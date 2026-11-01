@@ -2,6 +2,7 @@
 //! models this viewer can read.
 
 use std::collections::HashMap;
+use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
@@ -131,9 +132,11 @@ impl Models {
             // Maps store each object's height as the game places it: on the
             // ground, the seabed or the waterline.
             let [x, y, z] = thing.position;
+            // Models face their -y axis, which turns to the object's facing:
+            // roads run along it and waves roll back against it to shore.
             let [fx, fy, _] = thing.facing;
             let transform = Transform::from_translation(world(x, y, z))
-                .with_rotation(Quat::from_rotation_y(fy.atan2(fx)))
+                .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
                 .with_scale(Vec3::splat(view.scale * factor));
             commands
                 .spawn((
