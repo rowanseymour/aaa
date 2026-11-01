@@ -12,11 +12,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use bevy::asset::embedded_asset;
+use bevy::camera::Exposure;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
-use tgck::map::{CELL_SIZE, Terrain, Thing};
+use tgck::map::{CELL_SIZE, Sun, Terrain, Thing};
 
 use blend::GroundMaterial;
 use camera::RtsCamera;
@@ -39,6 +41,7 @@ struct Loaded {
     ground: Ground,
     terrain: Terrain,
     things: Vec<Thing>,
+    sun: Sun,
 }
 
 /// Saves a screenshot once the scene has settled, then exits.
@@ -144,12 +147,14 @@ fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
     let hm = map.height_map().map_err(err)?;
     let terrain = map.terrain().map_err(err)?;
     let things = map.things().map_err(err)?;
+    let sun = map.sun().map_err(err)?;
     let title = name.rsplit('/').next().unwrap_or(name);
     Ok(Loaded {
         title: title[..title.len() - 4].to_string(),
         ground: Ground::new(&hm),
         terrain,
         things,
+        sun,
         game,
     })
 }
@@ -168,6 +173,7 @@ fn setup(
         ground,
         terrain,
         things,
+        sun,
         ..
     } = &mut *loaded;
     let built = terrain::build(game, ground, terrain, &mut images);
@@ -202,15 +208,27 @@ fn setup(
         ground.height_at(size / 2.0, size / 2.0),
     );
     let cam = RtsCamera::new(centre);
-    commands.spawn((Camera3d::default(), cam.projection(), cam.transform(), cam));
-
+    // The game lights like Direct3D's fixed pipeline: texture * (ambient +
+    // diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
+    // PBR, and skipping tonemapping, gets the same result.
+    commands.spawn((
+        Camera3d::default(),
+        Tonemapping::None,
+        cam.projection(),
+        cam.transform(),
+        cam,
+    ));
+    let unit = 1.0 / Exposure::default().exposure();
+    let rgb = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b);
+    let [dx, dy, dz] = sun.direction;
     commands.spawn((
         DirectionalLight {
-            illuminance: 12_000.0,
+            color: rgb(sun.diffuse),
+            illuminance: std::f32::consts::PI * unit,
             shadow_maps_enabled: true,
             ..default()
         },
-        Transform::from_xyz(1.0, 2.0, 0.6).looking_at(Vec3::ZERO, Vec3::Y),
+        Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y),
         CascadeShadowConfigBuilder {
             maximum_distance: size * 1.5,
             ..default()
@@ -218,7 +236,8 @@ fn setup(
         .build(),
     ));
     commands.insert_resource(GlobalAmbientLight {
-        brightness: 400.0,
+        color: rgb(sun.ambient),
+        brightness: unit,
         ..default()
     });
 

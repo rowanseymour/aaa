@@ -16,6 +16,12 @@
 //!     string template, u32 unknown, u32 id, 10 bytes unknown,
 //!     f32 position[3], f32 facing[3] (unit vector), rest of record unknown
 //!
+//! SUN
+//!     u32 version (1 or 2), u32 unknown (1), u32 unknown (-1),
+//!     f32 direction[3]     unit vector the light travels along, z up
+//!     f32 diffuse[3], ambient[3], specular[3]   as in Templates/template_sun.tgi
+//!     rest unknown: the same colours again, then 38 more bytes
+//!
 //! MAPSTRINGS               plain text in .tgi syntax (map name, objectives, ...)
 //!
 //! TERRAIN
@@ -87,6 +93,10 @@ impl<R: Read + Seek> Map<R> {
         let index = self.container.read_named("DYNAMIC_THINGS_INDEX")?;
         let data = self.container.read_named("DYNAMIC_THINGS")?;
         parse_things(&index, &data)
+    }
+
+    pub fn sun(&mut self) -> Result<Sun> {
+        Sun::parse(&self.container.read_named("SUN")?)
     }
 
     /// The map's string table, in .tgi text syntax.
@@ -268,6 +278,40 @@ impl Terrain {
 }
 
 #[derive(Debug, Clone)]
+pub struct Sun {
+    pub version: u32,
+    pub unknown: [u32; 2],
+    /// Unit vector the light travels along, in map coordinates (z up).
+    pub direction: [f32; 3],
+    pub diffuse: [f32; 3],
+    pub ambient: [f32; 3],
+    pub specular: [f32; 3],
+    pub rest: Vec<u8>,
+}
+
+impl Sun {
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let mut cur = Cursor::new(data);
+        let header = [cur.u32()?, cur.u32()?, cur.u32()?];
+        let v3 =
+            |cur: &mut Cursor| -> Result<[f32; 3]> { Ok([cur.f32()?, cur.f32()?, cur.f32()?]) };
+        let direction = v3(&mut cur)?;
+        let diffuse = v3(&mut cur)?;
+        let ambient = v3(&mut cur)?;
+        let specular = v3(&mut cur)?;
+        Ok(Sun {
+            version: header[0],
+            unknown: [header[1], header[2]],
+            direction,
+            diffuse,
+            ambient,
+            specular,
+            rest: cur.rest().to_vec(),
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct Thing {
     /// Template name, e.g. `temperate_trees`, `start_loc`.
     pub template: String,
@@ -413,6 +457,22 @@ mod tests {
             Terrain::parse(&terrain_section(6, &[&[0; 8]])).is_err(),
             "wrong tile size"
         );
+    }
+
+    #[test]
+    fn parses_sun() {
+        let mut b = [2u32, 1, u32::MAX].map(u32::to_le_bytes).concat();
+        for v in [
+            0.6, 0.0, -0.8, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.0, 0.0, 0.0f32,
+        ] {
+            b.extend(v.to_le_bytes());
+        }
+        b.extend([0xAA, 0xBB]);
+        let sun = Sun::parse(&b).unwrap();
+        assert_eq!((sun.version, sun.direction), (2, [0.6, 0.0, -0.8]));
+        assert_eq!((sun.diffuse, sun.ambient), ([1.0; 3], [0.8; 3]));
+        assert_eq!(sun.rest, [0xAA, 0xBB]);
+        assert!(Sun::parse(&b[..40]).is_err(), "truncated");
     }
 
     #[test]
