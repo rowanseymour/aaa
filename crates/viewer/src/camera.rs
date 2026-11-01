@@ -1,7 +1,21 @@
 //! An RTS-style camera orbiting a focus point on the ground.
+//!
+//! It starts in the game's own view: the map seen corner-on from a fixed
+//! angle, which only pans and zooms. Tab frees it to rotate and tilt.
+
+use std::f32::consts::FRAC_PI_4;
 
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+
+// Estimated from screenshots of the game, not read from its data.
+const GAME_YAW: f32 = FRAC_PI_4;
+const GAME_PITCH: f32 = 0.85;
+const GAME_FOV: f32 = 0.52;
+const GAME_DISTANCE: (f32, f32) = (40.0, 250.0);
+
+const FREE_FOV: f32 = FRAC_PI_4;
+const FREE_DISTANCE: (f32, f32) = (5.0, 2000.0);
 
 #[derive(Component)]
 pub struct RtsCamera {
@@ -9,15 +23,17 @@ pub struct RtsCamera {
     pub yaw: f32,
     pub pitch: f32,
     pub distance: f32,
+    pub free: bool,
 }
 
 impl RtsCamera {
-    pub fn new(focus: Vec3, distance: f32) -> Self {
+    pub fn new(focus: Vec3) -> Self {
         RtsCamera {
             focus,
-            yaw: 0.0,
-            pitch: 0.9,
-            distance,
+            yaw: GAME_YAW,
+            pitch: GAME_PITCH,
+            distance: 150.0,
+            free: false,
         }
     }
 
@@ -26,10 +42,17 @@ impl RtsCamera {
             * Vec3::new(0.0, 0.0, self.distance);
         Transform::from_translation(self.focus + offset).looking_at(self.focus, Vec3::Y)
     }
+
+    pub fn projection(&self) -> Projection {
+        Projection::Perspective(PerspectiveProjection {
+            fov: if self.free { FREE_FOV } else { GAME_FOV },
+            ..default()
+        })
+    }
 }
 
-pub const HELP: &str =
-    "WASD/arrows/middle drag: pan   Q/E/right drag: rotate   R/F: tilt   wheel: zoom";
+pub const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
+                        (Q/E/right drag: rotate   R/F: tilt)";
 
 pub fn update(
     keys: Res<ButtonInput<KeyCode>>,
@@ -37,10 +60,19 @@ pub fn update(
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
     time: Res<Time>,
-    mut cameras: Query<(&mut RtsCamera, &mut Transform)>,
+    mut cameras: Query<(&mut RtsCamera, &mut Transform, &mut Projection)>,
 ) {
     let dt = time.delta_secs();
-    for (mut cam, mut transform) in &mut cameras {
+    for (mut cam, mut transform, mut projection) in &mut cameras {
+        if keys.just_pressed(KeyCode::Tab) {
+            cam.free = !cam.free;
+            if !cam.free {
+                cam.yaw = GAME_YAW;
+                cam.pitch = GAME_PITCH;
+            }
+            *projection = cam.projection();
+        }
+
         let pressed = |codes: &[KeyCode]| keys.any_pressed(codes.iter().copied()) as i32 as f32;
         let mut pan = Vec2::new(
             pressed(&[KeyCode::KeyD, KeyCode::ArrowRight])
@@ -55,19 +87,26 @@ pub fn update(
         let rotation = Quat::from_rotation_y(cam.yaw);
         cam.focus += rotation * Vec3::new(pan.x, 0.0, pan.y);
 
-        cam.yaw += (pressed(&[KeyCode::KeyQ]) - pressed(&[KeyCode::KeyE])) * 1.5 * dt;
-        cam.pitch += (pressed(&[KeyCode::KeyR]) - pressed(&[KeyCode::KeyF])) * 1.0 * dt;
-        if buttons.pressed(MouseButton::Right) {
-            cam.yaw -= motion.delta.x * 0.005;
-            cam.pitch += motion.delta.y * 0.005;
+        if cam.free {
+            cam.yaw += (pressed(&[KeyCode::KeyQ]) - pressed(&[KeyCode::KeyE])) * 1.5 * dt;
+            cam.pitch += (pressed(&[KeyCode::KeyR]) - pressed(&[KeyCode::KeyF])) * 1.0 * dt;
+            if buttons.pressed(MouseButton::Right) {
+                cam.yaw -= motion.delta.x * 0.005;
+                cam.pitch += motion.delta.y * 0.005;
+            }
+            cam.pitch = cam.pitch.clamp(0.1, 1.55);
         }
-        cam.pitch = cam.pitch.clamp(0.1, 1.55);
 
         let lines = match scroll.unit {
             MouseScrollUnit::Line => scroll.delta.y,
             MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
         };
-        cam.distance = (cam.distance * 0.9f32.powf(lines)).clamp(5.0, 2000.0);
+        let (near, far) = if cam.free {
+            FREE_DISTANCE
+        } else {
+            GAME_DISTANCE
+        };
+        cam.distance = (cam.distance * 0.9f32.powf(lines)).clamp(near, far);
 
         *transform = cam.transform();
     }

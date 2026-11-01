@@ -186,8 +186,8 @@ fn setup(
         size / 2.0,
         ground.height_at(size / 2.0, size / 2.0),
     );
-    let cam = RtsCamera::new(centre, size * 0.6);
-    commands.spawn((Camera3d::default(), cam.transform(), cam));
+    let cam = RtsCamera::new(centre);
+    commands.spawn((Camera3d::default(), cam.projection(), cam.transform(), cam));
 
     commands.spawn((
         DirectionalLight {

@@ -15,12 +15,16 @@ a file and exits.
 
 ## Controls
 
+The camera starts in the game's own fixed corner-on view. Tab frees it to
+rotate and tilt, and switches back.
+
 | Input | Action |
 |---|---|
 | WASD, arrow keys, middle drag | Pan |
-| Q / E, right drag | Rotate |
-| R / F | Tilt |
 | Mouse wheel | Zoom |
+| Tab | Toggle game / free camera |
+| Q / E, right drag | Rotate (free camera) |
+| R / F | Tilt (free camera) |
 
 ## What it shows
 
