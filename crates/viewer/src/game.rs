@@ -39,10 +39,18 @@ pub struct Variation {
     pub repeat: [f32; 2],
     /// Average colour, used where the texture is missing.
     pub color: [f32; 3],
-    /// Water surface colour, for water terrains.
-    pub water_color: Option<[f32; 3]>,
+    /// How water terrains colour the surface by depth, shallowest first.
+    pub water: Option<Vec<DepthColor>>,
     /// Higher priority terrain is drawn over lower where they meet.
     pub priority: i32,
+}
+
+/// A water surface's colour and opacity at a depth below it.
+#[derive(Debug, Clone, Copy)]
+pub struct DepthColor {
+    pub depth: f32,
+    pub color: [f32; 3],
+    pub alpha: f32,
 }
 
 impl Game {
@@ -135,26 +143,34 @@ impl Game {
     /// Reads every terrain definition and indexes the variations by
     /// lower-case IDS, which is how maps refer to them.
     pub fn terrain_variations(&mut self) -> HashMap<String, Variation> {
-        let files: Vec<String> = self
+        let files: Vec<(String, tgi::Parsed)> = self
             .data
             .entries
             .iter()
             .map(|e| e.name.clone())
             .filter(|n| {
                 let n = n.to_ascii_lowercase();
-                n.starts_with("terrain/") && n.ends_with(".tgi")
+                (n.starts_with("terrain/") || n.starts_with("templates/")) && n.ends_with(".tgi")
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|n| {
+                let parsed = tgi::parse_bytes(&self.read(&n)?);
+                Some((n, parsed))
             })
             .collect();
+        let water = water_colors(files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
-        for file in files {
-            let Some(bytes) = self.read(&file) else {
+        for (file, parsed) in &files {
+            if !file.to_ascii_lowercase().starts_with("terrain/") {
                 continue;
-            };
+            }
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            let parsed = tgi::parse_bytes(&bytes);
             for terrain in parsed.root.blocks_of("Terrain") {
                 let terrain_color = terrain.value("terrain_color").and_then(floats);
-                let water_color = terrain.value("color").and_then(floats);
+                let water = terrain
+                    .value("ids")
+                    .and_then(|id| water.get(&id.to_ascii_lowercase()));
                 let priority = terrain
                     .value("base_priority")
                     .and_then(|s| s.trim().parse().ok())
@@ -177,7 +193,7 @@ impl Game {
                                 .and_then(floats)
                                 .or(terrain_color)
                                 .unwrap_or([0.5; 3]),
-                            water_color,
+                            water: water.cloned(),
                             priority,
                         },
                     );
@@ -313,6 +329,48 @@ impl Game {
             })
             .collect()
     }
+}
+
+/// The depth colours of each water terrain, by lower-case IDS. Biomes name a
+/// `WaterInfo` template for each of their water terrains.
+fn water_colors<'a>(
+    roots: impl Iterator<Item = &'a tgi::Block>,
+) -> HashMap<String, Vec<DepthColor>> {
+    let roots: Vec<&tgi::Block> = roots.collect();
+    let templates: HashMap<String, Vec<DepthColor>> = roots
+        .iter()
+        .flat_map(|r| r.blocks_of("Template"))
+        .filter(|t| {
+            t.attr("Template")
+                .is_some_and(|k| k.eq_ignore_ascii_case("WaterInfo"))
+        })
+        .filter_map(|t| {
+            let mut stops: Vec<DepthColor> = t
+                .blocks_of("DepthInfo")
+                .filter_map(|d| {
+                    Some(DepthColor {
+                        depth: d.value("depth")?.trim().parse().ok()?,
+                        color: floats(d.value("color")?)?,
+                        alpha: d.value("alpha")?.trim().parse().ok()?,
+                    })
+                })
+                .collect();
+            stops.sort_by(|a, b| a.depth.total_cmp(&b.depth));
+            Some((t.name()?.to_ascii_lowercase(), stops))
+        })
+        .collect();
+    roots
+        .iter()
+        .flat_map(|r| r.blocks_of("Biome"))
+        .flat_map(|b| b.blocks_of("WaterInfo"))
+        .filter_map(|w| {
+            let stops = templates.get(&w.attr("Template")?.to_ascii_lowercase())?;
+            Some((
+                w.value("terrain_ids")?.trim().to_ascii_lowercase(),
+                stops.clone(),
+            ))
+        })
+        .collect()
 }
 
 /// Parses `0.451, 0.604, 0.294`.

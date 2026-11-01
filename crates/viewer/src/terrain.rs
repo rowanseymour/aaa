@@ -10,20 +10,29 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use tgck::map::{CELL_SIZE, HeightMap, Terrain};
 
 use crate::blend::{self, Blend, GroundMaterial};
-use crate::game::Game;
+use crate::game::{DepthColor, Game};
 
 /// Tile corners, counter-clockwise seen from above.
 const CORNERS: [(usize, usize); 4] = [(0, 0), (1, 0), (1, 1), (0, 1)];
 
 /// How far the bed drops per vertex step away from the shore, and at most.
-const BED_SLOPE: f32 = 0.6;
-const MAX_DEPTH: f32 = 3.0;
+/// Read from the temperate river's `max_slope` (taken as per world unit) and
+/// `max_depth`; how the game applies them is a guess.
+const BED_SLOPE: f32 = 1.8;
+const MAX_DEPTH: f32 = 3.5;
+
+/// How far the water surface sits below the bank. Maps flatten the land
+/// beside water to the water's own height; level with it, the two z-fight.
+/// Below it, the ground cuts the water off partway down the bank.
+const SHORE_DROP: f32 = 0.3;
 
 /// Ground heights with the water bed carved out. The height map stores the
 /// water surface at water vertices; the game derives the bed itself.
 pub struct Ground {
     pub side: usize,
     pub heights: Vec<f32>,
+    pub water: Vec<bool>,
+    /// Water level at water vertices and the land beside them.
     pub surface: Vec<f32>,
 }
 
@@ -31,7 +40,8 @@ impl Ground {
     pub fn new(hm: &HeightMap) -> Self {
         let side = hm.side;
         let water: Vec<bool> = hm.layer.iter().map(|&l| l != 0).collect();
-        // Breadth-first distance (in vertex steps) from the nearest land vertex.
+        // Breadth-first distance (in vertex steps, diagonals included) from
+        // the nearest land vertex.
         let mut dist = vec![u32::MAX; side * side];
         let mut queue = VecDeque::new();
         for (i, &w) in water.iter().enumerate() {
@@ -41,14 +51,7 @@ impl Ground {
             }
         }
         while let Some(i) = queue.pop_front() {
-            let (x, y) = (i % side, i / side);
-            let neighbours = [
-                (x > 0).then(|| i - 1),
-                (x + 1 < side).then(|| i + 1),
-                (y > 0).then(|| i - side),
-                (y + 1 < side).then(|| i + side),
-            ];
-            for j in neighbours.into_iter().flatten() {
+            for j in neighbours(side, i) {
                 if dist[j] == u32::MAX {
                     dist[j] = dist[i] + 1;
                     queue.push_back(j);
@@ -65,11 +68,36 @@ impl Ground {
                 d => h - (d as f32 * BED_SLOPE).min(MAX_DEPTH),
             })
             .collect();
+        let surface = (0..side * side)
+            .map(|i| {
+                if water[i] {
+                    return hm.heights[i];
+                }
+                let levels: Vec<f32> = neighbours(side, i)
+                    .filter(|&j| water[j])
+                    .map(|j| hm.heights[j])
+                    .collect();
+                match levels.len() {
+                    0 => hm.heights[i],
+                    n => levels.iter().sum::<f32>() / n as f32,
+                }
+            })
+            .collect();
         Ground {
             side,
             heights,
-            surface: hm.heights.clone(),
+            water,
+            surface,
         }
+    }
+
+    /// Whether to split a tile along its (1,0)-(0,1) diagonal rather than
+    /// (0,0)-(1,1): the flatter one, so a lone corner that differs gets a
+    /// triangle to itself and edges such as the shoreline cut across it.
+    fn flip(&self, x: usize, y: usize) -> bool {
+        let rising = (self.at(x, y) - self.at(x + 1, y + 1)).abs();
+        let falling = (self.at(x + 1, y) - self.at(x, y + 1)).abs();
+        falling < rising
     }
 
     fn at(&self, x: usize, y: usize) -> f32 {
@@ -95,6 +123,14 @@ impl Ground {
         let dy = h(x, y + 1) - h(x, y.saturating_sub(1));
         Vec3::new(-dx, 2.0 * CELL_SIZE, dy).normalize().to_array()
     }
+}
+
+/// The vertex and its up to eight neighbours.
+fn neighbours(side: usize, i: usize) -> impl Iterator<Item = usize> {
+    let (x, y) = (i % side, i / side);
+    (y.saturating_sub(1)..=(y + 1).min(side - 1)).flat_map(move |ny| {
+        (x.saturating_sub(1)..=(x + 1).min(side - 1)).map(move |nx| ny * side + nx)
+    })
 }
 
 /// Game space (x east, y north, z up) to Bevy's (x east, y up, -z north).
@@ -131,7 +167,7 @@ pub fn build(
     // Terrain types in use, numbered as texture array layers.
     let mut layer_of: HashMap<u16, u32> = HashMap::new();
     let mut kinds = Vec::new();
-    let mut water_color = None;
+    let mut water_colors = None;
     for tile in &terrain.tiles {
         if layer_of.contains_key(&tile.terrain) {
             continue;
@@ -144,7 +180,7 @@ pub fn build(
         let variation = variations.get(&name.to_ascii_lowercase());
         let image = match variation {
             Some(v) => {
-                water_color = water_color.or(v.water_color);
+                water_colors = water_colors.or(v.water.clone());
                 game.read(&v.texture)
                     .and_then(|b| load_texture(&b, &v.texture))
                     .unwrap_or_else(|| {
@@ -169,14 +205,23 @@ pub fn build(
 
     let water: Vec<(usize, usize)> = (0..side)
         .flat_map(|y| (0..side).map(move |x| (x, y)))
-        .filter(|&(x, y)| terrain.at(x, y).water_body != 0)
+        .filter(|&(x, y)| {
+            CORNERS
+                .iter()
+                .any(|&(dx, dy)| ground.water[(y + dy) * ground.side + x + dx])
+        })
         .collect();
     let water = (!water.is_empty()).then(|| {
-        let [r, g, b] = water_color.unwrap_or([0.12, 0.26, 0.33]);
+        let colors = water_colors.unwrap_or_else(|| {
+            vec![DepthColor {
+                depth: 0.0,
+                color: [0.12, 0.26, 0.33],
+                alpha: 0.8,
+            }]
+        });
         (
-            water_mesh(ground, &water),
+            water_mesh(ground, &water, &colors),
             StandardMaterial {
-                base_color: Color::srgba(r, g, b, 0.8),
                 alpha_mode: AlphaMode::Blend,
                 perceptual_roughness: 0.15,
                 ..default()
@@ -306,29 +351,71 @@ fn ground_mesh(ground: &Ground, side: usize, layers: impl Fn(usize, usize) -> La
             }
         }
     }
-    quads(positions, normals, uvs)
+    let flips: Vec<bool> = (0..side * side)
+        .map(|i| ground.flip(i % side, i / side))
+        .collect();
+    quads(positions, normals, uvs, &flips)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, kinds)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, masks)
 }
 
-fn water_mesh(ground: &Ground, tiles: &[(usize, usize)]) -> Mesh {
+/// The water surface over every tile that touches water, coloured by the
+/// depth of the bed below each vertex as the game does: clear at the shore,
+/// so it fades in where the bank cuts it off.
+fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor]) -> Mesh {
     let mut positions = Vec::with_capacity(tiles.len() * 4);
+    let mut vertex_colors = Vec::with_capacity(tiles.len() * 4);
     for &(x, y) in tiles {
         for (cx, cy) in CORNERS.map(|(dx, dy)| (x + dx, y + dy)) {
             let (wx, wy) = (cx as f32 * CELL_SIZE, cy as f32 * CELL_SIZE);
-            positions.push(world(wx, wy, ground.surface[cy * ground.side + cx]).to_array());
+            let surface = ground.surface[cy * ground.side + cx] - SHORE_DROP;
+            positions.push(world(wx, wy, surface).to_array());
+            let ([r, g, b], a) = at_depth(colors, surface - ground.at(cx, cy));
+            vertex_colors.push(Color::srgba(r, g, b, a).to_linear().to_f32_array());
         }
     }
     let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
     let uvs = vec![[0.0, 0.0]; positions.len()];
-    quads(positions, normals, uvs)
+    let flips: Vec<bool> = tiles.iter().map(|&(x, y)| ground.flip(x, y)).collect();
+    quads(positions, normals, uvs, &flips)
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors)
 }
 
-fn quads(positions: Vec<[f32; 3]>, normals: Vec<[f32; 3]>, uvs: Vec<[f32; 2]>) -> Mesh {
-    let indices = (0..positions.len() as u32 / 4)
-        .flat_map(|q| {
-            let i = q * 4;
-            [i, i + 1, i + 2, i, i + 2, i + 3]
+/// Interpolates the colour and alpha for a depth, holding the end values
+/// beyond the first and last.
+fn at_depth(colors: &[DepthColor], depth: f32) -> ([f32; 3], f32) {
+    let next = colors.partition_point(|c| c.depth <= depth);
+    let (a, b) = match next {
+        0 => (colors[0], colors[0]),
+        n if n == colors.len() => (colors[n - 1], colors[n - 1]),
+        n => (colors[n - 1], colors[n]),
+    };
+    let t = if b.depth > a.depth {
+        (depth - a.depth) / (b.depth - a.depth)
+    } else {
+        0.0
+    };
+    let mix = |x: f32, y: f32| x + (y - x) * t;
+    (
+        [0, 1, 2].map(|i| mix(a.color[i], b.color[i])),
+        mix(a.alpha, b.alpha),
+    )
+}
+
+/// Quads of four `CORNERS` each, split along the diagonal [`Ground::flip`]
+/// picks for their tile.
+fn quads(
+    positions: Vec<[f32; 3]>,
+    normals: Vec<[f32; 3]>,
+    uvs: Vec<[f32; 2]>,
+    flips: &[bool],
+) -> Mesh {
+    let indices = flips
+        .iter()
+        .zip((0..).step_by(4))
+        .flat_map(|(&flip, i)| match flip {
+            false => [i, i + 1, i + 2, i, i + 2, i + 3],
+            true => [i, i + 1, i + 3, i + 1, i + 2, i + 3],
         })
         .collect();
     Mesh::new(

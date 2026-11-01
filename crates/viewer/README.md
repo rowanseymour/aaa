@@ -30,14 +30,15 @@ rotate and tilt, and switches back.
 
 - The height map, with each tile textured by its terrain variation and soft
   edges between terrain types from the game's transition masks
-- Water surfaces, with the bed carved out below them
+- Water surfaces, with the bed carved out below them and coloured by depth
+  from the biome's water settings
 - Placed objects with the game's models: trees, buildings, roads, fences and
   the like, at each object's own size and variation
 - Simple markers where a model can't be read yet: boxes for skinned models
   such as tall grass, coloured boxes for units, red pillars for start
   locations
 
-Not yet: soft water edges, skinned and animated models, particle effects,
+Not yet: animated water textures, skinned and animated models, particle effects,
 lighting from the map's sun settings. Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 

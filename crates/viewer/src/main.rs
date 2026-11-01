@@ -13,7 +13,7 @@ use std::process::ExitCode;
 
 use bevy::asset::embedded_asset;
 use bevy::image::CompressedImageFormatSupport;
-use bevy::light::CascadeShadowConfigBuilder;
+use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use tgck::map::{CELL_SIZE, Terrain, Thing};
@@ -180,6 +180,7 @@ fn setup(
             Name::new("water"),
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(materials.add(material)),
+            NotShadowCaster,
         ));
     }
     let mut models = Models::new(game, formats.0);
