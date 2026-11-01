@@ -17,12 +17,14 @@
 //! `//` is not a comment (it appears in URLs). The parser is lenient like the
 //! game: malformed input produces [`Warning`]s rather than errors.
 //!
-//! This crate produces the syntax tree only. Template inheritance (`Template=`,
-//! `Inherit=`) is resolved by consumers.
+//! [`Templates`] resolves template inheritance (`Template=`, `Inherit=`) on
+//! request; the tree itself is left as written.
 
 mod decode;
+mod inherit;
 
 pub use decode::decode;
+pub use inherit::Templates;
 
 /// A block: a header with the fields and blocks it contains. The document root
 /// is a block with an empty header.
