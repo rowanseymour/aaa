@@ -3,8 +3,8 @@
 //! A model is a list of objects (scene nodes, triangle meshes, textures,
 //! render properties, animation data) that refer to each other by index; the
 //! scene graph hangs off the root objects listed at the end of the file.
-//! Nearly all of the game's models are version 10.1.0.0, a few 10.0.1.0;
-//! both are laid out little-endian:
+//! Nearly all of the game's models are version 10.1.0.0, a few 10.0.1.0 or
+//! NetImmerse 4.2.2.0; all are laid out little-endian:
 //!
 //! ```text
 //! header   text line "Gamebryo File Format, Version 10.1.0.0\n",
@@ -12,8 +12,10 @@
 //!          u32 object count,
 //!          u16 type count, type names (u32 length + bytes),
 //!          u16 type index per object, u32 group count + u32 groups
-//! objects  per object: u32 zero, then its fields; no sizes are stored, so
-//!          every type before the last one read must be understood
+//!          [4.2.2.0: no user version and nothing after the count]
+//! objects  per object: u32 zero [4.2.2.0: its type name], then its fields;
+//!          no sizes are stored, so every type before the last one read
+//!          must be understood
 //! footer   u32 root count, i32 roots (object indices; -1 = none)
 //! ```
 //!
@@ -27,9 +29,10 @@ mod objects;
 
 pub use objects::*;
 
-/// Format versions the reader accepts: 10.1.0.0 and 10.0.1.0.
+/// Format versions the reader accepts: 10.1.0.0, 10.0.1.0 and 4.2.2.0.
 pub const VERSION: u32 = 0x0A01_0000;
 pub const OLD_VERSION: u32 = 0x0A00_0100;
+pub const NETIMMERSE_VERSION: u32 = 0x0402_0200;
 
 #[derive(Debug)]
 pub enum Error {
@@ -77,7 +80,7 @@ impl Nif {
         }
         let mut r = Reader::new(&bytes[line_end + 1..]);
         r.version = r.u32()?;
-        if r.version != VERSION && r.version != OLD_VERSION {
+        if ![VERSION, OLD_VERSION, NETIMMERSE_VERSION].contains(&r.version) {
             let v = line.rsplit(' ').next().unwrap_or_default();
             return Err(Error::UnsupportedVersion(v.to_string()));
         }
@@ -85,30 +88,41 @@ impl Nif {
             r.u32()?; // user version
         }
         let count = r.u32()? as usize;
-        let type_count = r.u16()? as usize;
-        let types = (0..type_count)
-            .map(|_| r.string())
-            .collect::<Result<Vec<_>>>()?;
-        let index = (0..count).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
-        let groups = r.u32()? as usize;
-        r.skip(groups * 4)?;
+        let (types, index) = if r.netimmerse() {
+            (Vec::new(), Vec::new())
+        } else {
+            let type_count = r.u16()? as usize;
+            let types = (0..type_count)
+                .map(|_| r.string())
+                .collect::<Result<Vec<_>>>()?;
+            let index = (0..count).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
+            let groups = r.u32()? as usize;
+            r.skip(groups * 4)?;
+            (types, index)
+        };
 
-        let mut objects = Vec::with_capacity(count);
+        // Bounded by the file size, as each object takes at least four bytes.
+        let mut objects = Vec::with_capacity(count.min(r.remaining() / 4));
         let mut incomplete = None;
-        for &t in &index {
-            let name = types
-                .get(t as usize & 0x7fff)
-                .ok_or_else(|| Error::Corrupt(format!("type index {t} out of range")))?;
-            if r.u32()? != 0 {
-                return Err(Error::Corrupt(format!(
-                    "no separator before object {}",
-                    objects.len()
-                )));
-            }
-            match Object::read(name, &mut r)? {
+        let mut index = index.into_iter();
+        for i in 0..count {
+            // 4.2.2.0 has no index; its objects start with their type name.
+            let name = match index.next() {
+                None => r.string()?,
+                Some(t) => {
+                    let name = types
+                        .get(t as usize & 0x7fff)
+                        .ok_or_else(|| Error::Corrupt(format!("type index {t} out of range")))?;
+                    if r.u32()? != 0 {
+                        return Err(Error::Corrupt(format!("no separator before object {i}")));
+                    }
+                    name.clone()
+                }
+            };
+            match Object::read(&name, &mut r)? {
                 Some(o) => objects.push(o),
                 None => {
-                    incomplete = Some(name.clone());
+                    incomplete = Some(name);
                     break;
                 }
             }
@@ -260,9 +274,13 @@ impl<'a> Reader<'a> {
             version: VERSION,
         }
     }
-    /// Whether this is a 10.0.1.0 file.
+    /// Whether this is a 10.0.1.0 or 4.2.2.0 file.
     pub(crate) fn old(&self) -> bool {
-        self.version == OLD_VERSION
+        self.version < VERSION
+    }
+    /// Whether this is a 4.2.2.0 file.
+    pub(crate) fn netimmerse(&self) -> bool {
+        self.version == NETIMMERSE_VERSION
     }
     pub(crate) fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
         let end = self.pos.checked_add(n).filter(|&e| e <= self.buf.len());
