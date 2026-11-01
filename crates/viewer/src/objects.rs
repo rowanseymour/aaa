@@ -1,5 +1,7 @@
 //! Placeholder markers for placed objects without a readable model: units,
-//! start locations, and objects whose templates name a model.
+//! start locations, magenta boxes for everything else that should have had a
+//! model, and red boxes, hidden until toggled, for objects that have none
+//! such as sound emitters.
 
 use std::collections::HashMap;
 
@@ -10,12 +12,15 @@ use crate::terrain::{Ground, world};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Kind {
-    Tree,
-    Rock,
     Start,
     Unit(usize),
-    Other,
+    Missing,
+    Modelless,
 }
+
+/// Marks the markers of objects without a model, which start hidden.
+#[derive(Component)]
+pub struct Modelless;
 
 const NATIONS: [(&str, [f32; 3]); 5] = [
     ("usa", [0.3, 0.45, 0.2]),
@@ -25,34 +30,28 @@ const NATIONS: [(&str, [f32; 3]); 5] = [
     ("jpn", [0.85, 0.8, 0.2]),
 ];
 
-fn kind(template: &str) -> Option<Kind> {
+fn kind(template: &str, should_have_model: bool) -> Kind {
     let t = template.to_ascii_lowercase();
-    let has = |words: &[&str]| words.iter().any(|w| t.contains(w));
-    Some(if has(&["camera"]) {
-        return None;
-    } else if has(&["start_loc"]) {
+    if t.contains("start_loc") {
         Kind::Start
-    } else if has(&["tree", "forest", "bush", "hedge", "palm", "jungle"]) {
-        Kind::Tree
-    } else if has(&["rock", "boulder"]) {
-        Kind::Rock
     } else if let Some(n) = NATIONS
         .iter()
         .position(|(n, _)| t.starts_with("regiment_") && t.contains(&format!("_{n}_")))
     {
         Kind::Unit(n)
+    } else if should_have_model {
+        Kind::Missing
     } else {
-        Kind::Other
-    })
+        Kind::Modelless
+    }
 }
 
 fn shape(kind: Kind) -> (Mesh, [f32; 3], f32) {
     match kind {
-        Kind::Tree => (Cone::new(1.0, 4.0).into(), [0.13, 0.3, 0.1], 2.0),
-        Kind::Rock => (Cuboid::new(1.2, 0.8, 1.2).into(), [0.45, 0.43, 0.4], 0.4),
         Kind::Start => (Cylinder::new(0.8, 12.0).into(), [1.0, 0.1, 0.1], 6.0),
         Kind::Unit(n) => (Cuboid::new(2.5, 1.0, 1.5).into(), NATIONS[n].1, 0.5),
-        Kind::Other => (Cuboid::new(3.0, 2.5, 3.0).into(), [0.7, 0.62, 0.5], 1.25),
+        Kind::Missing => (Cuboid::new(3.0, 2.5, 3.0).into(), [1.0, 0.0, 1.0], 1.25),
+        Kind::Modelless => (Cuboid::new(1.5, 1.5, 1.5).into(), [0.9, 0.1, 0.1], 0.75),
     }
 }
 
@@ -64,13 +63,8 @@ pub fn spawn(
     things: &[(&Thing, bool)],
 ) {
     let mut handles = HashMap::new();
-    for &(thing, has_model) in things {
-        let Some(kind) = kind(&thing.template) else {
-            continue;
-        };
-        if !has_model && !matches!(kind, Kind::Start | Kind::Unit(_)) {
-            continue;
-        }
+    for &(thing, should_have_model) in things {
+        let kind = kind(&thing.template, should_have_model);
         let (mesh, material, lift) = handles
             .entry(kind)
             .or_insert_with(|| {
@@ -92,11 +86,26 @@ pub fn spawn(
         if fx != 0.0 || fy != 0.0 {
             transform.look_to(world(fx, fy, 0.0), Vec3::Y);
         }
-        commands.spawn((
+        let mut marker = commands.spawn((
             Name::new(thing.template.clone()),
             Mesh3d(mesh),
             MeshMaterial3d(material),
             transform,
         ));
+        if kind == Kind::Modelless {
+            marker.insert((Modelless, Visibility::Hidden));
+        }
+    }
+}
+
+/// Shows or hides the markers of objects without a model.
+pub fn toggle_modelless(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut markers: Query<&mut Visibility, With<Modelless>>,
+) {
+    if keys.just_pressed(KeyCode::KeyM) {
+        for mut v in &mut markers {
+            v.toggle_visible_hidden();
+        }
     }
 }
