@@ -108,7 +108,10 @@ fn main() -> ExitCode {
         .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
         .insert_resource(loaded)
         .add_systems(Startup, setup)
-        .add_systems(Update, (camera::update, objects::toggle_modelless));
+        .add_systems(
+            Update,
+            (camera::update, models::animate, objects::toggle_modelless),
+        );
     if let Some(s) = screenshot {
         app.insert_resource(s).add_systems(Update, take_screenshot);
     }
@@ -189,7 +192,7 @@ fn setup(
         materials: &mut materials,
         images: &mut images,
     };
-    let rest = models.spawn(&mut commands, game, &mut assets, ground, things);
+    let rest = models.spawn(&mut commands, game, &mut assets, things);
     objects::spawn(&mut commands, &mut meshes, &mut materials, ground, &rest);
 
     let size = (ground.side - 1) as f32 * CELL_SIZE;

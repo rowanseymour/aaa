@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use nif::{Nif, Object};
+use nif::{Keys, Nif, Object, Rotation};
 
 const USAGE: &str = "\
 usage:
@@ -91,10 +91,40 @@ fn dump(file: &str) -> ExitCode {
             Object::Alpha(a) => format!("alpha flags {:#06x} threshold {}", a.flags, a.threshold),
             Object::Stencil(s) => format!("stencil draw mode {}", s.draw_mode),
             Object::ExtraData(e) => format!("extra {:?} = {:?}", e.name, e.value),
+            Object::Controller(c) => format!(
+                "{:?} controller target {:?} data {:?} flags {:#06x} frequency {} phase {} time {}..{} next {:?}",
+                c.kind, c.target, c.data, c.flags, c.frequency, c.phase, c.start, c.stop, c.next
+            ),
+            Object::Keyframes(k) => {
+                let rotation = match &k.rotation {
+                    Rotation::Quaternion(q) => keys(q),
+                    Rotation::Euler(axes) => format!(
+                        "x {} y {} z {}",
+                        keys(&axes[0]),
+                        keys(&axes[1]),
+                        keys(&axes[2])
+                    ),
+                };
+                format!(
+                    "keyframes rotation {rotation} translation {} scale {}",
+                    keys(&k.translation),
+                    keys(&k.scale)
+                )
+            }
+            Object::Floats(k) => format!("floats {}", keys(k)),
             Object::Other(kind) => kind.clone(),
         };
         println!("{i:4} {line}");
     }
     println!("roots {:?}", nif.roots);
     ExitCode::SUCCESS
+}
+
+fn keys<T: std::fmt::Debug>(k: &Keys<T>) -> String {
+    let keys: Vec<_> = k
+        .keys
+        .iter()
+        .map(|k| format!("{}: {:?}", k.time, k.value))
+        .collect();
+    format!("{:?} [{}]", k.interpolation, keys.join(", "))
 }

@@ -3,7 +3,7 @@
 A Rust library and command-line tool for reading the `.nif` model files of
 **Axis & Allies (2004)**: scene nodes, triangle meshes, textures (external
 files or stored in the model) and render properties such as alpha and
-double-sidedness.
+double-sidedness, and keyframe and alpha animations.
 
 You need your own copy of the game. This project contains no game code or data.
 

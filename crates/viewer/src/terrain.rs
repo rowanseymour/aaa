@@ -21,10 +21,10 @@ const CORNERS: [(usize, usize); 4] = [(0, 0), (1, 0), (1, 1), (0, 1)];
 const BED_SLOPE: f32 = 1.8;
 const MAX_DEPTH: f32 = 3.5;
 
-/// How far the water surface sits below the bank. Maps flatten the land
-/// beside water to the water's own height; level with it, the two z-fight.
-/// Below it, the ground cuts the water off partway down the bank.
-const SHORE_DROP: f32 = 0.3;
+/// How far the waterline sits below the height map's water level: maps
+/// store every floating object (ships, lily pads, waves) exactly this far
+/// down.
+const SHORE_DROP: f32 = 0.5;
 
 /// Ground heights with the water bed carved out. The height map stores the
 /// water surface at water vertices; the game derives the bed itself.

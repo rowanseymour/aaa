@@ -34,14 +34,15 @@ rotate and tilt, and switches back.
 - Water surfaces, with the bed carved out below them and coloured by depth
   from the biome's water settings
 - Placed objects with the game's models: trees, buildings, roads, fences and
-  the like, at each object's own size and variation; skinned models such as
+  the like, at each object's own size, variation and height; skinned models such as
   tall grass stand in the pose they were modelled in
+- Models' own keyframe and fade animations, such as waves rolling in to shore
 - Simple markers where a model can't be drawn yet: magenta boxes for any
   object that should have one, boxes in their nation's colour for units, red
   pillars for start locations, and red boxes for objects without a model such
   as sound emitters
 
-Not yet: animated water textures, animation, particle effects,
+Not yet: animated water textures, skeletal animation, particle effects,
 lighting from the map's sun settings. Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 

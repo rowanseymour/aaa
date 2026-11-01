@@ -402,4 +402,83 @@ fn reads_netimmerse_models() {
     };
     assert_eq!(g.triangles, [[0, 1, 2]]);
     assert_eq!(g.uv_sets[0][1], [1.0, 0.0]);
+
+    let Some(Object::Material(m)) = nif.get(Some(6)) else {
+        panic!("no material");
+    };
+    let Some(Object::Controller(fade)) = nif.get(m.controller) else {
+        panic!("no controller");
+    };
+    assert_eq!(fade.kind, ControllerKind::Alpha);
+    assert_eq!((fade.target, fade.data), (Some(3), Some(9)));
+    let Some(Object::Floats(keys)) = nif.get(fade.data) else {
+        panic!("no keys");
+    };
+    assert_eq!(keys.sample(fade.key_time(3.0)), Some(0.25));
+}
+
+fn keys<T: Value>(interpolation: Interpolation, keys: &[(f32, T, Option<[T; 2]>)]) -> Keys<T> {
+    Keys {
+        interpolation,
+        keys: keys
+            .iter()
+            .map(|&(time, value, tangents)| Key {
+                time,
+                value,
+                tangents,
+            })
+            .collect(),
+    }
+}
+
+#[test]
+fn samples_keys() {
+    let linear = keys(
+        Interpolation::Linear,
+        &[(1.0, [0.0, 2.0], None), (3.0, [4.0, 2.0], None)],
+    );
+    assert_eq!(linear.sample(0.0), Some([0.0, 2.0]));
+    assert_eq!(linear.sample(2.0), Some([2.0, 2.0]));
+    assert_eq!(linear.sample(5.0), Some([4.0, 2.0]));
+    assert_eq!(Keys::<f32>::default().sample(1.0), None);
+
+    // Flat tangents ease in and out but still pass halfway at the middle.
+    let eased = keys(
+        Interpolation::Quadratic,
+        &[(0.0, 0.0, Some([0.0, 0.0])), (2.0, 1.0, Some([0.0, 0.0]))],
+    );
+    assert_eq!(eased.sample(1.0), Some(0.5));
+    assert!(eased.sample(0.5).unwrap() < 0.25);
+
+    let half_turn = [0.0, 0.0, 0.0, 1.0];
+    let turn = keys(
+        Interpolation::Linear,
+        &[(0.0, [1.0, 0.0, 0.0, 0.0], None), (1.0, half_turn, None)],
+    );
+    let base = Keyframes {
+        rotation: Rotation::Quaternion(turn),
+        ..Default::default()
+    };
+    let t = base.apply(&Transform::IDENTITY, 1.0);
+    let p = t.apply([1.0, 0.0, 0.0]);
+    assert!((p[0] + 1.0).abs() < 1e-6 && p[1].abs() < 1e-6);
+}
+
+#[test]
+fn cycles_controller_time() {
+    let c = |flags| Controller {
+        kind: ControllerKind::Keyframe,
+        next: None,
+        flags,
+        frequency: 1.0,
+        phase: 0.0,
+        start: 1.0,
+        stop: 3.0,
+        target: None,
+        data: None,
+    };
+    assert_eq!(c(8).key_time(4.0), 2.0);
+    assert_eq!(c(8 | 2).key_time(4.0), 2.0);
+    assert_eq!(c(8 | 2).key_time(5.5), 1.5);
+    assert_eq!(c(8 | 4).key_time(4.0), 3.0);
 }

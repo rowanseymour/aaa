@@ -157,7 +157,14 @@ impl Nif {
     pub fn shapes(&self) -> Vec<Placed<'_>> {
         let mut out = Vec::new();
         for &root in &self.roots {
-            self.walk(root, Transform::IDENTITY, &mut Vec::new(), &mut out, 0);
+            let mut path = Vec::new();
+            self.walk(
+                root,
+                Transform::IDENTITY,
+                &mut Vec::new(),
+                &mut path,
+                &mut out,
+            );
         }
         out
     }
@@ -167,12 +174,12 @@ impl Nif {
         r: Ref,
         parent: Transform,
         props: &mut Vec<Ref>,
+        path: &mut Vec<usize>,
         out: &mut Vec<Placed<'a>>,
-        depth: usize,
     ) {
-        if depth > 64 {
+        let Some(index) = r.filter(|_| path.len() <= 64) else {
             return;
-        }
+        };
         let (av, children) = match self.get(r) {
             Some(Object::Node(n)) => (&n.av, Some(&n.children)),
             Some(Object::Shape(s)) => (&s.av, None),
@@ -184,19 +191,22 @@ impl Nif {
         let transform = parent.then(&av.transform);
         let inherited = props.len();
         props.splice(0..0, av.properties.iter().copied());
+        path.push(index);
         match (self.get(r), children) {
             (Some(Object::Shape(shape)), _) => out.push(Placed {
                 shape,
                 transform,
                 properties: props.clone(),
+                path: path.clone(),
             }),
             (_, Some(children)) => {
                 for &c in children {
-                    self.walk(c, transform, props, out, depth + 1);
+                    self.walk(c, transform, props, path, out);
                 }
             }
             _ => {}
         }
+        path.pop();
         props.drain(0..props.len() - inherited);
     }
 
@@ -215,6 +225,8 @@ pub struct Placed<'a> {
     pub shape: &'a Shape,
     pub transform: Transform,
     pub properties: Vec<Ref>,
+    /// The scene objects from the root down to the shape.
+    pub path: Vec<usize>,
 }
 
 /// Rotation, then uniform scale, then translation.

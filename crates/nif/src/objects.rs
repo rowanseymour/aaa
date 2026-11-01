@@ -102,6 +102,9 @@ pub enum Object {
     Alpha(Alpha),
     Stencil(Stencil),
     ExtraData(ExtraData),
+    Controller(Controller),
+    Keyframes(Keyframes),
+    Floats(Keys<f32>),
     /// Understood well enough to step over; the type name.
     Other(String),
 }
@@ -187,6 +190,7 @@ pub struct Pixels {
 
 #[derive(Debug, Clone)]
 pub struct Material {
+    pub controller: Ref,
     pub ambient: [f32; 3],
     pub diffuse: [f32; 3],
     pub specular: [f32; 3],
@@ -235,6 +239,241 @@ pub enum ExtraValue {
     Boolean(bool),
     Binary(Vec<u8>),
     Strings(Vec<String>),
+}
+
+/// Plays its data on its target: a [`Keyframes`] on a scene object for
+/// [`ControllerKind::Keyframe`], a [`Keys`] on a material's alpha for
+/// [`ControllerKind::Alpha`].
+#[derive(Debug, Clone)]
+pub struct Controller {
+    pub kind: ControllerKind,
+    /// The next controller on the same target.
+    pub next: Ref,
+    pub flags: u16,
+    pub frequency: f32,
+    pub phase: f32,
+    pub start: f32,
+    pub stop: f32,
+    pub target: Ref,
+    pub data: Ref,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ControllerKind {
+    Keyframe,
+    Alpha,
+}
+
+impl Controller {
+    /// The time in the data's keys at `t` seconds of playing.
+    pub fn key_time(&self, t: f32) -> f32 {
+        let span = self.stop - self.start;
+        let t = t * self.frequency + self.phase;
+        if span <= 0.0 {
+            return self.start;
+        }
+        // Flag bits 1-2: 0 loops, 1 plays back and forth, 2 holds the end.
+        match (self.flags >> 1) & 3 {
+            1 => {
+                let u = (t - self.start).rem_euclid(2.0 * span);
+                self.start + if u > span { 2.0 * span - u } else { u }
+            }
+            2 => t.clamp(self.start, self.stop),
+            _ => self.start + (t - self.start).rem_euclid(span),
+        }
+    }
+}
+
+/// Animated translation, rotation and scale of a scene object; parts
+/// without keys keep the object's own.
+#[derive(Debug, Clone, Default)]
+pub struct Keyframes {
+    pub rotation: Rotation,
+    pub translation: Keys<[f32; 3]>,
+    pub scale: Keys<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub enum Rotation {
+    /// w, x, y, z.
+    Quaternion(Keys<[f32; 4]>),
+    /// Angles in radians about x, y and z, applied in that order.
+    Euler([Keys<f32>; 3]),
+}
+
+impl Default for Rotation {
+    fn default() -> Self {
+        Rotation::Quaternion(Keys::default())
+    }
+}
+
+impl Keyframes {
+    /// `base` with its animated parts taken from the keys at `time`.
+    pub fn apply(&self, base: &Transform, time: f32) -> Transform {
+        let mut out = *base;
+        if let Some(t) = self.translation.sample(time) {
+            out.translation = t;
+        }
+        if let Some(s) = self.scale.sample(time) {
+            out.scale = s;
+        }
+        match &self.rotation {
+            Rotation::Quaternion(keys) => {
+                if let Some(q) = keys.sample_rotation(time) {
+                    out.rotation = quaternion_matrix(q);
+                }
+            }
+            Rotation::Euler(axes) if axes.iter().any(|k| !k.keys.is_empty()) => {
+                let [x, y, z] = std::array::from_fn(|i| axes[i].sample(time).unwrap_or(0.0));
+                out.rotation = euler_matrix(x, y, z);
+            }
+            Rotation::Euler(_) => {}
+        }
+        out
+    }
+}
+
+/// A key group: values at times, eased between by their interpolation.
+#[derive(Debug, Clone)]
+pub struct Keys<T> {
+    pub interpolation: Interpolation,
+    pub keys: Vec<Key<T>>,
+}
+
+impl<T> Default for Keys<T> {
+    fn default() -> Self {
+        Keys {
+            interpolation: Interpolation::Linear,
+            keys: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Interpolation {
+    #[default]
+    Linear,
+    /// Hermite curves through each key's tangents.
+    Quadratic,
+    /// Kochanek-Bartels splines; their tension, continuity and bias are
+    /// skipped and the keys eased linearly.
+    Tcb,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct Key<T> {
+    pub time: f32,
+    pub value: T,
+    /// Incoming and outgoing tangents of quadratic keys.
+    pub tangents: Option<[T; 2]>,
+}
+
+impl<T: Value> Keys<T> {
+    /// The value at `time`, held before the first key and after the last.
+    pub fn sample(&self, time: f32) -> Option<T> {
+        let (a, b, u) = self.around(time)?;
+        Some(match (a.tangents, b.tangents) {
+            (Some([_, out]), Some([inc, _])) if self.interpolation == Interpolation::Quadratic => {
+                let (u2, u3) = (u * u, u * u * u);
+                a.value
+                    .scaled(2.0 * u3 - 3.0 * u2 + 1.0)
+                    .plus(out.scaled(u3 - 2.0 * u2 + u))
+                    .plus(b.value.scaled(-2.0 * u3 + 3.0 * u2))
+                    .plus(inc.scaled(u3 - u2))
+            }
+            _ => a.value.scaled(1.0 - u).plus(b.value.scaled(u)),
+        })
+    }
+
+    /// The keys either side of `time` and how far it is between them.
+    fn around(&self, time: f32) -> Option<(&Key<T>, &Key<T>, f32)> {
+        let first = self.keys.first()?;
+        let next = self.keys.iter().position(|k| k.time > time);
+        Some(match next {
+            Some(0) => (first, first, 0.0),
+            None => {
+                let last = self.keys.last()?;
+                (last, last, 0.0)
+            }
+            Some(i) => {
+                let (a, b) = (&self.keys[i - 1], &self.keys[i]);
+                (a, b, (time - a.time) / (b.time - a.time))
+            }
+        })
+    }
+}
+
+impl Keys<[f32; 4]> {
+    /// The rotation at `time`, eased along the shorter arc.
+    pub fn sample_rotation(&self, time: f32) -> Option<[f32; 4]> {
+        let (a, b, u) = self.around(time)?;
+        let dot: f32 = (0..4).map(|i| a.value[i] * b.value[i]).sum();
+        let b = if dot < 0.0 {
+            b.value.scaled(-1.0)
+        } else {
+            b.value
+        };
+        let q = a.value.scaled(1.0 - u).plus(b.scaled(u));
+        let len = q.iter().map(|v| v * v).sum::<f32>().sqrt();
+        (len > 0.0).then(|| q.map(|v| v / len))
+    }
+}
+
+/// Values keys can hold.
+pub trait Value: Copy {
+    fn scaled(self, f: f32) -> Self;
+    fn plus(self, other: Self) -> Self;
+}
+
+impl Value for f32 {
+    fn scaled(self, f: f32) -> Self {
+        self * f
+    }
+    fn plus(self, other: Self) -> Self {
+        self + other
+    }
+}
+
+impl<const N: usize> Value for [f32; N] {
+    fn scaled(self, f: f32) -> Self {
+        self.map(|v| v * f)
+    }
+    fn plus(self, other: Self) -> Self {
+        std::array::from_fn(|i| self[i] + other[i])
+    }
+}
+
+/// Rows of the matrix that rotates column vectors by `q` (w, x, y, z).
+fn quaternion_matrix([w, x, y, z]: [f32; 4]) -> [[f32; 3]; 3] {
+    [
+        [
+            1.0 - 2.0 * (y * y + z * z),
+            2.0 * (x * y - w * z),
+            2.0 * (x * z + w * y),
+        ],
+        [
+            2.0 * (x * y + w * z),
+            1.0 - 2.0 * (x * x + z * z),
+            2.0 * (y * z - w * x),
+        ],
+        [
+            2.0 * (x * z - w * y),
+            2.0 * (y * z + w * x),
+            1.0 - 2.0 * (x * x + y * y),
+        ],
+    ]
+}
+
+fn euler_matrix(x: f32, y: f32, z: f32) -> [[f32; 3]; 3] {
+    let (sx, cx) = x.sin_cos();
+    let (sy, cy) = y.sin_cos();
+    let (sz, cz) = z.sin_cos();
+    // Rz * Ry * Rx
+    [
+        [cy * cz, sx * sy * cz - cx * sz, cx * sy * cz + sx * sz],
+        [cy * sz, sx * sy * sz + cx * cz, cx * sy * sz - sx * cz],
+        [-sy, sx * cy, cx * cy],
+    ]
 }
 
 impl Object {
@@ -378,11 +617,12 @@ impl Object {
                 })
             }
             "NiMaterialProperty" => {
-                named(r)?;
+                let (_, _, controller) = named(r)?;
                 if r.old() {
                     r.u16()?;
                 }
                 Object::Material(Material {
+                    controller,
                     ambient: r.floats()?,
                     diffuse: r.floats()?,
                     specular: r.floats()?,
@@ -463,36 +703,59 @@ impl Object {
                 }
                 other()
             }
-            "NiKeyframeController" | "NiAlphaController" => {
-                r.skip(4 + 2 + 16 + 4 + 4)?;
-                other()
-            }
+            "NiKeyframeController" | "NiAlphaController" => Object::Controller(Controller {
+                kind: match kind {
+                    "NiKeyframeController" => ControllerKind::Keyframe,
+                    _ => ControllerKind::Alpha,
+                },
+                next: r.reference()?,
+                flags: r.u16()?,
+                frequency: r.f32()?,
+                phase: r.f32()?,
+                start: r.f32()?,
+                stop: r.f32()?,
+                target: r.reference()?,
+                data: r.reference()?,
+            }),
             "NiKeyframeData" => {
                 let n = r.u32()? as usize;
-                if n > 0 {
-                    match r.u32()? {
+                let rotation = match n {
+                    0 => Rotation::default(),
+                    _ => match r.u32()? {
                         4 => {
                             r.f32()?;
-                            for _ in 0..3 {
-                                key_group(r, 1)?;
-                            }
+                            Rotation::Euler([key_group(r)?, key_group(r)?, key_group(r)?])
                         }
                         // Rotations have no tangents, only TCB values.
                         kind => {
-                            let size = if kind == 3 { 7 } else { 4 };
-                            key_size(kind, 4)?;
-                            r.skip(n * 4 * (1 + size))?
+                            let interpolation = interpolation(kind)?;
+                            let keys = (0..n)
+                                .map(|_| {
+                                    let key = Key {
+                                        time: r.f32()?,
+                                        value: r.floats()?,
+                                        tangents: None,
+                                    };
+                                    if kind == 3 {
+                                        r.floats::<3>()?;
+                                    }
+                                    Ok(key)
+                                })
+                                .collect::<Result<_>>()?;
+                            Rotation::Quaternion(Keys {
+                                interpolation,
+                                keys,
+                            })
                         }
-                    }
-                }
-                key_group(r, 3)?;
-                key_group(r, 1)?;
-                other()
+                    },
+                };
+                Object::Keyframes(Keyframes {
+                    rotation,
+                    translation: key_group(r)?,
+                    scale: key_group(r)?,
+                })
             }
-            "NiFloatData" => {
-                key_group(r, 1)?;
-                other()
-            }
+            "NiFloatData" => Object::Floats(key_group(r)?),
             "NiSkinInstance" => {
                 r.reference()?;
                 r.reference()?;
@@ -669,23 +932,63 @@ fn texture_slot(r: &mut Reader) -> Result<TextureSlot> {
     Ok(slot)
 }
 
-/// Floats per key after the time, for an interpolation kind.
-fn key_size(kind: u32, width: usize) -> Result<usize> {
+fn interpolation(kind: u32) -> Result<Interpolation> {
     match kind {
-        1 => Ok(width),
-        2 => Ok(3 * width),
-        3 => Ok(width + 3),
+        1 => Ok(Interpolation::Linear),
+        2 => Ok(Interpolation::Quadratic),
+        3 => Ok(Interpolation::Tcb),
         _ => Err(Error::Corrupt(format!("unknown key kind {kind}"))),
     }
 }
 
-fn key_group(r: &mut Reader, width: usize) -> Result<()> {
-    let n = r.u32()? as usize;
-    if n > 0 {
-        let size = key_size(r.u32()?, width)?;
-        r.skip(n * 4 * (1 + size))?;
+trait ReadValue: Value {
+    fn read(r: &mut Reader) -> Result<Self>;
+}
+
+impl ReadValue for f32 {
+    fn read(r: &mut Reader) -> Result<Self> {
+        r.f32()
     }
-    Ok(())
+}
+
+impl<const N: usize> ReadValue for [f32; N] {
+    fn read(r: &mut Reader) -> Result<Self> {
+        r.floats()
+    }
+}
+
+fn key_group<T: ReadValue>(r: &mut Reader) -> Result<Keys<T>> {
+    let n = r.u32()? as usize;
+    if n == 0 {
+        return Ok(Keys::default());
+    }
+    let interpolation = interpolation(r.u32()?)?;
+    // Each key takes at least eight bytes, so a corrupt count is caught here.
+    r.bytes(n.saturating_mul(8))?;
+    r.pos -= n * 8;
+    let keys = (0..n)
+        .map(|_| {
+            let time = r.f32()?;
+            let value = T::read(r)?;
+            let tangents = match interpolation {
+                Interpolation::Quadratic => Some([T::read(r)?, T::read(r)?]),
+                Interpolation::Tcb => {
+                    r.floats::<3>()?;
+                    None
+                }
+                Interpolation::Linear => None,
+            };
+            Ok(Key {
+                time,
+                value,
+                tangents,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(Keys {
+        interpolation,
+        keys,
+    })
 }
 
 /// Triangles of a strip, with alternate ones flipped to keep the winding
