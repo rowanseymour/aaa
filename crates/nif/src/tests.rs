@@ -482,3 +482,221 @@ fn cycles_controller_time() {
     assert_eq!(c(8 | 2).key_time(5.5), 1.5);
     assert_eq!(c(8 | 4).key_time(4.0), 3.0);
 }
+
+/// The fields every controller starts with.
+fn time_controller(target: i32) -> Vec<u8> {
+    let mut v = (-1i32).to_le_bytes().to_vec();
+    v.extend(8u16.to_le_bytes());
+    v.extend(floats(&[1.0, 0.0, 0.0, 2.0]));
+    v.extend(target.to_le_bytes());
+    v
+}
+
+/// Two particles with positions and, from 10.1.0.0, radii.
+fn particles_data(netimmerse: bool) -> Vec<u8> {
+    let mut v = 2u16.to_le_bytes().to_vec();
+    if !netimmerse {
+        v.extend([0, 0]);
+    }
+    v.push(1);
+    v.extend(floats(&[0.0; 6]));
+    if !netimmerse {
+        v.extend(0u16.to_le_bytes());
+    }
+    v.push(0); // no normals
+    v.extend(floats(&[0.0; 4]));
+    v.push(0); // no colours
+    if netimmerse {
+        v.extend(0u16.to_le_bytes());
+        v.extend(floats(&[1.0])); // radius
+    } else {
+        v.extend(0u16.to_le_bytes());
+        v.push(1);
+        v.extend(floats(&[1.0, 1.0]));
+    }
+    v.extend(2u16.to_le_bytes());
+    v.push(1);
+    v.extend(floats(&[0.5, 0.5]));
+    if !netimmerse {
+        v.push(0); // no rotations
+    }
+    v
+}
+
+#[test]
+fn steps_over_particle_systems() {
+    let mut b = Builder::new();
+    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 3]));
+    b.add("NiTriShape", shape("chimney", 0x10, 2, &[]));
+    b.add("NiTriShapeData", geometry(false));
+
+    let mut smoke = scene("smoke", 0x10, [0.0; 3], 1.0, &[]);
+    smoke[string("smoke").len() + 4..][..4].copy_from_slice(&7i32.to_le_bytes());
+    smoke.extend(4i32.to_le_bytes());
+    smoke.extend((-1i32).to_le_bytes());
+    smoke.push(0); // no shader
+    smoke.push(1); // world space
+    smoke.extend(refs(&[5, 6]));
+    b.add("NiParticleSystem", smoke);
+
+    let mut data = particles_data(false);
+    data.extend([0; 2 * 40]);
+    data.extend(2u16.to_le_bytes());
+    data.extend(0u16.to_le_bytes());
+    b.add("NiPSysData", data);
+
+    let modifier = |name| {
+        let mut v = string(name);
+        v.extend(0u32.to_le_bytes());
+        v.extend(3i32.to_le_bytes());
+        v.push(1);
+        v
+    };
+    let mut emitter = modifier("Box");
+    emitter.extend(floats(&[0.0; 13]));
+    emitter.extend(1i32.to_le_bytes());
+    emitter.extend(floats(&[1.0, 2.0, 3.0]));
+    b.add("NiPSysBoxEmitter", emitter);
+    let mut fade = modifier("Fade");
+    fade.extend(floats(&[1.0]));
+    fade.extend(0u16.to_le_bytes());
+    fade.extend(floats(&[1.0]));
+    fade.extend(0u16.to_le_bytes());
+    b.add("NiPSysGrowFadeModifier", fade);
+
+    let mut ctlr = time_controller(3);
+    ctlr.extend(string("Box"));
+    ctlr.extend(8i32.to_le_bytes());
+    b.add("NiPSysEmitterCtlr", ctlr);
+    let mut rate = 1u32.to_le_bytes().to_vec();
+    rate.extend(1u32.to_le_bytes());
+    rate.extend(floats(&[0.0, 10.0]));
+    rate.extend(2u32.to_le_bytes());
+    rate.extend(floats(&[0.0]));
+    rate.push(1);
+    rate.extend(floats(&[2.0]));
+    rate.push(0);
+    b.add("NiPSysEmitterCtlrData", rate);
+
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    assert!(matches!(&nif.objects[3], Object::Other(k) if k == "NiParticleSystem"));
+    let names: Vec<_> = nif
+        .shapes()
+        .iter()
+        .map(|p| p.shape.av.name.clone())
+        .collect();
+    assert_eq!(names, ["chimney"]);
+}
+
+#[test]
+fn steps_over_controllers() {
+    let mut b = Builder::new();
+    let mut root = scene("root", 0x10, [0.0; 3], 1.0, &[]);
+    root[string("root").len() + 4..][..4].copy_from_slice(&2i32.to_le_bytes());
+    root.extend(refs(&[1]));
+    root.extend(refs(&[]));
+    b.add("NiNode", root);
+    b.add("NiNode", node("target", [0.0; 3], 1.0, &[]));
+
+    let mut look = time_controller(0);
+    look.extend(0u16.to_le_bytes());
+    look.extend(1i32.to_le_bytes());
+    b.add("NiLookAtController", look);
+
+    let mut path = time_controller(0);
+    path.extend(0u16.to_le_bytes());
+    path.extend(0i32.to_le_bytes());
+    path.extend(floats(&[0.0, 0.0]));
+    path.extend(0u16.to_le_bytes());
+    path.extend(4i32.to_le_bytes());
+    path.extend(5i32.to_le_bytes());
+    b.add("NiPathController", path);
+    let mut positions = 2u32.to_le_bytes().to_vec();
+    positions.extend(1u32.to_le_bytes());
+    positions.extend(floats(&[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]));
+    b.add("NiPosData", positions);
+    b.add("NiFloatData", 0u32.to_le_bytes().to_vec());
+
+    let mut vis = time_controller(1);
+    vis.extend(7i32.to_le_bytes());
+    b.add("NiVisController", vis);
+    let mut on_off = 2u32.to_le_bytes().to_vec();
+    on_off.extend(floats(&[0.0]));
+    on_off.push(1);
+    on_off.extend(floats(&[1.0]));
+    on_off.push(0);
+    b.add("NiVisData", on_off);
+
+    let mut flip = time_controller(9);
+    flip.extend(0u32.to_le_bytes());
+    flip.extend(floats(&[0.0, 0.5]));
+    flip.extend(refs(&[10]));
+    b.add("NiFlipController", flip);
+    b.add("NiTexturingProperty", {
+        let mut t = string("");
+        t.extend(refs(&[]));
+        t.extend(8i32.to_le_bytes());
+        t.extend(2u32.to_le_bytes());
+        t.extend(0u32.to_le_bytes());
+        t.extend([0; 5]);
+        t.extend(0u32.to_le_bytes());
+        t
+    });
+    b.add("NiSourceTexture", texture("frame.dds"));
+
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    assert!(
+        matches!(&nif.objects[10], Object::SourceTexture(t) if t.file.as_deref() == Some("frame.dds"))
+    );
+}
+
+#[test]
+fn steps_over_netimmerse_particles() {
+    let mut b = Builder::new();
+    let mut root = netimmerse_scene("Scene Root", -1, [0.0; 3], &[]);
+    root.push(0);
+    root.extend(refs(&[1]));
+    root.extend(refs(&[]));
+    b.add("NiNode", root);
+
+    let mut sparks = netimmerse_scene("sparks", -1, [0.0; 3], &[]);
+    sparks[string("sparks").len() + 4..][..4].copy_from_slice(&3i32.to_le_bytes());
+    sparks.push(0);
+    sparks.extend(2i32.to_le_bytes());
+    sparks.extend((-1i32).to_le_bytes());
+    b.add("NiRotatingParticles", sparks);
+    let mut data = particles_data(true);
+    data.push(1);
+    data.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]));
+    b.add("NiRotatingParticlesData", data);
+
+    let mut ctlr = time_controller(1);
+    ctlr.extend(floats(&[0.0; 16]));
+    ctlr.push(0);
+    ctlr.extend(floats(&[0.0; 3]));
+    ctlr.extend([0, 0]);
+    ctlr.extend(floats(&[0.0; 3]));
+    ctlr.extend((-1i32).to_le_bytes());
+    ctlr.extend(0u16.to_le_bytes());
+    ctlr.extend(floats(&[1.0]));
+    ctlr.extend(0u16.to_le_bytes());
+    ctlr.extend(floats(&[0.0, 0.0]));
+    ctlr.extend(1u16.to_le_bytes());
+    ctlr.extend(1u16.to_le_bytes());
+    ctlr.extend([0; 40]);
+    ctlr.extend((-1i32).to_le_bytes());
+    ctlr.extend(4i32.to_le_bytes());
+    ctlr.extend((-1i32).to_le_bytes());
+    ctlr.push(0);
+    b.add("NiParticleSystemController", ctlr);
+    let mut grow = (-1i32).to_le_bytes().to_vec();
+    grow.extend(3i32.to_le_bytes());
+    grow.extend(floats(&[0.1, 0.5]));
+    b.add("NiParticleGrowFade", grow);
+
+    let nif = Nif::parse(&b.finish_netimmerse(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    assert!(nif.shapes().is_empty());
+}
