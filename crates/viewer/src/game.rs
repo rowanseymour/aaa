@@ -1,4 +1,5 @@
-//! Access to the game's data archive: maps, terrain definitions and textures.
+//! Access to the game's data archive: maps, terrain definitions, object
+//! templates, models and textures.
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -9,6 +10,24 @@ use tgck::{Archive, Map};
 
 pub struct Game {
     data: Archive<BufReader<File>>,
+    /// Lower-case path to entry index.
+    paths: HashMap<String, usize>,
+    /// Lower-case file name to entry indices.
+    files: HashMap<String, Vec<usize>>,
+}
+
+/// How a template is drawn: its models and where their textures are.
+#[derive(Debug, Clone)]
+pub struct View {
+    /// Archive paths of the model variations; each placed object picks one.
+    pub models: Vec<String>,
+    /// Archive folders searched for the models' textures.
+    pub texture_dirs: Vec<String>,
+    /// Substitutions applied to texture names, `(from, to)`.
+    pub texture_renames: Vec<(String, String)>,
+    /// Size multiplier: the middle of the template's random size range, which
+    /// each placed object scales again by its own factor.
+    pub scale: f32,
 }
 
 /// One texture variation of a terrain type, e.g. `temperate_grass01`.
@@ -32,12 +51,52 @@ impl Game {
         let path = find_case_insensitive(dir, "Data.rwd")
             .ok_or_else(|| format!("no Data.rwd in {}", dir.display()))?;
         let data = Archive::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Ok(Game { data })
+        let mut paths = HashMap::new();
+        let mut files: HashMap<String, Vec<usize>> = HashMap::new();
+        for (i, e) in data.entries.iter().enumerate() {
+            let lower = e.name.to_ascii_lowercase();
+            let file = lower.rsplit('/').next().unwrap_or(&lower).to_string();
+            files.entry(file).or_default().push(i);
+            paths.insert(lower, i);
+        }
+        Ok(Game { data, paths, files })
     }
 
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
-        let entry = self.data.find(name)?.clone();
+        let i = *self.paths.get(&name.to_ascii_lowercase())?;
+        let entry = self.data.entries[i].clone();
         self.data.read(&entry).ok()
+    }
+
+    pub fn exists(&self, name: &str) -> bool {
+        self.paths.contains_key(&name.to_ascii_lowercase())
+    }
+
+    /// Finds a texture a model refers to by file name: in the given folders
+    /// first, then anywhere in the archive, preferring the path that shares
+    /// the longest folder prefix with `near`.
+    pub fn find_texture(&self, file: &str, dirs: &[String], near: &str) -> Option<String> {
+        let file = file.replace('\\', "/");
+        let name = file.rsplit('/').next().unwrap_or(&file);
+        for dir in dirs {
+            let path = format!("{dir}/{name}");
+            if self.exists(&path) {
+                return Some(path);
+            }
+        }
+        let near = near.to_ascii_lowercase();
+        let shared = |p: &str| {
+            p.bytes()
+                .zip(near.bytes())
+                .take_while(|(a, b)| a == b)
+                .count()
+        };
+        self.files
+            .get(&name.to_ascii_lowercase())?
+            .iter()
+            .map(|&i| self.data.entries[i].name.as_str())
+            .max_by_key(|p| shared(&p.to_ascii_lowercase()))
+            .map(str::to_string)
     }
 
     /// Archive paths of all maps, sorted.
@@ -126,6 +185,103 @@ impl Game {
             }
         }
         out
+    }
+
+    /// The views of all object templates that name a model, by lower-case
+    /// template id.
+    pub fn views(&mut self) -> HashMap<String, View> {
+        let files: Vec<String> = self
+            .data
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .filter(|n| n.to_ascii_lowercase().ends_with(".tgi"))
+            .collect();
+        let mut out = HashMap::new();
+        for file in files {
+            let Some(bytes) = self.read(&file) else {
+                continue;
+            };
+            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+            let parsed = tgi::parse_bytes(&bytes);
+            for thing in parsed.root.blocks_of("Thing") {
+                let (Some(id), Some(view)) = (thing.value("ids"), thing.blocks_of("View").next())
+                else {
+                    continue;
+                };
+                if let Some(v) = self.view(dir, thing, view) {
+                    out.insert(id.to_ascii_lowercase(), v);
+                }
+            }
+        }
+        out
+    }
+
+    /// A template's models: its aspects when they are variations, else its
+    /// normal model, else whatever aspects it lists.
+    fn view(&self, dir: &str, thing: &tgi::Block, view: &tgi::Block) -> Option<View> {
+        let prefix = view.value("resource_prefix").unwrap_or("");
+        let path = |m: &str| {
+            let m = m.replace("%s", prefix).replace('\\', "/");
+            match m.strip_prefix('/') {
+                Some(abs) => abs.to_string(),
+                None => format!("{dir}/{m}"),
+            }
+        };
+        let aspects: Vec<String> = view
+            .blocks_of("Aspect")
+            .filter_map(|a| a.value("model"))
+            .map(path)
+            .filter(|p| self.exists(p))
+            .collect();
+        let normal = view
+            .blocks_of("AspectNormal")
+            .find_map(|a| a.value("model"))
+            .map(path)
+            .or_else(|| (!prefix.is_empty()).then(|| path("%s.nif")))
+            .filter(|p| self.exists(p));
+        let variations = view
+            .value("aspects_as_variations")
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+        let models = match normal {
+            Some(n) if !variations => vec![n],
+            _ => aspects,
+        };
+        if models.is_empty() {
+            return None;
+        }
+        let texture_dirs = view
+            .blocks_of("TextureSearchPath")
+            .filter_map(|b| b.value("path"))
+            .map(|p| p.trim_matches('/').to_string())
+            .collect();
+        let texture_renames = view
+            .blocks()
+            .flat_map(|b| b.blocks_of("TextureRename"))
+            .filter_map(|r| {
+                Some((
+                    r.value("substring_from")?.to_string(),
+                    r.value("substring_to")?.to_string(),
+                ))
+            })
+            .collect();
+        let size = |key| {
+            thing
+                .blocks_of("Size")
+                .find_map(|s| s.value(key))
+                .and_then(|v| v.trim().parse::<f32>().ok())
+        };
+        let scale = match (size("scale_min"), size("scale_max")) {
+            (Some(a), Some(b)) => (a + b) / 2.0,
+            (Some(a), None) | (None, Some(a)) => a,
+            _ => 1.0,
+        };
+        Some(View {
+            models,
+            texture_dirs,
+            texture_renames,
+            scale,
+        })
     }
 
     /// The transition masks of the first transition set, keyed by the

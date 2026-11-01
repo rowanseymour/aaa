@@ -1,0 +1,12 @@
+[package]
+name = "nif"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Reader for the .nif model files of Axis & Allies (2004)"
+readme = "README.md"
+keywords = ["gamedev", "3d", "file-format", "parser"]
+categories = ["parser-implementations", "game-development"]
+
+[dependencies]

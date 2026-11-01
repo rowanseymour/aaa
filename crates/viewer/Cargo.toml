@@ -9,6 +9,7 @@ description = "3D viewer for Axis & Allies (2004) maps"
 publish = false
 
 [dependencies]
+nif = { path = "../nif" }
 tgck = { path = "../tgck" }
 tgi = { path = "../tgi" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

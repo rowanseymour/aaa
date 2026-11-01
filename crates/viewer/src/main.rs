@@ -4,6 +4,7 @@
 mod blend;
 mod camera;
 mod game;
+mod models;
 mod objects;
 mod terrain;
 
@@ -11,6 +12,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use bevy::asset::embedded_asset;
+use bevy::image::CompressedImageFormatSupport;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
@@ -19,6 +21,7 @@ use tgck::map::{CELL_SIZE, Terrain, Thing};
 use blend::GroundMaterial;
 use camera::RtsCamera;
 use game::Game;
+use models::{ModelAssets, Models};
 use terrain::Ground;
 
 const USAGE: &str = "\
@@ -155,6 +158,7 @@ fn setup(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut ground_materials: ResMut<Assets<GroundMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    formats: Res<CompressedImageFormatSupport>,
 ) {
     let Loaded {
         game,
@@ -178,7 +182,14 @@ fn setup(
             MeshMaterial3d(materials.add(material)),
         ));
     }
-    objects::spawn(&mut commands, &mut meshes, &mut materials, ground, things);
+    let mut models = Models::new(game, formats.0);
+    let mut assets = ModelAssets {
+        meshes: &mut meshes,
+        materials: &mut materials,
+        images: &mut images,
+    };
+    let rest = models.spawn(&mut commands, game, &mut assets, ground, things);
+    objects::spawn(&mut commands, &mut meshes, &mut materials, ground, &rest);
 
     let size = (ground.side - 1) as f32 * CELL_SIZE;
     let centre = terrain::world(

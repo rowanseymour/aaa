@@ -31,11 +31,14 @@ rotate and tilt, and switches back.
 - The height map, with each tile textured by its terrain variation and soft
   edges between terrain types from the game's transition masks
 - Water surfaces, with the bed carved out below them
-- Placed objects as simple markers: cones for trees, boxes for buildings and
-  rocks, coloured boxes for units, red pillars for start locations
+- Placed objects with the game's models: trees, buildings, roads, fences and
+  the like, at each object's own size and variation
+- Simple markers where a model can't be read yet: boxes for skinned models
+  such as tall grass, coloured boxes for units, red pillars for start
+  locations
 
-Not yet: soft water edges, models, doodads, lighting from the map's sun
-settings. Some developer test maps refer to terrain types the game no longer
+Not yet: soft water edges, skinned and animated models, particle effects,
+lighting from the map's sun settings. Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 
 ## Building on Linux

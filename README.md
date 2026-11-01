@@ -11,6 +11,7 @@ You need your own copy of the game. This project contains no game code or data.
 |---|---|
 | [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool |
 | [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) |
+| [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool |
 | [`aaa-viewer`](crates/viewer) | 3D map viewer built with Bevy |
 
 ## Building
@@ -20,7 +21,7 @@ cargo build --release
 cargo test
 ```
 
-Requires Rust 1.88 or newer (1.97.1 for the viewer). The `tgck`, `tgi` and `aaa-viewer` commands end up
+Requires Rust 1.88 or newer (1.97.1 for the viewer). The `tgck`, `tgi`, `nif` and `aaa-viewer` commands end up
 in `target/release/`. The viewer has extra system requirements on Linux; see
 [its README](crates/viewer/README.md).
 

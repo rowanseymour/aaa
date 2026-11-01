@@ -1,4 +1,5 @@
-//! Placeholder markers for the objects placed on a map.
+//! Placeholder markers for placed objects without a readable model: units,
+//! start locations, and objects whose templates name a model.
 
 use std::collections::HashMap;
 
@@ -60,13 +61,16 @@ pub fn spawn(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     ground: &Ground,
-    things: &[Thing],
+    things: &[(&Thing, bool)],
 ) {
     let mut handles = HashMap::new();
-    for thing in things {
+    for &(thing, has_model) in things {
         let Some(kind) = kind(&thing.template) else {
             continue;
         };
+        if !has_model && !matches!(kind, Kind::Start | Kind::Unit(_)) {
+            continue;
+        }
         let (mesh, material, lift) = handles
             .entry(kind)
             .or_insert_with(|| {
