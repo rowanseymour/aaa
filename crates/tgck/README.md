@@ -45,6 +45,7 @@ let mut map = Map::open("Kursk.RMP")?;
 let heights = map.height_map()?; // f32 grid plus a per-vertex water layer
 let terrain = map.terrain()?;    // biome, terrain names, per-tile terrain and water body
 let things = map.things()?;      // placed objects: template, id, position, facing
+let sun = map.sun()?;            // light direction and colours
 ```
 
 ## Format support
@@ -56,6 +57,7 @@ let things = map.things()?;      // placed objects: template, id, position, faci
 | Map `HEIGHT_MAP`, `MOUNTAIN_HEIGHT_MAP` | Done |
 | Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
 | Map `DYNAMIC_THINGS` | Template, id, position and facing; the rest of each record is kept as raw bytes |
+| Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
 | Other map sections (`MAP_HEADER`, `TEAMS`, `TRIGGERS`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
 
