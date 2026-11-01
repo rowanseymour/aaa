@@ -201,3 +201,98 @@ fn unbalanced_quote_kept_literally() {
         Some("a/b.tga\"")
     );
 }
+
+#[test]
+fn inheritance() {
+    let schema = ok("
+[template Thing]
+{
+    [list Property]
+    [list TextureSearchPath]
+}
+");
+    let files = ok("
+[Template Base Template=Thing]
+{
+    health = 100
+    [View]
+    {
+        [TextureSearchPath]
+        path = /Shared
+        [AspectNormal Template=Aspect]
+        {
+            [Animation]
+            ids = idle
+        }
+    }
+    [PropertiesComponent]
+    {
+        [Property]
+        property_ids = a
+    }
+}
+[template Middle inherit=base]
+{
+    health = 200
+    [Size]
+    scale_min = 2
+    [View]
+    {
+        resource_prefix = Corps/Corps
+        [AspectNormal]
+        skin = corps.dds
+    }
+}
+[Thing Template=Middle]
+{
+    IDS = corps
+    [PropertiesComponent]
+    {
+        [Property]
+        property_ids = b
+    }
+    [Size]
+    scale_min = 3
+}
+[Template Loop1 Template=Loop2]
+x = 1
+[Template Loop2 Template=Loop1]
+x = 2
+[Thing Template=Loop1]
+[Thing Template=Missing]
+y = 1
+");
+    let templates = Templates::new([&schema, &files]);
+    let things: Vec<&Block> = files.blocks_of("Thing").collect();
+    let corps = templates.resolve(things[0]);
+    assert_eq!(corps.header, things[0].header);
+    assert_eq!(
+        (corps.value("ids"), corps.value("health")),
+        (Some("corps"), Some("200"))
+    );
+    let size: Vec<_> = corps.blocks_of("Size").collect();
+    assert_eq!(size.len(), 1);
+    assert_eq!(size[0].value("scale_min"), Some("3"));
+
+    let view = corps.blocks_of("View").next().unwrap();
+    assert_eq!(view.value("resource_prefix"), Some("Corps/Corps"));
+    assert_eq!(view.blocks_of("TextureSearchPath").count(), 1);
+    let normal: Vec<_> = view.blocks_of("AspectNormal").collect();
+    assert_eq!(normal.len(), 1);
+    assert_eq!(
+        (normal[0].attr("template"), normal[0].value("skin")),
+        (Some("Aspect"), Some("corps.dds"))
+    );
+    assert_eq!(normal[0].blocks_of("Animation").count(), 1);
+
+    let properties: Vec<_> = corps
+        .blocks_of("PropertiesComponent")
+        .flat_map(|c| c.blocks_of("Property"))
+        .filter_map(|p| p.value("property_ids"))
+        .collect();
+    assert_eq!(properties, ["a", "b"]);
+
+    let looped = templates.resolve(things[1]);
+    assert_eq!(looped.value("x"), Some("1"));
+    assert_eq!(&templates.resolve(things[2]), things[2]);
+}

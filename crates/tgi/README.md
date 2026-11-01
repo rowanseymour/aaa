@@ -37,8 +37,13 @@ Files are decoded as UTF-8 (with or without BOM), falling back to Windows-1252.
 Malformed input (missing `]`, unbalanced braces, stray text) produces warnings
 instead of errors, so every file the game ships loads.
 
-This crate builds the syntax tree only; resolving `Template=` / `Inherit=`
-inheritance is left to the caller.
+The tree is left as written; `Templates` resolves `Template=` / `Inherit=`
+inheritance on request:
+
+```rust
+let templates = tgi::Templates::new(files.iter().map(|p| &p.root));
+let resolved = templates.resolve(thing);           // thing with its parents merged in
+```
 
 ## Command line
 

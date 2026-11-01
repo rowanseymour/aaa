@@ -205,29 +205,41 @@ impl Game {
 
     /// The views of all object templates, by lower-case template id,
     /// including the ids the game has since renamed: `None` for templates
-    /// that name no model, such as sound emitters. Templates without a view
-    /// of their own are left out.
+    /// that name no model, such as sound emitters, or are invisible.
+    /// Templates without a view, of their own or inherited, are left out.
     pub fn views(&mut self) -> HashMap<String, Option<View>> {
-        let files: Vec<String> = self
+        let files: Vec<(String, tgi::Parsed)> = self
             .data
             .entries
             .iter()
             .map(|e| e.name.clone())
             .filter(|n| n.to_ascii_lowercase().ends_with(".tgi"))
+            .collect::<Vec<_>>()
+            .into_iter()
+            .filter_map(|n| {
+                let parsed = tgi::parse_bytes(&self.read(&n)?);
+                Some((n, parsed))
+            })
             .collect();
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
-        for file in files {
-            let Some(bytes) = self.read(&file) else {
-                continue;
-            };
+        for (file, parsed) in &files {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            let parsed = tgi::parse_bytes(&bytes);
             for thing in parsed.root.blocks_of("Thing") {
-                let (Some(id), Some(view)) = (thing.value("ids"), thing.blocks_of("View").next())
-                else {
+                let Some(id) = thing.value("ids") else {
                     continue;
                 };
-                out.insert(id.to_ascii_lowercase(), self.view(dir, thing, view));
+                let thing = templates.resolve(thing);
+                let invisible = thing
+                    .blocks_of("Flags")
+                    .find_map(|f| f.value("invisible"))
+                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+                let view = match thing.blocks_of("View").next() {
+                    _ if invisible => None,
+                    Some(view) => self.view(&templates, dir, &thing, view),
+                    None => continue,
+                };
+                out.insert(id.to_ascii_lowercase(), view);
             }
         }
         let renames = self.thing_renames();
@@ -264,7 +276,13 @@ impl Game {
     /// A template's models: its aspects when they are variations, else its
     /// normal model, else whatever aspects it lists. Models missing from the
     /// archive are left out, so a view may have none.
-    fn view(&self, dir: &str, thing: &tgi::Block, view: &tgi::Block) -> Option<View> {
+    fn view(
+        &self,
+        templates: &tgi::Templates,
+        dir: &str,
+        thing: &tgi::Block,
+        view: &tgi::Block,
+    ) -> Option<View> {
         let prefix = view.value("resource_prefix").unwrap_or("");
         let path = |m: &str| {
             let m = m.replace("%s", prefix).replace('\\', "/");
@@ -273,10 +291,11 @@ impl Game {
                 None => format!("{dir}/{m}"),
             }
         };
+        // Aspects take their model, if they don't name one, from templates
+        // such as the schema's `%s.nif`.
         let aspects: Vec<String> = view
             .blocks_of("Aspect")
-            .filter_map(|a| a.value("model"))
-            .map(path)
+            .filter_map(|a| templates.resolve(a).value("model").map(path))
             .collect();
         let normal = view
             .blocks_of("AspectNormal")
