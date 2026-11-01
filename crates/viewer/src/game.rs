@@ -203,9 +203,11 @@ impl Game {
         out
     }
 
-    /// The views of all object templates that name a model, by lower-case
-    /// template id, including the ids the game has since renamed.
-    pub fn views(&mut self) -> HashMap<String, View> {
+    /// The views of all object templates, by lower-case template id,
+    /// including the ids the game has since renamed: `None` for templates
+    /// that name no model, such as sound emitters. Templates without a view
+    /// of their own are left out.
+    pub fn views(&mut self) -> HashMap<String, Option<View>> {
         let files: Vec<String> = self
             .data
             .entries
@@ -225,9 +227,7 @@ impl Game {
                 else {
                     continue;
                 };
-                if let Some(v) = self.view(dir, thing, view) {
-                    out.insert(id.to_ascii_lowercase(), v);
-                }
+                out.insert(id.to_ascii_lowercase(), self.view(dir, thing, view));
             }
         }
         let renames = self.thing_renames();
@@ -262,7 +262,8 @@ impl Game {
     }
 
     /// A template's models: its aspects when they are variations, else its
-    /// normal model, else whatever aspects it lists.
+    /// normal model, else whatever aspects it lists. Models missing from the
+    /// archive are left out, so a view may have none.
     fn view(&self, dir: &str, thing: &tgi::Block, view: &tgi::Block) -> Option<View> {
         let prefix = view.value("resource_prefix").unwrap_or("");
         let path = |m: &str| {
@@ -276,14 +277,17 @@ impl Game {
             .blocks_of("Aspect")
             .filter_map(|a| a.value("model"))
             .map(path)
-            .filter(|p| self.exists(p))
             .collect();
         let normal = view
             .blocks_of("AspectNormal")
             .find_map(|a| a.value("model"))
             .map(path)
-            .or_else(|| (!prefix.is_empty()).then(|| path("%s.nif")))
-            .filter(|p| self.exists(p));
+            .or_else(|| (!prefix.is_empty()).then(|| path("%s.nif")));
+        if aspects.is_empty() && normal.is_none() {
+            return None;
+        }
+        let aspects: Vec<String> = aspects.into_iter().filter(|p| self.exists(p)).collect();
+        let normal = normal.filter(|p| self.exists(p));
         let variations = view
             .value("aspects_as_variations")
             .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
@@ -291,9 +295,6 @@ impl Game {
             Some(n) if !variations => vec![n],
             _ => aspects,
         };
-        if models.is_empty() {
-            return None;
-        }
         let texture_dirs = view
             .blocks_of("TextureSearchPath")
             .filter_map(|b| b.value("path"))

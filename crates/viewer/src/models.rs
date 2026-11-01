@@ -81,7 +81,7 @@ pub fn animate(
 
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
-    views: HashMap<String, View>,
+    views: HashMap<String, Option<View>>,
     models: HashMap<String, Option<Vec<Part>>>,
     textures: HashMap<String, Option<Handle<Image>>>,
     /// Bevy's texture formats this GPU can sample compressed.
@@ -99,8 +99,8 @@ impl Models {
     }
 
     /// Spawns every object whose template has a readable model and returns
-    /// the rest, each with whether its template names a model at all (sound
-    /// emitters, cameras and the like do not).
+    /// the rest, each with whether it should have had one: false only for
+    /// templates that name no model, such as sound emitters.
     pub fn spawn<'a>(
         &mut self,
         commands: &mut Commands,
@@ -110,13 +110,16 @@ impl Models {
     ) -> Vec<(&'a Thing, bool)> {
         let mut rest = Vec::new();
         for thing in things {
-            let Some(view) = self
-                .views
-                .get(&thing.template.to_ascii_lowercase())
-                .cloned()
-            else {
-                rest.push((thing, false));
-                continue;
+            let view = match self.views.get(&thing.template.to_ascii_lowercase()) {
+                Some(Some(view)) if !view.models.is_empty() => view.clone(),
+                Some(None) => {
+                    rest.push((thing, false));
+                    continue;
+                }
+                _ => {
+                    rest.push((thing, true));
+                    continue;
+                }
             };
             let (factor, variant) = placement(thing);
             let model =
@@ -172,13 +175,14 @@ impl Models {
                 });
         }
         let mut missing: HashMap<&str, usize> = HashMap::new();
-        for (t, _) in &rest {
+        for (t, _) in rest.iter().filter(|(_, should)| *should) {
             *missing.entry(t.template.as_str()).or_default() += 1;
         }
         info!(
-            "{} objects drawn with models, {} as markers",
+            "{} objects drawn with models, {} missing, {} with no model",
             things.len() - rest.len(),
-            rest.len()
+            missing.values().sum::<usize>(),
+            rest.iter().filter(|(_, should)| !should).count()
         );
         debug!("templates without a readable model: {missing:?}");
         rest

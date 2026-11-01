@@ -52,7 +52,7 @@ impl RtsCamera {
 }
 
 pub const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
-                        (Q/E/right drag: rotate   R/F: tilt)";
+                        (Q/E/right drag: rotate   R/F: tilt)   M: objects without models";
 
 pub fn update(
     keys: Res<ButtonInput<KeyCode>>,
