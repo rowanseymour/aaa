@@ -33,7 +33,7 @@ rotate and tilt, and switches back.
 - Water surfaces, with the bed carved out below them and coloured by depth
   from the biome's water settings
 - Placed objects with the game's models: trees, buildings, roads, fences and
-  the like, at each object's own size and variation; skinned models such as
+  the like, at each object's own size, variation and height; skinned models such as
   tall grass stand in the pose they were modelled in
 - Models' own keyframe and fade animations, such as waves rolling in to shore
 - Simple markers where a model can't be read yet: boxes for models with

@@ -8,6 +8,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::{
     CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
 };
+use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
@@ -15,7 +16,7 @@ use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 use tgck::map::Thing;
 
 use crate::game::{Game, View};
-use crate::terrain::{Ground, world};
+use crate::terrain::world;
 
 /// One mesh of a model, in Bevy axes, ready to instance.
 #[derive(Clone)]
@@ -23,6 +24,9 @@ struct Part {
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
     animation: Option<Arc<Animation>>,
+    /// Bevy's shadows ignore alpha blending, so a faded or see-through mesh
+    /// would cast a solid one.
+    blended: bool,
 }
 
 /// What a model's controllers do to one of its meshes.
@@ -102,7 +106,6 @@ impl Models {
         commands: &mut Commands,
         game: &mut Game,
         assets: &mut ModelAssets,
-        ground: &Ground,
         things: &'a [Thing],
     ) -> Vec<(&'a Thing, bool)> {
         let mut rest = Vec::new();
@@ -122,9 +125,11 @@ impl Models {
                 rest.push((thing, true));
                 continue;
             };
-            let [x, y, _] = thing.position;
+            // Maps store each object's height as the game places it: on the
+            // ground, the seabed or the waterline.
+            let [x, y, z] = thing.position;
             let [fx, fy, _] = thing.facing;
-            let transform = Transform::from_translation(world(x, y, ground.height_at(x, y)))
+            let transform = Transform::from_translation(world(x, y, z))
                 .with_rotation(Quat::from_rotation_y(fy.atan2(fx)))
                 .with_scale(Vec3::splat(view.scale * factor));
             commands
@@ -135,8 +140,12 @@ impl Models {
                 ))
                 .with_children(|parent| {
                     for part in parts {
+                        let mut child = parent.spawn(Mesh3d(part.mesh));
+                        if part.blended {
+                            child.insert(NotShadowCaster);
+                        }
                         let Some(animation) = part.animation else {
-                            parent.spawn((Mesh3d(part.mesh), MeshMaterial3d(part.material)));
+                            child.insert(MeshMaterial3d(part.material));
                             continue;
                         };
                         let material = match animation.fade {
@@ -150,8 +159,7 @@ impl Models {
                         // Spread over a minute by the golden ratio, so any
                         // run of ids lands well apart.
                         let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
-                        parent.spawn((
-                            Mesh3d(part.mesh),
+                        child.insert((
                             MeshMaterial3d(material.clone()),
                             animation.transform(offset),
                             Animated {
@@ -289,6 +297,7 @@ impl Models {
                     ..default()
                 }),
                 animation: animation.map(Arc::new),
+                blended: alpha_mode == AlphaMode::Blend,
             });
         }
         if let Some(kind) = &nif.incomplete {

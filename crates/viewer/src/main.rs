@@ -189,7 +189,7 @@ fn setup(
         materials: &mut materials,
         images: &mut images,
     };
-    let rest = models.spawn(&mut commands, game, &mut assets, ground, things);
+    let rest = models.spawn(&mut commands, game, &mut assets, things);
     objects::spawn(&mut commands, &mut meshes, &mut materials, ground, &rest);
 
     let size = (ground.side - 1) as f32 * CELL_SIZE;
