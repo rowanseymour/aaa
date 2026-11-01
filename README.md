@@ -1,6 +1,6 @@
 ![aaa](docs/banner.svg)
 
-Rust tools for working with the data files of **Axis & Allies (2004)**, the
+Rust tools for working with the data files of **[Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game))**, the
 real-time strategy game.
 
 You need your own copy of the game. This project contains no game code or data.
