@@ -108,7 +108,7 @@ fn main() -> ExitCode {
         .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
         .insert_resource(loaded)
         .add_systems(Startup, setup)
-        .add_systems(Update, camera::update);
+        .add_systems(Update, (camera::update, models::animate));
     if let Some(s) = screenshot {
         app.insert_resource(s).add_systems(Update, take_screenshot);
     }

@@ -2,6 +2,7 @@
 //! models this viewer can read.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{
@@ -10,7 +11,7 @@ use bevy::image::{
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
-use nif::{Nif, Object};
+use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 use tgck::map::Thing;
 
 use crate::game::{Game, View};
@@ -21,6 +22,57 @@ use crate::terrain::{Ground, world};
 struct Part {
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
+    animation: Option<Arc<Animation>>,
+}
+
+/// What a model's controllers do to one of its meshes.
+pub struct Animation {
+    /// Moves the mesh's nearest animated ancestor, under `above`, its
+    /// parent's transform in the model; the mesh is then built relative
+    /// to that ancestor.
+    motion: Option<(Controller, Keyframes, nif::Transform)>,
+    above: nif::Transform,
+    /// Fades the material's alpha; each instance gets its own material.
+    fade: Option<(Controller, Keys<f32>)>,
+}
+
+impl Animation {
+    fn transform(&self, t: f32) -> Transform {
+        match &self.motion {
+            Some((c, keys, base)) => {
+                bevy_transform(&self.above.then(&keys.apply(base, c.key_time(t))))
+            }
+            None => Transform::IDENTITY,
+        }
+    }
+}
+
+/// Plays a part's animation, `offset` seconds in so neighbouring objects
+/// don't move in step.
+#[derive(Component)]
+pub struct Animated {
+    animation: Arc<Animation>,
+    offset: f32,
+    material: Handle<StandardMaterial>,
+}
+
+pub fn animate(
+    time: Res<Time>,
+    mut parts: Query<(&Animated, &mut Transform)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for (a, mut transform) in &mut parts {
+        let t = time.elapsed_secs() + a.offset;
+        if a.animation.motion.is_some() {
+            *transform = a.animation.transform(t);
+        }
+        if let Some((c, keys)) = &a.animation.fade
+            && let Some(alpha) = keys.sample(c.key_time(t))
+            && let Some(mut m) = materials.get_mut(&a.material)
+        {
+            m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
+        }
+    }
 }
 
 /// Loads models and textures once each, however many objects use them.
@@ -83,7 +135,31 @@ impl Models {
                 ))
                 .with_children(|parent| {
                     for part in parts {
-                        parent.spawn((Mesh3d(part.mesh), MeshMaterial3d(part.material)));
+                        let Some(animation) = part.animation else {
+                            parent.spawn((Mesh3d(part.mesh), MeshMaterial3d(part.material)));
+                            continue;
+                        };
+                        let material = match animation.fade {
+                            Some(_) => assets
+                                .materials
+                                .get(&part.material)
+                                .cloned()
+                                .map_or(part.material, |m| assets.materials.add(m)),
+                            None => part.material,
+                        };
+                        // Spread over a minute by the golden ratio, so any
+                        // run of ids lands well apart.
+                        let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
+                        parent.spawn((
+                            Mesh3d(part.mesh),
+                            MeshMaterial3d(material.clone()),
+                            animation.transform(offset),
+                            Animated {
+                                animation,
+                                offset,
+                                material,
+                            },
+                        ));
                     }
                 });
         }
@@ -137,8 +213,38 @@ impl Models {
                 _ => None,
             });
             let base = texturing.and_then(|t| t.base.as_ref());
-            let Some(mesh) = mesh(g, &placed.transform, base.map_or(0, |b| b.uv_set as usize))
-            else {
+            let material = nif.property(props, |o| match o {
+                Object::Material(m) => Some(m),
+                _ => None,
+            });
+            let motion = motion(&nif, &placed.path);
+            let fade = material
+                .and_then(|m| controller(&nif, m.controller, ControllerKind::Alpha))
+                .and_then(|c| match nif.get(c.data) {
+                    Some(Object::Floats(keys)) => Some((c.clone(), keys.clone())),
+                    _ => None,
+                });
+            let (mesh_transform, animation) = match (motion, fade) {
+                (None, None) => (placed.transform, None),
+                (Some((controller, keys, above, base, below)), fade) => (
+                    below,
+                    Some(Animation {
+                        motion: Some((controller, keys, base)),
+                        above,
+                        fade,
+                    }),
+                ),
+                (None, fade) => (
+                    placed.transform,
+                    Some(Animation {
+                        motion: None,
+                        above: nif::Transform::IDENTITY,
+                        fade,
+                    }),
+                ),
+            };
+            let uv_set = base.map_or(0, |b| b.uv_set as usize);
+            let Some(mesh) = mesh(g, &mesh_transform, uv_set) else {
                 continue;
             };
             let texture = match base.and_then(|b| nif.get(b.source)) {
@@ -152,10 +258,6 @@ impl Models {
                 },
                 _ => None,
             };
-            let material = nif.property(props, |o| match o {
-                Object::Material(m) => Some(m),
-                _ => None,
-            });
             let alpha = nif.property(props, |o| match o {
                 Object::Alpha(a) => Some(a),
                 _ => None,
@@ -186,6 +288,7 @@ impl Models {
                     reflectance: 0.2,
                     ..default()
                 }),
+                animation: animation.map(Arc::new),
             });
         }
         if let Some(kind) = &nif.incomplete {
@@ -248,6 +351,78 @@ impl Models {
         }
         self.textures.insert(key, handle.clone());
         handle
+    }
+}
+
+/// The first active controller of `kind` in the chain starting at `first`.
+fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Option<&Controller> {
+    let mut next = first;
+    for _ in 0..16 {
+        let Some(Object::Controller(c)) = nif.get(next) else {
+            return None;
+        };
+        // Flag bit 3 marks the controller active.
+        if c.kind == kind && c.flags & 8 != 0 {
+            return Some(c);
+        }
+        next = c.next;
+    }
+    None
+}
+
+type Motion = (
+    Controller,
+    Keyframes,
+    nif::Transform,
+    nif::Transform,
+    nif::Transform,
+);
+
+/// The keyframes on the nearest animated object along `path`, with the
+/// transforms above it, its own and below it down to the end of the path.
+fn motion(nif: &Nif, path: &[usize]) -> Option<Motion> {
+    let scene = |i: usize| match nif.get(Some(i)) {
+        Some(Object::Node(n)) => Some(&n.av),
+        Some(Object::Shape(s)) => Some(&s.av),
+        _ => None,
+    };
+    let (at, controller, keys) = path.iter().enumerate().rev().find_map(|(at, &i)| {
+        let c = controller(nif, scene(i)?.controller, ControllerKind::Keyframe)?;
+        match nif.get(c.data) {
+            Some(Object::Keyframes(k)) => Some((at, c, k)),
+            _ => None,
+        }
+    })?;
+    let chain = |range: &[usize]| {
+        range
+            .iter()
+            .filter_map(|&i| scene(i))
+            .fold(nif::Transform::IDENTITY, |t, av| t.then(&av.transform))
+    };
+    Some((
+        controller.clone(),
+        keys.clone(),
+        chain(&path[..at]),
+        scene(path[at])?.transform,
+        chain(&path[at + 1..]),
+    ))
+}
+
+/// A model-space transform in Bevy axes.
+fn bevy_transform(t: &nif::Transform) -> Transform {
+    let [x, y, z] = t.translation;
+    let r = t.rotation;
+    // The game's z-up axes map to Bevy's as (x, y, z) -> (x, z, -y); conjugate
+    // the rotation by that change of basis.
+    let m = Mat3::from_cols(
+        Vec3::new(r[0][0], r[2][0], -r[1][0]),
+        Vec3::new(r[0][2], r[2][2], -r[1][2]),
+        -Vec3::new(r[0][1], r[2][1], -r[1][1]),
+    );
+    Transform {
+        translation: Vec3::new(x, z, -y),
+        rotation: Quat::from_mat3(&m),
+        scale: Vec3::splat(t.scale),
     }
 }
 

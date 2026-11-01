@@ -35,11 +35,12 @@ rotate and tilt, and switches back.
 - Placed objects with the game's models: trees, buildings, roads, fences and
   the like, at each object's own size and variation; skinned models such as
   tall grass stand in the pose they were modelled in
+- Models' own keyframe and fade animations, such as waves rolling in to shore
 - Simple markers where a model can't be read yet: boxes for models with
   particle effects or some animations, coloured boxes for units, red pillars
   for start locations
 
-Not yet: animated water textures, animation, particle effects,
+Not yet: animated water textures, skeletal animation, particle effects,
 lighting from the map's sun settings. Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 
