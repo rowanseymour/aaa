@@ -204,7 +204,7 @@ impl Game {
     }
 
     /// The views of all object templates that name a model, by lower-case
-    /// template id.
+    /// template id, including the ids the game has since renamed.
     pub fn views(&mut self) -> HashMap<String, View> {
         let files: Vec<String> = self
             .data
@@ -230,7 +230,35 @@ impl Game {
                 }
             }
         }
+        let renames = self.thing_renames();
+        for old in renames.keys() {
+            if let Some(v) = out.get(&resolve(&renames, old)).cloned() {
+                out.insert(old.clone(), v);
+            }
+        }
         out
+    }
+
+    /// Old template ids that maps may still use, to their replacements, by
+    /// lower-case id.
+    fn thing_renames(&mut self) -> HashMap<String, String> {
+        let Some(bytes) = self.read("translate.tgi") else {
+            return HashMap::new();
+        };
+        tgi::parse_bytes(&bytes)
+            .root
+            .blocks_of("Translate")
+            .filter(|t| {
+                t.value("node")
+                    .is_some_and(|n| n.trim().eq_ignore_ascii_case("Thing"))
+            })
+            .filter_map(|t| {
+                Some((
+                    t.value("ids_old")?.trim().to_ascii_lowercase(),
+                    t.value("ids_new")?.trim().to_ascii_lowercase(),
+                ))
+            })
+            .collect()
     }
 
     /// A template's models: its aspects when they are variations, else its
@@ -373,6 +401,19 @@ fn water_colors<'a>(
         .collect()
 }
 
+/// The latest id of a template that may have been renamed more than once,
+/// stopping at a rename cycle.
+fn resolve(renames: &HashMap<String, String>, id: &str) -> String {
+    let mut id = id;
+    for _ in 0..renames.len() {
+        match renames.get(id) {
+            Some(new) => id = new,
+            None => break,
+        }
+    }
+    id.to_string()
+}
+
 /// Parses `0.451, 0.604, 0.294`.
 fn floats(s: &str) -> Option<[f32; 3]> {
     let v: Vec<f32> = s
@@ -389,4 +430,22 @@ fn find_case_insensitive(dir: &Path, name: &str) -> Option<PathBuf> {
         .filter_map(Result::ok)
         .find(|e| e.file_name().to_string_lossy().eq_ignore_ascii_case(name))
         .map(|e| e.path())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn renames() {
+        let renames: HashMap<String, String> = [("a", "b"), ("b", "c"), ("x", "y"), ("y", "x")]
+            .into_iter()
+            .map(|(o, n)| (o.to_string(), n.to_string()))
+            .collect();
+        assert_eq!(resolve(&renames, "a"), "c");
+        assert_eq!(resolve(&renames, "c"), "c");
+        assert_eq!(resolve(&renames, "z"), "z");
+        let cycle = resolve(&renames, "x");
+        assert!(cycle == "x" || cycle == "y");
+    }
 }
