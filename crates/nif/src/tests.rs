@@ -43,12 +43,29 @@ impl Builder {
             out.extend(0u32.to_le_bytes());
             out.extend(body);
         }
-        out.extend((roots.len() as u32).to_le_bytes());
-        for r in roots {
-            out.extend(r.to_le_bytes());
-        }
+        out.extend(footer(roots));
         out
     }
+
+    /// Writes the model as version 4.2.2.0, which names each object's type
+    /// in front of it instead of in a table.
+    fn finish_netimmerse(&self, roots: &[i32]) -> Vec<u8> {
+        let mut out = b"NetImmerse File Format, Version 4.2.2.0\n".to_vec();
+        out.extend(NETIMMERSE_VERSION.to_le_bytes());
+        out.extend((self.objects.len() as u32).to_le_bytes());
+        for (t, body) in &self.objects {
+            out.extend(string(self.types[*t as usize]));
+            out.extend(body);
+        }
+        out.extend(footer(roots));
+        out
+    }
+}
+
+fn footer(roots: &[i32]) -> Vec<u8> {
+    let mut v = (roots.len() as u32).to_le_bytes().to_vec();
+    v.extend(roots.iter().flat_map(|r| r.to_le_bytes()));
+    v
 }
 
 fn string(s: &str) -> Vec<u8> {
@@ -177,11 +194,11 @@ fn stops_at_unknown_types() {
 
 #[test]
 fn rejects_other_versions() {
-    let mut bytes = b"NetImmerse File Format, Version 4.2.2.0\n".to_vec();
-    bytes.extend(0x0402_0200u32.to_le_bytes());
+    let mut bytes = b"NetImmerse File Format, Version 4.0.0.2\n".to_vec();
+    bytes.extend(0x0400_0002u32.to_le_bytes());
     assert!(matches!(
         Nif::parse(&bytes),
-        Err(Error::UnsupportedVersion(v)) if v == "4.2.2.0"
+        Err(Error::UnsupportedVersion(v)) if v == "4.0.0.2"
     ));
     assert!(matches!(Nif::parse(b"hello"), Err(Error::NotNif)));
 }
@@ -260,4 +277,129 @@ fn steps_over_skins() {
     let shapes = nif.shapes();
     assert_eq!(shapes.len(), 1);
     assert_eq!(shapes[0].shape.skin, Some(3));
+}
+
+/// 4.2.2.0 scene fields: one extra data link, a velocity, and a bounding
+/// volume in place of the collision object.
+fn netimmerse_scene(name: &str, extra: i32, translation: [f32; 3], props: &[i32]) -> Vec<u8> {
+    let mut v = string(name);
+    v.extend(extra.to_le_bytes());
+    v.extend((-1i32).to_le_bytes());
+    v.extend(0x10u16.to_le_bytes());
+    v.extend(floats(&translation));
+    v.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
+    v.extend(floats(&[1.0]));
+    v.extend(floats(&[0.0; 3]));
+    v.extend(refs(props));
+    v
+}
+
+#[test]
+fn reads_netimmerse_models() {
+    let mut b = Builder::new();
+    let mut root = netimmerse_scene("Scene Root", 1, [0.0; 3], &[2]);
+    root.push(0); // no bounding volume
+    root.extend(refs(&[3]));
+    root.extend(refs(&[]));
+    b.add("NiNode", root);
+
+    let mut extra = (-1i32).to_le_bytes().to_vec();
+    extra.extend(11u32.to_le_bytes());
+    extra.extend(string("zMode10"));
+    b.add("NiStringExtraData", extra);
+
+    let mut zbuffer = string("");
+    zbuffer.extend([0xff; 8]);
+    zbuffer.extend(3u16.to_le_bytes());
+    zbuffer.extend(3u32.to_le_bytes());
+    b.add("NiZBufferProperty", zbuffer);
+
+    let mut wave = netimmerse_scene("Wave", -1, [0.0, 5.0, 0.0], &[4, 6]);
+    wave.push(1);
+    wave.extend(4u32.to_le_bytes()); // a union of a sphere and a box
+    wave.extend(2u32.to_le_bytes());
+    wave.extend(0u32.to_le_bytes());
+    wave.extend(floats(&[0.0; 4]));
+    wave.extend(1u32.to_le_bytes());
+    wave.extend(floats(&[0.0; 15]));
+    wave.extend(8i32.to_le_bytes());
+    wave.extend((-1i32).to_le_bytes());
+    b.add("NiTriStrips", wave);
+
+    let mut texturing = string("");
+    texturing.extend([0xff; 8]);
+    texturing.extend(0u16.to_le_bytes());
+    texturing.extend(2u32.to_le_bytes());
+    texturing.extend(1u32.to_le_bytes());
+    texturing.push(1);
+    texturing.extend(5i32.to_le_bytes());
+    texturing.extend([0; 3 * 4 + 4]);
+    texturing.extend([0; 4]); // the other slots
+    b.add("NiTexturingProperty", texturing);
+    let mut source = string("");
+    source.extend([0xff; 8]);
+    source.push(1);
+    source.extend(string("foam.dds"));
+    source.extend([0; 13]);
+    b.add("NiSourceTexture", source);
+
+    let mut material = string("");
+    material.extend((-1i32).to_le_bytes());
+    material.extend(7i32.to_le_bytes());
+    material.extend(0u16.to_le_bytes());
+    material.extend(floats(&[0.5; 14]));
+    b.add("NiMaterialProperty", material);
+    let mut fade = (-1i32).to_le_bytes().to_vec();
+    fade.extend(8u16.to_le_bytes());
+    fade.extend(floats(&[1.0, 0.0, 0.0, 2.0]));
+    fade.extend(3i32.to_le_bytes());
+    fade.extend(9i32.to_le_bytes());
+    b.add("NiAlphaController", fade);
+
+    let mut data = 3u16.to_le_bytes().to_vec();
+    data.push(1);
+    data.extend(floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
+    data.push(0); // no normals
+    data.extend(floats(&[0.0; 4]));
+    data.push(0); // no colours
+    data.extend(1u16.to_le_bytes());
+    data.extend(floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
+    data.extend(1u16.to_le_bytes());
+    data.extend(1u16.to_le_bytes());
+    data.extend(3u16.to_le_bytes());
+    data.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
+    b.add("NiTriStripsData", data);
+
+    let mut keys = 2u32.to_le_bytes().to_vec();
+    keys.extend(1u32.to_le_bytes());
+    keys.extend(floats(&[0.0, 0.0, 2.0, 0.5]));
+    b.add("NiFloatData", keys);
+
+    let nif = Nif::parse(&b.finish_netimmerse(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let Object::Node(root) = &nif.objects[0] else {
+        panic!("no root");
+    };
+    assert_eq!(root.av.extra_data, [Some(1)]);
+    assert!(
+        matches!(&nif.objects[1], Object::ExtraData(e) if matches!(&e.value, ExtraValue::String(s) if s == "zMode10"))
+    );
+
+    let shapes = nif.shapes();
+    assert_eq!(shapes.len(), 1);
+    assert_eq!(shapes[0].transform.apply([0.0; 3]), [0.0, 5.0, 0.0]);
+    assert_eq!(shapes[0].properties, [Some(4), Some(6), Some(2)]);
+    let texturing = nif.property(&shapes[0].properties, |o| match o {
+        Object::Texturing(t) => Some(t),
+        _ => None,
+    });
+    let source = texturing.unwrap().base.as_ref().unwrap().source;
+    assert!(
+        matches!(nif.get(source), Some(Object::SourceTexture(t)) if t.file.as_deref() == Some("foam.dds"))
+    );
+    let Some(Object::Geometry(g)) = nif.get(shapes[0].shape.data) else {
+        panic!("no geometry");
+    };
+    assert_eq!(g.triangles, [[0, 1, 2]]);
+    assert_eq!(g.uv_sets[0][1], [1.0, 0.0]);
 }

@@ -1,22 +1,32 @@
 //! The object types the reader understands and their layouts. Each layout
 //! lists the fields present in version 10.1.0.0; `[old: ...]` marks how
-//! 10.0.1.0 differs. Types read only so they can be stepped over become
+//! 10.0.1.0 and 4.2.2.0 differ, `[4.2.2.0: ...]` how 4.2.2.0 differs
+//! further. Types read only so they can be stepped over become
 //! [`Object::Other`].
 //!
 //! ```text
-//! named      string name, refs extra data, ref controller
+//! named      string name, refs extra data [4.2.2.0: ref to the first of a
+//!            list], ref controller
 //! scene      named, u16 flags, f32 translation[3], f32 rotation[9] (rows),
-//!            f32 scale, refs properties, ref collision
+//!            f32 scale, [4.2.2.0: f32 velocity[3]], refs properties,
+//!            ref collision [4.2.2.0: bool + bounding volume instead]
+//! bounding volume  u32 kind, then 0: f32 centre[3], radius; 1: f32
+//!            centre[3], axes[3][3], extents[3]; 2: f32 centre[3],
+//!            axis[3], extent, radius; 4: u32 n + bounding volumes;
+//!            5: f32 plane[4], centre[3]
 //! NiNode     scene, refs children, refs effects
 //!   NiBillboardNode adds u16 mode [old: nothing]
 //! NiTriShape, NiTriStrips
 //!            scene, ref data, ref skin, bool has shader (+ string, i32)
+//!            [4.2.2.0: no shader]
 //! geometry   u16 vertices, u8 keep, u8 compress [old: neither],
 //!            bool + f32 positions[n][3],
-//!            u16 flags (low 6 bits: UV sets; 0x1000: tangents),
+//!            u16 flags (low 6 bits: UV sets; 0x1000: tangents)
+//!            [4.2.2.0: none],
 //!            bool + f32 normals[n][3] (+ tangents, bitangents [old: never]),
 //!            f32 bound centre[3], radius, bool + f32 colours[n][4],
-//!            f32 uv[sets][n][2], u16 consistency
+//!            [4.2.2.0: u16 UV sets], f32 uv[sets][n][2],
+//!            u16 consistency [4.2.2.0: none]
 //! NiTriShapeData   geometry, u16 triangles, u32 points, bool + u16 triangles[t][3]
 //!                  [old: no bool],
 //!                  u16 groups, per group u16 n + u16[n]
@@ -28,7 +38,8 @@
 //! NiTexturingProperty  named, [old: u16 flags], u32 apply mode, u32 slot count, then per slot
 //!                  bool + slot: base, dark, detail, gloss, glow, bump (+ f32 6),
 //!                  decals 0-3 (only while the count allows), then u32 n +
-//!                  per shader map bool + slot + u32 id
+//!                  per shader map bool + slot + u32 id [4.2.2.0: no shader
+//!                  maps]
 //! NiSourceTexture  named, u8 external, string file, ref pixel data,
 //!                  u32 layout, u32 mipmaps, u32 alpha, u8 static
 //!                  [old: external: string file; else u8 internal + ref pixel
@@ -45,18 +56,22 @@
 //! NiStencilProperty named, [old: u16 flags], u8 enabled, u32 function, reference, mask,
 //!                  fail, z fail, pass, draw mode
 //! NiSpecularProperty named, u16 flags
-//! extra data       string name, then String: string; Integer: u32;
-//!                  Boolean: u8; Binary: u32 n + bytes; Strings: u32 n + strings
+//! extra data       string name [4.2.2.0: ref next], then String: string
+//!                  [4.2.2.0: u32 size first]; Integer: u32; Boolean: u8;
+//!                  Binary: u32 n + bytes; Strings: u32 n + strings
 //! NiCamera         scene, u16 flags, f32 frustum[6], bool orthographic
 //!                  [old: neither the flags nor the bool],
 //!                  f32 viewport[4], f32 lod, ref scene, u32 2 unused
-//! NiTextKeyExtraData string name, u32 n, per key f32 time + string
-//! NiKeyframeController ref next, u16 flags, f32 frequency, phase, start,
+//! NiTextKeyExtraData string name [4.2.2.0: ref next, u32 unused], u32 n,
+//!                  per key f32 time + string
+//! NiKeyframeController, NiAlphaController
+//!                  ref next, u16 flags, f32 frequency, phase, start,
 //!                  stop, ref target, ref data
 //! NiKeyframeData   u32 n + rotation keys (u32 kind; kind 4: f32 order and
 //!                  three float key groups; else f32 time + quaternion[4]
 //!                  (+ three TCB floats for kind 3)), vector key group,
 //!                  float key group
+//! NiFloatData      float key group
 //! key group        u32 n, u32 kind if n > 0, keys of f32 time + value
 //!                  (+ two tangents for kind 2, + three TCB floats for kind 3)
 //! NiSkinInstance   ref skin data, ref skeleton root, refs bones
@@ -246,7 +261,7 @@ impl Object {
                 let av = scene(r)?;
                 let data = r.reference()?;
                 let skin = r.reference()?;
-                if r.bool()? {
+                if !r.netimmerse() && r.bool()? {
                     r.string()?;
                     r.u32()?;
                 }
@@ -308,7 +323,8 @@ impl Object {
                         texture_slot(r)?;
                     }
                 }
-                for _ in 0..r.u32()? {
+                let shader_maps = if r.netimmerse() { 0 } else { r.u32()? };
+                for _ in 0..shader_maps {
                     if r.bool()? {
                         texture_slot(r)?;
                         r.u32()?;
@@ -409,9 +425,14 @@ impl Object {
             }
             "NiStringExtraData" | "NiIntegerExtraData" | "NiBooleanExtraData"
             | "NiBinaryExtraData" | "NiStringsExtraData" => {
-                let name = r.string()?;
+                let name = extra_data_name(r)?;
                 let value = match kind {
-                    "NiStringExtraData" => ExtraValue::String(r.string()?),
+                    "NiStringExtraData" => {
+                        if r.netimmerse() {
+                            r.u32()?;
+                        }
+                        ExtraValue::String(r.string()?)
+                    }
                     "NiIntegerExtraData" => ExtraValue::Integer(r.u32()?),
                     "NiBooleanExtraData" => ExtraValue::Boolean(r.bool()?),
                     "NiBinaryExtraData" => {
@@ -432,14 +453,17 @@ impl Object {
                 other()
             }
             "NiTextKeyExtraData" => {
-                r.string()?;
+                extra_data_name(r)?;
+                if r.netimmerse() {
+                    r.u32()?;
+                }
                 for _ in 0..r.u32()? {
                     r.f32()?;
                     r.string()?;
                 }
                 other()
             }
-            "NiKeyframeController" => {
+            "NiKeyframeController" | "NiAlphaController" => {
                 r.skip(4 + 2 + 16 + 4 + 4)?;
                 other()
             }
@@ -462,6 +486,10 @@ impl Object {
                     }
                 }
                 key_group(r, 3)?;
+                key_group(r, 1)?;
+                other()
+            }
+            "NiFloatData" => {
                 key_group(r, 1)?;
                 other()
             }
@@ -519,7 +547,23 @@ impl Object {
 }
 
 fn named(r: &mut Reader) -> Result<(String, Vec<Ref>, Ref)> {
-    Ok((r.string()?, r.references()?, r.reference()?))
+    let name = r.string()?;
+    let extra_data = if r.netimmerse() {
+        r.reference()?.into_iter().map(Some).collect()
+    } else {
+        r.references()?
+    };
+    Ok((name, extra_data, r.reference()?))
+}
+
+/// The name of an extra data object; 4.2.2.0 has none, but links to the next.
+fn extra_data_name(r: &mut Reader) -> Result<String> {
+    if r.netimmerse() {
+        r.reference()?;
+        Ok(String::new())
+    } else {
+        r.string()
+    }
 }
 
 fn scene(r: &mut Reader) -> Result<SceneObject> {
@@ -528,8 +572,15 @@ fn scene(r: &mut Reader) -> Result<SceneObject> {
     let translation = r.floats()?;
     let m = r.floats::<9>()?;
     let scale = r.f32()?;
+    if r.netimmerse() {
+        r.floats::<3>()?; // velocity
+    }
     let properties = r.references()?;
-    r.reference()?; // collision
+    if !r.netimmerse() {
+        r.reference()?; // collision
+    } else if r.bool()? {
+        bounding_volume(r, 0)?;
+    }
     Ok(SceneObject {
         name,
         extra_data,
@@ -544,6 +595,22 @@ fn scene(r: &mut Reader) -> Result<SceneObject> {
     })
 }
 
+fn bounding_volume(r: &mut Reader, depth: usize) -> Result<()> {
+    match r.u32()? {
+        0 => r.skip(4 * 4),
+        1 => r.skip(15 * 4),
+        2 => r.skip(8 * 4),
+        4 if depth < 8 => {
+            for _ in 0..r.u32()? {
+                bounding_volume(r, depth + 1)?;
+            }
+            Ok(())
+        }
+        5 => r.skip(7 * 4),
+        kind => Err(Error::Corrupt(format!("unknown bounding volume {kind}"))),
+    }
+}
+
 fn geometry(r: &mut Reader) -> Result<Geometry> {
     let n = r.u16()? as usize;
     if !r.old() {
@@ -554,7 +621,7 @@ fn geometry(r: &mut Reader) -> Result<Geometry> {
     } else {
         Vec::new()
     };
-    let flags = r.u16()?;
+    let flags = if r.netimmerse() { 0 } else { r.u16()? };
     let normals = if r.bool()? {
         let normals = r.float_array(n)?;
         if flags & 0x1000 != 0 && !r.old() {
@@ -570,10 +637,15 @@ fn geometry(r: &mut Reader) -> Result<Geometry> {
     } else {
         Vec::new()
     };
-    let uv_sets = (0..flags & 0x3f)
-        .map(|_| r.float_array(n))
-        .collect::<Result<_>>()?;
-    r.u16()?;
+    let sets = if r.netimmerse() {
+        r.u16()?
+    } else {
+        flags & 0x3f
+    };
+    let uv_sets = (0..sets).map(|_| r.float_array(n)).collect::<Result<_>>()?;
+    if !r.netimmerse() {
+        r.u16()?;
+    }
     Ok(Geometry {
         positions,
         normals,
