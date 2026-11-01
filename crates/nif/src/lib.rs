@@ -307,8 +307,10 @@ impl<'a> Reader<'a> {
         Ok(bytes
             .as_chunks::<4>()
             .0
-            .chunks_exact(N)
-            .map(|c| std::array::from_fn(|i| f32::from_le_bytes(c[i])))
+            .as_chunks::<N>()
+            .0
+            .iter()
+            .map(|c| c.map(f32::from_le_bytes))
             .collect())
     }
     pub(crate) fn reference(&mut self) -> Result<Ref> {
