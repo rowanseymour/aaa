@@ -1,4 +1,4 @@
-# aaa
+![aaa](docs/banner.svg)
 
 Rust tools for working with the data files of **Axis & Allies (2004)**, the
 real-time strategy game.
