@@ -1,6 +1,7 @@
 //! 3D viewer for Axis & Allies (2004) maps, reading straight from the game's
 //! installed data files.
 
+mod blend;
 mod camera;
 mod game;
 mod objects;
@@ -9,11 +10,13 @@ mod terrain;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use bevy::asset::embedded_asset;
 use bevy::light::CascadeShadowConfigBuilder;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, save_to_disk};
 use tgck::map::{CELL_SIZE, Terrain, Thing};
 
+use blend::GroundMaterial;
 use camera::RtsCamera;
 use game::Game;
 use terrain::Ground;
@@ -95,11 +98,14 @@ fn main() -> ExitCode {
             ..default()
         }),
         ..default()
-    }))
-    .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
-    .insert_resource(loaded)
-    .add_systems(Startup, setup)
-    .add_systems(Update, camera::update);
+    }));
+    // The shader has to be registered before the material that loads it.
+    embedded_asset!(app, "blend.wesl");
+    app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
+        .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
+        .insert_resource(loaded)
+        .add_systems(Startup, setup)
+        .add_systems(Update, camera::update);
     if let Some(s) = screenshot {
         app.insert_resource(s).add_systems(Update, take_screenshot);
     }
@@ -147,6 +153,7 @@ fn setup(
     mut loaded: ResMut<Loaded>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut ground_materials: ResMut<Assets<GroundMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
     let Loaded {
@@ -156,9 +163,17 @@ fn setup(
         things,
         ..
     } = &mut *loaded;
-    for (name, mesh, material) in terrain::build(game, ground, terrain, &mut images) {
+    let built = terrain::build(game, ground, terrain, &mut images);
+    if let Some((mesh, material)) = built.ground {
         commands.spawn((
-            Name::new(name),
+            Name::new("ground"),
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(ground_materials.add(material)),
+        ));
+    }
+    if let Some((mesh, material)) = built.water {
+        commands.spawn((
+            Name::new("water"),
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(materials.add(material)),
         ));

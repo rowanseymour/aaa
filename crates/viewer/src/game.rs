@@ -22,6 +22,8 @@ pub struct Variation {
     pub color: [f32; 3],
     /// Water surface colour, for water terrains.
     pub water_color: Option<[f32; 3]>,
+    /// Higher priority terrain is drawn over lower where they meet.
+    pub priority: i32,
 }
 
 impl Game {
@@ -94,6 +96,10 @@ impl Game {
             for terrain in parsed.root.blocks_of("Terrain") {
                 let terrain_color = terrain.value("terrain_color").and_then(floats);
                 let water_color = terrain.value("color").and_then(floats);
+                let priority = terrain
+                    .value("base_priority")
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(0);
                 for v in terrain.blocks_of("Variation") {
                     let (Some(ids), Some(texture)) = (v.value("ids"), v.value("texture")) else {
                         continue;
@@ -113,12 +119,43 @@ impl Game {
                                 .or(terrain_color)
                                 .unwrap_or([0.5; 3]),
                             water_color,
+                            priority,
                         },
                     );
                 }
             }
         }
         out
+    }
+
+    /// The transition masks of the first transition set, keyed by the
+    /// digits in their file names.
+    pub fn transition_masks(&mut self) -> Vec<(String, Vec<u8>)> {
+        const DIR: &str = "Terrain/Transitions/";
+        let Some(prefix) = self
+            .read(&format!("{DIR}transition_sets.tgi"))
+            .and_then(|b| {
+                let parsed = tgi::parse_bytes(&b);
+                let set = parsed.root.blocks_of("TransitionSet").next()?;
+                set.value("path_prefix").map(|p| format!("{DIR}{p}"))
+            })
+        else {
+            return Vec::new();
+        };
+        let names: Vec<String> = self
+            .data
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .filter(|n| n.len() > prefix.len() && n[..prefix.len()].eq_ignore_ascii_case(&prefix))
+            .collect();
+        names
+            .into_iter()
+            .filter_map(|n| {
+                let digits = n[prefix.len()..].split('.').next()?.to_string();
+                Some((digits, self.read(&n)?))
+            })
+            .collect()
     }
 }
 

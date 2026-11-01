@@ -24,14 +24,15 @@ a file and exits.
 
 ## What it shows
 
-- The height map, with each tile textured by its terrain variation
+- The height map, with each tile textured by its terrain variation and soft
+  edges between terrain types from the game's transition masks
 - Water surfaces, with the bed carved out below them
 - Placed objects as simple markers: cones for trees, boxes for buildings and
   rocks, coloured boxes for units, red pillars for start locations
 
-Not yet: blending between terrain types (tiles have hard edges), models,
-doodads, lighting from the map's sun settings. Some developer test maps refer
-to terrain types the game no longer defines; those tiles show as magenta.
+Not yet: soft water edges, models, doodads, lighting from the map's sun
+settings. Some developer test maps refer to terrain types the game no longer
+defines; those tiles show as magenta.
 
 ## Building on Linux
 
