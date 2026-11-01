@@ -126,10 +126,8 @@ impl Models {
             .map_err(|e| warn!("{path}: {e}"))
             .ok()?;
         let mut parts = Vec::new();
+        // Skinned shapes are drawn in the pose they were modelled in.
         for placed in nif.shapes() {
-            if placed.shape.skin.is_some() {
-                continue;
-            }
             let Some(Object::Geometry(g)) = nif.get(placed.shape.data) else {
                 continue;
             };

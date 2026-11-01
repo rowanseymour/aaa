@@ -33,12 +33,13 @@ rotate and tilt, and switches back.
 - Water surfaces, with the bed carved out below them and coloured by depth
   from the biome's water settings
 - Placed objects with the game's models: trees, buildings, roads, fences and
-  the like, at each object's own size and variation
-- Simple markers where a model can't be read yet: boxes for skinned models
-  such as tall grass, coloured boxes for units, red pillars for start
-  locations
+  the like, at each object's own size and variation; skinned models such as
+  tall grass stand in the pose they were modelled in
+- Simple markers where a model can't be read yet: boxes for models with
+  particle effects or some animations, coloured boxes for units, red pillars
+  for start locations
 
-Not yet: animated water textures, skinned and animated models, particle effects,
+Not yet: animated water textures, animation, particle effects,
 lighting from the map's sun settings. Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 

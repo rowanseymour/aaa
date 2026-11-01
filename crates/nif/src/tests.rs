@@ -208,3 +208,56 @@ fn reads_the_older_version() {
     let nif = Nif::parse(&bytes).unwrap();
     assert!(matches!(&nif.objects[0], Object::Node(n) if n.av.name == "root"));
 }
+
+#[test]
+fn steps_over_skins() {
+    let mut b = Builder::new();
+    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 6]));
+    let mut skinned = shape("grass", 0x10, 2, &[]);
+    let at = skinned.len() - 5;
+    skinned[at..at + 4].copy_from_slice(&3i32.to_le_bytes());
+    b.add("NiTriShape", skinned);
+    b.add("NiTriShapeData", geometry(false));
+
+    let mut instance = 4i32.to_le_bytes().to_vec();
+    instance.extend(0i32.to_le_bytes());
+    instance.extend(refs(&[6]));
+    b.add("NiSkinInstance", instance);
+
+    let transform = floats(&[
+        1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
+    ]);
+    let mut data = transform.clone();
+    data.extend(1u32.to_le_bytes());
+    data.extend(5i32.to_le_bytes());
+    data.push(1);
+    data.extend(&transform);
+    data.extend(floats(&[0.0; 4]));
+    data.extend(3u16.to_le_bytes());
+    for i in 0..3u16 {
+        data.extend(i.to_le_bytes());
+        data.extend(floats(&[1.0]));
+    }
+    b.add("NiSkinData", data);
+
+    let mut partition = 1u32.to_le_bytes().to_vec();
+    for n in [3u16, 1, 1, 0, 1, 0] {
+        partition.extend(n.to_le_bytes()); // counts, then the bone
+    }
+    partition.push(1);
+    partition.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
+    partition.push(1);
+    partition.extend(floats(&[1.0; 3]));
+    partition.push(1);
+    partition.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
+    partition.push(1);
+    partition.extend([0u8; 3]);
+    b.add("NiSkinPartition", partition);
+
+    b.add("NiNode", node("bone", [0.0; 3], 1.0, &[]));
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let shapes = nif.shapes();
+    assert_eq!(shapes.len(), 1);
+    assert_eq!(shapes[0].shape.skin, Some(3));
+}

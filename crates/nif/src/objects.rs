@@ -59,6 +59,18 @@
 //!                  float key group
 //! key group        u32 n, u32 kind if n > 0, keys of f32 time + value
 //!                  (+ two tangents for kind 2, + three TCB floats for kind 3)
+//! NiSkinInstance   ref skin data, ref skeleton root, refs bones
+//! bone transform   f32 rotation[9], translation[3], scale
+//! NiSkinData       bone transform (skin to skeleton), u32 bones,
+//!                  ref skin partition, u8 has weights, per bone:
+//!                  bone transform, f32 bound[4], u16 n, if weights
+//!                  n × (u16 vertex, f32 weight)
+//! NiSkinPartition  u32 n, per partition u16 vertices, triangles, bones,
+//!                  strips, weights per vertex, u16 bones[], bool + u16
+//!                  vertex map[v], bool + f32 weights[v][w], u16 strip
+//!                  lengths[strips], bool + u16 strip points or, without
+//!                  strips, triangles[t][3] [old: none of these three
+//!                  bools], bool + u8 bone indices[v][w]
 //! ```
 
 use crate::{Error, Reader, Ref, Result, Transform};
@@ -451,6 +463,54 @@ impl Object {
                 }
                 key_group(r, 3)?;
                 key_group(r, 1)?;
+                other()
+            }
+            "NiSkinInstance" => {
+                r.reference()?;
+                r.reference()?;
+                r.references()?;
+                other()
+            }
+            "NiSkinData" => {
+                r.floats::<13>()?;
+                let bones = r.u32()?;
+                r.reference()?;
+                let weights = r.bool()?;
+                for _ in 0..bones {
+                    r.floats::<17>()?;
+                    let n = r.u16()? as usize;
+                    if weights {
+                        r.skip(n * 6)?;
+                    }
+                }
+                other()
+            }
+            "NiSkinPartition" => {
+                for _ in 0..r.u32()? {
+                    let v = r.u16()? as usize;
+                    let t = r.u16()? as usize;
+                    let bones = r.u16()? as usize;
+                    let strips = r.u16()?;
+                    let w = r.u16()? as usize;
+                    r.skip(bones * 2)?;
+                    if r.old() || r.bool()? {
+                        r.skip(v * 2)?;
+                    }
+                    if r.old() || r.bool()? {
+                        r.skip(v * w * 4)?;
+                    }
+                    let lengths = (0..strips).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
+                    if r.old() || r.bool()? {
+                        let points = match strips {
+                            0 => t * 3,
+                            _ => lengths.iter().map(|&n| n as usize).sum(),
+                        };
+                        r.skip(points * 2)?;
+                    }
+                    if r.bool()? {
+                        r.skip(v * w)?;
+                    }
+                }
                 other()
             }
             _ => return Ok(None),
