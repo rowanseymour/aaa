@@ -59,10 +59,7 @@ impl Archive<BufReader<File>> {
 impl<R: Read + Seek> Archive<R> {
     pub fn new(reader: R) -> Result<Self> {
         let mut container = Container::new(reader)?;
-        let files = container
-            .section("Files")
-            .cloned()
-            .ok_or(Error::MissingSection("Files"))?;
+        let files = container.require("Files")?.clone();
         if files.is_compressed() {
             return Err(Error::Corrupt("compressed Files section".into()));
         }
@@ -82,10 +79,8 @@ impl<R: Read + Seek> Archive<R> {
     }
 
     pub fn read(&mut self, entry: &Entry) -> Result<Vec<u8>> {
-        let reader = &mut self.container.reader;
-        reader.seek(SeekFrom::Start(entry.offset))?;
-        let mut buf = vec![0u8; entry.size as usize];
-        reader.read_exact(&mut buf)?;
+        let mut buf = Vec::with_capacity(entry.size as usize);
+        self.copy_to(entry, &mut buf)?;
         Ok(buf)
     }
 
@@ -134,14 +129,13 @@ fn parse_directory(dir: &[u8], files: &Section) -> Result<Vec<Entry>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{build_container, utf16};
+    use crate::tests::{build_container, string};
 
     fn build(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut data = Vec::new();
         let mut dir = (files.len() as u32).to_le_bytes().to_vec();
         for (i, (name, bytes)) in files.iter().enumerate() {
-            dir.extend((name.encode_utf16().count() as u16).to_le_bytes());
-            dir.extend(utf16(name));
+            dir.extend(string(name));
             dir.extend((data.len() as u64).to_le_bytes());
             dir.extend((bytes.len() as u64).to_le_bytes());
             dir.extend(0u32.to_le_bytes());

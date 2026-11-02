@@ -77,6 +77,13 @@ impl<'a> Cursor<'a> {
     pub(crate) fn f32(&mut self) -> Result<f32> {
         Ok(f32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
+    pub(crate) fn f32s<const N: usize>(&mut self) -> Result<[f32; N]> {
+        let mut out = [0.0; N];
+        for v in &mut out {
+            *v = self.f32()?;
+        }
+        Ok(out)
+    }
     /// `u16` length in code units, then UTF-16LE.
     pub(crate) fn string(&mut self) -> Result<String> {
         let len = self.u16()? as usize;
@@ -110,6 +117,13 @@ pub(crate) fn utf16_lossy(bytes: &[u8]) -> String {
 pub(crate) mod tests {
     pub fn utf16(s: &str) -> Vec<u8> {
         s.encode_utf16().flat_map(u16::to_le_bytes).collect()
+    }
+
+    /// A string as [`crate::Cursor::string`] reads it.
+    pub fn string(s: &str) -> Vec<u8> {
+        let mut b = (s.encode_utf16().count() as u16).to_le_bytes().to_vec();
+        b.extend(utf16(s));
+        b
     }
 
     /// Builds a container the way the game lays them out: sections from 0x0C,

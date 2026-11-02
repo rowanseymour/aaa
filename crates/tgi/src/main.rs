@@ -24,7 +24,7 @@ fn main() -> ExitCode {
         }
     };
     match result {
-        Ok(code) => code,
+        Ok(()) => ExitCode::SUCCESS,
         Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("tgi: {e}");
@@ -33,7 +33,7 @@ fn main() -> ExitCode {
     }
 }
 
-fn check(files: &[&str]) -> std::io::Result<ExitCode> {
+fn check(files: &[&str]) -> std::io::Result<()> {
     let mut out = std::io::stdout().lock();
     let (mut blocks, mut fields, mut warnings) = (0, 0, 0);
     for path in files {
@@ -48,8 +48,7 @@ fn check(files: &[&str]) -> std::io::Result<ExitCode> {
         out,
         "{} files, {blocks} blocks, {fields} fields, {warnings} warnings",
         files.len()
-    )?;
-    Ok(ExitCode::SUCCESS)
+    )
 }
 
 fn count(b: &Block, blocks: &mut usize, fields: &mut usize) {
@@ -64,14 +63,14 @@ fn count(b: &Block, blocks: &mut usize, fields: &mut usize) {
     }
 }
 
-fn dump(path: &str) -> std::io::Result<ExitCode> {
+fn dump(path: &str) -> std::io::Result<()> {
     let parsed = tgi::parse_bytes(&std::fs::read(path)?);
     let mut out = std::io::stdout().lock();
     write_items(&mut out, &parsed.root, 0)?;
     for w in &parsed.warnings {
         eprintln!("{path}:{}: {}", w.line, w.message);
     }
-    Ok(ExitCode::SUCCESS)
+    Ok(())
 }
 
 fn write_items(out: &mut impl Write, block: &Block, depth: usize) -> std::io::Result<()> {

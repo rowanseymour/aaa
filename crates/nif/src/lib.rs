@@ -95,7 +95,7 @@ impl Nif {
             let types = (0..type_count)
                 .map(|_| r.string())
                 .collect::<Result<Vec<_>>>()?;
-            let index = (0..count).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
+            let index = r.u16s(count)?;
             let groups = r.u32()? as usize;
             r.skip(groups * 4)?;
             (types, index)
@@ -180,9 +180,9 @@ impl Nif {
         let Some(index) = r.filter(|_| path.len() <= 64) else {
             return;
         };
-        let (av, children) = match self.get(r) {
-            Some(Object::Node(n)) => (&n.av, Some(&n.children)),
-            Some(Object::Shape(s)) => (&s.av, None),
+        let (av, children, shape) = match self.get(r) {
+            Some(Object::Node(n)) => (&n.av, &n.children[..], None),
+            Some(Object::Shape(s)) => (&s.av, &[][..], Some(s)),
             _ => return,
         };
         if av.hidden() {
@@ -192,19 +192,16 @@ impl Nif {
         let inherited = props.len();
         props.splice(0..0, av.properties.iter().copied());
         path.push(index);
-        match (self.get(r), children) {
-            (Some(Object::Shape(shape)), _) => out.push(Placed {
+        if let Some(shape) = shape {
+            out.push(Placed {
                 shape,
                 transform,
                 properties: props.clone(),
                 path: path.clone(),
-            }),
-            (_, Some(children)) => {
-                for &c in children {
-                    self.walk(c, transform, props, path, out);
-                }
-            }
-            _ => {}
+            });
+        }
+        for &c in children {
+            self.walk(c, transform, props, path, out);
         }
         path.pop();
         props.drain(0..props.len() - inherited);
@@ -305,6 +302,17 @@ impl<'a> Reader<'a> {
     pub(crate) fn skip(&mut self, n: usize) -> Result<()> {
         self.bytes(n).map(drop)
     }
+    /// Fails unless `n` more bytes remain, so a corrupt count is caught
+    /// before it is used to allocate.
+    pub(crate) fn ensure(&self, n: usize) -> Result<()> {
+        if n > self.remaining() {
+            return Err(Error::Corrupt(format!(
+                "truncated at byte {} (+{n})",
+                self.pos
+            )));
+        }
+        Ok(())
+    }
     fn remaining(&self) -> usize {
         self.buf.len() - self.pos
     }
@@ -343,14 +351,29 @@ impl<'a> Reader<'a> {
             .map(|c| c.map(f32::from_le_bytes))
             .collect())
     }
+    /// `n` items of `N` u16s each.
+    pub(crate) fn u16_array<const N: usize>(&mut self, n: usize) -> Result<Vec<[u16; N]>> {
+        let bytes = self.bytes(n.saturating_mul(N * 2))?;
+        Ok(bytes
+            .as_chunks::<2>()
+            .0
+            .as_chunks::<N>()
+            .0
+            .iter()
+            .map(|c| c.map(u16::from_le_bytes))
+            .collect())
+    }
+    /// `n` u16s.
+    pub(crate) fn u16s(&mut self, n: usize) -> Result<Vec<u16>> {
+        Ok(self.u16_array::<1>(n)?.into_iter().map(|[v]| v).collect())
+    }
     pub(crate) fn reference(&mut self) -> Result<Ref> {
         let v = self.u32()? as i32;
         Ok(usize::try_from(v).ok())
     }
     pub(crate) fn references(&mut self) -> Result<Vec<Ref>> {
         let n = self.u32()? as usize;
-        self.bytes(n.saturating_mul(4))?;
-        self.pos -= n * 4;
+        self.ensure(n.saturating_mul(4))?;
         (0..n).map(|_| self.reference()).collect()
     }
     pub(crate) fn string(&mut self) -> Result<String> {
