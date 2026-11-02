@@ -192,10 +192,12 @@ fn unpack(path: &str, out_dir: &str) -> Res {
 fn map(path: &str) -> Res {
     let mut m = Map::open(path)?;
     let strings = m.strings()?;
+    let header = m.header()?;
     let name = strings
         .lines()
-        .find_map(|l| l.trim().strip_prefix("map_name = "))
-        .map_or("?", |n| n.trim_matches('"'));
+        .filter_map(|l| l.trim().split_once('='))
+        .find(|(key, _)| key.trim() == header.name)
+        .map_or("?", |(_, n)| n.trim().trim_matches('"'));
     let hm = m.height_map()?;
     let (lo, hi) = hm
         .heights
@@ -224,6 +226,13 @@ fn map(path: &str) -> Res {
         terrain.version,
         terrain.biome,
         terrain.names.len(),
+    );
+    let weather = &header.creator.weather;
+    outln!(
+        "  editor {} by {}, weather {}",
+        header.editor_version,
+        header.author,
+        if weather.is_empty() { "none" } else { weather }
     );
     let (templates, top) = top_counts(things.iter().map(|t| t.template.as_str()), 8);
     outln!("  {} objects, {templates} templates: {top}", things.len());
@@ -293,6 +302,7 @@ fn check(paths: &[&str]) -> Res {
             ("DYNAMIC_THINGS", things),
             ("TEAMS", tgck::map::write_teams(&m.teams()?)?),
             ("KINGDOMS", m.kingdoms()?.to_bytes(world_version)?),
+            ("MAP_HEADER", m.header()?.to_bytes()?),
         ];
         let mut diffs = Vec::new();
         for (name, data) in encoded {
