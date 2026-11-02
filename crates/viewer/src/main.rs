@@ -186,13 +186,14 @@ fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
     let mut map = game.open_map(name)?;
     let err = |e: tgck::Error| format!("{name}: {e}");
     let hm = map.height_map().map_err(err)?;
+    let mountain = map.mountain_height_map().map_err(err)?;
     let terrain = map.terrain().map_err(err)?;
     let things = map.things().map_err(err)?;
     let sun = map.sun().map_err(err)?;
     let title = name.rsplit('/').next().unwrap_or(name);
     Ok(Loaded {
         title: title[..title.len() - 4].to_string(),
-        ground: Ground::new(&hm),
+        ground: Ground::new(&hm, &mountain),
         terrain,
         things,
         sun,

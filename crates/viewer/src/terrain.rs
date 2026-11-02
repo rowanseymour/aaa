@@ -1,6 +1,6 @@
 //! Builds the ground and water meshes from a map's height map and tiles.
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
@@ -15,19 +15,14 @@ use crate::game::{DepthColor, Game};
 /// Tile corners, counter-clockwise seen from above.
 const CORNERS: [(usize, usize); 4] = [(0, 0), (1, 0), (1, 1), (0, 1)];
 
-/// How far the bed drops per vertex step away from the shore, and at most.
-/// Read from the temperate river's `max_slope` (taken as per world unit) and
-/// `max_depth`; how the game applies them is a guess.
-const BED_SLOPE: f32 = 1.8;
-const MAX_DEPTH: f32 = 3.5;
-
 /// How far the waterline sits below the height map's water level: maps
 /// store every floating object (ships, lily pads, waves) exactly this far
 /// down.
 const SHORE_DROP: f32 = 0.5;
 
-/// Ground heights with the water bed carved out. The height map stores the
-/// water surface at water vertices; the game derives the bed itself.
+/// Ground heights with the water bed below the water. The height map stores
+/// the water surface at water vertices, and the mountain height map how far
+/// the bed lies below it.
 pub struct Ground {
     pub side: usize,
     pub heights: Vec<f32>,
@@ -37,36 +32,17 @@ pub struct Ground {
 }
 
 impl Ground {
-    pub fn new(hm: &HeightMap) -> Self {
+    pub fn new(hm: &HeightMap, mountain: &HeightMap) -> Self {
         let side = hm.side;
         let water: Vec<bool> = hm.layer.iter().map(|&l| l != 0).collect();
-        // Breadth-first distance (in vertex steps, diagonals included) from
-        // the nearest land vertex.
-        let mut dist = vec![u32::MAX; side * side];
-        let mut queue = VecDeque::new();
-        for (i, &w) in water.iter().enumerate() {
-            if !w {
-                dist[i] = 0;
-                queue.push_back(i);
-            }
-        }
-        while let Some(i) = queue.pop_front() {
-            for j in neighbours(side, i) {
-                if dist[j] == u32::MAX {
-                    dist[j] = dist[i] + 1;
-                    queue.push_back(j);
-                }
-            }
-        }
+        // Off water the mountain heights are leftovers the game ignores:
+        // objects there sit on the height map alone.
         let heights = hm
             .heights
             .iter()
-            .zip(&dist)
-            .map(|(&h, &d)| match d {
-                0 => h,
-                u32::MAX => h - MAX_DEPTH,
-                d => h - (d as f32 * BED_SLOPE).min(MAX_DEPTH),
-            })
+            .zip(&mountain.heights)
+            .zip(&water)
+            .map(|((&h, &d), &w)| if w { h + d } else { h })
             .collect();
         let surface = (0..side * side)
             .map(|i| {
