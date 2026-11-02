@@ -8,4 +8,11 @@ description = "Parser for the .tgi text data files of Axis & Allies (2004)"
 keywords = ["gamedev", "parser", "file-format", "config"]
 categories = ["parser-implementations", "game-development"]
 
+[features]
+serde = ["dep:serde"]
+
 [dependencies]
+serde = { version = "1", optional = true }
+
+[dev-dependencies]
+serde = { version = "1", features = ["derive"] }

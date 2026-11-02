@@ -119,6 +119,16 @@ fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, ()>
     }
 }
 
+/// Parses a comma separated list such as `0.5,0.5,300,0,0.8`.
+fn floats<const N: usize>(s: &str) -> Option<[f32; N]> {
+    let v: Vec<f32> = s
+        .split(',')
+        .map(|p| p.trim().parse())
+        .collect::<Result<_, _>>()
+        .ok()?;
+    v.try_into().ok()
+}
+
 /// Removes `flag` from `args`, returning whether it was there.
 fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
     let before = args.len();
@@ -141,7 +151,7 @@ fn main() -> ExitCode {
         frame: 0,
         attempts: 0,
     });
-    let camera = match camera.map(|c| aaa_data::floats(&c)) {
+    let camera = match camera.map(|c| floats(&c)) {
         None => None,
         Some(Some(view)) => Some(StartView(view)),
         Some(None) => {

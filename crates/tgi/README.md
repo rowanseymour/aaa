@@ -45,6 +45,18 @@ let templates = tgi::Templates::new(files.iter().map(|p| &p.root));
 let resolved = templates.resolve(thing);           // thing with its parents merged in
 ```
 
+With the `serde` feature, a block reads into any `Deserialize` type, keys
+matching fields regardless of case and underscores (see the `de` module for
+the rules):
+
+```rust
+#[derive(serde::Deserialize)]
+struct Variation { texture: String, terrain_color: Option<[f32; 3]> }
+
+let v: Variation = tgi::from_block(block)?;           // as written
+let v: Variation = templates.deserialize(block)?;     // with inheritance resolved
+```
+
 ## Command line
 
 ```sh

@@ -6,6 +6,7 @@ version = 4
 name = "aaa-data"
 version = "0.1.0"
 dependencies = [
+ "serde",
  "tgck",
  "tgi",
 ]
@@ -5135,6 +5136,9 @@ dependencies = [
 [[package]]
 name = "tgi"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "thiserror"

@@ -19,10 +19,16 @@
 //!
 //! [`Templates`] resolves template inheritance (`Template=`, `Inherit=`) on
 //! request; the tree itself is left as written.
+//!
+//! With the `serde` feature, [`from_block`] reads a block into a typed struct.
 
+#[cfg(feature = "serde")]
+pub mod de;
 mod decode;
 mod inherit;
 
+#[cfg(feature = "serde")]
+pub use de::from_block;
 pub use decode::decode;
 pub use inherit::Templates;
 
