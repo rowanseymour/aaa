@@ -99,6 +99,18 @@ fn schema_fields() {
 }
 
 #[test]
+fn typed_values() {
+    let root = ok("scale = 1.5\nbad = x\ninvisible = TRUE\nvisible = false\nquoted = \" 2 \"");
+    assert_eq!(root.parse_value::<f32>("SCALE"), Some(1.5));
+    assert_eq!(root.parse_value::<f32>("bad"), None);
+    assert_eq!(root.parse_value::<f32>("missing"), None);
+    assert_eq!(root.parse_value::<i32>("quoted"), Some(2));
+    assert!(root.flag("invisible"));
+    assert!(!root.flag("visible"));
+    assert!(!root.flag("missing"));
+}
+
+#[test]
 fn comments() {
     let root = ok(
         "/* header\n   comment */[A] ; trailing\n;; whole line\nurl = http://example.com/x ; note\ntip = \"a;b\" ;\"old text\"\n[B]/* x */ ",

@@ -4,15 +4,15 @@
 //! one. Lower terrain therefore shows through where higher terrain thins out.
 
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{
-    CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
-};
+use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
     AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat,
 };
 use bevy::shader::ShaderRef;
+
+use crate::textures;
 
 pub type GroundMaterial = ExtendedMaterial<StandardMaterial, Blend>;
 
@@ -73,7 +73,7 @@ pub fn mask_array(files: &[(String, Vec<u8>)]) -> Option<Image> {
         let Some(pattern) = pattern(digits) else {
             continue;
         };
-        let Some(alpha) = decode_alpha(bytes, digits) else {
+        let Some(alpha) = decode_alpha(bytes, &format!("{digits}.tga")) else {
             continue;
         };
         known[pattern as usize] = Some(alpha);
@@ -153,16 +153,7 @@ fn pattern(digits: &str) -> Option<u8> {
 }
 
 fn decode_alpha(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
-    let image = Image::from_buffer(
-        bytes,
-        ImageType::Extension("tga"),
-        CompressedImageFormats::NONE,
-        false,
-        ImageSampler::Default,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .map_err(|e| warn!("transition {name}: {e}"))
-    .ok()?;
+    let image = textures::decode(bytes, name, CompressedImageFormats::NONE, false)?;
     let image = match image.texture_descriptor.format {
         TextureFormat::Rgba8Unorm => image,
         _ => image.convert(TextureFormat::Rgba8Unorm)?,
@@ -257,12 +248,7 @@ pub fn texture_array(layers: Vec<Image>) -> Image {
     );
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = mips;
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        anisotropy_clamp: 16,
-        ..ImageSamplerDescriptor::linear()
-    });
+    image.sampler = textures::repeating();
     image
 }
 
