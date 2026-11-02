@@ -242,42 +242,16 @@ impl Game {
                 // Model paths are relative to the defining file, so where an
                 // id is defined more than once keep a definition that finds
                 // its models.
-                let drawable = |v: &Option<View>| v.as_ref().is_some_and(|v| !v.models.is_empty());
                 let id = id.to_ascii_lowercase();
-                if drawable(&view) || !out.get(&id).is_some_and(drawable) {
+                if drawable(Some(&view)) || !drawable(out.get(&id)) {
                     out.insert(id, view);
                 }
             }
         }
-        let renames = self.thing_renames();
-        for old in renames.keys() {
-            if let Some(v) = out.get(&resolve(&renames, old)).cloned() {
-                out.insert(old.clone(), v);
-            }
+        if let Some(bytes) = self.read("translate.tgi") {
+            add_renames(&mut out, &tgi::decode(&bytes));
         }
         out
-    }
-
-    /// Old template ids that maps may still use, to their replacements, by
-    /// lower-case id.
-    fn thing_renames(&mut self) -> HashMap<String, String> {
-        let Some(bytes) = self.read("translate.tgi") else {
-            return HashMap::new();
-        };
-        tgi::parse_bytes(&bytes)
-            .root
-            .blocks_of("Translate")
-            .filter(|t| {
-                t.value("node")
-                    .is_some_and(|n| n.trim().eq_ignore_ascii_case("Thing"))
-            })
-            .filter_map(|t| {
-                Some((
-                    t.value("ids_old")?.trim().to_ascii_lowercase(),
-                    t.value("ids_new")?.trim().to_ascii_lowercase(),
-                ))
-            })
-            .collect()
     }
 
     /// A template's models: its aspects when they are variations, else its
@@ -428,6 +402,54 @@ fn water_colors<'a>(
         .collect()
 }
 
+/// Gives old template ids that maps may still use the views of their
+/// replacements, as `translate.tgi` lists them.
+fn add_renames(views: &mut HashMap<String, Option<View>>, translate: &str) {
+    let live = thing_renames(translate);
+    for old in live.keys() {
+        if let Some(v) = views.get(&resolve(&live, old)).cloned() {
+            views.insert(old.clone(), v);
+        }
+    }
+    // A stray `/*` comments out most of the file, including the renames
+    // that developer and trailer maps rely on, so use those too, but only
+    // for ids that would otherwise lack a model they should have.
+    let mut all = thing_renames(&translate.replace("/*", "").replace("*/", ""));
+    all.extend(live);
+    for old in all.keys() {
+        if matches!(views.get(old), Some(None)) || drawable(views.get(old)) {
+            continue;
+        }
+        if let Some(v) = views.get(&resolve(&all, old)).filter(|v| drawable(Some(v))) {
+            views.insert(old.clone(), v.clone());
+        }
+    }
+}
+
+fn drawable(view: Option<&Option<View>>) -> bool {
+    view.is_some_and(|v| v.as_ref().is_some_and(|v| !v.models.is_empty()))
+}
+
+/// Old template ids that maps may still use, to their replacements, by
+/// lower-case id, from `translate.tgi`. Where an id is renamed more than
+/// once the first wins, as the file lists the latest first.
+fn thing_renames(text: &str) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for t in tgi::parse(text).root.blocks_of("Translate") {
+        if !t
+            .value("node")
+            .is_some_and(|n| n.trim().eq_ignore_ascii_case("Thing"))
+        {
+            continue;
+        }
+        if let (Some(old), Some(new)) = (t.value("ids_old"), t.value("ids_new")) {
+            out.entry(old.trim().to_ascii_lowercase())
+                .or_insert_with(|| new.trim().to_ascii_lowercase());
+        }
+    }
+    out
+}
+
 /// The latest id of a template that may have been renamed more than once,
 /// stopping at a rename cycle.
 fn resolve(renames: &HashMap<String, String>, id: &str) -> String {
@@ -474,5 +496,45 @@ mod tests {
         assert_eq!(resolve(&renames, "z"), "z");
         let cycle = resolve(&renames, "x");
         assert!(cycle == "x" || cycle == "y");
+    }
+    #[test]
+    fn commented_renames() {
+        let view = |model: &str| {
+            Some(View {
+                models: vec![model.to_string()],
+                texture_dirs: Vec::new(),
+                texture_renames: Vec::new(),
+                scale: 1.0,
+            })
+        };
+        let mut views: HashMap<String, Option<View>> = [
+            ("new", view("new.nif")),
+            ("newer", view("newer.nif")),
+            ("kept", view("kept.nif")),
+            ("hidden", None),
+        ]
+        .into_iter()
+        .map(|(id, v)| (id.to_string(), v))
+        .collect();
+        // Renames the game reads, then ones commented out.
+        let rename = |node, old, new| {
+            format!("[Translate]\nnode = {node}\nids_old = {old}\nids_new = {new}\n")
+        };
+        let translate = format!(
+            "{}/*\n{}{}{}{}{}*/\n",
+            rename("Thing", "live", "new"),
+            rename("Thing", "kept", "new"),
+            rename("Thing", "old", "newer"),
+            rename("Thing", "old", "new"),
+            rename("Thing", "hidden", "new"),
+            rename("Variation", "terrain", "new"),
+        );
+        add_renames(&mut views, &translate);
+        let model = |id: &str| views[id].as_ref().map(|v| v.models[0].as_str());
+        assert_eq!(model("live"), Some("new.nif"));
+        assert_eq!(model("old"), Some("newer.nif"));
+        assert_eq!(model("kept"), Some("kept.nif"));
+        assert_eq!(model("hidden"), None);
+        assert!(!views.contains_key("terrain"));
     }
 }
