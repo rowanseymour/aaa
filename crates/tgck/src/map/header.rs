@@ -149,7 +149,11 @@ pub struct WorldCreator {
 
 const CREATOR_CLASS: &str = "KKC_WorldCreator";
 
-fn check_version(what: &str, version: u32, versions: std::ops::RangeInclusive<u32>) -> Result<u32> {
+pub(super) fn check_version(
+    what: &str,
+    version: u32,
+    versions: std::ops::RangeInclusive<u32>,
+) -> Result<u32> {
     if versions.contains(&version) {
         Ok(version)
     } else {
@@ -260,7 +264,7 @@ impl MapHeader {
 
 /// Writes `value` with `write` if the version has it, checking that it's set
 /// exactly when it does.
-fn optional<T>(
+pub(super) fn optional<T>(
     has: bool,
     what: &str,
     value: Option<T>,

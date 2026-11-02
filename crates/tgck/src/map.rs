@@ -45,6 +45,7 @@
 //! GWORLD, TEAMS, KINGDOMS  see map/players.rs
 //! MAP_HEADER               see map/header.rs
 //! OBJECTIVES               see map/objectives.rs
+//! TRIGGERS                 see map/triggers.rs
 //!
 //! TERRAIN
 //!     u32 version (6 or 7 in shipped maps; the game accepts up to 7)
@@ -69,6 +70,7 @@ use std::path::Path;
 mod header;
 mod objectives;
 mod players;
+mod triggers;
 
 pub use header::{
     KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
@@ -76,6 +78,7 @@ pub use header::{
 };
 pub use objectives::{Objective, Objectives};
 pub use players::{Ability, Faction, Kingdom, Kingdoms, Team, write_teams};
+pub use triggers::{Element, Parameter, Trigger, Triggers, Value};
 
 use crate::container::{Container, Section};
 use crate::{Cursor, Error, Result, Writer};
@@ -147,6 +150,10 @@ impl<R: Read + Seek> Map<R> {
 
     pub fn objectives(&mut self) -> Result<Objectives> {
         Objectives::parse(&self.container.read_named("OBJECTIVES")?)
+    }
+
+    pub fn triggers(&mut self) -> Result<Triggers> {
+        Triggers::parse(&self.container.read_named("TRIGGERS")?)
     }
 
     pub fn sun(&mut self) -> Result<Sun> {
