@@ -166,9 +166,9 @@ impl Models {
             }
             _ => return Placed::Missing,
         };
-        let (factor, variant) = placement(thing);
-        let model =
-            &view.models[variant.map_or(thing.id as usize, |v| v as usize) % view.models.len()];
+        // Things with no variation set pick one by id, so neighbours differ.
+        let variation = usize::try_from(thing.variation).unwrap_or(thing.id as usize);
+        let model = &view.models[variation % view.models.len()];
         let Some(parts) = self.model(game, assets, model, &view) else {
             return Placed::Missing;
         };
@@ -180,7 +180,7 @@ impl Models {
         let [fx, fy, _] = thing.facing;
         let transform = Transform::from_translation(world(x, y, z))
             .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
-            .with_scale(Vec3::splat(view.scale * factor));
+            .with_scale(Vec3::splat(view.scale * thing.scale));
         commands
             .spawn((
                 Name::new(thing.template.clone()),
@@ -451,19 +451,6 @@ pub struct ModelAssets<'a> {
     pub meshes: &'a mut Assets<Mesh>,
     pub materials: &'a mut Assets<StandardMaterial>,
     pub images: &'a mut Assets<Image>,
-}
-
-/// A placed object's own size factor and model variation, where its record
-/// has them. Both follow an 8-byte flag block at the start of the record's
-/// undecoded remainder.
-fn placement(thing: &Thing) -> (f32, Option<u32>) {
-    let field = |at: usize| -> Option<[u8; 4]> { thing.extra.get(at..at + 4)?.try_into().ok() };
-    let factor = field(8)
-        .map(f32::from_le_bytes)
-        .filter(|f| (0.1..10.0).contains(f))
-        .unwrap_or(1.0);
-    let variant = field(12).map(u32::from_le_bytes).filter(|&v| v < 1024);
-    (factor, variant)
 }
 
 /// A mesh in model space, converted from the game's z-up axes to Bevy's.

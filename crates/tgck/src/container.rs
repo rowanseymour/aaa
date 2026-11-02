@@ -12,14 +12,16 @@
 //! A section is zlib-compressed when `stored_size != unpacked_size`.
 
 use std::fs::File;
-use std::io::{BufReader, Read, Seek, SeekFrom};
+use std::io::{BufReader, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::{Cursor, Error, Result, utf16_lossy};
+use crate::{Cursor, Error, Result, Writer, utf16_lossy};
 
 pub const MAGIC: &[u8; 4] = b"TGCK";
 const SECTION_RECORD_LEN: u64 = 0x60;
 const SECTION_NAME_LEN: usize = 0x40;
+/// The zlib level the game compresses sections with.
+const ZLIB_LEVEL: u8 = 6;
 /// Refuse to inflate sections claiming more than this; real ones are a few MB.
 const MAX_UNPACKED: u64 = 256 << 20;
 
@@ -148,5 +150,67 @@ impl<R: Read + Seek> Container<R> {
     pub fn read_named(&mut self, name: &'static str) -> Result<Vec<u8>> {
         let section = self.require(name)?.clone();
         self.read_section(&section)
+    }
+}
+
+/// Writes a container of `(section, payload)` pairs, laid out as the game
+/// does. Each section gives its name, unknown bytes and whether to compress;
+/// its offset and sizes are recomputed from the payload.
+pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()> {
+    let mut w = Writer::default();
+    w.bytes(MAGIC);
+    w.u32(2);
+    w.u32(sections.len() as u32);
+    let mut table = Writer::default();
+    for (section, payload) in sections {
+        let stored = Some(section)
+            .filter(|s| s.is_compressed())
+            .map(|_| miniz_oxide::deflate::compress_to_vec_zlib(payload, ZLIB_LEVEL))
+            // Readers take a section whose sizes match as stored raw.
+            .filter(|z| z.len() != payload.len())
+            .unwrap_or_else(|| payload.to_vec());
+        let name: Vec<u16> = section.name.encode_utf16().collect();
+        if name.len() > SECTION_NAME_LEN / 2 {
+            return Err(Error::Unwritable(format!(
+                "section name {:?} is too long",
+                section.name
+            )));
+        }
+        name.iter().for_each(|&u| table.u16(u));
+        table.bytes(&[0; SECTION_NAME_LEN][name.len() * 2..]);
+        table.u64(w.0.len() as u64);
+        table.u64(stored.len() as u64);
+        table.bytes(&section.unknown);
+        table.u64(payload.len() as u64);
+        w.bytes(&stored);
+    }
+    w.bytes(&table.0);
+    out.write_all(&w.0)?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::build_container;
+    use std::io;
+
+    #[test]
+    fn writes_what_it_reads() {
+        let payload = vec![7u8; 1000];
+        let bytes = build_container(&[("RAW", b"abcd", false), ("PACKED", &payload, true)]);
+        let mut c = Container::new(io::Cursor::new(&bytes)).unwrap();
+        let sections = c.sections.clone();
+        let payloads: Vec<_> = sections
+            .iter()
+            .map(|s| c.read_section(s).unwrap())
+            .collect();
+        let pairs: Vec<_> = sections
+            .iter()
+            .zip(payloads.iter().map(Vec::as_slice))
+            .collect();
+        let mut out = Vec::new();
+        write(&mut out, &pairs).unwrap();
+        assert_eq!(out, bytes, "laid out as the game does");
     }
 }

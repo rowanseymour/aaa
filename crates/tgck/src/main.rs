@@ -14,7 +14,8 @@ usage:
   tgck cat      <archive.rwd> <entry-name>      write one entry to stdout
   tgck sections <file>                          list the sections of any TGCK file
   tgck unpack   <file> <out-dir>                write each section, decompressed, as <name>.bin
-  tgck map      <map.rmp>...                    summarise maps";
+  tgck map      <map.rmp>...                    summarise maps
+  tgck check    <map.rmp>...                    rewrite maps from what's decoded and compare";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -33,6 +34,7 @@ fn main() -> ExitCode {
         ["sections", file] => sections(file),
         ["unpack", file, out] => unpack(file, out),
         ["map", maps @ ..] if !maps.is_empty() => maps.iter().try_for_each(|m| map(m)),
+        ["check", maps @ ..] if !maps.is_empty() => check(maps),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -231,6 +233,73 @@ fn map(path: &str) -> Res {
         .collect();
     outln!("  start locations: {}", starts.join(" "));
     Ok(())
+}
+
+/// Re-encodes each map's decoded sections, writes the map out again and
+/// compares the result with the original.
+fn check(paths: &[&str]) -> Res {
+    let mut failed = 0;
+    for path in paths {
+        let bytes = fs::read(path)?;
+        let mut m = Map::new(std::io::Cursor::new(&bytes))?;
+        let sections = m.sections().to_vec();
+        let mut payloads = sections
+            .iter()
+            .map(|s| m.read_section(s))
+            .collect::<Result<Vec<_>, _>>()?;
+        let (index, things) = tgck::map::write_things(&m.things()?)?;
+        let encoded = [
+            ("HEIGHT_MAP", m.height_map()?.to_bytes()),
+            ("MOUNTAIN_HEIGHT_MAP", m.mountain_height_map()?.to_bytes()),
+            ("TERRAIN", m.terrain()?.to_bytes()?),
+            ("SUN", m.sun()?.to_bytes()),
+            ("DYNAMIC_THINGS_INDEX", index),
+            ("DYNAMIC_THINGS", things),
+        ];
+        let mut diffs = Vec::new();
+        for (name, data) in encoded {
+            let Some(i) = sections.iter().position(|s| s.name == name) else {
+                continue;
+            };
+            if let Some(at) = first_difference(&payloads[i], &data) {
+                diffs.push(format!("{name} differs at byte {at}"));
+            }
+            payloads[i] = data;
+        }
+        let pairs: Vec<_> = sections
+            .iter()
+            .zip(payloads.iter().map(Vec::as_slice))
+            .collect();
+        let mut file = Vec::new();
+        tgck::container::write(&mut file, &pairs)?;
+        // zlib streams can differ and still inflate to the same bytes.
+        let mut written = Container::new(std::io::Cursor::new(&file))?;
+        for (s, payload) in written.sections.clone().iter().zip(&payloads) {
+            if written.read_section(s)? != *payload {
+                diffs.push(format!("{} doesn't read back", s.name));
+            }
+        }
+        let file = if file == bytes {
+            "identical"
+        } else {
+            "recompressed"
+        };
+        if diffs.is_empty() {
+            outln!("{path}: ok, file {file}");
+        } else {
+            failed += 1;
+            outln!("{path}: {}", diffs.join(", "));
+        }
+    }
+    match failed {
+        0 => Ok(()),
+        n => Err(format!("{n} of {} maps don't round-trip", paths.len()).into()),
+    }
+}
+
+fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {
+    let same = a.iter().zip(b).take_while(|(a, b)| a == b).count();
+    (same < a.len().max(b.len())).then_some(same)
 }
 
 /// The number of distinct names, and the `n` most common as "name count, ...".
