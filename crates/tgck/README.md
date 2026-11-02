@@ -19,6 +19,7 @@ tgck cat      Data.rwd Units/USA/usa_battleship.tgi
 tgck sections Maps/Kursk.RMP             # list the sections of any TGCK file
 tgck unpack   Maps/Kursk.RMP out/        # write each section, decompressed, as <name>.bin
 tgck map      Maps/*.RMP                 # summarise maps
+tgck check    Maps/*.RMP                 # rewrite maps from what's decoded and compare
 ```
 
 ```text
@@ -48,6 +49,9 @@ let things = map.things()?;      // placed objects: template, id, position, faci
 let sun = map.sun()?;            // light direction and colours
 ```
 
+Each decoded section can be written back (`to_bytes`, `map::write_things`),
+and `container::write` puts a file back together.
+
 ## Format support
 
 | Data | Status |
@@ -56,12 +60,14 @@ let sun = map.sun()?;            // light direction and colours
 | `.rwd` archives | Done; tested against all 11 archives in the game |
 | Map `HEIGHT_MAP`, `MOUNTAIN_HEIGHT_MAP` | Done |
 | Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
-| Map `DYNAMIC_THINGS` | Template, id, position and facing, and the members of herds and regiments; the rest of each record is kept as raw bytes |
+| Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, and the members of herds and regiments; the rest of other classes' records is kept as raw bytes |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
 | Other map sections (`MAP_HEADER`, `TEAMS`, `TRIGGERS`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
 
-All 80 maps that ship with the game parse fully. The byte layouts are
+All 80 maps that ship with the game parse fully, and every decoded section
+writes back byte for byte. Whole files differ only in their zlib streams, as
+the game's zlib and `miniz_oxide` compress differently. The byte layouts are
 documented at the top of [`src/container.rs`](src/container.rs),
 [`src/archive.rs`](src/archive.rs) and [`src/map.rs`](src/map.rs).
 

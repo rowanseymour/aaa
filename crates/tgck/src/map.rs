@@ -14,13 +14,21 @@
 //!     trailing bytes       MOUNTAIN_HEIGHT_MAP has one more
 //!
 //! DYNAMIC_THINGS_INDEX     u32 unknown (0), u32 count, u32 record_size[count]
-//! DYNAMIC_THINGS           u32 unknown (0), u32 unknown (11), then per record:
-//!     string template, u32 unknown, u32 id, 10 bytes unknown,
-//!     f32 position[3], f32 facing[3] (unit vector), rest of record unknown
+//! DYNAMIC_THINGS           u32 unknown (0), u32 version (11), then per record:
+//!     string template, u32 class, u32 id, u32 version (2), string name,
+//!     u32 unknown (0), f32 position[3], f32 facing[3],
+//!     u32 flags, u32 version (5), f32 scale, i32 variation (-1 = none),
+//!     u32 unknown (0), u32 unknown, u16 unknown (0),
+//!     then by class:
+//!       area (6)    u32 version (1), [u32 id, u32 version (2),] string name,
+//!                   u32 shape (1 circle, 3 box), f32 radius, f32 bounds[4],
+//!                   u32 unknown (0); the cutscene maps leave out the id
+//!       camera (7)  u32 version (1 or 2), string name, f32 unknown
+//!       others      not decoded
 //!   An organization's record (a herd or regiment) holds its members too:
-//!     82 bytes unknown, string layout, u32 n, string slot_element[n],
+//!     56 bytes unknown, string layout, u32 n, string slot_element[n],
 //!     u32 positions, then per member: u32 index, a record as above whose
-//!     unknown rest runs up to the next member
+//!     undecoded rest runs up to the next member
 //!
 //! SUN
 //!     u32 version (1 or 2), u32 unknown (1), u32 unknown (-1),
@@ -38,8 +46,8 @@
 //!     u32 tile_count (width * height = (height-map side - 1)^2)
 //!     u32 tile_size  (8 for v7, 6 for v5-6, 4 for v4, 2 before)
 //!     tile[tile_count], row-major:
-//!       v7: u16 terrain, u16 unknown, u8 water_body, u8 unused, u8 flags, u8 unused
-//!       v6: u8 terrain, u8 flags, u16 unknown, u8 water_body, u8 unused
+//!       v7: u16 terrain, u16 unknown, u8 water_body, u8 unknown2, u8 flags, u8 unused
+//!       v6: u8 terrain, u8 flags, u16 unknown, u8 water_body, u8 unknown2
 //!     remainder: cached AI map analysis, followed by one more object for v6+.
 //!       The game can rebuild this data, so it is kept undecoded.
 //! ```
@@ -51,7 +59,7 @@ use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 use crate::container::{Container, Section};
-use crate::{Cursor, Error, Result};
+use crate::{Cursor, Error, Result, Writer};
 
 /// World units between adjacent height-map vertices.
 pub const CELL_SIZE: f32 = 2.0;
@@ -167,6 +175,20 @@ impl HeightMap {
     pub fn at(&self, x: usize, y: usize) -> f32 {
         self.heights[y * self.side + x]
     }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.u32(self.version);
+        w.f32(self.min);
+        w.f32(self.max);
+        w.f32(self.default);
+        w.u32(self.unknown);
+        w.u32(self.heights.len() as u32);
+        w.f32s(&self.heights);
+        w.bytes(&self.layer);
+        w.bytes(&self.trailing);
+        w.0
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -193,6 +215,8 @@ pub struct Tile {
     /// Bits 0-3 are stored; the game recomputes bits 4-6 from the terrain's group.
     pub flags: u8,
     pub unknown: u16,
+    /// Usually 0.
+    pub unknown2: u8,
 }
 
 impl Terrain {
@@ -216,12 +240,7 @@ impl Terrain {
             )));
         }
         let size = cur.u32()? as usize;
-        let expected = match version {
-            7.. => 8,
-            5..=6 => 6,
-            4 => 4,
-            _ => 2,
-        };
+        let expected = tile_size(version);
         if size != expected {
             return Err(Error::Corrupt(format!(
                 "TERRAIN v{version} tile size {size}, expected {expected}"
@@ -240,6 +259,7 @@ impl Terrain {
                         terrain: u16_at(0),
                         unknown: u16_at(2),
                         water_body: t[4],
+                        unknown2: t[5],
                         flags: t[6],
                     }
                 } else {
@@ -249,6 +269,7 @@ impl Terrain {
                         flags: t[1],
                         unknown: u16_at(2),
                         water_body: t.get(4).copied().unwrap_or(0),
+                        unknown2: t.get(5).copied().unwrap_or(0),
                     }
                 }
             })
@@ -279,6 +300,46 @@ impl Terrain {
     pub fn name_of(&self, tile: &Tile) -> &str {
         &self.names[tile.terrain as usize]
     }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut w = Writer::default();
+        w.u32(self.version);
+        w.u32(self.unknown);
+        w.string(&self.biome)?;
+        w.u32(self.names.len() as u32);
+        for name in &self.names {
+            w.string(name)?;
+        }
+        let size = tile_size(self.version);
+        w.u32(self.tiles.len() as u32);
+        w.u32(size as u32);
+        for t in &self.tiles {
+            if self.version >= 7 {
+                w.u16(t.terrain);
+                w.u16(t.unknown);
+                w.bytes(&[t.water_body, t.unknown2, t.flags, 0]);
+                continue;
+            }
+            let terrain = u8::try_from(t.terrain).map_err(|_| {
+                Error::Unwritable(format!("terrain {} in a v{} tile", t.terrain, self.version))
+            })?;
+            let mut tile = [terrain, t.flags, 0, 0, t.water_body, t.unknown2];
+            tile[2..4].copy_from_slice(&t.unknown.to_le_bytes());
+            w.bytes(&tile[..size]);
+        }
+        w.bytes(&self.ai_cache);
+        Ok(w.0)
+    }
+}
+
+/// Bytes per TERRAIN tile in a version.
+fn tile_size(version: u32) -> usize {
+    match version {
+        7.. => 8,
+        5..=6 => 6,
+        4 => 4,
+        _ => 2,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -306,28 +367,90 @@ impl Sun {
             rest: cur.rest().to_vec(),
         })
     }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut w = Writer::default();
+        w.u32(self.version);
+        w.u32(self.unknown[0]);
+        w.u32(self.unknown[1]);
+        for v in [self.direction, self.diffuse, self.ambient, self.specular] {
+            w.f32s(&v);
+        }
+        w.bytes(&self.rest);
+        w.0
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Thing {
     /// Template name, e.g. `temperate_trees`, `start_loc`.
     pub template: String,
+    /// The kind of object the record holds, which decides its [`Detail`]:
+    /// one for scenery, another for units and buildings, and so on.
+    pub class: u32,
     pub id: u32,
+    /// The name scripts refer to it by; empty for most.
+    pub name: String,
     pub position: [f32; 3],
-    /// Unit vector the object faces.
+    /// Direction the object faces, a unit vector in x and y; cameras add
+    /// their tilt in z.
     pub facing: [f32; 3],
-    pub unknown0: u32,
-    pub unknown1: [u8; 10],
-    /// Template-specific remainder of the record, not yet decoded.
-    pub extra: Vec<u8>,
+    pub flags: u32,
+    /// Size relative to the template's.
+    pub scale: f32,
+    /// Which of the template's model variations it shows; -1 when none is set.
+    pub variation: i32,
+    pub unknown: u32,
+    pub detail: Detail,
 }
+
+/// The [`Thing::class`] of areas.
+pub const AREA: u32 = 6;
+/// The [`Thing::class`] of cameras.
+pub const CAMERA: u32 = 7;
+
+/// The class-specific rest of a [`Thing`]'s record.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Detail {
+    Area(Area),
+    Camera(Camera),
+    /// Not decoded.
+    Raw(Vec<u8>),
+}
+
+/// A region scripts and triggers test units against.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Area {
+    pub version: u32,
+    /// Left out by some maps, such as the cutscenes.
+    pub id: Option<u32>,
+    /// The name the map's objectives and triggers use.
+    pub name: String,
+    /// 1 for a circle, 3 for a box.
+    pub shape: u32,
+    pub radius: f32,
+    /// The box about the position: min x, min y, max x, max y.
+    pub bounds: [f32; 4],
+}
+
+/// A camera position for cutscenes and scripted views.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Camera {
+    pub version: u32,
+    pub name: String,
+    pub unknown: f32,
+}
+
+/// The version DYNAMIC_THINGS records are written in.
+const THINGS_VERSION: u32 = 11;
 
 fn parse_things(index: &[u8], data: &[u8]) -> Result<Vec<Thing>> {
     let mut idx = Cursor::new(index);
-    idx.u32()?;
+    expect(&mut idx, "DYNAMIC_THINGS_INDEX header", 0)?;
     let count = idx.u32()?;
     let mut cur = Cursor::new(data);
-    cur.bytes(8)?;
+    expect(&mut cur, "DYNAMIC_THINGS header", 0)?;
+    expect(&mut cur, "DYNAMIC_THINGS version", THINGS_VERSION)?;
     let mut things = Vec::with_capacity(count.min(1 << 20) as usize);
     for i in 0..count {
         let size = idx.u32()? as usize;
@@ -340,6 +463,31 @@ fn parse_things(index: &[u8], data: &[u8]) -> Result<Vec<Thing>> {
     idx.finish("DYNAMIC_THINGS_INDEX")?;
     cur.finish("DYNAMIC_THINGS")?;
     Ok(things)
+}
+
+/// The DYNAMIC_THINGS_INDEX and DYNAMIC_THINGS sections holding `things`.
+pub fn write_things(things: &[Thing]) -> Result<(Vec<u8>, Vec<u8>)> {
+    let mut index = Writer::default();
+    index.u32(0);
+    index.u32(things.len() as u32);
+    let mut data = Writer::default();
+    data.u32(0);
+    data.u32(THINGS_VERSION);
+    for thing in things {
+        let start = data.0.len();
+        thing.write(&mut data)?;
+        index.u32((data.0.len() - start) as u32);
+    }
+    Ok((index.0, data.0))
+}
+
+/// Reads a `u32` that every known file has the same value in, so that
+/// writing the value back reproduces the file.
+fn expect(cur: &mut Cursor, what: &str, want: u32) -> Result<()> {
+    match cur.u32()? {
+        v if v == want => Ok(()),
+        v => Err(Error::Corrupt(format!("{what} is {v}, expected {want}"))),
+    }
 }
 
 /// The parts of a herd or regiment, as its record stores them.
@@ -356,29 +504,71 @@ pub struct Organization {
 impl Thing {
     fn parse(record: &[u8]) -> Result<Self> {
         let mut rec = Cursor::new(record);
-        let mut thing = Thing::parse_head(&mut rec)?;
-        thing.extra = rec.rest().to_vec();
+        let mut thing = Thing::parse_shared(&mut rec)?;
+        thing.detail = Detail::parse(thing.class, rec.rest())?;
         Ok(thing)
     }
 
-    /// Everything up to the undecoded rest, which is left empty.
-    fn parse_head(rec: &mut Cursor) -> Result<Self> {
+    /// The fields every class has, leaving the detail empty.
+    fn parse_shared(rec: &mut Cursor) -> Result<Self> {
         let template = rec.string()?;
-        let unknown0 = rec.u32()?;
+        let class = rec.u32()?;
+        let id = rec.u32()?;
+        expect(rec, "thing version", 2)?;
+        let name = rec.string()?;
+        expect(rec, "field after the name", 0)?;
+        let position = rec.f32s()?;
+        let facing = rec.f32s()?;
+        let flags = rec.u32()?;
+        expect(rec, "placement version", 5)?;
+        let scale = rec.f32()?;
+        let variation = rec.i32()?;
+        expect(rec, "field after the variation", 0)?;
+        let unknown = rec.u32()?;
+        match rec.u16()? {
+            0 => {}
+            v => return Err(Error::Corrupt(format!("placement ends in {v}, expected 0"))),
+        }
         Ok(Thing {
             template,
-            unknown0,
-            id: rec.u32()?,
-            unknown1: rec.bytes(10)?.try_into().unwrap(),
-            position: rec.f32s()?,
-            facing: rec.f32s()?,
-            extra: Vec::new(),
+            class,
+            id,
+            name,
+            position,
+            facing,
+            flags,
+            scale,
+            variation,
+            unknown,
+            detail: Detail::Raw(Vec::new()),
         })
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        w.string(&self.template)?;
+        w.u32(self.class);
+        w.u32(self.id);
+        w.u32(2);
+        w.string(&self.name)?;
+        w.u32(0);
+        w.f32s(&self.position);
+        w.f32s(&self.facing);
+        w.u32(self.flags);
+        w.u32(5);
+        w.f32(self.scale);
+        w.i32(self.variation);
+        w.u32(0);
+        w.u32(self.unknown);
+        w.u16(0);
+        self.detail.write(w)
     }
 
     /// The organization this thing is, if its record holds one.
     pub fn organization(&self) -> Option<Organization> {
-        let mut cur = Cursor::new(self.extra.get(82..)?);
+        let Detail::Raw(raw) = &self.detail else {
+            return None;
+        };
+        let mut cur = Cursor::new(raw.get(56..)?);
         let layout = cur.string().ok().filter(|s| is_id(s))?;
         let n = cur.u32().ok().filter(|&n| n <= 64)?;
         let slots = (0..n)
@@ -386,36 +576,103 @@ impl Thing {
             .collect::<Option<Vec<_>>>()?;
         let positions = cur.u32().ok().filter(|&n| n <= 256)?;
         // Members' records aren't decoded to the end, so each is found by a
-        // later position index than the one before and a plausible head.
+        // later position index than the one before and a plausible record.
         // Empty positions are left out.
         let body = cur.rest();
-        let head_at = |at: usize, next: u32| {
+        let member_at = |at: usize, next: u32| {
             let mut c = Cursor::new(&body[at..]);
             let index = c.u32().ok().filter(|i| (next..positions).contains(i))?;
-            let head = Thing::parse_head(&mut c).ok()?;
-            let [x, y, z] = head.facing;
-            let unit = (x * x + y * y + z * z - 1.0).abs() < 0.01;
-            (is_id(&head.template) && unit).then(|| (index, head, at + c.pos()))
+            let thing = Thing::parse_shared(&mut c).ok()?;
+            let [x, y, _] = thing.facing;
+            let unit = (x * x + y * y - 1.0).abs() < 0.01;
+            (is_id(&thing.template) && unit).then(|| (index, thing, at + c.pos()))
         };
         let mut members: Vec<Thing> = Vec::new();
         let (mut from, mut next) = (0, 0);
-        while let Some((at, (index, head, end))) =
-            (from..body.len()).find_map(|at| Some((at, head_at(at, next)?)))
+        while let Some((at, (index, thing, end))) =
+            (from..body.len()).find_map(|at| Some((at, member_at(at, next)?)))
         {
             if let Some(last) = members.last_mut() {
-                last.extra = body[from..at].to_vec();
+                last.detail = Detail::Raw(body[from..at].to_vec());
             }
-            members.push(head);
+            members.push(thing);
             (from, next) = (end, index + 1);
         }
         if let Some(last) = members.last_mut() {
-            last.extra = body[from..].to_vec();
+            last.detail = Detail::Raw(body[from..].to_vec());
         }
         Some(Organization {
             layout,
             slots,
             members,
         })
+    }
+}
+
+impl Detail {
+    fn parse(class: u32, data: &[u8]) -> Result<Self> {
+        let mut cur = Cursor::new(data);
+        let detail = match class {
+            AREA => {
+                // Records without the id are 8 bytes shorter; the name's
+                // length tells which this is.
+                let name_len = |at: usize| {
+                    data.get(at..at + 2)
+                        .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize * 2)
+                };
+                let has_id = name_len(4) != data.len().checked_sub(34);
+                let version = cur.u32()?;
+                let id = if has_id {
+                    let id = cur.u32()?;
+                    expect(&mut cur, "area id version", 2)?;
+                    Some(id)
+                } else {
+                    None
+                };
+                let area = Area {
+                    version,
+                    id,
+                    name: cur.string()?,
+                    shape: cur.u32()?,
+                    radius: cur.f32()?,
+                    bounds: cur.f32s()?,
+                };
+                expect(&mut cur, "area's last field", 0)?;
+                Detail::Area(area)
+            }
+            CAMERA => Detail::Camera(Camera {
+                version: cur.u32()?,
+                name: cur.string()?,
+                unknown: cur.f32()?,
+            }),
+            _ => Detail::Raw(cur.rest().to_vec()),
+        };
+        cur.finish("thing record")?;
+        Ok(detail)
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        match self {
+            Detail::Area(a) => {
+                w.u32(a.version);
+                if let Some(id) = a.id {
+                    w.u32(id);
+                    w.u32(2);
+                }
+                w.string(&a.name)?;
+                w.u32(a.shape);
+                w.f32(a.radius);
+                w.f32s(&a.bounds);
+                w.u32(0);
+            }
+            Detail::Camera(c) => {
+                w.u32(c.version);
+                w.string(&c.name)?;
+                w.f32(c.unknown);
+            }
+            Detail::Raw(raw) => w.bytes(raw),
+        }
+        Ok(())
     }
 }
 
@@ -446,16 +703,32 @@ mod tests {
         b
     }
 
-    fn thing_record(template: &str, id: u32, pos: [f32; 3], extra: &[u8]) -> Vec<u8> {
+    fn thing_record(class: u32, template: &str, id: u32, pos: [f32; 3], detail: &[u8]) -> Vec<u8> {
         let mut r = string(template);
-        r.extend(9u32.to_le_bytes());
-        r.extend(id.to_le_bytes());
-        r.extend([0u8; 10]);
+        r.extend([class, id, 2].map(u32::to_le_bytes).concat());
+        r.extend(string(""));
+        r.extend(0u32.to_le_bytes());
         for v in pos.into_iter().chain([0.0, -1.0, 0.0]) {
             r.extend(v.to_le_bytes());
         }
-        r.extend(extra);
+        r.extend(
+            [0x2400a800, 5, 1f32.to_bits(), u32::MAX, 0, 4]
+                .map(u32::to_le_bytes)
+                .concat(),
+        );
+        r.extend([0, 0]);
+        r.extend(detail);
         r
+    }
+
+    fn things_sections(records: &[Vec<u8>]) -> (Vec<u8>, Vec<u8>) {
+        let mut data = [0u32, 11].map(u32::to_le_bytes).concat();
+        let mut index = [0u32, records.len() as u32].map(u32::to_le_bytes).concat();
+        for r in records {
+            data.extend(r);
+            index.extend((r.len() as u32).to_le_bytes());
+        }
+        (index, data)
     }
 
     fn terrain_section(version: u32, tiles: &[&[u8]]) -> Vec<u8> {
@@ -489,7 +762,8 @@ mod tests {
                 terrain: 1,
                 water_body: 3,
                 flags: 0x21,
-                unknown: 0
+                unknown: 0,
+                unknown2: 0,
             }
         );
         assert_eq!(v7.name_of(v7.at(0, 0)), "ocean");
@@ -530,16 +804,10 @@ mod tests {
 
     #[test]
     fn parses_height_map_and_things() {
-        let recs = [
-            thing_record("start_loc", 7, [10.0, 20.0, 2.0], &[1, 2, 3]),
-            thing_record("tree", 8, [0.0; 3], &[]),
-        ];
-        let mut things = [0u32.to_le_bytes(), 11u32.to_le_bytes()].concat();
-        let mut index = [0u32.to_le_bytes(), 2u32.to_le_bytes()].concat();
-        for r in &recs {
-            things.extend(r);
-            index.extend((r.len() as u32).to_le_bytes());
-        }
+        let (index, things) = things_sections(&[
+            thing_record(3, "start_loc", 7, [10.0, 20.0, 2.0], &[1, 2, 3]),
+            thing_record(2, "tree", 8, [0.0; 3], &[]),
+        ]);
         let bytes = build_container(&[
             ("MAP", &[0; 4], false),
             ("MAP_HEADER", &[0; 64], true),
@@ -558,12 +826,89 @@ mod tests {
             (t[0].template.as_str(), t[0].id, t[0].position),
             ("start_loc", 7, [10.0, 20.0, 2.0])
         );
-        assert_eq!(t[0].extra, [1, 2, 3]);
+        assert_eq!((t[0].scale, t[0].variation), (1.0, -1));
+        assert_eq!(t[0].detail, Detail::Raw(vec![1, 2, 3]));
+        assert_eq!(write_things(&t).unwrap(), (index, things));
+    }
+
+    #[test]
+    fn parses_areas_and_cameras() {
+        let mut circle = 1u32.to_le_bytes().to_vec();
+        circle.extend([0x74u32, 2].map(u32::to_le_bytes).concat());
+        circle.extend(string("Ambush"));
+        circle.extend(1u32.to_le_bytes());
+        circle.extend(
+            [30.5f32, -5.0, -50.0, 5.0, 50.0]
+                .map(f32::to_le_bytes)
+                .concat(),
+        );
+        circle.extend(0u32.to_le_bytes());
+        // As in the cutscene maps, which leave out the area's id.
+        let mut no_id = 1u32.to_le_bytes().to_vec();
+        no_id.extend(string("area_0"));
+        no_id.extend(circle[circle.len() - 28..].iter());
+        let mut camera = 2u32.to_le_bytes().to_vec();
+        camera.extend(string("Intro"));
+        camera.extend(1.3f32.to_le_bytes());
+
+        let (index, data) = things_sections(&[
+            thing_record(AREA, "circle_area", 1, [0.0; 3], &circle),
+            thing_record(AREA, "circle_area", 2, [0.0; 3], &no_id),
+            thing_record(CAMERA, "camera", 3, [0.0; 3], &camera),
+        ]);
+        let things = parse_things(&index, &data).unwrap();
+        let Detail::Area(area) = &things[0].detail else {
+            panic!("{:?}", things[0].detail)
+        };
+        assert_eq!((area.id, area.name.as_str()), (Some(0x74), "Ambush"));
+        assert_eq!((area.shape, area.radius), (1, 30.5));
+        assert_eq!(area.bounds, [-5.0, -50.0, 5.0, 50.0]);
+        let Detail::Area(area) = &things[1].detail else {
+            panic!("{:?}", things[1].detail)
+        };
+        assert_eq!((area.id, area.name.as_str()), (None, "area_0"));
+        assert_eq!(
+            things[2].detail,
+            Detail::Camera(Camera {
+                version: 2,
+                name: "Intro".into(),
+                unknown: 1.3
+            })
+        );
+        assert_eq!(write_things(&things).unwrap(), (index, data));
+    }
+
+    #[test]
+    fn rejects_unknown_thing_versions() {
+        let mut record = thing_record(2, "tree", 1, [0.0; 3], &[]);
+        let at = string("tree").len() + 8;
+        record[at] = 3;
+        let (index, data) = things_sections(&[record]);
+        assert!(parse_things(&index, &data).is_err());
+    }
+
+    #[test]
+    fn writes_sections_back() {
+        let hm = height_section(3, 4);
+        assert_eq!(HeightMap::parse(&hm).unwrap().to_bytes(), hm);
+        for (version, tile) in [
+            (7, &[1, 0, 2, 0, 3, 9, 0x21, 0][..]),
+            (6, &[1, 0x21, 2, 0, 3, 9]),
+        ] {
+            let terrain = terrain_section(version, &[tile; 4]);
+            let parsed = Terrain::parse(&terrain).unwrap();
+            assert_eq!(parsed.at(0, 0).unknown2, 9);
+            assert_eq!(parsed.to_bytes().unwrap(), terrain);
+        }
+        let mut sun = [2u32, 1, u32::MAX].map(u32::to_le_bytes).concat();
+        sun.extend([0.5f32; 12].map(f32::to_le_bytes).concat());
+        sun.extend([0xAA]);
+        assert_eq!(Sun::parse(&sun).unwrap().to_bytes(), sun);
     }
 
     #[test]
     fn parses_organization_members() {
-        let mut extra = vec![0u8; 82];
+        let mut extra = vec![0u8; 56];
         extra.extend(string("herd_ambient_large"));
         extra.extend(3u32.to_le_bytes());
         for slot in ["sheep_ewe", "", "sheep_ram"] {
@@ -573,10 +918,11 @@ mod tests {
         // Positions 1 and 2 are empty; each member's rest is undecoded.
         for (index, template, id) in [(0u32, "sheep_ewe", 11), (3, "sheep_ram", 12)] {
             extra.extend(index.to_le_bytes());
-            extra.extend(thing_record(template, id, [1.0, 2.0, 3.0], &[0xAA; 20]));
+            extra.extend(thing_record(3, template, id, [1.0, 2.0, 3.0], &[0xAA; 20]));
         }
-        let parse =
-            |extra: &[u8]| Thing::parse(&thing_record("herd_sheep", 10, [0.0; 3], extra)).unwrap();
+        let parse = |extra: &[u8]| {
+            Thing::parse(&thing_record(3, "herd_sheep", 10, [0.0; 3], extra)).unwrap()
+        };
         let org = parse(&extra).organization().unwrap();
         assert_eq!(org.layout, "herd_ambient_large");
         assert_eq!(org.slots, ["sheep_ewe", "", "sheep_ram"]);
@@ -587,8 +933,8 @@ mod tests {
             .collect();
         assert_eq!(members, [("sheep_ewe", 11), ("sheep_ram", 12)]);
         assert_eq!(org.members[0].position, [1.0, 2.0, 3.0]);
-        assert_eq!(org.members[0].extra, [0xAA; 20]);
-        assert_eq!(org.members[1].extra, [0xAA; 20]);
+        assert_eq!(org.members[0].detail, Detail::Raw(vec![0xAA; 20]));
+        assert_eq!(org.members[1].detail, Detail::Raw(vec![0xAA; 20]));
 
         assert!(
             parse(&[0; 100]).organization().is_none(),

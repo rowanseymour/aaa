@@ -23,6 +23,8 @@ pub enum Error {
     UnsupportedVersion(u32),
     MissingSection(&'static str),
     Corrupt(String),
+    /// Data that can't be written in the format it asks for.
+    Unwritable(String),
 }
 
 impl fmt::Display for Error {
@@ -33,6 +35,7 @@ impl fmt::Display for Error {
             Error::UnsupportedVersion(v) => write!(f, "unsupported TGCK version {v}"),
             Error::MissingSection(s) => write!(f, "file has no {s:?} section"),
             Error::Corrupt(s) => write!(f, "corrupt file: {s}"),
+            Error::Unwritable(s) => write!(f, "can't write: {s}"),
         }
     }
 }
@@ -74,6 +77,9 @@ impl<'a> Cursor<'a> {
     pub(crate) fn u64(&mut self) -> Result<u64> {
         Ok(u64::from_le_bytes(self.bytes(8)?.try_into().unwrap()))
     }
+    pub(crate) fn i32(&mut self) -> Result<i32> {
+        Ok(i32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
+    }
     pub(crate) fn f32(&mut self) -> Result<f32> {
         Ok(f32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
@@ -102,6 +108,42 @@ impl<'a> Cursor<'a> {
             0 => Ok(()),
             n => Err(Error::Corrupt(format!("{what} has {n} trailing bytes"))),
         }
+    }
+}
+
+/// The inverse of [`Cursor`].
+#[derive(Default)]
+pub(crate) struct Writer(pub(crate) Vec<u8>);
+
+impl Writer {
+    pub(crate) fn bytes(&mut self, b: &[u8]) {
+        self.0.extend_from_slice(b);
+    }
+    pub(crate) fn u16(&mut self, v: u16) {
+        self.bytes(&v.to_le_bytes());
+    }
+    pub(crate) fn u32(&mut self, v: u32) {
+        self.bytes(&v.to_le_bytes());
+    }
+    pub(crate) fn u64(&mut self, v: u64) {
+        self.bytes(&v.to_le_bytes());
+    }
+    pub(crate) fn i32(&mut self, v: i32) {
+        self.bytes(&v.to_le_bytes());
+    }
+    pub(crate) fn f32(&mut self, v: f32) {
+        self.bytes(&v.to_le_bytes());
+    }
+    pub(crate) fn f32s(&mut self, vs: &[f32]) {
+        vs.iter().for_each(|&v| self.f32(v));
+    }
+    pub(crate) fn string(&mut self, s: &str) -> Result<()> {
+        let units: Vec<u16> = s.encode_utf16().collect();
+        let len = u16::try_from(units.len())
+            .map_err(|_| Error::Unwritable(format!("{} UTF-16 units in a string", units.len())))?;
+        self.u16(len);
+        units.iter().for_each(|&u| self.u16(u));
+        Ok(())
     }
 }
 
