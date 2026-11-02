@@ -167,7 +167,7 @@ fn write_strings(w: &mut Writer, vs: &[String]) -> Result<()> {
     vs.iter().try_for_each(|s| w.string(s))
 }
 
-fn bool(cur: &mut Cursor, what: &str) -> Result<bool> {
+pub(super) fn bool(cur: &mut Cursor, what: &str) -> Result<bool> {
     match cur.u8()? {
         0 => Ok(false),
         1 => Ok(true),
