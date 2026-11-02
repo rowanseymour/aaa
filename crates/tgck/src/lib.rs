@@ -89,6 +89,9 @@ impl<'a> Cursor<'a> {
         let len = self.u16()? as usize;
         Ok(utf16_lossy(self.bytes(len * 2)?))
     }
+    pub(crate) fn pos(&self) -> usize {
+        self.pos
+    }
     pub(crate) fn rest(&mut self) -> &'a [u8] {
         let s = &self.buf[self.pos..];
         self.pos = self.buf.len();

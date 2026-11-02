@@ -79,6 +79,14 @@ pub fn animate(
     }
 }
 
+/// What became of an object, best first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Placed {
+    Drawn,
+    Missing,
+    NoModel,
+}
+
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
     views: HashMap<String, Option<View>>,
@@ -108,74 +116,14 @@ impl Models {
         assets: &mut ModelAssets,
         things: &'a [Thing],
     ) -> Vec<(&'a Thing, bool)> {
-        let mut rest = Vec::new();
-        for thing in things {
-            let view = match self.views.get(&thing.template.to_ascii_lowercase()) {
-                Some(Some(view)) if !view.models.is_empty() => view.clone(),
-                Some(None) => {
-                    rest.push((thing, false));
-                    continue;
-                }
-                _ => {
-                    rest.push((thing, true));
-                    continue;
-                }
-            };
-            let (factor, variant) = placement(thing);
-            let model =
-                &view.models[variant.map_or(thing.id as usize, |v| v as usize) % view.models.len()];
-            let Some(parts) = self.model(game, assets, model, &view) else {
-                rest.push((thing, true));
-                continue;
-            };
-            // Maps store each object's height as the game places it: on the
-            // ground, the seabed or the waterline.
-            let [x, y, z] = thing.position;
-            // Models face their -y axis, which turns to the object's facing:
-            // roads run along it and waves roll back against it to shore.
-            let [fx, fy, _] = thing.facing;
-            let transform = Transform::from_translation(world(x, y, z))
-                .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
-                .with_scale(Vec3::splat(view.scale * factor));
-            commands
-                .spawn((
-                    Name::new(thing.template.clone()),
-                    transform,
-                    Visibility::default(),
-                ))
-                .with_children(|parent| {
-                    for part in parts {
-                        let mut child = parent.spawn(Mesh3d(part.mesh));
-                        if part.blended {
-                            child.insert(NotShadowCaster);
-                        }
-                        let Some(animation) = part.animation else {
-                            child.insert(MeshMaterial3d(part.material));
-                            continue;
-                        };
-                        let material = match animation.fade {
-                            Some(_) => assets
-                                .materials
-                                .get(&part.material)
-                                .cloned()
-                                .map_or(part.material, |m| assets.materials.add(m)),
-                            None => part.material,
-                        };
-                        // Spread over a minute by the golden ratio, so any
-                        // run of ids lands well apart.
-                        let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
-                        child.insert((
-                            MeshMaterial3d(material.clone()),
-                            animation.transform(offset),
-                            Animated {
-                                animation,
-                                offset,
-                                material,
-                            },
-                        ));
-                    }
-                });
-        }
+        let rest: Vec<(&Thing, bool)> = things
+            .iter()
+            .filter_map(|t| match self.place(commands, game, assets, t) {
+                Placed::Drawn => None,
+                Placed::Missing => Some((t, true)),
+                Placed::NoModel => Some((t, false)),
+            })
+            .collect();
         let mut missing: HashMap<&str, usize> = HashMap::new();
         for (t, _) in rest.iter().filter(|(_, should)| *should) {
             *missing.entry(t.template.as_str()).or_default() += 1;
@@ -188,6 +136,83 @@ impl Models {
         );
         debug!("templates without a readable model: {missing:?}");
         rest
+    }
+
+    /// Spawns one object, or, for an invisible organization such as a herd,
+    /// its members where the map has them standing.
+    fn place(
+        &mut self,
+        commands: &mut Commands,
+        game: &mut Game,
+        assets: &mut ModelAssets,
+        thing: &Thing,
+    ) -> Placed {
+        let view = match self.views.get(&thing.template.to_ascii_lowercase()) {
+            Some(Some(view)) if !view.models.is_empty() => view.clone(),
+            Some(None) => {
+                let members = thing.organization().map_or(Vec::new(), |o| o.members);
+                return members
+                    .iter()
+                    .map(|m| self.place(commands, game, assets, m))
+                    .max()
+                    .unwrap_or(Placed::NoModel);
+            }
+            _ => return Placed::Missing,
+        };
+        let (factor, variant) = placement(thing);
+        let model =
+            &view.models[variant.map_or(thing.id as usize, |v| v as usize) % view.models.len()];
+        let Some(parts) = self.model(game, assets, model, &view) else {
+            return Placed::Missing;
+        };
+        // Maps store each object's height as the game places it: on the
+        // ground, the seabed or the waterline.
+        let [x, y, z] = thing.position;
+        // Models face their -y axis, which turns to the object's facing:
+        // roads run along it and waves roll back against it to shore.
+        let [fx, fy, _] = thing.facing;
+        let transform = Transform::from_translation(world(x, y, z))
+            .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
+            .with_scale(Vec3::splat(view.scale * factor));
+        commands
+            .spawn((
+                Name::new(thing.template.clone()),
+                transform,
+                Visibility::default(),
+            ))
+            .with_children(|parent| {
+                for part in parts {
+                    let mut child = parent.spawn(Mesh3d(part.mesh));
+                    if part.blended {
+                        child.insert(NotShadowCaster);
+                    }
+                    let Some(animation) = part.animation else {
+                        child.insert(MeshMaterial3d(part.material));
+                        continue;
+                    };
+                    let material = match animation.fade {
+                        Some(_) => assets
+                            .materials
+                            .get(&part.material)
+                            .cloned()
+                            .map_or(part.material, |m| assets.materials.add(m)),
+                        None => part.material,
+                    };
+                    // Spread over a minute by the golden ratio, so any
+                    // run of ids lands well apart.
+                    let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
+                    child.insert((
+                        MeshMaterial3d(material.clone()),
+                        animation.transform(offset),
+                        Animated {
+                            animation,
+                            offset,
+                            material,
+                        },
+                    ));
+                }
+            });
+        Placed::Drawn
     }
 
     fn model(

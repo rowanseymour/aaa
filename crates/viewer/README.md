@@ -37,6 +37,7 @@ rotate and tilt, and switches back.
 - Placed objects with the game's models: trees, buildings, roads, fences and
   the like, at each object's own size, variation and height; skinned models such as
   tall grass stand in the pose they were modelled in
+- Herds of animals, each animal where the map has it standing
 - Models' own keyframe and fade animations, such as waves rolling in to shore
 - Lighting from the map's sun, combined the way the game's fixed-function
   renderer does
