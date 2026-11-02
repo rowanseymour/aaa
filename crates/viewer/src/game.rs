@@ -200,6 +200,9 @@ impl Game {
                 }
             }
         }
+        if let Some(bytes) = self.read("translate.tgi") {
+            add_renames(&mut out, &tgi::decode(&bytes), "Variation", |_| true);
+        }
         out
     }
 
@@ -242,14 +245,15 @@ impl Game {
                 // Model paths are relative to the defining file, so where an
                 // id is defined more than once keep a definition that finds
                 // its models.
+                let drawable = |v: &Option<View>| v.as_ref().is_some_and(|v| !v.models.is_empty());
                 let id = id.to_ascii_lowercase();
-                if drawable(Some(&view)) || !drawable(out.get(&id)) {
+                if drawable(&view) || !out.get(&id).is_some_and(drawable) {
                     out.insert(id, view);
                 }
             }
         }
         if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes));
+            add_renames(&mut out, &tgi::decode(&bytes), "Thing", complete);
         }
         out
     }
@@ -402,43 +406,49 @@ fn water_colors<'a>(
         .collect()
 }
 
-/// Gives old template ids that maps may still use the views of their
-/// replacements, as `translate.tgi` lists them.
-fn add_renames(views: &mut HashMap<String, Option<View>>, translate: &str) {
-    let live = thing_renames(translate);
+/// Gives old ids that maps may still use the entries of their replacements,
+/// as `translate.tgi` lists them for `node`, e.g. `Thing`. An entry that
+/// isn't `complete` is treated as missing.
+fn add_renames<T: Clone>(
+    entries: &mut HashMap<String, T>,
+    translate: &str,
+    node: &str,
+    complete: impl Fn(&T) -> bool,
+) {
+    let live = renames(translate, node);
     for old in live.keys() {
-        if let Some(v) = views.get(&resolve(&live, old)).cloned() {
-            views.insert(old.clone(), v);
+        if let Some(v) = entries.get(&resolve(&live, old)).cloned() {
+            entries.insert(old.clone(), v);
         }
     }
-    // A stray `/*` comments out most of the file, including the renames
-    // that developer and trailer maps rely on, so use those too, but only
-    // for ids that would otherwise lack a model they should have.
-    let mut all = thing_renames(&translate.replace("/*", "").replace("*/", ""));
+    // A stray `/*` comments out most of the file, including renames that
+    // older maps rely on, so use those too, but only for missing entries.
+    let mut all = renames(&translate.replace("/*", "").replace("*/", ""), node);
     all.extend(live);
     for old in all.keys() {
-        if matches!(views.get(old), Some(None)) || drawable(views.get(old)) {
+        if entries.get(old).is_some_and(&complete) {
             continue;
         }
-        if let Some(v) = views.get(&resolve(&all, old)).filter(|v| drawable(Some(v))) {
-            views.insert(old.clone(), v.clone());
+        if let Some(v) = entries.get(&resolve(&all, old)).filter(|v| complete(v)) {
+            entries.insert(old.clone(), v.clone());
         }
     }
 }
 
-fn drawable(view: Option<&Option<View>>) -> bool {
-    view.is_some_and(|v| v.as_ref().is_some_and(|v| !v.models.is_empty()))
+/// Whether a view names readable models, or deliberately none.
+fn complete(view: &Option<View>) -> bool {
+    view.as_ref().is_none_or(|v| !v.models.is_empty())
 }
 
-/// Old template ids that maps may still use, to their replacements, by
+/// Old ids of `node`s that maps may still use, to their replacements, by
 /// lower-case id, from `translate.tgi`. Where an id is renamed more than
 /// once the first wins, as the file lists the latest first.
-fn thing_renames(text: &str) -> HashMap<String, String> {
+fn renames(translate: &str, node: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
-    for t in tgi::parse(text).root.blocks_of("Translate") {
+    for t in tgi::parse(translate).root.blocks_of("Translate") {
         if !t
             .value("node")
-            .is_some_and(|n| n.trim().eq_ignore_ascii_case("Thing"))
+            .is_some_and(|n| n.trim().eq_ignore_ascii_case(node))
         {
             continue;
         }
@@ -529,12 +539,21 @@ mod tests {
             rename("Thing", "hidden", "new"),
             rename("Variation", "terrain", "new"),
         );
-        add_renames(&mut views, &translate);
+        add_renames(&mut views, &translate, "Thing", complete);
         let model = |id: &str| views[id].as_ref().map(|v| v.models[0].as_str());
         assert_eq!(model("live"), Some("new.nif"));
         assert_eq!(model("old"), Some("newer.nif"));
         assert_eq!(model("kept"), Some("kept.nif"));
         assert_eq!(model("hidden"), None);
         assert!(!views.contains_key("terrain"));
+    }
+    #[test]
+    fn variation_renames() {
+        let translate = "[Translate]\nnode = Variation\nids_old = live\nids_new = new\n\
+            /*\n[Translate]\nnode = Variation\nids_old = old\nids_new = live\n*/\n";
+        let mut variations: HashMap<String, &str> = [("new".to_string(), "new.tga")].into();
+        add_renames(&mut variations, translate, "Variation", |_| true);
+        assert_eq!(variations["live"], "new.tga");
+        assert_eq!(variations["old"], "new.tga");
     }
 }
