@@ -34,9 +34,9 @@ tile() {
 
 tile big '(2v2)Berlin' 0.25,0.25,110,0.785,0.7 $BIG_W $H
 tile top-left allies05_monte_cassino 0.25,0.45,110,0.785,0.7 $SMALL_W $SMALL_H
-tile top-right '(2v2)Market_Garden' 0.85,0.5,110,0.785,0.7 $SMALL_W $SMALL_H
-tile bottom-left allies05_monte_cassino 0.3,0.15,110,0.785,0.6 $SMALL_W $SMALL_H
-tile bottom-right '(3v3)Saint_lo' 0.4,0.15,110,0.785,0.7 $SMALL_W $SMALL_H
+tile top-right allies09_battle_of_the_bulge 0.3,0.7,110,0.785,0.7 $SMALL_W $SMALL_H
+tile bottom-left axis03_suez_canal 0.7,0.15,120,0.785,0.7 $SMALL_W $SMALL_H
+tile bottom-right axis09_burma 0.3,0.3,110,0.785,0.75 $SMALL_W $SMALL_H
 
 left=$((BIG_W + GAP))
 right=$((left + SMALL_W + GAP))
