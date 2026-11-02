@@ -23,8 +23,14 @@
 //!
 //! With [`Templates::deserialize`] every block is resolved against its
 //! template before its contents are read, nested blocks included.
+//!
+//! [`Coverage`] deserializes the same way while counting which keys the
+//! types read and which they skip.
 
+use std::cell::RefCell;
+use std::collections::BTreeMap;
 use std::fmt;
+use std::rc::Rc;
 
 use serde::de::{self, DeserializeOwned, IntoDeserializer, Visitor};
 
@@ -67,13 +73,133 @@ impl Error {
 
 /// Deserializes a block's contents as written.
 pub fn from_block<T: DeserializeOwned>(block: &Block) -> Result<T, Error> {
-    T::deserialize(Node::Block(block, None))
+    T::deserialize(Node::Block(block, Ctx::top(block, None, None)))
 }
 
 impl Templates<'_> {
     /// Deserializes a block's contents with everything it inherits merged in.
     pub fn deserialize<T: DeserializeOwned>(&self, block: &Block) -> Result<T, Error> {
-        T::deserialize(Node::Block(block, Some(self)))
+        T::deserialize(Node::Block(block, Ctx::top(block, Some(self), None)))
+    }
+}
+
+/// How often each key was read or skipped, by the lower-case kinds of the
+/// blocks it is in from the top-level block down, e.g. `thing/view/aspect`.
+/// Only fields with values count, and template slots in schema files
+/// (`[list Property]`, `[optional OnDeath]`) don't.
+#[derive(Debug, Default, Clone)]
+pub struct Coverage {
+    keys: BTreeMap<(String, String), Count>,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Count {
+    pub read: usize,
+    pub unread: usize,
+}
+
+impl Coverage {
+    /// Deserializes a block, with its inheritance resolved if `templates` are
+    /// given, counting the keys the type reads and skips. Keys counted before
+    /// an error stay counted.
+    pub fn read<T: DeserializeOwned>(
+        &mut self,
+        block: &Block,
+        templates: Option<&Templates>,
+    ) -> Result<T, Error> {
+        let cell = RefCell::new(std::mem::take(self));
+        let value = T::deserialize(Node::Block(block, Ctx::top(block, templates, Some(&cell))));
+        *self = cell.into_inner();
+        value
+    }
+
+    /// Counts every key of a block that nothing reads.
+    pub fn skip(&mut self, block: &Block, templates: Option<&Templates>) {
+        let path = block.kind().unwrap_or("").to_ascii_lowercase();
+        self.unread(&path, block, templates);
+    }
+
+    /// `(path, key, count)` for every key seen, in order.
+    pub fn keys(&self) -> impl Iterator<Item = (&str, &str, Count)> {
+        self.keys
+            .iter()
+            .map(|((p, k), c)| (p.as_str(), k.as_str(), *c))
+    }
+
+    fn count(&mut self, path: &str, field: &Field, read: bool) {
+        if field.value.is_none() {
+            return;
+        }
+        let count = self
+            .keys
+            .entry((path.to_string(), field.key.to_ascii_lowercase()))
+            .or_default();
+        match read {
+            true => count.read += 1,
+            false => count.unread += 1,
+        }
+    }
+
+    fn unread(&mut self, path: &str, block: &Block, templates: Option<&Templates>) {
+        let resolved;
+        let block = match templates {
+            Some(t) if t.parent(block).is_some() => {
+                resolved = t.resolve(block);
+                &resolved
+            }
+            _ => block,
+        };
+        for item in &block.items {
+            match item {
+                Item::Field(f) => self.count(path, f, false),
+                Item::Block(b) if !is_slot(b) => {
+                    self.unread(&child_path(path, b), b, templates);
+                }
+                Item::Block(_) => {}
+            }
+        }
+    }
+}
+
+/// Whether a block declares a template slot rather than holding data.
+fn is_slot(block: &Block) -> bool {
+    block
+        .kind()
+        .is_some_and(|k| k.eq_ignore_ascii_case("list") || k.eq_ignore_ascii_case("optional"))
+}
+
+fn child_path(path: &str, block: &Block) -> String {
+    format!("{path}/{}", block.kind().unwrap_or("").to_ascii_lowercase())
+}
+
+/// What deserializing carries down into nested blocks.
+#[derive(Clone)]
+struct Ctx<'a> {
+    templates: Option<&'a Templates<'a>>,
+    coverage: Option<&'a RefCell<Coverage>>,
+    /// The coverage path of the block being read, or of the block holding
+    /// the fields being read.
+    path: Rc<str>,
+}
+
+impl<'a> Ctx<'a> {
+    fn top(
+        block: &Block,
+        templates: Option<&'a Templates<'a>>,
+        coverage: Option<&'a RefCell<Coverage>>,
+    ) -> Self {
+        Ctx {
+            templates,
+            coverage,
+            path: block.kind().unwrap_or("").to_ascii_lowercase().into(),
+        }
+    }
+
+    fn child(&self, block: &Block) -> Self {
+        Ctx {
+            path: child_path(&self.path, block).into(),
+            ..self.clone()
+        }
     }
 }
 
@@ -99,17 +225,18 @@ fn key(item: &Item) -> &str {
 /// Something being deserialized.
 #[derive(Clone)]
 enum Node<'a> {
-    Block(&'a Block, Option<&'a Templates<'a>>),
+    Block(&'a Block, Ctx<'a>),
     Field(&'a Field),
     /// The items of a block sharing a key, at least one.
-    Group(Vec<&'a Item>, Option<&'a Templates<'a>>),
+    Group(Vec<&'a Item>, Ctx<'a>),
 }
 
 impl<'a> Node<'a> {
-    fn item(item: &'a Item, templates: Option<&'a Templates<'a>>) -> Self {
+    /// An item of the block `ctx` is reading.
+    fn item(item: &'a Item, ctx: &Ctx<'a>) -> Self {
         match item {
             Item::Field(f) => Node::Field(f),
-            Item::Block(b) => Node::Block(b, templates),
+            Item::Block(b) => Node::Block(b, ctx.child(b)),
         }
     }
 
@@ -127,7 +254,7 @@ impl<'a> Node<'a> {
     /// The single node a scalar or struct is read from: a group's first item.
     fn first(self) -> Self {
         match self {
-            Node::Group(items, templates) => Node::item(items[0], templates),
+            Node::Group(items, ctx) => Node::item(items[0], &ctx),
             n => n,
         }
     }
@@ -165,14 +292,15 @@ impl<'a> Node<'a> {
     }
 
     /// Visits a block's items as a map, keyed by the matching name in
-    /// `fields` where there is one.
+    /// `fields` where there is one. A struct's `fields` are all it reads; a
+    /// map (`None`) reads everything.
     fn visit_block<'de, V: Visitor<'de>>(
         self,
-        fields: &[&str],
+        fields: Option<&[&str]>,
         visitor: V,
     ) -> Result<V::Value, Error> {
-        let (block, templates) = match self.first() {
-            Node::Block(b, t) => (b, t),
+        let (block, ctx) = match self.first() {
+            Node::Block(b, ctx) => (b, ctx),
             n => {
                 return Err(Error {
                     line: Some(n.line()),
@@ -181,7 +309,7 @@ impl<'a> Node<'a> {
             }
         };
         let resolved;
-        let block = match templates {
+        let block = match ctx.templates {
             Some(t) if t.parent(block).is_some() => {
                 resolved = t.resolve(block);
                 &resolved
@@ -196,9 +324,26 @@ impl<'a> Node<'a> {
                 None => groups.push((k, vec![item])),
             }
         }
+        let name = |k: &str| fields.and_then(|f| f.iter().find(|f| same_key(f, k)).copied());
+        if let Some(coverage) = ctx.coverage {
+            let mut coverage = coverage.borrow_mut();
+            for (k, items) in &groups {
+                let read = fields.is_none() || name(k).is_some();
+                for item in items {
+                    match item {
+                        Item::Field(f) => coverage.count(&ctx.path, f, read),
+                        // Blocks that are read count their own keys.
+                        Item::Block(b) if !read && !is_slot(b) => {
+                            coverage.unread(&child_path(&ctx.path, b), b, ctx.templates);
+                        }
+                        Item::Block(_) => {}
+                    }
+                }
+            }
+        }
         let groups = groups.into_iter().map(|(k, items)| {
-            let name = fields.iter().find(|f| same_key(f, k)).copied().unwrap_or(k);
-            (name.to_string(), Node::Group(items, templates))
+            let key = name(k).unwrap_or(k).to_string();
+            (key, Node::Group(items, ctx.clone()))
         });
         // The resolved block lives only for this call, so the map access
         // owns what it hands out.
@@ -315,10 +460,7 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
     /// Every item of a repeated key.
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         let items = match self {
-            Node::Group(items, templates) => items
-                .into_iter()
-                .map(|i| Node::item(i, templates))
-                .collect(),
+            Node::Group(items, ctx) => items.into_iter().map(|i| Node::item(i, &ctx)).collect(),
             n => vec![n],
         };
         let mut seq = de::value::SeqDeserializer::new(items.into_iter());
@@ -353,7 +495,7 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
     }
 
     fn deserialize_map<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        self.visit_block(&[], visitor)
+        self.visit_block(None, visitor)
     }
 
     fn deserialize_struct<V: Visitor<'de>>(
@@ -362,7 +504,7 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
         fields: &'static [&'static str],
         visitor: V,
     ) -> Result<V::Value, Error> {
-        self.visit_block(fields, visitor)
+        self.visit_block(Some(fields), visitor)
     }
 
     /// A unit variant named by the value.
@@ -560,5 +702,30 @@ mod tests {
             }]
         );
         assert!(from_block::<Terrain>(terrain).is_err());
+    }
+
+    #[test]
+    fn counts_read_and_skipped_keys() {
+        let parsed = parse(
+            "[Template Tex]\n{\ntexture = t.dds\nshine = 1\n}\n\
+             [Terrain]\n{\nids = a\ncolour = red\ndeclared\n[Variation Template=Tex]\n\
+             [Sound]\n{\nfile = x.wav\n[list Slot]\n{\ndefault = 1\n}\n}\n}",
+        );
+        let templates = Templates::new([&parsed.root]);
+        let terrain = parsed.root.blocks_of("Terrain").next().unwrap();
+        let mut coverage = Coverage::default();
+        coverage.read::<Terrain>(terrain, Some(&templates)).unwrap();
+        coverage.skip(terrain, None);
+        let count = |read, unread| Count { read, unread };
+        assert_eq!(
+            coverage.keys().collect::<Vec<_>>(),
+            vec![
+                ("terrain", "colour", count(0, 2)),
+                ("terrain", "ids", count(1, 1)),
+                ("terrain/sound", "file", count(0, 2)),
+                ("terrain/variation", "shine", count(0, 1)),
+                ("terrain/variation", "texture", count(1, 0)),
+            ]
+        );
     }
 }

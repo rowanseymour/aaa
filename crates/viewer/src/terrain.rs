@@ -144,7 +144,6 @@ pub fn build(
     // Terrain types in use, numbered as texture array layers.
     let mut layer_of: HashMap<u16, u32> = HashMap::new();
     let mut kinds = Vec::new();
-    let mut water_colors = None;
     for tile in &terrain.tiles {
         if layer_of.contains_key(&tile.terrain) {
             continue;
@@ -156,15 +155,13 @@ pub fn build(
         let name = &terrain.names[tile.terrain as usize];
         let variation = variations.get(&name.to_ascii_lowercase());
         let image = match variation {
-            Some(v) => {
-                water_colors = water_colors.or(v.water.clone());
-                game.read(&v.texture)
-                    .and_then(|b| load_texture(&b, &v.texture))
-                    .unwrap_or_else(|| {
-                        warn!("{name}: texture {} missing", v.texture);
-                        solid(v.color)
-                    })
-            }
+            Some(v) => game
+                .read(&v.texture)
+                .and_then(|b| load_texture(&b, &v.texture))
+                .unwrap_or_else(|| {
+                    warn!("{name}: texture {} missing", v.texture);
+                    solid(v.color)
+                }),
             None => {
                 warn!("{name}: no terrain definition");
                 solid([1.0, 0.0, 1.0])
@@ -188,6 +185,20 @@ pub fn build(
                 .any(|&(dx, dy)| ground.water[(y + dy) * ground.side + x + dx])
         })
         .collect();
+    // One set of colours for all the water: those of the terrain most of it
+    // lies on, as some terrains beside water have colours of their own.
+    let mut on_water: HashMap<u16, usize> = HashMap::new();
+    for &(x, y) in &water {
+        *on_water.entry(terrain.at(x, y).terrain).or_default() += 1;
+    }
+    let water_colors = on_water
+        .into_iter()
+        .filter_map(|(t, n)| {
+            let name = terrain.names[t as usize].to_ascii_lowercase();
+            Some((n, t, variations.get(&name)?.water.clone()?))
+        })
+        .max_by_key(|&(n, t, _)| (n, t))
+        .map(|(_, _, colors)| colors);
     let water = (!water.is_empty()).then(|| {
         let colors = water_colors.unwrap_or_else(|| {
             vec![DepthColor {

@@ -162,7 +162,8 @@ impl Game {
     /// lower-case IDS, which is how maps refer to them.
     pub fn terrain_variations(&mut self) -> HashMap<String, Variation> {
         let files = self.parse_tgis(|n| n.starts_with("terrain/") || n.starts_with("templates/"));
-        let water = water_colors(files.iter().map(|(_, p)| &p.root));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let water = water_colors(&templates, files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
         for (file, parsed) in &files {
             if !file.to_ascii_lowercase().starts_with("terrain/") {
@@ -307,6 +308,33 @@ impl Game {
         })
     }
 
+    /// How much of the `.tgi` data the definitions read: each top-level
+    /// block is read as its definition, the way the methods above read it,
+    /// or counted as unread where there is none. Templates count through the
+    /// blocks that inherit from them.
+    pub fn coverage(&mut self) -> tgi::de::Coverage {
+        let files = self.parse_tgis(|_| true);
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut coverage = tgi::de::Coverage::default();
+        for block in files.iter().flat_map(|(_, p)| p.root.blocks()) {
+            let t = Some(&templates);
+            // Blocks that don't deserialize still count what they read.
+            let _ = match block.kind().unwrap_or("").to_ascii_lowercase().as_str() {
+                "template" => continue,
+                "thing" => coverage.read::<defs::Thing>(block, t).map(drop),
+                "terrain" => coverage.read::<defs::Terrain>(block, None).map(drop),
+                "biome" => coverage.read::<defs::Biome>(block, t).map(drop),
+                "translate" => coverage.read::<defs::Translate>(block, None).map(drop),
+                "transitionset" => coverage.read::<defs::TransitionSet>(block, None).map(drop),
+                _ => {
+                    coverage.skip(block, t);
+                    continue;
+                }
+            };
+        }
+        coverage
+    }
+
     /// The transition masks of the first transition set, keyed by the
     /// digits in their file names.
     pub fn transition_masks(&mut self) -> Vec<(String, Vec<u8>)> {
@@ -316,7 +344,8 @@ impl Game {
             .and_then(|b| {
                 let parsed = tgi::parse_bytes(&b);
                 let set = parsed.root.blocks_of("TransitionSet").next()?;
-                set.value("path_prefix").map(|p| format!("{DIR}{p}"))
+                let set: defs::TransitionSet = tgi::from_block(set).ok()?;
+                set.path_prefix.map(|p| format!("{DIR}{p}"))
             })
         else {
             return Vec::new();
@@ -335,42 +364,25 @@ impl Game {
 /// The depth colours of each water terrain, by lower-case IDS. Biomes name a
 /// `WaterInfo` template for each of their water terrains.
 fn water_colors<'a>(
+    templates: &tgi::Templates,
     roots: impl Iterator<Item = &'a tgi::Block>,
 ) -> HashMap<String, Vec<DepthColor>> {
-    let roots: Vec<&tgi::Block> = roots.collect();
-    let templates: HashMap<String, Vec<DepthColor>> = roots
-        .iter()
-        .flat_map(|r| r.blocks_of("Template"))
-        .filter(|t| {
-            t.attr("Template")
-                .is_some_and(|k| k.eq_ignore_ascii_case("WaterInfo"))
-        })
-        .filter_map(|t| {
-            let mut stops: Vec<DepthColor> = t
-                .blocks_of("DepthInfo")
-                .filter_map(|d| {
-                    let d: defs::DepthInfo = tgi::from_block(d).ok()?;
-                    Some(DepthColor {
-                        depth: d.depth,
-                        color: d.color,
-                        alpha: d.alpha,
-                    })
+    roots
+        .flat_map(|r| r.blocks_of("Biome"))
+        .filter_map(|b| templates.deserialize::<defs::Biome>(b).ok())
+        .flat_map(|b| b.water_info)
+        .filter_map(|w| {
+            let mut stops: Vec<DepthColor> = w
+                .depth_info
+                .into_iter()
+                .map(|d| DepthColor {
+                    depth: d.depth,
+                    color: d.color,
+                    alpha: d.alpha,
                 })
                 .collect();
             stops.sort_by(|a, b| a.depth.total_cmp(&b.depth));
-            Some((t.name()?.to_ascii_lowercase(), stops))
-        })
-        .collect();
-    roots
-        .iter()
-        .flat_map(|r| r.blocks_of("Biome"))
-        .flat_map(|b| b.blocks_of("WaterInfo"))
-        .filter_map(|w| {
-            let stops = templates.get(&w.attr("Template")?.to_ascii_lowercase())?;
-            Some((
-                w.value("terrain_ids")?.trim().to_ascii_lowercase(),
-                stops.clone(),
-            ))
+            Some((w.terrain_ids?.trim().to_ascii_lowercase(), stops))
         })
         .collect()
 }
@@ -415,13 +427,13 @@ fn complete(view: &Option<View>) -> bool {
 fn renames(translate: &str, node: &str) -> HashMap<String, String> {
     let mut out = HashMap::new();
     for t in tgi::parse(translate).root.blocks_of("Translate") {
-        if !t
-            .value("node")
-            .is_some_and(|n| n.trim().eq_ignore_ascii_case(node))
-        {
+        let Ok(t) = tgi::from_block::<defs::Translate>(t) else {
+            continue;
+        };
+        if !t.node.is_some_and(|n| n.trim().eq_ignore_ascii_case(node)) {
             continue;
         }
-        if let (Some(old), Some(new)) = (t.value("ids_old"), t.value("ids_new")) {
+        if let (Some(old), Some(new)) = (t.ids_old, t.ids_new) {
             out.entry(old.trim().to_ascii_lowercase())
                 .or_insert_with(|| new.trim().to_ascii_lowercase());
         }
