@@ -107,8 +107,9 @@ impl Models {
     }
 
     /// Spawns every object whose template has a readable model and returns
-    /// the rest, each with whether it should have had one: false only for
-    /// templates that name no model, such as sound emitters.
+    /// the rest, each with whether it should have had one: false for
+    /// templates that name no model, such as sound emitters and herds,
+    /// whose members are drawn in their place.
     pub fn spawn<'a>(
         &mut self,
         commands: &mut Commands,
@@ -116,23 +117,29 @@ impl Models {
         assets: &mut ModelAssets,
         things: &'a [Thing],
     ) -> Vec<(&'a Thing, bool)> {
-        let rest: Vec<(&Thing, bool)> = things
-            .iter()
-            .filter_map(|t| match self.place(commands, game, assets, t) {
-                Placed::Drawn => None,
-                Placed::Missing => Some((t, true)),
-                Placed::NoModel => Some((t, false)),
-            })
-            .collect();
+        let mut rest = Vec::new();
+        let (mut drawn, mut modelless) = (0, 0);
+        for t in things {
+            let placed = self.place(commands, game, assets, t);
+            let invisible = matches!(self.views.get(&t.template.to_ascii_lowercase()), Some(None));
+            match placed {
+                Placed::Drawn if invisible => rest.push((t, false)),
+                Placed::Drawn => {}
+                Placed::Missing => rest.push((t, true)),
+                Placed::NoModel => {
+                    rest.push((t, false));
+                    modelless += 1;
+                }
+            }
+            drawn += usize::from(placed == Placed::Drawn);
+        }
         let mut missing: HashMap<&str, usize> = HashMap::new();
         for (t, _) in rest.iter().filter(|(_, should)| *should) {
             *missing.entry(t.template.as_str()).or_default() += 1;
         }
         info!(
-            "{} objects drawn with models, {} missing, {} with no model",
-            things.len() - rest.len(),
+            "{drawn} objects drawn with models, {} missing, {modelless} with no model",
             missing.values().sum::<usize>(),
-            rest.iter().filter(|(_, should)| !should).count()
         );
         debug!("templates without a readable model: {missing:?}");
         rest
