@@ -27,6 +27,7 @@ $ tgck map "Maps/(3v3)Saint_lo.RMP"
 Maps/(3v3)Saint_lo.RMP: "Normandy Breakout"
   terrain 257x257 vertices (512 world units), heights 0.74..10.00, water 34.8%
   terrain v7, biome temperate_grassland, 43 of 410 types used: temperate_ocean01 11876, ...
+  editor 0.3.1.0 by Dev AA Dev, weather none
   7288 objects, 52 templates: temperate_trees 2689, temperate_lake_ripples 1618, ...
   start locations: (299,349) (180,361) (134,239) (124,78) (410,45) (491,321)
 ```
@@ -48,6 +49,7 @@ let terrain = map.terrain()?;    // biome, terrain names, per-tile terrain and w
 let things = map.things()?;      // placed objects: template, id, position, facing
 let sun = map.sun()?;            // light direction and colours
 let kingdoms = map.kingdoms()?;  // players: name, colour, team, nation, commander, resources
+let header = map.header()?;      // game options, sides, editor details
 ```
 
 Each decoded section can be written back (`to_bytes`, `map::write_things`),
@@ -62,11 +64,12 @@ and `container::write` puts a file back together.
 | Map `HEIGHT_MAP`, `MOUNTAIN_HEIGHT_MAP` | Done |
 | Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
 | Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, actors' owner and components, and the members of herds and regiments; component state and other classes' records are kept as raw bytes |
+| Map `MAP_HEADER` | Game options, sides, size, biome, weather and editor details; a few fields' meanings are unknown |
 | Map `TEAMS` | Done |
 | Map `KINGDOMS` | Name, colour, relations, resources, team, commander and nation; the rest (mostly AI state) is kept as raw bytes |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
-| Other map sections (`MAP_HEADER`, `TRIGGERS`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
+| Other map sections (`TRIGGERS`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
 
 All 80 maps that ship with the game parse fully, and every decoded section
 writes back byte for byte. Whole files differ only in their zlib streams, as

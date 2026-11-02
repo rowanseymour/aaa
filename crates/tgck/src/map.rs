@@ -43,6 +43,7 @@
 //! MAPSTRINGS               plain text in .tgi syntax (map name, objectives, ...)
 //!
 //! GWORLD, TEAMS, KINGDOMS  see map/players.rs
+//! MAP_HEADER               see map/header.rs
 //!
 //! TERRAIN
 //!     u32 version (6 or 7 in shipped maps; the game accepts up to 7)
@@ -64,8 +65,13 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
+mod header;
 mod players;
 
+pub use header::{
+    KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
+    WorldRules,
+};
 pub use players::{Ability, Faction, Kingdom, Kingdoms, Team, write_teams};
 
 use crate::container::{Container, Section};
@@ -130,6 +136,10 @@ impl<R: Read + Seek> Map<R> {
     pub fn kingdoms(&mut self) -> Result<Kingdoms> {
         let world_version = self.world_version()?;
         Kingdoms::parse(&self.container.read_named("KINGDOMS")?, world_version)
+    }
+
+    pub fn header(&mut self) -> Result<MapHeader> {
+        MapHeader::parse(&self.container.read_named("MAP_HEADER")?)
     }
 
     pub fn sun(&mut self) -> Result<Sun> {
