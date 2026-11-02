@@ -23,10 +23,14 @@
 //!       area (6)    u32 version (1), [u32 id, u32 version (2),] string name,
 //!                   u32 shape (1 circle, 3 box), f32 radius, f32 bounds[4],
 //!                   u32 unknown (0); the cutscene maps leave out the id
+//!       actor (3)   u32 version (9-14), u32 kingdom, u64 flags,
+//!                   u32 template_components, u32 components, then each
+//!                   component's state and the actor's own: not decoded, as
+//!                   each component's loader reads its own layout, unprefixed
 //!       camera (7)  u32 version (1 or 2), string name, f32 unknown
 //!       others      not decoded
-//!   An organization's record (a herd or regiment) holds its members too:
-//!     56 bytes unknown, string layout, u32 n, string slot_element[n],
+//!   An organization's (a herd or regiment) component state holds its members:
+//!     32 bytes unknown, string layout, u32 n, string slot_element[n],
 //!     u32 positions, then per member: u32 index, a record as above whose
 //!     undecoded rest runs up to the next member
 //!
@@ -404,6 +408,9 @@ pub struct Thing {
     pub detail: Detail,
 }
 
+/// The [`Thing::class`] of actors: units, buildings, herds, roads and other
+/// things made of components.
+pub const ACTOR: u32 = 3;
 /// The [`Thing::class`] of areas.
 pub const AREA: u32 = 6;
 /// The [`Thing::class`] of cameras.
@@ -412,10 +419,88 @@ pub const CAMERA: u32 = 7;
 /// The class-specific rest of a [`Thing`]'s record.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Detail {
+    Actor(Actor),
     Area(Area),
     Camera(Camera),
     /// Not decoded.
     Raw(Vec<u8>),
+}
+
+/// A thing made of components, such as a unit or building.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Actor {
+    pub version: u32,
+    /// The id of the kingdom that owns it; 0 for none.
+    pub kingdom: u32,
+    pub flags: u64,
+    /// The components its template gives it, a bit each as in [`COMPONENTS`].
+    pub template_components: u32,
+    /// The components the record holds state for: the template's, plus any
+    /// the game adds, such as a mind.
+    pub components: u32,
+    /// Each component's state, in bit order but for construction's first and
+    /// mind's last, then the actor's own; not decoded.
+    pub state: Vec<u8>,
+}
+
+/// Actor component names by their bit in [`Actor::components`], as the
+/// templates' `[...Component]` sections name them less the suffix.
+pub const COMPONENTS: [&str; 31] = [
+    "Body",
+    "Projectile",
+    "Character",
+    "Mover",
+    "Mind",
+    "Performer",
+    "Properties",
+    "Organization",
+    "Element",
+    "Economy",
+    "Denizen",
+    "Supply",
+    "Wall",
+    "Structure",
+    "Settlement",
+    "Construction",
+    "Recruit",
+    "Experience",
+    "Builder",
+    "MobileDeployment",
+    "Defender",
+    "Research",
+    "Detection",
+    "Aircraft",
+    "Transport",
+    "Lair",
+    "Flare",
+    "MetaGame",
+    "Portal",
+    "City",
+    "HQ",
+];
+
+impl Actor {
+    /// The first version that writes the flags in 64 bits; the layout of
+    /// earlier ones is unconfirmed.
+    const MIN_VERSION: u32 = 9;
+    /// The newest version the game reads.
+    const MAX_VERSION: u32 = 14;
+
+    /// The names of the components the record holds.
+    pub fn component_names(&self) -> impl Iterator<Item = &'static str> + '_ {
+        COMPONENTS
+            .iter()
+            .enumerate()
+            .filter(|&(bit, _)| self.components >> bit & 1 != 0)
+            .map(|(_, &name)| name)
+    }
+
+    pub fn has(&self, component: &str) -> bool {
+        COMPONENTS
+            .iter()
+            .position(|&c| c == component)
+            .is_some_and(|bit| self.components >> bit & 1 != 0)
+    }
 }
 
 /// A region scripts and triggers test units against.
@@ -565,10 +650,13 @@ impl Thing {
 
     /// The organization this thing is, if its record holds one.
     pub fn organization(&self) -> Option<Organization> {
-        let Detail::Raw(raw) = &self.detail else {
+        let Detail::Actor(actor) = &self.detail else {
             return None;
         };
-        let mut cur = Cursor::new(raw.get(56..)?);
+        if !actor.has("Organization") {
+            return None;
+        }
+        let mut cur = Cursor::new(actor.state.get(32..)?);
         let layout = cur.string().ok().filter(|s| is_id(s))?;
         let n = cur.u32().ok().filter(|&n| n <= 64)?;
         let slots = (0..n)
@@ -613,6 +701,20 @@ impl Detail {
     fn parse(class: u32, data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let detail = match class {
+            ACTOR => {
+                let version = cur.u32()?;
+                if !(Actor::MIN_VERSION..=Actor::MAX_VERSION).contains(&version) {
+                    return Err(Error::Corrupt(format!("actor version {version}")));
+                }
+                Detail::Actor(Actor {
+                    version,
+                    kingdom: cur.u32()?,
+                    flags: cur.u64()?,
+                    template_components: cur.u32()?,
+                    components: cur.u32()?,
+                    state: cur.rest().to_vec(),
+                })
+            }
             AREA => {
                 // Records without the id are 8 bytes shorter; the name's
                 // length tells which this is.
@@ -653,6 +755,14 @@ impl Detail {
 
     fn write(&self, w: &mut Writer) -> Result<()> {
         match self {
+            Detail::Actor(a) => {
+                w.u32(a.version);
+                w.u32(a.kingdom);
+                w.u64(a.flags);
+                w.u32(a.template_components);
+                w.u32(a.components);
+                w.bytes(&a.state);
+            }
             Detail::Area(a) => {
                 w.u32(a.version);
                 if let Some(id) = a.id {
@@ -719,6 +829,19 @@ mod tests {
         r.extend([0, 0]);
         r.extend(detail);
         r
+    }
+
+    /// An actor's detail: version 14, owned by kingdom 2.
+    fn actor_detail(components: u32, state: &[u8]) -> Vec<u8> {
+        let mut d = [14u32, 2].map(u32::to_le_bytes).concat();
+        d.extend(0x0800_0000u64.to_le_bytes());
+        d.extend(
+            [components, components | 0x10]
+                .map(u32::to_le_bytes)
+                .concat(),
+        );
+        d.extend(state);
+        d
     }
 
     fn things_sections(records: &[Vec<u8>]) -> (Vec<u8>, Vec<u8>) {
@@ -805,7 +928,13 @@ mod tests {
     #[test]
     fn parses_height_map_and_things() {
         let (index, things) = things_sections(&[
-            thing_record(3, "start_loc", 7, [10.0, 20.0, 2.0], &[1, 2, 3]),
+            thing_record(
+                ACTOR,
+                "start_loc",
+                7,
+                [10.0, 20.0, 2.0],
+                &actor_detail(0x200, &[1, 2, 3]),
+            ),
             thing_record(2, "tree", 8, [0.0; 3], &[]),
         ]);
         let bytes = build_container(&[
@@ -827,7 +956,17 @@ mod tests {
             ("start_loc", 7, [10.0, 20.0, 2.0])
         );
         assert_eq!((t[0].scale, t[0].variation), (1.0, -1));
-        assert_eq!(t[0].detail, Detail::Raw(vec![1, 2, 3]));
+        let Detail::Actor(actor) = &t[0].detail else {
+            panic!("{:?}", t[0].detail)
+        };
+        assert_eq!((actor.kingdom, actor.flags), (2, 0x0800_0000));
+        assert_eq!(
+            actor.component_names().collect::<Vec<_>>(),
+            ["Mind", "Economy"]
+        );
+        assert_eq!(actor.template_components, 0x200);
+        assert_eq!(actor.state, [1, 2, 3]);
+        assert_eq!(t[1].detail, Detail::Raw(vec![]));
         assert_eq!(write_things(&t).unwrap(), (index, things));
     }
 
@@ -885,6 +1024,11 @@ mod tests {
         record[at] = 3;
         let (index, data) = things_sections(&[record]);
         assert!(parse_things(&index, &data).is_err());
+
+        let mut actor = actor_detail(0, &[]);
+        actor[0] = 15;
+        let (index, data) = things_sections(&[thing_record(ACTOR, "tank", 1, [0.0; 3], &actor)]);
+        assert!(parse_things(&index, &data).is_err(), "newer than the game");
     }
 
     #[test]
@@ -908,7 +1052,7 @@ mod tests {
 
     #[test]
     fn parses_organization_members() {
-        let mut extra = vec![0u8; 56];
+        let mut extra = vec![0u8; 32];
         extra.extend(string("herd_ambient_large"));
         extra.extend(3u32.to_le_bytes());
         for slot in ["sheep_ewe", "", "sheep_ram"] {
@@ -920,10 +1064,11 @@ mod tests {
             extra.extend(index.to_le_bytes());
             extra.extend(thing_record(3, template, id, [1.0, 2.0, 3.0], &[0xAA; 20]));
         }
-        let parse = |extra: &[u8]| {
-            Thing::parse(&thing_record(3, "herd_sheep", 10, [0.0; 3], extra)).unwrap()
+        let parse = |components, state: &[u8]| {
+            let detail = actor_detail(components, state);
+            Thing::parse(&thing_record(ACTOR, "herd_sheep", 10, [0.0; 3], &detail)).unwrap()
         };
-        let org = parse(&extra).organization().unwrap();
+        let org = parse(0x80, &extra).organization().unwrap();
         assert_eq!(org.layout, "herd_ambient_large");
         assert_eq!(org.slots, ["sheep_ewe", "", "sheep_ram"]);
         let members: Vec<_> = org
@@ -937,7 +1082,7 @@ mod tests {
         assert_eq!(org.members[1].detail, Detail::Raw(vec![0xAA; 20]));
 
         assert!(
-            parse(&[0; 100]).organization().is_none(),
+            parse(0, &extra).organization().is_none(),
             "not an organization"
         );
     }
