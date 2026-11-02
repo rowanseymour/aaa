@@ -44,6 +44,7 @@
 //!
 //! GWORLD, TEAMS, KINGDOMS  see map/players.rs
 //! MAP_HEADER               see map/header.rs
+//! OBJECTIVES               see map/objectives.rs
 //!
 //! TERRAIN
 //!     u32 version (6 or 7 in shipped maps; the game accepts up to 7)
@@ -66,12 +67,14 @@ use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 mod header;
+mod objectives;
 mod players;
 
 pub use header::{
     KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
     WorldRules,
 };
+pub use objectives::{Objective, Objectives};
 pub use players::{Ability, Faction, Kingdom, Kingdoms, Team, write_teams};
 
 use crate::container::{Container, Section};
@@ -140,6 +143,10 @@ impl<R: Read + Seek> Map<R> {
 
     pub fn header(&mut self) -> Result<MapHeader> {
         MapHeader::parse(&self.container.read_named("MAP_HEADER")?)
+    }
+
+    pub fn objectives(&mut self) -> Result<Objectives> {
+        Objectives::parse(&self.container.read_named("OBJECTIVES")?)
     }
 
     pub fn sun(&mut self) -> Result<Sun> {

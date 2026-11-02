@@ -50,6 +50,7 @@ let things = map.things()?;      // placed objects: template, id, position, faci
 let sun = map.sun()?;            // light direction and colours
 let kingdoms = map.kingdoms()?;  // players: name, colour, team, nation, commander, resources
 let header = map.header()?;      // game options, sides, editor details
+let goals = map.objectives()?;   // objectives and whether each is primary
 ```
 
 Each decoded section can be written back (`to_bytes`, `map::write_things`),
@@ -65,6 +66,7 @@ and `container::write` puts a file back together.
 | Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
 | Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, actors' owner and components, and the members of herds and regiments; component state and other classes' records are kept as raw bytes |
 | Map `MAP_HEADER` | Game options, sides, size, biome, weather and editor details; a few fields' meanings are unknown |
+| Map `OBJECTIVES` | Done |
 | Map `TEAMS` | Done |
 | Map `KINGDOMS` | Name, colour, relations, resources, team, commander and nation; the rest (mostly AI state) is kept as raw bytes |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |

@@ -303,6 +303,7 @@ fn check(paths: &[&str]) -> Res {
             ("TEAMS", tgck::map::write_teams(&m.teams()?)?),
             ("KINGDOMS", m.kingdoms()?.to_bytes(world_version)?),
             ("MAP_HEADER", m.header()?.to_bytes()?),
+            ("OBJECTIVES", m.objectives()?.to_bytes()?),
         ];
         let mut diffs = Vec::new();
         for (name, data) in encoded {
