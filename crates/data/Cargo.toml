@@ -1,0 +1,12 @@
+[package]
+name = "aaa-data"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The game data of Axis & Allies (2004): archive access and definitions built from its files"
+publish = false
+
+[dependencies]
+tgck = { path = "../tgck" }
+tgi = { path = "../tgi" }

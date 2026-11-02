@@ -12,6 +12,7 @@ You need your own copy of the game. This project contains no game code or data.
 | [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool |
 | [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) |
 | [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool |
+| [`aaa-data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, shared by the tools that use them |
 | [`aaa-viewer`](crates/viewer) | 3D map viewer built with Bevy |
 
 ## Building

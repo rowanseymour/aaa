@@ -3,7 +3,6 @@
 
 mod blend;
 mod camera;
-mod game;
 mod models;
 mod objects;
 mod terrain;
@@ -12,6 +11,7 @@ mod textures;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
+use aaa_data::Game;
 use bevy::asset::embedded_asset;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -23,7 +23,6 @@ use tgck::map::{CELL_SIZE, Sun, Terrain, Thing};
 
 use blend::GroundMaterial;
 use camera::RtsCamera;
-use game::Game;
 use models::{ModelAssets, Models};
 use terrain::Ground;
 
@@ -142,7 +141,7 @@ fn main() -> ExitCode {
         frame: 0,
         attempts: 0,
     });
-    let camera = match camera.map(|c| game::floats(&c)) {
+    let camera = match camera.map(|c| aaa_data::floats(&c)) {
         None => None,
         Some(Some(view)) => Some(StartView(view)),
         Some(None) => {
@@ -263,7 +262,7 @@ fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
     let things = map.things().map_err(err)?;
     let sun = map.sun().map_err(err)?;
     Ok(Loaded {
-        title: game::map_title(name).to_string(),
+        title: aaa_data::map_title(name).to_string(),
         ground: Ground::new(&hm, &mountain),
         terrain,
         things,

@@ -10,6 +10,6 @@ publish = false
 
 [dependencies]
 nif = { path = "../nif" }
+aaa-data = { path = "../data" }
 tgck = { path = "../tgck" }
-tgi = { path = "../tgi" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

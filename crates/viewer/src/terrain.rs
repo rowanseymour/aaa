@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use aaa_data::{DepthColor, Game};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -10,7 +11,6 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use tgck::map::{CELL_SIZE, HeightMap, Terrain};
 
 use crate::blend::{self, Blend, GroundMaterial};
-use crate::game::{DepthColor, Game};
 use crate::textures;
 
 /// Tile corners, counter-clockwise seen from above.
