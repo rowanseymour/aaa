@@ -4,6 +4,7 @@ use std::io::{BufWriter, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use tgck::map::Detail;
 use tgck::{Archive, Container, Map};
 
 const USAGE: &str = "\
@@ -232,6 +233,15 @@ fn map(path: &str) -> Res {
         .map(|t| format!("({:.0},{:.0})", t.position[0], t.position[1]))
         .collect();
     outln!("  start locations: {}", starts.join(" "));
+    let kingdoms: Vec<String> = things
+        .iter()
+        .filter_map(|t| match &t.detail {
+            Detail::Actor(a) => Some(a.kingdom.to_string()),
+            _ => None,
+        })
+        .collect();
+    let (_, top) = top_counts(kingdoms.iter().map(String::as_str), 8);
+    outln!("  actors by kingdom: {top}");
     Ok(())
 }
 

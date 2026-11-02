@@ -60,7 +60,7 @@ and `container::write` puts a file back together.
 | `.rwd` archives | Done; tested against all 11 archives in the game |
 | Map `HEIGHT_MAP`, `MOUNTAIN_HEIGHT_MAP` | Done |
 | Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
-| Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, and the members of herds and regiments; the rest of other classes' records is kept as raw bytes |
+| Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, actors' owner and components, and the members of herds and regiments; component state and other classes' records are kept as raw bytes |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
 | Other map sections (`MAP_HEADER`, `TEAMS`, `TRIGGERS`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
