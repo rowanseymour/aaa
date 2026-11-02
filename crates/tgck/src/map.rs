@@ -17,6 +17,10 @@
 //! DYNAMIC_THINGS           u32 unknown (0), u32 unknown (11), then per record:
 //!     string template, u32 unknown, u32 id, 10 bytes unknown,
 //!     f32 position[3], f32 facing[3] (unit vector), rest of record unknown
+//!   An organization's record (a herd or regiment) holds its members too:
+//!     82 bytes unknown, string layout, u32 n, string slot_element[n],
+//!     u32 positions, then per member: u32 index, a record as above whose
+//!     unknown rest runs up to the next member
 //!
 //! SUN
 //!     u32 version (1 or 2), u32 unknown (1), u32 unknown (-1),
@@ -338,9 +342,27 @@ fn parse_things(index: &[u8], data: &[u8]) -> Result<Vec<Thing>> {
     Ok(things)
 }
 
+/// The parts of a herd or regiment, as its record stores them.
+#[derive(Debug, Clone)]
+pub struct Organization {
+    /// The `OrganizationLayout` the members are arranged by.
+    pub layout: String,
+    /// Each layout slot's element template; empty for an empty slot.
+    pub slots: Vec<String>,
+    /// The members where they stand, in layout position order.
+    pub members: Vec<Thing>,
+}
+
 impl Thing {
     fn parse(record: &[u8]) -> Result<Self> {
         let mut rec = Cursor::new(record);
+        let mut thing = Thing::parse_head(&mut rec)?;
+        thing.extra = rec.rest().to_vec();
+        Ok(thing)
+    }
+
+    /// Everything up to the undecoded rest, which is left empty.
+    fn parse_head(rec: &mut Cursor) -> Result<Self> {
         let template = rec.string()?;
         let unknown0 = rec.u32()?;
         Ok(Thing {
@@ -350,9 +372,56 @@ impl Thing {
             unknown1: rec.bytes(10)?.try_into().unwrap(),
             position: rec.f32s()?,
             facing: rec.f32s()?,
-            extra: rec.rest().to_vec(),
+            extra: Vec::new(),
         })
     }
+
+    /// The organization this thing is, if its record holds one.
+    pub fn organization(&self) -> Option<Organization> {
+        let mut cur = Cursor::new(self.extra.get(82..)?);
+        let layout = cur.string().ok().filter(|s| is_id(s))?;
+        let n = cur.u32().ok().filter(|&n| n <= 64)?;
+        let slots = (0..n)
+            .map(|_| cur.string().ok())
+            .collect::<Option<Vec<_>>>()?;
+        let positions = cur.u32().ok().filter(|&n| n <= 256)?;
+        // Members' records aren't decoded to the end, so each is found by a
+        // later position index than the one before and a plausible head.
+        // Empty positions are left out.
+        let body = cur.rest();
+        let head_at = |at: usize, next: u32| {
+            let mut c = Cursor::new(&body[at..]);
+            let index = c.u32().ok().filter(|i| (next..positions).contains(i))?;
+            let head = Thing::parse_head(&mut c).ok()?;
+            let [x, y, z] = head.facing;
+            let unit = (x * x + y * y + z * z - 1.0).abs() < 0.01;
+            (is_id(&head.template) && unit).then(|| (index, head, at + c.pos()))
+        };
+        let mut members: Vec<Thing> = Vec::new();
+        let (mut from, mut next) = (0, 0);
+        while let Some((at, (index, head, end))) =
+            (from..body.len()).find_map(|at| Some((at, head_at(at, next)?)))
+        {
+            if let Some(last) = members.last_mut() {
+                last.extra = body[from..at].to_vec();
+            }
+            members.push(head);
+            (from, next) = (end, index + 1);
+        }
+        if let Some(last) = members.last_mut() {
+            last.extra = body[from..].to_vec();
+        }
+        Some(Organization {
+            layout,
+            slots,
+            members,
+        })
+    }
+}
+
+/// Whether `s` looks like a template id.
+fn is_id(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 #[cfg(test)]
@@ -490,5 +559,40 @@ mod tests {
             ("start_loc", 7, [10.0, 20.0, 2.0])
         );
         assert_eq!(t[0].extra, [1, 2, 3]);
+    }
+
+    #[test]
+    fn parses_organization_members() {
+        let mut extra = vec![0u8; 82];
+        extra.extend(string("herd_ambient_large"));
+        extra.extend(3u32.to_le_bytes());
+        for slot in ["sheep_ewe", "", "sheep_ram"] {
+            extra.extend(string(slot));
+        }
+        extra.extend(7u32.to_le_bytes());
+        // Positions 1 and 2 are empty; each member's rest is undecoded.
+        for (index, template, id) in [(0u32, "sheep_ewe", 11), (3, "sheep_ram", 12)] {
+            extra.extend(index.to_le_bytes());
+            extra.extend(thing_record(template, id, [1.0, 2.0, 3.0], &[0xAA; 20]));
+        }
+        let parse =
+            |extra: &[u8]| Thing::parse(&thing_record("herd_sheep", 10, [0.0; 3], extra)).unwrap();
+        let org = parse(&extra).organization().unwrap();
+        assert_eq!(org.layout, "herd_ambient_large");
+        assert_eq!(org.slots, ["sheep_ewe", "", "sheep_ram"]);
+        let members: Vec<_> = org
+            .members
+            .iter()
+            .map(|m| (m.template.as_str(), m.id))
+            .collect();
+        assert_eq!(members, [("sheep_ewe", 11), ("sheep_ram", 12)]);
+        assert_eq!(org.members[0].position, [1.0, 2.0, 3.0]);
+        assert_eq!(org.members[0].extra, [0xAA; 20]);
+        assert_eq!(org.members[1].extra, [0xAA; 20]);
+
+        assert!(
+            parse(&[0; 100]).organization().is_none(),
+            "not an organization"
+        );
     }
 }

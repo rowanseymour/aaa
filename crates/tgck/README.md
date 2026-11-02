@@ -56,7 +56,7 @@ let sun = map.sun()?;            // light direction and colours
 | `.rwd` archives | Done; tested against all 11 archives in the game |
 | Map `HEIGHT_MAP`, `MOUNTAIN_HEIGHT_MAP` | Done |
 | Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
-| Map `DYNAMIC_THINGS` | Template, id, position and facing; the rest of each record is kept as raw bytes |
+| Map `DYNAMIC_THINGS` | Template, id, position and facing, and the members of herds and regiments; the rest of each record is kept as raw bytes |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
 | Other map sections (`MAP_HEADER`, `TEAMS`, `TRIGGERS`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
