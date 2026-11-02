@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
+use aaa_data::{Game, View};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
@@ -14,7 +15,6 @@ use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFor
 use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 use tgck::map::Thing;
 
-use crate::game::{Game, View};
 use crate::terrain::world;
 use crate::textures;
 

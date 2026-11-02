@@ -1,5 +1,5 @@
-//! Access to the game's data archive: maps, terrain definitions, object
-//! templates, models and textures.
+//! The game's data as a whole: access to the installed archive, and the
+//! definitions built from its files (terrain, object views, ...).
 
 use std::collections::HashMap;
 use std::fs::File;
