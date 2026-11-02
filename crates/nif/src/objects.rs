@@ -64,14 +64,26 @@
 //!                  f32 viewport[4], f32 lod, ref scene, u32 2 unused
 //! NiTextKeyExtraData string name [4.2.2.0: ref next, u32 unused], u32 n,
 //!                  per key f32 time + string
-//! NiKeyframeController, NiAlphaController
-//!                  ref next, u16 flags, f32 frequency, phase, start,
-//!                  stop, ref target, ref data
+//! controller       ref next, u16 flags, f32 frequency, phase, start,
+//!                  stop, ref target
+//! NiKeyframeController, NiAlphaController, NiVisController
+//!                  controller, ref data
+//! NiLookAtController, NiMaterialColorController, NiLightColorController
+//!                  controller, u16 flags [old: none], ref node or data
+//! NiPathController controller, u16 flags [old: none], i32 bank direction,
+//!                  f32 max bank, smoothing, i16 follow axis, ref path
+//!                  data, ref percent data
+//! NiTextureTransformController
+//!                  controller, bool shader map, u32 slot, u32 operation,
+//!                  ref data
+//! NiFlipController controller, u32 slot, f32 time, f32 delta, refs textures
 //! NiKeyframeData   u32 n + rotation keys (u32 kind; kind 4: f32 order and
 //!                  three float key groups; else f32 time + quaternion[4]
 //!                  (+ three TCB floats for kind 3)), vector key group,
 //!                  float key group
-//! NiFloatData      float key group
+//! NiFloatData, NiPosData, NiColorData
+//!                  key group of f32, f32[3], f32[4]
+//! NiVisData        bool keys: u32 n, per key f32 time + u8
 //! key group        u32 n, u32 kind if n > 0, keys of f32 time + value
 //!                  (+ two tangents for kind 2, + three TCB floats for kind 3)
 //! NiSkinInstance   ref skin data, ref skeleton root, refs bones
@@ -86,6 +98,69 @@
 //!                  lengths[strips], bool + u16 strip points or, without
 //!                  strips, triangles[t][3] [old: none of these three
 //!                  bools], bool + u8 bone indices[v][w]
+//! NiDitherProperty named, u16 flags
+//! NiAmbientLight, NiPointLight
+//!                  scene, refs affected nodes [old: none], f32 dimmer,
+//!                  ambient[3], diffuse[3], specular[3] (+ attenuation[3]
+//!                  for point lights)
+//! NiParticles, NiRotatingParticles, NiParticleMeshes, NiParticleSystem
+//!                  as NiTriShape; NiParticleSystem adds bool world space,
+//!                  refs modifiers
+//! particle info    40 bytes: f32 velocity[3], axis[3], age, life span,
+//!                  last update, u16 generation, u16 code
+//! NiParticlesData, NiRotatingParticlesData, NiParticleMeshesData, NiPSysData
+//!                  geometry, bool + f32 radii[n] [old: f32 radius],
+//!                  u16 active, bool + f32 sizes[n], bool + f32
+//!                  rotations[n][4] [4.2.2.0: none, but NiRotatingParticlesData
+//!                  ends with them]; NiParticleMeshesData adds ref node,
+//!                  NiPSysData particle info[n], u16 added, u16 added base
+//! NiParticleSystemController
+//!                  controller, f32 emission[16], u8 reset, f32 birth rate,
+//!                  life span[2], u8 use birth rate, u8 spawn on death,
+//!                  f32 emitter size[3], ref emitter, u16 generations,
+//!                  f32 spawned, u16 multiplier, f32 speed chaos, direction
+//!                  chaos, u16 n, u16 valid, particle info[n], ref emitter
+//!                  modifier, ref modifier, ref collider, u8 static bound
+//! NiGravity, NiParticleColorModifier, NiParticleGrowFade,
+//! NiParticleRotation, NiParticleMeshModifier
+//!                  ref next, ref controller, then f32 decay, force, u32
+//!                  kind, f32 position[3], direction[3]; ref colour data;
+//!                  f32 grow, fade; u8 random, f32 axis[3], speed; refs
+//!                  meshes
+//! ```
+//!
+//! The `NiPSys` types occur only in 10.1.0.0:
+//!
+//! ```text
+//! modifier         string name, u32 order, ref system, bool active
+//! NiPSysAgeDeathModifier     modifier, bool spawn, ref spawn modifier
+//! NiPSysBoundUpdateModifier  modifier, u16 skip
+//! NiPSysColliderManager, NiPSysColorModifier  modifier, ref
+//! NiPSysDragModifier         modifier, ref object, f32 axis[3],
+//!                            percentage, range, falloff
+//! NiPSysGravityModifier      modifier, ref object, f32 axis[3], decay,
+//!                            strength, u32 force, f32 turbulence[2]
+//! NiPSysGrowFadeModifier     modifier, f32 grow, u16 generation, f32 fade,
+//!                            u16 generation
+//! NiPSysPositionModifier     modifier
+//! NiPSysRotationModifier     modifier, f32 speed, bool random, f32 axis[3]
+//! NiPSysSpawnModifier        modifier, u16 generations, f32 spawned, u16
+//!                            min, max, f32 speed, direction, life span[2]
+//! emitter          modifier, f32 speed[2], declination[2], planar
+//!                  angle[2], colour[4], radius, life span[2]
+//! NiPSysBoxEmitter, NiPSysCylinderEmitter, NiPSysSphereEmitter
+//!                  emitter, ref object, f32 size[3], [2] or [1]
+//! NiPSysMeshEmitter emitter, refs meshes, u32 velocity, u32 emission,
+//!                  f32 axis[3]
+//! NiPSysPlanarCollider, NiPSysSphericalCollider
+//!                  f32 bounce, bool spawn, bool die, ref spawn modifier,
+//!                  ref manager, ref next, ref object, then f32 width,
+//!                  height, x axis[3], y axis[3]; f32 radius
+//! NiPSysEmitterCtlr, NiPSysModifierActiveCtlr, NiPSysEmitterSpeedCtlr,
+//! NiPSysEmitterInitialRadiusCtlr
+//!                  controller, string modifier, ref data
+//! NiPSysUpdateCtlr controller
+//! NiPSysEmitterCtlrData  float key group, bool keys
 //! ```
 
 use crate::{Error, Reader, Ref, Result, Transform};
@@ -507,7 +582,7 @@ impl Object {
                 Object::Shape(Shape { av, data, skin })
             }
             "NiTriShapeData" => {
-                let mut g = geometry(r)?;
+                let (_, mut g) = geometry(r)?;
                 let count = r.u16()? as usize;
                 r.u32()?;
                 if r.old() || r.bool()? {
@@ -528,7 +603,7 @@ impl Object {
                 Object::Geometry(g)
             }
             "NiTriStripsData" => {
-                let mut g = geometry(r)?;
+                let (_, mut g) = geometry(r)?;
                 r.u16()?;
                 let strips = r.u16()?;
                 let lengths = (0..strips).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
@@ -804,9 +879,265 @@ impl Object {
                 }
                 other()
             }
+            "NiDitherProperty" => {
+                named(r)?;
+                r.u16()?;
+                other()
+            }
+            "NiAmbientLight" | "NiPointLight" => {
+                scene(r)?;
+                if !r.old() {
+                    r.references()?; // affected nodes
+                }
+                r.floats::<10>()?;
+                if kind == "NiPointLight" {
+                    r.floats::<3>()?;
+                }
+                other()
+            }
+            "NiVisController" | "NiPSysUpdateCtlr" => {
+                time_controller(r)?;
+                if kind == "NiVisController" {
+                    r.reference()?;
+                }
+                other()
+            }
+            "NiLookAtController" | "NiMaterialColorController" | "NiLightColorController" => {
+                time_controller(r)?;
+                if !r.old() {
+                    r.u16()?;
+                }
+                r.reference()?;
+                other()
+            }
+            "NiPathController" => {
+                time_controller(r)?;
+                if !r.old() {
+                    r.u16()?;
+                }
+                r.skip(4 + 4 + 4 + 2)?;
+                r.reference()?;
+                r.reference()?;
+                other()
+            }
+            "NiTextureTransformController" => {
+                time_controller(r)?;
+                r.skip(1 + 4 + 4)?;
+                r.reference()?;
+                other()
+            }
+            "NiFlipController" => {
+                time_controller(r)?;
+                r.skip(4 + 4 + 4)?;
+                r.references()?;
+                other()
+            }
+            "NiPosData" => {
+                key_group::<[f32; 3]>(r)?;
+                other()
+            }
+            "NiColorData" => {
+                key_group::<[f32; 4]>(r)?;
+                other()
+            }
+            "NiVisData" => {
+                bool_keys(r)?;
+                other()
+            }
+            "NiParticles" | "NiRotatingParticles" | "NiParticleMeshes" | "NiParticleSystem" => {
+                scene(r)?;
+                r.reference()?;
+                r.reference()?;
+                if !r.netimmerse() && r.bool()? {
+                    r.string()?;
+                    r.u32()?;
+                }
+                if kind == "NiParticleSystem" {
+                    r.bool()?;
+                    r.references()?;
+                }
+                other()
+            }
+            "NiParticlesData"
+            | "NiRotatingParticlesData"
+            | "NiParticleMeshesData"
+            | "NiPSysData" => {
+                let n = particles_data(r)?;
+                match kind {
+                    "NiRotatingParticlesData" if r.netimmerse() => {
+                        if r.bool()? {
+                            r.float_array::<4>(n)?;
+                        }
+                    }
+                    "NiParticleMeshesData" => {
+                        r.reference()?;
+                    }
+                    "NiPSysData" => {
+                        r.skip(n * 40)?;
+                        r.skip(2 + 2)?;
+                    }
+                    _ => {}
+                }
+                other()
+            }
+            "NiParticleSystemController" => {
+                time_controller(r)?;
+                r.floats::<16>()?;
+                r.u8()?;
+                r.floats::<3>()?;
+                r.skip(1 + 1 + 3 * 4)?;
+                r.reference()?;
+                r.skip(2 + 4 + 2 + 4 + 4)?;
+                let n = r.u16()? as usize;
+                r.u16()?;
+                r.skip(n * 40)?;
+                r.skip(3 * 4 + 1)?;
+                other()
+            }
+            "NiGravity"
+            | "NiParticleColorModifier"
+            | "NiParticleGrowFade"
+            | "NiParticleRotation"
+            | "NiParticleMeshModifier" => {
+                r.reference()?; // next
+                r.reference()?; // controller
+                match kind {
+                    "NiGravity" => r.skip(2 * 4 + 4 + 6 * 4)?,
+                    "NiParticleColorModifier" => {
+                        r.reference()?;
+                    }
+                    "NiParticleGrowFade" => r.skip(2 * 4)?,
+                    "NiParticleRotation" => r.skip(1 + 4 * 4)?,
+                    _ => {
+                        r.references()?;
+                    }
+                }
+                other()
+            }
+            "NiPSysAgeDeathModifier"
+            | "NiPSysBoundUpdateModifier"
+            | "NiPSysColliderManager"
+            | "NiPSysColorModifier"
+            | "NiPSysDragModifier"
+            | "NiPSysGravityModifier"
+            | "NiPSysGrowFadeModifier"
+            | "NiPSysPositionModifier"
+            | "NiPSysRotationModifier"
+            | "NiPSysSpawnModifier" => {
+                psys_modifier(r)?;
+                match kind {
+                    "NiPSysAgeDeathModifier" => {
+                        r.bool()?;
+                        r.reference()?;
+                    }
+                    "NiPSysBoundUpdateModifier" => r.skip(2)?,
+                    "NiPSysColliderManager" | "NiPSysColorModifier" => {
+                        r.reference()?;
+                    }
+                    "NiPSysDragModifier" => {
+                        r.reference()?;
+                        r.floats::<6>()?;
+                    }
+                    "NiPSysGravityModifier" => {
+                        r.reference()?;
+                        r.skip(5 * 4 + 4 + 2 * 4)?;
+                    }
+                    "NiPSysGrowFadeModifier" => r.skip(2 * (4 + 2))?,
+                    "NiPSysRotationModifier" => r.skip(4 + 1 + 3 * 4)?,
+                    "NiPSysSpawnModifier" => r.skip(2 + 4 + 2 + 2 + 4 * 4)?,
+                    _ => {}
+                }
+                other()
+            }
+            "NiPSysBoxEmitter"
+            | "NiPSysCylinderEmitter"
+            | "NiPSysSphereEmitter"
+            | "NiPSysMeshEmitter" => {
+                psys_modifier(r)?;
+                r.floats::<13>()?;
+                if kind == "NiPSysMeshEmitter" {
+                    r.references()?;
+                    r.skip(4 + 4 + 3 * 4)?;
+                } else {
+                    r.reference()?; // emitter object
+                    let floats = match kind {
+                        "NiPSysBoxEmitter" => 3,
+                        "NiPSysCylinderEmitter" => 2,
+                        _ => 1,
+                    };
+                    r.skip(floats * 4)?;
+                }
+                other()
+            }
+            "NiPSysPlanarCollider" | "NiPSysSphericalCollider" => {
+                r.skip(4 + 1 + 1)?;
+                for _ in 0..4 {
+                    r.reference()?; // spawn modifier, manager, next, collider object
+                }
+                let floats = if kind == "NiPSysPlanarCollider" { 8 } else { 1 };
+                r.skip(floats * 4)?;
+                other()
+            }
+            "NiPSysEmitterCtlr"
+            | "NiPSysModifierActiveCtlr"
+            | "NiPSysEmitterInitialRadiusCtlr"
+            | "NiPSysEmitterSpeedCtlr" => {
+                time_controller(r)?;
+                r.string()?; // modifier
+                r.reference()?;
+                other()
+            }
+            "NiPSysEmitterCtlrData" => {
+                key_group::<f32>(r)?;
+                bool_keys(r)?;
+                other()
+            }
             _ => return Ok(None),
         }))
     }
+}
+
+/// The fields every controller starts with, as for [`Controller`].
+fn time_controller(r: &mut Reader) -> Result<()> {
+    r.reference()?;
+    r.skip(2 + 4 * 4)?;
+    r.reference()?;
+    Ok(())
+}
+
+/// Linear keys of f32 time and a u8 on/off value.
+fn bool_keys(r: &mut Reader) -> Result<()> {
+    let n = r.u32()? as usize;
+    r.skip(n.saturating_mul(5))
+}
+
+/// Geometry plus per-particle sizes and rotations; returns the particle
+/// count.
+fn particles_data(r: &mut Reader) -> Result<usize> {
+    let (n, _) = geometry(r)?;
+    if !r.old() {
+        if r.bool()? {
+            r.skip(n * 4)?; // radii
+        }
+    } else {
+        r.f32()?; // radius
+    }
+    r.u16()?; // active
+    if r.bool()? {
+        r.skip(n * 4)?; // sizes
+    }
+    if !r.netimmerse() && r.bool()? {
+        r.float_array::<4>(n)?; // rotations
+    }
+    Ok(n)
+}
+
+fn psys_modifier(r: &mut Reader) -> Result<()> {
+    r.string()?;
+    r.u32()?; // order
+    r.reference()?; // particle system
+    r.bool()?; // active
+    Ok(())
 }
 
 fn named(r: &mut Reader) -> Result<(String, Vec<Ref>, Ref)> {
@@ -874,7 +1205,8 @@ fn bounding_volume(r: &mut Reader, depth: usize) -> Result<()> {
     }
 }
 
-fn geometry(r: &mut Reader) -> Result<Geometry> {
+/// The vertex count and geometry.
+fn geometry(r: &mut Reader) -> Result<(usize, Geometry)> {
     let n = r.u16()? as usize;
     if !r.old() {
         r.skip(2)?;
@@ -909,13 +1241,16 @@ fn geometry(r: &mut Reader) -> Result<Geometry> {
     if !r.netimmerse() {
         r.u16()?;
     }
-    Ok(Geometry {
-        positions,
-        normals,
-        colors,
-        uv_sets,
-        triangles: Vec::new(),
-    })
+    Ok((
+        n,
+        Geometry {
+            positions,
+            normals,
+            colors,
+            uv_sets,
+            triangles: Vec::new(),
+        },
+    ))
 }
 
 fn texture_slot(r: &mut Reader) -> Result<TextureSlot> {

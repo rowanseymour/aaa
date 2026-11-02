@@ -30,8 +30,8 @@ for placed in model.shapes() {
 }
 ```
 
-Types the reader does not know yet (particles and some animation controllers)
-end a read early; what came before them is kept. The layouts are
+Types the reader does not know end a read early; what came before them is
+kept. Particle systems are read only to step over them. The layouts are
 documented in [`src/lib.rs`](src/lib.rs) and [`src/objects.rs`](src/objects.rs).
 
 ## Legal
