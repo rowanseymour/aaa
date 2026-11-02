@@ -42,6 +42,8 @@
 //!
 //! MAPSTRINGS               plain text in .tgi syntax (map name, objectives, ...)
 //!
+//! GWORLD, TEAMS, KINGDOMS  see map/players.rs
+//!
 //! TERRAIN
 //!     u32 version (6 or 7 in shipped maps; the game accepts up to 7)
 //!     u32 unknown (must be 1)
@@ -61,6 +63,10 @@
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
+
+mod players;
+
+pub use players::{Ability, Faction, Kingdom, Kingdoms, Team, write_teams};
 
 use crate::container::{Container, Section};
 use crate::{Cursor, Error, Result, Writer};
@@ -109,6 +115,21 @@ impl<R: Read + Seek> Map<R> {
         let index = self.container.read_named("DYNAMIC_THINGS_INDEX")?;
         let data = self.container.read_named("DYNAMIC_THINGS")?;
         parse_things(&index, &data)
+    }
+
+    /// The version of the game state the map was saved with, which decides
+    /// the layout of some sections.
+    pub fn world_version(&mut self) -> Result<u32> {
+        Cursor::new(&self.container.read_named("GWORLD")?).u32()
+    }
+
+    pub fn teams(&mut self) -> Result<Vec<Option<Team>>> {
+        players::parse_teams(&self.container.read_named("TEAMS")?)
+    }
+
+    pub fn kingdoms(&mut self) -> Result<Kingdoms> {
+        let world_version = self.world_version()?;
+        Kingdoms::parse(&self.container.read_named("KINGDOMS")?, world_version)
     }
 
     pub fn sun(&mut self) -> Result<Sun> {
@@ -430,7 +451,7 @@ pub enum Detail {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Actor {
     pub version: u32,
-    /// The id of the kingdom that owns it; 0 for none.
+    /// The owning [`Kingdom`]'s [`Thing::id`]; 0 for none.
     pub kingdom: u32,
     pub flags: u64,
     /// The components its template gives it, a bit each as in [`COMPONENTS`].
@@ -485,6 +506,30 @@ impl Actor {
     const MIN_VERSION: u32 = 9;
     /// The newest version the game reads.
     const MAX_VERSION: u32 = 14;
+
+    /// Everything but the state, which is left empty.
+    fn parse_header(cur: &mut Cursor) -> Result<Self> {
+        let version = cur.u32()?;
+        if !(Actor::MIN_VERSION..=Actor::MAX_VERSION).contains(&version) {
+            return Err(Error::Corrupt(format!("actor version {version}")));
+        }
+        Ok(Actor {
+            version,
+            kingdom: cur.u32()?,
+            flags: cur.u64()?,
+            template_components: cur.u32()?,
+            components: cur.u32()?,
+            state: Vec::new(),
+        })
+    }
+
+    fn write_header(&self, w: &mut Writer) {
+        w.u32(self.version);
+        w.u32(self.kingdom);
+        w.u64(self.flags);
+        w.u32(self.template_components);
+        w.u32(self.components);
+    }
 
     /// The names of the components the record holds.
     pub fn component_names(&self) -> impl Iterator<Item = &'static str> + '_ {
@@ -575,6 +620,51 @@ fn expect(cur: &mut Cursor, what: &str, want: u32) -> Result<()> {
     }
 }
 
+/// What every saved object's record starts with, things or not.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Head {
+    pub template: String,
+    pub class: u32,
+    pub id: u32,
+    pub name: String,
+    pub position: [f32; 3],
+    pub facing: [f32; 3],
+    pub flags: u32,
+}
+
+impl Head {
+    fn parse(rec: &mut Cursor) -> Result<Self> {
+        let template = rec.string()?;
+        let class = rec.u32()?;
+        let id = rec.u32()?;
+        expect(rec, "thing version", 2)?;
+        let name = rec.string()?;
+        expect(rec, "field after the name", 0)?;
+        Ok(Head {
+            template,
+            class,
+            id,
+            name,
+            position: rec.f32s()?,
+            facing: rec.f32s()?,
+            flags: rec.u32()?,
+        })
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        w.string(&self.template)?;
+        w.u32(self.class);
+        w.u32(self.id);
+        w.u32(2);
+        w.string(&self.name)?;
+        w.u32(0);
+        w.f32s(&self.position);
+        w.f32s(&self.facing);
+        w.u32(self.flags);
+        Ok(())
+    }
+}
+
 /// The parts of a herd or regiment, as its record stores them.
 #[derive(Debug, Clone)]
 pub struct Organization {
@@ -596,15 +686,21 @@ impl Thing {
 
     /// The fields every class has, leaving the detail empty.
     fn parse_shared(rec: &mut Cursor) -> Result<Self> {
-        let template = rec.string()?;
-        let class = rec.u32()?;
-        let id = rec.u32()?;
-        expect(rec, "thing version", 2)?;
-        let name = rec.string()?;
-        expect(rec, "field after the name", 0)?;
-        let position = rec.f32s()?;
-        let facing = rec.f32s()?;
-        let flags = rec.u32()?;
+        let head = Head::parse(rec)?;
+        Self::parse_placement(head, rec)
+    }
+
+    /// The fields after the head, leaving the detail empty.
+    fn parse_placement(head: Head, rec: &mut Cursor) -> Result<Self> {
+        let Head {
+            template,
+            class,
+            id,
+            name,
+            position,
+            facing,
+            flags,
+        } = head;
         expect(rec, "placement version", 5)?;
         let scale = rec.f32()?;
         let variation = rec.i32()?;
@@ -630,15 +726,16 @@ impl Thing {
     }
 
     fn write(&self, w: &mut Writer) -> Result<()> {
-        w.string(&self.template)?;
-        w.u32(self.class);
-        w.u32(self.id);
-        w.u32(2);
-        w.string(&self.name)?;
-        w.u32(0);
-        w.f32s(&self.position);
-        w.f32s(&self.facing);
-        w.u32(self.flags);
+        Head {
+            template: self.template.clone(),
+            class: self.class,
+            id: self.id,
+            name: self.name.clone(),
+            position: self.position,
+            facing: self.facing,
+            flags: self.flags,
+        }
+        .write(w)?;
         w.u32(5);
         w.f32(self.scale);
         w.i32(self.variation);
@@ -702,18 +799,9 @@ impl Detail {
         let mut cur = Cursor::new(data);
         let detail = match class {
             ACTOR => {
-                let version = cur.u32()?;
-                if !(Actor::MIN_VERSION..=Actor::MAX_VERSION).contains(&version) {
-                    return Err(Error::Corrupt(format!("actor version {version}")));
-                }
-                Detail::Actor(Actor {
-                    version,
-                    kingdom: cur.u32()?,
-                    flags: cur.u64()?,
-                    template_components: cur.u32()?,
-                    components: cur.u32()?,
-                    state: cur.rest().to_vec(),
-                })
+                let mut actor = Actor::parse_header(&mut cur)?;
+                actor.state = cur.rest().to_vec();
+                Detail::Actor(actor)
             }
             AREA => {
                 // Records without the id are 8 bytes shorter; the name's
@@ -756,11 +844,7 @@ impl Detail {
     fn write(&self, w: &mut Writer) -> Result<()> {
         match self {
             Detail::Actor(a) => {
-                w.u32(a.version);
-                w.u32(a.kingdom);
-                w.u64(a.flags);
-                w.u32(a.template_components);
-                w.u32(a.components);
+                a.write_header(w);
                 w.bytes(&a.state);
             }
             Detail::Area(a) => {
