@@ -239,7 +239,14 @@ impl Game {
                     Some(view) => self.view(&templates, dir, &thing, view),
                     None => continue,
                 };
-                out.insert(id.to_ascii_lowercase(), view);
+                // Model paths are relative to the defining file, so where an
+                // id is defined more than once keep a definition that finds
+                // its models.
+                let drawable = |v: &Option<View>| v.as_ref().is_some_and(|v| !v.models.is_empty());
+                let id = id.to_ascii_lowercase();
+                if drawable(&view) || !out.get(&id).is_some_and(drawable) {
+                    out.insert(id, view);
+                }
             }
         }
         let renames = self.thing_renames();
