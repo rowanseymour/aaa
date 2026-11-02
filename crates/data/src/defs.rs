@@ -3,9 +3,11 @@
 
 use serde::Deserialize;
 
+use crate::Id;
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Terrain {
-    pub ids: Option<String>,
+    pub ids: Option<Id>,
     pub terrain_color: Option<[f32; 3]>,
     #[serde(default)]
     pub base_priority: i32,
@@ -15,7 +17,7 @@ pub struct Terrain {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Variation {
-    pub ids: Option<String>,
+    pub ids: Option<Id>,
     pub texture: Option<String>,
     pub texture_width: Option<f32>,
     pub texture_height: Option<f32>,
@@ -31,7 +33,7 @@ pub struct Biome {
 /// How a biome's water terrain is coloured.
 #[derive(Debug, Clone, Deserialize)]
 pub struct WaterInfo {
-    pub terrain_ids: Option<String>,
+    pub terrain_ids: Option<Id>,
     #[serde(default)]
     pub depth_info: Vec<DepthInfo>,
 }
@@ -47,7 +49,7 @@ pub struct DepthInfo {
 /// An object template: units, buildings, doodads, sound emitters, ...
 #[derive(Debug, Clone, Deserialize)]
 pub struct Thing {
-    pub ids: Option<String>,
+    pub ids: Option<Id>,
     #[serde(default)]
     pub flags: Vec<Flags>,
     pub view: Option<View>,
@@ -104,8 +106,8 @@ pub struct TextureRename {
 pub struct Translate {
     /// The kind of block renamed, e.g. `Thing`.
     pub node: Option<String>,
-    pub ids_old: Option<String>,
-    pub ids_new: Option<String>,
+    pub ids_old: Option<Id>,
+    pub ids_new: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

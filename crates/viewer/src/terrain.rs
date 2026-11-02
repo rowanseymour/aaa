@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{DepthColor, Game};
+use aaa_data::{DepthColor, Game, Id};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -153,7 +153,7 @@ pub fn build(
             break;
         }
         let name = &terrain.names[tile.terrain as usize];
-        let variation = variations.get(&name.to_ascii_lowercase());
+        let variation = variations.get(&Id::from(name.as_str()));
         let image = match variation {
             Some(v) => game
                 .read(&v.texture)
@@ -194,7 +194,7 @@ pub fn build(
     let water_colors = on_water
         .into_iter()
         .filter_map(|(t, n)| {
-            let name = terrain.names[t as usize].to_ascii_lowercase();
+            let name = Id::from(terrain.names[t as usize].as_str());
             Some((n, t, variations.get(&name)?.water.clone()?))
         })
         .max_by_key(|&(n, t, _)| (n, t))
