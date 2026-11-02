@@ -86,35 +86,17 @@ impl<'a> Templates<'a> {
         // Only inherited items are overridden, so a block may repeat a key.
         let inherited = into.len();
         for item in items {
-            let existing = match item {
-                Item::Field(f) => into[..inherited].iter().position(|i| match i {
-                    Item::Field(e) => e.key.eq_ignore_ascii_case(&f.key),
-                    Item::Block(_) => false,
-                }),
-                Item::Block(b) => {
-                    let kind = b.kind().unwrap_or("").to_ascii_lowercase();
-                    if self.lists.contains(&kind) {
-                        None
-                    } else {
-                        into[..inherited].iter().position(|i| match i {
-                            Item::Block(e) => e.kind().unwrap_or("").eq_ignore_ascii_case(&kind),
-                            Item::Field(_) => false,
-                        })
-                    }
-                }
-            };
+            let existing = into[..inherited]
+                .iter()
+                .position(|e| self.overrides(item, e));
             match (existing.map(|i| &mut into[i]), item) {
                 (Some(Item::Block(e)), Item::Block(b)) => {
                     e.header.words = b.header.words.clone();
                     for (k, v) in &b.header.attrs {
-                        match e
-                            .header
-                            .attrs
-                            .iter_mut()
-                            .find(|(ek, _)| ek.eq_ignore_ascii_case(k))
-                        {
+                        let attrs = &mut e.header.attrs;
+                        match attrs.iter_mut().find(|(ek, _)| ek.eq_ignore_ascii_case(k)) {
                             Some(attr) => *attr = (k.clone(), v.clone()),
-                            None => e.header.attrs.push((k.clone(), v.clone())),
+                            None => attrs.push((k.clone(), v.clone())),
                         }
                     }
                     e.braced = b.braced;
@@ -124,6 +106,18 @@ impl<'a> Templates<'a> {
                 (Some(e), _) => *e = item.clone(),
                 (None, _) => into.push(item.clone()),
             }
+        }
+    }
+
+    /// Whether `item` takes the place of the inherited `existing`.
+    fn overrides(&self, item: &Item, existing: &Item) -> bool {
+        match (item, existing) {
+            (Item::Field(f), Item::Field(e)) => f.key.eq_ignore_ascii_case(&e.key),
+            (Item::Block(b), Item::Block(e)) => {
+                let kind = b.kind().unwrap_or("").to_ascii_lowercase();
+                !self.lists.contains(&kind) && e.kind().unwrap_or("").eq_ignore_ascii_case(&kind)
+            }
+            _ => false,
         }
     }
 }

@@ -164,6 +164,7 @@ fn sections(path: &str) -> Res {
 fn unpack(path: &str, out_dir: &str) -> Res {
     let mut c = Container::open(path)?;
     fs::create_dir_all(out_dir)?;
+    let mut written = 0;
     for s in c.sections.clone() {
         // Section names come from the file; keep only safe characters.
         let safe: String = s
@@ -179,8 +180,9 @@ fn unpack(path: &str, out_dir: &str) -> Res {
             Path::new(out_dir).join(format!("{safe}.bin")),
             c.read_section(&s)?,
         )?;
+        written += 1;
     }
-    outln!("unpacked {} sections to {out_dir}", c.sections.len());
+    outln!("unpacked {written} sections to {out_dir}");
     Ok(())
 }
 
@@ -213,42 +215,15 @@ fn map(path: &str) -> Res {
     outln!(
         "  terrain {side}x{side} vertices ({extent} world units), heights {lo:.2}..{hi:.2}, water {water_pct:.1}%"
     );
-    let mut by_terrain: BTreeMap<&str, usize> = BTreeMap::new();
-    for t in &terrain.tiles {
-        *by_terrain.entry(terrain.name_of(t)).or_default() += 1;
-    }
-    let mut rows: Vec<_> = by_terrain.into_iter().collect();
-    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
-    let top: Vec<String> = rows
-        .iter()
-        .take(6)
-        .map(|(t, n)| format!("{t} {n}"))
-        .collect();
+    let (used, top) = top_counts(terrain.tiles.iter().map(|t| terrain.name_of(t)), 6);
     outln!(
-        "  terrain v{}, biome {}, {} of {} types used: {}",
+        "  terrain v{}, biome {}, {used} of {} types used: {top}",
         terrain.version,
         terrain.biome,
-        rows.len(),
         terrain.names.len(),
-        top.join(", ")
     );
-    let mut by_template: BTreeMap<&str, usize> = BTreeMap::new();
-    for t in &things {
-        *by_template.entry(&t.template).or_default() += 1;
-    }
-    let mut rows: Vec<_> = by_template.into_iter().collect();
-    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
-    let top: Vec<String> = rows
-        .iter()
-        .take(8)
-        .map(|(t, n)| format!("{t} {n}"))
-        .collect();
-    outln!(
-        "  {} objects, {} templates: {}",
-        things.len(),
-        rows.len(),
-        top.join(", ")
-    );
+    let (templates, top) = top_counts(things.iter().map(|t| t.template.as_str()), 8);
+    outln!("  {} objects, {templates} templates: {top}", things.len());
     let starts: Vec<String> = things
         .iter()
         .filter(|t| t.template == "start_loc")
@@ -256,6 +231,22 @@ fn map(path: &str) -> Res {
         .collect();
     outln!("  start locations: {}", starts.join(" "));
     Ok(())
+}
+
+/// The number of distinct names, and the `n` most common as "name count, ...".
+fn top_counts<'a>(names: impl Iterator<Item = &'a str>, n: usize) -> (usize, String) {
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for name in names {
+        *counts.entry(name).or_default() += 1;
+    }
+    let mut rows: Vec<_> = counts.into_iter().collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.1));
+    let top: Vec<String> = rows
+        .iter()
+        .take(n)
+        .map(|(t, n)| format!("{t} {n}"))
+        .collect();
+    (rows.len(), top.join(", "))
 }
 
 fn human(n: u64) -> String {

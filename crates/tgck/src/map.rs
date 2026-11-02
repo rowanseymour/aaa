@@ -65,9 +65,7 @@ impl Map<BufReader<File>> {
 impl<R: Read + Seek> Map<R> {
     pub fn new(reader: R) -> Result<Self> {
         let container = Container::new(reader)?;
-        if container.section("MAP_HEADER").is_none() {
-            return Err(Error::MissingSection("MAP_HEADER"));
-        }
+        container.require("MAP_HEADER")?;
         Ok(Map { container })
     }
 
@@ -294,20 +292,13 @@ pub struct Sun {
 impl Sun {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
-        let header = [cur.u32()?, cur.u32()?, cur.u32()?];
-        let v3 =
-            |cur: &mut Cursor| -> Result<[f32; 3]> { Ok([cur.f32()?, cur.f32()?, cur.f32()?]) };
-        let direction = v3(&mut cur)?;
-        let diffuse = v3(&mut cur)?;
-        let ambient = v3(&mut cur)?;
-        let specular = v3(&mut cur)?;
         Ok(Sun {
-            version: header[0],
-            unknown: [header[1], header[2]],
-            direction,
-            diffuse,
-            ambient,
-            specular,
+            version: cur.u32()?,
+            unknown: [cur.u32()?, cur.u32()?],
+            direction: cur.f32s()?,
+            diffuse: cur.f32s()?,
+            ambient: cur.f32s()?,
+            specular: cur.f32s()?,
             rest: cur.rest().to_vec(),
         })
     }
@@ -336,40 +327,38 @@ fn parse_things(index: &[u8], data: &[u8]) -> Result<Vec<Thing>> {
     let mut things = Vec::with_capacity(count.min(1 << 20) as usize);
     for i in 0..count {
         let size = idx.u32()? as usize;
-        let mut rec = Cursor::new(cur.bytes(size)?);
-        let corrupt = |e| match e {
+        let thing = Thing::parse(cur.bytes(size)?).map_err(|e| match e {
             Error::Corrupt(m) => Error::Corrupt(format!("thing {i}: {m}")),
             e => e,
-        };
-        let parse = |rec: &mut Cursor| -> Result<Thing> {
-            let template = rec.string()?;
-            let unknown0 = rec.u32()?;
-            let id = rec.u32()?;
-            let unknown1 = rec.bytes(10)?.try_into().unwrap();
-            let position = [rec.f32()?, rec.f32()?, rec.f32()?];
-            let facing = [rec.f32()?, rec.f32()?, rec.f32()?];
-            let extra = rec.rest().to_vec();
-            Ok(Thing {
-                template,
-                id,
-                position,
-                facing,
-                unknown0,
-                unknown1,
-                extra,
-            })
-        };
-        things.push(parse(&mut rec).map_err(corrupt)?);
+        })?;
+        things.push(thing);
     }
     idx.finish("DYNAMIC_THINGS_INDEX")?;
     cur.finish("DYNAMIC_THINGS")?;
     Ok(things)
 }
 
+impl Thing {
+    fn parse(record: &[u8]) -> Result<Self> {
+        let mut rec = Cursor::new(record);
+        let template = rec.string()?;
+        let unknown0 = rec.u32()?;
+        Ok(Thing {
+            template,
+            unknown0,
+            id: rec.u32()?,
+            unknown1: rec.bytes(10)?.try_into().unwrap(),
+            position: rec.f32s()?,
+            facing: rec.f32s()?,
+            extra: rec.rest().to_vec(),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{build_container, utf16};
+    use crate::tests::{build_container, string};
     use std::io;
 
     fn height_section(side: u32, water_at: usize) -> Vec<u8> {
@@ -389,10 +378,7 @@ mod tests {
     }
 
     fn thing_record(template: &str, id: u32, pos: [f32; 3], extra: &[u8]) -> Vec<u8> {
-        let mut r = (template.encode_utf16().count() as u16)
-            .to_le_bytes()
-            .to_vec();
-        r.extend(utf16(template));
+        let mut r = string(template);
         r.extend(9u32.to_le_bytes());
         r.extend(id.to_le_bytes());
         r.extend([0u8; 10]);
@@ -404,16 +390,12 @@ mod tests {
     }
 
     fn terrain_section(version: u32, tiles: &[&[u8]]) -> Vec<u8> {
-        let s = |b: &mut Vec<u8>, v: &str| {
-            b.extend((v.encode_utf16().count() as u16).to_le_bytes());
-            b.extend(utf16(v));
-        };
         let mut b = version.to_le_bytes().to_vec();
         b.extend(1u32.to_le_bytes());
-        s(&mut b, "desert");
+        b.extend(string("desert"));
         b.extend(2u32.to_le_bytes());
-        s(&mut b, "sand");
-        s(&mut b, "ocean");
+        b.extend(string("sand"));
+        b.extend(string("ocean"));
         b.extend((tiles.len() as u32).to_le_bytes());
         b.extend((tiles[0].len() as u32).to_le_bytes());
         tiles.iter().for_each(|t| b.extend(*t));

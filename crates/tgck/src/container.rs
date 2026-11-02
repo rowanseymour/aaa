@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::Path;
 
-use crate::{Error, Result, utf16_lossy};
+use crate::{Cursor, Error, Result, utf16_lossy};
 
 pub const MAGIC: &[u8; 4] = b"TGCK";
 const SECTION_RECORD_LEN: u64 = 0x60;
@@ -57,15 +57,16 @@ impl<R: Read + Seek> Container<R> {
 
         let mut head = [0u8; 12];
         reader.read_exact(&mut head)?;
-        let magic: [u8; 4] = head[..4].try_into().unwrap();
+        let mut cur = Cursor::new(&head);
+        let magic: [u8; 4] = cur.bytes(4)?.try_into().unwrap();
         if &magic != MAGIC {
             return Err(Error::BadMagic(magic));
         }
-        let version = u32::from_le_bytes(head[4..8].try_into().unwrap());
+        let version = cur.u32()?;
         if version != 2 {
             return Err(Error::UnsupportedVersion(version));
         }
-        let section_count = u32::from_le_bytes(head[8..12].try_into().unwrap()) as u64;
+        let section_count = cur.u32()? as u64;
 
         let table_len = section_count * SECTION_RECORD_LEN;
         if table_len > len {
@@ -78,13 +79,13 @@ impl<R: Read + Seek> Container<R> {
         for _ in 0..section_count {
             let mut rec = [0u8; SECTION_RECORD_LEN as usize];
             reader.read_exact(&mut rec)?;
-            let u64_at = |o: usize| u64::from_le_bytes(rec[o..o + 8].try_into().unwrap());
+            let mut cur = Cursor::new(&rec);
             let section = Section {
-                name: utf16_lossy(&rec[..SECTION_NAME_LEN]),
-                offset: u64_at(0x40),
-                stored_size: u64_at(0x48),
-                unknown: rec[0x50..0x58].try_into().unwrap(),
-                unpacked_size: u64_at(0x58),
+                name: utf16_lossy(cur.bytes(SECTION_NAME_LEN)?),
+                offset: cur.u64()?,
+                stored_size: cur.u64()?,
+                unknown: cur.bytes(8)?.try_into().unwrap(),
+                unpacked_size: cur.u64()?,
             };
             if section
                 .offset
@@ -107,6 +108,11 @@ impl<R: Read + Seek> Container<R> {
 
     pub fn section(&self, name: &str) -> Option<&Section> {
         self.sections.iter().find(|s| s.name == name)
+    }
+
+    /// Like [`Container::section`], but a missing section is an error.
+    pub fn require(&self, name: &'static str) -> Result<&Section> {
+        self.section(name).ok_or(Error::MissingSection(name))
     }
 
     /// Reads a section's payload, inflating it if compressed.
@@ -140,10 +146,7 @@ impl<R: Read + Seek> Container<R> {
     }
 
     pub fn read_named(&mut self, name: &'static str) -> Result<Vec<u8>> {
-        let section = self
-            .section(name)
-            .cloned()
-            .ok_or(Error::MissingSection(name))?;
+        let section = self.require(name)?.clone();
         self.read_section(&section)
     }
 }

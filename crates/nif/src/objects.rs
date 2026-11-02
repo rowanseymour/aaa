@@ -571,30 +571,13 @@ impl Object {
                     billboard,
                 })
             }
-            "NiTriShape" | "NiTriStrips" => {
-                let av = scene(r)?;
-                let data = r.reference()?;
-                let skin = r.reference()?;
-                if !r.netimmerse() && r.bool()? {
-                    r.string()?;
-                    r.u32()?;
-                }
-                Object::Shape(Shape { av, data, skin })
-            }
+            "NiTriShape" | "NiTriStrips" => Object::Shape(shape(r)?),
             "NiTriShapeData" => {
                 let (_, mut g) = geometry(r)?;
                 let count = r.u16()? as usize;
                 r.u32()?;
                 if r.old() || r.bool()? {
-                    let t = r.bytes(count * 6)?;
-                    g.triangles = t
-                        .as_chunks::<6>()
-                        .0
-                        .iter()
-                        .map(|c| {
-                            std::array::from_fn(|i| u16::from_le_bytes([c[2 * i], c[2 * i + 1]]))
-                        })
-                        .collect();
+                    g.triangles = r.u16_array(count)?;
                 }
                 for _ in 0..r.u16()? {
                     let n = r.u16()? as usize;
@@ -605,11 +588,11 @@ impl Object {
             "NiTriStripsData" => {
                 let (_, mut g) = geometry(r)?;
                 r.u16()?;
-                let strips = r.u16()?;
-                let lengths = (0..strips).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
+                let strips = r.u16()? as usize;
+                let lengths = r.u16s(strips)?;
                 if r.old() || r.bool()? {
                     for len in lengths {
-                        let points = (0..len).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
+                        let points = r.u16s(len as usize)?;
                         g.triangles.extend(strip_triangles(&points));
                     }
                 }
@@ -802,26 +785,7 @@ impl Object {
                             Rotation::Euler([key_group(r)?, key_group(r)?, key_group(r)?])
                         }
                         // Rotations have no tangents, only TCB values.
-                        kind => {
-                            let interpolation = interpolation(kind)?;
-                            let keys = (0..n)
-                                .map(|_| {
-                                    let key = Key {
-                                        time: r.f32()?,
-                                        value: r.floats()?,
-                                        tangents: None,
-                                    };
-                                    if kind == 3 {
-                                        r.floats::<3>()?;
-                                    }
-                                    Ok(key)
-                                })
-                                .collect::<Result<_>>()?;
-                            Rotation::Quaternion(Keys {
-                                interpolation,
-                                keys,
-                            })
-                        }
+                        kind => Rotation::Quaternion(keys(r, n, interpolation(kind)?, false)?),
                     },
                 };
                 Object::Keyframes(Keyframes {
@@ -853,11 +817,7 @@ impl Object {
             }
             "NiSkinPartition" => {
                 for _ in 0..r.u32()? {
-                    let v = r.u16()? as usize;
-                    let t = r.u16()? as usize;
-                    let bones = r.u16()? as usize;
-                    let strips = r.u16()?;
-                    let w = r.u16()? as usize;
+                    let [v, t, bones, strips, w] = r.u16_array::<5>(1)?[0].map(usize::from);
                     r.skip(bones * 2)?;
                     if r.old() || r.bool()? {
                         r.skip(v * 2)?;
@@ -865,7 +825,7 @@ impl Object {
                     if r.old() || r.bool()? {
                         r.skip(v * w * 4)?;
                     }
-                    let lengths = (0..strips).map(|_| r.u16()).collect::<Result<Vec<_>>>()?;
+                    let lengths = r.u16s(strips)?;
                     if r.old() || r.bool()? {
                         let points = match strips {
                             0 => t * 3,
@@ -945,13 +905,7 @@ impl Object {
                 other()
             }
             "NiParticles" | "NiRotatingParticles" | "NiParticleMeshes" | "NiParticleSystem" => {
-                scene(r)?;
-                r.reference()?;
-                r.reference()?;
-                if !r.netimmerse() && r.bool()? {
-                    r.string()?;
-                    r.u32()?;
-                }
+                shape(r)?;
                 if kind == "NiParticleSystem" {
                     r.bool()?;
                     r.references()?;
@@ -1164,7 +1118,7 @@ fn scene(r: &mut Reader) -> Result<SceneObject> {
     let (name, extra_data, controller) = named(r)?;
     let flags = r.u16()?;
     let translation = r.floats()?;
-    let m = r.floats::<9>()?;
+    let rotation = [r.floats()?, r.floats()?, r.floats()?];
     let scale = r.f32()?;
     if r.netimmerse() {
         r.floats::<3>()?; // velocity
@@ -1182,11 +1136,22 @@ fn scene(r: &mut Reader) -> Result<SceneObject> {
         flags,
         transform: Transform {
             translation,
-            rotation: [[m[0], m[1], m[2]], [m[3], m[4], m[5]], [m[6], m[7], m[8]]],
+            rotation,
             scale,
         },
         properties,
     })
+}
+
+fn shape(r: &mut Reader) -> Result<Shape> {
+    let av = scene(r)?;
+    let data = r.reference()?;
+    let skin = r.reference()?;
+    if !r.netimmerse() && r.bool()? {
+        r.string()?; // shader
+        r.u32()?;
+    }
+    Ok(Shape { av, data, skin })
 }
 
 fn bounding_volume(r: &mut Reader, depth: usize) -> Result<()> {
@@ -1298,15 +1263,25 @@ fn key_group<T: ReadValue>(r: &mut Reader) -> Result<Keys<T>> {
         return Ok(Keys::default());
     }
     let interpolation = interpolation(r.u32()?)?;
-    // Each key takes at least eight bytes, so a corrupt count is caught here.
-    r.bytes(n.saturating_mul(8))?;
-    r.pos -= n * 8;
+    keys(r, n, interpolation, true)
+}
+
+/// `n` keys; quadratic ones carry tangents only if `tangents` is set.
+fn keys<T: ReadValue>(
+    r: &mut Reader,
+    n: usize,
+    interpolation: Interpolation,
+    tangents: bool,
+) -> Result<Keys<T>> {
+    // Each key takes at least eight bytes.
+    r.ensure(n.saturating_mul(8))?;
     let keys = (0..n)
         .map(|_| {
             let time = r.f32()?;
             let value = T::read(r)?;
             let tangents = match interpolation {
-                Interpolation::Quadratic => Some([T::read(r)?, T::read(r)?]),
+                Interpolation::Quadratic if tangents => Some([T::read(r)?, T::read(r)?]),
+                Interpolation::Quadratic => None,
                 Interpolation::Tcb => {
                     r.floats::<3>()?;
                     None
