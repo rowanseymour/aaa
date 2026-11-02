@@ -17,7 +17,7 @@ use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
 use tgck::map::{CELL_SIZE, Sun, Terrain, Thing};
 
 use blend::GroundMaterial;
@@ -32,7 +32,11 @@ usage:
   aaa-viewer <game dir> <map>    view a map, e.g. \"(2v2)Berlin\"
 
 options:
-  --screenshot <file.png>        save the first frames to a file and exit";
+  --camera <x,y,dist,yaw,pitch>  start the free camera looking at x,y (fractions
+                                 of the map's width) from dist away, with yaw
+                                 and pitch in radians
+  --screenshot <file.png>        save a frame to a file and exit, without the
+                                 help text or placeholder markers";
 
 #[derive(Resource)]
 struct Loaded {
@@ -44,6 +48,10 @@ struct Loaded {
     sun: Sun,
 }
 
+/// Where the camera starts, from `--camera`.
+#[derive(Resource, Clone, Copy)]
+struct StartView([f32; 5]);
+
 /// Saves a screenshot once the scene has settled, then exits.
 #[derive(Resource)]
 struct ScreenshotTo {
@@ -51,22 +59,45 @@ struct ScreenshotTo {
     frame: u32,
 }
 
+/// Removes `flag` and the value after it from `args`.
+fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, ()> {
+    match args.iter().position(|a| a == flag) {
+        Some(i) if i + 1 < args.len() => {
+            let value = args.remove(i + 1);
+            args.remove(i);
+            Ok(Some(value))
+        }
+        Some(_) => Err(()),
+        None => Ok(None),
+    }
+}
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let screenshot = match args.iter().position(|a| a == "--screenshot") {
-        Some(i) if i + 1 < args.len() => {
-            let path = args.remove(i + 1);
-            args.remove(i);
-            Some(ScreenshotTo {
-                path: path.into(),
-                frame: 0,
-            })
-        }
-        Some(_) => {
+    let (Ok(screenshot), Ok(camera)) = (
+        take_option(&mut args, "--screenshot"),
+        take_option(&mut args, "--camera"),
+    ) else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    };
+    let screenshot = screenshot.map(|path| ScreenshotTo {
+        path: path.into(),
+        frame: 0,
+    });
+    let camera = match camera.map(|c| {
+        c.split(',')
+            .map(|v| v.trim().parse::<f32>())
+            .collect::<Result<Vec<_>, _>>()
+            .ok()
+            .and_then(|v| <[f32; 5]>::try_from(v).ok())
+    }) {
+        None => None,
+        Some(Some(view)) => Some(StartView(view)),
+        Some(None) => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
-        None => None,
     };
     let (dir, map) = match args.as_slice() {
         [dir] => (PathBuf::from(dir), None),
@@ -115,6 +146,9 @@ fn main() -> ExitCode {
             Update,
             (camera::update, models::animate, objects::toggle_modelless),
         );
+    if let Some(c) = camera {
+        app.insert_resource(c);
+    }
     if let Some(s) = screenshot {
         app.insert_resource(s).add_systems(Update, take_screenshot);
     }
@@ -122,23 +156,30 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn take_screenshot(
-    mut commands: Commands,
-    mut shot: ResMut<ScreenshotTo>,
-    mut exit: MessageWriter<AppExit>,
-) {
+fn take_screenshot(mut commands: Commands, mut shot: ResMut<ScreenshotTo>) {
     shot.frame += 1;
-    match shot.frame {
-        60 => {
-            commands
-                .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(shot.path.clone()));
-        }
-        90 => {
-            exit.write(AppExit::Success);
-        }
-        _ => {}
+    if shot.frame != 60 {
+        return;
     }
+    commands.spawn(Screenshot::primary_window()).observe(
+        |captured: On<ScreenshotCaptured>,
+         mut shot: ResMut<ScreenshotTo>,
+         mut exit: MessageWriter<AppExit>| {
+            // A busy machine can hand back a frame before the window has drawn
+            // anything, all zeros, so that one is retried.
+            let blank = captured
+                .image
+                .data
+                .as_ref()
+                .is_none_or(|d| d.chunks(4).all(|px| px[..3].iter().all(|&c| c == 0)));
+            if blank {
+                shot.frame = 0;
+                return;
+            }
+            save_to_disk(shot.path.clone())(captured);
+            exit.write(AppExit::Success);
+        },
+    );
 }
 
 fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
@@ -159,6 +200,7 @@ fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
     })
 }
 
+#[allow(clippy::too_many_arguments)] // Bevy systems take their resources as arguments
 fn setup(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -167,6 +209,8 @@ fn setup(
     mut ground_materials: ResMut<Assets<GroundMaterial>>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
+    start: Option<Res<StartView>>,
+    screenshot: Option<Res<ScreenshotTo>>,
 ) {
     let Loaded {
         game,
@@ -199,7 +243,14 @@ fn setup(
         images: &mut images,
     };
     let rest = models.spawn(&mut commands, game, &mut assets, things);
-    objects::spawn(&mut commands, &mut meshes, &mut materials, ground, &rest);
+    objects::spawn(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        ground,
+        &rest,
+        screenshot.is_none(),
+    );
 
     let size = (ground.side - 1) as f32 * CELL_SIZE;
     let centre = terrain::world(
@@ -207,7 +258,17 @@ fn setup(
         size / 2.0,
         ground.height_at(size / 2.0, size / 2.0),
     );
-    let cam = RtsCamera::new(centre);
+    let mut cam = RtsCamera::new(centre);
+    if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
+        let (x, y) = (x * size, y * size);
+        cam = RtsCamera {
+            focus: terrain::world(x, y, ground.height_at(x, y)),
+            distance,
+            yaw,
+            pitch,
+            free: true,
+        };
+    }
     // The game lights like Direct3D's fixed pipeline: texture * (ambient +
     // diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
     // PBR, and skipping tonemapping, gets the same result.
@@ -241,6 +302,9 @@ fn setup(
         ..default()
     });
 
+    if screenshot.is_some() {
+        return;
+    }
     commands.spawn((
         Text::new(camera::HELP),
         TextFont {

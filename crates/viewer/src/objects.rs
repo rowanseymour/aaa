@@ -61,6 +61,7 @@ pub fn spawn(
     materials: &mut Assets<StandardMaterial>,
     ground: &Ground,
     things: &[(&Thing, bool)],
+    show_markers: bool,
 ) {
     let mut handles = HashMap::new();
     for &(thing, should_have_model) in things {
@@ -94,6 +95,8 @@ pub fn spawn(
         ));
         if kind == Kind::Modelless {
             marker.insert((Modelless, Visibility::Hidden));
+        } else if !show_markers {
+            marker.insert(Visibility::Hidden);
         }
     }
 }

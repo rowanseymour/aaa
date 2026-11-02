@@ -10,8 +10,9 @@ cargo run --release -p aaa-viewer -- "/path/to/Axis and Allies 2004" "(2v2)Berli
 ```
 
 A map can be named by file name without extension or by its full archive path
-(`Maps/Campaign/allies10_berlin.RMP`). `--screenshot out.png` renders a frame to
-a file and exits.
+(`Maps/Campaign/allies10_berlin.RMP`). Run it without arguments for the options,
+such as rendering a screenshot from a chosen camera position; the README banner
+is made that way by [`docs/banner.sh`](../../docs/banner.sh).
 
 ## Controls
 
