@@ -7,7 +7,9 @@
 //! HEIGHT_MAP, MOUNTAIN_HEIGHT_MAP
 //!     u32 version (1), f32 min (-10), f32 max (10), f32 default, u32 unknown (1),
 //!     u32 count (side * side, side = 257 on standard maps),
-//!     f32 heights[count]   row-major, one per vertex
+//!     f32 heights[count]   row-major, one per vertex; HEIGHT_MAP holds the
+//!                          water surface at water vertices, MOUNTAIN the
+//!                          (negative) depth of the bed below it
 //!     u8  layer[count]     HEIGHT_MAP: non-zero = water; MOUNTAIN: all 0
 //!     trailing bytes       MOUNTAIN_HEIGHT_MAP has one more
 //!
