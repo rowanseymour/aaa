@@ -18,7 +18,8 @@ enum Kind {
     Modelless,
 }
 
-/// Marks the markers of objects without a model, which start hidden.
+/// Marks the markers of objects without a model, which start hidden unless
+/// asked for.
 #[derive(Component)]
 pub struct Modelless;
 
@@ -62,6 +63,7 @@ pub fn spawn(
     ground: &Ground,
     things: &[(&Thing, bool)],
     show_markers: bool,
+    show_modelless: bool,
 ) {
     let mut handles = HashMap::new();
     for &(thing, should_have_model) in things {
@@ -94,7 +96,12 @@ pub fn spawn(
             transform,
         ));
         if kind == Kind::Modelless {
-            marker.insert((Modelless, Visibility::Hidden));
+            let visibility = if show_modelless {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+            marker.insert((Modelless, visibility));
         } else if !show_markers {
             marker.insert(Visibility::Hidden);
         }

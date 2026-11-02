@@ -35,8 +35,11 @@ options:
   --camera <x,y,dist,yaw,pitch>  start the free camera looking at x,y (fractions
                                  of the map's width) from dist away, with yaw
                                  and pitch in radians
+  --modelless                    start with markers shown for objects without
+                                 models, such as sound emitters (M toggles them)
   --screenshot <file.png>        save a frame to a file and exit, without the
-                                 help text or placeholder markers";
+                                 help text or placeholder markers other than
+                                 those --modelless asks for";
 
 #[derive(Resource)]
 struct Loaded {
@@ -47,6 +50,10 @@ struct Loaded {
     things: Vec<Thing>,
     sun: Sun,
 }
+
+/// Set by `--modelless`.
+#[derive(Resource)]
+struct ShowModelless;
 
 /// Where the camera starts, from `--camera`.
 #[derive(Resource, Clone, Copy)]
@@ -72,8 +79,16 @@ fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, ()>
     }
 }
 
+/// Removes `flag` from `args`, returning whether it was there.
+fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    let before = args.len();
+    args.retain(|a| a != flag);
+    args.len() != before
+}
+
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let modelless = take_flag(&mut args, "--modelless");
     let (Ok(screenshot), Ok(camera)) = (
         take_option(&mut args, "--screenshot"),
         take_option(&mut args, "--camera"),
@@ -149,6 +164,9 @@ fn main() -> ExitCode {
     if let Some(c) = camera {
         app.insert_resource(c);
     }
+    if modelless {
+        app.insert_resource(ShowModelless);
+    }
     if let Some(s) = screenshot {
         app.insert_resource(s).add_systems(Update, take_screenshot);
     }
@@ -212,6 +230,7 @@ fn setup(
     formats: Res<CompressedImageFormatSupport>,
     start: Option<Res<StartView>>,
     screenshot: Option<Res<ScreenshotTo>>,
+    modelless: Option<Res<ShowModelless>>,
 ) {
     let Loaded {
         game,
@@ -251,6 +270,7 @@ fn setup(
         ground,
         &rest,
         screenshot.is_none(),
+        modelless.is_some(),
     );
 
     let size = (ground.side - 1) as f32 * CELL_SIZE;
