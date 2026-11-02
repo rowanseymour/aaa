@@ -121,6 +121,17 @@ impl Block {
         self.field(key)?.value.as_deref()
     }
 
+    /// Value of the first field with this key, parsed, e.g. a number.
+    pub fn parse_value<T: std::str::FromStr>(&self, key: &str) -> Option<T> {
+        self.value(key)?.trim().parse().ok()
+    }
+
+    /// Whether the first field with this key is `true`, case-insensitive.
+    pub fn flag(&self, key: &str) -> bool {
+        self.value(key)
+            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+    }
+
     /// Child blocks whose first header word matches, case-insensitive.
     pub fn blocks_of<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Block> {
         self.blocks()

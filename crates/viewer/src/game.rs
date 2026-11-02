@@ -80,6 +80,27 @@ impl Game {
         self.paths.contains_key(&name.to_ascii_lowercase())
     }
 
+    /// Archive paths whose lower-case form passes `filter`.
+    fn entry_names(&self, filter: impl Fn(&str) -> bool) -> Vec<String> {
+        self.data
+            .entries
+            .iter()
+            .map(|e| e.name.clone())
+            .filter(|n| filter(&n.to_ascii_lowercase()))
+            .collect()
+    }
+
+    /// Every `.tgi` file whose lower-case path passes `filter`, parsed.
+    fn parse_tgis(&mut self, filter: impl Fn(&str) -> bool) -> Vec<(String, tgi::Parsed)> {
+        self.entry_names(|n| n.ends_with(".tgi") && filter(n))
+            .into_iter()
+            .filter_map(|n| {
+                let parsed = tgi::parse_bytes(&self.read(&n)?);
+                Some((n, parsed))
+            })
+            .collect()
+    }
+
     /// Finds a texture a model refers to by file name: in the given folders
     /// first, then anywhere in the archive, preferring the path that shares
     /// the longest folder prefix with `near`.
@@ -122,15 +143,10 @@ impl Game {
 
     /// Finds a map by archive path or by file name without extension.
     pub fn find_map(&self, name: &str) -> Option<String> {
-        let names = self.map_names();
-        let stem = |n: &str| {
-            let file = n.rsplit('/').next().unwrap_or(n);
-            file[..file.len() - 4].to_string()
-        };
-        names
-            .iter()
-            .find(|n| n.eq_ignore_ascii_case(name) || stem(n).eq_ignore_ascii_case(name))
-            .map(|n| n.to_string())
+        self.map_names()
+            .into_iter()
+            .find(|n| n.eq_ignore_ascii_case(name) || map_title(n).eq_ignore_ascii_case(name))
+            .map(str::to_string)
     }
 
     pub fn open_map(&mut self, name: &str) -> Result<Map<Cursor<Vec<u8>>>, String> {
@@ -143,22 +159,7 @@ impl Game {
     /// Reads every terrain definition and indexes the variations by
     /// lower-case IDS, which is how maps refer to them.
     pub fn terrain_variations(&mut self) -> HashMap<String, Variation> {
-        let files: Vec<(String, tgi::Parsed)> = self
-            .data
-            .entries
-            .iter()
-            .map(|e| e.name.clone())
-            .filter(|n| {
-                let n = n.to_ascii_lowercase();
-                (n.starts_with("terrain/") || n.starts_with("templates/")) && n.ends_with(".tgi")
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
-            .filter_map(|n| {
-                let parsed = tgi::parse_bytes(&self.read(&n)?);
-                Some((n, parsed))
-            })
-            .collect();
+        let files = self.parse_tgis(|n| n.starts_with("terrain/") || n.starts_with("templates/"));
         let water = water_colors(files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
         for (file, parsed) in &files {
@@ -171,22 +172,18 @@ impl Game {
                 let water = terrain
                     .value("ids")
                     .and_then(|id| water.get(&id.to_ascii_lowercase()));
-                let priority = terrain
-                    .value("base_priority")
-                    .and_then(|s| s.trim().parse().ok())
-                    .unwrap_or(0);
+                let priority = terrain.parse_value("base_priority").unwrap_or(0);
                 for v in terrain.blocks_of("Variation") {
                     let (Some(ids), Some(texture)) = (v.value("ids"), v.value("texture")) else {
                         continue;
                     };
-                    let size = |key| v.value(key).and_then(|s| s.trim().parse().ok());
                     out.insert(
                         ids.to_ascii_lowercase(),
                         Variation {
                             texture: format!("{dir}/{}", texture.trim_start_matches('/')),
                             repeat: [
-                                size("texture_width").unwrap_or(8.0),
-                                size("texture_height").unwrap_or(8.0),
+                                v.parse_value("texture_width").unwrap_or(8.0),
+                                v.parse_value("texture_height").unwrap_or(8.0),
                             ],
                             color: v
                                 .value("terrain_color")
@@ -211,19 +208,7 @@ impl Game {
     /// that name no model, such as sound emitters, or are invisible.
     /// Templates without a view, of their own or inherited, are left out.
     pub fn views(&mut self) -> HashMap<String, Option<View>> {
-        let files: Vec<(String, tgi::Parsed)> = self
-            .data
-            .entries
-            .iter()
-            .map(|e| e.name.clone())
-            .filter(|n| n.to_ascii_lowercase().ends_with(".tgi"))
-            .collect::<Vec<_>>()
-            .into_iter()
-            .filter_map(|n| {
-                let parsed = tgi::parse_bytes(&self.read(&n)?);
-                Some((n, parsed))
-            })
-            .collect();
+        let files = self.parse_tgis(|_| true);
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
         for (file, parsed) in &files {
@@ -233,10 +218,7 @@ impl Game {
                     continue;
                 };
                 let thing = templates.resolve(thing);
-                let invisible = thing
-                    .blocks_of("Flags")
-                    .find_map(|f| f.value("invisible"))
-                    .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+                let invisible = thing.blocks_of("Flags").any(|f| f.flag("invisible"));
                 let view = match thing.blocks_of("View").next() {
                     _ if invisible => None,
                     Some(view) => self.view(&templates, dir, &thing, view),
@@ -292,9 +274,7 @@ impl Game {
         }
         let aspects: Vec<String> = aspects.into_iter().filter(|p| self.exists(p)).collect();
         let normal = normal.filter(|p| self.exists(p));
-        let variations = view
-            .value("aspects_as_variations")
-            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+        let variations = view.flag("aspects_as_variations");
         let models = match normal {
             Some(n) if !variations => vec![n],
             _ => aspects,
@@ -317,8 +297,7 @@ impl Game {
         let size = |key| {
             thing
                 .blocks_of("Size")
-                .find_map(|s| s.value(key))
-                .and_then(|v| v.trim().parse::<f32>().ok())
+                .find_map(|s| s.parse_value::<f32>(key))
         };
         let scale = match (size("scale_min"), size("scale_max")) {
             (Some(a), Some(b)) => (a + b) / 2.0,
@@ -347,14 +326,8 @@ impl Game {
         else {
             return Vec::new();
         };
-        let names: Vec<String> = self
-            .data
-            .entries
-            .iter()
-            .map(|e| e.name.clone())
-            .filter(|n| n.len() > prefix.len() && n[..prefix.len()].eq_ignore_ascii_case(&prefix))
-            .collect();
-        names
+        let lower = prefix.to_ascii_lowercase();
+        self.entry_names(|n| n.len() > lower.len() && n.starts_with(&lower))
             .into_iter()
             .filter_map(|n| {
                 let digits = n[prefix.len()..].split('.').next()?.to_string();
@@ -382,9 +355,9 @@ fn water_colors<'a>(
                 .blocks_of("DepthInfo")
                 .filter_map(|d| {
                     Some(DepthColor {
-                        depth: d.value("depth")?.trim().parse().ok()?,
+                        depth: d.parse_value("depth")?,
                         color: floats(d.value("color")?)?,
-                        alpha: d.value("alpha")?.trim().parse().ok()?,
+                        alpha: d.parse_value("alpha")?,
                     })
                 })
                 .collect();
@@ -474,13 +447,19 @@ fn resolve(renames: &HashMap<String, String>, id: &str) -> String {
 }
 
 /// Parses `0.451, 0.604, 0.294`.
-fn floats(s: &str) -> Option<[f32; 3]> {
+pub fn floats<const N: usize>(s: &str) -> Option<[f32; N]> {
     let v: Vec<f32> = s
         .split(',')
         .map(|p| p.trim().parse())
         .collect::<Result<_, _>>()
         .ok()?;
     v.try_into().ok()
+}
+
+/// A map's file name without its `.rmp` extension.
+pub fn map_title(path: &str) -> &str {
+    let file = path.rsplit('/').next().unwrap_or(path);
+    &file[..file.len() - 4]
 }
 
 fn find_case_insensitive(dir: &Path, name: &str) -> Option<PathBuf> {

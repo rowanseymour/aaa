@@ -184,6 +184,51 @@ pub enum Object {
     Other(String),
 }
 
+impl Object {
+    /// The scene fields of a node or shape.
+    pub fn scene(&self) -> Option<&SceneObject> {
+        match self {
+            Object::Node(n) => Some(&n.av),
+            Object::Shape(s) => Some(&s.av),
+            _ => None,
+        }
+    }
+}
+
+/// The types an [`Object`] can hold, for picking one out by type.
+pub trait ObjectType {
+    fn of(object: &Object) -> Option<&Self>;
+}
+
+macro_rules! object_types {
+    ($($variant:ident($ty:ty)),* $(,)?) => {$(
+        impl ObjectType for $ty {
+            fn of(object: &Object) -> Option<&Self> {
+                match object {
+                    Object::$variant(v) => Some(v),
+                    _ => None,
+                }
+            }
+        }
+    )*};
+}
+
+object_types!(
+    Node(Node),
+    Shape(Shape),
+    Geometry(Geometry),
+    Texturing(Texturing),
+    SourceTexture(SourceTexture),
+    Pixels(Pixels),
+    Material(Material),
+    Alpha(Alpha),
+    Stencil(Stencil),
+    ExtraData(ExtraData),
+    Controller(Controller),
+    Keyframes(Keyframes),
+    Floats(Keys<f32>),
+);
+
 /// Fields shared by everything placed in the scene.
 #[derive(Debug, Clone)]
 pub struct SceneObject {

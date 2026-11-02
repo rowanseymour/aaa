@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{CompressedImageFormats, ImageSampler, ImageType};
+use bevy::image::CompressedImageFormats;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -11,6 +11,7 @@ use tgck::map::{CELL_SIZE, HeightMap, Terrain};
 
 use crate::blend::{self, Blend, GroundMaterial};
 use crate::game::{DepthColor, Game};
+use crate::textures;
 
 /// Tile corners, counter-clockwise seen from above.
 const CORNERS: [(usize, usize); 4] = [(0, 0), (1, 0), (1, 1), (0, 1)];
@@ -406,18 +407,8 @@ fn quads(
 
 /// Decodes a texture into a square, mipmapped array layer.
 fn load_texture(bytes: &[u8], name: &str) -> Option<Image> {
-    let ext = name.rsplit('.').next()?.to_ascii_lowercase();
-    let image = Image::from_buffer(
-        bytes,
-        ImageType::Extension(&ext),
-        CompressedImageFormats::NONE,
-        true,
-        ImageSampler::Default,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .map_err(|e| warn!("{name}: {e}"))
-    .ok()?
-    .convert(TextureFormat::Rgba8UnormSrgb)?;
+    let image = textures::decode(bytes, name, CompressedImageFormats::NONE, true)?
+        .convert(TextureFormat::Rgba8UnormSrgb)?;
     let (w, h) = (image.width() as usize, image.height() as usize);
     let src = image.data?;
     // Nearest-neighbour resampling: the textures are 128 or 256 square.

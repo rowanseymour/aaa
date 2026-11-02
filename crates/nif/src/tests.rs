@@ -167,10 +167,7 @@ fn reads_a_scene() {
     let names: Vec<&str> = shapes.iter().map(|p| p.shape.av.name.as_str()).collect();
     assert_eq!(names, ["mesh", "strips"]);
     assert_eq!(shapes[0].transform.apply([1.0, 0.0, 0.0]), [12.0, 0.0, 0.0]);
-    let tex = nif.property(&shapes[0].properties, |o| match o {
-        Object::SourceTexture(t) => Some(t),
-        _ => None,
-    });
+    let tex = nif.property::<SourceTexture>(&shapes[0].properties);
     assert_eq!(tex.unwrap().file.as_deref(), Some("bark.dds"));
     for s in &shapes {
         let Some(Object::Geometry(g)) = nif.get(s.shape.data) else {
@@ -389,10 +386,7 @@ fn reads_netimmerse_models() {
     assert_eq!(shapes.len(), 1);
     assert_eq!(shapes[0].transform.apply([0.0; 3]), [0.0, 5.0, 0.0]);
     assert_eq!(shapes[0].properties, [Some(4), Some(6), Some(2)]);
-    let texturing = nif.property(&shapes[0].properties, |o| match o {
-        Object::Texturing(t) => Some(t),
-        _ => None,
-    });
+    let texturing = nif.property::<Texturing>(&shapes[0].properties);
     let source = texturing.unwrap().base.as_ref().unwrap().source;
     assert!(
         matches!(nif.get(source), Some(Object::SourceTexture(t)) if t.file.as_deref() == Some("foam.dds"))

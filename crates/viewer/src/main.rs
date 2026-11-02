@@ -7,6 +7,7 @@ mod game;
 mod models;
 mod objects;
 mod terrain;
+mod textures;
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -141,13 +142,7 @@ fn main() -> ExitCode {
         frame: 0,
         attempts: 0,
     });
-    let camera = match camera.map(|c| {
-        c.split(',')
-            .map(|v| v.trim().parse::<f32>())
-            .collect::<Result<Vec<_>, _>>()
-            .ok()
-            .and_then(|v| <[f32; 5]>::try_from(v).ok())
-    }) {
+    let camera = match camera.map(|c| game::floats(&c)) {
         None => None,
         Some(Some(view)) => Some(StartView(view)),
         Some(None) => {
@@ -267,9 +262,8 @@ fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
     let terrain = map.terrain().map_err(err)?;
     let things = map.things().map_err(err)?;
     let sun = map.sun().map_err(err)?;
-    let title = name.rsplit('/').next().unwrap_or(name);
     Ok(Loaded {
-        title: title[..title.len() - 4].to_string(),
+        title: game::map_title(name).to_string(),
         ground: Ground::new(&hm, &mountain),
         terrain,
         things,

@@ -180,40 +180,40 @@ impl Nif {
         let Some(index) = r.filter(|_| path.len() <= 64) else {
             return;
         };
-        let (av, children, shape) = match self.get(r) {
-            Some(Object::Node(n)) => (&n.av, &n.children[..], None),
-            Some(Object::Shape(s)) => (&s.av, &[][..], Some(s)),
-            _ => return,
-        };
-        if av.hidden() {
+        let Some(object) = self.get(r) else { return };
+        let Some(av) = object.scene().filter(|av| !av.hidden()) else {
             return;
-        }
+        };
         let transform = parent.then(&av.transform);
         let inherited = props.len();
         props.splice(0..0, av.properties.iter().copied());
         path.push(index);
-        if let Some(shape) = shape {
-            out.push(Placed {
+        match object {
+            Object::Shape(shape) => out.push(Placed {
                 shape,
                 transform,
                 properties: props.clone(),
                 path: path.clone(),
-            });
-        }
-        for &c in children {
-            self.walk(c, transform, props, path, out);
+            }),
+            Object::Node(node) => {
+                for &c in &node.children {
+                    self.walk(c, transform, props, path, out);
+                }
+            }
+            _ => {}
         }
         path.pop();
         props.drain(0..props.len() - inherited);
     }
 
+    /// The object `r` refers to, if it is a `T`.
+    pub fn get_as<T: ObjectType>(&self, r: Ref) -> Option<&T> {
+        self.get(r).and_then(T::of)
+    }
+
     /// The first property of type `T` among `props`.
-    pub fn property<'a, T>(
-        &'a self,
-        props: &[Ref],
-        pick: impl Fn(&'a Object) -> Option<&'a T>,
-    ) -> Option<&'a T> {
-        props.iter().find_map(|&p| self.get(p).and_then(&pick))
+    pub fn property<T: ObjectType>(&self, props: &[Ref]) -> Option<&T> {
+        props.iter().find_map(|&p| self.get_as(p))
     }
 }
 

@@ -6,9 +6,7 @@ use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{
-    CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor, ImageType,
-};
+use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -18,6 +16,7 @@ use tgck::map::Thing;
 
 use crate::game::{Game, View};
 use crate::terrain::world;
+use crate::textures;
 
 /// One mesh of a model, in Bevy axes, ready to instance.
 #[derive(Clone)]
@@ -219,69 +218,43 @@ impl Models {
         let mut parts = Vec::new();
         // Skinned shapes are drawn in the pose they were modelled in.
         for placed in nif.shapes() {
-            let Some(Object::Geometry(g)) = nif.get(placed.shape.data) else {
+            let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
                 continue;
             };
             let props = &placed.properties;
-            let texturing = nif.property(props, |o| match o {
-                Object::Texturing(t) => Some(t),
-                _ => None,
-            });
-            let base = texturing.and_then(|t| t.base.as_ref());
-            let material = nif.property(props, |o| match o {
-                Object::Material(m) => Some(m),
-                _ => None,
-            });
-            let motion = motion(&nif, &placed.path);
+            let base = nif
+                .property::<nif::Texturing>(props)
+                .and_then(|t| t.base.as_ref());
+            let material = nif.property::<nif::Material>(props);
             let fade = material
                 .and_then(|m| controller(&nif, m.controller, ControllerKind::Alpha))
-                .and_then(|c| match nif.get(c.data) {
-                    Some(Object::Floats(keys)) => Some((c.clone(), keys.clone())),
-                    _ => None,
-                });
-            let (mesh_transform, animation) = match (motion, fade) {
-                (None, None) => (placed.transform, None),
-                (Some((controller, keys, above, base, below)), fade) => (
-                    below,
-                    Some(Animation {
-                        motion: Some((controller, keys, base)),
-                        above,
-                        fade,
-                    }),
-                ),
-                (None, fade) => (
-                    placed.transform,
-                    Some(Animation {
-                        motion: None,
-                        above: nif::Transform::IDENTITY,
-                        fade,
-                    }),
-                ),
+                .and_then(|c| Some((c.clone(), nif.get_as::<Keys<f32>>(c.data)?.clone())));
+            // An animated mesh is built relative to the object that moves.
+            let (mesh_transform, above, motion) = match motion(&nif, &placed.path) {
+                Some(m) => (m.below, m.above, Some((m.controller, m.keys, m.base))),
+                None => (placed.transform, nif::Transform::IDENTITY, None),
             };
+            let animation = (motion.is_some() || fade.is_some()).then_some(Animation {
+                motion,
+                above,
+                fade,
+            });
             let uv_set = base.map_or(0, |b| b.uv_set as usize);
             let Some(mesh) = mesh(g, &mesh_transform, uv_set) else {
                 continue;
             };
-            let texture = match base.and_then(|b| nif.get(b.source)) {
-                Some(Object::SourceTexture(t)) => match (&t.file, nif.get(t.pixels)) {
-                    (Some(file), _) => self.texture(game, assets, file, view, path),
-                    (None, Some(Object::Pixels(p))) => {
-                        let key = format!("{path}#{}", t.pixels.unwrap_or_default());
-                        self.embedded(assets, key, p)
-                    }
-                    _ => None,
-                },
-                _ => None,
-            };
-            let alpha = nif.property(props, |o| match o {
-                Object::Alpha(a) => Some(a),
+            let source = base.and_then(|b| nif.get_as::<nif::SourceTexture>(b.source));
+            let texture = source.and_then(|t| match (&t.file, nif.get_as(t.pixels)) {
+                (Some(file), _) => self.texture(game, assets, file, view, path),
+                (None, Some(p)) => {
+                    let key = format!("{path}#{}", t.pixels.unwrap_or_default());
+                    self.embedded(assets, key, p)
+                }
                 _ => None,
             });
+            let alpha = nif.property::<nif::Alpha>(props);
             let double_sided = nif
-                .property(props, |o| match o {
-                    Object::Stencil(s) => Some(s),
-                    _ => None,
-                })
+                .property::<nif::Stencil>(props)
                 .is_some_and(|s| s.double_sided());
             let [r, g, b] = material.map_or([1.0; 3], |m| m.diffuse);
             let opacity = material.map_or(1.0, |m| m.alpha);
@@ -336,47 +309,52 @@ impl Models {
             warn!("{model}: texture {file} not found");
             return None;
         };
-        if let Some(t) = self.textures.get(&path) {
-            return t.clone();
-        }
-        let handle = game
-            .read(&path)
-            .and_then(|bytes| load_image(&bytes, &path, self.formats))
-            .map(|image| assets.images.add(image));
-        self.textures.insert(path, handle.clone());
-        handle
+        let formats = self.formats;
+        cached(&mut self.textures, &path, || {
+            let image = load_image(&game.read(&path)?, &path, formats)?;
+            Some(assets.images.add(image))
+        })
     }
-}
 
-impl Models {
     fn embedded(
         &mut self,
         assets: &mut ModelAssets,
         key: String,
         pixels: &nif::Pixels,
     ) -> Option<Handle<Image>> {
-        if let Some(t) = self.textures.get(&key) {
-            return t.clone();
-        }
-        let handle = embedded_image(pixels, self.formats).map(|image| assets.images.add(image));
-        if handle.is_none() {
-            warn!(
-                "{key}: unsupported embedded texture format {}",
-                pixels.format
-            );
-        }
-        self.textures.insert(key, handle.clone());
-        handle
+        let formats = self.formats;
+        cached(&mut self.textures, &key, || {
+            let Some(image) = embedded_image(pixels, formats) else {
+                warn!(
+                    "{key}: unsupported embedded texture format {}",
+                    pixels.format
+                );
+                return None;
+            };
+            Some(assets.images.add(image))
+        })
     }
+}
+
+/// The value cached for `key`, loading and caching it on first use.
+fn cached<T: Clone>(
+    cache: &mut HashMap<String, Option<T>>,
+    key: &str,
+    load: impl FnOnce() -> Option<T>,
+) -> Option<T> {
+    if let Some(v) = cache.get(key) {
+        return v.clone();
+    }
+    let v = load();
+    cache.insert(key.to_string(), v.clone());
+    v
 }
 
 /// The first active controller of `kind` in the chain starting at `first`.
 fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Option<&Controller> {
     let mut next = first;
     for _ in 0..16 {
-        let Some(Object::Controller(c)) = nif.get(next) else {
-            return None;
-        };
+        let c = nif.get_as::<Controller>(next)?;
         // Flag bit 3 marks the controller active.
         if c.kind == kind && c.flags & 8 != 0 {
             return Some(c);
@@ -386,28 +364,22 @@ fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Option<&Contr
     None
 }
 
-type Motion = (
-    Controller,
-    Keyframes,
-    nif::Transform,
-    nif::Transform,
-    nif::Transform,
-);
+/// The keyframes on the nearest animated object along a shape's path.
+struct Motion {
+    controller: Controller,
+    keys: Keyframes,
+    /// Transforms above the animated object, its own, and below it down to
+    /// the shape.
+    above: nif::Transform,
+    base: nif::Transform,
+    below: nif::Transform,
+}
 
-/// The keyframes on the nearest animated object along `path`, with the
-/// transforms above it, its own and below it down to the end of the path.
 fn motion(nif: &Nif, path: &[usize]) -> Option<Motion> {
-    let scene = |i: usize| match nif.get(Some(i)) {
-        Some(Object::Node(n)) => Some(&n.av),
-        Some(Object::Shape(s)) => Some(&s.av),
-        _ => None,
-    };
+    let scene = |i: usize| nif.get(Some(i)).and_then(Object::scene);
     let (at, controller, keys) = path.iter().enumerate().rev().find_map(|(at, &i)| {
         let c = controller(nif, scene(i)?.controller, ControllerKind::Keyframe)?;
-        match nif.get(c.data) {
-            Some(Object::Keyframes(k)) => Some((at, c, k)),
-            _ => None,
-        }
+        Some((at, c, nif.get_as::<Keyframes>(c.data)?))
     })?;
     let chain = |range: &[usize]| {
         range
@@ -415,13 +387,13 @@ fn motion(nif: &Nif, path: &[usize]) -> Option<Motion> {
             .filter_map(|&i| scene(i))
             .fold(nif::Transform::IDENTITY, |t, av| t.then(&av.transform))
     };
-    Some((
-        controller.clone(),
-        keys.clone(),
-        chain(&path[..at]),
-        scene(path[at])?.transform,
-        chain(&path[at + 1..]),
-    ))
+    Some(Motion {
+        controller: controller.clone(),
+        keys: keys.clone(),
+        above: chain(&path[..at]),
+        base: scene(path[at])?.transform,
+        below: chain(&path[at + 1..]),
+    })
 }
 
 /// A model-space transform in Bevy axes.
@@ -436,7 +408,7 @@ fn bevy_transform(t: &nif::Transform) -> Transform {
         -Vec3::new(r[0][1], r[2][1], -r[1][1]),
     );
     Transform {
-        translation: Vec3::new(x, z, -y),
+        translation: world(x, y, z),
         rotation: Quat::from_mat3(&m),
         scale: Vec3::splat(t.scale),
     }
@@ -467,7 +439,7 @@ fn mesh(g: &nif::Geometry, transform: &nif::Transform, uv_set: usize) -> Option<
     if g.positions.is_empty() || g.triangles.is_empty() {
         return None;
     }
-    let to_bevy = |[x, y, z]: [f32; 3]| [x, z, -y];
+    let to_bevy = |[x, y, z]: [f32; 3]| world(x, y, z).to_array();
     let positions: Vec<[f32; 3]> = g
         .positions
         .iter()
@@ -542,31 +514,12 @@ fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -> Option<Im
     );
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = levels;
-    image.sampler = repeating();
+    image.sampler = textures::repeating();
     Some(image)
 }
 
-fn repeating() -> ImageSampler {
-    ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        anisotropy_clamp: 16,
-        ..ImageSamplerDescriptor::linear()
-    })
-}
-
 fn load_image(bytes: &[u8], name: &str, formats: CompressedImageFormats) -> Option<Image> {
-    let ext = name.rsplit('.').next()?.to_ascii_lowercase();
-    let mut image = Image::from_buffer(
-        bytes,
-        ImageType::Extension(&ext),
-        formats,
-        true,
-        ImageSampler::Default,
-        RenderAssetUsages::RENDER_WORLD,
-    )
-    .map_err(|e| warn!("{name}: {e}"))
-    .ok()?;
-    image.sampler = repeating();
+    let mut image = textures::decode(bytes, name, formats, true)?;
+    image.sampler = textures::repeating();
     Some(image)
 }
