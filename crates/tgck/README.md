@@ -51,6 +51,7 @@ let sun = map.sun()?;            // light direction and colours
 let kingdoms = map.kingdoms()?;  // players: name, colour, team, nation, commander, resources
 let header = map.header()?;      // game options, sides, editor details
 let goals = map.objectives()?;   // objectives and whether each is primary
+let triggers = map.triggers()?;  // scripting: each trigger's events, conditions and effects
 ```
 
 Each decoded section can be written back (`to_bytes`, `map::write_things`),
@@ -67,11 +68,12 @@ and `container::write` puts a file back together.
 | Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, actors' owner and components, and the members of herds and regiments; component state and other classes' records are kept as raw bytes |
 | Map `MAP_HEADER` | Game options, sides, size, biome, weather and editor details; a few fields' meanings are unknown |
 | Map `OBJECTIVES` | Done |
+| Map `TRIGGERS` | Done |
 | Map `TEAMS` | Done |
 | Map `KINGDOMS` | Name, colour, relations, resources, team, commander and nation; the rest (mostly AI state) is kept as raw bytes |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
-| Other map sections (`TRIGGERS`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
+| Other map sections (`RULES`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
 
 All 80 maps that ship with the game parse fully, and every decoded section
 writes back byte for byte. Whole files differ only in their zlib streams, as

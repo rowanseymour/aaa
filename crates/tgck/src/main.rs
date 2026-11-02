@@ -304,6 +304,7 @@ fn check(paths: &[&str]) -> Res {
             ("KINGDOMS", m.kingdoms()?.to_bytes(world_version)?),
             ("MAP_HEADER", m.header()?.to_bytes()?),
             ("OBJECTIVES", m.objectives()?.to_bytes()?),
+            ("TRIGGERS", m.triggers()?.to_bytes()?),
         ];
         let mut diffs = Vec::new();
         for (name, data) in encoded {
