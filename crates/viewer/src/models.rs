@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use aaa_data::{Game, View};
+use aaa_data::{Game, Id, View};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
@@ -89,7 +89,7 @@ enum Placed {
 
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
-    views: HashMap<String, Option<View>>,
+    views: HashMap<Id, Option<View>>,
     models: HashMap<String, Option<Vec<Part>>>,
     textures: HashMap<String, Option<Handle<Image>>>,
     /// Bevy's texture formats this GPU can sample compressed.
@@ -121,7 +121,7 @@ impl Models {
         let (mut drawn, mut modelless) = (0, 0);
         for t in things {
             let placed = self.place(commands, game, assets, t);
-            let invisible = matches!(self.views.get(&t.template.to_ascii_lowercase()), Some(None));
+            let invisible = matches!(self.views.get(&Id::from(t.template.as_str())), Some(None));
             match placed {
                 Placed::Drawn if invisible => rest.push((t, false)),
                 Placed::Drawn => {}
@@ -154,7 +154,7 @@ impl Models {
         assets: &mut ModelAssets,
         thing: &Thing,
     ) -> Placed {
-        let view = match self.views.get(&thing.template.to_ascii_lowercase()) {
+        let view = match self.views.get(&Id::from(thing.template.as_str())) {
             Some(Some(view)) if !view.models.is_empty() => view.clone(),
             Some(None) => {
                 let members = thing.organization().map_or(Vec::new(), |o| o.members);
