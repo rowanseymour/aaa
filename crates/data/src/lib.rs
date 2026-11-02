@@ -1,6 +1,8 @@
 //! The game's data as a whole: access to the installed archive, and the
 //! definitions built from its files (terrain, object views, ...).
 
+pub mod defs;
+
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufReader, Cursor};
@@ -167,14 +169,16 @@ impl Game {
                 continue;
             }
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            for terrain in parsed.root.blocks_of("Terrain") {
-                let terrain_color = terrain.value("terrain_color").and_then(floats);
+            for block in parsed.root.blocks_of("Terrain") {
+                let Ok(terrain) = tgi::from_block::<defs::Terrain>(block) else {
+                    continue;
+                };
                 let water = terrain
-                    .value("ids")
+                    .ids
+                    .as_ref()
                     .and_then(|id| water.get(&id.to_ascii_lowercase()));
-                let priority = terrain.parse_value("base_priority").unwrap_or(0);
-                for v in terrain.blocks_of("Variation") {
-                    let (Some(ids), Some(texture)) = (v.value("ids"), v.value("texture")) else {
+                for v in terrain.variation {
+                    let (Some(ids), Some(texture)) = (v.ids, v.texture) else {
                         continue;
                     };
                     out.insert(
@@ -182,16 +186,15 @@ impl Game {
                         Variation {
                             texture: format!("{dir}/{}", texture.trim_start_matches('/')),
                             repeat: [
-                                v.parse_value("texture_width").unwrap_or(8.0),
-                                v.parse_value("texture_height").unwrap_or(8.0),
+                                v.texture_width.unwrap_or(8.0),
+                                v.texture_height.unwrap_or(8.0),
                             ],
                             color: v
-                                .value("terrain_color")
-                                .and_then(floats)
-                                .or(terrain_color)
+                                .terrain_color
+                                .or(terrain.terrain_color)
                                 .unwrap_or([0.5; 3]),
                             water: water.cloned(),
-                            priority,
+                            priority: terrain.base_priority,
                         },
                     );
                 }
@@ -213,15 +216,17 @@ impl Game {
         let mut out = HashMap::new();
         for (file, parsed) in &files {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            for thing in parsed.root.blocks_of("Thing") {
-                let Some(id) = thing.value("ids") else {
+            for block in parsed.root.blocks_of("Thing") {
+                let Some(id) = block.value("ids") else {
                     continue;
                 };
-                let thing = templates.resolve(thing);
-                let invisible = thing.blocks_of("Flags").any(|f| f.flag("invisible"));
-                let view = match thing.blocks_of("View").next() {
+                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
+                    continue;
+                };
+                let invisible = thing.flags.iter().any(|f| f.invisible);
+                let view = match &thing.view {
                     _ if invisible => None,
-                    Some(view) => self.view(&templates, dir, &thing, view),
+                    Some(view) => self.view(dir, &thing, view),
                     None => continue,
                 };
                 // Model paths are relative to the defining file, so where an
@@ -243,14 +248,8 @@ impl Game {
     /// A template's models: its aspects when they are variations, else its
     /// normal model, else whatever aspects it lists. Models missing from the
     /// archive are left out, so a view may have none.
-    fn view(
-        &self,
-        templates: &tgi::Templates,
-        dir: &str,
-        thing: &tgi::Block,
-        view: &tgi::Block,
-    ) -> Option<View> {
-        let prefix = view.value("resource_prefix").unwrap_or("");
+    fn view(&self, dir: &str, thing: &defs::Thing, view: &defs::View) -> Option<View> {
+        let prefix = view.resource_prefix.as_deref().unwrap_or("");
         let path = |m: &str| {
             let m = m.replace("%s", prefix).replace('\\', "/");
             match m.strip_prefix('/') {
@@ -261,12 +260,14 @@ impl Game {
         // Aspects take their model, if they don't name one, from templates
         // such as the schema's `%s.nif`.
         let aspects: Vec<String> = view
-            .blocks_of("Aspect")
-            .filter_map(|a| templates.resolve(a).value("model").map(path))
+            .aspect
+            .iter()
+            .filter_map(|a| a.model.as_deref().map(path))
             .collect();
         let normal = view
-            .blocks_of("AspectNormal")
-            .find_map(|a| a.value("model"))
+            .aspect_normal
+            .iter()
+            .find_map(|a| a.model.as_deref())
             .map(path)
             .or_else(|| (!prefix.is_empty()).then(|| path("%s.nif")));
         if aspects.is_empty() && normal.is_none() {
@@ -274,32 +275,26 @@ impl Game {
         }
         let aspects: Vec<String> = aspects.into_iter().filter(|p| self.exists(p)).collect();
         let normal = normal.filter(|p| self.exists(p));
-        let variations = view.flag("aspects_as_variations");
         let models = match normal {
-            Some(n) if !variations => vec![n],
+            Some(n) if !view.aspects_as_variations => vec![n],
             _ => aspects,
         };
         let texture_dirs = view
-            .blocks_of("TextureSearchPath")
-            .filter_map(|b| b.value("path"))
+            .texture_search_path
+            .iter()
+            .filter_map(|b| b.path.as_deref())
             .map(|p| p.trim_matches('/').to_string())
             .collect();
         let texture_renames = view
-            .blocks()
-            .flat_map(|b| b.blocks_of("TextureRename"))
-            .filter_map(|r| {
-                Some((
-                    r.value("substring_from")?.to_string(),
-                    r.value("substring_to")?.to_string(),
-                ))
-            })
+            .aspect_normal
+            .iter()
+            .chain(&view.aspect)
+            .flat_map(|a| &a.texture_rename)
+            .filter_map(|r| Some((r.substring_from.clone()?, r.substring_to.clone()?)))
             .collect();
-        let size = |key| {
-            thing
-                .blocks_of("Size")
-                .find_map(|s| s.parse_value::<f32>(key))
-        };
-        let scale = match (size("scale_min"), size("scale_max")) {
+        let scale_min = thing.size.iter().find_map(|s| s.scale_min);
+        let scale_max = thing.size.iter().find_map(|s| s.scale_max);
+        let scale = match (scale_min, scale_max) {
             (Some(a), Some(b)) => (a + b) / 2.0,
             (Some(a), None) | (None, Some(a)) => a,
             _ => 1.0,
@@ -354,10 +349,11 @@ fn water_colors<'a>(
             let mut stops: Vec<DepthColor> = t
                 .blocks_of("DepthInfo")
                 .filter_map(|d| {
+                    let d: defs::DepthInfo = tgi::from_block(d).ok()?;
                     Some(DepthColor {
-                        depth: d.parse_value("depth")?,
-                        color: floats(d.value("color")?)?,
-                        alpha: d.parse_value("alpha")?,
+                        depth: d.depth,
+                        color: d.color,
+                        alpha: d.alpha,
                     })
                 })
                 .collect();
@@ -444,16 +440,6 @@ fn resolve(renames: &HashMap<String, String>, id: &str) -> String {
         }
     }
     id.to_string()
-}
-
-/// Parses `0.451, 0.604, 0.294`.
-pub fn floats<const N: usize>(s: &str) -> Option<[f32; N]> {
-    let v: Vec<f32> = s
-        .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()
-        .ok()?;
-    v.try_into().ok()
 }
 
 /// A map's file name without its `.rmp` extension.

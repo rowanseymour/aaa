@@ -9,4 +9,5 @@ publish = false
 
 [dependencies]
 tgck = { path = "../tgck" }
-tgi = { path = "../tgi" }
+serde = { version = "1", features = ["derive"] }
+tgi = { path = "../tgi", features = ["serde"] }
