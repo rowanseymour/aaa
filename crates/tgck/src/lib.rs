@@ -68,6 +68,9 @@ impl<'a> Cursor<'a> {
         self.pos = end;
         Ok(s)
     }
+    pub(crate) fn u8(&mut self) -> Result<u8> {
+        Ok(self.bytes(1)?[0])
+    }
     pub(crate) fn u16(&mut self) -> Result<u16> {
         Ok(u16::from_le_bytes(self.bytes(2)?.try_into().unwrap()))
     }
@@ -98,6 +101,10 @@ impl<'a> Cursor<'a> {
     pub(crate) fn pos(&self) -> usize {
         self.pos
     }
+    /// What was read since `from`.
+    pub(crate) fn since(&self, from: usize) -> &'a [u8] {
+        &self.buf[from..self.pos]
+    }
     pub(crate) fn rest(&mut self) -> &'a [u8] {
         let s = &self.buf[self.pos..];
         self.pos = self.buf.len();
@@ -118,6 +125,9 @@ pub(crate) struct Writer(pub(crate) Vec<u8>);
 impl Writer {
     pub(crate) fn bytes(&mut self, b: &[u8]) {
         self.0.extend_from_slice(b);
+    }
+    pub(crate) fn u8(&mut self, v: u8) {
+        self.0.push(v);
     }
     pub(crate) fn u16(&mut self, v: u16) {
         self.bytes(&v.to_le_bytes());

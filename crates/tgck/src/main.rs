@@ -242,6 +242,31 @@ fn map(path: &str) -> Res {
         .collect();
     let (_, top) = top_counts(kingdoms.iter().map(String::as_str), 8);
     outln!("  actors by kingdom: {top}");
+    let teams = m.teams()?;
+    for kingdom in m.kingdoms()?.kingdoms.iter().flatten() {
+        let team = teams
+            .iter()
+            .flatten()
+            .find(|t| t.head.id == kingdom.team)
+            .map(|t| t.head.name.as_str());
+        let faction = kingdom.faction.as_ref().map(|f| f.name.as_str());
+        let about: Vec<&str> = [
+            Some(kingdom.color.as_str()),
+            team,
+            Some(&kingdom.nation),
+            faction,
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|s| !s.is_empty())
+        .collect();
+        outln!(
+            "  kingdom {} (id {}): {}",
+            kingdom.name,
+            kingdom.thing.id,
+            about.join(", ")
+        );
+    }
     Ok(())
 }
 
@@ -258,6 +283,7 @@ fn check(paths: &[&str]) -> Res {
             .map(|s| m.read_section(s))
             .collect::<Result<Vec<_>, _>>()?;
         let (index, things) = tgck::map::write_things(&m.things()?)?;
+        let world_version = m.world_version()?;
         let encoded = [
             ("HEIGHT_MAP", m.height_map()?.to_bytes()),
             ("MOUNTAIN_HEIGHT_MAP", m.mountain_height_map()?.to_bytes()),
@@ -265,6 +291,8 @@ fn check(paths: &[&str]) -> Res {
             ("SUN", m.sun()?.to_bytes()),
             ("DYNAMIC_THINGS_INDEX", index),
             ("DYNAMIC_THINGS", things),
+            ("TEAMS", tgck::map::write_teams(&m.teams()?)?),
+            ("KINGDOMS", m.kingdoms()?.to_bytes(world_version)?),
         ];
         let mut diffs = Vec::new();
         for (name, data) in encoded {
