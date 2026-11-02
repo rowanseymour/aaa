@@ -22,7 +22,21 @@ pub struct Variation {
     pub terrain_color: Option<[f32; 3]>,
 }
 
-/// One stop of a `WaterInfo` template's colour by depth.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Biome {
+    #[serde(default)]
+    pub water_info: Vec<WaterInfo>,
+}
+
+/// How a biome's water terrain is coloured.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WaterInfo {
+    pub terrain_ids: Option<String>,
+    #[serde(default)]
+    pub depth_info: Vec<DepthInfo>,
+}
+
+/// One stop of a water's colour by depth.
 #[derive(Debug, Clone, Deserialize)]
 pub struct DepthInfo {
     pub depth: f32,
@@ -83,4 +97,19 @@ pub struct TextureSearchPath {
 pub struct TextureRename {
     pub substring_from: Option<String>,
     pub substring_to: Option<String>,
+}
+
+/// A renamed id, which maps made before the rename still use.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Translate {
+    /// The kind of block renamed, e.g. `Thing`.
+    pub node: Option<String>,
+    pub ids_old: Option<String>,
+    pub ids_new: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TransitionSet {
+    /// Start of the mask file names, relative to the transition set's file.
+    pub path_prefix: Option<String>,
 }
