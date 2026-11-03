@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use aaa_data::GameData;
 use aaa_map::Map;
 use aaa_render::camera::{self, RtsCamera};
-use aaa_render::{MapAssets, MapRenderPlugin, Markers};
+use aaa_render::{MapAssets, MapRenderPlugin};
 use bevy::prelude::*;
 
 const USAGE: &str = "\
@@ -59,10 +59,6 @@ fn main() -> ExitCode {
 
 fn setup(mut commands: Commands, mut loaded: ResMut<Loaded>, mut assets: MapAssets) {
     let Loaded { game, map } = &mut *loaded;
-    let markers = Markers {
-        placeholders: true,
-        modelless: false,
-    };
-    aaa_render::spawn_map(&mut commands, &mut assets, game, map, markers);
+    aaa_render::spawn_map(&mut commands, &mut assets, game, map, false);
     camera::spawn(&mut commands, RtsCamera::centred(&map.ground));
 }

@@ -48,22 +48,14 @@ pub struct MapAssets<'w> {
     formats: Res<'w, CompressedImageFormatSupport>,
 }
 
-/// Which placeholder markers [`spawn_map`] shows to begin with.
-pub struct Markers {
-    /// Markers for objects whose model can't be drawn.
-    pub placeholders: bool,
-    /// Markers for objects without a model, which
-    /// [`objects::toggle_modelless`] shows and hides.
-    pub modelless: bool,
-}
-
-/// Spawns a map's ground, water, objects and lights, but no camera.
+/// Spawns a map's ground, water, objects and lights, but no camera, with
+/// placeholder markers for objects that can't be drawn shown if `markers`.
 pub fn spawn_map(
     commands: &mut Commands,
     assets: &mut MapAssets,
     game: &mut GameData,
     map: &Map,
-    markers: Markers,
+    markers: bool,
 ) {
     let MapAssets {
         meshes,
@@ -103,15 +95,7 @@ pub fn spawn_map(
         &map.things,
         map.world_version,
     );
-    objects::spawn(
-        commands,
-        meshes,
-        materials,
-        &map.ground,
-        &rest,
-        markers.placeholders,
-        markers.modelless,
-    );
+    objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
     light(commands, &map.sun, map.ground.size());
 }
 
