@@ -1,5 +1,5 @@
 #!/bin/sh
-# Rebuilds docs/banner.jpg from viewer screenshots: one large tile on the left
+# Rebuilds docs/banner.jpg from editor screenshots: one large tile on the left
 # and a 2x2 grid of small ones on the right.
 #
 #   docs/banner.sh "/path/to/Axis and Allies 2004"
@@ -17,8 +17,8 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-cargo build --release -p aaa-viewer --manifest-path "$root/Cargo.toml"
-viewer=$root/target/release/aaa-viewer
+cargo build --release -p aaa-editor --manifest-path "$root/Cargo.toml"
+editor=$root/target/release/aaa-editor
 
 GAP=8
 BIG_W=1000
@@ -28,7 +28,7 @@ SMALL_H=$(((H - GAP) / 2))
 
 # tile <name> <map> <camera> <width> <height>
 tile() {
-    "$viewer" "$game" "$2" --camera "$3" --screenshot "$work/$1-raw.png"
+    "$editor" "$game" "$2" --camera "$3" --screenshot "$work/$1-raw.png"
     magick "$work/$1-raw.png" -resize "$4x$5^" -gravity center -extent "$4x$5" "$work/$1.png"
 }
 

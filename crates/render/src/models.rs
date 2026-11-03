@@ -1,5 +1,5 @@
 //! Placed objects drawn with the game's models, where their templates name
-//! models this viewer can read.
+//! models this crate can read.
 
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;

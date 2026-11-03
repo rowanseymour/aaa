@@ -12,6 +12,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "aaa-editor"
+version = "0.1.0"
+dependencies = [
+ "aaa-data",
+ "aaa-map",
+ "aaa-render",
+ "bevy",
+ "tgck",
+]
+
+[[package]]
 name = "aaa-map"
 version = "0.1.0"
 dependencies = [
@@ -20,7 +31,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "aaa-viewer"
+name = "aaa-render"
 version = "0.1.0"
 dependencies = [
  "aaa-data",

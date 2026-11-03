@@ -1,0 +1,16 @@
+[package]
+name = "aaa-editor"
+version.workspace = true
+edition.workspace = true
+# Bevy 0.20 needs a newer compiler than the libraries do.
+rust-version = "1.97.1"
+license.workspace = true
+description = "Map editor for Axis & Allies (2004), which for now views maps"
+publish = false
+
+[dependencies]
+aaa-data = { path = "../data" }
+aaa-map = { path = "../map" }
+aaa-render = { path = "../render" }
+tgck = { path = "../tgck" }
+bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

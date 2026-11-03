@@ -1,35 +1,27 @@
-//! 3D viewer for Axis & Allies (2004) maps, reading straight from the game's
-//! installed data files.
-
-mod blend;
-mod camera;
-mod models;
-mod objects;
-mod terrain;
-mod textures;
+//! Map editor for Axis & Allies (2004), which for now views maps, reading
+//! straight from the game's installed data files.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aaa_data::GameData;
 use aaa_map::Map;
-use bevy::asset::embedded_asset;
-use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::image::CompressedImageFormatSupport;
-use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
 use tgck::map::CELL_SIZE;
 
-use blend::GroundMaterial;
-use camera::RtsCamera;
-use models::{ModelAssets, Models};
+use aaa_render::blend::GroundMaterial;
+use aaa_render::camera::{self, RtsCamera};
+use aaa_render::models::{ModelAssets, Models};
+use aaa_render::{MapRenderPlugin, objects, terrain};
 
 const USAGE: &str = "\
 usage:
-  aaa-viewer <game dir>          list the maps
-  aaa-viewer <game dir> <map>    view a map, e.g. \"(2v2)Berlin\"
+  aaa-editor <game dir>          list the maps
+  aaa-editor <game dir> <map>    view a map, e.g. \"(2v2)Berlin\"
 
 options:
   --camera <x,y,dist,yaw,pitch>  start the free camera looking at x,y (fractions
@@ -40,6 +32,9 @@ options:
   --screenshot <file.png>        save a frame to a file and exit, without the
                                  help text or placeholder markers other than
                                  those --modelless asks for";
+
+const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
+                    (Q/E/right drag: rotate   R/F: tilt)   M: objects without models";
 
 #[derive(Resource)]
 struct Loaded {
@@ -179,7 +174,7 @@ fn main() -> ExitCode {
         Ok(Some(l)) => l,
         Ok(None) => return ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("aaa-viewer: {e}");
+            eprintln!("aaa-editor: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -187,21 +182,16 @@ fn main() -> ExitCode {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("{} - aaa-viewer", loaded.map.title),
+            title: format!("{} - aaa-editor", loaded.map.title),
             ..default()
         }),
         ..default()
     }));
-    // The shader has to be registered before the material that loads it.
-    embedded_asset!(app, "blend.wesl");
-    app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
+    app.add_plugins(MapRenderPlugin)
         .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
         .insert_resource(loaded)
         .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (camera::update, models::animate, objects::toggle_modelless),
-        );
+        .add_systems(Update, (camera::update, objects::toggle_modelless));
     if let Some(c) = camera {
         app.insert_resource(c);
     }
@@ -334,9 +324,7 @@ fn setup(
             free: true,
         };
     }
-    // The game lights like Direct3D's fixed pipeline: texture * (ambient +
-    // diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
-    // PBR, and skipping tonemapping, gets the same result.
+    // aaa_render::light matches the game only without tonemapping.
     commands.spawn((
         Camera3d::default(),
         Tonemapping::None,
@@ -344,34 +332,13 @@ fn setup(
         cam.transform(),
         cam,
     ));
-    let unit = 1.0 / Exposure::default().exposure();
-    let rgb = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b);
-    let [dx, dy, dz] = sun.direction;
-    commands.spawn((
-        DirectionalLight {
-            color: rgb(sun.diffuse),
-            illuminance: std::f32::consts::PI * unit,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y),
-        CascadeShadowConfigBuilder {
-            maximum_distance: size * 1.5,
-            ..default()
-        }
-        .build(),
-    ));
-    commands.insert_resource(GlobalAmbientLight {
-        color: rgb(sun.ambient),
-        brightness: unit,
-        ..default()
-    });
+    aaa_render::light(&mut commands, sun, size);
 
     if screenshot.is_some() {
         return;
     }
     commands.spawn((
-        Text::new(camera::HELP),
+        Text::new(HELP),
         TextFont {
             font_size: FontSize::Px(14.0),
             ..default()
