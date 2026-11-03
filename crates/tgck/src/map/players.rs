@@ -59,7 +59,7 @@ use super::header::{check_version, optional, strings, write_strings};
 use super::{Actor, Detail, Head, Property, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
-/// The game's world state as a map saves it; the names are the game's own.
+/// The game's world state as a map saves it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct World {
     /// The version of the game state, which decides the layout of this and
@@ -75,7 +75,7 @@ pub struct World {
     pub game_time_per_tick: f32,
     pub next_player_id: u32,
     /// The numbers the editor gives the next camera and area it names
-    /// (`camera_%d`, `area_%d`); from version 4 on.
+    /// (`camera_3`, `area_4`); from version 4 on.
     pub next_camera_id: Option<u32>,
     pub next_area_id: Option<u32>,
     /// For the items queued at structures; from version 27 on.
@@ -98,7 +98,7 @@ pub struct RestrictionGroups {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestrictionGroup {
-    /// `restriction_group_%04d`, by which teams refer to it.
+    /// E.g. `restriction_group_0003`, by which teams refer to it.
     pub name: String,
     /// The number in its name.
     pub number: u32,
