@@ -530,17 +530,22 @@ types:
       - id: flags_old
         type: u1
         if: version < 7
-      - id: unknown
+      - id: seen_by
         type: u2
         if: version >= 4
+        doc: |
+          The kingdoms that have explored it, a bit per kingdom slot, as
+          for a placement's `seen_by`; only some map types keep it.
       - id: water_body
         type: u1
         if: version >= 5
         doc: The water body id; 0 for dry land. It matches HEIGHT_MAP's layer.
-      - id: unknown2
+      - id: padding
         type: u1
         if: version >= 5
-        doc: Usually 0.
+        doc: |
+          Never read. Version 7 maps hold 0; some version 6 maps hold leftover
+          bytes, mostly in the first rows.
       - id: flags_v7
         type: u1
         if: version >= 7
