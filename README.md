@@ -7,17 +7,17 @@ You need your own copy of the game. This project contains no game code or data.
 
 ## Crates
 
-| Crate | What it does |
-|---|---|
-| [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool |
-| [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) |
-| [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool |
-| [`aaa-data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, as a library and a command-line tool |
-| [`aaa-map`](crates/map) | Maps as loaded: the ground, objects and players |
-| [`aaa-sim`](crates/sim) | The game's rules, played out with no rendering |
-| [`aaa-render`](crates/render) | Draws maps with Bevy |
-| [`aaa-editor`](crates/editor) | Map editor built with Bevy |
-| [`aaa-game`](crates/game) | Plays matches, starting one on a given map |
+| Crate | What it does | Status |
+|---|---|---|
+| [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool | Done; a few map fields still unnamed |
+| [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) | Done |
+| [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool | Done; particle systems skipped |
+| [`aaa‑data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, as a library and a command-line tool | Partial: definitions cover what rendering needs |
+| [`aaa‑map`](crates/map) | Maps as loaded: the ground, objects and players | Early: ground and placed objects |
+| [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Not started |
+| [`aaa‑render`](crates/render) | Draws maps with Bevy | Ground, water, models and their animations; no skeletal animation or particles |
+| [`aaa‑editor`](crates/editor) | Map editor built with Bevy | Views maps; no editing yet |
+| [`aaa‑game`](crates/game) | Plays matches, starting one on a given map | Shows the map; no gameplay yet |
 
 ## Building
 
