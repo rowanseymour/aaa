@@ -57,31 +57,13 @@ let triggers = map.triggers()?;  // scripting: each trigger's events, conditions
 Each decoded section can be written back (`to_bytes`, `map::write_things`),
 and `container::write` puts a file back together.
 
-## Format support
+## Formats
 
-| Data | Status |
-|---|---|
-| Container: sections, zlib compression | Done |
-| `.rwd` archives | Done; tested against all 11 archives in the game |
-| Map `HEIGHT_MAP`, `MOUNTAIN_HEIGHT_MAP` | Done |
-| Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
-| Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, and actors: owner, components and the members of herds and regiments, with some components' state typed (construction, body, mover, properties) and the rest read to its exact end but kept as bytes; other classes' records are kept as raw bytes |
-| Map `MAP_HEADER` | Game options, sides, size, biome, weather and editor details; a few fields' meanings are unknown |
-| Map `OBJECTIVES` | Done |
-| Map `TRIGGERS` | Done |
-| Map `TEAMS` | Done |
-| Map `KINGDOMS` | Name, colour, relations, resources, team, commander, nation, technologies and the strategic AI's state, much of it as unnamed values |
-| Map `SUN` | Direction and colours; the rest is kept as raw bytes |
-| Map `MAPSTRINGS` | Done, as text in `.tgi` syntax, which the `tgi` crate parses |
-| Map `GWORLD`, `RULES`, `MISC_DATA`, `MAP`, `IDMGR`, `UPDATABLES`, `RESTRICTION_GROUPS` | Done |
-| Map `USED_REQUIRED_OBJECTS` | Done; empty in every shipped map |
-| Map `DENIZEN_GROUPS` | Checked to hold no groups, as in every shipped map; a group's layout isn't decoded |
-
-All 80 maps that ship with the game parse fully, and every decoded section
-writes back byte for byte. Whole files differ only in their zlib streams, as
-the game's zlib and `miniz_oxide` compress differently. The byte layouts are
-documented at the top of [`src/container.rs`](src/container.rs),
-[`src/archive.rs`](src/archive.rs) and [`src/map.rs`](src/map.rs).
+The byte layouts, and what's undecoded, are specified in
+[`docs/formats`](../../docs/formats). All 80 maps that ship with the game
+parse fully, and every decoded section writes back byte for byte. Whole
+files differ only in their zlib streams, as the game's zlib and
+`miniz_oxide` compress differently.
 
 This repository contains only original code.
 

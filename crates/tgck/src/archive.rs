@@ -1,13 +1,6 @@
-//! File archives (`.rwd`): a container with `Header`, `Files` and `Footer` sections.
+//! File archives (`.rwd`), laid out as [`rwd.ksy`] specifies.
 //!
-//! ```text
-//! "Header"  18 bytes, contents not yet understood
-//! "Files"   file data packed back to back, uncompressed
-//! "Footer"  directory: u32 count, then per entry
-//!           u16 name_len, UTF-16LE name[name_len],
-//!           u64 offset (relative to the Files section), u64 size,
-//!           u32 unknown (always 0), u32 index (position in data order)
-//! ```
+//! [`rwd.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rwd.ksy
 
 use std::fs::File;
 use std::io::{self, BufReader, Read, Seek, SeekFrom};

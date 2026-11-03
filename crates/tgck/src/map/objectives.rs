@@ -1,12 +1,7 @@
 //! OBJECTIVES: the goals a map sets its kingdoms, which triggers then give,
-//! complete or fail.
+//! complete or fail. Laid out as [`rmp.ksy`] specifies.
 //!
-//! ```text
-//! OBJECTIVES
-//!     u32 count, then per objective:
-//!       u32 version (0), string name, string text, u8 primary
-//!     u32 next_number
-//! ```
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::expect;
 use super::header::bool;

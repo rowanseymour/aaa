@@ -1,59 +1,7 @@
-//! The world a map's sides play in, its teams and the kingdoms on them.
+//! The world a map's sides play in, its teams and the kingdoms on them: GWORLD,
+//! TEAMS, RESTRICTION_GROUPS and KINGDOMS, laid out as [`rmp.ksy`] specifies.
 //!
-//! ```text
-//! GWORLD      u32 world_version (up to 28), u32 rng_seed, u32 game_ticks,
-//!             f32 game_time_begin, f32 game_time_end, f32 game_time_per_tick,
-//!             u32 next_player_id,
-//!             v4: u32 next_camera_id, u32 next_area_id,
-//!             v27: u32 next_structure_queue_item_id,
-//!             v5: u32 map_status, v7: u32 mission_state
-//! TEAMS       u32 count, then per team: u8 present, and if present:
-//!     head: string template, u32 class (5), u32 id, u32 version (2),
-//!           string name, u32 unknown (0), f32 position[3], f32 facing[3],
-//!           u32 flags
-//!     u32 version (0 or 1), u32 index, string display_name,
-//!     u32 n, u32 kingdom_relation[n], u32 m, u32 team_relation[m],
-//!     v1: string restriction_group
-//! RESTRICTION_GROUPS  u32 version (0), u32 next_number, u32 n, group[n]:
-//!     u32 version (4), string name, u32 number, string display_name,
-//!     u32 n, string allowed_actor[n], u32 n, string allowed_technology[n],
-//!     u32 n, string required_actor[n], u32 n, string required_technology[n]
-//! KINGDOMS    u32 majors, u32 count, then per kingdom: u8 present, and if
-//!             present:
-//!     a thing record (class 4, as in DYNAMIC_THINGS) whose actor has no
-//!       component but Properties, holding no properties
-//!     world_version 22+: u32 version (1), i32 updatable id
-//!     u32 version (13-20), u32 index, i32 major_index (-1 if independent),
-//!     u32 independent, string name, string color,
-//!     u32 n, u32 relation[n], u32 n, (string resource, f32 amount)[n],
-//!     u32 team (its thing id, 0 for none), u32 n, u32 team_relation[n],
-//!     u8 unknown, u32 version (1), u32 recruits (0), i32 unknown,
-//!     u8 has_faction, if set: string faction, u32 version (0), u32 unknown,
-//!       u32 n, ability[n]: u32 version (0 or 1), u32 state, f32 time,
-//!       u32 unknown, u8 unknown, v1: u32 n, u32 target[n]
-//!     string nation
-//!     v5: u32 n, (string, u32)[n], v6: u32, v14: u32 n, string[n],
-//!     v7: u32 n, property[n] as in an actor's Properties, all of class 0
-//!       and without it
-//!     v8: u8 u8 string, v9: string
-//!     if not independent, from v10, the strategic AI:
-//!       v11: priorities: u32 version (0-2), then 4 lists (5 from v2) of
-//!         u32 n, (string template, f32)[n]; from v1 as many more of
-//!         u32 n, (u32 id, f32)[n]
-//!       v11: weights: u32 version (0-1), u32[60] (66 from v1)
-//!       u32 n, item[n]: u32 version (0), weights, u32[21]
-//!       v10 only: weights
-//!       u32 unknown
-//!     v12: u32 n, entry[n]: u32 version (0), string, string, u32 n,
-//!       u32[n], u8, u32
-//!     v15: u32 n, (string template, u32 instance_number)[n]
-//!     v16: u32 n, u32 used_badge[n]
-//!     v17: u8, v18: u8, v19: u8, v20: u32 n, (string resource, f32)[n]
-//! ```
-//!
-//! Relations are listed by the position of the kingdom or team they're with;
-//! a kingdom's relation to itself is 0.
-//! Teams' and kingdoms' indexes are their positions, which the game requires.
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::header::{check_version, optional, strings, write_strings};
 use super::{Actor, Detail, Head, Property, Thing, expect};

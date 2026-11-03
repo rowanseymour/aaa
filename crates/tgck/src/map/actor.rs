@@ -1,34 +1,12 @@
-//! Actors: the things made of components, such as units, buildings, herds
-//! and kingdoms.
+//! Actors: the things made of components, such as units, buildings, herds and
+//! kingdoms. Their layout is the `actor` type in [`rmp.ksy`].
 //!
-//! ```text
-//! actor       u32 version (9-14), u32 kingdom, u64 flags,
-//!             u32 template_components, u32 components,
-//!             each component's state: construction's first, then the others
-//!               in bit order, mind's last; none is prefixed with its length
-//!             trailer
-//! trailer     i32 main_component (-1 for none), v2: u32, v3-11: u32,
-//!             v4: u8 flag [string], v5: u8 flag [u32], v6: string,
-//!             v8: u32 u32, v10: u32, v11: u32 list x3, u32 n, (u32 x3)[n],
-//!             v13: u32
-//! updatable   u32 version (0-1), i32 id      most components start with it
+//! Construction, Body, Mover and Properties decode into types; the other
+//! components are read to their end and kept as bytes ([`Component::Framed`]).
+//! A record whose state doesn't decode to its exact end is kept whole
+//! ([`State::Raw`]), which only a record of known size allows.
 //!
-//! construction  updatable, u32 version (0-1), u32 n, f32[n],
-//!               v1: u32 n, f32[n], string upgrade; v0: u32 u32
-//! body          u32 version (0-4), v2: updatable, v1: f32, f32 fraction,
-//!               v3: u32, v4: u32
-//! mover         updatable, u32 version (0-8), f32[3], f32, f32, v8: f32,
-//!               v0-3: f32[3], f32, f32, v1-6: u8, v2: u8, v3: f32[3] f32,
-//!               v5: u8 u32, v6: u8 f32[3] u8 f32[3] f32[3]
-//! properties    updatable, u32 version (0-1), u32 n, property[n]:
-//!     u32 class (0 or 1; -1 for none, with nothing after),
-//!     u32 version (0-3), u32, v1: u32, string id, v2: u8 u32,
-//!     class 1 from v3: u32 version (0), u32
-//! ```
-//!
-//! The other components' layouts are in their `skip_` functions below.
-//! A mind's layout depends on its class, which the template's components
-//! decide: an organization's, an aircraft's or an element's.
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::{Thing, expect, header::check_version};
 use crate::{Cursor, Error, Result, Writer};

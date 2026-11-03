@@ -44,6 +44,17 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
       - run: cargo test --workspace --locked
 
+  # Statically typed targets catch type errors that Python's would let through.
+  formats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install kaitai-struct-compiler
+        run: |
+          curl -fsSLO https://github.com/kaitai-io/kaitai_struct_compiler/releases/download/0.11/kaitai-struct-compiler_0.11_all.deb
+          sudo apt-get install -y ./kaitai-struct-compiler_0.11_all.deb
+      - run: kaitai-struct-compiler -t python -t java -t rust --outdir "$RUNNER_TEMP/formats" docs/formats/*.ksy
+
   # The libraries' MSRV; the viewer follows Bevy's, which is newer.
   msrv:
     runs-on: ubuntu-latest

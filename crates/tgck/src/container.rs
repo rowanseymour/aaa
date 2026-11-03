@@ -1,17 +1,10 @@
-//! The TGCK section container shared by `.rwd` archives and `.rmp` maps.
+//! The TGCK section container shared by `.rwd` archives and `.rmp` maps, laid
+//! out as [`tgck.ksy`] specifies.
 //!
-//! ```text
-//! 0x00  "TGCK"  u32 version (2)  u32 section_count
-//! 0x0C  section payloads, back to back
-//! end   section table: section_count records of 0x60 bytes:
-//!         UTF-16LE name[32], u64 offset, u64 stored_size,
-//!         u32 flags (bit 0: zlib-compressed), u32 unknown,
-//!         u64 unpacked_size
-//! ```
+//! [`Section`] keeps the flags' unused bits and the unknown word, though the
+//! game ignores them, so that files write back unchanged.
 //!
-//! The game ignores the flags' other bits and the unknown word, which hold
-//! leftover memory; they're kept so files write back unchanged. Sizes alone
-//! can't tell a compressed section apart, as some deflate to their own size.
+//! [`tgck.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/tgck.ksy
 
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
