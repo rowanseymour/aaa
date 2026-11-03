@@ -40,7 +40,7 @@ pub fn write_denizen_groups() -> Vec<u8> {
     0u32.to_le_bytes().to_vec()
 }
 
-/// World state that didn't fit elsewhere; the names are the game's own.
+/// World state that didn't fit elsewhere.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiscData {
     pub used_names: Vec<UsedName>,

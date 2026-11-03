@@ -14,6 +14,10 @@
 //!     u32 version (0 or 1), u32 index, string display_name,
 //!     u32 n, u32 kingdom_relation[n], u32 m, u32 team_relation[m],
 //!     v1: string restriction_group
+//! RESTRICTION_GROUPS  u32 version (0), u32 next_number, u32 n, group[n]:
+//!     u32 version (4), string name, u32 number, string display_name,
+//!     u32 n, string allowed_actor[n], u32 n, string allowed_technology[n],
+//!     u32 n, string required_actor[n], u32 n, string required_technology[n]
 //! KINGDOMS    u32 majors, u32 count, then per kingdom: u8 present, and if
 //!             present:
 //!     a thing record (class 4, as in DYNAMIC_THINGS) whose actor has no
@@ -51,11 +55,11 @@
 //! a kingdom's relation to itself is 0.
 //! Teams' and kingdoms' indexes are their positions, which the game requires.
 
-use super::header::{check_version, optional};
+use super::header::{check_version, optional, strings, write_strings};
 use super::{Actor, Detail, Head, Property, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
-/// The game's world state as a map saves it; the names are the game's own.
+/// The game's world state as a map saves it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct World {
     /// The version of the game state, which decides the layout of this and
@@ -71,7 +75,7 @@ pub struct World {
     pub game_time_per_tick: f32,
     pub next_player_id: u32,
     /// The numbers the editor gives the next camera and area it names
-    /// (`camera_%d`, `area_%d`); from version 4 on.
+    /// (`camera_3`, `area_4`); from version 4 on.
     pub next_camera_id: Option<u32>,
     pub next_area_id: Option<u32>,
     /// For the items queued at structures; from version 27 on.
@@ -81,6 +85,82 @@ pub struct World {
     pub map_status: Option<u32>,
     /// 0 not started, 1 running, 2 won; from version 7 on.
     pub mission_state: Option<u32>,
+}
+
+/// What the teams set to a group may build and research, as set in the
+/// editor.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestrictionGroups {
+    /// What the editor numbers the next group it creates.
+    pub next_number: u32,
+    pub groups: Vec<RestrictionGroup>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RestrictionGroup {
+    /// E.g. `restriction_group_0003`, by which teams refer to it.
+    pub name: String,
+    /// The number in its name.
+    pub number: u32,
+    /// A string id; the same as the name in every shipped map.
+    pub display_name: String,
+    /// Actor templates.
+    pub allowed_actors: Vec<String>,
+    pub allowed_technologies: Vec<String>,
+    pub required_actors: Vec<String>,
+    pub required_technologies: Vec<String>,
+}
+
+impl RestrictionGroups {
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let mut cur = Cursor::new(data);
+        let cur = &mut cur;
+        expect(cur, "restriction groups version", 0)?;
+        let next_number = cur.u32()?;
+        let n = cur.u32()?;
+        let groups = (0..n)
+            .map(|_| {
+                // Older groups are laid out differently.
+                expect(cur, "restriction group version", RestrictionGroup::VERSION)?;
+                Ok(RestrictionGroup {
+                    name: cur.string()?,
+                    number: cur.u32()?,
+                    display_name: cur.string()?,
+                    allowed_actors: strings(cur)?,
+                    allowed_technologies: strings(cur)?,
+                    required_actors: strings(cur)?,
+                    required_technologies: strings(cur)?,
+                })
+            })
+            .collect::<Result<_>>()?;
+        cur.finish("RESTRICTION_GROUPS")?;
+        Ok(RestrictionGroups {
+            next_number,
+            groups,
+        })
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut w = Writer::default();
+        w.u32(0);
+        w.u32(self.next_number);
+        w.u32(self.groups.len() as u32);
+        for group in &self.groups {
+            w.u32(RestrictionGroup::VERSION);
+            w.string(&group.name)?;
+            w.u32(group.number);
+            w.string(&group.display_name)?;
+            write_strings(&mut w, &group.allowed_actors)?;
+            write_strings(&mut w, &group.allowed_technologies)?;
+            write_strings(&mut w, &group.required_actors)?;
+            write_strings(&mut w, &group.required_technologies)?;
+        }
+        Ok(w.0)
+    }
+}
+
+impl RestrictionGroup {
+    const VERSION: u32 = 4;
 }
 
 impl World {
@@ -840,6 +920,37 @@ mod tests {
             map_status: Some(2),
             mission_state: Some(0),
         }
+    }
+
+    #[test]
+    fn round_trips_restriction_groups() {
+        let groups = RestrictionGroups {
+            next_number: 4,
+            groups: vec![RestrictionGroup {
+                name: "restriction_group_0003".into(),
+                number: 3,
+                display_name: "restriction_group_0003".into(),
+                allowed_actors: vec!["gbr_tank_flame".into(), "sas_commando".into()],
+                allowed_technologies: vec!["tech_usa_gyrostabilizers".into()],
+                required_actors: vec!["ger_hq_mechanized_bunker".into()],
+                required_technologies: Vec::new(),
+            }],
+        };
+        let bytes = groups.to_bytes().unwrap();
+        assert_eq!(
+            &bytes[..16],
+            &[0, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 4, 0, 0, 0]
+        );
+        assert_eq!(RestrictionGroups::parse(&bytes).unwrap(), groups);
+        let empty = [0; 12];
+        let parsed = RestrictionGroups::parse(&empty).unwrap();
+        assert_eq!(parsed.to_bytes().unwrap(), empty);
+        let mut old = bytes.clone();
+        old[12] = 3;
+        assert!(
+            RestrictionGroups::parse(&old).is_err(),
+            "laid out differently"
+        );
     }
 
     #[test]

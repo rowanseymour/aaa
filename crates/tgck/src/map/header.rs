@@ -162,12 +162,12 @@ pub(super) fn check_version(
     }
 }
 
-fn strings(cur: &mut Cursor) -> Result<Vec<String>> {
+pub(super) fn strings(cur: &mut Cursor) -> Result<Vec<String>> {
     let n = cur.u32()?;
     (0..n).map(|_| cur.string()).collect()
 }
 
-fn write_strings(w: &mut Writer, vs: &[String]) -> Result<()> {
+pub(super) fn write_strings(w: &mut Writer, vs: &[String]) -> Result<()> {
     w.u32(vs.len() as u32);
     vs.iter().try_for_each(|s| w.string(s))
 }
