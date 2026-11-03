@@ -3,7 +3,8 @@
 A Rust library and command-line tool for reading the `.nif` model files of
 **Axis & Allies (2004)**: scene nodes, triangle meshes, textures (external
 files or stored in the model) and render properties such as alpha and
-double-sidedness, and keyframe and alpha animations. It also reads the `.kf`
+double-sidedness, skins binding meshes to bones, and keyframe and alpha
+animations. It also reads the `.kf`
 animation sequences, which share the format and animate a model's nodes by
 name.
 

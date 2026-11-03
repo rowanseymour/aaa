@@ -134,6 +134,30 @@ fn dump(file: &str) -> ExitCode {
                     .collect();
                 format!("text keys {:?} [{}]", t.name, keys.join(", "))
             }
+            Object::SkinInstance(s) => format!(
+                "skin data {:?} skeleton root {:?} bones {:?}",
+                s.data, s.skeleton_root, s.bones
+            ),
+            Object::SkinData(s) => {
+                let bones: String = s
+                    .bones
+                    .iter()
+                    .map(|b| {
+                        format!(
+                            "\n       bound {:?}, {} weights, at {:?}",
+                            b.bound,
+                            b.weights.len(),
+                            b.transform.translation
+                        )
+                    })
+                    .collect();
+                format!(
+                    "skin data partition {:?} at {:?}, {} bones{bones}",
+                    s.partition,
+                    s.transform.translation,
+                    s.bones.len()
+                )
+            }
             Object::Other(kind) => kind.clone(),
         };
         println!("{i:4} {line}");
