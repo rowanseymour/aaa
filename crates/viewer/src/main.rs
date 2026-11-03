@@ -11,7 +11,7 @@ mod textures;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use aaa_data::Game;
+use aaa_data::{Game, Ground};
 use bevy::asset::embedded_asset;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -24,7 +24,6 @@ use tgck::map::{CELL_SIZE, Sun, Terrain, Thing};
 use blend::GroundMaterial;
 use camera::RtsCamera;
 use models::{ModelAssets, Models};
-use terrain::Ground;
 
 const USAGE: &str = "\
 usage:
