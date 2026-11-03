@@ -23,16 +23,9 @@
 //!       area (6)    u32 version (1), [u32 id, u32 version (2),] string name,
 //!                   u32 shape (1 circle, 3 box), f32 radius, f32 bounds[4],
 //!                   u32 unknown (0); the cutscene maps leave out the id
-//!       actor (3)   u32 version (9-14), u32 kingdom, u64 flags,
-//!                   u32 template_components, u32 components, then each
-//!                   component's state and the actor's own: not decoded, as
-//!                   each component's loader reads its own layout, unprefixed
+//!       actor (3)   see map/actor.rs
 //!       camera (7)  u32 version (1 or 2), string name, f32 unknown
 //!       others      not decoded
-//!   An organization's (a herd or regiment) component state holds its members:
-//!     32 bytes unknown, string layout, u32 n, string slot_element[n],
-//!     u32 positions, then per member: u32 index, a record as above whose
-//!     undecoded rest runs up to the next member
 //!
 //! SUN
 //!     u32 version (1 or 2), u32 unknown (1), u32 unknown (-1),
@@ -67,11 +60,16 @@ use std::fs::File;
 use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
+mod actor;
 mod header;
 mod objectives;
 mod players;
 mod triggers;
 
+pub use actor::{
+    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverV6, Organization, Properties,
+    Property, State, Trailer, TrailerLists, Updatable, Upgrade,
+};
 pub use header::{
     KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
     WorldRules,
@@ -124,9 +122,10 @@ impl<R: Read + Seek> Map<R> {
     }
 
     pub fn things(&mut self) -> Result<Vec<Thing>> {
+        let world_version = self.world_version()?;
         let index = self.container.read_named("DYNAMIC_THINGS_INDEX")?;
         let data = self.container.read_named("DYNAMIC_THINGS")?;
-        parse_things(&index, &data)
+        parse_things(&index, &data, world_version)
     }
 
     /// The version of the game state the map was saved with, which decides
@@ -471,107 +470,6 @@ pub enum Detail {
     Raw(Vec<u8>),
 }
 
-/// A thing made of components, such as a unit or building.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Actor {
-    pub version: u32,
-    /// The owning [`Kingdom`]'s [`Thing::id`]; 0 for none.
-    pub kingdom: u32,
-    pub flags: u64,
-    /// The components its template gives it, a bit each as in [`COMPONENTS`].
-    pub template_components: u32,
-    /// The components the record holds state for: the template's, plus any
-    /// the game adds, such as a mind.
-    pub components: u32,
-    /// Each component's state, in bit order but for construction's first and
-    /// mind's last, then the actor's own; not decoded.
-    pub state: Vec<u8>,
-}
-
-/// Actor component names by their bit in [`Actor::components`], as the
-/// templates' `[...Component]` sections name them less the suffix.
-pub const COMPONENTS: [&str; 31] = [
-    "Body",
-    "Projectile",
-    "Character",
-    "Mover",
-    "Mind",
-    "Performer",
-    "Properties",
-    "Organization",
-    "Element",
-    "Economy",
-    "Denizen",
-    "Supply",
-    "Wall",
-    "Structure",
-    "Settlement",
-    "Construction",
-    "Recruit",
-    "Experience",
-    "Builder",
-    "MobileDeployment",
-    "Defender",
-    "Research",
-    "Detection",
-    "Aircraft",
-    "Transport",
-    "Lair",
-    "Flare",
-    "MetaGame",
-    "Portal",
-    "City",
-    "HQ",
-];
-
-impl Actor {
-    /// The first version that writes the flags in 64 bits; the layout of
-    /// earlier ones is unconfirmed.
-    const MIN_VERSION: u32 = 9;
-    /// The newest version the game reads.
-    const MAX_VERSION: u32 = 14;
-
-    /// Everything but the state, which is left empty.
-    fn parse_header(cur: &mut Cursor) -> Result<Self> {
-        let version = cur.u32()?;
-        if !(Actor::MIN_VERSION..=Actor::MAX_VERSION).contains(&version) {
-            return Err(Error::Corrupt(format!("actor version {version}")));
-        }
-        Ok(Actor {
-            version,
-            kingdom: cur.u32()?,
-            flags: cur.u64()?,
-            template_components: cur.u32()?,
-            components: cur.u32()?,
-            state: Vec::new(),
-        })
-    }
-
-    fn write_header(&self, w: &mut Writer) {
-        w.u32(self.version);
-        w.u32(self.kingdom);
-        w.u64(self.flags);
-        w.u32(self.template_components);
-        w.u32(self.components);
-    }
-
-    /// The names of the components the record holds.
-    pub fn component_names(&self) -> impl Iterator<Item = &'static str> + '_ {
-        COMPONENTS
-            .iter()
-            .enumerate()
-            .filter(|&(bit, _)| self.components >> bit & 1 != 0)
-            .map(|(_, &name)| name)
-    }
-
-    pub fn has(&self, component: &str) -> bool {
-        COMPONENTS
-            .iter()
-            .position(|&c| c == component)
-            .is_some_and(|bit| self.components >> bit & 1 != 0)
-    }
-}
-
 /// A region scripts and triggers test units against.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Area {
@@ -598,7 +496,7 @@ pub struct Camera {
 /// The version DYNAMIC_THINGS records are written in.
 const THINGS_VERSION: u32 = 11;
 
-fn parse_things(index: &[u8], data: &[u8]) -> Result<Vec<Thing>> {
+fn parse_things(index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thing>> {
     let mut idx = Cursor::new(index);
     expect(&mut idx, "DYNAMIC_THINGS_INDEX header", 0)?;
     let count = idx.u32()?;
@@ -608,7 +506,7 @@ fn parse_things(index: &[u8], data: &[u8]) -> Result<Vec<Thing>> {
     let mut things = Vec::with_capacity(count.min(1 << 20) as usize);
     for i in 0..count {
         let size = idx.u32()? as usize;
-        let thing = Thing::parse(cur.bytes(size)?).map_err(|e| match e {
+        let thing = Thing::parse(cur.bytes(size)?, world_version).map_err(|e| match e {
             Error::Corrupt(m) => Error::Corrupt(format!("thing {i}: {m}")),
             e => e,
         })?;
@@ -689,22 +587,22 @@ impl Head {
     }
 }
 
-/// The parts of a herd or regiment, as its record stores them.
-#[derive(Debug, Clone)]
-pub struct Organization {
-    /// The `OrganizationLayout` the members are arranged by.
-    pub layout: String,
-    /// Each layout slot's element template; empty for an empty slot.
-    pub slots: Vec<String>,
-    /// The members where they stand, in layout position order.
-    pub members: Vec<Thing>,
-}
-
 impl Thing {
-    fn parse(record: &[u8]) -> Result<Self> {
+    fn parse(record: &[u8], world_version: u32) -> Result<Self> {
         let mut rec = Cursor::new(record);
         let mut thing = Thing::parse_shared(&mut rec)?;
-        thing.detail = Detail::parse(thing.class, rec.rest())?;
+        thing.detail = Detail::parse(thing.class, rec.rest(), world_version)?;
+        Ok(thing)
+    }
+
+    /// An organization's member, whose record has no length: only actors'
+    /// can be told where they end.
+    fn parse_member(rec: &mut Cursor, world_version: u32) -> Result<Self> {
+        let mut thing = Thing::parse_shared(rec)?;
+        if thing.class != ACTOR {
+            return Err(Error::Corrupt(format!("member of class {}", thing.class)));
+        }
+        thing.detail = Detail::Actor(Actor::parse(rec, world_version)?);
         Ok(thing)
     }
 
@@ -770,63 +668,19 @@ impl Thing {
     }
 
     /// The organization this thing is, if its record holds one.
-    pub fn organization(&self) -> Option<Organization> {
-        let Detail::Actor(actor) = &self.detail else {
-            return None;
-        };
-        if !actor.has("Organization") {
-            return None;
+    pub fn organization(&self, world_version: u32) -> Option<Organization> {
+        match &self.detail {
+            Detail::Actor(actor) => actor.organization(world_version),
+            _ => None,
         }
-        let mut cur = Cursor::new(actor.state.get(32..)?);
-        let layout = cur.string().ok().filter(|s| is_id(s))?;
-        let n = cur.u32().ok().filter(|&n| n <= 64)?;
-        let slots = (0..n)
-            .map(|_| cur.string().ok())
-            .collect::<Option<Vec<_>>>()?;
-        let positions = cur.u32().ok().filter(|&n| n <= 256)?;
-        // Members' records aren't decoded to the end, so each is found by a
-        // later position index than the one before and a plausible record.
-        // Empty positions are left out.
-        let body = cur.rest();
-        let member_at = |at: usize, next: u32| {
-            let mut c = Cursor::new(&body[at..]);
-            let index = c.u32().ok().filter(|i| (next..positions).contains(i))?;
-            let thing = Thing::parse_shared(&mut c).ok()?;
-            let [x, y, _] = thing.facing;
-            let unit = (x * x + y * y - 1.0).abs() < 0.01;
-            (is_id(&thing.template) && unit).then(|| (index, thing, at + c.pos()))
-        };
-        let mut members: Vec<Thing> = Vec::new();
-        let (mut from, mut next) = (0, 0);
-        while let Some((at, (index, thing, end))) =
-            (from..body.len()).find_map(|at| Some((at, member_at(at, next)?)))
-        {
-            if let Some(last) = members.last_mut() {
-                last.detail = Detail::Raw(body[from..at].to_vec());
-            }
-            members.push(thing);
-            (from, next) = (end, index + 1);
-        }
-        if let Some(last) = members.last_mut() {
-            last.detail = Detail::Raw(body[from..].to_vec());
-        }
-        Some(Organization {
-            layout,
-            slots,
-            members,
-        })
     }
 }
 
 impl Detail {
-    fn parse(class: u32, data: &[u8]) -> Result<Self> {
+    fn parse(class: u32, data: &[u8], world_version: u32) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let detail = match class {
-            ACTOR => {
-                let mut actor = Actor::parse_header(&mut cur)?;
-                actor.state = cur.rest().to_vec();
-                Detail::Actor(actor)
-            }
+            ACTOR => Detail::Actor(Actor::parse_whole(&mut cur, world_version)?),
             AREA => {
                 // Records without the id are 8 bytes shorter; the name's
                 // length tells which this is.
@@ -867,10 +721,7 @@ impl Detail {
 
     fn write(&self, w: &mut Writer) -> Result<()> {
         match self {
-            Detail::Actor(a) => {
-                a.write_header(w);
-                w.bytes(&a.state);
-            }
+            Detail::Actor(a) => a.write(w)?,
             Detail::Area(a) => {
                 w.u32(a.version);
                 if let Some(id) = a.id {
@@ -892,11 +743,6 @@ impl Detail {
         }
         Ok(())
     }
-}
-
-/// Whether `s` looks like a template id.
-fn is_id(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
 }
 
 #[cfg(test)]
@@ -1048,6 +894,7 @@ mod tests {
         let bytes = build_container(&[
             ("MAP", &[0; 4], false),
             ("MAP_HEADER", &[0; 64], true),
+            ("GWORLD", &28u32.to_le_bytes(), true),
             ("HEIGHT_MAP", &height_section(3, 4), true),
             ("DYNAMIC_THINGS", &things, true),
             ("DYNAMIC_THINGS_INDEX", &index, true),
@@ -1073,7 +920,7 @@ mod tests {
             ["Mind", "Economy"]
         );
         assert_eq!(actor.template_components, 0x200);
-        assert_eq!(actor.state, [1, 2, 3]);
+        assert_eq!(actor.state, State::Raw(vec![1, 2, 3]), "Mind has no class");
         assert_eq!(t[1].detail, Detail::Raw(vec![]));
         assert_eq!(write_things(&t).unwrap(), (index, things));
     }
@@ -1103,7 +950,7 @@ mod tests {
             thing_record(AREA, "circle_area", 2, [0.0; 3], &no_id),
             thing_record(CAMERA, "camera", 3, [0.0; 3], &camera),
         ]);
-        let things = parse_things(&index, &data).unwrap();
+        let things = parse_things(&index, &data, 28).unwrap();
         let Detail::Area(area) = &things[0].detail else {
             panic!("{:?}", things[0].detail)
         };
@@ -1131,12 +978,15 @@ mod tests {
         let at = string("tree").len() + 8;
         record[at] = 3;
         let (index, data) = things_sections(&[record]);
-        assert!(parse_things(&index, &data).is_err());
+        assert!(parse_things(&index, &data, 28).is_err());
 
         let mut actor = actor_detail(0, &[]);
         actor[0] = 15;
         let (index, data) = things_sections(&[thing_record(ACTOR, "tank", 1, [0.0; 3], &actor)]);
-        assert!(parse_things(&index, &data).is_err(), "newer than the game");
+        assert!(
+            parse_things(&index, &data, 28).is_err(),
+            "newer than the game"
+        );
     }
 
     #[test]
@@ -1156,42 +1006,5 @@ mod tests {
         sun.extend([0.5f32; 12].map(f32::to_le_bytes).concat());
         sun.extend([0xAA]);
         assert_eq!(Sun::parse(&sun).unwrap().to_bytes(), sun);
-    }
-
-    #[test]
-    fn parses_organization_members() {
-        let mut extra = vec![0u8; 32];
-        extra.extend(string("herd_ambient_large"));
-        extra.extend(3u32.to_le_bytes());
-        for slot in ["sheep_ewe", "", "sheep_ram"] {
-            extra.extend(string(slot));
-        }
-        extra.extend(7u32.to_le_bytes());
-        // Positions 1 and 2 are empty; each member's rest is undecoded.
-        for (index, template, id) in [(0u32, "sheep_ewe", 11), (3, "sheep_ram", 12)] {
-            extra.extend(index.to_le_bytes());
-            extra.extend(thing_record(3, template, id, [1.0, 2.0, 3.0], &[0xAA; 20]));
-        }
-        let parse = |components, state: &[u8]| {
-            let detail = actor_detail(components, state);
-            Thing::parse(&thing_record(ACTOR, "herd_sheep", 10, [0.0; 3], &detail)).unwrap()
-        };
-        let org = parse(0x80, &extra).organization().unwrap();
-        assert_eq!(org.layout, "herd_ambient_large");
-        assert_eq!(org.slots, ["sheep_ewe", "", "sheep_ram"]);
-        let members: Vec<_> = org
-            .members
-            .iter()
-            .map(|m| (m.template.as_str(), m.id))
-            .collect();
-        assert_eq!(members, [("sheep_ewe", 11), ("sheep_ram", 12)]);
-        assert_eq!(org.members[0].position, [1.0, 2.0, 3.0]);
-        assert_eq!(org.members[0].detail, Detail::Raw(vec![0xAA; 20]));
-        assert_eq!(org.members[1].detail, Detail::Raw(vec![0xAA; 20]));
-
-        assert!(
-            parse(0, &extra).organization().is_none(),
-            "not an organization"
-        );
     }
 }

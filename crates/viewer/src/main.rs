@@ -48,6 +48,8 @@ struct Loaded {
     ground: Ground,
     terrain: Terrain,
     things: Vec<Thing>,
+    /// Which organization members' records depend on.
+    world_version: u32,
     sun: Sun,
 }
 
@@ -270,12 +272,14 @@ fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
     let mountain = map.mountain_height_map().map_err(err)?;
     let terrain = map.terrain().map_err(err)?;
     let things = map.things().map_err(err)?;
+    let world_version = map.world_version().map_err(err)?;
     let sun = map.sun().map_err(err)?;
     Ok(Loaded {
         title: aaa_data::map_title(name).to_string(),
         ground: Ground::new(&hm, &mountain),
         terrain,
         things,
+        world_version,
         sun,
         game,
     })
@@ -299,6 +303,7 @@ fn setup(
         ground,
         terrain,
         things,
+        world_version,
         sun,
         ..
     } = &mut *loaded;
@@ -324,7 +329,7 @@ fn setup(
         materials: &mut materials,
         images: &mut images,
     };
-    let rest = models.spawn(&mut commands, game, &mut assets, things);
+    let rest = models.spawn(&mut commands, game, &mut assets, things, *world_version);
     objects::spawn(
         &mut commands,
         &mut meshes,

@@ -101,6 +101,12 @@ impl<'a> Cursor<'a> {
     pub(crate) fn pos(&self) -> usize {
         self.pos
     }
+    pub(crate) fn seek(&mut self, pos: usize) {
+        self.pos = pos.min(self.buf.len());
+    }
+    pub(crate) fn at_end(&self) -> bool {
+        self.pos == self.buf.len()
+    }
     /// What was read since `from`.
     pub(crate) fn since(&self, from: usize) -> &'a [u8] {
         &self.buf[from..self.pos]

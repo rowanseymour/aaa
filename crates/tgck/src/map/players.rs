@@ -207,8 +207,6 @@ pub struct Ability {
 
 /// The world version from which kingdoms save an updatable id.
 const UPDATABLE_WORLD_VERSION: u32 = 22;
-/// The bit of [`super::COMPONENTS`]' Properties.
-const PROPERTIES: u32 = 1 << 6;
 
 impl Kingdoms {
     pub(super) fn parse(data: &[u8], world_version: u32) -> Result<Self> {
@@ -287,11 +285,7 @@ impl Kingdom {
     fn parse_decoded(cur: &mut Cursor, world_version: u32, index: u32) -> Result<Self> {
         let head = parse_head(cur, KINGDOM)?;
         let mut thing = Thing::parse_placement(head, cur)?;
-        let mut actor = Actor::parse_header(cur)?;
-        let state_at = cur.pos();
-        skip_actor_state(cur, &actor)?;
-        actor.state = cur.since(state_at).to_vec();
-        thing.detail = Detail::Actor(actor);
+        thing.detail = Detail::Actor(Actor::parse(cur, world_version)?);
 
         let updatable = (world_version >= UPDATABLE_WORLD_VERSION)
             .then(|| {
@@ -382,65 +376,6 @@ impl Kingdom {
     }
 }
 
-/// Steps over a kingdom's actor state, which only kingdoms' simple
-/// components allow.
-fn skip_actor_state(cur: &mut Cursor, actor: &Actor) -> Result<()> {
-    if actor.components & !PROPERTIES != 0 {
-        return Err(Error::Corrupt(format!(
-            "kingdom has components {:#x}",
-            actor.components
-        )));
-    }
-    if actor.components & PROPERTIES != 0 {
-        // The updatable base every component starts with.
-        if cur.u32()? > 1 {
-            return Err(Error::Corrupt("updatable version".into()));
-        }
-        cur.i32()?;
-        if cur.u32()? > 1 {
-            return Err(Error::Corrupt("properties version".into()));
-        }
-        expect(cur, "kingdom property count", 0)?;
-    }
-    let v = actor.version;
-    cur.i32()?;
-    if v >= 2 {
-        cur.u32()?;
-    }
-    if (3..12).contains(&v) {
-        cur.u32()?;
-    }
-    if v >= 4 && cur.u8()? != 0 {
-        cur.string()?;
-    }
-    if v >= 5 && cur.u8()? != 0 {
-        cur.u32()?;
-    }
-    if v >= 6 {
-        cur.string()?;
-    }
-    if v >= 8 {
-        cur.u64()?;
-    }
-    if v >= 10 {
-        cur.u32()?;
-    }
-    if v >= 11 {
-        for _ in 0..3 {
-            u32s(cur)?;
-        }
-        let n = cur.u32()? as usize;
-        cur.bytes(
-            n.checked_mul(12)
-                .ok_or(Error::Corrupt("list length".into()))?,
-        )?;
-    }
-    if v >= 13 {
-        cur.u32()?;
-    }
-    Ok(())
-}
-
 impl Faction {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         let name = cur.string()?;
@@ -496,6 +431,7 @@ impl Ability {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::map::{Component, Properties, State, Trailer, TrailerLists, Updatable};
 
     fn head(w: &mut Writer, template: &str, class: u32, id: u32) {
         Head {
@@ -547,21 +483,33 @@ mod tests {
             version: 14,
             kingdom: 0,
             flags: 0,
-            template_components: PROPERTIES,
-            components: PROPERTIES,
-            state: Vec::new(),
+            template_components: 1 << 6,
+            components: 1 << 6,
+            state: State::Decoded {
+                components: vec![Component::Properties(Properties {
+                    updatable: Updatable { version: 1, id: 7 },
+                    version: 1,
+                    properties: Vec::new(),
+                })],
+                trailer: Trailer {
+                    main_component: -1,
+                    unknown: Some(0),
+                    unknown2: None,
+                    unknown_string: Some(None),
+                    unknown3: Some(None),
+                    unknown_string2: Some(String::new()),
+                    unknown4: Some([0; 2]),
+                    unknown5: Some(0),
+                    lists: Some(TrailerLists {
+                        lists: Default::default(),
+                        triples: Vec::new(),
+                    }),
+                    unknown6: Some(0),
+                },
+            },
         }
-        .write_header(w);
-        // Properties: updatable, version, no properties; then the trailer.
-        for v in [1, 7, 1, 0, u32::MAX, 0] {
-            w.u32(v);
-        }
-        w.u8(0);
-        w.u8(0);
-        w.u16(0);
-        for _ in 0..8 {
-            w.u32(0);
-        }
+        .write(w)
+        .unwrap();
         w.u32(1); // updatable
         w.i32(index as i32);
         w.u32(20);

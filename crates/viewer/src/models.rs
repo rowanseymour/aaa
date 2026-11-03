@@ -116,11 +116,12 @@ impl Models {
         game: &mut Game,
         assets: &mut ModelAssets,
         things: &'a [Thing],
+        world_version: u32,
     ) -> Vec<(&'a Thing, bool)> {
         let mut rest = Vec::new();
         let (mut drawn, mut modelless) = (0, 0);
         for t in things {
-            let placed = self.place(commands, game, assets, t);
+            let placed = self.place(commands, game, assets, t, world_version);
             let invisible = matches!(self.views.get(&Id::from(t.template.as_str())), Some(None));
             match placed {
                 Placed::Drawn if invisible => rest.push((t, false)),
@@ -153,14 +154,17 @@ impl Models {
         game: &mut Game,
         assets: &mut ModelAssets,
         thing: &Thing,
+        world_version: u32,
     ) -> Placed {
         let view = match self.views.get(&Id::from(thing.template.as_str())) {
             Some(Some(view)) if !view.models.is_empty() => view.clone(),
             Some(None) => {
-                let members = thing.organization().map_or(Vec::new(), |o| o.members);
+                let members = thing
+                    .organization(world_version)
+                    .map_or(Vec::new(), |o| o.members);
                 return members
                     .iter()
-                    .map(|m| self.place(commands, game, assets, m))
+                    .map(|m| self.place(commands, game, assets, m, world_version))
                     .max()
                     .unwrap_or(Placed::NoModel);
             }
