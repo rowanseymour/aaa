@@ -27,7 +27,7 @@ $ tgck map "Maps/(3v3)Saint_lo.RMP"
 Maps/(3v3)Saint_lo.RMP: "Normandy Breakout"
   terrain 257x257 vertices (512 world units), heights 0.74..10.00, water 34.8%
   terrain v7, biome temperate_grassland, 43 of 410 types used: temperate_ocean01 11876, ...
-  editor 0.3.1.0 by Dev AA Dev, weather none
+  saved by 0.3.1.0 Dev AA Dev, weather none
   7288 objects, 52 templates: temperate_trees 2689, temperate_lake_ripples 1618, ...
   start locations: (299,349) (180,361) (134,239) (124,78) (410,45) (491,321)
 ```
@@ -49,7 +49,7 @@ let terrain = map.terrain()?;    // biome, terrain names, per-tile terrain and w
 let things = map.things()?;      // placed objects: template, id, position, facing
 let sun = map.sun()?;            // light direction and colours
 let kingdoms = map.kingdoms()?;  // players: name, colour, team, nation, commander, resources
-let header = map.header()?;      // game options, sides, editor details
+let header = map.header()?;      // game options, sides, the game that saved it
 let goals = map.objectives()?;   // objectives and whether each is primary
 let triggers = map.triggers()?;  // scripting: each trigger's events, conditions and effects
 ```

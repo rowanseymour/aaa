@@ -229,9 +229,9 @@ fn map(path: &str) -> Res {
     );
     let weather = &header.creator.weather;
     outln!(
-        "  editor {} by {}, weather {}",
-        header.editor_version,
-        header.author,
+        "  saved by {} {}, weather {}",
+        header.app_version,
+        header.edition,
         if weather.is_empty() { "none" } else { weather }
     );
     let (templates, top) = top_counts(things.iter().map(|t| t.template.as_str()), 8);
@@ -310,7 +310,7 @@ fn check(paths: &[&str]) -> Res {
                 tgck::map::write_mountain_height_map(&m.mountain_height_map()?, m.cutscene_mode()?),
             ),
             ("TERRAIN", m.terrain()?.to_bytes()?),
-            ("SUN", m.sun()?.to_bytes()),
+            ("SUN", m.sun()?.to_bytes()?),
             ("DYNAMIC_THINGS_INDEX", index),
             ("DYNAMIC_THINGS", things),
             ("TEAMS", tgck::map::write_teams(&m.teams()?)?),

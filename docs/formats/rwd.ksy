@@ -21,6 +21,12 @@ seq:
     repeat: expr
     repeat-expr: header.section_count
 instances:
+  archive_header:
+    value: sections[archive_header_index.index].archive_header
+  archive_header_index:
+    pos: 0
+    size: 0
+    type: find_section('Header', 0)
   files_section:
     value: sections[files_index.index].record
   files_index:
@@ -39,6 +45,20 @@ types:
       - id: record
         type: tgck::section_record
     instances:
+      archive_header:
+        value: 'record.is_compressed ? inflated_archive_header : stored_archive_header'
+        if: record.name.value == 'Header'
+      stored_archive_header:
+        pos: record.offset
+        size: record.len_stored
+        type: archive_header
+        if: record.name.value == 'Header' and not record.is_compressed
+      inflated_archive_header:
+        pos: record.offset
+        size: record.len_stored
+        process: zlib
+        type: archive_header
+        if: record.name.value == 'Header' and record.is_compressed
       directory:
         value: 'record.is_compressed ? inflated_directory : stored_directory'
         if: record.name.value == 'Footer'
@@ -68,10 +88,27 @@ types:
         size: 0
         type: find_section(name, i + 1)
         if: _root.sections[i].record.name.value != name
+  archive_header:
+    doc: The `Header` section. The game reads it but uses none of it.
+    seq:
+      - id: version
+        type: u4
+        doc: 2 in every shipped archive.
+      - id: product
+        type: string
+        doc: '`AA` in every shipped archive.'
+      - id: unknown1
+        type: string
+        doc: Unknown; empty in every shipped archive.
+      - id: unknown2
+        type: string
+        doc: Unknown; empty in every shipped archive.
+      - id: unknown3
+        type: u4
+        if: version >= 2
+        doc: Unknown; differs between archives, with no pattern.
   directory:
-    doc: |
-      The `Header` section's 18 bytes are undecoded. `Files` is always
-      stored raw.
+    doc: The `Footer` section. `Files` is always stored raw.
     seq:
       - id: num_entries
         type: u4

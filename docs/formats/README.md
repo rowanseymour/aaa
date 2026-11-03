@@ -40,7 +40,7 @@ bits of the actor's component mask.
 | Spec | Format | Undecoded |
 |---|---|---|
 | [`tgck.ksy`](tgck.ksy) | The container, with each payload as bytes | — |
-| [`rwd.ksy`](rwd.ksy) | `.rwd` archives | The `Header` section |
+| [`rwd.ksy`](rwd.ksy) | `.rwd` archives | A few `Header` fields, which the game ignores |
 | [`rmp.ksy`](rmp.ksy) | `.rmp` maps, a type per section | See below |
 
 What `rmp.ksy` keeps as bytes, or reads without naming:
@@ -50,13 +50,13 @@ What `rmp.ksy` keeps as bytes, or reads without naming:
 | TERRAIN | The AI's cached analysis of the map, after the tiles |
 | DYNAMIC_THINGS | Things other than actors, areas and cameras. Actors with a Projectile, Wall, Settlement, Aircraft, Flare or MetaGame component, or an aircraft's mind. Many component fields are read to their end but unnamed |
 | KINGDOMS | The strategic AI's state and several other fields, read but unnamed |
-| MAP_HEADER | A few fields' meanings |
-| SUN | What follows the colours |
+| MAP_HEADER | One byte's meaning |
 | DENIZEN_GROUPS | A group's layout; no shipped map has any |
 
 Every other section is decoded: MAP, GWORLD, RULES, HEIGHT_MAP,
 MOUNTAIN_HEIGHT_MAP, IDMGR, UPDATABLES, RESTRICTION_GROUPS, TEAMS,
-OBJECTIVES, TRIGGERS, MISC_DATA, MAPSTRINGS and USED_REQUIRED_OBJECTS.
+OBJECTIVES, TRIGGERS, SUN, MISC_DATA, MAPSTRINGS and
+USED_REQUIRED_OBJECTS.
 
 ## Using the specs
 

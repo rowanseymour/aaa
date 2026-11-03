@@ -10,24 +10,34 @@ pub struct MapHeader {
     pub version: u32,
     pub rules: WorldRules,
     pub parameters: WorldParameters,
-    pub unknown: [u32; 2],
+    /// The version again, so that it travels with the header.
+    pub header_version: u32,
+    /// 0 in a saved map; the game fills it in when it launches one.
+    pub checksum: u32,
     /// A string id, defined in MAPSTRINGS.
     pub name: String,
     /// A string id, defined in MAPSTRINGS.
     pub description: String,
-    /// From version 7 on.
+    /// Width and height in world units; from version 7 on.
     pub size: Option<[f32; 2]>,
-    pub unknown_f32: f32,
-    pub editor_build: u32,
-    pub editor_version: String,
-    pub game: String,
-    pub author: String,
-    pub unknown_u8: u8,
+    /// The build number of the game that saved it.
+    pub build: f32,
+    /// [`MapHeader::app_version`] as a number, two decimal digits a part:
+    /// 30100 for 0.3.1.0.
+    pub version_number: u32,
+    /// The version of the game that saved it, e.g. `0.3.1.0`.
+    pub app_version: String,
+    /// The game the map is for; the game refuses maps for another.
+    pub app_id: String,
+    /// The edition of the game that saved it, e.g. `North America AA Dev`.
+    pub edition: String,
+    pub unknown: u8,
     /// The map's path when it was saved.
     pub path: String,
-    pub unknown_string: String,
-    /// From version 6 on.
-    pub unknown_i32: Option<i32>,
+    /// The campaign a saved game belongs to; empty for none.
+    pub campaign: String,
+    /// The mission's index in that campaign, or -1; from version 6 on.
+    pub campaign_mission: Option<i32>,
     /// When the map was saved, as a Windows FILETIME.
     pub saved: u64,
     pub players: Vec<Player>,
@@ -37,7 +47,8 @@ pub struct MapHeader {
 /// The game options a map is played with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldRules {
-    pub unknown: u32,
+    /// An index into the game's map types; 0 in every shipped map.
+    pub map_type: u32,
     pub game_type: String,
     pub rules: Vec<Rule>,
 }
@@ -45,7 +56,8 @@ pub struct WorldRules {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
     pub name: String,
-    pub unknown: u8,
+    /// The map fixes it, so players can't change it.
+    pub locked: bool,
     pub value: RuleValue,
 }
 
@@ -85,24 +97,34 @@ pub struct KingdomSetup {
     pub color_markup: Option<String>,
     /// The strategic AI that plays it, if set.
     pub ai: String,
-    pub unknown: [u8; 2],
+    /// It must be in the game.
+    pub required: bool,
+    /// A human may play it.
+    pub playable: bool,
     pub team: String,
     pub objectives: Vec<String>,
-    pub shared_properties: Vec<String>,
-    pub unknown_string: String,
+    /// Technologies it starts with.
+    pub technologies: Vec<String>,
+    /// The kingdom it merges into; empty for none.
+    pub merge_into: String,
+    /// Actor templates it starts with besides the map's.
     pub actors: Vec<String>,
-    pub unknown2: [u8; 2],
-    /// From version 13 on.
+    /// It's removed when the game starts.
+    pub removed: bool,
+    /// The strategic AI plays it until a human takes it.
+    pub ai_controlled: bool,
+    /// Bonus stockpiles; from version 13 on.
     pub resources: Option<Vec<(String, f32)>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Player {
-    pub unknown: u8,
+    /// The computer plays it.
+    pub ai: bool,
     pub kingdom: String,
     pub name: String,
-    /// From version 5 on.
-    pub unknown2: Option<u8>,
+    /// It's the player on the machine that saved the map; from version 5 on.
+    pub local: Option<bool>,
 }
 
 /// What the editor generated the map from.
@@ -158,28 +180,31 @@ impl MapHeader {
             version,
             rules: WorldRules::read(cur)?,
             parameters: WorldParameters::parse(cur)?,
-            unknown: [cur.u32()?, cur.u32()?],
+            header_version: cur.u32()?,
+            checksum: cur.u32()?,
             name: cur.string()?,
             description: cur.string()?,
             size: (version >= 7).then(|| cur.f32s()).transpose()?,
-            unknown_f32: cur.f32()?,
-            editor_build: cur.u32()?,
-            editor_version: cur.string()?,
-            game: cur.string()?,
-            author: cur.string()?,
-            unknown_u8: cur.u8()?,
+            build: cur.f32()?,
+            version_number: cur.u32()?,
+            app_version: cur.string()?,
+            app_id: cur.string()?,
+            edition: cur.string()?,
+            unknown: cur.u8()?,
             path: cur.string()?,
-            unknown_string: cur.string()?,
-            unknown_i32: (version >= 6).then(|| cur.i32()).transpose()?,
+            campaign: cur.string()?,
+            campaign_mission: (version >= 6).then(|| cur.i32()).transpose()?,
             saved: cur.u64()?,
             players: {
                 let mut players = Vec::new();
                 while bool(cur, "player presence")? {
                     players.push(Player {
-                        unknown: cur.u8()?,
+                        ai: bool(cur, "player ai")?,
                         kingdom: cur.string()?,
                         name: cur.string()?,
-                        unknown2: (version >= 5).then(|| cur.u8()).transpose()?,
+                        local: (version >= 5)
+                            .then(|| bool(cur, "player local"))
+                            .transpose()?,
                     });
                 }
                 players
@@ -196,33 +221,39 @@ impl MapHeader {
         w.u32(version);
         self.rules.write(&mut w)?;
         self.parameters.write(&mut w)?;
-        self.unknown.iter().for_each(|&v| w.u32(v));
+        w.u32(self.header_version);
+        w.u32(self.checksum);
         w.string(&self.name)?;
         w.string(&self.description)?;
         optional(version >= 7, "size", self.size, |size| {
             w.f32s(&size);
             Ok(())
         })?;
-        w.f32(self.unknown_f32);
-        w.u32(self.editor_build);
-        w.string(&self.editor_version)?;
-        w.string(&self.game)?;
-        w.string(&self.author)?;
-        w.u8(self.unknown_u8);
+        w.f32(self.build);
+        w.u32(self.version_number);
+        w.string(&self.app_version)?;
+        w.string(&self.app_id)?;
+        w.string(&self.edition)?;
+        w.u8(self.unknown);
         w.string(&self.path)?;
-        w.string(&self.unknown_string)?;
-        optional(version >= 6, "unknown_i32", self.unknown_i32, |v| {
-            w.i32(v);
-            Ok(())
-        })?;
+        w.string(&self.campaign)?;
+        optional(
+            version >= 6,
+            "campaign_mission",
+            self.campaign_mission,
+            |v| {
+                w.i32(v);
+                Ok(())
+            },
+        )?;
         w.u64(self.saved);
         for player in &self.players {
             w.u8(1);
-            w.u8(player.unknown);
+            w.u8(player.ai.into());
             w.string(&player.kingdom)?;
             w.string(&player.name)?;
-            optional(version >= 5, "player unknown2", player.unknown2, |v| {
-                w.u8(v);
+            optional(version >= 5, "player local", player.local, |v| {
+                w.u8(v.into());
                 Ok(())
             })?;
         }
@@ -268,13 +299,13 @@ impl WorldRules {
 
     fn read(cur: &mut Cursor) -> Result<Self> {
         check_version("world rules", cur.u32()?, Self::VERSION..=Self::VERSION)?;
-        let unknown = cur.u32()?;
+        let map_type = cur.u32()?;
         let game_type = cur.string()?;
         let n = cur.u32()?;
         let rules = (0..n)
             .map(|_| {
                 let name = cur.string()?;
-                let unknown = cur.u8()?;
+                let locked = bool(cur, "rule locked")?;
                 let value = match cur.u32()? {
                     0 => RuleValue::Bool(bool(cur, "rule value")?),
                     1 => RuleValue::Int(cur.i32()?),
@@ -284,13 +315,13 @@ impl WorldRules {
                 };
                 Ok(Rule {
                     name,
-                    unknown,
+                    locked,
                     value,
                 })
             })
             .collect::<Result<_>>()?;
         Ok(WorldRules {
-            unknown,
+            map_type,
             game_type,
             rules,
         })
@@ -298,12 +329,12 @@ impl WorldRules {
 
     fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(Self::VERSION);
-        w.u32(self.unknown);
+        w.u32(self.map_type);
         w.string(&self.game_type)?;
         w.u32(self.rules.len() as u32);
         for rule in &self.rules {
             w.string(&rule.name)?;
-            w.u8(rule.unknown);
+            w.u8(rule.locked.into());
             match rule.value {
                 RuleValue::Bool(v) => {
                     w.u32(0);
@@ -374,13 +405,15 @@ impl KingdomSetup {
             display_name: cur.string()?,
             color_markup: (version >= 12).then(|| cur.string()).transpose()?,
             ai: cur.string()?,
-            unknown: [cur.u8()?, cur.u8()?],
+            required: bool(cur, "required")?,
+            playable: bool(cur, "playable")?,
             team: cur.string()?,
             objectives: strings(cur)?,
-            shared_properties: strings(cur)?,
-            unknown_string: cur.string()?,
+            technologies: strings(cur)?,
+            merge_into: cur.string()?,
             actors: strings(cur)?,
-            unknown2: [cur.u8()?, cur.u8()?],
+            removed: bool(cur, "removed")?,
+            ai_controlled: bool(cur, "ai controlled")?,
             resources: (version >= 13)
                 .then(|| {
                     let n = cur.u32()?;
@@ -411,13 +444,15 @@ impl KingdomSetup {
             |s| w.string(s),
         )?;
         w.string(&self.ai)?;
-        w.bytes(&self.unknown);
+        w.u8(self.required.into());
+        w.u8(self.playable.into());
         w.string(&self.team)?;
         write_strings(w, &self.objectives)?;
-        write_strings(w, &self.shared_properties)?;
-        w.string(&self.unknown_string)?;
+        write_strings(w, &self.technologies)?;
+        w.string(&self.merge_into)?;
         write_strings(w, &self.actors)?;
-        w.bytes(&self.unknown2);
+        w.u8(self.removed.into());
+        w.u8(self.ai_controlled.into());
         optional(version >= 13, "resources", self.resources.as_ref(), |rs| {
             w.u32(rs.len() as u32);
             rs.iter().try_for_each(|(name, amount)| {
@@ -467,22 +502,22 @@ mod tests {
 
     fn rules() -> WorldRules {
         WorldRules {
-            unknown: 0,
+            map_type: 0,
             game_type: "NORMAL".into(),
             rules: vec![
                 Rule {
                     name: "Multiplayer".into(),
-                    unknown: 0,
+                    locked: false,
                     value: RuleValue::Bool(true),
                 },
                 Rule {
                     name: "ResourceStockpileDefault".into(),
-                    unknown: 1,
+                    locked: true,
                     value: RuleValue::Float(500.0),
                 },
                 Rule {
                     name: "DifficultyLevel".into(),
-                    unknown: 0,
+                    locked: false,
                     value: RuleValue::Choice(1),
                 },
             ],
@@ -506,13 +541,15 @@ mod tests {
                 display_name: "kingdom_0".into(),
                 color_markup: (version >= 12).then(|| "<color=0,0.3,1>".into()),
                 ai: "ger_sai".into(),
-                unknown: [1, 0],
+                required: true,
+                playable: false,
                 team: "team_0".into(),
                 objectives: vec!["objective_0".into()],
-                shared_properties: Vec::new(),
-                unknown_string: String::new(),
+                technologies: Vec::new(),
+                merge_into: String::new(),
                 actors: Vec::new(),
-                unknown2: [0, 1],
+                removed: false,
+                ai_controlled: true,
                 resources: (version >= 13).then(|| vec![("money".into(), 250.0)]),
             }],
         }
@@ -523,25 +560,26 @@ mod tests {
             version,
             rules: rules(),
             parameters: parameters(parameters_version),
-            unknown: [version, 0],
+            header_version: version,
+            checksum: 0,
             name: "map_name".into(),
             description: "map_description".into(),
             size: (version >= 7).then_some([448.0, 448.0]),
-            unknown_f32: 4250.0,
-            editor_build: 30100,
-            editor_version: "0.3.1.0".into(),
-            game: "A&A".into(),
-            author: "someone".into(),
-            unknown_u8: 0,
+            build: 4250.0,
+            version_number: 30100,
+            app_version: "0.3.1.0".into(),
+            app_id: "A&A".into(),
+            edition: "Dev AA Dev".into(),
+            unknown: 0,
             path: "Maps/test.RMP".into(),
-            unknown_string: String::new(),
-            unknown_i32: (version >= 6).then_some(-1),
+            campaign: String::new(),
+            campaign_mission: (version >= 6).then_some(-1),
             saved: 0x01c4_a7e3_629f_3b0e,
             players: vec![Player {
-                unknown: 0,
+                ai: false,
                 kingdom: "kingdom_0".into(),
                 name: "Player".into(),
-                unknown2: (version >= 5).then_some(1),
+                local: (version >= 5).then_some(true),
             }],
             creator: WorldCreator {
                 rules: rules(),
