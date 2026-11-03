@@ -11,7 +11,8 @@
 //!                          water surface at water vertices, MOUNTAIN the
 //!                          (negative) depth of the bed below it
 //!     u8  layer[count]     HEIGHT_MAP: non-zero = water; MOUNTAIN: all 0
-//!     trailing bytes       MOUNTAIN_HEIGHT_MAP has one more
+//!     MOUNTAIN_HEIGHT_MAP, from world version 10: u8 cutscene_mode, the
+//!                          world's flag, saved here; 0 in every shipped map
 //!
 //! DYNAMIC_THINGS_INDEX     u32 data_version (0), u32 count, u32 record_size[count]
 //! DYNAMIC_THINGS           u32 data_version (0), u32 version (11), then per record:
@@ -123,7 +124,25 @@ impl<R: Read + Seek> Map<R> {
     }
 
     pub fn mountain_height_map(&mut self) -> Result<HeightMap> {
-        HeightMap::parse(&self.container.read_named("MOUNTAIN_HEIGHT_MAP")?)
+        Ok(self.mountain_section()?.0)
+    }
+
+    /// Whether the world was saved mid-cutscene; None before world version 10.
+    pub fn cutscene_mode(&mut self) -> Result<Option<bool>> {
+        Ok(self.mountain_section()?.1)
+    }
+
+    fn mountain_section(&mut self) -> Result<(HeightMap, Option<bool>)> {
+        let world_version = self.world_version()?;
+        let data = self.container.read_named("MOUNTAIN_HEIGHT_MAP")?;
+        let (data, cutscene_mode) = match data.split_last() {
+            Some((&flag, rest)) if world_version >= 10 => (
+                rest,
+                Some(header::bool(&mut Cursor::new(&[flag]), "cutscene mode")?),
+            ),
+            _ => (&data[..], None),
+        };
+        Ok((HeightMap::parse(data)?, cutscene_mode))
     }
 
     pub fn terrain(&mut self) -> Result<Terrain> {
@@ -223,7 +242,6 @@ pub struct HeightMap {
     pub heights: Vec<f32>,
     /// One byte per vertex; in HEIGHT_MAP non-zero marks water.
     pub layer: Vec<u8>,
-    pub trailing: Vec<u8>,
 }
 
 impl HeightMap {
@@ -249,7 +267,7 @@ impl HeightMap {
             .map(|&c| f32::from_le_bytes(c))
             .collect();
         let layer = cur.bytes(count)?.to_vec();
-        let trailing = cur.rest().to_vec();
+        cur.finish("height map")?;
         Ok(HeightMap {
             version,
             min,
@@ -259,7 +277,6 @@ impl HeightMap {
             side,
             heights,
             layer,
-            trailing,
         })
     }
 
@@ -277,9 +294,16 @@ impl HeightMap {
         w.u32(self.heights.len() as u32);
         w.f32s(&self.heights);
         w.bytes(&self.layer);
-        w.bytes(&self.trailing);
         w.0
     }
+}
+
+/// The MOUNTAIN_HEIGHT_MAP section holding `mountain` and the world's
+/// cutscene-mode flag, which is None exactly before world version 10.
+pub fn write_mountain_height_map(mountain: &HeightMap, cutscene_mode: Option<bool>) -> Vec<u8> {
+    let mut data = mountain.to_bytes();
+    data.extend(cutscene_mode.map(u8::from));
+    data
 }
 
 #[derive(Debug, Clone)]
@@ -1021,6 +1045,24 @@ mod tests {
     }
 
     #[test]
+    fn reads_cutscene_mode_after_the_mountain_height_map() {
+        let hm = height_section(3, 4);
+        for (world_version, flag, want) in [(28, &[1][..], Some(true)), (9, &[], None)] {
+            let mountain = [&hm[..], flag].concat();
+            let bytes = build_container(&[
+                ("MAP_HEADER", &[0; 64], true),
+                ("GWORLD", &(world_version as u32).to_le_bytes(), true),
+                ("MOUNTAIN_HEIGHT_MAP", &mountain, true),
+            ]);
+            let mut map = Map::new(io::Cursor::new(bytes)).unwrap();
+            assert_eq!(map.cutscene_mode().unwrap(), want);
+            let parsed = map.mountain_height_map().unwrap();
+            assert_eq!(parsed.side, 3);
+            assert_eq!(write_mountain_height_map(&parsed, want), mountain);
+        }
+    }
+
+    #[test]
     fn reads_used_required_objects() {
         let (index, data) = write_things(&[]).unwrap();
         assert_eq!(data, [0, 0, 0, 0, 11, 0, 0, 0]);
@@ -1058,6 +1100,10 @@ mod tests {
     fn writes_sections_back() {
         let hm = height_section(3, 4);
         assert_eq!(HeightMap::parse(&hm).unwrap().to_bytes(), hm);
+        assert!(
+            HeightMap::parse(&[&hm[..], &[0]].concat()).is_err(),
+            "trailing byte"
+        );
         for (version, tile) in [
             (7, &[1, 0, 2, 0, 3, 9, 0x21, 0][..]),
             (6, &[1, 0x21, 2, 0, 3, 9]),

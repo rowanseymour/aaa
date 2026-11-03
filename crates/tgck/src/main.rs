@@ -301,7 +301,10 @@ fn check(paths: &[&str]) -> Res {
             ("MAP", m.data_version()?.to_le_bytes().to_vec()),
             ("DENIZEN_GROUPS", tgck::map::write_denizen_groups()),
             ("HEIGHT_MAP", m.height_map()?.to_bytes()),
-            ("MOUNTAIN_HEIGHT_MAP", m.mountain_height_map()?.to_bytes()),
+            (
+                "MOUNTAIN_HEIGHT_MAP",
+                tgck::map::write_mountain_height_map(&m.mountain_height_map()?, m.cutscene_mode()?),
+            ),
             ("TERRAIN", m.terrain()?.to_bytes()?),
             ("SUN", m.sun()?.to_bytes()),
             ("DYNAMIC_THINGS_INDEX", index),
