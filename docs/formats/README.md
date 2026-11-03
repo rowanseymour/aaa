@@ -49,7 +49,7 @@ What `rmp.ksy` keeps as bytes, or reads without naming:
 |---|---|
 | TERRAIN | The AI's cached analysis of the map, after the tiles |
 | DYNAMIC_THINGS | Things other than actors, areas and cameras. Actors with a Projectile, Wall, Settlement, Aircraft, Flare or MetaGame component, or an aircraft's mind. Many component fields are read to their end but unnamed |
-| KINGDOMS | The strategic AI's state and several other fields, read but unnamed |
+| KINGDOMS | Two fields of an ability and one of a saved group |
 | MAP_HEADER | One byte's meaning |
 | DENIZEN_GROUPS | A group's layout; no shipped map has any |
 
