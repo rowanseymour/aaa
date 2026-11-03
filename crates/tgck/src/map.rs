@@ -314,6 +314,14 @@ impl HeightMap {
     }
 }
 
+/// The MAPSTRINGS section holding `text`, one byte per character as
+/// [`Map::strings`] reads it.
+pub fn write_strings(text: &str) -> Result<Vec<u8>> {
+    text.chars()
+        .map(|c| u8::try_from(c).map_err(|_| Error::Unwritable(format!("{c:?} in MAPSTRINGS"))))
+        .collect()
+}
+
 /// The MOUNTAIN_HEIGHT_MAP section holding `mountain` and the world's
 /// cutscene-mode flag, which is None exactly before world version 10.
 pub fn write_mountain_height_map(mountain: &HeightMap, cutscene_mode: Option<bool>) -> Vec<u8> {
@@ -1076,6 +1084,19 @@ mod tests {
             assert_eq!(parsed.side, 3);
             assert_eq!(write_mountain_height_map(&parsed, want), mountain);
         }
+    }
+
+    #[test]
+    fn writes_strings_back() {
+        let text = "[Text]\n{\n\tname_3954 = \"Stettin\"\n\tteam_0 = \"K\u{f6}nigsberg\"\n}\n";
+        let bytes = write_strings(text).unwrap();
+        assert_eq!(bytes.len(), text.chars().count());
+        assert!(bytes.contains(&0xf6), "one byte per character");
+        let container =
+            build_container(&[("MAP_HEADER", &[0; 64], true), ("MAPSTRINGS", &bytes, true)]);
+        let mut map = Map::new(io::Cursor::new(container)).unwrap();
+        assert_eq!(map.strings().unwrap(), text);
+        assert!(write_strings("\u{2019}").is_err(), "beyond one byte");
     }
 
     #[test]

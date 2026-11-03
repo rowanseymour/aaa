@@ -72,7 +72,7 @@ and `container::write` puts a file back together.
 | Map `TEAMS` | Done |
 | Map `KINGDOMS` | Name, colour, relations, resources, team, commander, nation, technologies and the strategic AI's state, much of it as unnamed values |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
-| Map `MAPSTRINGS` | Returned as text |
+| Map `MAPSTRINGS` | Done, as text in `.tgi` syntax, which the `tgi` crate parses |
 | Map `GWORLD`, `RULES`, `MISC_DATA`, `MAP`, `IDMGR`, `UPDATABLES`, `RESTRICTION_GROUPS` | Done |
 | Map `USED_REQUIRED_OBJECTS` | Done; empty in every shipped map |
 | Map `DENIZEN_GROUPS` | Checked to hold no groups, as in every shipped map; a group's layout isn't decoded |
