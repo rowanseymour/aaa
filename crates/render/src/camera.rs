@@ -5,6 +5,7 @@
 
 use std::f32::consts::FRAC_PI_4;
 
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 
@@ -49,6 +50,18 @@ impl RtsCamera {
             ..default()
         })
     }
+}
+
+/// Spawns the camera that looks at a map.
+pub fn spawn(commands: &mut Commands, cam: RtsCamera) {
+    // crate::light matches the game only without tonemapping.
+    commands.spawn((
+        Camera3d::default(),
+        Tonemapping::None,
+        cam.projection(),
+        cam.transform(),
+        cam,
+    ));
 }
 
 pub fn update(

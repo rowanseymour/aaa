@@ -6,17 +6,11 @@ use std::process::ExitCode;
 
 use aaa_data::GameData;
 use aaa_map::Map;
-use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::image::CompressedImageFormatSupport;
-use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
-use tgck::map::CELL_SIZE;
 
-use aaa_render::blend::GroundMaterial;
 use aaa_render::camera::{self, RtsCamera};
-use aaa_render::models::{ModelAssets, Models};
-use aaa_render::{MapRenderPlugin, objects, terrain};
+use aaa_render::{MapAssets, MapRenderPlugin, Markers, objects, terrain};
 
 const USAGE: &str = "\
 usage:
@@ -191,7 +185,7 @@ fn main() -> ExitCode {
         .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
         .insert_resource(loaded)
         .add_systems(Startup, setup)
-        .add_systems(Update, (camera::update, objects::toggle_modelless));
+        .add_systems(Update, objects::toggle_modelless);
     if let Some(c) = camera {
         app.insert_resource(c);
     }
@@ -249,71 +243,28 @@ fn take_screenshot(
     );
 }
 
-#[allow(clippy::too_many_arguments)] // Bevy systems take their resources as arguments
 fn setup(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut ground_materials: ResMut<Assets<GroundMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut assets: MapAssets,
     start: Option<Res<StartView>>,
     screenshot: Option<Res<ScreenshotTo>>,
     modelless: Option<Res<ShowModelless>>,
 ) {
-    let Loaded {
-        game,
-        map:
-            Map {
-                ground,
-                terrain,
-                things,
-                world_version,
-                sun,
-                ..
-            },
-    } = &mut *loaded;
-    let built = terrain::build(game, ground, terrain, &mut images);
-    if let Some((mesh, material)) = built.ground {
-        commands.spawn((
-            Name::new("ground"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(ground_materials.add(material)),
-        ));
-    }
-    if let Some((mesh, material)) = built.water {
-        commands.spawn((
-            Name::new("water"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(material)),
-            NotShadowCaster,
-        ));
-    }
-    let mut models = Models::new(game, formats.0);
-    let mut assets = ModelAssets {
-        meshes: &mut meshes,
-        materials: &mut materials,
-        images: &mut images,
+    let Loaded { game, map } = &mut *loaded;
+    let markers = Markers {
+        placeholders: screenshot.is_none(),
+        modelless: modelless.is_some(),
     };
-    let rest = models.spawn(&mut commands, game, &mut assets, things, *world_version);
-    objects::spawn(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        ground,
-        &rest,
-        screenshot.is_none(),
-        modelless.is_some(),
-    );
+    aaa_render::spawn_map(&mut commands, &mut assets, game, map, markers);
 
-    let size = (ground.side - 1) as f32 * CELL_SIZE;
-    let centre = terrain::world(
+    let ground = &map.ground;
+    let size = ground.size();
+    let mut cam = RtsCamera::new(terrain::world(
         size / 2.0,
         size / 2.0,
         ground.height_at(size / 2.0, size / 2.0),
-    );
-    let mut cam = RtsCamera::new(centre);
+    ));
     if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
         let (x, y) = (x * size, y * size);
         cam = RtsCamera {
@@ -324,15 +275,7 @@ fn setup(
             free: true,
         };
     }
-    // aaa_render::light matches the game only without tonemapping.
-    commands.spawn((
-        Camera3d::default(),
-        Tonemapping::None,
-        cam.projection(),
-        cam.transform(),
-        cam,
-    ));
-    aaa_render::light(&mut commands, sun, size);
+    camera::spawn(&mut commands, cam);
 
     if screenshot.is_some() {
         return;

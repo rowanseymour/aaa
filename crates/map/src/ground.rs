@@ -54,6 +54,11 @@ impl Ground {
         self.heights[y * self.side + x]
     }
 
+    /// Width and depth in world units.
+    pub fn size(&self) -> f32 {
+        (self.side - 1) as f32 * CELL_SIZE
+    }
+
     /// Ground height at a world position, interpolated.
     pub fn height_at(&self, wx: f32, wy: f32) -> f32 {
         let max = (self.side - 1) as f32;

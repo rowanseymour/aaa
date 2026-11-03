@@ -19,7 +19,6 @@ dependencies = [
  "aaa-map",
  "aaa-render",
  "bevy",
- "tgck",
 ]
 
 [[package]]
