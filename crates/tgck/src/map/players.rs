@@ -1,7 +1,12 @@
-//! The sides of a map: its teams and the kingdoms on them.
+//! The world a map's sides play in, its teams and the kingdoms on them.
 //!
 //! ```text
-//! GWORLD      u32 world_version, then not decoded
+//! GWORLD      u32 world_version (up to 28), u32 rng_seed, u32 game_ticks,
+//!             f32 game_time_begin, f32 game_time_end, f32 game_time_per_tick,
+//!             u32 next_player_id,
+//!             v4: u32 next_camera_id, u32 next_area_id,
+//!             v27: u32 next_structure_queue_item_id,
+//!             v5: u32 map_status, v7: u32 mission_state
 //! TEAMS       u32 count, then per team: u8 present, and if present:
 //!     head: string template, u32 class (5), u32 id, u32 version (2),
 //!           string name, u32 unknown (0), f32 position[3], f32 facing[3],
@@ -46,8 +51,92 @@
 //! a kingdom's relation to itself is 0.
 //! Teams' and kingdoms' indexes are their positions, which the game requires.
 
-use super::{Actor, Detail, Head, Property, Thing, expect, header::check_version};
+use super::header::{check_version, optional};
+use super::{Actor, Detail, Head, Property, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
+
+/// The game's world state as a map saves it; the names are the game's own.
+#[derive(Debug, Clone, PartialEq)]
+pub struct World {
+    /// The version of the game state, which decides the layout of this and
+    /// several other sections.
+    pub version: u32,
+    pub rng_seed: u32,
+    /// Ticks the game has run; 0 in every shipped map, as none has started.
+    pub game_ticks: u32,
+    /// The game time at the start and end of the last tick.
+    pub game_time_begin: f32,
+    pub game_time_end: f32,
+    /// Seconds of game time per tick.
+    pub game_time_per_tick: f32,
+    pub next_player_id: u32,
+    /// The numbers the editor gives the next camera and area it names
+    /// (`camera_%d`, `area_%d`); from version 4 on.
+    pub next_camera_id: Option<u32>,
+    pub next_area_id: Option<u32>,
+    /// For the items queued at structures; from version 27 on.
+    pub next_structure_queue_item_id: Option<u32>,
+    /// 0 unverified, 1 repaired, 2 verified; a mission only starts on a
+    /// verified map. From version 5 on.
+    pub map_status: Option<u32>,
+    /// 0 not started, 1 running, 2 won; from version 7 on.
+    pub mission_state: Option<u32>,
+}
+
+impl World {
+    const MAX_VERSION: u32 = 28;
+
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let mut cur = Cursor::new(data);
+        let cur = &mut cur;
+        let version = check_version("world", cur.u32()?, 0..=Self::MAX_VERSION)?;
+        let world = World {
+            version,
+            rng_seed: cur.u32()?,
+            game_ticks: cur.u32()?,
+            game_time_begin: cur.f32()?,
+            game_time_end: cur.f32()?,
+            game_time_per_tick: cur.f32()?,
+            next_player_id: cur.u32()?,
+            next_camera_id: (version >= 4).then(|| cur.u32()).transpose()?,
+            next_area_id: (version >= 4).then(|| cur.u32()).transpose()?,
+            next_structure_queue_item_id: (version >= 27).then(|| cur.u32()).transpose()?,
+            map_status: (version >= 5).then(|| cur.u32()).transpose()?,
+            mission_state: (version >= 7).then(|| cur.u32()).transpose()?,
+        };
+        cur.finish("GWORLD")?;
+        Ok(world)
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut w = Writer::default();
+        let v = self.version;
+        w.u32(v);
+        w.u32(self.rng_seed);
+        w.u32(self.game_ticks);
+        w.f32(self.game_time_begin);
+        w.f32(self.game_time_end);
+        w.f32(self.game_time_per_tick);
+        w.u32(self.next_player_id);
+        for (has, what, value) in [
+            (v >= 4, "next_camera_id", self.next_camera_id),
+            (v >= 4, "next_area_id", self.next_area_id),
+            (
+                v >= 27,
+                "next_structure_queue_item_id",
+                self.next_structure_queue_item_id,
+            ),
+            (v >= 5, "map_status", self.map_status),
+            (v >= 7, "mission_state", self.mission_state),
+        ] {
+            optional(has, what, value, |value| {
+                w.u32(value);
+                Ok(())
+            })?;
+        }
+        Ok(w.0)
+    }
+}
 
 /// A side kingdoms join, sharing victory.
 #[derive(Debug, Clone, PartialEq)]
@@ -735,6 +824,40 @@ impl Ability {
 mod tests {
     use super::*;
     use crate::map::{Component, Properties, State, Trailer, TrailerLists, Updatable};
+
+    fn world(version: u32) -> World {
+        World {
+            version,
+            rng_seed: 0x9e0b_05df,
+            game_ticks: 0,
+            game_time_begin: 0.0,
+            game_time_end: 0.0,
+            game_time_per_tick: 0.0625,
+            next_player_id: 0,
+            next_camera_id: Some(11),
+            next_area_id: Some(4),
+            next_structure_queue_item_id: (version >= 27).then_some(0),
+            map_status: Some(2),
+            mission_state: Some(0),
+        }
+    }
+
+    #[test]
+    fn round_trips_world() {
+        for (version, len) in [(21, 44), (27, 48)] {
+            let world = world(version);
+            let bytes = world.to_bytes().unwrap();
+            assert_eq!(bytes.len(), len);
+            assert_eq!(&bytes[20..24], &[0, 0, 0x80, 0x3d], "1/16 s per tick");
+            assert_eq!(World::parse(&bytes).unwrap(), world);
+        }
+        let mut bytes = world(28).to_bytes().unwrap();
+        bytes[0] = 29;
+        assert!(World::parse(&bytes).is_err(), "newer than the game");
+        let mut wrong = world(21);
+        wrong.next_structure_queue_item_id = Some(0);
+        assert!(wrong.to_bytes().is_err());
+    }
 
     fn head(w: &mut Writer, template: &str, class: u32, id: u32) {
         Head {

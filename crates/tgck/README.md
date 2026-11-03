@@ -73,7 +73,10 @@ and `container::write` puts a file back together.
 | Map `KINGDOMS` | Name, colour, relations, resources, team, commander, nation, technologies and the strategic AI's state, much of it as unnamed values |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
-| Other map sections (`RULES`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
+| Map `GWORLD`, `RULES`, `MISC_DATA`, `MAP` | Done |
+| Map `USED_REQUIRED_OBJECTS` | Done; empty in every shipped map |
+| Map `DENIZEN_GROUPS` | Checked to hold no groups, as in every shipped map; a group's layout isn't decoded |
+| Other map sections (`UPDATABLES`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
 
 All 80 maps that ship with the game parse fully, and every decoded section
 writes back byte for byte. Whole files differ only in their zlib streams, as

@@ -293,7 +293,13 @@ fn check(paths: &[&str]) -> Res {
             .collect::<Result<Vec<_>, _>>()?;
         let (index, things) = tgck::map::write_things(&m.things()?)?;
         let world_version = m.world_version()?;
-        let encoded = [
+        m.denizen_groups()?;
+        let mut encoded = vec![
+            ("GWORLD", m.world()?.to_bytes()?),
+            ("RULES", m.rules()?.to_bytes()?),
+            ("MISC_DATA", m.misc_data()?.to_bytes(world_version)?),
+            ("MAP", m.data_version()?.to_le_bytes().to_vec()),
+            ("DENIZEN_GROUPS", tgck::map::write_denizen_groups()),
             ("HEIGHT_MAP", m.height_map()?.to_bytes()),
             ("MOUNTAIN_HEIGHT_MAP", m.mountain_height_map()?.to_bytes()),
             ("TERRAIN", m.terrain()?.to_bytes()?),
@@ -306,6 +312,11 @@ fn check(paths: &[&str]) -> Res {
             ("OBJECTIVES", m.objectives()?.to_bytes()?),
             ("TRIGGERS", m.triggers()?.to_bytes()?),
         ];
+        if let Some(objects) = m.used_required_objects()? {
+            let (index, data) = tgck::map::write_things(&objects)?;
+            encoded.push(("USED_REQUIRED_OBJECTS_INDEX", index));
+            encoded.push(("USED_REQUIRED_OBJECTS", data));
+        }
         let mut diffs = Vec::new();
         for (name, data) in encoded {
             let Some(i) = sections.iter().position(|s| s.name == name) else {

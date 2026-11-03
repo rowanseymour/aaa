@@ -5,11 +5,13 @@
 //! 0x0C  section payloads, back to back
 //! end   section table: section_count records of 0x60 bytes:
 //!         UTF-16LE name[32], u64 offset, u64 stored_size,
-//!         8 bytes unknown (constant per file; uninitialised memory in .rwd),
+//!         u32 flags (bit 0: zlib-compressed), u32 unknown,
 //!         u64 unpacked_size
 //! ```
 //!
-//! A section is zlib-compressed when `stored_size != unpacked_size`.
+//! The game ignores the flags' other bits and the unknown word, which hold
+//! leftover memory; they're kept so files write back unchanged. Sizes alone
+//! can't tell a compressed section apart, as some deflate to their own size.
 
 use std::fs::File;
 use std::io::{BufReader, Read, Seek, SeekFrom, Write};
@@ -31,12 +33,13 @@ pub struct Section {
     pub offset: u64,
     pub stored_size: u64,
     pub unpacked_size: u64,
-    pub unknown: [u8; 8],
+    pub flags: u32,
+    pub unknown: u32,
 }
 
 impl Section {
     pub fn is_compressed(&self) -> bool {
-        self.stored_size != self.unpacked_size
+        self.flags & 1 != 0
     }
 }
 
@@ -86,7 +89,8 @@ impl<R: Read + Seek> Container<R> {
                 name: utf16_lossy(cur.bytes(SECTION_NAME_LEN)?),
                 offset: cur.u64()?,
                 stored_size: cur.u64()?,
-                unknown: cur.bytes(8)?.try_into().unwrap(),
+                flags: cur.u32()?,
+                unknown: cur.u32()?,
                 unpacked_size: cur.u64()?,
             };
             if section
@@ -154,8 +158,8 @@ impl<R: Read + Seek> Container<R> {
 }
 
 /// Writes a container of `(section, payload)` pairs, laid out as the game
-/// does. Each section gives its name, unknown bytes and whether to compress;
-/// its offset and sizes are recomputed from the payload.
+/// does. Each section gives its name and flags, which say whether to
+/// compress; its offset and sizes are recomputed from the payload.
 pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()> {
     let mut w = Writer::default();
     w.bytes(MAGIC);
@@ -163,12 +167,11 @@ pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()>
     w.u32(sections.len() as u32);
     let mut table = Writer::default();
     for (section, payload) in sections {
-        let stored = Some(section)
-            .filter(|s| s.is_compressed())
-            .map(|_| miniz_oxide::deflate::compress_to_vec_zlib(payload, ZLIB_LEVEL))
-            // Readers take a section whose sizes match as stored raw.
-            .filter(|z| z.len() != payload.len())
-            .unwrap_or_else(|| payload.to_vec());
+        let stored = if section.is_compressed() {
+            miniz_oxide::deflate::compress_to_vec_zlib(payload, ZLIB_LEVEL)
+        } else {
+            payload.to_vec()
+        };
         let name: Vec<u16> = section.name.encode_utf16().collect();
         if name.len() > SECTION_NAME_LEN / 2 {
             return Err(Error::Unwritable(format!(
@@ -180,7 +183,8 @@ pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()>
         table.bytes(&[0; SECTION_NAME_LEN][name.len() * 2..]);
         table.u64(w.0.len() as u64);
         table.u64(stored.len() as u64);
-        table.bytes(&section.unknown);
+        table.u32(section.flags);
+        table.u32(section.unknown);
         table.u64(payload.len() as u64);
         w.bytes(&stored);
     }
@@ -212,5 +216,23 @@ mod tests {
         let mut out = Vec::new();
         write(&mut out, &pairs).unwrap();
         assert_eq!(out, bytes, "laid out as the game does");
+    }
+
+    #[test]
+    fn takes_compression_from_the_flag() {
+        // Some payloads deflate to their own size, as MISC_DATA does in a few
+        // shipped maps; find one.
+        let payload = (1..64)
+            .map(|n| (0..n).map(|i| (i * 7 % 5) as u8).collect::<Vec<_>>())
+            .find(|p| miniz_oxide::deflate::compress_to_vec_zlib(p, ZLIB_LEVEL).len() == p.len())
+            .expect("a payload that deflates to its own size");
+        let bytes = build_container(&[("PACKED", &payload, true), ("RAW", &payload, false)]);
+        let mut c = Container::new(io::Cursor::new(&bytes)).unwrap();
+        let sections = c.sections.clone();
+        assert_eq!(sections[0].stored_size, sections[0].unpacked_size);
+        assert!(sections[0].is_compressed() && !sections[1].is_compressed());
+        for s in &sections {
+            assert_eq!(c.read_section(s).unwrap(), payload);
+        }
     }
 }

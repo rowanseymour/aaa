@@ -31,7 +31,8 @@
 //! ```
 //!
 //! The creator holds a second copy of the rules and parameters, the same in
-//! every shipped map.
+//! every shipped map. RULES holds the rules the world plays by, laid out as
+//! here; every shipped map's match its header's.
 
 use crate::{Cursor, Error, Result, Writer};
 
@@ -186,7 +187,7 @@ impl MapHeader {
         let version = check_version("map header", cur.u32()?, 4..=7)?;
         let header = MapHeader {
             version,
-            rules: WorldRules::parse(cur)?,
+            rules: WorldRules::read(cur)?,
             parameters: WorldParameters::parse(cur)?,
             unknown: [cur.u32()?, cur.u32()?],
             name: cur.string()?,
@@ -282,7 +283,21 @@ pub(super) fn optional<T>(
 impl WorldRules {
     const VERSION: u32 = 4;
 
-    fn parse(cur: &mut Cursor) -> Result<Self> {
+    /// Parses the RULES section.
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let mut cur = Cursor::new(data);
+        let rules = Self::read(&mut cur)?;
+        cur.finish("RULES")?;
+        Ok(rules)
+    }
+
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let mut w = Writer::default();
+        self.write(&mut w)?;
+        Ok(w.0)
+    }
+
+    fn read(cur: &mut Cursor) -> Result<Self> {
         check_version("world rules", cur.u32()?, Self::VERSION..=Self::VERSION)?;
         let unknown = cur.u32()?;
         let game_type = cur.string()?;
@@ -455,7 +470,7 @@ impl WorldCreator {
         }
         check_version("world creator", cur.u32()?, Self::VERSION..=Self::VERSION)?;
         Ok(WorldCreator {
-            rules: WorldRules::parse(cur)?,
+            rules: WorldRules::read(cur)?,
             parameters: WorldParameters::parse(cur)?,
             size: cur.f32s()?,
             biome: cur.string()?,
@@ -596,6 +611,10 @@ mod tests {
         want.string("DifficultyLevel").unwrap();
         want.bytes(&[0, 3, 0, 0, 0, 1, 0, 0, 0]);
         assert_eq!(w.0, want.0);
+        assert_eq!(rules().to_bytes().unwrap(), want.0, "as RULES");
+        assert_eq!(WorldRules::parse(&want.0).unwrap(), rules());
+        want.u8(0);
+        assert!(WorldRules::parse(&want.0).is_err(), "trailing byte");
     }
 
     #[test]

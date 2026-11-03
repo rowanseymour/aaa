@@ -13,8 +13,8 @@
 //!     u8  layer[count]     HEIGHT_MAP: non-zero = water; MOUNTAIN: all 0
 //!     trailing bytes       MOUNTAIN_HEIGHT_MAP has one more
 //!
-//! DYNAMIC_THINGS_INDEX     u32 unknown (0), u32 count, u32 record_size[count]
-//! DYNAMIC_THINGS           u32 unknown (0), u32 version (11), then per record:
+//! DYNAMIC_THINGS_INDEX     u32 data_version (0), u32 count, u32 record_size[count]
+//! DYNAMIC_THINGS           u32 data_version (0), u32 version (11), then per record:
 //!     string template, u32 class, u32 id, u32 version (2), string name,
 //!     u32 unknown (0), f32 position[3], f32 facing[3],
 //!     u32 flags, u32 version (5), f32 scale, i32 variation (-1 = none),
@@ -33,10 +33,14 @@
 //!     f32 diffuse[3], ambient[3], specular[3]   as in Templates/template_sun.tgi
 //!     rest unknown: the same colours again, then 38 more bytes
 //!
+//! USED_REQUIRED_OBJECTS_INDEX, USED_REQUIRED_OBJECTS
+//!     as DYNAMIC_THINGS, from world version 25; empty in every shipped map
+//!
 //! MAPSTRINGS               plain text in .tgi syntax (map name, objectives, ...)
 //!
 //! GWORLD, TEAMS, KINGDOMS  see map/players.rs
-//! MAP_HEADER               see map/header.rs
+//! MAP_HEADER, RULES        see map/header.rs
+//! MAP, DENIZEN_GROUPS, MISC_DATA  see map/misc.rs
 //! OBJECTIVES               see map/objectives.rs
 //! TRIGGERS                 see map/triggers.rs
 //!
@@ -62,6 +66,7 @@ use std::path::Path;
 
 mod actor;
 mod header;
+mod misc;
 mod objectives;
 mod players;
 mod triggers;
@@ -74,10 +79,11 @@ pub use header::{
     KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
     WorldRules,
 };
+pub use misc::{GameCounter, MiscData, UsedName, write_denizen_groups};
 pub use objectives::{Objective, Objectives};
 pub use players::{
     Ability, AiItem, AiPriorities, AiWeights, Entry, Faction, Kingdom, Kingdoms, StrategicAi, Team,
-    write_teams,
+    World, write_teams,
 };
 pub use triggers::{Element, Parameter, Trigger, Triggers, Value};
 
@@ -128,13 +134,47 @@ impl<R: Read + Seek> Map<R> {
         let world_version = self.world_version()?;
         let index = self.container.read_named("DYNAMIC_THINGS_INDEX")?;
         let data = self.container.read_named("DYNAMIC_THINGS")?;
-        parse_things(&index, &data, world_version)
+        parse_things("DYNAMIC_THINGS", &index, &data, world_version)
+    }
+
+    /// None if the map is older than the sections.
+    pub fn used_required_objects(&mut self) -> Result<Option<Vec<Thing>>> {
+        if self.container.section("USED_REQUIRED_OBJECTS").is_none() {
+            return Ok(None);
+        }
+        let world_version = self.world_version()?;
+        let index = self.container.read_named("USED_REQUIRED_OBJECTS_INDEX")?;
+        let data = self.container.read_named("USED_REQUIRED_OBJECTS")?;
+        parse_things("USED_REQUIRED_OBJECTS", &index, &data, world_version).map(Some)
     }
 
     /// The version of the game state the map was saved with, which decides
     /// the layout of some sections.
     pub fn world_version(&mut self) -> Result<u32> {
         Cursor::new(&self.container.read_named("GWORLD")?).u32()
+    }
+
+    pub fn world(&mut self) -> Result<World> {
+        World::parse(&self.container.read_named("GWORLD")?)
+    }
+
+    pub fn rules(&mut self) -> Result<WorldRules> {
+        WorldRules::parse(&self.container.read_named("RULES")?)
+    }
+
+    pub fn misc_data(&mut self) -> Result<MiscData> {
+        let world_version = self.world_version()?;
+        MiscData::parse(&self.container.read_named("MISC_DATA")?, world_version)
+    }
+
+    /// The map resource's data version (MAP).
+    pub fn data_version(&mut self) -> Result<u32> {
+        misc::parse_data_version(&self.container.read_named("MAP")?)
+    }
+
+    /// Checks the map saves no denizen groups, whose layout isn't decoded.
+    pub fn denizen_groups(&mut self) -> Result<()> {
+        misc::parse_denizen_groups(&self.container.read_named("DENIZEN_GROUPS")?)
     }
 
     pub fn teams(&mut self) -> Result<Vec<Option<Team>>> {
@@ -499,13 +539,15 @@ pub struct Camera {
 /// The version DYNAMIC_THINGS records are written in.
 const THINGS_VERSION: u32 = 11;
 
-fn parse_things(index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thing>> {
+/// Reads a thing list from its `{name}_INDEX` and `{name}` sections.
+fn parse_things(name: &str, index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thing>> {
+    let index_name = format!("{name}_INDEX");
     let mut idx = Cursor::new(index);
-    expect(&mut idx, "DYNAMIC_THINGS_INDEX header", 0)?;
+    expect(&mut idx, &format!("{index_name} data version"), 0)?;
     let count = idx.u32()?;
     let mut cur = Cursor::new(data);
-    expect(&mut cur, "DYNAMIC_THINGS header", 0)?;
-    expect(&mut cur, "DYNAMIC_THINGS version", THINGS_VERSION)?;
+    expect(&mut cur, &format!("{name} data version"), 0)?;
+    expect(&mut cur, &format!("{name} version"), THINGS_VERSION)?;
     let mut things = Vec::with_capacity(count.min(1 << 20) as usize);
     for i in 0..count {
         let size = idx.u32()? as usize;
@@ -515,12 +557,13 @@ fn parse_things(index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thi
         })?;
         things.push(thing);
     }
-    idx.finish("DYNAMIC_THINGS_INDEX")?;
-    cur.finish("DYNAMIC_THINGS")?;
+    idx.finish(&index_name)?;
+    cur.finish(name)?;
     Ok(things)
 }
 
-/// The DYNAMIC_THINGS_INDEX and DYNAMIC_THINGS sections holding `things`.
+/// The DYNAMIC_THINGS_INDEX and DYNAMIC_THINGS sections holding `things`, or
+/// the like pair of USED_REQUIRED_OBJECTS sections.
 pub fn write_things(things: &[Thing]) -> Result<(Vec<u8>, Vec<u8>)> {
     let mut index = Writer::default();
     index.u32(0);
@@ -903,6 +946,8 @@ mod tests {
             ("DYNAMIC_THINGS_INDEX", &index, true),
         ]);
         let mut map = Map::new(io::Cursor::new(bytes)).unwrap();
+        assert_eq!(map.data_version().unwrap(), 0);
+        assert!(map.used_required_objects().unwrap().is_none(), "too old");
         let hm = map.height_map().unwrap();
         assert_eq!((hm.side, hm.default), (3, 2.0));
         assert_eq!(hm.at(2, 1), 5.0);
@@ -953,7 +998,7 @@ mod tests {
             thing_record(AREA, "circle_area", 2, [0.0; 3], &no_id),
             thing_record(CAMERA, "camera", 3, [0.0; 3], &camera),
         ]);
-        let things = parse_things(&index, &data, 28).unwrap();
+        let things = parse_things("DYNAMIC_THINGS", &index, &data, 28).unwrap();
         let Detail::Area(area) = &things[0].detail else {
             panic!("{:?}", things[0].detail)
         };
@@ -976,18 +1021,35 @@ mod tests {
     }
 
     #[test]
+    fn reads_used_required_objects() {
+        let (index, data) = write_things(&[]).unwrap();
+        assert_eq!(data, [0, 0, 0, 0, 11, 0, 0, 0]);
+        let bytes = build_container(&[
+            ("MAP_HEADER", &[0; 64], true),
+            ("GWORLD", &25u32.to_le_bytes(), true),
+            ("USED_REQUIRED_OBJECTS", &data, true),
+            ("USED_REQUIRED_OBJECTS_INDEX", &index, true),
+        ]);
+        let mut map = Map::new(io::Cursor::new(bytes)).unwrap();
+        assert_eq!(
+            map.used_required_objects().unwrap().map(|t| t.len()),
+            Some(0)
+        );
+    }
+
+    #[test]
     fn rejects_unknown_thing_versions() {
         let mut record = thing_record(2, "tree", 1, [0.0; 3], &[]);
         let at = string("tree").len() + 8;
         record[at] = 3;
         let (index, data) = things_sections(&[record]);
-        assert!(parse_things(&index, &data, 28).is_err());
+        assert!(parse_things("DYNAMIC_THINGS", &index, &data, 28).is_err());
 
         let mut actor = actor_detail(0, &[]);
         actor[0] = 15;
         let (index, data) = things_sections(&[thing_record(ACTOR, "tank", 1, [0.0; 3], &actor)]);
         assert!(
-            parse_things(&index, &data, 28).is_err(),
+            parse_things("DYNAMIC_THINGS", &index, &data, 28).is_err(),
             "newer than the game"
         );
     }
