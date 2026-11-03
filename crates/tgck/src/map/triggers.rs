@@ -26,7 +26,9 @@ pub struct Triggers {
 pub struct Trigger {
     /// By which `mi_trigger` parameters refer to it.
     pub id: u32,
-    pub unknown: u32,
+    /// Whether every condition must hold for its effects to run, rather than
+    /// any one.
+    pub all_conditions: bool,
     /// Whether it starts out listening for its events.
     pub active: bool,
     /// Whether it stays active after running its effects.
@@ -232,7 +234,11 @@ impl Trigger {
         expect(cur, "trigger version", TRIGGER_VERSION)?;
         Ok(Trigger {
             id: cur.u32()?,
-            unknown: cur.u32()?,
+            all_conditions: match cur.u32()? {
+                0 => false,
+                1 => true,
+                v => return Err(Error::Corrupt(format!("trigger condition mode is {v}"))),
+            },
             active: bool(cur, "trigger active")?,
             repeats: bool(cur, "trigger repeats")?,
             activation_time: cur.f32()?,
@@ -248,7 +254,7 @@ impl Trigger {
     fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(TRIGGER_VERSION);
         w.u32(self.id);
-        w.u32(self.unknown);
+        w.u32(self.all_conditions.into());
         w.u8(self.active.into());
         w.u8(self.repeats.into());
         w.f32(self.activation_time);
@@ -342,7 +348,7 @@ mod tests {
             next_id: 3,
             triggers: vec![Trigger {
                 id: 1,
-                unknown: 1,
+                all_conditions: true,
                 active: true,
                 repeats: false,
                 activation_time: 0.0,

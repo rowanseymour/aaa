@@ -1035,9 +1035,13 @@ types:
       - id: id
         type: u4
         doc: By which `mi_trigger` parameters refer to it.
-      - id: unknown
+      - id: all_conditions
         type: u4
-        doc: Unknown.
+        valid:
+          max: 1
+        doc: |
+          1 if every condition must hold for the effects to run, 0 if any one
+          is enough.
       - id: active
         type: flag
         doc: Whether it starts out listening for its events.
