@@ -283,7 +283,7 @@ pub struct Terrain {
     pub side: usize,
     /// Row-major, `side * side` entries.
     pub tiles: Vec<Tile>,
-    /// Undecoded: the AI's cached analysis of the map, and what follows it.
+    /// The AI's analysis of the map and the shore mesh, kept as bytes.
     pub ai_cache: Vec<u8>,
 }
 

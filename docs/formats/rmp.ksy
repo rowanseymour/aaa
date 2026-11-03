@@ -138,6 +138,12 @@ types:
         type: f4
         repeat: expr
         repeat-expr: num_items
+  vec2:
+    seq:
+      - id: x
+        type: f4
+      - id: y
+        type: f4
   vec3:
     seq:
       - id: x
@@ -500,11 +506,13 @@ types:
         repeat: expr
         repeat-expr: num_tiles
         doc: Row-major.
-      - id: ai_cache
-        size-eos: true
-        doc: |
-          Undecoded: the AI's analysis of the map, then from version 6 one
-          more object. The game can rebuild it.
+      - id: ai_map
+        type: ai_map
+        if: version >= 2
+        doc: The AI's analysis of the map, which the game can rebuild.
+      - id: shore_mesh
+        type: shore_mesh
+        if: version >= 6
   tile:
     doc: |
       Version 7 widens the terrain index and reorders the fields; versions
@@ -546,6 +554,149 @@ types:
       flags:
         value: 'version >= 7 ? flags_v7 : flags_old'
         doc: Bits 0-3; the game recomputes bits 4-6 from the terrain's group.
+  ai_map:
+    doc: |
+      The map cut into rectangular blocks of tiles, grouped into regions
+      for the AI's path finding.
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: has_data
+        type: flag
+      - id: num_regions
+        type: u4
+        if: has_data.value == 1
+      - id: regions
+        type: ai_region
+        repeat: expr
+        repeat-expr: num_regions
+        if: has_data.value == 1
+      - id: num_blocks
+        type: u4
+        if: has_data.value == 1
+      - id: blocks
+        type: ai_block
+        repeat: expr
+        repeat-expr: num_blocks
+        if: has_data.value == 1
+        doc: They cover every tile once.
+  ai_region:
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: center
+        type: vec2
+        doc: In world units.
+      - id: num_neighbors
+        type: u4
+      - id: neighbors
+        type: ai_neighbor
+        repeat: expr
+        repeat-expr: num_neighbors
+        doc: The regions whose blocks touch this one's.
+  ai_neighbor:
+    seq:
+      - id: region
+        type: u4
+      - id: distance
+        type: f4
+        doc: Between the two regions' centers.
+  ai_block:
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: region
+        type: u4
+        doc: The region it belongs to.
+      - id: area
+        type: u4
+        doc: |
+          The connected stretch of land or water it's in; every block of a
+          region shares it.
+      - id: sides
+        type: ai_block_side
+        repeat: expr
+        repeat-expr: 4
+        doc: Top, right, bottom and left.
+    instances:
+      min_y:
+        value: sides[0].bound
+      max_x:
+        value: sides[1].bound
+      max_y:
+        value: sides[2].bound
+      min_x:
+        value: sides[3].bound
+  ai_block_side:
+    seq:
+      - id: bound
+        type: u2
+        doc: The block's first or last row or column on this side, inclusive.
+      - id: num_links
+        type: u4
+      - id: links
+        type: ai_block_link
+        repeat: expr
+        repeat-expr: num_links
+        doc: The blocks across this side.
+  ai_block_link:
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: min_x
+        type: u2
+        doc: The span of this block's edge tiles that the other block touches, inclusive.
+      - id: max_x
+        type: u2
+      - id: min_y
+        type: u2
+      - id: max_y
+        type: u2
+      - id: block
+        type: u4
+  shore_mesh:
+    doc: |
+      Triangles over the tiles along the water's edge, where the ground
+      crosses the water level; empty in most shipped maps.
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: num_points
+        type: u4
+      - id: points
+        type: vec2
+        repeat: expr
+        repeat-expr: num_points
+        doc: In world units.
+      - id: num_corners
+        type: u4
+      - id: corners
+        type: u4
+        repeat: expr
+        repeat-expr: num_corners
+        doc: Indices into the points, three per triangle.
+      - id: num_tiles
+        type: u4
+      - id: tiles
+        type: shore_tile
+        repeat: expr
+        repeat-expr: num_tiles
+  shore_tile:
+    seq:
+      - id: x
+        type: u4
+      - id: y
+        type: u4
+      - id: first_corner
+        type: u4
+      - id: last_corner
+        type: u4
+        doc: Inclusive; the tile's triangles run from the first corner to here.
 
   # The map header and rules.
   map_header:
