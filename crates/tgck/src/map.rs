@@ -426,39 +426,116 @@ fn tile_size(version: u32) -> usize {
 #[derive(Debug, Clone)]
 pub struct Sun {
     pub version: u32,
-    pub unknown: [u32; 2],
+    /// Registered only while a fade runs; -1 otherwise.
+    pub updatable: Updatable,
     /// Unit vector the light travels along, in map coordinates (z up).
     pub direction: [f32; 3],
     pub diffuse: [f32; 3],
     pub ambient: [f32; 3],
     pub specular: [f32; 3],
-    pub rest: Vec<u8>,
+    /// The colours the current ones fade toward.
+    pub target_diffuse: [f32; 3],
+    pub target_ambient: [f32; 3],
+    pub target_specular: [f32; 3],
+    /// Seconds left in the colour fade.
+    pub color_fade_time: f32,
+    /// A brightness multiplier.
+    pub dimmer: f32,
+    pub target_dimmer: f32,
+    pub dimmer_fade_time: f32,
+    /// The game time of the last fade step; -1 before any.
+    pub last_update_time: f32,
+    /// The cinematic letterbox and the screen fade; from version 1 on.
+    pub overlays: Option<[Overlay; 2]>,
+}
+
+/// A script-driven screen effect, such as the letterbox.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Overlay {
+    pub on: bool,
+    /// The game time it was turned on or off at; the game ignores it in
+    /// version 1.
+    pub start: f32,
+    /// Seconds it takes to come or go; the game ignores it in version 1.
+    pub duration: f32,
 }
 
 impl Sun {
+    const MAX_VERSION: u32 = 2;
+
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
-        Ok(Sun {
-            version: cur.u32()?,
-            unknown: [cur.u32()?, cur.u32()?],
+        let cur = &mut cur;
+        let version = header::check_version("sun", cur.u32()?, 0..=Self::MAX_VERSION)?;
+        let sun = Sun {
+            version,
+            updatable: Updatable::parse(cur)?,
             direction: cur.f32s()?,
             diffuse: cur.f32s()?,
             ambient: cur.f32s()?,
             specular: cur.f32s()?,
-            rest: cur.rest().to_vec(),
-        })
+            target_diffuse: cur.f32s()?,
+            target_ambient: cur.f32s()?,
+            target_specular: cur.f32s()?,
+            color_fade_time: cur.f32()?,
+            dimmer: cur.f32()?,
+            target_dimmer: cur.f32()?,
+            dimmer_fade_time: cur.f32()?,
+            last_update_time: cur.f32()?,
+            overlays: (version >= 1)
+                .then(|| Result::<_>::Ok([Overlay::parse(cur)?, Overlay::parse(cur)?]))
+                .transpose()?,
+        };
+        cur.finish("SUN")?;
+        Ok(sun)
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut w = Writer::default();
         w.u32(self.version);
-        w.u32(self.unknown[0]);
-        w.u32(self.unknown[1]);
-        for v in [self.direction, self.diffuse, self.ambient, self.specular] {
+        self.updatable.write(&mut w);
+        for v in [
+            self.direction,
+            self.diffuse,
+            self.ambient,
+            self.specular,
+            self.target_diffuse,
+            self.target_ambient,
+            self.target_specular,
+        ] {
             w.f32s(&v);
         }
-        w.bytes(&self.rest);
-        w.0
+        w.f32s(&[
+            self.color_fade_time,
+            self.dimmer,
+            self.target_dimmer,
+            self.dimmer_fade_time,
+            self.last_update_time,
+        ]);
+        header::optional(
+            self.version >= 1,
+            "sun overlays",
+            self.overlays,
+            |overlays| {
+                for o in overlays {
+                    w.u8(o.on.into());
+                    w.f32(o.start);
+                    w.f32(o.duration);
+                }
+                Ok(())
+            },
+        )?;
+        Ok(w.0)
+    }
+}
+
+impl Overlay {
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        Ok(Overlay {
+            on: header::bool(cur, "overlay flag")?,
+            start: cur.f32()?,
+            duration: cur.f32()?,
+        })
     }
 }
 
@@ -899,20 +976,46 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parses_sun() {
-        let mut b = [2u32, 1, u32::MAX].map(u32::to_le_bytes).concat();
+    fn sun_section(version: u32) -> Vec<u8> {
+        let mut b = [version, 1, u32::MAX].map(u32::to_le_bytes).concat();
         for v in [
-            0.6, 0.0, -0.8, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.0, 0.0, 0.0f32,
+            0.6, 0.0, -0.8, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.8, 0.8,
+            0.8, 0.0, 0.0, 0.0, 0.0, 1.0, 0.5, 2.0, -1.0f32,
         ] {
             b.extend(v.to_le_bytes());
         }
-        b.extend([0xAA, 0xBB]);
+        if version >= 1 {
+            for (on, start, duration) in [(1u8, 3.0f32, 1.5f32), (0, 0.0, 0.0)] {
+                b.push(on);
+                b.extend(start.to_le_bytes());
+                b.extend(duration.to_le_bytes());
+            }
+        }
+        b
+    }
+
+    #[test]
+    fn parses_sun() {
+        let b = sun_section(2);
+        assert_eq!(b.len(), 134);
         let sun = Sun::parse(&b).unwrap();
         assert_eq!((sun.version, sun.direction), (2, [0.6, 0.0, -0.8]));
+        assert_eq!((sun.updatable.version, sun.updatable.id), (1, -1));
         assert_eq!((sun.diffuse, sun.ambient), ([1.0; 3], [0.8; 3]));
-        assert_eq!(sun.rest, [0xAA, 0xBB]);
+        assert_eq!(sun.target_diffuse, sun.diffuse);
+        assert_eq!((sun.target_dimmer, sun.dimmer_fade_time), (0.5, 2.0));
+        let [letterbox, fade] = sun.overlays.unwrap();
+        assert_eq!(
+            (letterbox.on, letterbox.duration, fade.on),
+            (true, 1.5, false)
+        );
         assert!(Sun::parse(&b[..40]).is_err(), "truncated");
+        assert!(
+            Sun::parse(&[&b[..], &[0]].concat()).is_err(),
+            "trailing byte"
+        );
+        let v0 = Sun::parse(&sun_section(0)).unwrap();
+        assert!(v0.overlays.is_none());
     }
 
     #[test]
@@ -1092,9 +1195,9 @@ mod tests {
             assert_eq!(parsed.at(0, 0).unknown2, 9);
             assert_eq!(parsed.to_bytes().unwrap(), terrain);
         }
-        let mut sun = [2u32, 1, u32::MAX].map(u32::to_le_bytes).concat();
-        sun.extend([0.5f32; 12].map(f32::to_le_bytes).concat());
-        sun.extend([0xAA]);
-        assert_eq!(Sun::parse(&sun).unwrap().to_bytes(), sun);
+        for version in [0, 2] {
+            let sun = sun_section(version);
+            assert_eq!(Sun::parse(&sun).unwrap().to_bytes().unwrap(), sun);
+        }
     }
 }

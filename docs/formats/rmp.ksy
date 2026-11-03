@@ -297,17 +297,16 @@ types:
         size-eos: true
         encoding: windows-1252
   sun:
-    doc: SUN, the map's light.
+    doc: SUN, the map's light, and the screen effects scripts drive.
     seq:
       - id: version
         type: u4
-        doc: 1 or 2.
-      - id: unknown1
-        type: u4
-        doc: Unknown; 1.
-      - id: unknown2
-        type: u4
-        doc: Unknown; 0xFFFFFFFF.
+        valid:
+          max: 2
+        doc: 1 or 2 in shipped maps.
+      - id: updatable
+        type: updatable
+        doc: Registered only while a fade runs; -1 otherwise.
       - id: direction
         type: vec3
         doc: The unit vector the light travels along.
@@ -318,9 +317,45 @@ types:
         type: vec3
       - id: specular
         type: vec3
-      - id: rest
-        size-eos: true
-        doc: Undecoded; the same colours again, then 38 more bytes.
+      - id: target_diffuse
+        type: vec3
+        doc: The colours above fade toward these.
+      - id: target_ambient
+        type: vec3
+      - id: target_specular
+        type: vec3
+      - id: color_fade_time
+        type: f4
+        doc: Seconds left in the colour fade.
+      - id: dimmer
+        type: f4
+        doc: A brightness multiplier.
+      - id: target_dimmer
+        type: f4
+      - id: dimmer_fade_time
+        type: f4
+        doc: Seconds left in the dimmer fade.
+      - id: last_update_time
+        type: f4
+        doc: The game time of the last fade step; -1 before any.
+      - id: letterbox
+        type: overlay
+        if: version >= 1
+        doc: The cinematic black bars.
+      - id: screen_fade
+        type: overlay
+        if: version >= 1
+  overlay:
+    doc: A screen effect scripts turn on and off.
+    seq:
+      - id: on
+        type: flag
+      - id: start
+        type: f4
+        doc: The game time it was turned on or off at; ignored in version 1.
+      - id: duration
+        type: f4
+        doc: Seconds it takes to come or go; ignored in version 1.
 
   # The bookkeeping of the simulation.
   id_manager:
@@ -525,12 +560,12 @@ types:
         type: world_rules
       - id: parameters
         type: world_parameters
-      - id: unknown1
+      - id: header_version
         type: u4
-        doc: Unknown; the version again.
-      - id: unknown2
+        doc: The version again, so that it travels with the header.
+      - id: checksum
         type: u4
-        doc: Unknown; 0.
+        doc: 0 in a saved map; the game fills it in when it launches one.
       - id: name
         type: string
         doc: A string id, defined in MAPSTRINGS.
@@ -542,30 +577,35 @@ types:
         repeat: expr
         repeat-expr: 2
         if: version >= 7
-      - id: unknown3
+        doc: Width and height in world units.
+      - id: build
         type: f4
-        doc: Unknown.
-      - id: editor_build
+        doc: The build number of the game that saved it.
+      - id: version_number
         type: u4
-      - id: editor_version
+        doc: '`app_version` as a number, two decimal digits a part: 30100 for 0.3.1.0.'
+      - id: app_version
         type: string
-      - id: game
+        doc: The version of the game that saved it, e.g. `0.3.1.0`.
+      - id: app_id
         type: string
-      - id: author
+        doc: The game the map is for, `A&A`; the game refuses maps for another.
+      - id: edition
         type: string
-      - id: unknown4
+        doc: The edition of the game that saved it, e.g. `North America AA Dev`.
+      - id: unknown
         type: u1
-        doc: Unknown.
+        doc: Unknown; 0 in every shipped map.
       - id: path
         type: string
         doc: The map's path when it was saved.
-      - id: unknown5
+      - id: campaign
         type: string
-        doc: Unknown.
-      - id: unknown6
+        doc: The campaign a saved game belongs to; empty for none.
+      - id: campaign_mission
         type: s4
         if: version >= 6
-        doc: Unknown; -1.
+        doc: The mission's index in that campaign; -1 for none.
       - id: saved
         type: u8
         doc: When the map was saved, a Windows FILETIME.
@@ -583,18 +623,20 @@ types:
     seq:
       - id: present
         type: flag
-      - id: unknown
-        type: u1
+      - id: ai
+        type: flag
         if: present.value == 1
+        doc: The computer plays it.
       - id: kingdom
         type: string
         if: present.value == 1
       - id: name
         type: string
         if: present.value == 1
-      - id: unknown2
-        type: u1
+      - id: local
+        type: flag
         if: present.value == 1 and version >= 5
+        doc: It's the player on the machine that saved the map.
   world_creator:
     doc: |
       What the editor generated the map from. Its rules and parameters are
@@ -630,9 +672,9 @@ types:
       - id: version
         type: u4
         valid: 4
-      - id: unknown
+      - id: map_type
         type: u4
-        doc: Unknown; 0.
+        doc: An index into the game's map types; 0 in every shipped map.
       - id: game_type
         type: string
       - id: num_rules
@@ -645,9 +687,9 @@ types:
     seq:
       - id: name
         type: string
-      - id: unknown
-        type: u1
-        doc: Unknown.
+      - id: locked
+        type: flag
+        doc: The map fixes it, so players can't change it.
       - id: type
         type: u4
         enum: rule_type
@@ -718,30 +760,35 @@ types:
       - id: ai
         type: string
         doc: The strategic AI that plays it, if set.
-      - id: unknown
-        type: u1
-        repeat: expr
-        repeat-expr: 2
-        doc: Unknown.
+      - id: required
+        type: flag
+        doc: It must be in the game.
+      - id: playable
+        type: flag
+        doc: A human may play it.
       - id: team
         type: string
       - id: objectives
         type: strings
-      - id: shared_properties
+      - id: technologies
         type: strings
-      - id: unknown_string
+        doc: Technologies it starts with.
+      - id: merge_into
         type: string
-        doc: Unknown.
+        doc: The kingdom it merges into; empty for none.
       - id: actors
         type: strings
-      - id: unknown2
-        type: u1
-        repeat: expr
-        repeat-expr: 2
-        doc: Unknown.
+        doc: Actor templates it starts with besides the map's.
+      - id: removed
+        type: flag
+        doc: It's removed when the game starts.
+      - id: ai_controlled
+        type: flag
+        doc: The strategic AI plays it until a human takes it.
       - id: resources
         type: amounts
         if: version >= 13
+        doc: Bonus stockpiles.
 
   # Objectives and triggers.
   objectives:

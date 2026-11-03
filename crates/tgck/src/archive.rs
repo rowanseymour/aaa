@@ -38,6 +38,31 @@ impl Entry {
     }
 }
 
+/// The archive's `Header` section, which the game reads but doesn't use.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Header {
+    pub version: u32,
+    pub product: String,
+    pub unknown: [String; 2],
+    /// From version 2 on.
+    pub unknown2: Option<u32>,
+}
+
+impl Header {
+    pub fn parse(data: &[u8]) -> Result<Self> {
+        let mut cur = Cursor::new(data);
+        let version = cur.u32()?;
+        let header = Header {
+            version,
+            product: cur.string()?,
+            unknown: [cur.string()?, cur.string()?],
+            unknown2: (version >= 2).then(|| cur.u32()).transpose()?,
+        };
+        cur.finish("archive header")?;
+        Ok(header)
+    }
+}
+
 pub struct Archive<R> {
     container: Container<R>,
     pub entries: Vec<Entry>,
@@ -63,6 +88,10 @@ impl<R: Read + Seek> Archive<R> {
 
     pub fn sections(&self) -> &[Section] {
         &self.container.sections
+    }
+
+    pub fn header(&mut self) -> Result<Header> {
+        Header::parse(&self.container.read_named("Header")?)
     }
 
     pub fn find(&self, name: &str) -> Option<&Entry> {
@@ -148,6 +177,10 @@ mod tests {
         let bytes = build(&[("A/one.txt", b"hello"), ("B/two.bin", b"\x00\x01\x02")]);
         let mut ar = Archive::new(io::Cursor::new(bytes)).unwrap();
         assert_eq!(ar.entries.len(), 2);
+        let header = ar.header().unwrap();
+        assert_eq!((header.version, header.product.as_str()), (2, "AA"));
+        assert_eq!(header.unknown, [String::new(), String::new()]);
+        assert_eq!(header.unknown2, Some(0));
         let e = ar.find("b/TWO.bin").unwrap().clone();
         assert_eq!(ar.read(&e).unwrap(), b"\x00\x01\x02");
         assert_eq!(ar.read(&ar.entries[0].clone()).unwrap(), b"hello");
