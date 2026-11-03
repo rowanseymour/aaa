@@ -1,0 +1,11 @@
+[package]
+name = "aaa-sim"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "The rules of Axis & Allies (2004): matches played on a map, independent of how they are shown"
+publish = false
+
+[dependencies]
+aaa-map = { path = "../map" }
