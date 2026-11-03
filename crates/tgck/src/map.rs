@@ -295,9 +295,10 @@ pub struct Tile {
     pub water_body: u8,
     /// Bits 0-3 are stored; the game recomputes bits 4-6 from the terrain's group.
     pub flags: u8,
-    pub unknown: u16,
-    /// Usually 0.
-    pub unknown2: u8,
+    /// The kingdoms that have explored it, a bit per kingdom slot.
+    pub seen_by: u16,
+    /// Never read; kept because some version 6 maps hold leftover bytes here.
+    pub padding: u8,
 }
 
 impl Terrain {
@@ -338,9 +339,9 @@ impl Terrain {
                 if version >= 7 {
                     Tile {
                         terrain: u16_at(0),
-                        unknown: u16_at(2),
+                        seen_by: u16_at(2),
                         water_body: t[4],
-                        unknown2: t[5],
+                        padding: t[5],
                         flags: t[6],
                     }
                 } else {
@@ -348,9 +349,9 @@ impl Terrain {
                     Tile {
                         terrain: t[0] as u16,
                         flags: t[1],
-                        unknown: u16_at(2),
+                        seen_by: u16_at(2),
                         water_body: t.get(4).copied().unwrap_or(0),
-                        unknown2: t.get(5).copied().unwrap_or(0),
+                        padding: t.get(5).copied().unwrap_or(0),
                     }
                 }
             })
@@ -397,15 +398,15 @@ impl Terrain {
         for t in &self.tiles {
             if self.version >= 7 {
                 w.u16(t.terrain);
-                w.u16(t.unknown);
-                w.bytes(&[t.water_body, t.unknown2, t.flags, 0]);
+                w.u16(t.seen_by);
+                w.bytes(&[t.water_body, t.padding, t.flags, 0]);
                 continue;
             }
             let terrain = u8::try_from(t.terrain).map_err(|_| {
                 Error::Unwritable(format!("terrain {} in a v{} tile", t.terrain, self.version))
             })?;
-            let mut tile = [terrain, t.flags, 0, 0, t.water_body, t.unknown2];
-            tile[2..4].copy_from_slice(&t.unknown.to_le_bytes());
+            let mut tile = [terrain, t.flags, 0, 0, t.water_body, t.padding];
+            tile[2..4].copy_from_slice(&t.seen_by.to_le_bytes());
             w.bytes(&tile[..size]);
         }
         w.bytes(&self.ai_cache);
@@ -950,8 +951,8 @@ mod tests {
                 terrain: 1,
                 water_body: 3,
                 flags: 0x21,
-                unknown: 0,
-                unknown2: 0,
+                seen_by: 0,
+                padding: 0,
             }
         );
         assert_eq!(v7.name_of(v7.at(0, 0)), "ocean");
@@ -1190,7 +1191,7 @@ mod tests {
         ] {
             let terrain = terrain_section(version, &[tile; 4]);
             let parsed = Terrain::parse(&terrain).unwrap();
-            assert_eq!(parsed.at(0, 0).unknown2, 9);
+            assert_eq!(parsed.at(0, 0).padding, 9);
             assert_eq!(parsed.to_bytes().unwrap(), terrain);
         }
         for version in [0, 2] {
