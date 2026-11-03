@@ -25,7 +25,7 @@ struct Layers {
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var masks_sampler: sampler;
 
 fn terrain(kind: u32, ground: vec2<f32>) -> vec3<f32> {
-    let uv = vec2(ground.x, -ground.y) / layers.repeats[kind].xy;
+    let uv = vec2(ground.x, -ground.y) * CELL_SIZE / layers.repeats[kind].xy;
     return textureSample(textures, textures_sampler, uv, kind).rgb;
 }
 

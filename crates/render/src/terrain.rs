@@ -56,7 +56,7 @@ const TEXTURE_SIZE: usize = 256;
 struct Kind {
     image: Image,
     repeat: [f32; 2],
-    /// Blend order: base priority, then position in the map's table.
+    /// Blend order: priority, then position in the map's table.
     order: (i32, u16),
 }
 
@@ -200,10 +200,10 @@ impl Layers {
         }
     }
 
-    /// Every terrain in the 3x3 neighbourhood that does not outrank the
-    /// tile's own, lowest first. Each layer's mask covers the cells holding
-    /// that terrain or a higher one, so neighbouring tiles agree along their
-    /// shared edge. Neighbours beyond the map edge repeat the edge.
+    /// The terrains of a tile's centre, edges and corners, lowest first,
+    /// each edge or corner holding the lowest of the tiles that meet there.
+    /// Each layer's mask covers the edges and corners holding exactly that
+    /// terrain, so neighbouring tiles agree along their shared edge.
     fn of<K: Ord + Copy>(
         side: usize,
         x: usize,
@@ -211,15 +211,21 @@ impl Layers {
         order: &[K],
         layer: impl Fn(&K) -> u32,
     ) -> Self {
-        let at = |dx: i32, dy: i32| {
-            let cx = (x as i32 + dx).clamp(0, side as i32 - 1) as usize;
-            let cy = (y as i32 + dy).clamp(0, side as i32 - 1) as usize;
-            order[cy * side + cx]
+        let tile = |dx: i32, dy: i32| {
+            let (cx, cy) = (x as i32 + dx, y as i32 + dy);
+            let inside = (0..side as i32).contains(&cx) && (0..side as i32).contains(&cy);
+            inside.then(|| order[cy as usize * side + cx as usize])
         };
-        let own = at(0, 0);
+        let own = order[y * side + x];
+        let cell = |dx: i32, dy: i32| {
+            [(dx, 0), (0, dy), (dx, dy)]
+                .into_iter()
+                .filter(|&(a, b)| (a, b) != (0, 0))
+                .filter_map(|(a, b)| tile(a, b))
+                .fold(own, Ord::min)
+        };
         let mut present: Vec<K> = (-1..=1)
-            .flat_map(|dy| (-1..=1).map(move |dx| at(dx, dy)))
-            .filter(|k| *k <= own)
+            .flat_map(|dy| (-1..=1).map(move |dx| cell(dx, dy)))
             .collect();
         present.sort();
         present.dedup();
@@ -230,13 +236,13 @@ impl Layers {
             let mut pattern = 0;
             for dy in -1..=1 {
                 for dx in -1..=1 {
-                    if (dx, dy) != (0, 0) && at(dx, dy) >= *k {
+                    if (dx, dy) != (0, 0) && cell(dx, dy) == *k {
                         pattern |= blend::bit(dx, dy);
                     }
                 }
             }
             layers.kinds[i] = layer(k);
-            layers.masks[i] = pattern as u32;
+            layers.masks[i] = blend::fill_sides(pattern) as u32;
         }
         layers
     }
@@ -415,4 +421,33 @@ fn generate_mipmaps(image: &mut Image) {
         count += 1;
     }
     image.texture_descriptor.mip_level_count = count;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corners_take_the_lowest_tile_meeting_there() {
+        // A 3x3 map of terrain 1 with terrain 0 south of the middle tile.
+        let mut order = vec![1; 9];
+        order[1] = 0;
+        let l = Layers::of(3, 1, 1, &order, |&k| k);
+        assert_eq!(&l.kinds[..2], &[0, 1]);
+        // The south-west and south-east corners touch the lower tile too.
+        let north_and_sides = [(-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)]
+            .into_iter()
+            .fold(0, |p, (dx, dy)| p | blend::bit(dx, dy));
+        assert_eq!(l.masks[1], north_and_sides as u32);
+        assert_eq!(l.masks[2], blend::EMPTY_MASK);
+    }
+
+    #[test]
+    fn lower_tiles_take_nothing_from_higher_neighbours() {
+        let mut order = vec![0; 9];
+        order[1] = 1;
+        let l = Layers::of(3, 1, 1, &order, |&k| k);
+        assert_eq!(l.kinds, [0; blend::MAX_LAYERS]);
+        assert_eq!(l.masks, [blend::EMPTY_MASK; blend::MAX_LAYERS]);
+    }
 }
