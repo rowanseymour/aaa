@@ -11,7 +11,7 @@ mod textures;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use aaa_data::{Game, Ground};
+use aaa_data::{GameData, Ground};
 use bevy::asset::embedded_asset;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -42,7 +42,7 @@ options:
 
 #[derive(Resource)]
 struct Loaded {
-    game: Game,
+    game: GameData,
     title: String,
     ground: Ground,
     terrain: Terrain,
@@ -168,7 +168,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let loaded = Game::open(&dir).and_then(|game| {
+    let loaded = GameData::open(&dir).and_then(|game| {
         let Some(map) = map else {
             for name in game.map_names() {
                 println!("{name}");
@@ -264,7 +264,7 @@ fn take_screenshot(
     );
 }
 
-fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
+fn load(mut game: GameData, name: &str) -> Result<Loaded, String> {
     let mut map = game.open_map(name)?;
     let err = |e: tgck::Error| format!("{name}: {e}");
     let hm = map.height_map().map_err(err)?;

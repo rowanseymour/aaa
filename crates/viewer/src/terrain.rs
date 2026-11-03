@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{DepthColor, Game, Ground, Id};
+use aaa_data::{DepthColor, GameData, Ground, Id};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -60,7 +60,7 @@ struct Kind {
 }
 
 pub fn build(
-    game: &mut Game,
+    game: &mut GameData,
     ground: &Ground,
     terrain: &Terrain,
     images: &mut Assets<Image>,
