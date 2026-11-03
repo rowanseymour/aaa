@@ -8,7 +8,7 @@ edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 
-# Keep debug builds of the viewer usable: optimise dependencies (Bevy) fully
+# Keep debug builds of the editor usable: optimise dependencies (Bevy) fully
 # and our own code a little.
 [profile.dev]
 opt-level = 1

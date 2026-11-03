@@ -1,15 +1,16 @@
 [package]
-name = "aaa-viewer"
+name = "aaa-render"
 version.workspace = true
 edition.workspace = true
 # Bevy 0.20 needs a newer compiler than the libraries do.
 rust-version = "1.97.1"
 license.workspace = true
-description = "3D viewer for Axis & Allies (2004) maps"
+description = "Draws Axis & Allies (2004) maps with Bevy"
 publish = false
 
 [dependencies]
 nif = { path = "../nif" }
 aaa-data = { path = "../data" }
+aaa-map = { path = "../map" }
 tgck = { path = "../tgck" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

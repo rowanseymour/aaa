@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 
 use tgck::{Archive, Map};
 
-pub struct Game {
+pub struct GameData {
     data: Archive<BufReader<File>>,
     /// Lower-case path to entry index.
     paths: HashMap<String, usize>,
@@ -58,7 +58,7 @@ pub struct DepthColor {
     pub alpha: f32,
 }
 
-impl Game {
+impl GameData {
     /// Opens `Data.rwd` in the game's install directory.
     pub fn open(dir: &Path) -> Result<Self, String> {
         let path = find_case_insensitive(dir, "Data.rwd")
@@ -72,7 +72,7 @@ impl Game {
             files.entry(file).or_default().push(i);
             paths.insert(lower, i);
         }
-        Ok(Game { data, paths, files })
+        Ok(GameData { data, paths, files })
     }
 
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {

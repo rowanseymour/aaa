@@ -1,0 +1,12 @@
+[package]
+name = "aaa-map"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Axis & Allies (2004) maps as loaded: the ground, objects and players, independent of how they are shown or played"
+publish = false
+
+[dependencies]
+aaa-data = { path = "../data" }
+tgck = { path = "../tgck" }

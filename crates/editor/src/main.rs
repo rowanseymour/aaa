@@ -1,35 +1,21 @@
-//! 3D viewer for Axis & Allies (2004) maps, reading straight from the game's
-//! installed data files.
-
-mod blend;
-mod camera;
-mod models;
-mod objects;
-mod terrain;
-mod textures;
+//! Map editor for Axis & Allies (2004), which for now views maps, reading
+//! straight from the game's installed data files.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use aaa_data::Game;
-use bevy::asset::embedded_asset;
-use bevy::camera::Exposure;
-use bevy::core_pipeline::tonemapping::Tonemapping;
-use bevy::image::CompressedImageFormatSupport;
-use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use aaa_data::GameData;
+use aaa_map::Map;
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
-use tgck::map::{CELL_SIZE, Sun, Terrain, Thing};
 
-use blend::GroundMaterial;
-use camera::RtsCamera;
-use models::{ModelAssets, Models};
-use terrain::Ground;
+use aaa_render::camera::{self, RtsCamera};
+use aaa_render::{MapAssets, MapRenderPlugin, Markers, objects, terrain};
 
 const USAGE: &str = "\
 usage:
-  aaa-viewer <game dir>          list the maps
-  aaa-viewer <game dir> <map>    view a map, e.g. \"(2v2)Berlin\"
+  aaa-editor <game dir>          list the maps
+  aaa-editor <game dir> <map>    view a map, e.g. \"(2v2)Berlin\"
 
 options:
   --camera <x,y,dist,yaw,pitch>  start the free camera looking at x,y (fractions
@@ -41,16 +27,13 @@ options:
                                  help text or placeholder markers other than
                                  those --modelless asks for";
 
+const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
+                    (Q/E/right drag: rotate   R/F: tilt)   M: objects without models";
+
 #[derive(Resource)]
 struct Loaded {
-    game: Game,
-    title: String,
-    ground: Ground,
-    terrain: Terrain,
-    things: Vec<Thing>,
-    /// Which organization members' records depend on.
-    world_version: u32,
-    sun: Sun,
+    game: GameData,
+    map: Map,
 }
 
 /// Set by `--modelless`.
@@ -169,7 +152,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let loaded = Game::open(&dir).and_then(|game| {
+    let loaded = GameData::open(&dir).and_then(|mut game| {
         let Some(map) = map else {
             for name in game.map_names() {
                 println!("{name}");
@@ -179,13 +162,13 @@ fn main() -> ExitCode {
         let name = game
             .find_map(map)
             .ok_or_else(|| format!("no map named {map:?}; run without a map name to list them"))?;
-        load(game, &name).map(Some)
+        Map::load(&mut game, &name).map(|map| Some(Loaded { game, map }))
     });
     let loaded = match loaded {
         Ok(Some(l)) => l,
         Ok(None) => return ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("aaa-viewer: {e}");
+            eprintln!("aaa-editor: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -193,21 +176,15 @@ fn main() -> ExitCode {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("{} - aaa-viewer", loaded.title),
+            title: format!("{} - aaa-editor", loaded.map.title),
             ..default()
         }),
         ..default()
     }));
-    // The shader has to be registered before the material that loads it.
-    embedded_asset!(app, "blend.wesl");
-    app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
-        .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
+    app.add_plugins(MapRenderPlugin)
         .insert_resource(loaded)
         .add_systems(Startup, setup)
-        .add_systems(
-            Update,
-            (camera::update, models::animate, objects::toggle_modelless),
-        );
+        .add_systems(Update, objects::toggle_modelless);
     if let Some(c) = camera {
         app.insert_resource(c);
     }
@@ -265,88 +242,24 @@ fn take_screenshot(
     );
 }
 
-fn load(mut game: Game, name: &str) -> Result<Loaded, String> {
-    let mut map = game.open_map(name)?;
-    let err = |e: tgck::Error| format!("{name}: {e}");
-    let hm = map.height_map().map_err(err)?;
-    let mountain = map.mountain_height_map().map_err(err)?;
-    let terrain = map.terrain().map_err(err)?;
-    let things = map.things().map_err(err)?;
-    let world_version = map.world_version().map_err(err)?;
-    let sun = map.sun().map_err(err)?;
-    Ok(Loaded {
-        title: aaa_data::map_title(name).to_string(),
-        ground: Ground::new(&hm, &mountain),
-        terrain,
-        things,
-        world_version,
-        sun,
-        game,
-    })
-}
-
-#[allow(clippy::too_many_arguments)] // Bevy systems take their resources as arguments
 fn setup(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut ground_materials: ResMut<Assets<GroundMaterial>>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut assets: MapAssets,
     start: Option<Res<StartView>>,
     screenshot: Option<Res<ScreenshotTo>>,
     modelless: Option<Res<ShowModelless>>,
 ) {
-    let Loaded {
-        game,
-        ground,
-        terrain,
-        things,
-        world_version,
-        sun,
-        ..
-    } = &mut *loaded;
-    let built = terrain::build(game, ground, terrain, &mut images);
-    if let Some((mesh, material)) = built.ground {
-        commands.spawn((
-            Name::new("ground"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(ground_materials.add(material)),
-        ));
-    }
-    if let Some((mesh, material)) = built.water {
-        commands.spawn((
-            Name::new("water"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(material)),
-            NotShadowCaster,
-        ));
-    }
-    let mut models = Models::new(game, formats.0);
-    let mut assets = ModelAssets {
-        meshes: &mut meshes,
-        materials: &mut materials,
-        images: &mut images,
+    let Loaded { game, map } = &mut *loaded;
+    let markers = Markers {
+        placeholders: screenshot.is_none(),
+        modelless: modelless.is_some(),
     };
-    let rest = models.spawn(&mut commands, game, &mut assets, things, *world_version);
-    objects::spawn(
-        &mut commands,
-        &mut meshes,
-        &mut materials,
-        ground,
-        &rest,
-        screenshot.is_none(),
-        modelless.is_some(),
-    );
+    aaa_render::spawn_map(&mut commands, &mut assets, game, map, markers);
 
-    let size = (ground.side - 1) as f32 * CELL_SIZE;
-    let centre = terrain::world(
-        size / 2.0,
-        size / 2.0,
-        ground.height_at(size / 2.0, size / 2.0),
-    );
-    let mut cam = RtsCamera::new(centre);
+    let ground = &map.ground;
+    let size = ground.size();
+    let mut cam = RtsCamera::centred(ground);
     if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
         let (x, y) = (x * size, y * size);
         cam = RtsCamera {
@@ -357,44 +270,13 @@ fn setup(
             free: true,
         };
     }
-    // The game lights like Direct3D's fixed pipeline: texture * (ambient +
-    // diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
-    // PBR, and skipping tonemapping, gets the same result.
-    commands.spawn((
-        Camera3d::default(),
-        Tonemapping::None,
-        cam.projection(),
-        cam.transform(),
-        cam,
-    ));
-    let unit = 1.0 / Exposure::default().exposure();
-    let rgb = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b);
-    let [dx, dy, dz] = sun.direction;
-    commands.spawn((
-        DirectionalLight {
-            color: rgb(sun.diffuse),
-            illuminance: std::f32::consts::PI * unit,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-        Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y),
-        CascadeShadowConfigBuilder {
-            maximum_distance: size * 1.5,
-            ..default()
-        }
-        .build(),
-    ));
-    commands.insert_resource(GlobalAmbientLight {
-        color: rgb(sun.ambient),
-        brightness: unit,
-        ..default()
-    });
+    camera::spawn(&mut commands, cam);
 
     if screenshot.is_some() {
         return;
     }
     commands.spawn((
-        Text::new(camera::HELP),
+        Text::new(HELP),
         TextFont {
             font_size: FontSize::Px(14.0),
             ..default()

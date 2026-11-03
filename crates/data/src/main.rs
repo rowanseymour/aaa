@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::ExitCode;
 
-use aaa_data::Game;
+use aaa_data::GameData;
 use tgi::de::Count;
 
 const USAGE: &str = "\
@@ -51,7 +51,7 @@ macro_rules! outln {
 }
 
 fn coverage(dir: &str, kind: Option<&str>) -> Res {
-    let coverage = Game::open(dir.as_ref())?.coverage();
+    let coverage = GameData::open(dir.as_ref())?.coverage();
     match kind {
         None => {
             let mut kinds: BTreeMap<&str, Count> = BTreeMap::new();

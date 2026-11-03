@@ -5,10 +5,11 @@
 
 use std::collections::HashMap;
 
+use aaa_map::Ground;
 use bevy::prelude::*;
 use tgck::map::Thing;
 
-use crate::terrain::{Ground, world};
+use crate::terrain::world;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Kind {

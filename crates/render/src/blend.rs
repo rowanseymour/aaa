@@ -50,7 +50,7 @@ pub struct Layers {
 
 impl MaterialExtension for Blend {
     fn fragment_shader() -> ShaderRef {
-        "embedded://aaa_viewer/blend.wesl".into()
+        "embedded://aaa_render/blend.wesl".into()
     }
 }
 

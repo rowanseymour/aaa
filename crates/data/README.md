@@ -16,7 +16,7 @@ aaa-data coverage "/path/to/Axis and Allies 2004"          # by top-level block 
 aaa-data coverage "/path/to/Axis and Allies 2004" Thing    # each key of one kind
 ```
 
-It has no Bevy dependency, so the viewer and anything else built on the game's
-data can share it.
+It has no Bevy dependency, so rendering, simulation and anything else built on
+the game's data can share it.
 
 Licensed under the [MIT license](../../LICENSE).

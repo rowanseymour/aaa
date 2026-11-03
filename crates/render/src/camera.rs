@@ -5,8 +5,12 @@
 
 use std::f32::consts::FRAC_PI_4;
 
+use aaa_map::Ground;
+use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+
+use crate::terrain::world;
 
 // Estimated from screenshots of the game, not read from its data.
 const GAME_YAW: f32 = FRAC_PI_4;
@@ -37,6 +41,12 @@ impl RtsCamera {
         }
     }
 
+    /// The game's view of the middle of a map.
+    pub fn centred(ground: &Ground) -> Self {
+        let half = ground.size() / 2.0;
+        RtsCamera::new(world(half, half, ground.height_at(half, half)))
+    }
+
     pub fn transform(&self) -> Transform {
         let offset = Quat::from_euler(EulerRot::YXZ, self.yaw, -self.pitch, 0.0)
             * Vec3::new(0.0, 0.0, self.distance);
@@ -51,8 +61,17 @@ impl RtsCamera {
     }
 }
 
-pub const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
-                        (Q/E/right drag: rotate   R/F: tilt)   M: objects without models";
+/// Spawns the camera that looks at a map.
+pub fn spawn(commands: &mut Commands, cam: RtsCamera) {
+    // crate::light matches the game only without tonemapping.
+    commands.spawn((
+        Camera3d::default(),
+        Tonemapping::None,
+        cam.projection(),
+        cam.transform(),
+        cam,
+    ));
+}
 
 pub fn update(
     keys: Res<ButtonInput<KeyCode>>,

@@ -12,13 +12,49 @@ dependencies = [
 ]
 
 [[package]]
-name = "aaa-viewer"
+name = "aaa-editor"
 version = "0.1.0"
 dependencies = [
  "aaa-data",
+ "aaa-map",
+ "aaa-render",
+ "bevy",
+]
+
+[[package]]
+name = "aaa-game"
+version = "0.1.0"
+dependencies = [
+ "aaa-data",
+ "aaa-map",
+ "aaa-render",
+ "bevy",
+]
+
+[[package]]
+name = "aaa-map"
+version = "0.1.0"
+dependencies = [
+ "aaa-data",
+ "tgck",
+]
+
+[[package]]
+name = "aaa-render"
+version = "0.1.0"
+dependencies = [
+ "aaa-data",
+ "aaa-map",
  "bevy",
  "nif",
  "tgck",
+]
+
+[[package]]
+name = "aaa-sim"
+version = "0.1.0"
+dependencies = [
+ "aaa-map",
 ]
 
 [[package]]

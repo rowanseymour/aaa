@@ -1,11 +1,11 @@
 //! Placed objects drawn with the game's models, where their templates name
-//! models this viewer can read.
+//! models this crate can read.
 
 use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use aaa_data::{Game, Id, View};
+use aaa_data::{GameData, Id, View};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
@@ -97,7 +97,7 @@ pub struct Models {
 }
 
 impl Models {
-    pub fn new(game: &mut Game, formats: CompressedImageFormats) -> Self {
+    pub fn new(game: &mut GameData, formats: CompressedImageFormats) -> Self {
         Models {
             views: game.views(),
             models: HashMap::new(),
@@ -113,7 +113,7 @@ impl Models {
     pub fn spawn<'a>(
         &mut self,
         commands: &mut Commands,
-        game: &mut Game,
+        game: &mut GameData,
         assets: &mut ModelAssets,
         things: &'a [Thing],
         world_version: u32,
@@ -151,7 +151,7 @@ impl Models {
     fn place(
         &mut self,
         commands: &mut Commands,
-        game: &mut Game,
+        game: &mut GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
         world_version: u32,
@@ -228,7 +228,7 @@ impl Models {
 
     fn model(
         &mut self,
-        game: &mut Game,
+        game: &mut GameData,
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
@@ -243,7 +243,7 @@ impl Models {
 
     fn load(
         &mut self,
-        game: &mut Game,
+        game: &mut GameData,
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
@@ -324,7 +324,7 @@ impl Models {
 
     fn texture(
         &mut self,
-        game: &mut Game,
+        game: &mut GameData,
         assets: &mut ModelAssets,
         file: &str,
         view: &View,
