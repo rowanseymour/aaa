@@ -354,7 +354,7 @@ types:
   overlay:
     doc: A screen effect scripts turn on and off.
     seq:
-      - id: on
+      - id: enabled
         type: flag
       - id: start
         type: f4
