@@ -40,13 +40,14 @@ pub struct View {
 pub struct Variation {
     /// Archive path of the texture.
     pub texture: String,
-    /// Size of one texture repeat, in tiles.
+    /// Size of one texture repeat, in world units.
     pub repeat: [f32; 2],
     /// Average colour, used where the texture is missing.
     pub color: [f32; 3],
     /// How water terrains colour the surface by depth, shallowest first.
     pub water: Option<Vec<DepthColor>>,
-    /// Higher priority terrain is drawn over lower where they meet.
+    /// Higher priority terrain is drawn over lower where they meet. Each
+    /// variation ranks one above the one before it in its terrain.
     pub priority: i32,
 }
 
@@ -178,7 +179,7 @@ impl GameData {
                     continue;
                 };
                 let water = terrain.ids.as_ref().and_then(|id| water.get(id));
-                for v in terrain.variation {
+                for (i, v) in terrain.variation.into_iter().enumerate() {
                     let (Some(ids), Some(texture)) = (v.ids, v.texture) else {
                         continue;
                     };
@@ -195,7 +196,7 @@ impl GameData {
                                 .or(terrain.terrain_color)
                                 .unwrap_or([0.5; 3]),
                             water: water.cloned(),
-                            priority: terrain.base_priority,
+                            priority: terrain.base_priority + i as i32,
                         },
                     );
                 }

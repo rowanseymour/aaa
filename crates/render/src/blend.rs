@@ -1,7 +1,8 @@
-//! Soft edges between terrain types. Each tile draws, lowest priority first,
-//! every terrain in its 3x3 neighbourhood up to its own, each through an
-//! alpha mask chosen by which of the nine cells hold that terrain or a higher
-//! one. Lower terrain therefore shows through where higher terrain thins out.
+//! Soft edges between terrain types. Each of a tile's edges and corners
+//! takes the lowest terrain among the tiles that meet there, and the tile
+//! itself is the centre. The lowest terrain in those nine cells is drawn
+//! whole, then each higher one through an alpha mask chosen by which edges
+//! and corners hold exactly that terrain.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -44,7 +45,7 @@ pub struct Blend {
 
 #[derive(ShaderType, Debug, Clone)]
 pub struct Layers {
-    /// Texture repeat of each terrain type, in tiles (xy).
+    /// Texture repeat of each terrain type, in world units (xy).
     pub repeats: [Vec4; MAX_TYPES],
 }
 
@@ -64,45 +65,29 @@ pub fn bit(dx: i32, dy: i32) -> u8 {
 }
 
 /// Builds the array of 257 masks, one per neighbour pattern plus an empty
-/// one, from the set's files. Patterns without a file of their own use a
-/// rotated or mirrored one, failing that the union of the largest ones they
-/// contain.
+/// one, from the set's files. Patterns without a file of their own turn or
+/// mirror the first file, in pattern order, that one reaches: turns first,
+/// then a north-south flip and its turns, then an east-west flip and its
+/// turns. The rest, which [`fill_sides`] never produces, use the empty
+/// pattern's mask.
 pub fn mask_array(files: &[(String, Vec<u8>)]) -> Option<Image> {
-    let mut known: [Option<Vec<u8>>; 256] = std::array::from_fn(|_| None);
-    for (digits, bytes) in files {
-        let Some(pattern) = pattern(digits) else {
-            continue;
-        };
-        let Some(alpha) = decode_alpha(bytes, &format!("{digits}.tga")) else {
-            continue;
-        };
-        known[pattern as usize] = Some(alpha);
-    }
-    let symmetric: Vec<Option<Vec<u8>>> = (0..=255u8).map(|p| by_symmetry(&known, p)).collect();
-    if symmetric[0].is_none() {
+    let mut bases: Vec<(u8, Vec<u8>)> = files
+        .iter()
+        .filter_map(|(digits, bytes)| {
+            let pattern = pattern(digits)?;
+            Some((pattern, decode_alpha(bytes, &format!("{digits}.tga"))?))
+        })
+        .collect();
+    bases.sort_by_key(|(p, _)| *p);
+    let masks = derive(&bases);
+    let Some(fallback) = masks[0].clone() else {
         warn!("no terrain transition masks");
         return None;
-    }
+    };
 
     let mut data = Vec::with_capacity(MASK_SIZE * MASK_SIZE * (EMPTY_MASK as usize + 1));
-    for p in 0..=255u8 {
-        let mask = symmetric[p as usize].clone().unwrap_or_else(|| {
-            // Union of the largest available sub-patterns.
-            let subs: Vec<u8> = (0..=255u8)
-                .filter(|&q| q & !p == 0 && symmetric[q as usize].is_some())
-                .collect();
-            let maximal = subs
-                .iter()
-                .filter(|&&q| !subs.iter().any(|&r| r != q && r & q == q));
-            let mut out = vec![0u8; MASK_SIZE * MASK_SIZE];
-            for &q in maximal {
-                for (o, &a) in out.iter_mut().zip(symmetric[q as usize].as_ref().unwrap()) {
-                    *o = (*o).max(a);
-                }
-            }
-            out
-        });
-        data.extend_from_slice(&mask);
+    for mask in masks {
+        data.extend_from_slice(mask.as_ref().unwrap_or(&fallback));
     }
     data.extend(std::iter::repeat_n(0, MASK_SIZE * MASK_SIZE));
 
@@ -123,6 +108,24 @@ pub fn mask_array(files: &[(String, Vec<u8>)]) -> Option<Image> {
         ..ImageSamplerDescriptor::linear()
     });
     Some(image)
+}
+
+/// Completes a side that has both its corners but not its middle, the
+/// only shapes the mask set doesn't cover.
+pub fn fill_sides(p: u8) -> u8 {
+    let mut p = p;
+    for (a, mid, b) in [
+        ((-1, -1), (0, -1), (1, -1)),
+        ((-1, -1), (-1, 0), (-1, 1)),
+        ((1, -1), (1, 0), (1, 1)),
+        ((-1, 1), (0, 1), (1, 1)),
+    ] {
+        let has = |p: u8, (dx, dy): (i32, i32)| p & bit(dx, dy) != 0;
+        if has(p, a) && has(p, b) {
+            p |= bit(mid.0, mid.1);
+        }
+    }
+    p
 }
 
 /// A mask array with every mask empty, for when the masks are missing.
@@ -187,8 +190,14 @@ fn rotate(p: u8) -> u8 {
     from_cells(|c, r| (2 - r, c), p)
 }
 
+/// East-west mirror image.
 fn mirror(p: u8) -> u8 {
     from_cells(|c, r| (2 - c, r), p)
+}
+
+/// North-south mirror image.
+fn flip(p: u8) -> u8 {
+    from_cells(|c, r| (c, 2 - r), p)
 }
 
 fn rotate_pixels(m: &[u8]) -> Vec<u8> {
@@ -206,25 +215,43 @@ fn mirror_pixels(m: &[u8]) -> Vec<u8> {
     (0..n * n).map(|i| m[i / n * n + n - 1 - i % n]).collect()
 }
 
-/// The mask for `p`, from a file for `p` turned or mirrored.
-fn by_symmetry(known: &[Option<Vec<u8>>; 256], p: u8) -> Option<Vec<u8>> {
-    for mirrored in [false, true] {
-        let mut q = if mirrored { mirror(p) } else { p };
-        for turns in 0..4 {
-            if let Some(m) = &known[q as usize] {
-                let mut m = m.clone();
-                for _ in 0..(4 - turns) % 4 {
-                    m = rotate_pixels(&m);
-                }
-                if mirrored {
-                    m = mirror_pixels(&m);
-                }
-                return Some(m);
-            }
-            q = rotate(q);
+fn flip_pixels(m: &[u8]) -> Vec<u8> {
+    let n = MASK_SIZE;
+    (0..n * n).map(|i| m[(n - 1 - i / n) * n + i % n]).collect()
+}
+
+/// The mask of every pattern that `bases` reach by turning or mirroring.
+fn derive(bases: &[(u8, Vec<u8>)]) -> Vec<Option<Vec<u8>>> {
+    type Masks = Vec<Option<Vec<u8>>>;
+    /// Sets `p`'s mask unless it has one, saying whether it was set.
+    fn add(out: &mut Masks, p: u8, m: Vec<u8>) -> bool {
+        let new = out[p as usize].is_none();
+        if new {
+            out[p as usize] = Some(m);
+        }
+        new
+    }
+    fn turns(out: &mut Masks, mut p: u8, m: &[u8]) {
+        let mut m = m.to_vec();
+        for _ in 0..3 {
+            (p, m) = (rotate(p), rotate_pixels(&m));
+            add(out, p, m.clone());
         }
     }
-    None
+
+    let mut out: Masks = vec![None; 256];
+    for (p, m) in bases {
+        out[*p as usize] = Some(m.clone());
+    }
+    for (p, m) in bases {
+        turns(&mut out, *p, m);
+        for (q, n) in [(flip(*p), flip_pixels(m)), (mirror(*p), mirror_pixels(m))] {
+            if add(&mut out, q, n.clone()) {
+                turns(&mut out, q, &n);
+            }
+        }
+    }
+    out
 }
 
 /// Stacks equally sized RGBA8 images, each with the same mip chain, into one
@@ -267,6 +294,44 @@ mod tests {
         for p in 0..=255u8 {
             assert_eq!(rotate(rotate(rotate(rotate(p)))), p);
             assert_eq!(mirror(mirror(p)), p);
+            assert_eq!(flip(flip(p)), p);
         }
+    }
+
+    /// The digits of the shipped transition set's files.
+    const SHIPPED: &str = "5 15 25 125 245 345 456 1235 1245 1456 2345 2357 2456 2567 \
+        12345 12456 14567 23457 23567 24567 24568 34567 123456 123457 124567 \
+        124568 234567 1234567 1234568 2345678 12345678 123456789 357";
+
+    #[test]
+    fn shipped_masks_cover_every_filled_pattern() {
+        let bases: Vec<(u8, Vec<u8>)> = SHIPPED
+            .split_whitespace()
+            .map(|d| (pattern(d).unwrap(), vec![0; MASK_SIZE * MASK_SIZE]))
+            .collect();
+        let masks = derive(&bases);
+        for p in 0..=255u8 {
+            assert!(masks[fill_sides(p) as usize].is_some(), "{p:#04x}");
+        }
+    }
+
+    #[test]
+    fn derived_masks_turn_with_their_pattern() {
+        // A south edge mask, opaque at the middle of its bottom row only.
+        let n = MASK_SIZE;
+        let mut south = vec![0; n * n];
+        south[(n - 1) * n + n / 2] = 255;
+        let masks = derive(&[(bit(0, -1), south)]);
+        let west = masks[bit(-1, 0) as usize].as_ref().unwrap();
+        assert_eq!(west[n / 2 * n], 255);
+        let north = masks[bit(0, 1) as usize].as_ref().unwrap();
+        assert_eq!(north[n / 2 - 1], 255);
+    }
+
+    #[test]
+    fn sides_with_both_corners_fill_in() {
+        let sw_se = bit(-1, -1) | bit(1, -1);
+        assert_eq!(fill_sides(sw_se), sw_se | bit(0, -1));
+        assert_eq!(fill_sides(bit(-1, -1)), bit(-1, -1));
     }
 }
