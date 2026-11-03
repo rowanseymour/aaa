@@ -297,6 +297,7 @@ fn check(paths: &[&str]) -> Res {
         let mut encoded = vec![
             ("GWORLD", m.world()?.to_bytes()?),
             ("RULES", m.rules()?.to_bytes()?),
+            ("MAPSTRINGS", tgck::map::write_strings(&m.strings()?)?),
             ("IDMGR", m.ids()?.to_bytes()),
             ("UPDATABLES", m.updatables()?.to_bytes(world_version)?),
             ("RESTRICTION_GROUPS", m.restriction_groups()?.to_bytes()?),
