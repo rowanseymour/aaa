@@ -694,3 +694,78 @@ fn steps_over_netimmerse_particles() {
     assert!(nif.incomplete.is_none());
     assert!(nif.shapes().is_empty());
 }
+
+#[test]
+fn reads_animation_sequences() {
+    let mut b = Builder::new();
+    let mut sequence = string("SoldierJog");
+    sequence.extend(string("Bip01"));
+    sequence.extend(1i32.to_le_bytes());
+    sequence.extend(2u32.to_le_bytes());
+    sequence.extend(string("Bip01"));
+    sequence.extend(2i32.to_le_bytes());
+    sequence.extend(string("Bip01 Head"));
+    sequence.extend((-1i32).to_le_bytes());
+    b.add("NiControllerSequence", sequence);
+
+    let mut text = string("");
+    text.extend(2u32.to_le_bytes());
+    text.extend(floats(&[0.0]));
+    text.extend(string("start"));
+    text.extend(floats(&[1.5]));
+    text.extend(string("end"));
+    b.add("NiTextKeyExtraData", text);
+
+    // No target: it is bound to the model's node of the block's name.
+    let mut ctlr = (-1i32).to_le_bytes().to_vec();
+    ctlr.extend(0x2cu16.to_le_bytes());
+    ctlr.extend(floats(&[1.0, 0.0, 0.0, 1.5]));
+    ctlr.extend((-1i32).to_le_bytes());
+    ctlr.extend(3i32.to_le_bytes());
+    b.add("NiKeyframeController", ctlr);
+    let mut data = 1u32.to_le_bytes().to_vec();
+    data.extend(1u32.to_le_bytes());
+    data.extend(floats(&[0.0, 1.0, 0.0, 0.0, 0.0]));
+    data.extend(2u32.to_le_bytes());
+    data.extend(1u32.to_le_bytes());
+    data.extend(floats(&[0.0, 0.0, 0.0, 0.0, 1.5, 3.0, 0.0, 0.0]));
+    data.extend(0u32.to_le_bytes());
+    b.add("NiKeyframeData", data);
+
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let seq = nif.get_as::<Sequence>(nif.roots[0]).unwrap();
+    assert_eq!(seq.name, "SoldierJog");
+    assert_eq!(seq.accumulation_root, "Bip01");
+    let targets: Vec<_> = seq.blocks.iter().map(|b| b.target.as_str()).collect();
+    assert_eq!(targets, ["Bip01", "Bip01 Head"]);
+    assert_eq!(seq.blocks[1].controller, None);
+
+    let text = nif.get_as::<TextKeys>(seq.text_keys).unwrap();
+    let keys: Vec<_> = text
+        .keys
+        .iter()
+        .map(|k| (k.time, k.text.as_str()))
+        .collect();
+    assert_eq!(keys, [(0.0, "start"), (1.5, "end")]);
+
+    let ctlr = nif.get_as::<Controller>(seq.blocks[0].controller).unwrap();
+    assert_eq!(ctlr.key_time(2.0), 1.5);
+    let keyframes = nif.get_as::<Keyframes>(ctlr.data).unwrap();
+    let t = keyframes.apply(&Transform::IDENTITY, 0.75);
+    assert_eq!(t.translation, [1.5, 0.0, 0.0]);
+}
+
+#[test]
+fn rejects_corrupt_sequences() {
+    let mut b = Builder::new();
+    let mut sequence = string("Walk");
+    sequence.extend(string(""));
+    sequence.extend((-1i32).to_le_bytes());
+    sequence.extend(u32::MAX.to_le_bytes());
+    b.add("NiControllerSequence", sequence);
+    assert!(matches!(
+        Nif::parse(&b.finish(&[0])),
+        Err(Error::Corrupt(_))
+    ));
+}

@@ -64,6 +64,8 @@
 //!                  f32 viewport[4], f32 lod, ref scene, u32 2 unused
 //! NiTextKeyExtraData string name [4.2.2.0: ref next, u32 unused], u32 n,
 //!                  per key f32 time + string
+//! NiControllerSequence  string name, string accumulation root, ref text
+//!                  keys, u32 n, per block string target + ref controller
 //! controller       ref next, u16 flags, f32 frequency, phase, start,
 //!                  stop, ref target
 //! NiKeyframeController, NiAlphaController, NiVisController
@@ -180,6 +182,8 @@ pub enum Object {
     Controller(Controller),
     Keyframes(Keyframes),
     Floats(Keys<f32>),
+    Sequence(Sequence),
+    TextKeys(TextKeys),
     /// Understood well enough to step over; the type name.
     Other(String),
 }
@@ -227,6 +231,8 @@ object_types!(
     Controller(Controller),
     Keyframes(Keyframes),
     Floats(Keys<f32>),
+    Sequence(Sequence),
+    TextKeys(TextKeys),
 );
 
 /// Fields shared by everything placed in the scene.
@@ -359,6 +365,38 @@ pub enum ExtraValue {
     Boolean(bool),
     Binary(Vec<u8>),
     Strings(Vec<String>),
+}
+
+/// An animation in a `.kf` file: controllers for the nodes of a model with
+/// the same names. The timing (start, stop, frequency and cycle) is each
+/// controller's own.
+#[derive(Debug, Clone)]
+pub struct Sequence {
+    pub name: String,
+    /// The node whose animated movement carries the whole model.
+    pub accumulation_root: String,
+    pub text_keys: Ref,
+    pub blocks: Vec<ControlledBlock>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ControlledBlock {
+    /// Name of the node the controller animates.
+    pub target: String,
+    pub controller: Ref,
+}
+
+/// Named moments of an animation, such as `start` and `end`.
+#[derive(Debug, Clone)]
+pub struct TextKeys {
+    pub name: String,
+    pub keys: Vec<TextKey>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TextKey {
+    pub time: f32,
+    pub text: String,
 }
 
 /// Plays its data on its target: a [`Keyframes`] on a scene object for
@@ -796,15 +834,43 @@ impl Object {
                 other()
             }
             "NiTextKeyExtraData" => {
-                extra_data_name(r)?;
+                let name = extra_data_name(r)?;
                 if r.netimmerse() {
                     r.u32()?;
                 }
-                for _ in 0..r.u32()? {
-                    r.f32()?;
-                    r.string()?;
-                }
-                other()
+                let n = r.u32()? as usize;
+                // Each key takes at least eight bytes.
+                r.ensure(n.saturating_mul(8))?;
+                let keys = (0..n)
+                    .map(|_| {
+                        Ok(TextKey {
+                            time: r.f32()?,
+                            text: r.string()?,
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+                Object::TextKeys(TextKeys { name, keys })
+            }
+            "NiControllerSequence" => {
+                let name = r.string()?;
+                let accumulation_root = r.string()?;
+                let text_keys = r.reference()?;
+                let n = r.u32()? as usize;
+                r.ensure(n.saturating_mul(8))?;
+                let blocks = (0..n)
+                    .map(|_| {
+                        Ok(ControlledBlock {
+                            target: r.string()?,
+                            controller: r.reference()?,
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+                Object::Sequence(Sequence {
+                    name,
+                    accumulation_root,
+                    text_keys,
+                    blocks,
+                })
             }
             "NiKeyframeController" | "NiAlphaController" => Object::Controller(Controller {
                 kind: match kind {
