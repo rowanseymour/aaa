@@ -204,7 +204,7 @@ pub(crate) mod tests {
             rec.resize(0x40, 0);
             rec.extend((out.len() as u64).to_le_bytes());
             rec.extend((stored.len() as u64).to_le_bytes());
-            rec.extend([0; 8]);
+            rec.extend((*compress as u64).to_le_bytes());
             rec.extend((payload.len() as u64).to_le_bytes());
             table.extend(rec);
             out.extend(stored);
