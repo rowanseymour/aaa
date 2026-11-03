@@ -30,7 +30,7 @@ state it was saved from, which decides the layout of several other sections
 (KINGDOMS, MISC_DATA, UPDATABLES, ...) and of some objects.
 
 The placed objects, *things*, are records whose class decides their layout:
-an actor's (a unit, building or herd), an area's or a camera's. The
+an actor's (a unit, building or herd), scenery's, an area's or a camera's. The
 `_INDEX` section beside a thing list gives each record's size. An actor's
 record is a set of components, each with its own layout, chosen by the
 bits of the actor's component mask.
@@ -47,7 +47,7 @@ What `rmp.ksy` keeps as bytes, or reads without naming:
 
 | Section | Undecoded |
 |---|---|
-| DYNAMIC_THINGS | Things other than actors, areas and cameras. Actors with a Projectile, Wall, Settlement, Aircraft, Flare or MetaGame component, or an aircraft's mind. Many component fields are read to their end but unnamed |
+| DYNAMIC_THINGS | Things of the classes no shipped map has, and kingdoms' memories of things, which none has either. Actors with a Projectile, Wall, Settlement, Aircraft, Flare or MetaGame component, or an aircraft's mind. Many component fields are read to their end but unnamed |
 | KINGDOMS | Two fields of an ability and one of a saved group |
 | MAP_HEADER | One byte's meaning |
 | DENIZEN_GROUPS | A group's layout; no shipped map has any |

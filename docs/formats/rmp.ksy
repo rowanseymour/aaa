@@ -1646,9 +1646,9 @@ types:
       - id: name
         type: string
         doc: The name scripts refer to it by; empty for most.
-      - id: unknown
-        type: u4
-        valid: 0
+      - id: created_at
+        type: f4
+        doc: The game time it was made at, in seconds; 0 in shipped maps.
       - id: position
         type: vec3
       - id: facing
@@ -1656,6 +1656,19 @@ types:
         doc: A unit vector in x and y; cameras add their tilt in z.
       - id: flags
         type: u4
+        doc: |
+          Bit 3 marks things placed automatically rather than by hand, such
+          as scenery scattered with painted terrain, shoreline waves and
+          random maps' placements; moving one clears it. The other bits of
+          the low byte are clear in shipped maps. Bits 8-25 copy its
+          template's `[Flags]` when saved, a bit each: 8 radar,
+          9 tributable, 10 blocking, 11 invulnerable, 12 flying,
+          13 flatten_terrain, 14 targetable, 15 random_orientation,
+          16 tile_locked, 17 axis_locked, 18 ethereal, 19 corpse_blocking,
+          20 revealed, 21 water_based, 22 invisible, 23 ownable,
+          24 conform_to_terrain, 25 allow_alpha_blend. Bits 26-31 are the
+          game's running state. Only the low byte is read back; the rest
+          comes from the template.
   placement:
     doc: What follows the head in a thing record.
     seq:
@@ -1668,15 +1681,22 @@ types:
       - id: variation
         type: s4
         doc: Which of the template's model variations it shows; -1 for none.
-      - id: unknown
+      - id: actor
         type: u4
-        valid: 0
-      - id: unknown2
-        type: u4
-        doc: Unknown.
-      - id: unknown3
+        doc: |
+          The thing id of the actor it belongs to, which moves it and takes
+          it away with itself; 0 for none, as in every shipped map.
+      - id: seen_by
         type: u2
+        doc: |
+          The kingdoms that have seen it, a bit per kingdom slot; only some
+          map types keep it.
+      - id: num_remembered
+        type: u4
         valid: 0
+        doc: |
+          Undecoded: for each kingdom slot, a flag and then what that
+          kingdom last saw of it. No shipped map has any.
   thing:
     doc: A record in a thing list, sized by its index.
     seq:
@@ -1689,11 +1709,16 @@ types:
         type:
           switch-on: head.class_id
           cases:
+            thing_class::scenery: no_detail
             thing_class::actor: actor
             thing_class::area: area
             thing_class::camera: camera
+            thing_class::reactive_scenery: reactive_scenery
             _: undecoded
         doc: Other classes' details are undecoded.
+  no_detail:
+    doc: The detail of a class that adds nothing to the placement.
+    seq: []
   actor_thing:
     doc: |
       A thing record whose detail is an actor, inside another record with
@@ -1753,9 +1778,71 @@ types:
         doc: 1 or 2.
       - id: name
         type: string
-      - id: unknown
+      - id: zoom
         type: f4
-        doc: Unknown.
+        doc: The zoom it views at, as the editor's camera properties show it.
+  reactive_scenery:
+    doc: |
+      Trees, grass, hedges and the like, with up to two parts that react to
+      units and blasts, as their templates' `DynamicDoodad` components set
+      up.
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: parts
+        type: u4
+        doc: The parts the record holds state for, a bit each; 0 stirs, 1 topples.
+      - id: template_parts
+        type: u4
+        doc: |
+          The parts its template had when saved; the game adds any the
+          template has gained since, in their starting state.
+      - id: stir
+        type: scenery_part
+        if: (parts & 1) != 0
+        doc: Set off by units passing through, such as tall grass.
+      - id: topple
+        type: topple
+        if: (parts & 2) != 0
+  scenery_part:
+    doc: What each part of reactive scenery holds.
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: updatable
+        type: updatable
+      - id: base_version
+        type: u4
+        valid: 0
+  topple:
+    doc: The part that falls when hit hard enough, and may grow back.
+    seq:
+      - id: version
+        type: u4
+        valid:
+          max: 1
+      - id: part
+        type: scenery_part
+      - id: state
+        type: u4
+        enum: topple_state
+      - id: state_time
+        type: f4
+        doc: The game time the state began.
+      - id: regrow_time
+        type: f4
+        doc: The game time it began growing back.
+      - id: direction
+        type: f4
+        repeat: expr
+        repeat-expr: 2
+        doc: The way it falls, a unit vector in its own frame.
+      - id: growth
+        type: f4
+        if: version >= 1
+        doc: How far grown it was when it fell, 0 to 1.
 
   # Actors: things made of components, such as units, buildings and herds.
   actor:
@@ -1774,8 +1861,11 @@ types:
       - id: kingdom
         type: u4
         doc: The owning kingdom's thing id; 0 for none.
-      - id: flags
+      - id: states
         type: u8
+        doc: |
+          The states it's in, a bit each (see `actor_state`, named by the
+          ids of the game's actor state data).
       - id: template_components
         type: u4
         doc: The components its template gives it, a bit each (see `component`).
@@ -1872,51 +1962,81 @@ types:
       - id: main_component
         type: s4
         doc: The bit of the component in charge; -1 for none.
-      - id: unknown1
+      - id: required_object
         type: u4
         if: version >= 2
-      - id: unknown2
+        doc: The thing id of the object it needs alongside it; 0 for none.
+      - id: old_stance
         type: u4
         if: version >= 3 and version < 12
-      - id: has_unknown_string
+        doc: Ignored; the game works the stance out again.
+      - id: has_saved_group
         type: flag
         if: version >= 4
-      - id: unknown_string
+      - id: saved_group
         type: string
-        if: version >= 4 and has_unknown_string.value == 1
-      - id: has_unknown3
+        if: version >= 4 and has_saved_group.value == 1
+        doc: The name of its kingdom's saved group it's in.
+      - id: has_group
         type: flag
         if: version >= 5
-      - id: unknown3
+      - id: group
         type: u4
-        if: version >= 5 and has_unknown3.value == 1
-      - id: unknown_string2
+        if: version >= 5 and has_group.value == 1
+        doc: The thing id of the group thing moving it with others.
+      - id: map_string
         type: string
         if: version >= 6
-      - id: unknown4
+        doc: |
+          The MAPSTRINGS key of its own name, such as `name_11542`; empty
+          for the template's.
+      - id: towing
         type: u4
-        repeat: expr
-        repeat-expr: 2
         if: version >= 8
-      - id: unknown5
+        doc: The thing id of the trailer it tows; 0 for none.
+      - id: towed_by
+        type: u4
+        if: version >= 8
+        doc: The thing id of what tows it; 0 for none.
+      - id: number
         type: u4
         if: version >= 10
-      - id: lists
+        doc: The ordinal in its name, as in 3rd Infantry Regiment; 0 for none.
+      - id: engaged_by
         type: u4s
-        repeat: expr
-        repeat-expr: 3
         if: version >= 11
-      - id: num_triples
+        doc: The thing ids of the organizations engaging it.
+      - id: approached_by
+        type: u4s
+        if: version >= 11
+        doc: The thing ids of the units moving to it.
+      - id: attacked_by
+        type: u4s
+        if: version >= 11
+        doc: The thing ids of the actors that have attacked it.
+      - id: num_recent_attacks
         type: u4
         if: version >= 11
-      - id: triples
-        type: u4
+      - id: recent_attacks
+        type: recent_attack
         repeat: expr
-        repeat-expr: num_triples * 3
+        repeat-expr: num_recent_attacks
         if: version >= 11
-      - id: unknown6
+      - id: num_deploying
         type: u4
         if: version >= 13
+        doc: How many units are deploying onto it.
+  recent_attack:
+    seq:
+      - id: attacker
+        type: u4
+        doc: The attacker's thing id.
+      - id: time
+        type: f4
+        doc: The game time of its latest hit.
+      - id: duration
+        type: f4
+        doc: How long after that it's still counted.
   updatable:
     doc: The component's id among the world's updatable objects.
     seq:
@@ -3155,11 +3275,79 @@ enums:
     2: neutral
     3: enemy
   thing_class:
+    1:
+      id: bare
+      doc: A thing with no body, only a place.
+    2:
+      id: scenery
+      doc: |
+        A plain object such as a rock, ripple or street light, which only
+        ever blocks.
     3: actor
     4: kingdom
     5: team
     6: area
     7: camera
+    8:
+      id: group
+      doc: An invisible actor that leads units moving together.
+    9:
+      id: reactive_scenery
+      doc: |
+        Scenery that reacts to what passes it: grass that stirs, trees,
+        hedges and fences that topple and may grow back.
+  actor_state:
+    0: mind_attacking
+    1: mind_bombard
+    2: mind_building
+    3: mind_chasing
+    4: mind_engaged
+    5: mind_exhausted
+    6: mind_guarding
+    7: mind_joining
+    8: mind_moving
+    9: mind_reattaching
+    10: mind_regrouping
+    11: mind_repairing
+    12: mind_resting
+    13: mind_retreating
+    14: mind_routing
+    15: mind_reforming
+    16: mind_exploring
+    17: mind_rampaging
+    18: mind_razing
+    19: out_of_supply
+    20: under_siege
+    21: construction
+    22: organization_entrenched
+    23: dead
+    24: falling
+    25: structure_packing
+    26: structure_unpacking
+    27: structure_normal
+    28: structure_researching
+    29: structure_upgrading
+    30: structure_razing
+    31: structure_recruiting
+    32: active_construction
+    33: summoning
+    34: unpacked
+    35: mind_packing
+    36: mind_unpacking
+    37: missing_primary
+    38: unloading
+    39: disabled
+    40: targeted
+    41: hq_attached
+  topple_state:
+    0: standing
+    1: trampled
+    2: falling
+    3: down
+    4: bouncing
+    5: dead
+    6: sinking
+    7: regrowing
   rule_type:
     0: bool
     1: int

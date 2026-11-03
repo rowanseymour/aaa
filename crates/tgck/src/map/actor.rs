@@ -17,7 +17,8 @@ pub struct Actor {
     pub version: u32,
     /// The owning [`Kingdom`](super::Kingdom)'s [`Thing::id`]; 0 for none.
     pub kingdom: u32,
-    pub flags: u64,
+    /// The states it's in, a bit each (see `actor_state` in [`rmp.ksy`]).
+    pub states: u64,
     /// The components its template gives it, a bit each as in [`COMPONENTS`].
     pub template_components: u32,
     /// The components the record holds state for: the template's, plus any
@@ -210,39 +211,43 @@ pub struct Property {
     pub extra: Option<u32>,
 }
 
-/// What follows an actor's components.
+/// What follows an actor's components. Thing ids are 0 for none.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trailer {
     /// The bit of the component that's in charge, or -1.
     pub main_component: i32,
-    /// From version 2 on.
-    pub unknown: Option<u32>,
-    /// Versions 3 to 11.
-    pub unknown2: Option<u32>,
-    /// From version 4 on.
-    pub unknown_string: Option<Option<String>>,
-    /// From version 5 on.
-    pub unknown3: Option<Option<u32>>,
-    /// From version 6 on.
-    pub unknown_string2: Option<String>,
-    /// From version 8 on.
-    pub unknown4: Option<[u32; 2]>,
-    /// From version 10 on.
-    pub unknown5: Option<u32>,
+    /// From version 2 on: the object it needs alongside it.
+    pub required_object: Option<u32>,
+    /// Versions 3 to 11, which the game ignores.
+    pub old_stance: Option<u32>,
+    /// From version 4 on: the name of its kingdom's saved group it's in.
+    pub saved_group: Option<Option<String>>,
+    /// From version 5 on: the group thing moving it with others.
+    pub group: Option<Option<u32>>,
+    /// From version 6 on: the MAPSTRINGS key of its own name.
+    pub map_string: Option<String>,
+    /// From version 8 on: the trailer it tows and what tows it.
+    pub towing: Option<[u32; 2]>,
+    /// From version 10 on: the ordinal in its name, as in 3rd Infantry.
+    pub number: Option<u32>,
     /// From version 11 on.
     pub lists: Option<TrailerLists>,
-    /// From version 13 on.
-    pub unknown6: Option<u32>,
+    /// From version 13 on: how many units are deploying onto it.
+    pub num_deploying: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrailerLists {
+    /// The organizations engaging it, the units moving to it and the
+    /// actors that have attacked it.
     pub lists: [Vec<u32>; 3],
-    pub triples: Vec<[u32; 3]>,
+    /// Recent attacks: the attacker, then the time of its latest hit and
+    /// how long that counts, as `f32` bits.
+    pub recent_attacks: Vec<[u32; 3]>,
 }
 
 impl Actor {
-    /// The first version that writes the flags in 64 bits; the layout of
+    /// The first version that writes the states in 64 bits; the layout of
     /// earlier ones is unconfirmed.
     const MIN_VERSION: u32 = 9;
     /// The newest version the game reads.
@@ -279,7 +284,7 @@ impl Actor {
         Ok(Actor {
             version,
             kingdom: cur.u32()?,
-            flags: cur.u64()?,
+            states: cur.u64()?,
             template_components: cur.u32()?,
             components: cur.u32()?,
             state: State::Raw(Vec::new()),
@@ -320,7 +325,7 @@ impl Actor {
     pub(super) fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(self.version);
         w.u32(self.kingdom);
-        w.u64(self.flags);
+        w.u64(self.states);
         w.u32(self.template_components);
         w.u32(self.components);
         match &self.state {
@@ -674,28 +679,28 @@ impl Trailer {
         };
         Ok(Trailer {
             main_component: cur.i32()?,
-            unknown: (v >= 2).then(|| cur.u32()).transpose()?,
-            unknown2: (3..12).contains(&v).then(|| cur.u32()).transpose()?,
-            unknown_string: (v >= 4)
+            required_object: (v >= 2).then(|| cur.u32()).transpose()?,
+            old_stance: (3..12).contains(&v).then(|| cur.u32()).transpose()?,
+            saved_group: (v >= 4)
                 .then(|| {
-                    flagged(cur, "trailer string")?
+                    flagged(cur, "saved group")?
                         .then(|| cur.string())
                         .transpose()
                 })
                 .transpose()?,
-            unknown3: (v >= 5)
-                .then(|| flagged(cur, "trailer u32")?.then(|| cur.u32()).transpose())
+            group: (v >= 5)
+                .then(|| flagged(cur, "group")?.then(|| cur.u32()).transpose())
                 .transpose()?,
-            unknown_string2: (v >= 6).then(|| cur.string()).transpose()?,
-            unknown4: (v >= 8)
+            map_string: (v >= 6).then(|| cur.string()).transpose()?,
+            towing: (v >= 8)
                 .then(|| Result::<_>::Ok([cur.u32()?, cur.u32()?]))
                 .transpose()?,
-            unknown5: (v >= 10).then(|| cur.u32()).transpose()?,
+            number: (v >= 10).then(|| cur.u32()).transpose()?,
             lists: (v >= 11)
                 .then(|| {
                     let lists = [u32s(cur)?, u32s(cur)?, u32s(cur)?];
                     let n = cur.u32()?;
-                    let triples = bytes(cur, n, 12)?
+                    let recent_attacks = bytes(cur, n, 12)?
                         .chunks(12)
                         .map(|c| {
                             let [a, b, c] = [0, 4, 8]
@@ -703,10 +708,13 @@ impl Trailer {
                             [a, b, c]
                         })
                         .collect();
-                    Result::<_>::Ok(TrailerLists { lists, triples })
+                    Result::<_>::Ok(TrailerLists {
+                        lists,
+                        recent_attacks,
+                    })
                 })
                 .transpose()?,
-            unknown6: (v >= 13).then(|| cur.u32()).transpose()?,
+            num_deploying: (v >= 13).then(|| cur.u32()).transpose()?,
         })
     }
 
@@ -719,46 +727,53 @@ impl Trailer {
                 ))),
             }
         };
-        has(self.unknown.is_some(), v >= 2)?;
-        has(self.unknown2.is_some(), (3..12).contains(&v))?;
-        has(self.unknown_string.is_some(), v >= 4)?;
-        has(self.unknown3.is_some(), v >= 5)?;
-        has(self.unknown_string2.is_some(), v >= 6)?;
-        has(self.unknown4.is_some(), v >= 8)?;
-        has(self.unknown5.is_some(), v >= 10)?;
+        has(self.required_object.is_some(), v >= 2)?;
+        has(self.old_stance.is_some(), (3..12).contains(&v))?;
+        has(self.saved_group.is_some(), v >= 4)?;
+        has(self.group.is_some(), v >= 5)?;
+        has(self.map_string.is_some(), v >= 6)?;
+        has(self.towing.is_some(), v >= 8)?;
+        has(self.number.is_some(), v >= 10)?;
         has(self.lists.is_some(), v >= 11)?;
-        has(self.unknown6.is_some(), v >= 13)?;
+        has(self.num_deploying.is_some(), v >= 13)?;
         w.i32(self.main_component);
-        for v in [self.unknown, self.unknown2].into_iter().flatten() {
+        for v in [self.required_object, self.old_stance]
+            .into_iter()
+            .flatten()
+        {
             w.u32(v);
         }
-        if let Some(s) = &self.unknown_string {
+        if let Some(s) = &self.saved_group {
             w.u8(s.is_some().into());
             if let Some(s) = s {
                 w.string(s)?;
             }
         }
-        if let Some(v) = self.unknown3 {
+        if let Some(v) = self.group {
             w.u8(v.is_some().into());
             if let Some(v) = v {
                 w.u32(v);
             }
         }
-        if let Some(s) = &self.unknown_string2 {
+        if let Some(s) = &self.map_string {
             w.string(s)?;
         }
-        if let Some(vs) = self.unknown4 {
+        if let Some(vs) = self.towing {
             vs.iter().for_each(|&v| w.u32(v));
         }
-        if let Some(v) = self.unknown5 {
+        if let Some(v) = self.number {
             w.u32(v);
         }
         if let Some(lists) = &self.lists {
             lists.lists.iter().for_each(|l| write_u32s(w, l));
-            w.u32(lists.triples.len() as u32);
-            lists.triples.iter().flatten().for_each(|&v| w.u32(v));
+            w.u32(lists.recent_attacks.len() as u32);
+            lists
+                .recent_attacks
+                .iter()
+                .flatten()
+                .for_each(|&v| w.u32(v));
         }
-        if let Some(v) = self.unknown6 {
+        if let Some(v) = self.num_deploying {
             w.u32(v);
         }
         Ok(())
@@ -1384,18 +1399,18 @@ mod tests {
     fn trailer() -> Trailer {
         Trailer {
             main_component: 3,
-            unknown: Some(1),
-            unknown2: None,
-            unknown_string: Some(Some("order".into())),
-            unknown3: Some(None),
-            unknown_string2: Some(String::new()),
-            unknown4: Some([2, 3]),
-            unknown5: Some(4),
+            required_object: Some(1),
+            old_stance: None,
+            saved_group: Some(Some("order".into())),
+            group: Some(None),
+            map_string: Some(String::new()),
+            towing: Some([2, 3]),
+            number: Some(4),
             lists: Some(TrailerLists {
                 lists: [vec![5], vec![], vec![6, 7]],
-                triples: vec![[8, 9, 10]],
+                recent_attacks: vec![[8, 9, 10]],
             }),
-            unknown6: Some(11),
+            num_deploying: Some(11),
         }
     }
 
@@ -1403,7 +1418,7 @@ mod tests {
         Actor {
             version: 14,
             kingdom: 2,
-            flags: 0x0800_0000,
+            states: 0x0800_0000,
             template_components: components,
             components,
             state: State::Decoded {
@@ -1524,7 +1539,7 @@ mod tests {
             flags: 0,
             scale: 1.0,
             variation: -1,
-            unknown: 0,
+            seen_by: 0,
             detail: Detail::Actor(actor(1 | 1 << 3, vec![body(), mover()])),
         }
         .write(&mut w)
