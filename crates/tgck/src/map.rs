@@ -17,7 +17,7 @@ mod players;
 mod triggers;
 
 pub use actor::{
-    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverV6, Organization, Properties,
+    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverFall, Organization, Properties,
     Property, State, Trailer, TrailerLists, Updatable, Upgrade,
 };
 pub use bookkeeping::{IdManager, Updatables, Update, UpdateQueue};
@@ -558,7 +558,8 @@ pub struct Thing {
     pub scale: f32,
     /// Which of the template's model variations it shows; -1 when none is set.
     pub variation: i32,
-    pub unknown: u32,
+    /// The kingdoms that have seen it, a bit per kingdom slot.
+    pub seen_by: u16,
     pub detail: Detail,
 }
 
@@ -600,7 +601,7 @@ pub struct Area {
 pub struct Camera {
     pub version: u32,
     pub name: String,
-    pub unknown: f32,
+    pub zoom: f32,
 }
 
 /// The version DYNAMIC_THINGS records are written in.
@@ -674,7 +675,7 @@ impl Head {
         let id = rec.u32()?;
         expect(rec, "thing version", 2)?;
         let name = rec.string()?;
-        expect(rec, "field after the name", 0)?;
+        expect(rec, "creation time", 0)?;
         Ok(Head {
             template,
             class,
@@ -739,12 +740,9 @@ impl Thing {
         expect(rec, "placement version", 5)?;
         let scale = rec.f32()?;
         let variation = rec.i32()?;
-        expect(rec, "field after the variation", 0)?;
-        let unknown = rec.u32()?;
-        match rec.u16()? {
-            0 => {}
-            v => return Err(Error::Corrupt(format!("placement ends in {v}, expected 0"))),
-        }
+        expect(rec, "placement's actor", 0)?;
+        let seen_by = rec.u16()?;
+        expect(rec, "remembered views", 0)?;
         Ok(Thing {
             template,
             class,
@@ -755,7 +753,7 @@ impl Thing {
             flags,
             scale,
             variation,
-            unknown,
+            seen_by,
             detail: Detail::Raw(Vec::new()),
         })
     }
@@ -775,8 +773,8 @@ impl Thing {
         w.f32(self.scale);
         w.i32(self.variation);
         w.u32(0);
-        w.u32(self.unknown);
-        w.u16(0);
+        w.u16(self.seen_by);
+        w.u32(0);
         self.detail.write(w)
     }
 
@@ -824,7 +822,7 @@ impl Detail {
             CAMERA => Detail::Camera(Camera {
                 version: cur.u32()?,
                 name: cur.string()?,
-                unknown: cur.f32()?,
+                zoom: cur.f32()?,
             }),
             _ => Detail::Raw(cur.rest().to_vec()),
         };
@@ -850,7 +848,7 @@ impl Detail {
             Detail::Camera(c) => {
                 w.u32(c.version);
                 w.string(&c.name)?;
-                w.f32(c.unknown);
+                w.f32(c.zoom);
             }
             Detail::Raw(raw) => w.bytes(raw),
         }
@@ -1055,7 +1053,7 @@ mod tests {
         let Detail::Actor(actor) = &t[0].detail else {
             panic!("{:?}", t[0].detail)
         };
-        assert_eq!((actor.kingdom, actor.flags), (2, 0x0800_0000));
+        assert_eq!((actor.kingdom, actor.states), (2, 0x0800_0000));
         assert_eq!(
             actor.component_names().collect::<Vec<_>>(),
             ["Mind", "Economy"]
@@ -1107,7 +1105,7 @@ mod tests {
             Detail::Camera(Camera {
                 version: 2,
                 name: "Intro".into(),
-                unknown: 1.3
+                zoom: 1.3
             })
         );
         assert_eq!(write_things(&things).unwrap(), (index, data));

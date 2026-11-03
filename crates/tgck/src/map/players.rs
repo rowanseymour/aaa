@@ -993,7 +993,7 @@ mod tests {
         Actor {
             version: 14,
             kingdom: 0,
-            flags: 0,
+            states: 0,
             template_components: 1 << 6,
             components: 1 << 6,
             state: State::Decoded {
@@ -1004,18 +1004,18 @@ mod tests {
                 })],
                 trailer: Trailer {
                     main_component: -1,
-                    unknown: Some(0),
-                    unknown2: None,
-                    unknown_string: Some(None),
-                    unknown3: Some(None),
-                    unknown_string2: Some(String::new()),
-                    unknown4: Some([0; 2]),
-                    unknown5: Some(0),
+                    required_object: Some(0),
+                    old_stance: None,
+                    saved_group: Some(None),
+                    group: Some(None),
+                    map_string: Some(String::new()),
+                    towing: Some([0; 2]),
+                    number: Some(0),
                     lists: Some(TrailerLists {
                         lists: Default::default(),
-                        triples: Vec::new(),
+                        recent_attacks: Vec::new(),
                     }),
-                    unknown6: Some(0),
+                    num_deploying: Some(0),
                 },
             },
         }

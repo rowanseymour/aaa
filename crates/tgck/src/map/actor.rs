@@ -17,7 +17,8 @@ pub struct Actor {
     pub version: u32,
     /// The owning [`Kingdom`](super::Kingdom)'s [`Thing::id`]; 0 for none.
     pub kingdom: u32,
-    pub flags: u64,
+    /// The states it's in, a bit each (see `actor_state` in [`rmp.ksy`]).
+    pub states: u64,
     /// The components its template gives it, a bit each as in [`COMPONENTS`].
     pub template_components: u32,
     /// The components the record holds state for: the template's, plus any
@@ -130,46 +131,59 @@ pub struct Body {
     pub version: u32,
     /// From version 2 on.
     pub updatable: Option<Updatable>,
-    /// From version 1 on.
-    pub unknown: Option<f32>,
-    /// A fraction the game multiplies by the template's maximum.
-    pub fraction: f32,
-    /// From version 3 on.
-    pub unknown2: Option<u32>,
-    /// From version 4 on.
-    pub unknown3: Option<u32>,
+    /// From version 1 on: when it died; -1 while alive.
+    pub death_time: Option<f32>,
+    /// Its health as a fraction of the template's `health`.
+    pub health: f32,
+    /// From version 3 on: how long its remains take to sink, set when it dies.
+    pub sink_time: Option<f32>,
+    /// From version 4 on: when it last took damage.
+    pub last_damage_time: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mover {
     pub updatable: Updatable,
     pub version: u32,
-    pub unknown_vector: [f32; 3],
-    pub unknown: [f32; 2],
-    /// From version 8 on: a fraction the game multiplies by a template value.
-    pub fraction: Option<f32>,
+    pub destination: [f32; 3],
+    pub speed: f32,
+    /// The speed it's accelerating or braking towards.
+    pub target_speed: f32,
+    /// From version 8 on: its top speed as a fraction of the template's
+    /// `speed_max`.
+    pub max_speed: Option<f32>,
     /// Before version 4, and ignored.
     pub old: Option<[f32; 3]>,
-    pub unknown2: [f32; 2],
+    /// The thing id of an actor it's following.
+    pub follow: u32,
+    /// How close it keeps to the actor it follows; junk when it follows none.
+    pub follow_distance: f32,
     /// Versions 1 to 6.
     pub old_flag: Option<u8>,
-    /// From version 2 on.
-    pub flag: Option<u8>,
+    /// From version 2 on: whether it snaps to its target facing.
+    pub turn_instantly: Option<u8>,
     /// From version 3 on.
-    pub unknown3: Option<([f32; 3], f32)>,
-    /// From version 5 on; the flag marks the actor in its flags, too.
-    pub flag2: Option<(u8, u32)>,
+    pub target_facing: Option<[f32; 3]>,
+    /// From version 3 on: a factor on how far it moves for its speed.
+    pub speed_scale: Option<f32>,
+    /// From version 5 on: whether it's falling or sliding along a set
+    /// course (marked in the actor's flags, too), and the fall's drag.
+    pub falling: Option<(u8, f32)>,
     /// From version 6 on.
-    pub v6: Option<MoverV6>,
+    pub fall: Option<MoverFall>,
 }
 
+/// The course of a fall.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MoverV6 {
-    pub flag: u8,
-    pub a: [f32; 3],
-    pub flag2: u8,
-    pub b: [f32; 3],
-    pub c: [f32; 3],
+pub struct MoverFall {
+    /// Whether it turns to face the way it falls.
+    pub turns: u8,
+    pub direction: [f32; 3],
+    /// Whether the fall ends at `landing`.
+    pub has_landing: u8,
+    pub landing: [f32; 3],
+    /// From where the fall started to `landing`.
+    pub landing_offset: [f32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -197,39 +211,43 @@ pub struct Property {
     pub extra: Option<u32>,
 }
 
-/// What follows an actor's components.
+/// What follows an actor's components. Thing ids are 0 for none.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trailer {
     /// The bit of the component that's in charge, or -1.
     pub main_component: i32,
-    /// From version 2 on.
-    pub unknown: Option<u32>,
-    /// Versions 3 to 11.
-    pub unknown2: Option<u32>,
-    /// From version 4 on.
-    pub unknown_string: Option<Option<String>>,
-    /// From version 5 on.
-    pub unknown3: Option<Option<u32>>,
-    /// From version 6 on.
-    pub unknown_string2: Option<String>,
-    /// From version 8 on.
-    pub unknown4: Option<[u32; 2]>,
-    /// From version 10 on.
-    pub unknown5: Option<u32>,
+    /// From version 2 on: the object it needs alongside it.
+    pub required_object: Option<u32>,
+    /// Versions 3 to 11, which the game ignores.
+    pub old_stance: Option<u32>,
+    /// From version 4 on: the name of its kingdom's saved group it's in.
+    pub saved_group: Option<Option<String>>,
+    /// From version 5 on: the group thing moving it with others.
+    pub group: Option<Option<u32>>,
+    /// From version 6 on: the MAPSTRINGS key of its own name.
+    pub map_string: Option<String>,
+    /// From version 8 on: the trailer it tows and what tows it.
+    pub towing: Option<[u32; 2]>,
+    /// From version 10 on: the ordinal in its name, as in 3rd Infantry.
+    pub number: Option<u32>,
     /// From version 11 on.
     pub lists: Option<TrailerLists>,
-    /// From version 13 on.
-    pub unknown6: Option<u32>,
+    /// From version 13 on: how many units are deploying onto it.
+    pub num_deploying: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrailerLists {
+    /// The organizations engaging it, the units moving to it and the
+    /// actors that have attacked it.
     pub lists: [Vec<u32>; 3],
-    pub triples: Vec<[u32; 3]>,
+    /// Recent attacks: the attacker, then the time of its latest hit and
+    /// how long that counts, as `f32` bits.
+    pub recent_attacks: Vec<[u32; 3]>,
 }
 
 impl Actor {
-    /// The first version that writes the flags in 64 bits; the layout of
+    /// The first version that writes the states in 64 bits; the layout of
     /// earlier ones is unconfirmed.
     const MIN_VERSION: u32 = 9;
     /// The newest version the game reads.
@@ -266,7 +284,7 @@ impl Actor {
         Ok(Actor {
             version,
             kingdom: cur.u32()?,
-            flags: cur.u64()?,
+            states: cur.u64()?,
             template_components: cur.u32()?,
             components: cur.u32()?,
             state: State::Raw(Vec::new()),
@@ -307,7 +325,7 @@ impl Actor {
     pub(super) fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(self.version);
         w.u32(self.kingdom);
-        w.u64(self.flags);
+        w.u64(self.states);
         w.u32(self.template_components);
         w.u32(self.components);
         match &self.state {
@@ -472,10 +490,10 @@ impl Body {
         Ok(Body {
             version,
             updatable: (version >= 2).then(|| Updatable::parse(cur)).transpose()?,
-            unknown: (version >= 1).then(|| cur.f32()).transpose()?,
-            fraction: cur.f32()?,
-            unknown2: (version >= 3).then(|| cur.u32()).transpose()?,
-            unknown3: (version >= 4).then(|| cur.u32()).transpose()?,
+            death_time: (version >= 1).then(|| cur.f32()).transpose()?,
+            health: cur.f32()?,
+            sink_time: (version >= 3).then(|| cur.f32()).transpose()?,
+            last_damage_time: (version >= 4).then(|| cur.f32()).transpose()?,
         })
     }
 
@@ -484,12 +502,15 @@ impl Body {
         if let Some(u) = &self.updatable {
             u.write(w);
         }
-        if let Some(v) = self.unknown {
+        if let Some(v) = self.death_time {
             w.f32(v);
         }
-        w.f32(self.fraction);
-        for v in [self.unknown2, self.unknown3].into_iter().flatten() {
-            w.u32(v);
+        w.f32(self.health);
+        for v in [self.sink_time, self.last_damage_time]
+            .into_iter()
+            .flatten()
+        {
+            w.f32(v);
         }
     }
 }
@@ -501,27 +522,28 @@ impl Mover {
         Ok(Mover {
             updatable,
             version: v,
-            unknown_vector: cur.f32s()?,
-            unknown: cur.f32s()?,
-            fraction: (v >= 8).then(|| cur.f32()).transpose()?,
+            destination: cur.f32s()?,
+            speed: cur.f32()?,
+            target_speed: cur.f32()?,
+            max_speed: (v >= 8).then(|| cur.f32()).transpose()?,
             old: (v < 4).then(|| cur.f32s()).transpose()?,
-            unknown2: cur.f32s()?,
+            follow: cur.u32()?,
+            follow_distance: cur.f32()?,
             old_flag: (1..7).contains(&v).then(|| cur.u8()).transpose()?,
-            flag: (v >= 2).then(|| cur.u8()).transpose()?,
-            unknown3: (v >= 3)
-                .then(|| Result::<_>::Ok((cur.f32s()?, cur.f32()?)))
+            turn_instantly: (v >= 2).then(|| cur.u8()).transpose()?,
+            target_facing: (v >= 3).then(|| cur.f32s()).transpose()?,
+            speed_scale: (v >= 3).then(|| cur.f32()).transpose()?,
+            falling: (v >= 5)
+                .then(|| Result::<_>::Ok((cur.u8()?, cur.f32()?)))
                 .transpose()?,
-            flag2: (v >= 5)
-                .then(|| Result::<_>::Ok((cur.u8()?, cur.u32()?)))
-                .transpose()?,
-            v6: (v >= 6)
+            fall: (v >= 6)
                 .then(|| {
-                    Result::<_>::Ok(MoverV6 {
-                        flag: cur.u8()?,
-                        a: cur.f32s()?,
-                        flag2: cur.u8()?,
-                        b: cur.f32s()?,
-                        c: cur.f32s()?,
+                    Result::<_>::Ok(MoverFall {
+                        turns: cur.u8()?,
+                        direction: cur.f32s()?,
+                        has_landing: cur.u8()?,
+                        landing: cur.f32s()?,
+                        landing_offset: cur.f32s()?,
                     })
                 })
                 .transpose()?,
@@ -531,32 +553,36 @@ impl Mover {
     fn write(&self, w: &mut Writer) {
         self.updatable.write(w);
         w.u32(self.version);
-        w.f32s(&self.unknown_vector);
-        w.f32s(&self.unknown);
-        if let Some(v) = self.fraction {
+        w.f32s(&self.destination);
+        w.f32(self.speed);
+        w.f32(self.target_speed);
+        if let Some(v) = self.max_speed {
             w.f32(v);
         }
         if let Some(v) = self.old {
             w.f32s(&v);
         }
-        w.f32s(&self.unknown2);
-        for v in [self.old_flag, self.flag].into_iter().flatten() {
+        w.u32(self.follow);
+        w.f32(self.follow_distance);
+        for v in [self.old_flag, self.turn_instantly].into_iter().flatten() {
             w.u8(v);
         }
-        if let Some((v, f)) = self.unknown3 {
+        if let Some(v) = self.target_facing {
             w.f32s(&v);
-            w.f32(f);
         }
-        if let Some((flag, v)) = self.flag2 {
+        if let Some(v) = self.speed_scale {
+            w.f32(v);
+        }
+        if let Some((flag, drag)) = self.falling {
             w.u8(flag);
-            w.u32(v);
+            w.f32(drag);
         }
-        if let Some(v6) = &self.v6 {
-            w.u8(v6.flag);
-            w.f32s(&v6.a);
-            w.u8(v6.flag2);
-            w.f32s(&v6.b);
-            w.f32s(&v6.c);
+        if let Some(fall) = &self.fall {
+            w.u8(fall.turns);
+            w.f32s(&fall.direction);
+            w.u8(fall.has_landing);
+            w.f32s(&fall.landing);
+            w.f32s(&fall.landing_offset);
         }
     }
 }
@@ -653,28 +679,28 @@ impl Trailer {
         };
         Ok(Trailer {
             main_component: cur.i32()?,
-            unknown: (v >= 2).then(|| cur.u32()).transpose()?,
-            unknown2: (3..12).contains(&v).then(|| cur.u32()).transpose()?,
-            unknown_string: (v >= 4)
+            required_object: (v >= 2).then(|| cur.u32()).transpose()?,
+            old_stance: (3..12).contains(&v).then(|| cur.u32()).transpose()?,
+            saved_group: (v >= 4)
                 .then(|| {
-                    flagged(cur, "trailer string")?
+                    flagged(cur, "saved group")?
                         .then(|| cur.string())
                         .transpose()
                 })
                 .transpose()?,
-            unknown3: (v >= 5)
-                .then(|| flagged(cur, "trailer u32")?.then(|| cur.u32()).transpose())
+            group: (v >= 5)
+                .then(|| flagged(cur, "group")?.then(|| cur.u32()).transpose())
                 .transpose()?,
-            unknown_string2: (v >= 6).then(|| cur.string()).transpose()?,
-            unknown4: (v >= 8)
+            map_string: (v >= 6).then(|| cur.string()).transpose()?,
+            towing: (v >= 8)
                 .then(|| Result::<_>::Ok([cur.u32()?, cur.u32()?]))
                 .transpose()?,
-            unknown5: (v >= 10).then(|| cur.u32()).transpose()?,
+            number: (v >= 10).then(|| cur.u32()).transpose()?,
             lists: (v >= 11)
                 .then(|| {
                     let lists = [u32s(cur)?, u32s(cur)?, u32s(cur)?];
                     let n = cur.u32()?;
-                    let triples = bytes(cur, n, 12)?
+                    let recent_attacks = bytes(cur, n, 12)?
                         .chunks(12)
                         .map(|c| {
                             let [a, b, c] = [0, 4, 8]
@@ -682,10 +708,13 @@ impl Trailer {
                             [a, b, c]
                         })
                         .collect();
-                    Result::<_>::Ok(TrailerLists { lists, triples })
+                    Result::<_>::Ok(TrailerLists {
+                        lists,
+                        recent_attacks,
+                    })
                 })
                 .transpose()?,
-            unknown6: (v >= 13).then(|| cur.u32()).transpose()?,
+            num_deploying: (v >= 13).then(|| cur.u32()).transpose()?,
         })
     }
 
@@ -698,46 +727,53 @@ impl Trailer {
                 ))),
             }
         };
-        has(self.unknown.is_some(), v >= 2)?;
-        has(self.unknown2.is_some(), (3..12).contains(&v))?;
-        has(self.unknown_string.is_some(), v >= 4)?;
-        has(self.unknown3.is_some(), v >= 5)?;
-        has(self.unknown_string2.is_some(), v >= 6)?;
-        has(self.unknown4.is_some(), v >= 8)?;
-        has(self.unknown5.is_some(), v >= 10)?;
+        has(self.required_object.is_some(), v >= 2)?;
+        has(self.old_stance.is_some(), (3..12).contains(&v))?;
+        has(self.saved_group.is_some(), v >= 4)?;
+        has(self.group.is_some(), v >= 5)?;
+        has(self.map_string.is_some(), v >= 6)?;
+        has(self.towing.is_some(), v >= 8)?;
+        has(self.number.is_some(), v >= 10)?;
         has(self.lists.is_some(), v >= 11)?;
-        has(self.unknown6.is_some(), v >= 13)?;
+        has(self.num_deploying.is_some(), v >= 13)?;
         w.i32(self.main_component);
-        for v in [self.unknown, self.unknown2].into_iter().flatten() {
+        for v in [self.required_object, self.old_stance]
+            .into_iter()
+            .flatten()
+        {
             w.u32(v);
         }
-        if let Some(s) = &self.unknown_string {
+        if let Some(s) = &self.saved_group {
             w.u8(s.is_some().into());
             if let Some(s) = s {
                 w.string(s)?;
             }
         }
-        if let Some(v) = self.unknown3 {
+        if let Some(v) = self.group {
             w.u8(v.is_some().into());
             if let Some(v) = v {
                 w.u32(v);
             }
         }
-        if let Some(s) = &self.unknown_string2 {
+        if let Some(s) = &self.map_string {
             w.string(s)?;
         }
-        if let Some(vs) = self.unknown4 {
+        if let Some(vs) = self.towing {
             vs.iter().for_each(|&v| w.u32(v));
         }
-        if let Some(v) = self.unknown5 {
+        if let Some(v) = self.number {
             w.u32(v);
         }
         if let Some(lists) = &self.lists {
             lists.lists.iter().for_each(|l| write_u32s(w, l));
-            w.u32(lists.triples.len() as u32);
-            lists.triples.iter().flatten().for_each(|&v| w.u32(v));
+            w.u32(lists.recent_attacks.len() as u32);
+            lists
+                .recent_attacks
+                .iter()
+                .flatten()
+                .for_each(|&v| w.u32(v));
         }
-        if let Some(v) = self.unknown6 {
+        if let Some(v) = self.num_deploying {
             w.u32(v);
         }
         Ok(())
@@ -1363,18 +1399,18 @@ mod tests {
     fn trailer() -> Trailer {
         Trailer {
             main_component: 3,
-            unknown: Some(1),
-            unknown2: None,
-            unknown_string: Some(Some("order".into())),
-            unknown3: Some(None),
-            unknown_string2: Some(String::new()),
-            unknown4: Some([2, 3]),
-            unknown5: Some(4),
+            required_object: Some(1),
+            old_stance: None,
+            saved_group: Some(Some("order".into())),
+            group: Some(None),
+            map_string: Some(String::new()),
+            towing: Some([2, 3]),
+            number: Some(4),
             lists: Some(TrailerLists {
                 lists: [vec![5], vec![], vec![6, 7]],
-                triples: vec![[8, 9, 10]],
+                recent_attacks: vec![[8, 9, 10]],
             }),
-            unknown6: Some(11),
+            num_deploying: Some(11),
         }
     }
 
@@ -1382,7 +1418,7 @@ mod tests {
         Actor {
             version: 14,
             kingdom: 2,
-            flags: 0x0800_0000,
+            states: 0x0800_0000,
             template_components: components,
             components,
             state: State::Decoded {
@@ -1396,10 +1432,10 @@ mod tests {
         Component::Body(Body {
             version: 4,
             updatable: Some(Updatable { version: 1, id: 12 }),
-            unknown: Some(-1.0),
-            fraction: 0.5,
-            unknown2: Some(0),
-            unknown3: Some(1),
+            death_time: Some(-1.0),
+            health: 0.5,
+            sink_time: Some(0.0),
+            last_damage_time: Some(-999.0),
         })
     }
 
@@ -1407,21 +1443,24 @@ mod tests {
         Component::Mover(Mover {
             updatable: Updatable { version: 1, id: 13 },
             version: 8,
-            unknown_vector: [1.0, 2.0, 3.0],
-            unknown: [0.0, 1.0],
-            fraction: Some(0.25),
+            destination: [1.0, 2.0, 3.0],
+            speed: 0.0,
+            target_speed: 1.0,
+            max_speed: Some(0.25),
             old: None,
-            unknown2: [4.0, 5.0],
+            follow: 4,
+            follow_distance: 5.0,
             old_flag: None,
-            flag: Some(1),
-            unknown3: Some(([6.0, 7.0, 8.0], 9.0)),
-            flag2: Some((0, 2)),
-            v6: Some(MoverV6 {
-                flag: 1,
-                a: [1.0; 3],
-                flag2: 0,
-                b: [2.0; 3],
-                c: [3.0; 3],
+            turn_instantly: Some(1),
+            target_facing: Some([6.0, 7.0, 8.0]),
+            speed_scale: Some(9.0),
+            falling: Some((0, 2.0)),
+            fall: Some(MoverFall {
+                turns: 1,
+                direction: [1.0; 3],
+                has_landing: 0,
+                landing: [2.0; 3],
+                landing_offset: [3.0; 3],
             }),
         })
     }
@@ -1500,7 +1539,7 @@ mod tests {
             flags: 0,
             scale: 1.0,
             variation: -1,
-            unknown: 0,
+            seen_by: 0,
             detail: Detail::Actor(actor(1 | 1 << 3, vec![body(), mover()])),
         }
         .write(&mut w)
