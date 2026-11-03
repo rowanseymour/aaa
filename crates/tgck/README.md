@@ -70,7 +70,7 @@ and `container::write` puts a file back together.
 | Map `OBJECTIVES` | Done |
 | Map `TRIGGERS` | Done |
 | Map `TEAMS` | Done |
-| Map `KINGDOMS` | Name, colour, relations, resources, team, commander and nation; the rest (mostly AI state) is kept as raw bytes |
+| Map `KINGDOMS` | Name, colour, relations, resources, team, commander, nation, technologies and the strategic AI's state, much of it as unnamed values |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
 | Other map sections (`RULES`, ...) | Not decoded; available as raw bytes through `tgck unpack` |

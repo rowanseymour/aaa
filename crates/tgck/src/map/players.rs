@@ -13,10 +13,6 @@
 //!             present:
 //!     a thing record (class 4, as in DYNAMIC_THINGS) whose actor has no
 //!       component but Properties, holding no properties
-//!     the actor's trailer: i32 unknown, v2: u32, v3-11: u32,
-//!       v4: u8 flag [string], v5: u8 flag [u32], v6: string, v8: u32 u32,
-//!       v10: u32, v11: three u32 lists, then u32 n and 12 bytes each,
-//!       v13: u32
 //!     world_version 22+: u32 version (1), i32 updatable id
 //!     u32 version (13-20), u32 index, i32 major_index (-1 if independent),
 //!     u32 independent, string name, string color,
@@ -27,18 +23,30 @@
 //!       u32 n, ability[n]: u32 version (0 or 1), u32 state, f32 time,
 //!       u32 unknown, u8 unknown, v1: u32 n, u32 target[n]
 //!     string nation
-//!     the rest, mostly the strategic AI's state: not decoded
+//!     v5: u32 n, (string, u32)[n], v6: u32, v14: u32 n, string[n],
+//!     v7: u32 n, property[n] as in an actor's Properties, all of class 0
+//!       and without it
+//!     v8: u8 u8 string, v9: string
+//!     if not independent, from v10, the strategic AI:
+//!       v11: priorities: u32 version (0-2), then 4 lists (5 from v2) of
+//!         u32 n, (string template, f32)[n]; from v1 as many more of
+//!         u32 n, (u32 id, f32)[n]
+//!       v11: weights: u32 version (0-1), u32[60] (66 from v1)
+//!       u32 n, item[n]: u32 version (0), weights, u32[21]
+//!       v10 only: weights
+//!       u32 unknown
+//!     v12: u32 n, entry[n]: u32 version (0), string, string, u32 n,
+//!       u32[n], u8, u32
+//!     v15: u32 n, (string template, u32 instance_number)[n]
+//!     v16: u32 n, u32 used_badge[n]
+//!     v17: u8, v18: u8, v19: u8, v20: u32 n, (string resource, f32)[n]
 //! ```
 //!
 //! Relations are listed by the position of the kingdom or team they're with;
 //! a kingdom's relation to itself is 0.
 //! Teams' and kingdoms' indexes are their positions, which the game requires.
-//!
-//! A kingdom's undecoded rest isn't prefixed with its length, so it's taken
-//! to run up to the next record that parses as the following kingdom, less
-//! one byte for each empty position in between.
 
-use super::{Actor, Detail, Head, Thing, expect};
+use super::{Actor, Detail, Head, Property, Thing, expect, header::check_version};
 use crate::{Cursor, Error, Result, Writer};
 
 /// A side kingdoms join, sharing victory.
@@ -182,7 +190,70 @@ pub struct Kingdom {
     pub faction: Option<Faction>,
     /// The nation id, e.g. `nation_gbr`; empty when chosen in the lobby.
     pub nation: String,
-    pub rest: Vec<u8>,
+    /// From version 5 on.
+    pub counts: Option<Vec<(String, u32)>>,
+    /// From version 6 on.
+    pub unknown2: Option<u32>,
+    /// From version 14 on.
+    pub strings: Option<Vec<String>>,
+    /// Shared properties, such as technologies; from version 7 on.
+    pub properties: Option<Vec<Property>>,
+    /// From version 8 on.
+    pub unknown3: Option<([u8; 2], String)>,
+    /// From version 9 on.
+    pub unknown_string: Option<String>,
+    /// The strategic AI's state, which independent kingdoms don't have;
+    /// from version 10 on.
+    pub ai: Option<StrategicAi>,
+    /// From version 12 on.
+    pub entries: Option<Vec<Entry>>,
+    /// The next instance number by actor template; from version 15 on.
+    pub instance_numbers: Option<Vec<(String, u32)>>,
+    /// From version 16 on.
+    pub used_badges: Option<Vec<u32>>,
+    /// One from each of versions 17, 18 and 19 on.
+    pub unknown4: Vec<u8>,
+    /// From version 20 on.
+    pub resources2: Option<Vec<(String, f32)>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StrategicAi {
+    /// From version 11 on.
+    pub priorities: Option<AiPriorities>,
+    pub weights: AiWeights,
+    pub items: Vec<AiItem>,
+    pub unknown: u32,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiPriorities {
+    pub version: u32,
+    /// Version 0 stores u32s, kept here by their bits.
+    pub templates: Vec<Vec<(String, f32)>>,
+    /// Empty for version 0.
+    pub ids: Vec<Vec<(u32, f32)>>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiWeights {
+    pub version: u32,
+    pub values: Vec<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiItem {
+    pub weights: AiWeights,
+    pub values: [u32; 21],
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Entry {
+    pub name: String,
+    pub unknown: String,
+    pub ids: Vec<u32>,
+    pub unknown2: u8,
+    pub unknown3: u32,
 }
 
 /// A kingdom's commander and the state of their abilities.
@@ -213,33 +284,14 @@ impl Kingdoms {
         let mut cur = Cursor::new(data);
         let majors = cur.u32()?;
         let count = cur.u32()?;
-        let mut kingdoms: Vec<Option<Kingdom>> = Vec::new();
-        let mut at = cur.pos();
-        while kingdoms.len() < count as usize {
-            let index = kingdoms.len() as u32;
-            let mut cur = Cursor::new(&data[at..]);
-            if !present(&mut cur)? {
-                kingdoms.push(None);
-                at += 1;
-                continue;
-            }
-            let mut kingdom = Kingdom::parse_decoded(&mut cur, world_version, index)?;
-            let rest_at = at + cur.pos();
-            let (next, empty) = match next_kingdom(data, rest_at, world_version, index, count) {
-                Some((next, next_index)) => (next, next_index - index - 1),
-                None => (data.len(), count - index - 1),
-            };
-            let rest_end = next
-                .checked_sub(empty as usize)
-                .filter(|&end| end >= rest_at && data[end..next].iter().all(|&b| b == 0))
-                .ok_or_else(|| {
-                    Error::Corrupt(format!("kingdom {index}'s end can't be told apart"))
-                })?;
-            kingdom.rest = data[rest_at..rest_end].to_vec();
-            kingdoms.push(Some(kingdom));
-            kingdoms.extend((0..empty).map(|_| None));
-            at = next;
-        }
+        let kingdoms = (0..count)
+            .map(|index| {
+                present(&mut cur)?
+                    .then(|| Kingdom::parse(&mut cur, world_version, index))
+                    .transpose()
+            })
+            .collect::<Result<_>>()?;
+        cur.finish("KINGDOMS")?;
         Ok(Kingdoms { majors, kingdoms })
     }
 
@@ -257,32 +309,11 @@ impl Kingdoms {
     }
 }
 
-/// Where the first kingdom after `index` starts, at or after `from`, and its
-/// index.
-fn next_kingdom(
-    data: &[u8],
-    from: usize,
-    world_version: u32,
-    index: u32,
-    count: u32,
-) -> Option<(usize, u32)> {
-    (from..data.len()).find_map(|at| {
-        (data[at] == 1).then_some(())?;
-        (index + 1..count).find_map(|next| {
-            let mut cur = Cursor::new(&data[at + 1..]);
-            Kingdom::parse_decoded(&mut cur, world_version, next)
-                .ok()
-                .map(|_| (at, next))
-        })
-    })
-}
-
 impl Kingdom {
     const MIN_VERSION: u32 = 13;
     const MAX_VERSION: u32 = 20;
 
-    /// Everything but the rest.
-    fn parse_decoded(cur: &mut Cursor, world_version: u32, index: u32) -> Result<Self> {
+    fn parse(cur: &mut Cursor, world_version: u32, index: u32) -> Result<Self> {
         let head = parse_head(cur, KINGDOM)?;
         let mut thing = Thing::parse_placement(head, cur)?;
         thing.detail = Detail::Actor(Actor::parse(cur, world_version)?);
@@ -314,6 +345,23 @@ impl Kingdom {
         expect(cur, "recruit count", 0)?;
         let recruit_unknown = cur.i32()?;
         let faction = (cur.u8()? != 0).then(|| Faction::parse(cur)).transpose()?;
+        let nation = cur.string()?;
+        let v = version;
+        let counts = (v >= 5).then(|| pairs(cur, Cursor::u32)).transpose()?;
+        let unknown2 = (v >= 6).then(|| cur.u32()).transpose()?;
+        let strings = (v >= 14)
+            .then(|| (0..cur.u32()?).map(|_| cur.string()).collect())
+            .transpose()?;
+        let properties = (v >= 7)
+            .then(|| (0..cur.u32()?).map(|_| Property::parse(cur, 0)).collect())
+            .transpose()?;
+        let unknown3 = (v >= 8)
+            .then(|| Result::<_>::Ok(([cur.u8()?, cur.u8()?], cur.string()?)))
+            .transpose()?;
+        let unknown_string = (v >= 9).then(|| cur.string()).transpose()?;
+        let ai = (v >= 10 && independent == 0)
+            .then(|| StrategicAi::parse(cur, v))
+            .transpose()?;
         Ok(Kingdom {
             thing,
             updatable,
@@ -329,8 +377,21 @@ impl Kingdom {
             unknown,
             recruit_unknown,
             faction,
-            nation: cur.string()?,
-            rest: Vec::new(),
+            nation,
+            counts,
+            unknown2,
+            strings,
+            properties,
+            unknown3,
+            unknown_string,
+            ai,
+            entries: (v >= 12)
+                .then(|| (0..cur.u32()?).map(|_| Entry::parse(cur)).collect())
+                .transpose()?,
+            instance_numbers: (v >= 15).then(|| pairs(cur, Cursor::u32)).transpose()?,
+            used_badges: (v >= 16).then(|| u32s(cur)).transpose()?,
+            unknown4: (17..=v.min(19)).map(|_| cur.u8()).collect::<Result<_>>()?,
+            resources2: (v >= 20).then(|| pairs(cur, Cursor::f32)).transpose()?,
         })
     }
 
@@ -371,7 +432,249 @@ impl Kingdom {
             faction.write(w)?;
         }
         w.string(&self.nation)?;
-        w.bytes(&self.rest);
+        self.write_tail(w, index)
+    }
+
+    /// Everything after the nation.
+    fn write_tail(&self, w: &mut Writer, index: u32) -> Result<()> {
+        let v = self.version;
+        let unwritable = || {
+            Error::Unwritable(format!(
+                "kingdom {index}'s fields don't suit its version {v}"
+            ))
+        };
+        let has = [
+            (self.counts.is_some(), v >= 5),
+            (self.unknown2.is_some(), v >= 6),
+            (self.strings.is_some(), v >= 14),
+            (self.properties.is_some(), v >= 7),
+            (self.unknown3.is_some(), v >= 8),
+            (self.unknown_string.is_some(), v >= 9),
+            (self.ai.is_some(), v >= 10 && self.independent == 0),
+            (self.entries.is_some(), v >= 12),
+            (self.instance_numbers.is_some(), v >= 15),
+            (self.used_badges.is_some(), v >= 16),
+            (self.resources2.is_some(), v >= 20),
+            (self.unknown4.len() == (17..=v.min(19)).count(), true),
+        ];
+        if has.iter().any(|(set, wanted)| set != wanted) {
+            return Err(unwritable());
+        }
+        if let Some(counts) = &self.counts {
+            write_pairs(w, counts, Writer::u32)?;
+        }
+        if let Some(v) = self.unknown2 {
+            w.u32(v);
+        }
+        if let Some(strings) = &self.strings {
+            w.u32(strings.len() as u32);
+            strings.iter().try_for_each(|s| w.string(s))?;
+        }
+        if let Some(properties) = &self.properties {
+            if properties.iter().any(|p| p.class != 0) {
+                return Err(unwritable());
+            }
+            w.u32(properties.len() as u32);
+            properties.iter().try_for_each(|p| p.write_body(w))?;
+        }
+        if let Some((bytes, s)) = &self.unknown3 {
+            bytes.iter().for_each(|&b| w.u8(b));
+            w.string(s)?;
+        }
+        if let Some(s) = &self.unknown_string {
+            w.string(s)?;
+        }
+        if let Some(ai) = &self.ai {
+            ai.write(w, v)?;
+        }
+        if let Some(entries) = &self.entries {
+            w.u32(entries.len() as u32);
+            entries.iter().try_for_each(|e| e.write(w))?;
+        }
+        if let Some(numbers) = &self.instance_numbers {
+            write_pairs(w, numbers, Writer::u32)?;
+        }
+        if let Some(badges) = &self.used_badges {
+            write_u32s(w, badges);
+        }
+        self.unknown4.iter().for_each(|&b| w.u8(b));
+        if let Some(resources) = &self.resources2 {
+            write_pairs(w, resources, Writer::f32)?;
+        }
+        Ok(())
+    }
+}
+
+/// `u32 n`, then `(string, value)[n]`.
+fn pairs<'a, T>(
+    cur: &mut Cursor<'a>,
+    value: impl Fn(&mut Cursor<'a>) -> Result<T>,
+) -> Result<Vec<(String, T)>> {
+    let n = cur.u32()?;
+    (0..n).map(|_| Ok((cur.string()?, value(cur)?))).collect()
+}
+
+fn write_pairs<T: Copy>(
+    w: &mut Writer,
+    pairs: &[(String, T)],
+    value: impl Fn(&mut Writer, T),
+) -> Result<()> {
+    w.u32(pairs.len() as u32);
+    for (s, v) in pairs {
+        w.string(s)?;
+        value(w, *v);
+    }
+    Ok(())
+}
+
+impl StrategicAi {
+    fn parse(cur: &mut Cursor, v: u32) -> Result<Self> {
+        let priorities = (v >= 11).then(|| AiPriorities::parse(cur)).transpose()?;
+        let weights = (v >= 11).then(|| AiWeights::parse(cur)).transpose()?;
+        let items = (0..cur.u32()?)
+            .map(|_| AiItem::parse(cur))
+            .collect::<Result<_>>()?;
+        let weights = match weights {
+            Some(weights) => weights,
+            None => AiWeights::parse(cur)?,
+        };
+        Ok(StrategicAi {
+            priorities,
+            weights,
+            items,
+            unknown: cur.u32()?,
+        })
+    }
+
+    fn write(&self, w: &mut Writer, v: u32) -> Result<()> {
+        if self.priorities.is_some() != (v >= 11) {
+            return Err(Error::Unwritable(format!(
+                "AI priorities must be set exactly from kingdom version 11, not {v}"
+            )));
+        }
+        if let Some(priorities) = &self.priorities {
+            priorities.write(w)?;
+            self.weights.write(w)?;
+        }
+        w.u32(self.items.len() as u32);
+        for item in &self.items {
+            w.u32(0);
+            item.weights.write(w)?;
+            item.values.iter().for_each(|&v| w.u32(v));
+        }
+        if v < 11 {
+            self.weights.write(w)?;
+        }
+        w.u32(self.unknown);
+        Ok(())
+    }
+}
+
+impl AiPriorities {
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        let version = check_version("AI priorities", cur.u32()?, 0..=2)?;
+        let lists = if version >= 2 { 5 } else { 4 };
+        let templates = (0..lists)
+            .map(|_| match version {
+                0 => pairs(cur, |c| c.u32().map(f32::from_bits)),
+                _ => pairs(cur, Cursor::f32),
+            })
+            .collect::<Result<_>>()?;
+        let ids = (0..if version >= 1 { lists } else { 0 })
+            .map(|_| {
+                let n = cur.u32()?;
+                (0..n).map(|_| Ok((cur.u32()?, cur.f32()?))).collect()
+            })
+            .collect::<Result<_>>()?;
+        Ok(AiPriorities {
+            version,
+            templates,
+            ids,
+        })
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        let lists = if self.version >= 2 { 5 } else { 4 };
+        let ids = if self.version >= 1 { lists } else { 0 };
+        if self.templates.len() != lists || self.ids.len() != ids {
+            return Err(Error::Unwritable(format!(
+                "AI priorities version {} has {lists} lists",
+                self.version
+            )));
+        }
+        w.u32(self.version);
+        for list in &self.templates {
+            write_pairs(w, list, |w, v| w.u32(v.to_bits()))?;
+        }
+        for list in &self.ids {
+            w.u32(list.len() as u32);
+            for &(id, v) in list {
+                w.u32(id);
+                w.f32(v);
+            }
+        }
+        Ok(())
+    }
+}
+
+impl AiWeights {
+    fn count(version: u32) -> usize {
+        if version >= 1 { 66 } else { 60 }
+    }
+
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        let version = check_version("AI weights", cur.u32()?, 0..=1)?;
+        let values = (0..Self::count(version))
+            .map(|_| cur.u32())
+            .collect::<Result<_>>()?;
+        Ok(AiWeights { version, values })
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        if self.values.len() != Self::count(self.version) {
+            return Err(Error::Unwritable(format!(
+                "AI weights version {} have {} values",
+                self.version,
+                Self::count(self.version)
+            )));
+        }
+        w.u32(self.version);
+        self.values.iter().for_each(|&v| w.u32(v));
+        Ok(())
+    }
+}
+
+impl AiItem {
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        expect(cur, "AI item version", 0)?;
+        let weights = AiWeights::parse(cur)?;
+        let mut values = [0; 21];
+        for v in &mut values {
+            *v = cur.u32()?;
+        }
+        Ok(AiItem { weights, values })
+    }
+}
+
+impl Entry {
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        expect(cur, "kingdom entry version", 0)?;
+        Ok(Entry {
+            name: cur.string()?,
+            unknown: cur.string()?,
+            ids: u32s(cur)?,
+            unknown2: cur.u8()?,
+            unknown3: cur.u32()?,
+        })
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        w.u32(0);
+        w.string(&self.name)?;
+        w.string(&self.unknown)?;
+        write_u32s(w, &self.ids);
+        w.u8(self.unknown2);
+        w.u32(self.unknown3);
         Ok(())
     }
 }
@@ -472,7 +775,7 @@ mod tests {
         assert_eq!(write_teams(&teams).unwrap(), w.0);
     }
 
-    /// A kingdom record up to its undecoded rest.
+    /// A version 20 kingdom record, a major one if it has a faction.
     fn kingdom(w: &mut Writer, index: u32, faction: Option<&str>) {
         head(w, "kingdom", KINGDOM, 100 + index);
         for v in [5, 1f32.to_bits(), u32::MAX, 0, 0] {
@@ -546,6 +849,58 @@ mod tests {
         }
         w.string(if faction.is_some() { "nation_gbr" } else { "" })
             .unwrap();
+        // Counts, an unknown, technologies, two flags and a string, and
+        // another string.
+        write_pairs(w, &[("ger_tank".to_string(), 2)], Writer::u32).unwrap();
+        w.u32(7);
+        w.u32(1);
+        w.string("objective_a").unwrap();
+        w.u32(1);
+        Property {
+            class: 0,
+            version: 3,
+            unknown: 1,
+            unknown2: Some(2),
+            id: "tech_armor".into(),
+            unknown3: Some((1, 0)),
+            extra: None,
+        }
+        .write_body(w)
+        .unwrap();
+        w.bytes(&[1, 0]);
+        w.string("gbr_sai").unwrap();
+        w.string("").unwrap();
+        if faction.is_some() {
+            // The strategic AI: priorities, weights, an item and an unknown.
+            w.u32(2);
+            for list in 0..10 {
+                w.u32((list == 0).into());
+                if list == 0 {
+                    w.string("ger_tank").unwrap();
+                    w.f32(0.5);
+                }
+            }
+            w.u32(1);
+            (0..66).for_each(|v| w.u32(v));
+            w.u32(1);
+            w.u32(0);
+            w.u32(0);
+            (0..60).for_each(|_| w.u32(3));
+            (0..21).for_each(|v| w.u32(v));
+            w.u32(9);
+        }
+        // An entry, instance numbers, badges, three flags and resources.
+        w.u32(1);
+        w.u32(0);
+        w.string("entry").unwrap();
+        w.string("").unwrap();
+        write_u32s(w, &[4]);
+        w.u8(1);
+        w.u32(5);
+        write_pairs(w, &[("ger_tank".to_string(), 3)], Writer::u32).unwrap();
+        write_u32s(w, &[6]);
+        w.bytes(&[0, 1, 0]);
+        write_pairs(w, &[("ammo".to_string(), 10.0)], Writer::f32).unwrap();
     }
 
     #[test]
@@ -555,13 +910,10 @@ mod tests {
         w.u32(4);
         w.u8(1);
         kingdom(&mut w, 0, Some("montgomery"));
-        // The rest, holding a byte that could start a record, then two
-        // empty positions.
-        w.bytes(&[0xAA, 1, 0, 0]);
+        // Two empty positions.
         w.bytes(&[0, 0]);
         w.u8(1);
         kingdom(&mut w, 3, None);
-        w.bytes(&[0xBB]);
 
         let kingdoms = Kingdoms::parse(&w.0, 28).unwrap();
         assert_eq!(kingdoms.majors, 1);
@@ -577,10 +929,17 @@ mod tests {
             ("montgomery", 1)
         );
         assert_eq!(first.nation, "nation_gbr");
-        assert_eq!(first.rest, [0xAA, 1, 0, 0]);
+        let tech = &first.properties.as_ref().unwrap()[0];
+        assert_eq!(tech.id, "tech_armor");
+        let ai = first.ai.as_ref().unwrap();
+        assert_eq!(ai.priorities.as_ref().unwrap().templates[0][0].1, 0.5);
+        assert_eq!((ai.items.len(), ai.unknown), (1, 9));
+        assert_eq!(first.unknown4, [0, 1, 0]);
+        assert_eq!(first.resources2, Some(vec![("ammo".to_string(), 10.0)]));
         let last = kingdoms.kingdoms[3].as_ref().unwrap();
         assert_eq!((last.major_index, last.faction.is_none()), (-1, true));
-        assert_eq!(last.rest, [0xBB]);
+        assert!(last.ai.is_none(), "independents have no strategic AI");
+        assert_eq!(last.instance_numbers.as_ref().unwrap()[0].1, 3);
         assert_eq!(kingdoms.to_bytes(28).unwrap(), w.0);
         assert!(
             kingdoms.to_bytes(21).is_err(),

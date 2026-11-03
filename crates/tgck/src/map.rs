@@ -75,7 +75,10 @@ pub use header::{
     WorldRules,
 };
 pub use objectives::{Objective, Objectives};
-pub use players::{Ability, Faction, Kingdom, Kingdoms, Team, write_teams};
+pub use players::{
+    Ability, AiItem, AiPriorities, AiWeights, Entry, Faction, Kingdom, Kingdoms, StrategicAi, Team,
+    write_teams,
+};
 pub use triggers::{Element, Parameter, Trigger, Triggers, Value};
 
 use crate::container::{Container, Section};
