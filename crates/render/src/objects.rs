@@ -1,7 +1,6 @@
 //! Placeholder markers for placed objects without a readable model: units,
 //! start locations, magenta boxes for everything else that should have had a
-//! model, and red boxes, hidden until toggled, for objects that have none
-//! such as sound emitters.
+//! model, and red boxes for objects that have none such as sound emitters.
 
 use std::collections::HashMap;
 
@@ -19,10 +18,9 @@ enum Kind {
     Modelless,
 }
 
-/// Marks the markers of objects without a model, which start hidden unless
-/// asked for.
+/// Marks a placeholder marker, which [`toggle_markers`] shows and hides.
 #[derive(Component)]
-pub struct Modelless;
+pub struct Marker;
 
 const NATIONS: [(&str, [f32; 3]); 5] = [
     ("usa", [0.3, 0.45, 0.2]),
@@ -63,8 +61,7 @@ pub fn spawn(
     materials: &mut Assets<StandardMaterial>,
     ground: &Ground,
     things: &[(&Thing, bool)],
-    show_markers: bool,
-    show_modelless: bool,
+    show: bool,
 ) {
     let mut handles = HashMap::new();
     for &(thing, should_have_model) in things {
@@ -90,29 +87,25 @@ pub fn spawn(
         if fx != 0.0 || fy != 0.0 {
             transform.look_to(world(fx, fy, 0.0), Vec3::Y);
         }
-        let mut marker = commands.spawn((
+        commands.spawn((
             Name::new(thing.template.clone()),
             Mesh3d(mesh),
             MeshMaterial3d(material),
             transform,
-        ));
-        if kind == Kind::Modelless {
-            let visibility = if show_modelless {
+            Marker,
+            if show {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
-            };
-            marker.insert((Modelless, visibility));
-        } else if !show_markers {
-            marker.insert(Visibility::Hidden);
-        }
+            },
+        ));
     }
 }
 
-/// Shows or hides the markers of objects without a model.
-pub fn toggle_modelless(
+/// Shows or hides all placeholder markers.
+pub fn toggle_markers(
     keys: Res<ButtonInput<KeyCode>>,
-    mut markers: Query<&mut Visibility, With<Modelless>>,
+    mut markers: Query<&mut Visibility, With<Marker>>,
 ) {
     if keys.just_pressed(KeyCode::KeyM) {
         for mut v in &mut markers {

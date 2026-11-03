@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
 
 use aaa_render::camera::{self, RtsCamera};
-use aaa_render::{MapAssets, MapRenderPlugin, Markers, objects, terrain};
+use aaa_render::{MapAssets, MapRenderPlugin, objects, terrain};
 
 const USAGE: &str = "\
 usage:
@@ -21,24 +21,17 @@ options:
   --camera <x,y,dist,yaw,pitch>  start the free camera looking at x,y (fractions
                                  of the map's width) from dist away, with yaw
                                  and pitch in radians
-  --modelless                    start with markers shown for objects without
-                                 models, such as sound emitters (M toggles them)
   --screenshot <file.png>        save a frame to a file and exit, without the
-                                 help text or placeholder markers other than
-                                 those --modelless asks for";
+                                 help text or placeholder markers";
 
 const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
-                    (Q/E/right drag: rotate   R/F: tilt)   M: objects without models";
+                    (Q/E/right drag: rotate   R/F: tilt)   M: placeholder markers";
 
 #[derive(Resource)]
 struct Loaded {
     game: GameData,
     map: Map,
 }
-
-/// Set by `--modelless`.
-#[derive(Resource)]
-struct ShowModelless;
 
 /// Where the camera starts, from `--camera`.
 #[derive(Resource, Clone, Copy)]
@@ -114,16 +107,8 @@ fn floats<const N: usize>(s: &str) -> Option<[f32; N]> {
     v.try_into().ok()
 }
 
-/// Removes `flag` from `args`, returning whether it was there.
-fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
-    let before = args.len();
-    args.retain(|a| a != flag);
-    args.len() != before
-}
-
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let modelless = take_flag(&mut args, "--modelless");
     let (Ok(screenshot), Ok(camera)) = (
         take_option(&mut args, "--screenshot"),
         take_option(&mut args, "--camera"),
@@ -184,12 +169,9 @@ fn main() -> ExitCode {
     app.add_plugins(MapRenderPlugin)
         .insert_resource(loaded)
         .add_systems(Startup, setup)
-        .add_systems(Update, objects::toggle_modelless);
+        .add_systems(Update, objects::toggle_markers);
     if let Some(c) = camera {
         app.insert_resource(c);
-    }
-    if modelless {
-        app.insert_resource(ShowModelless);
     }
     if let Some(s) = screenshot {
         app.insert_resource(s).add_systems(Update, take_screenshot);
@@ -248,14 +230,9 @@ fn setup(
     mut assets: MapAssets,
     start: Option<Res<StartView>>,
     screenshot: Option<Res<ScreenshotTo>>,
-    modelless: Option<Res<ShowModelless>>,
 ) {
     let Loaded { game, map } = &mut *loaded;
-    let markers = Markers {
-        placeholders: screenshot.is_none(),
-        modelless: modelless.is_some(),
-    };
-    aaa_render::spawn_map(&mut commands, &mut assets, game, map, markers);
+    aaa_render::spawn_map(&mut commands, &mut assets, game, map, screenshot.is_none());
 
     let ground = &map.ground;
     let size = ground.size();

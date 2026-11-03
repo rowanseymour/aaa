@@ -26,7 +26,7 @@ rotate and tilt, and switches back.
 | Tab | Toggle game / free camera |
 | Q / E, right drag | Rotate (free camera) |
 | R / F | Tilt (free camera) |
-| M | Show / hide objects without models |
+| M | Show / hide placeholder markers, as screenshots leave them out |
 
 ## Building on Linux
 
