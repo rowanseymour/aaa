@@ -15,6 +15,7 @@ and the game can share.
   tall grass stand in the pose they were modelled in
 - Herds of animals, each animal where the map has it standing
 - Models' own keyframe and fade animations, such as waves rolling in to shore
+- Units and animals bending on their skeletons through their idle animation
 - Lighting from the map's sun, combined the way the game's fixed-function
   renderer does
 - Simple markers where a model can't be drawn yet: magenta boxes for any
@@ -22,7 +23,7 @@ and the game can share.
   pillars for start locations, and red boxes for objects without a model such
   as sound emitters
 
-Not yet: animated water textures, skeletal animation, particle effects.
+Not yet: animated water textures, units' other animations, particle effects.
 Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 

@@ -5,6 +5,7 @@ pub mod blend;
 pub mod camera;
 pub mod models;
 pub mod objects;
+mod rig;
 pub mod terrain;
 mod textures;
 
@@ -15,6 +16,7 @@ use bevy::camera::Exposure;
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
+use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use tgck::map::Sun;
 
@@ -31,7 +33,7 @@ impl Plugin for MapRenderPlugin {
         embedded_asset!(app, "blend.wesl");
         app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
             .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
-            .add_systems(Update, (models::animate, camera::update));
+            .add_systems(Update, (models::animate, rig::play, camera::update));
     }
 }
 
@@ -42,6 +44,7 @@ pub struct MapAssets<'w> {
     materials: ResMut<'w, Assets<StandardMaterial>>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
     images: ResMut<'w, Assets<Image>>,
+    skins: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
     formats: Res<'w, CompressedImageFormatSupport>,
 }
 
@@ -67,6 +70,7 @@ pub fn spawn_map(
         materials,
         ground_materials,
         images,
+        skins,
         formats,
     } = assets;
     let built = terrain::build(game, &map.ground, &map.terrain, images);
@@ -90,6 +94,7 @@ pub fn spawn_map(
         meshes,
         materials,
         images,
+        skins,
     };
     let rest = models.spawn(
         commands,

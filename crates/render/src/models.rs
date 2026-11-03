@@ -9,24 +9,34 @@ use aaa_data::{GameData, Id, View};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
+use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
 use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 use tgck::map::Thing;
 
+use crate::rig::{Nodes, Rig};
 use crate::terrain::world;
 use crate::textures;
 
 /// One mesh of a model, in Bevy axes, ready to instance.
 #[derive(Clone)]
-struct Part {
-    mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
+pub(crate) struct Part {
+    pub mesh: Handle<Mesh>,
+    pub material: Handle<StandardMaterial>,
     animation: Option<Arc<Animation>>,
     /// Bevy's shadows ignore alpha blending, so a faded or see-through mesh
     /// would cast a solid one.
-    blended: bool,
+    pub blended: bool,
+}
+
+/// A loaded model: meshes placed in the model, or a rig of its nodes for
+/// one that plays a `.kf` animation.
+#[derive(Clone)]
+enum Model {
+    Parts(Vec<Part>),
+    Rig(Arc<Rig>),
 }
 
 /// What a model's controllers do to one of its meshes.
@@ -90,7 +100,8 @@ enum Placed {
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
     views: HashMap<Id, Option<View>>,
-    models: HashMap<String, Option<Vec<Part>>>,
+    /// By path, and for rigs the animation's path too.
+    models: HashMap<String, Option<Model>>,
     textures: HashMap<String, Option<Handle<Image>>>,
     /// Bevy's texture formats this GPU can sample compressed.
     formats: CompressedImageFormats,
@@ -173,7 +184,7 @@ impl Models {
         // Things with no variation set pick one by id, so neighbours differ.
         let variation = usize::try_from(thing.variation).unwrap_or(thing.id as usize);
         let model = &view.models[variation % view.models.len()];
-        let Some(parts) = self.model(game, assets, model, &view) else {
+        let Some(model) = self.model(game, assets, model, &view) else {
             return Placed::Missing;
         };
         // Maps store each object's height as the game places it: on the
@@ -185,44 +196,51 @@ impl Models {
         let transform = Transform::from_translation(world(x, y, z))
             .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
             .with_scale(Vec3::splat(view.scale * thing.scale));
-        commands
-            .spawn((
-                Name::new(thing.template.clone()),
-                transform,
-                Visibility::default(),
-            ))
-            .with_children(|parent| {
-                for part in parts {
-                    let mut child = parent.spawn(Mesh3d(part.mesh));
-                    if part.blended {
-                        child.insert(NotShadowCaster);
-                    }
-                    let Some(animation) = part.animation else {
-                        child.insert(MeshMaterial3d(part.material));
-                        continue;
-                    };
-                    let material = match animation.fade {
-                        Some(_) => assets
-                            .materials
-                            .get(&part.material)
-                            .cloned()
-                            .map_or(part.material, |m| assets.materials.add(m)),
-                        None => part.material,
-                    };
-                    // Spread over a minute by the golden ratio, so any
-                    // run of ids lands well apart.
-                    let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
-                    child.insert((
-                        MeshMaterial3d(material.clone()),
-                        animation.transform(offset),
-                        Animated {
-                            animation,
-                            offset,
-                            material,
-                        },
-                    ));
+        let mut root = commands.spawn((
+            Name::new(thing.template.clone()),
+            transform,
+            Visibility::default(),
+        ));
+        // Spread over a minute by the golden ratio, so any run of ids lands
+        // well apart.
+        let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
+        let parts = match model {
+            Model::Parts(parts) => parts,
+            Model::Rig(rig) => {
+                let root = root.id();
+                rig.spawn(commands, root, offset);
+                return Placed::Drawn;
+            }
+        };
+        root.with_children(|parent| {
+            for part in parts {
+                let mut child = parent.spawn(Mesh3d(part.mesh));
+                if part.blended {
+                    child.insert(NotShadowCaster);
                 }
-            });
+                let Some(animation) = part.animation else {
+                    child.insert(MeshMaterial3d(part.material));
+                    continue;
+                };
+                let material = match animation.fade {
+                    Some(_) => assets
+                        .materials
+                        .get(&part.material)
+                        .cloned()
+                        .map_or(part.material, |m| assets.materials.add(m)),
+                    None => part.material,
+                };
+                child.insert((
+                    MeshMaterial3d(material.clone()),
+                    animation.transform(offset),
+                    Animated {
+                        animation,
+                        offset,
+                        material,
+                    },
+                ));
+            }
+        });
         Placed::Drawn
     }
 
@@ -232,13 +250,18 @@ impl Models {
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
-    ) -> Option<Vec<Part>> {
-        if let Some(parts) = self.models.get(path) {
-            return parts.clone();
+    ) -> Option<Model> {
+        let idle = idle(view);
+        let key = match idle {
+            Some(a) => format!("{path}#{}", a.kf),
+            None => path.to_string(),
+        };
+        if let Some(model) = self.models.get(&key) {
+            return model.clone();
         }
-        let parts = self.load(game, assets, path, view);
-        self.models.insert(path.to_string(), parts.clone());
-        parts
+        let model = self.load(game, assets, path, view, idle);
+        self.models.insert(key, model.clone());
+        model
     }
 
     fn load(
@@ -247,10 +270,17 @@ impl Models {
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
-    ) -> Option<Vec<Part>> {
+        idle: Option<&aaa_data::Animation>,
+    ) -> Option<Model> {
         let nif = Nif::parse(&game.read(path)?)
             .map_err(|e| warn!("{path}: {e}"))
             .ok()?;
+        if let Some(kind) = &nif.incomplete {
+            debug!("{path}: stops at {kind}");
+        }
+        if let Some(rig) = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a)) {
+            return Some(Model::Rig(Arc::new(rig)));
+        }
         let mut parts = Vec::new();
         // Skinned shapes are drawn in the pose they were modelled in.
         for placed in nif.shapes() {
@@ -258,11 +288,8 @@ impl Models {
                 continue;
             };
             let props = &placed.properties;
-            let base = nif
-                .property::<nif::Texturing>(props)
-                .and_then(|t| t.base.as_ref());
-            let material = nif.property::<nif::Material>(props);
-            let fade = material
+            let fade = nif
+                .property::<nif::Material>(props)
                 .and_then(|m| controller(&nif, m.controller, ControllerKind::Alpha))
                 .and_then(|c| Some((c.clone(), nif.get_as::<Keys<f32>>(c.data)?.clone())));
             // An animated mesh is built relative to the object that moves.
@@ -275,51 +302,116 @@ impl Models {
                 above,
                 fade,
             });
-            let uv_set = base.map_or(0, |b| b.uv_set as usize);
-            let Some(mesh) = mesh(g, &mesh_transform, uv_set) else {
+            if let Some(mut part) =
+                self.part(game, assets, &nif, path, view, g, props, &mesh_transform)
+            {
+                part.animation = animation.map(Arc::new);
+                parts.push(part);
+            }
+        }
+        (!parts.is_empty()).then_some(Model::Parts(parts))
+    }
+
+    /// A model as a rig of its nodes playing `animation`, if its `.kf`
+    /// file reads and animates any of them.
+    fn rig(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        animation: &aaa_data::Animation,
+    ) -> Option<Rig> {
+        let kf = Nif::parse(&game.read(&animation.kf)?)
+            .map_err(|e| warn!("{}: {e}", animation.kf))
+            .ok()?;
+        let nodes = Nodes::new(nif);
+        let mut meshes = Vec::new();
+        for (i, shape) in nodes.shapes.iter().enumerate() {
+            let Some(s) = nif.get_as::<nif::Shape>(Some(shape.shape)) else {
                 continue;
             };
-            let source = base.and_then(|b| nif.get_as::<nif::SourceTexture>(b.source));
-            let texture = source.and_then(|t| match (&t.file, nif.get_as(t.pixels)) {
-                (Some(file), _) => self.texture(game, assets, file, view, path),
-                (None, Some(p)) => {
-                    let key = format!("{path}#{}", t.pixels.unwrap_or_default());
-                    self.embedded(assets, key, p)
-                }
-                _ => None,
-            });
-            let alpha = nif.property::<nif::Alpha>(props);
-            let double_sided = nif
-                .property::<nif::Stencil>(props)
-                .is_some_and(|s| s.double_sided());
-            let [r, g, b] = material.map_or([1.0; 3], |m| m.diffuse);
-            let opacity = material.map_or(1.0, |m| m.alpha);
-            let alpha_mode = match alpha {
-                Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
-                Some(a) if a.blend() => AlphaMode::Blend,
-                _ if opacity < 1.0 => AlphaMode::Blend,
-                _ => AlphaMode::Opaque,
+            let Some(g) = nif.get_as::<nif::Geometry>(s.data) else {
+                continue;
             };
-            parts.push(Part {
-                mesh: assets.meshes.add(mesh),
-                material: assets.materials.add(StandardMaterial {
-                    base_color: Color::srgba(r, g, b, opacity),
-                    base_color_texture: texture,
-                    alpha_mode,
-                    double_sided,
-                    cull_mode: (!double_sided).then_some(Face::Back),
-                    perceptual_roughness: 0.9,
-                    reflectance: 0.2,
-                    ..default()
-                }),
-                animation: animation.map(Arc::new),
-                blended: alpha_mode == AlphaMode::Blend,
-            });
+            // Skins are bound in their own space, other meshes hang from
+            // their node.
+            let transform = match s.skin {
+                Some(_) => nif::Transform::IDENTITY,
+                None => s.av.transform,
+            };
+            let props = &shape.properties;
+            if let Some(part) = self.part(game, assets, nif, path, view, g, props, &transform) {
+                meshes.push((part, i));
+            }
         }
-        if let Some(kind) = &nif.incomplete {
-            debug!("{path}: stops at {kind}");
-        }
-        (!parts.is_empty()).then_some(parts)
+        nodes.rig(
+            nif,
+            meshes,
+            &kf,
+            animation.length,
+            assets.meshes,
+            assets.skins,
+        )
+    }
+
+    /// A mesh and its material, with `props` the properties in effect for
+    /// it, nearest first.
+    #[allow(clippy::too_many_arguments)]
+    fn part(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        g: &nif::Geometry,
+        props: &[nif::Ref],
+        transform: &nif::Transform,
+    ) -> Option<Part> {
+        let base = nif
+            .property::<nif::Texturing>(props)
+            .and_then(|t| t.base.as_ref());
+        let material = nif.property::<nif::Material>(props);
+        let uv_set = base.map_or(0, |b| b.uv_set as usize);
+        let mesh = mesh(g, transform, uv_set)?;
+        let source = base.and_then(|b| nif.get_as::<nif::SourceTexture>(b.source));
+        let texture = source.and_then(|t| match (&t.file, nif.get_as(t.pixels)) {
+            (Some(file), _) => self.texture(game, assets, file, view, path),
+            (None, Some(p)) => {
+                let key = format!("{path}#{}", t.pixels.unwrap_or_default());
+                self.embedded(assets, key, p)
+            }
+            _ => None,
+        });
+        let alpha = nif.property::<nif::Alpha>(props);
+        let double_sided = nif
+            .property::<nif::Stencil>(props)
+            .is_some_and(|s| s.double_sided());
+        let [r, g, b] = material.map_or([1.0; 3], |m| m.diffuse);
+        let opacity = material.map_or(1.0, |m| m.alpha);
+        let alpha_mode = match alpha {
+            Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
+            Some(a) if a.blend() => AlphaMode::Blend,
+            _ if opacity < 1.0 => AlphaMode::Blend,
+            _ => AlphaMode::Opaque,
+        };
+        Some(Part {
+            mesh: assets.meshes.add(mesh),
+            material: assets.materials.add(StandardMaterial {
+                base_color: Color::srgba(r, g, b, opacity),
+                base_color_texture: texture,
+                alpha_mode,
+                double_sided,
+                cull_mode: (!double_sided).then_some(Face::Back),
+                perceptual_roughness: 0.9,
+                reflectance: 0.2,
+                ..default()
+            }),
+            animation: None,
+            blended: alpha_mode == AlphaMode::Blend,
+        })
     }
 
     fn texture(
@@ -433,7 +525,7 @@ fn motion(nif: &Nif, path: &[usize]) -> Option<Motion> {
 }
 
 /// A model-space transform in Bevy axes.
-fn bevy_transform(t: &nif::Transform) -> Transform {
+pub(crate) fn bevy_transform(t: &nif::Transform) -> Transform {
     let [x, y, z] = t.translation;
     let r = t.rotation;
     // The game's z-up axes map to Bevy's as (x, y, z) -> (x, z, -y); conjugate
@@ -455,6 +547,17 @@ pub struct ModelAssets<'a> {
     pub meshes: &'a mut Assets<Mesh>,
     pub materials: &'a mut Assets<StandardMaterial>,
     pub images: &'a mut Assets<Image>,
+    pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
+}
+
+/// The idle animation a view's models play: the one named `idle`, else the
+/// first of its kind.
+fn idle(view: &View) -> Option<&aaa_data::Animation> {
+    let mut idles = view.animations.iter().filter(|a| a.kind == "IDLE");
+    idles
+        .clone()
+        .find(|a| a.ids.eq_ignore_ascii_case("idle"))
+        .or_else(|| idles.next())
 }
 
 /// A mesh in model space, converted from the game's z-up axes to Bevy's.

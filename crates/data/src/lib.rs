@@ -33,6 +33,21 @@ pub struct View {
     /// Size multiplier: the middle of the template's random size range, which
     /// each placed object scales again by its own factor.
     pub scale: f32,
+    /// The animations the models can play; units have them.
+    pub animations: Vec<Animation>,
+}
+
+/// An animation a template's models can play.
+#[derive(Debug, Clone)]
+pub struct Animation {
+    /// What it is for: `IDLE`, `MOVE`, `DIE`, ...
+    pub kind: String,
+    /// Which one of its kind, e.g. `idle`, `fidget1`, `walk`.
+    pub ids: String,
+    /// Archive path of its `.kf` file.
+    pub kf: String,
+    /// Seconds one play takes; the file's keys are stretched to fit.
+    pub length: f32,
 }
 
 /// One texture variation of a terrain type, e.g. `temperate_grass01`.
@@ -248,8 +263,8 @@ impl GameData {
     }
 
     /// A template's models: its aspects when they are variations, else its
-    /// normal model, else whatever aspects it lists. Models missing from the
-    /// archive are left out, so a view may have none.
+    /// normal model, else whatever aspects it lists. Models and animations
+    /// missing from the archive are left out, so a view may have none.
     fn view(&self, dir: &str, thing: &defs::Thing, view: &defs::View) -> Option<View> {
         let prefix = view.resource_prefix.as_deref().unwrap_or("");
         let path = |m: &str| {
@@ -301,11 +316,34 @@ impl GameData {
             (Some(a), None) | (None, Some(a)) => a,
             _ => 1.0,
         };
+        // A `.kf` path's second `%s` is the animation's ids.
+        let animations = thing
+            .character_component
+            .iter()
+            .flat_map(|c| &c.animation)
+            .filter_map(|a| {
+                let ids = a.ids.clone()?;
+                let kf = path(
+                    &a.kf
+                        .as_deref()?
+                        .replacen("%s", prefix, 1)
+                        .replacen("%s", &ids, 1),
+                );
+                Some(Animation {
+                    kind: a.kind.clone().unwrap_or_default(),
+                    ids,
+                    kf,
+                    length: a.length.unwrap_or(1.0),
+                })
+            })
+            .filter(|a| self.exists(&a.kf))
+            .collect();
         Some(View {
             models,
             texture_dirs,
             texture_renames,
             scale,
+            animations,
         })
     }
 
@@ -493,6 +531,7 @@ mod tests {
                 texture_dirs: Vec::new(),
                 texture_renames: Vec::new(),
                 scale: 1.0,
+                animations: Vec::new(),
             })
         };
         let mut views: HashMap<Id, Option<View>> = [
@@ -533,5 +572,44 @@ mod tests {
         add_renames(&mut variations, translate, "Variation", |_| true);
         assert_eq!(variations[&Id::from("live")], "new.tga");
         assert_eq!(variations[&Id::from("old")], "new.tga");
+    }
+
+    #[test]
+    fn character_animations() {
+        let parsed = tgi::parse(
+            "[Template Animation]\n{\n\tstring type\n\tstring IDS\n\tstring kf = %s%s.kf\n\tfixed length = 1\n}\n\
+             [Template IdleAnimation Template=Animation]\n{\n\ttype = IDLE\n\tlength = 3\n}\n\
+             [Template Character]\n{\n\t[list Animation Template=Animation]\n}\n\
+             [Template Soldier Template=Character]\n{\n\t[Animation Template=IdleAnimation]\n\tIDS = idle\n\
+             \tkf = /Shared/Idle.kf\n\n\t[Animation Template=IdleAnimation]\n\tIDS = fidget\n}\n\
+             [Thing]\n{\n\t[CharacterComponent Template=Soldier]\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        let animations = thing.character_component.unwrap().animation;
+        let fields: Vec<_> = animations
+            .iter()
+            .map(|a| {
+                (
+                    a.kind.as_deref(),
+                    a.ids.as_deref(),
+                    a.kf.as_deref(),
+                    a.length,
+                )
+            })
+            .collect();
+        assert_eq!(
+            fields,
+            [
+                (
+                    Some("IDLE"),
+                    Some("idle"),
+                    Some("/Shared/Idle.kf"),
+                    Some(3.0)
+                ),
+                (Some("IDLE"), Some("fidget"), Some("%s%s.kf"), Some(3.0)),
+            ]
+        );
     }
 }

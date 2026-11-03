@@ -224,7 +224,7 @@ fn reads_the_older_version() {
 }
 
 #[test]
-fn steps_over_skins() {
+fn reads_skins() {
     let mut b = Builder::new();
     b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 6]));
     let mut skinned = shape("grass", 0x10, 2, &[]);
@@ -238,19 +238,22 @@ fn steps_over_skins() {
     instance.extend(refs(&[6]));
     b.add("NiSkinInstance", instance);
 
-    let transform = floats(&[
-        1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0,
-    ]);
-    let mut data = transform.clone();
+    let transform = |translation: [f32; 3], scale: f32| {
+        let mut v = floats(&[1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0]);
+        v.extend(floats(&translation));
+        v.extend(floats(&[scale]));
+        v
+    };
+    let mut data = transform([1.0, 2.0, 3.0], 1.0);
     data.extend(1u32.to_le_bytes());
     data.extend(5i32.to_le_bytes());
     data.push(1);
-    data.extend(&transform);
-    data.extend(floats(&[0.0; 4]));
+    data.extend(transform([0.0, 0.0, -0.5], 2.0));
+    data.extend(floats(&[0.1, 0.2, 0.3, 0.4]));
     data.extend(3u16.to_le_bytes());
     for i in 0..3u16 {
         data.extend(i.to_le_bytes());
-        data.extend(floats(&[1.0]));
+        data.extend(floats(&[1.0 - f32::from(i) * 0.25]));
     }
     b.add("NiSkinData", data);
 
@@ -274,6 +277,54 @@ fn steps_over_skins() {
     let shapes = nif.shapes();
     assert_eq!(shapes.len(), 1);
     assert_eq!(shapes[0].shape.skin, Some(3));
+
+    let instance: &SkinInstance = nif.get_as(Some(3)).unwrap();
+    assert_eq!(instance.data, Some(4));
+    assert_eq!(instance.skeleton_root, Some(0));
+    assert_eq!(instance.bones, [Some(6)]);
+    let data: &SkinData = nif.get_as(instance.data).unwrap();
+    assert_eq!(data.transform.translation, [1.0, 2.0, 3.0]);
+    assert_eq!(data.transform.rotation[1], [0.0, 0.0, -1.0]);
+    assert_eq!(data.partition, Some(5));
+    let [bone] = data.bones.as_slice() else {
+        panic!("{:?}", data.bones);
+    };
+    assert_eq!(bone.transform.translation, [0.0, 0.0, -0.5]);
+    assert_eq!(bone.transform.scale, 2.0);
+    assert_eq!(bone.bound, [0.1, 0.2, 0.3, 0.4]);
+    assert_eq!(bone.weights, [(0, 1.0), (1, 0.75), (2, 0.5)]);
+}
+
+#[test]
+fn reads_skins_without_weights() {
+    let mut data = floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    data.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+    data.extend(1u32.to_le_bytes());
+    data.extend((-1i32).to_le_bytes());
+    data.push(0);
+    data.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
+    data.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+    data.extend(floats(&[0.0; 4]));
+    data.extend(7u16.to_le_bytes()); // vertices, with no weights stored
+    let mut b = Builder::new();
+    b.add("NiSkinData", data);
+    let nif = Nif::parse(&b.finish(&[])).unwrap();
+    let data: &SkinData = nif.get_as(Some(0)).unwrap();
+    assert_eq!(data.partition, None);
+    assert_eq!(data.bones.len(), 1);
+    assert!(data.bones[0].weights.is_empty());
+}
+
+#[test]
+fn rejects_corrupt_skins() {
+    let mut data = floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    data.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
+    data.extend(u32::MAX.to_le_bytes());
+    data.extend((-1i32).to_le_bytes());
+    data.push(1);
+    let mut b = Builder::new();
+    b.add("NiSkinData", data);
+    assert!(Nif::parse(&b.finish(&[])).is_err());
 }
 
 /// 4.2.2.0 scene fields: one extra data link, a velocity, and a bounding

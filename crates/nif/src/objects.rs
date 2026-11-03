@@ -90,7 +90,7 @@
 //!                  (+ two tangents for kind 2, + three TCB floats for kind 3)
 //! NiSkinInstance   ref skin data, ref skeleton root, refs bones
 //! bone transform   f32 rotation[9], translation[3], scale
-//! NiSkinData       bone transform (skin to skeleton), u32 bones,
+//! NiSkinData       bone transform (skeleton parent to skin), u32 bones,
 //!                  ref skin partition, u8 has weights, per bone:
 //!                  bone transform, f32 bound[4], u16 n, if weights
 //!                  n × (u16 vertex, f32 weight)
@@ -184,6 +184,8 @@ pub enum Object {
     Floats(Keys<f32>),
     Sequence(Sequence),
     TextKeys(TextKeys),
+    SkinInstance(SkinInstance),
+    SkinData(SkinData),
     /// Understood well enough to step over; the type name.
     Other(String),
 }
@@ -233,6 +235,8 @@ object_types!(
     Floats(Keys<f32>),
     Sequence(Sequence),
     TextKeys(TextKeys),
+    SkinInstance(SkinInstance),
+    SkinData(SkinData),
 );
 
 /// Fields shared by everything placed in the scene.
@@ -384,6 +388,39 @@ pub struct ControlledBlock {
     /// Name of the node the controller animates.
     pub target: String,
     pub controller: Ref,
+}
+
+/// Binds a mesh to the bones that bend it.
+#[derive(Debug, Clone)]
+pub struct SkinInstance {
+    pub data: Ref,
+    /// The node the bones hang from.
+    pub skeleton_root: Ref,
+    /// The bone nodes, in the order of [`SkinData::bones`].
+    pub bones: Vec<Ref>,
+}
+
+/// How a mesh's vertices follow its bones.
+#[derive(Debug, Clone)]
+pub struct SkinData {
+    /// From the space of the skeleton root's parent to the mesh's, as bound.
+    pub transform: Transform,
+    pub partition: Ref,
+    pub bones: Vec<Bone>,
+}
+
+/// One bone's hold on a mesh. A vertex follows the bone as it moves from
+/// where it was bound: the bone's current transform, below the skeleton
+/// root's parent, after this one places the vertex.
+#[derive(Debug, Clone)]
+pub struct Bone {
+    /// From the mesh's space to the bone's, as bound.
+    pub transform: Transform,
+    /// Centre and radius of a sphere around the bone's vertices, in the
+    /// bone's space.
+    pub bound: [f32; 4],
+    /// Vertex indices and how strongly the bone moves each.
+    pub weights: Vec<(u16, f32)>,
 }
 
 /// Named moments of an animation, such as `start` and `end`.
@@ -906,25 +943,41 @@ impl Object {
                 })
             }
             "NiFloatData" => Object::Floats(key_group(r)?),
-            "NiSkinInstance" => {
-                r.reference()?;
-                r.reference()?;
-                r.references()?;
-                other()
-            }
+            "NiSkinInstance" => Object::SkinInstance(SkinInstance {
+                data: r.reference()?,
+                skeleton_root: r.reference()?,
+                bones: r.references()?,
+            }),
             "NiSkinData" => {
-                r.floats::<13>()?;
-                let bones = r.u32()?;
-                r.reference()?;
-                let weights = r.bool()?;
-                for _ in 0..bones {
-                    r.floats::<17>()?;
-                    let n = r.u16()? as usize;
-                    if weights {
-                        r.skip(n * 6)?;
-                    }
-                }
-                other()
+                let transform = bone_transform(r)?;
+                let n = r.u32()? as usize;
+                let partition = r.reference()?;
+                let has_weights = r.bool()?;
+                // Each bone takes at least 70 bytes.
+                r.ensure(n.saturating_mul(70))?;
+                let bones = (0..n)
+                    .map(|_| {
+                        let transform = bone_transform(r)?;
+                        let bound = r.floats()?;
+                        let n = r.u16()? as usize;
+                        let weights = match has_weights {
+                            true => (0..n)
+                                .map(|_| Ok((r.u16()?, r.f32()?)))
+                                .collect::<Result<_>>()?,
+                            false => Vec::new(),
+                        };
+                        Ok(Bone {
+                            transform,
+                            bound,
+                            weights,
+                        })
+                    })
+                    .collect::<Result<_>>()?;
+                Object::SkinData(SkinData {
+                    transform,
+                    partition,
+                    bones,
+                })
             }
             "NiSkinPartition" => {
                 for _ in 0..r.u32()? {
@@ -1251,6 +1304,16 @@ fn scene(r: &mut Reader) -> Result<SceneObject> {
             scale,
         },
         properties,
+    })
+}
+
+/// A skin's transform: rotation rows, then translation and scale.
+fn bone_transform(r: &mut Reader) -> Result<Transform> {
+    let rotation = [r.floats()?, r.floats()?, r.floats()?];
+    Ok(Transform {
+        rotation,
+        translation: r.floats()?,
+        scale: r.f32()?,
     })
 }
 
