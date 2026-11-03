@@ -1140,6 +1140,7 @@ types:
         valid:
           min: 13
           max: 20
+        doc: Earlier versions are undecoded.
       - id: index_again
         type: u4
         valid: index
@@ -1155,7 +1156,8 @@ types:
       - id: color
         type: string
       - id: relations
-        type: u4s
+        type: relations
+        doc: To each kingdom, by position.
       - id: resources
         type: amounts
         doc: Stockpiles.
@@ -1163,19 +1165,20 @@ types:
         type: u4
         doc: The team's thing id; 0 for none.
       - id: team_relations
-        type: u4s
-      - id: unknown
-        type: u1
-        doc: Unknown.
+        type: relations
+        doc: To each team, by position.
+      - id: use_default_stockpile
+        type: flag
+        doc: Whether the mission's start replaces the stockpiles with the game's default amount.
       - id: recruits_version
         type: u4
         valid: 1
       - id: num_recruits
         type: u4
         valid: 0
-      - id: recruit_unknown
+      - id: current_recruit
         type: s4
-        doc: Unknown.
+        doc: The recruit being worked on; -1 for none.
       - id: has_faction
         type: u1
       - id: faction
@@ -1185,56 +1188,46 @@ types:
       - id: nation
         type: string
         doc: The nation id, e.g. `nation_gbr`; empty when chosen in the lobby.
-      - id: counts
+      - id: objectives
         type: string_u4s
-        if: version >= 5
-        doc: Unknown.
-      - id: unknown2
+        doc: Its objectives' states by objective name; 0 active, 1 completed, 2 failed.
+      - id: outcome
         type: u4
-        if: version >= 6
-        doc: Unknown.
-      - id: strings
+        doc: 0 still playing, 1 won, 2 lost.
+      - id: start_technologies
         type: strings
         if: version >= 14
-        doc: Unknown.
+        doc: Technologies it's given when the mission starts.
       - id: num_properties
         type: u4
-        if: version >= 7
       - id: properties
         type: property(0)
         repeat: expr
         repeat-expr: num_properties
-        if: version >= 7
         doc: |
-          Shared properties, such as technologies, laid out as in an actor's
-          Properties component without the class, which is 0.
-      - id: unknown3
-        type: u1
-        repeat: expr
-        repeat-expr: 2
-        if: version >= 8
-        doc: Unknown.
-      - id: unknown_string
+          Shared properties it has, such as technologies, laid out as in an
+          actor's Properties component without the class, which is 0.
+      - id: required
+        type: flag
+        doc: It must be in the game.
+      - id: playable
+        type: flag
+        doc: A human may play it.
+      - id: ai_profile
         type: string
-        if: version >= 8
-        doc: Unknown.
-      - id: unknown_string2
+        doc: The strategic AI that plays it, e.g. `ger_sai`; empty for none.
+      - id: restriction_group
         type: string
-        if: version >= 9
-        doc: Unknown.
-      - id: ai
-        type: strategic_ai(version)
-        if: version >= 10 and independent == 0
-        doc: The strategic AI's state, which independent kingdoms don't have.
-      - id: num_entries
+        doc: The restriction group it's in; empty for none.
+      - id: stats
+        type: kingdom_stats
+        if: independent == 0
+      - id: num_saved_groups
         type: u4
-        if: version >= 12
-      - id: entries
-        type: kingdom_entry
+      - id: saved_groups
+        type: saved_group
         repeat: expr
-        repeat-expr: num_entries
-        if: version >= 12
-        doc: Unknown.
+        repeat-expr: num_saved_groups
       - id: instance_numbers
         type: string_u4s
         if: version >= 15
@@ -1242,22 +1235,30 @@ types:
       - id: used_badges
         type: u4s
         if: version >= 16
-      - id: unknown4
-        type: u1
+      - id: default_victory_condition
+        type: flag
         if: version >= 17
-        doc: Unknown.
-      - id: unknown5
-        type: u1
+        doc: Whether the usual victory check applies, which triggers can turn off.
+      - id: resigned
+        type: flag
         if: version >= 18
-        doc: Unknown.
-      - id: unknown6
-        type: u1
+      - id: city_ratio_victory
+        type: flag
         if: version >= 19
-        doc: Unknown.
-      - id: resources2
+        doc: Its team won by holding the share of cities the rules require.
+      - id: bonus_stockpile
         type: amounts
         if: version >= 20
-        doc: Unknown.
+        doc: Amounts added to the stockpiles when the mission starts.
+  relations:
+    seq:
+      - id: num_items
+        type: u4
+      - id: items
+        type: u4
+        enum: relation
+        repeat: expr
+        repeat-expr: num_items
   faction:
     doc: A kingdom's commander and the state of their abilities.
     seq:
@@ -1267,9 +1268,9 @@ types:
       - id: version
         type: u4
         valid: 0
-      - id: unknown
-        type: u4
-        doc: Unknown.
+      - id: experience
+        type: f4
+        doc: The commander's experience, which abilities cost.
       - id: num_abilities
         type: u4
       - id: abilities
@@ -1283,77 +1284,80 @@ types:
         type: u4
         valid:
           max: 1
-      - id: state
+      - id: use_count
         type: u4
-      - id: time
+      - id: last_used
         type: f4
+        doc: The game time it was last used; -1000 or the lowest f4 for never.
       - id: unknown
         type: u4
-        doc: Unknown.
+        doc: Unknown; 0 in every shipped map.
       - id: unknown2
         type: u1
-        doc: Unknown.
-      - id: targets
+        doc: Unknown; 1 in every shipped map.
+      - id: active_targets
         type: u4s
         if: version >= 1
-  kingdom_entry:
+        doc: The things it's acting on.
+  saved_group:
+    doc: A selection of units the player saved, to recall with a key.
     seq:
       - id: version
         type: u4
         valid: 0
       - id: name
         type: string
+        doc: Its digits are the group's number.
       - id: unknown
         type: string
         doc: Unknown.
       - id: ids
         type: u4s
-      - id: unknown2
-        type: u1
-        doc: Unknown.
-      - id: unknown3
+        doc: The actors' thing ids.
+      - id: grouped
+        type: flag
+        doc: Whether the units move together as one group.
+      - id: group_thing
         type: u4
-        doc: Unknown.
-  strategic_ai:
-    doc: The values are unnamed.
-    params:
-      - id: kingdom_version
-        type: u4
+        doc: The thing that leads them when they do.
+  kingdom_stats:
+    doc: A kingdom's statistics, which the score screen and graph show.
     seq:
-      - id: priorities
-        type: ai_priorities
-        if: kingdom_version >= 11
-      - id: weights_v11
-        type: ai_weights
-        if: kingdom_version >= 11
-      - id: num_items
+      - id: favorites
+        type: favorites
+      - id: totals
+        type: totals
+      - id: num_snapshots
         type: u4
-      - id: items
-        type: ai_item
+      - id: snapshots
+        type: snapshot
         repeat: expr
-        repeat-expr: num_items
-      - id: weights_v10
-        type: ai_weights
-        if: kingdom_version < 11
-      - id: unknown
-        type: u4
-        doc: Unknown.
-  ai_priorities:
+        repeat-expr: num_snapshots
+        doc: Taken every 60 seconds of game time, for the score graph.
+      - id: time_since_snapshot
+        type: f4
+        doc: Seconds toward the next snapshot.
+  favorites:
+    doc: |
+      Tallies from which the game picks the kingdom's favourite unit, hero,
+      building, enemy and, from version 2, organization: a list per
+      category by template, then from version 1 a list per category by
+      thing id.
     seq:
       - id: version
         type: u4
         valid:
           max: 2
-      - id: templates
-        type: ai_template_priorities(version)
+      - id: by_template
+        type: template_tallies(version)
         repeat: expr
         repeat-expr: 'version >= 2 ? 5 : 4'
-      - id: ids
-        type: ai_id_priorities
+      - id: by_id
+        type: id_tallies
         repeat: expr
         repeat-expr: 'version >= 2 ? 5 : 4'
         if: version >= 1
-  ai_template_priorities:
+  template_tallies:
     params:
       - id: version
         type: u4
@@ -1361,10 +1365,10 @@ types:
       - id: num_items
         type: u4
       - id: items
-        type: ai_template_priority(version)
+        type: template_tally(version)
         repeat: expr
         repeat-expr: num_items
-  ai_template_priority:
+  template_tally:
     params:
       - id: version
         type: u4
@@ -1374,44 +1378,56 @@ types:
       - id: value_v0
         type: u4
         if: version == 0
+        doc: Ignored by the game.
       - id: value
         type: f4
         if: version >= 1
-  ai_id_priorities:
+  id_tallies:
     seq:
       - id: num_items
         type: u4
       - id: items
-        type: ai_id_priority
+        type: id_tally
         repeat: expr
         repeat-expr: num_items
-  ai_id_priority:
+  id_tally:
     seq:
       - id: id
         type: u4
       - id: value
         type: f4
-  ai_weights:
+  totals:
+    doc: |
+      Running totals: each resource's total production, ten slots in the
+      game's resource order (`money`, `ammo`, `oil`, then the unit and
+      building limits provided and consumed), then a counter per statistic
+      in the order of the ids in the game's `Scoring/Scoring.tgi`
+      (`TRIBUTE_GIVEN`, `TRIBUTE_RECEIVED`, ...). Version 0 leaves out the
+      statistics from `CITIES_CAPTURED` to `FACTION_ABILITIES_USED` and
+      `CITIES_OWNED`. The slots of the counts the game works out live (the
+      `..._OWNED` ones) hold leftover memory.
     seq:
       - id: version
         type: u4
         valid:
           max: 1
       - id: values
-        type: u4
+        type: f4
         repeat: expr
         repeat-expr: 'version >= 1 ? 66 : 60'
-  ai_item:
+  snapshot:
+    doc: A sample for the score graph.
     seq:
       - id: version
         type: u4
         valid: 0
-      - id: weights
-        type: ai_weights
+      - id: totals
+        type: totals
       - id: values
-        type: u4
+        type: f4
         repeat: expr
         repeat-expr: 21
+        doc: Each resource's rate, ten slots; the hero inventory's size; then the scores.
 
   # Things: the placed objects.
   thing_index:
@@ -2685,6 +2701,11 @@ types:
         type: u4
         if: version >= 14
 enums:
+  relation:
+    0: itself
+    1: ally
+    2: neutral
+    3: enemy
   thing_class:
     3: actor
     4: kingdom

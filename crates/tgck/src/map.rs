@@ -28,8 +28,8 @@ pub use header::{
 pub use misc::{GameCounter, MiscData, UsedName, write_denizen_groups};
 pub use objectives::{Objective, Objectives};
 pub use players::{
-    Ability, AiItem, AiPriorities, AiWeights, Entry, Faction, Kingdom, Kingdoms, RestrictionGroup,
-    RestrictionGroups, StrategicAi, Team, World, write_teams,
+    Ability, Faction, Favorites, Kingdom, KingdomStats, Kingdoms, Relation, RestrictionGroup,
+    RestrictionGroups, SavedGroup, Snapshot, Team, Totals, World, write_teams,
 };
 pub use triggers::{Element, Parameter, Trigger, Triggers, Value};
 
