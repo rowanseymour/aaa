@@ -5,7 +5,7 @@ use nif::{Keys, Nif, Object, Rotation};
 const USAGE: &str = "\
 usage:
   nif check <file.nif>...    read files and report the ones that fail or stop early
-  nif dump  <file.nif>       print the scene graph and meshes";
+  nif dump  <file.nif>       print the objects in a model or animation";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -112,6 +112,28 @@ fn dump(file: &str) -> ExitCode {
                 )
             }
             Object::Floats(k) => format!("floats {}", keys(k)),
+            Object::Sequence(s) => {
+                let blocks: String = s
+                    .blocks
+                    .iter()
+                    .map(|b| format!("\n       {:?} controller {:?}", b.target, b.controller))
+                    .collect();
+                format!(
+                    "sequence {:?} accumulation root {:?} text keys {:?}, {} blocks{blocks}",
+                    s.name,
+                    s.accumulation_root,
+                    s.text_keys,
+                    s.blocks.len()
+                )
+            }
+            Object::TextKeys(t) => {
+                let keys: Vec<_> = t
+                    .keys
+                    .iter()
+                    .map(|k| format!("{}: {:?}", k.time, k.text))
+                    .collect();
+                format!("text keys {:?} [{}]", t.name, keys.join(", "))
+            }
             Object::Other(kind) => kind.clone(),
         };
         println!("{i:4} {line}");

@@ -3,6 +3,8 @@
 //! A model is a list of objects (scene nodes, triangle meshes, textures,
 //! render properties, animation data) that refer to each other by index; the
 //! scene graph hangs off the root objects listed at the end of the file.
+//! An animation (`.kf`) file is laid out the same, with a sequence as its
+//! root.
 //! Nearly all of the game's models are version 10.1.0.0, a few 10.0.1.0 or
 //! NetImmerse 4.2.2.0; all are laid out little-endian:
 //!

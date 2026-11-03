@@ -3,7 +3,9 @@
 A Rust library and command-line tool for reading the `.nif` model files of
 **Axis & Allies (2004)**: scene nodes, triangle meshes, textures (external
 files or stored in the model) and render properties such as alpha and
-double-sidedness, and keyframe and alpha animations.
+double-sidedness, and keyframe and alpha animations. It also reads the `.kf`
+animation sequences, which share the format and animate a model's nodes by
+name.
 
 You need your own copy of the game. This project contains no game code or data.
 
@@ -14,7 +16,8 @@ nif check Doodads/Temperate/*/*.nif    # report files that fail or stop early
 nif dump  TemperateTree01.nif          # print the objects in one model
 ```
 
-Extract models from the game's archive first with `tgck extract Data.rwd out/ .nif`.
+Extract models from the game's archive first with `tgck extract Data.rwd out/ .nif`
+(or `.kf` for animations).
 
 ## Library
 
