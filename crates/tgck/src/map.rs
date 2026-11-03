@@ -39,7 +39,8 @@
 //!
 //! MAPSTRINGS               plain text in .tgi syntax (map name, objectives, ...)
 //!
-//! GWORLD, TEAMS, KINGDOMS  see map/players.rs
+//! GWORLD, TEAMS, RESTRICTION_GROUPS, KINGDOMS  see map/players.rs
+//! IDMGR, UPDATABLES        see map/bookkeeping.rs
 //! MAP_HEADER, RULES        see map/header.rs
 //! MAP, DENIZEN_GROUPS, MISC_DATA  see map/misc.rs
 //! OBJECTIVES               see map/objectives.rs
@@ -66,6 +67,7 @@ use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 mod actor;
+mod bookkeeping;
 mod header;
 mod misc;
 mod objectives;
@@ -76,6 +78,7 @@ pub use actor::{
     Actor, Body, COMPONENTS, Component, Construction, Mover, MoverV6, Organization, Properties,
     Property, State, Trailer, TrailerLists, Updatable, Upgrade,
 };
+pub use bookkeeping::{IdManager, Updatables, Update, UpdateQueue};
 pub use header::{
     KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
     WorldRules,
@@ -83,8 +86,8 @@ pub use header::{
 pub use misc::{GameCounter, MiscData, UsedName, write_denizen_groups};
 pub use objectives::{Objective, Objectives};
 pub use players::{
-    Ability, AiItem, AiPriorities, AiWeights, Entry, Faction, Kingdom, Kingdoms, StrategicAi, Team,
-    World, write_teams,
+    Ability, AiItem, AiPriorities, AiWeights, Entry, Faction, Kingdom, Kingdoms, RestrictionGroup,
+    RestrictionGroups, StrategicAi, Team, World, write_teams,
 };
 pub use triggers::{Element, Parameter, Trigger, Triggers, Value};
 
@@ -175,6 +178,19 @@ impl<R: Read + Seek> Map<R> {
 
     pub fn world(&mut self) -> Result<World> {
         World::parse(&self.container.read_named("GWORLD")?)
+    }
+
+    pub fn ids(&mut self) -> Result<IdManager> {
+        IdManager::parse(&self.container.read_named("IDMGR")?)
+    }
+
+    pub fn updatables(&mut self) -> Result<Updatables> {
+        let world_version = self.world_version()?;
+        Updatables::parse(&self.container.read_named("UPDATABLES")?, world_version)
+    }
+
+    pub fn restriction_groups(&mut self) -> Result<RestrictionGroups> {
+        RestrictionGroups::parse(&self.container.read_named("RESTRICTION_GROUPS")?)
     }
 
     pub fn rules(&mut self) -> Result<WorldRules> {
