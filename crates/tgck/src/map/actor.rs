@@ -130,46 +130,59 @@ pub struct Body {
     pub version: u32,
     /// From version 2 on.
     pub updatable: Option<Updatable>,
-    /// From version 1 on.
-    pub unknown: Option<f32>,
-    /// A fraction the game multiplies by the template's maximum.
-    pub fraction: f32,
-    /// From version 3 on.
-    pub unknown2: Option<u32>,
-    /// From version 4 on.
-    pub unknown3: Option<u32>,
+    /// From version 1 on: when it died; -1 while alive.
+    pub death_time: Option<f32>,
+    /// Its health as a fraction of the template's `health`.
+    pub health: f32,
+    /// From version 3 on: how long its remains take to sink, set when it dies.
+    pub sink_time: Option<f32>,
+    /// From version 4 on: when it last took damage.
+    pub last_damage_time: Option<f32>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mover {
     pub updatable: Updatable,
     pub version: u32,
-    pub unknown_vector: [f32; 3],
-    pub unknown: [f32; 2],
-    /// From version 8 on: a fraction the game multiplies by a template value.
-    pub fraction: Option<f32>,
+    pub destination: [f32; 3],
+    pub speed: f32,
+    /// The speed it's accelerating or braking towards.
+    pub target_speed: f32,
+    /// From version 8 on: its top speed as a fraction of the template's
+    /// `speed_max`.
+    pub max_speed: Option<f32>,
     /// Before version 4, and ignored.
     pub old: Option<[f32; 3]>,
-    pub unknown2: [f32; 2],
+    /// The thing id of an actor it's following.
+    pub follow: u32,
+    /// How close it keeps to the actor it follows; junk when it follows none.
+    pub follow_distance: f32,
     /// Versions 1 to 6.
     pub old_flag: Option<u8>,
-    /// From version 2 on.
-    pub flag: Option<u8>,
+    /// From version 2 on: whether it snaps to its target facing.
+    pub turn_instantly: Option<u8>,
     /// From version 3 on.
-    pub unknown3: Option<([f32; 3], f32)>,
-    /// From version 5 on; the flag marks the actor in its flags, too.
-    pub flag2: Option<(u8, u32)>,
+    pub target_facing: Option<[f32; 3]>,
+    /// From version 3 on: a factor on how far it moves for its speed.
+    pub speed_scale: Option<f32>,
+    /// From version 5 on: whether it's falling or sliding along a set
+    /// course (marked in the actor's flags, too), and the fall's drag.
+    pub falling: Option<(u8, f32)>,
     /// From version 6 on.
-    pub v6: Option<MoverV6>,
+    pub fall: Option<MoverFall>,
 }
 
+/// The course of a fall.
 #[derive(Debug, Clone, PartialEq)]
-pub struct MoverV6 {
-    pub flag: u8,
-    pub a: [f32; 3],
-    pub flag2: u8,
-    pub b: [f32; 3],
-    pub c: [f32; 3],
+pub struct MoverFall {
+    /// Whether it turns to face the way it falls.
+    pub turns: u8,
+    pub direction: [f32; 3],
+    /// Whether the fall ends at `landing`.
+    pub has_landing: u8,
+    pub landing: [f32; 3],
+    /// From where the fall started to `landing`.
+    pub landing_offset: [f32; 3],
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -472,10 +485,10 @@ impl Body {
         Ok(Body {
             version,
             updatable: (version >= 2).then(|| Updatable::parse(cur)).transpose()?,
-            unknown: (version >= 1).then(|| cur.f32()).transpose()?,
-            fraction: cur.f32()?,
-            unknown2: (version >= 3).then(|| cur.u32()).transpose()?,
-            unknown3: (version >= 4).then(|| cur.u32()).transpose()?,
+            death_time: (version >= 1).then(|| cur.f32()).transpose()?,
+            health: cur.f32()?,
+            sink_time: (version >= 3).then(|| cur.f32()).transpose()?,
+            last_damage_time: (version >= 4).then(|| cur.f32()).transpose()?,
         })
     }
 
@@ -484,12 +497,15 @@ impl Body {
         if let Some(u) = &self.updatable {
             u.write(w);
         }
-        if let Some(v) = self.unknown {
+        if let Some(v) = self.death_time {
             w.f32(v);
         }
-        w.f32(self.fraction);
-        for v in [self.unknown2, self.unknown3].into_iter().flatten() {
-            w.u32(v);
+        w.f32(self.health);
+        for v in [self.sink_time, self.last_damage_time]
+            .into_iter()
+            .flatten()
+        {
+            w.f32(v);
         }
     }
 }
@@ -501,27 +517,28 @@ impl Mover {
         Ok(Mover {
             updatable,
             version: v,
-            unknown_vector: cur.f32s()?,
-            unknown: cur.f32s()?,
-            fraction: (v >= 8).then(|| cur.f32()).transpose()?,
+            destination: cur.f32s()?,
+            speed: cur.f32()?,
+            target_speed: cur.f32()?,
+            max_speed: (v >= 8).then(|| cur.f32()).transpose()?,
             old: (v < 4).then(|| cur.f32s()).transpose()?,
-            unknown2: cur.f32s()?,
+            follow: cur.u32()?,
+            follow_distance: cur.f32()?,
             old_flag: (1..7).contains(&v).then(|| cur.u8()).transpose()?,
-            flag: (v >= 2).then(|| cur.u8()).transpose()?,
-            unknown3: (v >= 3)
-                .then(|| Result::<_>::Ok((cur.f32s()?, cur.f32()?)))
+            turn_instantly: (v >= 2).then(|| cur.u8()).transpose()?,
+            target_facing: (v >= 3).then(|| cur.f32s()).transpose()?,
+            speed_scale: (v >= 3).then(|| cur.f32()).transpose()?,
+            falling: (v >= 5)
+                .then(|| Result::<_>::Ok((cur.u8()?, cur.f32()?)))
                 .transpose()?,
-            flag2: (v >= 5)
-                .then(|| Result::<_>::Ok((cur.u8()?, cur.u32()?)))
-                .transpose()?,
-            v6: (v >= 6)
+            fall: (v >= 6)
                 .then(|| {
-                    Result::<_>::Ok(MoverV6 {
-                        flag: cur.u8()?,
-                        a: cur.f32s()?,
-                        flag2: cur.u8()?,
-                        b: cur.f32s()?,
-                        c: cur.f32s()?,
+                    Result::<_>::Ok(MoverFall {
+                        turns: cur.u8()?,
+                        direction: cur.f32s()?,
+                        has_landing: cur.u8()?,
+                        landing: cur.f32s()?,
+                        landing_offset: cur.f32s()?,
                     })
                 })
                 .transpose()?,
@@ -531,32 +548,36 @@ impl Mover {
     fn write(&self, w: &mut Writer) {
         self.updatable.write(w);
         w.u32(self.version);
-        w.f32s(&self.unknown_vector);
-        w.f32s(&self.unknown);
-        if let Some(v) = self.fraction {
+        w.f32s(&self.destination);
+        w.f32(self.speed);
+        w.f32(self.target_speed);
+        if let Some(v) = self.max_speed {
             w.f32(v);
         }
         if let Some(v) = self.old {
             w.f32s(&v);
         }
-        w.f32s(&self.unknown2);
-        for v in [self.old_flag, self.flag].into_iter().flatten() {
+        w.u32(self.follow);
+        w.f32(self.follow_distance);
+        for v in [self.old_flag, self.turn_instantly].into_iter().flatten() {
             w.u8(v);
         }
-        if let Some((v, f)) = self.unknown3 {
+        if let Some(v) = self.target_facing {
             w.f32s(&v);
-            w.f32(f);
         }
-        if let Some((flag, v)) = self.flag2 {
+        if let Some(v) = self.speed_scale {
+            w.f32(v);
+        }
+        if let Some((flag, drag)) = self.falling {
             w.u8(flag);
-            w.u32(v);
+            w.f32(drag);
         }
-        if let Some(v6) = &self.v6 {
-            w.u8(v6.flag);
-            w.f32s(&v6.a);
-            w.u8(v6.flag2);
-            w.f32s(&v6.b);
-            w.f32s(&v6.c);
+        if let Some(fall) = &self.fall {
+            w.u8(fall.turns);
+            w.f32s(&fall.direction);
+            w.u8(fall.has_landing);
+            w.f32s(&fall.landing);
+            w.f32s(&fall.landing_offset);
         }
     }
 }
@@ -1396,10 +1417,10 @@ mod tests {
         Component::Body(Body {
             version: 4,
             updatable: Some(Updatable { version: 1, id: 12 }),
-            unknown: Some(-1.0),
-            fraction: 0.5,
-            unknown2: Some(0),
-            unknown3: Some(1),
+            death_time: Some(-1.0),
+            health: 0.5,
+            sink_time: Some(0.0),
+            last_damage_time: Some(-999.0),
         })
     }
 
@@ -1407,21 +1428,24 @@ mod tests {
         Component::Mover(Mover {
             updatable: Updatable { version: 1, id: 13 },
             version: 8,
-            unknown_vector: [1.0, 2.0, 3.0],
-            unknown: [0.0, 1.0],
-            fraction: Some(0.25),
+            destination: [1.0, 2.0, 3.0],
+            speed: 0.0,
+            target_speed: 1.0,
+            max_speed: Some(0.25),
             old: None,
-            unknown2: [4.0, 5.0],
+            follow: 4,
+            follow_distance: 5.0,
             old_flag: None,
-            flag: Some(1),
-            unknown3: Some(([6.0, 7.0, 8.0], 9.0)),
-            flag2: Some((0, 2)),
-            v6: Some(MoverV6 {
-                flag: 1,
-                a: [1.0; 3],
-                flag2: 0,
-                b: [2.0; 3],
-                c: [3.0; 3],
+            turn_instantly: Some(1),
+            target_facing: Some([6.0, 7.0, 8.0]),
+            speed_scale: Some(9.0),
+            falling: Some((0, 2.0)),
+            fall: Some(MoverFall {
+                turns: 1,
+                direction: [1.0; 3],
+                has_landing: 0,
+                landing: [2.0; 3],
+                landing_offset: [3.0; 3],
             }),
         })
     }

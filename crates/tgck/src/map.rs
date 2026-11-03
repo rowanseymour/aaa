@@ -17,7 +17,7 @@ mod players;
 mod triggers;
 
 pub use actor::{
-    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverV6, Organization, Properties,
+    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverFall, Organization, Properties,
     Property, State, Trailer, TrailerLists, Updatable, Upgrade,
 };
 pub use bookkeeping::{IdManager, Updatables, Update, UpdateQueue};

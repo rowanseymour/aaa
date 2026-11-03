@@ -1927,7 +1927,8 @@ types:
       - id: id
         type: s4
 
-  # The decoded components.
+  # The decoded components. Times are the world's game time in seconds;
+  # thing ids are 0 for none.
   construction:
     doc: A building's construction or upgrade progress.
     seq:
@@ -1960,20 +1961,24 @@ types:
       - id: updatable
         type: updatable
         if: version >= 2
-      - id: unknown
+      - id: death_time
         type: f4
         if: version >= 1
-      - id: fraction
+        doc: When it died; -1 while alive.
+      - id: health
         type: f4
-        doc: A fraction the game multiplies by the template's maximum.
-      - id: unknown2
-        type: u4
+        doc: Its health as a fraction of the template's `health`.
+      - id: sink_time
+        type: f4
         if: version >= 3
-      - id: unknown3
-        type: u4
+        doc: |
+          How long its remains take to sink into the ground, set when it
+          dies.
+      - id: last_damage_time
+        type: f4
         if: version >= 4
+        doc: When it last took damage; a large negative number for never.
   mover:
-    doc: Fields are unknown unless noted.
     seq:
       - id: updatable
         type: updatable
@@ -1981,58 +1986,69 @@ types:
         type: u4
         valid:
           max: 8
-      - id: unknown_vector
+      - id: destination
         type: vec3
-      - id: unknown
+      - id: speed
         type: f4
-        repeat: expr
-        repeat-expr: 2
-      - id: fraction
+      - id: target_speed
+        type: f4
+        doc: The speed it's accelerating or braking towards.
+      - id: max_speed
         type: f4
         if: version >= 8
-        doc: A fraction the game multiplies by a template value.
+        doc: Its top speed as a fraction of the template's `speed_max`.
       - id: old
         type: vec3
         if: version < 4
         doc: Ignored by the game.
-      - id: unknown2
+      - id: follow
+        type: u4
+        doc: The thing id of an actor it's following.
+      - id: follow_distance
         type: f4
-        repeat: expr
-        repeat-expr: 2
+        doc: How close it keeps to the actor it follows; junk when it follows none.
       - id: old_flag
         type: u1
         if: version >= 1 and version < 7
-      - id: flag
+      - id: turn_instantly
         type: u1
         if: version >= 2
-      - id: unknown3
+        doc: Whether it snaps to its target facing rather than turning.
+      - id: target_facing
         type: vec3
         if: version >= 3
-      - id: unknown4
+      - id: speed_scale
         type: f4
         if: version >= 3
-      - id: flag2
+        doc: A factor on how far it moves for its speed; 1 normally.
+      - id: falling
         type: u1
         if: version >= 5
-        doc: Also set in the actor's flags.
-      - id: unknown5
-        type: u4
+        doc: |
+          Whether it's falling or sliding along a set course, as when it
+          leaves a transport; also set in the actor's flags.
+      - id: fall_drag
+        type: f4
         if: version >= 5
-      - id: v6_flag
+        doc: How quickly the fall's speed decays; junk when not falling.
+      - id: fall_turns
         type: u1
         if: version >= 6
-      - id: v6_a
+        doc: Whether it turns to face the way it falls.
+      - id: fall_direction
         type: vec3
         if: version >= 6
-      - id: v6_flag2
+      - id: has_landing
         type: u1
         if: version >= 6
-      - id: v6_b
+        doc: Whether the fall ends at `landing`.
+      - id: landing
         type: vec3
         if: version >= 6
-      - id: v6_c
+      - id: landing_offset
         type: vec3
         if: version >= 6
+        doc: From where the fall started to `landing`.
   properties:
     seq:
       - id: updatable
@@ -2058,7 +2074,9 @@ types:
         type: property(property_class)
         if: property_class != 0xffffffff
   property:
-    doc: A shared property, such as a nation's technology.
+    doc: |
+      A shared property, such as a nation's technology. No shipped map's
+      actors have any, so the fields are unverified.
     params:
       - id: property_class
         type: u4
@@ -2088,11 +2106,8 @@ types:
       - id: extra
         type: u4
         if: property_class == 1 and version >= 3
-
-  # Components read to their end but not named. Their fields are unknown
-  # unless noted.
   plain_component:
-    doc: Economy, Builder, Detection and Portal.
+    doc: Economy, Builder, Detection and Portal, which save nothing of their own.
     seq:
       - id: updatable
         type: updatable
@@ -2107,9 +2122,10 @@ types:
         type: u4
         valid:
           max: 2
-      - id: unknown1
+      - id: mode
         type: u4
-      - id: unknown2
+        doc: What its animation is doing, 0 to 5.
+      - id: old
         type: u4
         if: version < 1
       - id: animation
@@ -2120,10 +2136,12 @@ types:
         valid: 0
       - id: animation_state
         size: 13
-      - id: unknown3
-        type: u4
+      - id: unknown
+        type: s4
         if: version >= 2
+        doc: -2 in every map, as when nothing is playing.
   performer:
+    doc: Uses the actor's abilities, aiming its turrets.
     seq:
       - id: updatable
         type: updatable
@@ -2133,24 +2151,42 @@ types:
           min: 4
           max: 9
         doc: Earlier versions are undecoded.
-      - id: unknown1
-        size: 24
-      - id: unknown2
+      - id: stage
+        type: u4
+        doc: The stage of the ability under way, 0 to 5; 3 when idle.
+      - id: mana
+        type: f4
+        doc: A fraction of the template's `mana_max`.
+      - id: target
+        type: u4
+        doc: The thing id of the ability's target.
+      - id: target_position
+        type: vec2
+        doc: Where the ability is aimed, when not at an actor.
+      - id: current_ability
+        type: s4
+        doc: The index of the ability under way; -1 for none.
+      - id: old_abilities
         type: u4s
         if: version < 5
-      - id: unknown3
-        size: 8
-      - id: num_entries
+      - id: stage_start
+        type: f4
+        doc: When the current stage began.
+      - id: stage_length
+        type: f4
+      - id: num_turrets
         type: u4
-      - id: entries
-        type: performer_entry(version)
+      - id: turrets
+        type: performer_turret(version)
         repeat: expr
-        repeat-expr: num_entries
-      - id: unknown4
-        type: u4
-      - id: unknown5
+        repeat-expr: num_turrets
+      - id: current_turret
+        type: s4
+        doc: The index of the turret the ability uses; -1 for none.
+      - id: unknown
         type: u4
         if: version >= 6
+        doc: Passed in when an ability starts; 0 in every map.
       - id: num_abilities
         type: u4
         if: version >= 5
@@ -2159,25 +2195,34 @@ types:
         repeat: expr
         repeat-expr: num_abilities
         if: version >= 5
-      - id: unknown6
+      - id: turrets_turning
         type: u1
         if: version >= 7
-  performer_entry:
+        doc: Whether any turret is still turning to its target.
+  performer_turret:
     params:
       - id: version
         type: u4
     seq:
-      - id: unknown1
-        size: 8
-      - id: unknown2
-        size: 4
+      - id: facing
+        type: f4
+        doc: The angle it points at, in radians.
+      - id: last_facing
+        type: f4
+      - id: aim_time
+        type: f4
         if: version >= 7
-      - id: unknown3
-        size: 9
+        doc: When it was last aimed.
+      - id: has_target_position
+        type: u1
         if: version >= 8
-      - id: unknown4
-        size: 4
+      - id: target_position
+        type: vec2
+        if: version >= 8
+      - id: target
+        type: u4
         if: version >= 9
+        doc: The thing id it's aimed at; ignored on load.
   damage:
     doc: The damage an element deals; its tail depends on the world version.
     seq:
@@ -2205,7 +2250,7 @@ types:
       - id: updatable
         type: updatable
         if: version >= 1
-      - id: unknown
+      - id: old
         type: u1
         if: version <= 1
       - id: num_damages
@@ -2241,7 +2286,7 @@ types:
         repeat: expr
         repeat-expr: num_positions
         doc: The members where they stand.
-      - id: unknown1
+      - id: old
         type: u4
         repeat: expr
         repeat-expr: num_positions
@@ -2251,40 +2296,65 @@ types:
         repeat: expr
         repeat-expr: num_positions
         if: version >= 7
-      - id: unknown2
-        size: 12
-      - id: unknown3
-        type: u4
+      - id: leader
+        type: s4
+        doc: The position of the member in the lead; -1 for none.
+      - id: morale
+        type: f4
+        doc: A fraction of its maximum, the sum of its members'.
+      - id: formation
+        type: s4
+        doc: The index of its formation; -1 for none.
+      - id: desired_formation
+        type: s4
         if: version >= 3
-      - id: unknown4
+      - id: old2
         type: u4
         if: version == 0
-      - id: unknown5
-        size: num_positions * 8
-      - id: unknown6
-        size: num_positions * 4
+      - id: slot_positions
+        type: vec2
+        repeat: expr
+        repeat-expr: num_positions
+        doc: Where each position stands relative to the organization.
+      - id: unknown1
+        type: u4
+        repeat: expr
+        repeat-expr: num_positions
         if: version >= 1
-      - id: unknown7
-        size: 6
+        doc: One per position; 0 in every map.
+      - id: unknown2
+        type: f4
+        if: version >= 4
+        doc: Eases over time towards `unknown5`.
+      - id: unknown3
+        type: u1
+        if: version >= 4
+      - id: unknown4
+        type: u1
         if: version >= 4
       - id: damage
         type: damage
         if: version >= 4
-      - id: unknown8
-        size: 4
+      - id: unknown5
+        type: f4
         if: version >= 5
-      - id: unknown9
-        size: 4
+        doc: A level its properties set; 1 in every map.
+      - id: unknown6
+        type: f4
         if: version >= 6
-      - id: unknown10
-        size: 8
+        doc: A time; 0 in every map.
+      - id: position
+        type: vec2
         if: version >= 8
-      - id: unknown11
-        size: 4
+        doc: Its position, (x, y), as last recorded.
+      - id: hq
+        type: u4
         if: version >= 9
-      - id: unknown12
-        size: 4
+        doc: The thing id of the HQ it's attached to.
+      - id: transport
+        type: u4
         if: version >= 10
+        doc: The thing id of the transport carrying it.
   organization_position:
     seq:
       - id: index
@@ -2294,6 +2364,7 @@ types:
         type: actor_thing(3)
         if: index >= 0
   denizen:
+    doc: Keeps the denizens, such as militia and aircraft, that a building houses.
     seq:
       - id: updatable
         type: updatable
@@ -2307,21 +2378,37 @@ types:
       - id: unknown2
         type: u1
         if: version >= 2
-      - id: num_unknown3
+      - id: num_inventory
         type: u4
         if: version >= 3
+      - id: inventory
+        type: denizen_item
+        repeat: expr
+        repeat-expr: num_inventory
+        if: version >= 3
+        doc: One per denizen it holds.
       - id: unknown3
-        size: num_unknown3 * 8
-        if: version >= 3
-      - id: unknown4
-        type: u4
+        type: f4
         if: version >= 4
-      - id: unknown5
+        doc: -1 or -0 in every map.
+      - id: ids
         type: u4s
         if: version >= 3
-      - id: unknown6
+        doc: Thing ids of some actors; empty in every map.
+      - id: unknown4
         type: u4s
         if: version >= 3
+        doc: |
+          A count of saved objects, read here as u4s since every map has
+          none.
+  denizen_item:
+    seq:
+      - id: unknown
+        type: u4
+        doc: 0 in every map.
+      - id: health
+        type: f4
+        doc: A fraction of the denizen's maximum.
   supply:
     seq:
       - id: version
@@ -2331,9 +2418,14 @@ types:
       - id: updatable
         type: updatable
         if: version >= 1
-      - id: unknown
-        size: 8
+      - id: stockpile
+        type: f4
         if: version >= 2
+        doc: A relay's stockpile, as a fraction of the template's `stockpile_max`.
+      - id: organization
+        type: u4
+        if: version >= 2
+        doc: The thing id of the organization, such as a corps, it supplies through.
   structure:
     seq:
       - id: version
@@ -2343,9 +2435,10 @@ types:
       - id: updatable
         type: updatable
         if: version >= 6
-      - id: unknown1
+      - id: old
         type: u4
-      - id: unknown2
+        doc: Ignored by the game.
+      - id: old2
         type: strings
         if: version < 1
       - id: num_queued
@@ -2353,18 +2446,26 @@ types:
         valid: 0
         if: version >= 2
         doc: Queued items' layout is undecoded; no shipped map has any.
-      - id: unknown3
-        size: 8
+      - id: queue_end_time
+        type: f4
         if: version >= 2
-      - id: unknown4
-        type: u4
+        doc: When the item being made is done.
+      - id: queue_length
+        type: f4
+        if: version >= 2
+        doc: How long the item being made takes.
+      - id: paused_time
+        type: f4
         if: version >= 11
-      - id: unknown5
-        type: u4
+        doc: When the queue was paused; -1 if it isn't.
+      - id: pause_reason
+        type: s4
         if: version >= 12
-      - id: unknown6
+        doc: -1 if the queue isn't paused.
+      - id: city
         type: u4
         if: version >= 7
+        doc: The thing id of the city it belongs to.
   layout:
     seq:
       - id: id
@@ -2406,7 +2507,7 @@ types:
         if: version == 2
   recruit_entry:
     seq:
-      - id: unknown
+      - id: template
         type: string
       - id: has_layout
         type: u1
@@ -2418,9 +2519,11 @@ types:
       - id: version
         type: u4
         valid: 0
-      - id: unknown
-        type: u4
+      - id: experience
+        type: f4
+        doc: The points its levels' `experience_required` count against.
   mobile_deployment:
+    doc: Lets the actor pack into, or unpack from, another actor.
     seq:
       - id: updatable
         type: updatable
@@ -2428,12 +2531,14 @@ types:
         type: u4
         valid:
           max: 3
-      - id: unknown1
-        type: u4
-      - id: unknown2
-        type: u4
+      - id: unknown
+        type: f4
+        doc: 1 in every map.
+      - id: finish_time
+        type: f4
         if: version >= 1
-      - id: unknown3
+        doc: When packing or unpacking finishes; -1 when not under way.
+      - id: old
         type: id_list
         if: version == 2
   id_list:
@@ -2475,13 +2580,15 @@ types:
       - id: unknown
         type: strings
   transport:
+    doc: Every field is empty or 0 in every map.
     seq:
       - id: version
         type: u4
         valid:
           max: 6
-      - id: unknown1
+      - id: template
         type: string
+        doc: An actor template's id.
       - id: has_layout
         type: u1
       - id: layout
@@ -2520,10 +2627,15 @@ types:
       - id: version
         type: u4
         valid: 0
-      - id: unknown1
+      - id: children
         type: u4s
+        doc: Thing ids of the lairs it has spawned.
+      - id: unknown1
+        type: u4
+        doc: 0 in every map.
       - id: unknown2
-        size: 8
+        type: f4
+        doc: -1 in every map.
   city:
     seq:
       - id: updatable
@@ -2532,9 +2644,10 @@ types:
         type: u4
         valid:
           max: 1
-      - id: unknown
+      - id: buildings
         type: u4s
         if: version >= 1
+        doc: Thing ids of the buildings that make up the city.
   hq:
     seq:
       - id: updatable
@@ -2548,30 +2661,46 @@ types:
       - id: unknown1
         type: u4s
         if: version == 1
-      - id: num_entries
+      - id: num_attachments
         type: u4
         if: version >= 2
         doc: |
           Version 0 records end before this in every map, though the game's
           loader reads on as for version 2.
-      - id: entries
-        type: hq_entry(version)
+      - id: attachments
+        type: hq_attachment(version)
         repeat: expr
-        repeat-expr: num_entries
+        repeat-expr: num_attachments
         if: version >= 2
-  hq_entry:
+        doc: Its slots for attached organizations.
+  hq_attachment:
     params:
       - id: version
         type: u4
     seq:
       - id: present
         type: u1
-      - id: unknown
-        size: 'version < 3 ? 5 : 12'
-        if: present != 0
+      - id: old
+        size: 5
+        if: present != 0 and version < 3
+      - id: unknown1
+        type: u4
+        if: present != 0 and version >= 3
+        doc: 0 in every map.
+      - id: organization
+        type: u4
+        if: present != 0 and version >= 3
+        doc: The attached organization's thing id.
+      - id: unknown2
+        type: s4
+        if: present != 0 and version >= 3
+        doc: -1 in every map.
 
   # Minds: an organization's or an element's, as the template's components
-  # decide. Aircraft minds are undecoded.
+  # decide. Aircraft minds are undecoded. A mind is a set of states, such as
+  # `cai_move` or `uai_guard`, each with an activity, 0 to 3 (2 for the
+  # state it's in), and fields of its own; the fields below are prefixed
+  # with their state's name.
   mind:
     params:
       - id: template_components
@@ -2593,55 +2722,67 @@ types:
         valid:
           max: 3
       - id: unknown1
-        size: 8
+        type: u4
+      - id: target
+        type: u4
+        doc: The thing id of the enemy it's set on.
       - id: num_commands
         type: u4
       - id: commands
         type: command
         repeat: expr
         repeat-expr: num_commands
+        doc: Orders queued after the current one.
       - id: unknown2
         type: u4
         if: version >= 1
       - id: states
         type: strings
         if: version >= 1
-        doc: The names of its mind states.
+        doc: The names of the states it's in.
       - id: has_command
         type: u1
         if: version >= 3
       - id: command
         type: command
         if: version >= 3 and has_command != 0
+        doc: The order it's carrying out.
   command:
-    doc: An order queued for an actor.
+    doc: An order for an actor.
     seq:
       - id: version
         type: u4
         valid:
           max: 3
-      - id: unknown1
+      - id: name
         type: string
+        doc: What to do, e.g. `stop`, `move`.
       - id: flags
         type: u4
-      - id: unknown2
+      - id: target
         type: u4
-      - id: unknown3
+        doc: The thing id of the actor it's aimed at.
+      - id: template
         type: string
-      - id: unknown4
-        size: 21
-      - id: unknown5
+        doc: An actor template's id, such as one to build.
+      - id: position
+        type: vec2
+      - id: unknown1
+        size: 13
+      - id: unknown2
         type: u1
         if: version >= 3
-      - id: unknown6
+      - id: formation
         type: string
         if: version >= 1
+        doc: A formation's id.
       - id: layout
         type: layout
         if: (flags & 0x20) != 0
-      - id: unknown7
+      - id: property
         type: string
         if: version >= 2
+        doc: A shared property's id.
   path:
     seq:
       - id: version
@@ -2651,8 +2792,9 @@ types:
         type: u4
       - id: points
         size: num_points * 36
-      - id: unknown
-        type: u4
+      - id: current
+        type: s4
+        doc: The index of the point it's heading for; -1 for none.
   element_mind:
     seq:
       - id: version
@@ -2666,69 +2808,133 @@ types:
         type: element_mind_rest(version)
         if: version >= 2
   element_mind_rest:
+    doc: Facings are (x, y) directions, (0, -1) for none.
     params:
       - id: version
         type: u4
     seq:
       - id: unknown1
-        size: 8
-      - id: unknown2
+        type: u4
+        doc: 1 in every map.
+      - id: sleep_activity
+        type: u4
+      - id: sleep_unknown
         type: u4
         if: version >= 9
-      - id: unknown3
-        size: 52
-      - id: unknown4
+      - id: move_activity
+        type: u4
+      - id: move_target
+        type: u4
+        doc: The thing id of the actor it's moving to.
+      - id: move_destination
+        type: vec2
+      - id: move_facing
+        type: vec2
+        doc: The way to face on arrival.
+      - id: move_speed
+        type: f4
+      - id: move_unknown1
+        type: u4
+      - id: move_state
+        type: u4
+      - id: move_precision
+        type: u4
+        doc: How close it must get.
+      - id: move_unknown2
+        size: 8
+      - id: move_unknown3
+        type: u4
+      - id: move_unknown4
         type: u4
         if: version >= 12
-      - id: path
+      - id: move_path
         type: path
-      - id: unknown5
+      - id: move_unknown5
         size: 24
         if: version >= 10
-      - id: unknown6
+      - id: old
         type: u1
         if: version >= 5 and version < 7
-      - id: unknown7
+      - id: move_unknown6
         type: u4
         if: version >= 7
-      - id: unknown8
-        size: 8
-      - id: unknown9
+      - id: kill_activity
+        type: u4
+      - id: kill_target
+        type: u4
+      - id: old2
         size: 29
         if: version < 4
-      - id: unknown10
-        size: 26
-      - id: unknown11
+      - id: engage_activity
+        type: u4
+      - id: engage_target
+        type: u4
+      - id: engage_old
+        type: u4
+        doc: Ignored by the game.
+      - id: engage_unknown1
+        type: u4
+      - id: engage_unknown2
+        type: u1
+      - id: repair_activity
+        type: u4
+      - id: repair_unknown1
+        type: u1
+      - id: repair_target
+        type: u4
+      - id: repair_unknown2
         type: u1
         if: version >= 8
-      - id: unknown12
-        size: 12
-      - id: unknown13
+      - id: join_activity
+        type: u4
+      - id: join_target
+        type: u4
+      - id: reattach_activity
+        type: u4
+      - id: unknown2
         type: u4
         if: version >= 3
-      - id: unknown14
+      - id: bombard_activity
         type: u4
         if: version >= 4
-      - id: unknown15
+      - id: old3
         type: u1
         if: version >= 4 and version < 6
-      - id: unknown16
-        size: 12
+      - id: bombard_target
+        type: u4
         if: version >= 4
-      - id: unknown17
+      - id: bombard_location
+        type: vec2
+        if: version >= 4
+      - id: bombard_unknown
         type: string
         if: version >= 4
-      - id: unknown18
-        size: 12
+      - id: unpack_activity
+        type: u4
         if: version >= 9
-      - id: unknown19
-        size: 8
+      - id: unpack_location
+        type: vec2
+        if: version >= 9
+      - id: unpack_facing
+        type: vec2
         if: version >= 13
-      - id: unknown20
-        size: 20
+      - id: unload_unknown
+        type: u4
         if: version >= 11
-      - id: unknown21
-        size: 8
+      - id: deploy_location
+        type: vec2
+        if: version >= 11
+      - id: deploy_unknown
+        type: u4
+        if: version >= 11
+      - id: deploy_target
+        type: u4
+        if: version >= 11
+      - id: unload_activity
+        type: u4
+        if: version >= 14
+      - id: deploy_activity
+        type: u4
         if: version >= 14
   organization_mind:
     seq:
@@ -2739,118 +2945,209 @@ types:
       - id: base
         type: mind_base
         if: version >= 1
-      - id: unknown
-        size: 8
+      - id: facing
+        type: vec2
         if: version >= 1
+        doc: A facing, (x, y), to turn to once it stops.
       - id: rest
         type: organization_mind_rest(version)
         if: version >= 2
   organization_mind_rest:
+    doc: Facings are (x, y) directions, (0, -1) for none.
     params:
       - id: version
         type: u4
     seq:
-      - id: unknown1
+      - id: actors
         type: u4s
-      - id: unknown2
+        doc: Thing ids of actors it keeps a list of.
+      - id: sleep_activity
         type: u4
-      - id: unknown3
-        size: 5
+      - id: sleep_unknown1
+        type: u1
         if: version >= 9
-      - id: unknown4
+      - id: sleep_unknown2
+        type: u4
+        if: version >= 9
+      - id: sleep_unknown3
         type: u1
         if: version >= 12
-      - id: unknown5
-        size: 37
-      - id: unknown6
-        size: 8
-        if: version >= 15
-      - id: path
-        type: path
-      - id: unknown7
+      - id: rampage_activity
         type: u4
+      - id: rampage_unknown
+        type: u1
+      - id: move_activity
+        type: u4
+      - id: move_target
+        type: u4
+        doc: The thing id of the actor it's moving to.
+      - id: move_destination
+        type: vec2
+      - id: move_facing
+        type: vec2
+        doc: The way to face on arrival.
+      - id: move_unknown1
+        type: u4
+      - id: move_unknown2
+        type: u4
+      - id: move_requested_destination
+        type: vec2
+        if: version >= 15
+        doc: Where it was told to go, before `move_destination` was adjusted.
+      - id: move_path
+        type: path
+      - id: move_formation
+        type: s4
         if: version >= 3
+        doc: The index of the formation to move in; -1 for none.
       - id: unknown8
         size: 16
         doc: |
-          Holds a u4, 0 in every map, that the game's loader doesn't appear
-          to read; its place among these bytes is a guess.
-      - id: unknown9
+          The kill state's activity and target and the bombard state's
+          activity, then a u4, 0 in every map, that the game's loader
+          doesn't appear to read. That it comes last is a guess.
+      - id: old
         type: u1
         if: version < 8
-      - id: unknown10
+      - id: bombard_target
         type: u4
-      - id: unknown11
+      - id: bombard_unknown
         type: string
         if: version >= 6
-      - id: unknown12
-        size: 8
+      - id: bombard_location
+        type: vec2
         if: version >= 6
-      - id: unknown13
-        size: 8
+      - id: siege_activity
+        type: u4
         if: version >= 4
-      - id: unknown14
+      - id: siege_unknown1
+        type: u4
+        if: version >= 4
+      - id: siege_unknown2
         type: u4
         if: version >= 5 and version < 13
-      - id: unknown15
-        size: 13
-      - id: unknown16
-        type: string
-      - id: unknown17
-        size: 8
-      - id: unknown18
+      - id: chasing_activity
         type: u4
+      - id: chasing_unknown
+        type: u4
+      - id: construct_activity
+        type: u4
+      - id: construct_unknown1
+        type: u1
+      - id: construct_template
+        type: string
+        doc: The template of what it's to build.
+      - id: construct_location
+        type: vec2
+      - id: construct_unknown2
+        type: s4
         if: version >= 11
-      - id: unknown19
-        size: 8
+      - id: construct_facing
+        type: vec2
         if: version >= 20
-      - id: unknown20
-        size: 9
-      - id: unknown21
+      - id: repair_activity
+        type: u4
+      - id: repair_unknown1
+        type: u1
+      - id: repair_unknown2
+        type: u4
+      - id: repair_unknown3
         type: u1
         if: version >= 10
-      - id: unknown22
-        size: 45
-      - id: num_unknown23
+      - id: guard_activity
         type: u4
-      - id: unknown23
-        size: num_unknown23 * 8
-      - id: unknown24
+      - id: guard_unknown1
+        type: u4
+      - id: guard_unknown2
+        type: u1
+      - id: guard_unknown3
+        type: u4
+      - id: guard_location
+        type: vec2
+      - id: guard_facing
+        type: vec2
+      - id: regroup_activity
+        type: u4
+      - id: reform_activity
+        type: u4
+      - id: reform_unknown
+        type: u4
+      - id: engage_activity
+        type: u4
+      - id: num_engage_targets
+        type: u4
+      - id: engage_targets
+        size: num_engage_targets * 8
+        doc: Two u4s per target.
+      - id: engage_unknown1
         type: u4
         if: version >= 18
-      - id: unknown25
+      - id: engage_unknown2
         type: u1
         if: version >= 19
-      - id: unknown26
+      - id: engage_old
         type: u1
         if: version >= 5
-      - id: unknown27
-        size: 52
-      - id: unknown28
-        size: 12
+        doc: Ignored by the game.
+      - id: retreat_activity
+        type: u4
+      - id: retreat_location
+        type: vec2
+      - id: retreat_unknown
+        type: u4
+      - id: rout_activity
+        type: u4
+      - id: rout_old
+        size: 8
+        doc: Ignored by the game.
+      - id: rout_unknown
+        type: u4
+      - id: explore_activity
+        type: u4
+      - id: explore_unknown1
+        size: 8
+      - id: explore_unknown2
+        size: 8
+      - id: explore_unknown3
+        type: f4
         if: version >= 17
-      - id: unknown29
-        size: 9
-      - id: unknown30
+      - id: explore_unknown4
+        type: u4
+        if: version >= 17
+      - id: explore_old
+        type: u4
+        if: version >= 17
+        doc: Ignored by the game.
+      - id: join_activity
+        type: u4
+      - id: join_unknown1
+        type: u4
+      - id: join_unknown2
+        type: u1
+      - id: join_unknown3
         type: u1
         if: version >= 7
-      - id: unknown31
+      - id: join_unknown4
         type: u4s
         if: version >= 7
-      - id: unknown32
+      - id: exhausted_activity
         type: u4
-      - id: unknown33
-        size: 12
+      - id: unpack_activity
+        type: u4
         if: version >= 14
-      - id: unknown34
-        size: 8
+      - id: unpack_location
+        type: vec2
+        if: version >= 14
+      - id: unpack_facing
+        type: vec2
         if: version >= 21
-      - id: unknown35
+      - id: unpack_unknown
         type: u4
         if: version >= 16
-      - id: unknown36
+      - id: pack_activity
         type: u4
         if: version >= 14
+        doc: Ignored on load.
 enums:
   relation:
     0: itself
