@@ -17,6 +17,7 @@ You need your own copy of the game. This project contains no game code or data.
 | [`aaa-sim`](crates/sim) | The game's rules, played out with no rendering |
 | [`aaa-render`](crates/render) | Draws maps with Bevy |
 | [`aaa-editor`](crates/editor) | Map editor built with Bevy |
+| [`aaa-game`](crates/game) | Plays matches, starting one on a given map |
 
 ## Building
 
@@ -25,7 +26,7 @@ cargo build --release
 cargo test
 ```
 
-Requires Rust 1.88 or newer (1.97.1 for the Bevy crates). The `tgck`, `tgi`, `nif`, `aaa-data` and `aaa-editor` commands end up
+Requires Rust 1.88 or newer (1.97.1 for the Bevy crates). The `tgck`, `tgi`, `nif`, `aaa-data`, `aaa-editor` and `aaa-game` commands end up
 in `target/release/`. The editor has extra system requirements on Linux; see
 [its README](crates/editor/README.md).
 

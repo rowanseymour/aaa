@@ -5,9 +5,12 @@
 
 use std::f32::consts::FRAC_PI_4;
 
+use aaa_map::Ground;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+
+use crate::terrain::world;
 
 // Estimated from screenshots of the game, not read from its data.
 const GAME_YAW: f32 = FRAC_PI_4;
@@ -36,6 +39,12 @@ impl RtsCamera {
             distance: 150.0,
             free: false,
         }
+    }
+
+    /// The game's view of the middle of a map.
+    pub fn centred(ground: &Ground) -> Self {
+        let half = ground.size() / 2.0;
+        RtsCamera::new(world(half, half, ground.height_at(half, half)))
     }
 
     pub fn transform(&self) -> Transform {

@@ -182,7 +182,6 @@ fn main() -> ExitCode {
         ..default()
     }));
     app.add_plugins(MapRenderPlugin)
-        .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
         .insert_resource(loaded)
         .add_systems(Startup, setup)
         .add_systems(Update, objects::toggle_modelless);
@@ -260,11 +259,7 @@ fn setup(
 
     let ground = &map.ground;
     let size = ground.size();
-    let mut cam = RtsCamera::new(terrain::world(
-        size / 2.0,
-        size / 2.0,
-        ground.height_at(size / 2.0, size / 2.0),
-    ));
+    let mut cam = RtsCamera::centred(ground);
     if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
         let (x, y) = (x * size, y * size);
         cam = RtsCamera {

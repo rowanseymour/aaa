@@ -21,8 +21,8 @@ use tgck::map::Sun;
 use blend::GroundMaterial;
 use models::{ModelAssets, Models};
 
-/// What drawing a map needs: the ground material, model animation and the
-/// camera's controls.
+/// What drawing a map needs: the ground material, model animation, the sky and
+/// the camera's controls.
 pub struct MapRenderPlugin;
 
 impl Plugin for MapRenderPlugin {
@@ -30,6 +30,7 @@ impl Plugin for MapRenderPlugin {
         // The shader has to be registered before the material that loads it.
         embedded_asset!(app, "blend.wesl");
         app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
+            .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
             .add_systems(Update, (models::animate, camera::update));
     }
 }

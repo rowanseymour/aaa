@@ -1,0 +1,15 @@
+[package]
+name = "aaa-game"
+version.workspace = true
+edition.workspace = true
+# Bevy 0.20 needs a newer compiler than the libraries do.
+rust-version = "1.97.1"
+license.workspace = true
+description = "Plays Axis & Allies (2004) matches"
+publish = false
+
+[dependencies]
+aaa-data = { path = "../data" }
+aaa-map = { path = "../map" }
+aaa-render = { path = "../render" }
+bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

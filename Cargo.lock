@@ -22,6 +22,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aaa-game"
+version = "0.1.0"
+dependencies = [
+ "aaa-data",
+ "aaa-map",
+ "aaa-render",
+ "bevy",
+]
+
+[[package]]
 name = "aaa-map"
 version = "0.1.0"
 dependencies = [
