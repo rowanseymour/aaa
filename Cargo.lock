@@ -12,10 +12,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "aaa-map"
+version = "0.1.0"
+dependencies = [
+ "aaa-data",
+ "tgck",
+]
+
+[[package]]
 name = "aaa-viewer"
 version = "0.1.0"
 dependencies = [
  "aaa-data",
+ "aaa-map",
  "bevy",
  "nif",
  "tgck",

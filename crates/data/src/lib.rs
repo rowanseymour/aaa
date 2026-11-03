@@ -2,10 +2,8 @@
 //! definitions built from its files (terrain, object views, ...).
 
 pub mod defs;
-mod ground;
 mod id;
 
-pub use ground::Ground;
 pub use id::Id;
 
 use std::collections::HashMap;

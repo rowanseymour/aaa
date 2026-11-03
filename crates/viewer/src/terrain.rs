@@ -2,7 +2,8 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{DepthColor, GameData, Ground, Id};
+use aaa_data::{DepthColor, GameData, Id};
+use aaa_map::Ground;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::mesh::{Indices, PrimitiveTopology};

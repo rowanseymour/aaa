@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::Ground;
+use aaa_map::Ground;
 use bevy::prelude::*;
 use tgck::map::Thing;
 

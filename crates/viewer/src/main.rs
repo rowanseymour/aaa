@@ -11,7 +11,8 @@ mod textures;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use aaa_data::{GameData, Ground};
+use aaa_data::GameData;
+use aaa_map::Map;
 use bevy::asset::embedded_asset;
 use bevy::camera::Exposure;
 use bevy::core_pipeline::tonemapping::Tonemapping;
@@ -19,7 +20,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
-use tgck::map::{CELL_SIZE, Sun, Terrain, Thing};
+use tgck::map::CELL_SIZE;
 
 use blend::GroundMaterial;
 use camera::RtsCamera;
@@ -43,13 +44,7 @@ options:
 #[derive(Resource)]
 struct Loaded {
     game: GameData,
-    title: String,
-    ground: Ground,
-    terrain: Terrain,
-    things: Vec<Thing>,
-    /// Which organization members' records depend on.
-    world_version: u32,
-    sun: Sun,
+    map: Map,
 }
 
 /// Set by `--modelless`.
@@ -168,7 +163,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let loaded = GameData::open(&dir).and_then(|game| {
+    let loaded = GameData::open(&dir).and_then(|mut game| {
         let Some(map) = map else {
             for name in game.map_names() {
                 println!("{name}");
@@ -178,7 +173,7 @@ fn main() -> ExitCode {
         let name = game
             .find_map(map)
             .ok_or_else(|| format!("no map named {map:?}; run without a map name to list them"))?;
-        load(game, &name).map(Some)
+        Map::load(&mut game, &name).map(|map| Some(Loaded { game, map }))
     });
     let loaded = match loaded {
         Ok(Some(l)) => l,
@@ -192,7 +187,7 @@ fn main() -> ExitCode {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("{} - aaa-viewer", loaded.title),
+            title: format!("{} - aaa-viewer", loaded.map.title),
             ..default()
         }),
         ..default()
@@ -264,26 +259,6 @@ fn take_screenshot(
     );
 }
 
-fn load(mut game: GameData, name: &str) -> Result<Loaded, String> {
-    let mut map = game.open_map(name)?;
-    let err = |e: tgck::Error| format!("{name}: {e}");
-    let hm = map.height_map().map_err(err)?;
-    let mountain = map.mountain_height_map().map_err(err)?;
-    let terrain = map.terrain().map_err(err)?;
-    let things = map.things().map_err(err)?;
-    let world_version = map.world_version().map_err(err)?;
-    let sun = map.sun().map_err(err)?;
-    Ok(Loaded {
-        title: aaa_data::map_title(name).to_string(),
-        ground: Ground::new(&hm, &mountain),
-        terrain,
-        things,
-        world_version,
-        sun,
-        game,
-    })
-}
-
 #[allow(clippy::too_many_arguments)] // Bevy systems take their resources as arguments
 fn setup(
     mut commands: Commands,
@@ -299,12 +274,15 @@ fn setup(
 ) {
     let Loaded {
         game,
-        ground,
-        terrain,
-        things,
-        world_version,
-        sun,
-        ..
+        map:
+            Map {
+                ground,
+                terrain,
+                things,
+                world_version,
+                sun,
+                ..
+            },
     } = &mut *loaded;
     let built = terrain::build(game, ground, terrain, &mut images);
     if let Some((mesh, material)) = built.ground {
