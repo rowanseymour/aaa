@@ -65,12 +65,12 @@ and `container::write` puts a file back together.
 | `.rwd` archives | Done; tested against all 11 archives in the game |
 | Map `HEIGHT_MAP`, `MOUNTAIN_HEIGHT_MAP` | Done |
 | Map `TERRAIN` | Done for versions 6 and 7; the AI analysis at the end is kept as raw bytes |
-| Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, actors' owner and components, and the members of herds and regiments; component state and other classes' records are kept as raw bytes |
+| Map `DYNAMIC_THINGS` | The fields every object has (template, id, name, position, facing, scale, variation), areas, cameras, and actors: owner, components and the members of herds and regiments, with some components' state typed (construction, body, mover, properties) and the rest read to its exact end but kept as bytes; other classes' records are kept as raw bytes |
 | Map `MAP_HEADER` | Game options, sides, size, biome, weather and editor details; a few fields' meanings are unknown |
 | Map `OBJECTIVES` | Done |
 | Map `TRIGGERS` | Done |
 | Map `TEAMS` | Done |
-| Map `KINGDOMS` | Name, colour, relations, resources, team, commander and nation; the rest (mostly AI state) is kept as raw bytes |
+| Map `KINGDOMS` | Name, colour, relations, resources, team, commander, nation, technologies and the strategic AI's state, much of it as unnamed values |
 | Map `SUN` | Direction and colours; the rest is kept as raw bytes |
 | Map `MAPSTRINGS` | Returned as text |
 | Other map sections (`RULES`, ...) | Not decoded; available as raw bytes through `tgck unpack` |
