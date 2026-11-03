@@ -55,6 +55,24 @@ pub struct Thing {
     pub view: Option<View>,
     #[serde(default)]
     pub size: Vec<Size>,
+    pub character_component: Option<CharacterComponent>,
+}
+
+/// How a unit's model is animated.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CharacterComponent {
+    #[serde(default)]
+    pub animation: Vec<Animation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Animation {
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub ids: Option<String>,
+    /// The `.kf` file, with `%s`s for the view's resource prefix and the ids.
+    pub kf: Option<String>,
+    pub length: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
