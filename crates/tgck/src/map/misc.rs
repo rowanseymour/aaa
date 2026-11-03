@@ -1,17 +1,10 @@
-//! The small sections: MAP, DENIZEN_GROUPS and MISC_DATA.
+//! The small sections: MAP, DENIZEN_GROUPS and MISC_DATA, laid out as
+//! [`rmp.ksy`] specifies.
 //!
-//! ```text
-//! MAP             u32 data_version (0; the game refuses any other)
-//! DENIZEN_GROUPS  u32 n, (u32 id, group)[n]   the herds wildlife keeps to
-//! MISC_DATA       laid out by world version (GWORLD), read from 18 on:
-//!     u32 n, (string name_list, u32 index)[n]   names handed out so far
-//!     f32 pre_cutscene_game_speed
-//!     string active_weather                     a weather id, empty for none
-//!     v24: u32 n, string ui_script_listen[n]
-//!     v28: u8 has_game_counter, if set: f32 start_time, f32 duration
-//! ```
+//! A denizen group's layout isn't decoded, so DENIZEN_GROUPS is only checked to
+//! hold none.
 //!
-//! No shipped map saves a denizen group, so their layout isn't decoded.
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::header::{bool, check_version, optional};
 use crate::{Cursor, Error, Result, Writer};

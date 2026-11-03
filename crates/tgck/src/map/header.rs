@@ -1,38 +1,7 @@
-//! MAP_HEADER: what a map offers before it's loaded — its game options, sides
-//! and editor details.
+//! MAP_HEADER, what a map offers before it's loaded, and RULES, laid out as
+//! [`rmp.ksy`] specifies.
 //!
-//! ```text
-//! MAP_HEADER
-//!     u32 version (4-7), rules, parameters,
-//!     u32 unknown (the version again), u32 unknown (0),
-//!     string name, string description      string ids, defined in MAPSTRINGS
-//!     v7: f32 size[2]
-//!     f32 unknown, u32 editor_build, string editor_version, string game,
-//!     string author, u8 unknown, string path, string unknown,
-//!     v6: i32 unknown (-1)
-//!     u64 saved                            a Windows FILETIME
-//!     players: per player u8 1, u8 unknown, string kingdom, string name,
-//!       v5: u8 unknown; then u8 0
-//!     string creator_class ("KKC_WorldCreator"), u32 version (3), rules,
-//!     parameters, f32 size[2], string biome, string weather, u32 seed
-//!
-//! rules       u32 version (4), u32 unknown (0), string game_type,
-//!             u32 n, rule[n]: string name, u8 unknown, u32 type, value:
-//!             u8 for type 0 (bool), else 4 bytes (1 int, 2 float, 3 choice)
-//! parameters  u32 version (11-13), u32 n, (string name, string display_name)[n]
-//!             for teams, u32 n, kingdom[n]:
-//!     string name, u8 independent, string nation, string faction,
-//!     string color, string handicap, string display_name,
-//!     v12: string color_markup, string ai, u8 unknown, u8 unknown,
-//!     string team, u32 n, string objective[n],
-//!     u32 n, string shared_property[n], string unknown,
-//!     u32 n, string actor[n], u8 unknown, u8 unknown,
-//!     v13: u32 n, (string resource, f32 amount)[n]
-//! ```
-//!
-//! The creator holds a second copy of the rules and parameters, the same in
-//! every shipped map. RULES holds the rules the world plays by, laid out as
-//! here; every shipped map's match its header's.
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use crate::{Cursor, Error, Result, Writer};
 

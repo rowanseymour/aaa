@@ -1,66 +1,8 @@
-//! Maps (`.rmp`): a container with 22 named, individually zlib-compressed sections.
+//! Maps (`.rmp`), laid out as [`rmp.ksy`] specifies.
 //!
-//! Section payloads are packed little-endian streams with no alignment; strings
-//! are `u16 len` + UTF-16LE. Decoded so far:
+//! [`Map`] reads each section into a type that writes itself back.
 //!
-//! ```text
-//! HEIGHT_MAP, MOUNTAIN_HEIGHT_MAP
-//!     u32 version (1), f32 min (-10), f32 max (10), f32 default, u32 unknown (1),
-//!     u32 count (side * side, side = 257 on standard maps),
-//!     f32 heights[count]   row-major, one per vertex; HEIGHT_MAP holds the
-//!                          water surface at water vertices, MOUNTAIN the
-//!                          (negative) depth of the bed below it
-//!     u8  layer[count]     HEIGHT_MAP: non-zero = water; MOUNTAIN: all 0
-//!     MOUNTAIN_HEIGHT_MAP, from world version 10: u8 cutscene_mode, the
-//!                          world's flag, saved here; 0 in every shipped map
-//!
-//! DYNAMIC_THINGS_INDEX     u32 data_version (0), u32 count, u32 record_size[count]
-//! DYNAMIC_THINGS           u32 data_version (0), u32 version (11), then per record:
-//!     string template, u32 class, u32 id, u32 version (2), string name,
-//!     u32 unknown (0), f32 position[3], f32 facing[3],
-//!     u32 flags, u32 version (5), f32 scale, i32 variation (-1 = none),
-//!     u32 unknown (0), u32 unknown, u16 unknown (0),
-//!     then by class:
-//!       area (6)    u32 version (1), [u32 id, u32 version (2),] string name,
-//!                   u32 shape (1 circle, 3 box), f32 radius, f32 bounds[4],
-//!                   u32 unknown (0); the cutscene maps leave out the id
-//!       actor (3)   see map/actor.rs
-//!       camera (7)  u32 version (1 or 2), string name, f32 unknown
-//!       others      not decoded
-//!
-//! SUN
-//!     u32 version (1 or 2), u32 unknown (1), u32 unknown (-1),
-//!     f32 direction[3]     unit vector the light travels along, z up
-//!     f32 diffuse[3], ambient[3], specular[3]   as in Templates/template_sun.tgi
-//!     rest unknown: the same colours again, then 38 more bytes
-//!
-//! USED_REQUIRED_OBJECTS_INDEX, USED_REQUIRED_OBJECTS
-//!     as DYNAMIC_THINGS, from world version 25; empty in every shipped map
-//!
-//! MAPSTRINGS               plain text in .tgi syntax (map name, objectives, ...)
-//!
-//! GWORLD, TEAMS, RESTRICTION_GROUPS, KINGDOMS  see map/players.rs
-//! IDMGR, UPDATABLES        see map/bookkeeping.rs
-//! MAP_HEADER, RULES        see map/header.rs
-//! MAP, DENIZEN_GROUPS, MISC_DATA  see map/misc.rs
-//! OBJECTIVES               see map/objectives.rs
-//! TRIGGERS                 see map/triggers.rs
-//!
-//! TERRAIN
-//!     u32 version (6 or 7 in shipped maps; the game accepts up to 7)
-//!     u32 unknown (must be 1)
-//!     string biome          biome id, e.g. "temperate_grassland"
-//!     u32 n, string terrain[n]
-//!     u32 tile_count (width * height = (height-map side - 1)^2)
-//!     u32 tile_size  (8 for v7, 6 for v5-6, 4 for v4, 2 before)
-//!     tile[tile_count], row-major:
-//!       v7: u16 terrain, u16 unknown, u8 water_body, u8 unknown2, u8 flags, u8 unused
-//!       v6: u8 terrain, u8 flags, u16 unknown, u8 water_body, u8 unknown2
-//!     remainder: cached AI map analysis, followed by one more object for v6+.
-//!       The game can rebuild this data, so it is kept undecoded.
-//! ```
-//!
-//! World coordinates span 0..(side - 1) * 2, i.e. two world units per height cell.
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use std::fs::File;
 use std::io::{BufReader, Read, Seek};
@@ -341,7 +283,7 @@ pub struct Terrain {
     pub side: usize,
     /// Row-major, `side * side` entries.
     pub tiles: Vec<Tile>,
-    /// Cached AI map analysis and what follows it; see the module docs.
+    /// Undecoded: the AI's cached analysis of the map, and what follows it.
     pub ai_cache: Vec<u8>,
 }
 

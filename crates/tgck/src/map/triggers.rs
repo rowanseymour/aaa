@@ -1,27 +1,8 @@
-//! TRIGGERS: the map's scripting. Each trigger waits for any of its events,
-//! checks its conditions and then runs its effects.
+//! TRIGGERS: the map's scripting, laid out as [`rmp.ksy`] specifies. Each
+//! trigger waits for any of its events, checks its conditions and then runs its
+//! effects.
 //!
-//! ```text
-//! TRIGGERS
-//!     u32 version (4 or 5), u32 next_id,
-//!     u32 n, trigger[n], u32 n, (string name, f32 value)[n] variables,
-//!     v4: string, u32           read and ignored by the game
-//!     v5: u32 n, string[n]
-//! trigger
-//!     u32 version (4), u32 id, u32 unknown, u8 active, u8 repeats,
-//!     f32 activation_time, string name, string comment, u32 next_element,
-//!     u32 n, element[n] events, u32 n, element[n] conditions,
-//!     u32 n, element[n] effects
-//! element
-//!     u32 version (2 or 3), string name, u32 id, u32 n, parameter[n]
-//! parameter
-//!     u32 version (4), string kind, string source, u8 set, value:
-//!     4, 12 or 0 bytes or a string, by source (see `value_kind`)
-//! ```
-//!
-//! Elements are instances of templates the game defines by name, such as
-//! `actor_enters_area`; their parameters are typed by kind (`ma_actor`) and
-//! say where the value comes from (`mi_actor_id`, `mi_actor_named`, ...).
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::expect;
 use super::header::{bool, check_version, optional};

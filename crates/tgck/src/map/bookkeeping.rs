@@ -1,13 +1,7 @@
-//! The simulation's bookkeeping: IDMGR and UPDATABLES.
+//! The simulation's bookkeeping: IDMGR and UPDATABLES, laid out as [`rmp.ksy`]
+//! specifies.
 //!
-//! ```text
-//! IDMGR       u32 version (0), u32 next_slot, u32 highest_slot,
-//!             u32 capacity (0x10000), u16 generation[highest_slot]
-//! UPDATABLES  u32 updatable_count, then update queues (2 delayed, and from
-//!             world version 22 3 periodic), each:
-//!     u32 version (0), u32 current_slot, u32 n, slot[n]:
-//!       u32 n, (i32 updatable_id, u32 argument)[n]
-//! ```
+//! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::expect;
 use super::header::{check_version, optional};
