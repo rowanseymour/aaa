@@ -16,6 +16,7 @@ const CELL_SIZE: f32 = 2.0;
 
 struct Layers {
     repeats: array<vec4<f32>, 256>,
+    edge: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> layers: Layers;
@@ -31,6 +32,17 @@ fn terrain(kind: u32, ground: vec2<f32>) -> vec3<f32> {
 
 fn mask(index: u32, uv: vec2<f32>) -> f32 {
     return textureSample(masks, masks_sampler, uv, index).r;
+}
+
+// 1 inside the map, falling to 0 at its edge; matches terrain.rs.
+fn edge_light(world: vec2<f32>) -> f32 {
+    let size = layers.edge.x;
+    let fade = layers.edge.y;
+    if fade <= 0.0 {
+        return 1.0;
+    }
+    let d = min(min(world.x, world.y), min(size - world.x, size - world.y));
+    return smoothstep(0.0, fade, d);
 }
 
 @fragment
@@ -54,6 +66,7 @@ fn fragment(
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
+    out.color = vec4(out.color.rgb * edge_light(ground * CELL_SIZE), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

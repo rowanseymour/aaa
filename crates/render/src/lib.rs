@@ -26,16 +26,42 @@ use blend::GroundMaterial;
 use models::{ModelAssets, Models};
 use tgck::map::Thing;
 
-/// What drawing a map needs: the ground material, model animation, the sky and
-/// the camera's controls.
-pub struct MapRenderPlugin;
+/// What drawing a map needs: the ground material, model animation, what lies
+/// beyond the map and the camera's controls.
+pub struct MapRenderPlugin {
+    pub edge: Edge,
+}
+
+/// How the map meets what lies beyond it.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Edge {
+    /// A sharp edge against sky blue, to show exactly where the map ends.
+    Hard,
+    /// Fading into black over the last tiles, as the game draws it.
+    Fade,
+}
+
+impl Edge {
+    /// Distance in from the map's edge that the fade to black takes.
+    pub fn fade(self) -> f32 {
+        match self {
+            Edge::Hard => 0.0,
+            Edge::Fade => 2.0 * tgck::map::CELL_SIZE,
+        }
+    }
+}
 
 impl Plugin for MapRenderPlugin {
     fn build(&self, app: &mut App) {
         // The shader has to be registered before the material that loads it.
         embedded_asset!(app, "blend.wesl");
+        let beyond = match self.edge {
+            Edge::Hard => Color::srgb(0.55, 0.7, 0.85),
+            Edge::Fade => Color::BLACK,
+        };
         app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
-            .insert_resource(ClearColor(Color::srgb(0.55, 0.7, 0.85)))
+            .insert_resource(ClearColor(beyond))
+            .insert_resource(self.edge)
             .add_systems(Update, (models::animate, rig::play, camera::update));
     }
 }
@@ -49,6 +75,7 @@ pub struct MapAssets<'w> {
     images: ResMut<'w, Assets<Image>>,
     skins: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
     formats: Res<'w, CompressedImageFormatSupport>,
+    edge: Res<'w, Edge>,
 }
 
 impl MapAssets<'_> {
@@ -82,8 +109,9 @@ pub fn spawn_map(
         images,
         skins,
         formats,
+        edge,
     } = assets;
-    let built = terrain::build(game, &map.ground, &map.terrain, images);
+    let built = terrain::build(game, &map.ground, &map.terrain, images, edge.fade());
     if let Some((mesh, material)) = built.ground {
         commands.spawn((
             Name::new("ground"),

@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured, save_to_disk};
 
 use aaa_render::camera::{self, RtsCamera};
-use aaa_render::{MapAssets, MapRenderPlugin, objects, terrain};
+use aaa_render::{Edge, MapAssets, MapRenderPlugin, objects, terrain};
 
 const USAGE: &str = "\
 usage:
@@ -166,7 +166,7 @@ fn main() -> ExitCode {
         }),
         ..default()
     }));
-    app.add_plugins(MapRenderPlugin)
+    app.add_plugins(MapRenderPlugin { edge: Edge::Hard })
         .insert_resource(loaded)
         .add_systems(Startup, setup)
         .add_systems(Update, objects::toggle_markers);
