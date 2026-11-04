@@ -1,6 +1,6 @@
-// Water shader: the vertex colour (depth tint and edge fade) times the
-// current frame of the water's animation, tiled in world space, then lit like
-// a StandardMaterial.
+// Water shader: the vertex colour (depth tint and edge fade) with ripples
+// from the current frame of the water's animation, tiled in world space, then
+// lit like a StandardMaterial.
 
 import bevy_pbr::render::{
     mesh_view_bindings::globals,
@@ -30,7 +30,12 @@ fn fragment(
     let uv = vec2(in.world_position.x, -in.world_position.z) / animation.params.xy;
     let count = u32(animation.params.w);
     let frame = u32(globals.time * animation.params.z) % count;
-    pbr_input.material.base_color *= textureSample(frames, frames_sampler, uv, frame);
+    // The frames are dark, about a quarter grey; in the game's screenshots
+    // water is about as bright as its depth colour, so they only add ripples
+    // around it. Scaled in gamma terms, as the game's colours are.
+    let t = textureSample(frames, frames_sampler, uv, frame);
+    let ripples = pow(saturate(pow(t.rgb, vec3(1.0 / 2.2)) * 3.0), vec3(2.2));
+    pbr_input.material.base_color *= vec4(ripples, t.a);
 
     // The game blends gamma-encoded colours, which covers what's below far
     // more than the same alpha does in linear light. Over a background, a
