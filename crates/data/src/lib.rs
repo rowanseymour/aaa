@@ -61,6 +61,75 @@ pub struct Body {
     pub speed: Option<f32>,
 }
 
+/// How a template's objects fight: what they can take and what they deal.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Fighter {
+    pub health: f32,
+    pub defense: f32,
+    /// The fraction of each damage type's damage its properties turn
+    /// aside, by damage type; negative where they add to it.
+    pub resists: HashMap<Id, f32>,
+    /// What its properties make it for weapons' targets to match, e.g.
+    /// `infantry`.
+    pub flags: Vec<Id>,
+    pub weapons: Vec<Weapon>,
+}
+
+/// An attack a fighter makes by itself on what comes in range.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Weapon {
+    pub range: f32,
+    pub min_range: f32,
+    /// Seconds between shots.
+    pub recharge: f32,
+    /// Radius of the area a shot hits, 0 for only its target.
+    pub area: f32,
+    /// Within this distance of where a shot lands it does full damage...
+    pub full_within: f32,
+    /// ...falling to this fraction of it at the area's edge.
+    pub edge_damage: f32,
+    pub targets: Targets,
+    pub damage: Vec<Damage>,
+    /// The ids of the animation its user plays to fire it.
+    pub animation: Option<String>,
+}
+
+/// Which flags a target must have, and must not, for a weapon to fire on
+/// it. Besides a fighter's own [`Fighter::flags`], it has `enemy` or
+/// `friend` by its side.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Targets {
+    pub required: Vec<Id>,
+    pub excluded: Vec<Id>,
+}
+
+impl Targets {
+    fn parse(text: &str) -> Targets {
+        let mut out = Targets::default();
+        for word in text.split([',', ' ']).filter(|w| !w.is_empty()) {
+            match word.split_at(1) {
+                ("-", flag) => out.excluded.push(Id::from(flag)),
+                ("+", flag) => out.required.push(Id::from(flag)),
+                _ => out.required.push(Id::from(word)),
+            }
+        }
+        out
+    }
+
+    pub fn allow<'a>(&self, mut flags: impl Iterator<Item = &'a Id> + Clone) -> bool {
+        self.required.iter().all(|r| flags.clone().any(|f| f == r))
+            && !flags.any(|f| self.excluded.contains(f))
+    }
+}
+
+/// Damage a shot does, of one type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Damage {
+    /// E.g. `gunfire`.
+    pub kind: Id,
+    pub amount: f32,
+}
+
 /// How an organization's members can be arranged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
@@ -366,6 +435,37 @@ impl GameData {
         out
     }
 
+    /// How the objects of every template that can be hurt fight, by
+    /// template id, including the ids the game has since renamed.
+    pub fn fighters(&mut self) -> HashMap<Id, Fighter> {
+        let files = self.parse_tgis(|_| true);
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let properties: HashMap<Id, defs::Property> = files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Property"))
+            .filter_map(|b| templates.deserialize::<defs::Property>(b).ok())
+            .filter_map(|p| Some((p.ids.clone()?, p)))
+            .collect();
+        let mut out = HashMap::new();
+        for (_, parsed) in &files {
+            for block in parsed.root.blocks_of("Thing") {
+                let Some(id) = block.value("ids") else {
+                    continue;
+                };
+                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
+                    continue;
+                };
+                if let Some(f) = fighter(&thing, &properties) {
+                    out.insert(Id::from(id), f);
+                }
+            }
+        }
+        if let Some(bytes) = self.read("translate.tgi") {
+            add_renames(&mut out, &tgi::decode(&bytes), "Thing", |_| true);
+        }
+        out
+    }
+
     /// The organization layouts, by id.
     pub fn layouts(&mut self) -> HashMap<Id, Layout> {
         let files =
@@ -631,6 +731,84 @@ fn body(thing: &defs::Thing) -> Body {
     }
 }
 
+fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<Fighter> {
+    let body = thing.body_component.as_ref()?;
+    let health = body.health.filter(|&h| h > 0.0)?;
+    let mut fighter = Fighter {
+        health,
+        defense: body.defense.unwrap_or(0.0),
+        ..Fighter::default()
+    };
+    let properties = thing.properties_component.iter().flat_map(|c| {
+        let refs = c
+            .property
+            .iter()
+            .filter_map(|r| shared.get(r.property_ids.as_ref()?));
+        refs.chain(&c.intrinsic_property)
+    });
+    for p in properties {
+        let flags = p.enabled_target_flags.as_deref().unwrap_or("");
+        for flag in flags.split(',').map(str::trim) {
+            let flag = Id::from(flag);
+            if !flag.as_str().is_empty()
+                && flag != Id::from("null")
+                && !fighter.flags.contains(&flag)
+            {
+                fighter.flags.push(flag);
+            }
+        }
+        for m in &p.modifier {
+            let resist = m
+                .kind
+                .as_deref()
+                .is_some_and(|k| k.eq_ignore_ascii_case("RESIST_DAMAGE"));
+            if let (true, Some(kind), Some(amount)) = (resist, &m.damage_type, m.amount) {
+                *fighter.resists.entry(kind.clone()).or_default() += amount;
+            }
+        }
+    }
+    let abilities = thing.performer_component.iter().flat_map(|p| &p.ability);
+    for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
+        let attack = d
+            .ability_type
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("attack"));
+        let damage: Vec<Damage> = d
+            .effect
+            .iter()
+            .filter(|e| {
+                e.kind
+                    .as_deref()
+                    .is_some_and(|k| k.eq_ignore_ascii_case("MAIN_DAMAGE"))
+            })
+            .filter_map(|e| {
+                Some(Damage {
+                    kind: e.damage_type_ids.clone()?,
+                    amount: e.amount?,
+                })
+            })
+            .collect();
+        let Some(range) = d.range.filter(|_| attack && !damage.is_empty()) else {
+            continue;
+        };
+        fighter.weapons.push(Weapon {
+            range,
+            min_range: d.min_range,
+            recharge: d.recharge_time,
+            area: d.area,
+            full_within: d.attenuation_range_min.unwrap_or(1.0),
+            edge_damage: d.attenuation_factor_max.unwrap_or(1.0),
+            targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
+            damage,
+            animation: a
+                .animation1
+                .clone()
+                .filter(|ids| !ids.eq_ignore_ascii_case("null")),
+        });
+    }
+    Some(fighter)
+}
+
 /// The depth colours of each water terrain, by IDS. Biomes name a
 /// `WaterInfo` template for each of their water terrains.
 fn water_colors<'a>(
@@ -826,6 +1004,53 @@ mod tests {
             layout.formations[0].slots,
             [vec![[-1.0, 1.0], [1.0, 1.0]], vec![[0.0, 0.0]]]
         );
+    }
+
+    #[test]
+    fn fighters_take_resistance_and_flags_from_properties() {
+        let parsed = tgi::parse(
+            "[Template Property]\n{\n\t[list Modifier]\n}\n\
+             [Template Resist]\n{\n\ttype = RESIST_DAMAGE\n}\n\
+             [Template Gunfire]\n{\n\ttype = MAIN_DAMAGE\n\tdamage_type_IDS = gunfire\n}\n\
+             [Property Template=Property]\n{\n\tIDS = vehicle\n\tenabled_target_flags = vehicle\n\
+             \t[Modifier Template=Resist]\n\tdamage_type = gunfire\n\tamount = 0.4\n}\n\
+             [Property Template=Property]\n{\n\tIDS = tank\n\tenabled_target_flags = tank, vehicle\n\
+             \t[Modifier Template=Resist]\n\tdamage_type = gunfire\n\tamount = 0.2\n}\n\
+             [Thing]\n{\n\tIDS = tank\n\t[BodyComponent]\n\thealth = 400\n\tdefense = 6\n\
+             \t[PropertiesComponent]\n\t{\n\t\t[Property]\n\t\tproperty_IDS = vehicle\n\
+             \t\t[Property]\n\t\tproperty_IDS = tank\n\t}\n\
+             \t[PerformerComponent]\n\t{\n\t\t[Ability]\n\t\t{\n\t\t\tanimation1 = attack1\n\
+             \t\t\t[AbilityDefinition]\n\t\t\t{\n\t\t\t\tability_type = attack\n\t\t\t\trange = 12\n\
+             \t\t\t\trecharge_time = 3\n\t\t\t\ttargets = +enemy, -air\n\
+             \t\t\t\t[Effect Template=Gunfire]\n\t\t\t\tamount = 12\n\t\t\t}\n\t\t}\n\t}\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let properties = parsed
+            .root
+            .blocks_of("Property")
+            .filter_map(|b| templates.deserialize::<defs::Property>(b).ok())
+            .filter_map(|p| Some((p.ids.clone()?, p)))
+            .collect();
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        let tank = fighter(&thing, &properties).unwrap();
+        assert_eq!((tank.health, tank.defense), (400.0, 6.0));
+        assert!((tank.resists[&Id::from("gunfire")] - 0.6).abs() < 1e-6);
+        assert_eq!(tank.flags, [Id::from("vehicle"), Id::from("tank")]);
+        let gun = &tank.weapons[0];
+        assert_eq!((gun.range, gun.recharge), (12.0, 3.0));
+        assert_eq!(gun.animation.as_deref(), Some("attack1"));
+        assert_eq!(
+            gun.damage,
+            [Damage {
+                kind: Id::from("gunfire"),
+                amount: 12.0
+            }]
+        );
+        let enemy = Id::from("enemy");
+        assert!(gun.targets.allow([&enemy].into_iter()));
+        assert!(!gun.targets.allow([&enemy, &Id::from("AIR")].into_iter()));
+        assert!(!gun.targets.allow(tank.flags.iter()));
     }
 
     #[test]
