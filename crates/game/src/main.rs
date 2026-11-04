@@ -13,7 +13,7 @@ use aaa_data::GameData;
 use aaa_map::{Ground, Map};
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::terrain::world;
-use aaa_render::{MapAssets, MapRenderPlugin, Playing};
+use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{TICK, World};
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -67,7 +67,7 @@ fn main() -> ExitCode {
         }),
         ..default()
     }));
-    app.add_plugins(MapRenderPlugin)
+    app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
         .insert_resource(Sim(World::new(&loaded.map)))
         .insert_resource(loaded)
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))

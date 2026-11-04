@@ -47,6 +47,9 @@ pub struct Blend {
 pub struct Layers {
     /// Texture repeat of each terrain type, in world units (xy).
     pub repeats: [Vec4; MAX_TYPES],
+    /// The map's size (x) and how far in from its edge it fades to black (y),
+    /// in world units; no fade if y is 0.
+    pub edge: Vec4,
 }
 
 impl MaterialExtension for Blend {

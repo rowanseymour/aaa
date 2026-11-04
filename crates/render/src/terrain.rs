@@ -65,6 +65,7 @@ pub fn build(
     ground: &Ground,
     terrain: &Terrain,
     images: &mut Assets<Image>,
+    fade: f32,
 ) -> Built {
     let variations = game.terrain_variations();
     let side = terrain.side;
@@ -136,7 +137,7 @@ pub fn build(
             }]
         });
         (
-            water_mesh(ground, &water, &colors),
+            water_mesh(ground, &water, &colors, fade),
             StandardMaterial {
                 alpha_mode: AlphaMode::Blend,
                 perceptual_roughness: 0.15,
@@ -174,7 +175,10 @@ pub fn build(
             ..default()
         },
         extension: Blend {
-            layers: blend::Layers { repeats },
+            layers: blend::Layers {
+                repeats,
+                edge: Vec4::new(ground.size(), fade, 0.0, 0.0),
+            },
             textures: images.add(textures),
             masks: images.add(masks),
         },
@@ -283,8 +287,9 @@ fn ground_mesh(ground: &Ground, side: usize, layers: impl Fn(usize, usize) -> La
 
 /// The water surface over every tile that touches water, coloured by the
 /// depth of the bed below each vertex as the game does: clear at the shore,
-/// so it fades in where the bank cuts it off.
-fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor]) -> Mesh {
+/// so it fades in where the bank cuts it off. Within `fade` of the map's
+/// edge it darkens to opaque black, as the ground does.
+fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor], fade: f32) -> Mesh {
     let mut positions = Vec::with_capacity(tiles.len() * 4);
     let mut vertex_colors = Vec::with_capacity(tiles.len() * 4);
     for &(x, y) in tiles {
@@ -293,7 +298,9 @@ fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor]) 
             let surface = ground.surface[cy * ground.side + cx] - SHORE_DROP;
             positions.push(world(wx, wy, surface).to_array());
             let ([r, g, b], a) = at_depth(colors, surface - ground.at(cx, cy));
-            vertex_colors.push(Color::srgba(r, g, b, a).to_linear().to_f32_array());
+            let [r, g, b, a] = Color::srgba(r, g, b, a).to_linear().to_f32_array();
+            let lit = edge_light(ground.size(), fade, wx, wy);
+            vertex_colors.push([r * lit, g * lit, b * lit, a + (1.0 - a) * (1.0 - lit)]);
         }
     }
     let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
@@ -301,6 +308,17 @@ fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor]) 
     let flips: Vec<bool> = tiles.iter().map(|&(x, y)| flip(ground, x, y)).collect();
     quads(positions, normals, uvs, &flips)
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors)
+}
+
+/// How lit the point (x, y) is, from 1 down to 0 at the edge of a map of
+/// `size` over the last `fade` of it; matches `edge_light` in the shader.
+fn edge_light(size: f32, fade: f32, x: f32, y: f32) -> f32 {
+    if fade <= 0.0 {
+        return 1.0;
+    }
+    let d = x.min(y).min(size - x).min(size - y);
+    let t = (d / fade).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
 }
 
 /// Interpolates the colour and alpha for a depth, holding the end values
