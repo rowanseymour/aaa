@@ -270,11 +270,18 @@ fn show_selection(
         let [px, py] = unit.previous;
         let [x, y] = unit.position;
         let (x, y) = (px + (x - px) * t, py + (y - py) * t);
-        let at = world(x, y, loaded.map.ground.height_at(x, y) + 0.05);
-        gizmos.circle(
-            Isometry3d::new(at, Quat::from_rotation_x(FRAC_PI_2)),
-            0.6,
-            Color::srgb(0.3, 1.0, 0.3),
-        );
+        gizmos.linestrip(ring(&loaded.map.ground, x, y), Color::srgb(0.3, 1.0, 0.3));
     }
+}
+
+/// A ring around a point that follows the ground's rise and fall, so it
+/// doesn't sink into slopes the way a flat circle would.
+fn ring(ground: &Ground, x: f32, y: f32) -> impl Iterator<Item = Vec3> {
+    const RADIUS: f32 = 0.6;
+    const SEGMENTS: usize = 24;
+    (0..=SEGMENTS).map(move |i| {
+        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
+        let (px, py) = (x + RADIUS * a.cos(), y + RADIUS * a.sin());
+        world(px, py, ground.height_at(px, py) + 0.05)
+    })
 }
