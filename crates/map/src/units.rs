@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Body, Id, Layout};
+use aaa_data::{Body, Fighter, Id, Layout};
 use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
 
 /// A side: a player, human or AI, or an independent power such as
@@ -137,6 +137,8 @@ pub struct Member {
     pub thing: Thing,
     /// Top speed in world units a second.
     pub speed: f32,
+    /// What it can take and deal; `None` for what can't be hurt.
+    pub fighter: Option<Fighter>,
 }
 
 #[derive(Debug, Clone)]
@@ -153,6 +155,7 @@ pub struct Formation {
 pub fn regiments(
     things: &[Thing],
     bodies: &HashMap<Id, Body>,
+    fighters: &HashMap<Id, Fighter>,
     layouts: &HashMap<Id, Layout>,
 ) -> Vec<Regiment> {
     let speed = |t: &Thing| bodies.get(&Id::from(t.template.as_str()))?.speed;
@@ -170,6 +173,7 @@ pub fn regiments(
                 .map(|m| {
                     Some(Member {
                         speed: speed(m)?,
+                        fighter: fighters.get(&Id::from(m.template.as_str())).cloned(),
                         thing: m.clone(),
                     })
                 })

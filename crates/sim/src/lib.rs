@@ -10,7 +10,7 @@ pub mod path;
 use std::collections::HashMap;
 
 use aaa_map::pathing::tile_at;
-use aaa_map::{Domain, Map, Pathing};
+use aaa_map::{Domain, Fighter, Id, Map, Pathing, Weapon};
 
 pub use aaa_map::{Player, Relation, Team};
 
@@ -67,11 +67,26 @@ pub struct Unit {
     end_facing: [f32; 2],
     /// Waypoints still ahead, the next last.
     path: Vec<[f32; 2]>,
+    /// What it can take and deal; `None` for what can't be hurt.
+    pub fighter: Option<Fighter>,
+    pub health: f32,
+    /// Seconds until each of its fighter's weapons can fire again.
+    reloads: Vec<f32>,
+    /// Index into [`World::units`] of what it last fired on.
+    pub target: Option<usize>,
+    /// The tick it last fired on, and the index of the weapon it fired.
+    pub shot: Option<(u64, usize)>,
+    /// The tick it died on.
+    pub died: Option<u64>,
 }
 
 impl Unit {
     pub fn moving(&self) -> bool {
         !self.path.is_empty()
+    }
+
+    pub fn alive(&self) -> bool {
+        self.died.is_none()
     }
 }
 
@@ -117,7 +132,16 @@ impl World {
                     true => Domain::Land,
                     false => Domain::Naval,
                 };
+                let fighter = m.fighter.clone();
                 world.units.push(Unit {
+                    health: fighter.as_ref().map_or(0.0, |f| f.health),
+                    reloads: fighter
+                        .as_ref()
+                        .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),
+                    fighter,
+                    target: None,
+                    shot: None,
+                    died: None,
                     id: m.thing.id,
                     template: m.thing.template.clone(),
                     regiment: r,
@@ -153,9 +177,21 @@ impl World {
         world
     }
 
-    /// Where a regiment's members stand on average.
+    /// Where a regiment's surviving members stand on average.
     pub fn centre(&self, regiment: usize) -> [f32; 2] {
-        self.average(&self.regiments[regiment].units)
+        let survivors: Vec<usize> = self.survivors(regiment).collect();
+        self.average(&survivors)
+    }
+
+    /// A regiment's members still alive.
+    pub fn survivors(&self, regiment: usize) -> impl Iterator<Item = usize> + '_ {
+        let units = &self.regiments[regiment].units;
+        units.iter().copied().filter(|&u| self.units[u].alive())
+    }
+
+    /// Whether a regiment has lost every member.
+    pub fn destroyed(&self, regiment: usize) -> bool {
+        self.survivors(regiment).next().is_none()
     }
 
     fn average(&self, units: &[usize]) -> [f32; 2] {
@@ -169,7 +205,7 @@ impl World {
 
     /// Whether `player` may give `regiment` orders.
     pub fn commands(&self, player: u32, regiment: usize) -> bool {
-        self.regiments[regiment].owner == player
+        self.regiments[regiment].owner == player && !self.destroyed(regiment)
     }
 
     /// Sends a regiment to `target`, turned to face the way it's going,
@@ -221,6 +257,9 @@ impl World {
         for (&u, &[right, ahead]) in r.units.iter().zip(offsets) {
             let place = [px + right * fy + ahead * fx, py - right * fx + ahead * fy];
             let unit = &mut self.units[u];
+            if !unit.alive() {
+                continue;
+            }
             let mut way = path::find(&self.pathing, unit.domain, unit.position, place);
             way.reverse();
             unit.path = way;
@@ -233,6 +272,12 @@ impl World {
 
     /// Plays one [`TICK`].
     pub fn tick(&mut self) {
+        self.travel();
+        self.fight();
+        self.ticks += 1;
+    }
+
+    fn travel(&mut self) {
         for unit in &mut self.units {
             unit.previous = unit.position;
             let mut left = self.regiments[unit.regiment].speed * TICK;
@@ -255,8 +300,145 @@ impl World {
                 }
             }
         }
-        self.ticks += 1;
     }
+
+    /// Fires every weapon that's ready at what it can hit, then takes the
+    /// dead out of the fight, so that units hit each other at once.
+    fn fight(&mut self) {
+        let mut hits: Vec<(usize, f32)> = Vec::new();
+        for u in 0..self.units.len() {
+            let unit = &self.units[u];
+            let Some(fighter) = unit.fighter.as_ref().filter(|_| unit.alive()) else {
+                continue;
+            };
+            let mut reloads = unit.reloads.clone();
+            let mut target = unit.target;
+            let mut shot = unit.shot;
+            for (w, weapon) in fighter.weapons.iter().enumerate() {
+                reloads[w] = (reloads[w] - TICK).max(0.0);
+                if reloads[w] > 0.0 {
+                    continue;
+                }
+                let Some(t) = self.aim(u, weapon, target) else {
+                    continue;
+                };
+                target = Some(t);
+                shot = Some((self.ticks, w));
+                reloads[w] = weapon.recharge;
+                self.strike(weapon, self.units[t].position, t, &mut hits);
+            }
+            let unit = &mut self.units[u];
+            unit.reloads = reloads;
+            unit.target = target;
+            unit.shot = shot;
+        }
+        for (t, amount) in hits {
+            let unit = &mut self.units[t];
+            if unit.alive() {
+                unit.health -= amount;
+                if unit.health <= 0.0 {
+                    unit.health = 0.0;
+                    unit.died = Some(self.ticks);
+                    unit.path.clear();
+                    unit.target = None;
+                }
+            }
+        }
+        for u in 0..self.units.len() {
+            if self.units[u].target.is_some_and(|t| !self.units[t].alive()) {
+                self.units[u].target = None;
+            }
+        }
+    }
+
+    /// What unit `u` fires `weapon` at: the one it fired on last if it
+    /// still can, else the nearest it can.
+    fn aim(&self, u: usize, weapon: &Weapon, last: Option<usize>) -> Option<usize> {
+        if let Some(t) = last.filter(|&t| self.can_hit(u, weapon, t)) {
+            return Some(t);
+        }
+        let from = self.units[u].position;
+        (0..self.units.len())
+            .filter(|&t| self.can_hit(u, weapon, t))
+            .min_by(|&a, &b| {
+                distance(from, self.units[a].position)
+                    .total_cmp(&distance(from, self.units[b].position))
+            })
+    }
+
+    fn can_hit(&self, u: usize, weapon: &Weapon, t: usize) -> bool {
+        let (unit, target) = (&self.units[u], &self.units[t]);
+        let Some(fighter) = target.fighter.as_ref().filter(|_| target.alive() && t != u) else {
+            return false;
+        };
+        let d = distance(unit.position, target.position);
+        if d > weapon.range || d < weapon.min_range {
+            return false;
+        }
+        let side = match self.sides.relation(
+            self.regiments[unit.regiment].owner,
+            self.regiments[target.regiment].owner,
+        ) {
+            Relation::Enemy => "enemy",
+            Relation::Ally | Relation::Itself => "friend",
+            _ => "neutral",
+        };
+        let side = Id::from(side);
+        weapon
+            .targets
+            .allow(fighter.flags.iter().chain(std::iter::once(&side)))
+    }
+
+    /// Records the damage a shot landing at `at`, aimed at unit `t`, does
+    /// to what it hits.
+    fn strike(&self, weapon: &Weapon, at: [f32; 2], t: usize, hits: &mut Vec<(usize, f32)>) {
+        if weapon.area <= 0.0 {
+            if let Some(f) = &self.units[t].fighter {
+                hits.push((t, damage(weapon, f, 1.0)));
+            }
+            return;
+        }
+        for (i, unit) in self.units.iter().enumerate() {
+            let Some(f) = unit.fighter.as_ref().filter(|_| unit.alive()) else {
+                continue;
+            };
+            let d = distance(at, unit.position);
+            if d > weapon.area {
+                continue;
+            }
+            hits.push((i, damage(weapon, f, falloff(weapon, d))));
+        }
+    }
+}
+
+/// The fraction of an area shot's damage that reaches `d` from where it
+/// lands: full within [`Weapon::full_within`], falling
+/// evenly to [`Weapon::edge_damage`] at the edge.
+fn falloff(weapon: &Weapon, d: f32) -> f32 {
+    let full = weapon.full_within.min(weapon.area);
+    if d <= full || weapon.area <= full {
+        return 1.0;
+    }
+    let along = (d - full) / (weapon.area - full);
+    1.0 + (weapon.edge_damage - 1.0) * along
+}
+
+/// Health a shot of `weapon` takes from `target`, its damage scaled by
+/// `scale`: defence comes off first, then resistance takes its share, and
+/// every hit does at least 1.
+fn damage(weapon: &Weapon, target: &Fighter, scale: f32) -> f32 {
+    weapon
+        .damage
+        .iter()
+        .map(|d| {
+            let resist = target.resists.get(&d.kind).copied().unwrap_or(0.0);
+            ((d.amount * scale - target.defense.max(0.0)) * (1.0 - resist)).max(1.0)
+        })
+        .sum()
+}
+
+fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
+    (a[0] - b[0]).hypot(a[1] - b[1])
 }
 
 /// An order to a regiment from a player that doesn't own it.
@@ -329,6 +511,7 @@ mod tests {
                 detail: Detail::Raw(Vec::new()),
             },
             speed,
+            fighter: None,
         }
     }
 
@@ -444,6 +627,147 @@ mod tests {
         run(&mut w, 5.0);
         assert!(near(w.units[0].position, [9.0, 10.0]));
         assert_eq!(w.regiments[0].formation, 0);
+    }
+
+    fn rifle(range: f32, amount: f32) -> Weapon {
+        Weapon {
+            range,
+            min_range: 0.0,
+            recharge: 2.0,
+            area: 0.0,
+            full_within: 1.0,
+            edge_damage: 1.0,
+            targets: aaa_map::Targets {
+                required: vec![Id::from("enemy")],
+                excluded: vec![Id::from("tank")],
+            },
+            damage: vec![aaa_map::Damage {
+                kind: Id::from("gunfire"),
+                amount,
+            }],
+            animation: None,
+        }
+    }
+
+    fn soldier(weapons: Vec<Weapon>) -> Fighter {
+        Fighter {
+            health: 100.0,
+            defense: 0.0,
+            resists: HashMap::new(),
+            flags: vec![Id::from("infantry")],
+            weapons,
+        }
+    }
+
+    /// A regiment for each of `owners`, of one fighter each, the first at
+    /// 10,10 and each next 10 further along y.
+    fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> World {
+        let regiments = owners
+            .iter()
+            .zip(fighters)
+            .enumerate()
+            .map(|(i, (&owner, fighter))| {
+                let mut m = member(i as u32 * 2 + 2, [10.0, 10.0 + 10.0 * i as f32], 2.0);
+                m.fighter = Some(fighter);
+                aaa_map::Regiment {
+                    id: i as u32 * 2 + 1,
+                    template: "squad".into(),
+                    owner,
+                    facing: [0.0, 1.0],
+                    members: vec![m],
+                    formations: vec![aaa_map::Formation {
+                        id: "line".into(),
+                        offsets: vec![[0.0, 0.0]],
+                    }],
+                    formation: 0,
+                    primary: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        World::from_regiments(sides, Pathing::uniform(40, Domain::Land), &regiments)
+    }
+
+    /// Players 1 and 2 at war, and 3 allied to 1.
+    fn at_war() -> Sides {
+        Sides {
+            players: vec![
+                player(1, None, &[0, 3, 1], &[]),
+                player(2, None, &[3, 0, 3], &[]),
+                player(3, None, &[1, 3, 0], &[]),
+            ],
+            teams: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn enemies_in_range_fire_on_each_other_until_one_dies() {
+        let mut w = battle(
+            &[1, 2],
+            vec![
+                soldier(vec![rifle(12.0, 30.0)]),
+                soldier(vec![rifle(12.0, 20.0)]),
+            ],
+            at_war(),
+        );
+        w.tick();
+        assert_eq!(w.units[0].target, Some(1));
+        assert_eq!(w.units[0].health, 80.0);
+        assert_eq!(w.units[1].health, 70.0);
+        // Every 2s: the second is down to 10 after three volleys and dies
+        // to the fourth, while the first has taken 80.
+        run(&mut w, 6.0);
+        assert!(w.units[0].alive() && !w.units[1].alive());
+        assert_eq!(w.units[0].health, 20.0);
+        assert!(w.destroyed(1) && !w.destroyed(0));
+        assert_eq!(w.units[0].target, None);
+        assert_eq!(w.order_move(2, 1, [0.0, 0.0]), Err(NotYours));
+    }
+
+    #[test]
+    fn weapons_hold_fire_on_friends_what_they_exclude_and_what_is_out_of_range() {
+        let mut tank = soldier(vec![rifle(12.0, 30.0)]);
+        tank.flags = vec![Id::from("tank")];
+        // 1 and 3 are allies, 2 a tank the rifles can't hurt, and 4 out of
+        // the rifles' range.
+        let mut w = battle(
+            &[1, 3, 2, 2],
+            vec![
+                soldier(vec![rifle(12.0, 30.0)]),
+                soldier(vec![rifle(12.0, 30.0)]),
+                tank,
+                soldier(Vec::new()),
+            ],
+            at_war(),
+        );
+        run(&mut w, 10.0);
+        assert_eq!(w.units[2].health, 100.0);
+        assert_eq!(w.units[3].health, 100.0);
+        // The tank's own rifle has no such limit.
+        assert!(!w.units[1].alive());
+    }
+
+    #[test]
+    fn defence_then_resistance_soften_hits() {
+        let mut tank = soldier(Vec::new());
+        tank.defense = 6.0;
+        tank.resists = [(Id::from("gunfire"), 0.6)].into();
+        // (12 - 6) * 0.4
+        assert!((damage(&rifle(12.0, 12.0), &tank, 1.0) - 2.4).abs() < 1e-5);
+        assert_eq!(damage(&rifle(12.0, 5.0), &tank, 1.0), 1.0);
+        assert!((damage(&rifle(12.0, 50.0), &tank, 0.5) - 7.6).abs() < 1e-5);
+    }
+
+    #[test]
+    fn area_shots_fall_off_toward_their_edge() {
+        let shell = Weapon {
+            area: 6.0,
+            full_within: 2.0,
+            edge_damage: 0.5,
+            ..rifle(30.0, 40.0)
+        };
+        assert_eq!(falloff(&shell, 1.0), 1.0);
+        assert_eq!(falloff(&shell, 4.0), 0.75);
+        assert_eq!(falloff(&shell, 6.0), 0.5);
     }
 
     fn player(id: u32, team: Option<usize>, relations: &[u32], team_relations: &[u32]) -> Player {

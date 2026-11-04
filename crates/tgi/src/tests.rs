@@ -308,3 +308,44 @@ y = 1
     assert_eq!(looped.value("x"), Some("1"));
     assert_eq!(&templates.resolve(things[2]), things[2]);
 }
+
+#[test]
+fn nested_block_naming_another_template() {
+    let schema = ok("[template Definition]\n{\n[list Effect]\n}");
+    let files = ok("
+[Template Attack Template=Definition]
+{
+    range = 1
+    [Effect]
+    kind = base
+}
+[Template Grenade Inherit=Attack]
+{
+    range = 9
+    recharge_time = 15
+    area = 2
+}
+[Template GrenadeUse]
+{
+    [Definition Template=Attack]
+    {
+        recharge_time = 0.5
+        area = 1
+    }
+}
+[Ability Template=GrenadeUse]
+{
+    [Definition Template=Grenade]
+    area = 3
+}
+");
+    let templates = Templates::new([&schema, &files]);
+    let ability = templates.resolve(files.blocks_of("Ability").next().unwrap());
+    let definition = ability.blocks_of("Definition").next().unwrap();
+    // The block it merges into, then its own template, then its own fields.
+    assert_eq!(definition.value("range"), Some("9"));
+    assert_eq!(definition.value("recharge_time"), Some("15"));
+    assert_eq!(definition.value("area"), Some("3"));
+    assert_eq!(definition.blocks_of("Effect").count(), 1);
+    assert_eq!(definition.attr("template"), None);
+}

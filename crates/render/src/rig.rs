@@ -1,6 +1,7 @@
 //! Models whose nodes are spawned as entities, so that a `.kf` animation can
 //! move them and skinned meshes bend with them: units, playing their idle
-//! animation, or their moving one while they move.
+//! animation, or their moving one while they move, and once through an
+//! attack or their death when told to.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -21,6 +22,10 @@ pub struct Rig {
     idle: Clip,
     /// Timed per world unit moved rather than per second.
     moving: Option<Clip>,
+    /// What it plays once to use an ability, by the animation's ids.
+    abilities: Vec<(String, Clip)>,
+    /// Ways it can die, each held at its end.
+    deaths: Vec<Clip>,
 }
 
 struct RigNode {
@@ -45,6 +50,8 @@ struct Clip {
     channels: Vec<Channel>,
     /// Key time per second of playing.
     speed: f32,
+    /// Seconds one play takes.
+    length: f32,
 }
 
 struct Channel {
@@ -139,19 +146,30 @@ impl Nodes {
 
     /// The rig for these nodes, with parts for [`Nodes::shapes`] by index:
     /// built in its own space for a skinned shape, else in its node's.
-    /// `idle` and `moving` are `.kf` files with how long one play takes:
-    /// in seconds for `idle`, in world units moved for `moving`.
+    /// The clips are `.kf` files with how long one play takes: in world
+    /// units moved for `moving`, else in seconds.
+    #[allow(clippy::too_many_arguments)]
     pub fn rig(
         self,
         nif: &Nif,
         meshes: Vec<(Part, usize)>,
         idle: (&Nif, f32),
         moving: Option<(&Nif, f32)>,
+        abilities: &[(String, Nif, f32)],
+        deaths: &[(Nif, f32)],
         assets: &mut Assets<Mesh>,
         skins: &mut Assets<SkinnedMeshInverseBindposes>,
     ) -> Option<Rig> {
         let moving = moving.and_then(|(kf, length)| self.clip(kf, length));
         let idle = self.clip(idle.0, idle.1)?;
+        let abilities = abilities
+            .iter()
+            .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
+            .collect();
+        let deaths = deaths
+            .iter()
+            .filter_map(|(kf, length)| self.clip(kf, *length))
+            .collect();
         let meshes = meshes
             .into_iter()
             .filter_map(|(part, i)| {
@@ -183,6 +201,8 @@ impl Nodes {
             meshes,
             idle,
             moving,
+            abilities,
+            deaths,
         })
     }
 
@@ -298,6 +318,7 @@ impl Nodes {
         Some(Clip {
             channels,
             speed: if length > 0.0 { span / length } else { 1.0 },
+            length,
         })
     }
 }
@@ -343,6 +364,7 @@ impl Rig {
             joints,
             time: offset,
             moving: None,
+            once: None,
         });
     }
 
@@ -376,9 +398,72 @@ pub struct Playing {
     time: f32,
     /// Speed in world units a second while moving.
     moving: Option<f32>,
+    /// An animation it's playing once instead.
+    once: Option<Once>,
+}
+
+struct Once {
+    clip: OnceClip,
+    /// Seconds into it.
+    time: f32,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum OnceClip {
+    /// Index into [`Rig::abilities`].
+    Ability(usize),
+    /// Index into [`Rig::deaths`], held at its end.
+    Death(usize),
+}
+
+impl Rig {
+    fn once(&self, clip: OnceClip) -> &Clip {
+        match clip {
+            OnceClip::Ability(i) => &self.abilities[i].1,
+            OnceClip::Death(i) => &self.deaths[i],
+        }
+    }
 }
 
 impl Playing {
+    /// Plays the ability animation with these ids once from the start,
+    /// unless it's dying or has none.
+    pub fn use_ability(&mut self, ids: &str) {
+        let Some(i) = self
+            .rig
+            .abilities
+            .iter()
+            .position(|(a, _)| a.eq_ignore_ascii_case(ids))
+        else {
+            return;
+        };
+        if !self.dying() {
+            self.once = Some(Once {
+                clip: OnceClip::Ability(i),
+                time: 0.0,
+            });
+        }
+    }
+
+    /// Plays one of its deaths, picked by `pick`, and stays at its end;
+    /// false if it has none to play.
+    pub fn die(&mut self, pick: usize) -> bool {
+        if self.rig.deaths.is_empty() {
+            return false;
+        }
+        if !self.dying() {
+            self.once = Some(Once {
+                clip: OnceClip::Death(pick % self.rig.deaths.len()),
+                time: 0.0,
+            });
+        }
+        true
+    }
+
+    fn dying(&self) -> bool {
+        matches!(&self.once, Some(o) if matches!(o.clip, OnceClip::Death(_)))
+    }
+
     /// Switches between idling and moving at `speed`, for rigs with a
     /// moving animation.
     pub fn set_moving(&mut self, speed: Option<f32>) {
@@ -391,13 +476,32 @@ impl Playing {
 }
 
 pub fn play(time: Res<Time>, mut rigs: Query<&mut Playing>, mut transforms: Query<&mut Transform>) {
+    let dt = time.delta_secs();
     for mut p in &mut rigs {
-        p.time += time.delta_secs() * p.moving.unwrap_or(1.0);
-        let clip = match (&p.rig.moving, p.moving) {
-            (Some(clip), Some(_)) => clip,
-            _ => &p.rig.idle,
+        let p = &mut *p;
+        if let Some(once) = &mut p.once {
+            once.time += dt;
+            let ended = once.time >= p.rig.once(once.clip).length;
+            if ended && matches!(once.clip, OnceClip::Ability(_)) {
+                p.once = None;
+            }
+        }
+        let (clip, time) = match &p.once {
+            Some(once) => {
+                let clip = p.rig.once(once.clip);
+                // Short of the end, which looping clips would wrap around.
+                (clip, once.time.min(clip.length * 0.999))
+            }
+            None => {
+                p.time += dt * p.moving.unwrap_or(1.0);
+                let clip = match (&p.rig.moving, p.moving) {
+                    (Some(clip), Some(_)) => clip,
+                    _ => &p.rig.idle,
+                };
+                (clip, p.time)
+            }
         };
-        let t = p.time * clip.speed;
+        let t = time * clip.speed;
         for c in &clip.channels {
             let rest = &p.rig.nodes[c.node].rest;
             if let Ok(mut transform) = transforms.get_mut(p.joints[c.node]) {

@@ -6,7 +6,10 @@
 //! block merges into the inherited block of the same kind, recursively,
 //! except for kinds the schema files declare as lists (`[list Property]`),
 //! whose blocks are added after the inherited ones. Blocks nested in the
-//! result keep their own `Template=`, to be resolved in turn if needed.
+//! result keep their own `Template=`, to be resolved in turn if needed,
+//! except where a child's block names a different template from the block it
+//! merges into: then its template's fields override the inherited block's,
+//! so both are resolved first.
 
 use std::collections::{HashMap, HashSet};
 
@@ -77,19 +80,35 @@ impl<'a> Templates<'a> {
             line: block.line,
         };
         for b in chain.iter().rev() {
-            self.merge(&mut out.items, &b.items);
+            self.merge(&mut out.items, &b.items, false);
         }
         out
     }
 
-    fn merge(&self, into: &mut Vec<Item>, items: &[Item]) {
+    /// Merges `items` over `into`. With `shared`, list blocks already in
+    /// `into` aren't added again, as both sides may have them from a
+    /// template they have in common.
+    fn merge(&self, into: &mut Vec<Item>, items: &[Item], shared: bool) {
         // Only inherited items are overridden, so a block may repeat a key.
         let inherited = into.len();
         for item in items {
             let existing = into[..inherited]
                 .iter()
                 .position(|e| self.overrides(item, e));
+            if existing.is_none() && shared && matches!(item, Item::Block(_)) && into.contains(item)
+            {
+                continue;
+            }
             match (existing.map(|i| &mut into[i]), item) {
+                (Some(Item::Block(e)), Item::Block(b)) if self.retemplates(e, b) => {
+                    let mut merged = self.resolve(e);
+                    self.merge(&mut merged.items, &self.resolve(b).items, true);
+                    merged.header = b.header.clone();
+                    merged.header.attrs.retain(|(k, _)| !is_template_attr(k));
+                    merged.braced = b.braced;
+                    merged.line = b.line;
+                    *e = merged;
+                }
                 (Some(Item::Block(e)), Item::Block(b)) => {
                     e.header.words = b.header.words.clone();
                     for (k, v) in &b.header.attrs {
@@ -101,11 +120,21 @@ impl<'a> Templates<'a> {
                     }
                     e.braced = b.braced;
                     e.line = b.line;
-                    self.merge(&mut e.items, &b.items);
+                    self.merge(&mut e.items, &b.items, shared);
                 }
                 (Some(e), _) => *e = item.clone(),
                 (None, _) => into.push(item.clone()),
             }
+        }
+    }
+
+    /// Whether `child` names a template other than the one `inherited`
+    /// does.
+    fn retemplates(&self, inherited: &Block, child: &Block) -> bool {
+        match (template(inherited), template(child)) {
+            (_, None) => false,
+            (Some(a), Some(b)) => !a.eq_ignore_ascii_case(b),
+            (None, Some(_)) => true,
         }
     }
 
@@ -120,4 +149,12 @@ impl<'a> Templates<'a> {
             _ => false,
         }
     }
+}
+
+fn template(block: &Block) -> Option<&str> {
+    block.attr("Template").or_else(|| block.attr("Inherit"))
+}
+
+fn is_template_attr(key: &str) -> bool {
+    key.eq_ignore_ascii_case("Template") || key.eq_ignore_ascii_case("Inherit")
 }
