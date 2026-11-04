@@ -90,6 +90,12 @@ fn dump(file: &str) -> ExitCode {
             Object::Material(m) => format!("material diffuse {:?} alpha {}", m.diffuse, m.alpha),
             Object::Alpha(a) => format!("alpha flags {:#06x} threshold {}", a.flags, a.threshold),
             Object::Stencil(s) => format!("stencil draw mode {}", s.draw_mode),
+            Object::VertexColor(v) => {
+                format!(
+                    "vertex colour mode {} lighting {}",
+                    v.vertex_mode, v.lighting
+                )
+            }
             Object::ExtraData(e) => format!("extra {:?} = {:?}", e.name, e.value),
             Object::Controller(c) => format!(
                 "{:?} controller target {:?} data {:?} flags {:#06x} frequency {} phase {} time {}..{} next {:?}",

@@ -17,6 +17,9 @@ pub struct Terrain {
     /// Ships can cross it.
     #[serde(default)]
     pub water: bool,
+    /// Path of a water terrain's animation frames, numbered by a `%04d`.
+    pub anim_textures_path_prefix: Option<String>,
+    pub anim_fps: Option<f32>,
     #[serde(default)]
     pub variation: Vec<Variation>,
 }

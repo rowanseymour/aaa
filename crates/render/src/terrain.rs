@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{DepthColor, GameData, Id};
+use aaa_data::{DepthColor, GameData, Id, TextureAnimation};
 use aaa_map::Ground;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
@@ -13,6 +13,7 @@ use tgck::map::{CELL_SIZE, Terrain};
 
 use crate::blend::{self, Blend, GroundMaterial};
 use crate::textures;
+use crate::water::{Water, WaterMaterial};
 
 /// Tile corners, counter-clockwise seen from above.
 const CORNERS: [(usize, usize); 4] = [(0, 0), (1, 0), (1, 1), (0, 1)];
@@ -46,11 +47,16 @@ pub fn world(x: f32, y: f32, height: f32) -> Vec3 {
 /// The ground, blended across terrain types, and the water surface.
 pub struct Built {
     pub ground: Option<(Mesh, GroundMaterial)>,
-    pub water: Option<(Mesh, StandardMaterial)>,
+    pub water: Option<(Mesh, WaterMaterial)>,
 }
 
 /// Side of each terrain texture in the array.
 const TEXTURE_SIZE: usize = 256;
+/// Side of each water animation frame.
+const FRAME_SIZE: usize = 128;
+/// World units across one repeat of the water's texture: `AVars.tgi`'s
+/// `TerrainBlockSize`, whatever the water terrain's `texture_width`.
+const WATER_REPEAT: f32 = 8.0;
 
 /// A terrain type used by the map, as one layer of the texture array.
 struct Kind {
@@ -86,14 +92,14 @@ pub fn build(
         let image = match variation {
             Some(v) => game
                 .read(&v.texture)
-                .and_then(|b| load_texture(&b, &v.texture))
+                .and_then(|b| load_texture(&b, &v.texture, TEXTURE_SIZE))
                 .unwrap_or_else(|| {
                     warn!("{name}: texture {} missing", v.texture);
-                    solid(v.color)
+                    solid(v.color, TEXTURE_SIZE)
                 }),
             None => {
                 warn!("{name}: no terrain definition");
-                solid([1.0, 0.0, 1.0])
+                solid([1.0, 0.0, 1.0], TEXTURE_SIZE)
             }
         };
         layer_of.insert(tile.terrain, kinds.len() as u32);
@@ -114,34 +120,50 @@ pub fn build(
                 .any(|&(dx, dy)| ground.water[(y + dy) * ground.side + x + dx])
         })
         .collect();
-    // One set of colours for all the water: those of the terrain most of it
-    // lies on, as some terrains beside water have colours of their own.
+    // One look for all the water: that of the terrain most of it lies on,
+    // as some terrains beside water have colours of their own.
     let mut on_water: HashMap<u16, usize> = HashMap::new();
     for &(x, y) in &water {
         *on_water.entry(terrain.at(x, y).terrain).or_default() += 1;
     }
-    let water_colors = on_water
+    let water_look = on_water
         .into_iter()
         .filter_map(|(t, n)| {
             let name = Id::from(terrain.names[t as usize].as_str());
-            Some((n, t, variations.get(&name)?.water.clone()?))
+            let v = variations.get(&name).filter(|v| v.water.is_some())?;
+            Some((n, t, v))
         })
         .max_by_key(|&(n, t, _)| (n, t))
-        .map(|(_, _, colors)| colors);
+        .map(|(_, _, v)| v);
     let water = (!water.is_empty()).then(|| {
-        let colors = water_colors.unwrap_or_else(|| {
+        let colors = water_look.and_then(|v| v.water.clone()).unwrap_or_else(|| {
             vec![DepthColor {
                 depth: 0.0,
                 color: [0.12, 0.26, 0.33],
                 alpha: 0.8,
             }]
         });
+        let animation = water_look.and_then(|v| v.animation.as_ref());
+        let mut frames = animation.map_or_else(Vec::new, |a| load_frames(game, a));
+        if frames.is_empty() {
+            frames.push(solid([1.0; 3], FRAME_SIZE));
+        }
+        let fps = animation.map_or(0.0, |a| a.fps);
+        let count = frames.len() as f32;
         (
             water_mesh(ground, &water, &colors, fade),
-            StandardMaterial {
-                alpha_mode: AlphaMode::Blend,
-                perceptual_roughness: 0.15,
-                ..default()
+            WaterMaterial {
+                // Lit without highlights, as the game draws it.
+                base: StandardMaterial {
+                    alpha_mode: AlphaMode::Blend,
+                    perceptual_roughness: 1.0,
+                    reflectance: 0.0,
+                    ..default()
+                },
+                extension: Water {
+                    animation: Vec4::new(WATER_REPEAT, WATER_REPEAT, fps, count),
+                    frames: images.add(blend::texture_array(frames)),
+                },
             },
         )
     });
@@ -368,14 +390,32 @@ fn quads(
     .with_inserted_indices(Indices::U32(indices))
 }
 
-/// Decodes a texture into a square, mipmapped array layer.
-fn load_texture(bytes: &[u8], name: &str) -> Option<Image> {
-    let image = textures::decode(bytes, name, CompressedImageFormats::NONE, true)?
-        .convert(TextureFormat::Rgba8UnormSrgb)?;
+/// Every frame of a water animation, as array layers.
+fn load_frames(game: &mut GameData, animation: &TextureAnimation) -> Vec<Image> {
+    let mut frames = Vec::new();
+    loop {
+        let name = animation.frame(frames.len());
+        let Some(frame) = game
+            .read(&name)
+            .and_then(|b| load_texture(&b, &name, FRAME_SIZE))
+        else {
+            break;
+        };
+        frames.push(frame);
+    }
+    if frames.is_empty() {
+        warn!("no water animation frames at {}", animation.frames);
+    }
+    frames
+}
+
+/// Decodes a texture into a square, mipmapped array layer of side `n`.
+fn load_texture(bytes: &[u8], name: &str, n: usize) -> Option<Image> {
+    let image = textures::decode(bytes, name, CompressedImageFormats::BC, true)?;
+    let image = textures::decompress(image)?.convert(TextureFormat::Rgba8UnormSrgb)?;
     let (w, h) = (image.width() as usize, image.height() as usize);
     let src = image.data?;
     // Nearest-neighbour resampling: the textures are 128 or 256 square.
-    let n = TEXTURE_SIZE;
     let data = (0..n * n)
         .flat_map(|i| {
             let (x, y) = (i % n * w / n, i / n * h / n);
@@ -383,20 +423,19 @@ fn load_texture(bytes: &[u8], name: &str) -> Option<Image> {
             [src[p], src[p + 1], src[p + 2], src[p + 3]]
         })
         .collect();
-    Some(layer_image(data))
+    Some(layer_image(data, n))
 }
 
-/// A single-colour array layer, for terrain whose texture is missing.
-fn solid(color: [f32; 3]) -> Image {
+/// A single-colour array layer of side `n`, for a missing texture.
+fn solid(color: [f32; 3], n: usize) -> Image {
     let [r, g, b, a] = Color::srgb(color[0], color[1], color[2])
         .to_srgba()
         .to_u8_array();
-    let n = TEXTURE_SIZE;
-    layer_image([r, g, b, a].repeat(n * n))
+    layer_image([r, g, b, a].repeat(n * n), n)
 }
 
-fn layer_image(data: Vec<u8>) -> Image {
-    let n = TEXTURE_SIZE as u32;
+fn layer_image(data: Vec<u8>, n: usize) -> Image {
+    let n = n as u32;
     let mut image = Image::new(
         Extent3d {
             width: n,

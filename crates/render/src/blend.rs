@@ -9,7 +9,8 @@ use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageS
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
 use bevy::render::render_resource::{
-    AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat,
+    AsBindGroup, Extent3d, ShaderType, TextureDimension, TextureFormat, TextureViewDescriptor,
+    TextureViewDimension,
 };
 use bevy::shader::ShaderRef;
 
@@ -278,6 +279,11 @@ pub fn texture_array(layers: Vec<Image>) -> Image {
     );
     image.data = Some(data);
     image.texture_descriptor.mip_level_count = mips;
+    // Otherwise a single layer would be viewed as a plain 2D texture.
+    image.texture_view_descriptor = Some(TextureViewDescriptor {
+        dimension: Some(TextureViewDimension::D2Array),
+        ..default()
+    });
     image.sampler = textures::repeating();
     image
 }

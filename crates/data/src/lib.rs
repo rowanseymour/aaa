@@ -121,6 +121,8 @@ pub struct Variation {
     pub color: [f32; 3],
     /// How water terrains colour the surface by depth, shallowest first.
     pub water: Option<Vec<DepthColor>>,
+    /// The animated texture of a water terrain's surface.
+    pub animation: Option<TextureAnimation>,
     /// Higher priority terrain is drawn over lower where they meet. Each
     /// variation ranks one above the one before it in its terrain.
     pub priority: i32,
@@ -128,6 +130,22 @@ pub struct Variation {
     pub land: bool,
     /// Ships can cross it.
     pub naval: bool,
+}
+
+/// A looping sequence of textures.
+#[derive(Debug, Clone)]
+pub struct TextureAnimation {
+    /// Archive path of each frame, with `%04d` where its number goes.
+    pub frames: String,
+    pub fps: f32,
+}
+
+impl TextureAnimation {
+    /// Archive path of frame `i`; frames count up from 0 to the first
+    /// missing one.
+    pub fn frame(&self, i: usize) -> String {
+        self.frames.replace("%04d", &format!("{i:04}"))
+    }
 }
 
 /// A water surface's colour and opacity at a depth below it.
@@ -258,6 +276,15 @@ impl GameData {
                     continue;
                 };
                 let water = terrain.ids.as_ref().and_then(|id| water.get(id));
+                let animation =
+                    terrain
+                        .anim_textures_path_prefix
+                        .as_ref()
+                        .map(|p| TextureAnimation {
+                            frames: format!("{dir}/{}", p.trim_start_matches('/')),
+                            // The schema's default.
+                            fps: terrain.anim_fps.unwrap_or(30.0),
+                        });
                 for (i, v) in terrain.variation.into_iter().enumerate() {
                     let (Some(ids), Some(texture)) = (v.ids, v.texture) else {
                         continue;
@@ -276,6 +303,7 @@ impl GameData {
                                 .or(terrain.terrain_color)
                                 .unwrap_or([0.5; 3]),
                             water: water.cloned(),
+                            animation: animation.clone(),
                             priority: terrain.base_priority + i as i32,
                             land: terrain.land,
                             naval: terrain.water,

@@ -324,10 +324,10 @@ impl Rig {
             let parent = mesh.node.map_or(root, |n| joints[n]);
             let mut child = commands.spawn((
                 Mesh3d(mesh.part.mesh.clone()),
-                MeshMaterial3d(mesh.part.material.clone()),
                 mesh.transform,
                 ChildOf(parent),
             ));
+            mesh.part.material.insert(&mut child);
             if mesh.part.blended {
                 child.insert(NotShadowCaster);
             }

@@ -178,6 +178,7 @@ pub enum Object {
     Material(Material),
     Alpha(Alpha),
     Stencil(Stencil),
+    VertexColor(VertexColor),
     ExtraData(ExtraData),
     Controller(Controller),
     Keyframes(Keyframes),
@@ -229,6 +230,7 @@ object_types!(
     Material(Material),
     Alpha(Alpha),
     Stencil(Stencil),
+    VertexColor(VertexColor),
     ExtraData(ExtraData),
     Controller(Controller),
     Keyframes(Keyframes),
@@ -347,12 +349,27 @@ impl Alpha {
     pub fn adds(&self) -> bool {
         (self.flags >> 5) & 0xf == 0
     }
+    /// What the colour drawn is scaled by: 0 one, 2 the colour itself, 6
+    /// its alpha, and so on through the usual blend factors.
+    pub fn source(&self) -> u16 {
+        (self.flags >> 1) & 0xf
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct Stencil {
     /// Which faces are drawn; 3 means both sides.
     pub draw_mode: u32,
+}
+
+/// How a shape's vertex colours and lights combine.
+#[derive(Debug, Clone)]
+pub struct VertexColor {
+    /// What the vertex colours stand for: 0 nothing, 1 emissive, 2
+    /// ambient and diffuse.
+    pub vertex_mode: u32,
+    /// 0 for emissive light only, 1 for emissive, ambient and diffuse.
+    pub lighting: u32,
 }
 
 impl Stencil {
@@ -838,8 +855,11 @@ impl Object {
             }
             "NiVertexColorProperty" => {
                 named(r)?;
-                r.skip(2 + 4 + 4)?;
-                other()
+                r.skip(2)?;
+                Object::VertexColor(VertexColor {
+                    vertex_mode: r.u32()?,
+                    lighting: r.u32()?,
+                })
             }
             "NiSpecularProperty" => {
                 named(r)?;
