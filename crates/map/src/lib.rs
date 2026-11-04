@@ -2,11 +2,17 @@
 //! that [`tgck::Map`] reads and the definitions in [`aaa_data`].
 
 mod ground;
+pub mod pathing;
+mod units;
 
 pub use ground::Ground;
+pub use pathing::{Domain, Pathing};
+pub use units::{Member, Player, Regiment};
 
-use aaa_data::GameData;
+use aaa_data::{GameData, Id};
 use tgck::map::{Sun, Terrain, Thing};
+
+use pathing::Obstacle;
 
 pub struct Map {
     /// The file name without its extension, e.g. `(2v2)Berlin`.
@@ -17,6 +23,9 @@ pub struct Map {
     /// Which organization members' records depend on.
     pub world_version: u32,
     pub sun: Sun,
+    pub players: Vec<Player>,
+    pub regiments: Vec<Regiment>,
+    pub pathing: Pathing,
 }
 
 impl Map {
@@ -26,12 +35,36 @@ impl Map {
         let err = |e: tgck::Error| format!("{name}: {e}");
         let hm = map.height_map().map_err(err)?;
         let mountain = map.mountain_height_map().map_err(err)?;
+        let terrain = map.terrain().map_err(err)?;
+        let things = map.things().map_err(err)?;
+        let world_version = map.world_version().map_err(err)?;
+        let bodies = game.bodies();
+        // Movers don't block the ground they start on.
+        let obstacles = things.iter().filter_map(|t| {
+            let body = bodies.get(&Id::from(t.template.as_str()))?;
+            let shape = body.blocking.filter(|_| body.speed.is_none())?;
+            let [x, y, _] = t.position;
+            // Objects never turned face their model's -y.
+            let facing = match t.facing {
+                [0.0, 0.0, _] => [0.0, -1.0],
+                [fx, fy, _] => [fx, fy],
+            };
+            Some(Obstacle {
+                position: [x, y],
+                facing,
+                shape: shape.scaled(t.scale),
+            })
+        });
+        let pathing = Pathing::new(&terrain, &game.terrain_variations(), obstacles);
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
-            terrain: map.terrain().map_err(err)?,
-            things: map.things().map_err(err)?,
-            world_version: map.world_version().map_err(err)?,
+            regiments: units::regiments(&things, world_version, &bodies),
+            players: units::players(&map.kingdoms().map_err(err)?),
+            pathing,
+            terrain,
+            things,
+            world_version,
             sun: map.sun().map_err(err)?,
         })
     }

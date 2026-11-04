@@ -9,6 +9,8 @@ mod rig;
 pub mod terrain;
 mod textures;
 
+pub use rig::Playing;
+
 use aaa_data::GameData;
 use aaa_map::Map;
 use bevy::asset::embedded_asset;
@@ -22,6 +24,7 @@ use tgck::map::Sun;
 
 use blend::GroundMaterial;
 use models::{ModelAssets, Models};
+use tgck::map::Thing;
 
 /// What drawing a map needs: the ground material, model animation, the sky and
 /// the camera's controls.
@@ -48,15 +51,30 @@ pub struct MapAssets<'w> {
     formats: Res<'w, CompressedImageFormatSupport>,
 }
 
+impl MapAssets<'_> {
+    /// The stores [`Models`] add to.
+    pub fn models(&mut self) -> ModelAssets<'_> {
+        ModelAssets {
+            meshes: &mut self.meshes,
+            materials: &mut self.materials,
+            images: &mut self.images,
+            skins: &mut self.skins,
+        }
+    }
+}
+
 /// Spawns a map's ground, water, objects and lights, but no camera, with
 /// placeholder markers for objects that can't be drawn shown if `markers`.
+/// Objects `leave_out` picks are left for the caller to spawn, with the
+/// [`Models`] returned.
 pub fn spawn_map(
     commands: &mut Commands,
     assets: &mut MapAssets,
     game: &mut GameData,
     map: &Map,
     markers: bool,
-) {
+    leave_out: impl Fn(&Thing) -> bool,
+) -> Models {
     let MapAssets {
         meshes,
         materials,
@@ -92,11 +110,12 @@ pub fn spawn_map(
         commands,
         game,
         &mut model_assets,
-        &map.things,
+        map.things.iter().filter(|t| !leave_out(t)),
         map.world_version,
     );
     objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
     light(commands, &map.sun, map.ground.size());
+    models
 }
 
 /// Lights a map of `size` across from its sun.

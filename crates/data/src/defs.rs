@@ -11,8 +11,18 @@ pub struct Terrain {
     pub terrain_color: Option<[f32; 3]>,
     #[serde(default)]
     pub base_priority: i32,
+    /// Land units can cross it.
+    #[serde(default = "yes")]
+    pub land: bool,
+    /// Ships can cross it.
+    #[serde(default)]
+    pub water: bool,
     #[serde(default)]
     pub variation: Vec<Variation>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -21,6 +31,7 @@ pub struct Variation {
     pub texture: Option<String>,
     pub texture_width: Option<f32>,
     pub texture_height: Option<f32>,
+    /// Negative where it takes its terrain's.
     pub terrain_color: Option<[f32; 3]>,
 }
 
@@ -56,6 +67,13 @@ pub struct Thing {
     #[serde(default)]
     pub size: Vec<Size>,
     pub character_component: Option<CharacterComponent>,
+    pub mover_component: Option<MoverComponent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct MoverComponent {
+    /// World units a second.
+    pub speed_max: Option<f32>,
 }
 
 /// How a unit's model is animated.
@@ -73,18 +91,27 @@ pub struct Animation {
     /// The `.kf` file, with `%s`s for the view's resource prefix and the ids.
     pub kf: Option<String>,
     pub length: Option<f32>,
+    /// For moving animations, how far one play carries the unit.
+    pub walk_distance: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Flags {
     #[serde(default)]
     pub invisible: bool,
+    pub blocking: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Size {
     pub scale_min: Option<f32>,
     pub scale_max: Option<f32>,
+    /// `CIRCLE`, `SQUARE`, `RECT` or `POINT`, sized by the fields below.
+    pub blocking_shape: Option<String>,
+    pub blocking_radius: Option<f32>,
+    pub square_size: Option<f32>,
+    pub rect_width: Option<f32>,
+    pub rect_height: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

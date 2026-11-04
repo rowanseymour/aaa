@@ -12,4 +12,5 @@ publish = false
 aaa-data = { path = "../data" }
 aaa-map = { path = "../map" }
 aaa-render = { path = "../render" }
+aaa-sim = { path = "../sim" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

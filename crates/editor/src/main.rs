@@ -232,7 +232,14 @@ fn setup(
     screenshot: Option<Res<ScreenshotTo>>,
 ) {
     let Loaded { game, map } = &mut *loaded;
-    aaa_render::spawn_map(&mut commands, &mut assets, game, map, screenshot.is_none());
+    aaa_render::spawn_map(
+        &mut commands,
+        &mut assets,
+        game,
+        map,
+        screenshot.is_none(),
+        |_| false,
+    );
 
     let ground = &map.ground;
     let size = ground.size();

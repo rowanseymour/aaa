@@ -9,3 +9,6 @@ publish = false
 
 [dependencies]
 aaa-map = { path = "../map" }
+
+[dev-dependencies]
+tgck = { path = "../tgck" }

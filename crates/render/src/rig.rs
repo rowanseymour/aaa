@@ -1,6 +1,6 @@
 //! Models whose nodes are spawned as entities, so that a `.kf` animation can
 //! move them and skinned meshes bend with them: units, playing their idle
-//! animation.
+//! animation, or their moving one while they move.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,12 +13,14 @@ use nif::{Controller, ControllerKind, Keyframes, Nif, Object};
 
 use crate::models::{Part, bevy_transform};
 
-/// A model's node tree, its meshes and the animation it plays.
+/// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
     /// Parents come before their children.
     nodes: Vec<RigNode>,
     meshes: Vec<RigMesh>,
-    clip: Clip,
+    idle: Clip,
+    /// Timed per world unit moved rather than per second.
+    moving: Option<Clip>,
 }
 
 struct RigNode {
@@ -137,16 +139,19 @@ impl Nodes {
 
     /// The rig for these nodes, with parts for [`Nodes::shapes`] by index:
     /// built in its own space for a skinned shape, else in its node's.
+    /// `idle` and `moving` are `.kf` files with how long one play takes:
+    /// in seconds for `idle`, in world units moved for `moving`.
     pub fn rig(
         self,
         nif: &Nif,
         meshes: Vec<(Part, usize)>,
-        clip: &Nif,
-        length: f32,
+        idle: (&Nif, f32),
+        moving: Option<(&Nif, f32)>,
         assets: &mut Assets<Mesh>,
         skins: &mut Assets<SkinnedMeshInverseBindposes>,
     ) -> Option<Rig> {
-        let clip = self.clip(clip, length)?;
+        let moving = moving.and_then(|(kf, length)| self.clip(kf, length));
+        let idle = self.clip(idle.0, idle.1)?;
         let meshes = meshes
             .into_iter()
             .filter_map(|(part, i)| {
@@ -176,7 +181,8 @@ impl Nodes {
         Some(Rig {
             nodes: self.nodes,
             meshes,
-            clip,
+            idle,
+            moving,
         })
     }
 
@@ -335,17 +341,18 @@ impl Rig {
         commands.entity(root).insert(Playing {
             rig: self.clone(),
             joints,
-            offset,
+            time: offset,
+            moving: None,
         });
     }
 
-    /// Node `i`'s transform below its parent, `t` seconds in.
+    /// Node `i`'s transform below its parent, `t` seconds into idling.
     fn pose(&self, i: usize, t: f32) -> nif::Transform {
         let rest = self.nodes[i].rest;
-        let Some(c) = self.clip.channels.iter().find(|c| c.node == i) else {
+        let Some(c) = self.idle.channels.iter().find(|c| c.node == i) else {
             return rest;
         };
-        c.pose(&rest, t * self.clip.speed)
+        c.pose(&rest, t * self.idle.speed)
     }
 }
 
@@ -359,19 +366,39 @@ impl Channel {
     }
 }
 
-/// Plays a rig's animation on the node entities spawned for it, `offset`
-/// seconds in so neighbours don't move in step.
+/// Plays a rig's animation on the node entities spawned for it.
 #[derive(Component)]
 pub struct Playing {
     rig: Arc<Rig>,
     joints: Vec<Entity>,
-    offset: f32,
+    /// Into the current animation, in seconds, or world units moved while
+    /// moving; idling starts at an offset so neighbours don't move in step.
+    time: f32,
+    /// Speed in world units a second while moving.
+    moving: Option<f32>,
 }
 
-pub fn play(time: Res<Time>, rigs: Query<&Playing>, mut transforms: Query<&mut Transform>) {
-    for p in &rigs {
-        let t = (time.elapsed_secs() + p.offset) * p.rig.clip.speed;
-        for c in &p.rig.clip.channels {
+impl Playing {
+    /// Switches between idling and moving at `speed`, for rigs with a
+    /// moving animation.
+    pub fn set_moving(&mut self, speed: Option<f32>) {
+        let speed = speed.filter(|_| self.rig.moving.is_some());
+        if speed.is_some() != self.moving.is_some() {
+            self.time = 0.0;
+        }
+        self.moving = speed;
+    }
+}
+
+pub fn play(time: Res<Time>, mut rigs: Query<&mut Playing>, mut transforms: Query<&mut Transform>) {
+    for mut p in &mut rigs {
+        p.time += time.delta_secs() * p.moving.unwrap_or(1.0);
+        let clip = match (&p.rig.moving, p.moving) {
+            (Some(clip), Some(_)) => clip,
+            _ => &p.rig.idle,
+        };
+        let t = p.time * clip.speed;
+        for c in &clip.channels {
             let rest = &p.rig.nodes[c.node].rest;
             if let Ok(mut transform) = transforms.get_mut(p.joints[c.node]) {
                 *transform = bevy_transform(&c.pose(rest, t));

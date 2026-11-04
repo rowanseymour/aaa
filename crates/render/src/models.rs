@@ -126,7 +126,7 @@ impl Models {
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
-        things: &'a [Thing],
+        things: impl IntoIterator<Item = &'a Thing>,
         world_version: u32,
     ) -> Vec<(&'a Thing, bool)> {
         let mut rest = Vec::new();
@@ -157,6 +157,25 @@ impl Models {
         rest
     }
 
+    /// Spawns a unit that moves at `speed`, its model playing the moving
+    /// animation that suits that speed while [`crate::Playing::set_moving`] says
+    /// it's moving. `None` if its model can't be drawn.
+    pub fn spawn_unit(
+        &mut self,
+        commands: &mut Commands,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        thing: &Thing,
+        speed: f32,
+    ) -> Option<Entity> {
+        let view = self
+            .views
+            .get(&Id::from(thing.template.as_str()))?
+            .clone()?;
+        let moving = moving(&view, speed);
+        self.spawn_model(commands, game, assets, thing, &view, moving)
+    }
+
     /// Spawns one object, or, for an invisible organization such as a herd,
     /// its members where the map has them standing.
     fn place(
@@ -181,12 +200,29 @@ impl Models {
             }
             _ => return Placed::Missing,
         };
+        match self.spawn_model(commands, game, assets, thing, &view, None) {
+            Some(_) => Placed::Drawn,
+            None => Placed::Missing,
+        }
+    }
+
+    /// Spawns an object with one of its view's models, returning its root.
+    fn spawn_model(
+        &mut self,
+        commands: &mut Commands,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        thing: &Thing,
+        view: &View,
+        moving: Option<&aaa_data::Animation>,
+    ) -> Option<Entity> {
+        if view.models.is_empty() {
+            return None;
+        }
         // Things with no variation set pick one by id, so neighbours differ.
         let variation = usize::try_from(thing.variation).unwrap_or(thing.id as usize);
         let model = &view.models[variation % view.models.len()];
-        let Some(model) = self.model(game, assets, model, &view) else {
-            return Placed::Missing;
-        };
+        let model = self.model(game, assets, model, view, moving)?;
         // Maps store each object's height as the game places it: on the
         // ground, the seabed or the waterline.
         let [x, y, z] = thing.position;
@@ -209,7 +245,7 @@ impl Models {
             Model::Rig(rig) => {
                 let root = root.id();
                 rig.spawn(commands, root, offset);
-                return Placed::Drawn;
+                return Some(root);
             }
         };
         root.with_children(|parent| {
@@ -241,7 +277,7 @@ impl Models {
                 ));
             }
         });
-        Placed::Drawn
+        Some(root.id())
     }
 
     fn model(
@@ -250,16 +286,17 @@ impl Models {
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
+        moving: Option<&aaa_data::Animation>,
     ) -> Option<Model> {
         let idle = idle(view);
-        let key = match idle {
-            Some(a) => format!("{path}#{}", a.kf),
-            None => path.to_string(),
-        };
+        let mut key = path.to_string();
+        for a in idle.iter().chain(&moving) {
+            key += &format!("#{}", a.kf);
+        }
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
-        let model = self.load(game, assets, path, view, idle);
+        let model = self.load(game, assets, path, view, idle, moving);
         self.models.insert(key, model.clone());
         model
     }
@@ -271,6 +308,7 @@ impl Models {
         path: &str,
         view: &View,
         idle: Option<&aaa_data::Animation>,
+        moving: Option<&aaa_data::Animation>,
     ) -> Option<Model> {
         let nif = Nif::parse(&game.read(path)?)
             .map_err(|e| warn!("{path}: {e}"))
@@ -278,7 +316,7 @@ impl Models {
         if let Some(kind) = &nif.incomplete {
             debug!("{path}: stops at {kind}");
         }
-        if let Some(rig) = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a)) {
+        if let Some(rig) = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving)) {
             return Some(Model::Rig(Arc::new(rig)));
         }
         let mut parts = Vec::new();
@@ -312,8 +350,9 @@ impl Models {
         (!parts.is_empty()).then_some(Model::Parts(parts))
     }
 
-    /// A model as a rig of its nodes playing `animation`, if its `.kf`
-    /// file reads and animates any of them.
+    /// A model as a rig of its nodes idling with `idle`, if its `.kf`
+    /// file reads and animates any of them, and moving with `moving`.
+    #[allow(clippy::too_many_arguments)]
     fn rig(
         &mut self,
         game: &mut GameData,
@@ -321,11 +360,16 @@ impl Models {
         nif: &Nif,
         path: &str,
         view: &View,
-        animation: &aaa_data::Animation,
+        idle: &aaa_data::Animation,
+        moving: Option<&aaa_data::Animation>,
     ) -> Option<Rig> {
-        let kf = Nif::parse(&game.read(&animation.kf)?)
-            .map_err(|e| warn!("{}: {e}", animation.kf))
-            .ok()?;
+        let mut kf = |a: &aaa_data::Animation| {
+            Nif::parse(&game.read(&a.kf)?)
+                .map_err(|e| warn!("{}: {e}", a.kf))
+                .ok()
+        };
+        let idle_kf = kf(idle)?;
+        let moving = moving.and_then(|a| Some((kf(a)?, a.walk_distance?)));
         let nodes = Nodes::new(nif);
         let mut meshes = Vec::new();
         for (i, shape) in nodes.shapes.iter().enumerate() {
@@ -349,8 +393,8 @@ impl Models {
         nodes.rig(
             nif,
             meshes,
-            &kf,
-            animation.length,
+            (&idle_kf, idle.length),
+            moving.as_ref().map(|(kf, distance)| (kf, *distance)),
             assets.meshes,
             assets.skins,
         )
@@ -548,6 +592,17 @@ pub struct ModelAssets<'a> {
     pub materials: &'a mut Assets<StandardMaterial>,
     pub images: &'a mut Assets<Image>,
     pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
+}
+
+/// The moving animation that best suits `speed`: the one whose stride
+/// takes as long, played at its natural pace.
+fn moving(view: &View, speed: f32) -> Option<&aaa_data::Animation> {
+    view.animations
+        .iter()
+        .filter(|a| a.kind == "MOVE")
+        .filter_map(|a| Some((a, a.walk_distance? / a.length - speed)))
+        .min_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+        .map(|(a, _)| a)
 }
 
 /// The idle animation a view's models play: the one named `idle`, else the
