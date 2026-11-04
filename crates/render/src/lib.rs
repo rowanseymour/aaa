@@ -147,21 +147,16 @@ pub fn spawn_map(
 }
 
 /// Lights a map of `size` across from its sun.
-///
-/// The game lights like Direct3D's fixed pipeline: texture * (ambient +
-/// diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
-/// PBR gets the same result, as long as the camera skips tonemapping.
 fn light(commands: &mut Commands, sun: &Sun, size: f32) {
-    let unit = 1.0 / Exposure::default().exposure();
-    let rgb = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b);
+    let mut directional = DirectionalLight {
+        shadow_maps_enabled: true,
+        ..default()
+    };
+    let mut ambient = GlobalAmbientLight::default();
+    color_lights(&mut directional, &mut ambient, sun.diffuse, sun.ambient);
     let [dx, dy, dz] = sun.direction;
     commands.spawn((
-        DirectionalLight {
-            color: rgb(sun.diffuse),
-            illuminance: std::f32::consts::PI * unit,
-            shadow_maps_enabled: true,
-            ..default()
-        },
+        directional,
         Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y),
         CascadeShadowConfigBuilder {
             maximum_distance: size * 1.5,
@@ -169,9 +164,24 @@ fn light(commands: &mut Commands, sun: &Sun, size: f32) {
         }
         .build(),
     ));
-    commands.insert_resource(GlobalAmbientLight {
-        color: rgb(sun.ambient),
-        brightness: unit,
-        ..default()
-    });
+    commands.insert_resource(ambient);
+}
+
+/// Gives the sun and ambient lights a sun's `diffuse` and `ambient` colours.
+///
+/// The game lights like Direct3D's fixed pipeline: texture * (ambient +
+/// diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
+/// PBR gets the same result, as long as the camera skips tonemapping.
+pub fn color_lights(
+    directional: &mut DirectionalLight,
+    ambient: &mut GlobalAmbientLight,
+    diffuse: [f32; 3],
+    ambient_color: [f32; 3],
+) {
+    let unit = 1.0 / Exposure::default().exposure();
+    let rgb = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b);
+    directional.color = rgb(diffuse);
+    directional.illuminance = std::f32::consts::PI * unit;
+    ambient.color = rgb(ambient_color);
+    ambient.brightness = unit;
 }
