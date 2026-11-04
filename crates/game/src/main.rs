@@ -1,5 +1,5 @@
-//! Plays Axis & Allies (2004) matches, starting one straight away on the
-//! map it's given.
+//! Plays Axis & Allies (2004) matches, on a map picked from a menu or given
+//! on the command line.
 //!
 //! Click a unit to select its regiment and right-click the ground to send
 //! it there. The number keys pick its formation, in the order its layout
@@ -16,12 +16,29 @@ use aaa_render::camera::{self, RtsCamera};
 use aaa_render::terrain::world;
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{TICK, World};
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::ui_widgets::{Activate, Button, ScrollArea};
 use bevy::window::PrimaryWindow;
 
 const USAGE: &str = "\
 usage:
-  aaa-game <game dir> <map>    play a map, e.g. \"allies10_berlin\"; aaa-editor lists them";
+  aaa-game <game dir>          pick a map from a menu
+  aaa-game <game dir> <map>    play a map, e.g. \"allies10_berlin\"";
+
+#[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Screen {
+    Menu,
+    Match,
+}
+
+/// The game's data while the menu waits for a map.
+#[derive(Resource)]
+struct Data(GameData);
+
+/// A menu entry, holding the map's archive path.
+#[derive(Component)]
+struct MapChoice(String);
 
 #[derive(Resource)]
 struct Loaded {
@@ -42,18 +59,25 @@ struct UnitView(usize);
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [dir, map] = args.as_slice() else {
-        eprintln!("{USAGE}");
-        return ExitCode::from(2);
+    let (dir, map) = match args.as_slice() {
+        [dir] => (dir, None),
+        [dir, map] => (dir, Some(map)),
+        _ => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
     };
-    let loaded = GameData::open(&PathBuf::from(dir)).and_then(|mut game| {
+    let opened = GameData::open(&PathBuf::from(dir)).and_then(|mut game| {
+        let Some(map) = map else {
+            return Ok((game, None));
+        };
         let name = game
             .find_map(map)
-            .ok_or_else(|| format!("no map named {map:?}"))?;
-        Map::load(&mut game, &name).map(|map| Loaded { game, map })
+            .ok_or_else(|| format!("no map named {map:?}; run without one to pick from a menu"))?;
+        Map::load(&mut game, &name).map(|map| (game, Some(map)))
     });
-    let loaded = match loaded {
-        Ok(l) => l,
+    let (game, map) = match opened {
+        Ok(o) => o,
         Err(e) => {
             eprintln!("aaa-game: {e}");
             return ExitCode::FAILURE;
@@ -63,30 +87,163 @@ fn main() -> ExitCode {
     let mut app = App::new();
     app.add_plugins(DefaultPlugins.set(WindowPlugin {
         primary_window: Some(Window {
-            title: format!("{} - aaa-game", loaded.map.title),
+            title: "aaa-game".into(),
             ..default()
         }),
         ..default()
     }));
     app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
-        .insert_resource(Sim(World::new(&loaded.map)))
-        .insert_resource(loaded)
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .init_resource::<Selected>()
-        .add_systems(Startup, setup)
-        .add_systems(FixedUpdate, step)
+        .add_systems(OnEnter(Screen::Menu), menu)
+        .add_systems(Update, highlight.run_if(in_state(Screen::Menu)))
+        .add_systems(OnEnter(Screen::Match), setup)
+        .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
             Update,
-            (command, choose_formation, show_units, show_selection),
+            (command, choose_formation, show_units, show_selection).run_if(in_state(Screen::Match)),
         );
+    match map {
+        Some(map) => {
+            begin(app.world_mut(), Loaded { game, map });
+            app.insert_state(Screen::Match);
+        }
+        None => {
+            app.insert_resource(Data(game)).insert_state(Screen::Menu);
+        }
+    }
     match app.run() {
         AppExit::Success => ExitCode::SUCCESS,
         AppExit::Error(code) => ExitCode::from(code.get()),
     }
 }
 
-fn setup(mut commands: Commands, mut loaded: ResMut<Loaded>, sim: Res<Sim>, mut assets: MapAssets) {
+/// Readies a match on a loaded map, for [`setup`] to start.
+fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded) {
+    world.insert_resource(Sim(World::new(&loaded.map)));
+    world.insert_resource(loaded);
+}
+
+const IDLE: Color = Color::srgb(0.15, 0.15, 0.15);
+const HOVER: Color = Color::srgb(0.3, 0.3, 0.3);
+
+/// Lists the maps in a column per folder.
+fn menu(mut commands: Commands, data: Res<Data>) {
+    let mut folders: Vec<(&str, Vec<&str>)> = Vec::new();
+    for name in data.0.map_names() {
+        let folder = name.rsplit_once('/').map_or("", |(f, _)| f);
+        let folder = folder.rsplit('/').next().unwrap_or(folder);
+        match folders.iter_mut().find(|(f, _)| *f == folder) {
+            Some((_, maps)) => maps.push(name),
+            None => folders.push((folder, vec![name])),
+        }
+    }
+    commands.spawn((Camera2d, DespawnOnExit(Screen::Menu)));
+    commands
+        .spawn((
+            DespawnOnExit(Screen::Menu),
+            Node {
+                width: percent(100),
+                height: percent(100),
+                // Otherwise it grows to fit the longest list instead of
+                // letting it scroll.
+                min_height: px(0),
+                padding: UiRect::all(px(16)),
+                column_gap: px(16),
+                ..default()
+            },
+        ))
+        .with_children(|root| {
+            for (folder, maps) in folders {
+                root.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(8),
+                    ..default()
+                })
+                .with_children(|column| {
+                    column.spawn((
+                        Text::new(folder),
+                        TextFont {
+                            font_size: FontSize::Px(18.0),
+                            ..default()
+                        },
+                    ));
+                    column
+                        .spawn((
+                            ScrollArea,
+                            Node {
+                                flex_direction: FlexDirection::Column,
+                                overflow: Overflow::scroll_y(),
+                                min_height: px(0),
+                                row_gap: px(2),
+                                ..default()
+                            },
+                        ))
+                        .with_children(|list| {
+                            for name in maps {
+                                list.spawn((
+                                    Button,
+                                    Hovered::default(),
+                                    MapChoice(name.to_string()),
+                                    Node {
+                                        padding: UiRect::axes(px(8), px(4)),
+                                        ..default()
+                                    },
+                                    BackgroundColor(IDLE),
+                                    children![(
+                                        Text::new(aaa_data::map_title(name)),
+                                        TextFont {
+                                            font_size: FontSize::Px(14.0),
+                                            ..default()
+                                        },
+                                    )],
+                                ))
+                                .observe(choose_map);
+                            }
+                        });
+                });
+            }
+        });
+}
+
+fn highlight(mut buttons: Query<(&Hovered, &mut BackgroundColor), Changed<Hovered>>) {
+    for (hovered, mut background) in &mut buttons {
+        background.0 = if hovered.get() { HOVER } else { IDLE };
+    }
+}
+
+/// Loads the clicked map and starts a match on it.
+fn choose_map(activate: On<Activate>, choices: Query<&MapChoice>, mut commands: Commands) {
+    let Ok(MapChoice(name)) = choices.get(activate.entity) else {
+        return;
+    };
+    let name = name.clone();
+    commands.queue(move |world: &mut bevy::ecs::world::World| {
+        let Some(Data(mut game)) = world.remove_resource::<Data>() else {
+            return;
+        };
+        match Map::load(&mut game, &name) {
+            Ok(map) => {
+                begin(world, Loaded { game, map });
+                world.resource_mut::<NextState<Screen>>().set(Screen::Match);
+            }
+            Err(e) => {
+                error!("{e}");
+                world.insert_resource(Data(game));
+            }
+        }
+    });
+}
+
+fn setup(
+    mut commands: Commands,
+    mut loaded: ResMut<Loaded>,
+    sim: Res<Sim>,
+    mut assets: MapAssets,
+    mut window: Single<&mut Window, With<PrimaryWindow>>,
+) {
     let Loaded { game, map } = &mut *loaded;
+    window.title = format!("{} - aaa-game", map.title);
     let regiments: HashSet<u32> = map.regiments.iter().map(|r| r.id).collect();
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
         regiments.contains(&t.id)
