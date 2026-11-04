@@ -875,11 +875,11 @@ impl Ability {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::map::{Component, Properties, State, Trailer, TrailerLists, Updatable};
 
-    fn world(version: u32) -> World {
+    pub(in crate::map) fn world(version: u32) -> World {
         World {
             version,
             rng_seed: 0x9e0b_05df,

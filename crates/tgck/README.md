@@ -19,7 +19,7 @@ tgck cat      Data.rwd Units/USA/usa_battleship.tgi
 tgck sections Maps/Kursk.RMP             # list the sections of any TGCK file
 tgck unpack   Maps/Kursk.RMP out/        # write each section, decompressed, as <name>.bin
 tgck map      Maps/*.RMP                 # summarise maps
-tgck check    Maps/*.RMP                 # rewrite maps from what's decoded and compare
+tgck check    Maps/*.RMP                 # load maps whole, save them again and compare
 ```
 
 ```text
@@ -54,8 +54,15 @@ let goals = map.objectives()?;   // objectives and whether each is primary
 let triggers = map.triggers()?;  // scripting: each trigger's events, conditions and effects
 ```
 
-Each decoded section can be written back (`to_bytes`, `map::write_things`),
-and `container::write` puts a file back together.
+`MapFile` holds every section decoded and saves itself:
+
+```rust
+use tgck::map::MapFile;
+
+let mut map = MapFile::open("Kursk.RMP")?;
+map.things.retain(|t| t.template != "temperate_trees");
+map.save("Kursk_treeless.RMP")?;
+```
 
 ## Formats
 

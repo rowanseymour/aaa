@@ -1,6 +1,7 @@
 //! Maps (`.rmp`), laid out as [`rmp.ksy`] specifies.
 //!
-//! [`Map`] reads each section into a type that writes itself back.
+//! [`Map`] reads each section into a type that writes itself back, and
+//! [`MapFile`] holds them all and saves the whole map.
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
@@ -9,28 +10,36 @@ use std::io::{BufReader, Read, Seek};
 use std::path::Path;
 
 mod actor;
+mod ai;
 mod bookkeeping;
+mod file;
 mod header;
 mod misc;
 mod objectives;
+mod organization;
 mod players;
+mod scenery;
 mod triggers;
 
 pub use actor::{
-    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverFall, Organization, Properties,
-    Property, State, Trailer, TrailerLists, Updatable, Upgrade,
+    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverFall, Properties, Property,
+    State, Trailer, TrailerLists, Updatable, Upgrade,
 };
+pub use ai::{AiBlock, AiBlockLink, AiBlockSide, AiData, AiMap, AiRegion, ShoreMesh, ShoreTile};
 pub use bookkeeping::{IdManager, Updatables, Update, UpdateQueue};
+pub use file::MapFile;
 pub use header::{
     KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
     WorldRules,
 };
 pub use misc::{GameCounter, MiscData, UsedName, write_denizen_groups};
 pub use objectives::{Objective, Objectives};
+pub use organization::{Damage, DamageTail, ElementState, Fighting, Organization, Position};
 pub use players::{
     Ability, Faction, Favorites, Kingdom, KingdomStats, Kingdoms, Relation, RestrictionGroup,
     RestrictionGroups, SavedGroup, Snapshot, Team, Totals, World, write_teams,
 };
+pub use scenery::{ReactiveScenery, Topple, ToppleState};
 pub use triggers::{Element, Parameter, Trigger, Triggers, Value};
 
 use crate::container::{Container, Section};
@@ -283,8 +292,10 @@ pub struct Terrain {
     pub side: usize,
     /// Row-major, `side * side` entries.
     pub tiles: Vec<Tile>,
-    /// The AI's analysis of the map and the shore mesh, kept as bytes.
-    pub ai_cache: Vec<u8>,
+    /// From version 2 on.
+    pub ai_map: Option<AiMap>,
+    /// From version 6 on.
+    pub shore_mesh: Option<ShoreMesh>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -363,7 +374,11 @@ impl Terrain {
                 names.len()
             )));
         }
-        let ai_cache = cur.rest().to_vec();
+        let ai_map = (version >= 2).then(|| AiMap::parse(&mut cur)).transpose()?;
+        let shore_mesh = (version >= 6)
+            .then(|| ShoreMesh::parse(&mut cur))
+            .transpose()?;
+        cur.finish("TERRAIN")?;
         Ok(Terrain {
             version,
             unknown,
@@ -371,7 +386,8 @@ impl Terrain {
             names,
             side,
             tiles,
-            ai_cache,
+            ai_map,
+            shore_mesh,
         })
     }
 
@@ -409,7 +425,19 @@ impl Terrain {
             tile[2..4].copy_from_slice(&t.seen_by.to_le_bytes());
             w.bytes(&tile[..size]);
         }
-        w.bytes(&self.ai_cache);
+        header::optional(self.version >= 2, "AI map", self.ai_map.as_ref(), |m| {
+            m.write(&mut w);
+            Ok(())
+        })?;
+        header::optional(
+            self.version >= 6,
+            "shore mesh",
+            self.shore_mesh.as_ref(),
+            |m| {
+                m.write(&mut w);
+                Ok(())
+            },
+        )?;
         Ok(w.0)
     }
 }
@@ -540,7 +568,7 @@ impl Overlay {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Thing {
     /// Template name, e.g. `temperate_trees`, `start_loc`.
     pub template: String,
@@ -564,6 +592,9 @@ pub struct Thing {
     pub detail: Detail,
 }
 
+/// The [`Thing::class`] of plain scenery, such as rocks and street lights,
+/// whose record has no detail.
+pub const SCENERY: u32 = 2;
 /// The [`Thing::class`] of actors: units, buildings, herds, roads and other
 /// things made of components.
 pub const ACTOR: u32 = 3;
@@ -571,13 +602,18 @@ pub const ACTOR: u32 = 3;
 pub const AREA: u32 = 6;
 /// The [`Thing::class`] of cameras.
 pub const CAMERA: u32 = 7;
+/// The [`Thing::class`] of scenery that stirs or topples as units pass.
+pub const REACTIVE_SCENERY: u32 = 9;
 
 /// The class-specific rest of a [`Thing`]'s record.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Detail {
+    /// The detail of a class that adds nothing, such as [`SCENERY`].
+    None,
     Actor(Actor),
     Area(Area),
     Camera(Camera),
+    ReactiveScenery(ReactiveScenery),
     /// Not decoded.
     Raw(Vec<u8>),
 }
@@ -780,9 +816,9 @@ impl Thing {
     }
 
     /// The organization this thing is, if its record holds one.
-    pub fn organization(&self, world_version: u32) -> Option<Organization> {
+    pub fn organization(&self) -> Option<&Organization> {
         match &self.detail {
-            Detail::Actor(actor) => actor.organization(world_version),
+            Detail::Actor(actor) => actor.organization(),
             _ => None,
         }
     }
@@ -825,6 +861,8 @@ impl Detail {
                 name: cur.string()?,
                 zoom: cur.f32()?,
             }),
+            SCENERY => Detail::None,
+            REACTIVE_SCENERY => Detail::ReactiveScenery(ReactiveScenery::parse(&mut cur)?),
             _ => Detail::Raw(cur.rest().to_vec()),
         };
         cur.finish("thing record")?;
@@ -851,6 +889,8 @@ impl Detail {
                 w.string(&c.name)?;
                 w.f32(c.zoom);
             }
+            Detail::ReactiveScenery(s) => s.write(w)?,
+            Detail::None => {}
             Detail::Raw(raw) => w.bytes(raw),
         }
         Ok(())
@@ -863,7 +903,7 @@ mod tests {
     use crate::tests::{build_container, string};
     use std::io;
 
-    fn height_section(side: u32, water_at: usize) -> Vec<u8> {
+    pub(super) fn height_section(side: u32, water_at: usize) -> Vec<u8> {
         let n = (side * side) as usize;
         let mut b = Vec::new();
         b.extend(1u32.to_le_bytes());
@@ -879,7 +919,13 @@ mod tests {
         b
     }
 
-    fn thing_record(class: u32, template: &str, id: u32, pos: [f32; 3], detail: &[u8]) -> Vec<u8> {
+    pub(super) fn thing_record(
+        class: u32,
+        template: &str,
+        id: u32,
+        pos: [f32; 3],
+        detail: &[u8],
+    ) -> Vec<u8> {
         let mut r = string(template);
         r.extend([class, id, 2].map(u32::to_le_bytes).concat());
         r.extend(string(""));
@@ -910,7 +956,7 @@ mod tests {
         d
     }
 
-    fn things_sections(records: &[Vec<u8>]) -> (Vec<u8>, Vec<u8>) {
+    pub(super) fn things_sections(records: &[Vec<u8>]) -> (Vec<u8>, Vec<u8>) {
         let mut data = [0u32, 11].map(u32::to_le_bytes).concat();
         let mut index = [0u32, records.len() as u32].map(u32::to_le_bytes).concat();
         for r in records {
@@ -920,7 +966,7 @@ mod tests {
         (index, data)
     }
 
-    fn terrain_section(version: u32, tiles: &[&[u8]]) -> Vec<u8> {
+    pub(super) fn terrain_section(version: u32, tiles: &[&[u8]]) -> Vec<u8> {
         let mut b = version.to_le_bytes().to_vec();
         b.extend(1u32.to_le_bytes());
         b.extend(string("desert"));
@@ -930,7 +976,11 @@ mod tests {
         b.extend((tiles.len() as u32).to_le_bytes());
         b.extend((tiles[0].len() as u32).to_le_bytes());
         tiles.iter().for_each(|t| b.extend(*t));
-        b.extend([0xAA, 0xBB]);
+        // No AI map, and from version 6 an empty shore mesh.
+        b.extend([0, 0, 0, 0, 0]);
+        if version >= 6 {
+            b.extend([0u32; 4].map(u32::to_le_bytes).concat());
+        }
         b
     }
 
@@ -956,7 +1006,15 @@ mod tests {
             }
         );
         assert_eq!(v7.name_of(v7.at(0, 0)), "ocean");
-        assert_eq!(v7.ai_cache, [0xAA, 0xBB]);
+        assert_eq!(v7.ai_map, Some(AiMap { data: None }));
+        assert_eq!(v7.shore_mesh, Some(ShoreMesh::default()));
+        assert_eq!(
+            v7.to_bytes().unwrap(),
+            terrain_section(
+                7,
+                &[&[1, 0, 0, 0, 3, 0, 0x21, 0], &[0; 8], &[0; 8], &[0; 8]]
+            )
+        );
 
         let v6 = Terrain::parse(&terrain_section(
             6,
@@ -975,7 +1033,7 @@ mod tests {
         );
     }
 
-    fn sun_section(version: u32) -> Vec<u8> {
+    pub(super) fn sun_section(version: u32) -> Vec<u8> {
         let mut b = [version, 1, u32::MAX].map(u32::to_le_bytes).concat();
         for v in [
             0.6, 0.0, -0.8, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 0.8, 0.8,
@@ -1061,7 +1119,7 @@ mod tests {
         );
         assert_eq!(actor.template_components, 0x200);
         assert_eq!(actor.state, State::Raw(vec![1, 2, 3]), "Mind has no class");
-        assert_eq!(t[1].detail, Detail::Raw(vec![]));
+        assert_eq!(t[1].detail, Detail::None);
         assert_eq!(write_things(&t).unwrap(), (index, things));
     }
 

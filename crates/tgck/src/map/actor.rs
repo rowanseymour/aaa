@@ -1,14 +1,16 @@
 //! Actors: the things made of components, such as units, buildings, herds and
 //! kingdoms. Their layout is the `actor` type in [`rmp.ksy`].
 //!
-//! Construction, Body, Mover and Properties decode into types; the other
-//! components are read to their end and kept as bytes ([`Component::Framed`]).
+//! Construction, Body, Mover, Properties, Organization and Element decode
+//! into types; the other components are read to their end and kept as bytes
+//! ([`Component::Framed`]).
 //! A record whose state doesn't decode to its exact end is kept whole
 //! ([`State::Raw`]), which only a record of known size allows.
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::{Thing, expect, header::check_version};
+use super::organization::{ElementState, Organization};
+use super::{expect, header::check_version};
 use crate::{Cursor, Error, Result, Writer};
 
 /// A thing made of components, such as a unit or building.
@@ -47,6 +49,8 @@ pub enum Component {
     Body(Body),
     Mover(Mover),
     Properties(Properties),
+    Organization(Organization),
+    Element(ElementState),
     /// Not decoded, but read to its exact end.
     Framed {
         /// Its bit in [`COMPONENTS`].
@@ -307,10 +311,11 @@ impl Actor {
             BODY => Component::Body(Body::parse(cur)?),
             MOVER => Component::Mover(Mover::parse(cur)?),
             PROPERTIES => Component::Properties(Properties::parse(cur)?),
+            ORGANIZATION => Component::Organization(Organization::parse(cur, world)?),
+            ELEMENT => Component::Element(ElementState::parse(cur, world)?),
             _ => {
                 let start = cur.pos();
                 let skip = Skip {
-                    world,
                     template_components: self.template_components,
                 };
                 skip.component(cur, bit)?;
@@ -368,14 +373,6 @@ impl Actor {
             State::Raw(_) => None,
         }
     }
-
-    /// A component's state, undecoded, if it's one read only to its end.
-    pub(super) fn framed(&self, bit: u32) -> Option<&[u8]> {
-        self.decoded()?.iter().find_map(|c| match c {
-            Component::Framed { bit: b, data } if *b == bit => Some(data.as_slice()),
-            _ => None,
-        })
-    }
 }
 
 /// The components' bits in the order their state is recorded.
@@ -389,7 +386,7 @@ fn record_order(components: u32) -> impl Iterator<Item = u32> {
         .filter(move |&b| has(b))
 }
 
-fn version(cur: &mut Cursor, what: &str, max: u32) -> Result<u32> {
+pub(super) fn version(cur: &mut Cursor, what: &str, max: u32) -> Result<u32> {
     check_version(what, cur.u32()?, 0..=max)
 }
 
@@ -428,6 +425,8 @@ impl Component {
             Component::Body(b) => b.write(w),
             Component::Mover(m) => m.write(w),
             Component::Properties(p) => p.write(w)?,
+            Component::Organization(o) => o.write(w)?,
+            Component::Element(e) => e.write(w)?,
             Component::Framed { data, .. } => w.bytes(data),
         }
         Ok(())
@@ -783,8 +782,6 @@ impl Trailer {
 /// Reads past the state of components not decoded into types, to find
 /// where it ends.
 struct Skip {
-    /// The game state's version, which some layouts depend on.
-    world: u32,
     template_components: u32,
 }
 
@@ -794,8 +791,6 @@ impl Skip {
             "Character" => skip_character(cur),
             "Mind" => self.mind(cur),
             "Performer" => skip_performer(cur),
-            "Organization" => self.organization(cur).map(drop),
-            "Element" => self.element(cur),
             "Economy" | "Builder" | "Detection" | "Portal" => {
                 Updatable::parse(cur)?;
                 version(cur, "component", 0).map(drop)
@@ -846,87 +841,6 @@ impl Skip {
         } else {
             Err(Error::Corrupt("mind of no known class".into()))
         }
-    }
-
-    /// The damage an element deals.
-    fn damage(&self, cur: &mut Cursor) -> Result<()> {
-        cur.bytes(8)?;
-        cur.string()?;
-        cur.bytes(8)?;
-        match self.world {
-            ..15 => {}
-            15..18 => drop(cur.u8()?),
-            _ => drop(cur.u32()?),
-        }
-        if self.world >= 20 {
-            cur.u32()?;
-        }
-        Ok(())
-    }
-
-    fn element(&self, cur: &mut Cursor) -> Result<()> {
-        let v = version(cur, "element", 3)?;
-        if v >= 1 {
-            Updatable::parse(cur)?;
-        }
-        if v <= 1 {
-            cur.u8()?;
-        }
-        if v >= 3 {
-            for _ in 0..cur.u32()? {
-                self.damage(cur)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Returns the members, each a whole thing record.
-    fn organization(&self, cur: &mut Cursor) -> Result<Organization> {
-        Updatable::parse(cur)?;
-        let v = version(cur, "organization", 10)?;
-        version(cur, "organization layout", 0)?;
-        let layout = cur.string()?;
-        let n = cur.u32()?;
-        let slots = (0..n).map(|_| cur.string()).collect::<Result<_>>()?;
-        let positions = cur.u32()?;
-        let mut members = Vec::new();
-        for _ in 0..positions {
-            if cur.i32()? >= 0 {
-                members.push(Thing::parse_member(cur, self.world)?);
-            }
-        }
-        if (2..=6).contains(&v) {
-            bytes(cur, positions, 4)?;
-        }
-        if v >= 7 {
-            (0..positions).try_for_each(|_| cur.string().map(drop))?;
-        }
-        cur.bytes(12)?;
-        if v >= 3 {
-            cur.u32()?;
-        }
-        if v == 0 {
-            cur.u32()?;
-        }
-        bytes(cur, positions, 8)?;
-        if v >= 1 {
-            bytes(cur, positions, 4)?;
-        }
-        if v >= 4 {
-            cur.bytes(6)?;
-            self.damage(cur)?;
-        }
-        let tail = [(5, 4), (6, 4), (8, 8), (9, 4), (10, 4)];
-        for (from, size) in tail {
-            if v >= from {
-                cur.bytes(size)?;
-            }
-        }
-        Ok(Organization {
-            layout,
-            slots,
-            members,
-        })
     }
 }
 
@@ -1366,33 +1280,20 @@ fn skip_organization_mind(cur: &mut Cursor) -> Result<()> {
     Ok(())
 }
 
-/// The parts of a herd or regiment, as its record stores them.
-#[derive(Debug, Clone)]
-pub struct Organization {
-    /// The `OrganizationLayout` the members are arranged by.
-    pub layout: String,
-    /// Each layout slot's element template; empty for an empty slot.
-    pub slots: Vec<String>,
-    /// The members where they stand, in layout position order.
-    pub members: Vec<Thing>,
-}
-
 impl Actor {
-    /// The organization this actor is, if its record holds one.
-    pub fn organization(&self, world: u32) -> Option<Organization> {
-        let data = self.framed(ORGANIZATION)?;
-        let skip = Skip {
-            world,
-            template_components: self.template_components,
-        };
-        skip.organization(&mut Cursor::new(data)).ok()
+    /// The herd or regiment this actor is, if its record holds one.
+    pub fn organization(&self) -> Option<&Organization> {
+        self.decoded()?.iter().find_map(|c| match c {
+            Component::Organization(o) => Some(o),
+            _ => None,
+        })
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::map::Detail;
+    use crate::map::{DamageTail, Detail, Thing};
 
     const WORLD: u32 = 28;
 
@@ -1511,7 +1412,6 @@ mod tests {
             vec![construction, body(), mover(), properties, economy],
         );
         assert_eq!(round_trip(&a), a);
-        assert_eq!(a.framed(9).map(<[u8]>::len), Some(12));
     }
 
     #[test]
@@ -1574,16 +1474,16 @@ mod tests {
         org.string("dmg_bullet").unwrap();
         org.bytes(&[0; 16]);
         org.bytes(&[0; 24]);
-        let a = actor(
-            1 << 7,
-            vec![Component::Framed {
-                bit: 7,
-                data: org.0,
-            }],
-        );
-        let parsed = round_trip(&a);
-        assert_eq!(parsed, a);
-        let org = parsed.organization(WORLD).unwrap();
+        let mut w = Writer::default();
+        actor(1 << 7, vec![]).write(&mut w).unwrap();
+        // The organization goes between the header and the trailer.
+        let trailer_at = 24;
+        let bytes = [&w.0[..trailer_at], &org.0, &w.0[trailer_at..]].concat();
+        let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
+        let mut again = Writer::default();
+        parsed.write(&mut again).unwrap();
+        assert_eq!(again.0, bytes, "writes back what it read");
+        let org = parsed.organization().unwrap();
         assert_eq!(org.layout, "herd_ambient_large");
         assert_eq!(org.slots, ["sheep_ewe", ""]);
         let ids: Vec<_> = org.members.iter().map(|m| m.id).collect();
@@ -1592,5 +1492,15 @@ mod tests {
             panic!("{:?}", org.members[0].detail)
         };
         assert_eq!(sheep.decoded().map(<[Component]>::len), Some(2));
+        let filled: Vec<_> = org.positions.iter().map(|p| p.index).collect();
+        assert_eq!(filled, [0, -1, 2]);
+        assert_eq!(
+            org.fighting.as_ref().map(|f| f.damage.tail),
+            Some(DamageTail::Words([0, 0]))
+        );
+
+        let mut missing = org.clone();
+        missing.members.pop();
+        assert!(missing.write(&mut Writer::default()).is_err());
     }
 }

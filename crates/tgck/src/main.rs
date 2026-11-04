@@ -16,7 +16,7 @@ usage:
   tgck sections <file>                          list the sections of any TGCK file
   tgck unpack   <file> <out-dir>                write each section, decompressed, as <name>.bin
   tgck map      <map.rmp>...                    summarise maps
-  tgck check    <map.rmp>...                    rewrite maps from what's decoded and compare";
+  tgck check    <map.rmp>...                    load maps whole, save them again and compare";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -279,73 +279,25 @@ fn map(path: &str) -> Res {
     Ok(())
 }
 
-/// Re-encodes each map's decoded sections, writes the map out again and
-/// compares the result with the original.
+/// Loads each map whole, saves it again and compares every section's
+/// payload with the original's.
 fn check(paths: &[&str]) -> Res {
     let mut failed = 0;
     for path in paths {
         let bytes = fs::read(path)?;
-        let mut m = Map::new(std::io::Cursor::new(&bytes))?;
-        let sections = m.sections().to_vec();
-        let mut payloads = sections
-            .iter()
-            .map(|s| m.read_section(s))
-            .collect::<Result<Vec<_>, _>>()?;
-        let (index, things) = tgck::map::write_things(&m.things()?)?;
-        let world_version = m.world_version()?;
-        m.denizen_groups()?;
-        let mut encoded = vec![
-            ("GWORLD", m.world()?.to_bytes()?),
-            ("RULES", m.rules()?.to_bytes()?),
-            ("MAPSTRINGS", tgck::map::write_strings(&m.strings()?)?),
-            ("IDMGR", m.ids()?.to_bytes()),
-            ("UPDATABLES", m.updatables()?.to_bytes(world_version)?),
-            ("RESTRICTION_GROUPS", m.restriction_groups()?.to_bytes()?),
-            ("MISC_DATA", m.misc_data()?.to_bytes(world_version)?),
-            ("MAP", m.data_version()?.to_le_bytes().to_vec()),
-            ("DENIZEN_GROUPS", tgck::map::write_denizen_groups()),
-            ("HEIGHT_MAP", m.height_map()?.to_bytes()),
-            (
-                "MOUNTAIN_HEIGHT_MAP",
-                tgck::map::write_mountain_height_map(&m.mountain_height_map()?, m.cutscene_mode()?),
-            ),
-            ("TERRAIN", m.terrain()?.to_bytes()?),
-            ("SUN", m.sun()?.to_bytes()?),
-            ("DYNAMIC_THINGS_INDEX", index),
-            ("DYNAMIC_THINGS", things),
-            ("TEAMS", tgck::map::write_teams(&m.teams()?)?),
-            ("KINGDOMS", m.kingdoms()?.to_bytes(world_version)?),
-            ("MAP_HEADER", m.header()?.to_bytes()?),
-            ("OBJECTIVES", m.objectives()?.to_bytes()?),
-            ("TRIGGERS", m.triggers()?.to_bytes()?),
-        ];
-        if let Some(objects) = m.used_required_objects()? {
-            let (index, data) = tgck::map::write_things(&objects)?;
-            encoded.push(("USED_REQUIRED_OBJECTS_INDEX", index));
-            encoded.push(("USED_REQUIRED_OBJECTS", data));
-        }
+        let mut original = Map::new(std::io::Cursor::new(&bytes))?;
+        let file = original.load()?.to_bytes()?;
+        let mut written = Map::new(std::io::Cursor::new(&file))?;
         let mut diffs = Vec::new();
-        for (name, data) in encoded {
-            let Some(i) = sections.iter().position(|s| s.name == name) else {
-                continue;
-            };
-            if let Some(at) = first_difference(&payloads[i], &data) {
-                diffs.push(format!("{name} differs at byte {at}"));
+        let sections = original.sections().to_vec();
+        for (s, w) in sections.iter().zip(written.sections().to_vec()) {
+            let (a, b) = (original.read_section(s)?, written.read_section(&w)?);
+            if let Some(at) = first_difference(&a, &b) {
+                diffs.push(format!("{} differs at byte {at}", s.name));
             }
-            payloads[i] = data;
         }
-        let pairs: Vec<_> = sections
-            .iter()
-            .zip(payloads.iter().map(Vec::as_slice))
-            .collect();
-        let mut file = Vec::new();
-        tgck::container::write(&mut file, &pairs)?;
-        // zlib streams can differ and still inflate to the same bytes.
-        let mut written = Container::new(std::io::Cursor::new(&file))?;
-        for (s, payload) in written.sections.clone().iter().zip(&payloads) {
-            if written.read_section(s)? != *payload {
-                diffs.push(format!("{} doesn't read back", s.name));
-            }
+        if let Err(e) = written.load() {
+            diffs.push(format!("doesn't load back: {e}"));
         }
         let file = if file == bytes {
             "identical"
