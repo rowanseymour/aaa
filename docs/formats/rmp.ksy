@@ -2437,7 +2437,7 @@ types:
       - id: desired_formation
         type: s4
         if: version >= 3
-      - id: old2
+      - id: old_value
         type: u4
         if: version == 0
       - id: slot_positions
@@ -2454,7 +2454,7 @@ types:
       - id: unknown2
         type: f4
         if: version >= 4
-        doc: Eases over time towards `unknown5`.
+        doc: Eases over time towards `level`.
       - id: unknown3
         type: u1
         if: version >= 4
@@ -2464,11 +2464,11 @@ types:
       - id: damage
         type: damage
         if: version >= 4
-      - id: unknown5
+      - id: level
         type: f4
         if: version >= 5
         doc: A level its properties set; 1 in every map.
-      - id: unknown6
+      - id: time
         type: f4
         if: version >= 6
         doc: A time; 0 in every map.

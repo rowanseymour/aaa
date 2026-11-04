@@ -158,11 +158,11 @@ impl GameCounter {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
     use crate::tests::string;
 
-    fn misc(world_version: u32) -> MiscData {
+    pub(in crate::map) fn misc(world_version: u32) -> MiscData {
         MiscData {
             used_names: vec![UsedName {
                 name_list: "names_usa_soldier".into(),

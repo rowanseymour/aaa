@@ -154,7 +154,6 @@ pub fn spawn_map(
         game,
         &mut model_assets,
         map.things.iter().filter(|t| !leave_out(t)),
-        map.world_version,
     );
     objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
     light(commands, &map.sun, map.ground.size());

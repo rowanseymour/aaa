@@ -66,7 +66,7 @@ impl Map {
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
-            regiments: units::regiments(&things, world_version, &bodies, &game.layouts()),
+            regiments: units::regiments(&things, &bodies, &game.layouts()),
             players,
             teams,
             pathing,

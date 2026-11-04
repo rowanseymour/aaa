@@ -330,7 +330,7 @@ impl Parameter {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn parameter(kind: &str, source: &str, value: Value) -> Parameter {
@@ -342,7 +342,7 @@ mod tests {
         }
     }
 
-    fn triggers(version: u32) -> Triggers {
+    pub(in crate::map) fn triggers(version: u32) -> Triggers {
         Triggers {
             version,
             next_id: 3,

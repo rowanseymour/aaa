@@ -104,6 +104,9 @@ impl<'a> Cursor<'a> {
     pub(crate) fn seek(&mut self, pos: usize) {
         self.pos = pos.min(self.buf.len());
     }
+    pub(crate) fn remaining(&self) -> usize {
+        self.buf.len() - self.pos
+    }
     pub(crate) fn at_end(&self) -> bool {
         self.pos == self.buf.len()
     }

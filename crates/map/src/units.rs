@@ -152,7 +152,6 @@ pub struct Formation {
 /// The owned organizations whose members can all move.
 pub fn regiments(
     things: &[Thing],
-    world_version: u32,
     bodies: &HashMap<Id, Body>,
     layouts: &HashMap<Id, Layout>,
 ) -> Vec<Regiment> {
@@ -161,17 +160,17 @@ pub fn regiments(
         .iter()
         .filter_map(|t| {
             let owner = owner(t)?;
-            let organization = t.organization(world_version)?;
+            let organization = t.organization()?;
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
             let arranged =
                 layout.and_then(|l| arrange(l, &organization.slots, organization.members.len()));
             let members = organization
                 .members
-                .into_iter()
+                .iter()
                 .map(|m| {
                     Some(Member {
-                        speed: speed(&m)?,
-                        thing: m,
+                        speed: speed(m)?,
+                        thing: m.clone(),
                     })
                 })
                 .collect::<Option<Vec<_>>>()?;

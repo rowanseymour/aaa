@@ -497,7 +497,7 @@ impl WorldCreator {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use super::*;
 
     fn rules() -> WorldRules {
@@ -555,7 +555,7 @@ mod tests {
         }
     }
 
-    fn header(version: u32, parameters_version: u32) -> MapHeader {
+    pub(in crate::map) fn header(version: u32, parameters_version: u32) -> MapHeader {
         MapHeader {
             version,
             rules: rules(),
