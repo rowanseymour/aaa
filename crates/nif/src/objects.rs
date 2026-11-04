@@ -342,6 +342,11 @@ impl Alpha {
     pub fn test(&self) -> bool {
         self.flags & 0x200 != 0
     }
+    /// Whether blending adds to what's behind: the destination factor is
+    /// one, as for glows and ripples.
+    pub fn adds(&self) -> bool {
+        (self.flags >> 5) & 0xf == 0
+    }
 }
 
 #[derive(Debug, Clone)]
