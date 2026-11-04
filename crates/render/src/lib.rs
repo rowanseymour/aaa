@@ -3,6 +3,7 @@
 
 pub mod blend;
 pub mod camera;
+mod glow;
 pub mod models;
 pub mod objects;
 mod rig;
@@ -24,6 +25,7 @@ use bevy::prelude::*;
 use tgck::map::Sun;
 
 use blend::GroundMaterial;
+use glow::GlowMaterial;
 use models::{ModelAssets, Models};
 use tgck::map::Thing;
 use water::WaterMaterial;
@@ -58,12 +60,14 @@ impl Plugin for MapRenderPlugin {
         // The shader has to be registered before the material that loads it.
         embedded_asset!(app, "blend.wesl");
         embedded_asset!(app, "water.wesl");
+        embedded_asset!(app, "glow.wesl");
         let beyond = match self.edge {
             Edge::Hard => Color::srgb(0.55, 0.7, 0.85),
             Edge::Fade => Color::BLACK,
         };
         app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
+            .add_plugins(MaterialPlugin::<GlowMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .add_systems(Update, (models::animate, rig::play, camera::update));
@@ -75,6 +79,7 @@ impl Plugin for MapRenderPlugin {
 pub struct MapAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
+    glow_materials: ResMut<'w, Assets<GlowMaterial>>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
     water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
@@ -89,6 +94,7 @@ impl MapAssets<'_> {
         ModelAssets {
             meshes: &mut self.meshes,
             materials: &mut self.materials,
+            glow_materials: &mut self.glow_materials,
             images: &mut self.images,
             skins: &mut self.skins,
         }
@@ -110,6 +116,7 @@ pub fn spawn_map(
     let MapAssets {
         meshes,
         materials,
+        glow_materials,
         ground_materials,
         water_materials,
         images,
@@ -137,6 +144,7 @@ pub fn spawn_map(
     let mut model_assets = ModelAssets {
         meshes,
         materials,
+        glow_materials,
         images,
         skins,
     };

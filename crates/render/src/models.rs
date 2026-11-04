@@ -16,6 +16,7 @@ use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFor
 use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 use tgck::map::Thing;
 
+use crate::glow::{Glow, GlowMaterial, Source};
 use crate::rig::{Nodes, Rig};
 use crate::terrain::world;
 use crate::textures;
@@ -24,11 +25,48 @@ use crate::textures;
 #[derive(Clone)]
 pub(crate) struct Part {
     pub mesh: Handle<Mesh>,
-    pub material: Handle<StandardMaterial>,
+    pub material: PartMaterial,
     animation: Option<Arc<Animation>>,
     /// Bevy's shadows ignore alpha blending, so a faded or see-through mesh
     /// would cast a solid one.
     pub blended: bool,
+}
+
+/// A part's material: most are standard, those that add to what's behind
+/// them need their own.
+#[derive(Clone)]
+pub(crate) enum PartMaterial {
+    Standard(Handle<StandardMaterial>),
+    Glow(Handle<GlowMaterial>),
+}
+
+impl PartMaterial {
+    pub fn insert(&self, entity: &mut EntityCommands) {
+        match self {
+            PartMaterial::Standard(m) => entity.insert(MeshMaterial3d(m.clone())),
+            PartMaterial::Glow(m) => entity.insert(MeshMaterial3d(m.clone())),
+        };
+    }
+
+    /// A copy of the material of its own, to animate.
+    fn copy(&self, assets: &mut ModelAssets) -> Self {
+        match self {
+            PartMaterial::Standard(h) => PartMaterial::Standard(
+                assets
+                    .materials
+                    .get(h)
+                    .cloned()
+                    .map_or(h.clone(), |m| assets.materials.add(m)),
+            ),
+            PartMaterial::Glow(h) => PartMaterial::Glow(
+                assets
+                    .glow_materials
+                    .get(h)
+                    .cloned()
+                    .map_or(h.clone(), |m| assets.glow_materials.add(m)),
+            ),
+        }
+    }
 }
 
 /// A loaded model: meshes placed in the model, or a rig of its nodes for
@@ -67,13 +105,14 @@ impl Animation {
 pub struct Animated {
     animation: Arc<Animation>,
     offset: f32,
-    material: Handle<StandardMaterial>,
+    material: PartMaterial,
 }
 
 pub fn animate(
     time: Res<Time>,
     mut parts: Query<(&Animated, &mut Transform)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut glow_materials: ResMut<Assets<GlowMaterial>>,
 ) {
     for (a, mut transform) in &mut parts {
         let t = time.elapsed_secs() + a.offset;
@@ -82,9 +121,16 @@ pub fn animate(
         }
         if let Some((c, keys)) = &a.animation.fade
             && let Some(alpha) = keys.sample(c.key_time(t))
-            && let Some(mut m) = materials.get_mut(&a.material)
         {
-            m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
+            let base = match &a.material {
+                PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
+                PartMaterial::Glow(h) => {
+                    glow_materials.get_mut(h).map(|m| &mut m.into_inner().base)
+                }
+            };
+            if let Some(m) = base {
+                m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
+            }
         }
     }
 }
@@ -255,19 +301,15 @@ impl Models {
                     child.insert(NotShadowCaster);
                 }
                 let Some(animation) = part.animation else {
-                    child.insert(MeshMaterial3d(part.material));
+                    part.material.insert(&mut child);
                     continue;
                 };
                 let material = match animation.fade {
-                    Some(_) => assets
-                        .materials
-                        .get(&part.material)
-                        .cloned()
-                        .map_or(part.material, |m| assets.materials.add(m)),
+                    Some(_) => part.material.copy(assets),
                     None => part.material,
                 };
+                material.insert(&mut child);
                 child.insert((
-                    MeshMaterial3d(material.clone()),
                     animation.transform(offset),
                     Animated {
                         animation,
@@ -442,18 +484,34 @@ impl Models {
             _ if opacity < 1.0 => AlphaMode::Blend,
             _ => AlphaMode::Opaque,
         };
+        let standard = StandardMaterial {
+            base_color: Color::srgba(r, g, b, opacity),
+            base_color_texture: texture,
+            alpha_mode,
+            double_sided,
+            cull_mode: (!double_sided).then_some(Face::Back),
+            perceptual_roughness: 0.9,
+            reflectance: 0.2,
+            ..default()
+        };
+        let source = alpha.filter(|_| alpha_mode == AlphaMode::Add);
+        let material = match (source.and_then(|a| Source::of(a.source())), material) {
+            (Some(source), Some(m)) => {
+                PartMaterial::Glow(assets.glow_materials.add(GlowMaterial {
+                    // Without highlights, as the game draws them.
+                    base: StandardMaterial {
+                        reflectance: 0.0,
+                        perceptual_roughness: 1.0,
+                        ..standard
+                    },
+                    extension: Glow::new(m.ambient, m.diffuse, source),
+                }))
+            }
+            _ => PartMaterial::Standard(assets.materials.add(standard)),
+        };
         Some(Part {
             mesh: assets.meshes.add(mesh),
-            material: assets.materials.add(StandardMaterial {
-                base_color: Color::srgba(r, g, b, opacity),
-                base_color_texture: texture,
-                alpha_mode,
-                double_sided,
-                cull_mode: (!double_sided).then_some(Face::Back),
-                perceptual_roughness: 0.9,
-                reflectance: 0.2,
-                ..default()
-            }),
+            material,
             animation: None,
             blended: matches!(alpha_mode, AlphaMode::Blend | AlphaMode::Add),
         })
@@ -591,6 +649,7 @@ pub(crate) fn bevy_transform(t: &nif::Transform) -> Transform {
 pub struct ModelAssets<'a> {
     pub meshes: &'a mut Assets<Mesh>,
     pub materials: &'a mut Assets<StandardMaterial>,
+    pub glow_materials: &'a mut Assets<GlowMaterial>,
     pub images: &'a mut Assets<Image>,
     pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
 }
