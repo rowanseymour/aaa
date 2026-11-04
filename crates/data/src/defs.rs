@@ -209,3 +209,9 @@ pub struct Sun {
     pub ambient: [f32; 3],
     pub specular: [f32; 3],
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct KingdomColor {
+    pub ids: Option<Id>,
+    pub color: [f32; 3],
+}

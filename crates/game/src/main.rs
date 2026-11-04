@@ -1,9 +1,10 @@
 //! Plays Axis & Allies (2004) matches, on a map picked from a menu or given
 //! on the command line.
 //!
-//! Click a unit to select its regiment and right-click the ground to send
-//! it there. The number keys pick its formation, in the order its layout
-//! lists them.
+//! You play one of the map's players. Click one of your units to select its
+//! regiment and right-click the ground to send it there. The number keys pick
+//! its formation, in the order its layout lists them. Rings in their owner's
+//! colour mark every regiment's units.
 
 use std::collections::HashSet;
 use std::f32::consts::FRAC_PI_2;
@@ -23,8 +24,11 @@ use bevy::window::PrimaryWindow;
 
 const USAGE: &str = "\
 usage:
-  aaa-game <game dir>          pick a map from a menu
-  aaa-game <game dir> <map>    play a map, e.g. \"allies10_berlin\"";
+  aaa-game <game dir> [--side <n>]          pick a map from a menu
+  aaa-game <game dir> <map> [--side <n>]    play a map, e.g. \"allies10_berlin\"
+
+  --side <n>    play the map's nth player (\"Side n\" in its lobby) instead of
+                the first one a person may play";
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
@@ -49,6 +53,14 @@ struct Loaded {
 #[derive(Resource)]
 struct Sim(World);
 
+/// Which of the map's major players to play, counting from 1.
+#[derive(Resource, Clone, Copy)]
+struct Side(Option<usize>);
+
+/// The player orders come from; none where the map has nobody to play.
+#[derive(Resource)]
+struct Local(Option<u32>);
+
 /// The regiment orders go to.
 #[derive(Resource, Default)]
 struct Selected(Option<usize>);
@@ -58,7 +70,20 @@ struct Selected(Option<usize>);
 struct UnitView(usize);
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let side = match args.iter().position(|a| a == "--side") {
+        Some(i) => match args.get(i + 1).and_then(|n| n.parse().ok()) {
+            Some(n @ 1..) => {
+                args.drain(i..i + 2);
+                Some(n)
+            }
+            _ => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
     let (dir, map) = match args.as_slice() {
         [dir] => (dir, None),
         [dir, map] => (dir, Some(map)),
@@ -95,6 +120,7 @@ fn main() -> ExitCode {
     app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .init_resource::<Selected>()
+        .insert_resource(Side(side))
         .add_systems(OnEnter(Screen::Menu), menu)
         .add_systems(Update, highlight.run_if(in_state(Screen::Menu)))
         .add_systems(OnEnter(Screen::Match), setup)
@@ -120,7 +146,22 @@ fn main() -> ExitCode {
 
 /// Readies a match on a loaded map, for [`setup`] to start.
 fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded) {
-    world.insert_resource(Sim(World::new(&loaded.map)));
+    let sim = World::new(&loaded.map);
+    let local = match world.resource::<Side>().0 {
+        Some(n) => sim
+            .sides
+            .players
+            .iter()
+            .filter(|p| !p.independent)
+            .nth(n - 1),
+        None => sim.sides.first_playable(),
+    };
+    match local {
+        Some(p) => info!("playing {} ({})", p.name, p.color),
+        None => warn!("{}: no such player to play", loaded.map.title),
+    }
+    world.insert_resource(Local(local.map(|p| p.id)));
+    world.insert_resource(Sim(sim));
     world.insert_resource(loaded);
 }
 
@@ -239,6 +280,7 @@ fn setup(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
     sim: Res<Sim>,
+    local: Res<Local>,
     mut assets: MapAssets,
     mut window: Single<&mut Window, With<PrimaryWindow>>,
 ) {
@@ -264,9 +306,10 @@ fn setup(
         sim.0.regiments.len(),
         sim.0.units.len()
     );
-    let cam = match sim.0.regiments.first() {
-        Some(_) => {
-            let [x, y] = sim.0.centre(0);
+    let own = (0..sim.0.regiments.len()).find(|&r| local.0.is_some_and(|p| sim.0.commands(p, r)));
+    let cam = match own.or((!sim.0.regiments.is_empty()).then_some(0)) {
+        Some(r) => {
+            let [x, y] = sim.0.centre(r);
             RtsCamera::new(world(x, y, map.ground.height_at(x, y)))
         }
         None => RtsCamera::centred(&map.ground),
@@ -302,16 +345,20 @@ fn show_units(
     }
 }
 
-/// Left click selects the regiment of the unit under the cursor, right
-/// click sends the selected one where it points.
+/// Left click selects the regiment of the unit of yours under the cursor,
+/// right click sends the selected one where it points.
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     loaded: Res<Loaded>,
+    local: Res<Local>,
     mut sim: ResMut<Sim>,
     mut selected: ResMut<Selected>,
 ) {
+    let Some(player) = local.0 else {
+        return;
+    };
     let (left, right) = (
         buttons.just_pressed(MouseButton::Left),
         buttons.just_pressed(MouseButton::Right),
@@ -341,6 +388,7 @@ fn command(
             .0
             .units
             .iter()
+            .filter(|u| sim.0.commands(player, u.regiment))
             .map(|u| {
                 (
                     u,
@@ -351,13 +399,15 @@ fn command(
             .min_by(|a, b| a.1.total_cmp(&b.1))
             .map(|(u, _)| u.regiment);
     } else if let Some(r) = selected.0 {
-        sim.0.order_move(r, point);
+        // Selection only takes the player's own.
+        let _ = sim.0.order_move(player, r, point);
     }
 }
 
 fn choose_formation(
     keys: Res<ButtonInput<KeyCode>>,
     selected: Res<Selected>,
+    local: Res<Local>,
     mut sim: ResMut<Sim>,
 ) {
     const KEYS: [KeyCode; 9] = [
@@ -371,11 +421,12 @@ fn choose_formation(
         KeyCode::Digit8,
         KeyCode::Digit9,
     ];
-    let Some(r) = selected.0 else {
+    let (Some(r), Some(player)) = (selected.0, local.0) else {
         return;
     };
-    if let Some(f) = KEYS.iter().position(|&k| keys.just_pressed(k)) {
-        sim.0.set_formation(r, f);
+    if let Some(f) = KEYS.iter().position(|&k| keys.just_pressed(k))
+        && sim.0.set_formation(player, r, f).is_ok()
+    {
         let regiment = &sim.0.regiments[r];
         info!(
             "{} in formation {}",
@@ -410,7 +461,8 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
     None
 }
 
-/// Rings the selected regiment's units.
+/// Rings every regiment's units in their owner's colour, and the selected
+/// regiment's again, wider.
 fn show_selection(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
@@ -418,27 +470,29 @@ fn show_selection(
     fixed: Res<Time<Fixed>>,
     mut gizmos: Gizmos,
 ) {
-    let Some(r) = selected.0 else {
-        return;
-    };
+    const RADIUS: f32 = 0.6;
     let t = fixed.overstep_fraction();
-    for &u in &sim.0.regiments[r].units {
-        let unit = &sim.0.units[u];
+    let ground = &loaded.map.ground;
+    for unit in &sim.0.units {
         let [px, py] = unit.previous;
         let [x, y] = unit.position;
         let (x, y) = (px + (x - px) * t, py + (y - py) * t);
-        gizmos.linestrip(ring(&loaded.map.ground, x, y), Color::srgb(0.3, 1.0, 0.3));
+        let owner = sim.0.regiments[unit.regiment].owner;
+        let [r, g, b] = sim.0.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
+        gizmos.linestrip(ring(ground, x, y, RADIUS), Color::srgb(r, g, b));
+        if selected.0 == Some(unit.regiment) {
+            gizmos.linestrip(ring(ground, x, y, RADIUS * 1.4), Color::WHITE);
+        }
     }
 }
 
 /// A ring around a point that follows the ground's rise and fall, so it
 /// doesn't sink into slopes the way a flat circle would.
-fn ring(ground: &Ground, x: f32, y: f32) -> impl Iterator<Item = Vec3> {
-    const RADIUS: f32 = 0.6;
+fn ring(ground: &Ground, x: f32, y: f32, radius: f32) -> impl Iterator<Item = Vec3> {
     const SEGMENTS: usize = 24;
     (0..=SEGMENTS).map(move |i| {
         let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let (px, py) = (x + RADIUS * a.cos(), y + RADIUS * a.sin());
+        let (px, py) = (x + radius * a.cos(), y + radius * a.sin());
         world(px, py, ground.height_at(px, py) + 0.05)
     })
 }

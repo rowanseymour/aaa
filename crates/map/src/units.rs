@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use aaa_data::{Body, Id, Layout};
-use tgck::map::{Detail, Kingdoms, Thing};
+use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
 
 /// A side: a player, human or AI, or an independent power such as
 /// neutral civilians.
@@ -12,14 +12,49 @@ pub struct Player {
     /// What objects name as their owner.
     pub id: u32,
     pub name: String,
+    /// Its colour's id, e.g. `blue`.
     pub color: String,
-    /// The team's id; 0 for none.
-    pub team: u32,
+    /// The colour that id names, white where the game data has none.
+    pub rgb: [f32; 3],
+    /// Index into [`Map::teams`](crate::Map::teams).
+    pub team: Option<usize>,
     pub independent: bool,
+    /// A person may play it.
+    pub playable: bool,
+    /// How it stands toward each player, by index in
+    /// [`Map::players`](crate::Map::players).
+    pub relations: Vec<Relation>,
+    /// How it stands toward each team, by index in
+    /// [`Map::teams`](crate::Map::teams).
+    pub team_relations: Vec<Relation>,
 }
 
-pub fn players(kingdoms: &Kingdoms) -> Vec<Player> {
-    kingdoms
+/// Players that share victory.
+#[derive(Debug, Clone)]
+pub struct Team {
+    pub id: u32,
+    pub name: String,
+    /// How it stands toward each player, by index in
+    /// [`Map::players`](crate::Map::players).
+    pub relations: Vec<Relation>,
+    /// How it stands toward each team, by index in
+    /// [`Map::teams`](crate::Map::teams).
+    pub team_relations: Vec<Relation>,
+}
+
+/// The players and teams, with their relations by index rather than by
+/// their positions in the stored sections, which can have gaps.
+pub fn sides(
+    kingdoms: &Kingdoms,
+    teams: &[Option<StoredTeam>],
+    colors: &HashMap<Id, [f32; 3]>,
+) -> (Vec<Player>, Vec<Team>) {
+    let kingdom_slots: Vec<bool> = kingdoms.kingdoms.iter().map(Option::is_some).collect();
+    let team_slots: Vec<bool> = teams.iter().map(Option::is_some).collect();
+    let by_player = |stored: &[u32]| by_index(&kingdom_slots, stored);
+    let by_team = |stored: &[u32]| by_index(&team_slots, stored);
+    let teams: Vec<&StoredTeam> = teams.iter().flatten().collect();
+    let players = kingdoms
         .kingdoms
         .iter()
         .flatten()
@@ -27,10 +62,53 @@ pub fn players(kingdoms: &Kingdoms) -> Vec<Player> {
             id: k.thing.id,
             name: k.name.clone(),
             color: k.color.clone(),
-            team: k.team,
+            rgb: colors
+                .get(&Id::from(k.color.as_str()))
+                .copied()
+                .unwrap_or([1.0; 3]),
+            team: teams
+                .iter()
+                .position(|t| t.head.id == k.team && k.team != 0),
             independent: k.independent != 0,
+            playable: k.playable,
+            relations: by_player(&k.relations),
+            team_relations: by_team(&k.team_relations),
+        })
+        .collect();
+    let teams = teams
+        .iter()
+        .map(|t| Team {
+            id: t.head.id,
+            name: t.head.name.clone(),
+            relations: by_player(&t.kingdom_relations),
+            team_relations: by_team(&t.team_relations),
+        })
+        .collect();
+    (players, teams)
+}
+
+/// Relations stored by section position, kept for the positions holding
+/// something; neutral where none is stored.
+fn by_index(slots: &[bool], stored: &[u32]) -> Vec<Relation> {
+    slots
+        .iter()
+        .enumerate()
+        .filter(|(_, present)| **present)
+        .map(|(i, _)| {
+            stored
+                .get(i)
+                .and_then(|&r| Relation::from_u32(r))
+                .unwrap_or(Relation::Neutral)
         })
         .collect()
+}
+
+/// The player that owns a placed object, where the map records one.
+pub fn owner(thing: &Thing) -> Option<u32> {
+    match &thing.detail {
+        Detail::Actor(actor) if actor.kingdom != 0 => Some(actor.kingdom),
+        _ => None,
+    }
 }
 
 /// A group of units that moves and fights together.
@@ -82,12 +160,7 @@ pub fn regiments(
     things
         .iter()
         .filter_map(|t| {
-            let Detail::Actor(actor) = &t.detail else {
-                return None;
-            };
-            if actor.kingdom == 0 {
-                return None;
-            }
+            let owner = owner(t)?;
             let organization = t.organization(world_version)?;
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
             let arranged =
@@ -114,7 +187,7 @@ pub fn regiments(
             Some(Regiment {
                 id: t.id,
                 template: t.template.clone(),
-                owner: actor.kingdom,
+                owner,
                 facing,
                 members,
                 formations,
@@ -213,5 +286,14 @@ mod tests {
     fn refuses_layouts_that_miss_members() {
         let slots = ["rifle".to_string(), String::new(), "captain".to_string()];
         assert!(arrange(&layout(), &slots, 4).is_none());
+    }
+
+    #[test]
+    fn relations_skip_empty_slots() {
+        use Relation::{Ally, Enemy, Neutral};
+        assert_eq!(
+            by_index(&[true, false, true, true], &[1, 0, 3]),
+            [Ally, Enemy, Neutral]
+        );
     }
 }

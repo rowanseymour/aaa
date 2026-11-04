@@ -7,14 +7,22 @@
 
 pub mod path;
 
+use std::collections::HashMap;
+
 use aaa_map::pathing::tile_at;
 use aaa_map::{Domain, Map, Pathing};
+
+pub use aaa_map::{Player, Relation, Team};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
 
 /// A match in progress.
 pub struct World {
+    pub sides: Sides,
+    /// The owning [`Player::id`] of each owned object that isn't a
+    /// regiment, such as a building, by object id.
+    pub owners: HashMap<u32, u32>,
     pub pathing: Pathing,
     pub regiments: Vec<Regiment>,
     pub units: Vec<Unit>,
@@ -26,6 +34,7 @@ pub struct Regiment {
     /// Its object's id in the map.
     pub id: u32,
     pub template: String,
+    /// The owning [`Player::id`], the only one it takes orders from.
     pub owner: u32,
     /// Indices into [`World::units`].
     pub units: Vec<usize>,
@@ -68,11 +77,27 @@ impl Unit {
 
 impl World {
     pub fn new(map: &Map) -> World {
-        World::from_regiments(map.pathing.clone(), &map.regiments)
+        let sides = Sides {
+            players: map.players.clone(),
+            teams: map.teams.clone(),
+        };
+        let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
+        world.owners = map
+            .things
+            .iter()
+            .filter_map(|t| Some((t.id, aaa_map::owner(t)?)))
+            .collect();
+        world
     }
 
-    pub fn from_regiments(pathing: Pathing, regiments: &[aaa_map::Regiment]) -> World {
+    pub fn from_regiments(
+        sides: Sides,
+        pathing: Pathing,
+        regiments: &[aaa_map::Regiment],
+    ) -> World {
         let mut world = World {
+            sides,
+            owners: HashMap::new(),
             pathing,
             regiments: Vec::new(),
             units: Vec::new(),
@@ -142,9 +167,22 @@ impl World {
         [x / n, y / n]
     }
 
+    /// Whether `player` may give `regiment` orders.
+    pub fn commands(&self, player: u32, regiment: usize) -> bool {
+        self.regiments[regiment].owner == player
+    }
+
     /// Sends a regiment to `target`, turned to face the way it's going,
     /// each member making for its place in the formation there.
-    pub fn order_move(&mut self, regiment: usize, target: [f32; 2]) {
+    pub fn order_move(
+        &mut self,
+        player: u32,
+        regiment: usize,
+        target: [f32; 2],
+    ) -> Result<(), NotYours> {
+        if !self.commands(player, regiment) {
+            return Err(NotYours);
+        }
         let r = &mut self.regiments[regiment];
         let from = r.position;
         if let Some(heading) = normalised([target[0] - from[0], target[1] - from[1]]) {
@@ -152,16 +190,26 @@ impl World {
         }
         r.position = target;
         self.take_places(regiment);
+        Ok(())
     }
 
     /// Switches a regiment to another of its formations, its members
     /// taking their new places where it stands, or is headed.
-    pub fn set_formation(&mut self, regiment: usize, formation: usize) {
+    pub fn set_formation(
+        &mut self,
+        player: u32,
+        regiment: usize,
+        formation: usize,
+    ) -> Result<(), NotYours> {
+        if !self.commands(player, regiment) {
+            return Err(NotYours);
+        }
         let r = &mut self.regiments[regiment];
         if formation < r.formations.len() && formation != r.formation {
             r.formation = formation;
             self.take_places(regiment);
         }
+        Ok(())
     }
 
     /// Sends each of a regiment's members to its place in the formation.
@@ -208,6 +256,50 @@ impl World {
             }
         }
         self.ticks += 1;
+    }
+}
+
+/// An order to a regiment from a player that doesn't own it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NotYours;
+
+/// The players in a match and how they stand toward each other.
+#[derive(Debug, Clone, Default)]
+pub struct Sides {
+    pub players: Vec<Player>,
+    pub teams: Vec<Team>,
+}
+
+impl Sides {
+    pub fn player(&self, id: u32) -> Option<&Player> {
+        self.players.iter().find(|p| p.id == id)
+    }
+
+    /// How the player `from` stands toward the player `to`, by their ids;
+    /// neutral toward a player the match doesn't have.
+    pub fn relation(&self, from: u32, to: u32) -> Relation {
+        if from == to {
+            return Relation::Itself;
+        }
+        let index = |id| self.players.iter().position(|p| p.id == id);
+        let (Some(a), Some(b)) = (index(from), index(to)) else {
+            return Relation::Neutral;
+        };
+        let (pa, pb) = (&self.players[a], &self.players[b]);
+        // Players put in a team keep their own stored relations at war
+        // with everyone, so the team's speak for them.
+        let stance = match (pa.team, pb.team) {
+            (Some(ta), Some(tb)) => self.teams[ta].team_relations.get(tb),
+            (Some(ta), None) => self.teams[ta].relations.get(b),
+            (None, Some(tb)) => pa.team_relations.get(tb),
+            (None, None) => pa.relations.get(b),
+        };
+        stance.copied().unwrap_or(Relation::Neutral)
+    }
+
+    /// The player a person plays by default: the first a person may.
+    pub fn first_playable(&self) -> Option<&Player> {
+        self.players.iter().find(|p| p.playable && !p.independent)
     }
 }
 
@@ -260,7 +352,7 @@ mod tests {
             formation: 0,
             primary: None,
         };
-        World::from_regiments(pathing, &[regiment])
+        World::from_regiments(Sides::default(), pathing, &[regiment])
     }
 
     fn run(world: &mut World, seconds: f32) {
@@ -276,7 +368,7 @@ mod tests {
     #[test]
     fn regiments_move_at_their_slowest_members_speed() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
-        w.order_move(0, [10.0, 20.0]);
+        w.order_move(7, 0, [10.0, 20.0]).unwrap();
         run(&mut w, 1.0);
         assert!(near(w.units[0].position, [9.0, 12.0]));
         assert!(near(w.units[1].position, [11.0, 12.0]));
@@ -290,7 +382,7 @@ mod tests {
     fn formations_turn_to_face_the_way_they_go() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         // Facing +x now, so the left-hand man ends up on the +y side.
-        w.order_move(0, [30.0, 10.0]);
+        w.order_move(7, 0, [30.0, 10.0]).unwrap();
         run(&mut w, 20.0);
         assert!(
             near(w.units[0].position, [30.0, 11.0]),
@@ -307,10 +399,10 @@ mod tests {
         // The right-hand man's place at 11,20 is blocked.
         pathing.set_blocked(5, 10);
         let mut w = world(pathing);
-        w.order_move(0, [10.0, 20.0]);
+        w.order_move(7, 0, [10.0, 20.0]).unwrap();
         run(&mut w, 10.0);
         assert!(!near(w.units[1].position, [11.0, 20.0]));
-        w.order_move(0, [10.0, 30.0]);
+        w.order_move(7, 0, [10.0, 30.0]).unwrap();
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [9.0, 30.0]));
         assert!(near(w.units[1].position, [11.0, 30.0]));
@@ -319,7 +411,7 @@ mod tests {
     #[test]
     fn changing_formation_rearranges_them_where_they_stand() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
-        w.set_formation(0, 1);
+        w.set_formation(7, 0, 1).unwrap();
         run(&mut w, 5.0);
         assert!(near(w.units[0].position, [10.0, 11.0]));
         assert!(near(w.units[1].position, [10.0, 9.0]));
@@ -333,7 +425,7 @@ mod tests {
             pathing.set_blocked(x, 8);
         }
         let mut w = world(pathing.clone());
-        w.order_move(0, [10.0, 30.0]);
+        w.order_move(7, 0, [10.0, 30.0]).unwrap();
         for _ in 0..400 {
             w.tick();
             for u in &w.units {
@@ -342,5 +434,77 @@ mod tests {
             }
         }
         assert!(near(w.units[0].position, [9.0, 30.0]));
+    }
+
+    #[test]
+    fn regiments_only_take_orders_from_their_owner() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        assert_eq!(w.order_move(8, 0, [10.0, 20.0]), Err(NotYours));
+        assert_eq!(w.set_formation(8, 0, 1), Err(NotYours));
+        run(&mut w, 5.0);
+        assert!(near(w.units[0].position, [9.0, 10.0]));
+        assert_eq!(w.regiments[0].formation, 0);
+    }
+
+    fn player(id: u32, team: Option<usize>, relations: &[u32], team_relations: &[u32]) -> Player {
+        let stored = |r: &[u32]| r.iter().map(|&r| Relation::from_u32(r).unwrap()).collect();
+        Player {
+            id,
+            name: format!("kingdom_{id}"),
+            color: String::new(),
+            rgb: [1.0; 3],
+            team,
+            independent: team.is_none(),
+            playable: team.is_some(),
+            relations: stored(relations),
+            team_relations: stored(team_relations),
+        }
+    }
+
+    #[test]
+    fn teams_decide_relations_for_their_players() {
+        let team = |id, relations: [Relation; 4], team_relations| Team {
+            id,
+            name: String::new(),
+            relations: relations.into(),
+            team_relations,
+        };
+        use Relation::{Ally, Enemy, Neutral};
+        // Two players a team, at odds with each other as they're stored,
+        // and civilians neutral to everyone.
+        let sides = Sides {
+            players: vec![
+                player(1, Some(0), &[0, 3, 3, 3], &[3, 3]),
+                player(2, Some(0), &[3, 0, 3, 3], &[3, 3]),
+                player(3, Some(1), &[3, 3, 0, 3], &[3, 3]),
+                player(4, None, &[2, 2, 2, 0], &[2, 2]),
+            ],
+            teams: vec![
+                team(10, [Enemy, Enemy, Enemy, Neutral], vec![Ally, Enemy]),
+                team(11, [Enemy, Enemy, Enemy, Neutral], vec![Enemy, Ally]),
+            ],
+        };
+        assert_eq!(sides.relation(1, 1), Relation::Itself);
+        assert_eq!(sides.relation(1, 2), Ally);
+        assert_eq!(sides.relation(2, 3), Enemy);
+        assert_eq!(sides.relation(3, 4), Neutral);
+        assert_eq!(sides.relation(4, 1), Neutral);
+        assert_eq!(sides.relation(1, 99), Neutral);
+        assert_eq!(sides.first_playable().map(|p| p.id), Some(1));
+    }
+
+    #[test]
+    fn players_without_teams_keep_their_own_relations() {
+        let sides = Sides {
+            players: vec![
+                player(1, None, &[0, 1, 3], &[]),
+                player(2, None, &[1, 0, 3], &[]),
+                player(3, None, &[2, 3, 0], &[]),
+            ],
+            teams: Vec::new(),
+        };
+        assert_eq!(sides.relation(1, 2), Relation::Ally);
+        assert_eq!(sides.relation(1, 3), Relation::Enemy);
+        assert_eq!(sides.relation(3, 1), Relation::Neutral);
     }
 }
