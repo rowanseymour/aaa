@@ -307,10 +307,12 @@ fn ground_mesh(ground: &Ground, side: usize, layers: impl Fn(usize, usize) -> La
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, masks)
 }
 
-/// The water surface over every tile that touches water, coloured by the
-/// depth of the bed below each vertex as the game does: clear at the shore,
-/// so it fades in where the bank cuts it off. Within `fade` of the map's
-/// edge it darkens to opaque black, as the ground does.
+/// The water surface over every tile that touches water, as opaque as the
+/// depth of the bed below each vertex makes it: clear at the shore, so it
+/// fades in where the bank cuts it off. The depth table's colours tint
+/// nothing: the game's water has its texture's own hue however deep it is.
+/// Within `fade` of the map's edge it darkens to opaque black, as the ground
+/// does.
 fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor], fade: f32) -> Mesh {
     let mut positions = Vec::with_capacity(tiles.len() * 4);
     let mut vertex_colors = Vec::with_capacity(tiles.len() * 4);
@@ -319,10 +321,9 @@ fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor], 
             let (wx, wy) = (cx as f32 * CELL_SIZE, cy as f32 * CELL_SIZE);
             let surface = ground.surface[cy * ground.side + cx] - SHORE_DROP;
             positions.push(world(wx, wy, surface).to_array());
-            let ([r, g, b], a) = at_depth(colors, surface - ground.at(cx, cy));
-            let [r, g, b, a] = Color::srgba(r, g, b, a).to_linear().to_f32_array();
+            let a = alpha_at_depth(colors, surface - ground.at(cx, cy));
             let lit = edge_light(ground.size(), fade, wx, wy);
-            vertex_colors.push([r * lit, g * lit, b * lit, a + (1.0 - a) * (1.0 - lit)]);
+            vertex_colors.push([lit, lit, lit, a + (1.0 - a) * (1.0 - lit)]);
         }
     }
     let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
@@ -343,9 +344,9 @@ fn edge_light(size: f32, fade: f32, x: f32, y: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
-/// Interpolates the colour and alpha for a depth, holding the end values
-/// beyond the first and last.
-fn at_depth(colors: &[DepthColor], depth: f32) -> ([f32; 3], f32) {
+/// Interpolates the alpha for a depth, holding the end values beyond the
+/// first and last.
+fn alpha_at_depth(colors: &[DepthColor], depth: f32) -> f32 {
     let next = colors.partition_point(|c| c.depth <= depth);
     let (a, b) = match next {
         0 => (colors[0], colors[0]),
@@ -357,11 +358,7 @@ fn at_depth(colors: &[DepthColor], depth: f32) -> ([f32; 3], f32) {
     } else {
         0.0
     };
-    let mix = |x: f32, y: f32| x + (y - x) * t;
-    (
-        [0, 1, 2].map(|i| mix(a.color[i], b.color[i])),
-        mix(a.alpha, b.alpha),
-    )
+    a.alpha + (b.alpha - a.alpha) * t
 }
 
 /// Quads of four `CORNERS` each, split along the diagonal [`flip`]
