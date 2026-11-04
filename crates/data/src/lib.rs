@@ -48,6 +48,46 @@ pub struct Animation {
     pub kf: String,
     /// Seconds one play takes; the file's keys are stretched to fit.
     pub length: f32,
+    /// For moving animations, how far one play carries the unit.
+    pub walk_distance: Option<f32>,
+}
+
+/// How a template's objects take part in movement.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Body {
+    /// The ground it keeps movers off; `None` if it doesn't block.
+    pub blocking: Option<Shape>,
+    /// Top speed in world units a second; `None` if it can't move.
+    pub speed: Option<f32>,
+}
+
+/// An outline centred on an object, in world units at its template's size.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Shape {
+    Point,
+    Circle {
+        radius: f32,
+    },
+    /// Sides along the model's x and y axes, which turn with the object.
+    Rect {
+        width: f32,
+        height: f32,
+    },
+}
+
+impl Shape {
+    pub fn scaled(self, by: f32) -> Shape {
+        match self {
+            Shape::Point => Shape::Point,
+            Shape::Circle { radius } => Shape::Circle {
+                radius: radius * by,
+            },
+            Shape::Rect { width, height } => Shape::Rect {
+                width: width * by,
+                height: height * by,
+            },
+        }
+    }
 }
 
 /// One texture variation of a terrain type, e.g. `temperate_grass01`.
@@ -64,6 +104,10 @@ pub struct Variation {
     /// Higher priority terrain is drawn over lower where they meet. Each
     /// variation ranks one above the one before it in its terrain.
     pub priority: i32,
+    /// Land units can cross it.
+    pub land: bool,
+    /// Ships can cross it.
+    pub naval: bool,
 }
 
 /// A water surface's colour and opacity at a depth below it.
@@ -190,7 +234,7 @@ impl GameData {
             }
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             for block in parsed.root.blocks_of("Terrain") {
-                let Ok(terrain) = tgi::from_block::<defs::Terrain>(block) else {
+                let Ok(terrain) = templates.deserialize::<defs::Terrain>(block) else {
                     continue;
                 };
                 let water = terrain.ids.as_ref().and_then(|id| water.get(id));
@@ -208,10 +252,13 @@ impl GameData {
                             ],
                             color: v
                                 .terrain_color
+                                .filter(|c| c.iter().all(|&c| c >= 0.0))
                                 .or(terrain.terrain_color)
                                 .unwrap_or([0.5; 3]),
                             water: water.cloned(),
                             priority: terrain.base_priority + i as i32,
+                            land: terrain.land,
+                            naval: terrain.water,
                         },
                     );
                 }
@@ -258,6 +305,29 @@ impl GameData {
         }
         if let Some(bytes) = self.read("translate.tgi") {
             add_renames(&mut out, &tgi::decode(&bytes), "Thing", complete);
+        }
+        out
+    }
+
+    /// How the objects of every template block and move, by template id,
+    /// including the ids the game has since renamed.
+    pub fn bodies(&mut self) -> HashMap<Id, Body> {
+        let files = self.parse_tgis(|_| true);
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut out = HashMap::new();
+        for (_, parsed) in &files {
+            for block in parsed.root.blocks_of("Thing") {
+                let Some(id) = block.value("ids") else {
+                    continue;
+                };
+                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
+                    continue;
+                };
+                out.insert(Id::from(id), body(&thing));
+            }
+        }
+        if let Some(bytes) = self.read("translate.tgi") {
+            add_renames(&mut out, &tgi::decode(&bytes), "Thing", |_| true);
         }
         out
     }
@@ -334,6 +404,7 @@ impl GameData {
                     ids,
                     kf,
                     length: a.length.unwrap_or(1.0),
+                    walk_distance: a.walk_distance,
                 })
             })
             .filter(|a| self.exists(&a.kf))
@@ -361,7 +432,7 @@ impl GameData {
             let _ = match block.kind().unwrap_or("").to_ascii_lowercase().as_str() {
                 "template" => continue,
                 "thing" => coverage.read::<defs::Thing>(block, t).map(drop),
-                "terrain" => coverage.read::<defs::Terrain>(block, None).map(drop),
+                "terrain" => coverage.read::<defs::Terrain>(block, t).map(drop),
                 "biome" => coverage.read::<defs::Biome>(block, t).map(drop),
                 "translate" => coverage.read::<defs::Translate>(block, None).map(drop),
                 "transitionset" => coverage.read::<defs::TransitionSet>(block, None).map(drop),
@@ -397,6 +468,42 @@ impl GameData {
                 Some((digits, self.read(&n)?))
             })
             .collect()
+    }
+}
+
+fn body(thing: &defs::Thing) -> Body {
+    let blocking = thing.flags.iter().rev().find_map(|f| f.blocking) == Some(true);
+    let size = |f: fn(&defs::Size) -> Option<f32>| thing.size.iter().rev().find_map(f);
+    let kind = thing
+        .size
+        .iter()
+        .rev()
+        .find_map(|s| s.blocking_shape.as_deref())
+        .unwrap_or("CIRCLE");
+    let shape = match kind.to_ascii_uppercase().as_str() {
+        "POINT" => Shape::Point,
+        "SQUARE" => {
+            let side = size(|s| s.square_size).unwrap_or(4.0);
+            Shape::Rect {
+                width: side,
+                height: side,
+            }
+        }
+        "RECT" => Shape::Rect {
+            width: size(|s| s.rect_width).unwrap_or(4.0),
+            height: size(|s| s.rect_height).unwrap_or(4.0),
+        },
+        _ => Shape::Circle {
+            radius: size(|s| s.blocking_radius).unwrap_or(0.2),
+        },
+    };
+    Body {
+        blocking: blocking.then_some(shape),
+        speed: thing
+            .mover_component
+            .as_ref()
+            .and_then(|m| m.speed_max)
+            .filter(|&s| s > 0.0),
     }
 }
 
