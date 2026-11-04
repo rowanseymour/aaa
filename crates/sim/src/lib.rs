@@ -31,6 +31,14 @@ pub struct Regiment {
     pub units: Vec<usize>,
     /// Its slowest member's, which they all keep to so as to stay together.
     pub speed: f32,
+    /// Where it stands, or is headed: its members take their places in the
+    /// formation around it.
+    pub position: [f32; 2],
+    /// The way it faces, or will once there.
+    pub facing: [f32; 2],
+    pub formations: Vec<aaa_map::Formation>,
+    /// Index into `formations` of the one it's in.
+    pub formation: usize,
 }
 
 pub struct Unit {
@@ -96,16 +104,25 @@ impl World {
                     path: Vec::new(),
                 });
             }
+            let units: Vec<usize> = (first..world.units.len()).collect();
+            let position = match regiment.primary {
+                Some(p) => world.units[first + p].position,
+                None => world.average(&units),
+            };
             world.regiments.push(Regiment {
                 id: regiment.id,
                 template: regiment.template.clone(),
                 owner: regiment.owner,
-                units: (first..world.units.len()).collect(),
+                units,
                 speed: regiment
                     .members
                     .iter()
                     .map(|m| m.speed)
                     .fold(f32::INFINITY, f32::min),
+                position,
+                facing: normalised(regiment.facing).unwrap_or([0.0, -1.0]),
+                formations: regiment.formations.clone(),
+                formation: regiment.formation,
             });
         }
         world
@@ -113,7 +130,10 @@ impl World {
 
     /// Where a regiment's members stand on average.
     pub fn centre(&self, regiment: usize) -> [f32; 2] {
-        let units = &self.regiments[regiment].units;
+        self.average(&self.regiments[regiment].units)
+    }
+
+    fn average(&self, units: &[usize]) -> [f32; 2] {
         let n = units.len().max(1) as f32;
         let [x, y] = units.iter().fold([0.0, 0.0], |[x, y], &u| {
             let [ux, uy] = self.units[u].position;
@@ -122,36 +142,44 @@ impl World {
         [x / n, y / n]
     }
 
-    /// Sends a regiment to `target`, its members keeping their places in
-    /// the formation, turned to face the way it's going.
+    /// Sends a regiment to `target`, turned to face the way it's going,
+    /// each member making for its place in the formation there.
     pub fn order_move(&mut self, regiment: usize, target: [f32; 2]) {
-        let centre = self.centre(regiment);
-        let units = self.regiments[regiment].units.clone();
-        let Some(heading) = normalised([target[0] - centre[0], target[1] - centre[1]]) else {
-            return;
-        };
-        let was = units
-            .iter()
-            .map(|&u| self.units[u].facing)
-            .fold([0.0, 0.0], |[x, y], [fx, fy]| [x + fx, y + fy]);
-        let was = normalised(was).unwrap_or(heading);
-        // The turn from the old heading to the new, as a rotation.
-        let (cos, sin) = (
-            was[0] * heading[0] + was[1] * heading[1],
-            was[0] * heading[1] - was[1] * heading[0],
-        );
-        for u in units {
-            let unit = &self.units[u];
-            let [ox, oy] = [unit.position[0] - centre[0], unit.position[1] - centre[1]];
-            let place = [
-                target[0] + ox * cos - oy * sin,
-                target[1] + ox * sin + oy * cos,
-            ];
+        let r = &mut self.regiments[regiment];
+        let from = r.position;
+        if let Some(heading) = normalised([target[0] - from[0], target[1] - from[1]]) {
+            r.facing = heading;
+        }
+        r.position = target;
+        self.take_places(regiment);
+    }
+
+    /// Switches a regiment to another of its formations, its members
+    /// taking their new places where it stands, or is headed.
+    pub fn set_formation(&mut self, regiment: usize, formation: usize) {
+        let r = &mut self.regiments[regiment];
+        if formation < r.formations.len() && formation != r.formation {
+            r.formation = formation;
+            self.take_places(regiment);
+        }
+    }
+
+    /// Sends each of a regiment's members to its place in the formation.
+    fn take_places(&mut self, regiment: usize) {
+        let r = &self.regiments[regiment];
+        let [px, py] = r.position;
+        let [fx, fy] = r.facing;
+        let offsets = &r.formations[r.formation].offsets;
+        for (&u, &[right, ahead]) in r.units.iter().zip(offsets) {
+            let place = [px + right * fy + ahead * fx, py - right * fx + ahead * fy];
+            let unit = &mut self.units[u];
             let mut way = path::find(&self.pathing, unit.domain, unit.position, place);
             way.reverse();
-            let unit = &mut self.units[u];
             unit.path = way;
-            unit.end_facing = heading;
+            unit.end_facing = r.facing;
+            if unit.path.is_empty() {
+                unit.facing = r.facing;
+            }
         }
     }
 
@@ -212,13 +240,25 @@ mod tests {
         }
     }
 
-    /// Two soldiers side by side facing +y, the slower one on the right.
+    /// Two soldiers side by side facing +y, the slower one on the right,
+    /// who can also line up one behind the other.
     fn world(pathing: Pathing) -> World {
+        let formation = |id: &str, offsets| aaa_map::Formation {
+            id: id.into(),
+            offsets,
+        };
         let regiment = aaa_map::Regiment {
             id: 1,
             template: "squad".into(),
             owner: 7,
+            facing: [0.0, 1.0],
             members: vec![member(2, [9.0, 10.0], 3.0), member(3, [11.0, 10.0], 2.0)],
+            formations: vec![
+                formation("line", vec![[-1.0, 0.0], [1.0, 0.0]]),
+                formation("file", vec![[0.0, 1.0], [0.0, -1.0]]),
+            ],
+            formation: 0,
+            primary: None,
         };
         World::from_regiments(pathing, &[regiment])
     }
@@ -259,6 +299,31 @@ mod tests {
         );
         assert!(near(w.units[1].position, [30.0, 9.0]));
         assert!(near(w.units[0].facing, [1.0, 0.0]));
+    }
+
+    #[test]
+    fn members_go_back_to_their_places_after_being_kept_from_them() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // The right-hand man's place at 11,20 is blocked.
+        pathing.set_blocked(5, 10);
+        let mut w = world(pathing);
+        w.order_move(0, [10.0, 20.0]);
+        run(&mut w, 10.0);
+        assert!(!near(w.units[1].position, [11.0, 20.0]));
+        w.order_move(0, [10.0, 30.0]);
+        run(&mut w, 10.0);
+        assert!(near(w.units[0].position, [9.0, 30.0]));
+        assert!(near(w.units[1].position, [11.0, 30.0]));
+    }
+
+    #[test]
+    fn changing_formation_rearranges_them_where_they_stand() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.set_formation(0, 1);
+        run(&mut w, 5.0);
+        assert!(near(w.units[0].position, [10.0, 11.0]));
+        assert!(near(w.units[1].position, [10.0, 9.0]));
+        assert!(near(w.units[1].facing, [0.0, 1.0]));
     }
 
     #[test]

@@ -146,6 +146,43 @@ pub struct TextureRename {
     pub substring_to: Option<String>,
 }
 
+/// How an organization's members are arranged.
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrganizationLayout {
+    pub ids: Option<Id>,
+    /// The first formation's when not set.
+    pub default_formation_ids: Option<Id>,
+    #[serde(default)]
+    pub slot: Vec<LayoutSlot>,
+    #[serde(default)]
+    pub formation: Vec<LayoutFormation>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LayoutSlot {
+    /// The property a member needs to fill it.
+    pub property_ids: Option<String>,
+    #[serde(default)]
+    pub primary: bool,
+    /// How many times the slot repeats.
+    pub number: Option<usize>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct LayoutFormation {
+    pub formation_ids: Option<Id>,
+    #[serde(default)]
+    pub position: Vec<FormationPosition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct FormationPosition {
+    /// The property of the slots that take it.
+    pub property_ids: Option<String>,
+    /// From the primary slot's position, with 0,1 straight ahead.
+    pub offset: Option<[f32; 2]>,
+}
+
 /// A renamed id, which maps made before the rename still use.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Translate {

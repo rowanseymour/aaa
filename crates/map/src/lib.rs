@@ -7,7 +7,7 @@ mod units;
 
 pub use ground::Ground;
 pub use pathing::{Domain, Pathing};
-pub use units::{Member, Player, Regiment};
+pub use units::{Formation, Member, Player, Regiment};
 
 use aaa_data::{GameData, Id};
 use tgck::map::{Sun, Terrain, Thing};
@@ -59,7 +59,7 @@ impl Map {
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
-            regiments: units::regiments(&things, world_version, &bodies),
+            regiments: units::regiments(&things, world_version, &bodies, &game.layouts()),
             players: units::players(&map.kingdoms().map_err(err)?),
             pathing,
             terrain,
