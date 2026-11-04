@@ -117,6 +117,7 @@ pub fn spawn_map(
             Name::new("ground"),
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(ground_materials.add(material)),
+            NotShadowCaster,
         ));
     }
     if let Some((mesh, material)) = built.water {
