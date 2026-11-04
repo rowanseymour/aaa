@@ -81,33 +81,19 @@ pub struct Formation {
     pub slots: Vec<Vec<[f32; 2]>>,
 }
 
-/// An outline centred on an object, in world units at its template's size.
+/// An outline centred on an object, in world units: an object's own scale
+/// doesn't change it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Shape {
     Point,
     Circle {
         radius: f32,
     },
-    /// Sides along the model's x and y axes, which turn with the object.
+    /// Width across the object's facing and height along it.
     Rect {
         width: f32,
         height: f32,
     },
-}
-
-impl Shape {
-    pub fn scaled(self, by: f32) -> Shape {
-        match self {
-            Shape::Point => Shape::Point,
-            Shape::Circle { radius } => Shape::Circle {
-                radius: radius * by,
-            },
-            Shape::Rect { width, height } => Shape::Rect {
-                width: width * by,
-                height: height * by,
-            },
-        }
-    }
 }
 
 /// One texture variation of a terrain type, e.g. `temperate_grass01`.
