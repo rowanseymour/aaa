@@ -17,7 +17,7 @@ You need your own copy of the game. This project contains no game code or data.
 | [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: regiments move in formation around what blocks them |
 | [`aaa‑render`](crates/render) | Draws maps with Bevy | Ground, water, models and their animations, units idling and walking; no particles |
 | [`aaa‑editor`](crates/editor) | Map editor built with Bevy | Views maps; no editing yet |
-| [`aaa‑game`](crates/game) | Plays matches, starting one on a given map | Select a regiment, send it somewhere and change its formation; no combat yet |
+| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Select a regiment, send it somewhere and change its formation; no combat yet |
 
 ## Building
 
