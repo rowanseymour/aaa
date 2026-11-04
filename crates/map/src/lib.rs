@@ -52,7 +52,7 @@ impl Map {
             Some(Obstacle {
                 position: [x, y],
                 facing,
-                shape: shape.scaled(t.scale),
+                shape,
             })
         });
         let pathing = Pathing::new(&terrain, &game.terrain_variations(), obstacles);

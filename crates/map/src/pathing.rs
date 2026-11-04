@@ -107,31 +107,36 @@ impl Pathing {
         ((0..side).contains(&x) && (0..side).contains(&y)).then(|| (y * side + x) as usize)
     }
 
-    /// Blocks the tiles whose centres the obstacle covers, and the one it
-    /// stands on, so that small ones still count.
+    /// Blocks the tiles whose centres lie within half a tile's width of the
+    /// obstacle's shape, as the game does: so shapes reaching no further
+    /// than that from their middle block nothing.
     fn block(&mut self, o: &Obstacle) {
+        const MARGIN: f32 = CELL_SIZE / 4.0;
         let [px, py] = o.position;
-        let extent = match o.shape {
-            Shape::Point => return,
+        let reach = match o.shape {
+            Shape::Point => 0.0,
             Shape::Circle { radius } => radius,
             Shape::Rect { width, height } => width.hypot(height) / 2.0,
         };
+        if reach <= MARGIN {
+            return;
+        }
+        // The shape's y axis runs along the facing.
         let [fx, fy] = o.facing;
-        // The model's x axis, with -y along the facing.
-        let (ax, ay) = (-fy, fx);
         let covers = |wx: f32, wy: f32| {
             let (dx, dy) = (wx - px, wy - py);
             match o.shape {
                 Shape::Point => false,
-                Shape::Circle { radius } => dx * dx + dy * dy <= radius * radius,
+                Shape::Circle { radius } => dx.hypot(dy) <= radius + MARGIN,
                 Shape::Rect { width, height } => {
-                    let across = dx * ax + dy * ay;
-                    let along = dx * fx + dy * fy;
-                    across.abs() <= width / 2.0 && along.abs() <= height / 2.0
+                    let across = (dx * fy - dy * fx).abs() - width / 2.0;
+                    let along = (dx * fx + dy * fy).abs() - height / 2.0;
+                    across.max(0.0).hypot(along.max(0.0)) < MARGIN
                 }
             }
         };
         let tile = |w: f32| (w / CELL_SIZE).floor() as i32;
+        let extent = reach + MARGIN;
         for y in tile(py - extent)..=tile(py + extent) {
             for x in tile(px - extent)..=tile(px + extent) {
                 let centre = |t: i32| (t as f32 + 0.5) * CELL_SIZE;
@@ -140,7 +145,6 @@ impl Pathing {
                 }
             }
         }
-        self.set_blocked(tile(px), tile(py));
     }
 }
 
@@ -180,12 +184,34 @@ mod tests {
     }
 
     #[test]
-    fn small_obstacles_block_the_tile_they_stand_on() {
+    fn small_obstacles_block_nothing() {
+        assert_eq!(blocked(Shape::Circle { radius: 0.5 }, [0.0, -1.0]), []);
+        assert_eq!(blocked(Shape::Point, [0.0, -1.0]), []);
         assert_eq!(
-            blocked(Shape::Circle { radius: 0.2 }, [0.0, -1.0]),
+            blocked(Shape::Circle { radius: 0.6 }, [0.0, -1.0]),
             [(5, 5)]
         );
-        assert_eq!(blocked(Shape::Point, [0.0, -1.0]), []);
+    }
+
+    #[test]
+    fn shapes_reach_half_a_tile_beyond_their_edges() {
+        // 1.5 short of the next tiles' centres, and then 1.6.
+        assert_eq!(
+            blocked(Shape::Circle { radius: 1.4 }, [0.0, -1.0]),
+            [(5, 5)]
+        );
+        assert_eq!(
+            blocked(Shape::Circle { radius: 1.6 }, [0.0, -1.0]),
+            [(5, 4), (4, 5), (5, 5), (6, 5), (5, 6)]
+        );
+        let rect = Shape::Rect {
+            width: 7.2,
+            height: 1.0,
+        };
+        assert_eq!(
+            blocked(rect, [0.0, -1.0]),
+            [(3, 5), (4, 5), (5, 5), (6, 5), (7, 5)]
+        );
     }
 
     #[test]
