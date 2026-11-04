@@ -437,6 +437,7 @@ impl Models {
         let opacity = material.map_or(1.0, |m| m.alpha);
         let alpha_mode = match alpha {
             Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
+            Some(a) if a.blend() && a.adds() => AlphaMode::Add,
             Some(a) if a.blend() => AlphaMode::Blend,
             _ if opacity < 1.0 => AlphaMode::Blend,
             _ => AlphaMode::Opaque,
@@ -454,7 +455,7 @@ impl Models {
                 ..default()
             }),
             animation: None,
-            blended: alpha_mode == AlphaMode::Blend,
+            blended: matches!(alpha_mode, AlphaMode::Blend | AlphaMode::Add),
         })
     }
 
