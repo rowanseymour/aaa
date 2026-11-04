@@ -13,11 +13,11 @@ You need your own copy of the game. This project contains no game code or data.
 | [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) | Done |
 | [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool | Done; particle systems skipped |
 | [`aaa‑data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, as a library and a command-line tool | Partial: definitions cover what rendering needs |
-| [`aaa‑map`](crates/map) | Maps as loaded: the ground, objects and players | Early: ground, placed objects, players, regiments and where movers can go |
-| [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: regiments move in formation around what blocks them |
+| [`aaa‑map`](crates/map) | Maps as loaded: the ground, objects and players | Early: ground, placed objects, players and teams, regiments and where movers can go |
+| [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: sides and how they stand toward each other; regiments take their owner's orders and move in formation around what blocks them |
 | [`aaa‑render`](crates/render) | Draws maps with Bevy | Ground, water, models and their animations, units idling and walking; no particles |
 | [`aaa‑editor`](crates/editor) | Map editor built with Bevy | Views maps; no editing yet |
-| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Select a regiment, send it somewhere and change its formation; no combat yet |
+| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Play one side: select your regiments, send them somewhere and change their formation; no combat yet |
 
 ## Building
 

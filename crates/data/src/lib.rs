@@ -506,6 +506,18 @@ impl GameData {
         out
     }
 
+    /// The colours players can take, by id, e.g. `blue`.
+    pub fn kingdom_colors(&mut self) -> HashMap<Id, [f32; 3]> {
+        let files = self.parse_tgis(|n| n == "game/kingdom_colors.tgi");
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("KingdomColor"))
+            .filter_map(|b| templates.deserialize::<defs::KingdomColor>(b).ok())
+            .filter_map(|c| Some((c.ids?, c.color)))
+            .collect()
+    }
+
     /// The transition masks of the first transition set, keyed by the
     /// digits in their file names.
     pub fn transition_masks(&mut self) -> Vec<(String, Vec<u8>)> {

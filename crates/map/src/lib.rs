@@ -7,7 +7,8 @@ mod units;
 
 pub use ground::Ground;
 pub use pathing::{Domain, Pathing};
-pub use units::{Formation, Member, Player, Regiment};
+pub use tgck::map::Relation;
+pub use units::{Formation, Member, Player, Regiment, Team, owner};
 
 use aaa_data::{GameData, Id};
 use tgck::map::{Sun, Terrain, Thing};
@@ -24,6 +25,7 @@ pub struct Map {
     pub world_version: u32,
     pub sun: Sun,
     pub players: Vec<Player>,
+    pub teams: Vec<Team>,
     pub regiments: Vec<Regiment>,
     pub pathing: Pathing,
 }
@@ -56,11 +58,17 @@ impl Map {
             })
         });
         let pathing = Pathing::new(&terrain, &game.terrain_variations(), obstacles);
+        let (players, teams) = units::sides(
+            &map.kingdoms().map_err(err)?,
+            &map.teams().map_err(err)?,
+            &game.kingdom_colors(),
+        );
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
             regiments: units::regiments(&things, world_version, &bodies, &game.layouts()),
-            players: units::players(&map.kingdoms().map_err(err)?),
+            players,
+            teams,
             pathing,
             terrain,
             things,
