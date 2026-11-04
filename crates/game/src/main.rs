@@ -67,7 +67,13 @@ struct Selected(Option<usize>);
 
 /// Draws one of the simulation's units.
 #[derive(Component)]
-struct UnitView(usize);
+struct UnitView {
+    /// Index into the sim's units.
+    unit: usize,
+    /// The last of its shots shown.
+    shot: Option<(u64, usize)>,
+    dead: bool,
+}
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
@@ -296,7 +302,11 @@ fn setup(
         debug_assert_eq!(sim.0.units[i].id, m.thing.id);
         match models.spawn_unit(&mut commands, game, &mut assets.models(), &m.thing, m.speed) {
             Some(e) => {
-                commands.entity(e).insert(UnitView(i));
+                commands.entity(e).insert(UnitView {
+                    unit: i,
+                    shot: None,
+                    dead: false,
+                });
             }
             None => missing += 1,
         }
@@ -317,28 +327,56 @@ fn setup(
     camera::spawn(&mut commands, cam);
 }
 
-fn step(mut sim: ResMut<Sim>) {
+fn step(mut sim: ResMut<Sim>, mut selected: ResMut<Selected>) {
     sim.0.tick();
+    if selected.0.is_some_and(|r| sim.0.destroyed(r)) {
+        selected.0 = None;
+    }
 }
 
 /// Places units between where the last two ticks left them, playing their
-/// moving animation while they move.
+/// moving animation while they move, their attack as they fire and their
+/// death as they die; the dead without one are hidden.
 fn show_units(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
     fixed: Res<Time<Fixed>>,
-    mut views: Query<(&UnitView, &mut Transform, Option<&mut Playing>)>,
+    mut views: Query<(
+        &mut UnitView,
+        &mut Transform,
+        &mut Visibility,
+        Option<&mut Playing>,
+    )>,
 ) {
     let t = fixed.overstep_fraction();
-    for (view, mut transform, playing) in &mut views {
-        let unit = &sim.0.units[view.0];
+    for (mut view, mut transform, mut visibility, mut playing) in &mut views {
+        let unit = &sim.0.units[view.unit];
+        if !unit.alive() && !view.dead {
+            view.dead = true;
+            let dies = playing.as_mut().is_some_and(|p| p.die(unit.id as usize));
+            if !dies {
+                *visibility = Visibility::Hidden;
+            }
+        }
+        if unit.shot != view.shot {
+            view.shot = unit.shot;
+            let weapon = unit
+                .shot
+                .and_then(|(_, w)| unit.fighter.as_ref()?.weapons.get(w));
+            if let (Some(p), Some(ids)) = (
+                playing.as_mut(),
+                weapon.and_then(|w| w.animation.as_deref()),
+            ) {
+                p.use_ability(ids);
+            }
+        }
         let [px, py] = unit.previous;
         let [x, y] = unit.position;
         let (x, y) = (px + (x - px) * t, py + (y - py) * t);
         transform.translation = world(x, y, loaded.map.ground.height_at(x, y));
         let [fx, fy] = unit.facing;
         transform.rotation = Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2);
-        if let Some(mut playing) = playing {
+        if let Some(mut playing) = playing.filter(|_| unit.alive()) {
             let speed = sim.0.regiments[unit.regiment].speed;
             playing.set_moving(unit.moving().then_some(speed));
         }
@@ -388,7 +426,7 @@ fn command(
             .0
             .units
             .iter()
-            .filter(|u| sim.0.commands(player, u.regiment))
+            .filter(|u| u.alive() && sim.0.commands(player, u.regiment))
             .map(|u| {
                 (
                     u,
@@ -473,7 +511,7 @@ fn show_selection(
     const RADIUS: f32 = 0.6;
     let t = fixed.overstep_fraction();
     let ground = &loaded.map.ground;
-    for unit in &sim.0.units {
+    for unit in sim.0.units.iter().filter(|u| u.alive()) {
         let [px, py] = unit.previous;
         let [x, y] = unit.position;
         let (x, y) = (px + (x - px) * t, py + (y - py) * t);

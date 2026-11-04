@@ -5,12 +5,13 @@ mod ground;
 pub mod pathing;
 mod units;
 
+pub use aaa_data::{Damage, Fighter, Id, Targets, Weapon};
 pub use ground::Ground;
 pub use pathing::{Domain, Pathing};
 pub use tgck::map::Relation;
 pub use units::{Formation, Member, Player, Regiment, Team, owner};
 
-use aaa_data::{GameData, Id};
+use aaa_data::GameData;
 use tgck::map::{Sun, Terrain, Thing};
 
 use pathing::Obstacle;
@@ -66,7 +67,13 @@ impl Map {
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
-            regiments: units::regiments(&things, world_version, &bodies, &game.layouts()),
+            regiments: units::regiments(
+                &things,
+                world_version,
+                &bodies,
+                &game.fighters(),
+                &game.layouts(),
+            ),
             players,
             teams,
             pathing,

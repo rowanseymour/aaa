@@ -71,6 +71,99 @@ pub struct Thing {
     pub size: Vec<Size>,
     pub character_component: Option<CharacterComponent>,
     pub mover_component: Option<MoverComponent>,
+    pub body_component: Option<BodyComponent>,
+    pub properties_component: Option<PropertiesComponent>,
+    pub performer_component: Option<PerformerComponent>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BodyComponent {
+    pub health: Option<f32>,
+    pub defense: Option<f32>,
+}
+
+/// The properties an object has.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PropertiesComponent {
+    /// References to shared [`Property`]s.
+    #[serde(default)]
+    pub property: Vec<PropertyRef>,
+    /// Properties of this template's own.
+    #[serde(default)]
+    pub intrinsic_property: Vec<Property>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PropertyRef {
+    pub property_ids: Option<Id>,
+}
+
+/// A property objects can have, shared at the top level or an object's own.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Property {
+    pub ids: Option<Id>,
+    /// Comma separated, the flags it gives its objects for abilities'
+    /// `targets` to match.
+    pub enabled_target_flags: Option<String>,
+    #[serde(default)]
+    pub modifier: Vec<Modifier>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Modifier {
+    /// What it modifies, e.g. `RESIST_DAMAGE`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub damage_type: Option<Id>,
+    pub amount: Option<f32>,
+}
+
+/// What an object can do to others.
+#[derive(Debug, Clone, Deserialize)]
+pub struct PerformerComponent {
+    #[serde(default)]
+    pub check_damage_resistance: bool,
+    #[serde(default)]
+    pub ability: Vec<Ability>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Ability {
+    /// The ids of the animation its user plays to use it.
+    pub animation1: Option<String>,
+    pub ability_definition: Option<AbilityDefinition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AbilityDefinition {
+    /// E.g. `attack`.
+    pub ability_type: Option<String>,
+    pub range: Option<f32>,
+    #[serde(default)]
+    pub min_range: f32,
+    /// Seconds between uses.
+    #[serde(default)]
+    pub recharge_time: f32,
+    /// Radius of the area it hits, 0 for only its target.
+    #[serde(default)]
+    pub area: f32,
+    /// Within this distance of the centre an area hit does full damage.
+    pub attenuation_range_min: Option<f32>,
+    /// The fraction of damage an area hit does at its edge.
+    pub attenuation_factor_max: Option<f32>,
+    /// Comma separated flags, each `+` to require it or `-` to rule it out.
+    pub targets: Option<String>,
+    #[serde(default)]
+    pub effect: Vec<Effect>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Effect {
+    /// What it does, e.g. `MAIN_DAMAGE`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub damage_type_ids: Option<Id>,
+    pub amount: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

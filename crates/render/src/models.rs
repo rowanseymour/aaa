@@ -332,7 +332,8 @@ impl Models {
     ) -> Option<Model> {
         let idle = idle(view);
         let mut key = path.to_string();
-        for a in idle.iter().chain(&moving) {
+        let once = view.animations.iter().filter(|a| once(a));
+        for a in idle.into_iter().chain(moving).chain(once) {
             key += &format!("#{}", a.kf);
         }
         if let Some(model) = self.models.get(&key) {
@@ -412,6 +413,17 @@ impl Models {
         };
         let idle_kf = kf(idle)?;
         let moving = moving.and_then(|a| Some((kf(a)?, a.walk_distance?)));
+        let mut abilities = Vec::new();
+        let mut deaths = Vec::new();
+        for a in view.animations.iter().filter(|a| once(a)) {
+            let Some(clip) = kf(a) else {
+                continue;
+            };
+            match a.kind.as_str() {
+                "DIE" => deaths.push((clip, a.length)),
+                _ => abilities.push((a.ids.clone(), clip, a.length)),
+            }
+        }
         let nodes = Nodes::new(nif);
         let mut meshes = Vec::new();
         for (i, shape) in nodes.shapes.iter().enumerate() {
@@ -437,6 +449,8 @@ impl Models {
             meshes,
             (&idle_kf, idle.length),
             moving.as_ref().map(|(kf, distance)| (kf, *distance)),
+            &abilities,
+            &deaths,
             assets.meshes,
             assets.skins,
         )
@@ -663,6 +677,12 @@ fn moving(view: &View, speed: f32) -> Option<&aaa_data::Animation> {
         .filter_map(|a| Some((a, a.walk_distance? / a.length - speed)))
         .min_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
         .map(|(a, _)| a)
+}
+
+/// Whether an animation is one units play once when told to: using an
+/// ability or dying.
+fn once(a: &aaa_data::Animation) -> bool {
+    a.kind == "ABILITY" || a.kind == "DIE"
 }
 
 /// The idle animation a view's models play: the one named `idle`, else the
