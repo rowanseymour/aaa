@@ -32,6 +32,13 @@ fn fragment(
     let frame = u32(globals.time * animation.params.z) % count;
     pbr_input.material.base_color *= textureSample(frames, frames_sampler, uv, frame);
 
+    // The game blends gamma-encoded colours, which covers what's below far
+    // more than the same alpha does in linear light. Over a background, a
+    // dark surface of alpha a leaves (1 - a) of it in gamma terms, so
+    // (1 - a)^2.2 of it in linear ones.
+    let a = pbr_input.material.base_color.a;
+    pbr_input.material.base_color.a = 1.0 - pow(1.0 - a, 2.2);
+
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);

@@ -153,9 +153,11 @@ pub fn build(
         (
             water_mesh(ground, &water, &colors, fade),
             WaterMaterial {
+                // Lit without highlights, as the game draws it.
                 base: StandardMaterial {
                     alpha_mode: AlphaMode::Blend,
-                    perceptual_roughness: 0.15,
+                    perceptual_roughness: 1.0,
+                    reflectance: 0.0,
                     ..default()
                 },
                 extension: Water {
