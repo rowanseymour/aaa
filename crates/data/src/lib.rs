@@ -469,6 +469,7 @@ impl GameData {
                 "biome" => coverage.read::<defs::Biome>(block, t).map(drop),
                 "translate" => coverage.read::<defs::Translate>(block, None).map(drop),
                 "transitionset" => coverage.read::<defs::TransitionSet>(block, None).map(drop),
+                "sun" => coverage.read::<defs::Sun>(block, t).map(drop),
                 _ => {
                     coverage.skip(block, t);
                     continue;
@@ -476,6 +477,19 @@ impl GameData {
             };
         }
         coverage
+    }
+
+    /// The lighting presets the player can pick from, by id.
+    pub fn sun_presets(&mut self) -> Vec<defs::Sun> {
+        let files = self.parse_tgis(|n| n.starts_with("sun/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut out: Vec<defs::Sun> = files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Sun"))
+            .filter_map(|b| templates.deserialize(b).ok())
+            .collect();
+        out.sort_by(|a, b| a.ids.cmp(&b.ids));
+        out
     }
 
     /// The transition masks of the first transition set, keyed by the

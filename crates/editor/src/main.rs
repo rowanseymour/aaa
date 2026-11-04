@@ -25,7 +25,26 @@ options:
                                  help text or placeholder markers";
 
 const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
-                    (Q/E/right drag: rotate   R/F: tilt)   M: placeholder markers";
+                    (Q/E/right drag: rotate   R/F: tilt)   M: placeholder markers   \
+                    L: lighting";
+
+/// The help text, naming the lighting in use.
+fn help(lighting: &str) -> String {
+    format!("{HELP} ({lighting})")
+}
+
+/// Marks the help text.
+#[derive(Component)]
+struct Help;
+
+/// The lighting presets to cycle through: the map's own sun, then the
+/// player's choices in the game, each named with its diffuse and ambient
+/// colours.
+#[derive(Resource)]
+struct Lighting {
+    presets: Vec<(String, [f32; 3], [f32; 3])>,
+    current: usize,
+}
 
 #[derive(Resource)]
 struct Loaded {
@@ -149,13 +168,27 @@ fn main() -> ExitCode {
             .ok_or_else(|| format!("no map named {map:?}; run without a map name to list them"))?;
         Map::load(&mut game, &name).map(|map| Some(Loaded { game, map }))
     });
-    let loaded = match loaded {
+    let mut loaded = match loaded {
         Ok(Some(l)) => l,
         Ok(None) => return ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aaa-editor: {e}");
             return ExitCode::FAILURE;
         }
+    };
+
+    let sun = &loaded.map.sun;
+    let mut presets = vec![("map".to_string(), sun.diffuse, sun.ambient)];
+    presets.extend(loaded.game.sun_presets().into_iter().map(|s| {
+        (
+            s.ids.map_or_else(String::new, |i| i.to_string()),
+            s.diffuse,
+            s.ambient,
+        )
+    }));
+    let lighting = Lighting {
+        presets,
+        current: 0,
     };
 
     let mut app = App::new();
@@ -168,8 +201,9 @@ fn main() -> ExitCode {
     }));
     app.add_plugins(MapRenderPlugin { edge: Edge::Hard })
         .insert_resource(loaded)
+        .insert_resource(lighting)
         .add_systems(Startup, setup)
-        .add_systems(Update, objects::toggle_markers);
+        .add_systems(Update, (objects::toggle_markers, cycle_lighting));
     if let Some(c) = camera {
         app.insert_resource(c);
     }
@@ -228,6 +262,7 @@ fn setup(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
     mut assets: MapAssets,
+    lighting: Res<Lighting>,
     start: Option<Res<StartView>>,
     screenshot: Option<Res<ScreenshotTo>>,
 ) {
@@ -260,7 +295,8 @@ fn setup(
         return;
     }
     commands.spawn((
-        Text::new(HELP),
+        Help,
+        Text::new(help(&lighting.presets[lighting.current].0)),
         TextFont {
             font_size: FontSize::Px(14.0),
             ..default()
@@ -272,6 +308,25 @@ fn setup(
             ..default()
         },
     ));
+}
+
+/// Moves to the next lighting preset on `L`, keeping the sun's direction.
+fn cycle_lighting(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut lighting: ResMut<Lighting>,
+    mut sun: Single<&mut DirectionalLight>,
+    mut ambient: ResMut<GlobalAmbientLight>,
+    mut text: Query<&mut Text, With<Help>>,
+) {
+    if !keys.just_pressed(KeyCode::KeyL) {
+        return;
+    }
+    lighting.current = (lighting.current + 1) % lighting.presets.len();
+    let (name, diffuse, ambient_color) = &lighting.presets[lighting.current];
+    aaa_render::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
+    for mut t in &mut text {
+        t.0 = help(name);
+    }
 }
 
 #[cfg(test)]

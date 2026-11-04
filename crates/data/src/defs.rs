@@ -197,3 +197,12 @@ pub struct TransitionSet {
     /// Start of the mask file names, relative to the transition set's file.
     pub path_prefix: Option<String>,
 }
+
+/// A lighting preset the player can pick, with the colours a map's sun takes.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Sun {
+    pub ids: Option<Id>,
+    pub diffuse: [f32; 3],
+    pub ambient: [f32; 3],
+    pub specular: [f32; 3],
+}
