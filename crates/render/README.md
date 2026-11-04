@@ -8,8 +8,8 @@ and the game can share.
 
 - The height map, with each tile textured by its terrain variation and soft
   edges between terrain types from the game's transition masks
-- Water surfaces, with the bed carved out below them and coloured by depth
-  from the biome's water settings
+- Water surfaces, with the bed carved out below them, their animated texture
+  tinted by depth from the biome's water settings
 - Placed objects with the game's models: trees, buildings, roads, fences and
   the like, at each object's own size, variation and height; skinned models such as
   tall grass stand in the pose they were modelled in
@@ -23,7 +23,7 @@ and the game can share.
   pillars for start locations, and red boxes for objects without a model such
   as sound emitters
 
-Not yet: animated water textures, units' other animations, particle effects.
+Not yet: units' other animations, particle effects.
 Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 

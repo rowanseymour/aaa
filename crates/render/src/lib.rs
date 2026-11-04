@@ -8,6 +8,7 @@ pub mod objects;
 mod rig;
 pub mod terrain;
 mod textures;
+pub mod water;
 
 pub use rig::Playing;
 
@@ -25,6 +26,7 @@ use tgck::map::Sun;
 use blend::GroundMaterial;
 use models::{ModelAssets, Models};
 use tgck::map::Thing;
+use water::WaterMaterial;
 
 /// What drawing a map needs: the ground material, model animation, what lies
 /// beyond the map and the camera's controls.
@@ -55,11 +57,13 @@ impl Plugin for MapRenderPlugin {
     fn build(&self, app: &mut App) {
         // The shader has to be registered before the material that loads it.
         embedded_asset!(app, "blend.wesl");
+        embedded_asset!(app, "water.wesl");
         let beyond = match self.edge {
             Edge::Hard => Color::srgb(0.55, 0.7, 0.85),
             Edge::Fade => Color::BLACK,
         };
         app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
+            .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .add_systems(Update, (models::animate, rig::play, camera::update));
@@ -72,6 +76,7 @@ pub struct MapAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
+    water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
     skins: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
     formats: Res<'w, CompressedImageFormatSupport>,
@@ -106,6 +111,7 @@ pub fn spawn_map(
         meshes,
         materials,
         ground_materials,
+        water_materials,
         images,
         skins,
         formats,
@@ -123,7 +129,7 @@ pub fn spawn_map(
         commands.spawn((
             Name::new("water"),
             Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(materials.add(material)),
+            MeshMaterial3d(water_materials.add(material)),
             NotShadowCaster,
         ));
     }
