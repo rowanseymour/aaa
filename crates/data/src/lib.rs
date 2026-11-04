@@ -61,6 +61,26 @@ pub struct Body {
     pub speed: Option<f32>,
 }
 
+/// How an organization's members can be arranged.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Layout {
+    /// The formations it can take, in the order the layout lists them.
+    pub formations: Vec<Formation>,
+    /// Index into `formations` of the one it starts in.
+    pub default: usize,
+    /// The slot whose member the organization's position follows.
+    pub primary: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Formation {
+    /// E.g. `regiment_defensive`.
+    pub id: Id,
+    /// The positions of each slot's members, as many as the slot holds:
+    /// offsets from the primary slot's position, with 0,1 straight ahead.
+    pub slots: Vec<Vec<[f32; 2]>>,
+}
+
 /// An outline centred on an object, in world units at its template's size.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Shape {
@@ -332,6 +352,19 @@ impl GameData {
         out
     }
 
+    /// The organization layouts, by id.
+    pub fn layouts(&mut self) -> HashMap<Id, Layout> {
+        let files =
+            self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("templates/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("OrganizationLayout"))
+            .filter_map(|b| templates.deserialize::<defs::OrganizationLayout>(b).ok())
+            .filter_map(|l| Some((l.ids.clone()?, layout(&l)?)))
+            .collect()
+    }
+
     /// A template's models: its aspects when they are variations, else its
     /// normal model, else whatever aspects it lists. Models and animations
     /// missing from the archive are left out, so a view may have none.
@@ -469,6 +502,57 @@ impl GameData {
             })
             .collect()
     }
+}
+
+/// A layout's formations, each with its positions given to the slots in
+/// turn: a slot takes the next position for its property.
+fn layout(l: &defs::OrganizationLayout) -> Option<Layout> {
+    let formations: Vec<Formation> = l
+        .formation
+        .iter()
+        .filter_map(|f| {
+            Some(Formation {
+                id: f.formation_ids.clone()?,
+                slots: slot_positions(&l.slot, f)?,
+            })
+        })
+        .collect();
+    // Layouts may inherit a default they don't define.
+    let default = l
+        .default_formation_ids
+        .as_ref()
+        .and_then(|id| formations.iter().position(|f| &f.id == id))
+        .unwrap_or(0);
+    (!formations.is_empty()).then(|| Layout {
+        formations,
+        default,
+        primary: l.slot.iter().position(|s| s.primary),
+    })
+}
+
+fn slot_positions(
+    slots: &[defs::LayoutSlot],
+    formation: &defs::LayoutFormation,
+) -> Option<Vec<Vec<[f32; 2]>>> {
+    let mut taken = vec![false; formation.position.len()];
+    slots
+        .iter()
+        .map(|slot| {
+            let property = slot.property_ids.as_deref()?;
+            (0..slot.number.unwrap_or(1))
+                .map(|_| {
+                    let i = formation.position.iter().enumerate().position(|(i, p)| {
+                        !taken[i]
+                            && p.property_ids
+                                .as_deref()
+                                .is_some_and(|q| q.eq_ignore_ascii_case(property))
+                    })?;
+                    taken[i] = true;
+                    Some(formation.position[i].offset.unwrap_or([0.0, 0.0]))
+                })
+                .collect()
+        })
+        .collect()
 }
 
 fn body(thing: &defs::Thing) -> Body {
@@ -679,6 +763,29 @@ mod tests {
         add_renames(&mut variations, translate, "Variation", |_| true);
         assert_eq!(variations[&Id::from("live")], "new.tga");
         assert_eq!(variations[&Id::from("old")], "new.tga");
+    }
+
+    #[test]
+    fn layouts_give_positions_to_slots_by_property() {
+        let parsed = tgi::parse(
+            "[OrganizationLayout]\n{\n\tIDS = squad\n\tdefault_formation_ids = missing\n\
+             \t[Slot]\n\tproperty_IDS = front\n\tnumber = 2\n\
+             \t[Slot]\n\tproperty_IDS = captain\n\tprimary = true\n\
+             \t[Formation]\n\t{\n\t\tformation_IDS = line\n\
+             \t\t[Position]\n\t\tproperty_IDS = captain\n\t\toffset = 0,0\n\
+             \t\t[Position]\n\t\tproperty_IDS = front\n\t\toffset = -1,1\n\
+             \t\t[Position]\n\t\tproperty_IDS = front\n\t\toffset = 1,1\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("OrganizationLayout").next().unwrap();
+        let l: defs::OrganizationLayout = tgi::from_block(block).unwrap();
+        let layout = layout(&l).unwrap();
+        assert_eq!(layout.default, 0);
+        assert_eq!(layout.primary, Some(1));
+        assert_eq!(layout.formations[0].id, Id::from("line"));
+        assert_eq!(
+            layout.formations[0].slots,
+            [vec![[-1.0, 1.0], [1.0, 1.0]], vec![[0.0, 0.0]]]
+        );
     }
 
     #[test]

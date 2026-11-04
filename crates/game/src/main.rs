@@ -2,7 +2,8 @@
 //! map it's given.
 //!
 //! Click a unit to select its regiment and right-click the ground to send
-//! it there.
+//! it there. The number keys pick its formation, in the order its layout
+//! lists them.
 
 use std::collections::HashSet;
 use std::f32::consts::FRAC_PI_2;
@@ -74,7 +75,10 @@ fn main() -> ExitCode {
         .init_resource::<Selected>()
         .add_systems(Startup, setup)
         .add_systems(FixedUpdate, step)
-        .add_systems(Update, (command, show_units, show_selection));
+        .add_systems(
+            Update,
+            (command, choose_formation, show_units, show_selection),
+        );
     match app.run() {
         AppExit::Success => ExitCode::SUCCESS,
         AppExit::Error(code) => ExitCode::from(code.get()),
@@ -191,6 +195,35 @@ fn command(
             .map(|(u, _)| u.regiment);
     } else if let Some(r) = selected.0 {
         sim.0.order_move(r, point);
+    }
+}
+
+fn choose_formation(
+    keys: Res<ButtonInput<KeyCode>>,
+    selected: Res<Selected>,
+    mut sim: ResMut<Sim>,
+) {
+    const KEYS: [KeyCode; 9] = [
+        KeyCode::Digit1,
+        KeyCode::Digit2,
+        KeyCode::Digit3,
+        KeyCode::Digit4,
+        KeyCode::Digit5,
+        KeyCode::Digit6,
+        KeyCode::Digit7,
+        KeyCode::Digit8,
+        KeyCode::Digit9,
+    ];
+    let Some(r) = selected.0 else {
+        return;
+    };
+    if let Some(f) = KEYS.iter().position(|&k| keys.just_pressed(k)) {
+        sim.0.set_formation(r, f);
+        let regiment = &sim.0.regiments[r];
+        info!(
+            "{} in formation {}",
+            regiment.template, regiment.formations[regiment.formation].id
+        );
     }
 }
 
