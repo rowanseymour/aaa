@@ -22,7 +22,7 @@ mod scenery;
 mod triggers;
 
 pub use actor::{
-    Actor, Body, COMPONENTS, Component, Construction, Mover, MoverFall, Properties, Property,
+    Actor, Body, COMPONENTS, City, Component, Construction, Mover, MoverFall, Properties, Property,
     State, Trailer, TrailerLists, Updatable, Upgrade,
 };
 pub use ai::{AiBlock, AiBlockLink, AiBlockSide, AiData, AiMap, AiRegion, ShoreMesh, ShoreTile};

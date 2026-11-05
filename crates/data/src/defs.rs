@@ -74,12 +74,20 @@ pub struct Thing {
     pub body_component: Option<BodyComponent>,
     pub properties_component: Option<PropertiesComponent>,
     pub performer_component: Option<PerformerComponent>,
+    pub city_component: Option<CityComponent>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct BodyComponent {
     pub health: Option<f32>,
     pub defense: Option<f32>,
+    pub captureable: Option<bool>,
+    pub destructible: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct CityComponent {
+    pub zone_radius: Option<f32>,
 }
 
 /// The properties an object has.

@@ -4,7 +4,8 @@
 //! You play one of the map's players. Click one of your units to select its
 //! regiment and right-click the ground to send it there. The number keys pick
 //! its formation, in the order its layout lists them. Rings in their owner's
-//! colour mark every regiment's units.
+//! colour mark every regiment's units, outlines every building and a wider
+//! ring each city's reach; grey outlines mark disabled buildings.
 
 use std::collections::HashSet;
 use std::f32::consts::FRAC_PI_2;
@@ -12,11 +13,11 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aaa_data::GameData;
-use aaa_map::{Ground, Map};
+use aaa_map::{Ground, Map, Obstacle, Shape};
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::terrain::world;
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
-use aaa_sim::{TICK, World};
+use aaa_sim::{State, TICK, World};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button, ScrollArea};
@@ -73,6 +74,17 @@ struct UnitView {
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
     dead: bool,
+}
+
+/// Draws one of the simulation's buildings.
+#[derive(Component)]
+struct BuildingView {
+    /// Index into the sim's buildings.
+    building: usize,
+    /// Where the map placed it.
+    placed: Vec3,
+    /// The last of its shots shown.
+    shot: Option<(u64, usize)>,
 }
 
 fn main() -> ExitCode {
@@ -133,7 +145,14 @@ fn main() -> ExitCode {
         .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
             Update,
-            (command, choose_formation, show_units, show_selection).run_if(in_state(Screen::Match)),
+            (
+                command,
+                choose_formation,
+                show_units,
+                show_buildings,
+                show_selection,
+            )
+                .run_if(in_state(Screen::Match)),
         );
     match map {
         Some(map) => {
@@ -292,9 +311,10 @@ fn setup(
 ) {
     let Loaded { game, map } = &mut *loaded;
     window.title = format!("{} - aaa-game", map.title);
-    let regiments: HashSet<u32> = map.regiments.iter().map(|r| r.id).collect();
+    let ids = map.regiments.iter().map(|r| r.id);
+    let leave_out: HashSet<u32> = ids.chain(map.buildings.iter().map(|b| b.id)).collect();
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
-        regiments.contains(&t.id)
+        leave_out.contains(&t.id)
     });
     let members = map.regiments.iter().flat_map(|r| &r.members);
     let mut missing = 0;
@@ -315,6 +335,28 @@ fn setup(
         "{} regiments of {} units, {missing} without a model",
         sim.0.regiments.len(),
         sim.0.units.len()
+    );
+    let things = map.things.iter().filter(|t| leave_out.contains(&t.id));
+    let things: std::collections::HashMap<u32, _> = things.map(|t| (t.id, t)).collect();
+    let mut missing = 0;
+    for (i, b) in map.buildings.iter().enumerate() {
+        debug_assert_eq!(sim.0.buildings[i].id, b.id);
+        let thing = things[&b.id];
+        match models.spawn_object(&mut commands, game, &mut assets.models(), thing) {
+            Some(e) => {
+                let [x, y, z] = thing.position;
+                commands.entity(e).insert(BuildingView {
+                    building: i,
+                    placed: world(x, y, z),
+                    shot: None,
+                });
+            }
+            None => missing += 1,
+        }
+    }
+    info!(
+        "{} buildings, {missing} without a model",
+        sim.0.buildings.len()
     );
     let own = (0..sim.0.regiments.len()).find(|&r| local.0.is_some_and(|p| sim.0.commands(p, r)));
     let cam = match own.or((!sim.0.regiments.is_empty()).then_some(0)) {
@@ -379,6 +421,44 @@ fn show_units(
         if let Some(mut playing) = playing.filter(|_| unit.alive()) {
             let speed = sim.0.regiments[unit.regiment].speed;
             playing.set_moving(unit.moving().then_some(speed));
+        }
+    }
+}
+
+/// Plays buildings' attacks as they fire, and sinks the destroyed into the
+/// ground.
+fn show_buildings(
+    sim: Res<Sim>,
+    fixed: Res<Time<Fixed>>,
+    mut views: Query<(
+        &mut BuildingView,
+        &mut Transform,
+        &mut Visibility,
+        Option<&mut Playing>,
+    )>,
+) {
+    const SINK_TIME: f32 = 3.0;
+    const SINK_DEPTH: f32 = 12.0;
+    for (mut view, mut transform, mut visibility, playing) in &mut views {
+        let building = &sim.0.buildings[view.building];
+        if let State::Destroyed(fell) = building.state {
+            let since = (sim.0.ticks - fell) as f32 + fixed.overstep_fraction();
+            let sunk = (since * TICK / SINK_TIME).min(1.0);
+            transform.translation = view.placed - Vec3::Y * SINK_DEPTH * sunk;
+            if sunk >= 1.0 {
+                *visibility = Visibility::Hidden;
+            }
+            continue;
+        }
+        if building.shot != view.shot {
+            view.shot = building.shot;
+            let weapon = building
+                .shot
+                .and_then(|(_, w)| building.fighter.weapons.get(w));
+            if let (Some(mut p), Some(ids)) = (playing, weapon.and_then(|w| w.animation.as_deref()))
+            {
+                p.use_ability(ids);
+            }
         }
     }
 }
@@ -500,7 +580,8 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
 }
 
 /// Rings every regiment's units in their owner's colour, and the selected
-/// regiment's again, wider.
+/// regiment's again, wider; outlines buildings in theirs, and rings cities'
+/// reach.
 fn show_selection(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
@@ -522,6 +603,63 @@ fn show_selection(
             gizmos.linestrip(ring(ground, x, y, RADIUS * 1.4), Color::WHITE);
         }
     }
+    for building in &sim.0.buildings {
+        let colour = match building.state {
+            State::Standing => {
+                let rgb = sim.0.sides.player(building.owner).map(|p| p.rgb);
+                let [r, g, b] = rgb.unwrap_or([1.0; 3]);
+                Color::srgb(r, g, b)
+            }
+            State::Disabled => Color::srgb(0.4, 0.4, 0.4),
+            State::Destroyed(_) => continue,
+        };
+        let [x, y] = building.position;
+        match &building.obstacle {
+            Some(o) => gizmos.linestrip(outline(ground, o), colour),
+            None => gizmos.linestrip(ring(ground, x, y, 1.0), colour),
+        }
+        if let Some(zone) = building.zone {
+            gizmos.linestrip(ring(ground, x, y, zone), colour.with_alpha(0.5));
+        }
+    }
+}
+
+/// The edge of the ground an obstacle covers, following the ground's rise
+/// and fall.
+fn outline(ground: &Ground, o: &Obstacle) -> Vec<Vec3> {
+    let [x, y] = o.position;
+    let (w, h) = match o.shape {
+        Shape::Rect { width, height } => (width, height),
+        Shape::Circle { radius } => return ring(ground, x, y, radius).collect(),
+        Shape::Point => return ring(ground, x, y, 1.0).collect(),
+    };
+    // Its y axis runs along the facing.
+    let [fx, fy] = o.facing;
+    let corner = |right: f32, ahead: f32| {
+        let (rx, ry) = (right * w / 2.0, ahead * h / 2.0);
+        [x + rx * fy + ry * fx, y - rx * fx + ry * fy]
+    };
+    let corners = [
+        corner(-1.0, -1.0),
+        corner(1.0, -1.0),
+        corner(1.0, 1.0),
+        corner(-1.0, 1.0),
+        corner(-1.0, -1.0),
+    ];
+    // Several points a side, so it follows the ground between corners.
+    const STEPS: usize = 8;
+    corners
+        .windows(2)
+        .flat_map(|side| {
+            let ([ax, ay], [bx, by]) = (side[0], side[1]);
+            (0..STEPS).map(move |i| {
+                let t = i as f32 / STEPS as f32;
+                (ax + (bx - ax) * t, ay + (by - ay) * t)
+            })
+        })
+        .chain(std::iter::once((corners[4][0], corners[4][1])))
+        .map(|(px, py)| world(px, py, ground.height_at(px, py) + 0.05))
+        .collect()
 }
 
 /// A ring around a point that follows the ground's rise and fall, so it
