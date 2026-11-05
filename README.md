@@ -5,6 +5,10 @@ real-time strategy game.
 
 You need your own copy of the game. This project contains no game code or data.
 
+This is not a decompilation of the game. Its executable was studied to learn
+how its file formats and rules work, but none of its code is included or
+translated here: everything is written from scratch.
+
 ## Crates
 
 | Crate | What it does | Status |
