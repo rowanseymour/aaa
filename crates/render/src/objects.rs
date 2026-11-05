@@ -8,6 +8,7 @@ use aaa_map::Ground;
 use bevy::prelude::*;
 use tgck::map::Thing;
 
+use crate::MapObject;
 use crate::terrain::world;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,6 +90,7 @@ pub fn spawn(
         }
         commands.spawn((
             Name::new(thing.template.clone()),
+            MapObject(thing.clone()),
             Mesh3d(mesh),
             MeshMaterial3d(material),
             transform,

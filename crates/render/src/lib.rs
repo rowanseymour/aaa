@@ -71,9 +71,20 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<GlowMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
-            .add_systems(Update, (models::animate, rig::play, camera::update));
+            .add_systems(
+                Update,
+                (
+                    models::animate,
+                    rig::play,
+                    camera::update.in_set(camera::Controls),
+                ),
+            );
     }
 }
+
+/// The map record an object was spawned from, on its root entity.
+#[derive(Component)]
+pub struct MapObject(pub Thing);
 
 /// The assets [`spawn_map`] adds to.
 #[derive(SystemParam)]
@@ -140,6 +151,8 @@ pub fn spawn_map(
             Mesh3d(meshes.add(mesh)),
             MeshMaterial3d(water_materials.add(material)),
             NotShadowCaster,
+            // Clicks go through to what's under the water.
+            Pickable::IGNORE,
         ));
     }
     let mut models = Models::new(game, formats.0);

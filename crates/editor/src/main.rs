@@ -6,11 +6,15 @@ use std::process::ExitCode;
 
 use aaa_data::GameData;
 use aaa_map::Map;
+use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
+use bevy_egui::{
+    EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui, input::egui_wants_any_pointer_input,
+};
 
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::shot::{self, ShotPlugin};
-use aaa_render::{Edge, MapAssets, MapRenderPlugin, objects, terrain};
+use aaa_render::{Edge, MapAssets, MapObject, MapRenderPlugin, objects, terrain};
 
 const USAGE: &str = "\
 usage:
@@ -24,7 +28,7 @@ options:
   --screenshot <file.png>        save a frame to a file and exit, without a
                                  window, help text or placeholder markers";
 
-const HELP: &str = "WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
+const HELP: &str = "click: inspect   WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
                     (Q/E/right drag: rotate   R/F: tilt)   M: placeholder markers   \
                     L: lighting";
 
@@ -50,6 +54,15 @@ struct Lighting {
 struct Loaded {
     game: GameData,
     map: Map,
+}
+
+/// Marks an object clicked on, whose map record shows in a window until
+/// that's closed.
+#[derive(Component)]
+struct Inspected {
+    /// Whether to bring its window to the front, for a click on an object
+    /// that already has one.
+    raise: bool,
 }
 
 /// Whether the run is only here to save a frame, from `--screenshot`.
@@ -166,8 +179,19 @@ fn main() -> ExitCode {
     }
     let shooting = Shooting(screenshot.is_some());
     app.insert_resource(shooting);
-    if let Some(s) = screenshot {
-        app.add_plugins(s);
+    match screenshot {
+        Some(s) => {
+            app.add_plugins(s);
+        }
+        None => {
+            app.add_plugins((MeshPickingPlugin, EguiPlugin::default()))
+                .configure_sets(
+                    Update,
+                    camera::Controls.run_if(not(egui_wants_any_pointer_input)),
+                )
+                .add_observer(inspect)
+                .add_systems(EguiPrimaryContextPass, show_inspected);
+        }
     }
     match app.run() {
         AppExit::Success => ExitCode::SUCCESS,
@@ -239,4 +263,116 @@ fn cycle_lighting(
     for mut t in &mut text {
         t.0 = help(name);
     }
+}
+
+/// Opens a window on the object clicked on.
+fn inspect(
+    mut click: On<PointerClick>,
+    objects: Query<(), With<MapObject>>,
+    parents: Query<&ChildOf>,
+    mut commands: Commands,
+) {
+    // Clicks bubble up through the parts of a model, so act on the first.
+    click.propagate(false);
+    if click.button != PointerButton::Primary {
+        return;
+    }
+    // Clicks on egui's windows land on its context's entity instead, which
+    // isn't an object.
+    let hit = click.original_event_target();
+    let object = std::iter::once(hit)
+        .chain(parents.iter_ancestors(hit))
+        .find(|&e| objects.contains(e));
+    if let Some(object) = object {
+        commands.entity(object).insert(Inspected { raise: true });
+    }
+}
+
+/// Shows a window with the map record of each object being inspected, with
+/// a line out to it from the object.
+fn show_inspected(
+    mut contexts: EguiContexts,
+    camera: Single<(&Camera, &GlobalTransform), With<RtsCamera>>,
+    mut inspected: Query<(Entity, &MapObject, &GlobalTransform, &mut Inspected)>,
+    mut commands: Commands,
+) -> Result {
+    let ctx = contexts.ctx_mut()?;
+    let (camera, view) = *camera;
+    let color = egui::Color32::from_rgb(255, 230, 50);
+    for (entity, MapObject(thing), transform, mut inspected) in &mut inspected {
+        let id = egui::Id::new(entity);
+        if inspected.raise {
+            ctx.move_to_top(egui::LayerId::new(egui::Order::Middle, id));
+            inspected.raise = false;
+        }
+        let at = camera
+            .world_to_viewport(view, transform.translation())
+            .ok()
+            .map(|p| egui::pos2(p.x, p.y));
+        let mut open = true;
+        let mut window = egui::Window::new(&thing.template)
+            .id(id)
+            .open(&mut open)
+            .default_width(320.0);
+        if let Some(at) = at {
+            window = window.default_pos(at + egui::vec2(60.0, -120.0));
+        }
+        let shown = window.show(ctx, |ui| {
+            egui::Grid::new("fields")
+                .num_columns(2)
+                .striped(true)
+                .show(ui, |ui| {
+                    let mut row = |name: &str, value: String| {
+                        ui.label(name);
+                        ui.monospace(value);
+                        ui.end_row();
+                    };
+                    row("name", thing.name.clone());
+                    row("id", thing.id.to_string());
+                    row("class", thing.class.to_string());
+                    row("position", format!("{:.2?}", thing.position));
+                    row("facing", format!("{:.3?}", thing.facing));
+                    row("scale", thing.scale.to_string());
+                    row("variation", thing.variation.to_string());
+                    row("flags", format!("{:#010x}", thing.flags));
+                    row("seen by", format!("{:#06x}", thing.seen_by));
+                });
+            egui::CollapsingHeader::new("detail").show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(400.0)
+                    .show(ui, |ui| {
+                        ui.monospace(format!("{:#?}", thing.detail));
+                    });
+            });
+        });
+        if !open {
+            commands.entity(entity).remove::<Inspected>();
+            continue;
+        }
+        if let (Some(at), Some(shown)) = (at, shown) {
+            let painter = ctx.layer_painter(egui::LayerId::background());
+            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                leader(shown.response.rect, at),
+                false,
+                egui::Color32::TRANSPARENT,
+                egui::Stroke::new(1.5, color),
+            ));
+            painter.circle_filled(at, 4.0, color);
+        }
+    }
+    Ok(())
+}
+
+/// The curve from a window to the point on screen it's about, like a pipe:
+/// out of the side of its title bar facing the point, and round to arrive
+/// level with it too.
+fn leader(window: egui::Rect, to: egui::Pos2) -> [egui::Pos2; 4] {
+    let (x, out) = if to.x > window.center().x {
+        (window.right(), 1.0)
+    } else {
+        (window.left(), -1.0)
+    };
+    let from = egui::pos2(x, window.top() + 14.0);
+    let bend = egui::vec2(out * ((to.x - from.x).abs() / 2.0).max(40.0), 0.0);
+    [from, from + bend, to - bend, to]
 }
