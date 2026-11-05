@@ -18,6 +18,9 @@ pub const TICK: f32 = 0.1;
 /// The share of its health a building taken over by force is left with.
 pub const CAPTURE_HEALTH: f32 = 0.3;
 
+/// How near a moving unit comes to an enemy to run into it.
+pub const CONTACT: f32 = 1.5;
+
 /// A match in progress.
 pub struct World {
     pub sides: Sides,
@@ -45,8 +48,50 @@ pub struct Regiment {
     /// The way it faces, or will once there.
     pub facing: [f32; 2],
     pub formations: Vec<aaa_map::Formation>,
-    /// Index into `formations` of the one it's in.
+    /// Index into `formations` of the one it's been put in.
     pub formation: usize,
+    /// Index into `formations` of the one it fights in once engaged.
+    pub combat: Option<usize>,
+    /// How far from where it stands it takes on enemies that fire on it.
+    pub operational_range: f32,
+    pub order: Order,
+    /// The enemies it's engaged with. While there are any it holds its
+    /// ground against them.
+    pub engaged: Vec<Enemy>,
+    /// Where it was headed and how it was to face there when it engaged,
+    /// to carry on once it's done.
+    resume: Option<([f32; 2], [f32; 2])>,
+}
+
+impl Regiment {
+    /// Index into `formations` of the one it's in: its combat formation
+    /// while engaged.
+    pub fn current_formation(&self) -> usize {
+        match self.engaged.is_empty() {
+            true => self.formation,
+            false => self.combat.unwrap_or(self.formation),
+        }
+    }
+}
+
+/// What a regiment can engage.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Enemy {
+    /// Index into [`World::regiments`].
+    Regiment(usize),
+    /// Index into [`World::buildings`].
+    Building(usize),
+}
+
+/// How a regiment goes where it's sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Order {
+    /// Engaging enemies that fire on it or that it runs into on the way,
+    /// and carrying on once they're dealt with. Standing is moving nowhere.
+    #[default]
+    Move,
+    /// Ignoring enemies all the way there, then back to [`Order::Move`].
+    Run,
 }
 
 pub struct Unit {
@@ -231,6 +276,11 @@ impl World {
                 facing: normalised(regiment.facing).unwrap_or([0.0, -1.0]),
                 formations: regiment.formations.clone(),
                 formation: regiment.formation,
+                combat: regiment.combat,
+                operational_range: regiment.operational_range.unwrap_or(0.0),
+                order: Order::Move,
+                engaged: Vec::new(),
+                resume: None,
             });
         }
         world
@@ -301,7 +351,8 @@ impl World {
     }
 
     /// Sends a regiment to `target`, turned to face the way it's going,
-    /// each member making for its place in the formation there.
+    /// each member making for its place in the formation there. An engaged
+    /// regiment only sets off once it's done.
     pub fn order_move(
         &mut self,
         player: u32,
@@ -312,13 +363,42 @@ impl World {
             return Err(NotYours);
         }
         let r = &mut self.regiments[regiment];
+        r.order = Order::Move;
         let from = r.position;
-        if let Some(heading) = normalised([target[0] - from[0], target[1] - from[1]]) {
-            r.facing = heading;
+        let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
+        match r.engaged.is_empty() {
+            true => self.send(regiment, target, facing),
+            false => r.resume = Some((target, facing)),
         }
-        r.position = target;
-        self.take_places(regiment);
         Ok(())
+    }
+
+    /// Sends a regiment to `target` as [`World::order_move`] does, but
+    /// breaking off any engagement and engaging nothing on the way.
+    pub fn order_run(
+        &mut self,
+        player: u32,
+        regiment: usize,
+        target: [f32; 2],
+    ) -> Result<(), NotYours> {
+        if !self.commands(player, regiment) {
+            return Err(NotYours);
+        }
+        let r = &mut self.regiments[regiment];
+        r.order = Order::Run;
+        r.engaged.clear();
+        r.resume = None;
+        let from = r.position;
+        let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
+        self.send(regiment, target, facing);
+        Ok(())
+    }
+
+    fn send(&mut self, regiment: usize, target: [f32; 2], facing: [f32; 2]) {
+        let r = &mut self.regiments[regiment];
+        r.position = target;
+        r.facing = facing;
+        self.take_places(regiment);
     }
 
     /// Switches a regiment to another of its formations, its members
@@ -335,7 +415,10 @@ impl World {
         let r = &mut self.regiments[regiment];
         if formation < r.formations.len() && formation != r.formation {
             r.formation = formation;
-            self.take_places(regiment);
+            // An engaged regiment keeps to its combat formation for now.
+            if r.current_formation() == formation {
+                self.take_places(regiment);
+            }
         }
         Ok(())
     }
@@ -345,7 +428,7 @@ impl World {
         let r = &self.regiments[regiment];
         let [px, py] = r.position;
         let [fx, fy] = r.facing;
-        let offsets = &r.formations[r.formation].offsets;
+        let offsets = &r.formations[r.current_formation()].offsets;
         for (&u, &[right, ahead]) in r.units.iter().zip(offsets) {
             let place = [px + right * fy + ahead * fx, py - right * fx + ahead * fy];
             let unit = &mut self.units[u];
@@ -365,9 +448,125 @@ impl World {
     /// Plays one [`TICK`].
     pub fn tick(&mut self) {
         self.travel();
-        self.fight();
+        let fired_on = self.fight();
+        self.engage(&fired_on);
         self.occupy();
         self.ticks += 1;
+    }
+
+    /// Ends the engagements whose enemies are gone, then engages regiments
+    /// with what `fired_on` says fired on them, by regiment, where it's in
+    /// their operational range, and moving ones with enemy units they run
+    /// into. Regiments on [`Order::Run`] engage nothing.
+    fn engage(&mut self, fired_on: &[(usize, Target)]) {
+        for r in 0..self.regiments.len() {
+            if self.regiments[r].order == Order::Run
+                && !self.survivors(r).any(|u| self.units[u].moving())
+            {
+                self.regiments[r].order = Order::Move;
+            }
+            let engaged = std::mem::take(&mut self.regiments[r].engaged);
+            if engaged.is_empty() {
+                continue;
+            }
+            let left: Vec<Enemy> = engaged
+                .into_iter()
+                .filter(|&e| self.within_range(r, e))
+                .collect();
+            let done = left.is_empty();
+            self.regiments[r].engaged = left;
+            if done {
+                self.disengage(r);
+            }
+        }
+        let mut meetings: Vec<(usize, Enemy)> = Vec::new();
+        for &(r, from) in fired_on {
+            let reach = self.regiments[r].operational_range;
+            if self.reach(self.centre(r), from) <= reach {
+                let enemy = match from {
+                    Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
+                    Target::Building(b) => Enemy::Building(b),
+                };
+                meetings.push((r, enemy));
+            }
+        }
+        for (u, unit) in self.units.iter().enumerate() {
+            if !unit.alive() || !unit.moving() {
+                continue;
+            }
+            let met = self.units.iter().enumerate().find(|&(v, other)| {
+                v != u
+                    && other.alive()
+                    && distance(unit.position, other.position) <= CONTACT
+                    && self.hostile(unit.regiment, Enemy::Regiment(other.regiment))
+            });
+            if let Some((_, other)) = met {
+                meetings.push((unit.regiment, Enemy::Regiment(other.regiment)));
+            }
+        }
+        for (r, enemy) in meetings {
+            let regiment = &self.regiments[r];
+            if regiment.order == Order::Run
+                || regiment.engaged.contains(&enemy)
+                || !self.hostile(r, enemy)
+                || self.destroyed(r)
+            {
+                continue;
+            }
+            let first = regiment.engaged.is_empty();
+            self.regiments[r].engaged.push(enemy);
+            if first {
+                self.hold(r, enemy);
+            }
+        }
+    }
+
+    fn hostile(&self, r: usize, enemy: Enemy) -> bool {
+        let owner = match enemy {
+            Enemy::Regiment(e) => self.regiments[e].owner,
+            Enemy::Building(b) => self.buildings[b].owner,
+        };
+        self.sides.relation(self.regiments[r].owner, owner) == Relation::Enemy
+    }
+
+    /// Whether `enemy` is still one to `r` and in its operational range, or
+    /// close enough to be run into where it has none.
+    fn within_range(&self, r: usize, enemy: Enemy) -> bool {
+        let reach = self.regiments[r].operational_range.max(CONTACT);
+        let here = self.centre(r);
+        let near = match enemy {
+            Enemy::Regiment(e) => self
+                .survivors(e)
+                .any(|u| distance(here, self.units[u].position) <= reach),
+            Enemy::Building(b) => {
+                self.buildings[b].standing() && self.buildings[b].distance(here) <= reach
+            }
+        };
+        near && self.hostile(r, enemy)
+    }
+
+    /// Stops a regiment that's just engaged where it stands, in its combat
+    /// formation facing `enemy`, to carry on where it was going afterwards.
+    fn hold(&mut self, r: usize, enemy: Enemy) {
+        let here = self.centre(r);
+        let there = match enemy {
+            Enemy::Regiment(e) => self.centre(e),
+            Enemy::Building(b) => self.buildings[b].position,
+        };
+        let regiment = &mut self.regiments[r];
+        regiment.resume = Some((regiment.position, regiment.facing));
+        let facing = normalised([there[0] - here[0], there[1] - here[1]]);
+        let facing = facing.unwrap_or(regiment.facing);
+        self.send(r, here, facing);
+    }
+
+    /// Sends a regiment that's no longer engaged on its way again, in the
+    /// formation it was put in.
+    fn disengage(&mut self, r: usize) {
+        match self.regiments[r].resume.take() {
+            Some((target, facing)) => self.send(r, target, facing),
+            None => self.take_places(r),
+        }
     }
 
     fn travel(&mut self) {
@@ -444,7 +643,8 @@ impl World {
     /// Fires every weapon that's ready at what it can hit, then takes the
     /// dead out of the fight, so that all hit each other at once. Only
     /// turrets fire on the move: anything else turns its user to aim.
-    fn fight(&mut self) {
+    /// Returns, for each unit hit, its regiment and what fired.
+    fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
         let shooters: Vec<Target> = self.targets().collect();
         for s in shooters {
@@ -471,7 +671,7 @@ impl World {
                 target = Some(t);
                 shot = Some((self.ticks, w));
                 reloads[w] = weapon.recharge;
-                self.strike(weapon, self.position(t), t, by, &mut hits);
+                self.strike(weapon, self.position(t), t, (s, by), &mut hits);
             }
             match s {
                 Target::Unit(u) => {
@@ -484,7 +684,11 @@ impl World {
                 }
             }
         }
+        let mut fired_on = Vec::new();
         for hit in hits {
+            if let Target::Unit(u) = hit.target {
+                fired_on.push((self.units[u].regiment, hit.from));
+            }
             self.land(hit);
         }
         let gone = |w: &World, t: Option<Target>| t.is_some_and(|t| w.fighter(t).is_none());
@@ -498,6 +702,7 @@ impl World {
                 self.buildings[b].target = None;
             }
         }
+        fired_on
     }
 
     /// Takes a hit's damage off what it lands on. A building whose health
@@ -610,14 +815,22 @@ impl World {
             .allow(fighter.flags.iter().chain(std::iter::once(&side)))
     }
 
-    /// Records the damage a shot by `by`'s side landing at `at`, aimed at
-    /// `t`, does to what it hits.
-    fn strike(&self, weapon: &Weapon, at: [f32; 2], t: Target, by: u32, hits: &mut Vec<Hit>) {
+    /// Records the damage a shot fired by `from` of `by`'s side, landing at
+    /// `at` and aimed at `t`, does to what it hits.
+    fn strike(
+        &self,
+        weapon: &Weapon,
+        at: [f32; 2],
+        t: Target,
+        (from, by): (Target, u32),
+        hits: &mut Vec<Hit>,
+    ) {
         if weapon.area <= 0.0 {
             if let Some(f) = self.fighter(t) {
                 hits.push(Hit {
                     target: t,
                     amount: damage(weapon, f, 1.0),
+                    from,
                     by,
                 });
             }
@@ -632,6 +845,7 @@ impl World {
             hits.push(Hit {
                 target,
                 amount: damage(weapon, f, falloff(weapon, d)),
+                from,
                 by,
             });
         }
@@ -704,6 +918,8 @@ impl World {
 struct Hit {
     target: Target,
     amount: f32,
+    /// What fired it.
+    from: Target,
     by: u32,
 }
 
@@ -832,6 +1048,8 @@ mod tests {
                 formation("file", vec![[0.0, 1.0], [0.0, -1.0]]),
             ],
             formation: 0,
+            combat: None,
+            operational_range: None,
             primary: None,
         };
         World::from_regiments(Sides::default(), pathing, &[regiment])
@@ -982,6 +1200,8 @@ mod tests {
                         offsets: vec![[0.0, 0.0]],
                     }],
                     formation: 0,
+                    combat: None,
+                    operational_range: Some(34.0),
                     primary: None,
                 }
             })
@@ -1046,6 +1266,104 @@ mod tests {
             assert!(!w.units[0].moving());
             assert!(w.units[1].health < 100.0);
         }
+    }
+
+    /// Player 1's strong rifleman at 10,10 and player 2's weak one at
+    /// 10,30, out of each other's range; the first can also stand in a
+    /// wider line, which it fights in.
+    fn skirmish() -> World {
+        let mut w = battle(
+            &[1, 2],
+            vec![
+                soldier(vec![rifle(12.0, 50.0)]),
+                soldier(vec![rifle(12.0, 10.0)]),
+            ],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 30.0];
+        let r = &mut w.regiments[0];
+        r.formations.push(aaa_map::Formation {
+            id: "wide".into(),
+            offsets: vec![[0.0, 0.0]],
+        });
+        r.combat = Some(1);
+        w
+    }
+
+    #[test]
+    fn moving_regiments_stop_to_fight_what_fires_on_them_then_carry_on() {
+        let mut w = skirmish();
+        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        // In the enemy's range after 4s, at 18.
+        run(&mut w, 4.5);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].current_formation(), 1);
+        assert!(w.units[0].health < 100.0);
+        let stopped = w.units[0].position;
+        assert!(stopped[1] < 20.0, "{stopped:?}");
+        // Orders to move only take effect once it's done.
+        w.order_move(1, 0, [30.0, 20.0]).unwrap();
+        run(&mut w, 1.0);
+        assert!(near(w.units[0].position, stopped));
+        assert!(near(w.units[0].facing, [0.0, 1.0]));
+        run(&mut w, 2.0);
+        assert!(!w.units[1].alive());
+        assert!(w.regiments[0].engaged.is_empty());
+        assert_eq!(w.regiments[0].current_formation(), 0);
+        run(&mut w, 15.0);
+        assert!(near(w.units[0].position, [30.0, 20.0]));
+    }
+
+    #[test]
+    fn moving_regiments_engage_enemies_they_run_into() {
+        let mut w = skirmish();
+        // Unarmed, so it doesn't fire on them first.
+        w.units[1].fighter = Some(soldier(Vec::new()));
+        w.units[0].fighter = Some(soldier(vec![rifle(2.0, 50.0)]));
+        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        run(&mut w, 9.5);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert!(!w.units[0].moving());
+        assert!(distance(w.units[0].position, w.units[1].position) <= CONTACT);
+        run(&mut w, 15.0);
+        assert!(!w.units[1].alive());
+        assert!(near(w.units[0].position, [10.0, 50.0]));
+    }
+
+    #[test]
+    fn moving_regiments_engage_buildings_that_fire_on_them() {
+        let mut pillbox = building(20, 2, [21.0, 20.0]);
+        pillbox.fighter.destructible = true;
+        pillbox.fighter.weapons = vec![rifle(12.0, 10.0)];
+        let mut w = siege(&[pillbox]);
+        w.units[0].fighter = Some(soldier(vec![rifle(12.0, 50.0)]));
+        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        // In its range from 15.2, after 2.6s.
+        run(&mut w, 3.0);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Building(0)]);
+        assert!(!w.units[0].moving());
+        run(&mut w, 2.0);
+        assert!(matches!(w.buildings[0].state, State::Destroyed(_)));
+        assert!(w.regiments[0].engaged.is_empty());
+        run(&mut w, 20.0);
+        assert!(near(w.units[0].position, [10.0, 50.0]));
+    }
+
+    #[test]
+    fn running_regiments_break_off_and_ignore_enemies() {
+        let mut w = skirmish();
+        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        run(&mut w, 4.5);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        w.order_run(1, 0, [10.0, 50.0]).unwrap();
+        assert_eq!(w.regiments[0].order, Order::Run);
+        for _ in 0..200 {
+            w.tick();
+            assert!(w.regiments[0].engaged.is_empty());
+        }
+        assert!(w.units[0].alive() && w.units[1].alive());
+        assert!(near(w.units[0].position, [10.0, 50.0]));
+        assert_eq!(w.regiments[0].order, Order::Move);
     }
 
     #[test]

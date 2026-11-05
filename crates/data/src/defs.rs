@@ -75,6 +75,7 @@ pub struct Thing {
     pub properties_component: Option<PropertiesComponent>,
     pub performer_component: Option<PerformerComponent>,
     pub city_component: Option<CityComponent>,
+    pub organization_component: Option<OrganizationComponent>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -88,6 +89,11 @@ pub struct BodyComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct CityComponent {
     pub zone_radius: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrganizationComponent {
+    pub operational_range: Option<f32>,
 }
 
 /// The properties an object has.
@@ -264,6 +270,8 @@ pub struct OrganizationLayout {
     pub ids: Option<Id>,
     /// The first formation's when not set.
     pub default_formation_ids: Option<Id>,
+    /// The one it fights in once engaged.
+    pub combat_formation_ids: Option<Id>,
     #[serde(default)]
     pub slot: Vec<LayoutSlot>,
     #[serde(default)]
