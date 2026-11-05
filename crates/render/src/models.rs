@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use aaa_data::{GameData, Id, View};
+use aaa_data::{GameData, Id, Shape, View};
+use aaa_map::Ground;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
@@ -20,6 +21,33 @@ use crate::glow::{Glow, GlowMaterial, Source};
 use crate::rig::{Nodes, Rig};
 use crate::terrain::world;
 use crate::textures;
+
+/// Where and how turned to draw an object at `position` facing `facing`: on
+/// the ground and turned only about the vertical, or tilted to rest on the
+/// ground under `conform`'s outline.
+pub fn pose(
+    ground: &Ground,
+    position: [f32; 2],
+    facing: [f32; 2],
+    conform: Option<Shape>,
+) -> (Vec3, Quat) {
+    let [x, y] = position;
+    let [fx, fy] = facing;
+    let Some(footprint) = conform else {
+        let translation = world(x, y, ground.height_at(x, y));
+        return (translation, Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2));
+    };
+    // Objects never turned face their model's -y.
+    let facing = Vec2::new(fx, fy).try_normalize().unwrap_or(Vec2::NEG_Y);
+    let tilt = ground.tilt(position, facing.to_array(), footprint);
+    let axis = |[x, y, z]: [f32; 3]| world(x, y, z);
+    let forward = axis(tilt.forward);
+    // The model's -y points ahead and its z up, kept square to it.
+    let right = (-forward).cross(axis(tilt.up)).normalize();
+    let up = right.cross(-forward);
+    let rotation = Quat::from_mat3(&Mat3::from_cols(right, up, forward));
+    (world(x, y, tilt.height), rotation)
+}
 
 /// One mesh of a model, in Bevy axes, ready to instance.
 #[derive(Clone)]
@@ -172,12 +200,13 @@ impl Models {
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
+        ground: &Ground,
         things: impl IntoIterator<Item = &'a Thing>,
     ) -> Vec<(&'a Thing, bool)> {
         let mut rest = Vec::new();
         let (mut drawn, mut modelless) = (0, 0);
         for t in things {
-            let placed = self.place(commands, game, assets, t);
+            let placed = self.place(commands, game, assets, ground, t);
             let invisible = matches!(self.views.get(&Id::from(t.template.as_str())), Some(None));
             match placed {
                 Placed::Drawn if invisible => rest.push((t, false)),
@@ -200,6 +229,12 @@ impl Models {
         );
         debug!("templates without a readable model: {missing:?}");
         rest
+    }
+
+    /// The outline under which a template's models tilt to follow the
+    /// ground, for [`pose`]; `None` for models that stay upright.
+    pub fn conform(&self, template: &str) -> Option<Shape> {
+        self.views.get(&Id::from(template))?.as_ref()?.conform
     }
 
     /// Spawns a unit that moves at `speed`, its model playing the moving
@@ -244,6 +279,7 @@ impl Models {
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
+        ground: &Ground,
         thing: &Thing,
     ) -> Placed {
         let view = match self.views.get(&Id::from(thing.template.as_str())) {
@@ -252,16 +288,26 @@ impl Models {
                 let members = thing.organization().map_or(&[][..], |o| &o.members);
                 return members
                     .iter()
-                    .map(|m| self.place(commands, game, assets, m))
+                    .map(|m| self.place(commands, game, assets, ground, m))
                     .max()
                     .unwrap_or(Placed::NoModel);
             }
             _ => return Placed::Missing,
         };
-        match self.spawn_model(commands, game, assets, thing, &view, None) {
-            Some(_) => Placed::Drawn,
-            None => Placed::Missing,
+        let Some(root) = self.spawn_model(commands, game, assets, thing, &view, None) else {
+            return Placed::Missing;
+        };
+        if let Some(footprint) = view.conform {
+            let [x, y, _] = thing.position;
+            let [fx, fy, _] = thing.facing;
+            let (translation, rotation) = pose(ground, [x, y], [fx, fy], Some(footprint));
+            let mut root = commands.entity(root);
+            root.entry::<Transform>().and_modify(move |mut t| {
+                t.translation = translation;
+                t.rotation = rotation;
+            });
         }
+        Placed::Drawn
     }
 
     /// Spawns an object with one of its view's models, returning its root.
@@ -795,4 +841,48 @@ fn load_image(bytes: &[u8], name: &str, formats: CompressedImageFormats) -> Opti
     let mut image = textures::decode(bytes, name, formats, true)?;
     image.sampler = textures::repeating();
     Some(image)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ground(height: impl Fn(f32, f32) -> f32) -> Ground {
+        let side = 9;
+        let heights = (0..side * side)
+            .map(|i| height((i % side) as f32 * 2.0, (i / side) as f32 * 2.0))
+            .collect();
+        Ground {
+            side,
+            heights,
+            water: vec![false; side * side],
+            surface: vec![0.0; side * side],
+        }
+    }
+
+    const TANK: Shape = Shape::Rect {
+        width: 1.5,
+        height: 2.5,
+    };
+
+    #[test]
+    fn conforming_on_the_flat_turns_like_upright() {
+        let flat = ground(|_, _| 3.0);
+        for facing in [[0.0, -1.0], [1.0, 0.0], [0.6, 0.8]] {
+            let upright = pose(&flat, [8.0, 8.0], facing, None);
+            let conform = pose(&flat, [8.0, 8.0], facing, Some(TANK));
+            assert!(upright.0.abs_diff_eq(conform.0, 1e-5));
+            assert!(upright.1.abs_diff_eq(conform.1, 1e-5), "{facing:?}");
+        }
+    }
+
+    #[test]
+    fn climbing_points_the_nose_up_the_slope() {
+        let slope = ground(|_, y| y * 0.5);
+        let (_, rotation) = pose(&slope, [8.0, 8.0], [0.0, 1.0], Some(TANK));
+        // The model's -y is its front, which is Bevy's +z.
+        let nose = rotation * Vec3::Z;
+        let ahead = world(0.0, 1.0, 0.5).normalize();
+        assert!(nose.abs_diff_eq(ahead, 1e-5), "{nose}");
+    }
 }

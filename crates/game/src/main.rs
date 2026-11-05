@@ -8,13 +8,13 @@
 //! ring each city's reach; grey outlines mark disabled buildings.
 
 use std::collections::HashSet;
-use std::f32::consts::FRAC_PI_2;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aaa_data::GameData;
 use aaa_map::{Ground, Map, Obstacle, Shape};
 use aaa_render::camera::{self, RtsCamera};
+use aaa_render::models::pose;
 use aaa_render::terrain::world;
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{State, TICK, World};
@@ -74,6 +74,8 @@ struct UnitView {
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
     dead: bool,
+    /// The outline its model tilts on to follow the ground, if it does.
+    conform: Option<Shape>,
 }
 
 /// Draws one of the simulation's buildings.
@@ -326,6 +328,7 @@ fn setup(
                     unit: i,
                     shot: None,
                     dead: false,
+                    conform: models.conform(&m.thing.template),
                 });
             }
             None => missing += 1,
@@ -415,9 +418,8 @@ fn show_units(
         let [px, py] = unit.previous;
         let [x, y] = unit.position;
         let (x, y) = (px + (x - px) * t, py + (y - py) * t);
-        transform.translation = world(x, y, loaded.map.ground.height_at(x, y));
-        let [fx, fy] = unit.facing;
-        transform.rotation = Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2);
+        (transform.translation, transform.rotation) =
+            pose(&loaded.map.ground, [x, y], unit.facing, view.conform);
         if let Some(mut playing) = playing.filter(|_| unit.alive()) {
             let speed = sim.0.regiments[unit.regiment].speed;
             playing.set_moving(unit.moving().then_some(speed));

@@ -8,7 +8,7 @@ mod units;
 
 pub use aaa_data::{Damage, Fighter, Id, Shape, Targets, Weapon};
 pub use buildings::Building;
-pub use ground::Ground;
+pub use ground::{Ground, Tilt};
 pub use pathing::{Domain, Obstacle, Pathing};
 pub use tgck::map::Relation;
 pub use units::{Formation, Member, Player, Regiment, Team, owner};

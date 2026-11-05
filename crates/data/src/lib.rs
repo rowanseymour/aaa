@@ -35,6 +35,9 @@ pub struct View {
     pub scale: f32,
     /// The animations the models can play; units have them.
     pub animations: Vec<Animation>,
+    /// The outline under which the ground is sampled to tilt the model to
+    /// follow it, as vehicles do; `None` for models that stay upright.
+    pub conform: Option<Shape>,
 }
 
 /// An animation a template's models can play.
@@ -594,6 +597,7 @@ impl GameData {
             texture_renames,
             scale,
             animations,
+            conform: conform(thing),
         })
     }
 
@@ -729,14 +733,37 @@ fn slot_positions(
 
 fn body(thing: &defs::Thing) -> Body {
     let blocking = thing.flags.iter().rev().find_map(|f| f.blocking) == Some(true);
-    let size = |f: fn(&defs::Size) -> Option<f32>| thing.size.iter().rev().find_map(f);
     let kind = thing
         .size
         .iter()
         .rev()
-        .find_map(|s| s.blocking_shape.as_deref())
-        .unwrap_or("CIRCLE");
-    let shape = match kind.to_ascii_uppercase().as_str() {
+        .find_map(|s| s.blocking_shape.as_deref());
+    let shape = shape(thing, kind, |s| s.blocking_radius);
+    Body {
+        blocking: blocking.then_some(shape),
+        speed: thing
+            .mover_component
+            .as_ref()
+            .and_then(|m| m.speed_max)
+            .filter(|&s| s > 0.0),
+    }
+}
+
+fn conform(thing: &defs::Thing) -> Option<Shape> {
+    let conforms = thing.flags.iter().rev().find_map(|f| f.conform_to_terrain) == Some(true);
+    let kind = thing
+        .size
+        .iter()
+        .rev()
+        .find_map(|s| s.soft_shape.as_deref());
+    conforms.then(|| shape(thing, kind, |s| s.soft_radius))
+}
+
+/// A shape of the template's `[Size]`, which its shapes share all but the
+/// radius of.
+fn shape(thing: &defs::Thing, kind: Option<&str>, radius: fn(&defs::Size) -> Option<f32>) -> Shape {
+    let size = |f: fn(&defs::Size) -> Option<f32>| thing.size.iter().rev().find_map(f);
+    match kind.unwrap_or("CIRCLE").to_ascii_uppercase().as_str() {
         "POINT" => Shape::Point,
         "SQUARE" => {
             let side = size(|s| s.square_size).unwrap_or(4.0);
@@ -750,16 +777,8 @@ fn body(thing: &defs::Thing) -> Body {
             height: size(|s| s.rect_height).unwrap_or(4.0),
         },
         _ => Shape::Circle {
-            radius: size(|s| s.blocking_radius).unwrap_or(0.2),
+            radius: size(radius).unwrap_or(0.2),
         },
-    };
-    Body {
-        blocking: blocking.then_some(shape),
-        speed: thing
-            .mover_component
-            .as_ref()
-            .and_then(|m| m.speed_max)
-            .filter(|&s| s > 0.0),
     }
 }
 
@@ -975,6 +994,7 @@ mod tests {
                 texture_renames: Vec::new(),
                 scale: 1.0,
                 animations: Vec::new(),
+                conform: None,
             })
         };
         let mut views: HashMap<Id, Option<View>> = [
@@ -1038,6 +1058,28 @@ mod tests {
             layout.formations[0].slots,
             [vec![[-1.0, 1.0], [1.0, 1.0]], vec![[0.0, 0.0]]]
         );
+    }
+
+    #[test]
+    fn vehicles_conform_by_their_soft_shape() {
+        let parsed = tgi::parse(
+            "[Template Vehicle]\n{\n\t[Flags]\n\tconform_to_terrain = true\n\
+             \t[Size]\n\t{\n\t\tblocking_shape = CIRCLE\n\t\tblocking_radius = 0.7\n\
+             \t\tsoft_shape = RECT\n\t\trect_width = 1.5\n\t\trect_height = 2.5\n\t}\n}\n\
+             [Thing Template=Vehicle]\n{\n\tIDS = tank\n}\n\
+             [Thing]\n{\n\tIDS = soldier\n\t[Size]\n\tsoft_shape = CIRCLE\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let conform = |i| {
+            let block = parsed.root.blocks_of("Thing").nth(i).unwrap();
+            conform(&templates.deserialize(block).unwrap())
+        };
+        let footprint = Shape::Rect {
+            width: 1.5,
+            height: 2.5,
+        };
+        assert_eq!(conform(0), Some(footprint));
+        assert_eq!(conform(1), None);
     }
 
     #[test]

@@ -204,6 +204,8 @@ pub struct Flags {
     #[serde(default)]
     pub invisible: bool,
     pub blocking: Option<bool>,
+    /// Its model tilts to follow the ground under its soft shape.
+    pub conform_to_terrain: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -213,6 +215,10 @@ pub struct Size {
     /// `CIRCLE`, `SQUARE`, `RECT` or `POINT`, sized by the fields below.
     pub blocking_shape: Option<String>,
     pub blocking_radius: Option<f32>,
+    /// The outline it occupies the ground with, sized by the fields of the
+    /// blocking shape but for a circle's `soft_radius`.
+    pub soft_shape: Option<String>,
+    pub soft_radius: Option<f32>,
     pub square_size: Option<f32>,
     pub rect_width: Option<f32>,
     pub rect_height: Option<f32>,
