@@ -442,26 +442,27 @@ impl World {
     }
 
     /// Fires every weapon that's ready at what it can hit, then takes the
-    /// dead out of the fight, so that all hit each other at once.
+    /// dead out of the fight, so that all hit each other at once. Only
+    /// turrets fire on the move: anything else turns its user to aim.
     fn fight(&mut self) {
         let mut hits: Vec<Hit> = Vec::new();
         let shooters: Vec<Target> = self.targets().collect();
         for s in shooters {
             let fighter = self.fighter(s).expect("shooters can fight");
-            let (mut reloads, mut target, mut shot) = match s {
+            let (mut reloads, mut target, mut shot, moving) = match s {
                 Target::Unit(u) => {
                     let u = &self.units[u];
-                    (u.reloads.clone(), u.target, u.shot)
+                    (u.reloads.clone(), u.target, u.shot, u.moving())
                 }
                 Target::Building(b) => {
                     let b = &self.buildings[b];
-                    (b.reloads.clone(), b.target, b.shot)
+                    (b.reloads.clone(), b.target, b.shot, false)
                 }
             };
             let by = self.owner(s);
             for (w, weapon) in fighter.weapons.iter().enumerate() {
                 reloads[w] = (reloads[w] - TICK).max(0.0);
-                if reloads[w] > 0.0 {
+                if reloads[w] > 0.0 || moving && !weapon.turret {
                     continue;
                 }
                 let Some(t) = self.aim(s, weapon, target) else {
@@ -944,6 +945,7 @@ mod tests {
                 amount,
             }],
             animation: None,
+            turret: false,
         }
     }
 
@@ -1021,6 +1023,29 @@ mod tests {
         assert!(w.destroyed(1) && !w.destroyed(0));
         assert_eq!(w.units[0].target, None);
         assert_eq!(w.order_move(2, 1, [0.0, 0.0]), Err(NotYours));
+    }
+
+    #[test]
+    fn only_turrets_fire_on_the_move() {
+        let turret = Weapon {
+            turret: true,
+            ..rifle(12.0, 10.0)
+        };
+        for (weapon, fires_on_the_move) in [(rifle(12.0, 10.0), false), (turret, true)] {
+            let mut w = battle(
+                &[1, 2],
+                vec![soldier(vec![weapon]), soldier(Vec::new())],
+                at_war(),
+            );
+            // 2 units a second toward the enemy, in range all the way.
+            w.order_move(1, 0, [10.0, 14.0]).unwrap();
+            run(&mut w, 1.5);
+            assert!(w.units[0].moving());
+            assert_eq!(w.units[1].health < 100.0, fires_on_the_move);
+            run(&mut w, 1.0);
+            assert!(!w.units[0].moving());
+            assert!(w.units[1].health < 100.0);
+        }
     }
 
     #[test]

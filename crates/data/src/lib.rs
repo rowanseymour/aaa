@@ -97,6 +97,9 @@ pub struct Weapon {
     pub damage: Vec<Damage>,
     /// The ids of the animation its user plays to fire it.
     pub animation: Option<String>,
+    /// It's on a turret, which aims it without turning its user, so it can
+    /// fire while its user moves. Others fire only when it stands.
+    pub turret: bool,
 }
 
 /// Which flags a target must have, and must not, for a weapon to fire on
@@ -838,6 +841,10 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
                 .animation1
                 .clone()
                 .filter(|ids| !ids.eq_ignore_ascii_case("null")),
+            turret: a
+                .turret_ids
+                .as_deref()
+                .is_some_and(|ids| !ids.eq_ignore_ascii_case("null")),
         });
     }
     Some(fighter)
@@ -1054,7 +1061,7 @@ mod tests {
              \t[PropertiesComponent]\n\t{\n\t\t[Property]\n\t\tproperty_IDS = vehicle\n\
              \t\t[Property]\n\t\tproperty_IDS = tank\n\t}\n\
              \t[PerformerComponent]\n\t{\n\t\t[Ability]\n\t\t{\n\t\t\tanimation1 = attack1\n\
-             \t\t\t[AbilityDefinition]\n\t\t\t{\n\t\t\t\tability_type = attack\n\t\t\t\trange = 12\n\
+             \t\t\tturret_ids = turret\n\t\t\t[AbilityDefinition]\n\t\t\t{\n\t\t\t\tability_type = attack\n\t\t\t\trange = 12\n\
              \t\t\t\trecharge_time = 3\n\t\t\t\ttargets = +enemy, -air\n\
              \t\t\t\t[Effect Template=Gunfire]\n\t\t\t\tamount = 12\n\t\t\t}\n\t\t}\n\t}\n}\n",
         );
@@ -1074,6 +1081,7 @@ mod tests {
         let gun = &tank.weapons[0];
         assert_eq!((gun.range, gun.recharge), (12.0, 3.0));
         assert_eq!(gun.animation.as_deref(), Some("attack1"));
+        assert!(gun.turret);
         assert_eq!(
             gun.damage,
             [Damage {
