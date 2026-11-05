@@ -1,5 +1,6 @@
 //! The ground's shape, from a map's height maps.
 
+use aaa_data::Shape;
 use tgck::map::{CELL_SIZE, HeightMap};
 
 /// Ground heights with the water bed below the water. The height map stores
@@ -73,10 +74,153 @@ impl Ground {
     }
 }
 
+/// How an object that follows the ground sits on it, in world axes with z up.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Tilt {
+    pub height: f32,
+    /// Unit length, along the ground ahead.
+    pub forward: [f32; 3],
+    /// Unit length; not quite square to `forward` where the ground bends.
+    pub up: [f32; 3],
+}
+
+impl Ground {
+    /// How an object at `position` facing `facing`, a unit vector, rests on
+    /// the ground under `footprint`: on a plane through the ground at the
+    /// footprint's corners and centre, raised to clear all of them so it
+    /// doesn't sink into a hill, and never below the ground at its centre.
+    pub fn tilt(&self, position: [f32; 2], facing: [f32; 2], footprint: Shape) -> Tilt {
+        let [x, y] = position;
+        let [fx, fy] = facing;
+        // x to the right of the facing and y along it.
+        let ground = |lx: f32, ly: f32| {
+            let (wx, wy) = (x + lx * fy + ly * fx, y - lx * fx + ly * fy);
+            [wx, wy, self.height_at(wx, wy)]
+        };
+        let (half_w, half_h) = match footprint {
+            Shape::Point => (0.0, 0.0),
+            Shape::Circle { radius } => (radius, radius),
+            Shape::Rect { width, height } => (width / 2.0, height / 2.0),
+        };
+        let back_left = ground(-half_w, -half_h);
+        let back_right = ground(half_w, -half_h);
+        let front_right = ground(half_w, half_h);
+        let front_left = ground(-half_w, half_h);
+        let centre = ground(0.0, 0.0);
+        // One normal for each side's triangle with the centre, averaged.
+        let left = cross(sub(centre, back_left), sub(front_left, centre));
+        let right = cross(sub(front_right, back_right), sub(centre, front_right));
+        let up = normalize(add(normalize(left), normalize(right)));
+        if up[2] <= 0.0 {
+            return Tilt {
+                height: centre[2],
+                forward: [fx, fy, 0.0],
+                up: [0.0, 0.0, 1.0],
+            };
+        }
+        let lift = [back_left, back_right, front_right, front_left]
+            .iter()
+            .fold(dot(up, centre), |d, &c| d.max(dot(up, c)));
+        let plane = |px: f32, py: f32| (lift - up[0] * px - up[1] * py) / up[2];
+        let height = plane(x, y).max(centre[2]);
+        Tilt {
+            height,
+            forward: normalize([fx, fy, plane(x + fx, y + fy) - height]),
+            up,
+        }
+    }
+}
+
+fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+/// Zero for a vector too short to have a direction.
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let len = dot(v, v).sqrt();
+    if len < 1e-6 {
+        return [0.0; 3];
+    }
+    [v[0] / len, v[1] / len, v[2] / len]
+}
+
 /// The vertex and its up to eight neighbours.
 fn neighbours(side: usize, i: usize) -> impl Iterator<Item = usize> {
     let (x, y) = (i % side, i / side);
     (y.saturating_sub(1)..=(y + 1).min(side - 1)).flat_map(move |ny| {
         (x.saturating_sub(1)..=(x + 1).min(side - 1)).map(move |nx| ny * side + nx)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A ground whose height at each vertex is `height` of its position.
+    fn ground(height: impl Fn(f32, f32) -> f32) -> Ground {
+        let side = 9;
+        let heights = (0..side * side)
+            .map(|i| height((i % side) as f32 * CELL_SIZE, (i / side) as f32 * CELL_SIZE))
+            .collect();
+        Ground {
+            side,
+            heights,
+            water: vec![false; side * side],
+            surface: vec![0.0; side * side],
+        }
+    }
+
+    fn near(a: [f32; 3], b: [f32; 3]) -> bool {
+        a.iter().zip(b).all(|(a, b)| (a - b).abs() < 1e-5)
+    }
+
+    const TANK: Shape = Shape::Rect {
+        width: 1.5,
+        height: 2.5,
+    };
+
+    #[test]
+    fn tilts_up_a_slope_ahead_and_across_one_beside() {
+        let slope = ground(|_, y| y * 0.5);
+        let n = 1.25_f32.sqrt();
+        let up_slope = [0.0, -0.5 / n, 1.0 / n];
+        let climbing = slope.tilt([8.0, 8.0], [0.0, 1.0], TANK);
+        assert!((climbing.height - 4.0).abs() < 1e-5);
+        assert!(near(climbing.forward, [0.0, 1.0 / n, 0.5 / n]));
+        assert!(near(climbing.up, up_slope));
+        let across = slope.tilt([8.0, 8.0], [1.0, 0.0], TANK);
+        assert!(near(across.forward, [1.0, 0.0, 0.0]));
+        assert!(near(across.up, up_slope));
+    }
+
+    #[test]
+    fn rests_on_the_sides_of_a_dip() {
+        let valley = ground(|x, _| (x - 8.0).abs());
+        let tilt = valley.tilt([8.0, 8.0], [0.0, 1.0], TANK);
+        assert!((tilt.height - 0.75).abs() < 1e-5);
+        assert!(near(tilt.up, [0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn a_point_stays_upright() {
+        let slope = ground(|x, _| x);
+        let tilt = slope.tilt([8.0, 8.0], [0.0, 1.0], Shape::Point);
+        assert_eq!((tilt.height, tilt.up), (8.0, [0.0, 0.0, 1.0]));
+    }
 }
