@@ -363,27 +363,16 @@ fn show_inspected(
     Ok(())
 }
 
-/// The curve from a window to the point on screen it's about: out of the
-/// side of its title bar and bending round to the point like a pipe, or
-/// straight down or up to a point below or above the window.
+/// The curve from a window to the point on screen it's about, like a pipe:
+/// out of the side of its title bar facing the point, and round to arrive
+/// level with it too.
 fn leader(window: egui::Rect, to: egui::Pos2) -> [egui::Pos2; 4] {
-    let from = if window.x_range().contains(to.x) {
-        egui::pos2(
-            to.x,
-            if to.y > window.bottom() {
-                window.bottom()
-            } else {
-                window.top()
-            },
-        )
+    let (x, out) = if to.x > window.center().x {
+        (window.right(), 1.0)
     } else {
-        let x = if to.x > window.right() {
-            window.right()
-        } else {
-            window.left()
-        };
-        egui::pos2(x, window.top() + 14.0)
+        (window.left(), -1.0)
     };
-    let corner = egui::pos2(to.x, from.y);
-    [from, from.lerp(corner, 0.6), to.lerp(corner, 0.6), to]
+    let from = egui::pos2(x, window.top() + 14.0);
+    let bend = egui::vec2(out * ((to.x - from.x).abs() / 2.0).max(40.0), 0.0);
+    [from, from + bend, to - bend, to]
 }
