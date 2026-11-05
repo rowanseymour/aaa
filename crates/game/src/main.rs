@@ -15,6 +15,7 @@ use std::process::ExitCode;
 use aaa_data::GameData;
 use aaa_map::{Ground, Map, Obstacle, Shape};
 use aaa_render::camera::{self, RtsCamera};
+use aaa_render::shot::{self, ShotPlugin};
 use aaa_render::terrain::world;
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{State, TICK, World};
@@ -25,11 +26,13 @@ use bevy::window::PrimaryWindow;
 
 const USAGE: &str = "\
 usage:
-  aaa-game <game dir> [--side <n>]          pick a map from a menu
-  aaa-game <game dir> <map> [--side <n>]    play a map, e.g. \"allies10_berlin\"
+  aaa-game <game dir> [options]          pick a map from a menu
+  aaa-game <game dir> <map> [options]    play a map, e.g. \"allies10_berlin\"
 
-  --side <n>    play the map's nth player (\"Side n\" in its lobby) instead of
-                the first one a person may play";
+options:
+  --side <n>                play the map's nth player (\"Side n\" in its lobby)
+                            instead of the first one a person may play
+  --screenshot <file.png>   save a frame to a file and exit, without a window";
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
@@ -102,6 +105,18 @@ fn main() -> ExitCode {
         },
         None => None,
     };
+    let screenshot = match args.iter().position(|a| a == "--screenshot") {
+        Some(i) if i + 1 < args.len() => {
+            let path = args.remove(i + 1);
+            args.remove(i);
+            Some(ShotPlugin { path: path.into() })
+        }
+        Some(_) => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+        None => None,
+    };
     let (dir, map) = match args.as_slice() {
         [dir] => (dir, None),
         [dir, map] => (dir, Some(map)),
@@ -128,13 +143,20 @@ fn main() -> ExitCode {
     };
 
     let mut app = App::new();
-    app.add_plugins(DefaultPlugins.set(WindowPlugin {
-        primary_window: Some(Window {
-            title: "aaa-game".into(),
+    let window = match screenshot {
+        Some(_) => shot::no_window(),
+        None => WindowPlugin {
+            primary_window: Some(Window {
+                title: "aaa-game".into(),
+                ..default()
+            }),
             ..default()
-        }),
-        ..default()
-    }));
+        },
+    };
+    app.add_plugins(DefaultPlugins.set(window));
+    if let Some(s) = screenshot {
+        app.add_plugins(s);
+    }
     app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .init_resource::<Selected>()
@@ -307,10 +329,12 @@ fn setup(
     sim: Res<Sim>,
     local: Res<Local>,
     mut assets: MapAssets,
-    mut window: Single<&mut Window, With<PrimaryWindow>>,
+    mut window: Option<Single<&mut Window, With<PrimaryWindow>>>,
 ) {
     let Loaded { game, map } = &mut *loaded;
-    window.title = format!("{} - aaa-game", map.title);
+    if let Some(window) = &mut window {
+        window.title = format!("{} - aaa-game", map.title);
+    }
     let ids = map.regiments.iter().map(|r| r.id);
     let leave_out: HashSet<u32> = ids.chain(map.buildings.iter().map(|b| b.id)).collect();
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {

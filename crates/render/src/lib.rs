@@ -7,6 +7,7 @@ mod glow;
 pub mod models;
 pub mod objects;
 mod rig;
+pub mod shot;
 pub mod terrain;
 mod textures;
 pub mod water;
