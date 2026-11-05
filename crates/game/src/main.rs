@@ -39,6 +39,7 @@ options:
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
     Menu,
+    Loading,
     Match,
 }
 
@@ -49,6 +50,14 @@ struct Data(GameData);
 /// A menu entry, holding the map's archive path.
 #[derive(Component)]
 struct MapChoice(String);
+
+/// The map picked from the menu, loaded once the loading screen has had a
+/// chance to show, since loading holds up the frame.
+#[derive(Resource)]
+struct Pending {
+    name: String,
+    frames: u32,
+}
 
 #[derive(Resource)]
 struct Loaded {
@@ -167,6 +176,8 @@ fn main() -> ExitCode {
         .insert_resource(Side(side))
         .add_systems(OnEnter(Screen::Menu), menu)
         .add_systems(Update, highlight.run_if(in_state(Screen::Menu)))
+        .add_systems(OnEnter(Screen::Loading), loading)
+        .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(OnEnter(Screen::Match), setup)
         .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
@@ -304,27 +315,71 @@ fn highlight(mut buttons: Query<(&Hovered, &mut BackgroundColor), Changed<Hovere
     }
 }
 
-/// Loads the clicked map and starts a match on it.
-fn choose_map(activate: On<Activate>, choices: Query<&MapChoice>, mut commands: Commands) {
+/// Shows the loading screen for the clicked map.
+fn choose_map(
+    activate: On<Activate>,
+    choices: Query<&MapChoice>,
+    mut commands: Commands,
+    mut next: ResMut<NextState<Screen>>,
+) {
     let Ok(MapChoice(name)) = choices.get(activate.entity) else {
         return;
     };
-    let name = name.clone();
-    commands.queue(move |world: &mut bevy::ecs::world::World| {
-        let Some(Data(mut game)) = world.remove_resource::<Data>() else {
-            return;
-        };
-        match Map::load(&mut game, &name) {
-            Ok(map) => {
-                begin(world, Loaded { game, map });
-                world.resource_mut::<NextState<Screen>>().set(Screen::Match);
-            }
-            Err(e) => {
-                error!("{e}");
-                world.insert_resource(Data(game));
-            }
-        }
+    commands.insert_resource(Pending {
+        name: name.clone(),
+        frames: 0,
     });
+    next.set(Screen::Loading);
+}
+
+fn loading(mut commands: Commands, pending: Res<Pending>) {
+    commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
+    commands.spawn((
+        DespawnOnExit(Screen::Loading),
+        Node {
+            width: percent(100),
+            height: percent(100),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        children![(
+            Text::new(format!("Loading {}...", aaa_data::map_title(&pending.name))),
+            TextFont {
+                font_size: FontSize::Px(18.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.6, 0.6, 0.6)),
+        )],
+    ));
+}
+
+/// Loads the pending map and starts a match on it, or goes back to the menu
+/// if it can't.
+fn load(world: &mut bevy::ecs::world::World) {
+    // One frame to lay the screen out and one to draw it.
+    let mut pending = world.resource_mut::<Pending>();
+    pending.frames += 1;
+    if pending.frames < 3 {
+        return;
+    }
+    let Some(Pending { name, .. }) = world.remove_resource::<Pending>() else {
+        return;
+    };
+    let Some(Data(mut game)) = world.remove_resource::<Data>() else {
+        return;
+    };
+    match Map::load(&mut game, &name) {
+        Ok(map) => {
+            begin(world, Loaded { game, map });
+            world.resource_mut::<NextState<Screen>>().set(Screen::Match);
+        }
+        Err(e) => {
+            error!("{e}");
+            world.insert_resource(Data(game));
+            world.resource_mut::<NextState<Screen>>().set(Screen::Menu);
+        }
+    }
 }
 
 fn setup(
