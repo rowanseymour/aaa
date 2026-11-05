@@ -221,6 +221,22 @@ impl Models {
         self.spawn_model(commands, game, assets, thing, &view, moving)
     }
 
+    /// Spawns an object that stands still, such as a building. `None` if its
+    /// model can't be drawn.
+    pub fn spawn_object(
+        &mut self,
+        commands: &mut Commands,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        thing: &Thing,
+    ) -> Option<Entity> {
+        let view = self
+            .views
+            .get(&Id::from(thing.template.as_str()))?
+            .clone()?;
+        self.spawn_model(commands, game, assets, thing, &view, None)
+    }
+
     /// Spawns one object, or, for an invisible organization such as a herd,
     /// its members where the map has them standing.
     fn place(

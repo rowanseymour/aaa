@@ -1,8 +1,8 @@
 //! Actors: the things made of components, such as units, buildings, herds and
 //! kingdoms. Their layout is the `actor` type in [`rmp.ksy`].
 //!
-//! Construction, Body, Mover, Properties, Organization and Element decode
-//! into types; the other components are read to their end and kept as bytes
+//! Construction, Body, Mover, Properties, Organization, Element and City
+//! decode into types; the other components are read to their end and kept as bytes
 //! ([`Component::Framed`]).
 //! A record whose state doesn't decode to its exact end is kept whole
 //! ([`State::Raw`]), which only a record of known size allows.
@@ -51,6 +51,7 @@ pub enum Component {
     Properties(Properties),
     Organization(Organization),
     Element(ElementState),
+    City(City),
     /// Not decoded, but read to its exact end.
     Framed {
         /// Its bit in [`COMPONENTS`].
@@ -103,6 +104,7 @@ const ORGANIZATION: u32 = 7;
 const ELEMENT: u32 = 8;
 const CONSTRUCTION: u32 = 15;
 const AIRCRAFT: u32 = 23;
+const CITY: u32 = 29;
 
 /// Its id among the world's updatable objects.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -188,6 +190,15 @@ pub struct MoverFall {
     pub landing: [f32; 3],
     /// From where the fall started to `landing`.
     pub landing_offset: [f32; 3],
+}
+
+/// A city's centre, which stands for the buildings around it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct City {
+    pub updatable: Updatable,
+    pub version: u32,
+    /// From version 1 on: the thing ids of the buildings that make it up.
+    pub buildings: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -313,6 +324,7 @@ impl Actor {
             PROPERTIES => Component::Properties(Properties::parse(cur)?),
             ORGANIZATION => Component::Organization(Organization::parse(cur, world)?),
             ELEMENT => Component::Element(ElementState::parse(cur, world)?),
+            CITY => Component::City(City::parse(cur)?),
             _ => {
                 let start = cur.pos();
                 let skip = Skip {
@@ -427,6 +439,7 @@ impl Component {
             Component::Properties(p) => p.write(w)?,
             Component::Organization(o) => o.write(w)?,
             Component::Element(e) => e.write(w)?,
+            Component::City(c) => c.write(w),
             Component::Framed { data, .. } => w.bytes(data),
         }
         Ok(())
@@ -480,6 +493,26 @@ impl Construction {
             unknown.iter().for_each(|&v| w.u32(v));
         }
         Ok(())
+    }
+}
+
+impl City {
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        let updatable = Updatable::parse(cur)?;
+        let version = version(cur, "city", 1)?;
+        Ok(City {
+            updatable,
+            version,
+            buildings: (version >= 1).then(|| u32s(cur)).transpose()?,
+        })
+    }
+
+    fn write(&self, w: &mut Writer) {
+        self.updatable.write(w);
+        w.u32(self.version);
+        if let Some(b) = &self.buildings {
+            write_u32s(w, b);
+        }
     }
 }
 
@@ -816,13 +849,6 @@ impl Skip {
                 version(cur, "lair", 0)?;
                 u32s(cur)?;
                 cur.bytes(8).map(drop)
-            }
-            "City" => {
-                Updatable::parse(cur)?;
-                if version(cur, "city", 1)? >= 1 {
-                    u32s(cur)?;
-                }
-                Ok(())
             }
             "HQ" => skip_hq(cur),
             name => Err(Error::Corrupt(format!("{name} component isn't decoded"))),
@@ -1288,6 +1314,21 @@ impl Actor {
             _ => None,
         })
     }
+
+    pub fn body(&self) -> Option<&Body> {
+        self.decoded()?.iter().find_map(|c| match c {
+            Component::Body(b) => Some(b),
+            _ => None,
+        })
+    }
+
+    /// The city this actor is the centre of, if its record holds one.
+    pub fn city(&self) -> Option<&City> {
+        self.decoded()?.iter().find_map(|c| match c {
+            Component::City(c) => Some(c),
+            _ => None,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -1406,10 +1447,15 @@ mod tests {
             bit: 9,
             data: [1u32, 15, 0].map(u32::to_le_bytes).concat(),
         };
-        let components = 1 << 15 | 1 | 1 << 3 | 1 << 6 | 1 << 9;
+        let city = Component::City(City {
+            updatable: Updatable { version: 1, id: 16 },
+            version: 1,
+            buildings: Some(vec![30, 31]),
+        });
+        let components = 1 << 15 | 1 | 1 << 3 | 1 << 6 | 1 << 9 | 1 << 29;
         let a = actor(
             components,
-            vec![construction, body(), mover(), properties, economy],
+            vec![construction, body(), mover(), properties, economy, city],
         );
         assert_eq!(round_trip(&a), a);
     }

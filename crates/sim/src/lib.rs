@@ -7,25 +7,24 @@
 
 pub mod path;
 
-use std::collections::HashMap;
-
 use aaa_map::pathing::tile_at;
-use aaa_map::{Domain, Fighter, Id, Map, Pathing, Weapon};
+use aaa_map::{Domain, Fighter, Id, Map, Obstacle, Pathing, Weapon};
 
 pub use aaa_map::{Player, Relation, Team};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
 
+/// The share of its health a building taken over by force is left with.
+pub const CAPTURE_HEALTH: f32 = 0.3;
+
 /// A match in progress.
 pub struct World {
     pub sides: Sides,
-    /// The owning [`Player::id`] of each owned object that isn't a
-    /// regiment, such as a building, by object id.
-    pub owners: HashMap<u32, u32>,
     pub pathing: Pathing,
     pub regiments: Vec<Regiment>,
     pub units: Vec<Unit>,
+    pub buildings: Vec<Building>,
     /// Ticks played.
     pub ticks: u64,
 }
@@ -72,8 +71,8 @@ pub struct Unit {
     pub health: f32,
     /// Seconds until each of its fighter's weapons can fire again.
     reloads: Vec<f32>,
-    /// Index into [`World::units`] of what it last fired on.
-    pub target: Option<usize>,
+    /// What it last fired on.
+    pub target: Option<Target>,
     /// The tick it last fired on, and the index of the weapon it fired.
     pub shot: Option<(u64, usize)>,
     /// The tick it died on.
@@ -90,6 +89,70 @@ impl Unit {
     }
 }
 
+/// An owned object that can be hurt but not move, such as a house, a
+/// bunker or a city's centre.
+pub struct Building {
+    /// Its object's id in the map.
+    pub id: u32,
+    pub template: String,
+    /// The owning [`Player::id`], which changes when it's captured.
+    pub owner: u32,
+    pub position: [f32; 2],
+    pub fighter: Fighter,
+    pub health: f32,
+    /// Seconds until each of its fighter's weapons can fire again.
+    reloads: Vec<f32>,
+    /// What it last fired on.
+    pub target: Option<Target>,
+    /// The tick it last fired on, and the index of the weapon it fired.
+    pub shot: Option<(u64, usize)>,
+    pub state: State,
+    /// The tick it last changed hands on.
+    pub captured: Option<u64>,
+    /// For a city's centre, how far around it the city reaches.
+    pub zone: Option<f32>,
+    /// For a city's centre, indices into [`World::buildings`] of the
+    /// buildings that change hands with it.
+    pub members: Vec<usize>,
+    /// The ground it keeps movers off until it's destroyed.
+    pub obstacle: Option<Obstacle>,
+}
+
+/// How a building stands.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum State {
+    Standing,
+    /// Out of health but still there, as buildings that can't be destroyed
+    /// are left.
+    Disabled,
+    /// Out of health and gone, since the tick it fell on.
+    Destroyed(u64),
+}
+
+impl Building {
+    /// Whether it still takes part: it can be hit and fire.
+    pub fn standing(&self) -> bool {
+        self.state == State::Standing
+    }
+
+    /// How far a point is from it, to the edge of the ground it covers.
+    fn distance(&self, from: [f32; 2]) -> f32 {
+        match &self.obstacle {
+            Some(o) => o.distance(from),
+            None => distance(from, self.position),
+        }
+    }
+}
+
+/// Something a weapon can fire on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Target {
+    /// Index into [`World::units`].
+    Unit(usize),
+    /// Index into [`World::buildings`].
+    Building(usize),
+}
+
 impl World {
     pub fn new(map: &Map) -> World {
         let sides = Sides {
@@ -97,11 +160,7 @@ impl World {
             teams: map.teams.clone(),
         };
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
-        world.owners = map
-            .things
-            .iter()
-            .filter_map(|t| Some((t.id, aaa_map::owner(t)?)))
-            .collect();
+        world.add_buildings(&map.buildings);
         world
     }
 
@@ -112,10 +171,10 @@ impl World {
     ) -> World {
         let mut world = World {
             sides,
-            owners: HashMap::new(),
             pathing,
             regiments: Vec::new(),
             units: Vec::new(),
+            buildings: Vec::new(),
             ticks: 0,
         };
         for (r, regiment) in regiments.iter().enumerate() {
@@ -175,6 +234,39 @@ impl World {
             });
         }
         world
+    }
+
+    /// Adds buildings as the map has them, those out of health already
+    /// disabled. Their ground is taken to be blocked already.
+    pub fn add_buildings(&mut self, buildings: &[aaa_map::Building]) {
+        let first = self.buildings.len();
+        for b in buildings {
+            let health = b.fighter.health * b.health;
+            self.buildings.push(Building {
+                id: b.id,
+                template: b.template.clone(),
+                owner: b.owner,
+                position: b.position,
+                reloads: vec![0.0; b.fighter.weapons.len()],
+                fighter: b.fighter.clone(),
+                health,
+                target: None,
+                shot: None,
+                state: match health > 0.0 {
+                    true => State::Standing,
+                    false => State::Disabled,
+                },
+                captured: None,
+                zone: b.zone,
+                members: Vec::new(),
+                obstacle: b.obstacle.clone(),
+            });
+        }
+        for (i, b) in buildings.iter().enumerate() {
+            let index =
+                |id: &u32| (first..self.buildings.len()).find(|&j| self.buildings[j].id == *id);
+            self.buildings[first + i].members = b.members.iter().filter_map(index).collect();
+        }
     }
 
     /// Where a regiment's surviving members stand on average.
@@ -274,6 +366,7 @@ impl World {
     pub fn tick(&mut self) {
         self.travel();
         self.fight();
+        self.occupy();
         self.ticks += 1;
     }
 
@@ -302,83 +395,210 @@ impl World {
         }
     }
 
+    /// Whatever can be fired on: alive units and standing buildings.
+    fn targets(&self) -> impl Iterator<Item = Target> + '_ {
+        let units = (0..self.units.len()).map(Target::Unit);
+        let buildings = (0..self.buildings.len()).map(Target::Building);
+        units
+            .chain(buildings)
+            .filter(|&t| self.fighter(t).is_some())
+    }
+
+    /// What a target can take and deal, if it's still there to fire on.
+    fn fighter(&self, t: Target) -> Option<&Fighter> {
+        match t {
+            Target::Unit(u) => self.units[u]
+                .fighter
+                .as_ref()
+                .filter(|_| self.units[u].alive()),
+            Target::Building(b) => {
+                let b = &self.buildings[b];
+                b.standing().then_some(&b.fighter)
+            }
+        }
+    }
+
+    fn owner(&self, t: Target) -> u32 {
+        match t {
+            Target::Unit(u) => self.regiments[self.units[u].regiment].owner,
+            Target::Building(b) => self.buildings[b].owner,
+        }
+    }
+
+    fn position(&self, t: Target) -> [f32; 2] {
+        match t {
+            Target::Unit(u) => self.units[u].position,
+            Target::Building(b) => self.buildings[b].position,
+        }
+    }
+
+    /// How far a point is from a target: to a building's edge, a unit's
+    /// middle.
+    fn reach(&self, from: [f32; 2], t: Target) -> f32 {
+        match t {
+            Target::Unit(u) => distance(from, self.units[u].position),
+            Target::Building(b) => self.buildings[b].distance(from),
+        }
+    }
+
     /// Fires every weapon that's ready at what it can hit, then takes the
-    /// dead out of the fight, so that units hit each other at once.
+    /// dead out of the fight, so that all hit each other at once.
     fn fight(&mut self) {
-        let mut hits: Vec<(usize, f32)> = Vec::new();
-        for u in 0..self.units.len() {
-            let unit = &self.units[u];
-            let Some(fighter) = unit.fighter.as_ref().filter(|_| unit.alive()) else {
-                continue;
+        let mut hits: Vec<Hit> = Vec::new();
+        let shooters: Vec<Target> = self.targets().collect();
+        for s in shooters {
+            let fighter = self.fighter(s).expect("shooters can fight");
+            let (mut reloads, mut target, mut shot) = match s {
+                Target::Unit(u) => {
+                    let u = &self.units[u];
+                    (u.reloads.clone(), u.target, u.shot)
+                }
+                Target::Building(b) => {
+                    let b = &self.buildings[b];
+                    (b.reloads.clone(), b.target, b.shot)
+                }
             };
-            let mut reloads = unit.reloads.clone();
-            let mut target = unit.target;
-            let mut shot = unit.shot;
+            let by = self.owner(s);
             for (w, weapon) in fighter.weapons.iter().enumerate() {
                 reloads[w] = (reloads[w] - TICK).max(0.0);
                 if reloads[w] > 0.0 {
                     continue;
                 }
-                let Some(t) = self.aim(u, weapon, target) else {
+                let Some(t) = self.aim(s, weapon, target) else {
                     continue;
                 };
                 target = Some(t);
                 shot = Some((self.ticks, w));
                 reloads[w] = weapon.recharge;
-                self.strike(weapon, self.units[t].position, t, &mut hits);
+                self.strike(weapon, self.position(t), t, by, &mut hits);
             }
-            let unit = &mut self.units[u];
-            unit.reloads = reloads;
-            unit.target = target;
-            unit.shot = shot;
+            match s {
+                Target::Unit(u) => {
+                    let u = &mut self.units[u];
+                    (u.reloads, u.target, u.shot) = (reloads, target, shot);
+                }
+                Target::Building(b) => {
+                    let b = &mut self.buildings[b];
+                    (b.reloads, b.target, b.shot) = (reloads, target, shot);
+                }
+            }
         }
-        for (t, amount) in hits {
-            let unit = &mut self.units[t];
-            if unit.alive() {
-                unit.health -= amount;
+        for hit in hits {
+            self.land(hit);
+        }
+        let gone = |w: &World, t: Option<Target>| t.is_some_and(|t| w.fighter(t).is_none());
+        for u in 0..self.units.len() {
+            if gone(self, self.units[u].target) {
+                self.units[u].target = None;
+            }
+        }
+        for b in 0..self.buildings.len() {
+            if gone(self, self.buildings[b].target) {
+                self.buildings[b].target = None;
+            }
+        }
+    }
+
+    /// Takes a hit's damage off what it lands on. A building whose health
+    /// runs out is captured by the hit's owner if it can be, else destroyed
+    /// if it can be, else disabled.
+    fn land(&mut self, hit: Hit) {
+        let ticks = self.ticks;
+        match hit.target {
+            Target::Unit(u) => {
+                let unit = &mut self.units[u];
+                if !unit.alive() {
+                    return;
+                }
+                unit.health -= hit.amount;
                 if unit.health <= 0.0 {
                     unit.health = 0.0;
-                    unit.died = Some(self.ticks);
+                    unit.died = Some(ticks);
                     unit.path.clear();
                     unit.target = None;
                 }
             }
-        }
-        for u in 0..self.units.len() {
-            if self.units[u].target.is_some_and(|t| !self.units[t].alive()) {
-                self.units[u].target = None;
+            Target::Building(b) => {
+                let building = &mut self.buildings[b];
+                // Nothing a side fires hurts its own, such as what it took
+                // over earlier in the tick.
+                if !building.standing() || building.owner == hit.by {
+                    return;
+                }
+                building.health -= hit.amount;
+                if building.health > 0.0 {
+                    return;
+                }
+                building.health = 0.0;
+                building.target = None;
+                // Cities change hands by who holds them instead.
+                if building.fighter.capturable && building.zone.is_none() {
+                    building.health = CAPTURE_HEALTH * building.fighter.health;
+                    self.change_hands(b, hit.by);
+                } else if building.fighter.destructible {
+                    building.state = State::Destroyed(ticks);
+                    if let Some(o) = building.obstacle.take() {
+                        self.pathing.unblock(&o);
+                    }
+                } else {
+                    building.state = State::Disabled;
+                }
             }
         }
     }
 
-    /// What unit `u` fires `weapon` at: the one it fired on last if it
-    /// still can, else the nearest it can.
-    fn aim(&self, u: usize, weapon: &Weapon, last: Option<usize>) -> Option<usize> {
-        if let Some(t) = last.filter(|&t| self.can_hit(u, weapon, t)) {
-            return Some(t);
+    /// Gives a building, and the rest of its city if it's one's centre, to
+    /// `owner`.
+    fn change_hands(&mut self, b: usize, owner: u32) {
+        let members = self.buildings[b].members.clone();
+        for i in std::iter::once(b).chain(members) {
+            let building = &mut self.buildings[i];
+            building.owner = owner;
+            building.captured = Some(self.ticks);
+            building.target = None;
         }
-        let from = self.units[u].position;
-        (0..self.units.len())
-            .filter(|&t| self.can_hit(u, weapon, t))
-            .min_by(|&a, &b| {
-                distance(from, self.units[a].position)
-                    .total_cmp(&distance(from, self.units[b].position))
-            })
     }
 
-    fn can_hit(&self, u: usize, weapon: &Weapon, t: usize) -> bool {
-        let (unit, target) = (&self.units[u], &self.units[t]);
-        let Some(fighter) = target.fighter.as_ref().filter(|_| target.alive() && t != u) else {
+    /// What `s` fires `weapon` at: the best it can, armed enemies first,
+    /// then what can be captured or destroyed, then the rest, and the
+    /// nearest of them; or the one it fired on last as long as it's as good.
+    fn aim(&self, s: Target, weapon: &Weapon, last: Option<Target>) -> Option<Target> {
+        let from = self.position(s);
+        let best = self
+            .targets()
+            .filter(|&t| self.can_hit(s, weapon, t))
+            .max_by(|&a, &b| {
+                self.rank(a)
+                    .cmp(&self.rank(b))
+                    .then(self.reach(from, b).total_cmp(&self.reach(from, a)))
+            })?;
+        match last.filter(|&t| self.can_hit(s, weapon, t)) {
+            Some(t) if self.rank(t) >= self.rank(best) => Some(t),
+            _ => Some(best),
+        }
+    }
+
+    /// How much a target is worth firing on before others.
+    fn rank(&self, t: Target) -> u8 {
+        let Some(f) = self.fighter(t) else {
+            return 0;
+        };
+        match (f.weapons.is_empty(), f.capturable || f.destructible) {
+            (false, _) => 3,
+            (true, true) => 2,
+            (true, false) => 1,
+        }
+    }
+
+    fn can_hit(&self, s: Target, weapon: &Weapon, t: Target) -> bool {
+        let Some(fighter) = self.fighter(t).filter(|_| t != s) else {
             return false;
         };
-        let d = distance(unit.position, target.position);
+        let d = self.reach(self.position(s), t);
         if d > weapon.range || d < weapon.min_range {
             return false;
         }
-        let side = match self.sides.relation(
-            self.regiments[unit.regiment].owner,
-            self.regiments[target.regiment].owner,
-        ) {
+        let side = match self.sides.relation(self.owner(s), self.owner(t)) {
             Relation::Enemy => "enemy",
             Relation::Ally | Relation::Itself => "friend",
             _ => "neutral",
@@ -389,26 +609,101 @@ impl World {
             .allow(fighter.flags.iter().chain(std::iter::once(&side)))
     }
 
-    /// Records the damage a shot landing at `at`, aimed at unit `t`, does
-    /// to what it hits.
-    fn strike(&self, weapon: &Weapon, at: [f32; 2], t: usize, hits: &mut Vec<(usize, f32)>) {
+    /// Records the damage a shot by `by`'s side landing at `at`, aimed at
+    /// `t`, does to what it hits.
+    fn strike(&self, weapon: &Weapon, at: [f32; 2], t: Target, by: u32, hits: &mut Vec<Hit>) {
         if weapon.area <= 0.0 {
-            if let Some(f) = &self.units[t].fighter {
-                hits.push((t, damage(weapon, f, 1.0)));
+            if let Some(f) = self.fighter(t) {
+                hits.push(Hit {
+                    target: t,
+                    amount: damage(weapon, f, 1.0),
+                    by,
+                });
             }
             return;
         }
-        for (i, unit) in self.units.iter().enumerate() {
-            let Some(f) = unit.fighter.as_ref().filter(|_| unit.alive()) else {
-                continue;
-            };
-            let d = distance(at, unit.position);
+        for target in self.targets() {
+            let d = self.reach(at, target);
             if d > weapon.area {
                 continue;
             }
-            hits.push((i, damage(weapon, f, falloff(weapon, d))));
+            let f = self.fighter(target).expect("targets can fight");
+            hits.push(Hit {
+                target,
+                amount: damage(weapon, f, falloff(weapon, d)),
+                by,
+            });
         }
     }
+
+    /// Hands each city to whoever holds its zone, as long as the side
+    /// holding it has none of its own there to keep it.
+    fn occupy(&mut self) {
+        for c in 0..self.buildings.len() {
+            let destroyed = matches!(self.buildings[c].state, State::Destroyed(_));
+            let Some(zone) = self.buildings[c].zone.filter(|_| !destroyed) else {
+                continue;
+            };
+            if let Some(winner) = self.holder(c, zone)
+                && winner != self.buildings[c].owner
+            {
+                self.change_hands(c, winner);
+            }
+        }
+    }
+
+    /// Who should hold the city centred on `c`: its owner while any of its
+    /// own are in the zone or no enemy of its is, else the side there with
+    /// none of its enemies there and no ally there stronger or in danger.
+    fn holder(&self, c: usize, zone: f32) -> Option<u32> {
+        let centre = self.buildings[c].position;
+        let owner = self.buildings[c].owner;
+        // Armed occupants, each by its health's share.
+        let occupants: Vec<(u32, f32)> = self
+            .targets()
+            .filter(|&t| t != Target::Building(c) && self.reach(centre, t) <= zone)
+            .filter_map(|t| {
+                let f = self.fighter(t).filter(|f| !f.weapons.is_empty())?;
+                let health = match t {
+                    Target::Unit(u) => self.units[u].health,
+                    Target::Building(b) => self.buildings[b].health,
+                };
+                Some((self.owner(t), health / f.health))
+            })
+            .collect();
+        let weight = |of: &dyn Fn(u32) -> bool| -> f32 {
+            occupants
+                .iter()
+                .filter(|(o, _)| of(*o))
+                .map(|(_, w)| w)
+                .sum()
+        };
+        let enemy = |of: u32| move |o: u32| self.sides.relation(o, of) == Relation::Enemy;
+        let own = weight(&|o| o == owner);
+        if owner != 0 && (own > 0.0 || weight(&enemy(owner)) <= 0.0) {
+            return Some(owner);
+        }
+        let players: Vec<u32> = self.sides.players.iter().map(|p| p.id).collect();
+        let present = |p: u32| weight(&|o| o == p);
+        let threat = |p: u32| weight(&|o| self.sides.relation(p, o) == Relation::Enemy);
+        let winner = players.iter().copied().find(|&p| {
+            threat(p) <= 0.0
+                && present(p) > 0.0
+                && !players.iter().any(|&q| {
+                    q != p
+                        && self.sides.relation(p, q) == Relation::Ally
+                        && (present(p) < present(q) || threat(q) > 0.0)
+                })
+        });
+        winner.or((owner != 0).then_some(owner))
+    }
+}
+
+/// Damage a shot does to what it lands on, for the side that fired it.
+struct Hit {
+    target: Target,
+    amount: f32,
+    by: u32,
 }
 
 /// The fraction of an area shot's damage that reaches `d` from where it
@@ -492,7 +787,10 @@ fn normalised([x, y]: [f32; 2]) -> Option<[f32; 2]> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
+    use aaa_map::{Obstacle, Shape};
     use tgck::map::{Detail, Thing};
 
     fn member(id: u32, position: [f32; 2], speed: f32) -> aaa_map::Member {
@@ -653,6 +951,8 @@ mod tests {
         Fighter {
             health: 100.0,
             defense: 0.0,
+            capturable: false,
+            destructible: true,
             resists: HashMap::new(),
             flags: vec![Id::from("infantry")],
             weapons,
@@ -710,7 +1010,7 @@ mod tests {
             at_war(),
         );
         w.tick();
-        assert_eq!(w.units[0].target, Some(1));
+        assert_eq!(w.units[0].target, Some(Target::Unit(1)));
         assert_eq!(w.units[0].health, 80.0);
         assert_eq!(w.units[1].health, 70.0);
         // Every 2s: the second is down to 10 after three volleys and dies
@@ -768,6 +1068,142 @@ mod tests {
         assert_eq!(falloff(&shell, 1.0), 1.0);
         assert_eq!(falloff(&shell, 4.0), 0.75);
         assert_eq!(falloff(&shell, 6.0), 0.5);
+    }
+
+    /// An unarmed building of `owner`'s with 100 health, 6 across and
+    /// square to the axes, at `position`.
+    fn building(id: u32, owner: u32, position: [f32; 2]) -> aaa_map::Building {
+        aaa_map::Building {
+            id,
+            template: "house".into(),
+            owner,
+            position,
+            fighter: Fighter {
+                flags: vec![Id::from("building")],
+                destructible: false,
+                ..soldier(Vec::new())
+            },
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle: Some(Obstacle {
+                position,
+                facing: [0.0, -1.0],
+                shape: Shape::Rect {
+                    width: 6.0,
+                    height: 6.0,
+                },
+            }),
+        }
+    }
+
+    /// Player 1's rifleman at 10,10 and whatever buildings, on open ground.
+    fn siege(buildings: &[aaa_map::Building]) -> World {
+        let mut w = battle(&[1], vec![soldier(vec![rifle(12.0, 30.0)])], at_war());
+        for b in buildings {
+            if let Some(o) = &b.obstacle {
+                w.pathing.block(o);
+            }
+        }
+        w.add_buildings(buildings);
+        w
+    }
+
+    #[test]
+    fn range_reaches_to_a_buildings_edge() {
+        // Its middle is 14 off, out of the rifle's 12, but its edge 11.
+        let mut w = siege(&[building(20, 2, [10.0, 24.0])]);
+        w.tick();
+        assert_eq!(w.units[0].target, Some(Target::Building(0)));
+        assert_eq!(w.buildings[0].health, 70.0);
+    }
+
+    #[test]
+    fn armed_enemies_come_before_buildings() {
+        // The house is nearer, but the enemy soldier can fire back.
+        let mut w = battle(
+            &[1, 2],
+            vec![
+                soldier(vec![rifle(12.0, 30.0)]),
+                soldier(vec![rifle(12.0, 1.0)]),
+            ],
+            at_war(),
+        );
+        w.add_buildings(&[building(20, 2, [16.0, 10.0])]);
+        w.tick();
+        assert_eq!(w.units[0].target, Some(Target::Unit(1)));
+        assert_eq!(w.buildings[0].health, 100.0);
+        run(&mut w, 10.0);
+        assert!(!w.units[1].alive());
+        assert_eq!(w.units[0].target, Some(Target::Building(0)));
+    }
+
+    #[test]
+    fn buildings_out_of_health_are_captured_destroyed_or_disabled() {
+        let mut bunker = building(20, 2, [10.0, 20.0]);
+        bunker.fighter.capturable = true;
+        let mut pillbox = building(21, 2, [20.0, 10.0]);
+        pillbox.fighter.destructible = true;
+        let house = building(22, 2, [0.0, 10.0]);
+        let mut w = siege(&[bunker, pillbox, house]);
+        assert!(!w.pathing.passable(10, 5, Domain::Land));
+        run(&mut w, 30.0);
+        // Its new owner's rifle leaves it be at the share it's left with.
+        let b = &w.buildings[0];
+        assert_eq!((b.owner, b.state), (1, State::Standing));
+        assert!((b.health - 30.0).abs() < 1e-3);
+        assert!(b.captured.is_some());
+        assert!(matches!(w.buildings[1].state, State::Destroyed(_)));
+        assert!(w.pathing.passable(10, 5, Domain::Land));
+        assert_eq!(w.buildings[2].state, State::Disabled);
+        assert_eq!(w.buildings[2].owner, 2);
+        assert_eq!(w.units[0].target, None);
+    }
+
+    /// Player 2's city centred at 40,10 with a zone of 15 and a house of
+    /// its own, out of the rifleman's reach.
+    fn city() -> [aaa_map::Building; 2] {
+        let mut centre = building(30, 2, [40.0, 10.0]);
+        centre.fighter.capturable = true;
+        centre.zone = Some(15.0);
+        centre.members = vec![31];
+        [centre, building(31, 2, [40.0, 20.0])]
+    }
+
+    #[test]
+    fn cities_go_to_whoever_holds_their_zone() {
+        let mut w = siege(&city());
+        run(&mut w, 1.0);
+        assert_eq!(w.buildings[0].owner, 2);
+        w.order_move(1, 0, [30.0, 10.0]).unwrap();
+        run(&mut w, 15.0);
+        assert!(w.buildings.iter().all(|b| b.owner == 1));
+        assert!(w.buildings[0].captured.is_some());
+        // Leaving doesn't give it back.
+        w.order_move(1, 0, [10.0, 10.0]).unwrap();
+        run(&mut w, 15.0);
+        assert!(w.buildings.iter().all(|b| b.owner == 1));
+    }
+
+    #[test]
+    fn cities_hold_out_while_their_own_are_there() {
+        let mut w = battle(
+            &[1, 2],
+            vec![
+                soldier(vec![rifle(1.0, 30.0)]),
+                soldier(vec![rifle(1.0, 30.0)]),
+            ],
+            at_war(),
+        );
+        w.add_buildings(&city());
+        // Player 2's soldier inside the zone, out of the other's reach.
+        w.units[1].position = [40.0, 15.0];
+        w.order_move(1, 0, [30.0, 10.0]).unwrap();
+        run(&mut w, 15.0);
+        assert_eq!(w.buildings[0].owner, 2);
+        w.units[1].died = Some(w.ticks);
+        w.tick();
+        assert_eq!(w.buildings[0].owner, 1);
     }
 
     fn player(id: u32, team: Option<usize>, relations: &[u32], team_relations: &[u32]) -> Player {

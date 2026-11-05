@@ -66,6 +66,11 @@ pub struct Body {
 pub struct Fighter {
     pub health: f32,
     pub defense: f32,
+    /// Whoever brings its health to nothing takes it over, unless it's a
+    /// city's centre, which changes hands by who holds its zone instead.
+    pub capturable: bool,
+    /// It's destroyed when its health runs out; otherwise it's disabled.
+    pub destructible: bool,
     /// The fraction of each damage type's damage its properties turn
     /// aside, by damage type; negative where they add to it.
     pub resists: HashMap<Id, f32>,
@@ -466,6 +471,33 @@ impl GameData {
         out
     }
 
+    /// How far around them city centres hold sway, by template id, including
+    /// the ids the game has since renamed.
+    pub fn city_zones(&mut self) -> HashMap<Id, f32> {
+        let files = self.parse_tgis(|_| true);
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut out = HashMap::new();
+        for (_, parsed) in &files {
+            for block in parsed.root.blocks_of("Thing") {
+                let Some(id) = block.value("ids") else {
+                    continue;
+                };
+                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
+                    continue;
+                };
+                // A city's other buildings have the component with no zone.
+                let zone = thing.city_component.and_then(|c| c.zone_radius);
+                if let Some(r) = zone.filter(|&r| r > 0.0) {
+                    out.insert(Id::from(id), r);
+                }
+            }
+        }
+        if let Some(bytes) = self.read("translate.tgi") {
+            add_renames(&mut out, &tgi::decode(&bytes), "Thing", |_| true);
+        }
+        out
+    }
+
     /// The organization layouts, by id.
     pub fn layouts(&mut self) -> HashMap<Id, Layout> {
         let files =
@@ -737,6 +769,8 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
     let mut fighter = Fighter {
         health,
         defense: body.defense.unwrap_or(0.0),
+        capturable: body.captureable.unwrap_or(false),
+        destructible: body.destructible.unwrap_or(true),
         ..Fighter::default()
     };
     let properties = thing.properties_component.iter().flat_map(|c| {

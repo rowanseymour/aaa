@@ -1,0 +1,70 @@
+//! The buildings a map starts with, such as houses, bunkers and cities'
+//! centres.
+
+use std::collections::HashMap;
+
+use aaa_data::{Body, Fighter, Id};
+use tgck::map::{Detail, Thing};
+
+use crate::pathing::Obstacle;
+use crate::units::owner;
+
+/// An owned object that can be hurt but not move and isn't a regiment.
+#[derive(Debug, Clone)]
+pub struct Building {
+    /// Its object's id, as in [`Map::things`](crate::Map::things).
+    pub id: u32,
+    pub template: String,
+    /// The owning [`Player::id`](crate::Player::id).
+    pub owner: u32,
+    pub position: [f32; 2],
+    pub fighter: Fighter,
+    /// Its health as a fraction of its fighter's.
+    pub health: f32,
+    /// For a city's centre, how far around it the city reaches.
+    pub zone: Option<f32>,
+    /// For a city's centre, the ids of the buildings that make up the city
+    /// and change hands with it.
+    pub members: Vec<u32>,
+    /// The ground it keeps movers off, if any.
+    pub obstacle: Option<Obstacle>,
+}
+
+pub fn buildings(
+    things: &[Thing],
+    bodies: &HashMap<Id, Body>,
+    fighters: &HashMap<Id, Fighter>,
+    zones: &HashMap<Id, f32>,
+    obstacles: &HashMap<u32, Obstacle>,
+) -> Vec<Building> {
+    things
+        .iter()
+        .filter_map(|t| {
+            let owner = owner(t)?;
+            let template = Id::from(t.template.as_str());
+            let fighter = fighters.get(&template)?;
+            let moves = bodies.get(&template).is_some_and(|b| b.speed.is_some());
+            if moves || t.organization().is_some() {
+                return None;
+            }
+            let Detail::Actor(actor) = &t.detail else {
+                return None;
+            };
+            let [x, y, _] = t.position;
+            Some(Building {
+                id: t.id,
+                template: t.template.clone(),
+                owner,
+                position: [x, y],
+                fighter: fighter.clone(),
+                health: actor.body().map_or(1.0, |b| b.health),
+                zone: zones.get(&template).copied(),
+                members: actor
+                    .city()
+                    .and_then(|c| c.buildings.clone())
+                    .unwrap_or_default(),
+                obstacle: obstacles.get(&t.id).cloned(),
+            })
+        })
+        .collect()
+}
