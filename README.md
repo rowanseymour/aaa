@@ -1,9 +1,10 @@
 ![Maps rendered by aaa-editor](docs/banner.jpg)
 
-Tools for working with the data files of [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)), the
+Experiments with the data files of [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)), the
 real-time strategy game.
 
-You need your own copy of the game. This project contains no game code or data.
+> [!IMPORTANT]
+> You need your own copy of the game. This project contains no game code or data. 
 
 This is not a decompilation of the game. Its executable was studied to learn
 how its file formats and rules work, but none of its code is included or
