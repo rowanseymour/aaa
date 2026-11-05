@@ -17,6 +17,7 @@ use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFor
 use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 use tgck::map::Thing;
 
+use crate::MapObject;
 use crate::glow::{Glow, GlowMaterial, Source};
 use crate::rig::{Nodes, Rig};
 use crate::terrain::world;
@@ -326,6 +327,7 @@ impl Models {
             .with_scale(Vec3::splat(view.scale * thing.scale));
         let mut root = commands.spawn((
             Name::new(thing.template.clone()),
+            MapObject(thing.clone()),
             transform,
             Visibility::default(),
         ));

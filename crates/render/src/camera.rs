@@ -76,6 +76,11 @@ pub fn spawn(commands: &mut Commands, cam: RtsCamera) {
     ));
 }
 
+/// The camera's keyboard and mouse controls, for pausing while the
+/// pointer is busy elsewhere.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Controls;
+
 pub fn update(
     keys: Res<ButtonInput<KeyCode>>,
     buttons: Res<ButtonInput<MouseButton>>,
