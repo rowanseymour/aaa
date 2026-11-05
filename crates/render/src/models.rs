@@ -200,13 +200,12 @@ impl Models {
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
-        ground: &Ground,
         things: impl IntoIterator<Item = &'a Thing>,
     ) -> Vec<(&'a Thing, bool)> {
         let mut rest = Vec::new();
         let (mut drawn, mut modelless) = (0, 0);
         for t in things {
-            let placed = self.place(commands, game, assets, ground, t);
+            let placed = self.place(commands, game, assets, t);
             let invisible = matches!(self.views.get(&Id::from(t.template.as_str())), Some(None));
             match placed {
                 Placed::Drawn if invisible => rest.push((t, false)),
@@ -279,7 +278,6 @@ impl Models {
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
-        ground: &Ground,
         thing: &Thing,
     ) -> Placed {
         let view = match self.views.get(&Id::from(thing.template.as_str())) {
@@ -288,26 +286,16 @@ impl Models {
                 let members = thing.organization().map_or(&[][..], |o| &o.members);
                 return members
                     .iter()
-                    .map(|m| self.place(commands, game, assets, ground, m))
+                    .map(|m| self.place(commands, game, assets, m))
                     .max()
                     .unwrap_or(Placed::NoModel);
             }
             _ => return Placed::Missing,
         };
-        let Some(root) = self.spawn_model(commands, game, assets, thing, &view, None) else {
-            return Placed::Missing;
-        };
-        if let Some(footprint) = view.conform {
-            let [x, y, _] = thing.position;
-            let [fx, fy, _] = thing.facing;
-            let (translation, rotation) = pose(ground, [x, y], [fx, fy], Some(footprint));
-            let mut root = commands.entity(root);
-            root.entry::<Transform>().and_modify(move |mut t| {
-                t.translation = translation;
-                t.rotation = rotation;
-            });
+        match self.spawn_model(commands, game, assets, thing, &view, None) {
+            Some(_) => Placed::Drawn,
+            None => Placed::Missing,
         }
-        Placed::Drawn
     }
 
     /// Spawns an object with one of its view's models, returning its root.

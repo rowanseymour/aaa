@@ -153,7 +153,6 @@ pub fn spawn_map(
         commands,
         game,
         &mut model_assets,
-        &map.ground,
         map.things.iter().filter(|t| !leave_out(t)),
     );
     objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
