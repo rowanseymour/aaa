@@ -139,6 +139,8 @@ pub struct PerformerComponent {
 pub struct Ability {
     /// The ids of the animation its user plays to use it.
     pub animation1: Option<String>,
+    /// The bone of the turret that aims it, if it has one.
+    pub turret_ids: Option<String>,
     pub ability_definition: Option<AbilityDefinition>,
 }
 
