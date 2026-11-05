@@ -8,6 +8,7 @@ use std::f32::consts::FRAC_PI_4;
 use aaa_map::Ground;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
+use bevy::pbr::ScreenSpaceTransmission;
 use bevy::prelude::*;
 
 use crate::terrain::world;
@@ -67,6 +68,8 @@ pub fn spawn(commands: &mut Commands, cam: RtsCamera) {
     commands.spawn((
         Camera3d::default(),
         Tonemapping::None,
+        // The water blends over the scene behind it.
+        ScreenSpaceTransmission::default(),
         cam.projection(),
         cam.transform(),
         cam,

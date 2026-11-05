@@ -153,9 +153,12 @@ pub fn build(
         (
             water_mesh(ground, &water, &colors, fade),
             WaterMaterial {
-                // Lit without highlights, as the game draws it.
+                // Lit without highlights, as the game draws it. Transmission
+                // gives the shader the scene behind to blend over; Blend
+                // keeps it out of the depth buffer, as in the game.
                 base: StandardMaterial {
                     alpha_mode: AlphaMode::Blend,
+                    specular_transmission: 1.0,
                     perceptual_roughness: 1.0,
                     reflectance: 0.0,
                     ..default()
