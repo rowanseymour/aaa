@@ -350,12 +350,40 @@ fn show_inspected(
             continue;
         }
         if let (Some(at), Some(shown)) = (at, shown) {
-            // Behind the windows, so the line runs to the nearest edge.
             let painter = ctx.layer_painter(egui::LayerId::background());
-            let rect = shown.response.rect;
-            painter.line_segment([at, rect.clamp(at)], egui::Stroke::new(1.5, color));
+            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                leader(shown.response.rect, at),
+                false,
+                egui::Color32::TRANSPARENT,
+                egui::Stroke::new(1.5, color),
+            ));
             painter.circle_filled(at, 4.0, color);
         }
     }
     Ok(())
+}
+
+/// The curve from a window to the point on screen it's about: out of the
+/// side of its title bar and bending round to the point like a pipe, or
+/// straight down or up to a point below or above the window.
+fn leader(window: egui::Rect, to: egui::Pos2) -> [egui::Pos2; 4] {
+    let from = if window.x_range().contains(to.x) {
+        egui::pos2(
+            to.x,
+            if to.y > window.bottom() {
+                window.bottom()
+            } else {
+                window.top()
+            },
+        )
+    } else {
+        let x = if to.x > window.right() {
+            window.right()
+        } else {
+            window.left()
+        };
+        egui::pos2(x, window.top() + 14.0)
+    };
+    let corner = egui::pos2(to.x, from.y);
+    [from, from.lerp(corner, 0.6), to.lerp(corner, 0.6), to]
 }
