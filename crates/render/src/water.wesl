@@ -3,7 +3,7 @@
 // lit like a StandardMaterial.
 
 import bevy_pbr::render::{
-    mesh_view_bindings::globals,
+    mesh_view_bindings::{globals, view_transmission_texture, view_transmission_sampler},
     pbr_fragment::pbr_input_from_standard_material,
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
@@ -37,15 +37,21 @@ fn fragment(
     let ripples = pow(saturate(pow(t.rgb, vec3(1.0 / 2.2)) * 3.0), vec3(2.2));
     pbr_input.material.base_color *= vec4(ripples, t.a);
 
-    // The game blends gamma-encoded colours, which covers what's below far
-    // more than the same alpha does in linear light. Over a background, a
-    // dark surface of alpha a leaves (1 - a) of it in gamma terms, so
-    // (1 - a)^2.2 of it in linear ones.
+    // The game blends gamma-encoded colours, which no alpha in linear light
+    // matches for both dark water over pale ground and a pale film over a
+    // dark bridge deck. So blend here, over the scene behind the water.
     let a = pbr_input.material.base_color.a;
-    pbr_input.material.base_color.a = 1.0 - pow(1.0 - a, 2.2);
+    pbr_input.material.base_color.a = 1.0;
+    // Set only to read the scene behind; it shouldn't dim or refract.
+    pbr_input.material.specular_transmission = 0.0;
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+
+    let size = vec2<f32>(textureDimensions(view_transmission_texture));
+    let behind = textureSampleLevel(view_transmission_texture, view_transmission_sampler, in.position.xy / size, 0.0);
+    let gamma = mix(pow(behind.rgb, vec3(1.0 / 2.2)), pow(max(out.color.rgb, vec3(0.0)), vec3(1.0 / 2.2)), a);
+    out.color = vec4(pow(gamma, vec3(2.2)), 1.0);
     return out;
 }
