@@ -77,7 +77,13 @@ impl Map {
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
-            regiments: units::regiments(&things, &bodies, &fighters, &game.layouts()),
+            regiments: units::regiments(
+                &things,
+                &bodies,
+                &fighters,
+                &game.layouts(),
+                &game.operational_ranges(),
+            ),
             buildings: buildings::buildings(
                 &things,
                 &bodies,

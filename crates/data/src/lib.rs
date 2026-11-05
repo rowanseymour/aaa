@@ -148,6 +148,8 @@ pub struct Layout {
     pub formations: Vec<Formation>,
     /// Index into `formations` of the one it starts in.
     pub default: usize,
+    /// Index into `formations` of the one it fights in once engaged.
+    pub combat: Option<usize>,
     /// The slot whose member the organization's position follows.
     pub primary: Option<usize>,
 }
@@ -480,6 +482,23 @@ impl GameData {
     /// How far around them city centres hold sway, by template id, including
     /// the ids the game has since renamed.
     pub fn city_zones(&mut self) -> HashMap<Id, f32> {
+        // A city's other buildings have the component with no zone.
+        self.by_template(|t| {
+            let zone = t.city_component.as_ref()?.zone_radius;
+            zone.filter(|&r| r > 0.0)
+        })
+    }
+
+    /// How far from where they stand organizations take on enemies that
+    /// fire on them, by template id, including the ids the game has since
+    /// renamed.
+    pub fn operational_ranges(&mut self) -> HashMap<Id, f32> {
+        self.by_template(|t| t.organization_component.as_ref()?.operational_range)
+    }
+
+    /// What `of` finds in each template that has it, by template id,
+    /// including the ids the game has since renamed.
+    fn by_template<T: Clone>(&mut self, of: impl Fn(&defs::Thing) -> Option<T>) -> HashMap<Id, T> {
         let files = self.parse_tgis(|_| true);
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
@@ -491,10 +510,8 @@ impl GameData {
                 let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
                     continue;
                 };
-                // A city's other buildings have the component with no zone.
-                let zone = thing.city_component.and_then(|c| c.zone_radius);
-                if let Some(r) = zone.filter(|&r| r > 0.0) {
-                    out.insert(Id::from(id), r);
+                if let Some(v) = of(&thing) {
+                    out.insert(Id::from(id), v);
                 }
             }
         }
@@ -696,15 +713,17 @@ fn layout(l: &defs::OrganizationLayout) -> Option<Layout> {
             })
         })
         .collect();
+    let index = |id: &Option<Id>| {
+        let id = id.as_ref()?;
+        formations.iter().position(|f| &f.id == id)
+    };
     // Layouts may inherit a default they don't define.
-    let default = l
-        .default_formation_ids
-        .as_ref()
-        .and_then(|id| formations.iter().position(|f| &f.id == id))
-        .unwrap_or(0);
+    let default = index(&l.default_formation_ids).unwrap_or(0);
+    let combat = index(&l.combat_formation_ids);
     (!formations.is_empty()).then(|| Layout {
         formations,
         default,
+        combat,
         primary: l.slot.iter().position(|s| s.primary),
     })
 }
@@ -1048,6 +1067,7 @@ mod tests {
     fn layouts_give_positions_to_slots_by_property() {
         let parsed = tgi::parse(
             "[OrganizationLayout]\n{\n\tIDS = squad\n\tdefault_formation_ids = missing\n\
+             \tcombat_formation_ids = line\n\
              \t[Slot]\n\tproperty_IDS = front\n\tnumber = 2\n\
              \t[Slot]\n\tproperty_IDS = captain\n\tprimary = true\n\
              \t[Formation]\n\t{\n\t\tformation_IDS = line\n\
@@ -1059,6 +1079,7 @@ mod tests {
         let l: defs::OrganizationLayout = tgi::from_block(block).unwrap();
         let layout = layout(&l).unwrap();
         assert_eq!(layout.default, 0);
+        assert_eq!(layout.combat, Some(0));
         assert_eq!(layout.primary, Some(1));
         assert_eq!(layout.formations[0].id, Id::from("line"));
         assert_eq!(

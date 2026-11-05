@@ -14,10 +14,10 @@ You need your own copy of the game. This project contains no game code or data.
 | [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool | Done; particle systems skipped |
 | [`aaa‑data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, as a library and a command-line tool | Partial: definitions cover what rendering and the rules use so far |
 | [`aaa‑map`](crates/map) | Maps as loaded: the ground, objects and players | Early: ground, placed objects, players and teams, regiments, buildings and cities, and where movers can go |
-| [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: sides and how they stand toward each other; regiments take their owner's orders, move in formation around what blocks them, and fire on enemies in range until they're destroyed; buildings are captured, destroyed or disabled, and cities go to whoever holds them |
+| [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: sides and how they stand toward each other; regiments take their owner's orders, move in formation around what blocks them, fire on enemies in range until they're destroyed, and stop to fight enemies they meet unless told to run; buildings are captured, destroyed or disabled, and cities go to whoever holds them |
 | [`aaa‑render`](crates/render) | Draws maps with Bevy | Ground, water, models and their animations, units idling, walking, attacking and dying; no particles |
 | [`aaa‑editor`](crates/editor) | Map editor built with Bevy | Views maps; no editing yet |
-| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Play one side: select your regiments, send them somewhere and change their formation; they fight enemies in range and take cities by holding them |
+| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Play one side: select your regiments, send them somewhere or run them there and change their formation; they fight enemies in range and take cities by holding them |
 
 ## Building
 

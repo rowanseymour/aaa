@@ -2,10 +2,12 @@
 //! on the command line.
 //!
 //! You play one of the map's players. Click one of your units to select its
-//! regiment and right-click the ground to send it there. The number keys pick
-//! its formation, in the order its layout lists them. Rings in their owner's
-//! colour mark every regiment's units, outlines every building and a wider
-//! ring each city's reach; grey outlines mark disabled buildings.
+//! regiment and right-click the ground to send it there, stopping to fight
+//! enemies on the way, or Alt+right-click to have it run there, ignoring
+//! them. The number keys pick its formation, in the order its layout lists
+//! them. Rings in their owner's colour mark every regiment's units, outlines
+//! every building and a wider ring each city's reach; grey outlines mark
+//! disabled buildings.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -490,9 +492,11 @@ fn show_buildings(
 }
 
 /// Left click selects the regiment of the unit of yours under the cursor,
-/// right click sends the selected one where it points.
+/// right click sends the selected one where it points, running with Alt.
+#[allow(clippy::too_many_arguments)]
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     loaded: Res<Loaded>,
@@ -544,7 +548,10 @@ fn command(
             .map(|(u, _)| u.regiment);
     } else if let Some(r) = selected.0 {
         // Selection only takes the player's own.
-        let _ = sim.0.order_move(player, r, point);
+        let _ = match keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
+            true => sim.0.order_run(player, r, point),
+            false => sim.0.order_move(player, r, point),
+        };
     }
 }
 

@@ -126,6 +126,10 @@ pub struct Regiment {
     pub formations: Vec<Formation>,
     /// Index into `formations` of the one it's in.
     pub formation: usize,
+    /// Index into `formations` of the one it fights in once engaged.
+    pub combat: Option<usize>,
+    /// How far from where it stands it takes on enemies that fire on it.
+    pub operational_range: Option<f32>,
     /// The member whose position is the regiment's; without one, the
     /// members' average position is.
     pub primary: Option<usize>,
@@ -157,6 +161,7 @@ pub fn regiments(
     bodies: &HashMap<Id, Body>,
     fighters: &HashMap<Id, Fighter>,
     layouts: &HashMap<Id, Layout>,
+    operational_ranges: &HashMap<Id, f32>,
 ) -> Vec<Regiment> {
     let speed = |t: &Thing| bodies.get(&Id::from(t.template.as_str()))?.speed;
     things
@@ -185,6 +190,8 @@ pub fn regiments(
                 [0.0, 0.0, _] => [0.0, -1.0],
                 [fx, fy, _] => [fx, fy],
             };
+            // The layout's formations keep their order once arranged.
+            let combat = layout.and_then(|l| l.combat).filter(|_| arranged.is_some());
             let (formations, formation, primary) =
                 arranged.unwrap_or_else(|| (vec![as_placed(&members, facing)], 0, None));
             Some(Regiment {
@@ -195,6 +202,10 @@ pub fn regiments(
                 members,
                 formations,
                 formation,
+                combat,
+                operational_range: operational_ranges
+                    .get(&Id::from(t.template.as_str()))
+                    .copied(),
                 primary,
             })
         })
@@ -270,6 +281,7 @@ mod tests {
         Layout {
             formations: vec![formation("aggressive", 2.0), formation("defensive", 1.0)],
             default: 1,
+            combat: Some(0),
             primary: Some(2),
         }
     }
