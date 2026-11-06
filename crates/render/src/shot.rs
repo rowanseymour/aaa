@@ -189,9 +189,9 @@ fn capture(
     }
 }
 
-/// Bevy's own `save_to_disk` only logs a failure, which would leave the run
-/// exiting as if it had worked.
-fn save(image: &Image, path: &std::path::Path) -> Result<(), String> {
+/// Saves a captured frame. Bevy's own `save_to_disk` only logs a failure,
+/// which would leave a run exiting as if it had worked.
+pub fn save(image: &Image, path: &std::path::Path) -> Result<(), String> {
     let picture = image
         .clone()
         .try_into_dynamic()
