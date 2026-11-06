@@ -130,7 +130,7 @@ impl Nodes {
                     self.walk(nif, c, Some(at), transform, &properties, hidden);
                 }
             }
-            Object::Shape(_) if !hidden => {
+            Object::Shape(_) if !hidden && !nif.casts_shadow_only(av) => {
                 if let Some(node) = parent {
                     self.shapes.push(RigShape {
                         shape: i,

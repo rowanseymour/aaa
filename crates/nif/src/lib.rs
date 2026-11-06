@@ -153,6 +153,16 @@ impl Nif {
         self.objects.get(r?)
     }
 
+    /// Whether a shape is shadow geometry: a rough hull the game casts
+    /// shadows with and never draws, hugging the mesh it shadows.
+    pub fn casts_shadow_only(&self, av: &SceneObject) -> bool {
+        av.extra_data.iter().any(|&r| {
+            self.get_as::<ExtraData>(r).is_some_and(|e| {
+                e.name == "Sg" && matches!(e.value, ExtraValue::Integer(n) if n != 0)
+            })
+        })
+    }
+
     /// Every visible triangle mesh reachable from the roots, with its transform
     /// relative to the model and the properties in effect for it: its own,
     /// then those inherited from its parents, nearest first.
@@ -186,6 +196,9 @@ impl Nif {
         let Some(av) = object.scene().filter(|av| !av.hidden()) else {
             return;
         };
+        if matches!(object, Object::Shape(_)) && self.casts_shadow_only(av) {
+            return;
+        }
         let transform = parent.then(&av.transform);
         let inherited = props.len();
         props.splice(0..0, av.properties.iter().copied());
