@@ -153,7 +153,7 @@ fn whitened(mut image: Image) -> Image {
             TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm
         )
     }) {
-        for texel in data.chunks_exact_mut(4) {
+        for texel in data.as_chunks_mut::<4>().0 {
             if texel[3] > 0 && texel[..3] != [0, 0, 0] {
                 texel[..3].fill(255);
             }
