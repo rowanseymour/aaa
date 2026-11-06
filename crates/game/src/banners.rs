@@ -26,16 +26,29 @@ pub struct Banner {
     focus: Entity,
 }
 
-/// Spawns every regiment's banner, hidden until [`show_banners`] places it.
+/// Loads what banners are drawn with.
 pub fn setup_banners(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
-    sim: Res<Sim>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
-    let templates = sim.0.regiments.iter().map(|r| r.template.as_str());
-    let banners = BannerImages::load(&mut loaded.game, &mut images, formats.0, templates);
+    commands.insert_resource(BannerImages::load(&mut loaded.game, &mut images, formats.0));
+}
+
+/// Spawns a banner, hidden until [`show_banners`] places it, for each
+/// regiment that has none yet: those the map starts with and any raised
+/// since.
+pub fn add_banners(
+    mut commands: Commands,
+    mut loaded: ResMut<Loaded>,
+    sim: Res<Sim>,
+    mut banners: ResMut<BannerImages>,
+    mut images: ResMut<Assets<Image>>,
+    existing: Query<&Banner>,
+) {
+    // Regiments are only ever added, at the end.
+    let have = existing.iter().map(|b| b.regiment + 1).max().unwrap_or(0);
     let layer = |image: &Option<Handle<Image>>, colour: Color| {
         (
             Node {
@@ -52,12 +65,13 @@ pub fn setup_banners(
             Pickable::IGNORE,
         )
     };
-    for (r, regiment) in sim.0.regiments.iter().enumerate() {
+    for (r, regiment) in sim.0.regiments.iter().enumerate().skip(have) {
         let [red, green, blue] = sim
             .0
             .sides
             .player(regiment.owner)
             .map_or([1.0; 3], |p| p.rgb);
+        let icon = banners.icon(&mut loaded.game, &mut images, &regiment.template);
         let mut root = commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -78,8 +92,8 @@ pub fn setup_banners(
         root.add_child(engaged);
         root.with_children(|banner| {
             banner.spawn(layer(&banners.plate, Color::srgb(red, green, blue)));
-            if let Some(icon) = banners.icons.get(&regiment.template) {
-                banner.spawn(layer(&Some(icon.clone()), Color::WHITE));
+            if icon.is_some() {
+                banner.spawn(layer(&icon, Color::WHITE));
             }
             banner.spawn(layer(&banners.frame, Color::WHITE));
         });
@@ -90,7 +104,6 @@ pub fn setup_banners(
             focus,
         });
     }
-    commands.insert_resource(banners);
 }
 
 /// Places each live regiment's banner over where its units stand, nearer

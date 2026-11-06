@@ -84,7 +84,7 @@ impl OverlayImages {
 
 /// The layers of the banners that float over regiments, each a square
 /// image drawn the same size, one over another.
-#[derive(Resource, Clone)]
+#[derive(Resource)]
 pub struct BannerImages {
     /// The plate, grey to be tinted in the owner's colour.
     pub plate: Option<Handle<Image>>,
@@ -95,52 +95,56 @@ pub struct BannerImages {
     /// Corner brackets around it while the cursor is on the regiment, white
     /// to be tinted.
     pub focus: Option<Handle<Image>>,
-    /// The image on each organization template's banner, by template.
-    pub icons: HashMap<String, Handle<Image>>,
+    /// The archive path of each organization template's icon.
+    icon_paths: HashMap<Id, String>,
+    /// Icons loaded so far, by path.
+    icons: HashMap<String, Option<Handle<Image>>>,
+    formats: CompressedImageFormats,
 }
 
 impl BannerImages {
-    /// Loads the banner layers, and the icons of the organization
-    /// `templates`.
-    pub fn load<'a>(
+    pub fn load(
         game: &mut GameData,
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
-        templates: impl IntoIterator<Item = &'a str>,
     ) -> Self {
-        let decode = |game: &mut GameData, name: &str| {
-            textures::decode(&game.read(name)?, name, formats, true)
+        let mut add = |name: &str, change: fn(Image) -> Image| {
+            let image = textures::decode(&game.read(name)?, name, formats, true)?;
+            Some(images.add(change(image)))
         };
-        let plate = decode(game, "Organizations/Banners/Shared/BannerPlayerColor.png");
+        let plate = add("Organizations/Banners/Shared/BannerPlayerColor.png", |i| i);
         // Every nation's frame has the same shape; in the field the game
         // draws its band white instead of the nation's colour.
-        let frame = decode(game, "Organizations/Banners/RUS/RUSBannerBase.png").map(whitened);
-        let engaged = decode(game, "Organizations/Banners/Shared/BannerEngaged1.png");
-        let focus = decode(game, "Effects/Selection/BannerFocusBase.tga");
-        let paths = game.banner_icons();
-        let mut loaded: HashMap<&str, Handle<Image>> = Default::default();
-        let mut icons = HashMap::new();
-        for template in templates {
-            let Some(path) = paths.get(&Id::from(template)) else {
-                continue;
-            };
-            let icon = match loaded.get(path.as_str()) {
-                Some(h) => Some(h.clone()),
-                None => decode(game, path).map(|i| images.add(i)),
-            };
-            if let Some(icon) = icon {
-                loaded.insert(path, icon.clone());
-                icons.insert(template.to_string(), icon);
-            }
-        }
-        let mut add = |i: Option<Image>| i.map(|i| images.add(i));
+        let frame = add("Organizations/Banners/RUS/RUSBannerBase.png", whitened);
+        let engaged = add("Organizations/Banners/Shared/BannerEngaged1.png", |i| i);
+        let focus = add("Effects/Selection/BannerFocusBase.tga", |i| i);
         BannerImages {
-            plate: add(plate),
-            frame: add(frame),
-            engaged: add(engaged),
-            focus: add(focus),
-            icons,
+            plate,
+            frame,
+            engaged,
+            focus,
+            icon_paths: game.banner_icons(),
+            icons: HashMap::new(),
+            formats,
         }
+    }
+
+    /// The image on the banner of an organization of `template`, loaded the
+    /// first time it's asked for.
+    pub fn icon(
+        &mut self,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        template: &str,
+    ) -> Option<Handle<Image>> {
+        let path = self.icon_paths.get(&Id::from(template))?;
+        if let Some(icon) = self.icons.get(path) {
+            return icon.clone();
+        }
+        let icon =
+            textures::decode(&game.read(path)?, path, self.formats, true).map(|i| images.add(i));
+        self.icons.insert(path.clone(), icon.clone());
+        icon
     }
 }
 

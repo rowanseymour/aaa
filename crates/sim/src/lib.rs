@@ -222,68 +222,75 @@ impl World {
             buildings: Vec::new(),
             ticks: 0,
         };
-        for (r, regiment) in regiments.iter().enumerate() {
-            let first = world.units.len();
-            for m in &regiment.members {
-                let [x, y, _] = m.thing.position;
-                let facing =
-                    normalised([m.thing.facing[0], m.thing.facing[1]]).unwrap_or([0.0, -1.0]);
-                let (tx, ty) = tile_at([x, y]);
-                // Units start on what they travel on.
-                let domain = match world.pathing.passable(tx, ty, Domain::Land)
-                    || !world.pathing.passable(tx, ty, Domain::Naval)
-                {
-                    true => Domain::Land,
-                    false => Domain::Naval,
-                };
-                let fighter = m.fighter.clone();
-                world.units.push(Unit {
-                    health: fighter.as_ref().map_or(0.0, |f| f.health),
-                    reloads: fighter
-                        .as_ref()
-                        .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),
-                    fighter,
-                    target: None,
-                    shot: None,
-                    died: None,
-                    id: m.thing.id,
-                    template: m.thing.template.clone(),
-                    regiment: r,
-                    domain,
-                    position: [x, y],
-                    previous: [x, y],
-                    facing,
-                    end_facing: facing,
-                    path: Vec::new(),
-                });
-            }
-            let units: Vec<usize> = (first..world.units.len()).collect();
-            let position = match regiment.primary {
-                Some(p) => world.units[first + p].position,
-                None => world.average(&units),
-            };
-            world.regiments.push(Regiment {
-                id: regiment.id,
-                template: regiment.template.clone(),
-                owner: regiment.owner,
-                units,
-                speed: regiment
-                    .members
-                    .iter()
-                    .map(|m| m.speed)
-                    .fold(f32::INFINITY, f32::min),
-                position,
-                facing: normalised(regiment.facing).unwrap_or([0.0, -1.0]),
-                formations: regiment.formations.clone(),
-                formation: regiment.formation,
-                combat: regiment.combat,
-                operational_range: regiment.operational_range.unwrap_or(0.0),
-                order: Order::Move,
-                engaged: Vec::new(),
-                resume: None,
-            });
+        for regiment in regiments {
+            world.add_regiment(regiment);
         }
         world
+    }
+
+    /// Adds a regiment as the map has it, standing where its members do,
+    /// returning its index.
+    pub fn add_regiment(&mut self, regiment: &aaa_map::Regiment) -> usize {
+        let r = self.regiments.len();
+        let first = self.units.len();
+        for m in &regiment.members {
+            let [x, y, _] = m.thing.position;
+            let facing = normalised([m.thing.facing[0], m.thing.facing[1]]).unwrap_or([0.0, -1.0]);
+            let (tx, ty) = tile_at([x, y]);
+            // Units start on what they travel on.
+            let domain = match self.pathing.passable(tx, ty, Domain::Land)
+                || !self.pathing.passable(tx, ty, Domain::Naval)
+            {
+                true => Domain::Land,
+                false => Domain::Naval,
+            };
+            let fighter = m.fighter.clone();
+            self.units.push(Unit {
+                health: fighter.as_ref().map_or(0.0, |f| f.health),
+                reloads: fighter
+                    .as_ref()
+                    .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),
+                fighter,
+                target: None,
+                shot: None,
+                died: None,
+                id: m.thing.id,
+                template: m.thing.template.clone(),
+                regiment: r,
+                domain,
+                position: [x, y],
+                previous: [x, y],
+                facing,
+                end_facing: facing,
+                path: Vec::new(),
+            });
+        }
+        let units: Vec<usize> = (first..self.units.len()).collect();
+        let position = match regiment.primary {
+            Some(p) => self.units[first + p].position,
+            None => self.average(&units),
+        };
+        self.regiments.push(Regiment {
+            id: regiment.id,
+            template: regiment.template.clone(),
+            owner: regiment.owner,
+            units,
+            speed: regiment
+                .members
+                .iter()
+                .map(|m| m.speed)
+                .fold(f32::INFINITY, f32::min),
+            position,
+            facing: normalised(regiment.facing).unwrap_or([0.0, -1.0]),
+            formations: regiment.formations.clone(),
+            formation: regiment.formation,
+            combat: regiment.combat,
+            operational_range: regiment.operational_range.unwrap_or(0.0),
+            order: Order::Move,
+            engaged: Vec::new(),
+            resume: None,
+        });
+        r
     }
 
     /// Adds buildings as the map has them, those out of health already
@@ -343,6 +350,19 @@ impl World {
             [x + ux, y + uy]
         });
         [x / n, y / n]
+    }
+
+    /// Kills a regiment's surviving members outright.
+    pub fn destroy(&mut self, regiment: usize) {
+        for u in self.regiments[regiment].units.clone() {
+            let unit = &mut self.units[u];
+            if unit.alive() {
+                unit.health = 0.0;
+                unit.died = Some(self.ticks);
+                unit.path.clear();
+                unit.target = None;
+            }
+        }
     }
 
     /// Whether `player` may give `regiment` orders.
@@ -1144,6 +1164,40 @@ mod tests {
         run(&mut w, 5.0);
         assert!(near(w.units[0].position, [9.0, 10.0]));
         assert_eq!(w.regiments[0].formation, 0);
+    }
+
+    #[test]
+    fn regiments_added_later_take_orders_like_the_first() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        let second = aaa_map::Regiment {
+            id: 4,
+            template: "squad".into(),
+            owner: 7,
+            facing: [0.0, 1.0],
+            members: vec![member(5, [20.0, 10.0], 2.0)],
+            formations: vec![aaa_map::Formation {
+                id: "line".into(),
+                offsets: vec![[0.0, 0.0]],
+            }],
+            formation: 0,
+            combat: None,
+            operational_range: None,
+            primary: None,
+        };
+        let r = w.add_regiment(&second);
+        assert_eq!((r, w.units[2].regiment), (1, 1));
+        w.order_move(7, r, [20.0, 20.0]).unwrap();
+        run(&mut w, 10.0);
+        assert!(near(w.units[2].position, [20.0, 20.0]));
+        assert!(near(w.units[0].position, [9.0, 10.0]));
+    }
+
+    #[test]
+    fn destroyed_regiments_take_no_more_orders() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.destroy(0);
+        assert!(w.destroyed(0));
+        assert!(!w.commands(7, 0));
     }
 
     fn rifle(range: f32, amount: f32) -> Weapon {

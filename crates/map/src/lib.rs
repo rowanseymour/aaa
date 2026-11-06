@@ -11,7 +11,7 @@ pub use buildings::Building;
 pub use ground::{Ground, Tilt};
 pub use pathing::{Domain, Obstacle, Pathing};
 pub use tgck::map::Relation;
-pub use units::{Formation, Member, Player, Regiment, Team, owner};
+pub use units::{Formation, Member, Player, Recruits, Regiment, Team, owner};
 
 use aaa_data::GameData;
 use tgck::map::{Sun, Terrain, Thing};

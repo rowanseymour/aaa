@@ -8,9 +8,11 @@
 //! them. Models wear their owner's colour and banners float over every
 //! regiment. Rings mark the units of the regiment under the cursor, and a
 //! square the building under it, green for your own; health bars show under
-//! the selected regiment's units.
+//! the selected regiment's units. The key left of 1 opens a console for
+//! script commands, such as moving the camera or raising regiments.
 
 mod banners;
+mod console;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -20,7 +22,7 @@ use aaa_data::GameData;
 use aaa_map::{Ground, Map, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
-use aaa_render::models::{Footprint, pose};
+use aaa_render::models::{Footprint, Models, pose};
 use aaa_render::overlay::{self, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET};
 use aaa_render::shot::{self, ShotPlugin};
 use aaa_render::terrain::world;
@@ -40,6 +42,8 @@ usage:
 options:
   --side <n>                play the map's nth player (\"Side n\" in its lobby)
                             instead of the first one a person may play
+  --exec <script.txt>       run a file of console commands once the match starts;
+                            may be given more than once
   --screenshot <file.png>   save a frame to a file and exit, without a window";
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -73,6 +77,10 @@ struct Loaded {
 
 #[derive(Resource)]
 struct Sim(World);
+
+/// The models objects are drawn with, for drawing more mid-match.
+#[derive(Resource)]
+struct Drawn(Models);
 
 /// Which of the map's major players to play, counting from 1.
 #[derive(Resource, Clone, Copy)]
@@ -147,6 +155,15 @@ fn main() -> ExitCode {
         },
         None => None,
     };
+    let mut scripts = Vec::new();
+    while let Some(i) = args.iter().position(|a| a == "--exec") {
+        if i + 1 >= args.len() {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+        scripts.push(args.remove(i + 1));
+        args.remove(i);
+    }
     let screenshot = match args.iter().position(|a| a == "--screenshot") {
         Some(i) if i + 1 < args.len() => {
             let path = args.remove(i + 1);
@@ -199,7 +216,14 @@ fn main() -> ExitCode {
     if let Some(s) = screenshot {
         app.add_plugins(s);
     }
+    let mut console = console::Console::default();
+    for s in &scripts {
+        console.exec_on_start(s);
+    }
     app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
+        .add_plugins(console::ConsolePlugin)
+        .insert_resource(console)
+        .configure_sets(Update, camera::Controls.run_if(console::closed))
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .init_resource::<Selected>()
         .init_resource::<Focus>()
@@ -210,21 +234,33 @@ fn main() -> ExitCode {
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
             OnEnter(Screen::Match),
-            (setup, setup_overlays, banners::setup_banners),
+            (
+                setup,
+                setup_overlays,
+                banners::setup_banners,
+                console::start_scripts,
+            )
+                .chain(),
         )
         .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
             Update,
             (
-                (focus, command).chain(),
-                choose_formation,
                 show_units,
                 show_buildings,
                 show_focus,
                 show_health.after(camera::Controls),
-                banners::show_banners.after(camera::Controls),
+                (banners::add_banners, banners::show_banners)
+                    .chain()
+                    .after(camera::Controls),
             )
                 .run_if(in_state(Screen::Match)),
+        )
+        .add_systems(
+            Update,
+            ((focus, command).chain(), choose_formation)
+                .run_if(in_state(Screen::Match))
+                .run_if(console::closed),
         );
     match map {
         Some(map) => {
@@ -516,6 +552,7 @@ fn setup(
         None => RtsCamera::centred(&map.ground),
     };
     camera::spawn(&mut commands, cam);
+    commands.insert_resource(Drawn(models));
 }
 
 fn step(mut sim: ResMut<Sim>, mut selected: ResMut<Selected>) {
