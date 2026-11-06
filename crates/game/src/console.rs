@@ -2,10 +2,12 @@
 //! the game's own style, which `--exec` also reads from files. A line holds
 //! commands split by `;`, each a case-insensitive verb and its words, with
 //! "quotes" around a word that has spaces; `#` or `//` makes the rest of a
-//! line a comment. `help` lists the verbs.
+//! line a comment. `help` lists the verbs. [`crate::remote`] takes lines
+//! from a socket too.
 
 use std::collections::VecDeque;
 use std::f32::consts::FRAC_PI_2;
+use std::sync::mpsc::SyncSender;
 
 use aaa_map::Recruits;
 use aaa_render::MapAssets;
@@ -15,7 +17,10 @@ use bevy::ecs::system::SystemState;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
+use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::window::PrimaryWindow;
 
+use crate::remote::Remote;
 use crate::{Drawn, Loaded, Local, Screen, Selected, Sim, UnitView};
 
 /// Lines kept for scrolling back through.
@@ -51,8 +56,12 @@ pub struct Console {
     history: Vec<String>,
     /// Where in `history` the arrow keys are; `None` for a fresh line.
     recall: Option<usize>,
-    /// Lines to run, with whether to echo them.
-    queued: VecDeque<(String, bool)>,
+    /// Lines to run, with where they came from.
+    queued: VecDeque<(String, Source)>,
+    /// What the line running says, for answering a client with.
+    capture: Option<String>,
+    /// Where the answer to the line running goes, if it came from a client.
+    answer: Option<SyncSender<String>>,
     /// Scripts held until a match starts, since most commands need one.
     scripts: Vec<String>,
     /// Tab was pressed and the input wants completing.
@@ -72,6 +81,10 @@ impl Console {
     fn say(&mut self, text: &str) {
         for line in text.lines() {
             info!("console: {line}");
+            if let Some(capture) = &mut self.capture {
+                capture.push_str(line);
+                capture.push('\n');
+            }
             self.lines.push_back(line.to_string());
             if self.lines.len() > SCROLLBACK {
                 self.lines.pop_front();
@@ -80,12 +93,19 @@ impl Console {
     }
 }
 
+/// Where a line to run came from.
+enum Source {
+    Typed,
+    Script,
+    Client(SyncSender<String>),
+}
+
 /// Queues the held scripts; added to the match's start.
 pub fn start_scripts(mut console: ResMut<Console>) {
     for path in std::mem::take(&mut console.scripts) {
         console
             .queued
-            .push_back((format!("exec \"{path}\""), false));
+            .push_back((format!("exec \"{path}\""), Source::Script));
     }
 }
 
@@ -113,6 +133,11 @@ const VERBS: &[Verb] = &[
         "runs the commands in a file, a line at a time",
     ),
     verb("quit", "", "ends the program"),
+    verb(
+        "screenshot",
+        "file.png",
+        "saves what the window shows to a file, answering once it's written",
+    ),
     verb(
         "lookat",
         "[x y]",
@@ -258,6 +283,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
             world.write_message(AppExit::Success);
             Ok(String::new())
         }
+        "screenshot" => screenshot(world, &args),
         "gamespeed" => game_speed(world, &args),
         "gamepause" => game_pause(world, &args),
         name => {
@@ -339,6 +365,39 @@ fn exec(world: &mut World, args: &[&str], depth: usize) -> Reply {
     for line in script.lines() {
         run_line(world, line, depth + 1);
     }
+    Ok(String::new())
+}
+
+fn screenshot(world: &mut World, args: &[&str]) -> Reply {
+    let [path] = args else {
+        return Err(usage("screenshot"));
+    };
+    let windows = world
+        .query_filtered::<(), With<PrimaryWindow>>()
+        .iter(world)
+        .count();
+    if windows == 0 {
+        return Err("no window to save; --screenshot saves a windowless run's".into());
+    }
+    let path = std::path::PathBuf::from(path);
+    // A client's answer waits for the file, with what the line said so far.
+    let mut console = world.resource_mut::<Console>();
+    let mut waiting = console
+        .answer
+        .take()
+        .map(|answer| (answer, console.capture.take().unwrap_or_default()));
+    world.spawn(Screenshot::primary_window()).observe(
+        move |captured: On<ScreenshotCaptured>, mut console: ResMut<Console>| {
+            let said = match aaa_render::shot::save(&captured.image, &path) {
+                Ok(()) => format!("saved {}", path.display()),
+                Err(e) => format!("screenshot: {}: {e}", path.display()),
+            };
+            console.say(&said);
+            if let Some((answer, before)) = waiting.take() {
+                let _ = answer.send(before + &said + "\n");
+            }
+        },
+    );
     Ok(String::new())
 }
 
@@ -776,7 +835,7 @@ fn keys(mut presses: MessageReader<KeyboardInput>, mut console: ResMut<Console>)
                 if console.history.last() != Some(&line) {
                     console.history.push(line.clone());
                 }
-                console.queued.push_back((line, true));
+                console.queued.push_back((line, Source::Typed));
             }
             KeyCode::ArrowUp => {
                 let back = match console.recall {
@@ -821,11 +880,29 @@ fn run(world: &mut World) {
     if std::mem::take(&mut world.resource_mut::<Console>().complete) {
         complete(world);
     }
-    while let Some((line, echo)) = world.resource_mut::<Console>().queued.pop_front() {
-        if echo {
-            world.resource_mut::<Console>().say(&format!("] {line}"));
+    if let Some(remote) = world.get_resource::<Remote>() {
+        let asked = remote.take();
+        let mut console = world.resource_mut::<Console>();
+        for (line, answer) in asked {
+            console.queued.push_back((line, Source::Client(answer)));
+        }
+    }
+    while let Some((line, source)) = world.resource_mut::<Console>().queued.pop_front() {
+        let mut console = world.resource_mut::<Console>();
+        if !matches!(source, Source::Script) {
+            console.say(&format!("] {line}"));
+        }
+        if let Source::Client(answer) = source {
+            console.capture = Some(String::new());
+            console.answer = Some(answer);
         }
         run_line(world, &line, 0);
+        let mut console = world.resource_mut::<Console>();
+        let said = console.capture.take().unwrap_or_default();
+        // Unless a command took it, to answer once its work is done.
+        if let Some(answer) = console.answer.take() {
+            let _ = answer.send(said);
+        }
     }
 }
 
