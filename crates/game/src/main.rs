@@ -8,11 +8,14 @@
 //! them. Models wear their owner's colour and banners float over every
 //! regiment. Rings mark the units of the regiment under the cursor, and a
 //! square the building under it, green for your own; health bars show under
-//! the selected regiment's units. The key left of 1 opens a console for
-//! script commands, such as moving the camera or raising regiments.
+//! the selected regiment's units. A minimap in the corner shows where
+//! everything is, and clicking it moves the camera there. The key left of 1
+//! opens a console for script commands, such as moving the camera or
+//! raising regiments.
 
 mod banners;
 mod console;
+mod minimap;
 mod remote;
 
 use std::collections::HashSet;
@@ -260,6 +263,7 @@ fn main() -> ExitCode {
                 setup,
                 setup_overlays,
                 banners::setup_banners,
+                minimap::spawn,
                 console::start_scripts,
             )
                 .chain(),
@@ -280,7 +284,18 @@ fn main() -> ExitCode {
         )
         .add_systems(
             Update,
-            ((focus, command).chain(), choose_formation)
+            (
+                minimap::steer.before(camera::Controls),
+                minimap::update.after(camera::Controls),
+            )
+                .run_if(in_state(Screen::Match)),
+        )
+        .add_systems(
+            Update,
+            (
+                (focus, command.run_if(minimap::pointer_away)).chain(),
+                choose_formation,
+            )
                 .run_if(in_state(Screen::Match))
                 .run_if(console::closed),
         );
