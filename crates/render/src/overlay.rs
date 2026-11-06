@@ -1,14 +1,17 @@
 //! What the game draws over objects to show what the cursor is on and what
 //! is selected: rings and squares on the ground, white and tinted as they're
-//! drawn, and health bars that face the screen.
+//! drawn, health bars that face the screen, and regiments' banners.
 
-use aaa_data::GameData;
+use std::collections::HashMap;
+
+use aaa_data::{GameData, Id};
 use aaa_map::{Ground, Shape};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 use nif::{Nif, Object};
 
 use crate::models::embedded_image;
@@ -77,6 +80,86 @@ impl OverlayImages {
         };
         self.health.get(frame)
     }
+}
+
+/// The layers of the banners that float over regiments, each a square
+/// image drawn the same size, one over another.
+#[derive(Resource, Clone)]
+pub struct BannerImages {
+    /// The plate, grey to be tinted in the owner's colour.
+    pub plate: Option<Handle<Image>>,
+    /// The frame around it.
+    pub frame: Option<Handle<Image>>,
+    /// Crossed rifles behind it while the regiment is engaged.
+    pub engaged: Option<Handle<Image>>,
+    /// Corner brackets around it while the cursor is on the regiment, white
+    /// to be tinted.
+    pub focus: Option<Handle<Image>>,
+    /// The image on each organization template's banner, by template.
+    pub icons: HashMap<String, Handle<Image>>,
+}
+
+impl BannerImages {
+    /// Loads the banner layers, and the icons of the organization
+    /// `templates`.
+    pub fn load<'a>(
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        formats: CompressedImageFormats,
+        templates: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        let decode = |game: &mut GameData, name: &str| {
+            textures::decode(&game.read(name)?, name, formats, true)
+        };
+        let plate = decode(game, "Organizations/Banners/Shared/BannerPlayerColor.png");
+        // Every nation's frame has the same shape; in the field the game
+        // draws its band white instead of the nation's colour.
+        let frame = decode(game, "Organizations/Banners/RUS/RUSBannerBase.png").map(whitened);
+        let engaged = decode(game, "Organizations/Banners/Shared/BannerEngaged1.png");
+        let focus = decode(game, "Effects/Selection/BannerFocusBase.tga");
+        let paths = game.banner_icons();
+        let mut loaded: HashMap<&str, Handle<Image>> = Default::default();
+        let mut icons = HashMap::new();
+        for template in templates {
+            let Some(path) = paths.get(&Id::from(template)) else {
+                continue;
+            };
+            let icon = match loaded.get(path.as_str()) {
+                Some(h) => Some(h.clone()),
+                None => decode(game, path).map(|i| images.add(i)),
+            };
+            if let Some(icon) = icon {
+                loaded.insert(path, icon.clone());
+                icons.insert(template.to_string(), icon);
+            }
+        }
+        let mut add = |i: Option<Image>| i.map(|i| images.add(i));
+        BannerImages {
+            plate: add(plate),
+            frame: add(frame),
+            engaged: add(engaged),
+            focus: add(focus),
+            icons,
+        }
+    }
+}
+
+/// An image with every coloured texel turned white, black and see-through
+/// ones left be.
+fn whitened(mut image: Image) -> Image {
+    if let Some(data) = image.data.as_mut().filter(|_| {
+        matches!(
+            image.texture_descriptor.format,
+            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm
+        )
+    }) {
+        for texel in data.chunks_exact_mut(4) {
+            if texel[3] > 0 && texel[..3] != [0, 0, 0] {
+                texel[..3].fill(255);
+            }
+        }
+    }
+    image
 }
 
 /// A flip book's frames, in the order the model holds them.

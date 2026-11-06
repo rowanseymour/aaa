@@ -5,9 +5,12 @@
 //! regiment and right-click the ground to send it there, stopping to fight
 //! enemies on the way, or Alt+right-click to have it run there, ignoring
 //! them. The number keys pick its formation, in the order its layout lists
-//! them. Models wear their owner's colour. Rings mark the units of the
-//! regiment under the cursor, and a square the building under it, green for
-//! your own; health bars show under the selected regiment's units.
+//! them. Models wear their owner's colour and banners float over every
+//! regiment. Rings mark the units of the regiment under the cursor, and a
+//! square the building under it, green for your own; health bars show under
+//! the selected regiment's units.
+
+mod banners;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -205,7 +208,10 @@ fn main() -> ExitCode {
         .add_systems(Update, highlight.run_if(in_state(Screen::Menu)))
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
-        .add_systems(OnEnter(Screen::Match), (setup, setup_overlays))
+        .add_systems(
+            OnEnter(Screen::Match),
+            (setup, setup_overlays, banners::setup_banners),
+        )
         .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
             Update,
@@ -216,6 +222,7 @@ fn main() -> ExitCode {
                 show_buildings,
                 show_focus,
                 show_health.after(camera::Controls),
+                banners::show_banners.after(camera::Controls),
             )
                 .run_if(in_state(Screen::Match)),
         );
@@ -421,7 +428,7 @@ fn setup_overlays(
 ) {
     let images = OverlayImages::load(&mut loaded.game, &mut images, formats.0);
     let mut tinted = |image: &Option<Handle<Image>>| {
-        [OWN, FRIEND, OTHER].map(|c| materials.add(overlay::mark_material(image.clone(), c)))
+        TINTS.map(|c| materials.add(overlay::mark_material(image.clone(), c)))
     };
     commands.insert_resource(Marks {
         square: meshes.add(overlay::flat_square()),
@@ -758,6 +765,9 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
 const OWN: Color = Color::srgb(0.1, 0.9, 0.1);
 const FRIEND: Color = Color::srgb(0.2, 0.55, 1.0);
 const OTHER: Color = Color::srgb(0.95, 0.15, 0.1);
+/// What marks things by how their owner stands toward the player, by
+/// [`tint`].
+const TINTS: [Color; 3] = [OWN, FRIEND, OTHER];
 
 /// Which of [`Marks`]' tints suits what `owner` owns.
 fn tint(sim: &World, local: Option<u32>, owner: u32) -> usize {
@@ -935,6 +945,8 @@ fn show_health(
         commands.spawn((
             HealthBar,
             node,
+            // Over the banners.
+            GlobalZIndex(1),
             ImageNode::new(frame),
             Pickable::IGNORE,
             DespawnOnExit(Screen::Match),

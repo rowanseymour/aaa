@@ -244,6 +244,8 @@ pub struct View {
     pub aspects_as_variations: bool,
     #[serde(default)]
     pub texture_search_path: Vec<TextureSearchPath>,
+    /// The image on an organization's banner.
+    pub banner_icon: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
