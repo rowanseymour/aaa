@@ -589,6 +589,7 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
                     &mut loaded.game,
                     &mut assets.models(),
                     &m.thing,
+                    owner,
                     m.speed,
                 );
                 match spawned {

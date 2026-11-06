@@ -499,6 +499,15 @@ impl GameData {
         })
     }
 
+    /// The archive path of the image on each organization template's
+    /// banner, by template id.
+    pub fn banner_icons(&mut self) -> HashMap<Id, String> {
+        self.by_template(|t| {
+            let icon = t.view.as_ref()?.banner_icon.as_deref()?;
+            Some(icon.trim_start_matches('/').to_string())
+        })
+    }
+
     /// How far from where they stand organizations take on enemies that
     /// fire on them, by template id, including the ids the game has since
     /// renamed.

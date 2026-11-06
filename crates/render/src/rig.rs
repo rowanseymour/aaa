@@ -12,7 +12,7 @@ use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
 use nif::{Controller, ControllerKind, Keyframes, Nif, Object};
 
-use crate::models::{Part, bevy_transform};
+use crate::models::{Part, PartMaterial, bevy_transform};
 
 /// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
@@ -326,7 +326,20 @@ impl Nodes {
 impl Rig {
     /// Spawns the rig's nodes and meshes under `root`, posed `offset`
     /// seconds into its animation.
-    pub fn spawn(self: &Arc<Rig>, commands: &mut Commands, root: Entity, offset: f32) {
+    /// Its meshes' parts, in the order [`Rig::spawn`] takes their materials.
+    pub fn parts(&self) -> impl Iterator<Item = &Part> {
+        self.meshes.iter().map(|m| &m.part)
+    }
+
+    /// Spawns its nodes and meshes under `root`, each mesh with its own of
+    /// `materials`.
+    pub fn spawn(
+        self: &Arc<Rig>,
+        commands: &mut Commands,
+        root: Entity,
+        offset: f32,
+        materials: Vec<PartMaterial>,
+    ) {
         let mut joints: Vec<Entity> = Vec::with_capacity(self.nodes.len());
         for (i, node) in self.nodes.iter().enumerate() {
             let parent = node.parent.map_or(root, |p| joints[p]);
@@ -341,14 +354,14 @@ impl Rig {
                 .id();
             joints.push(id);
         }
-        for mesh in &self.meshes {
+        for (mesh, material) in self.meshes.iter().zip(materials) {
             let parent = mesh.node.map_or(root, |n| joints[n]);
             let mut child = commands.spawn((
                 Mesh3d(mesh.part.mesh.clone()),
                 mesh.transform,
                 ChildOf(parent),
             ));
-            mesh.part.material.insert(&mut child);
+            material.insert(&mut child);
             if mesh.part.blended {
                 child.insert(NotShadowCaster);
             }
