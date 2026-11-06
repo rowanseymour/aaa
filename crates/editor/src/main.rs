@@ -69,6 +69,10 @@ struct Inspected {
 #[derive(Resource)]
 struct Shooting(bool);
 
+/// The game camera's zoom limits: the game's own nearest, but out far
+/// enough to see a whole map.
+const EDITOR_ZOOM: (f32, f32) = (camera::GAME_ZOOM.0, 12.0);
+
 /// Where the camera starts, from `--camera`.
 #[derive(Resource, Clone, Copy)]
 struct StartView([f32; 5]);
@@ -214,7 +218,10 @@ fn setup(
 
     let ground = &map.ground;
     let size = ground.size();
-    let mut cam = RtsCamera::centred(ground);
+    let mut cam = RtsCamera {
+        zoom: EDITOR_ZOOM,
+        ..RtsCamera::centred(ground)
+    };
     if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
         let (x, y) = (x * size, y * size);
         cam = RtsCamera {
@@ -223,6 +230,7 @@ fn setup(
             yaw,
             pitch,
             free: true,
+            ..cam
         };
     }
     camera::spawn(&mut commands, cam);

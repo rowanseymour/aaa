@@ -2,6 +2,9 @@
 //!
 //! It starts in the game's own view: the map seen corner-on from a fixed
 //! angle, which only pans and zooms. Tab frees it to rotate and tilt.
+//!
+//! Unzoomed, the game's camera sits `GAME_HEIGHT` above the point it looks
+//! at, and its field of view is the horizontal angle of a 4:3 view.
 
 use std::f32::consts::FRAC_PI_4;
 
@@ -13,11 +16,13 @@ use bevy::prelude::*;
 
 use crate::terrain::world;
 
-// Estimated from screenshots of the game, not read from its data.
 const GAME_YAW: f32 = FRAC_PI_4;
-const GAME_PITCH: f32 = 0.85;
-const GAME_FOV: f32 = 0.52;
-const GAME_DISTANCE: (f32, f32) = (40.0, 250.0);
+const GAME_PITCH: f32 = 40f32.to_radians();
+const GAME_HEIGHT: f32 = 100.0;
+const GAME_FOV_4_3: f32 = 15f32.to_radians();
+
+/// How far the game lets you zoom in and out.
+pub const GAME_ZOOM: (f32, f32) = (0.7, 1.4);
 
 const FREE_FOV: f32 = FRAC_PI_4;
 const FREE_DISTANCE: (f32, f32) = (5.0, 2000.0);
@@ -29,6 +34,17 @@ pub struct RtsCamera {
     pub pitch: f32,
     pub distance: f32,
     pub free: bool,
+    /// The game camera's zoom limits, as multiples of its starting distance.
+    pub zoom: (f32, f32),
+}
+
+/// The game camera's distance from its focus at zoom 1.
+fn game_distance() -> f32 {
+    GAME_HEIGHT / GAME_PITCH.sin()
+}
+
+fn game_fov() -> f32 {
+    2.0 * ((GAME_FOV_4_3 / 2.0).tan() * 0.75).atan()
 }
 
 impl RtsCamera {
@@ -37,8 +53,9 @@ impl RtsCamera {
             focus,
             yaw: GAME_YAW,
             pitch: GAME_PITCH,
-            distance: 150.0,
+            distance: game_distance(),
             free: false,
+            zoom: GAME_ZOOM,
         }
     }
 
@@ -56,7 +73,9 @@ impl RtsCamera {
 
     pub fn projection(&self) -> Projection {
         Projection::Perspective(PerspectiveProjection {
-            fov: if self.free { FREE_FOV } else { GAME_FOV },
+            fov: if self.free { FREE_FOV } else { game_fov() },
+            // Far enough to see a whole map from the editor's furthest zoom.
+            far: 10_000.0,
             ..default()
         })
     }
@@ -131,7 +150,7 @@ pub fn update(
         let (near, far) = if cam.free {
             FREE_DISTANCE
         } else {
-            GAME_DISTANCE
+            (cam.zoom.0 * game_distance(), cam.zoom.1 * game_distance())
         };
         cam.distance = (cam.distance * 0.9f32.powf(lines)).clamp(near, far);
 

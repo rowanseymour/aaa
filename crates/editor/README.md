@@ -16,8 +16,9 @@ is made that way by [`docs/banner.sh`](../../docs/banner.sh).
 
 ## Controls
 
-The camera starts in the game's own fixed corner-on view. Tab frees it to
-rotate and tilt, and switches back.
+The camera starts in the game's own fixed corner-on view, but zooms out far
+enough to see the whole map. Tab frees it to rotate and tilt, and switches
+back.
 
 | Input | Action |
 |---|---|
