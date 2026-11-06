@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Body, Fighter, Id, Layout};
+use aaa_data::{Body, Fighter, GameData, Id, Layout, Organization};
 use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
 
 /// A side: a player, human or AI, or an independent power such as
@@ -163,53 +163,200 @@ pub fn regiments(
     layouts: &HashMap<Id, Layout>,
     operational_ranges: &HashMap<Id, f32>,
 ) -> Vec<Regiment> {
-    let speed = |t: &Thing| bodies.get(&Id::from(t.template.as_str()))?.speed;
     things
         .iter()
         .filter_map(|t| {
             let owner = owner(t)?;
             let organization = t.organization()?;
-            let layout = layouts.get(&Id::from(organization.layout.as_str()));
-            let arranged =
-                layout.and_then(|l| arrange(l, &organization.slots, organization.members.len()));
             let members = organization
                 .members
                 .iter()
-                .map(|m| {
-                    Some(Member {
-                        speed: speed(m)?,
-                        fighter: fighters.get(&Id::from(m.template.as_str())).cloned(),
-                        thing: m.clone(),
-                    })
-                })
+                .map(|m| member(m.clone(), bodies, fighters))
                 .collect::<Option<Vec<_>>>()?;
-            if members.is_empty() {
-                return None;
-            }
             let facing = match t.facing {
                 [0.0, 0.0, _] => [0.0, -1.0],
                 [fx, fy, _] => [fx, fy],
             };
-            // The layout's formations keep their order once arranged.
-            let combat = layout.and_then(|l| l.combat).filter(|_| arranged.is_some());
-            let (formations, formation, primary) =
-                arranged.unwrap_or_else(|| (vec![as_placed(&members, facing)], 0, None));
-            Some(Regiment {
-                id: t.id,
-                template: t.template.clone(),
+            let layout = layouts.get(&Id::from(organization.layout.as_str()));
+            let operational_range = operational_ranges
+                .get(&Id::from(t.template.as_str()))
+                .copied();
+            regiment(
+                t.id,
+                &t.template,
                 owner,
                 facing,
                 members,
-                formations,
-                formation,
-                combat,
-                operational_range: operational_ranges
-                    .get(&Id::from(t.template.as_str()))
-                    .copied(),
-                primary,
-            })
+                layout.map(|l| (l, &organization.slots[..])),
+                operational_range,
+            )
         })
         .collect()
+}
+
+/// A member standing as `thing` has it, if its template can move.
+fn member(
+    thing: Thing,
+    bodies: &HashMap<Id, Body>,
+    fighters: &HashMap<Id, Fighter>,
+) -> Option<Member> {
+    let template = Id::from(thing.template.as_str());
+    Some(Member {
+        speed: bodies.get(&template)?.speed?,
+        fighter: fighters.get(&template).cloned(),
+        thing,
+    })
+}
+
+/// A regiment of `members`, arranged by its layout and the slots they fill
+/// where those account for them all, else as they stand.
+fn regiment(
+    id: u32,
+    template: &str,
+    owner: u32,
+    facing: [f32; 2],
+    members: Vec<Member>,
+    layout: Option<(&Layout, &[String])>,
+    operational_range: Option<f32>,
+) -> Option<Regiment> {
+    if members.is_empty() {
+        return None;
+    }
+    let arranged = layout.and_then(|(l, slots)| Some((l, arrange(l, slots, members.len())?)));
+    // The layout's formations keep their order once arranged.
+    let combat = arranged.as_ref().and_then(|(l, _)| l.combat);
+    let (formations, formation, primary) = match arranged {
+        Some((_, a)) => a,
+        None => (vec![as_placed(&members, facing)], 0, None),
+    };
+    Some(Regiment {
+        id,
+        template: template.to_string(),
+        owner,
+        facing,
+        members,
+        formations,
+        formation,
+        combat,
+        operational_range,
+        primary,
+    })
+}
+
+/// What raising regiments from their templates takes: what each template is
+/// made of, and what its members are.
+pub struct Recruits {
+    organizations: HashMap<Id, Organization>,
+    bodies: HashMap<Id, Body>,
+    fighters: HashMap<Id, Fighter>,
+    layouts: HashMap<Id, Layout>,
+    operational_ranges: HashMap<Id, f32>,
+}
+
+impl Recruits {
+    pub fn new(game: &mut GameData) -> Recruits {
+        Recruits {
+            organizations: game.organizations(),
+            bodies: game.bodies(),
+            fighters: game.fighters(),
+            layouts: game.layouts(),
+            operational_ranges: game.operational_ranges(),
+        }
+    }
+
+    /// The templates [`Recruits::raise`] can raise, sorted.
+    pub fn templates(&self) -> Vec<&str> {
+        let mut out: Vec<&str> = self
+            .organizations
+            .iter()
+            .filter(|(_, o)| {
+                let filled = o.slots.iter().flatten();
+                filled.clone().next().is_some()
+                    && filled
+                        .into_iter()
+                        .all(|e| self.bodies.get(e).is_some_and(|b| b.speed.is_some()))
+            })
+            .map(|(id, _)| id.as_str())
+            .collect();
+        out.sort_unstable_by_key(|t| t.to_ascii_lowercase());
+        out.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+        out
+    }
+
+    /// A regiment of `template` owned by `owner`, standing in its starting
+    /// formation around `position` and facing `facing`. It takes the id `id`
+    /// and its members the ones after it.
+    pub fn raise(
+        &self,
+        template: &str,
+        id: u32,
+        owner: u32,
+        position: [f32; 2],
+        facing: [f32; 2],
+    ) -> Result<Regiment, String> {
+        let organization = self
+            .organizations
+            .get(&Id::from(template))
+            .ok_or_else(|| format!("{template} isn't a regiment"))?;
+        let layout = self
+            .layouts
+            .get(&organization.layout)
+            .ok_or_else(|| format!("{template} has no layout {}", organization.layout))?;
+        let slots: Vec<String> = organization
+            .slots
+            .iter()
+            .map(|s| {
+                s.as_ref()
+                    .map_or_else(String::new, |e| e.as_str().to_string())
+            })
+            .collect();
+        let start = &layout.formations[layout.default];
+        let elements = slots.iter().enumerate().filter(|(_, e)| !e.is_empty());
+        let elements = elements.flat_map(|(i, e)| {
+            let n = start.slots.get(i).map_or(1, Vec::len);
+            std::iter::repeat_n(e, n)
+        });
+        let [fx, fy] = facing;
+        let members = elements
+            .zip(id + 1..)
+            .map(|(element, id)| {
+                let thing = Thing {
+                    template: element.clone(),
+                    class: tgck::map::ACTOR,
+                    id,
+                    name: String::new(),
+                    position: [position[0], position[1], 0.0],
+                    facing: [fx, fy, 0.0],
+                    flags: 0,
+                    scale: 1.0,
+                    variation: -1,
+                    seen_by: 0,
+                    detail: Detail::None,
+                };
+                member(thing, &self.bodies, &self.fighters)
+                    .ok_or_else(|| format!("{element}, in {template}, can't move"))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let operational_range = self.operational_ranges.get(&Id::from(template)).copied();
+        let mut regiment = regiment(
+            id,
+            template,
+            owner,
+            facing,
+            members,
+            Some((layout, &slots)),
+            operational_range,
+        )
+        .ok_or_else(|| format!("{template} has no members"))?;
+        // Formation offsets are from the regiment's position, x to its right
+        // and y ahead.
+        let offsets = regiment.formations[regiment.formation].offsets.clone();
+        for (m, [right, ahead]) in regiment.members.iter_mut().zip(offsets) {
+            m.thing.position[0] = position[0] + right * fy + ahead * fx;
+            m.thing.position[1] = position[1] - right * fx + ahead * fy;
+        }
+        Ok(regiment)
+    }
 }
 
 /// A layout's formations for the members filling `slots`, each slot's
@@ -301,6 +448,54 @@ mod tests {
     fn refuses_layouts_that_miss_members() {
         let slots = ["rifle".to_string(), String::new(), "captain".to_string()];
         assert!(arrange(&layout(), &slots, 4).is_none());
+    }
+
+    #[test]
+    fn raises_regiments_in_their_starting_formation() {
+        let body = Body {
+            blocking: None,
+            speed: Some(3.0),
+        };
+        let recruits = Recruits {
+            organizations: HashMap::from([(
+                Id::from("squad"),
+                Organization {
+                    layout: Id::from("line"),
+                    slots: vec![Some(Id::from("rifle")), None, Some(Id::from("captain"))],
+                },
+            )]),
+            bodies: HashMap::from([
+                (Id::from("rifle"), body.clone()),
+                (Id::from("captain"), body),
+            ]),
+            fighters: HashMap::new(),
+            layouts: HashMap::from([(Id::from("line"), layout())]),
+            operational_ranges: HashMap::new(),
+        };
+        assert_eq!(recruits.templates(), ["squad"]);
+        // Facing +x, so the front's left-hand man stands on the +y side.
+        let r = recruits
+            .raise("Squad", 10, 2, [50.0, 50.0], [1.0, 0.0])
+            .unwrap();
+        assert_eq!((r.id, r.owner, r.formation, r.primary), (10, 2, 1, Some(2)));
+        let placed: Vec<_> = r
+            .members
+            .iter()
+            .map(|m| (m.thing.id, m.thing.template.as_str(), m.thing.position))
+            .collect();
+        assert_eq!(
+            placed,
+            [
+                (11, "rifle", [51.0, 51.0, 0.0]),
+                (12, "rifle", [51.0, 49.0, 0.0]),
+                (13, "captain", [50.0, 50.0, 0.0]),
+            ]
+        );
+        assert!(
+            recruits
+                .raise("rifle", 10, 2, [0.0, 0.0], [1.0, 0.0])
+                .is_err()
+        );
     }
 
     #[test]

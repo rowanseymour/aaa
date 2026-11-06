@@ -141,6 +141,16 @@ pub struct Damage {
     pub amount: f32,
 }
 
+/// What an organization template, such as a regiment, is made of.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Organization {
+    /// The [`Layout`] its members are arranged by.
+    pub layout: Id,
+    /// The template filling each of the layout's slots; `None` for one left
+    /// empty.
+    pub slots: Vec<Option<Id>>,
+}
+
 /// How an organization's members can be arranged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Layout {
@@ -494,6 +504,24 @@ impl GameData {
     /// renamed.
     pub fn operational_ranges(&mut self) -> HashMap<Id, f32> {
         self.by_template(|t| t.organization_component.as_ref()?.operational_range)
+    }
+
+    /// What every organization template is made of, by template id,
+    /// including the ids the game has since renamed.
+    pub fn organizations(&mut self) -> HashMap<Id, Organization> {
+        self.by_template(|t| {
+            let o = t.organization_component.as_ref()?;
+            Some(Organization {
+                layout: o.layout_ids.clone()?,
+                // Templates name an empty slot's element `null`.
+                slots: o
+                    .slot
+                    .iter()
+                    .map(|s| s.element_ids.clone().filter(|e| *e != Id::from("null")))
+                    .collect(),
+            })
+            .filter(|o| !o.slots.is_empty())
+        })
     }
 
     /// What `of` finds in each template that has it, by template id,

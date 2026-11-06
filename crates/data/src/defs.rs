@@ -94,6 +94,17 @@ pub struct CityComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationComponent {
     pub operational_range: Option<f32>,
+    /// The [`OrganizationLayout`] its members are arranged by.
+    pub layout_ids: Option<Id>,
+    /// What fills each of the layout's slots, in the layout's order.
+    #[serde(default)]
+    pub slot: Vec<OrganizationSlot>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct OrganizationSlot {
+    /// The template of the slot's members; none for a slot left empty.
+    pub element_ids: Option<Id>,
 }
 
 /// The properties an object has.
