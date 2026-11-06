@@ -6,7 +6,7 @@ use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
 use aaa_data::{GameData, Id, Shape, View};
-use aaa_map::Ground;
+use aaa_map::{Ground, Player, owner};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
@@ -20,6 +20,7 @@ use tgck::map::Thing;
 use crate::MapObject;
 use crate::glow::{Glow, GlowMaterial, Source};
 use crate::rig::{Nodes, Rig};
+use crate::team::{self, Team, TeamMaterial};
 use crate::terrain::world;
 use crate::textures;
 
@@ -59,6 +60,8 @@ pub(crate) struct Part {
     /// Bevy's shadows ignore alpha blending, so a faded or see-through mesh
     /// would cast a solid one.
     pub blended: bool,
+    /// Its owner's colour shows where its texture is see-through.
+    team: bool,
 }
 
 /// A part's material: most are standard, those that add to what's behind
@@ -67,6 +70,7 @@ pub(crate) struct Part {
 pub(crate) enum PartMaterial {
     Standard(Handle<StandardMaterial>),
     Glow(Handle<GlowMaterial>),
+    Team(Handle<TeamMaterial>),
 }
 
 impl PartMaterial {
@@ -74,6 +78,7 @@ impl PartMaterial {
         match self {
             PartMaterial::Standard(m) => entity.insert(MeshMaterial3d(m.clone())),
             PartMaterial::Glow(m) => entity.insert(MeshMaterial3d(m.clone())),
+            PartMaterial::Team(m) => entity.insert(MeshMaterial3d(m.clone())),
         };
     }
 
@@ -94,17 +99,38 @@ impl PartMaterial {
                     .cloned()
                     .map_or(h.clone(), |m| assets.glow_materials.add(m)),
             ),
+            PartMaterial::Team(h) => PartMaterial::Team(
+                assets
+                    .team_materials
+                    .get(h)
+                    .cloned()
+                    .map_or(h.clone(), |m| assets.team_materials.add(m)),
+            ),
         }
     }
 }
 
-/// A loaded model: meshes placed in the model, or a rig of its nodes for
-/// one that plays a `.kf` animation.
+/// A loaded model.
 #[derive(Clone)]
-enum Model {
+struct Model {
+    meshes: Meshes,
+    /// Its selection box's width and length, in model units.
+    selection: Option<Vec2>,
+}
+
+/// A model's meshes placed in the model, or a rig of its nodes for one that
+/// plays a `.kf` animation.
+#[derive(Clone)]
+enum Meshes {
     Parts(Vec<Part>),
     Rig(Arc<Rig>),
 }
+
+/// The ground an object's model marks as its own, in world units: width
+/// across its facing and length along it. On the root of objects whose
+/// models have one.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Footprint(pub Vec2);
 
 /// What a model's controllers do to one of its meshes.
 pub struct Animation {
@@ -142,6 +168,7 @@ pub fn animate(
     mut parts: Query<(&Animated, &mut Transform)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut glow_materials: ResMut<Assets<GlowMaterial>>,
+    mut team_materials: ResMut<Assets<TeamMaterial>>,
 ) {
     for (a, mut transform) in &mut parts {
         let t = time.elapsed_secs() + a.offset;
@@ -155,6 +182,9 @@ pub fn animate(
                 PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
                 PartMaterial::Glow(h) => {
                     glow_materials.get_mut(h).map(|m| &mut m.into_inner().base)
+                }
+                PartMaterial::Team(h) => {
+                    team_materials.get_mut(h).map(|m| &mut m.into_inner().base)
                 }
             };
             if let Some(m) = base {
@@ -180,15 +210,22 @@ pub struct Models {
     textures: HashMap<String, Option<Handle<Image>>>,
     /// Bevy's texture formats this GPU can sample compressed.
     formats: CompressedImageFormats,
+    /// Each player's colour, by id.
+    colours: HashMap<u32, [f32; 3]>,
+    /// Team-coloured copies of materials, by the material and the colour's
+    /// bits.
+    painted: HashMap<(AssetId<StandardMaterial>, [u32; 3]), Handle<TeamMaterial>>,
 }
 
 impl Models {
-    pub fn new(game: &mut GameData, formats: CompressedImageFormats) -> Self {
+    pub fn new(game: &mut GameData, formats: CompressedImageFormats, players: &[Player]) -> Self {
         Models {
             views: game.views(),
             models: HashMap::new(),
             textures: HashMap::new(),
             formats,
+            colours: players.iter().map(|p| (p.id, p.rgb)).collect(),
+            painted: HashMap::new(),
         }
     }
 
@@ -206,7 +243,7 @@ impl Models {
         let mut rest = Vec::new();
         let (mut drawn, mut modelless) = (0, 0);
         for t in things {
-            let placed = self.place(commands, game, assets, t);
+            let placed = self.place(commands, game, assets, t, None);
             let invisible = matches!(self.views.get(&Id::from(t.template.as_str())), Some(None));
             match placed {
                 Placed::Drawn if invisible => rest.push((t, false)),
@@ -237,15 +274,17 @@ impl Models {
         self.views.get(&Id::from(template))?.as_ref()?.conform
     }
 
-    /// Spawns a unit that moves at `speed`, its model playing the moving
-    /// animation that suits that speed while [`crate::Playing::set_moving`] says
-    /// it's moving. `None` if its model can't be drawn.
+    /// Spawns a unit of the player `owner` that moves at `speed`, its model
+    /// playing the moving animation that suits that speed while
+    /// [`crate::Playing::set_moving`] says it's moving. `None` if its model
+    /// can't be drawn.
     pub fn spawn_unit(
         &mut self,
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
+        owner: u32,
         speed: f32,
     ) -> Option<Entity> {
         let view = self
@@ -253,7 +292,7 @@ impl Models {
             .get(&Id::from(thing.template.as_str()))?
             .clone()?;
         let moving = moving(&view, speed);
-        self.spawn_model(commands, game, assets, thing, &view, moving)
+        self.spawn_model(commands, game, assets, thing, Some(owner), &view, moving)
     }
 
     /// Spawns an object that stands still, such as a building. `None` if its
@@ -269,43 +308,49 @@ impl Models {
             .views
             .get(&Id::from(thing.template.as_str()))?
             .clone()?;
-        self.spawn_model(commands, game, assets, thing, &view, None)
+        self.spawn_model(commands, game, assets, thing, owner(thing), &view, None)
     }
 
     /// Spawns one object, or, for an invisible organization such as a herd,
-    /// its members where the map has them standing.
+    /// its members where the map has them standing. Members belong to their
+    /// organization's owner, `within`, unless they name their own.
     fn place(
         &mut self,
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
+        within: Option<u32>,
     ) -> Placed {
+        let owner = owner(thing).or(within);
         let view = match self.views.get(&Id::from(thing.template.as_str())) {
             Some(Some(view)) if !view.models.is_empty() => view.clone(),
             Some(None) => {
                 let members = thing.organization().map_or(&[][..], |o| &o.members);
                 return members
                     .iter()
-                    .map(|m| self.place(commands, game, assets, m))
+                    .map(|m| self.place(commands, game, assets, m, owner))
                     .max()
                     .unwrap_or(Placed::NoModel);
             }
             _ => return Placed::Missing,
         };
-        match self.spawn_model(commands, game, assets, thing, &view, None) {
+        match self.spawn_model(commands, game, assets, thing, owner, &view, None) {
             Some(_) => Placed::Drawn,
             None => Placed::Missing,
         }
     }
 
-    /// Spawns an object with one of its view's models, returning its root.
+    /// Spawns an object with one of its view's models, painted in its
+    /// owner's colour, returning its root.
+    #[allow(clippy::too_many_arguments)]
     fn spawn_model(
         &mut self,
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
+        owner: Option<u32>,
         view: &View,
         moving: Option<&aaa_data::Animation>,
     ) -> Option<Entity> {
@@ -316,6 +361,7 @@ impl Models {
         let variation = usize::try_from(thing.variation).unwrap_or(thing.id as usize);
         let model = &view.models[variation % view.models.len()];
         let model = self.model(game, assets, model, view, moving)?;
+        let colour = owner.and_then(|o| self.colours.get(&o).copied());
         // Maps store each object's height as the game places it: on the
         // ground, the seabed or the waterline.
         let [x, y, z] = thing.position;
@@ -331,30 +377,38 @@ impl Models {
             transform,
             Visibility::default(),
         ));
+        if let Some(size) = model.selection {
+            root.insert(Footprint(size * view.scale * thing.scale));
+        }
         // Spread over a minute by the golden ratio, so any run of ids lands
         // well apart.
         let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
-        let parts = match model {
-            Model::Parts(parts) => parts,
-            Model::Rig(rig) => {
+        let parts = match model.meshes {
+            Meshes::Parts(parts) => parts,
+            Meshes::Rig(rig) => {
                 let root = root.id();
-                rig.spawn(commands, root, offset);
+                let materials = rig.parts().map(|p| self.paint(assets, p, colour)).collect();
+                rig.spawn(commands, root, offset, materials);
                 return Some(root);
             }
         };
+        let materials: Vec<_> = parts
+            .iter()
+            .map(|p| self.paint(assets, p, colour))
+            .collect();
         root.with_children(|parent| {
-            for part in parts {
+            for (part, material) in parts.into_iter().zip(materials) {
                 let mut child = parent.spawn(Mesh3d(part.mesh));
                 if part.blended {
                     child.insert(NotShadowCaster);
                 }
                 let Some(animation) = part.animation else {
-                    part.material.insert(&mut child);
+                    material.insert(&mut child);
                     continue;
                 };
                 let material = match animation.fade {
-                    Some(_) => part.material.copy(assets),
-                    None => part.material,
+                    Some(_) => material.copy(assets),
+                    None => material,
                 };
                 material.insert(&mut child);
                 child.insert((
@@ -368,6 +422,38 @@ impl Models {
             }
         });
         Some(root.id())
+    }
+
+    /// A part's material, painted in `colour` if the part takes its owner's.
+    fn paint(
+        &mut self,
+        assets: &mut ModelAssets,
+        part: &Part,
+        colour: Option<[f32; 3]>,
+    ) -> PartMaterial {
+        let (PartMaterial::Standard(h), true, Some(colour)) = (&part.material, part.team, colour)
+        else {
+            return part.material.clone();
+        };
+        let key = (h.id(), colour.map(f32::to_bits));
+        if let Some(painted) = self.painted.get(&key) {
+            return PartMaterial::Team(painted.clone());
+        }
+        // Masked texels would be cut out before the colour shows.
+        let Some(base) = assets
+            .materials
+            .get(h)
+            .filter(|m| m.alpha_mode == AlphaMode::Opaque)
+        else {
+            return part.material.clone();
+        };
+        let base = base.clone();
+        let painted = assets.team_materials.add(TeamMaterial {
+            base,
+            extension: Team::new(colour),
+        });
+        self.painted.insert(key, painted.clone());
+        PartMaterial::Team(painted)
     }
 
     fn model(
@@ -407,8 +493,12 @@ impl Models {
         if let Some(kind) = &nif.incomplete {
             debug!("{path}: stops at {kind}");
         }
+        let selection = selection_box(&nif);
         if let Some(rig) = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving)) {
-            return Some(Model::Rig(Arc::new(rig)));
+            return Some(Model {
+                meshes: Meshes::Rig(Arc::new(rig)),
+                selection,
+            });
         }
         let mut parts = Vec::new();
         // Skinned shapes are drawn in the pose they were modelled in.
@@ -435,10 +525,14 @@ impl Models {
                 self.part(game, assets, &nif, path, view, g, props, &mesh_transform)
             {
                 part.animation = animation.map(Arc::new);
+                part.team = team::marked(&nif, &placed.shape.av);
                 parts.push(part);
             }
         }
-        (!parts.is_empty()).then_some(Model::Parts(parts))
+        (!parts.is_empty()).then_some(Model {
+            meshes: Meshes::Parts(parts),
+            selection,
+        })
     }
 
     /// A model as a rig of its nodes idling with `idle`, if its `.kf`
@@ -488,7 +582,8 @@ impl Models {
                 None => s.av.transform,
             };
             let props = &shape.properties;
-            if let Some(part) = self.part(game, assets, nif, path, view, g, props, &transform) {
+            if let Some(mut part) = self.part(game, assets, nif, path, view, g, props, &transform) {
+                part.team = team::marked(nif, &s.av);
                 meshes.push((part, i));
             }
         }
@@ -576,6 +671,7 @@ impl Models {
             material,
             animation: None,
             blended: matches!(alpha_mode, AlphaMode::Blend | AlphaMode::Add),
+            team: false,
         })
     }
 
@@ -627,6 +723,23 @@ impl Models {
             Some(assets.images.add(image))
         })
     }
+}
+
+/// The size of the hidden box a model marks its selectable extent with:
+/// width across its -y facing and length along it.
+fn selection_box(nif: &Nif) -> Option<Vec2> {
+    let shape = nif.objects.iter().find_map(|o| match o {
+        Object::Shape(s) if s.av.name.eq_ignore_ascii_case("SelectionBox") => Some(s),
+        _ => None,
+    })?;
+    let g = nif.get_as::<nif::Geometry>(shape.data)?;
+    let (mut min, mut max) = (Vec2::MAX, Vec2::MIN);
+    for &p in &g.positions {
+        let [x, y, _] = shape.av.transform.apply(p);
+        (min, max) = (min.min(Vec2::new(x, y)), max.max(Vec2::new(x, y)));
+    }
+    let size = max - min;
+    (size.min_element() > 0.0).then_some(size)
 }
 
 /// The value cached for `key`, loading and caching it on first use.
@@ -712,6 +825,7 @@ pub struct ModelAssets<'a> {
     pub meshes: &'a mut Assets<Mesh>,
     pub materials: &'a mut Assets<StandardMaterial>,
     pub glow_materials: &'a mut Assets<GlowMaterial>,
+    pub team_materials: &'a mut Assets<TeamMaterial>,
     pub images: &'a mut Assets<Image>,
     pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
 }
@@ -787,7 +901,7 @@ fn mesh(g: &nif::Geometry, transform: &nif::Transform, uv_set: usize) -> Option<
 
 /// A texture stored in a model: uncompressed RGB(A), or DXT blocks with
 /// every mipmap level when the GPU can sample them.
-fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -> Option<Image> {
+pub(crate) fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -> Option<Image> {
     let &[width, height, offset] = p.mipmaps.first()?;
     let size = Extent3d {
         width,

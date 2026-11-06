@@ -6,8 +6,10 @@ pub mod camera;
 mod glow;
 pub mod models;
 pub mod objects;
+pub mod overlay;
 mod rig;
 pub mod shot;
+mod team;
 pub mod terrain;
 mod textures;
 pub mod water;
@@ -28,6 +30,7 @@ use tgck::map::Sun;
 use blend::GroundMaterial;
 use glow::GlowMaterial;
 use models::{ModelAssets, Models};
+use team::TeamMaterial;
 use tgck::map::Thing;
 use water::WaterMaterial;
 
@@ -62,6 +65,7 @@ impl Plugin for MapRenderPlugin {
         embedded_asset!(app, "blend.wesl");
         embedded_asset!(app, "water.wesl");
         embedded_asset!(app, "glow.wesl");
+        embedded_asset!(app, "team.wesl");
         let beyond = match self.edge {
             Edge::Hard => Color::srgb(0.55, 0.7, 0.85),
             Edge::Fade => Color::BLACK,
@@ -69,6 +73,7 @@ impl Plugin for MapRenderPlugin {
         app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_plugins(MaterialPlugin::<GlowMaterial>::default())
+            .add_plugins(MaterialPlugin::<TeamMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .add_systems(
@@ -92,6 +97,7 @@ pub struct MapAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
     glow_materials: ResMut<'w, Assets<GlowMaterial>>,
+    team_materials: ResMut<'w, Assets<TeamMaterial>>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
     water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
@@ -107,6 +113,7 @@ impl MapAssets<'_> {
             meshes: &mut self.meshes,
             materials: &mut self.materials,
             glow_materials: &mut self.glow_materials,
+            team_materials: &mut self.team_materials,
             images: &mut self.images,
             skins: &mut self.skins,
         }
@@ -129,6 +136,7 @@ pub fn spawn_map(
         meshes,
         materials,
         glow_materials,
+        team_materials,
         ground_materials,
         water_materials,
         images,
@@ -155,11 +163,12 @@ pub fn spawn_map(
             Pickable::IGNORE,
         ));
     }
-    let mut models = Models::new(game, formats.0);
+    let mut models = Models::new(game, formats.0, &map.players);
     let mut model_assets = ModelAssets {
         meshes,
         materials,
         glow_materials,
+        team_materials,
         images,
         skins,
     };

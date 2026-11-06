@@ -104,6 +104,8 @@ pub fn spawn(
             ..default()
         },
         BackgroundColor(Color::BLACK),
+        // Over the banners, which stack by where they are on screen.
+        GlobalZIndex(1),
         children![(
             MinimapView,
             RelativeCursorPosition::default(),

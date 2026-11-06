@@ -5,13 +5,15 @@
 //! regiment and right-click the ground to send it there, stopping to fight
 //! enemies on the way, or Alt+right-click to have it run there, ignoring
 //! them. The number keys pick its formation, in the order its layout lists
-//! them. Rings in their owner's colour mark every regiment's units, outlines
-//! every building and a wider ring each city's reach; grey outlines mark
-//! disabled buildings. A minimap in the corner shows where everything is,
-//! and clicking it moves the camera there. The key left of 1 opens a
-//! console for script commands, such as moving the camera or raising
-//! regiments.
+//! them. Models wear their owner's colour and banners float over every
+//! regiment. Rings mark the units of the regiment under the cursor, and a
+//! square the building under it, green for your own; health bars show under
+//! the selected regiment's units. A minimap in the corner shows where
+//! everything is, and clicking it moves the camera there. The key left of 1
+//! opens a console for script commands, such as moving the camera or
+//! raising regiments.
 
+mod banners;
 mod console;
 mod minimap;
 
@@ -20,13 +22,16 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aaa_data::GameData;
-use aaa_map::{Ground, Map, Obstacle, Shape};
+use aaa_map::{Ground, Map, Shape};
+use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
-use aaa_render::models::{Models, pose};
+use aaa_render::models::{Footprint, Models, pose};
+use aaa_render::overlay::{self, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET};
 use aaa_render::shot::{self, ShotPlugin};
 use aaa_render::terrain::world;
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
-use aaa_sim::{State, TICK, World};
+use aaa_sim::{Relation, State, TICK, World};
+use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button, ScrollArea};
@@ -91,6 +96,29 @@ struct Local(Option<u32>);
 /// The regiment orders go to.
 #[derive(Resource, Default)]
 struct Selected(Option<usize>);
+
+/// What the cursor is over.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
+enum Focus {
+    #[default]
+    Nothing,
+    Regiment(usize),
+    Building(usize),
+}
+
+/// The flat square marks are drawn on and their materials, by how the
+/// marked object's owner stands toward the player: theirs, friendly, or
+/// anyone else's.
+#[derive(Resource)]
+struct Marks {
+    square: Handle<Mesh>,
+    rings: [Handle<StandardMaterial>; 3],
+    squares: [Handle<StandardMaterial>; 3],
+}
+
+/// One of the health bars drawn over the screen.
+#[derive(Component)]
+struct HealthBar;
 
 /// Draws one of the simulation's units.
 #[derive(Component)]
@@ -201,6 +229,7 @@ fn main() -> ExitCode {
         .configure_sets(Update, camera::Controls.run_if(console::closed))
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .init_resource::<Selected>()
+        .init_resource::<Focus>()
         .insert_resource(Side(side))
         .add_systems(OnEnter(Screen::Menu), menu)
         .add_systems(Update, highlight.run_if(in_state(Screen::Menu)))
@@ -208,12 +237,28 @@ fn main() -> ExitCode {
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
             OnEnter(Screen::Match),
-            (setup, minimap::spawn, console::start_scripts).chain(),
+            (
+                setup,
+                setup_overlays,
+                banners::setup_banners,
+                minimap::spawn,
+                console::start_scripts,
+            )
+                .chain(),
         )
         .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
             Update,
-            (show_units, show_buildings, show_selection).run_if(in_state(Screen::Match)),
+            (
+                show_units,
+                show_buildings,
+                show_focus,
+                show_health.after(camera::Controls),
+                (banners::add_banners, banners::show_banners)
+                    .chain()
+                    .after(camera::Controls),
+            )
+                .run_if(in_state(Screen::Match)),
         )
         .add_systems(
             Update,
@@ -225,7 +270,10 @@ fn main() -> ExitCode {
         )
         .add_systems(
             Update,
-            (command.run_if(minimap::pointer_away), choose_formation)
+            (
+                (focus, command.run_if(minimap::pointer_away)).chain(),
+                choose_formation,
+            )
                 .run_if(in_state(Screen::Match))
                 .run_if(console::closed),
         );
@@ -420,6 +468,27 @@ fn load(world: &mut bevy::ecs::world::World) {
     }
 }
 
+/// Loads what [`show_focus`] and [`show_health`] draw with.
+fn setup_overlays(
+    mut commands: Commands,
+    mut loaded: ResMut<Loaded>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    formats: Res<CompressedImageFormatSupport>,
+) {
+    let images = OverlayImages::load(&mut loaded.game, &mut images, formats.0);
+    let mut tinted = |image: &Option<Handle<Image>>| {
+        TINTS.map(|c| materials.add(overlay::mark_material(image.clone(), c)))
+    };
+    commands.insert_resource(Marks {
+        square: meshes.add(overlay::flat_square()),
+        rings: tinted(&images.ring),
+        squares: tinted(&images.square),
+    });
+    commands.insert_resource(images);
+}
+
 fn setup(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -441,7 +510,16 @@ fn setup(
     let mut missing = 0;
     for (i, m) in members.enumerate() {
         debug_assert_eq!(sim.0.units[i].id, m.thing.id);
-        match models.spawn_unit(&mut commands, game, &mut assets.models(), &m.thing, m.speed) {
+        let owner = sim.0.regiments[sim.0.units[i].regiment].owner;
+        let mut model_assets = assets.models();
+        match models.spawn_unit(
+            &mut commands,
+            game,
+            &mut model_assets,
+            &m.thing,
+            owner,
+            m.speed,
+        ) {
             Some(e) => {
                 commands.entity(e).insert(UnitView {
                     unit: i,
@@ -585,8 +663,61 @@ fn show_buildings(
     }
 }
 
-/// Left click selects the regiment of the unit of yours under the cursor,
-/// right click sends the selected one where it points, running with Alt.
+/// The point on the ground under the cursor, in world units.
+fn pointed(
+    windows: &Query<&Window, With<PrimaryWindow>>,
+    cameras: &Query<(&Camera, &GlobalTransform, &RtsCamera)>,
+    ground: &Ground,
+) -> Option<[f32; 2]> {
+    let (Ok(window), Ok((camera, transform, _))) = (windows.single(), cameras.single()) else {
+        return None;
+    };
+    let ray = camera
+        .viewport_to_world(transform, window.cursor_position()?)
+        .ok()?;
+    pick_ground(ground, ray)
+}
+
+/// Finds what the cursor is over: the regiment of the nearest unit within
+/// reach of the ground it points at, else the building standing there.
+fn focus(
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
+    loaded: Res<Loaded>,
+    sim: Res<Sim>,
+    mut focus: ResMut<Focus>,
+) {
+    const REACH: f32 = 2.0;
+    let Some(point) = pointed(&windows, &cameras, &loaded.map.ground) else {
+        focus.set_if_neq(Focus::Nothing);
+        return;
+    };
+    let near = |p: [f32; 2]| (p[0] - point[0]).hypot(p[1] - point[1]);
+    let unit = sim
+        .0
+        .units
+        .iter()
+        .filter(|u| u.alive())
+        .map(|u| (u.regiment, near(u.position)))
+        .filter(|(_, d)| *d < REACH)
+        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let building = || {
+        sim.0.buildings.iter().position(|b| {
+            !matches!(b.state, State::Destroyed(_))
+                && b.obstacle
+                    .as_ref()
+                    .is_some_and(|o| o.distance(point) == 0.0)
+        })
+    };
+    let found = match unit {
+        Some((r, _)) => Focus::Regiment(r),
+        None => building().map_or(Focus::Nothing, Focus::Building),
+    };
+    focus.set_if_neq(found);
+}
+
+/// Left click selects the regiment of yours under the cursor, right click
+/// sends the selected one where it points, running with Alt.
 #[allow(clippy::too_many_arguments)]
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -595,52 +726,29 @@ fn command(
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     loaded: Res<Loaded>,
     local: Res<Local>,
+    focus: Res<Focus>,
     mut sim: ResMut<Sim>,
     mut selected: ResMut<Selected>,
 ) {
     let Some(player) = local.0 else {
         return;
     };
-    let (left, right) = (
-        buttons.just_pressed(MouseButton::Left),
-        buttons.just_pressed(MouseButton::Right),
-    );
-    if !left && !right {
+    if buttons.just_pressed(MouseButton::Left) {
+        selected.0 = match *focus {
+            Focus::Regiment(r) if sim.0.commands(player, r) => Some(r),
+            _ => None,
+        };
         return;
     }
-    let (Ok(window), Ok((camera, transform, rts))) = (windows.single(), cameras.single()) else {
-        return;
-    };
     // The free camera turns with the right button.
-    if right && rts.free {
+    let free = cameras.single().is_ok_and(|(_, _, rts)| rts.free);
+    if !buttons.just_pressed(MouseButton::Right) || free {
         return;
     }
-    let Some(ray) = window
-        .cursor_position()
-        .and_then(|c| camera.viewport_to_world(transform, c).ok())
-    else {
+    let Some(point) = pointed(&windows, &cameras, &loaded.map.ground) else {
         return;
     };
-    let Some(point) = pick_ground(&loaded.map.ground, ray) else {
-        return;
-    };
-    if left {
-        const REACH: f32 = 2.0;
-        selected.0 = sim
-            .0
-            .units
-            .iter()
-            .filter(|u| u.alive() && sim.0.commands(player, u.regiment))
-            .map(|u| {
-                (
-                    u,
-                    (u.position[0] - point[0]).hypot(u.position[1] - point[1]),
-                )
-            })
-            .filter(|(_, d)| *d < REACH)
-            .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(u, _)| u.regiment);
-    } else if let Some(r) = selected.0 {
+    if let Some(r) = selected.0 {
         // Selection only takes the player's own.
         let _ = match keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
             true => sim.0.order_run(player, r, point),
@@ -706,96 +814,194 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
     None
 }
 
-/// Rings every regiment's units in their owner's colour, and the selected
-/// regiment's again, wider; outlines buildings in theirs, and rings cities'
-/// reach.
-fn show_selection(
+const OWN: Color = Color::srgb(0.1, 0.9, 0.1);
+const FRIEND: Color = Color::srgb(0.2, 0.55, 1.0);
+const OTHER: Color = Color::srgb(0.95, 0.15, 0.1);
+/// What marks things by how their owner stands toward the player, by
+/// [`tint`].
+const TINTS: [Color; 3] = [OWN, FRIEND, OTHER];
+
+/// Which of [`Marks`]' tints suits what `owner` owns.
+fn tint(sim: &World, local: Option<u32>, owner: u32) -> usize {
+    match local.map(|p| sim.sides.relation(p, owner)) {
+        Some(Relation::Itself) => 0,
+        Some(Relation::Ally) => 1,
+        _ => 2,
+    }
+}
+
+/// Rings the units of the regiment under the cursor and squares the
+/// building under it, each mark sized to the model's footprint.
+#[allow(clippy::too_many_arguments)]
+fn show_focus(
+    mut commands: Commands,
+    focus: Res<Focus>,
     sim: Res<Sim>,
     loaded: Res<Loaded>,
-    selected: Res<Selected>,
+    local: Res<Local>,
+    marks: Res<Marks>,
     fixed: Res<Time<Fixed>>,
-    mut gizmos: Gizmos,
+    units: Query<(&UnitView, Option<&Footprint>)>,
+    buildings: Query<(&BuildingView, &MapObject, Option<&Footprint>)>,
+    mut shown: Query<
+        (
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+            &mut Visibility,
+        ),
+        With<Mark>,
+    >,
 ) {
-    const RADIUS: f32 = 0.6;
-    let t = fixed.overstep_fraction();
+    // The ring fills its image but for a thin margin.
+    const RING_FILL: f32 = 238.0 / 256.0;
+    // Infantry are about this wide.
+    const SMALLEST: Vec2 = Vec2::splat(0.4);
     let ground = &loaded.map.ground;
-    for unit in sim.0.units.iter().filter(|u| u.alive()) {
-        let [px, py] = unit.previous;
-        let [x, y] = unit.position;
-        let (x, y) = (px + (x - px) * t, py + (y - py) * t);
-        let owner = sim.0.regiments[unit.regiment].owner;
-        let [r, g, b] = sim.0.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
-        gizmos.linestrip(ring(ground, x, y, RADIUS), Color::srgb(r, g, b));
-        if selected.0 == Some(unit.regiment) {
-            gizmos.linestrip(ring(ground, x, y, RADIUS * 1.4), Color::WHITE);
-        }
-    }
-    for building in &sim.0.buildings {
-        let colour = match building.state {
-            State::Standing => {
-                let rgb = sim.0.sides.player(building.owner).map(|p| p.rgb);
-                let [r, g, b] = rgb.unwrap_or([1.0; 3]);
-                Color::srgb(r, g, b)
+    let t = fixed.overstep_fraction();
+    let mut wanted = Vec::new();
+    match *focus {
+        Focus::Nothing => {}
+        Focus::Regiment(r) => {
+            let material = &marks.rings[tint(&sim.0, local.0, sim.0.regiments[r].owner)];
+            for (view, footprint) in &units {
+                let unit = &sim.0.units[view.unit];
+                if unit.regiment != r || !unit.alive() {
+                    continue;
+                }
+                let [px, py] = unit.previous;
+                let [x, y] = unit.position;
+                let at = [px + (x - px) * t, py + (y - py) * t];
+                // An oval through the footprint's corners.
+                let size =
+                    footprint.map_or(SMALLEST, |f| f.0) * std::f32::consts::SQRT_2 / RING_FILL;
+                let transform = overlay::mark_transform(ground, at, unit.facing, size);
+                wanted.push((transform, material.clone()));
             }
-            State::Disabled => Color::srgb(0.4, 0.4, 0.4),
-            State::Destroyed(_) => continue,
-        };
-        let [x, y] = building.position;
-        match &building.obstacle {
-            Some(o) => gizmos.linestrip(outline(ground, o), colour),
-            None => gizmos.linestrip(ring(ground, x, y, 1.0), colour),
         }
-        if let Some(zone) = building.zone {
-            gizmos.linestrip(ring(ground, x, y, zone), colour.with_alpha(0.5));
+        Focus::Building(b) => {
+            let building = &sim.0.buildings[b];
+            let material = &marks.squares[tint(&sim.0, local.0, building.owner)];
+            if let Some((_, object, footprint)) = buildings.iter().find(|(v, ..)| v.building == b) {
+                let [fx, fy, _] = object.0.facing;
+                let size = footprint.map_or(Vec2::splat(4.0), |f| f.0) / (1.0 - 2.0 * SQUARE_INSET);
+                let transform = overlay::mark_transform(ground, building.position, [fx, fy], size);
+                wanted.push((transform, material.clone()));
+            }
         }
+    }
+    let mut wanted = wanted.into_iter();
+    for (mut transform, mut material, mut visibility) in &mut shown {
+        match wanted.next() {
+            Some((t, m)) => {
+                *transform = t;
+                if material.0 != m {
+                    material.0 = m;
+                }
+                *visibility = Visibility::Inherited;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+    for (transform, material) in wanted {
+        commands.spawn((
+            Mark,
+            Mesh3d(marks.square.clone()),
+            MeshMaterial3d(material),
+            transform,
+            DespawnOnExit(Screen::Match),
+        ));
     }
 }
 
-/// The edge of the ground an obstacle covers, following the ground's rise
-/// and fall.
-fn outline(ground: &Ground, o: &Obstacle) -> Vec<Vec3> {
-    let [x, y] = o.position;
-    let (w, h) = match o.shape {
-        Shape::Rect { width, height } => (width, height),
-        Shape::Circle { radius } => return ring(ground, x, y, radius).collect(),
-        Shape::Point => return ring(ground, x, y, 1.0).collect(),
+/// Draws a health bar below each of the selected regiment's units, the
+/// width a bar has there but square to the screen and over everything.
+#[allow(clippy::too_many_arguments)]
+fn show_health(
+    mut commands: Commands,
+    selected: Res<Selected>,
+    sim: Res<Sim>,
+    loaded: Res<Loaded>,
+    images: Res<OverlayImages>,
+    fixed: Res<Time<Fixed>>,
+    cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
+    units: Query<(&UnitView, Option<&Footprint>)>,
+    mut bars: Query<(&mut Node, &mut ImageNode, &mut Visibility), With<HealthBar>>,
+) {
+    let mut wanted = Vec::new();
+    if let (Some(r), Ok((camera, transform))) = (selected.0, cameras.single()) {
+        // This frame's camera, which moves after transforms propagate.
+        let global = GlobalTransform::from(*transform);
+        let half = transform.right() * HEALTH_BAR.x / 2.0;
+        let toward = (transform.back().as_vec3() * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
+        let ground = &loaded.map.ground;
+        let t = fixed.overstep_fraction();
+        for (view, footprint) in &units {
+            let unit = &sim.0.units[view.unit];
+            if unit.regiment != r || !unit.alive() {
+                continue;
+            }
+            let Some(fighter) = &unit.fighter else {
+                continue;
+            };
+            let Some(image) = images.health_bar(unit.health / fighter.health) else {
+                continue;
+            };
+            let [px, py] = unit.previous;
+            let [x, y] = unit.position;
+            let (x, y) = (px + (x - px) * t, py + (y - py) * t);
+            // At the edge of its footprint nearest the camera, so the bar
+            // clears the model.
+            let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
+            let at = world(x, y, ground.height_at(x, y)) + toward * reach;
+            let (Ok(a), Ok(b)) = (
+                camera.world_to_viewport(&global, at - half),
+                camera.world_to_viewport(&global, at + half),
+            ) else {
+                continue;
+            };
+            let width = a.distance(b);
+            let height = width * HEALTH_BAR.y / HEALTH_BAR.x;
+            let centre = (a + b) / 2.0 + Vec2::new(0.0, height);
+            wanted.push((
+                centre - Vec2::new(width, height) / 2.0,
+                Vec2::new(width, height),
+                image.clone(),
+            ));
+        }
+    }
+    let place = |node: &mut Node, corner: Vec2, size: Vec2| {
+        node.left = px(corner.x);
+        node.top = px(corner.y);
+        node.width = px(size.x);
+        node.height = px(size.y);
     };
-    // Its y axis runs along the facing.
-    let [fx, fy] = o.facing;
-    let corner = |right: f32, ahead: f32| {
-        let (rx, ry) = (right * w / 2.0, ahead * h / 2.0);
-        [x + rx * fy + ry * fx, y - rx * fx + ry * fy]
-    };
-    let corners = [
-        corner(-1.0, -1.0),
-        corner(1.0, -1.0),
-        corner(1.0, 1.0),
-        corner(-1.0, 1.0),
-        corner(-1.0, -1.0),
-    ];
-    // Several points a side, so it follows the ground between corners.
-    const STEPS: usize = 8;
-    corners
-        .windows(2)
-        .flat_map(|side| {
-            let ([ax, ay], [bx, by]) = (side[0], side[1]);
-            (0..STEPS).map(move |i| {
-                let t = i as f32 / STEPS as f32;
-                (ax + (bx - ax) * t, ay + (by - ay) * t)
-            })
-        })
-        .chain(std::iter::once((corners[4][0], corners[4][1])))
-        .map(|(px, py)| world(px, py, ground.height_at(px, py) + 0.05))
-        .collect()
-}
-
-/// A ring around a point that follows the ground's rise and fall, so it
-/// doesn't sink into slopes the way a flat circle would.
-fn ring(ground: &Ground, x: f32, y: f32, radius: f32) -> impl Iterator<Item = Vec3> {
-    const SEGMENTS: usize = 24;
-    (0..=SEGMENTS).map(move |i| {
-        let a = i as f32 / SEGMENTS as f32 * std::f32::consts::TAU;
-        let (px, py) = (x + radius * a.cos(), y + radius * a.sin());
-        world(px, py, ground.height_at(px, py) + 0.05)
-    })
+    let mut wanted = wanted.into_iter();
+    for (mut node, mut image, mut visibility) in &mut bars {
+        match wanted.next() {
+            Some((corner, size, frame)) => {
+                place(&mut node, corner, size);
+                if image.image != frame {
+                    image.image = frame;
+                }
+                *visibility = Visibility::Inherited;
+            }
+            None => *visibility = Visibility::Hidden,
+        }
+    }
+    for (corner, size, frame) in wanted {
+        let mut node = Node {
+            position_type: PositionType::Absolute,
+            ..default()
+        };
+        place(&mut node, corner, size);
+        commands.spawn((
+            HealthBar,
+            node,
+            // Over the banners.
+            GlobalZIndex(1),
+            ImageNode::new(frame),
+            Pickable::IGNORE,
+            DespawnOnExit(Screen::Match),
+        ));
+    }
 }
