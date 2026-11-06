@@ -7,10 +7,13 @@
 //! them. The number keys pick its formation, in the order its layout lists
 //! them. Rings in their owner's colour mark every regiment's units, outlines
 //! every building and a wider ring each city's reach; grey outlines mark
-//! disabled buildings. The key left of 1 opens a console for script
-//! commands, such as moving the camera or raising regiments.
+//! disabled buildings. A minimap in the corner shows where everything is,
+//! and clicking it moves the camera there. The key left of 1 opens a
+//! console for script commands, such as moving the camera or raising
+//! regiments.
 
 mod console;
+mod minimap;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -205,7 +208,7 @@ fn main() -> ExitCode {
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
             OnEnter(Screen::Match),
-            (setup, console::start_scripts).chain(),
+            (setup, minimap::spawn, console::start_scripts).chain(),
         )
         .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
@@ -214,7 +217,15 @@ fn main() -> ExitCode {
         )
         .add_systems(
             Update,
-            (command, choose_formation)
+            (
+                minimap::steer.before(camera::Controls),
+                minimap::update.after(camera::Controls),
+            )
+                .run_if(in_state(Screen::Match)),
+        )
+        .add_systems(
+            Update,
+            (command.run_if(minimap::pointer_away), choose_formation)
                 .run_if(in_state(Screen::Match))
                 .run_if(console::closed),
         );

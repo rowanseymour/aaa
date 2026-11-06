@@ -74,7 +74,7 @@ impl RtsCamera {
     pub fn distances(&self) -> (f32, f32) {
         match self.free {
             true => FREE_DISTANCE,
-            false => GAME_DISTANCE,
+            false => (self.zoom.0 * game_distance(), self.zoom.1 * game_distance()),
         }
     }
 
@@ -160,11 +160,7 @@ pub fn update(
             MouseScrollUnit::Line => scroll.delta.y,
             MouseScrollUnit::Pixel => scroll.delta.y / 40.0,
         };
-        let (near, far) = if cam.free {
-            FREE_DISTANCE
-        } else {
-            (cam.zoom.0 * game_distance(), cam.zoom.1 * game_distance())
-        };
+        let (near, far) = cam.distances();
         cam.distance = (cam.distance * 0.9f32.powf(lines)).clamp(near, far);
 
         *transform = cam.transform();
