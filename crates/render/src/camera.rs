@@ -65,6 +65,19 @@ impl RtsCamera {
         RtsCamera::new(world(half, half, ground.height_at(half, half)))
     }
 
+    /// Back to the game's own view, still looking where it is.
+    pub fn default_angles(&mut self) {
+        *self = RtsCamera::new(self.focus);
+    }
+
+    /// How near to and far from its focus it can be.
+    pub fn distances(&self) -> (f32, f32) {
+        match self.free {
+            true => FREE_DISTANCE,
+            false => GAME_DISTANCE,
+        }
+    }
+
     pub fn transform(&self) -> Transform {
         let offset = Quat::from_euler(EulerRot::YXZ, self.yaw, -self.pitch, 0.0)
             * Vec3::new(0.0, 0.0, self.distance);
