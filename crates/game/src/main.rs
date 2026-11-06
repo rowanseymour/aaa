@@ -16,6 +16,7 @@
 mod banners;
 mod console;
 mod minimap;
+mod remote;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -47,6 +48,8 @@ options:
                             instead of the first one a person may play
   --exec <script.txt>       run a file of console commands once the match starts;
                             may be given more than once
+  --console <port>          take console lines on a port of this machine, each
+                            answered with what the console says, then an empty line
   --screenshot <file.png>   save a frame to a file and exit, without a window";
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -167,6 +170,25 @@ fn main() -> ExitCode {
         scripts.push(args.remove(i + 1));
         args.remove(i);
     }
+    let remote = match args.iter().position(|a| a == "--console") {
+        Some(i) => match args.get(i + 1).and_then(|p| p.parse().ok()) {
+            Some(port) => {
+                args.drain(i..i + 2);
+                match remote::Remote::listen(port) {
+                    Ok(r) => Some(r),
+                    Err(e) => {
+                        eprintln!("aaa-game: {e}");
+                        return ExitCode::FAILURE;
+                    }
+                }
+            }
+            None => {
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+        },
+        None => None,
+    };
     let screenshot = match args.iter().position(|a| a == "--screenshot") {
         Some(i) if i + 1 < args.len() => {
             let path = args.remove(i + 1);
@@ -277,6 +299,9 @@ fn main() -> ExitCode {
                 .run_if(in_state(Screen::Match))
                 .run_if(console::closed),
         );
+    if let Some(remote) = remote {
+        app.insert_resource(remote);
+    }
     match map {
         Some(map) => {
             begin(app.world_mut(), Loaded { game, map });
