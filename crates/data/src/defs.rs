@@ -64,6 +64,8 @@ pub struct DepthInfo {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Thing {
     pub ids: Option<Id>,
+    /// A `#` key into the localized strings.
+    pub name: Option<String>,
     #[serde(default)]
     pub flags: Vec<Flags>,
     pub view: Option<View>,
@@ -76,6 +78,11 @@ pub struct Thing {
     pub performer_component: Option<PerformerComponent>,
     pub city_component: Option<CityComponent>,
     pub organization_component: Option<OrganizationComponent>,
+    pub recruit_component: Option<RecruitComponent>,
+    pub mobile_deployment_component: Option<MobileDeploymentComponent>,
+    pub economy_component: Option<EconomyComponent>,
+    pub denizen_component: Option<DenizenComponent>,
+    pub element_component: Option<ElementComponent>,
     pub placement: Option<Placement>,
     /// On entering and leaving the states named by each command's
     /// `actor_state`.
@@ -137,11 +144,69 @@ pub struct CityComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationComponent {
     pub operational_range: Option<f32>,
+    /// Seconds recruiting one takes.
+    pub recruit_time: Option<f32>,
     /// The [`OrganizationLayout`] its members are arranged by.
     pub layout_ids: Option<Id>,
     /// What fills each of the layout's slots, in the layout's order.
     #[serde(default)]
     pub slot: Vec<OrganizationSlot>,
+}
+
+/// What an object can recruit, which for a Corps HQ is what it commissions.
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecruitComponent {
+    #[serde(default)]
+    pub recruit_actor: Vec<RecruitActor>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RecruitActor {
+    pub actor_ids: Option<Id>,
+}
+
+/// Packing a building into a vehicle and unpacking it again.
+#[derive(Debug, Clone, Deserialize)]
+pub struct MobileDeploymentComponent {
+    /// On a packed building, the template it unpacks into.
+    pub unpack_to_actor_ids: Option<Id>,
+    /// Where the vehicle stands from the building it packs from, and the
+    /// way it faces there.
+    pub packed_position_offset: Option<[f32; 2]>,
+    pub packed_orientation: Option<[f32; 2]>,
+    /// On a building, the seconds unpacking takes.
+    pub unpacking_length: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct EconomyComponent {
+    pub cost: Option<Resources>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Resources {
+    pub money: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ElementComponent {
+    /// Health it gets back a second in supply, as a share of its own;
+    /// recruiting one alone takes its inverse in seconds.
+    pub resupply_rate: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DenizenComponent {
+    pub deployment_info: Option<DeploymentInfo>,
+}
+
+/// Where what an object recruits appears, from its root node: x across its
+/// facing and y along it. Declared in `Templates/template_deployment.tgi`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeploymentInfo {
+    pub creation_offset: Option<[f32; 2]>,
+    /// Where it then moves to, in a straight line.
+    pub deployment_offset: Option<[f32; 2]>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -305,6 +370,8 @@ pub struct View {
     pub aspects_as_variations: bool,
     #[serde(default)]
     pub texture_search_path: Vec<TextureSearchPath>,
+    /// The image on the button that commissions or recruits it.
+    pub icon: Option<String>,
     /// The image on an organization's banner.
     pub banner_icon: Option<String>,
     /// The image marking it on the minimap, white to take its owner's
@@ -325,6 +392,8 @@ pub struct View {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Aspect {
+    /// E.g. `aspect_unpacking`, for the state it's shown in.
+    pub ids: Option<Id>,
     pub model: Option<String>,
     #[serde(default)]
     pub texture_rename: Vec<TextureRename>,

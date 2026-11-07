@@ -7,8 +7,10 @@
 
 pub mod path;
 
+use std::collections::VecDeque;
+
 use aaa_map::pathing::tile_at;
-use aaa_map::{Domain, Fighter, Id, Map, Obstacle, Pathing, Weapon};
+use aaa_map::{DeployPoints, Domain, Fighter, Id, Map, Obstacle, Pathing, Unpacks, Weapon};
 
 pub use aaa_map::{Player, Relation, Team};
 
@@ -21,6 +23,9 @@ pub const CAPTURE_HEALTH: f32 = 0.3;
 /// How near a moving unit comes to an enemy to run into it.
 pub const CONTACT: f32 = 1.5;
 
+/// How near a packed building has to get to where it was sent to unpack.
+pub const UNPACK_REACH: f32 = 1.5;
+
 /// A match in progress.
 pub struct World {
     pub sides: Sides,
@@ -30,6 +35,8 @@ pub struct World {
     pub buildings: Vec<Building>,
     /// Ticks played.
     pub ticks: u64,
+    /// An id no object has yet.
+    next_id: u32,
 }
 
 pub struct Regiment {
@@ -61,6 +68,10 @@ pub struct Regiment {
     /// Where it was headed and how it was to face there when it engaged,
     /// to carry on once it's done.
     resume: Option<([f32; 2], [f32; 2])>,
+    /// For a packed building, such as a supply truck, what it unpacks into.
+    pub unpacks: Option<Unpacks>,
+    /// Where it's on its way to unpack.
+    pub unpack_at: Option<[f32; 2]>,
 }
 
 impl Regiment {
@@ -125,6 +136,8 @@ pub struct Unit {
     pub shot: Option<(u64, usize)>,
     /// The tick it died on.
     pub died: Option<u64>,
+    /// The tick it left the map, having unpacked into a building.
+    pub unpacked: Option<u64>,
 }
 
 impl Unit {
@@ -132,8 +145,9 @@ impl Unit {
         !self.path.is_empty()
     }
 
+    /// Whether it's still on the map and in one piece.
     pub fn alive(&self) -> bool {
-        self.died.is_none()
+        self.died.is_none() && self.unpacked.is_none()
     }
 
     fn die(&mut self, tick: u64) {
@@ -160,6 +174,8 @@ pub struct Building {
     /// The owning [`Player::id`], which changes when it's captured.
     pub owner: u32,
     pub position: [f32; 2],
+    /// The way its model's -y axis points, a unit vector.
+    pub facing: [f32; 2],
     pub fighter: Fighter,
     pub health: f32,
     /// Seconds until each of its fighter's weapons can fire again.
@@ -169,6 +185,15 @@ pub struct Building {
     /// The tick it last fired on, and the index of the weapon it fired.
     pub shot: Option<(u64, usize)>,
     pub state: State,
+    /// The ticks it began and finishes unpacking on, for one that
+    /// unpacked from a truck during the match.
+    pub unpacking: Option<(u64, u64)>,
+    /// What it's been asked to commission, the one under way first.
+    pub queue: VecDeque<Commission>,
+    /// Ticks spent on the first of the queue.
+    pub progress: u64,
+    /// Where what it commissions appears, then goes.
+    pub deploy: Option<DeployPoints>,
     /// The tick it last changed hands on.
     pub captured: Option<u64>,
     /// For a city's centre, how far around it the city reaches.
@@ -189,6 +214,43 @@ pub enum State {
     Disabled,
     /// Out of health and gone, since the tick it fell on.
     Destroyed(u64),
+}
+
+/// Something a building has been asked to commission.
+#[derive(Debug, Clone)]
+pub struct Commission {
+    /// What it raises, standing anywhere: it's placed and given ids once
+    /// it's done.
+    pub regiment: aaa_map::Regiment,
+    /// Ticks it takes.
+    pub ticks: u64,
+}
+
+impl Commission {
+    /// A commission taking `seconds`, at least a tick.
+    pub fn new(regiment: aaa_map::Regiment, seconds: f32) -> Self {
+        Commission {
+            regiment,
+            ticks: ((seconds / TICK).round() as u64).max(1),
+        }
+    }
+}
+
+/// Why an order wasn't given.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Refused {
+    /// It's someone else's, or gone.
+    NotYours,
+    /// It can't carry out that order.
+    Unable,
+    /// What it would put down doesn't fit there.
+    NoRoom,
+}
+
+impl From<NotYours> for Refused {
+    fn from(_: NotYours) -> Self {
+        Refused::NotYours
+    }
 }
 
 impl Building {
@@ -223,6 +285,13 @@ impl World {
         };
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
         world.add_buildings(&map.buildings);
+        let members = map
+            .things
+            .iter()
+            .flat_map(|t| t.organization())
+            .flat_map(|o| &o.members);
+        let ids = map.things.iter().chain(members).map(|t| t.id);
+        world.next_id = world.next_id.max(ids.max().map_or(1, |id| id + 1));
         world
     }
 
@@ -238,6 +307,7 @@ impl World {
             units: Vec::new(),
             buildings: Vec::new(),
             ticks: 0,
+            next_id: 1,
         };
         for regiment in regiments {
             world.add_regiment(regiment);
@@ -271,6 +341,7 @@ impl World {
                 target: None,
                 shot: None,
                 died: None,
+                unpacked: None,
                 id: m.thing.id,
                 template: m.thing.template.clone(),
                 regiment: r,
@@ -306,8 +377,21 @@ impl World {
             order: Order::Move,
             engaged: Vec::new(),
             resume: None,
+            unpacks: regiment.unpacks.clone(),
+            unpack_at: None,
         });
+        let ids = regiment.members.iter().map(|m| m.thing.id);
+        self.next_id = ids
+            .chain([regiment.id])
+            .fold(self.next_id, |n, id| n.max(id + 1));
         r
+    }
+
+    /// Takes `n` ids no object has, returning the first.
+    pub fn take_ids(&mut self, n: u32) -> u32 {
+        let first = self.next_id;
+        self.next_id += n;
+        first
     }
 
     /// Adds buildings as the map has them, those out of health already
@@ -321,6 +405,7 @@ impl World {
                 template: b.template.clone(),
                 owner: b.owner,
                 position: b.position,
+                facing: b.facing,
                 reloads: vec![0.0; b.fighter.weapons.len()],
                 fighter: b.fighter.clone(),
                 health,
@@ -334,7 +419,12 @@ impl World {
                 zone: b.zone,
                 members: Vec::new(),
                 obstacle: b.obstacle.clone(),
+                unpacking: None,
+                queue: VecDeque::new(),
+                progress: 0,
+                deploy: b.deploy,
             });
+            self.next_id = self.next_id.max(b.id + 1);
         }
         for (i, b) in buildings.iter().enumerate() {
             let index =
@@ -433,6 +523,7 @@ impl World {
         }
         let r = &mut self.regiments[regiment];
         r.order = order;
+        r.unpack_at = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
@@ -455,6 +546,7 @@ impl World {
         }
         let r = &mut self.regiments[regiment];
         r.order = Order::Run;
+        r.unpack_at = None;
         r.engaged.clear();
         r.resume = None;
         let from = r.position;
@@ -474,9 +566,90 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = Order::Move;
         r.resume = None;
+        r.unpack_at = None;
         if r.engaged.is_empty() {
             let facing = r.facing;
             self.send(regiment, here, facing);
+        }
+        Ok(())
+    }
+
+    /// Sends a packed building to unpack at `at`, or the nearest whole
+    /// units to it, where buildings stand. Refused where it can't unpack
+    /// or the building wouldn't fit.
+    pub fn order_unpack(
+        &mut self,
+        player: u32,
+        regiment: usize,
+        at: [f32; 2],
+    ) -> Result<[f32; 2], Refused> {
+        if !self.commands(player, regiment) {
+            return Err(Refused::NotYours);
+        }
+        let at = at.map(f32::round);
+        let Some(unpacks) = &self.regiments[regiment].unpacks else {
+            return Err(Refused::Unable);
+        };
+        if !self.room_to_unpack(unpacks, at) {
+            return Err(Refused::NoRoom);
+        }
+        let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
+        self.order_move(player, regiment, stop)?;
+        self.regiments[regiment].unpack_at = Some(at);
+        Ok(at)
+    }
+
+    /// Whether what `unpacks` makes would fit standing at `at`.
+    pub fn room_to_unpack(&self, unpacks: &Unpacks, at: [f32; 2]) -> bool {
+        match &unpacks.building.obstacle {
+            Some(o) => {
+                let placed = Obstacle {
+                    position: at,
+                    ..o.clone()
+                };
+                self.pathing.room_for(&placed, Domain::Land)
+            }
+            None => {
+                let (x, y) = tile_at(at);
+                self.pathing.passable(x, y, Domain::Land)
+            }
+        }
+    }
+
+    /// Asks a building to commission something once it's done with what
+    /// it was asked for before.
+    pub fn commission(
+        &mut self,
+        player: u32,
+        building: usize,
+        commission: Commission,
+    ) -> Result<(), Refused> {
+        let b = &mut self.buildings[building];
+        if b.owner != player || !b.standing() {
+            return Err(Refused::NotYours);
+        }
+        if b.deploy.is_none() || b.unpacking.is_some() {
+            return Err(Refused::Unable);
+        }
+        b.queue.push_back(commission);
+        Ok(())
+    }
+
+    /// Calls off the `index`th of what a building was asked to
+    /// commission, starting the next over if it was under way.
+    pub fn cancel_commission(
+        &mut self,
+        player: u32,
+        building: usize,
+        index: usize,
+    ) -> Result<(), Refused> {
+        let b = &mut self.buildings[building];
+        if b.owner != player {
+            return Err(Refused::NotYours);
+        }
+        b.queue.remove(index).ok_or(Refused::Unable)?;
+        if index == 0 {
+            b.progress = 0;
         }
         Ok(())
     }
@@ -536,7 +709,115 @@ impl World {
         let fired_on = self.fight();
         self.engage(&fired_on);
         self.occupy();
+        self.produce();
+        self.unpack();
         self.ticks += 1;
+    }
+
+    /// Moves buildings on with what they're commissioning, and puts out
+    /// what's done where they deploy it, sent on to where it goes.
+    fn produce(&mut self) {
+        for b in 0..self.buildings.len() {
+            let building = &mut self.buildings[b];
+            if !building.standing() || building.unpacking.is_some() {
+                continue;
+            }
+            let (Some(first), Some(deploy)) = (building.queue.front(), building.deploy) else {
+                continue;
+            };
+            building.progress += 1;
+            if building.progress < first.ticks {
+                continue;
+            }
+            building.progress = 0;
+            let Some(done) = building.queue.pop_front() else {
+                continue;
+            };
+            let (position, facing, owner) = (building.position, building.facing, building.owner);
+            let from = deploy_point(position, facing, deploy.creation);
+            let to = deploy_point(position, facing, deploy.deployment);
+            let heading = normalised([to[0] - from[0], to[1] - from[1]]).unwrap_or(facing);
+            let mut regiment = done.regiment;
+            regiment.owner = owner;
+            let ids = regiment.members.len() as u32 + u32::from(!regiment.lone());
+            regiment.renumber(self.take_ids(ids));
+            regiment.place(from, heading);
+            let r = self.add_regiment(&regiment);
+            self.roll_out(r, to, heading);
+        }
+    }
+
+    /// Sends a regiment just put out straight to `to`, through whatever
+    /// put it out, each member to its place in the formation there.
+    fn roll_out(&mut self, regiment: usize, to: [f32; 2], facing: [f32; 2]) {
+        let r = &mut self.regiments[regiment];
+        r.position = to;
+        r.facing = facing;
+        let offsets = &r.formations[r.current_formation()].offsets;
+        for (&u, &offset) in r.units.iter().zip(offsets) {
+            let unit = &mut self.units[u];
+            unit.path = vec![aaa_map::from_local(to, facing, offset)];
+            unit.end_facing = facing;
+        }
+    }
+
+    /// Unpacks the packed buildings that have reached where they were sent
+    /// to unpack, each leaving the map for the building it makes, and
+    /// calls it off for those that can't get there or no longer have room.
+    fn unpack(&mut self) {
+        for r in 0..self.regiments.len() {
+            let Some(at) = self.regiments[r].unpack_at else {
+                continue;
+            };
+            if self.destroyed(r) {
+                self.regiments[r].unpack_at = None;
+                continue;
+            }
+            if self.underway(r) {
+                continue;
+            }
+            self.regiments[r].unpack_at = None;
+            let Some(unpacks) = self.regiments[r].unpacks.clone() else {
+                continue;
+            };
+            let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
+            if distance(self.centre(r), stop) > UNPACK_REACH || !self.room_to_unpack(&unpacks, at) {
+                continue;
+            }
+            // It keeps the share of its health it had as a truck.
+            let health = self
+                .survivors(r)
+                .filter_map(|u| Some(self.units[u].health / self.units[u].fighter.as_ref()?.health))
+                .fold(1.0_f32, f32::min);
+            for u in self.regiments[r].units.clone() {
+                let unit = &mut self.units[u];
+                if unit.alive() {
+                    unit.unpacked = Some(self.ticks);
+                    unit.path.clear();
+                    unit.target = None;
+                }
+            }
+            let mut building = unpacks.building;
+            building.id = self.take_ids(1);
+            building.owner = self.regiments[r].owner;
+            building.position = at;
+            building.health = health;
+            if let Some(o) = &mut building.obstacle {
+                o.position = at;
+                self.pathing.block(o);
+            }
+            let b = self.buildings.len();
+            self.add_buildings(std::slice::from_ref(&building));
+            let ticks = (unpacks.seconds / TICK).round() as u64;
+            self.buildings[b].unpacking = Some((self.ticks, self.ticks + ticks));
+        }
+        for b in &mut self.buildings {
+            if let Some((_, end)) = b.unpacking
+                && self.ticks >= end
+            {
+                b.unpacking = None;
+            }
+        }
     }
 
     /// Ends the engagements whose enemies are gone, then engages regiments
@@ -1062,6 +1343,12 @@ fn damage(weapon: &Weapon, target: &Fighter, scale: f32) -> f32 {
         .sum()
 }
 
+/// Where a deployment offset from a building standing at `position`
+/// facing `facing` lies.
+fn deploy_point(position: [f32; 2], facing: [f32; 2], offset: [f32; 2]) -> [f32; 2] {
+    aaa_map::from_local(position, facing, offset)
+}
+
 fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
     (a[0] - b[0]).hypot(a[1] - b[1])
 }
@@ -1148,6 +1435,7 @@ mod tests {
             combat: None,
             operational_range: None,
             primary: None,
+            unpacks: None,
         };
         World::from_regiments(Sides::default(), pathing, &[regiment])
     }
@@ -1260,6 +1548,7 @@ mod tests {
             combat: None,
             operational_range: None,
             primary: None,
+            unpacks: None,
         };
         let r = w.add_regiment(&second);
         assert_eq!((r, w.units[2].regiment), (1, 1));
@@ -1335,6 +1624,7 @@ mod tests {
                     combat: None,
                     operational_range: Some(34.0),
                     primary: None,
+                    unpacks: None,
                 }
             })
             .collect::<Vec<_>>();
@@ -1638,6 +1928,7 @@ mod tests {
             template: "house".into(),
             owner,
             position,
+            facing: [0.0, -1.0],
             fighter: Fighter {
                 flags: vec![Id::from("building")],
                 destructible: false,
@@ -1654,6 +1945,7 @@ mod tests {
                     height: 6.0,
                 },
             }),
+            deploy: None,
         }
     }
 
@@ -1867,5 +2159,124 @@ mod tests {
         let (a, b) = (play(), play());
         assert!(a.units.iter().any(|u| u.died.is_some()));
         assert_eq!(snapshot(&a), snapshot(&b));
+    }
+
+    /// Player 1's HQ at 20,20, putting out what it commissions 6 to its
+    /// left, on open ground with nothing else.
+    fn headquarters() -> World {
+        let mut hq = building(5, 1, [20.0, 20.0]);
+        hq.deploy = Some(DeployPoints {
+            creation: [0.0, 0.0],
+            deployment: [-6.0, 0.0],
+        });
+        let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+        w.pathing.block(hq.obstacle.as_ref().unwrap());
+        w.add_buildings(&[hq]);
+        w
+    }
+
+    /// A truck that unpacks into an 8-wide depot, standing at the origin.
+    fn truck() -> aaa_map::Regiment {
+        let mut depot = building(0, 0, [0.0, 0.0]);
+        depot.template = "depot".into();
+        depot.obstacle.as_mut().unwrap().shape = Shape::Rect {
+            width: 8.0,
+            height: 8.0,
+        };
+        let mut m = member(0, [0.0, 0.0], 3.0);
+        m.thing.template = "truck".into();
+        m.fighter = Some(soldier(Vec::new()));
+        aaa_map::Regiment {
+            id: 0,
+            template: "truck".into(),
+            owner: 0,
+            facing: [0.0, 1.0],
+            members: vec![m],
+            formations: vec![aaa_map::Formation {
+                id: String::new(),
+                offsets: vec![[0.0, 0.0]],
+            }],
+            formation: 0,
+            combat: None,
+            operational_range: None,
+            primary: Some(0),
+            unpacks: Some(Unpacks {
+                building: depot,
+                offset: [0.0, 0.0],
+                seconds: 7.0,
+            }),
+        }
+    }
+
+    #[test]
+    fn commissions_come_out_of_their_building_in_turn() {
+        let mut w = headquarters();
+        assert_eq!(
+            w.commission(2, 0, Commission::new(truck(), 10.0)),
+            Err(Refused::NotYours)
+        );
+        w.commission(1, 0, Commission::new(truck(), 10.0)).unwrap();
+        w.commission(1, 0, Commission::new(truck(), 10.0)).unwrap();
+        run(&mut w, 9.0);
+        assert!(w.regiments.is_empty());
+        run(&mut w, 1.0);
+        assert_eq!(w.regiments.len(), 1);
+        assert_eq!(w.buildings[0].queue.len(), 1);
+        let r = &w.regiments[0];
+        assert_eq!(r.owner, 1);
+        // New ids, the lone truck's its regiment's too.
+        assert_eq!((r.id, w.units[0].id), (6, 6));
+        // It drives out to the HQ's left, which facing -y is +x.
+        assert!(near(w.units[0].position, [20.0, 20.0]));
+        run(&mut w, 3.0);
+        assert!(near(w.units[0].position, [26.0, 20.0]));
+        w.cancel_commission(1, 0, 0).unwrap();
+        run(&mut w, 10.0);
+        assert_eq!(w.regiments.len(), 1);
+    }
+
+    #[test]
+    fn trucks_unpack_where_theres_room_once_there() {
+        let mut w = headquarters();
+        let mut t = truck();
+        t.owner = 1;
+        t.renumber(9);
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        // Over the HQ, and over the map's edge.
+        assert_eq!(w.order_unpack(1, r, [22.0, 22.0]), Err(Refused::NoRoom));
+        assert_eq!(w.order_unpack(1, r, [78.0, 30.0]), Err(Refused::NoRoom));
+        assert_eq!(w.order_unpack(2, r, [30.0, 40.0]), Err(Refused::NotYours));
+        assert_eq!(w.order_unpack(1, r, [30.2, 39.6]), Ok([30.0, 40.0]));
+        run(&mut w, 3.0);
+        assert!(w.units[0].alive());
+        assert_eq!(w.buildings.len(), 1);
+        run(&mut w, 1.0);
+        assert!(!w.units[0].alive());
+        assert!(w.units[0].died.is_none());
+        assert!(w.destroyed(r));
+        let depot = &w.buildings[1];
+        assert_eq!((depot.template.as_str(), depot.owner), ("depot", 1));
+        assert_eq!(depot.position, [30.0, 40.0]);
+        let (from, to) = depot.unpacking.unwrap();
+        assert_eq!(to - from, 70);
+        assert!(!w.pathing.passable(15, 20, Domain::Land));
+        run(&mut w, 7.0);
+        assert!(w.buildings[1].unpacking.is_none());
+    }
+
+    #[test]
+    fn other_orders_call_off_unpacking() {
+        let mut w = headquarters();
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        w.order_unpack(1, r, [30.0, 40.0]).unwrap();
+        run(&mut w, 1.0);
+        w.order_stop(1, r).unwrap();
+        run(&mut w, 5.0);
+        assert!(w.units[0].alive());
+        assert_eq!(w.buildings.len(), 1);
     }
 }

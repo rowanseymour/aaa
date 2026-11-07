@@ -6,13 +6,14 @@ mod ground;
 pub mod pathing;
 mod units;
 
-pub use aaa_data::{Damage, Fighter, Id, Shape, Targets, Weapon};
+pub use aaa_data::{Damage, DeployPoints, Fighter, Id, Shape, Targets, Weapon};
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
 pub use pathing::{Domain, Obstacle, Pathing};
 pub use tgck::map::Relation;
 pub use units::{
-    Division, Formation, Member, Player, Recruits, Regiment, Team, divisions, owner, relation,
+    Division, Formation, Member, Player, Recruits, Regiment, Team, UNPACKED_FACING, Unpacks,
+    divisions, owner, relation,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -108,6 +109,7 @@ impl Map {
                 &fighters,
                 &game.city_zones(),
                 &obstacles.into_iter().collect(),
+                &game.deploy_points(),
             ),
             players,
             teams,

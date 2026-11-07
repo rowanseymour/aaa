@@ -3,11 +3,11 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Body, Fighter, Id};
+use aaa_data::{Body, DeployPoints, Fighter, Id};
 use tgck::map::{Detail, Thing};
 
 use crate::pathing::Obstacle;
-use crate::units::owner;
+use crate::units::{facing, owner};
 
 /// An owned object that can be hurt but not move and isn't a regiment.
 #[derive(Debug, Clone)]
@@ -18,6 +18,8 @@ pub struct Building {
     /// The owning [`Player::id`](crate::Player::id).
     pub owner: u32,
     pub position: [f32; 2],
+    /// The way its model's -y axis points, a unit vector.
+    pub facing: [f32; 2],
     pub fighter: Fighter,
     /// Its health as a fraction of its fighter's.
     pub health: f32,
@@ -28,6 +30,8 @@ pub struct Building {
     pub members: Vec<u32>,
     /// The ground it keeps movers off, if any.
     pub obstacle: Option<Obstacle>,
+    /// Where what it recruits appears and goes, for one that recruits.
+    pub deploy: Option<DeployPoints>,
 }
 
 pub fn buildings(
@@ -36,6 +40,7 @@ pub fn buildings(
     fighters: &HashMap<Id, Fighter>,
     zones: &HashMap<Id, f32>,
     obstacles: &HashMap<u32, Obstacle>,
+    deploy_points: &HashMap<Id, DeployPoints>,
 ) -> Vec<Building> {
     things
         .iter()
@@ -56,6 +61,7 @@ pub fn buildings(
                 template: t.template.clone(),
                 owner,
                 position: [x, y],
+                facing: facing(t),
                 fighter: fighter.clone(),
                 health: actor.body().map_or(1.0, |b| b.health),
                 zone: zones.get(&template).copied(),
@@ -64,6 +70,7 @@ pub fn buildings(
                     .and_then(|c| c.buildings.clone())
                     .unwrap_or_default(),
                 obstacle: obstacles.get(&t.id).cloned(),
+                deploy: deploy_points.get(&template).copied(),
             })
         })
         .collect()

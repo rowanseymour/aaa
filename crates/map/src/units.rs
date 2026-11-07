@@ -2,8 +2,11 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Body, Fighter, GameData, Id, Layout, Organization};
+use aaa_data::{Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization};
 use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
+
+use crate::buildings::Building;
+use crate::pathing::Obstacle;
 
 /// A side: a player, human or AI, or an independent power such as
 /// neutral civilians.
@@ -168,7 +171,55 @@ pub struct Regiment {
     /// The member whose position is the regiment's; without one, the
     /// members' average position is.
     pub primary: Option<usize>,
+    /// For a packed building, such as a supply truck, what it unpacks into.
+    pub unpacks: Option<Unpacks>,
 }
+
+impl Regiment {
+    /// Stands the members in its formation around `position`, facing
+    /// `facing`.
+    pub fn place(&mut self, position: [f32; 2], facing: [f32; 2]) {
+        self.facing = facing;
+        let offsets = &self.formations[self.formation].offsets;
+        for (m, &offset) in self.members.iter_mut().zip(offsets) {
+            let [x, y] = crate::from_local(position, facing, offset);
+            m.thing.position = [x, y, 0.0];
+            m.thing.facing = [facing[0], facing[1], 0.0];
+        }
+    }
+
+    /// Gives it the id `id`, and its members the ones after it, or the
+    /// same one for a lone unit, which is its own regiment.
+    pub fn renumber(&mut self, id: u32) {
+        self.id = id;
+        let lone = self.lone();
+        for (m, id) in self.members.iter_mut().zip(id + u32::from(!lone)..) {
+            m.thing.id = id;
+        }
+    }
+
+    /// Whether it's a single unit rather than an organization of them.
+    pub fn lone(&self) -> bool {
+        matches!(&self.members[..], [m] if m.thing.template == self.template)
+    }
+}
+
+/// What a packed building unpacks into.
+#[derive(Debug, Clone)]
+pub struct Unpacks {
+    /// The building, standing at the origin facing [`UNPACKED_FACING`]
+    /// and owned by nobody.
+    pub building: Building,
+    /// Where the packed building stands from where the building will, in
+    /// the map's axes.
+    pub offset: [f32; 2],
+    /// Seconds unpacking takes.
+    pub seconds: f32,
+}
+
+/// The way buildings that unpack face, as all of them on the game's maps
+/// do.
+pub const UNPACKED_FACING: [f32; 2] = [0.0, -1.0];
 
 #[derive(Debug, Clone)]
 pub struct Member {
@@ -302,6 +353,7 @@ fn regiment(
         combat,
         operational_range,
         primary,
+        unpacks: None,
     })
 }
 
@@ -313,6 +365,10 @@ pub struct Recruits {
     fighters: HashMap<Id, Fighter>,
     layouts: HashMap<Id, Layout>,
     operational_ranges: HashMap<Id, f32>,
+    lists: HashMap<Id, Vec<Id>>,
+    deployments: HashMap<Id, Deployment>,
+    deploy_points: HashMap<Id, DeployPoints>,
+    recruit_times: HashMap<Id, f32>,
 }
 
 impl Recruits {
@@ -323,7 +379,64 @@ impl Recruits {
             fighters: game.fighters(),
             layouts: game.layouts(),
             operational_ranges: game.operational_ranges(),
+            lists: game.recruit_lists(),
+            deployments: game.deployments(),
+            deploy_points: game.deploy_points(),
+            recruit_times: game.recruit_times(),
         }
+    }
+
+    /// Seconds commissioning or recruiting one of `template` takes.
+    pub fn recruit_time(&self, template: &str) -> f32 {
+        self.recruit_times
+            .get(&Id::from(template))
+            .copied()
+            .unwrap_or(0.0)
+    }
+
+    /// What objects of `template` commission or recruit, in the order
+    /// their buttons take.
+    pub fn list(&self, template: &str) -> &[Id] {
+        self.lists
+            .get(&Id::from(template))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// Where what objects of `template` recruit appears and goes.
+    pub fn deploy_points(&self, template: &str) -> Option<DeployPoints> {
+        self.deploy_points.get(&Id::from(template)).copied()
+    }
+
+    /// What a packed building of `template` unpacks into, if it does and
+    /// the building can stand.
+    fn unpacks(&self, template: &str) -> Option<Unpacks> {
+        let d = self.deployments.get(&Id::from(template))?;
+        let into = d.unpacks_into.as_ref()?;
+        let fighter = self.fighters.get(into)?.clone();
+        let body = self.bodies.get(into)?;
+        let seconds = self.deployments.get(into).map_or(7.0, |b| b.unpacking);
+        let obstacle = body.blocking.map(|shape| Obstacle {
+            position: [0.0, 0.0],
+            facing: UNPACKED_FACING,
+            shape,
+        });
+        Some(Unpacks {
+            building: Building {
+                id: 0,
+                template: into.as_str().to_string(),
+                owner: 0,
+                position: [0.0, 0.0],
+                facing: UNPACKED_FACING,
+                fighter,
+                health: 1.0,
+                zone: None,
+                members: Vec::new(),
+                obstacle,
+                deploy: None,
+            },
+            offset: d.packed_offset,
+            seconds,
+        })
     }
 
     /// The templates [`Recruits::raise`] can raise, sorted.
@@ -353,10 +466,9 @@ impl Recruits {
         position: [f32; 2],
         facing: [f32; 2],
     ) -> Result<Regiment, String> {
-        let organization = self
-            .organizations
-            .get(&Id::from(template))
-            .ok_or_else(|| format!("{template} isn't a regiment"))?;
+        let Some(organization) = self.organizations.get(&Id::from(template)) else {
+            return self.raise_lone(template, id, owner, position, facing);
+        };
         let layout = self
             .layouts
             .get(&organization.layout)
@@ -407,13 +519,55 @@ impl Recruits {
             operational_range,
         )
         .ok_or_else(|| format!("{template} has no members"))?;
-        let offsets = &regiment.formations[regiment.formation].offsets;
-        for (m, &offset) in regiment.members.iter_mut().zip(offsets) {
-            let [x, y] = crate::from_local(position, facing, offset);
-            m.thing.position[0] = x;
-            m.thing.position[1] = y;
+        regiment.place(position, facing);
+        if let [m] = &regiment.members[..] {
+            regiment.unpacks = self.unpacks(&m.thing.template);
         }
         Ok(regiment)
+    }
+
+    /// A unit that's no organization's member, such as a truck, raised as
+    /// a regiment of its own.
+    fn raise_lone(
+        &self,
+        template: &str,
+        id: u32,
+        owner: u32,
+        position: [f32; 2],
+        facing: [f32; 2],
+    ) -> Result<Regiment, String> {
+        let [fx, fy] = facing;
+        let thing = Thing {
+            template: template.to_string(),
+            class: tgck::map::ACTOR,
+            id,
+            name: String::new(),
+            position: [position[0], position[1], 0.0],
+            facing: [fx, fy, 0.0],
+            flags: 0,
+            scale: 1.0,
+            variation: -1,
+            seen_by: 0,
+            detail: Detail::None,
+        };
+        let member = member(thing, &self.bodies, &self.fighters)
+            .ok_or_else(|| format!("{template} isn't a regiment or a unit that can move"))?;
+        Ok(Regiment {
+            id,
+            template: template.to_string(),
+            owner,
+            facing,
+            members: vec![member],
+            formations: vec![Formation {
+                id: String::new(),
+                offsets: vec![[0.0, 0.0]],
+            }],
+            formation: 0,
+            combat: None,
+            operational_range: self.operational_ranges.get(&Id::from(template)).copied(),
+            primary: Some(0),
+            unpacks: self.unpacks(template),
+        })
     }
 }
 
@@ -529,6 +683,10 @@ mod tests {
             fighters: HashMap::new(),
             layouts: HashMap::from([(Id::from("line"), layout())]),
             operational_ranges: HashMap::new(),
+            lists: HashMap::new(),
+            deployments: HashMap::new(),
+            deploy_points: HashMap::new(),
+            recruit_times: HashMap::new(),
         };
         assert_eq!(recruits.templates(), ["squad"]);
         // Facing +x, so the front's left-hand man stands on the +y side.
@@ -549,11 +707,85 @@ mod tests {
                 (13, "captain", [50.0, 50.0, 0.0]),
             ]
         );
+        let lone = recruits
+            .raise("rifle", 20, 2, [5.0, 6.0], [1.0, 0.0])
+            .unwrap();
+        assert!(lone.lone());
+        assert_eq!(lone.members[0].thing.id, 20);
+        assert_eq!(lone.members[0].thing.position, [5.0, 6.0, 0.0]);
+        assert!(lone.unpacks.is_none());
         assert!(
             recruits
-                .raise("rifle", 10, 2, [0.0, 0.0], [1.0, 0.0])
+                .raise("hut", 10, 2, [0.0, 0.0], [1.0, 0.0])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn trucks_raise_with_what_they_unpack_into() {
+        let recruits = Recruits {
+            organizations: HashMap::new(),
+            bodies: HashMap::from([
+                (
+                    Id::from("truck"),
+                    Body {
+                        blocking: None,
+                        speed: Some(3.0),
+                    },
+                ),
+                (
+                    Id::from("depot"),
+                    Body {
+                        blocking: Some(aaa_data::Shape::Rect {
+                            width: 8.0,
+                            height: 8.0,
+                        }),
+                        speed: None,
+                    },
+                ),
+            ]),
+            fighters: HashMap::from([(
+                Id::from("depot"),
+                Fighter {
+                    health: 750.0,
+                    ..Fighter::default()
+                },
+            )]),
+            layouts: HashMap::new(),
+            operational_ranges: HashMap::new(),
+            lists: HashMap::new(),
+            deployments: HashMap::from([
+                (
+                    Id::from("truck"),
+                    Deployment {
+                        unpacks_into: Some(Id::from("depot")),
+                        packed_offset: [0.0, 0.0],
+                        packed_facing: [1.0, 0.0],
+                        unpacking: 7.0,
+                    },
+                ),
+                (
+                    Id::from("depot"),
+                    Deployment {
+                        unpacks_into: None,
+                        packed_offset: [0.0, 0.0],
+                        packed_facing: [0.0, -1.0],
+                        unpacking: 9.0,
+                    },
+                ),
+            ]),
+            deploy_points: HashMap::new(),
+            recruit_times: HashMap::new(),
+        };
+        let mut truck = recruits
+            .raise("truck", 1, 2, [0.0, 0.0], [0.0, 1.0])
+            .unwrap();
+        let unpacks = truck.unpacks.as_ref().unwrap();
+        assert_eq!(unpacks.building.template, "depot");
+        assert_eq!(unpacks.seconds, 9.0);
+        assert!(unpacks.building.obstacle.is_some());
+        truck.renumber(40);
+        assert_eq!((truck.id, truck.members[0].thing.id), (40, 40));
     }
 
     #[test]
