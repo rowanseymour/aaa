@@ -21,6 +21,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::PrimaryWindow;
 
 use crate::actions::Aim;
+use crate::lobby::Lineup;
 use crate::remote::Remote;
 use crate::waypoints::Sent;
 use crate::{Drawn, Loaded, Local, Screen, Selected, Sim, spawn_unit_view};
@@ -614,6 +615,9 @@ fn player_kingdom(world: &mut World, args: &[&str]) -> Reply {
         [word] => {
             let id = kingdom(sim, word)?;
             world.resource_mut::<Local>().0 = Some(id);
+            if let Some(mut lineup) = world.get_resource_mut::<Lineup>() {
+                lineup.seat(Some(id));
+            }
             world.resource_mut::<Selected>().0.clear();
             Ok(String::new())
         }

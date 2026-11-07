@@ -1085,23 +1085,7 @@ impl Sides {
     /// How the player `from` stands toward the player `to`, by their ids;
     /// neutral toward a player the match doesn't have.
     pub fn relation(&self, from: u32, to: u32) -> Relation {
-        if from == to {
-            return Relation::Itself;
-        }
-        let index = |id| self.players.iter().position(|p| p.id == id);
-        let (Some(a), Some(b)) = (index(from), index(to)) else {
-            return Relation::Neutral;
-        };
-        let (pa, pb) = (&self.players[a], &self.players[b]);
-        // Players put in a team keep their own stored relations at war
-        // with everyone, so the team's speak for them.
-        let stance = match (pa.team, pb.team) {
-            (Some(ta), Some(tb)) => self.teams[ta].team_relations.get(tb),
-            (Some(ta), None) => self.teams[ta].relations.get(b),
-            (None, Some(tb)) => pa.team_relations.get(tb),
-            (None, None) => pa.relations.get(b),
-        };
-        stance.copied().unwrap_or(Relation::Neutral)
+        aaa_map::relation(&self.players, &self.teams, from, to)
     }
 
     /// The player a person plays by default: the first a person may.
@@ -1792,6 +1776,7 @@ mod tests {
             team,
             independent: team.is_none(),
             playable: team.is_some(),
+            nation: None,
             relations: stored(relations),
             team_relations: stored(team_relations),
         }

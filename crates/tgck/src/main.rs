@@ -191,13 +191,9 @@ fn unpack(path: &str, out_dir: &str) -> Res {
 
 fn map(path: &str) -> Res {
     let mut m = Map::open(path)?;
-    let strings = m.strings()?;
     let header = m.header()?;
-    let name = strings
-        .lines()
-        .filter_map(|l| l.trim().split_once('='))
-        .find(|(key, _)| key.trim() == header.name)
-        .map_or("?", |(_, n)| n.trim().trim_matches('"'));
+    let name = m.string(&header.name)?;
+    let name = name.as_deref().unwrap_or("?");
     let hm = m.height_map()?;
     let (lo, hi) = hm
         .heights
