@@ -205,6 +205,21 @@ pub struct Command {
     pub icon: Option<String>,
     /// Which button it takes, numbered across then down.
     pub slot: Option<usize>,
+    /// The [`CursorLook`] shown while it waits for a place or target.
+    pub cursor: Option<Id>,
+    /// The effect marking where it was given, from [`GameData::vfx_models`].
+    pub marker: Option<Id>,
+}
+
+/// A mouse cursor's frames, which loop.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CursorLook {
+    /// Archive paths, in order.
+    pub frames: Vec<String>,
+    /// The pixel that points, from the top left.
+    pub hotspot: [u16; 2],
+    /// Seconds one loop through the frames takes.
+    pub period: f32,
 }
 
 /// How a formation shows on its button.
@@ -926,9 +941,63 @@ impl GameData {
                     ids,
                     icon: c.icon.as_deref().and_then(ui_path),
                     slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
+                    cursor: c.cursor_ids,
+                    marker: c.command_vfx_ids_location,
                 })
             })
             .collect()
+    }
+
+    /// The mouse cursors whose frames are all there, by id.
+    pub fn cursors(&mut self) -> HashMap<Id, CursorLook> {
+        let files = self.parse_tgis(|n| n.starts_with("cursors/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut out = HashMap::new();
+        for (file, parsed) in &files {
+            for block in parsed.root.blocks_of("Cursor") {
+                let Ok(c) = templates.deserialize::<defs::Cursor>(block) else {
+                    continue;
+                };
+                let (Some(ids), Some(pattern)) = (c.ids, c.frame_filename) else {
+                    continue;
+                };
+                let frames = frames(&beside(file, &pattern), |f| self.exists(f));
+                if frames.is_empty() {
+                    continue;
+                }
+                let [x, y] = c.hotspot_offset.unwrap_or_default();
+                out.insert(
+                    ids,
+                    CursorLook {
+                        frames,
+                        hotspot: [x as u16, y as u16],
+                        period: c.loop_length_ms.unwrap_or(1000.0) / 1000.0,
+                    },
+                );
+            }
+        }
+        out
+    }
+
+    /// The archive path of each effect's model that's there, by effect id.
+    pub fn vfx_models(&mut self) -> HashMap<Id, String> {
+        let files = self.parse_tgis(|n| n.starts_with("effects/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut out = HashMap::new();
+        for (file, parsed) in &files {
+            for block in parsed.root.blocks_of("VFX") {
+                let Ok(v) = templates.deserialize::<defs::Vfx>(block) else {
+                    continue;
+                };
+                if let (Some(ids), Some(model)) = (v.ids, v.model) {
+                    let model = beside(file, &model);
+                    if self.exists(&model) {
+                        out.insert(ids, model);
+                    }
+                }
+            }
+        }
+        out
     }
 
     /// How each formation shows on its button, by formation id.
@@ -1537,6 +1606,25 @@ fn localized(strings: &HashMap<String, String>, name: Option<&str>) -> Option<St
 
 /// The archive path of an interface image, whose `%s` folder, for a
 /// screen size, is empty for the default images.
+/// A path a file gives relative to its own folder, unless it starts with `/`.
+fn beside(file: &str, path: &str) -> String {
+    match path.strip_prefix('/') {
+        Some(abs) => abs.to_string(),
+        None => match file.rsplit_once('/') {
+            Some((dir, _)) => format!("{dir}/{path}"),
+            None => path.to_string(),
+        },
+    }
+}
+
+/// The numbered files a `%d` pattern names, counting up from 0 or 1 for as
+/// long as they're there.
+fn frames(pattern: &str, exists: impl Fn(&str) -> bool) -> Vec<String> {
+    let frame = |n: usize| pattern.replace("%d", &n.to_string());
+    let first = usize::from(!exists(&frame(0)));
+    (first..).map(frame).take_while(|f| exists(f)).collect()
+}
+
 fn ui_path(path: &str) -> Option<String> {
     let path = path.split_whitespace().next()?;
     (!path.eq_ignore_ascii_case("null"))
@@ -1566,6 +1654,18 @@ mod tests {
             Some("UI/Game/ActionButtons/IconMove.png")
         );
         assert_eq!(ui_path("NULL"), None);
+    }
+
+    #[test]
+    fn cursor_frames_count_up_beside_their_file() {
+        let pattern = beside("cursors/cursors_aa.tgi", "Cursors/movement_%d.tga");
+        assert_eq!(pattern, "cursors/Cursors/movement_%d.tga");
+        assert_eq!(beside("effects/w.tgi", "/UI/x.png"), "UI/x.png");
+        let there = |n: &str| ["a_1.tga", "a_2.tga", "a_4.tga"].contains(&n);
+        assert_eq!(frames("a_%d.tga", there), ["a_1.tga", "a_2.tga"]);
+        let from_zero = |n: &str| ["b_0.tga", "b_1.tga"].contains(&n);
+        assert_eq!(frames("b_%d.tga", from_zero), ["b_0.tga", "b_1.tga"]);
+        assert!(frames("c_%d.tga", |_| false).is_empty());
     }
 
     #[test]

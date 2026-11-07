@@ -459,6 +459,29 @@ pub struct ActorCommand {
     /// Which of the action buttons it takes, numbered across then down;
     /// negative for none.
     pub preferred_position: Option<i32>,
+    /// The cursor shown while the order waits for a place or target.
+    pub cursor_ids: Option<Id>,
+    /// The [`Vfx`] marking where the order was given.
+    pub command_vfx_ids_location: Option<Id>,
+}
+
+/// A mouse cursor, drawn from numbered frames that loop.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Cursor {
+    pub ids: Option<Id>,
+    pub loop_length_ms: Option<f32>,
+    /// The pixel that points, from the top left.
+    pub hotspot_offset: Option<[f32; 2]>,
+    /// Relative to its file's folder, with `%d` for the frame number.
+    pub frame_filename: Option<String>,
+}
+
+/// A visual effect; those with a model draw it, relative to their file's
+/// folder.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Vfx {
+    pub ids: Option<Id>,
+    pub model: Option<String>,
 }
 
 /// A way of arranging an organization, which its layout places its slots

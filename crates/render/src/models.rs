@@ -368,20 +368,109 @@ impl Models {
         // Spread over a minute by the golden ratio, so any run of ids lands
         // well apart.
         let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
-        let parts = match model.meshes {
+        let root = root.id();
+        self.spawn_meshes(commands, assets, root, model.meshes, colour, offset);
+        Some(root)
+    }
+
+    /// Spawns an effect's model, such as the flag marking where an order
+    /// was given, playing the animation its own nodes carry. `None` if it
+    /// can't be drawn.
+    pub fn spawn_effect(
+        &mut self,
+        commands: &mut Commands,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        path: &str,
+        transform: Transform,
+    ) -> Option<Entity> {
+        let model = self.effect(game, assets, path)?;
+        let root = commands
+            .spawn((
+                Name::new(path.to_string()),
+                transform,
+                Visibility::default(),
+            ))
+            .id();
+        self.spawn_meshes(commands, assets, root, model.meshes, None, 0.0);
+        Some(root)
+    }
+
+    /// An effect's model, as a rig if its nodes are animated.
+    fn effect(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        path: &str,
+    ) -> Option<Model> {
+        let key = format!("{path}#own");
+        if let Some(model) = self.models.get(&key) {
+            return model.clone();
+        }
+        let view = View {
+            models: vec![path.to_string()],
+            texture_dirs: path
+                .rsplit_once('/')
+                .map(|(d, _)| d.to_string())
+                .into_iter()
+                .collect(),
+            texture_renames: Vec::new(),
+            scale: 1.0,
+            animations: Vec::new(),
+            conform: None,
+        };
+        let rig = Nif::parse(&game.read(path)?)
+            .map_err(|e| warn!("{path}: {e}"))
+            .ok()
+            .and_then(|nif| {
+                let nodes = Nodes::new(&nif);
+                let meshes = self.rig_meshes(game, assets, &nif, path, &view, &nodes);
+                nodes.rig(
+                    &nif,
+                    meshes,
+                    None,
+                    None,
+                    &[],
+                    &[],
+                    assets.meshes,
+                    assets.skins,
+                )
+            });
+        let model = match rig {
+            Some(rig) => Some(Model {
+                meshes: Meshes::Rig(Arc::new(rig)),
+                selection: None,
+            }),
+            None => self.load(game, assets, path, &view, None, None),
+        };
+        self.models.insert(key, model.clone());
+        model
+    }
+
+    /// Spawns a model's meshes under `root`, painted in `colour` where
+    /// they take their owner's, animations `offset` seconds in.
+    fn spawn_meshes(
+        &mut self,
+        commands: &mut Commands,
+        assets: &mut ModelAssets,
+        root: Entity,
+        meshes: Meshes,
+        colour: Option<[f32; 3]>,
+        offset: f32,
+    ) {
+        let parts = match meshes {
             Meshes::Parts(parts) => parts,
             Meshes::Rig(rig) => {
-                let root = root.id();
                 let materials = rig.parts().map(|p| self.paint(assets, p, colour)).collect();
                 rig.spawn(commands, root, offset, materials);
-                return Some(root);
+                return;
             }
         };
         let materials: Vec<_> = parts
             .iter()
             .map(|p| self.paint(assets, p, colour))
             .collect();
-        root.with_children(|parent| {
+        commands.entity(root).with_children(|parent| {
             for (part, material) in parts.into_iter().zip(materials) {
                 let mut child = parent.spawn(Mesh3d(part.mesh));
                 if part.blended {
@@ -406,7 +495,6 @@ impl Models {
                 ));
             }
         });
-        Some(root.id())
     }
 
     /// A part's material, painted in `colour` if the part takes its owner's.
@@ -552,6 +640,30 @@ impl Models {
             }
         }
         let nodes = Nodes::new(nif);
+        let meshes = self.rig_meshes(game, assets, nif, path, view, &nodes);
+        nodes.rig(
+            nif,
+            meshes,
+            Some((&idle_kf, idle.length)),
+            moving.as_ref().map(|(kf, distance)| (kf, *distance)),
+            &abilities,
+            &deaths,
+            assets.meshes,
+            assets.skins,
+        )
+    }
+
+    /// The parts of a rig's shapes, each with its index in
+    /// [`Nodes::shapes`].
+    fn rig_meshes(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        nodes: &Nodes,
+    ) -> Vec<(Part, usize)> {
         let mut meshes = Vec::new();
         for (i, shape) in nodes.shapes.iter().enumerate() {
             let Some(s) = nif.get_as::<nif::Shape>(Some(shape.shape)) else {
@@ -572,16 +684,7 @@ impl Models {
                 meshes.push((part, i));
             }
         }
-        nodes.rig(
-            nif,
-            meshes,
-            (&idle_kf, idle.length),
-            moving.as_ref().map(|(kf, distance)| (kf, *distance)),
-            &abilities,
-            &deaths,
-            assets.meshes,
-            assets.skins,
-        )
+        meshes
     }
 
     /// A mesh and its material, with `props` the properties in effect for
@@ -742,7 +845,7 @@ pub(crate) fn cached<T: Clone>(
 }
 
 /// The first active controller of `kind` in the chain starting at `first`.
-fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Option<&Controller> {
+pub(crate) fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Option<&Controller> {
     let mut next = first;
     for _ in 0..16 {
         let c = nif.get_as::<Controller>(next)?;
