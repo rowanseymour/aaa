@@ -667,6 +667,22 @@ impl GameData {
         })
     }
 
+    /// The archive path of the image marking each template's objects on
+    /// the minimap, by template id.
+    pub fn minimap_icons(&mut self) -> HashMap<Id, String> {
+        self.by_template(|t| ui_path(t.view.as_ref()?.minimap_icon.as_deref()?))
+    }
+
+    /// The minimap's colours.
+    pub fn minimap(&mut self) -> Option<defs::Minimap> {
+        let files = self.parse_tgis(|n| n == "minimap/minimap.tgi");
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let block = files
+            .iter()
+            .find_map(|(_, p)| p.root.blocks_of("Minimap").next())?;
+        templates.deserialize(block).ok()
+    }
+
     /// The archive paths of the badges that divisions of each organization
     /// template's nation wear, in the order HQs number them, by template id.
     pub fn division_badges(&mut self) -> HashMap<Id, Vec<String>> {

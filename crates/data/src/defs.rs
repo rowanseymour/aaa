@@ -307,6 +307,9 @@ pub struct View {
     pub texture_search_path: Vec<TextureSearchPath>,
     /// The image on an organization's banner.
     pub banner_icon: Option<String>,
+    /// The image marking it on the minimap, white to take its owner's
+    /// colour, drawn square to the map's sides.
+    pub minimap_icon: Option<String>,
     #[serde(default)]
     pub when_selected: Vec<Fxc>,
     /// Given an order, or an order to attack.
@@ -447,6 +450,21 @@ pub struct Badge {
 pub struct KingdomColor {
     pub ids: Option<Id>,
     pub color: [f32; 3],
+}
+
+/// The minimap's colours: static for buildings, mobile for units, by how
+/// their owner stands toward the player.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Minimap {
+    pub color_object_border: [f32; 3],
+    pub color_owned_static: [f32; 3],
+    pub color_owned_mobile: [f32; 3],
+    pub color_allied_static: [f32; 3],
+    pub color_allied_mobile: [f32; 3],
+    pub color_enemy_static: [f32; 3],
+    pub color_enemy_mobile: [f32; 3],
+    pub color_neutral_static: [f32; 3],
+    pub color_neutral_mobile: [f32; 3],
 }
 
 /// An order the player can give what they've selected, shown as a button.

@@ -1,20 +1,26 @@
 //! The minimap: the map drawn as a diamond on a black disc in the corner,
 //! turned the way the game camera sees it, with units and buildings
-//! coloured by how their owner stands toward the player and the ground
-//! the camera sees outlined in white.
+//! coloured by how their owner stands toward the player, buildings such as
+//! HQs marked by their own icons, and the ground the camera sees outlined
+//! in white.
 //! Clicking or dragging on it moves the camera there.
 
-use aaa_data::Id;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use aaa_data::{GameData, Id};
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::{map_point, world};
+use aaa_render::textures;
 use bevy::asset::RenderAssetUsages;
+use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::RelativeCursorPosition;
 
-use crate::{Loaded, Sim, TINTS, tint};
-use aaa_sim::State;
+use crate::{Loaded, Sim, TINTS};
+use aaa_sim::{Relation, State};
 
 /// Width of the disc on screen, in logical pixels, which the diamond's
 /// corners touch.
@@ -27,6 +33,9 @@ const SHALLOW: [f32; 3] = [0.34, 0.48, 0.68];
 const DEEP: [f32; 3] = [0.17, 0.28, 0.5];
 /// How deep water is before it takes the deep colour.
 const DEEP_AT: f32 = 3.0;
+/// How much of the map's side one texel of an icon covers, going by the
+/// game's Corps HQ icon on its Berlin map.
+const ICON_TEXEL: f32 = 0.0058;
 
 #[derive(Resource)]
 pub struct Minimap {
@@ -35,6 +44,71 @@ pub struct Minimap {
     base: Vec<u8>,
     /// The map's width, in world units.
     size: f32,
+    /// The icons buildings are marked with, by template id.
+    icons: HashMap<Id, Icon>,
+    colours: Colours,
+}
+
+/// An icon's pixels, RGBA, rows running along the map's y axis.
+#[derive(Clone)]
+struct Icon {
+    width: usize,
+    height: usize,
+    rgba: Arc<[u8]>,
+}
+
+/// What things are marked in, buildings and units, by [`Colours::of`].
+struct Colours {
+    buildings: [[u8; 3]; 4],
+    units: [[u8; 3]; 4],
+}
+
+impl Colours {
+    fn load(game: &mut GameData) -> Self {
+        let rgb = |[r, g, b]: [f32; 3]| {
+            let [r, g, b, _] = Color::srgb(r, g, b).to_srgba().to_u8_array();
+            [r, g, b]
+        };
+        match game.minimap() {
+            Some(m) => Colours {
+                buildings: [
+                    m.color_owned_static,
+                    m.color_allied_static,
+                    m.color_enemy_static,
+                    m.color_neutral_static,
+                ]
+                .map(rgb),
+                units: [
+                    m.color_owned_mobile,
+                    m.color_allied_mobile,
+                    m.color_enemy_mobile,
+                    m.color_neutral_mobile,
+                ]
+                .map(rgb),
+            },
+            None => {
+                warn!("no minimap colours; using the marks' tints");
+                let tints = [TINTS[0], TINTS[1], TINTS[2], Color::WHITE].map(|c| {
+                    let [r, g, b, _] = c.to_srgba().to_f32_array();
+                    rgb([r, g, b])
+                });
+                Colours {
+                    buildings: tints,
+                    units: tints,
+                }
+            }
+        }
+    }
+
+    /// Which of the colours suits how `relation` stands.
+    fn of(relation: Relation) -> usize {
+        match relation {
+            Relation::Itself => 0,
+            Relation::Ally => 1,
+            Relation::Enemy => 2,
+            Relation::Neutral => 3,
+        }
+    }
 }
 
 /// The node showing the minimap's image.
@@ -60,8 +134,20 @@ pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
+    formats: Res<CompressedImageFormatSupport>,
 ) {
     let Loaded { game, map } = &mut *loaded;
+    let palette = Colours::load(game);
+    let mut by_path: HashMap<String, Option<Icon>> = HashMap::new();
+    let mut icons = HashMap::new();
+    for (template, path) in game.minimap_icons() {
+        let icon = by_path
+            .entry(path.clone())
+            .or_insert_with(|| decode_icon(game, &path, formats.0));
+        if let Some(icon) = icon {
+            icons.insert(template, icon.clone());
+        }
+    }
     let variations = game.terrain_variations();
     let colours: Vec<[f32; 3]> = map
         .terrain
@@ -91,6 +177,8 @@ pub fn spawn(
         image: image.clone(),
         base,
         size: map.ground.size(),
+        icons,
+        colours: palette,
     });
     commands.spawn((
         Node {
@@ -116,6 +204,23 @@ pub fn spawn(
             },
         )],
     ));
+}
+
+fn decode_icon(
+    game: &mut GameData,
+    path: &str,
+    formats: bevy::image::CompressedImageFormats,
+) -> Option<Icon> {
+    let image = textures::decode(&game.read(path)?, path, formats, true)?;
+    let image = match image.texture_descriptor.format {
+        TextureFormat::Rgba8UnormSrgb => image,
+        _ => image.convert(TextureFormat::Rgba8UnormSrgb)?,
+    };
+    Some(Icon {
+        width: image.width() as usize,
+        height: image.height() as usize,
+        rgba: image.data?.into(),
+    })
 }
 
 /// The ground as the image's pixels: each tile in its terrain's colour, or
@@ -188,17 +293,16 @@ pub fn update(
     let to_px = |p: [f32; 2]| to_image(minimap.size, p) * PIXELS as f32;
     // With nobody to play, there's no one to stand toward, so each side
     // keeps its own colour.
-    let colour = |owner: u32| {
-        let colour = match local.0 {
-            Some(_) => TINTS[tint(&sim.0, local.0, owner)],
-            None => {
-                let [r, g, b] = sim.0.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
-                Color::srgb(r, g, b)
-            }
-        };
-        let [r, g, b, _] = colour.to_srgba().to_u8_array();
-        [r, g, b]
+    let colour = |palette: &[[u8; 3]; 4], owner: u32| match local.0 {
+        Some(p) => palette[Colours::of(sim.0.sides.relation(p, owner))],
+        None => {
+            let [r, g, b] = sim.0.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
+            let [r, g, b, _] = Color::srgb(r, g, b).to_srgba().to_u8_array();
+            [r, g, b]
+        }
     };
+    let neutral = minimap.colours.buildings[Colours::of(Relation::Neutral)];
+    let mut icons = Vec::new();
     for building in &sim.0.buildings {
         if matches!(building.state, State::Destroyed(_)) {
             continue;
@@ -212,16 +316,28 @@ pub fn update(
             .is_none_or(|p| p.independent);
         let rgb = match building.state {
             _ if independent && building.zone.is_none() => continue,
-            _ if independent => [255; 3],
+            _ if independent => neutral,
             State::Disabled => [100; 3],
-            _ => colour(building.owner),
+            _ => colour(&minimap.colours.buildings, building.owner),
         };
+        // Drawn last, over the units.
+        if let Some(icon) = minimap.icons.get(&Id::from(building.template.as_str())) {
+            icons.push((icon, building.position, rgb));
+            continue;
+        }
         canvas.square(to_px(building.position), 4.0, [0; 3]);
         canvas.square(to_px(building.position), 3.0, rgb);
     }
     for unit in sim.0.units.iter().filter(|u| u.alive()) {
         let owner = sim.0.regiments[unit.regiment].owner;
-        canvas.square(to_px(unit.position), 2.0, colour(owner));
+        canvas.square(
+            to_px(unit.position),
+            2.0,
+            colour(&minimap.colours.units, owner),
+        );
+    }
+    for (icon, at, rgb) in icons {
+        canvas.icon(minimap.size, icon, at, rgb);
     }
     if let Ok((camera, rts)) = cameras.single() {
         // From where the camera is this frame rather than where it was
@@ -275,6 +391,50 @@ impl Canvas<'_> {
         if (0..n).contains(&x) && (0..n).contains(&y) {
             let at = (y * n + x) as usize * 4;
             self.0[at..at + 4].copy_from_slice(&[r, g, b, 255]);
+        }
+    }
+
+    /// An icon tinted by `rgb`, centred on a world position, its texels
+    /// [`ICON_TEXEL`] of the map's side apart along the map's axes.
+    fn icon(&mut self, size: f32, icon: &Icon, [x, y]: [f32; 2], rgb: [u8; 3]) {
+        let texel = size * ICON_TEXEL;
+        let (w, h) = (icon.width as f32, icon.height as f32);
+        let (hw, hh) = (w * texel / 2.0, h * texel / 2.0);
+        let corners = [[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]]
+            .map(|[dx, dy]| to_image(size, [x + dx, y + dy]) * PIXELS as f32);
+        let lo = corners.iter().fold(Vec2::MAX, |a, &c| a.min(c)).floor();
+        let hi = corners.iter().fold(Vec2::MIN, |a, &c| a.max(c)).ceil();
+        for row in lo.y as i32..hi.y as i32 {
+            for col in lo.x as i32..hi.x as i32 {
+                let centre = (Vec2::new(col as f32, row as f32) + 0.5) / PIXELS as f32;
+                let [px, py] = from_image(size, centre);
+                let u = ((px - x) / texel + w / 2.0).floor();
+                let v = ((py - y) / texel + h / 2.0).floor();
+                if !(0.0..w).contains(&u) || !(0.0..h).contains(&v) {
+                    continue;
+                }
+                let at = (v as usize * icon.width + u as usize) * 4;
+                let [r, g, b, a] = [0, 1, 2, 3].map(|i| icon.rgba[at + i] as u32);
+                let tinted = [r, g, b]
+                    .into_iter()
+                    .zip(rgb)
+                    .map(|(c, t)| (c * t as u32 / 255) as u8);
+                self.blend(col, row, tinted, a as u8);
+            }
+        }
+    }
+
+    /// Lays a colour over a pixel with the given opacity.
+    fn blend(&mut self, x: i32, y: i32, rgb: impl Iterator<Item = u8>, alpha: u8) {
+        let n = PIXELS as i32;
+        if alpha == 0 || !(0..n).contains(&x) || !(0..n).contains(&y) {
+            return;
+        }
+        let at = (y * n + x) as usize * 4;
+        let a = alpha as u32;
+        for (i, c) in rgb.enumerate() {
+            let under = self.0[at + i] as u32;
+            self.0[at + i] = ((c as u32 * a + under * (255 - a)) / 255) as u8;
         }
     }
 
@@ -377,6 +537,29 @@ mod tests {
         assert_eq!(at([10.0, 0.0]), Vec2::new(0.5, 1.0));
         assert_eq!(at([0.0, 0.0]), Vec2::new(0.0, 0.5));
         assert_eq!(from_image(10.0, Vec2::new(0.75, 0.25)), [5.0, 10.0]);
+    }
+
+    #[test]
+    fn icons_lie_along_the_map() {
+        // Two texels, white then black, along the map's x axis.
+        let icon = Icon {
+            width: 2,
+            height: 1,
+            rgba: Arc::from([255, 255, 255, 255, 0, 0, 0, 255].as_slice()),
+        };
+        let mut pixels = vec![9; PIXELS * PIXELS * 4];
+        let size = 1.0 / ICON_TEXEL;
+        let centre = [size / 2.0; 2];
+        Canvas(&mut pixels).icon(size, &icon, centre, [0, 255, 0]);
+        let at = |[x, y]: [f32; 2]| {
+            let p = to_image(size, [x, y]) * PIXELS as f32;
+            let i = (p.y as usize * PIXELS + p.x as usize) * 4;
+            pixels[i..i + 3].to_vec()
+        };
+        // Tinted where white, black where black, and untouched off it.
+        assert_eq!(at([centre[0] - 0.5, centre[1]]), [0, 255, 0]);
+        assert_eq!(at([centre[0] + 0.5, centre[1]]), [0, 0, 0]);
+        assert_eq!(at([centre[0] - 0.5, centre[1] + 1.0]), [9; 3]);
     }
 
     #[test]
