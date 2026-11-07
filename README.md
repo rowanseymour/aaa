@@ -1,4 +1,4 @@
-![Maps rendered by aaa-editor](docs/banner.jpg)
+![Matches in aaa-game and a map in aaa-editor](docs/banner.jpg)
 
 Experiments with the data files of [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)), the
 real-time strategy game.

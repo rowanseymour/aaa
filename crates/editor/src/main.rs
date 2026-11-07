@@ -25,6 +25,7 @@ options:
   --camera <x,y,dist,yaw,pitch>  start the free camera looking at x,y (fractions
                                  of the map's width) from dist away, with yaw
                                  and pitch in radians
+  --inspect <id,...>             open the windows on the objects with these ids
   --screenshot <file.png>        save a frame to a file and exit, without a
                                  window, help text or placeholder markers";
 
@@ -77,6 +78,10 @@ const EDITOR_ZOOM: (f32, f32) = (camera::GAME_ZOOM.0, 12.0);
 #[derive(Resource, Clone, Copy)]
 struct StartView([f32; 5]);
 
+/// The objects to open windows on from the start, from `--inspect`.
+#[derive(Resource)]
+struct StartInspecting(Vec<u32>);
+
 /// Removes `flag` and the value after it from `args`.
 fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, ()> {
     match args.iter().position(|a| a == flag) {
@@ -102,9 +107,10 @@ fn floats<const N: usize>(s: &str) -> Option<[f32; N]> {
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let (Ok(screenshot), Ok(camera)) = (
+    let (Ok(screenshot), Ok(camera), Ok(inspect_ids)) = (
         take_option(&mut args, "--screenshot"),
         take_option(&mut args, "--camera"),
+        take_option(&mut args, "--inspect"),
     ) else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
@@ -114,6 +120,15 @@ fn main() -> ExitCode {
         None => None,
         Some(Some(view)) => Some(StartView(view)),
         Some(None) => {
+            eprintln!("{USAGE}");
+            return ExitCode::from(2);
+        }
+    };
+    let inspecting = match inspect_ids.map(|ids| ids.split(',').map(|i| i.trim().parse()).collect())
+    {
+        None => Vec::new(),
+        Some(Ok(ids)) => ids,
+        Some(Err(_)) => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
         }
@@ -172,19 +187,22 @@ fn main() -> ExitCode {
     if let Some(c) = camera {
         app.insert_resource(c);
     }
-    app.insert_resource(Shooting(screenshot.is_some()));
+    app.insert_resource(Shooting(screenshot.is_some()))
+        .insert_resource(StartInspecting(inspecting))
+        .add_plugins(EguiPlugin::default())
+        .add_systems(Update, start_inspecting)
+        .add_systems(EguiPrimaryContextPass, show_inspected);
     match screenshot {
         Some(s) => {
             app.add_plugins(s);
         }
         None => {
-            app.add_plugins((MeshPickingPlugin, EguiPlugin::default()))
+            app.add_plugins(MeshPickingPlugin)
                 .configure_sets(
                     Update,
                     camera::Controls.run_if(not(egui_wants_any_pointer_input)),
                 )
-                .add_observer(inspect)
-                .add_systems(EguiPrimaryContextPass, show_inspected);
+                .add_observer(inspect);
         }
     }
     match app.run() {
@@ -260,6 +278,23 @@ fn cycle_lighting(
     aaa_render::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
     for mut t in &mut text {
         t.0 = help(name);
+    }
+}
+
+/// Opens the windows `--inspect` asks for, once the objects are there.
+fn start_inspecting(
+    mut start: ResMut<StartInspecting>,
+    objects: Query<(Entity, &MapObject)>,
+    mut commands: Commands,
+) {
+    if start.0.is_empty() {
+        return;
+    }
+    for (entity, MapObject(thing)) in &objects {
+        if let Some(i) = start.0.iter().position(|&id| id == thing.id) {
+            start.0.remove(i);
+            commands.entity(entity).insert(Inspected { raise: true });
+        }
     }
 }
 

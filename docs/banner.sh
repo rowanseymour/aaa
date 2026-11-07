@@ -1,6 +1,7 @@
 #!/bin/sh
-# Rebuilds docs/banner.jpg from editor screenshots: one large tile on the left
-# and a 2x2 grid of small ones on the right.
+# Rebuilds docs/banner.jpg as a 2x2 grid of screenshots: three from the game,
+# each set up by a script of console commands, and one from the editor with a
+# window open on an object.
 #
 #   docs/banner.sh "/path/to/Axis and Allies 2004"
 #
@@ -17,34 +18,68 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
-cargo build --release -p aaa-editor --manifest-path "$root/Cargo.toml"
-editor=$root/target/release/aaa-editor
+cargo build --release -p aaa-game -p aaa-editor --manifest-path "$root/Cargo.toml"
+bin=$root/target/release
 
 GAP=8
-BIG_W=1000
-H=600
-SMALL_W=392
-SMALL_H=$(((H - GAP) / 2))
+W=1000
+H=562
 
-# tile <name> <map> <camera> <width> <height>
-tile() {
-    "$editor" "$game" "$2" --camera "$3" --screenshot "$work/$1-raw.png"
-    magick "$work/$1-raw.png" -resize "$4x$5^" -gravity center -extent "$4x$5" "$work/$1.png"
+fit() {
+    magick "$work/$1-raw.png" -resize "${W}x$H^" -gravity center -extent "${W}x$H" "$work/$1.png"
 }
 
-tile big '(2v2)Berlin' 0.25,0.25,110,0.785,0.7 $BIG_W $H
-tile top-left allies05_monte_cassino 0.25,0.45,110,0.785,0.7 $SMALL_W $SMALL_H
-tile top-right allies09_battle_of_the_bulge 0.3,0.7,110,0.785,0.7 $SMALL_W $SMALL_H
-tile bottom-left axis03_suez_canal 0.7,0.15,120,0.785,0.7 $SMALL_W $SMALL_H
-tile bottom-right axis09_burma 0.3,0.3,110,0.785,0.75 $SMALL_W $SMALL_H
+# game <name> <map>, with the script on stdin. Regiment ids are the ones
+# `create` gives on that map, which are the same every run.
+game() {
+    cat >"$work/$1.txt"
+    "$bin/aaa-game" "$game" "$2" --exec "$work/$1.txt" --screenshot "$work/$1-raw.png"
+    fit "$1"
+}
 
-left=$((BIG_W + GAP))
-right=$((left + SMALL_W + GAP))
-magick -size $((right + SMALL_W))x$H xc:white \
-    "$work/big.png" -geometry +0+0 -composite \
-    "$work/top-left.png" -geometry +$left+0 -composite \
-    "$work/top-right.png" -geometry +$right+0 -composite \
-    "$work/bottom-left.png" -geometry +$left+$((SMALL_H + GAP)) -composite \
-    "$work/bottom-right.png" -geometry +$right+$((SMALL_H + GAP)) -composite \
+# editor <name> <map> <camera> <ids to inspect>
+editor() {
+    "$bin/aaa-editor" "$game" "$2" --camera "$3" --inspect "$4" --screenshot "$work/$1-raw.png"
+    fit "$1"
+}
+
+game top-right allies03_stalingrad <<'EOF'
+create regiment_rus_tank_heavy 62 392
+create regiment_rus_tank_medium 66 384
+placementkingdom kingdom_1
+create regiment_ger_tank_heavy 77 400
+create regiment_ger_tank_medium 80 390
+advance 12
+select 13457 13462
+lookat 71 393
+zoom 0.55
+EOF
+
+game top-left allies06_normandy <<'EOF'
+select 68870 68880
+lookat 336 230
+zoom 0.6
+advance 3
+EOF
+
+game bottom-left allies01_el_alamein <<'EOF'
+create regiment_gbr_tank_heavy 340 300
+create regiment_gbr_tank_medium 348 294
+placementkingdom kingdom_1
+create regiment_ger_tank_heavy 330 280
+create regiment_ger_halftrack_at 342 278
+advance 8
+select 10744 10749
+lookat 339 290
+zoom 0.6
+EOF
+
+editor bottom-right '(2v2)Berlin' 0.235,0.26,70,0.785,0.75 12193
+
+magick -size $((2 * W + GAP))x$((2 * H + GAP)) xc:white \
+    "$work/top-left.png" -geometry +0+0 -composite \
+    "$work/top-right.png" -geometry +$((W + GAP))+0 -composite \
+    "$work/bottom-left.png" -geometry +0+$((H + GAP)) -composite \
+    "$work/bottom-right.png" -geometry +$((W + GAP))+$((H + GAP)) -composite \
     -strip -quality 85 "$root/docs/banner.jpg"
 echo "wrote docs/banner.jpg"

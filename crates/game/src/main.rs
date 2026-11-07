@@ -630,8 +630,13 @@ fn setup(
 }
 
 fn step(mut sim: ResMut<Sim>, mut selected: ResMut<Selected>) {
-    sim.0.tick();
-    selected.0.retain(|&r| !sim.0.destroyed(r));
+    step_world(&mut sim.0, &mut selected.0);
+}
+
+/// Plays a tick of the game, dropping destroyed regiments from the selection.
+fn step_world(sim: &mut World, selected: &mut Vec<usize>) {
+    sim.tick();
+    selected.retain(|&r| !sim.destroyed(r));
 }
 
 /// Places units between where the last two ticks left them, playing their
