@@ -12,7 +12,7 @@ use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
 use nif::{Controller, ControllerKind, Keyframes, Nif, Object};
 
-use crate::models::{Part, PartMaterial, bevy_transform};
+use crate::models::{Part, PartMaterial, bevy_transform, controller};
 
 /// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
@@ -147,13 +147,14 @@ impl Nodes {
     /// The rig for these nodes, with parts for [`Nodes::shapes`] by index:
     /// built in its own space for a skinned shape, else in its node's.
     /// The clips are `.kf` files with how long one play takes: in world
-    /// units moved for `moving`, else in seconds.
+    /// units moved for `moving`, else in seconds. With no `idle` clip it
+    /// idles with the keyframes the model's own nodes carry.
     #[allow(clippy::too_many_arguments)]
     pub fn rig(
         self,
         nif: &Nif,
         meshes: Vec<(Part, usize)>,
-        idle: (&Nif, f32),
+        idle: Option<(&Nif, f32)>,
         moving: Option<(&Nif, f32)>,
         abilities: &[(String, Nif, f32)],
         deaths: &[(Nif, f32)],
@@ -161,7 +162,10 @@ impl Nodes {
         skins: &mut Assets<SkinnedMeshInverseBindposes>,
     ) -> Option<Rig> {
         let moving = moving.and_then(|(kf, length)| self.clip(kf, length));
-        let idle = self.clip(idle.0, idle.1)?;
+        let idle = match idle {
+            Some((kf, length)) => self.clip(kf, length)?,
+            None => self.own_clip(nif)?,
+        };
         let abilities = abilities
             .iter()
             .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
@@ -267,6 +271,35 @@ impl Nodes {
             .map(|b| bevy_transform(&b.transform).to_matrix())
             .collect();
         Some((joints, skins.add(SkinnedMeshInverseBindposes::from(poses))))
+    }
+
+    /// The keyframes on the model's own nodes, looping as each controller
+    /// says.
+    fn own_clip(&self, nif: &Nif) -> Option<Clip> {
+        let channels: Vec<Channel> = self
+            .index
+            .iter()
+            .filter_map(|(&i, &node)| {
+                let av = nif.get(Some(i)).and_then(Object::scene)?;
+                let controller = controller(nif, av.controller, ControllerKind::Keyframe)?;
+                let keys = nif.get_as::<Keyframes>(controller.data)?;
+                Some(Channel {
+                    node,
+                    controller: controller.clone(),
+                    keys: keys.clone(),
+                    hold: None,
+                })
+            })
+            .collect();
+        let length = channels
+            .iter()
+            .map(|c| c.controller.stop - c.controller.start)
+            .fold(0.0, f32::max);
+        (!channels.is_empty()).then_some(Clip {
+            channels,
+            speed: 1.0,
+            length,
+        })
     }
 
     /// Binds a `.kf` sequence's controllers to the nodes they name, timed so

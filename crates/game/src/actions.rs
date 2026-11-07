@@ -50,7 +50,7 @@ enum Give {
 }
 
 /// An order given at a place.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Aim {
     Move,
     Run,
@@ -405,6 +405,7 @@ pub fn aim(
     mut page: ResMut<Page>,
     time: Res<Time>,
     mut sounds: ResMut<crate::sound::Sounds>,
+    mut sent: MessageWriter<crate::waypoints::Sent>,
 ) {
     let Page::Aiming(aim) = *page else {
         return;
@@ -423,7 +424,7 @@ pub fn aim(
         return;
     };
     crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-    crate::send(
+    let regiments = crate::send(
         &mut sim.0,
         player,
         &selected.0,
@@ -431,6 +432,11 @@ pub fn aim(
         aim == Aim::Run,
         loaded.map.ground.size(),
     );
+    sent.write(crate::waypoints::Sent {
+        to: point,
+        aim,
+        regiments,
+    });
     *page = Page::Orders;
 }
 
