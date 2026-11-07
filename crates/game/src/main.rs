@@ -1080,6 +1080,7 @@ fn command(
     selected: Res<Selected>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
+    mut sent: MessageWriter<waypoints::Sent>,
 ) {
     let Some(player) = local.0 else {
         return;
@@ -1094,7 +1095,19 @@ fn command(
         return;
     };
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-    send(&mut sim.0, player, &selected.0, point, false, ground.size());
+    let regiments = send(
+        &mut sim.0,
+        player,
+        &selected.0,
+        point,
+        actions::Aim::Move,
+        ground.size(),
+    );
+    sent.write(waypoints::Sent {
+        to: point,
+        aim: actions::Aim::Move,
+        regiments,
+    });
 }
 
 /// Plays the first of the regiments answering an order.
@@ -1111,15 +1124,15 @@ fn acknowledge(
     }
 }
 
-/// Sends regiments to a point, running or not, each keeping its place
-/// relative to the rest, within a map `size` across. Returns those that
-/// went, each with where to.
+/// Gives regiments an order at a point, each keeping its place relative to
+/// the rest, within a map `size` across. Returns those that went, each with
+/// where to.
 fn send(
     sim: &mut World,
     player: u32,
     regiments: &[usize],
     [px, py]: [f32; 2],
-    run: bool,
+    aim: actions::Aim,
     size: f32,
 ) -> Vec<(usize, [f32; 2])> {
     let centres: Vec<[f32; 2]> = regiments.iter().map(|&r| sim.centre(r)).collect();
@@ -1133,9 +1146,10 @@ fn send(
             (px + x - cx).clamp(0.0, size),
             (py + y - cy).clamp(0.0, size),
         ];
-        let ordered = match run {
-            true => sim.order_run(player, r, target),
-            false => sim.order_move(player, r, target),
+        let ordered = match aim {
+            actions::Aim::Move => sim.order_move(player, r, target),
+            actions::Aim::Attack => sim.order_attack(player, r, target),
+            actions::Aim::Run => sim.order_run(player, r, target),
         };
         if ordered.is_ok() {
             sent.push((r, target));
