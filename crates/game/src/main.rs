@@ -8,10 +8,12 @@
 //! regiments' places relative to each other and stopping to fight enemies on
 //! the way, or Alt+right-click to have it run there, ignoring them. The
 //! number keys pick the selection's formation, in the order each regiment's
-//! layout lists them. Clicking the minimap moves the camera there, and the
+//! layout lists them, and the buttons in the corner give the selection the
+//! orders in [`actions`]. Clicking the minimap moves the camera there, and the
 //! key left of 1 opens a console for script commands. Units and buildings
 //! make their sounds as they're selected, ordered, move, fire and die.
 
+mod actions;
 mod banners;
 mod console;
 mod minimap;
@@ -297,6 +299,7 @@ fn main() -> ExitCode {
                 setup_overlays,
                 banners::setup_banners,
                 minimap::spawn,
+                actions::spawn,
                 console::start_scripts,
             )
                 .chain(),
@@ -321,13 +324,27 @@ fn main() -> ExitCode {
             (
                 minimap::steer.before(camera::Controls),
                 minimap::update.after(camera::Controls),
+                (actions::back_out, actions::show).chain(),
             )
                 .run_if(in_state(Screen::Match)),
         )
         .add_systems(
             Update,
             (
-                (focus, (select, command.run_if(minimap::pointer_away))).chain(),
+                (
+                    focus,
+                    (
+                        select,
+                        command
+                            .run_if(minimap::pointer_away)
+                            .run_if(actions::pointer_away),
+                    )
+                        .run_if(not(actions::aiming)),
+                    actions::aim
+                        .run_if(minimap::pointer_away)
+                        .run_if(actions::pointer_away),
+                )
+                    .chain(),
                 choose_formation,
             )
                 .run_if(in_state(Screen::Match))
@@ -875,6 +892,7 @@ fn select(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
+    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Grid>>,
     loaded: Res<Loaded>,
     local: Res<Local>,
     focus: Res<Focus>,
@@ -886,7 +904,10 @@ fn select(
     // How far the cursor goes before a click becomes a drag, in pixels.
     const DRAG: f32 = 4.0;
     let cursor = windows.single().ok().and_then(|w| w.cursor_position());
-    if buttons.just_pressed(MouseButton::Left) && minimap::pointer_away(minimap) {
+    if buttons.just_pressed(MouseButton::Left)
+        && minimap::pointer_away(minimap)
+        && actions::pointer_away(grid)
+    {
         *start = cursor;
     }
     let released = buttons.just_released(MouseButton::Left);
@@ -978,27 +999,52 @@ fn command(
         return;
     }
     let ground = &loaded.map.ground;
-    let Some([px, py]) = pointed(&windows, &cameras, ground) else {
+    let Some(point) = pointed(&windows, &cameras, ground) else {
         return;
     };
-    let centres: Vec<[f32; 2]> = selected.0.iter().map(|&r| sim.0.centre(r)).collect();
+    let run = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+    send(&mut sim.0, player, &selected.0, point, run, ground.size());
+}
+
+/// Plays the first of the regiments answering an order.
+fn acknowledge(
+    sim: &World,
+    sounds: &mut sound::Sounds,
+    time: &Time,
+    player: u32,
+    regiments: &[usize],
+) {
+    if let Some(&first) = regiments.first() {
+        let template = &sim.regiments[first].template;
+        sounds.cue(time, template, |a| &a.commanded, sim.centre(first), player);
+    }
+}
+
+/// Sends regiments to a point, running or not, each keeping its place
+/// relative to the rest, within a map `size` across.
+fn send(
+    sim: &mut World,
+    player: u32,
+    regiments: &[usize],
+    [px, py]: [f32; 2],
+    run: bool,
+    size: f32,
+) {
+    let centres: Vec<[f32; 2]> = regiments.iter().map(|&r| sim.centre(r)).collect();
     let n = centres.len() as f32;
     let [cx, cy] = centres
         .iter()
         .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
-    let run = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
-    let first = &sim.0.regiments[selected.0[0]];
-    sounds.cue(&time, &first.template, |a| &a.commanded, centres[0], player);
-    let size = ground.size();
-    for (&r, [x, y]) in selected.0.iter().zip(centres) {
+    for (&r, [x, y]) in regiments.iter().zip(centres) {
         let target = [
             (px + x - cx).clamp(0.0, size),
             (py + y - cy).clamp(0.0, size),
         ];
         // Selection only takes the player's own.
         let _ = match run {
-            true => sim.0.order_run(player, r, target),
-            false => sim.0.order_move(player, r, target),
+            true => sim.order_run(player, r, target),
+            false => sim.order_move(player, r, target),
         };
     }
 }

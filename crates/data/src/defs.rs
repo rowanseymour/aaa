@@ -449,6 +449,29 @@ pub struct KingdomColor {
     pub color: [f32; 3],
 }
 
+/// An order the player can give what they've selected, shown as a button.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActorCommand {
+    pub ids: Option<Id>,
+    /// A `#` key into the localized strings.
+    pub name: Option<String>,
+    pub icon: Option<String>,
+    /// Which of the action buttons it takes, numbered across then down;
+    /// negative for none.
+    pub preferred_position: Option<i32>,
+}
+
+/// A way of arranging an organization, which its layout places its slots
+/// in.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Formation {
+    pub ids: Option<Id>,
+    /// A `#` key into the localized strings.
+    pub name: Option<String>,
+    /// Relative to its file's folder unless it starts with `/`.
+    pub icon: Option<String>,
+}
+
 /// A sound, speech or music the game plays by id. Its base templates are
 /// declared in `Templates/template_audio.tgi`, which documents the fields.
 /// Percentages and `NULL`s are left as written for [`crate::Audio`] to
