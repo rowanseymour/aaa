@@ -1,8 +1,7 @@
 //! The action buttons: a grid in the bottom-right corner of the orders the
 //! selected regiments can take, with the game's icons in the places its
 //! data gives them. Orders given at a place, such as Move, wait for a left
-//! click on the map; a sub-page, such as the formations, has a button to go
-//! back. Right click or Escape backs out of either.
+//! click on the map, with a button to cancel; right click or Escape does too.
 
 use std::collections::HashMap;
 
@@ -25,28 +24,21 @@ const GAP: f32 = 4.0;
 /// Black margin between the buttons and the panel's rounded edge.
 const PAD: f32 = 8.0;
 
-/// The orders a regiment's grid holds, by command id, as the game lays
-/// them out, and what each does here; `None` for those the sim can't
-/// carry out yet, which are shown dimmed.
-const ORDERS: [(&str, Option<Give>); 8] = [
+/// The orders a regiment has, by command id, and what each does here;
+/// `None` for those the sim can't carry out yet, which are shown dimmed.
+/// The game leaves the rest of the commands off a regiment's grid.
+const ORDERS: [(&str, Option<Give>); 7] = [
     ("move", Some(Give::Aim(Aim::Move))),
     ("kill", None),
     ("retreat", Some(Give::Aim(Aim::Run))),
     ("stop", Some(Give::Stop)),
     ("guard", None),
-    ("explore", None),
     ("hq_attach", None),
     ("hq_detach", None),
 ];
 
-/// Where the button that opens the formations goes. The game shows them
-/// in a panel of their own, but here they're a page of the grid, in a slot
-/// no regiment order takes.
-const FORMATIONS: usize = 4;
-/// Where the game puts the button that cancels an order being aimed...
+/// Where the game puts the button that cancels an order being aimed.
 const CANCEL: usize = 8;
-/// ...and the one that leaves a sub-page.
-const BACK: usize = 11;
 const CANCEL_ICON: &str = "UI/Game/ActionButtons/IconCancel.png";
 
 /// What an order does once its button is pressed.
@@ -69,7 +61,6 @@ pub enum Aim {
 pub enum Page {
     #[default]
     Orders,
-    Formations,
     /// Waiting for a click on the map to give an order there.
     Aiming(Aim),
 }
@@ -79,16 +70,11 @@ pub enum Page {
 pub enum Entry {
     /// Index into [`ORDERS`].
     Order(usize),
-    Formations,
-    /// Index into the first selected regiment's formations.
-    Formation(usize),
-    Back,
     Cancel,
 }
 
-/// The buttons a page has, by slot, given each of [`ORDERS`]' slot and how
-/// many formations the selection has.
-fn layout(page: Page, slots: &[Option<usize>], formations: usize) -> [Option<Entry>; SLOTS] {
+/// The buttons a page has, by slot, given each of [`ORDERS`]' slot.
+fn layout(page: Page, slots: &[Option<usize>]) -> [Option<Entry>; SLOTS] {
     let mut out = [None; SLOTS];
     match page {
         Page::Orders => {
@@ -97,15 +83,6 @@ fn layout(page: Page, slots: &[Option<usize>], formations: usize) -> [Option<Ent
                     out[s] = Some(Entry::Order(i));
                 }
             }
-            if formations > 1 && out[FORMATIONS].is_none() {
-                out[FORMATIONS] = Some(Entry::Formations);
-            }
-        }
-        Page::Formations => {
-            for (f, slot) in out.iter_mut().take(BACK).enumerate().take(formations) {
-                *slot = Some(Entry::Formation(f));
-            }
-            out[BACK] = Some(Entry::Back);
         }
         Page::Aiming(aim) => {
             let aimed = ORDERS.iter().position(|(_, g)| *g == Some(Give::Aim(aim)));
@@ -131,8 +108,6 @@ struct Look {
 pub struct Looks {
     /// Per [`ORDERS`], its slot and look.
     orders: Vec<(Option<usize>, Look)>,
-    /// By formation id.
-    formations: HashMap<Id, Look>,
     cancel: Option<Handle<Image>>,
 }
 
@@ -193,20 +168,8 @@ pub fn spawn(
             }
         })
         .collect();
-    let formations = game
-        .formation_looks()
-        .into_iter()
-        .map(|(id, f)| {
-            let icon = f.icon.as_deref().and_then(|p| image(game, p));
-            (id, Look { name: f.name, icon })
-        })
-        .collect();
     let cancel = image(game, CANCEL_ICON);
-    commands.insert_resource(Looks {
-        orders,
-        formations,
-        cancel,
-    });
+    commands.insert_resource(Looks { orders, cancel });
     commands.init_resource::<Shown>();
     commands.insert_resource(Page::Orders);
 
@@ -309,7 +272,6 @@ pub fn back_out(keys: Res<ButtonInput<KeyCode>>, selected: Res<Selected>, mut pa
 pub fn show(
     page: Res<Page>,
     selected: Res<Selected>,
-    sim: Res<Sim>,
     looks: Res<Looks>,
     mut shown: ResMut<Shown>,
     mut root: Query<&mut Visibility, (With<Node>, Without<Slot>)>,
@@ -327,23 +289,17 @@ pub fn show(
     mut icons: Query<&mut ImageNode, With<SlotIcon>>,
     mut caption: Single<&mut Text, With<Caption>>,
 ) {
-    let first = selected.0.first().map(|&r| &sim.0.regiments[r]);
     if let Ok(mut v) = root.get_mut(grid.parent()) {
-        v.set_if_neq(match first {
-            Some(_) => Visibility::Inherited,
-            None => Visibility::Hidden,
+        v.set_if_neq(match selected.0.is_empty() {
+            false => Visibility::Inherited,
+            true => Visibility::Hidden,
         });
     }
-    let Some(first) = first else {
+    if selected.0.is_empty() {
         return;
-    };
+    }
     let order_slots: Vec<Option<usize>> = looks.orders.iter().map(|(s, _)| *s).collect();
-    shown.0 = layout(*page, &order_slots, first.formations.len());
-    let formation = |f: usize| {
-        looks
-            .formations
-            .get(&Id::from(first.formations[f].id.as_str()))
-    };
+    shown.0 = layout(*page, &order_slots);
     let mut hovered = None;
     for (slot, hover, children, mut visibility, mut border) in &mut slots {
         let entry = shown.0[slot.0];
@@ -366,23 +322,6 @@ pub fn show(
                 };
                 (look.icon.clone(), name, ready, lit)
             }
-            Entry::Formations => {
-                let look = formation(first.formation);
-                let icon = look.and_then(|l| l.icon.clone());
-                let name = look.map_or("formation", |l| l.name.as_str());
-                (icon, format!("Formation: {name}"), true, false)
-            }
-            Entry::Formation(f) => {
-                let look = formation(f);
-                let name = look.map_or_else(|| first.formations[f].id.clone(), |l| l.name.clone());
-                (
-                    look.and_then(|l| l.icon.clone()),
-                    name,
-                    true,
-                    f == first.formation,
-                )
-            }
-            Entry::Back => (looks.cancel.clone(), "Back".into(), true, false),
             Entry::Cancel => (looks.cancel.clone(), "Cancel".into(), true, false),
         };
         if hover.get() {
@@ -417,7 +356,7 @@ pub fn show(
     }
 }
 
-/// A button pressed: gives its order, aims it or changes page.
+/// A button pressed: gives its order, aims it or cancels aiming.
 #[allow(clippy::too_many_arguments)]
 fn press(
     activate: On<Activate>,
@@ -448,23 +387,7 @@ fn press(
             }
             None => {}
         },
-        Entry::Formations => *page = Page::Formations,
-        Entry::Formation(f) => {
-            let Some(&first) = selected.0.first() else {
-                return;
-            };
-            let id = sim.0.regiments[first].formations[f].id.clone();
-            for &r in &selected.0 {
-                let index = sim.0.regiments[r]
-                    .formations
-                    .iter()
-                    .position(|g| g.id == id);
-                if let Some(index) = index {
-                    let _ = sim.0.set_formation(player, r, index);
-                }
-            }
-        }
-        Entry::Back | Entry::Cancel => *page = Page::Orders,
+        Entry::Cancel => *page = Page::Orders,
     }
 }
 
@@ -516,42 +439,29 @@ mod tests {
     use super::*;
 
     /// The slots the game's data gives [`ORDERS`].
-    const GAME: [Option<usize>; 8] = [
+    const GAME: [Option<usize>; 7] = [
         Some(0),
         Some(1),
         Some(2),
         Some(3),
         Some(6),
-        Some(7),
         Some(10),
         Some(11),
     ];
 
     #[test]
-    fn orders_take_their_slots_with_formations_in_a_free_one() {
-        let grid = layout(Page::Orders, &GAME, 3);
+    fn orders_take_their_slots() {
+        let grid = layout(Page::Orders, &GAME);
         assert_eq!(grid[0], Some(Entry::Order(0)));
         assert_eq!(grid[3], Some(Entry::Order(3)));
-        assert_eq!(grid[FORMATIONS], Some(Entry::Formations));
-        assert_eq!(grid[11], Some(Entry::Order(7)));
-        assert_eq!(grid[5], None);
-        assert_eq!(layout(Page::Orders, &GAME, 1)[FORMATIONS], None);
+        assert_eq!(grid[6], Some(Entry::Order(4)));
+        assert_eq!(grid[11], Some(Entry::Order(6)));
+        assert_eq!(grid.iter().flatten().count(), 7);
     }
 
     #[test]
-    fn sub_pages_and_aiming_have_a_way_back() {
-        let grid = layout(Page::Formations, &GAME, 3);
-        assert_eq!(
-            grid[..4],
-            [
-                Some(Entry::Formation(0)),
-                Some(Entry::Formation(1)),
-                Some(Entry::Formation(2)),
-                None
-            ]
-        );
-        assert_eq!(grid[BACK], Some(Entry::Back));
-        let grid = layout(Page::Aiming(Aim::Run), &GAME, 3);
+    fn aiming_shows_the_order_and_a_way_out() {
+        let grid = layout(Page::Aiming(Aim::Run), &GAME);
         assert_eq!(grid[2], Some(Entry::Order(2)));
         assert_eq!(grid[CANCEL], Some(Entry::Cancel));
         assert_eq!(grid.iter().flatten().count(), 2);
