@@ -179,6 +179,32 @@ fn reads_a_scene() {
 }
 
 #[test]
+fn leaves_out_shadow_geometry() {
+    let mut b = Builder::new();
+    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 2]));
+    b.add("NiTriShape", shape("mesh", 0x10, 3, &[]));
+    // A shape whose extra data marks it as the mesh's shadow hull.
+    let mut hull = string("Sg");
+    hull.extend(refs(&[4]));
+    // The rest of a shape, after its empty name and extra data list.
+    hull.extend(&shape("", 0x10, 3, &[])[8..]);
+    b.add("NiTriShape", hull);
+    b.add("NiTriShapeData", geometry(false));
+    let mut sg = string("Sg");
+    sg.extend(1u32.to_le_bytes());
+    b.add("NiIntegerExtraData", sg);
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+
+    let names: Vec<&str> = nif
+        .shapes()
+        .iter()
+        .map(|p| p.shape.av.name.as_str())
+        .collect();
+    assert_eq!(names, ["mesh"]);
+}
+
+#[test]
 fn stops_at_unknown_types() {
     let mut b = Builder::new();
     b.add("NiNode", node("root", [0.0; 3], 1.0, &[1]));
