@@ -194,6 +194,18 @@ impl<R: Read + Seek> Map<R> {
         // Windows-1252 in practice; Latin-1 is identical for everything but 0x80..0x9F.
         Ok(bytes.iter().map(|&b| b as char).collect())
     }
+
+    /// The text a string id stands for in [`Map::strings`]; `None` where the
+    /// map doesn't define it.
+    pub fn string(&mut self, id: &str) -> Result<Option<String>> {
+        let strings = self.strings()?;
+        let text = strings
+            .lines()
+            .filter_map(|l| l.trim().split_once('='))
+            .find(|(key, _)| key.trim() == id)
+            .map(|(_, text)| text.trim().trim_matches('"').to_string());
+        Ok(text)
+    }
 }
 
 #[derive(Debug, Clone)]
