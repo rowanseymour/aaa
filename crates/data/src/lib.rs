@@ -59,6 +59,8 @@ pub struct View {
     pub conform: Option<Shape>,
     /// Archive path of the model a building plays once as it unpacks.
     pub unpacking: Option<String>,
+    /// Archive path of the model a building plays once as it packs.
+    pub packing: Option<String>,
 }
 
 /// An animation a template's models can play.
@@ -229,8 +231,12 @@ pub struct Deployment {
     /// building's facing and y along it, and the way it faces there.
     pub packed_offset: [f32; 2],
     pub packed_facing: [f32; 2],
-    /// For a building, the seconds unpacking takes.
+    /// For a building, the seconds packing and unpacking take.
+    pub packing: f32,
     pub unpacking: f32,
+    /// For a building, the share of its health at or below which it can't
+    /// pack.
+    pub pack_health_min: f32,
 }
 
 /// Where what a building recruits appears and goes, from where it stands:
@@ -814,7 +820,9 @@ impl GameData {
                     .filter(|i| *i != Id::from("null")),
                 packed_offset: m.packed_position_offset.unwrap_or([0.0, 0.0]),
                 packed_facing: m.packed_orientation.unwrap_or([0.0, -1.0]),
+                packing: m.packing_length.unwrap_or(7.0),
                 unpacking: m.unpacking_length.unwrap_or(7.0),
+                pack_health_min: m.pack_health_min.unwrap_or(0.5),
             })
         })
     }
@@ -939,15 +947,20 @@ impl GameData {
         if aspects.is_empty() && normal.is_none() {
             return None;
         }
-        let unpacking = view
-            .aspect
-            .iter()
-            .filter(|a| a.ids == Some(Id::from("aspect_unpacking")))
-            .find_map(|a| a.model.as_deref().map(path))
-            .filter(|p| self.exists(p));
+        let state_model = |ids: &str| {
+            view.aspect
+                .iter()
+                .filter(|a| a.ids == Some(Id::from(ids)))
+                .find_map(|a| a.model.as_deref().map(path))
+                .filter(|p| self.exists(p))
+        };
+        let unpacking = state_model("aspect_unpacking");
+        let packing = state_model("aspect_packing");
         let aspects: Vec<String> = aspects
             .into_iter()
-            .filter(|p| self.exists(p) && Some(p) != unpacking.as_ref())
+            .filter(|p| {
+                self.exists(p) && Some(p) != unpacking.as_ref() && Some(p) != packing.as_ref()
+            })
             .collect();
         let normal = normal.filter(|p| self.exists(p));
         let models = match normal {
@@ -1005,6 +1018,7 @@ impl GameData {
             animations,
             conform: conform(thing),
             unpacking,
+            packing,
         })
     }
 
@@ -1865,6 +1879,7 @@ mod tests {
                 animations: Vec::new(),
                 conform: None,
                 unpacking: None,
+                packing: None,
             })
         };
         let mut views: HashMap<Id, Option<View>> = [

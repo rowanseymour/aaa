@@ -217,6 +217,22 @@ pub struct Unpacks {
     pub seconds: f32,
 }
 
+/// What a building packs into.
+#[derive(Debug, Clone)]
+pub struct Packs {
+    /// The packed building, such as a truck, standing anywhere and owned
+    /// by nobody: it's placed and given ids as it's put out.
+    pub truck: Regiment,
+    /// Where it stands from the building, in the map's axes, and the way
+    /// it faces there.
+    pub offset: [f32; 2],
+    pub facing: [f32; 2],
+    /// Seconds packing takes.
+    pub seconds: f32,
+    /// The share of its health at or below which the building can't pack.
+    pub health_min: f32,
+}
+
 /// The way buildings that unpack face, as all of them on the game's maps
 /// do.
 pub const UNPACKED_FACING: [f32; 2] = [0.0, -1.0];
@@ -405,6 +421,33 @@ impl Recruits {
     /// Where what objects of `template` recruit appears and goes.
     pub fn deploy_points(&self, template: &str) -> Option<DeployPoints> {
         self.deploy_points.get(&Id::from(template)).copied()
+    }
+
+    /// What each building template packs into, by template, for those
+    /// some packed building unpacks into and that can be raised.
+    pub fn packings(&self) -> HashMap<String, Packs> {
+        // Where several pack to one building the first by name wins, so
+        // it's always the same one.
+        let mut trucks: Vec<(&Id, &Deployment)> = self.deployments.iter().collect();
+        trucks.sort_unstable_by_key(|(id, _)| id.as_str());
+        let mut out = HashMap::new();
+        for (truck, d) in trucks {
+            let Some(into) = &d.unpacks_into else {
+                continue;
+            };
+            let building = self.deployments.get(into);
+            let Ok(raised) = self.raise(truck.as_str(), 0, 0, [0.0, 0.0], d.packed_facing) else {
+                continue;
+            };
+            out.entry(into.as_str().to_string()).or_insert(Packs {
+                truck: raised,
+                offset: d.packed_offset,
+                facing: d.packed_facing,
+                seconds: building.map_or(7.0, |b| b.packing),
+                health_min: building.map_or(0.5, |b| b.pack_health_min),
+            });
+        }
+        out
     }
 
     /// What a packed building of `template` unpacks into, if it does and
@@ -761,7 +804,9 @@ mod tests {
                         unpacks_into: Some(Id::from("depot")),
                         packed_offset: [0.0, 0.0],
                         packed_facing: [1.0, 0.0],
+                        packing: 7.0,
                         unpacking: 7.0,
+                        pack_health_min: 0.5,
                     },
                 ),
                 (
@@ -770,7 +815,9 @@ mod tests {
                         unpacks_into: None,
                         packed_offset: [0.0, 0.0],
                         packed_facing: [0.0, -1.0],
+                        packing: 8.0,
                         unpacking: 9.0,
+                        pack_health_min: 0.5,
                     },
                 ),
             ]),
@@ -786,6 +833,10 @@ mod tests {
         assert!(unpacks.building.obstacle.is_some());
         truck.renumber(40);
         assert_eq!((truck.id, truck.members[0].thing.id), (40, 40));
+        let packings = recruits.packings();
+        let packs = &packings["depot"];
+        assert_eq!(packs.truck.template, "truck");
+        assert_eq!((packs.seconds, packs.facing), (8.0, [1.0, 0.0]));
     }
 
     #[test]

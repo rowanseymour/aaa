@@ -4,7 +4,9 @@
 //! map, with a button to cancel; right click or Escape does too. A selected
 //! building that commissions, such as a Corps HQ, has a button opening a
 //! menu of what it commissions, and above the grid a row of what it's been
-//! asked for, the first with its progress; clicking one calls it off.
+//! asked for, the first with its progress; clicking one calls it off. A
+//! building that packs, into a truck say, has Pack, dimmed while it
+//! can't.
 
 use std::collections::HashMap;
 
@@ -48,6 +50,8 @@ const ORDERS: [(&str, Option<Give>); 8] = [
 /// The command whose button opens a building's menu of what it
 /// commissions.
 const COMMISSION: &str = "commission";
+/// The command that packs a building up, such as into a truck.
+const PACK: &str = "pack";
 
 /// Where the game puts the button that cancels an order being aimed.
 const CANCEL: usize = 8;
@@ -97,6 +101,18 @@ pub enum Entry {
     Commission,
     /// Index into the selected building's menu.
     Recruit(usize),
+    /// Packs the selected building up.
+    Pack,
+}
+
+/// The buttons a selected building has: where its commission button goes
+/// and how much the menu behind it holds, and where its Pack button goes,
+/// if it packs.
+#[derive(Clone, Copy, Debug)]
+struct BuildingButtons {
+    commission: Option<usize>,
+    menu: usize,
+    pack: Option<usize>,
 }
 
 /// Which of [`ORDERS`] the selection has: packed buildings move, stop and,
@@ -118,22 +134,24 @@ fn offered(sim: &aaa_sim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
 }
 
 /// The buttons a page has, by slot, given each of [`ORDERS`]' slot and
-/// whether the selection has it, and for a selected building the
-/// commission button's slot and how much its menu holds.
+/// whether the selection has it, or a selected building's buttons.
 fn layout(
     page: Page,
     slots: &[Option<usize>],
     offered: &[bool],
-    building: Option<(Option<usize>, usize)>,
+    building: Option<BuildingButtons>,
 ) -> [Option<Entry>; SLOTS] {
     let mut out = [None; SLOTS];
     match (page, building) {
-        (Page::Orders, Some((slot, menu))) => {
-            if let Some(s) = slot.filter(|&s| s < SLOTS && menu > 0) {
+        (Page::Orders, Some(b)) => {
+            if let Some(s) = b.commission.filter(|&s| s < SLOTS && b.menu > 0) {
                 out[s] = Some(Entry::Commission);
             }
+            if let Some(s) = b.pack.filter(|&s| s < SLOTS && out[s].is_none()) {
+                out[s] = Some(Entry::Pack);
+            }
         }
-        (Page::Commission, Some((_, menu))) => {
+        (Page::Commission, Some(BuildingButtons { menu, .. })) => {
             for (i, slot) in out.iter_mut().take(menu.min(MENU_CANCEL)).enumerate() {
                 *slot = Some(Entry::Recruit(i));
             }
@@ -185,6 +203,7 @@ pub struct Looks {
     /// Per [`ORDERS`], its slot and look.
     orders: Vec<(Option<usize>, Look)>,
     commission: (Option<usize>, Look),
+    pack: (Option<usize>, Look),
     cancel: Option<Handle<Image>>,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
@@ -266,6 +285,7 @@ pub fn spawn(
     };
     let orders = ORDERS.iter().map(|(ids, _)| look_of(game, ids)).collect();
     let commission = look_of(game, COMMISSION);
+    let pack = look_of(game, PACK);
     let cancel = image(game, CANCEL_ICON);
     let listings = game.listings();
     let mut menus = HashMap::new();
@@ -301,6 +321,7 @@ pub fn spawn(
     commands.insert_resource(Looks {
         orders,
         commission,
+        pack,
         cancel,
         menus,
     });
@@ -500,7 +521,14 @@ pub fn show(
         *page,
         &order_slots,
         &offered(&sim.0, &selected.0),
-        building.map(|_| (looks.commission.0, menu.len())),
+        building.map(|b| BuildingButtons {
+            commission: looks.commission.0,
+            menu: menu.len(),
+            pack: looks
+                .pack
+                .0
+                .filter(|_| sim.0.packing.contains_key(&sim.0.buildings[b].template)),
+        }),
     );
     let mut hovered = None;
     for (slot, hover, children, mut visibility, mut border) in &mut slots {
@@ -524,6 +552,11 @@ pub fn show(
             Entry::Commission => {
                 let look = &looks.commission.1;
                 (look.icon.clone(), look.name.clone(), true, false)
+            }
+            Entry::Pack => {
+                let look = &looks.pack.1;
+                let ready = building.is_some_and(|b| can_pack(&sim.0, b));
+                (look.icon.clone(), look.name.clone(), ready, false)
             }
             Entry::Recruit(i) => {
                 let r = &menu[i];
@@ -638,6 +671,13 @@ fn press(
         },
         Entry::Cancel => *page = Page::Orders,
         Entry::Commission => *page = Page::Commission,
+        Entry::Pack => {
+            if let Some(b) = chosen.0
+                && let Err(e) = sim.0.order_pack(player, b)
+            {
+                info!("can't pack {}: {e:?}", sim.0.buildings[b].template);
+            }
+        }
         Entry::Recruit(i) => {
             let Some(b) = chosen.0 else {
                 return;
@@ -651,6 +691,14 @@ fn press(
             }
         }
     }
+}
+
+/// Whether a building can pack now: not while it's packing or unpacking,
+/// nor when it's too hurt.
+fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
+    let b = &sim.buildings[building];
+    let floor = sim.packing.get(&b.template).map_or(1.0, |p| p.health_min);
+    !b.busy() && b.health > floor * b.fighter.health
 }
 
 /// A place in the queue clicked: calls off what's there.
@@ -771,15 +819,26 @@ mod tests {
 
     #[test]
     fn buildings_open_a_menu_of_what_they_commission() {
-        let grid = layout(Page::Orders, &GAME, &[true; 8], Some((Some(0), 11)));
+        let hq = BuildingButtons {
+            commission: Some(0),
+            menu: 11,
+            pack: Some(9),
+        };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq));
         assert_eq!(grid[0], Some(Entry::Commission));
-        assert_eq!(grid.iter().flatten().count(), 1);
+        assert_eq!(grid[9], Some(Entry::Pack));
+        assert_eq!(grid.iter().flatten().count(), 2);
+        let depot = BuildingButtons {
+            menu: 0,
+            pack: None,
+            ..hq
+        };
         assert!(
-            layout(Page::Orders, &GAME, &[true; 8], Some((Some(0), 0)))
+            layout(Page::Orders, &GAME, &[true; 8], Some(depot))
                 .iter()
                 .all(Option::is_none)
         );
-        let menu = layout(Page::Commission, &GAME, &[true; 8], Some((Some(0), 11)));
+        let menu = layout(Page::Commission, &GAME, &[true; 8], Some(hq));
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
     }

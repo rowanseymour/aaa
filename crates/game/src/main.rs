@@ -4,7 +4,9 @@
 //! You play one of the map's sides, or watch, and the computer plays the rest. Click one of your units or its
 //! banner to select its regiment, Shift+click to add a regiment to the
 //! selection or take it out, or drag a box over several, with Shift to add
-//! them. Click one of your buildings to select it instead. Right-click the ground to send the selection there, keeping its
+//! them. Click one of your buildings to select it instead. The selection
+//! passes from a truck to the building it unpacks into, and back as the
+//! building packs up. Right-click the ground to send the selection there, keeping its
 //! regiments' places relative to each other and stopping to fight enemies on
 //! the way. The number keys pick the selection's formation, in the order each regiment's
 //! layout lists them, and the buttons in the corner give the selection the
@@ -233,8 +235,9 @@ struct BuildingView {
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
     destroyed: bool,
-    /// The model it plays while it unpacks, shown in its place.
-    unpacking: Option<Entity>,
+    /// The model it plays while it packs or unpacks, shown in its place,
+    /// and whether it's unpacking.
+    packing: Option<(Entity, bool)>,
 }
 
 /// Removes `flag` and the value after it from `args`; `None` if the value is
@@ -371,7 +374,7 @@ fn main() -> ExitCode {
         .add_systems(
             Update,
             (
-                (spawn_views, (show_units, show_buildings)).chain(),
+                (spawn_views, (show_units, show_buildings, show_packing)).chain(),
                 drop_lost_building,
                 selection_sounds,
                 show_focus,
@@ -463,7 +466,9 @@ fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded, person: Option<u32
     world.insert_resource(lineup);
     world.insert_resource(Sim(sim));
     let mut loaded = loaded;
-    world.insert_resource(Raising(Recruits::new(&mut loaded.game)));
+    let raising = Recruits::new(&mut loaded.game);
+    world.resource_mut::<Sim>().0.packing = raising.packings();
+    world.insert_resource(Raising(raising));
     world.insert_resource(loaded);
 }
 
@@ -740,7 +745,7 @@ fn setup(
                     placed: world(x, y, z),
                     shot: None,
                     destroyed: false,
-                    unpacking: None,
+                    packing: None,
                 });
             }
             None => missing += 1,
@@ -812,14 +817,32 @@ fn target_position(sim: &World, target: Target) -> [f32; 2] {
     }
 }
 
-fn step(mut sim: ResMut<Sim>, mut selected: ResMut<Selected>) {
-    step_world(&mut sim.0, &mut selected.0);
+fn step(
+    mut sim: ResMut<Sim>,
+    mut selected: ResMut<Selected>,
+    mut chosen: ResMut<SelectedBuilding>,
+) {
+    step_world(&mut sim.0, &mut selected.0, &mut chosen.0);
 }
 
-/// Plays a tick of the game, dropping destroyed regiments from the selection.
-fn step_world(sim: &mut World, selected: &mut Vec<usize>) {
+/// Plays a tick of the game, dropping destroyed regiments from the
+/// selection. A packed building selected on its own that unpacks hands the
+/// selection to the building, and a building that packs to what it packed
+/// into.
+fn step_world(sim: &mut World, selected: &mut Vec<usize>, chosen: &mut Option<usize>) {
     sim.tick();
+    if let &[r] = &selected[..]
+        && let Some(b) = sim.regiments[r].unpacked_into
+    {
+        *chosen = Some(b);
+    }
     selected.retain(|&r| !sim.destroyed(r));
+    if let Some(b) = *chosen
+        && let State::Packed(_, r) = sim.buildings[b].state
+    {
+        *chosen = None;
+        *selected = vec![r];
+    }
 }
 
 /// A placed object standing on the ground, for drawing what the sim adds.
@@ -903,19 +926,6 @@ fn spawn_views(
         else {
             continue;
         };
-        let unpacking = building.unpacking.and_then(|(start, _)| {
-            let into = (sim.0.ticks - start) as f32 * TICK;
-            let owner = building.owner;
-            let e =
-                drawn
-                    .0
-                    .spawn_unpacking(&mut commands, game, &mut models, &thing, owner, into)?;
-            commands.entity(e).insert(DespawnOnExit(Screen::Match));
-            Some(e)
-        });
-        if unpacking.is_some() {
-            commands.entity(e).insert(Visibility::Hidden);
-        }
         let [x, y, z] = thing.position;
         commands.entity(e).insert((
             BuildingView {
@@ -923,12 +933,62 @@ fn spawn_views(
                 placed: world(x, y, z),
                 shot: None,
                 destroyed: false,
-                unpacking,
+                packing: None,
             },
             DespawnOnExit(Screen::Match),
         ));
     }
     viewed.buildings = sim.0.buildings.len();
+}
+
+/// Plays a building's packing or unpacking model in its place while it
+/// packs or unpacks, and hides it once it's packed up.
+fn show_packing(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    mut loaded: ResMut<Loaded>,
+    mut drawn: ResMut<Drawn>,
+    mut assets: MapAssets,
+    mut views: Query<(&mut BuildingView, &MapObject, &mut Visibility)>,
+) {
+    for (mut view, object, mut visibility) in &mut views {
+        let building = &sim.0.buildings[view.building];
+        let wanted = match (building.unpacking, building.packing) {
+            (Some((start, _)), _) => Some((start, true)),
+            (None, Some((start, _))) => Some((start, false)),
+            _ => None,
+        };
+        if view.packing.map(|(_, u)| u) != wanted.map(|(_, u)| u)
+            && let Some((e, _)) = view.packing.take()
+        {
+            commands.entity(e).despawn();
+        }
+        let gone = matches!(building.state, State::Packed(..));
+        if let (Some((start, unpacking)), None) = (wanted, view.packing) {
+            let into = (sim.0.ticks - start) as f32 * TICK;
+            let mut models = assets.models();
+            let spawned = drawn.0.spawn_packing(
+                &mut commands,
+                &mut loaded.game,
+                &mut models,
+                &object.0,
+                building.owner,
+                unpacking,
+                into,
+            );
+            if let Some(e) = spawned {
+                commands.entity(e).insert(DespawnOnExit(Screen::Match));
+                view.packing = Some((e, unpacking));
+            }
+        }
+        let shown = match view.packing.is_some() || gone {
+            true => Visibility::Hidden,
+            false => Visibility::Inherited,
+        };
+        if !matches!(building.state, State::Destroyed(_)) {
+            visibility.set_if_neq(shown);
+        }
+    }
 }
 
 /// Lets go of the selected building once it's no longer the player's to
@@ -1017,10 +1077,9 @@ fn show_units(
     }
 }
 
-/// Plays buildings' attacks as they fire, sinks the destroyed into the
-/// ground, and swaps those done unpacking to their own model.
+/// Plays buildings' attacks as they fire, and sinks the destroyed into the
+/// ground.
 fn show_buildings(
-    mut commands: Commands,
     sim: Res<Sim>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
@@ -1036,12 +1095,6 @@ fn show_buildings(
     const SINK_DEPTH: f32 = 12.0;
     for (mut view, mut transform, mut visibility, playing) in &mut views {
         let building = &sim.0.buildings[view.building];
-        if building.unpacking.is_none()
-            && let Some(e) = view.unpacking.take()
-        {
-            commands.entity(e).despawn();
-            *visibility = Visibility::Inherited;
-        }
         if let (State::Destroyed(_), false) = (building.state, view.destroyed) {
             view.destroyed = true;
             let (at, owner) = (building.position, building.owner);
@@ -1124,7 +1177,7 @@ fn focus(
         .min_by(|a, b| a.1.total_cmp(&b.1));
     let building = || {
         sim.0.buildings.iter().position(|b| {
-            !matches!(b.state, State::Destroyed(_))
+            !b.gone()
                 && b.obstacle
                     .as_ref()
                     .is_some_and(|o| o.distance(point) == 0.0)
