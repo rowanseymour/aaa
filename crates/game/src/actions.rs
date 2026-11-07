@@ -3,9 +3,8 @@
 //! them. Orders given at a place, such as Move, wait for a left click on the
 //! map, with a button to cancel; right click or Escape does too. A selected
 //! building that commissions, such as a Corps HQ, has a button opening a
-//! menu of what it commissions, and above the grid a row of what it's been
-//! asked for, the first with its progress; clicking one calls it off. A
-//! building that packs, into a truck say, has Pack, dimmed while it
+//! menu of what it commissions; [`crate::pane`] shows what it's been asked
+//! for. A building that packs, into a truck say, has Pack, dimmed while it
 //! can't.
 
 use std::collections::HashMap;
@@ -30,8 +29,6 @@ const BUTTON: f32 = 56.0;
 const GAP: f32 = 4.0;
 /// Black margin between the buttons and the panel's rounded edge.
 const PAD: f32 = 8.0;
-/// How much of a building's queue shows.
-const QUEUED: usize = 6;
 
 /// The orders a regiment has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
@@ -234,13 +231,10 @@ pub struct Grid;
 #[derive(Component)]
 pub struct Caption;
 
-/// A place in the row of what the selected building commissions.
+/// Part of the interface that takes clicks, so they don't go to the map
+/// under it.
 #[derive(Component)]
-pub struct Queued(usize);
-
-/// How far along the first of the queue is.
-#[derive(Component)]
-pub struct Progress;
+pub struct Blocks;
 
 /// What each slot holds now.
 #[derive(Resource, Default)]
@@ -345,42 +339,6 @@ pub fn spawn(
             DespawnOnExit(Screen::Match),
         ))
         .with_children(|root| {
-            root.spawn(Node {
-                flex_direction: FlexDirection::Row,
-                column_gap: px(GAP),
-                ..default()
-            })
-            .with_children(|row| {
-                for i in 0..QUEUED {
-                    let mut place = row.spawn((
-                        Queued(i),
-                        Button,
-                        Hovered::default(),
-                        Node {
-                            width: px(BUTTON * 0.75),
-                            height: px(BUTTON * 0.75),
-                            flex_direction: FlexDirection::ColumnReverse,
-                            ..default()
-                        },
-                        BackgroundColor(Color::BLACK),
-                        ImageNode::default(),
-                        Visibility::Hidden,
-                    ));
-                    if i == 0 {
-                        place.with_child((
-                            Progress,
-                            Node {
-                                height: px(4),
-                                width: percent(0),
-                                ..default()
-                            },
-                            BackgroundColor(Color::srgb(0.1, 0.9, 0.1)),
-                            Pickable::IGNORE,
-                        ));
-                    }
-                    place.observe(cancel_queued);
-                }
-            });
             root.spawn((
                 Caption,
                 Text::default(),
@@ -392,6 +350,7 @@ pub fn spawn(
             ));
             root.spawn((
                 Grid,
+                Blocks,
                 RelativeCursorPosition::default(),
                 Node {
                     display: Display::Grid,
@@ -439,7 +398,7 @@ pub fn spawn(
 
 /// Whether the cursor is off the grid, so clicks go to the map.
 pub fn pointer_away(
-    grids: Query<(&RelativeCursorPosition, &InheritedVisibility), With<Grid>>,
+    grids: Query<(&RelativeCursorPosition, &InheritedVisibility), With<Blocks>>,
 ) -> bool {
     grids
         .iter()
@@ -469,14 +428,7 @@ pub fn back_out(
 }
 
 /// The grid's panel, its root.
-type PanelFilter = (With<Node>, Without<Slot>, Without<Queued>);
-
-type QueuedParts<'a> = (
-    &'a Queued,
-    &'a Hovered,
-    &'a mut ImageNode,
-    &'a mut Visibility,
-);
+type PanelFilter = (With<Node>, Without<Slot>);
 
 type SlotParts<'a> = (
     &'a Slot,
@@ -486,8 +438,8 @@ type SlotParts<'a> = (
     &'a mut BorderColor,
 );
 
-/// Fills the grid's slots for the page and the selection, says what's
-/// under the cursor, and shows the selected building's queue.
+/// Fills the grid's slots for the page and the selection, and says what's
+/// under the cursor.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     page: Res<Page>,
@@ -498,10 +450,8 @@ pub fn show(
     mut shown: ResMut<Shown>,
     mut root: Query<&mut Visibility, PanelFilter>,
     grid: Single<&ChildOf, With<Grid>>,
-    mut slots: Query<SlotParts, (Without<SlotIcon>, Without<Queued>)>,
-    mut icons: Query<&mut ImageNode, (With<SlotIcon>, Without<Queued>)>,
-    mut queued: Query<QueuedParts, (Without<Slot>, Without<SlotIcon>)>,
-    mut progress: Single<&mut Node, With<Progress>>,
+    mut slots: Query<SlotParts, Without<SlotIcon>>,
+    mut icons: Query<&mut ImageNode, With<SlotIcon>>,
     mut caption: Single<&mut Text, With<Caption>>,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
@@ -589,40 +539,6 @@ pub fn show(
             }
         }
     }
-    let queue = building.map(|b| &sim.0.buildings[b]);
-    for (place, hover, mut image, mut visibility) in &mut queued {
-        let item = queue.and_then(|q| q.queue.get(place.0));
-        visibility.set_if_neq(match item {
-            Some(_) => Visibility::Inherited,
-            None => Visibility::Hidden,
-        });
-        let Some(item) = item else {
-            continue;
-        };
-        let look = menu
-            .iter()
-            .find(|r| {
-                r.regiment
-                    .as_ref()
-                    .is_some_and(|g| g.template == item.regiment.template)
-            })
-            .map(|r| &r.look);
-        let icon = look.and_then(|l| l.icon.clone()).unwrap_or_default();
-        if image.image != icon {
-            image.image = icon;
-        }
-        if hover.get() {
-            let name = look.map_or(item.regiment.template.as_str(), |l| l.name.as_str());
-            hovered = Some(format!("Cancel {name}"));
-        }
-    }
-    let done = queue
-        .and_then(|q| Some(q.progress as f32 / q.queue.front()?.ticks as f32))
-        .unwrap_or(0.0);
-    let width = percent(done * 100.0);
-    if progress.width != width {
-        progress.width = width;
-    }
     let text = match (hovered, *page) {
         (Some(name), _) => name,
         (None, Page::Aiming(Aim::Unpack)) => "Left click where to unpack".into(),
@@ -699,19 +615,6 @@ fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
     let b = &sim.buildings[building];
     let floor = sim.packing.get(&b.template).map_or(1.0, |p| p.health_min);
     !b.busy() && b.health > floor * b.fighter.health
-}
-
-/// A place in the queue clicked: calls off what's there.
-fn cancel_queued(
-    activate: On<Activate>,
-    places: Query<&Queued>,
-    chosen: Res<SelectedBuilding>,
-    local: Res<Local>,
-    mut sim: ResMut<Sim>,
-) {
-    if let (Ok(place), Some(b), Some(player)) = (places.get(activate.entity), chosen.0, local.0) {
-        let _ = sim.0.cancel_commission(player, b, place.0);
-    }
 }
 
 /// While an order is aimed, a left click on the map gives it there and a

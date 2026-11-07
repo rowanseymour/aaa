@@ -1,6 +1,6 @@
 //! The sides in a map and the regiments they start with.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use aaa_data::{Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization};
 use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
@@ -385,6 +385,8 @@ pub struct Recruits {
     deployments: HashMap<Id, Deployment>,
     deploy_points: HashMap<Id, DeployPoints>,
     recruit_times: HashMap<Id, f32>,
+    /// Ids the game has since renamed.
+    renamed: HashSet<Id>,
 }
 
 impl Recruits {
@@ -399,6 +401,7 @@ impl Recruits {
             deployments: game.deployments(),
             deploy_points: game.deploy_points(),
             recruit_times: game.recruit_times(),
+            renamed: game.renamed_things(),
         }
     }
 
@@ -426,26 +429,45 @@ impl Recruits {
     /// What each building template packs into, by template, for those
     /// some packed building unpacks into and that can be raised.
     pub fn packings(&self) -> HashMap<String, Packs> {
-        // Where several pack to one building the first by name wins, so
-        // it's always the same one.
-        let mut trucks: Vec<(&Id, &Deployment)> = self.deployments.iter().collect();
-        trucks.sort_unstable_by_key(|(id, _)| id.as_str());
+        // What buildings commission comes first, so a Division HQ packs
+        // back into its regiment rather than a bare truck; then any packed
+        // building under its current id. Where several still pack to one
+        // building the first by name wins, so it's always the same one.
+        fn sorted<'a>(ids: impl Iterator<Item = &'a Id>) -> Vec<&'a str> {
+            let mut ids: Vec<&str> = ids.map(Id::as_str).collect();
+            ids.sort_unstable();
+            ids.dedup();
+            ids
+        }
+        let listed = sorted(self.lists.values().flatten());
+        let packed = self
+            .deployments
+            .keys()
+            .filter(|id| !self.renamed.contains(*id));
         let mut out = HashMap::new();
-        for (truck, d) in trucks {
-            let Some(into) = &d.unpacks_into else {
+        for id in listed.into_iter().chain(sorted(packed)) {
+            let Ok(raised) = self.raise(id, 0, 0, [0.0, 0.0], [0.0, -1.0]) else {
                 continue;
             };
-            let building = self.deployments.get(into);
-            let Ok(raised) = self.raise(truck.as_str(), 0, 0, [0.0, 0.0], d.packed_facing) else {
+            let Some(unpacks) = &raised.unpacks else {
                 continue;
             };
-            out.entry(into.as_str().to_string()).or_insert(Packs {
-                truck: raised,
-                offset: d.packed_offset,
-                facing: d.packed_facing,
+            let into = unpacks.building.template.clone();
+            let member = Id::from(raised.members[0].thing.template.as_str());
+            let (Some(truck), building) = (
+                self.deployments.get(&member),
+                self.deployments.get(&Id::from(into.as_str())),
+            ) else {
+                continue;
+            };
+            let packs = Packs {
+                offset: truck.packed_offset,
+                facing: truck.packed_facing,
                 seconds: building.map_or(7.0, |b| b.packing),
                 health_min: building.map_or(0.5, |b| b.pack_health_min),
-            });
+                truck: raised,
+            };
+            out.entry(into).or_insert(packs);
         }
         out
     }
@@ -730,6 +752,7 @@ mod tests {
             deployments: HashMap::new(),
             deploy_points: HashMap::new(),
             recruit_times: HashMap::new(),
+            renamed: HashSet::new(),
         };
         assert_eq!(recruits.templates(), ["squad"]);
         // Facing +x, so the front's left-hand man stands on the +y side.
@@ -823,6 +846,7 @@ mod tests {
             ]),
             deploy_points: HashMap::new(),
             recruit_times: HashMap::new(),
+            renamed: HashSet::new(),
         };
         let mut truck = recruits
             .raise("truck", 1, 2, [0.0, 0.0], [0.0, 1.0])
@@ -837,6 +861,28 @@ mod tests {
         let packs = &packings["depot"];
         assert_eq!(packs.truck.template, "truck");
         assert_eq!((packs.seconds, packs.facing), (8.0, [1.0, 0.0]));
+
+        // A renamed id comes before by name but is passed over, and a
+        // regiment of the truck that a building lists comes first.
+        let mut recruits = recruits;
+        let truck = recruits.deployments[&Id::from("truck")].clone();
+        recruits.deployments.insert(Id::from("an_old_truck"), truck);
+        recruits.renamed.insert(Id::from("an_old_truck"));
+        assert_eq!(recruits.packings()["depot"].truck.template, "truck");
+        recruits.organizations.insert(
+            Id::from("convoy"),
+            Organization {
+                layout: Id::from("line"),
+                slots: vec![None, None, Some(Id::from("truck"))],
+            },
+        );
+        recruits.layouts.insert(Id::from("line"), layout());
+        recruits
+            .lists
+            .insert(Id::from("corps"), vec![Id::from("convoy")]);
+        let packs = &recruits.packings()["depot"];
+        assert_eq!(packs.truck.template, "convoy");
+        assert_eq!(packs.facing, [1.0, 0.0]);
     }
 
     #[test]

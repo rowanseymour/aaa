@@ -273,6 +273,16 @@ impl Models {
         rest
     }
 
+    /// The archive path of a template's picture in the interface, if it
+    /// has one.
+    pub fn icon(&self, template: &str) -> Option<&str> {
+        self.views
+            .get(&Id::from(template))?
+            .as_ref()?
+            .icon
+            .as_deref()
+    }
+
     /// The outline under which a template's models tilt to follow the
     /// ground, for [`pose`]; `None` for models that stay upright.
     pub fn conform(&self, template: &str) -> Option<Shape> {
@@ -459,6 +469,7 @@ impl Models {
             conform: None,
             unpacking: None,
             packing: None,
+            icon: None,
         };
         let model = self.own_animation(game, assets, path, view)?;
         let root = commands

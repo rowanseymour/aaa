@@ -34,7 +34,7 @@ pub struct Banner {
 
 /// The division of each regiment the map starts in one, by regiment id.
 #[derive(Resource)]
-pub struct Divisions(HashMap<u32, Division>);
+pub struct Divisions(pub HashMap<u32, Division>);
 
 /// The templates of regiments that fly no banner and that players can't
 /// focus or select, such as animal herds.
