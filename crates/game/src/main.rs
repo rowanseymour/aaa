@@ -1205,7 +1205,17 @@ fn show_focus(
             let material = &marks.squares[tint(&sim.0, local.0, building.owner)];
             if let Some((_, object, footprint)) = buildings.iter().find(|(v, ..)| v.building == b) {
                 let [fx, fy, _] = object.0.facing;
-                let size = footprint.map_or(Vec2::splat(4.0), |f| f.0) / (1.0 - 2.0 * SQUARE_INSET);
+                // Around the ground its template claims, which takes in the
+                // pad and yard; the model's own box is about its walls.
+                let claimed = match building.obstacle.as_ref().map(|o| o.shape) {
+                    Some(Shape::Rect { width, height }) => Some(Vec2::new(width, height)),
+                    Some(Shape::Circle { radius }) => Some(Vec2::splat(2.0 * radius)),
+                    _ => None,
+                };
+                let size = claimed
+                    .or(footprint.map(|f| f.0))
+                    .unwrap_or(Vec2::splat(4.0))
+                    / (1.0 - 2.0 * SQUARE_INSET);
                 let transform = overlay::mark_transform(ground, building.position, [fx, fy], size);
                 wanted.push((transform, material.clone()));
             }
