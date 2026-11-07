@@ -168,8 +168,8 @@ impl Triggers {
         let cur = &mut cur;
         let version = check_version("triggers", cur.u32()?, 4..=5)?;
         let next_id = cur.u32()?;
-        let triggers = list(cur, Trigger::parse)?;
-        let variables = list(cur, |cur| Ok((cur.string()?, cur.f32()?)))?;
+        let triggers = cur.list(Trigger::parse)?;
+        let variables = cur.list(|cur| Ok((cur.string()?, cur.f32()?)))?;
         let triggers = Triggers {
             version,
             next_id,
@@ -178,9 +178,7 @@ impl Triggers {
             legacy: (version == 4)
                 .then(|| Ok::<_, Error>((cur.string()?, cur.u32()?)))
                 .transpose()?,
-            unknown_strings: (version >= 5)
-                .then(|| list(cur, Cursor::string))
-                .transpose()?,
+            unknown_strings: (version >= 5).then(|| cur.strings()).transpose()?,
         };
         cur.finish("TRIGGERS")?;
         Ok(triggers)
@@ -207,21 +205,10 @@ impl Triggers {
             version >= 5,
             "unknown_strings",
             self.unknown_strings.as_ref(),
-            |ss| {
-                w.u32(ss.len() as u32);
-                ss.iter().try_for_each(|s| w.string(s))
-            },
+            |ss| w.strings(ss),
         )?;
         Ok(w.0)
     }
-}
-
-fn list<'a, T>(
-    cur: &mut Cursor<'a>,
-    mut item: impl FnMut(&mut Cursor<'a>) -> Result<T>,
-) -> Result<Vec<T>> {
-    let n = cur.u32()?;
-    (0..n).map(|_| item(cur)).collect()
 }
 
 fn write_elements(w: &mut Writer, elements: &[Element]) -> Result<()> {
@@ -245,9 +232,9 @@ impl Trigger {
             name: cur.string()?,
             comment: cur.string()?,
             next_element: cur.u32()?,
-            events: list(cur, Element::parse)?,
-            conditions: list(cur, Element::parse)?,
-            effects: list(cur, Element::parse)?,
+            events: cur.list(Element::parse)?,
+            conditions: cur.list(Element::parse)?,
+            effects: cur.list(Element::parse)?,
         })
     }
 
@@ -273,7 +260,7 @@ impl Element {
             version: check_version("trigger element", cur.u32()?, 2..=3)?,
             name: cur.string()?,
             id: cur.u32()?,
-            parameters: list(cur, Parameter::parse)?,
+            parameters: cur.list(Parameter::parse)?,
         })
     }
 

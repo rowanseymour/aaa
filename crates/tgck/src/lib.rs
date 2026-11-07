@@ -98,6 +98,25 @@ impl<'a> Cursor<'a> {
         let len = self.u16()? as usize;
         Ok(utf16_lossy(self.bytes(len * 2)?))
     }
+    /// A `u32` count, then that many items; the count is capped by what's
+    /// left so a corrupt one can't reserve too much.
+    pub(crate) fn list<T>(
+        &mut self,
+        mut item: impl FnMut(&mut Cursor<'a>) -> Result<T>,
+    ) -> Result<Vec<T>> {
+        let n = self.u32()? as usize;
+        let mut items = Vec::with_capacity(n.min(self.remaining()));
+        for _ in 0..n {
+            items.push(item(self)?);
+        }
+        Ok(items)
+    }
+    pub(crate) fn u32s(&mut self) -> Result<Vec<u32>> {
+        self.list(Cursor::u32)
+    }
+    pub(crate) fn strings(&mut self) -> Result<Vec<String>> {
+        self.list(Cursor::string)
+    }
     pub(crate) fn pos(&self) -> usize {
         self.pos
     }
@@ -163,6 +182,16 @@ impl Writer {
         self.u16(len);
         units.iter().for_each(|&u| self.u16(u));
         Ok(())
+    }
+    /// The inverse of [`Cursor::u32s`].
+    pub(crate) fn u32s(&mut self, vs: &[u32]) {
+        self.u32(vs.len() as u32);
+        vs.iter().for_each(|&v| self.u32(v));
+    }
+    /// The inverse of [`Cursor::strings`].
+    pub(crate) fn strings(&mut self, vs: &[String]) -> Result<()> {
+        self.u32(vs.len() as u32);
+        vs.iter().try_for_each(|s| self.string(s))
     }
 }
 

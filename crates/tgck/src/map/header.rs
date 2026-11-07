@@ -153,16 +153,6 @@ pub(super) fn check_version(
     }
 }
 
-pub(super) fn strings(cur: &mut Cursor) -> Result<Vec<String>> {
-    let n = cur.u32()?;
-    (0..n).map(|_| cur.string()).collect()
-}
-
-pub(super) fn write_strings(w: &mut Writer, vs: &[String]) -> Result<()> {
-    w.u32(vs.len() as u32);
-    vs.iter().try_for_each(|s| w.string(s))
-}
-
 pub(super) fn bool(cur: &mut Cursor, what: &str) -> Result<bool> {
     match cur.u8()? {
         0 => Ok(false),
@@ -408,10 +398,10 @@ impl KingdomSetup {
             required: bool(cur, "required")?,
             playable: bool(cur, "playable")?,
             team: cur.string()?,
-            objectives: strings(cur)?,
-            technologies: strings(cur)?,
+            objectives: cur.strings()?,
+            technologies: cur.strings()?,
             merge_into: cur.string()?,
-            actors: strings(cur)?,
+            actors: cur.strings()?,
             removed: bool(cur, "removed")?,
             ai_controlled: bool(cur, "ai controlled")?,
             resources: (version >= 13)
@@ -447,10 +437,10 @@ impl KingdomSetup {
         w.u8(self.required.into());
         w.u8(self.playable.into());
         w.string(&self.team)?;
-        write_strings(w, &self.objectives)?;
-        write_strings(w, &self.technologies)?;
+        w.strings(&self.objectives)?;
+        w.strings(&self.technologies)?;
         w.string(&self.merge_into)?;
-        write_strings(w, &self.actors)?;
+        w.strings(&self.actors)?;
         w.u8(self.removed.into());
         w.u8(self.ai_controlled.into());
         optional(version >= 13, "resources", self.resources.as_ref(), |rs| {

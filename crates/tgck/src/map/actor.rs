@@ -403,21 +403,6 @@ pub(super) fn version(cur: &mut Cursor, what: &str, max: u32) -> Result<u32> {
     check_version(what, cur.u32()?, 0..=max)
 }
 
-fn u32s(cur: &mut Cursor) -> Result<Vec<u32>> {
-    let n = cur.u32()?;
-    (0..n).map(|_| cur.u32()).collect()
-}
-
-fn write_u32s(w: &mut Writer, vs: &[u32]) {
-    w.u32(vs.len() as u32);
-    vs.iter().for_each(|&v| w.u32(v));
-}
-
-fn f32s(cur: &mut Cursor) -> Result<Vec<f32>> {
-    let n = cur.u32()?;
-    (0..n).map(|_| cur.f32()).collect()
-}
-
 fn write_f32s(w: &mut Writer, vs: &[f32]) {
     w.u32(vs.len() as u32);
     w.f32s(vs);
@@ -465,9 +450,9 @@ impl Construction {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         let updatable = Updatable::parse(cur)?;
         let version = version(cur, "construction", 1)?;
-        let progress = f32s(cur)?;
+        let progress = cur.list(Cursor::f32)?;
         let (upgrade, unknown) = if version >= 1 {
-            let progress = f32s(cur)?;
+            let progress = cur.list(Cursor::f32)?;
             let template = cur.string()?;
             (Some(Upgrade { progress, template }), None)
         } else {
@@ -504,7 +489,7 @@ impl City {
         Ok(City {
             updatable,
             version,
-            buildings: (version >= 1).then(|| u32s(cur)).transpose()?,
+            buildings: (version >= 1).then(|| cur.u32s()).transpose()?,
         })
     }
 
@@ -512,7 +497,7 @@ impl City {
         self.updatable.write(w);
         w.u32(self.version);
         if let Some(b) = &self.buildings {
-            write_u32s(w, b);
+            w.u32s(b);
         }
     }
 }
@@ -731,7 +716,7 @@ impl Trailer {
             number: (v >= 10).then(|| cur.u32()).transpose()?,
             lists: (v >= 11)
                 .then(|| {
-                    let lists = [u32s(cur)?, u32s(cur)?, u32s(cur)?];
+                    let lists = [cur.u32s()?, cur.u32s()?, cur.u32s()?];
                     let n = cur.u32()?;
                     let recent_attacks = bytes(cur, n, 12)?
                         .chunks(12)
@@ -798,7 +783,7 @@ impl Trailer {
             w.u32(v);
         }
         if let Some(lists) = &self.lists {
-            lists.lists.iter().for_each(|l| write_u32s(w, l));
+            lists.lists.iter().for_each(|l| w.u32s(l));
             w.u32(lists.recent_attacks.len() as u32);
             lists
                 .recent_attacks
@@ -848,7 +833,7 @@ impl Skip {
             "Lair" => {
                 Updatable::parse(cur)?;
                 version(cur, "lair", 0)?;
-                u32s(cur)?;
+                cur.u32s()?;
                 cur.bytes(8).map(drop)
             }
             "HQ" => skip_hq(cur),
@@ -887,7 +872,7 @@ fn skip_ability(cur: &mut Cursor) -> Result<()> {
     let v = version(cur, "ability", 1)?;
     cur.bytes(13)?;
     if v >= 1 {
-        u32s(cur)?;
+        cur.u32s()?;
     }
     Ok(())
 }
@@ -917,7 +902,7 @@ fn skip_performer(cur: &mut Cursor) -> Result<()> {
     }
     cur.bytes(24)?;
     if v < 5 {
-        u32s(cur)?;
+        cur.u32s()?;
     }
     if v >= 3 {
         cur.bytes(8)?;
@@ -961,8 +946,8 @@ fn skip_denizen(cur: &mut Cursor) -> Result<()> {
         if v >= 4 {
             cur.u32()?;
         }
-        u32s(cur)?;
-        u32s(cur)?;
+        cur.u32s()?;
+        cur.u32s()?;
     }
     Ok(())
 }
@@ -1041,7 +1026,7 @@ fn skip_mobile_deployment(cur: &mut Cursor) -> Result<()> {
 
 fn skip_id_list(cur: &mut Cursor) -> Result<()> {
     version(cur, "id list", 0)?;
-    u32s(cur).map(drop)
+    cur.u32s().map(drop)
 }
 
 fn skip_defender(cur: &mut Cursor) -> Result<()> {
@@ -1065,7 +1050,7 @@ fn skip_transport(cur: &mut Cursor) -> Result<()> {
     }
     cur.bytes(18)?;
     if v == 0 {
-        u32s(cur)?;
+        cur.u32s()?;
     }
     if v >= 4 {
         cur.u32()?;
@@ -1091,7 +1076,7 @@ fn skip_hq(cur: &mut Cursor) -> Result<()> {
     // The badge.
     cur.i32()?;
     match v {
-        1 => drop(u32s(cur)?),
+        1 => drop(cur.u32s()?),
         // Version 0 records end here in every map, though the game's
         // loader reads on as for version 2.
         0 => {}
@@ -1225,7 +1210,7 @@ fn skip_organization_mind(cur: &mut Cursor) -> Result<()> {
     if v < 2 {
         return Ok(());
     }
-    u32s(cur)?;
+    cur.u32s()?;
     cur.u32()?;
     if v >= 9 {
         cur.bytes(5)?;
@@ -1291,7 +1276,7 @@ fn skip_organization_mind(cur: &mut Cursor) -> Result<()> {
     cur.bytes(9)?;
     if v >= 7 {
         cur.u8()?;
-        u32s(cur)?;
+        cur.u32s()?;
     }
     cur.u32()?;
     if v >= 14 {

@@ -90,12 +90,7 @@ impl MiscData {
                 .collect::<Result<_>>()?,
             pre_cutscene_game_speed: cur.f32()?,
             active_weather: cur.string()?,
-            ui_script_listens: (world_version >= 24)
-                .then(|| {
-                    let n = cur.u32()?;
-                    (0..n).map(|_| cur.string()).collect()
-                })
-                .transpose()?,
+            ui_script_listens: (world_version >= 24).then(|| cur.strings()).transpose()?,
             game_counter: (world_version >= 28)
                 .then(|| GameCounter::parse(cur))
                 .transpose()?,
@@ -122,10 +117,7 @@ impl MiscData {
             world_version >= 24,
             "ui_script_listens",
             self.ui_script_listens.as_ref(),
-            |names| {
-                w.u32(names.len() as u32);
-                names.iter().try_for_each(|name| w.string(name))
-            },
+            |names| w.strings(names),
         )?;
         optional(
             world_version >= 28,
