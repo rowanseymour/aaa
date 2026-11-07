@@ -3,8 +3,9 @@
 //! behind it while it's engaged and brackets around it while the cursor is
 //! on it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
+use aaa_data::Id;
 use aaa_map::Division;
 use aaa_render::camera::RtsCamera;
 use aaa_render::overlay::BannerImages;
@@ -35,6 +36,20 @@ pub struct Banner {
 #[derive(Resource)]
 pub struct Divisions(HashMap<u32, Division>);
 
+/// The templates of regiments that fly no banner and that players can't
+/// focus or select, such as animal herds.
+#[derive(Resource)]
+pub struct Scenery(HashSet<Id>);
+
+impl Scenery {
+    /// Whether the regiment at this index into the sim's regiments is
+    /// scenery.
+    pub fn has(&self, sim: &aaa_sim::World, regiment: usize) -> bool {
+        self.0
+            .contains(&Id::from(sim.regiments[regiment].template.as_str()))
+    }
+}
+
 /// Loads what banners are drawn with.
 pub fn setup_banners(
     mut commands: Commands,
@@ -44,16 +59,19 @@ pub fn setup_banners(
 ) {
     commands.insert_resource(BannerImages::load(&mut loaded.game, &mut images, formats.0));
     commands.insert_resource(Divisions(aaa_map::divisions(&loaded.map.things)));
+    commands.insert_resource(Scenery(loaded.game.scenery()));
 }
 
 /// Spawns a banner, hidden until [`show_banners`] places it, for each
 /// regiment that has none yet: those the map starts with and any raised
 /// since.
+#[allow(clippy::too_many_arguments)]
 pub fn add_banners(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
     sim: Res<Sim>,
     divisions: Res<Divisions>,
+    scenery: Res<Scenery>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
     mut have: bevy::prelude::Local<usize>,
@@ -81,6 +99,9 @@ pub fn add_banners(
     let new = sim.0.regiments.iter().enumerate().skip(*have);
     *have = sim.0.regiments.len();
     for (r, regiment) in new {
+        if scenery.has(&sim.0, r) {
+            continue;
+        }
         let [red, green, blue] = sim
             .0
             .sides
