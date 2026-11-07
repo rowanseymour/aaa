@@ -2,9 +2,6 @@
 //!
 //! It starts in the game's own view: the map seen corner-on from a fixed
 //! angle, which only pans and zooms. Tab frees it to rotate and tilt.
-//!
-//! Unzoomed, the game's camera sits `GAME_HEIGHT` above the point it looks
-//! at, and its field of view is the horizontal angle of a 4:3 view.
 
 use std::f32::consts::FRAC_PI_4;
 
@@ -18,7 +15,9 @@ use crate::terrain::world;
 
 const GAME_YAW: f32 = FRAC_PI_4;
 const GAME_PITCH: f32 = 40f32.to_radians();
+/// How far above the point it looks at the game's camera sits, unzoomed.
 const GAME_HEIGHT: f32 = 100.0;
+/// The game's field of view, as the horizontal angle of a 4:3 view.
 const GAME_FOV_4_3: f32 = 15f32.to_radians();
 
 /// How far the game lets you zoom in and out.
@@ -96,7 +95,7 @@ impl RtsCamera {
 
 /// Spawns the camera that looks at a map.
 pub fn spawn(commands: &mut Commands, cam: RtsCamera) {
-    // crate::light matches the game only without tonemapping.
+    // For crate::color_lights.
     commands.spawn((
         Camera3d::default(),
         Tonemapping::None,

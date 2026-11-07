@@ -131,7 +131,8 @@ fn target(size: UVec2) -> Image {
     image
 }
 
-/// Cameras can come and go, as with a change of screen, so this is every frame.
+/// Points every camera at the capture image; every frame, as cameras can come
+/// and go, as with a change of screen.
 ///
 /// UI goes to the top camera on the primary window by default, and there is
 /// none, so that camera is marked to draw it instead.

@@ -84,28 +84,13 @@ impl PartMaterial {
 
     /// A copy of the material of its own, to animate.
     fn copy(&self, assets: &mut ModelAssets) -> Self {
+        fn copy<M: Asset + Clone>(store: &mut Assets<M>, h: &Handle<M>) -> Handle<M> {
+            store.get(h).cloned().map_or(h.clone(), |m| store.add(m))
+        }
         match self {
-            PartMaterial::Standard(h) => PartMaterial::Standard(
-                assets
-                    .materials
-                    .get(h)
-                    .cloned()
-                    .map_or(h.clone(), |m| assets.materials.add(m)),
-            ),
-            PartMaterial::Glow(h) => PartMaterial::Glow(
-                assets
-                    .glow_materials
-                    .get(h)
-                    .cloned()
-                    .map_or(h.clone(), |m| assets.glow_materials.add(m)),
-            ),
-            PartMaterial::Team(h) => PartMaterial::Team(
-                assets
-                    .team_materials
-                    .get(h)
-                    .cloned()
-                    .map_or(h.clone(), |m| assets.team_materials.add(m)),
-            ),
+            PartMaterial::Standard(h) => PartMaterial::Standard(copy(assets.materials, h)),
+            PartMaterial::Glow(h) => PartMaterial::Glow(copy(assets.glow_materials, h)),
+            PartMaterial::Team(h) => PartMaterial::Team(copy(assets.team_materials, h)),
         }
     }
 }
@@ -133,7 +118,7 @@ enum Meshes {
 pub struct Footprint(pub Vec2);
 
 /// What a model's controllers do to one of its meshes.
-pub struct Animation {
+pub(crate) struct Animation {
     /// Moves the mesh's nearest animated ancestor, under `above`, its
     /// parent's transform in the model; the mesh is then built relative
     /// to that ancestor.
@@ -218,7 +203,11 @@ pub struct Models {
 }
 
 impl Models {
-    pub fn new(game: &mut GameData, formats: CompressedImageFormats, players: &[Player]) -> Self {
+    pub(crate) fn new(
+        game: &mut GameData,
+        formats: CompressedImageFormats,
+        players: &[Player],
+    ) -> Self {
         Models {
             views: game.views(),
             models: HashMap::new(),
@@ -324,7 +313,7 @@ impl Models {
     ) -> Placed {
         let owner = owner(thing).or(within);
         let view = match self.views.get(&Id::from(thing.template.as_str())) {
-            Some(Some(view)) if !view.models.is_empty() => view.clone(),
+            Some(Some(view)) => view.clone(),
             Some(None) => {
                 let members = thing.organization().map_or(&[][..], |o| &o.members);
                 return members
@@ -743,7 +732,7 @@ fn selection_box(nif: &Nif) -> Option<Vec2> {
 }
 
 /// The value cached for `key`, loading and caching it on first use.
-fn cached<T: Clone>(
+pub(crate) fn cached<T: Clone>(
     cache: &mut HashMap<String, Option<T>>,
     key: &str,
     load: impl FnOnce() -> Option<T>,
@@ -822,12 +811,12 @@ pub(crate) fn bevy_transform(t: &nif::Transform) -> Transform {
 
 /// Bevy asset stores the models are added to.
 pub struct ModelAssets<'a> {
-    pub meshes: &'a mut Assets<Mesh>,
-    pub materials: &'a mut Assets<StandardMaterial>,
-    pub glow_materials: &'a mut Assets<GlowMaterial>,
-    pub team_materials: &'a mut Assets<TeamMaterial>,
-    pub images: &'a mut Assets<Image>,
-    pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
+    pub(crate) meshes: &'a mut Assets<Mesh>,
+    pub(crate) materials: &'a mut Assets<StandardMaterial>,
+    pub(crate) glow_materials: &'a mut Assets<GlowMaterial>,
+    pub(crate) team_materials: &'a mut Assets<TeamMaterial>,
+    pub(crate) images: &'a mut Assets<Image>,
+    pub(crate) skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
 }
 
 /// The moving animation that best suits `speed`: the one whose stride

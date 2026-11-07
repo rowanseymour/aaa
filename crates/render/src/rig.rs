@@ -324,8 +324,6 @@ impl Nodes {
 }
 
 impl Rig {
-    /// Spawns the rig's nodes and meshes under `root`, posed `offset`
-    /// seconds into its animation.
     /// Its meshes' parts, in the order [`Rig::spawn`] takes their materials.
     pub fn parts(&self) -> impl Iterator<Item = &Part> {
         self.meshes.iter().map(|m| &m.part)
@@ -407,7 +405,7 @@ pub struct Playing {
     rig: Arc<Rig>,
     joints: Vec<Entity>,
     /// Into the current animation, in seconds, or world units moved while
-    /// moving; idling starts at an offset so neighbours don't move in step.
+    /// moving.
     time: f32,
     /// Speed in world units a second while moving.
     moving: Option<f32>,
@@ -425,7 +423,7 @@ struct Once {
 enum OnceClip {
     /// Index into [`Rig::abilities`].
     Ability(usize),
-    /// Index into [`Rig::deaths`], held at its end.
+    /// Index into [`Rig::deaths`].
     Death(usize),
 }
 

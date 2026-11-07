@@ -12,8 +12,6 @@ import bevy_pbr::render::{
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
 };
 
-const CELL_SIZE: f32 = 2.0;
-
 struct Layers {
     repeats: array<vec4<f32>, 256>,
     edge: vec4<f32>,
@@ -26,7 +24,7 @@ struct Layers {
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var masks_sampler: sampler;
 
 fn terrain(kind: u32, ground: vec2<f32>) -> vec3<f32> {
-    let uv = vec2(ground.x, -ground.y) * CELL_SIZE / layers.repeats[kind].xy;
+    let uv = vec2(ground.x, -ground.y) / layers.repeats[kind].xy;
     return textureSample(textures, textures_sampler, uv, kind).rgb;
 }
 
@@ -52,8 +50,8 @@ fn fragment(
 ) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
 
-    // Game space: x east, y north, in tiles.
-    let ground = vec2(in.world_position.x, -in.world_position.z) / CELL_SIZE;
+    // Game space: x east, y north.
+    let ground = vec2(in.world_position.x, -in.world_position.z);
     let kinds = vec4<u32>(round(in.color));
     let packed = vec2<u32>(round(in.uv_b));
     let m = vec3<u32>(packed.x % 512u, packed.x / 512u, packed.y);
@@ -66,7 +64,7 @@ fn fragment(
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
-    out.color = vec4(out.color.rgb * edge_light(ground * CELL_SIZE), out.color.a);
+    out.color = vec4(out.color.rgb * edge_light(ground), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

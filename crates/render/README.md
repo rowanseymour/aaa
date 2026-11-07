@@ -15,15 +15,15 @@ and the game can share.
   tall grass stand in the pose they were modelled in
 - Herds of animals, each animal where the map has it standing
 - Models' own keyframe and fade animations, such as waves rolling in to shore
-- Units and animals bending on their skeletons through their idle animation
+- Units and animals bending on their skeletons: idling, moving, attacking and
+  dying
+- Models painted in their owner's colour, and the game's additive glow
+- Hover marks, health bars and regiments' banners, in `overlay`
 - Lighting from the map's sun, combined the way the game's fixed-function
   renderer does
-- Simple markers where a model can't be drawn yet: magenta boxes for any
-  object that should have one, boxes in their nation's colour for units, red
-  pillars for start locations, and red boxes for objects without a model such
-  as sound emitters
+- Placeholder markers for objects without a drawable model
 
-Not yet: units' other animations, particle effects.
+`shot` captures a frame without a window. Particle effects aren't drawn.
 Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 

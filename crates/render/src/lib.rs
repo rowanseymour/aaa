@@ -1,7 +1,7 @@
 //! Draws Axis & Allies (2004) maps with Bevy: the ground and water, placed
 //! objects with the game's models, and an RTS camera to look at them with.
 
-pub mod blend;
+mod blend;
 pub mod camera;
 mod glow;
 pub mod models;
@@ -12,7 +12,7 @@ pub mod shot;
 mod team;
 pub mod terrain;
 mod textures;
-pub mod water;
+mod water;
 
 pub use rig::Playing;
 
@@ -51,7 +51,7 @@ pub enum Edge {
 
 impl Edge {
     /// Distance in from the map's edge that the fade to black takes.
-    pub fn fade(self) -> f32 {
+    pub(crate) fn fade(self) -> f32 {
         match self {
             Edge::Hard => 0.0,
             Edge::Fade => 2.0 * tgck::map::CELL_SIZE,
@@ -132,52 +132,39 @@ pub fn spawn_map(
     markers: bool,
     leave_out: impl Fn(&Thing) -> bool,
 ) -> Models {
-    let MapAssets {
-        meshes,
-        materials,
-        glow_materials,
-        team_materials,
-        ground_materials,
-        water_materials,
-        images,
-        skins,
-        formats,
-        edge,
-    } = assets;
-    let built = terrain::build(game, &map.ground, &map.terrain, images, edge.fade());
+    let built = terrain::build(
+        game,
+        &map.ground,
+        &map.terrain,
+        &mut assets.images,
+        assets.edge.fade(),
+    );
     if let Some((mesh, material)) = built.ground {
         commands.spawn((
             Name::new("ground"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(ground_materials.add(material)),
+            Mesh3d(assets.meshes.add(mesh)),
+            MeshMaterial3d(assets.ground_materials.add(material)),
             NotShadowCaster,
         ));
     }
     if let Some((mesh, material)) = built.water {
         commands.spawn((
             Name::new("water"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(water_materials.add(material)),
+            Mesh3d(assets.meshes.add(mesh)),
+            MeshMaterial3d(assets.water_materials.add(material)),
             NotShadowCaster,
             // Clicks go through to what's under the water.
             Pickable::IGNORE,
         ));
     }
-    let mut models = Models::new(game, formats.0, &map.players);
-    let mut model_assets = ModelAssets {
-        meshes,
-        materials,
-        glow_materials,
-        team_materials,
-        images,
-        skins,
-    };
+    let mut models = Models::new(game, assets.formats.0, &map.players);
     let rest = models.spawn(
         commands,
         game,
-        &mut model_assets,
+        &mut assets.models(),
         map.things.iter().filter(|t| !leave_out(t)),
     );
+    let (meshes, materials) = (&mut assets.meshes, &mut assets.materials);
     objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
     light(commands, &map.sun, map.ground.size());
     models
