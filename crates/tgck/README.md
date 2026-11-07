@@ -30,6 +30,9 @@ Maps/(3v3)Saint_lo.RMP: "Normandy Breakout"
   saved by 0.3.1.0 Dev AA Dev, weather none
   7288 objects, 52 templates: temperate_trees 2689, temperate_lake_ripples 1618, ...
   start locations: (299,349) (180,361) (134,239) (124,78) (410,45) (491,321)
+  actors by kingdom: 0 161, 27162 23, 20473 12, 27163 2, ...
+  kingdom kingdom_0 (id 27163): blue, team_0
+  ...
 ```
 
 Maps are inside `Data.rwd`; extract them first with `tgck extract Data.rwd out/ Maps/`.

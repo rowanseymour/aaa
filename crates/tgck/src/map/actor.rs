@@ -1,9 +1,8 @@
 //! Actors: the things made of components, such as units, buildings, herds and
 //! kingdoms. Their layout is the `actor` type in [`rmp.ksy`].
 //!
-//! Construction, Body, Mover, Properties, Organization, Element and City
-//! decode into types; the other components are read to their end and kept as bytes
-//! ([`Component::Framed`]).
+//! Components with a [`Component`] variant of their own decode into types;
+//! the others are read to their end and kept as bytes ([`Component::Framed`]).
 //! A record whose state doesn't decode to its exact end is kept whole
 //! ([`State::Raw`]), which only a record of known size allows.
 //!
@@ -18,9 +17,9 @@ use crate::{Cursor, Error, Result, Writer};
 #[derive(Debug, Clone, PartialEq)]
 pub struct Actor {
     pub version: u32,
-    /// The owning [`Kingdom`](super::Kingdom)'s [`Thing::id`]; 0 for none.
+    /// The owning [`Kingdom`](super::Kingdom)'s [`Thing::id`](super::Thing::id); 0 for none.
     pub kingdom: u32,
-    /// The states it's in, a bit each (see `actor_state` in [`rmp.ksy`]).
+    /// The states it's in, a bit each (see `actor_state` in `rmp.ksy`).
     pub states: u64,
     /// The components its template gives it, a bit each as in [`COMPONENTS`].
     pub template_components: u32,

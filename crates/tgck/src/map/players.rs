@@ -262,8 +262,7 @@ pub struct Kingdoms {
 /// A player, human or AI, or an independent power such as neutral civilians.
 #[derive(Debug, Clone)]
 pub struct Kingdom {
-    /// The shared fields; the detail is the [`Actor`], whose state holds its
-    /// Properties component's and its trailer, undecoded.
+    /// The shared fields; the detail is the kingdom's [`Actor`].
     pub thing: Thing,
     /// Present in maps saved from world version 22 on.
     pub updatable: Option<i32>,

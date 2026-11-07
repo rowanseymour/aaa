@@ -307,11 +307,9 @@ impl<'a> Reader<'a> {
         self.version == NETIMMERSE_VERSION
     }
     pub(crate) fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
-        let end = self.pos.checked_add(n).filter(|&e| e <= self.buf.len());
-        let end =
-            end.ok_or_else(|| Error::Corrupt(format!("truncated at byte {} (+{n})", self.pos)))?;
-        let s = &self.buf[self.pos..end];
-        self.pos = end;
+        self.ensure(n)?;
+        let s = &self.buf[self.pos..self.pos + n];
+        self.pos += n;
         Ok(s)
     }
     pub(crate) fn skip(&mut self, n: usize) -> Result<()> {
