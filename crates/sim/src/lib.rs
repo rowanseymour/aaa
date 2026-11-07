@@ -1670,4 +1670,44 @@ mod tests {
         assert_eq!(sides.relation(1, 3), Relation::Enemy);
         assert_eq!(sides.relation(3, 1), Relation::Neutral);
     }
+
+    /// Everything about a match that orders and ticks can change.
+    fn snapshot(w: &World) -> String {
+        let units: Vec<_> = w
+            .units
+            .iter()
+            .map(|u| (u.position, u.facing, u.health, u.target, u.shot, u.died))
+            .collect();
+        let regiments: Vec<_> = w
+            .regiments
+            .iter()
+            .map(|r| (r.position, r.facing, r.formation, r.order, &r.engaged))
+            .collect();
+        let buildings: Vec<_> = w
+            .buildings
+            .iter()
+            .map(|b| (b.owner, b.health, b.target, b.state, b.captured))
+            .collect();
+        format!("{:?}", (w.ticks, units, regiments, buildings))
+    }
+
+    #[test]
+    fn the_same_orders_play_out_the_same_way() {
+        let play = || {
+            let rifles = |n| (0..n).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
+            let mut w = battle(&[1, 2, 3, 2], rifles(4), at_war());
+            let house = building(20, 2, [30.0, 10.0]);
+            w.pathing.block(house.obstacle.as_ref().unwrap());
+            w.add_buildings(&[house]);
+            w.order_move(1, 0, [30.0, 30.0]).unwrap();
+            w.order_run(3, 2, [10.0, 50.0]).unwrap();
+            run(&mut w, 15.0);
+            w.order_move(2, 3, [20.0, 20.0]).unwrap();
+            run(&mut w, 30.0);
+            w
+        };
+        let (a, b) = (play(), play());
+        assert!(a.units.iter().any(|u| u.died.is_some()));
+        assert_eq!(snapshot(&a), snapshot(&b));
+    }
 }
