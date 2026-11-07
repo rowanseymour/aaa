@@ -201,6 +201,7 @@ const VERBS: &[Verb] = &[
         "template",
         "asks the selected building to commission a template it lists",
     ),
+    verb("pack", "", "packs up the selected building"),
     verb(
         "unpack",
         "x y",
@@ -336,6 +337,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "select" => select(world, &args),
                 "commission" => commission(world, &args),
                 "unpack" => unpack(world, &args),
+                "pack" => pack(world, &args),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
                 _ => unreachable!("{name} isn't handled"),
@@ -752,6 +754,7 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
         });
     }
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let scenery = world.resource::<crate::banners::Scenery>();
     if let [id] = args
         && let Some(b) = sim.buildings.iter().position(|b| b.id.to_string() == *id)
     {
@@ -770,7 +773,7 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
                 .iter()
                 .position(|r| r.id.to_string() == *id)
                 .ok_or_else(|| format!("no regiment {id}"))?;
-            match sim.commands(player, r) {
+            match sim.commands(player, r) && !scenery.has(sim, r) {
                 true => Ok(r),
                 false => Err(format!("regiment {id} isn't the player's to select")),
             }
@@ -807,6 +810,21 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
+fn pack(world: &mut World, args: &[&str]) -> Reply {
+    no_args(args)?;
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let b = world
+        .resource::<SelectedBuilding>()
+        .0
+        .ok_or("no building selected")?;
+    world
+        .resource_mut::<Sim>()
+        .0
+        .order_pack(player, b)
+        .map_err(|e| format!("refused: {e:?}"))?;
+    Ok(String::new())
+}
+
 fn unpack(world: &mut World, args: &[&str]) -> Reply {
     let [x, y] = args else {
         return Err(usage("unpack"));
@@ -838,11 +856,13 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
         return Err("takes 0 to 600 seconds".into());
     }
     let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
+    let mut chosen = world.resource::<SelectedBuilding>().0;
     let sim = &mut world.resource_mut::<Sim>().0;
     for _ in 0..(seconds / aaa_sim::TICK).round() as u32 {
-        crate::step_world(sim, &mut selected);
+        crate::step_world(sim, &mut selected, &mut chosen);
     }
     world.resource_mut::<Selected>().0 = selected;
+    world.resource_mut::<SelectedBuilding>().0 = chosen;
     Ok(String::new())
 }
 

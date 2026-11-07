@@ -12,7 +12,7 @@ pub use ground::{Ground, Tilt};
 pub use pathing::{Domain, Obstacle, Pathing};
 pub use tgck::map::Relation;
 pub use units::{
-    Division, Formation, Member, Player, Recruits, Regiment, Team, UNPACKED_FACING, Unpacks,
+    Division, Formation, Member, Packs, Player, Recruits, Regiment, Team, UNPACKED_FACING, Unpacks,
     divisions, owner, relation,
 };
 

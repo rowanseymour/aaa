@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use aaa_data::{GameData, Id};
-use aaa_map::{Division, Ground, Shape};
+use aaa_map::{Division, Ground, Shape, from_local};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler};
 use bevy::light::NotShadowCaster;
@@ -13,6 +13,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::TextureFormat;
 use nif::{Nif, Object};
+use tgck::map::CELL_SIZE;
 
 use crate::models::embedded_image;
 use crate::terrain::world;
@@ -274,9 +275,80 @@ pub fn mark_transform(
     }
 }
 
+/// A mark like [`mark_transform`]'s but laid over the ground point by point,
+/// in world space: across a building's footprint the ground bends too much
+/// for one plane to lie on it without floating somewhere.
+pub fn draped_square(ground: &Ground, position: [f32; 2], facing: [f32; 2], size: Vec2) -> Mesh {
+    let facing = Vec2::from(facing)
+        .try_normalize()
+        .unwrap_or(Vec2::NEG_Y)
+        .to_array();
+    // Finer than the ground's cells, so it bends where they do.
+    let steps = |len: f32| ((2.0 * len / CELL_SIZE).ceil() as u32).max(1);
+    let (nx, ny) = (steps(size.x), steps(size.y));
+    let mut positions = Vec::new();
+    let mut uvs = Vec::new();
+    for j in 0..=ny {
+        for i in 0..=nx {
+            let (u, v) = (i as f32 / nx as f32, j as f32 / ny as f32);
+            // The image's top is ahead.
+            let local = [(u - 0.5) * size.x, (0.5 - v) * size.y];
+            let [x, y] = from_local(position, facing, local);
+            positions.push(world(x, y, ground.height_at(x, y) + LIFT).to_array());
+            uvs.push([u, v]);
+        }
+    }
+    let at = |i: u32, j: u32| j * (nx + 1) + i;
+    let mut indices = Vec::new();
+    for j in 0..ny {
+        for i in 0..nx {
+            let (a, b, c, d) = (at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1));
+            indices.extend([a, c, b, a, d, c]);
+        }
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn draped_squares_follow_the_ground() {
+        // A ridge running across the middle of a 16x16 cell map.
+        let side = 17;
+        let heights = (0..side * side)
+            .map(|i| if i % side == 8 { 5.0 } else { 0.0 })
+            .collect();
+        let ground = Ground {
+            side,
+            heights,
+            water: vec![false; side * side],
+            surface: vec![0.0; side * side],
+        };
+        let mesh = draped_square(&ground, [16.0, 16.0], [0.0, 1.0], Vec2::splat(12.0));
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("no positions");
+        };
+        for p in positions {
+            let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
+            assert!((p[1] - ground.height_at(x, y) - LIFT).abs() < 1e-4);
+        }
+        // Its corners are at the size asked for, around the position.
+        let xs = positions.iter().map(|p| p[0]);
+        assert_eq!(xs.clone().fold(f32::MAX, f32::min), 10.0);
+        assert_eq!(xs.fold(f32::MIN, f32::max), 22.0);
+    }
 
     #[test]
     fn health_bars_empty_only_with_no_health_left() {

@@ -7,10 +7,10 @@
 
 pub mod path;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
 use aaa_map::pathing::tile_at;
-use aaa_map::{DeployPoints, Domain, Fighter, Id, Map, Obstacle, Pathing, Unpacks, Weapon};
+use aaa_map::{DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Unpacks, Weapon};
 
 pub use aaa_map::{Player, Relation, Team};
 
@@ -39,6 +39,8 @@ pub const PURSUIT_DRIFT: f32 = 0.14646;
 pub struct World {
     pub sides: Sides,
     pub pathing: Pathing,
+    /// What each building template packs into, for those that can.
+    pub packing: HashMap<String, Packs>,
     pub regiments: Vec<Regiment>,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
@@ -83,6 +85,8 @@ pub struct Regiment {
     pub unpacks: Option<Unpacks>,
     /// Where it's on its way to unpack.
     pub unpack_at: Option<[f32; 2]>,
+    /// The building it unpacked into, by index into [`World::buildings`].
+    pub unpacked_into: Option<usize>,
 }
 
 impl Regiment {
@@ -221,6 +225,8 @@ pub struct Building {
     /// The ticks it began and finishes unpacking on, for one that
     /// unpacked from a truck during the match.
     pub unpacking: Option<(u64, u64)>,
+    /// The ticks it began and finishes packing on.
+    pub packing: Option<(u64, u64)>,
     /// What it's been asked to commission, the one under way first.
     pub queue: VecDeque<Commission>,
     /// Ticks spent on the first of the queue.
@@ -247,6 +253,9 @@ pub enum State {
     Disabled,
     /// Out of health and gone, since the tick it fell on.
     Destroyed(u64),
+    /// Packed up and gone, since the tick it packed on, into the regiment
+    /// at this index into [`World::regiments`].
+    Packed(u64, usize),
 }
 
 /// Something a building has been asked to commission.
@@ -290,6 +299,16 @@ impl Building {
     /// Whether it still takes part: it can be hit and fire.
     pub fn standing(&self) -> bool {
         self.state == State::Standing
+    }
+
+    /// Whether it's left the map, destroyed or packed up.
+    pub fn gone(&self) -> bool {
+        matches!(self.state, State::Destroyed(_) | State::Packed(..))
+    }
+
+    /// Whether it's unpacking or packing, and so can't take orders.
+    pub fn busy(&self) -> bool {
+        self.unpacking.is_some() || self.packing.is_some()
     }
 
     /// How far a point is from it, to the edge of the ground it covers.
@@ -341,6 +360,7 @@ impl World {
             buildings: Vec::new(),
             ticks: 0,
             next_id: 1,
+            packing: HashMap::new(),
         };
         for regiment in regiments {
             world.add_regiment(regiment);
@@ -414,6 +434,7 @@ impl World {
             resume: None,
             unpacks: regiment.unpacks.clone(),
             unpack_at: None,
+            unpacked_into: None,
         });
         let ids = regiment.members.iter().map(|m| m.thing.id);
         self.next_id = ids
@@ -455,6 +476,7 @@ impl World {
                 members: Vec::new(),
                 obstacle: b.obstacle.clone(),
                 unpacking: None,
+                packing: None,
                 queue: VecDeque::new(),
                 progress: 0,
                 deploy: b.deploy,
@@ -682,6 +704,28 @@ impl World {
         }
     }
 
+    /// Starts a building packing into what it packs into, such as a
+    /// truck, dropping whatever it was asked to commission. Refused while
+    /// it's unpacking or packing, or too hurt to pack.
+    pub fn order_pack(&mut self, player: u32, building: usize) -> Result<(), Refused> {
+        let b = &self.buildings[building];
+        if b.owner != player || !b.standing() {
+            return Err(Refused::NotYours);
+        }
+        let Some(packs) = self.packing.get(&b.template) else {
+            return Err(Refused::Unable);
+        };
+        if b.busy() || b.health <= packs.health_min * b.fighter.health {
+            return Err(Refused::Unable);
+        }
+        let ticks = (packs.seconds / TICK).round() as u64;
+        let b = &mut self.buildings[building];
+        b.queue.clear();
+        b.progress = 0;
+        b.packing = Some((self.ticks, self.ticks + ticks));
+        Ok(())
+    }
+
     /// Asks a building to commission something once it's done with what
     /// it was asked for before.
     pub fn commission(
@@ -694,7 +738,7 @@ impl World {
         if b.owner != player || !b.standing() {
             return Err(Refused::NotYours);
         }
-        if b.deploy.is_none() || b.unpacking.is_some() {
+        if b.deploy.is_none() || b.busy() {
             return Err(Refused::Unable);
         }
         b.queue.push_back(commission);
@@ -787,7 +831,7 @@ impl World {
     fn produce(&mut self) {
         for b in 0..self.buildings.len() {
             let building = &mut self.buildings[b];
-            if !building.standing() || building.unpacking.is_some() {
+            if !building.standing() || building.busy() {
                 continue;
             }
             let (Some(first), Some(deploy)) = (building.queue.front(), building.deploy) else {
@@ -875,6 +919,7 @@ impl World {
                 self.pathing.block(o);
             }
             let b = self.buildings.len();
+            self.regiments[r].unpacked_into = Some(b);
             self.add_buildings(std::slice::from_ref(&building));
             let ticks = (unpacks.seconds / TICK).round() as u64;
             self.buildings[b].unpacking = Some((self.ticks, self.ticks + ticks));
@@ -886,6 +931,48 @@ impl World {
                 b.unpacking = None;
             }
         }
+        for b in 0..self.buildings.len() {
+            if let Some((_, end)) = self.buildings[b].packing
+                && self.ticks >= end
+            {
+                self.pack_up(b);
+            }
+        }
+    }
+
+    /// Takes a building that's done packing off the map, putting out what
+    /// it packs into where it stood, with the share of health it had.
+    fn pack_up(&mut self, b: usize) {
+        let building = &mut self.buildings[b];
+        building.packing = None;
+        if !building.standing() {
+            return;
+        }
+        let Some(packs) = self.packing.get(&building.template).cloned() else {
+            return;
+        };
+        let share = building.health / building.fighter.health;
+        let at = building.position;
+        let owner = building.owner;
+        if let Some(o) = building.obstacle.clone() {
+            self.pathing.unblock(&o);
+        }
+        let mut truck = packs.truck;
+        truck.owner = owner;
+        let ids = truck.members.len() as u32 + u32::from(!truck.lone());
+        truck.renumber(self.take_ids(ids));
+        truck.place(
+            [at[0] + packs.offset[0], at[1] + packs.offset[1]],
+            packs.facing,
+        );
+        let r = self.add_regiment(&truck);
+        for u in self.regiments[r].units.clone() {
+            let unit = &mut self.units[u];
+            if let Some(f) = &unit.fighter {
+                unit.health = f.health * share;
+            }
+        }
+        self.buildings[b].state = State::Packed(self.ticks, r);
     }
 
     /// Ends the engagements whose enemies are gone, then engages regiments
@@ -1519,7 +1606,7 @@ impl World {
     /// holding it has none of its own there to keep it.
     fn occupy(&mut self) {
         for c in 0..self.buildings.len() {
-            let destroyed = matches!(self.buildings[c].state, State::Destroyed(_));
+            let destroyed = self.buildings[c].gone();
             let Some(zone) = self.buildings[c].zone.filter(|_| !destroyed) else {
                 continue;
             };
@@ -2712,5 +2799,54 @@ mod tests {
         run(&mut w, 5.0);
         assert!(w.units[0].alive());
         assert_eq!(w.buildings.len(), 1);
+    }
+
+    #[test]
+    fn buildings_pack_back_into_their_trucks() {
+        let mut w = headquarters();
+        w.packing.insert(
+            "depot".into(),
+            Packs {
+                truck: truck(),
+                offset: [0.0, 0.0],
+                facing: [1.0, 0.0],
+                seconds: 7.0,
+                health_min: 0.5,
+            },
+        );
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        w.order_unpack(1, r, [30.0, 40.0]).unwrap();
+        run(&mut w, 4.0);
+        let depot = w.regiments[r].unpacked_into.unwrap();
+        // Not while it's unpacking, nor someone else's, nor what packs to
+        // nothing.
+        assert_eq!(w.order_pack(1, depot), Err(Refused::Unable));
+        run(&mut w, 7.0);
+        assert_eq!(w.order_pack(2, depot), Err(Refused::NotYours));
+        assert_eq!(w.order_pack(1, 0), Err(Refused::Unable));
+        let full = w.buildings[depot].health;
+        w.buildings[depot].health = full * 0.5;
+        assert_eq!(w.order_pack(1, depot), Err(Refused::Unable));
+        w.buildings[depot].health = full * 0.8;
+        w.order_pack(1, depot).unwrap();
+        run(&mut w, 6.9);
+        assert!(w.buildings[depot].standing());
+        assert!(!w.pathing.passable(15, 20, Domain::Land));
+        run(&mut w, 0.2);
+        let State::Packed(_, packed) = w.buildings[depot].state else {
+            panic!("not packed: {:?}", w.buildings[depot].state);
+        };
+        assert!(w.buildings[depot].gone());
+        assert!(w.pathing.passable(15, 20, Domain::Land));
+        let u = w.regiments[packed].units[0];
+        assert_eq!(w.regiments[packed].owner, 1);
+        assert!(near(w.units[u].position, [30.0, 40.0]));
+        assert!(near(w.units[u].facing, [1.0, 0.0]));
+        assert!((w.units[u].health - 80.0).abs() < 1e-3);
+        // And the truck can go and unpack again.
+        w.order_unpack(1, packed, [30.0, 60.0]).unwrap();
     }
 }

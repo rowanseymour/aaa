@@ -273,6 +273,16 @@ impl Models {
         rest
     }
 
+    /// The archive path of a template's picture in the interface, if it
+    /// has one.
+    pub fn icon(&self, template: &str) -> Option<&str> {
+        self.views
+            .get(&Id::from(template))?
+            .as_ref()?
+            .icon
+            .as_deref()
+    }
+
     /// The outline under which a template's models tilt to follow the
     /// ground, for [`pose`]; `None` for models that stay upright.
     pub fn conform(&self, template: &str) -> Option<Shape> {
@@ -333,23 +343,28 @@ impl Models {
         self.spawn_model(commands, game, assets, thing, Some(owner), &view, None)
     }
 
-    /// Spawns the model a building plays once as it unpacks, `into`
-    /// seconds in, painted in its owner's colour. `None` if it has none
-    /// that can be drawn.
-    pub fn spawn_unpacking(
+    /// Spawns the model a building plays once as it packs, or unpacks,
+    /// `into` seconds in, painted in its owner's colour. `None` if it has
+    /// none that can be drawn.
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_packing(
         &mut self,
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
         owner: u32,
+        unpacking: bool,
         into: f32,
     ) -> Option<Entity> {
         let view = self
             .views
             .get(&Id::from(thing.template.as_str()))?
             .clone()?;
-        let path = view.unpacking.clone()?;
+        let path = match unpacking {
+            true => view.unpacking.clone()?,
+            false => view.packing.clone()?,
+        };
         let model = self.own_animation(game, assets, &path, view.clone())?;
         if !matches!(model.meshes, Meshes::Rig(_)) {
             return None;
@@ -453,6 +468,8 @@ impl Models {
             animations: Vec::new(),
             conform: None,
             unpacking: None,
+            packing: None,
+            icon: None,
         };
         let model = self.own_animation(game, assets, path, view)?;
         let root = commands
