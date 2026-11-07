@@ -1,7 +1,7 @@
 //! Draws Axis & Allies (2004) maps with Bevy: the ground and water, placed
 //! objects with the game's models, and an RTS camera to look at them with.
 
-mod blend;
+pub mod blend;
 pub mod camera;
 mod glow;
 pub mod models;
@@ -12,7 +12,7 @@ pub mod shot;
 mod team;
 pub mod terrain;
 mod textures;
-mod water;
+pub mod water;
 
 pub use rig::Playing;
 
@@ -51,7 +51,7 @@ pub enum Edge {
 
 impl Edge {
     /// Distance in from the map's edge that the fade to black takes.
-    pub(crate) fn fade(self) -> f32 {
+    pub fn fade(self) -> f32 {
         match self {
             Edge::Hard => 0.0,
             Edge::Fade => 2.0 * tgck::map::CELL_SIZE,

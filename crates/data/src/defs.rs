@@ -1,5 +1,5 @@
 //! Typed forms of the game's `.tgi` blocks, named after the block kinds they
-//! read. Each holds only the keys something reads.
+//! read. Each holds only the keys something uses so far.
 
 use serde::Deserialize;
 
@@ -153,6 +153,8 @@ pub struct Modifier {
 /// What an object can do to others.
 #[derive(Debug, Clone, Deserialize)]
 pub struct PerformerComponent {
+    #[serde(default)]
+    pub check_damage_resistance: bool,
     #[serde(default)]
     pub ability: Vec<Ability>,
 }
@@ -342,11 +344,13 @@ pub struct Sun {
     pub ids: Option<Id>,
     pub diffuse: [f32; 3],
     pub ambient: [f32; 3],
+    pub specular: [f32; 3],
 }
 
 /// A nation players can play.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Nation {
+    pub ids: Option<Id>,
     /// The group of the templates it fields.
     pub placement_group_ids: Option<Id>,
     /// What its divisions wear on their banners, each division one.

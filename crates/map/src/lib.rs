@@ -13,20 +13,6 @@ pub use pathing::{Domain, Obstacle, Pathing};
 pub use tgck::map::Relation;
 pub use units::{Division, Formation, Member, Player, Recruits, Regiment, Team, divisions, owner};
 
-/// The point `right` and `ahead` of `origin` when facing `facing`, a unit
-/// vector.
-pub fn from_local(origin: [f32; 2], [fx, fy]: [f32; 2], [right, ahead]: [f32; 2]) -> [f32; 2] {
-    let [x, y] = origin;
-    [x + right * fy + ahead * fx, y - right * fx + ahead * fy]
-}
-
-/// How far `point` is to the right of `origin` and ahead of it when facing
-/// `facing`, a unit vector; the inverse of [`from_local`].
-pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 2] {
-    let (dx, dy) = (point[0] - origin[0], point[1] - origin[1]);
-    [dx * fy - dy * fx, dx * fx + dy * fy]
-}
-
 use aaa_data::GameData;
 use tgck::map::{Sun, Terrain, Thing};
 
@@ -36,6 +22,8 @@ pub struct Map {
     pub ground: Ground,
     pub terrain: Terrain,
     pub things: Vec<Thing>,
+    /// Which organization members' records depend on.
+    pub world_version: u32,
     pub sun: Sun,
     pub players: Vec<Player>,
     pub teams: Vec<Team>,
@@ -53,6 +41,7 @@ impl Map {
         let mountain = map.mountain_height_map().map_err(err)?;
         let terrain = map.terrain().map_err(err)?;
         let things = map.things().map_err(err)?;
+        let world_version = map.world_version().map_err(err)?;
         let bodies = game.bodies();
         // Movers don't block the ground they start on.
         let obstacles: Vec<(u32, Obstacle)> = things
@@ -102,7 +91,22 @@ impl Map {
             pathing,
             terrain,
             things,
+            world_version,
             sun: map.sun().map_err(err)?,
         })
     }
+}
+
+/// The point `right` and `ahead` of `origin` when facing `facing`, a unit
+/// vector.
+pub fn from_local(origin: [f32; 2], [fx, fy]: [f32; 2], [right, ahead]: [f32; 2]) -> [f32; 2] {
+    let [x, y] = origin;
+    [x + right * fy + ahead * fx, y - right * fx + ahead * fy]
+}
+
+/// How far `point` is to the right of `origin` and ahead of it when facing
+/// `facing`, a unit vector; the inverse of [`from_local`].
+pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 2] {
+    let (dx, dy) = (point[0] - origin[0], point[1] - origin[1]);
+    [dx * fy - dy * fx, dx * fx + dy * fy]
 }

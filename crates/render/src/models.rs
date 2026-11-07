@@ -118,7 +118,7 @@ enum Meshes {
 pub struct Footprint(pub Vec2);
 
 /// What a model's controllers do to one of its meshes.
-pub(crate) struct Animation {
+pub struct Animation {
     /// Moves the mesh's nearest animated ancestor, under `above`, its
     /// parent's transform in the model; the mesh is then built relative
     /// to that ancestor.
@@ -203,11 +203,7 @@ pub struct Models {
 }
 
 impl Models {
-    pub(crate) fn new(
-        game: &mut GameData,
-        formats: CompressedImageFormats,
-        players: &[Player],
-    ) -> Self {
+    pub fn new(game: &mut GameData, formats: CompressedImageFormats, players: &[Player]) -> Self {
         Models {
             views: game.views(),
             models: HashMap::new(),
@@ -811,12 +807,12 @@ pub(crate) fn bevy_transform(t: &nif::Transform) -> Transform {
 
 /// Bevy asset stores the models are added to.
 pub struct ModelAssets<'a> {
-    pub(crate) meshes: &'a mut Assets<Mesh>,
-    pub(crate) materials: &'a mut Assets<StandardMaterial>,
-    pub(crate) glow_materials: &'a mut Assets<GlowMaterial>,
-    pub(crate) team_materials: &'a mut Assets<TeamMaterial>,
-    pub(crate) images: &'a mut Assets<Image>,
-    pub(crate) skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
+    pub meshes: &'a mut Assets<Mesh>,
+    pub materials: &'a mut Assets<StandardMaterial>,
+    pub glow_materials: &'a mut Assets<GlowMaterial>,
+    pub team_materials: &'a mut Assets<TeamMaterial>,
+    pub images: &'a mut Assets<Image>,
+    pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
 }
 
 /// The moving animation that best suits `speed`: the one whose stride
