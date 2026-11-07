@@ -14,4 +14,4 @@ file of them or taking them from a socket.
 
 It has the same system requirements on Linux as [`aaa-editor`](../editor).
 
-Licensed under the [MIT license](../../LICENSE).
+Licensed under the [GNU GPL v3 or later](../../LICENSE).

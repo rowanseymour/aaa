@@ -68,4 +68,4 @@ Tested against all 1,842 `.tgi` files in the game: every file parses, the 14
 warnings all point at genuine mistakes in the data, and every file round-trips
 through `dump` unchanged.
 
-Licensed under the [MIT license](../../LICENSE).
+Licensed under the [GNU GPL v3 or later](../../LICENSE).

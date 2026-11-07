@@ -27,4 +27,4 @@ and the game can share.
 Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 
-Licensed under the [MIT license](../../LICENSE).
+Licensed under the [GNU GPL v3 or later](../../LICENSE).

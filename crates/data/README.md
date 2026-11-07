@@ -19,4 +19,4 @@ aaa-data coverage "/path/to/Axis and Allies 2004" Thing    # each key of one kin
 It has no Bevy dependency, so rendering, simulation and anything else built on
 the game's data can share it.
 
-Licensed under the [MIT license](../../LICENSE).
+Licensed under the [GNU GPL v3 or later](../../LICENSE).

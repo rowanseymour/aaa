@@ -94,4 +94,4 @@ Not affiliated with or endorsed by TimeGate Studios, Atari or Hasbro. Axis &
 Allies is a trademark of Hasbro, used here only to describe which game's files
 this tool reads.
 
-Licensed under the [MIT license](../../LICENSE).
+Licensed under the [GNU GPL v3 or later](../../LICENSE).

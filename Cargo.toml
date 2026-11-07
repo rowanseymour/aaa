@@ -6,7 +6,7 @@ resolver = "3"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT"
+license = "GPL-3.0-or-later"
 
 # Keep debug builds of the editor usable: optimise dependencies (Bevy) fully
 # and our own code a little.
