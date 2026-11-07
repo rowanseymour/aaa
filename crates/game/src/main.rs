@@ -6,8 +6,7 @@
 //! selection or take it out, or drag a box over several, with Shift to add
 //! them. Right-click the ground to send the selection there, keeping its
 //! regiments' places relative to each other and stopping to fight enemies on
-//! the way, or Alt+right-click to have it run there, ignoring them. The
-//! number keys pick the selection's formation, in the order each regiment's
+//! the way. The number keys pick the selection's formation, in the order each regiment's
 //! layout lists them, and the buttons in the corner give the selection the
 //! orders in [`actions`]. Clicking the minimap moves the camera there, and the
 //! key left of 1 opens a console for script commands. Units and buildings
@@ -980,12 +979,11 @@ fn select(
     }
 }
 
-/// Right click sends the selected regiments where it points, running with
-/// Alt, each keeping its place relative to the rest.
+/// Right click sends the selected regiments where it points, each keeping
+/// its place relative to the rest.
 #[allow(clippy::too_many_arguments)]
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
-    keys: Res<ButtonInput<KeyCode>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     loaded: Res<Loaded>,
@@ -994,7 +992,6 @@ fn command(
     selected: Res<Selected>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
-    mut sent: MessageWriter<waypoints::Sent>,
 ) {
     let Some(player) = local.0 else {
         return;
@@ -1008,17 +1005,8 @@ fn command(
     let Some(point) = pointed(&windows, &cameras, ground) else {
         return;
     };
-    let run = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-    let regiments = send(&mut sim.0, player, &selected.0, point, run, ground.size());
-    sent.write(waypoints::Sent {
-        to: point,
-        aim: match run {
-            true => actions::Aim::Run,
-            false => actions::Aim::Move,
-        },
-        regiments,
-    });
+    send(&mut sim.0, player, &selected.0, point, false, ground.size());
 }
 
 /// Plays the first of the regiments answering an order.
