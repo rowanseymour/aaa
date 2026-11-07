@@ -6,7 +6,7 @@ mod id;
 
 pub use id::Id;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
@@ -731,10 +731,18 @@ impl GameData {
     /// The archive path of the image on each organization template's
     /// banner, by template id.
     pub fn banner_icons(&mut self) -> HashMap<Id, String> {
+        self.by_template(|t| ui_path(t.view.as_ref()?.banner_icon.as_deref()?))
+    }
+
+    /// The organization templates that fly no banner, such as animal herds:
+    /// part of the scenery, which players can't pick.
+    pub fn scenery(&mut self) -> HashSet<Id> {
         self.by_template(|t| {
-            let icon = t.view.as_ref()?.banner_icon.as_deref()?;
-            Some(icon.trim_start_matches('/').to_string())
+            let icon = t.view.as_ref().and_then(|v| v.banner_icon.as_deref());
+            (t.organization_component.is_some() && icon.and_then(ui_path).is_none()).then_some(())
         })
+        .into_keys()
+        .collect()
     }
 
     /// The archive path of the image marking each template's objects on

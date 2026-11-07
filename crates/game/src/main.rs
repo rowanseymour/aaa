@@ -1155,6 +1155,7 @@ fn focus(
     )>,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
+    scenery: Res<banners::Scenery>,
     mut focus: ResMut<Focus>,
 ) {
     const REACH: f32 = 2.0;
@@ -1171,7 +1172,7 @@ fn focus(
         .0
         .units
         .iter()
-        .filter(|u| u.alive())
+        .filter(|u| u.alive() && !scenery.has(&sim.0, u.regiment))
         .map(|u| (u.regiment, near(u.position)))
         .filter(|(_, d)| *d < REACH)
         .min_by(|a, b| a.1.total_cmp(&b.1));
@@ -1205,6 +1206,7 @@ fn select(
     local: Res<Local>,
     focus: Res<Focus>,
     sim: Res<Sim>,
+    scenery: Res<banners::Scenery>,
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
     mut start: bevy::prelude::Local<Option<Vec2>>,
@@ -1291,7 +1293,11 @@ fn select(
         chosen.0 = None;
     }
     for r in 0..sim.0.regiments.len() {
-        if sim.0.commands(player, r) && !selected.0.contains(&r) && sim.0.survivors(r).any(inside) {
+        if sim.0.commands(player, r)
+            && !scenery.has(&sim.0, r)
+            && !selected.0.contains(&r)
+            && sim.0.survivors(r).any(inside)
+        {
             selected.0.push(r);
             chosen.0 = None;
         }
