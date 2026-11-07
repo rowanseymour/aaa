@@ -2787,6 +2787,9 @@ types:
           max: 3
       - id: badge
         type: s4
+        doc: |
+          Index into the HQ's nation's `[Badge]` list, worn on the banners of
+          the HQ and the organizations attached to it; -1 for none.
       - id: unknown1
         type: u4s
         if: version == 1

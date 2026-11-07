@@ -822,6 +822,14 @@ impl Thing {
             _ => None,
         }
     }
+
+    /// Which of its nation's division badges this thing wears as an HQ.
+    pub fn hq_badge(&self) -> Option<i32> {
+        match &self.detail {
+            Detail::Actor(actor) => actor.hq_badge(),
+            _ => None,
+        }
+    }
 }
 
 impl Detail {
