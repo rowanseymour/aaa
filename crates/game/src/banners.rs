@@ -11,6 +11,7 @@ use aaa_render::overlay::BannerImages;
 use aaa_render::terrain::world;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
+use bevy::ui::RelativeCursorPosition;
 
 use crate::{Focus, Loaded, Local, Screen, Sim, TINTS, tint};
 
@@ -93,6 +94,7 @@ pub fn add_banners(
             },
             Visibility::Hidden,
             Pickable::IGNORE,
+            RelativeCursorPosition::default(),
             DespawnOnExit(Screen::Match),
         ));
         let engaged = root
@@ -189,4 +191,18 @@ pub fn show_banners(
             }
         }
     }
+}
+
+/// The regiment whose banner the cursor is on, the nearest where they
+/// overlap.
+pub fn under_cursor(
+    banners: &Query<(&Banner, &RelativeCursorPosition, &ZIndex, &Visibility)>,
+) -> Option<usize> {
+    banners
+        .iter()
+        .filter(|(_, cursor, _, visibility)| {
+            cursor.cursor_over && **visibility != Visibility::Hidden
+        })
+        .max_by_key(|(_, _, z, _)| z.0)
+        .map(|(banner, ..)| banner.regiment)
 }
