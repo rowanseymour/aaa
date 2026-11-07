@@ -77,6 +77,42 @@ pub struct Thing {
     pub city_component: Option<CityComponent>,
     pub organization_component: Option<OrganizationComponent>,
     pub placement: Option<Placement>,
+    /// On entering and leaving the states named by each command's
+    /// `actor_state`.
+    #[serde(default)]
+    pub when_enter: Vec<Fxc>,
+    #[serde(default)]
+    pub when_leave: Vec<Fxc>,
+    #[serde(default)]
+    pub component: Vec<Component>,
+}
+
+/// A component named by its template, e.g. a doodad's
+/// `DisturbableDynamicDoodadComponent`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Component {
+    /// What it does when set off.
+    #[serde(default)]
+    pub action: Vec<Fxc>,
+}
+
+/// An effects command, run when the event its block is named after happens;
+/// its template sets its `type`. Declared in `Templates/template_fx.tgi`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Fxc {
+    /// E.g. `PLAY_SFX` or `CREATE_VFX`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    /// The [`Audio`] a `PLAY_SFX` plays.
+    pub audio_ids: Option<Id>,
+    /// Where it happens, e.g. `SELF` or `TARGET_GROUND`.
+    pub at: Option<String>,
+    pub looping: Option<bool>,
+    /// Seconds after the event.
+    pub delay: Option<f32>,
+    /// It runs on one in this many of the events, never for 0.
+    pub frequency: Option<u32>,
+    pub actor_state: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -189,6 +225,9 @@ pub struct AbilityDefinition {
     pub targets: Option<String>,
     #[serde(default)]
     pub effect: Vec<Effect>,
+    /// Run each time it's used.
+    #[serde(default)]
+    pub when_do: Vec<Fxc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -204,6 +243,10 @@ pub struct Effect {
 pub struct MoverComponent {
     /// World units a second.
     pub speed_max: Option<f32>,
+    #[serde(default)]
+    pub when_start_moving: Vec<Fxc>,
+    #[serde(default)]
+    pub when_stop_moving: Vec<Fxc>,
 }
 
 /// How a unit's model is animated.
@@ -264,6 +307,17 @@ pub struct View {
     pub texture_search_path: Vec<TextureSearchPath>,
     /// The image on an organization's banner.
     pub banner_icon: Option<String>,
+    #[serde(default)]
+    pub when_selected: Vec<Fxc>,
+    /// Given an order, or an order to attack.
+    #[serde(default)]
+    pub when_commanded: Vec<Fxc>,
+    #[serde(default)]
+    pub when_commanded_aggressive: Vec<Fxc>,
+    #[serde(default)]
+    pub when_created: Vec<Fxc>,
+    #[serde(default)]
+    pub when_destroyed: Vec<Fxc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -271,6 +325,31 @@ pub struct Aspect {
     pub model: Option<String>,
     #[serde(default)]
     pub texture_rename: Vec<TextureRename>,
+    #[serde(default)]
+    pub animation: Vec<ObjectAnimation>,
+}
+
+/// An animation of an aspect's model, as opposed to a unit's
+/// [`Animation`]s. Declared in `Templates/template_animation.tgi`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ObjectAnimation {
+    pub ids: Option<String>,
+    /// E.g. `RANDOM`, which plays every `start_min` to `start_max`
+    /// milliseconds, or `SELECTED`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub start_min: Option<f32>,
+    pub start_max: Option<f32>,
+    /// Played as it starts.
+    #[serde(default)]
+    pub play_sfx: Vec<PlaySfx>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PlaySfx {
+    pub sfx_ids: Option<Id>,
+    #[serde(default)]
+    pub looping: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -368,4 +447,42 @@ pub struct Badge {
 pub struct KingdomColor {
     pub ids: Option<Id>,
     pub color: [f32; 3],
+}
+
+/// A sound, speech or music the game plays by id. Its base templates are
+/// declared in `Templates/template_audio.tgi`, which documents the fields.
+/// Percentages and `NULL`s are left as written for [`crate::Audio`] to
+/// read.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Audio {
+    pub ids: Option<Id>,
+    /// `SOUND`, `SPEECH` or `MUSIC`.
+    pub category: Option<String>,
+    /// Comma separated file lists: one of the lead-ins plays first, then the
+    /// main files, then one of the fall-outs.
+    pub leadin: Option<String>,
+    pub files: Option<String>,
+    pub fallout: Option<String>,
+    pub priority: Option<String>,
+    pub control_flags: Option<String>,
+    pub world_flags: Option<String>,
+    pub who_flags: Option<String>,
+    /// How steeply it falls off, and the distance it is silent beyond.
+    pub range: Option<[f32; 2]>,
+    pub simultaneous_limit: Option<u32>,
+    pub volume: Option<String>,
+    pub volume_adjust: Option<String>,
+    pub pitch_adjust: Option<[String; 2]>,
+    pub delay_ms: Option<[f32; 2]>,
+    /// Seconds to fade in and out.
+    pub fade_time_s: Option<[f32; 2]>,
+    pub subtitle: Option<Subtitle>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Subtitle {
+    /// Seconds, 0 for the length of the audio.
+    pub duration: Option<f32>,
+    /// A localisation key, e.g. `#sounds_speech_tutorial_Subtitle_text`.
+    pub text: Option<String>,
 }

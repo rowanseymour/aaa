@@ -1224,6 +1224,7 @@ mod tests {
             }],
             animation: None,
             turret: false,
+            sounds: Vec::new(),
         }
     }
 
