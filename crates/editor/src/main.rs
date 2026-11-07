@@ -1,5 +1,5 @@
-//! Map editor for Axis & Allies (2004), which for now views maps, reading
-//! straight from the game's installed data files.
+//! Map editor for Axis & Allies (2004), which views maps, reading straight
+//! from the game's installed data files.
 
 use std::path::PathBuf;
 use std::process::ExitCode;

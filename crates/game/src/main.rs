@@ -8,13 +8,8 @@
 //! regiments' places relative to each other and stopping to fight enemies on
 //! the way, or Alt+right-click to have it run there, ignoring them. The
 //! number keys pick the selection's formation, in the order each regiment's
-//! layout lists them. Models wear their owner's colour and banners float over every
-//! regiment. Rings mark the units of the regiment under the cursor, and a
-//! square the building under it, green for your own; health bars show under
-//! the selected regiments' units. A minimap in the corner shows where
-//! everything is, and clicking it moves the camera there. The key left of 1
-//! opens a console for script commands, such as moving the camera or
-//! raising regiments.
+//! layout lists them. Clicking the minimap moves the camera there, and the
+//! key left of 1 opens a console for script commands.
 
 mod banners;
 mod console;
@@ -113,9 +108,8 @@ enum Focus {
     Building(usize),
 }
 
-/// The flat square marks are drawn on and their materials, by how the
-/// marked object's owner stands toward the player: theirs, friendly, or
-/// anyone else's.
+/// The flat square marks are drawn on and their materials, one per
+/// [`TINTS`].
 #[derive(Resource)]
 struct Marks {
     square: Handle<Mesh>,
