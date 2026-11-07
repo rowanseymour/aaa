@@ -1,5 +1,5 @@
-//! The game's data as a whole: access to the installed archive, and the
-//! definitions built from its files (terrain, object views, ...).
+//! The game's data as a whole: access to the installed archives, and the
+//! definitions built from their files (terrain, object views, ...).
 
 pub mod defs;
 mod id;
@@ -14,12 +14,19 @@ use std::path::{Path, PathBuf};
 use tgck::{Archive, Map};
 
 pub struct GameData {
-    data: Archive<BufReader<File>>,
-    /// Lower-case path to entry index.
-    paths: HashMap<String, usize>,
-    /// Lower-case file name to entry indices.
-    files: HashMap<String, Vec<usize>>,
+    archives: Vec<Archive<BufReader<File>>>,
+    /// Lower-case path to entry; where archives share a path the first wins.
+    paths: HashMap<String, EntryRef>,
+    /// Lower-case file name to entries.
+    files: HashMap<String, Vec<EntryRef>>,
 }
+
+/// An entry of one of [`GameData`]'s archives: `(archive, entry)` indices.
+type EntryRef = (usize, usize);
+
+/// The archives besides `Data.rwd` that are opened when present, in the
+/// order their paths are looked up.
+const EXTRA_ARCHIVES: [&str; 2] = ["Music.rwd", "Speech.rwd"];
 
 /// How a template is drawn: its models and where their textures are.
 #[derive(Debug, Clone)]
@@ -232,27 +239,146 @@ pub struct DepthColor {
     pub alpha: f32,
 }
 
+/// A sound, speech or music, as the game asks for it by id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Audio {
+    pub category: AudioCategory,
+    /// Archive paths: one of the lead-ins plays first, then the main files
+    /// (one, or all where [`AudioControl::all`]), then one of the fall-outs.
+    pub leadin: Vec<String>,
+    pub files: Vec<String>,
+    pub fallout: Vec<String>,
+    /// Files it names that aren't in the archives, as written.
+    pub missing: Vec<String>,
+    pub priority: AudioPriority,
+    pub control: AudioControl,
+    pub world: AudioWorld,
+    pub who: AudioWho,
+    /// How steeply it falls off with distance; lower is steeper.
+    pub falloff: f32,
+    /// The distance beyond which it can't be heard.
+    pub range: f32,
+    /// How many can play at once.
+    pub limit: u32,
+    /// Its loudness, 1 for full.
+    pub volume: f32,
+    /// Up to how much quieter each play is picked, as a fraction of
+    /// `volume`, 0 or less.
+    pub volume_adjust: f32,
+    /// The range each play's pitch is picked from, as deltas from 1.
+    pub pitch_adjust: [f32; 2],
+    /// The range each play's delay is picked from, in seconds.
+    pub delay: [f32; 2],
+    /// Seconds to fade in and out.
+    pub fade: [f32; 2],
+    /// The localisation key of the text shown while it plays.
+    pub subtitle: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioCategory {
+    Sound,
+    Speech,
+    Music,
+}
+
+/// Which plays win when there are more than channels to play them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AudioPriority {
+    Lowest,
+    Low,
+    Medium,
+    High,
+    Critical,
+}
+
+/// How an [`Audio`] is played.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioControl {
+    /// A new play takes over an old one when out of channels or at its limit.
+    pub interrupt: bool,
+    /// Its files are played in order instead of picked at random.
+    pub sequential: bool,
+    /// Each play plays all its files.
+    pub all: bool,
+    /// It is spoken by an object, which says one such at a time.
+    pub voice: bool,
+    /// It is heard from a place in the world.
+    pub world: bool,
+    /// It fades other kinds of audio down while it plays.
+    pub cause_fade: bool,
+    /// It is the sample played by the options' volume sliders.
+    pub test: bool,
+}
+
+/// How an [`Audio`] played in the world is heard.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioWorld {
+    /// From anywhere on the map, however far.
+    pub global: bool,
+    /// Not where the listener's fog covers it.
+    pub fogged: bool,
+}
+
+/// Who hears an [`Audio`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct AudioWho {
+    /// The local player, whom it is meant for.
+    pub local: bool,
+    /// Its owner, when they caused it.
+    pub player: bool,
+    pub allies: bool,
+    pub enemies: bool,
+}
+
 impl GameData {
-    /// Opens `Data.rwd` in the game's install directory.
+    /// Opens the archives in the game's install directory: `Data.rwd`, which
+    /// must be there, and the music and speech archives if they are.
     pub fn open(dir: &Path) -> Result<Self, String> {
-        let path = find_case_insensitive(dir, "Data.rwd")
+        let open =
+            |path: PathBuf| Archive::open(&path).map_err(|e| format!("{}: {e}", path.display()));
+        let data = find_case_insensitive(dir, "Data.rwd")
             .ok_or_else(|| format!("no Data.rwd in {}", dir.display()))?;
-        let data = Archive::open(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-        let mut paths = HashMap::new();
-        let mut files: HashMap<String, Vec<usize>> = HashMap::new();
-        for (i, e) in data.entries.iter().enumerate() {
-            let lower = e.name.to_ascii_lowercase();
-            let file = lower.rsplit('/').next().unwrap_or(&lower).to_string();
-            files.entry(file).or_default().push(i);
-            paths.insert(lower, i);
+        let mut archives = vec![open(data)?];
+        for name in EXTRA_ARCHIVES {
+            if let Some(path) = find_case_insensitive(dir, name) {
+                archives.push(open(path)?);
+            }
         }
-        Ok(GameData { data, paths, files })
+        let mut paths = HashMap::new();
+        let mut files: HashMap<String, Vec<EntryRef>> = HashMap::new();
+        for (a, archive) in archives.iter().enumerate() {
+            for (i, e) in archive.entries.iter().enumerate() {
+                let lower = e.name.to_ascii_lowercase();
+                let file = lower.rsplit('/').next().unwrap_or(&lower).to_string();
+                files.entry(file).or_default().push((a, i));
+                paths.entry(lower).or_insert((a, i));
+            }
+        }
+        Ok(GameData {
+            archives,
+            paths,
+            files,
+        })
     }
 
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
-        let i = *self.paths.get(&name.to_ascii_lowercase())?;
-        let entry = self.data.entries[i].clone();
-        self.data.read(&entry).ok()
+        let (a, i) = *self.paths.get(&name.to_ascii_lowercase())?;
+        let archive = &mut self.archives[a];
+        let entry = archive.entries[i].clone();
+        archive.read(&entry).ok()
+    }
+
+    /// Every entry's path, in archive order.
+    fn entries(&self) -> impl Iterator<Item = &str> {
+        self.archives
+            .iter()
+            .flat_map(|a| &a.entries)
+            .map(|e| e.name.as_str())
+    }
+
+    fn entry_name(&self, (a, i): EntryRef) -> &str {
+        &self.archives[a].entries[i].name
     }
 
     pub fn exists(&self, name: &str) -> bool {
@@ -261,11 +387,9 @@ impl GameData {
 
     /// Archive paths whose lower-case form passes `filter`.
     fn entry_names(&self, filter: impl Fn(&str) -> bool) -> Vec<String> {
-        self.data
-            .entries
-            .iter()
-            .map(|e| e.name.clone())
+        self.entries()
             .filter(|n| filter(&n.to_ascii_lowercase()))
+            .map(str::to_string)
             .collect()
     }
 
@@ -302,7 +426,7 @@ impl GameData {
         self.files
             .get(&name.to_ascii_lowercase())?
             .iter()
-            .map(|&i| self.data.entries[i].name.as_str())
+            .map(|&e| self.entry_name(e))
             .max_by_key(|p| shared(&p.to_ascii_lowercase()))
             .map(str::to_string)
     }
@@ -310,10 +434,7 @@ impl GameData {
     /// Archive paths of all maps, sorted.
     pub fn map_names(&self) -> Vec<&str> {
         let mut names: Vec<&str> = self
-            .data
-            .entries
-            .iter()
-            .map(|e| e.name.as_str())
+            .entries()
             .filter(|n| n.to_ascii_lowercase().ends_with(".rmp"))
             .collect();
         names.sort_by_key(|n| n.to_ascii_lowercase());
@@ -678,6 +799,7 @@ impl GameData {
                     .map(drop),
                 "nation" => coverage.read::<defs::Nation>(block, t).map(drop),
                 "kingdomcolor" => coverage.read::<defs::KingdomColor>(block, t).map(drop),
+                "audio" => coverage.read::<defs::Audio>(block, t).map(drop),
                 _ => {
                     coverage.skip(block, t);
                     continue;
@@ -710,6 +832,24 @@ impl GameData {
             .filter_map(|b| templates.deserialize::<defs::KingdomColor>(b).ok())
             .filter_map(|c| Some((c.ids?, c.color)))
             .collect()
+    }
+
+    /// Every sound, speech and music, by id.
+    pub fn audio(&mut self) -> HashMap<Id, Audio> {
+        let files = self.parse_tgis(|n| n.starts_with("audio/") || n.starts_with("templates/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Audio"))
+            .filter_map(|b| templates.deserialize::<defs::Audio>(b).ok())
+            .filter_map(|a| Some((a.ids.clone()?, audio(&a, |p| self.path(p))?)))
+            .collect()
+    }
+
+    /// An archive path as the archives spell it.
+    fn path(&self, path: &str) -> Option<String> {
+        let &entry = self.paths.get(&path.to_ascii_lowercase())?;
+        Some(self.entry_name(entry).to_string())
     }
 
     /// The transition masks of the first transition set, keyed by the
@@ -1018,6 +1158,130 @@ fn resolve(renames: &HashMap<Id, Id>, id: &Id) -> Id {
     id.clone()
 }
 
+/// An audio definition with its files found by `find`, which gives an
+/// archive path as the archives spell it.
+fn audio(a: &defs::Audio, find: impl Fn(&str) -> Option<String>) -> Option<Audio> {
+    let category = match a.category.as_deref()?.to_ascii_uppercase().as_str() {
+        "SOUND" => AudioCategory::Sound,
+        "SPEECH" => AudioCategory::Speech,
+        "MUSIC" => AudioCategory::Music,
+        _ => return None,
+    };
+    let mut missing = Vec::new();
+    let mut paths = |list: &Option<String>| -> Vec<String> {
+        let mut found = Vec::new();
+        for file in audio_files(list.as_deref()) {
+            match find(&audio_path(file)) {
+                Some(p) => found.push(p),
+                None => missing.push(file.to_string()),
+            }
+        }
+        found
+    };
+    let (leadin, files, fallout) = (paths(&a.leadin), paths(&a.files), paths(&a.fallout));
+    let priority = match a
+        .priority
+        .as_deref()
+        .map(str::to_ascii_uppercase)
+        .as_deref()
+    {
+        Some("LOWEST") => AudioPriority::Lowest,
+        Some("LOW") => AudioPriority::Low,
+        Some("HIGH") => AudioPriority::High,
+        Some("CRITICAL") => AudioPriority::Critical,
+        _ => AudioPriority::Medium,
+    };
+    let mut control = AudioControl::default();
+    for flag in flags(&a.control_flags) {
+        match flag.as_str() {
+            "INTERRUPT" => control.interrupt = true,
+            "SEQUENTIAL" => control.sequential = true,
+            "ALL" => control.all = true,
+            "VOICE" => control.voice = true,
+            "WORLD" => control.world = true,
+            "CAUSEFADE" => control.cause_fade = true,
+            "TESTSOUND" => control.test = true,
+            _ => {}
+        }
+    }
+    let mut world = AudioWorld::default();
+    for flag in flags(&a.world_flags) {
+        match flag.as_str() {
+            "GLOBAL" => world.global = true,
+            "FOGGED" => world.fogged = true,
+            _ => {}
+        }
+    }
+    let mut who = AudioWho::default();
+    for flag in flags(&a.who_flags) {
+        match flag.as_str() {
+            "LOCAL" => who.local = true,
+            "PLAYER" => who.player = true,
+            "ALLIES" => who.allies = true,
+            "ENEMIES" => who.enemies = true,
+            "EVERYONE" => (who.player, who.allies, who.enemies) = (true, true, true),
+            _ => {}
+        }
+    }
+    let [falloff, range] = a.range.unwrap_or([4.0, 64.0]);
+    let percents = |p: &Option<[String; 2]>| {
+        p.as_ref().map_or([0.0; 2], |[a, b]| {
+            [percent(a).unwrap_or(0.0), percent(b).unwrap_or(0.0)]
+        })
+    };
+    Some(Audio {
+        category,
+        leadin,
+        files,
+        fallout,
+        missing,
+        priority,
+        control,
+        world,
+        who,
+        falloff,
+        range,
+        limit: a.simultaneous_limit.unwrap_or(2),
+        volume: a.volume.as_deref().and_then(percent).unwrap_or(0.8),
+        volume_adjust: a.volume_adjust.as_deref().and_then(percent).unwrap_or(0.0),
+        pitch_adjust: percents(&a.pitch_adjust),
+        delay: a.delay_ms.unwrap_or_default().map(|ms| ms / 1000.0),
+        fade: a.fade_time_s.unwrap_or_default(),
+        subtitle: a.subtitle.as_ref().and_then(|s| s.text.clone()),
+    })
+}
+
+/// The archive path of a file an [`Audio`] names: from the root where it
+/// starts with a `/`, else from `Audio/`.
+fn audio_path(file: &str) -> String {
+    let file = file.replace('\\', "/");
+    match file.strip_prefix('/') {
+        Some(rooted) => rooted.to_string(),
+        None => format!("Audio/{file}"),
+    }
+}
+
+/// The files of an audio file list, which `NULL` leaves empty.
+fn audio_files(list: Option<&str>) -> impl Iterator<Item = &str> {
+    list.into_iter()
+        .flat_map(|l| l.split(','))
+        .map(str::trim)
+        .filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("null"))
+}
+
+/// The upper-case flags of a comma separated list.
+fn flags(list: &Option<String>) -> Vec<String> {
+    audio_files(list.as_deref())
+        .map(str::to_ascii_uppercase)
+        .collect()
+}
+
+/// A percentage as a fraction, e.g. `80%` as 0.8; the `%` is optional.
+fn percent(text: &str) -> Option<f32> {
+    let n: f32 = text.trim().trim_end_matches('%').trim().parse().ok()?;
+    Some(n / 100.0)
+}
+
 /// A map's file name without its `.rmp` extension.
 pub fn map_title(path: &str) -> &str {
     let file = path.rsplit('/').next().unwrap_or(path);
@@ -1124,6 +1388,71 @@ mod tests {
             layout.formations[0].slots,
             [vec![[-1.0, 1.0], [1.0, 1.0]], vec![[0.0, 0.0]]]
         );
+    }
+
+    #[test]
+    fn audio_takes_schema_defaults_and_finds_its_files() {
+        // Shaped like the game's schema: typed declarations with defaults.
+        let parsed = tgi::parse(
+            "[Template Audio]\n{\n\tstring IDS\n\tstring category\n\tstring files = NULL\n\
+             \tstring priority = MEDIUM\n\tstring control_flags = NULL\n\
+             \tstring who_flags = NULL\n\tpoint2 range = 4, 64\n\
+             \tint simultaneous_limit = 2\n\tfloat volume = 80%\n\
+             \tpoint2 pitch_adjust = 0%, 0%\n\tpoint2 delay_ms = 0, 0\n\
+             \t[optional Subtitle]\n\t{\n\t\tfixed duration = 0\n\t\tlocalized text\n\t}\n}\n\
+             [Template AudioSound inherit=Audio]\n{\n\tcategory = SOUND\n}\n\
+             [Audio Template=AudioSound]\n{\n\tIDS = tank_select\n\
+             \tfiles = Sounds/a.wav, sounds/B.wav,/Audio/Default/c.wav, Sounds/gone.wav\n\
+             \tpriority = high\n\tcontrol_flags = VOICE, SEQUENTIAL\n\
+             \twho_flags = LOCAL, EVERYONE\n\tvolume = 125%\n\
+             \tpitch_adjust = -5%, 5%\n\tdelay_ms = 0, 250\n}\n\
+             [Audio Template=AudioSound]\n{\n\tIDS = quiet\n\
+             \t[Subtitle]\n\ttext = \"#quiet_text\"\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let archive = [
+            "Audio/Sounds/a.wav",
+            "Audio/Sounds/b.wav",
+            "Audio/Default/c.wav",
+        ];
+        let find = |p: &str| {
+            archive
+                .iter()
+                .find(|a| a.eq_ignore_ascii_case(p))
+                .map(|a| a.to_string())
+        };
+        let mut blocks = parsed.root.blocks_of("Audio");
+        let mut next = || {
+            audio(
+                &templates.deserialize(blocks.next().unwrap()).unwrap(),
+                find,
+            )
+        };
+
+        let select = next().unwrap();
+        assert_eq!(select.category, AudioCategory::Sound);
+        assert_eq!(select.files, archive);
+        assert_eq!(select.missing, ["Sounds/gone.wav"]);
+        assert_eq!(select.priority, AudioPriority::High);
+        assert!(select.control.voice && select.control.sequential && !select.control.world);
+        let everyone = AudioWho {
+            local: true,
+            player: true,
+            allies: true,
+            enemies: true,
+        };
+        assert_eq!(select.who, everyone);
+        assert_eq!(select.volume, 1.25);
+        assert_eq!(select.pitch_adjust, [-0.05, 0.05]);
+        assert_eq!(select.delay, [0.0, 0.25]);
+
+        let quiet = next().unwrap();
+        assert!(quiet.files.is_empty() && quiet.missing.is_empty());
+        assert_eq!(quiet.priority, AudioPriority::Medium);
+        assert_eq!(quiet.control, AudioControl::default());
+        assert_eq!((quiet.falloff, quiet.range, quiet.limit), (4.0, 64.0, 2));
+        assert_eq!(quiet.volume, 0.8);
+        assert_eq!(quiet.subtitle.as_deref(), Some("#quiet_text"));
     }
 
     #[test]

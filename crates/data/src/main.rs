@@ -8,7 +8,8 @@ use tgi::de::Count;
 const USAGE: &str = "\
 usage:
   aaa-data coverage <game dir>          how much of each top-level block kind the definitions read
-  aaa-data coverage <game dir> <kind>   each key of one kind, e.g. Thing, with how often it is read";
+  aaa-data coverage <game dir> <kind>   each key of one kind, e.g. Thing, with how often it is read
+  aaa-data audio    <game dir> [filter] sounds, speech and music by id, with their files and any missing";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -20,6 +21,8 @@ fn main() -> ExitCode {
     {
         ["coverage", dir] => coverage(dir, None),
         ["coverage", dir, kind] => coverage(dir, Some(kind)),
+        ["audio", dir] => audio(dir, ""),
+        ["audio", dir, filter] => audio(dir, filter),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -79,6 +82,35 @@ fn coverage(dir: &str, kind: Option<&str>) -> Res {
             }
         }
     }
+    Ok(())
+}
+
+/// Each audio whose id contains `filter`, ignoring case.
+fn audio(dir: &str, filter: &str) -> Res {
+    let filter = filter.to_ascii_lowercase();
+    let mut audio: Vec<_> = GameData::open(dir.as_ref())?
+        .audio()
+        .into_iter()
+        .filter(|(id, _)| id.as_str().to_ascii_lowercase().contains(&filter))
+        .collect();
+    audio.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut missing = 0;
+    for (id, a) in &audio {
+        let files = [&a.leadin, &a.files, &a.fallout].map(|f| f.len());
+        outln!(
+            "{id}  {:?}  {} files",
+            a.category,
+            files.iter().sum::<usize>()
+        );
+        for f in a.leadin.iter().chain(&a.files).chain(&a.fallout) {
+            outln!("    {f}");
+        }
+        for f in &a.missing {
+            outln!("    missing: {f}");
+        }
+        missing += a.missing.len();
+    }
+    outln!("{} audio, {missing} missing files", audio.len());
     Ok(())
 }
 

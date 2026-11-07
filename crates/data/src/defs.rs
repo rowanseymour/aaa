@@ -369,3 +369,41 @@ pub struct KingdomColor {
     pub ids: Option<Id>,
     pub color: [f32; 3],
 }
+
+/// A sound, speech or music the game plays by id. Its base templates are
+/// declared in `Templates/template_audio.tgi`, which documents the fields.
+/// Percentages and `NULL`s are left as written for [`crate::Audio`] to
+/// read.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Audio {
+    pub ids: Option<Id>,
+    /// `SOUND`, `SPEECH` or `MUSIC`.
+    pub category: Option<String>,
+    /// Comma separated file lists: one of the lead-ins plays first, then the
+    /// main files, then one of the fall-outs.
+    pub leadin: Option<String>,
+    pub files: Option<String>,
+    pub fallout: Option<String>,
+    pub priority: Option<String>,
+    pub control_flags: Option<String>,
+    pub world_flags: Option<String>,
+    pub who_flags: Option<String>,
+    /// How steeply it falls off, and the distance it is silent beyond.
+    pub range: Option<[f32; 2]>,
+    pub simultaneous_limit: Option<u32>,
+    pub volume: Option<String>,
+    pub volume_adjust: Option<String>,
+    pub pitch_adjust: Option<[String; 2]>,
+    pub delay_ms: Option<[f32; 2]>,
+    /// Seconds to fade in and out.
+    pub fade_time_s: Option<[f32; 2]>,
+    pub subtitle: Option<Subtitle>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Subtitle {
+    /// Seconds, 0 for the length of the audio.
+    pub duration: Option<f32>,
+    /// A localisation key, e.g. `#sounds_speech_tutorial_Subtitle_text`.
+    pub text: Option<String>,
+}
