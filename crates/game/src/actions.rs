@@ -418,6 +418,7 @@ pub fn show(
 }
 
 /// A button pressed: gives its order, aims it or changes page.
+#[allow(clippy::too_many_arguments)]
 fn press(
     activate: On<Activate>,
     slots: Query<&Slot>,
@@ -426,6 +427,8 @@ fn press(
     local: Res<Local>,
     mut sim: ResMut<Sim>,
     mut page: ResMut<Page>,
+    time: Res<Time>,
+    mut sounds: ResMut<crate::sound::Sounds>,
 ) {
     let Ok(slot) = slots.get(activate.entity) else {
         return;
@@ -437,6 +440,7 @@ fn press(
         Entry::Order(i) => match ORDERS[i].1 {
             Some(Give::Aim(aim)) => *page = Page::Aiming(aim),
             Some(Give::Stop) => {
+                crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
                 for &r in &selected.0 {
                     let _ = sim.0.order_stop(player, r);
                 }
@@ -476,6 +480,8 @@ pub fn aim(
     selected: Res<Selected>,
     mut sim: ResMut<Sim>,
     mut page: ResMut<Page>,
+    time: Res<Time>,
+    mut sounds: ResMut<crate::sound::Sounds>,
 ) {
     let Page::Aiming(aim) = *page else {
         return;
@@ -493,6 +499,7 @@ pub fn aim(
     ) else {
         return;
     };
+    crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
     crate::send(
         &mut sim.0,
         player,

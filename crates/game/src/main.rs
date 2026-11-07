@@ -10,13 +10,15 @@
 //! number keys pick the selection's formation, in the order each regiment's
 //! layout lists them, and the buttons in the corner give the selection the
 //! orders in [`actions`]. Clicking the minimap moves the camera there, and the
-//! key left of 1 opens a console for script commands.
+//! key left of 1 opens a console for script commands. Units and buildings
+//! make their sounds as they're selected, ordered, move, fire and die.
 
 mod actions;
 mod banners;
 mod console;
 mod minimap;
 mod remote;
+mod sound;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -31,7 +33,7 @@ use aaa_render::overlay::{self, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET};
 use aaa_render::shot::{self, ShotPlugin};
 use aaa_render::terrain::{map_point, world};
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
-use aaa_sim::{Relation, State, TICK, World};
+use aaa_sim::{Relation, State, TICK, Target, World};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -135,6 +137,7 @@ struct UnitView {
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
     dead: bool,
+    moving: bool,
     /// The outline its model tilts on to follow the ground, if it does.
     conform: Option<Shape>,
 }
@@ -158,6 +161,7 @@ fn spawn_unit_view(
         unit,
         shot: None,
         dead: false,
+        moving: false,
         conform: models.conform(&thing.template),
     });
     true
@@ -172,6 +176,7 @@ struct BuildingView {
     placed: Vec3,
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
+    destroyed: bool,
 }
 
 /// Removes `flag` and the value after it from `args`; `None` if the value is
@@ -276,6 +281,7 @@ fn main() -> ExitCode {
     }
     app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
         .add_plugins(console::ConsolePlugin)
+        .add_plugins(sound::SoundPlugin)
         .insert_resource(console)
         .configure_sets(Update, camera::Controls.run_if(console::closed))
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
@@ -304,6 +310,7 @@ fn main() -> ExitCode {
             (
                 show_units,
                 show_buildings,
+                selection_sounds,
                 show_focus,
                 show_health.after(camera::Controls),
                 (banners::add_banners, banners::show_banners)
@@ -625,6 +632,7 @@ fn setup(
                     building: i,
                     placed: world(x, y, z),
                     shot: None,
+                    destroyed: false,
                 });
             }
             None => missing += 1,
@@ -644,6 +652,40 @@ fn setup(
     };
     camera::spawn(&mut commands, cam);
     commands.insert_resource(Drawn(models));
+    commands.insert_resource(sound::Sounds::new(game));
+}
+
+/// Plays the callout of a regiment newly added to the selection.
+fn selection_sounds(
+    selected: Res<Selected>,
+    sim: Res<Sim>,
+    time: Res<Time>,
+    mut sounds: ResMut<sound::Sounds>,
+    mut before: bevy::prelude::Local<Vec<usize>>,
+) {
+    if !selected.is_changed() {
+        return;
+    }
+    if let Some(&r) = selected.0.iter().find(|r| !before.contains(r)) {
+        let regiment = &sim.0.regiments[r];
+        let at = sim.0.centre(r);
+        sounds.cue(
+            &time,
+            &regiment.template,
+            |a| &a.selected,
+            at,
+            regiment.owner,
+        );
+    }
+    before.clone_from(&selected.0);
+}
+
+/// Where a shot's target stands.
+fn target_position(sim: &World, target: Target) -> [f32; 2] {
+    match target {
+        Target::Unit(u) => sim.units[u].position,
+        Target::Building(b) => sim.buildings[b].position,
+    }
 }
 
 fn step(mut sim: ResMut<Sim>, mut selected: ResMut<Selected>) {
@@ -663,6 +705,8 @@ fn show_units(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
     fixed: Res<Time<Fixed>>,
+    time: Res<Time>,
+    mut sounds: ResMut<sound::Sounds>,
     mut views: Query<(
         &mut UnitView,
         &mut Transform,
@@ -673,8 +717,16 @@ fn show_units(
     let t = fixed.overstep_fraction();
     for (mut view, mut transform, mut visibility, mut playing) in &mut views {
         let unit = &sim.0.units[view.unit];
+        let owner = sim.0.regiments[unit.regiment].owner;
         if !unit.alive() && !view.dead {
             view.dead = true;
+            sounds.cue(
+                &time,
+                &unit.template,
+                |a| &a.destroyed,
+                unit.position,
+                owner,
+            );
             let dies = playing.as_mut().is_some_and(|p| p.die(unit.id as usize));
             if !dies {
                 *visibility = Visibility::Hidden;
@@ -685,6 +737,10 @@ fn show_units(
             let weapon = unit
                 .shot
                 .and_then(|(_, w)| unit.fighter.as_ref()?.weapons.get(w));
+            if let (Some(w), Some(target)) = (weapon, unit.target) {
+                let to = target_position(&sim.0, target);
+                sounds.shot(&time, &w.sounds, unit.position, to, owner);
+            }
             if let (Some(p), Some(ids)) = (
                 playing.as_mut(),
                 weapon.and_then(|w| w.animation.as_deref()),
@@ -698,6 +754,14 @@ fn show_units(
             unit.facing,
             view.conform,
         );
+        if unit.alive() && unit.moving() != view.moving {
+            view.moving = unit.moving();
+            let event: fn(&aaa_data::ObjectAudio) -> &Vec<_> = match view.moving {
+                true => |a| &a.start_moving,
+                false => |a| &a.stop_moving,
+            };
+            sounds.cue(&time, &unit.template, event, unit.position, owner);
+        }
         if let Some(mut playing) = playing.filter(|_| unit.alive()) {
             let speed = sim.0.regiments[unit.regiment].speed;
             playing.set_moving(unit.moving().then_some(speed));
@@ -710,6 +774,8 @@ fn show_units(
 fn show_buildings(
     sim: Res<Sim>,
     fixed: Res<Time<Fixed>>,
+    time: Res<Time>,
+    mut sounds: ResMut<sound::Sounds>,
     mut views: Query<(
         &mut BuildingView,
         &mut Transform,
@@ -721,6 +787,11 @@ fn show_buildings(
     const SINK_DEPTH: f32 = 12.0;
     for (mut view, mut transform, mut visibility, playing) in &mut views {
         let building = &sim.0.buildings[view.building];
+        if let (State::Destroyed(_), false) = (building.state, view.destroyed) {
+            view.destroyed = true;
+            let (at, owner) = (building.position, building.owner);
+            sounds.cue(&time, &building.template, |a| &a.destroyed, at, owner);
+        }
         if let State::Destroyed(fell) = building.state {
             let since = (sim.0.ticks - fell) as f32 + fixed.overstep_fraction();
             let sunk = (since * TICK / SINK_TIME).min(1.0);
@@ -735,6 +806,10 @@ fn show_buildings(
             let weapon = building
                 .shot
                 .and_then(|(_, w)| building.fighter.weapons.get(w));
+            if let (Some(w), Some(target)) = (weapon, building.target) {
+                let to = target_position(&sim.0, target);
+                sounds.shot(&time, &w.sounds, building.position, to, building.owner);
+            }
             if let (Some(mut p), Some(ids)) = (playing, weapon.and_then(|w| w.animation.as_deref()))
             {
                 p.use_ability(ids);
@@ -912,6 +987,8 @@ fn command(
     local: Res<Local>,
     mut sim: ResMut<Sim>,
     selected: Res<Selected>,
+    time: Res<Time>,
+    mut sounds: ResMut<sound::Sounds>,
 ) {
     let Some(player) = local.0 else {
         return;
@@ -926,7 +1003,22 @@ fn command(
         return;
     };
     let run = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
     send(&mut sim.0, player, &selected.0, point, run, ground.size());
+}
+
+/// Plays the first of the regiments answering an order.
+fn acknowledge(
+    sim: &World,
+    sounds: &mut sound::Sounds,
+    time: &Time,
+    player: u32,
+    regiments: &[usize],
+) {
+    if let Some(&first) = regiments.first() {
+        let template = &sim.regiments[first].template;
+        sounds.cue(time, template, |a| &a.commanded, sim.centre(first), player);
+    }
 }
 
 /// Sends regiments to a point, running or not, each keeping its place
