@@ -729,6 +729,7 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
         });
     }
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let scenery = world.resource::<crate::banners::Scenery>();
     if let [id] = args
         && let Some(b) = sim.buildings.iter().position(|b| b.id.to_string() == *id)
     {
@@ -747,7 +748,7 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
                 .iter()
                 .position(|r| r.id.to_string() == *id)
                 .ok_or_else(|| format!("no regiment {id}"))?;
-            match sim.commands(player, r) {
+            match sim.commands(player, r) && !scenery.has(sim, r) {
                 true => Ok(r),
                 false => Err(format!("regiment {id} isn't the player's to select")),
             }
