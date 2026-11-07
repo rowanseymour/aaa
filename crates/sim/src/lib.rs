@@ -352,6 +352,20 @@ impl World {
         units.iter().copied().filter(|&u| self.units[u].alive())
     }
 
+    /// Where a regiment is headed: where it stands once there, or, while
+    /// fighting on the way, where it carries on to after.
+    pub fn destination(&self, regiment: usize) -> [f32; 2] {
+        let r = &self.regiments[regiment];
+        r.resume.map_or(r.position, |(to, _)| to)
+    }
+
+    /// Whether a regiment is still on its way somewhere: moving, or
+    /// fighting before it carries on.
+    pub fn underway(&self, regiment: usize) -> bool {
+        let r = &self.regiments[regiment];
+        r.resume.is_some() || self.survivors(regiment).any(|u| self.units[u].moving())
+    }
+
     /// Whether a regiment has lost every member.
     pub fn destroyed(&self, regiment: usize) -> bool {
         self.survivors(regiment).next().is_none()
@@ -1457,6 +1471,31 @@ mod tests {
         assert!(near(w.units[1].position, [11.0, 12.0]));
         assert!(!w.units.iter().any(Unit::moving));
         assert!(w.order_stop(1, 0).is_err());
+    }
+
+    #[test]
+    fn regiments_are_underway_until_they_arrive() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        assert!(!w.underway(0));
+        w.order_move(7, 0, [10.0, 20.0]).unwrap();
+        assert!(w.underway(0));
+        assert!(near(w.destination(0), [10.0, 20.0]));
+        run(&mut w, 30.0);
+        assert!(!w.underway(0));
+        w.order_move(7, 0, [10.0, 5.0]).unwrap();
+        run(&mut w, 0.5);
+        w.order_stop(7, 0).unwrap();
+        assert!(!near(w.destination(0), [10.0, 5.0]));
+    }
+
+    #[test]
+    fn fighting_on_the_way_keeps_the_destination() {
+        let mut w = skirmish();
+        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        run(&mut w, 4.5);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert!(w.underway(0));
+        assert!(near(w.destination(0), [10.0, 50.0]));
     }
 
     #[test]
