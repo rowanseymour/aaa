@@ -20,7 +20,7 @@ real-time strategy game.
 | [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: sides and how they stand toward each other; regiments take their owner's orders, move in formation around what blocks them, fire on enemies in range until they're destroyed, and stop to fight enemies they meet unless told to run; buildings are captured, destroyed or disabled, and cities go to whoever holds them |
 | [`aaa‑render`](crates/render) | Draws maps with Bevy | Ground, water, models in their owner's colour and their animations, units idling, walking, attacking and dying, hover marks, health bars and regiments' banners; no particles |
 | [`aaa‑editor`](crates/editor) | Map editor built with Bevy | Views maps and inspects objects' records; no editing yet |
-| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Play one side: select your regiments, send them somewhere or run them there and change their formation; they fight enemies in range and take cities by holding them |
+| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Play one side: select your regiments, send them somewhere or run them there and change their formation; they fight enemies in range and take cities by holding them, with their sounds as they answer orders, move, fire and die |
 
 ## Building
 
