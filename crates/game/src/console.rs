@@ -188,8 +188,8 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "attack",
-        "regiment x y",
-        "sends a regiment, by its id, to x y, taking on enemies in reach on the way",
+        "regiment (x y | enemy)",
+        "sends a regiment, by its id, to x y, taking on enemies in reach on the way, or after an enemy regiment, by its id",
     ),
     verb(
         "select",
@@ -678,6 +678,9 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
 
 /// Gives a regiment an order at a place, marked as if clicked there.
 fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
+    if let (Aim::Attack, [id, enemy]) = (aim, args) {
+        return pursue(world, id, enemy);
+    }
     let [id, x, y] = args else {
         return Err(usage(match aim {
             Aim::Attack => "attack",
@@ -703,9 +706,31 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     };
     ordered.map_err(|_| format!("regiment {id} is destroyed"))?;
     world.write_message(Sent {
-        to: point,
+        to: Some(point),
         aim,
         regiments: vec![(r, point)],
+    });
+    Ok(String::new())
+}
+
+/// Sends a regiment after an enemy regiment, both by their ids.
+fn pursue(world: &mut World, id: &str, enemy: &str) -> Reply {
+    let sim = &mut world.resource_mut::<Sim>().0;
+    let find = |id: &str| {
+        sim.regiments
+            .iter()
+            .position(|r| r.id.to_string() == id)
+            .ok_or_else(|| format!("no regiment {id}"))
+    };
+    let (r, e) = (find(id)?, find(enemy)?);
+    let there = sim.centre(e);
+    let owner = sim.regiments[r].owner;
+    sim.order_pursue(owner, r, e)
+        .map_err(|e| format!("refused: {e:?}"))?;
+    world.write_message(Sent {
+        to: None,
+        aim: Aim::Attack,
+        regiments: vec![(r, there)],
     });
     Ok(String::new())
 }
@@ -797,7 +822,7 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
         .order_unpack(player, r, point)
         .map_err(|e| format!("refused: {e:?}"))?;
     world.write_message(crate::waypoints::Sent {
-        to: at,
+        to: Some(at),
         aim: crate::actions::Aim::Unpack,
         regiments: vec![(r, at)],
     });

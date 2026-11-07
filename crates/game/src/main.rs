@@ -1282,7 +1282,7 @@ fn command(
         ground.size(),
     );
     sent.write(waypoints::Sent {
-        to: point,
+        to: Some(point),
         aim: actions::Aim::Move,
         regiments,
     });

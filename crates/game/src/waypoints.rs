@@ -22,10 +22,11 @@ use crate::{Drawn, Loaded, Screen, Sim, minimap};
 /// Regiments, each with the spot it was sent to.
 type Spots = Vec<(usize, [f32; 2])>;
 
-/// Regiments sent to a place, each to its own spot around it.
+/// Regiments sent to a place, each to its own spot around it, or after an
+/// enemy, which marks nowhere.
 #[derive(Message)]
 pub struct Sent {
-    pub to: [f32; 2],
+    pub to: Option<[f32; 2]>,
     pub aim: Aim,
     pub regiments: Spots,
 }
@@ -197,16 +198,16 @@ pub fn mark(
 /// Where to put waypoints for regiments sent somewhere, each with the
 /// regiments it's for: at each one's spot, or once where they were sent.
 fn places(sent: &Sent, each: bool) -> Vec<([f32; 2], Spots)> {
-    if sent.regiments.is_empty() {
+    let Some(to) = sent.to.filter(|_| !sent.regiments.is_empty()) else {
         return Vec::new();
-    }
+    };
     match each {
         true => sent
             .regiments
             .iter()
             .map(|&(r, to)| (to, vec![(r, to)]))
             .collect(),
-        false => vec![(sent.to, sent.regiments.clone())],
+        false => vec![(to, sent.regiments.clone())],
     }
 }
 
@@ -233,7 +234,7 @@ mod tests {
     #[test]
     fn waypoints_mark_each_spot_or_the_one_place() {
         let sent = Sent {
-            to: [10.0, 10.0],
+            to: Some([10.0, 10.0]),
             aim: Aim::Move,
             regiments: vec![(0, [8.0, 10.0]), (1, [12.0, 10.0])],
         };
@@ -244,6 +245,12 @@ mod tests {
             places(&sent, false),
             vec![([10.0, 10.0], sent.regiments.clone())]
         );
+        let after = Sent {
+            to: None,
+            aim: Aim::Attack,
+            regiments: sent.regiments.clone(),
+        };
+        assert!(places(&after, false).is_empty());
         let none = Sent {
             regiments: Vec::new(),
             ..sent

@@ -593,7 +593,7 @@ pub fn show(
     let text = match (hovered, *page) {
         (Some(name), _) => name,
         (None, Page::Aiming(Aim::Unpack)) => "Left click where to unpack".into(),
-        (None, Page::Aiming(Aim::Attack)) => "Left click where to attack".into(),
+        (None, Page::Aiming(Aim::Attack)) => "Left click an enemy or where to attack".into(),
         (None, Page::Aiming(_)) => "Left click where to go".into(),
         (None, _) => String::new(),
     };
@@ -667,8 +667,9 @@ fn cancel_queued(
 }
 
 /// While an order is aimed, a left click on the map gives it there and a
-/// right click calls it off. Unpacking somewhere the building wouldn't fit
-/// waits for another click.
+/// right click calls it off. Attacking an enemy regiment sends the
+/// selected after it instead. Unpacking somewhere the building wouldn't
+/// fit waits for another click.
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -677,6 +678,7 @@ pub fn aim(
     loaded: Res<Loaded>,
     local: Res<Local>,
     selected: Res<Selected>,
+    focus: Res<crate::Focus>,
     mut sim: ResMut<Sim>,
     mut page: ResMut<Page>,
     time: Res<Time>,
@@ -699,6 +701,30 @@ pub fn aim(
     ) else {
         return;
     };
+    let enemy = match *focus {
+        crate::Focus::Regiment(e) if aim == Aim::Attack => {
+            let owner = sim.0.regiments[e].owner;
+            (sim.0.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(e)
+        }
+        _ => None,
+    };
+    if let Some(e) = enemy {
+        crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+        let there = sim.0.centre(e);
+        let regiments = selected
+            .0
+            .iter()
+            .filter(|&&r| sim.0.order_pursue(player, r, e).is_ok())
+            .map(|&r| (r, there))
+            .collect();
+        sent.write(crate::waypoints::Sent {
+            to: None,
+            aim,
+            regiments,
+        });
+        *page = Page::Orders;
+        return;
+    }
     let regiments = match aim {
         Aim::Unpack => {
             let &[r] = &selected.0[..] else {
@@ -723,7 +749,7 @@ pub fn aim(
         }
     };
     sent.write(crate::waypoints::Sent {
-        to: point,
+        to: Some(point),
         aim,
         regiments,
     });
