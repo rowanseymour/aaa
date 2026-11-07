@@ -1,6 +1,7 @@
 //! The minimap: the map drawn as a diamond on a black disc in the corner,
-//! turned the way the game camera sees it, with units and buildings in
-//! their owner's colour and the ground the camera sees outlined in white.
+//! turned the way the game camera sees it, with units and buildings
+//! coloured by how their owner stands toward the player and the ground
+//! the camera sees outlined in white.
 //! Clicking or dragging on it moves the camera there.
 
 use aaa_data::Id;
@@ -12,13 +13,12 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::RelativeCursorPosition;
 
-use crate::{Loaded, Sim};
+use crate::{Loaded, Sim, TINTS, tint};
 use aaa_sim::State;
 
-/// Width of the disc on screen, in logical pixels.
-const DISC: f32 = 260.0;
-/// Space between the disc's edge and the diamond's corners.
-const INSET: f32 = 12.0;
+/// Width of the disc on screen, in logical pixels, which the diamond's
+/// corners touch.
+const DISC: f32 = 236.0;
 /// Pixels across the minimap's image, enough for a sharp diamond on a
 /// high-density screen.
 const PIXELS: usize = 512;
@@ -99,7 +99,6 @@ pub fn spawn(
             bottom: px(12),
             width: px(DISC),
             height: px(DISC),
-            padding: UiRect::all(px(INSET)),
             border_radius: BorderRadius::MAX,
             ..default()
         },
@@ -174,6 +173,7 @@ fn water_depth(ground: &Ground, x: f32, y: f32, height: f32) -> Option<f32> {
 pub fn update(
     minimap: Res<Minimap>,
     sim: Res<Sim>,
+    local: Res<crate::Local>,
     cameras: Query<(&Camera, &RtsCamera)>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -186,9 +186,17 @@ pub fn update(
     pixels.copy_from_slice(&minimap.base);
     let mut canvas = Canvas(pixels);
     let to_px = |p: [f32; 2]| to_image(minimap.size, p) * PIXELS as f32;
+    // With nobody to play, there's no one to stand toward, so each side
+    // keeps its own colour.
     let colour = |owner: u32| {
-        let [r, g, b] = sim.0.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
-        let [r, g, b, _] = Color::srgb(r, g, b).to_srgba().to_u8_array();
+        let colour = match local.0 {
+            Some(_) => TINTS[tint(&sim.0, local.0, owner)],
+            None => {
+                let [r, g, b] = sim.0.sides.player(owner).map_or([1.0; 3], |p| p.rgb);
+                Color::srgb(r, g, b)
+            }
+        };
+        let [r, g, b, _] = colour.to_srgba().to_u8_array();
         [r, g, b]
     };
     for building in &sim.0.buildings {
@@ -320,8 +328,7 @@ fn clip(a: Vec2, b: Vec2, n: f32) -> Option<(Vec2, Vec2)> {
 /// Whether the pointer is off the minimap's disc, so clicks go to the map.
 pub fn pointer_away(views: Query<&RelativeCursorPosition, With<MinimapView>>) -> bool {
     views.iter().all(|v| match v.normalized {
-        // The disc reaches a little past the image on every side.
-        Some(p) => p.distance(Vec2::ZERO) > 0.5 * DISC / (DISC - 2.0 * INSET),
+        Some(p) => p.distance(Vec2::ZERO) > 0.5,
         None => true,
     })
 }
