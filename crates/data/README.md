@@ -6,8 +6,7 @@ object views, ...) from the parsed `.tgi` files. The format crates
 ([`tgck`](../tgck), [`tgi`](../tgi)) read single files; this crate knows how
 the game ties them together.
 
-The blocks it reads have typed forms in its `defs` module, which grow as more
-of the data is put to use.
+The blocks it reads have typed forms in its `defs` module.
 
 To see how much of the data those definitions read, and which keys they skip:
 

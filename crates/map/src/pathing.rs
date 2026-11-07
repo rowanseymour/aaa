@@ -32,16 +32,14 @@ pub struct Obstacle {
 impl Obstacle {
     /// How far a point is from the shape's edge; 0 within it.
     pub fn distance(&self, [x, y]: [f32; 2]) -> f32 {
-        let [px, py] = self.position;
-        let (dx, dy) = (x - px, y - py);
         // The shape's y axis runs along the facing.
-        let [fx, fy] = self.facing;
+        let [across, along] = crate::to_local(self.position, self.facing, [x, y]);
         match self.shape {
-            Shape::Point => dx.hypot(dy),
-            Shape::Circle { radius } => (dx.hypot(dy) - radius).max(0.0),
+            Shape::Point => across.hypot(along),
+            Shape::Circle { radius } => (across.hypot(along) - radius).max(0.0),
             Shape::Rect { width, height } => {
-                let across = (dx * fy - dy * fx).abs() - width / 2.0;
-                let along = (dx * fx + dy * fy).abs() - height / 2.0;
+                let across = across.abs() - width / 2.0;
+                let along = along.abs() - height / 2.0;
                 across.max(0.0).hypot(along.max(0.0))
             }
         }
@@ -92,13 +90,9 @@ impl Pathing {
 
     /// A map of one kind of tile, for tests and tools.
     pub fn uniform(side: usize, domain: Domain) -> Self {
-        let bits = match domain {
-            Domain::Land => LAND,
-            Domain::Naval => NAVAL,
-        };
         Pathing {
             side,
-            tiles: vec![bits; side * side],
+            tiles: vec![bits(domain); side * side],
             blockers: vec![0; side * side],
         }
     }
@@ -108,11 +102,7 @@ impl Pathing {
         let Some(i) = self.index(x, y) else {
             return false;
         };
-        let wanted = match domain {
-            Domain::Land => LAND,
-            Domain::Naval => NAVAL,
-        };
-        self.blockers[i] == 0 && self.tiles[i] & wanted != 0
+        self.blockers[i] == 0 && self.tiles[i] & bits(domain) != 0
     }
 
     /// Keeps movers off one tile.
@@ -144,7 +134,7 @@ impl Pathing {
     }
 }
 
-/// The tiles whose centres lie within half a tile's width of the
+/// The tiles whose centres lie within a quarter of a tile's width of the
 /// obstacle's shape, as the game blocks them: so shapes reaching no further
 /// than that from their middle cover none.
 fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
@@ -163,18 +153,27 @@ fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
         Shape::Circle { .. } => o.distance([wx, wy]) <= MARGIN,
         Shape::Rect { .. } => o.distance([wx, wy]) < MARGIN,
     };
-    let tile = |w: f32| (w / CELL_SIZE).floor() as i32;
     let extent = reach + MARGIN;
+    let (x0, y0) = tile_at([px - extent, py - extent]);
+    let (x1, y1) = tile_at([px + extent, py + extent]);
     let mut out = Vec::new();
-    for y in tile(py - extent)..=tile(py + extent) {
-        for x in tile(px - extent)..=tile(px + extent) {
-            let centre = |t: i32| (t as f32 + 0.5) * CELL_SIZE;
-            if covers(centre(x), centre(y)) {
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            let [cx, cy] = tile_centre(x, y);
+            if covers(cx, cy) {
                 out.push((x, y));
             }
         }
     }
     out
+}
+
+/// The tile bit a mover on `domain` needs.
+fn bits(domain: Domain) -> u8 {
+    match domain {
+        Domain::Land => LAND,
+        Domain::Naval => NAVAL,
+    }
 }
 
 /// The tile a world position lies in.
@@ -223,8 +222,9 @@ mod tests {
     }
 
     #[test]
-    fn shapes_reach_half_a_tile_beyond_their_edges() {
-        // 1.5 short of the next tiles' centres, and then 1.6.
+    fn shapes_reach_a_quarter_tile_beyond_their_edges() {
+        // Radii either side of 1.5, which leaves the next tiles' centres a
+        // quarter tile out.
         assert_eq!(
             blocked(Shape::Circle { radius: 1.4 }, [0.0, -1.0]),
             [(5, 5)]

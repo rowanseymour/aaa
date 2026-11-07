@@ -69,8 +69,7 @@ pub struct Body {
 pub struct Fighter {
     pub health: f32,
     pub defense: f32,
-    /// Whoever brings its health to nothing takes it over, unless it's a
-    /// city's centre, which changes hands by who holds its zone instead.
+    /// Whoever brings its health to nothing can take it over.
     pub capturable: bool,
     /// It's destroyed when its health runs out; otherwise it's disabled.
     pub destructible: bool,
@@ -100,14 +99,13 @@ pub struct Weapon {
     pub damage: Vec<Damage>,
     /// The ids of the animation its user plays to fire it.
     pub animation: Option<String>,
-    /// It's on a turret, which aims it without turning its user, so it can
-    /// fire while its user moves. Others fire only when it stands.
+    /// It's on a turret, which aims it without turning its user.
     pub turret: bool,
 }
 
 /// Which flags a target must have, and must not, for a weapon to fire on
-/// it. Besides a fighter's own [`Fighter::flags`], it has `enemy` or
-/// `friend` by its side.
+/// it. Besides a fighter's own [`Fighter::flags`], it has `enemy`, `friend`
+/// or `neutral` by how its side stands toward the firer's.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Targets {
     pub required: Vec<Id>,
@@ -438,24 +436,7 @@ impl GameData {
     /// How the objects of every template block and move, by template id,
     /// including the ids the game has since renamed.
     pub fn bodies(&mut self) -> HashMap<Id, Body> {
-        let files = self.parse_tgis(|_| true);
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        let mut out = HashMap::new();
-        for (_, parsed) in &files {
-            for block in parsed.root.blocks_of("Thing") {
-                let Some(id) = block.value("ids") else {
-                    continue;
-                };
-                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
-                    continue;
-                };
-                out.insert(Id::from(id), body(&thing));
-            }
-        }
-        if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Thing", |_| true);
-        }
-        out
+        self.by_template(|t| Some(body(t)))
     }
 
     /// How the objects of every template that can be hurt fight, by
@@ -469,24 +450,7 @@ impl GameData {
             .filter_map(|b| templates.deserialize::<defs::Property>(b).ok())
             .filter_map(|p| Some((p.ids.clone()?, p)))
             .collect();
-        let mut out = HashMap::new();
-        for (_, parsed) in &files {
-            for block in parsed.root.blocks_of("Thing") {
-                let Some(id) = block.value("ids") else {
-                    continue;
-                };
-                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
-                    continue;
-                };
-                if let Some(f) = fighter(&thing, &properties) {
-                    out.insert(Id::from(id), f);
-                }
-            }
-        }
-        if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Thing", |_| true);
-        }
-        out
+        self.things_by_template(&files, &templates, |t| fighter(t, &properties))
     }
 
     /// How far around them city centres hold sway, by template id, including
@@ -559,8 +523,18 @@ impl GameData {
     fn by_template<T: Clone>(&mut self, of: impl Fn(&defs::Thing) -> Option<T>) -> HashMap<Id, T> {
         let files = self.parse_tgis(|_| true);
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        self.things_by_template(&files, &templates, of)
+    }
+
+    /// [`GameData::by_template`] over files already parsed.
+    fn things_by_template<T: Clone>(
+        &mut self,
+        files: &[(String, tgi::Parsed)],
+        templates: &tgi::Templates,
+        of: impl Fn(&defs::Thing) -> Option<T>,
+    ) -> HashMap<Id, T> {
         let mut out = HashMap::new();
-        for (_, parsed) in &files {
+        for (_, parsed) in files {
             for block in parsed.root.blocks_of("Thing") {
                 let Some(id) = block.value("ids") else {
                     continue;
@@ -698,6 +672,12 @@ impl GameData {
                 "translate" => coverage.read::<defs::Translate>(block, None).map(drop),
                 "transitionset" => coverage.read::<defs::TransitionSet>(block, None).map(drop),
                 "sun" => coverage.read::<defs::Sun>(block, t).map(drop),
+                "property" => coverage.read::<defs::Property>(block, t).map(drop),
+                "organizationlayout" => coverage
+                    .read::<defs::OrganizationLayout>(block, t)
+                    .map(drop),
+                "nation" => coverage.read::<defs::Nation>(block, t).map(drop),
+                "kingdomcolor" => coverage.read::<defs::KingdomColor>(block, t).map(drop),
                 _ => {
                     coverage.skip(block, t);
                     continue;
