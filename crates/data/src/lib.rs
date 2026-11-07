@@ -186,6 +186,26 @@ pub enum Shape {
     },
 }
 
+/// An order the player can give, shown as one of the action buttons.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Command {
+    /// E.g. `move`, `kill`, `stop`.
+    pub ids: Id,
+    pub name: String,
+    /// Archive path of its icon.
+    pub icon: Option<String>,
+    /// Which button it takes, numbered across then down.
+    pub slot: Option<usize>,
+}
+
+/// How a formation shows on its button.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FormationLook {
+    pub name: String,
+    /// Archive path of its icon.
+    pub icon: Option<String>,
+}
+
 /// One texture variation of a terrain type, e.g. `temperate_grass01`.
 #[derive(Debug, Clone)]
 pub struct Variation {
@@ -678,6 +698,8 @@ impl GameData {
                     .map(drop),
                 "nation" => coverage.read::<defs::Nation>(block, t).map(drop),
                 "kingdomcolor" => coverage.read::<defs::KingdomColor>(block, t).map(drop),
+                "actorcommand" => coverage.read::<defs::ActorCommand>(block, t).map(drop),
+                "formation" => coverage.read::<defs::Formation>(block, t).map(drop),
                 _ => {
                     coverage.skip(block, t);
                     continue;
@@ -709,6 +731,64 @@ impl GameData {
             .flat_map(|(_, p)| p.root.blocks_of("KingdomColor"))
             .filter_map(|b| templates.deserialize::<defs::KingdomColor>(b).ok())
             .filter_map(|c| Some((c.ids?, c.color)))
+            .collect()
+    }
+
+    /// The orders the player can give, in the order the files list them.
+    pub fn commands(&mut self) -> Vec<Command> {
+        let strings = self.strings();
+        let files = self.parse_tgis(|n| n.starts_with("game/actor_commands"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("ActorCommand"))
+            .filter_map(|b| templates.deserialize::<defs::ActorCommand>(b).ok())
+            .filter_map(|c| {
+                let ids = c.ids?;
+                Some(Command {
+                    name: localized(&strings, c.name.as_deref()).unwrap_or(ids.to_string()),
+                    ids,
+                    icon: c.icon.as_deref().and_then(ui_path),
+                    slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
+                })
+            })
+            .collect()
+    }
+
+    /// How each formation shows on its button, by formation id.
+    pub fn formation_looks(&mut self) -> HashMap<Id, FormationLook> {
+        let strings = self.strings();
+        let files = self.parse_tgis(|n| n.starts_with("organizations/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut out = HashMap::new();
+        for (file, parsed) in &files {
+            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+            for block in parsed.root.blocks_of("Formation") {
+                let Ok(f) = templates.deserialize::<defs::Formation>(block) else {
+                    continue;
+                };
+                let Some(ids) = f.ids else {
+                    continue;
+                };
+                let icon = f.icon.as_deref().map(|i| match i.strip_prefix('/') {
+                    Some(abs) => abs.to_string(),
+                    None => format!("{dir}/{i}"),
+                });
+                let icon = icon.filter(|i| self.exists(i));
+                let name = localized(&strings, f.name.as_deref()).unwrap_or(ids.to_string());
+                out.insert(ids, FormationLook { name, icon });
+            }
+        }
+        out
+    }
+
+    /// The game's text in its default language, by key.
+    pub fn strings(&mut self) -> HashMap<String, String> {
+        let files = self.parse_tgis(|n| n.starts_with("localization/strings_"));
+        files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Text"))
+            .flat_map(text_strings)
             .collect()
     }
 
@@ -1032,9 +1112,56 @@ fn find_case_insensitive(dir: &Path, name: &str) -> Option<PathBuf> {
         .map(|e| e.path())
 }
 
+/// A `Text` block's strings by key, without the format a key may carry
+/// after a `|`.
+fn text_strings(block: &tgi::Block) -> impl Iterator<Item = (String, String)> + '_ {
+    block.fields().filter(|f| f.quoted).filter_map(|f| {
+        let key = f.key.split('|').next()?.to_ascii_lowercase();
+        Some((key, f.value.clone()?))
+    })
+}
+
+/// The text a `#` key names, or a name written out as is.
+fn localized(strings: &HashMap<String, String>, name: Option<&str>) -> Option<String> {
+    let name = name?;
+    match name.strip_prefix('#') {
+        Some(key) => strings.get(&key.to_ascii_lowercase()).cloned(),
+        None => Some(name.to_string()),
+    }
+}
+
+/// The archive path of an interface image, whose `%s` folder, for a
+/// screen size, is empty for the default images.
+fn ui_path(path: &str) -> Option<String> {
+    let path = path.split_whitespace().next()?;
+    (!path.eq_ignore_ascii_case("null"))
+        .then(|| path.replace("%s/", "").trim_start_matches('/').to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn commands_take_names_and_icons_from_the_interface() {
+        let parsed = tgi::parse(
+            "[Text language = default]\n{\n\tmove_name = \"Move\"\n\
+             \tcount|d = \"%d left\"\n}\n",
+        );
+        let block = parsed.root.blocks_of("Text").next().unwrap();
+        let strings: HashMap<String, String> = text_strings(block).collect();
+        assert_eq!(
+            localized(&strings, Some("#Move_name")).as_deref(),
+            Some("Move")
+        );
+        assert_eq!(localized(&strings, Some("Plain")).as_deref(), Some("Plain"));
+        assert_eq!(strings.get("count").map(String::as_str), Some("%d left"));
+        assert_eq!(
+            ui_path("/UI/%s/Game/ActionButtons/IconMove.png").as_deref(),
+            Some("UI/Game/ActionButtons/IconMove.png")
+        );
+        assert_eq!(ui_path("NULL"), None);
+    }
 
     #[test]
     fn renames() {

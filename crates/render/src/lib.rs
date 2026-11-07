@@ -11,7 +11,7 @@ mod rig;
 pub mod shot;
 mod team;
 pub mod terrain;
-mod textures;
+pub mod textures;
 pub mod water;
 
 pub use rig::Playing;
