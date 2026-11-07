@@ -129,7 +129,7 @@ pub fn cursor(
     page: Res<Page>,
     looks: Res<Looks>,
     time: Res<Time>,
-    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Grid>>,
+    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
     window: Single<(Entity, Option<&CursorIcon>), With<PrimaryWindow>>,
 ) {

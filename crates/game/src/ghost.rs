@@ -39,7 +39,7 @@ pub fn show(
     mut ghost: ResMut<Ghost>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
-    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Grid>>,
+    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
     mut transforms: Query<&mut Transform>,
 ) {

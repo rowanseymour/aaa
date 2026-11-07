@@ -4,7 +4,8 @@
 //! You play one of the map's sides, or watch, and the computer plays the rest. Click one of your units or its
 //! banner to select its regiment, Shift+click to add a regiment to the
 //! selection or take it out, or drag a box over several, with Shift to add
-//! them. Click one of your buildings to select it instead. The selection
+//! them, up to six at once. Click one of your buildings to select it
+//! instead; the [`pane`] along the bottom shows what's selected. The selection
 //! passes from a truck to the building it unpacks into, and back as the
 //! building packs up. Right-click the ground to send the selection there, keeping its
 //! regiments' places relative to each other and stopping to fight enemies on
@@ -21,6 +22,7 @@ mod ghost;
 mod lobby;
 mod menu;
 mod minimap;
+mod pane;
 mod presets;
 mod remote;
 mod sound;
@@ -364,6 +366,7 @@ fn main() -> ExitCode {
                 banners::setup_banners,
                 minimap::spawn,
                 actions::spawn,
+                pane::spawn,
                 waypoints::load,
                 console::start_scripts,
                 ready,
@@ -391,6 +394,7 @@ fn main() -> ExitCode {
                 minimap::steer.before(camera::Controls),
                 minimap::update.after(camera::Controls),
                 (actions::back_out, actions::show).chain(),
+                (pane::lay_out, pane::refresh).chain(),
                 (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain(),
@@ -1200,7 +1204,7 @@ fn select(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
-    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Grid>>,
+    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
     loaded: Res<Loaded>,
     local: Res<Local>,
     focus: Res<Focus>,
@@ -1256,7 +1260,8 @@ fn select(
                     Some(i) if adding => {
                         selected.0.remove(i);
                     }
-                    None if adding => selected.0.push(r),
+                    None if adding && selected.0.len() < pane::MAX_SELECTED => selected.0.push(r),
+                    None if adding => {}
                     _ => selected.0 = vec![r],
                 }
             }
@@ -1291,6 +1296,9 @@ fn select(
         chosen.0 = None;
     }
     for r in 0..sim.0.regiments.len() {
+        if selected.0.len() >= pane::MAX_SELECTED {
+            break;
+        }
         if sim.0.commands(player, r) && !selected.0.contains(&r) && sim.0.survivors(r).any(inside) {
             selected.0.push(r);
             chosen.0 = None;

@@ -61,6 +61,9 @@ pub struct View {
     pub unpacking: Option<String>,
     /// Archive path of the model a building plays once as it packs.
     pub packing: Option<String>,
+    /// Archive path of its picture in the interface, such as a unit's
+    /// portrait in its regiment's panel or a building's button.
+    pub icon: Option<String>,
 }
 
 /// An animation a template's models can play.
@@ -841,6 +844,17 @@ impl GameData {
         })
     }
 
+    /// The old ids of object templates the game has since renamed, which
+    /// maps may still use and the other methods answer for too.
+    pub fn renamed_things(&mut self) -> std::collections::HashSet<Id> {
+        let Some(bytes) = self.read("translate.tgi") else {
+            return Default::default();
+        };
+        // As in `add_renames`, including those a stray comment hides.
+        let translate = tgi::decode(&bytes).replace("/*", "").replace("*/", "");
+        renames(&translate, "Thing").into_keys().collect()
+    }
+
     /// Where what each template recruits appears, by template id.
     pub fn deploy_points(&mut self) -> HashMap<Id, DeployPoints> {
         self.by_template(|t| {
@@ -861,7 +875,10 @@ impl GameData {
             let view = t.view.as_ref();
             Some(Listing {
                 name: localized(&strings, t.name.as_deref())?,
-                icon: view.and_then(|v| ui_path(v.icon.as_deref()?)),
+                icon: view
+                    .and_then(|v| v.icon.as_deref())
+                    .filter(|i| i.to_ascii_lowercase().starts_with("/ui/"))
+                    .and_then(ui_path),
                 cost: t
                     .economy_component
                     .as_ref()
@@ -954,6 +971,17 @@ impl GameData {
                 .find_map(|a| a.model.as_deref().map(path))
                 .filter(|p| self.exists(p))
         };
+        // Interface images name their folder for a screen size `%s`;
+        // others take the resource prefix, a unit's `%sIcon.tga` say.
+        let icon = view
+            .icon
+            .as_deref()
+            .and_then(|i| match i.to_ascii_lowercase().starts_with("/ui/") {
+                true => ui_path(i),
+                false => Some(path(i)),
+            })
+            .or_else(|| (!prefix.is_empty()).then(|| path("%sIcon.tga")))
+            .filter(|p| self.exists(p));
         let unpacking = state_model("aspect_unpacking");
         let packing = state_model("aspect_packing");
         let aspects: Vec<String> = aspects
@@ -1019,6 +1047,7 @@ impl GameData {
             conform: conform(thing),
             unpacking,
             packing,
+            icon,
         })
     }
 
@@ -1880,6 +1909,7 @@ mod tests {
                 conform: None,
                 unpacking: None,
                 packing: None,
+                icon: None,
             })
         };
         let mut views: HashMap<Id, Option<View>> = [
