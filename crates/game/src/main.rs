@@ -1318,7 +1318,8 @@ fn select(
 }
 
 /// Right click sends the selected regiments where it points, each keeping
-/// its place relative to the rest.
+/// its place relative to the rest, or after the enemy regiment it's on,
+/// those that can't fight it going there instead.
 #[allow(clippy::too_many_arguments)]
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -1326,6 +1327,8 @@ fn command(
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     loaded: Res<Loaded>,
     local: Res<Local>,
+    focus: Res<Focus>,
+    looks: Res<waypoints::Looks>,
     mut sim: ResMut<Sim>,
     selected: Res<Selected>,
     time: Res<Time>,
@@ -1345,19 +1348,53 @@ fn command(
         return;
     };
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+    let mut moving = selected.0.clone();
+    if let Some(e) = enemy_at(&sim.0, player, *focus) {
+        let (pursuing, rest) = pursue(&mut sim.0, player, &selected.0, e);
+        sent.write(waypoints::Sent {
+            to: None,
+            aim: actions::Aim::Attack,
+            regiments: pursuing,
+        });
+        moving = rest;
+    }
     let regiments = send(
         &mut sim.0,
         player,
-        &selected.0,
+        &moving,
         point,
-        actions::Aim::Move,
+        (actions::Aim::Move, looks.together(actions::Aim::Move)),
         ground.size(),
     );
     sent.write(waypoints::Sent {
-        to: point,
+        to: Some(point),
         aim: actions::Aim::Move,
         regiments,
     });
+}
+
+/// The enemy regiment of `player`'s that `focus` is on, if it's one.
+fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
+    let Focus::Regiment(e) = focus else {
+        return None;
+    };
+    let owner = sim.regiments[e].owner;
+    (sim.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(e)
+}
+
+/// Sends regiments after the enemy regiment `e`. Returns those that went,
+/// each with where the enemy is, and those that can't.
+fn pursue(
+    sim: &mut World,
+    player: u32,
+    regiments: &[usize],
+    e: usize,
+) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
+    let there = sim.centre(e);
+    let (went, rest): (Vec<usize>, Vec<usize>) = regiments
+        .iter()
+        .partition(|&&r| sim.order_pursue(player, r, e).is_ok());
+    (went.into_iter().map(|r| (r, there)).collect(), rest)
 }
 
 /// Plays the first of the regiments answering an order.
@@ -1375,14 +1412,14 @@ fn acknowledge(
 }
 
 /// Gives regiments an order at a point, each keeping its place relative to
-/// the rest, within a map `size` across. Returns those that went, each with
-/// where to.
+/// the rest within a map `size` across, unless they all go `together` to
+/// the point itself. Returns those that went, each with where to.
 fn send(
     sim: &mut World,
     player: u32,
     regiments: &[usize],
     [px, py]: [f32; 2],
-    aim: actions::Aim,
+    (aim, together): (actions::Aim, bool),
     size: f32,
 ) -> Vec<(usize, [f32; 2])> {
     let centres: Vec<[f32; 2]> = regiments.iter().map(|&r| sim.centre(r)).collect();
@@ -1392,10 +1429,13 @@ fn send(
         .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
     let mut sent = Vec::new();
     for (&r, [x, y]) in regiments.iter().zip(centres) {
-        let target = [
-            (px + x - cx).clamp(0.0, size),
-            (py + y - cy).clamp(0.0, size),
-        ];
+        let target = match together {
+            true => [px, py],
+            false => [
+                (px + x - cx).clamp(0.0, size),
+                (py + y - cy).clamp(0.0, size),
+            ],
+        };
         let ordered = match aim {
             actions::Aim::Move => sim.order_move(player, r, target),
             actions::Aim::Attack => sim.order_attack(player, r, target),

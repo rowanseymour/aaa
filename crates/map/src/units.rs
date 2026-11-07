@@ -2,7 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aaa_data::{Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization};
+use aaa_data::{
+    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges,
+};
 use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
 
 use crate::buildings::Building;
@@ -168,6 +170,8 @@ pub struct Regiment {
     pub combat: Option<usize>,
     /// How far from where it stands it takes on enemies that fire on it.
     pub operational_range: Option<f32>,
+    /// Its zone of control's radius.
+    pub control_range: Option<f32>,
     /// The member whose position is the regiment's; without one, the
     /// members' average position is.
     pub primary: Option<usize>,
@@ -255,6 +259,9 @@ pub struct Formation {
     /// Per member, where it stands from the regiment's position: x to its
     /// right and y ahead.
     pub offsets: Vec<[f32; 2]>,
+    /// Whether a regiment standing or moving in it takes on enemies that
+    /// come within its operational range, or runs into.
+    pub aggressive: bool,
 }
 
 /// The owned organizations whose members can all move.
@@ -263,7 +270,7 @@ pub fn regiments(
     bodies: &HashMap<Id, Body>,
     fighters: &HashMap<Id, Fighter>,
     layouts: &HashMap<Id, Layout>,
-    operational_ranges: &HashMap<Id, f32>,
+    ranges: &HashMap<Id, Ranges>,
 ) -> Vec<Regiment> {
     things
         .iter()
@@ -277,9 +284,10 @@ pub fn regiments(
                 .collect::<Option<Vec<_>>>()?;
             let facing = facing(t);
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
-            let operational_range = operational_ranges
+            let ranges = ranges
                 .get(&Id::from(t.template.as_str()))
-                .copied();
+                .copied()
+                .unwrap_or_default();
             regiment(
                 t.id,
                 &t.template,
@@ -287,7 +295,7 @@ pub fn regiments(
                 facing,
                 members,
                 layout.map(|l| (l, &organization.slots[..])),
-                operational_range,
+                ranges,
             )
         })
         .collect()
@@ -346,7 +354,7 @@ fn regiment(
     facing: [f32; 2],
     members: Vec<Member>,
     layout: Option<(&Layout, &[String])>,
-    operational_range: Option<f32>,
+    ranges: Ranges,
 ) -> Option<Regiment> {
     if members.is_empty() {
         return None;
@@ -367,7 +375,8 @@ fn regiment(
         formations,
         formation,
         combat,
-        operational_range,
+        operational_range: ranges.operational,
+        control_range: ranges.control,
         primary,
         unpacks: None,
     })
@@ -380,7 +389,7 @@ pub struct Recruits {
     bodies: HashMap<Id, Body>,
     fighters: HashMap<Id, Fighter>,
     layouts: HashMap<Id, Layout>,
-    operational_ranges: HashMap<Id, f32>,
+    ranges: HashMap<Id, Ranges>,
     lists: HashMap<Id, Vec<Id>>,
     deployments: HashMap<Id, Deployment>,
     deploy_points: HashMap<Id, DeployPoints>,
@@ -396,13 +405,20 @@ impl Recruits {
             bodies: game.bodies(),
             fighters: game.fighters(),
             layouts: game.layouts(),
-            operational_ranges: game.operational_ranges(),
+            ranges: game.organization_ranges(),
             lists: game.recruit_lists(),
             deployments: game.deployments(),
             deploy_points: game.deploy_points(),
             recruit_times: game.recruit_times(),
             renamed: game.renamed_things(),
         }
+    }
+
+    fn ranges(&self, template: &str) -> Ranges {
+        self.ranges
+            .get(&Id::from(template))
+            .copied()
+            .unwrap_or_default()
     }
 
     /// Seconds commissioning or recruiting one of `template` takes.
@@ -573,7 +589,7 @@ impl Recruits {
                     .ok_or_else(|| format!("{element}, in {template}, can't move"))
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let operational_range = self.operational_ranges.get(&Id::from(template)).copied();
+        let ranges = self.ranges(template);
         let mut regiment = regiment(
             id,
             template,
@@ -581,7 +597,7 @@ impl Recruits {
             facing,
             members,
             Some((layout, &slots)),
-            operational_range,
+            ranges,
         )
         .ok_or_else(|| format!("{template} has no members"))?;
         regiment.place(position, facing);
@@ -625,11 +641,13 @@ impl Recruits {
             members: vec![member],
             formations: vec![Formation {
                 id: String::new(),
+                aggressive: false,
                 offsets: vec![[0.0, 0.0]],
             }],
             formation: 0,
             combat: None,
-            operational_range: self.operational_ranges.get(&Id::from(template)).copied(),
+            operational_range: self.ranges(template).operational,
+            control_range: self.ranges(template).control,
             primary: Some(0),
             unpacks: self.unpacks(template),
         })
@@ -650,6 +668,7 @@ fn arrange(
         .iter()
         .map(|f| Formation {
             id: f.id.to_string(),
+            aggressive: f.aggressive,
             offsets: f
                 .slots
                 .iter()
@@ -677,6 +696,7 @@ fn as_placed(members: &[Member], facing: [f32; 2]) -> Formation {
     });
     Formation {
         id: String::new(),
+        aggressive: false,
         offsets: members
             .iter()
             .map(|m| {
@@ -696,6 +716,7 @@ mod tests {
         // A front slot of two, an optional flank and the captain.
         let formation = |id: &str, dy: f32| LayoutFormation {
             id: Id::from(id),
+            aggressive: false,
             slots: vec![
                 vec![[-1.0, dy], [1.0, dy]],
                 vec![[3.0, 0.0]],
@@ -747,7 +768,7 @@ mod tests {
             ]),
             fighters: HashMap::new(),
             layouts: HashMap::from([(Id::from("line"), layout())]),
-            operational_ranges: HashMap::new(),
+            ranges: HashMap::new(),
             lists: HashMap::new(),
             deployments: HashMap::new(),
             deploy_points: HashMap::new(),
@@ -818,7 +839,7 @@ mod tests {
                 },
             )]),
             layouts: HashMap::new(),
-            operational_ranges: HashMap::new(),
+            ranges: HashMap::new(),
             lists: HashMap::new(),
             deployments: HashMap::from([
                 (

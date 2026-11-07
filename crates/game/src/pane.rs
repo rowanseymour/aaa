@@ -619,9 +619,10 @@ fn regiment_state(sim: &World, r: usize) -> Option<&'static str> {
     }
     Some(match () {
         _ if !regiment.engaged.is_empty() => "mind_engaged",
+        _ if matches!(regiment.order, Order::Pursue(_)) => "mind_attacking",
         _ if sim.underway(r) || regiment.unpack_at.is_some() => match regiment.order {
             Order::Run => "mind_retreating",
-            Order::Attack => "mind_attacking",
+            Order::Attack | Order::Pursue(_) => "mind_attacking",
             Order::Move => "mind_moving",
         },
         _ => "mind_resting",

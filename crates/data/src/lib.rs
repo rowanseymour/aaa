@@ -167,6 +167,15 @@ pub struct Damage {
     pub amount: f32,
 }
 
+/// How far around it an organization reaches.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Ranges {
+    /// How far from where it stands it takes on enemies that fire on it.
+    pub operational: Option<f32>,
+    /// Its zone of control's radius.
+    pub control: Option<f32>,
+}
+
 /// What an organization template, such as a regiment, is made of.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Organization {
@@ -197,6 +206,9 @@ pub struct Formation {
     /// The positions of each slot's members, as many as the slot holds:
     /// offsets from the primary slot's position, with 0,1 straight ahead.
     pub slots: Vec<Vec<[f32; 2]>>,
+    /// Whether a regiment standing or moving in it takes on enemies that
+    /// come within its operational range, or runs into.
+    pub aggressive: bool,
 }
 
 /// An outline centred on an object, in world units: an object's own scale
@@ -785,11 +797,16 @@ impl GameData {
         })
     }
 
-    /// How far from where they stand organizations take on enemies that
-    /// fire on them, by template id, including the ids the game has since
-    /// renamed.
-    pub fn operational_ranges(&mut self) -> HashMap<Id, f32> {
-        self.by_template(|t| t.organization_component.as_ref()?.operational_range)
+    /// Organizations' ranges, by template id, including the ids the game
+    /// has since renamed.
+    pub fn organization_ranges(&mut self) -> HashMap<Id, Ranges> {
+        self.by_template(|t| {
+            let o = t.organization_component.as_ref()?;
+            Some(Ranges {
+                operational: o.operational_range,
+                control: o.control_range,
+            })
+        })
     }
 
     /// What every organization template is made of, by template id,
@@ -936,11 +953,18 @@ impl GameData {
         let files =
             self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("templates/"));
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let aggressive: HashSet<Id> = files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Formation"))
+            .filter_map(|b| templates.deserialize::<defs::Formation>(b).ok())
+            .filter(|f| f.aggressive)
+            .filter_map(|f| f.ids)
+            .collect();
         files
             .iter()
             .flat_map(|(_, p)| p.root.blocks_of("OrganizationLayout"))
             .filter_map(|b| templates.deserialize::<defs::OrganizationLayout>(b).ok())
-            .filter_map(|l| Some((l.ids.clone()?, layout(&l)?)))
+            .filter_map(|l| Some((l.ids.clone()?, layout(&l, &aggressive)?)))
             .collect()
     }
 
@@ -1314,14 +1338,16 @@ impl GameData {
 
 /// A layout's formations, each with its positions given to the slots in
 /// turn: a slot takes the next position for its property.
-fn layout(l: &defs::OrganizationLayout) -> Option<Layout> {
+fn layout(l: &defs::OrganizationLayout, aggressive: &HashSet<Id>) -> Option<Layout> {
     let formations: Vec<Formation> = l
         .formation
         .iter()
         .filter_map(|f| {
+            let id = f.formation_ids.clone()?;
             Some(Formation {
-                id: f.formation_ids.clone()?,
+                aggressive: aggressive.contains(&id),
                 slots: slot_positions(&l.slot, f)?,
+                id,
             })
         })
         .collect();
@@ -1974,7 +2000,7 @@ mod tests {
         );
         let block = parsed.root.blocks_of("OrganizationLayout").next().unwrap();
         let l: defs::OrganizationLayout = tgi::from_block(block).unwrap();
-        let layout = layout(&l).unwrap();
+        let layout = layout(&l, &HashSet::new()).unwrap();
         assert_eq!(layout.default, 0);
         assert_eq!(layout.combat, Some(0));
         assert_eq!(layout.primary, Some(1));

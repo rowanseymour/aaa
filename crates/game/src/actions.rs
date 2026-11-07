@@ -562,7 +562,7 @@ pub fn show(
     let text = match (hovered, *page) {
         (Some(name), _) => name,
         (None, Page::Aiming(Aim::Unpack)) => "Left click where to unpack".into(),
-        (None, Page::Aiming(Aim::Attack)) => "Left click where to attack".into(),
+        (None, Page::Aiming(Aim::Attack)) => "Left click an enemy or where to attack".into(),
         (None, Page::Aiming(_)) => "Left click where to go".into(),
         (None, _) => String::new(),
     };
@@ -638,8 +638,9 @@ fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
 }
 
 /// While an order is aimed, a left click on the map gives it there and a
-/// right click calls it off. Unpacking somewhere the building wouldn't fit
-/// waits for another click.
+/// right click calls it off. Attacking an enemy regiment sends the
+/// selected after it instead. Unpacking somewhere the building wouldn't
+/// fit waits for another click.
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -648,6 +649,8 @@ pub fn aim(
     loaded: Res<Loaded>,
     local: Res<Local>,
     selected: Res<Selected>,
+    focus: Res<crate::Focus>,
+    looks: Res<crate::waypoints::Looks>,
     mut sim: ResMut<Sim>,
     mut page: ResMut<Page>,
     time: Res<Time>,
@@ -670,6 +673,17 @@ pub fn aim(
     ) else {
         return;
     };
+    if let Some(e) = crate::enemy_at(&sim.0, player, *focus).filter(|_| aim == Aim::Attack) {
+        crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+        let (regiments, _) = crate::pursue(&mut sim.0, player, &selected.0, e);
+        sent.write(crate::waypoints::Sent {
+            to: None,
+            aim,
+            regiments,
+        });
+        *page = Page::Orders;
+        return;
+    }
     let regiments = match aim {
         Aim::Unpack => {
             let &[r] = &selected.0[..] else {
@@ -688,13 +702,13 @@ pub fn aim(
                 player,
                 &selected.0,
                 point,
-                aim,
+                (aim, looks.together(aim)),
                 loaded.map.ground.size(),
             )
         }
     };
     sent.write(crate::waypoints::Sent {
-        to: point,
+        to: Some(point),
         aim,
         regiments,
     });

@@ -101,7 +101,7 @@ impl Map {
                 &bodies,
                 &fighters,
                 &game.layouts(),
-                &game.operational_ranges(),
+                &game.organization_ranges(),
             ),
             buildings: buildings::buildings(
                 &things,
