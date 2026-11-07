@@ -33,6 +33,9 @@ Requires Rust 1.88 or newer (1.97.1 for the Bevy crates). The `tgck`, `tgi`, `ni
 in `target/release/`. The editor has extra system requirements on Linux; see
 [its README](crates/editor/README.md).
 
+`./aaa.sh` builds and runs the game or the editor; run it with no arguments for
+usage.
+
 ## Legal
 
 Not affiliated with or endorsed by TimeGate Studios, Atari or Hasbro. Axis &
