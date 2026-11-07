@@ -425,6 +425,24 @@ impl World {
         Ok(())
     }
 
+    /// Halts a regiment, its members forming up around where they stand on
+    /// average, and drops where it was headed, so that once done with any
+    /// engagement it stays put.
+    pub fn order_stop(&mut self, player: u32, regiment: usize) -> Result<(), NotYours> {
+        if !self.commands(player, regiment) {
+            return Err(NotYours);
+        }
+        let here = self.centre(regiment);
+        let r = &mut self.regiments[regiment];
+        r.order = Order::Move;
+        r.resume = None;
+        if r.engaged.is_empty() {
+            let facing = r.facing;
+            self.send(regiment, here, facing);
+        }
+        Ok(())
+    }
+
     fn send(&mut self, regiment: usize, target: [f32; 2], facing: [f32; 2]) {
         let r = &mut self.regiments[regiment];
         r.position = target;
@@ -1424,6 +1442,35 @@ mod tests {
         assert!(w.units[0].alive() && w.units[1].alive());
         assert!(near(w.units[0].position, [10.0, 50.0]));
         assert_eq!(w.regiments[0].order, Order::Move);
+    }
+
+    #[test]
+    fn stopped_regiments_form_up_where_they_are() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.order_move(7, 0, [10.0, 20.0]).unwrap();
+        run(&mut w, 1.0);
+        w.order_stop(7, 0).unwrap();
+        run(&mut w, 5.0);
+        assert!(near(w.regiments[0].position, [10.0, 12.0]));
+        assert!(near(w.units[0].position, [9.0, 12.0]));
+        assert!(near(w.units[1].position, [11.0, 12.0]));
+        assert!(!w.units.iter().any(Unit::moving));
+        assert!(w.order_stop(1, 0).is_err());
+    }
+
+    #[test]
+    fn stopped_regiments_stay_put_after_fighting() {
+        let mut w = skirmish();
+        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        run(&mut w, 4.5);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        let held = w.regiments[0].position;
+        w.order_stop(1, 0).unwrap();
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        w.destroy(1);
+        run(&mut w, 10.0);
+        assert!(w.regiments[0].engaged.is_empty());
+        assert!(near(w.regiments[0].position, held));
     }
 
     #[test]
