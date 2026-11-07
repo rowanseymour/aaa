@@ -183,6 +183,11 @@ struct Marks {
 #[derive(Component)]
 struct SelectionBox;
 
+/// The square under a focused building, draped over the ground in a mesh of
+/// its own: which building and how big.
+#[derive(Component)]
+struct DrapedMark(usize, Vec2);
+
 /// One of the health bars drawn over the screen.
 #[derive(Component)]
 struct HealthBar;
@@ -1475,6 +1480,12 @@ fn tint(sim: &World, local: Option<u32>, owner: u32) -> usize {
     }
 }
 
+type ShownMark = (
+    &'static mut Transform,
+    &'static mut MeshMaterial3d<StandardMaterial>,
+    &'static mut Visibility,
+);
+
 /// Rings the units of the regiment under the cursor and squares the
 /// building under it, each mark sized to the model's footprint.
 #[allow(clippy::too_many_arguments)]
@@ -1488,14 +1499,9 @@ fn show_focus(
     fixed: Res<Time<Fixed>>,
     units: Query<(&UnitView, Option<&Footprint>)>,
     buildings: Query<(&BuildingView, &MapObject, Option<&Footprint>)>,
-    mut shown: Query<
-        (
-            &mut Transform,
-            &mut MeshMaterial3d<StandardMaterial>,
-            &mut Visibility,
-        ),
-        With<Mark>,
-    >,
+    mut shown: Query<ShownMark, (With<Mark>, Without<DrapedMark>)>,
+    mut draped: Query<(Entity, &DrapedMark, &mut MeshMaterial3d<StandardMaterial>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     // The ring fills its image but for a thin margin.
     const RING_FILL: f32 = 238.0 / 256.0;
@@ -1504,6 +1510,7 @@ fn show_focus(
     let ground = &loaded.map.ground;
     let t = fixed.overstep_fraction();
     let mut wanted = Vec::new();
+    let mut square = None;
     match *focus {
         Focus::Nothing => {}
         Focus::Regiment(r) => {
@@ -1537,10 +1544,31 @@ fn show_focus(
                     .or(footprint.map(|f| f.0))
                     .unwrap_or(Vec2::splat(4.0))
                     / (1.0 - 2.0 * SQUARE_INSET);
-                let transform = overlay::mark_transform(ground, building.position, [fx, fy], size);
-                wanted.push((transform, material.clone()));
+                square = Some((b, size, [fx, fy], material.clone()));
             }
         }
+    }
+    let mut kept = false;
+    for (entity, mark, mut material) in &mut draped {
+        match &square {
+            Some((b, size, _, m)) if !kept && mark.0 == *b && mark.1 == *size => {
+                if material.0 != *m {
+                    material.0 = m.clone();
+                }
+                kept = true;
+            }
+            _ => commands.entity(entity).despawn(),
+        }
+    }
+    if !kept && let Some((b, size, facing, material)) = square {
+        let mesh = overlay::draped_square(ground, sim.0.buildings[b].position, facing, size);
+        commands.spawn((
+            Mark,
+            DrapedMark(b, size),
+            Mesh3d(meshes.add(mesh)),
+            MeshMaterial3d(material),
+            DespawnOnExit(Screen::Match),
+        ));
     }
     let mut wanted = wanted.into_iter();
     for (mut transform, mut material, mut visibility) in &mut shown {
