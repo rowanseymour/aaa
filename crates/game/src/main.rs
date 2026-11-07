@@ -1,14 +1,17 @@
 //! Plays Axis & Allies (2004) matches, on a map picked from a menu or given
 //! on the command line.
 //!
-//! You play one of the map's players. Click one of your units to select its
-//! regiment and right-click the ground to send it there, stopping to fight
-//! enemies on the way, or Alt+right-click to have it run there, ignoring
-//! them. The number keys pick its formation, in the order its layout lists
-//! them. Models wear their owner's colour and banners float over every
+//! You play one of the map's players. Click one of your units or its
+//! banner to select its regiment, Shift+click to add a regiment to the
+//! selection or take it out, or drag a box over several, with Shift to add
+//! them. Right-click the ground to send the selection there, keeping its
+//! regiments' places relative to each other and stopping to fight enemies on
+//! the way, or Alt+right-click to have it run there, ignoring them. The
+//! number keys pick the selection's formation, in the order each regiment's
+//! layout lists them. Models wear their owner's colour and banners float over every
 //! regiment. Rings mark the units of the regiment under the cursor, and a
 //! square the building under it, green for your own; health bars show under
-//! the selected regiment's units. A minimap in the corner shows where
+//! the selected regiments' units. A minimap in the corner shows where
 //! everything is, and clicking it moves the camera there. The key left of 1
 //! opens a console for script commands, such as moving the camera or
 //! raising regiments.
@@ -35,6 +38,7 @@ use aaa_sim::{Relation, State, TICK, World};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button, ScrollArea};
 use bevy::window::PrimaryWindow;
 
@@ -96,9 +100,9 @@ struct Side(Option<usize>);
 #[derive(Resource)]
 struct Local(Option<u32>);
 
-/// The regiment orders go to.
+/// The regiments orders go to, in the order they were picked.
 #[derive(Resource, Default)]
-struct Selected(Option<usize>);
+struct Selected(Vec<usize>);
 
 /// What the cursor is over.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -118,6 +122,10 @@ struct Marks {
     rings: [Handle<StandardMaterial>; 3],
     squares: [Handle<StandardMaterial>; 3],
 }
+
+/// The box drawn while dragging to select regiments.
+#[derive(Component)]
+struct SelectionBox;
 
 /// One of the health bars drawn over the screen.
 #[derive(Component)]
@@ -293,7 +301,7 @@ fn main() -> ExitCode {
         .add_systems(
             Update,
             (
-                (focus, command.run_if(minimap::pointer_away)).chain(),
+                (focus, (select, command.run_if(minimap::pointer_away))).chain(),
                 choose_formation,
             )
                 .run_if(in_state(Screen::Match))
@@ -493,7 +501,8 @@ fn load(world: &mut bevy::ecs::world::World) {
     }
 }
 
-/// Loads what [`show_focus`] and [`show_health`] draw with.
+/// Loads what [`show_focus`] and [`show_health`] draw with, and the box
+/// [`select`] draws.
 fn setup_overlays(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -512,6 +521,19 @@ fn setup_overlays(
         squares: tinted(&images.square),
     });
     commands.insert_resource(images);
+    commands.spawn((
+        SelectionBox,
+        Node {
+            position_type: PositionType::Absolute,
+            border: UiRect::all(px(1)),
+            ..default()
+        },
+        BorderColor::all(OWN),
+        BackgroundColor(OWN.with_alpha(0.1)),
+        Visibility::Hidden,
+        Pickable::IGNORE,
+        DespawnOnExit(Screen::Match),
+    ));
 }
 
 fn setup(
@@ -597,9 +619,7 @@ fn setup(
 
 fn step(mut sim: ResMut<Sim>, mut selected: ResMut<Selected>) {
     sim.0.tick();
-    if selected.0.is_some_and(|r| sim.0.destroyed(r)) {
-        selected.0 = None;
-    }
+    selected.0.retain(|&r| !sim.0.destroyed(r));
 }
 
 /// Places units between where the last two ticks left them, playing their
@@ -703,16 +723,27 @@ fn pointed(
     pick_ground(ground, ray)
 }
 
-/// Finds what the cursor is over: the regiment of the nearest unit within
-/// reach of the ground it points at, else the building standing there.
+/// Finds what the cursor is over: the regiment whose banner it's on, else
+/// that of the nearest unit within reach of the ground it points at, else
+/// the building standing there.
 fn focus(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
+    banners: Query<(
+        &banners::Banner,
+        &RelativeCursorPosition,
+        &ZIndex,
+        &Visibility,
+    )>,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     mut focus: ResMut<Focus>,
 ) {
     const REACH: f32 = 2.0;
+    if let Some(r) = banners::under_cursor(&banners) {
+        focus.set_if_neq(Focus::Regiment(r));
+        return;
+    }
     let Some(point) = pointed(&windows, &cameras, &loaded.map.ground) else {
         focus.set_if_neq(Focus::Nothing);
         return;
@@ -741,8 +772,97 @@ fn focus(
     focus.set_if_neq(found);
 }
 
-/// Left click selects the regiment of yours under the cursor, right click
-/// sends the selected one where it points, running with Alt.
+/// Left click selects the regiment of yours under the cursor and dragging
+/// selects those with a unit in the box, either adding to the selection with
+/// Shift, which also takes a clicked regiment already in it back out.
+#[allow(clippy::too_many_arguments)]
+fn select(
+    buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
+    minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
+    loaded: Res<Loaded>,
+    local: Res<Local>,
+    focus: Res<Focus>,
+    sim: Res<Sim>,
+    mut selected: ResMut<Selected>,
+    mut start: bevy::prelude::Local<Option<Vec2>>,
+    mut shown: Single<(&mut Node, &mut Visibility), With<SelectionBox>>,
+) {
+    // How far the cursor goes before a click becomes a drag, in pixels.
+    const DRAG: f32 = 4.0;
+    let cursor = windows.single().ok().and_then(|w| w.cursor_position());
+    if buttons.just_pressed(MouseButton::Left) && minimap::pointer_away(minimap) {
+        *start = cursor;
+    }
+    let released = buttons.just_released(MouseButton::Left);
+    // Presses can end unseen, such as while the console is open.
+    if !released && !buttons.pressed(MouseButton::Left) {
+        *start = None;
+    }
+    let dragged = start
+        .zip(cursor)
+        .map(|(a, b)| Rect::from_corners(a, b))
+        .filter(|r| r.size().max_element() > DRAG);
+    let (node, visibility) = &mut *shown;
+    match dragged.filter(|_| !released) {
+        Some(r) => {
+            node.left = px(r.min.x);
+            node.top = px(r.min.y);
+            node.width = px(r.width());
+            node.height = px(r.height());
+            visibility.set_if_neq(Visibility::Inherited);
+        }
+        None => {
+            visibility.set_if_neq(Visibility::Hidden);
+        }
+    }
+    if !released || start.take().is_none() {
+        return;
+    }
+    let Some(player) = local.0 else {
+        return;
+    };
+    let adding = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let Some(rect) = dragged else {
+        match *focus {
+            Focus::Regiment(r) if sim.0.commands(player, r) => {
+                match selected.0.iter().position(|&s| s == r) {
+                    Some(i) if adding => {
+                        selected.0.remove(i);
+                    }
+                    None if adding => selected.0.push(r),
+                    _ => selected.0 = vec![r],
+                }
+            }
+            _ if adding => {}
+            _ => selected.0.clear(),
+        }
+        return;
+    };
+    let Ok((camera, transform, _)) = cameras.single() else {
+        return;
+    };
+    let ground = &loaded.map.ground;
+    let inside = |u: usize| {
+        let [x, y] = sim.0.units[u].position;
+        camera
+            .world_to_viewport(transform, world(x, y, ground.height_at(x, y)))
+            .is_ok_and(|p| rect.contains(p))
+    };
+    if !adding {
+        selected.0.clear();
+    }
+    for r in 0..sim.0.regiments.len() {
+        if sim.0.commands(player, r) && !selected.0.contains(&r) && sim.0.survivors(r).any(inside) {
+            selected.0.push(r);
+        }
+    }
+}
+
+/// Right click sends the selected regiments where it points, running with
+/// Alt, each keeping its place relative to the rest.
 #[allow(clippy::too_many_arguments)]
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -751,33 +871,37 @@ fn command(
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     loaded: Res<Loaded>,
     local: Res<Local>,
-    focus: Res<Focus>,
     mut sim: ResMut<Sim>,
-    mut selected: ResMut<Selected>,
+    selected: Res<Selected>,
 ) {
     let Some(player) = local.0 else {
         return;
     };
-    if buttons.just_pressed(MouseButton::Left) {
-        selected.0 = match *focus {
-            Focus::Regiment(r) if sim.0.commands(player, r) => Some(r),
-            _ => None,
-        };
-        return;
-    }
     // The free camera turns with the right button.
     let free = cameras.single().is_ok_and(|(_, _, rts)| rts.free);
-    if !buttons.just_pressed(MouseButton::Right) || free {
+    if !buttons.just_pressed(MouseButton::Right) || free || selected.0.is_empty() {
         return;
     }
-    let Some(point) = pointed(&windows, &cameras, &loaded.map.ground) else {
+    let ground = &loaded.map.ground;
+    let Some([px, py]) = pointed(&windows, &cameras, ground) else {
         return;
     };
-    if let Some(r) = selected.0 {
+    let centres: Vec<[f32; 2]> = selected.0.iter().map(|&r| sim.0.centre(r)).collect();
+    let n = centres.len() as f32;
+    let [cx, cy] = centres
+        .iter()
+        .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
+    let run = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    let size = ground.size();
+    for (&r, [x, y]) in selected.0.iter().zip(centres) {
+        let target = [
+            (px + x - cx).clamp(0.0, size),
+            (py + y - cy).clamp(0.0, size),
+        ];
         // Selection only takes the player's own.
-        let _ = match keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]) {
-            true => sim.0.order_run(player, r, point),
-            false => sim.0.order_move(player, r, point),
+        let _ = match run {
+            true => sim.0.order_run(player, r, target),
+            false => sim.0.order_move(player, r, target),
         };
     }
 }
@@ -799,17 +923,17 @@ fn choose_formation(
         KeyCode::Digit8,
         KeyCode::Digit9,
     ];
-    let (Some(r), Some(player)) = (selected.0, local.0) else {
+    let (Some(f), Some(player)) = (KEYS.iter().position(|&k| keys.just_pressed(k)), local.0) else {
         return;
     };
-    if let Some(f) = KEYS.iter().position(|&k| keys.just_pressed(k))
-        && sim.0.set_formation(player, r, f).is_ok()
-    {
-        let regiment = &sim.0.regiments[r];
-        info!(
-            "{} in formation {}",
-            regiment.template, regiment.formations[regiment.formation].id
-        );
+    for &r in &selected.0 {
+        if sim.0.set_formation(player, r, f).is_ok() {
+            let regiment = &sim.0.regiments[r];
+            info!(
+                "{} in formation {}",
+                regiment.template, regiment.formations[regiment.formation].id
+            );
+        }
     }
 }
 
@@ -938,7 +1062,7 @@ fn show_focus(
     }
 }
 
-/// Draws a health bar below each of the selected regiment's units, the
+/// Draws a health bar below each of the selected regiments' units, the
 /// width a bar has there but square to the screen and over everything.
 #[allow(clippy::too_many_arguments)]
 fn show_health(
@@ -953,7 +1077,7 @@ fn show_health(
     mut bars: Query<(&mut Node, &mut ImageNode, &mut Visibility), With<HealthBar>>,
 ) {
     let mut wanted = Vec::new();
-    if let (Some(r), Ok((camera, transform))) = (selected.0, cameras.single()) {
+    if let (false, Ok((camera, transform))) = (selected.0.is_empty(), cameras.single()) {
         // This frame's camera, which moves after transforms propagate.
         let global = GlobalTransform::from(*transform);
         let half = transform.right() * HEALTH_BAR.x / 2.0;
@@ -962,7 +1086,7 @@ fn show_health(
         let t = fixed.overstep_fraction();
         for (view, footprint) in &units {
             let unit = &sim.0.units[view.unit];
-            if unit.regiment != r || !unit.alive() {
+            if !selected.0.contains(&unit.regiment) || !unit.alive() {
                 continue;
             }
             let Some(fighter) = &unit.fighter else {

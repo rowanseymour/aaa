@@ -188,7 +188,7 @@ const VERBS: &[Verb] = &[
         "regiment x y",
         "sends a regiment, by its id, to x y",
     ),
-    verb("destroyselected", "", "destroys the selected regiment"),
+    verb("destroyselected", "", "destroys the selected regiments"),
     verb(
         "gamespeed",
         "[speed]",
@@ -598,7 +598,7 @@ fn player_kingdom(world: &mut World, args: &[&str]) -> Reply {
         [word] => {
             let id = kingdom(sim, word)?;
             world.resource_mut::<Local>().0 = Some(id);
-            world.resource_mut::<Selected>().0 = None;
+            world.resource_mut::<Selected>().0.clear();
             Ok(String::new())
         }
         _ => Err(usage("playerkingdom")),
@@ -729,9 +729,13 @@ fn move_regiment(world: &mut World, args: &[&str]) -> Reply {
 
 fn destroy_selected(world: &mut World, args: &[&str]) -> Reply {
     no_args(args)?;
-    let r = world.resource::<Selected>().0.ok_or("nothing selected")?;
-    world.resource_mut::<Sim>().0.destroy(r);
-    world.resource_mut::<Selected>().0 = None;
+    let selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
+    if selected.is_empty() {
+        return Err("nothing selected".into());
+    }
+    for r in selected {
+        world.resource_mut::<Sim>().0.destroy(r);
+    }
     Ok(String::new())
 }
 
