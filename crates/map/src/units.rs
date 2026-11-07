@@ -497,7 +497,7 @@ impl Recruits {
                 zone: None,
                 members: Vec::new(),
                 obstacle,
-                deploy: None,
+                deploy: self.deploy_points.get(into).copied(),
             },
             offset: d.packed_offset,
             seconds,
@@ -844,7 +844,13 @@ mod tests {
                     },
                 ),
             ]),
-            deploy_points: HashMap::new(),
+            deploy_points: HashMap::from([(
+                Id::from("depot"),
+                DeployPoints {
+                    creation: [2.0, 1.0],
+                    deployment: [2.0, 6.0],
+                },
+            )]),
             recruit_times: HashMap::new(),
             renamed: HashSet::new(),
         };
@@ -855,6 +861,11 @@ mod tests {
         assert_eq!(unpacks.building.template, "depot");
         assert_eq!(unpacks.seconds, 9.0);
         assert!(unpacks.building.obstacle.is_some());
+        // So it can commission what it lists once unpacked.
+        assert_eq!(
+            unpacks.building.deploy.map(|d| d.deployment),
+            Some([2.0, 6.0])
+        );
         truck.renumber(40);
         assert_eq!((truck.id, truck.members[0].thing.id), (40, 40));
         let packings = recruits.packings();

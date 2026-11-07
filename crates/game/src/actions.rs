@@ -282,12 +282,21 @@ pub fn spawn(
     let pack = look_of(game, PACK);
     let cancel = image(game, CANCEL_ICON);
     let listings = game.listings();
+    // Buildings unpacked during the match need menus too: those of the
+    // map's trucks, and of what any menu commissions.
     let mut menus = HashMap::new();
-    for b in &sim.0.buildings {
-        if menus.contains_key(&b.template) {
+    let mut templates: Vec<String> = sim.0.buildings.iter().map(|b| b.template.clone()).collect();
+    templates.extend(
+        sim.0
+            .regiments
+            .iter()
+            .filter_map(|r| Some(r.unpacks.as_ref()?.building.template.clone())),
+    );
+    while let Some(template) = templates.pop() {
+        if menus.contains_key(&template) {
             continue;
         }
-        let list = raising.0.list(&b.template);
+        let list = raising.0.list(&template);
         let menu: Vec<Recruit> = list
             .iter()
             .map(|id| {
@@ -310,7 +319,18 @@ pub fn spawn(
                 }
             })
             .collect();
-        menus.insert(b.template.clone(), menu);
+        templates.extend(menu.iter().filter_map(|r| {
+            Some(
+                r.regiment
+                    .as_ref()?
+                    .unpacks
+                    .as_ref()?
+                    .building
+                    .template
+                    .clone(),
+            )
+        }));
+        menus.insert(template, menu);
     }
     commands.insert_resource(Looks {
         orders,
