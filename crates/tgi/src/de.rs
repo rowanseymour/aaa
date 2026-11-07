@@ -27,6 +27,7 @@
 //! [`Coverage`] deserializes the same way while counting which keys the
 //! types read and which they skip.
 
+use std::borrow::Cow;
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -141,14 +142,7 @@ impl Coverage {
     }
 
     fn unread(&mut self, path: &str, block: &Block, templates: Option<&Templates>) {
-        let resolved;
-        let block = match templates {
-            Some(t) if t.parent(block).is_some() => {
-                resolved = t.resolve(block);
-                &resolved
-            }
-            _ => block,
-        };
+        let block = &*resolved(templates, block);
         for item in &block.items {
             match item {
                 Item::Field(f) => self.count(path, f, false),
@@ -308,14 +302,7 @@ impl<'a> Node<'a> {
                 });
             }
         };
-        let resolved;
-        let block = match ctx.templates {
-            Some(t) if t.parent(block).is_some() => {
-                resolved = t.resolve(block);
-                &resolved
-            }
-            _ => block,
-        };
+        let block = &*resolved(ctx.templates, block);
         let mut groups: Vec<(&str, Vec<&Item>)> = Vec::new();
         for item in &block.items {
             let k = key(item);
@@ -402,10 +389,9 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         let (text, line) = self.text("true or false")?;
-        match text.trim().to_ascii_lowercase().as_str() {
-            "true" | "1" => visitor.visit_bool(true),
-            "false" | "0" => visitor.visit_bool(false),
-            _ => Err(Error {
+        match parse_bool(text) {
+            Some(b) => visitor.visit_bool(b),
+            None => Err(Error {
                 line: Some(line),
                 message: format!("expected true or false, found {text:?}"),
             }),
@@ -553,25 +539,50 @@ impl<'de> de::Deserializer<'de> for Scalar<'_> {
         visitor.visit_str(self.0)
     }
 
-    fn deserialize_f32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        visitor.visit_f32(self.parse("a number")?)
+    parse_scalars! {
+        deserialize_i8 visit_i8 i8, "an integer";
+        deserialize_i16 visit_i16 i16, "an integer";
+        deserialize_i32 visit_i32 i32, "an integer";
+        deserialize_i64 visit_i64 i64, "an integer";
+        deserialize_u8 visit_u8 u8, "an integer";
+        deserialize_u16 visit_u16 u16, "an integer";
+        deserialize_u32 visit_u32 u32, "an integer";
+        deserialize_u64 visit_u64 u64, "an integer";
+        deserialize_f32 visit_f32 f32, "a number";
+        deserialize_f64 visit_f64 f64, "a number";
+        deserialize_char visit_char char, "a character";
     }
 
-    fn deserialize_f64<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        visitor.visit_f64(self.parse("a number")?)
-    }
-
-    fn deserialize_i32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        visitor.visit_i32(self.parse("an integer")?)
-    }
-
-    fn deserialize_u32<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        visitor.visit_u32(self.parse("an integer")?)
+    fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        match parse_bool(self.0) {
+            Some(b) => visitor.visit_bool(b),
+            None => Err(de::Error::custom(format!(
+                "expected true or false, found {:?}",
+                self.0
+            ))),
+        }
     }
 
     serde::forward_to_deserialize_any! {
-        bool i8 i16 i64 i128 u8 u16 u64 u128 char str string bytes byte_buf option unit
+        i128 u128 str string bytes byte_buf option unit
         unit_struct newtype_struct seq tuple tuple_struct map struct enum identifier ignored_any
+    }
+}
+
+/// The block with what it inherits merged in, where it inherits anything.
+fn resolved<'b>(templates: Option<&Templates>, block: &'b Block) -> Cow<'b, Block> {
+    match templates {
+        Some(t) if t.parent(block).is_some() => Cow::Owned(t.resolve(block)),
+        _ => Cow::Borrowed(block),
+    }
+}
+
+/// `true` or `false`, in any case, or `1` or `0`.
+fn parse_bool(text: &str) -> Option<bool> {
+    match text.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" => Some(true),
+        "false" | "0" => Some(false),
+        _ => None,
     }
 }
 
@@ -654,6 +665,17 @@ mod tests {
                 }),
             }
         );
+    }
+
+    #[test]
+    fn reads_lists_of_any_scalar() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Mixed {
+            list: (bool, u8, i64, char),
+        }
+        let block = first("[Mixed]\nlist = TRUE, 7, -3, x\n");
+        let m: Mixed = from_block(&block).unwrap();
+        assert_eq!(m.list, (true, 7, -3, 'x'));
     }
 
     #[test]
