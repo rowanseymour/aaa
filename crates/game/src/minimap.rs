@@ -304,7 +304,7 @@ pub fn update(
     let neutral = minimap.colours.buildings[Colours::of(Relation::Neutral)];
     let mut icons = Vec::new();
     for building in &sim.0.buildings {
-        if matches!(building.state, State::Destroyed(_)) {
+        if building.gone() {
             continue;
         }
         // Like the game, leave out the independents' houses and sheds,

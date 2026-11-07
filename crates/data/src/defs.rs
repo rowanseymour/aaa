@@ -174,7 +174,10 @@ pub struct MobileDeploymentComponent {
     /// way it faces there.
     pub packed_position_offset: Option<[f32; 2]>,
     pub packed_orientation: Option<[f32; 2]>,
-    /// On a building, the seconds unpacking takes.
+    /// On a building, the share of its health at or below which it can't
+    /// pack, and the seconds packing and unpacking take.
+    pub pack_health_min: Option<f32>,
+    pub packing_length: Option<f32>,
     pub unpacking_length: Option<f32>,
 }
 
