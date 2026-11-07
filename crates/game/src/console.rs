@@ -188,7 +188,17 @@ const VERBS: &[Verb] = &[
         "regiment x y",
         "sends a regiment, by its id, to x y",
     ),
+    verb(
+        "select",
+        "[regiment ...]",
+        "selects the player's regiments, by their ids; without any, says which are selected",
+    ),
     verb("destroyselected", "", "destroys the selected regiments"),
+    verb(
+        "advance",
+        "seconds",
+        "plays that much of the game at once, paused or not",
+    ),
     verb(
         "gamespeed",
         "[speed]",
@@ -309,7 +319,9 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "placementkingdom" => placement_kingdom(world, &args),
                 "playerkingdom" => player_kingdom(world, &args),
                 "move" => move_regiment(world, &args),
+                "select" => select(world, &args),
                 "destroyselected" => destroy_selected(world, &args),
+                "advance" => advance(world, &args),
                 _ => unreachable!("{name} isn't handled"),
             }
         }
@@ -713,6 +725,55 @@ fn move_regiment(world: &mut World, args: &[&str]) -> Reply {
     let owner = sim.regiments[r].owner;
     sim.order_move(owner, r, point)
         .map_err(|_| format!("regiment {id} is destroyed"))?;
+    Ok(String::new())
+}
+
+fn select(world: &mut World, args: &[&str]) -> Reply {
+    let sim = &world.resource::<Sim>().0;
+    if args.is_empty() {
+        let selected = &world.resource::<Selected>().0;
+        let ids: Vec<String> = selected
+            .iter()
+            .map(|&r| sim.regiments[r].id.to_string())
+            .collect();
+        return Ok(match ids.is_empty() {
+            true => "nothing selected".into(),
+            false => ids.join(" "),
+        });
+    }
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let picked = args
+        .iter()
+        .map(|id| {
+            let r = sim
+                .regiments
+                .iter()
+                .position(|r| r.id.to_string() == *id)
+                .ok_or_else(|| format!("no regiment {id}"))?;
+            match sim.commands(player, r) {
+                true => Ok(r),
+                false => Err(format!("regiment {id} isn't the player's to select")),
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    world.resource_mut::<Selected>().0 = picked;
+    Ok(String::new())
+}
+
+fn advance(world: &mut World, args: &[&str]) -> Reply {
+    let [seconds] = args else {
+        return Err(usage("advance"));
+    };
+    let seconds = number(seconds)?;
+    if !(0.0..=600.0).contains(&seconds) {
+        return Err("takes 0 to 600 seconds".into());
+    }
+    let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
+    let sim = &mut world.resource_mut::<Sim>().0;
+    for _ in 0..(seconds / aaa_sim::TICK).round() as u32 {
+        crate::step_world(sim, &mut selected);
+    }
+    world.resource_mut::<Selected>().0 = selected;
     Ok(String::new())
 }
 
