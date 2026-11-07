@@ -187,7 +187,7 @@ pub(super) fn parse_teams(data: &[u8]) -> Result<Vec<Option<Team>>> {
     let count = cur.u32()?;
     let teams = (0..count)
         .map(|index| {
-            present(&mut cur)?
+            bool(&mut cur, "presence byte")?
                 .then(|| Team::parse(&mut cur, index))
                 .transpose()
         })
@@ -209,14 +209,6 @@ pub fn write_teams(teams: &[Option<Team>]) -> Result<Vec<u8>> {
     Ok(w.0)
 }
 
-fn present(cur: &mut Cursor) -> Result<bool> {
-    match cur.u8()? {
-        0 => Ok(false),
-        1 => Ok(true),
-        b => Err(Error::Corrupt(format!("presence byte is {b}"))),
-    }
-}
-
 fn parse_head(cur: &mut Cursor, class: u32) -> Result<Head> {
     let head = Head::parse(cur)?;
     if head.class != class {
@@ -233,10 +225,7 @@ impl Team {
 
     fn parse(cur: &mut Cursor, index: u32) -> Result<Self> {
         let head = parse_head(cur, TEAM)?;
-        let version = cur.u32()?;
-        if version > Self::MAX_VERSION {
-            return Err(Error::Corrupt(format!("team version {version}")));
-        }
+        let version = check_version("team", cur.u32()?, 0..=Self::MAX_VERSION)?;
         expect(cur, "team index", index)?;
         Ok(Team {
             head,
@@ -448,7 +437,7 @@ impl Kingdoms {
         let count = cur.u32()?;
         let kingdoms = (0..count)
             .map(|index| {
-                present(&mut cur)?
+                bool(&mut cur, "presence byte")?
                     .then(|| Kingdom::parse(&mut cur, world_version, index))
                     .transpose()
             })
@@ -486,10 +475,8 @@ impl Kingdom {
                 cur.i32()
             })
             .transpose()?;
-        let version = cur.u32()?;
-        if !(Self::MIN_VERSION..=Self::MAX_VERSION).contains(&version) {
-            return Err(Error::Corrupt(format!("kingdom version {version}")));
-        }
+        let versions = Self::MIN_VERSION..=Self::MAX_VERSION;
+        let version = check_version("kingdom", cur.u32()?, versions)?;
         let v = version;
         expect(cur, "kingdom index", index)?;
         let major_index = cur.i32()?;
@@ -838,10 +825,7 @@ impl Faction {
 
 impl Ability {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        let version = cur.u32()?;
-        if version > 1 {
-            return Err(Error::Corrupt(format!("ability version {version}")));
-        }
+        let version = check_version("ability", cur.u32()?, 0..=1)?;
         Ok(Ability {
             version,
             use_count: cur.u32()?,

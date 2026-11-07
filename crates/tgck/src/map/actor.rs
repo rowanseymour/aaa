@@ -9,8 +9,9 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
+use super::expect;
+use super::header::{bool, check_version};
 use super::organization::{ElementState, Organization};
-use super::{expect, header::check_version};
 use crate::{Cursor, Error, Result, Writer};
 
 /// A thing made of components, such as a unit or building.
@@ -293,10 +294,8 @@ impl Actor {
     }
 
     fn parse_header(cur: &mut Cursor) -> Result<Self> {
-        let version = cur.u32()?;
-        if !(Actor::MIN_VERSION..=Actor::MAX_VERSION).contains(&version) {
-            return Err(Error::Corrupt(format!("actor version {version}")));
-        }
+        let versions = Actor::MIN_VERSION..=Actor::MAX_VERSION;
+        let version = check_version("actor", cur.u32()?, versions)?;
         Ok(Actor {
             version,
             kingdom: cur.u32()?,
@@ -690,24 +689,19 @@ impl Property {
 
 impl Trailer {
     fn parse(cur: &mut Cursor, v: u32) -> Result<Self> {
-        let flagged = |cur: &mut Cursor, what: &str| match cur.u8()? {
-            0 => Ok(false),
-            1 => Ok(true),
-            b => Err(Error::Corrupt(format!("{what} flag is {b}"))),
-        };
         Ok(Trailer {
             main_component: cur.i32()?,
             required_object: (v >= 2).then(|| cur.u32()).transpose()?,
             old_stance: (3..12).contains(&v).then(|| cur.u32()).transpose()?,
             saved_group: (v >= 4)
                 .then(|| {
-                    flagged(cur, "saved group")?
+                    bool(cur, "saved group flag")?
                         .then(|| cur.string())
                         .transpose()
                 })
                 .transpose()?,
             group: (v >= 5)
-                .then(|| flagged(cur, "group")?.then(|| cur.u32()).transpose())
+                .then(|| bool(cur, "group flag")?.then(|| cur.u32()).transpose())
                 .transpose()?,
             map_string: (v >= 6).then(|| cur.string()).transpose()?,
             towing: (v >= 8)
@@ -896,10 +890,7 @@ fn skip_character(cur: &mut Cursor) -> Result<()> {
 
 fn skip_performer(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "performer", 9)?;
-    if v < 4 {
-        return Err(Error::Corrupt(format!("performer version {v}")));
-    }
+    let v = check_version("performer", cur.u32()?, 4..=9)?;
     cur.bytes(24)?;
     if v < 5 {
         cur.u32s()?;
