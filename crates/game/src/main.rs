@@ -1,7 +1,7 @@
-//! Plays Axis & Allies (2004) matches, on a map picked from a menu or given
-//! on the command line.
+//! Plays Axis & Allies (2004) matches, set up in a custom game's lobby or on
+//! a map given on the command line.
 //!
-//! You play one of the map's players. Click one of your units or its
+//! You play one of the map's sides, or watch, and the computer plays the rest. Click one of your units or its
 //! banner to select its regiment, Shift+click to add a regiment to the
 //! selection or take it out, or drag a box over several, with Shift to add
 //! them. Right-click the ground to send the selection there, keeping its
@@ -15,12 +15,15 @@
 mod actions;
 mod banners;
 mod console;
+mod lobby;
+mod menu;
 mod minimap;
+mod presets;
 mod remote;
 mod sound;
 mod waypoints;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -35,15 +38,13 @@ use aaa_render::terrain::{map_point, world};
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{Relation, State, TICK, Target, World};
 use bevy::image::CompressedImageFormatSupport;
-use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
-use bevy::ui_widgets::{Activate, Button, ScrollArea};
 use bevy::window::PrimaryWindow;
 
 const USAGE: &str = "\
 usage:
-  aaa-game <game dir> [options]          pick a map from a menu
+  aaa-game <game dir> [options]          set up a game from the menus
   aaa-game <game dir> <map> [options]    play a map, e.g. \"allies10_berlin\"
 
 options:
@@ -57,28 +58,60 @@ options:
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
-    Menu,
+    MainMenu,
+    NewGame,
+    Lobby,
     Loading,
     Match,
 }
 
-/// The game's data while the menu waits for a map.
+/// The game's data while the menus wait for a map.
 #[derive(Resource)]
 struct Data(GameData);
-
-/// A menu entry, holding the map's archive path.
-#[derive(Component)]
-struct MapChoice(String);
 
 /// The map to play, loaded once the loading screen has had a chance to show,
 /// since loading holds up the frame.
 #[derive(Resource)]
 struct Pending {
     name: String,
+    /// What the loading screen calls it.
+    title: String,
+    /// What the loading screen says of it.
+    description: String,
+    /// The teams the lobby put the sides in, by player id, for
+    /// [`Map::arrange`]; none to play it as made.
+    teams: Option<Vec<Vec<u32>>>,
+    /// The player the person plays, or none to watch, when launched from
+    /// the lobby.
+    person: Option<u32>,
+    /// The nation each side plays as, by player id, when launched from the
+    /// lobby.
+    nations: HashMap<u32, aaa_data::Nation>,
     frames: u32,
-    /// Whether failing to load it goes back to the menu rather than exiting.
+    /// Whether it was launched from the lobby, which failing to load it goes
+    /// back to and which waits for the person to continue once it's loaded,
+    /// rather than given on the command line, which it exits or starts.
     from_menu: bool,
 }
+
+/// The loading screen, which stays over the match while it's set up.
+#[derive(Component)]
+struct LoadingScreen;
+
+/// What the loading screen says it's doing.
+#[derive(Component)]
+struct LoadingStatus;
+
+/// A match set up behind the loading screen; whether it waits there for the
+/// person to continue.
+#[derive(Resource)]
+struct Readying {
+    wait: bool,
+}
+
+/// Where the loading screen puts its Continue button.
+#[derive(Component)]
+struct ContinueSlot;
 
 #[derive(Resource)]
 struct Loaded {
@@ -93,7 +126,8 @@ struct Sim(World);
 #[derive(Resource)]
 struct Drawn(Models);
 
-/// Which of the map's major players to play, counting from 1.
+/// Which of the map's sides to play, counting from 1, as asked on the command
+/// line.
 #[derive(Resource, Clone, Copy)]
 struct Side(Option<usize>);
 
@@ -263,7 +297,7 @@ fn main() -> ExitCode {
             .ok_or_else(|| format!("no map named {map:?}; run without one to pick from a menu"))?;
         Ok((game, Some(name)))
     });
-    let (game, map) = match opened {
+    let (mut game, map) = match opened {
         Ok(o) => o,
         Err(e) => {
             eprintln!("aaa-game: {e}");
@@ -292,8 +326,7 @@ fn main() -> ExitCode {
         .init_resource::<Focus>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
-        .add_systems(OnEnter(Screen::Menu), menu)
-        .add_systems(Update, highlight.run_if(in_state(Screen::Menu)))
+        .add_plugins((menu::MenuPlugin, lobby::LobbyPlugin))
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
@@ -306,6 +339,7 @@ fn main() -> ExitCode {
                 actions::spawn,
                 waypoints::load,
                 console::start_scripts,
+                ready,
             )
                 .chain(),
         )
@@ -360,18 +394,24 @@ fn main() -> ExitCode {
     if let Some(remote) = remote {
         app.insert_resource(remote);
     }
-    app.insert_resource(Data(game));
+    app.insert_resource(lobby::Nations(game.nations()))
+        .insert_resource(Data(game));
     match map {
         Some(name) => {
             app.insert_resource(Pending {
+                title: aaa_data::map_title(&name).to_string(),
                 name,
+                description: String::new(),
+                teams: None,
+                person: None,
+                nations: HashMap::new(),
                 frames: 0,
                 from_menu: false,
             })
             .insert_state(Screen::Loading);
         }
         None => {
-            app.insert_state(Screen::Menu);
+            app.insert_state(Screen::MainMenu);
         }
     }
     match app.run() {
@@ -380,166 +420,116 @@ fn main() -> ExitCode {
     }
 }
 
-/// Readies a match on a loaded map, for [`setup`] to start.
-fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded) {
+/// Readies a match on a loaded map, with a person playing the `person`
+/// player's side, if any, for [`setup`] to start.
+fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded, person: Option<u32>) {
     let sim = World::new(&loaded.map);
-    let local = match world.resource::<Side>().0 {
-        Some(n) => sim
-            .sides
-            .players
-            .iter()
-            .filter(|p| !p.independent)
-            .nth(n - 1),
-        None => sim.sides.first_playable(),
-    };
-    match local {
-        Some(p) => info!("playing {} ({})", p.name, p.color),
-        None => warn!("{}: no such player to play", loaded.map.title),
+    let lineup = lobby::Lineup::new(&loaded.map.players, person);
+    for &(id, control) in &lineup.0 {
+        if let Some(p) = sim.sides.player(id) {
+            let team = p
+                .team
+                .map_or("no team".into(), |t| format!("team {}", t + 1));
+            let nation = p.nation.as_deref().unwrap_or("no nation");
+            info!("{} ({}, {team}, {nation}): {control:?}", p.name, p.color);
+        }
     }
-    world.insert_resource(Local(local.map(|p| p.id)));
+    world.insert_resource(Local(lineup.person()));
+    world.insert_resource(lineup);
     world.insert_resource(Sim(sim));
     world.insert_resource(loaded);
 }
 
-const IDLE: Color = Color::srgb(0.15, 0.15, 0.15);
-const HOVER: Color = Color::srgb(0.3, 0.3, 0.3);
-
-/// Lists the maps in a column per folder.
-fn menu(mut commands: Commands, data: Res<Data>) {
-    let mut folders: Vec<(&str, Vec<&str>)> = Vec::new();
-    for name in data.0.map_names() {
-        let folder = name.rsplit_once('/').map_or("", |(f, _)| f);
-        let folder = folder.rsplit('/').next().unwrap_or(folder);
-        match folders.iter_mut().find(|(f, _)| *f == folder) {
-            Some((_, maps)) => maps.push(name),
-            None => folders.push((folder, vec![name])),
-        }
-    }
-    commands.spawn((Camera2d, DespawnOnExit(Screen::Menu)));
-    commands
+/// Shows the map being loaded, as the game does: its name over what it's
+/// about, and how loading goes.
+fn loading(mut commands: Commands, pending: Res<Pending>) {
+    commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
+    let font = |size: f32| TextFont {
+        font_size: FontSize::Px(size),
+        ..default()
+    };
+    let root = commands
         .spawn((
-            DespawnOnExit(Screen::Menu),
+            LoadingScreen,
             Node {
+                position_type: PositionType::Absolute,
                 width: percent(100),
                 height: percent(100),
-                // Otherwise it grows to fit the longest list instead of
-                // letting it scroll.
-                min_height: px(0),
-                padding: UiRect::all(px(16)),
-                column_gap: px(16),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(40)),
+                row_gap: px(24),
                 ..default()
             },
+            BackgroundColor(Color::BLACK),
+            GlobalZIndex(10),
         ))
-        .with_children(|root| {
-            for (folder, maps) in folders {
-                root.spawn(Node {
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(8),
-                    ..default()
-                })
-                .with_children(|column| {
-                    column.spawn((
-                        Text::new(folder),
-                        TextFont {
-                            font_size: FontSize::Px(18.0),
-                            ..default()
-                        },
-                    ));
-                    column
-                        .spawn((
-                            ScrollArea,
-                            Node {
-                                flex_direction: FlexDirection::Column,
-                                overflow: Overflow::scroll_y(),
-                                min_height: px(0),
-                                row_gap: px(2),
-                                ..default()
-                            },
-                        ))
-                        .with_children(|list| {
-                            for name in maps {
-                                list.spawn((
-                                    Button,
-                                    Hovered::default(),
-                                    MapChoice(name.to_string()),
-                                    Node {
-                                        padding: UiRect::axes(px(8), px(4)),
-                                        ..default()
-                                    },
-                                    BackgroundColor(IDLE),
-                                    children![(
-                                        Text::new(aaa_data::map_title(name)),
-                                        TextFont {
-                                            font_size: FontSize::Px(14.0),
-                                            ..default()
-                                        },
-                                    )],
-                                ))
-                                .observe(choose_map);
-                            }
-                        });
-                });
-            }
-        });
-}
-
-fn highlight(mut buttons: Query<(&Hovered, &mut BackgroundColor), Changed<Hovered>>) {
-    for (hovered, mut background) in &mut buttons {
-        background.0 = if hovered.get() { HOVER } else { IDLE };
+        .id();
+    commands.spawn((ChildOf(root), Text::new(pending.title.clone()), font(22.0)));
+    if !pending.description.is_empty() {
+        commands.spawn((
+            ChildOf(root),
+            Node {
+                width: percent(50),
+                min_height: percent(40),
+                padding: UiRect::all(px(16)),
+                border: UiRect::all(px(2)),
+                ..default()
+            },
+            BorderColor::all(Color::srgb(0.75, 0.6, 0.3)),
+            children![(Text::new(pending.description.clone()), font(16.0))],
+        ));
     }
-}
-
-/// Shows the loading screen for the clicked map.
-fn choose_map(
-    activate: On<Activate>,
-    choices: Query<&MapChoice>,
-    mut commands: Commands,
-    mut next: ResMut<NextState<Screen>>,
-) {
-    let Ok(MapChoice(name)) = choices.get(activate.entity) else {
-        return;
-    };
-    commands.insert_resource(Pending {
-        name: name.clone(),
-        frames: 0,
-        from_menu: true,
-    });
-    next.set(Screen::Loading);
-}
-
-fn loading(mut commands: Commands) {
-    commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
     commands.spawn((
-        DespawnOnExit(Screen::Loading),
+        ChildOf(root),
         Node {
-            width: percent(100),
-            height: percent(100),
-            justify_content: JustifyContent::Center,
+            flex_grow: 1.0,
+            ..default()
+        },
+    ));
+    commands.spawn((
+        ChildOf(root),
+        Node {
+            justify_content: JustifyContent::SpaceBetween,
             align_items: AlignItems::Center,
             ..default()
         },
-        children![(
-            Text::new("Loading..."),
-            TextFont {
-                font_size: FontSize::Px(18.0),
-                ..default()
-            },
-            TextColor(Color::srgb(0.6, 0.6, 0.6)),
-        )],
+        children![
+            (
+                LoadingStatus,
+                Text::new("Loading..."),
+                font(16.0),
+                TextColor(Color::srgb(0.6, 0.6, 0.6)),
+            ),
+            (
+                ContinueSlot,
+                Node {
+                    width: px(240),
+                    justify_content: JustifyContent::End,
+                    ..default()
+                },
+            ),
+        ],
     ));
 }
 
-/// Loads the pending map and starts a match on it, or goes back to the menu
-/// or exits if it can't.
+/// Loads the pending map and starts setting a match up on it behind the
+/// loading screen, or goes back to the lobby or exits if it can't.
 fn load(world: &mut bevy::ecs::world::World) {
     // One frame to lay the screen out and one to draw it.
-    let mut pending = world.resource_mut::<Pending>();
+    let Some(mut pending) = world.get_resource_mut::<Pending>() else {
+        return;
+    };
     pending.frames += 1;
     if pending.frames < 3 {
         return;
     }
     let Some(Pending {
-        name, from_menu, ..
+        name,
+        teams,
+        person,
+        nations,
+        from_menu,
+        ..
     }) = world.remove_resource::<Pending>()
     else {
         return;
@@ -547,21 +537,91 @@ fn load(world: &mut bevy::ecs::world::World) {
     let Some(Data(mut game)) = world.remove_resource::<Data>() else {
         return;
     };
-    match Map::load(&mut game, &name) {
-        Ok(map) => {
-            begin(world, Loaded { game, map });
+    // Given on the command line, each side plays as the nation its map
+    // fixes or one at random.
+    let nations = match from_menu {
+        true => nations,
+        false => aaa_map::Brief::load(&mut game, &name).map_or_else(
+            |_| HashMap::new(),
+            |b| {
+                lobby::nations(
+                    &b.players,
+                    &HashMap::new(),
+                    &world.resource::<lobby::Nations>().0,
+                )
+            },
+        ),
+    };
+    match Map::load_as(&mut game, &name, &nations) {
+        Ok(mut map) => {
+            if let Some(teams) = &teams {
+                map.arrange(teams);
+            }
+            let person = match from_menu {
+                true => person,
+                false => lobby::default_person(&map.players, *world.resource::<Side>()),
+            };
+            if !from_menu && world.resource::<Side>().0.is_some() && person.is_none() {
+                warn!("{}: no such side to play", map.title);
+            }
+            begin(world, Loaded { game, map }, person);
+            world.insert_resource(Readying { wait: from_menu });
             world.resource_mut::<NextState<Screen>>().set(Screen::Match);
         }
         Err(e) if from_menu => {
             error!("{e}");
+            let mut screens = world.query_filtered::<Entity, With<LoadingScreen>>();
+            for screen in screens.iter(world).collect::<Vec<_>>() {
+                world.despawn(screen);
+            }
             world.insert_resource(Data(game));
-            world.resource_mut::<NextState<Screen>>().set(Screen::Menu);
+            world.resource_mut::<NextState<Screen>>().set(Screen::Lobby);
         }
         Err(e) => {
             error!("{e}");
             world.write_message(AppExit::error());
         }
     }
+}
+
+/// Once the match is set up, says so and holds it until the person
+/// continues, or starts it straight away.
+fn ready(
+    mut commands: Commands,
+    readying: Option<Res<Readying>>,
+    mut time: ResMut<Time<Virtual>>,
+    mut status: Query<&mut Text, With<LoadingStatus>>,
+    slot: Query<Entity, With<ContinueSlot>>,
+    screen: Query<Entity, With<LoadingScreen>>,
+) {
+    let Some(readying) = readying else {
+        return;
+    };
+    commands.remove_resource::<Readying>();
+    if !readying.wait {
+        screen.iter().for_each(|e| commands.entity(e).despawn());
+        return;
+    }
+    time.pause();
+    for mut text in &mut status {
+        text.0 = "Finished Loading".into();
+    }
+    for slot in &slot {
+        commands
+            .spawn((ChildOf(slot), menu::button("Continue", 20.0)))
+            .observe(start);
+    }
+}
+
+/// Takes the loading screen away and starts the match.
+fn start(
+    _: On<bevy::ui_widgets::Activate>,
+    mut commands: Commands,
+    mut time: ResMut<Time<Virtual>>,
+    screen: Query<Entity, With<LoadingScreen>>,
+) {
+    screen.iter().for_each(|e| commands.entity(e).despawn());
+    time.unpause();
 }
 
 /// Loads what [`show_focus`] and [`show_health`] draw with, and the box
@@ -662,12 +722,24 @@ fn setup(
         "{} buildings, {missing} without a model",
         sim.0.buildings.len()
     );
-    let own = (0..sim.0.regiments.len()).find(|&r| local.0.is_some_and(|p| sim.0.commands(p, r)));
-    let cam = match own.or((!sim.0.regiments.is_empty()).then_some(0)) {
-        Some(r) => {
-            let [x, y] = sim.0.centre(r);
-            RtsCamera::new(world(x, y, map.ground.height_at(x, y)))
-        }
+    // Looking at the person's side: a regiment of theirs, else a building,
+    // else where they start.
+    let own = |owner: u32| local.0 == Some(owner);
+    let regiment = (0..sim.0.regiments.len())
+        .find(|&r| local.0.is_some_and(|p| sim.0.commands(p, r)))
+        .map(|r| sim.0.centre(r));
+    let building = || {
+        let mut buildings = sim.0.buildings.iter();
+        buildings.find(|b| own(b.owner)).map(|b| b.position)
+    };
+    let start = || {
+        let mut things = map.things.iter();
+        let start =
+            things.find(|t| t.template == "start_loc" && aaa_map::owner(t).is_some_and(own));
+        start.map(|t| [t.position[0], t.position[1]])
+    };
+    let cam = match regiment.or_else(building).or_else(start) {
+        Some([x, y]) => RtsCamera::new(world(x, y, map.ground.height_at(x, y))),
         None => RtsCamera::centred(&map.ground),
     };
     camera::spawn(&mut commands, cam);
