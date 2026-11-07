@@ -29,8 +29,15 @@ const QUIET_FRAMES: u32 = 5;
 /// Frames to wait for all that before giving up rather than running forever.
 const MAX_FRAMES: u32 = 3000;
 
-/// A [`WindowPlugin`] with no window, for runs that only capture a frame.
-pub fn no_window() -> WindowPlugin {
+/// A [`WindowPlugin`] with a window titled `title`, or none for runs that only
+/// capture a frame.
+pub fn window(title: String, shooting: bool) -> WindowPlugin {
+    if !shooting {
+        return WindowPlugin {
+            primary_window: Some(Window { title, ..default() }),
+            ..default()
+        };
+    }
     WindowPlugin {
         primary_window: None,
         // With no window to close, closing can't be what ends the run.
@@ -41,7 +48,7 @@ pub fn no_window() -> WindowPlugin {
 }
 
 /// Points every camera at an image and saves it to `path` once the scene is
-/// ready, then exits. Goes with [`no_window`].
+/// ready, then exits. Goes with [`window`].
 pub struct ShotPlugin {
     pub path: PathBuf,
 }
@@ -124,7 +131,8 @@ fn target(size: UVec2) -> Image {
     image
 }
 
-/// Cameras can come and go, as with a change of screen, so this is every frame.
+/// Points every camera at the capture image; every frame, as cameras can come
+/// and go, as with a change of screen.
 ///
 /// UI goes to the top camera on the primary window by default, and there is
 /// none, so that camera is marked to draw it instead.

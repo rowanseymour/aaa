@@ -103,7 +103,7 @@ pub struct Unit {
     pub domain: Domain,
     /// In world units.
     pub position: [f32; 2],
-    /// Where it was a tick ago, to draw it in between.
+    /// Where it was a tick ago; see [`Unit::drawn_at`].
     pub previous: [f32; 2],
     /// The way it faces, a unit vector.
     pub facing: [f32; 2],
@@ -131,6 +131,20 @@ impl Unit {
 
     pub fn alive(&self) -> bool {
         self.died.is_none()
+    }
+
+    fn die(&mut self, tick: u64) {
+        self.health = 0.0;
+        self.died = Some(tick);
+        self.path.clear();
+        self.target = None;
+    }
+
+    /// Where to draw it a fraction `t` of the way through the tick that
+    /// moved it from [`Unit::previous`] to [`Unit::position`].
+    pub fn drawn_at(&self, t: f32) -> [f32; 2] {
+        let ([px, py], [x, y]) = (self.previous, self.position);
+        [px + (x - px) * t, py + (y - py) * t]
     }
 }
 
@@ -357,10 +371,7 @@ impl World {
         for u in self.regiments[regiment].units.clone() {
             let unit = &mut self.units[u];
             if unit.alive() {
-                unit.health = 0.0;
-                unit.died = Some(self.ticks);
-                unit.path.clear();
-                unit.target = None;
+                unit.die(self.ticks);
             }
         }
     }
@@ -446,11 +457,9 @@ impl World {
     /// Sends each of a regiment's members to its place in the formation.
     fn take_places(&mut self, regiment: usize) {
         let r = &self.regiments[regiment];
-        let [px, py] = r.position;
-        let [fx, fy] = r.facing;
         let offsets = &r.formations[r.current_formation()].offsets;
-        for (&u, &[right, ahead]) in r.units.iter().zip(offsets) {
-            let place = [px + right * fy + ahead * fx, py - right * fx + ahead * fy];
+        for (&u, &offset) in r.units.iter().zip(offsets) {
+            let place = aaa_map::from_local(r.position, r.facing, offset);
             let unit = &mut self.units[u];
             if !unit.alive() {
                 continue;
@@ -738,10 +747,7 @@ impl World {
                 }
                 unit.health -= hit.amount;
                 if unit.health <= 0.0 {
-                    unit.health = 0.0;
-                    unit.died = Some(ticks);
-                    unit.path.clear();
-                    unit.target = None;
+                    unit.die(ticks);
                 }
             }
             Target::Building(b) => {

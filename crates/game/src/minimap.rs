@@ -6,7 +6,7 @@
 use aaa_data::Id;
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
-use aaa_render::terrain::world;
+use aaa_render::terrain::{map_point, world};
 use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -253,7 +253,7 @@ fn view_corners(
             false => FAR,
         };
         let p = ray.get_point(t);
-        *out = [p.x, -p.z];
+        *out = map_point(p);
     }
     Some(out)
 }

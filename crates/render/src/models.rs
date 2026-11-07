@@ -84,28 +84,13 @@ impl PartMaterial {
 
     /// A copy of the material of its own, to animate.
     fn copy(&self, assets: &mut ModelAssets) -> Self {
+        fn copy<M: Asset + Clone>(store: &mut Assets<M>, h: &Handle<M>) -> Handle<M> {
+            store.get(h).cloned().map_or(h.clone(), |m| store.add(m))
+        }
         match self {
-            PartMaterial::Standard(h) => PartMaterial::Standard(
-                assets
-                    .materials
-                    .get(h)
-                    .cloned()
-                    .map_or(h.clone(), |m| assets.materials.add(m)),
-            ),
-            PartMaterial::Glow(h) => PartMaterial::Glow(
-                assets
-                    .glow_materials
-                    .get(h)
-                    .cloned()
-                    .map_or(h.clone(), |m| assets.glow_materials.add(m)),
-            ),
-            PartMaterial::Team(h) => PartMaterial::Team(
-                assets
-                    .team_materials
-                    .get(h)
-                    .cloned()
-                    .map_or(h.clone(), |m| assets.team_materials.add(m)),
-            ),
+            PartMaterial::Standard(h) => PartMaterial::Standard(copy(assets.materials, h)),
+            PartMaterial::Glow(h) => PartMaterial::Glow(copy(assets.glow_materials, h)),
+            PartMaterial::Team(h) => PartMaterial::Team(copy(assets.team_materials, h)),
         }
     }
 }
@@ -324,7 +309,7 @@ impl Models {
     ) -> Placed {
         let owner = owner(thing).or(within);
         let view = match self.views.get(&Id::from(thing.template.as_str())) {
-            Some(Some(view)) if !view.models.is_empty() => view.clone(),
+            Some(Some(view)) => view.clone(),
             Some(None) => {
                 let members = thing.organization().map_or(&[][..], |o| &o.members);
                 return members
@@ -743,7 +728,7 @@ fn selection_box(nif: &Nif) -> Option<Vec2> {
 }
 
 /// The value cached for `key`, loading and caching it on first use.
-fn cached<T: Clone>(
+pub(crate) fn cached<T: Clone>(
     cache: &mut HashMap<String, Option<T>>,
     key: &str,
     load: impl FnOnce() -> Option<T>,

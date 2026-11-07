@@ -60,7 +60,7 @@ impl<'a> Templates<'a> {
 
     /// The template a block inherits from, if it names one that exists.
     pub fn parent(&self, block: &Block) -> Option<&'a Block> {
-        self.get(block.attr("Template").or_else(|| block.attr("Inherit"))?)
+        self.get(template(block)?)
     }
 
     /// The block with everything it inherits merged in. The chain stops at a

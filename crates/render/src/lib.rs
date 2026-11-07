@@ -132,52 +132,39 @@ pub fn spawn_map(
     markers: bool,
     leave_out: impl Fn(&Thing) -> bool,
 ) -> Models {
-    let MapAssets {
-        meshes,
-        materials,
-        glow_materials,
-        team_materials,
-        ground_materials,
-        water_materials,
-        images,
-        skins,
-        formats,
-        edge,
-    } = assets;
-    let built = terrain::build(game, &map.ground, &map.terrain, images, edge.fade());
+    let built = terrain::build(
+        game,
+        &map.ground,
+        &map.terrain,
+        &mut assets.images,
+        assets.edge.fade(),
+    );
     if let Some((mesh, material)) = built.ground {
         commands.spawn((
             Name::new("ground"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(ground_materials.add(material)),
+            Mesh3d(assets.meshes.add(mesh)),
+            MeshMaterial3d(assets.ground_materials.add(material)),
             NotShadowCaster,
         ));
     }
     if let Some((mesh, material)) = built.water {
         commands.spawn((
             Name::new("water"),
-            Mesh3d(meshes.add(mesh)),
-            MeshMaterial3d(water_materials.add(material)),
+            Mesh3d(assets.meshes.add(mesh)),
+            MeshMaterial3d(assets.water_materials.add(material)),
             NotShadowCaster,
             // Clicks go through to what's under the water.
             Pickable::IGNORE,
         ));
     }
-    let mut models = Models::new(game, formats.0, &map.players);
-    let mut model_assets = ModelAssets {
-        meshes,
-        materials,
-        glow_materials,
-        team_materials,
-        images,
-        skins,
-    };
+    let mut models = Models::new(game, assets.formats.0, &map.players);
     let rest = models.spawn(
         commands,
         game,
-        &mut model_assets,
+        &mut assets.models(),
         map.things.iter().filter(|t| !leave_out(t)),
     );
+    let (meshes, materials) = (&mut assets.meshes, &mut assets.materials);
     objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
     light(commands, &map.sun, map.ground.size());
     models

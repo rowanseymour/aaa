@@ -323,8 +323,7 @@ impl Terrain {
         }
         let unknown = cur.u32()?;
         let biome = cur.string()?;
-        let n = cur.u32()?;
-        let names = (0..n).map(|_| cur.string()).collect::<Result<Vec<_>>>()?;
+        let names = cur.strings()?;
         let count = cur.u32()? as usize;
         let side = count.isqrt();
         if side * side != count {
@@ -404,10 +403,7 @@ impl Terrain {
         w.u32(self.version);
         w.u32(self.unknown);
         w.string(&self.biome)?;
-        w.u32(self.names.len() as u32);
-        for name in &self.names {
-            w.string(name)?;
-        }
+        w.strings(&self.names)?;
         let size = tile_size(self.version);
         w.u32(self.tiles.len() as u32);
         w.u32(size as u32);

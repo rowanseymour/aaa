@@ -1,5 +1,5 @@
-//! Map editor for Axis & Allies (2004), which for now views maps, reading
-//! straight from the game's installed data files.
+//! Map editor for Axis & Allies (2004), which views maps, reading straight
+//! from the game's installed data files.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -162,17 +162,8 @@ fn main() -> ExitCode {
     };
 
     let mut app = App::new();
-    let window = match screenshot {
-        Some(_) => shot::no_window(),
-        None => WindowPlugin {
-            primary_window: Some(Window {
-                title: format!("{} - aaa-editor", loaded.map.title),
-                ..default()
-            }),
-            ..default()
-        },
-    };
-    app.add_plugins(DefaultPlugins.set(window));
+    let title = format!("{} - aaa-editor", loaded.map.title);
+    app.add_plugins(DefaultPlugins.set(shot::window(title, screenshot.is_some())));
     app.add_plugins(MapRenderPlugin { edge: Edge::Hard })
         .insert_resource(loaded)
         .insert_resource(lighting)
@@ -181,8 +172,7 @@ fn main() -> ExitCode {
     if let Some(c) = camera {
         app.insert_resource(c);
     }
-    let shooting = Shooting(screenshot.is_some());
-    app.insert_resource(shooting);
+    app.insert_resource(Shooting(screenshot.is_some()));
     match screenshot {
         Some(s) => {
             app.add_plugins(s);

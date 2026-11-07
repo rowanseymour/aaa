@@ -103,6 +103,15 @@ fn by_index(slots: &[bool], stored: &[u32]) -> Vec<Relation> {
         .collect()
 }
 
+/// The way a placed object faces.
+pub(crate) fn facing(thing: &Thing) -> [f32; 2] {
+    match thing.facing {
+        // Objects never turned face their model's -y.
+        [0.0, 0.0, _] => [0.0, -1.0],
+        [fx, fy, _] => [fx, fy],
+    }
+}
+
 /// The player that owns a placed object, where the map records one.
 pub fn owner(thing: &Thing) -> Option<u32> {
     match &thing.detail {
@@ -173,10 +182,7 @@ pub fn regiments(
                 .iter()
                 .map(|m| member(m.clone(), bodies, fighters))
                 .collect::<Option<Vec<_>>>()?;
-            let facing = match t.facing {
-                [0.0, 0.0, _] => [0.0, -1.0],
-                [fx, fy, _] => [fx, fy],
-            };
+            let facing = facing(t);
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
             let operational_range = operational_ranges
                 .get(&Id::from(t.template.as_str()))
@@ -300,16 +306,13 @@ impl Recruits {
             .organizations
             .iter()
             .filter(|(_, o)| {
-                let filled = o.slots.iter().flatten();
-                filled.clone().next().is_some()
-                    && filled
-                        .into_iter()
-                        .all(|e| self.bodies.get(e).is_some_and(|b| b.speed.is_some()))
+                let mut filled = o.slots.iter().flatten().peekable();
+                filled.peek().is_some()
+                    && filled.all(|e| self.bodies.get(e).is_some_and(|b| b.speed.is_some()))
             })
             .map(|(id, _)| id.as_str())
             .collect();
         out.sort_unstable_by_key(|t| t.to_ascii_lowercase());
-        out.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
         out
     }
 
@@ -378,12 +381,11 @@ impl Recruits {
             operational_range,
         )
         .ok_or_else(|| format!("{template} has no members"))?;
-        // Formation offsets are from the regiment's position, x to its right
-        // and y ahead.
-        let offsets = regiment.formations[regiment.formation].offsets.clone();
-        for (m, [right, ahead]) in regiment.members.iter_mut().zip(offsets) {
-            m.thing.position[0] = position[0] + right * fy + ahead * fx;
-            m.thing.position[1] = position[1] - right * fx + ahead * fy;
+        let offsets = &regiment.formations[regiment.formation].offsets;
+        for (m, &offset) in regiment.members.iter_mut().zip(offsets) {
+            let [x, y] = crate::from_local(position, facing, offset);
+            m.thing.position[0] = x;
+            m.thing.position[1] = y;
         }
         Ok(regiment)
     }
@@ -423,7 +425,7 @@ fn arrange(
 }
 
 /// Where the members stand from their average position.
-fn as_placed(members: &[Member], [fx, fy]: [f32; 2]) -> Formation {
+fn as_placed(members: &[Member], facing: [f32; 2]) -> Formation {
     let n = members.len() as f32;
     let (cx, cy) = members.iter().fold((0.0, 0.0), |(x, y), m| {
         (x + m.thing.position[0] / n, y + m.thing.position[1] / n)
@@ -433,8 +435,8 @@ fn as_placed(members: &[Member], [fx, fy]: [f32; 2]) -> Formation {
         offsets: members
             .iter()
             .map(|m| {
-                let (dx, dy) = (m.thing.position[0] - cx, m.thing.position[1] - cy);
-                [dx * fy - dy * fx, dx * fx + dy * fy]
+                let [x, y, _] = m.thing.position;
+                crate::to_local([cx, cy], facing, [x, y])
             })
             .collect(),
     }

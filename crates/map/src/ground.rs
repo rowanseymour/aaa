@@ -92,10 +92,9 @@ impl Ground {
     pub fn tilt(&self, position: [f32; 2], facing: [f32; 2], footprint: Shape) -> Tilt {
         let [x, y] = position;
         let [fx, fy] = facing;
-        // x to the right of the facing and y along it.
-        let ground = |lx: f32, ly: f32| {
-            let (wx, wy) = (x + lx * fy + ly * fx, y - lx * fx + ly * fy);
-            [wx, wy, self.height_at(wx, wy)]
+        let ground = |right: f32, ahead: f32| {
+            let [x, y] = crate::from_local(position, facing, [right, ahead]);
+            [x, y, self.height_at(x, y)]
         };
         let (half_w, half_h) = match footprint {
             Shape::Point => (0.0, 0.0),

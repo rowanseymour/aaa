@@ -166,13 +166,10 @@ impl BannerImages {
         images: &mut Assets<Image>,
         path: String,
     ) -> Option<Handle<Image>> {
-        if let Some(image) = self.loaded.get(&path) {
-            return image.clone();
-        }
-        let image =
-            textures::decode(&game.read(&path)?, &path, self.formats, true).map(|i| images.add(i));
-        self.loaded.insert(path, image.clone());
-        image
+        let formats = self.formats;
+        crate::models::cached(&mut self.loaded, &path, || {
+            textures::decode(&game.read(&path)?, &path, formats, true).map(|i| images.add(i))
+        })
     }
 }
 

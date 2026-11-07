@@ -1,8 +1,8 @@
 # aaa-editor
 
-A map editor for Axis & Allies (2004), built with [Bevy](https://bevy.org). For
-now it views maps, drawn by [`aaa-render`](../render). It reads them straight
-from the game's installed `Data.rwd`; nothing needs extracting.
+A map editor for Axis & Allies (2004), built with [Bevy](https://bevy.org). It
+views maps, drawn by [`aaa-render`](../render), reading them straight from the
+game's installed `Data.rwd`; nothing needs extracting.
 
 ```sh
 cargo run --release -p aaa-editor -- "/path/to/Axis and Allies 2004"                  # list maps
@@ -14,20 +14,7 @@ A map can be named by file name without extension or by its full archive path
 such as rendering a screenshot from a chosen camera position; the README banner
 is made that way by [`docs/banner.sh`](../../docs/banner.sh).
 
-## Controls
-
-The camera starts in the game's own fixed corner-on view, but zooms out far
-enough to see the whole map. Tab frees it to rotate and tilt, and switches
-back.
-
-| Input | Action |
-|---|---|
-| WASD, arrow keys, middle drag | Pan |
-| Mouse wheel | Zoom |
-| Tab | Toggle game / free camera |
-| Q / E, right drag | Rotate (free camera) |
-| R / F | Tilt (free camera) |
-| M | Show / hide placeholder markers, as screenshots leave them out |
+The window's help line lists the controls.
 
 ## Building on Linux
 

@@ -50,14 +50,9 @@ impl Map {
                 let body = bodies.get(&Id::from(t.template.as_str()))?;
                 let shape = body.blocking.filter(|_| body.speed.is_none())?;
                 let [x, y, _] = t.position;
-                // Objects never turned face their model's -y.
-                let facing = match t.facing {
-                    [0.0, 0.0, _] => [0.0, -1.0],
-                    [fx, fy, _] => [fx, fy],
-                };
                 let obstacle = Obstacle {
                     position: [x, y],
-                    facing,
+                    facing: units::facing(t),
                     shape,
                 };
                 Some((t.id, obstacle))
@@ -100,4 +95,18 @@ impl Map {
             sun: map.sun().map_err(err)?,
         })
     }
+}
+
+/// The point `right` and `ahead` of `origin` when facing `facing`, a unit
+/// vector.
+pub fn from_local(origin: [f32; 2], [fx, fy]: [f32; 2], [right, ahead]: [f32; 2]) -> [f32; 2] {
+    let [x, y] = origin;
+    [x + right * fy + ahead * fx, y - right * fx + ahead * fy]
+}
+
+/// How far `point` is to the right of `origin` and ahead of it when facing
+/// `facing`, a unit vector; the inverse of [`from_local`].
+pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 2] {
+    let (dx, dy) = (point[0] - origin[0], point[1] - origin[1]);
+    [dx * fy - dy * fx, dx * fx + dy * fy]
 }

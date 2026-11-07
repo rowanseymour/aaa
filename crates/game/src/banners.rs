@@ -158,10 +158,7 @@ pub fn show_banners(
         };
         let count = live().count();
         let at = (count > 0).then(|| {
-            let sum = live().fold(Vec2::ZERO, |sum, u| {
-                let (was, is) = (Vec2::from(u.previous), Vec2::from(u.position));
-                sum + was.lerp(is, t)
-            });
+            let sum = live().fold(Vec2::ZERO, |sum, u| sum + Vec2::from(u.drawn_at(t)));
             let [x, y] = (sum / count as f32).to_array();
             world(x, y, ground.height_at(x, y) + HEIGHT)
         });

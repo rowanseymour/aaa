@@ -44,6 +44,11 @@ pub fn world(x: f32, y: f32, height: f32) -> Vec3 {
     Vec3::new(x, height, -y)
 }
 
+/// Bevy's space back to game space's x and y; the inverse of [`world`].
+pub fn map_point(v: Vec3) -> [f32; 2] {
+    [v.x, -v.z]
+}
+
 /// The ground, blended across terrain types, and the water surface.
 pub struct Built {
     pub ground: Option<(Mesh, GroundMaterial)>,

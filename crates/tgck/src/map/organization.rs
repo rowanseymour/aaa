@@ -114,8 +114,7 @@ impl Organization {
         let v = version(cur, "organization", Self::MAX_VERSION)?;
         expect(cur, "organization layout version", 0)?;
         let layout = cur.string()?;
-        let n = cur.u32()?;
-        let slots = (0..n).map(|_| cur.string()).collect::<Result<_>>()?;
+        let slots = cur.strings()?;
         let n = cur.u32()?;
         let mut positions = Vec::new();
         let mut members = Vec::new();
@@ -204,10 +203,7 @@ impl Organization {
         w.u32(v);
         w.u32(0);
         w.string(&self.layout)?;
-        w.u32(self.slots.len() as u32);
-        for s in &self.slots {
-            w.string(s)?;
-        }
+        w.strings(&self.slots)?;
         w.u32(self.positions.len() as u32);
         let mut members = self.members.iter();
         for p in &self.positions {

@@ -43,7 +43,7 @@ impl Builder {
             out.extend(0u32.to_le_bytes());
             out.extend(body);
         }
-        out.extend(footer(roots));
+        out.extend(refs(roots));
         out
     }
 
@@ -57,15 +57,9 @@ impl Builder {
             out.extend(string(self.types[*t as usize]));
             out.extend(body);
         }
-        out.extend(footer(roots));
+        out.extend(refs(roots));
         out
     }
-}
-
-fn footer(roots: &[i32]) -> Vec<u8> {
-    let mut v = (roots.len() as u32).to_le_bytes().to_vec();
-    v.extend(roots.iter().flat_map(|r| r.to_le_bytes()));
-    v
 }
 
 fn string(s: &str) -> Vec<u8> {

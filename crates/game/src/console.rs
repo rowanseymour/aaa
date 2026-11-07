@@ -12,7 +12,7 @@ use std::sync::mpsc::SyncSender;
 use aaa_map::Recruits;
 use aaa_render::MapAssets;
 use aaa_render::camera::RtsCamera;
-use aaa_render::terrain::world as point;
+use aaa_render::terrain::{map_point, world as point};
 use bevy::ecs::system::SystemState;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
@@ -21,7 +21,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::PrimaryWindow;
 
 use crate::remote::Remote;
-use crate::{Drawn, Loaded, Local, Screen, Selected, Sim, UnitView};
+use crate::{Drawn, Loaded, Local, Screen, Selected, Sim, spawn_unit_view};
 
 /// Lines kept for scrolling back through.
 const SCROLLBACK: usize = 200;
@@ -459,14 +459,10 @@ fn place(ground: &aaa_map::Ground, x: &str, y: &str) -> Result<[f32; 2], String>
     Ok([x, y])
 }
 
-fn focus(cam: &RtsCamera) -> [f32; 2] {
-    [cam.focus.x, -cam.focus.z]
-}
-
 fn look_at(world: &mut World, args: &[&str]) -> Reply {
     with_camera(world, |cam, ground| match args {
         [] => {
-            let [x, y] = focus(cam);
+            let [x, y] = map_point(cam.focus);
             Ok(format!("{x:.1} {y:.1}"))
         }
         [x, y] => {
@@ -616,7 +612,7 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
             .query::<&RtsCamera>()
             .single(world)
             .map_err(|_| "no camera")?;
-        (focus(cam), cam.yaw)
+        (map_point(cam.focus), cam.yaw)
     };
     let position = match at {
         Some((x, y)) => place(&world.resource::<Loaded>().map.ground, x, y)?,
@@ -642,25 +638,18 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
                 state.get_mut(world).expect("the render plugin's assets");
             let mut missing = 0;
             for (m, unit) in regiment.members.iter().zip(units) {
-                let models = &mut drawn.0;
-                let spawned = models.spawn_unit(
+                let (models, game) = (&mut drawn.0, &mut loaded.game);
+                let mut model_assets = assets.models();
+                if !spawn_unit_view(
                     &mut commands,
-                    &mut loaded.game,
-                    &mut assets.models(),
-                    &m.thing,
+                    models,
+                    game,
+                    &mut model_assets,
+                    m,
                     owner,
-                    m.speed,
-                );
-                match spawned {
-                    Some(e) => {
-                        commands.entity(e).insert(UnitView {
-                            unit,
-                            shot: None,
-                            dead: false,
-                            conform: models.conform(&m.thing.template),
-                        });
-                    }
-                    None => missing += 1,
+                    unit,
+                ) {
+                    missing += 1;
                 }
             }
             missing

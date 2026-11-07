@@ -84,14 +84,14 @@ impl AiMap {
         if !super::header::bool(cur, "AI map flag")? {
             return Ok(AiMap { data: None });
         }
-        let regions = list(cur, |cur| {
+        let regions = cur.list(|cur| {
             expect(cur, "AI region version", 0)?;
             Ok(AiRegion {
                 center: cur.f32s()?,
-                neighbors: list(cur, |cur| Ok((cur.u32()?, cur.f32()?)))?,
+                neighbors: cur.list(|cur| Ok((cur.u32()?, cur.f32()?)))?,
             })
         })?;
-        let blocks = list(cur, AiBlock::parse)?;
+        let blocks = cur.list(AiBlock::parse)?;
         Ok(AiMap {
             data: Some(AiData { regions, blocks }),
         })
@@ -126,7 +126,7 @@ impl AiBlock {
         let mut side = || -> Result<AiBlockSide> {
             Ok(AiBlockSide {
                 bound: cur.u16()?,
-                links: list(cur, |cur| {
+                links: cur.list(|cur| {
                     expect(cur, "AI block link version", 0)?;
                     Ok(AiBlockLink {
                         span: [cur.u16()?, cur.u16()?, cur.u16()?, cur.u16()?],
@@ -162,9 +162,9 @@ impl ShoreMesh {
     pub(super) fn parse(cur: &mut Cursor) -> Result<Self> {
         expect(cur, "shore mesh version", 0)?;
         Ok(ShoreMesh {
-            points: list(cur, |cur| cur.f32s())?,
-            corners: list(cur, |cur| cur.u32())?,
-            tiles: list(cur, |cur| {
+            points: cur.list(|cur| cur.f32s())?,
+            corners: cur.list(|cur| cur.u32())?,
+            tiles: cur.list(|cur| {
                 Ok(ShoreTile {
                     x: cur.u32()?,
                     y: cur.u32()?,
@@ -188,17 +188,6 @@ impl ShoreMesh {
                 .for_each(|&v| w.u32(v));
         }
     }
-}
-
-/// A u32 count, then that many items; the count is capped by what's left
-/// so a corrupt one can't reserve too much.
-fn list<T>(cur: &mut Cursor, mut item: impl FnMut(&mut Cursor) -> Result<T>) -> Result<Vec<T>> {
-    let n = cur.u32()? as usize;
-    let mut items = Vec::with_capacity(n.min(cur.remaining()));
-    for _ in 0..n {
-        items.push(item(cur)?);
-    }
-    Ok(items)
 }
 
 #[cfg(test)]
