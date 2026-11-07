@@ -70,12 +70,14 @@ struct Data(GameData);
 #[derive(Component)]
 struct MapChoice(String);
 
-/// The map picked from the menu, loaded once the loading screen has had a
-/// chance to show, since loading holds up the frame.
+/// The map to play, loaded once the loading screen has had a chance to show,
+/// since loading holds up the frame.
 #[derive(Resource)]
 struct Pending {
     name: String,
     frames: u32,
+    /// Whether failing to load it goes back to the menu rather than exiting.
+    from_menu: bool,
 }
 
 #[derive(Resource)]
@@ -252,14 +254,14 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let opened = GameData::open(&PathBuf::from(dir)).and_then(|mut game| {
+    let opened = GameData::open(&PathBuf::from(dir)).and_then(|game| {
         let Some(map) = map else {
             return Ok((game, None));
         };
         let name = game
             .find_map(map)
             .ok_or_else(|| format!("no map named {map:?}; run without one to pick from a menu"))?;
-        Map::load(&mut game, &name).map(|map| (game, Some(map)))
+        Ok((game, Some(name)))
     });
     let (game, map) = match opened {
         Ok(o) => o,
@@ -287,6 +289,7 @@ fn main() -> ExitCode {
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .init_resource::<Selected>()
         .init_resource::<Focus>()
+        .init_resource::<actions::Page>()
         .insert_resource(Side(side))
         .add_systems(OnEnter(Screen::Menu), menu)
         .add_systems(Update, highlight.run_if(in_state(Screen::Menu)))
@@ -353,13 +356,18 @@ fn main() -> ExitCode {
     if let Some(remote) = remote {
         app.insert_resource(remote);
     }
+    app.insert_resource(Data(game));
     match map {
-        Some(map) => {
-            begin(app.world_mut(), Loaded { game, map });
-            app.insert_state(Screen::Match);
+        Some(name) => {
+            app.insert_resource(Pending {
+                name,
+                frames: 0,
+                from_menu: false,
+            })
+            .insert_state(Screen::Loading);
         }
         None => {
-            app.insert_resource(Data(game)).insert_state(Screen::Menu);
+            app.insert_state(Screen::Menu);
         }
     }
     match app.run() {
@@ -490,11 +498,12 @@ fn choose_map(
     commands.insert_resource(Pending {
         name: name.clone(),
         frames: 0,
+        from_menu: true,
     });
     next.set(Screen::Loading);
 }
 
-fn loading(mut commands: Commands, pending: Res<Pending>) {
+fn loading(mut commands: Commands) {
     commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
     commands.spawn((
         DespawnOnExit(Screen::Loading),
@@ -506,7 +515,7 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
             ..default()
         },
         children![(
-            Text::new(format!("Loading {}...", aaa_data::map_title(&pending.name))),
+            Text::new("Loading..."),
             TextFont {
                 font_size: FontSize::Px(18.0),
                 ..default()
@@ -517,7 +526,7 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
 }
 
 /// Loads the pending map and starts a match on it, or goes back to the menu
-/// if it can't.
+/// or exits if it can't.
 fn load(world: &mut bevy::ecs::world::World) {
     // One frame to lay the screen out and one to draw it.
     let mut pending = world.resource_mut::<Pending>();
@@ -525,7 +534,10 @@ fn load(world: &mut bevy::ecs::world::World) {
     if pending.frames < 3 {
         return;
     }
-    let Some(Pending { name, .. }) = world.remove_resource::<Pending>() else {
+    let Some(Pending {
+        name, from_menu, ..
+    }) = world.remove_resource::<Pending>()
+    else {
         return;
     };
     let Some(Data(mut game)) = world.remove_resource::<Data>() else {
@@ -536,10 +548,14 @@ fn load(world: &mut bevy::ecs::world::World) {
             begin(world, Loaded { game, map });
             world.resource_mut::<NextState<Screen>>().set(Screen::Match);
         }
-        Err(e) => {
+        Err(e) if from_menu => {
             error!("{e}");
             world.insert_resource(Data(game));
             world.resource_mut::<NextState<Screen>>().set(Screen::Menu);
+        }
+        Err(e) => {
+            error!("{e}");
+            world.write_message(AppExit::error());
         }
     }
 }
