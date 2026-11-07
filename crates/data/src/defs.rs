@@ -144,6 +144,7 @@ pub struct CityComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationComponent {
     pub operational_range: Option<f32>,
+    pub control_range: Option<f32>,
     /// Seconds recruiting one takes.
     pub recruit_time: Option<f32>,
     /// The [`OrganizationLayout`] its members are arranged by.

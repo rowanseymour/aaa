@@ -162,6 +162,15 @@ pub struct Damage {
     pub amount: f32,
 }
 
+/// How far around it an organization reaches.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Ranges {
+    /// How far from where it stands it takes on enemies that fire on it.
+    pub operational: Option<f32>,
+    /// Its zone of control's radius.
+    pub control: Option<f32>,
+}
+
 /// What an organization template, such as a regiment, is made of.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Organization {
@@ -768,11 +777,16 @@ impl GameData {
         })
     }
 
-    /// How far from where they stand organizations take on enemies that
-    /// fire on them, by template id, including the ids the game has since
-    /// renamed.
-    pub fn operational_ranges(&mut self) -> HashMap<Id, f32> {
-        self.by_template(|t| t.organization_component.as_ref()?.operational_range)
+    /// Organizations' ranges, by template id, including the ids the game
+    /// has since renamed.
+    pub fn organization_ranges(&mut self) -> HashMap<Id, Ranges> {
+        self.by_template(|t| {
+            let o = t.organization_component.as_ref()?;
+            Some(Ranges {
+                operational: o.operational_range,
+                control: o.control_range,
+            })
+        })
     }
 
     /// What every organization template is made of, by template id,

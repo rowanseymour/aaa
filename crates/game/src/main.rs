@@ -1246,7 +1246,8 @@ fn select(
 }
 
 /// Right click sends the selected regiments where it points, each keeping
-/// its place relative to the rest.
+/// its place relative to the rest, or after the enemy regiment it's on,
+/// those that can't fight it going there instead.
 #[allow(clippy::too_many_arguments)]
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -1254,6 +1255,7 @@ fn command(
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     loaded: Res<Loaded>,
     local: Res<Local>,
+    focus: Res<Focus>,
     mut sim: ResMut<Sim>,
     selected: Res<Selected>,
     time: Res<Time>,
@@ -1273,10 +1275,20 @@ fn command(
         return;
     };
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+    let mut moving = selected.0.clone();
+    if let Some(e) = enemy_at(&sim.0, player, *focus) {
+        let (pursuing, rest) = pursue(&mut sim.0, player, &selected.0, e);
+        sent.write(waypoints::Sent {
+            to: None,
+            aim: actions::Aim::Attack,
+            regiments: pursuing,
+        });
+        moving = rest;
+    }
     let regiments = send(
         &mut sim.0,
         player,
-        &selected.0,
+        &moving,
         point,
         actions::Aim::Move,
         ground.size(),
@@ -1286,6 +1298,30 @@ fn command(
         aim: actions::Aim::Move,
         regiments,
     });
+}
+
+/// The enemy regiment of `player`'s that `focus` is on, if it's one.
+fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
+    let Focus::Regiment(e) = focus else {
+        return None;
+    };
+    let owner = sim.regiments[e].owner;
+    (sim.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(e)
+}
+
+/// Sends regiments after the enemy regiment `e`. Returns those that went,
+/// each with where the enemy is, and those that can't.
+fn pursue(
+    sim: &mut World,
+    player: u32,
+    regiments: &[usize],
+    e: usize,
+) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
+    let there = sim.centre(e);
+    let (went, rest): (Vec<usize>, Vec<usize>) = regiments
+        .iter()
+        .partition(|&&r| sim.order_pursue(player, r, e).is_ok());
+    (went.into_iter().map(|r| (r, there)).collect(), rest)
 }
 
 /// Plays the first of the regiments answering an order.

@@ -701,22 +701,9 @@ pub fn aim(
     ) else {
         return;
     };
-    let enemy = match *focus {
-        crate::Focus::Regiment(e) if aim == Aim::Attack => {
-            let owner = sim.0.regiments[e].owner;
-            (sim.0.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(e)
-        }
-        _ => None,
-    };
-    if let Some(e) = enemy {
+    if let Some(e) = crate::enemy_at(&sim.0, player, *focus).filter(|_| aim == Aim::Attack) {
         crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-        let there = sim.0.centre(e);
-        let regiments = selected
-            .0
-            .iter()
-            .filter(|&&r| sim.0.order_pursue(player, r, e).is_ok())
-            .map(|&r| (r, there))
-            .collect();
+        let (regiments, _) = crate::pursue(&mut sim.0, player, &selected.0, e);
         sent.write(crate::waypoints::Sent {
             to: None,
             aim,
