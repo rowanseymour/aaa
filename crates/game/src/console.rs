@@ -9,11 +9,8 @@ use std::collections::VecDeque;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::mpsc::SyncSender;
 
-use aaa_map::Recruits;
-use aaa_render::MapAssets;
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::{map_point, world as point};
-use bevy::ecs::system::SystemState;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -21,7 +18,7 @@ use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::PrimaryWindow;
 
 use crate::remote::Remote;
-use crate::{Drawn, Loaded, Local, Screen, Selected, Sim, spawn_unit_view};
+use crate::{Loaded, Local, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 /// Lines kept for scrolling back through.
 const SCROLLBACK: usize = 200;
@@ -68,8 +65,6 @@ pub struct Console {
     complete: bool,
     /// Who owns what `create` raises; the player's kingdom if `None`.
     placement: Option<u32>,
-    /// The id the next object raised takes.
-    next_id: Option<u32>,
 }
 
 impl Console {
@@ -190,8 +185,18 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "select",
-        "[regiment ...]",
-        "selects the player's regiments, by their ids; without any, says which are selected",
+        "[id ...]",
+        "selects the player's regiments, or one of its buildings, by their ids; without any, says what's selected",
+    ),
+    verb(
+        "commission",
+        "template",
+        "asks the selected building to commission a template it lists",
+    ),
+    verb(
+        "unpack",
+        "x y",
+        "sends the selected packed building to unpack at x y",
     ),
     verb("destroyselected", "", "destroys the selected regiments"),
     verb(
@@ -320,6 +325,8 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "playerkingdom" => player_kingdom(world, &args),
                 "move" => move_regiment(world, &args),
                 "select" => select(world, &args),
+                "commission" => commission(world, &args),
+                "unpack" => unpack(world, &args),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
                 _ => unreachable!("{name} isn't handled"),
@@ -635,81 +642,27 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
         .placement
         .or(world.resource::<Local>().0)
         .ok_or("no placement kingdom; set one with placementkingdom")?;
-    let id = next_id(world);
-    let recruits = recruits(world);
     // Facing the way the camera looks, so it's seen from behind.
     let facing = [-yaw.sin(), yaw.cos()];
-    let regiment = recruits.raise(template, id, owner, position, facing)?;
-    world.resource_mut::<Console>().next_id = Some(id + 1 + regiment.members.len() as u32);
-    let r = world.resource_mut::<Sim>().0.add_regiment(&regiment);
-    let units = world.resource::<Sim>().0.regiments[r].units.clone();
-    let mut state: SystemState<(Commands, MapAssets)> = SystemState::new(world);
-    let missing = world.resource_scope(|world, mut loaded: Mut<Loaded>| {
-        world.resource_scope(|world, mut drawn: Mut<Drawn>| {
-            let (mut commands, mut assets) =
-                state.get_mut(world).expect("the render plugin's assets");
-            let mut missing = 0;
-            for (m, unit) in regiment.members.iter().zip(units) {
-                let (models, game) = (&mut drawn.0, &mut loaded.game);
-                let mut model_assets = assets.models();
-                if !spawn_unit_view(
-                    &mut commands,
-                    models,
-                    game,
-                    &mut model_assets,
-                    m,
-                    owner,
-                    unit,
-                ) {
-                    missing += 1;
-                }
-            }
-            missing
-        })
-    });
-    state.apply(world);
-    let mut reply = format!(
+    let id = world.resource_mut::<Sim>().0.take_ids(0);
+    let regiment = world
+        .resource::<Raising>()
+        .0
+        .raise(template, id, owner, position, facing)?;
+    let sim = &mut world.resource_mut::<Sim>().0;
+    // A lone unit is its own regiment, so takes one id.
+    let ids = regiment.members.len() as u32 + u32::from(!regiment.lone());
+    sim.take_ids(ids);
+    sim.add_regiment(&regiment);
+    Ok(format!(
         "{} {} of {} units at {:.1} {:.1}",
         regiment.template,
         regiment.id,
         regiment.members.len(),
         position[0],
         position[1]
-    );
-    if missing > 0 {
-        reply += &format!(", {missing} without a model");
-    }
-    Ok(reply)
+    ))
 }
-
-/// An id no object on the map has.
-fn next_id(world: &mut World) -> u32 {
-    if let Some(id) = world.resource::<Console>().next_id {
-        return id;
-    }
-    let sim = &world.resource::<Sim>().0;
-    let things = world.resource::<Loaded>().map.things.iter().map(|t| t.id);
-    let id = things
-        .chain(sim.regiments.iter().map(|r| r.id))
-        .chain(sim.units.iter().map(|u| u.id))
-        .chain(sim.buildings.iter().map(|b| b.id))
-        .max()
-        .map_or(1, |id| id + 1);
-    world.resource_mut::<Console>().next_id = Some(id);
-    id
-}
-
-/// What raising regiments takes, read from the game's data the first time.
-fn recruits(world: &mut World) -> &Recruits {
-    if !world.contains_resource::<Raising>() {
-        let recruits = Recruits::new(&mut world.resource_mut::<Loaded>().game);
-        world.insert_resource(Raising(recruits));
-    }
-    &world.resource::<Raising>().0
-}
-
-#[derive(Resource)]
-struct Raising(Recruits);
 
 fn move_regiment(world: &mut World, args: &[&str]) -> Reply {
     let [id, x, y] = args else {
@@ -732,16 +685,29 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
     let sim = &world.resource::<Sim>().0;
     if args.is_empty() {
         let selected = &world.resource::<Selected>().0;
-        let ids: Vec<String> = selected
+        let mut ids: Vec<String> = selected
             .iter()
             .map(|&r| sim.regiments[r].id.to_string())
             .collect();
+        if let Some(b) = world.resource::<SelectedBuilding>().0 {
+            ids.push(sim.buildings[b].id.to_string());
+        }
         return Ok(match ids.is_empty() {
             true => "nothing selected".into(),
             false => ids.join(" "),
         });
     }
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    if let [id] = args
+        && let Some(b) = sim.buildings.iter().position(|b| b.id.to_string() == *id)
+    {
+        if sim.buildings[b].owner != player || !sim.buildings[b].standing() {
+            return Err(format!("building {id} isn't the player's to select"));
+        }
+        world.resource_mut::<Selected>().0.clear();
+        world.resource_mut::<SelectedBuilding>().0 = Some(b);
+        return Ok(String::new());
+    }
     let picked = args
         .iter()
         .map(|id| {
@@ -757,7 +723,56 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
         })
         .collect::<Result<Vec<_>, _>>()?;
     world.resource_mut::<Selected>().0 = picked;
+    world.resource_mut::<SelectedBuilding>().0 = None;
     Ok(String::new())
+}
+
+fn commission(world: &mut World, args: &[&str]) -> Reply {
+    let [template] = args else {
+        return Err(usage("commission"));
+    };
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let b = world
+        .resource::<SelectedBuilding>()
+        .0
+        .ok_or("no building selected")?;
+    let raising = &world.resource::<Raising>().0;
+    let hq = &world.resource::<Sim>().0.buildings[b].template;
+    let listed = raising
+        .list(hq)
+        .iter()
+        .find(|t| t.as_str().eq_ignore_ascii_case(template));
+    let template = listed.ok_or_else(|| format!("{hq} doesn't commission {template}"))?;
+    let regiment = raising.raise(template.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])?;
+    let seconds = raising.recruit_time(template.as_str());
+    world
+        .resource_mut::<Sim>()
+        .0
+        .commission(player, b, aaa_sim::Commission::new(regiment, seconds))
+        .map_err(|e| format!("refused: {e:?}"))?;
+    Ok(String::new())
+}
+
+fn unpack(world: &mut World, args: &[&str]) -> Reply {
+    let [x, y] = args else {
+        return Err(usage("unpack"));
+    };
+    let point = place(&world.resource::<Loaded>().map.ground, x, y)?;
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let &[r] = &world.resource::<Selected>().0[..] else {
+        return Err("select one packed building".into());
+    };
+    let at = world
+        .resource_mut::<Sim>()
+        .0
+        .order_unpack(player, r, point)
+        .map_err(|e| format!("refused: {e:?}"))?;
+    world.write_message(crate::waypoints::Sent {
+        to: at,
+        aim: crate::actions::Aim::Unpack,
+        regiments: vec![(r, at)],
+    });
+    Ok(format!("unpacking at {:.0} {:.0}", at[0], at[1]))
 }
 
 fn advance(world: &mut World, args: &[&str]) -> Reply {
@@ -801,11 +816,24 @@ fn completions(world: &mut World, before: &str) -> Vec<String> {
         [verb] if verb.eq_ignore_ascii_case("help") => {
             VERBS.iter().map(|v| v.name.to_string()).collect()
         }
-        [verb] if verb.eq_ignore_ascii_case("create") && in_match => recruits(world)
+        [verb] if verb.eq_ignore_ascii_case("create") && in_match => world
+            .resource::<Raising>()
+            .0
             .templates()
             .iter()
             .map(|t| t.to_string())
             .collect(),
+        [verb] if verb.eq_ignore_ascii_case("commission") && in_match => {
+            let sim = &world.resource::<Sim>().0;
+            let building = world.resource::<SelectedBuilding>().0;
+            let template = building.map_or("", |b| sim.buildings[b].template.as_str());
+            let raising = &world.resource::<Raising>().0;
+            raising
+                .list(template)
+                .iter()
+                .map(|t| t.to_string())
+                .collect()
+        }
         [verb] if verb.to_ascii_lowercase().ends_with("kingdom") && in_match => {
             let players = &world.resource::<Sim>().0.sides.players;
             players.iter().map(|p| quote(&p.name)).collect()

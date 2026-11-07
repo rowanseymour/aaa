@@ -56,10 +56,8 @@ pub fn add_banners(
     divisions: Res<Divisions>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
-    existing: Query<&Banner>,
+    mut have: bevy::prelude::Local<usize>,
 ) {
-    // Regiments are only ever added, at the end.
-    let have = existing.iter().map(|b| b.regiment + 1).max().unwrap_or(0);
     let layer = |image: &Option<Handle<Image>>, colour: Color| {
         (
             Node {
@@ -76,13 +74,23 @@ pub fn add_banners(
             Pickable::IGNORE,
         )
     };
-    for (r, regiment) in sim.0.regiments.iter().enumerate().skip(have) {
+    // Regiments are only ever added, at the end, until another match.
+    if sim.is_added() {
+        *have = 0;
+    }
+    let new = sim.0.regiments.iter().enumerate().skip(*have);
+    *have = sim.0.regiments.len();
+    for (r, regiment) in new {
         let [red, green, blue] = sim
             .0
             .sides
             .player(regiment.owner)
             .map_or([1.0; 3], |p| p.rgb);
         let icon = banners.icon(&mut loaded.game, &mut images, &regiment.template);
+        // Packed buildings such as supply trucks fly none of their own.
+        if icon.is_none() && regiment.unpacks.is_some() {
+            continue;
+        }
         let badge = divisions
             .0
             .get(&regiment.id)

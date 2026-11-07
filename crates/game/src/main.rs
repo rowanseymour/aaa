@@ -4,7 +4,7 @@
 //! You play one of the map's players. Click one of your units or its
 //! banner to select its regiment, Shift+click to add a regiment to the
 //! selection or take it out, or drag a box over several, with Shift to add
-//! them. Right-click the ground to send the selection there, keeping its
+//! them. Click one of your buildings to select it instead. Right-click the ground to send the selection there, keeping its
 //! regiments' places relative to each other and stopping to fight enemies on
 //! the way. The number keys pick the selection's formation, in the order each regiment's
 //! layout lists them, and the buttons in the corner give the selection the
@@ -15,6 +15,7 @@
 mod actions;
 mod banners;
 mod console;
+mod ghost;
 mod minimap;
 mod remote;
 mod sound;
@@ -25,7 +26,7 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aaa_data::GameData;
-use aaa_map::{Ground, Map, Member, Shape};
+use aaa_map::{Ground, Map, Member, Recruits, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::models::{Footprint, ModelAssets, Models, pose};
@@ -40,6 +41,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button, ScrollArea};
 use bevy::window::PrimaryWindow;
+use tgck::map::{Detail, Thing};
 
 const USAGE: &str = "\
 usage:
@@ -104,6 +106,24 @@ struct Local(Option<u32>);
 /// The regiments orders go to, in the order they were picked.
 #[derive(Resource, Default)]
 struct Selected(Vec<usize>);
+
+/// The player's building that's selected, whose orders the buttons give
+/// while no regiments are.
+#[derive(Resource, Default)]
+struct SelectedBuilding(Option<usize>);
+
+/// What raising regiments and commissioning things takes, read from the
+/// game's data as the match starts.
+#[derive(Resource)]
+struct Raising(Recruits);
+
+/// How many of the sim's units and buildings are drawn, so those it adds
+/// mid-match get drawn too.
+#[derive(Resource, Default)]
+struct Viewed {
+    units: usize,
+    buildings: usize,
+}
 
 /// What the cursor is over.
 #[derive(Resource, Default, Clone, Copy, PartialEq, Eq, Debug)]
@@ -179,6 +199,8 @@ struct BuildingView {
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
     destroyed: bool,
+    /// The model it plays while it unpacks, shown in its place.
+    unpacking: Option<Entity>,
 }
 
 /// Removes `flag` and the value after it from `args`; `None` if the value is
@@ -289,7 +311,9 @@ fn main() -> ExitCode {
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<waypoints::Sent>()
         .init_resource::<Selected>()
+        .init_resource::<SelectedBuilding>()
         .init_resource::<Focus>()
+        .init_resource::<ghost::Ghost>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
         .add_systems(OnEnter(Screen::Menu), menu)
@@ -313,8 +337,8 @@ fn main() -> ExitCode {
         .add_systems(
             Update,
             (
-                show_units,
-                show_buildings,
+                (spawn_views, (show_units, show_buildings)).chain(),
+                drop_lost_building,
                 selection_sounds,
                 show_focus,
                 show_health.after(camera::Controls),
@@ -330,6 +354,7 @@ fn main() -> ExitCode {
                 minimap::steer.before(camera::Controls),
                 minimap::update.after(camera::Controls),
                 (actions::back_out, actions::show).chain(),
+                (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain(),
             )
@@ -398,6 +423,8 @@ fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded) {
     }
     world.insert_resource(Local(local.map(|p| p.id)));
     world.insert_resource(Sim(sim));
+    let mut loaded = loaded;
+    world.insert_resource(Raising(Recruits::new(&mut loaded.game)));
     world.insert_resource(loaded);
 }
 
@@ -653,6 +680,7 @@ fn setup(
                     placed: world(x, y, z),
                     shot: None,
                     destroyed: false,
+                    unpacking: None,
                 });
             }
             None => missing += 1,
@@ -663,14 +691,29 @@ fn setup(
         sim.0.buildings.len()
     );
     let own = (0..sim.0.regiments.len()).find(|&r| local.0.is_some_and(|p| sim.0.commands(p, r)));
-    let cam = match own.or((!sim.0.regiments.is_empty()).then_some(0)) {
-        Some(r) => {
-            let [x, y] = sim.0.centre(r);
-            RtsCamera::new(world(x, y, map.ground.height_at(x, y)))
-        }
+    // Without regiments of its own, the player starts at a building that
+    // puts out what it commissions, such as its Corps HQ.
+    let headquarters = || {
+        let b = sim
+            .0
+            .buildings
+            .iter()
+            .find(|b| Some(b.owner) == local.0 && b.deploy.is_some() && b.standing());
+        b.map(|b| b.position)
+    };
+    let start = match own.or((!sim.0.regiments.is_empty()).then_some(0)) {
+        Some(r) if own.is_some() || headquarters().is_none() => Some(sim.0.centre(r)),
+        _ => headquarters(),
+    };
+    let cam = match start {
+        Some([x, y]) => RtsCamera::new(world(x, y, map.ground.height_at(x, y))),
         None => RtsCamera::centred(&map.ground),
     };
     camera::spawn(&mut commands, cam);
+    commands.insert_resource(Viewed {
+        units: sim.0.units.len(),
+        buildings: sim.0.buildings.len(),
+    });
     commands.insert_resource(Drawn(models));
     commands.insert_resource(sound::Sounds::new(game));
 }
@@ -718,6 +761,126 @@ fn step_world(sim: &mut World, selected: &mut Vec<usize>) {
     selected.retain(|&r| !sim.destroyed(r));
 }
 
+/// A placed object standing on the ground, for drawing what the sim adds.
+fn thing_at(
+    ground: &Ground,
+    id: u32,
+    template: &str,
+    [x, y]: [f32; 2],
+    [fx, fy]: [f32; 2],
+) -> Thing {
+    Thing {
+        template: template.to_string(),
+        class: tgck::map::ACTOR,
+        id,
+        name: String::new(),
+        position: [x, y, ground.height_at(x, y)],
+        facing: [fx, fy, 0.0],
+        flags: 0,
+        scale: 1.0,
+        variation: -1,
+        seen_by: 0,
+        detail: Detail::None,
+    }
+}
+
+/// Draws the units and buildings the sim has added since last time, such
+/// as those commissioned or unpacked; a building still unpacking plays
+/// its unpacking model in its place.
+fn spawn_views(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    mut loaded: ResMut<Loaded>,
+    mut drawn: ResMut<Drawn>,
+    mut viewed: ResMut<Viewed>,
+    mut assets: MapAssets,
+) {
+    let Loaded { game, map } = &mut *loaded;
+    for u in viewed.units..sim.0.units.len() {
+        let unit = &sim.0.units[u];
+        let regiment = &sim.0.regiments[unit.regiment];
+        let member = Member {
+            thing: thing_at(
+                &map.ground,
+                unit.id,
+                &unit.template,
+                unit.position,
+                unit.facing,
+            ),
+            speed: regiment.speed,
+            fighter: unit.fighter.clone(),
+        };
+        let mut models = assets.models();
+        spawn_unit_view(
+            &mut commands,
+            &mut drawn.0,
+            game,
+            &mut models,
+            &member,
+            regiment.owner,
+            u,
+        );
+        if regiment.units.first() == Some(&u) {
+            info!("{} {} raised", regiment.template, regiment.id);
+        }
+    }
+    viewed.units = sim.0.units.len();
+    for b in viewed.buildings..sim.0.buildings.len() {
+        let building = &sim.0.buildings[b];
+        let thing = thing_at(
+            &map.ground,
+            building.id,
+            &building.template,
+            building.position,
+            building.facing,
+        );
+        let mut models = assets.models();
+        let Some(e) =
+            drawn
+                .0
+                .spawn_building(&mut commands, game, &mut models, &thing, building.owner)
+        else {
+            continue;
+        };
+        let unpacking = building.unpacking.and_then(|(start, _)| {
+            let into = (sim.0.ticks - start) as f32 * TICK;
+            let owner = building.owner;
+            let e =
+                drawn
+                    .0
+                    .spawn_unpacking(&mut commands, game, &mut models, &thing, owner, into)?;
+            commands.entity(e).insert(DespawnOnExit(Screen::Match));
+            Some(e)
+        });
+        if unpacking.is_some() {
+            commands.entity(e).insert(Visibility::Hidden);
+        }
+        let [x, y, z] = thing.position;
+        commands.entity(e).insert((
+            BuildingView {
+                building: b,
+                placed: world(x, y, z),
+                shot: None,
+                destroyed: false,
+                unpacking,
+            },
+            DespawnOnExit(Screen::Match),
+        ));
+    }
+    viewed.buildings = sim.0.buildings.len();
+}
+
+/// Lets go of the selected building once it's no longer the player's to
+/// give orders to.
+fn drop_lost_building(sim: Res<Sim>, local: Res<Local>, mut chosen: ResMut<SelectedBuilding>) {
+    if let Some(b) = chosen.0 {
+        let building = &sim.0.buildings[b];
+        if Some(building.owner) != local.0 || !building.standing() {
+            chosen.0 = None;
+        }
+    }
+}
+
 /// Places units between where the last two ticks left them, playing their
 /// moving animation while they move, their attack as they fire and their
 /// death as they die; the dead without one are hidden.
@@ -738,6 +901,10 @@ fn show_units(
     for (mut view, mut transform, mut visibility, mut playing) in &mut views {
         let unit = &sim.0.units[view.unit];
         let owner = sim.0.regiments[unit.regiment].owner;
+        if unit.unpacked.is_some() {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        }
         if !unit.alive() && !view.dead {
             view.dead = true;
             sounds.cue(
@@ -789,9 +956,10 @@ fn show_units(
     }
 }
 
-/// Plays buildings' attacks as they fire, and sinks the destroyed into the
-/// ground.
+/// Plays buildings' attacks as they fire, sinks the destroyed into the
+/// ground, and swaps those done unpacking to their own model.
 fn show_buildings(
+    mut commands: Commands,
     sim: Res<Sim>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
@@ -807,6 +975,12 @@ fn show_buildings(
     const SINK_DEPTH: f32 = 12.0;
     for (mut view, mut transform, mut visibility, playing) in &mut views {
         let building = &sim.0.buildings[view.building];
+        if building.unpacking.is_none()
+            && let Some(e) = view.unpacking.take()
+        {
+            commands.entity(e).despawn();
+            *visibility = Visibility::Inherited;
+        }
         if let (State::Destroyed(_), false) = (building.state, view.destroyed) {
             view.destroyed = true;
             let (at, owner) = (building.position, building.owner);
@@ -918,6 +1092,7 @@ fn select(
     focus: Res<Focus>,
     sim: Res<Sim>,
     mut selected: ResMut<Selected>,
+    mut chosen: ResMut<SelectedBuilding>,
     mut start: bevy::prelude::Local<Option<Vec2>>,
     mut shown: Single<(&mut Node, &mut Visibility), With<SelectionBox>>,
 ) {
@@ -962,6 +1137,7 @@ fn select(
     let Some(rect) = dragged else {
         match *focus {
             Focus::Regiment(r) if sim.0.commands(player, r) => {
+                chosen.0 = None;
                 match selected.0.iter().position(|&s| s == r) {
                     Some(i) if adding => {
                         selected.0.remove(i);
@@ -970,8 +1146,19 @@ fn select(
                     _ => selected.0 = vec![r],
                 }
             }
+            Focus::Building(b)
+                if !adding
+                    && sim.0.buildings[b].owner == player
+                    && sim.0.buildings[b].standing() =>
+            {
+                selected.0.clear();
+                chosen.0 = Some(b);
+            }
             _ if adding => {}
-            _ => selected.0.clear(),
+            _ => {
+                selected.0.clear();
+                chosen.0 = None;
+            }
         }
         return;
     };
@@ -987,10 +1174,12 @@ fn select(
     };
     if !adding {
         selected.0.clear();
+        chosen.0 = None;
     }
     for r in 0..sim.0.regiments.len() {
         if sim.0.commands(player, r) && !selected.0.contains(&r) && sim.0.survivors(r).any(inside) {
             selected.0.push(r);
+            chosen.0 = None;
         }
     }
 }

@@ -63,6 +63,7 @@ fn command(aim: Aim) -> &'static str {
     match aim {
         Aim::Move => "move",
         Aim::Run => "retreat",
+        Aim::Unpack => "unpack",
     }
 }
 
@@ -81,7 +82,7 @@ pub fn load(
     let cursors = game.cursors();
     let models = game.vfx_models();
     let mut looks = Looks::default();
-    for aim in [Aim::Move, Aim::Run] {
+    for aim in [Aim::Move, Aim::Run, Aim::Unpack] {
         let Some(c) = by_id.get(&Id::from(command(aim))) else {
             continue;
         };

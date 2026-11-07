@@ -126,6 +126,14 @@ impl Pathing {
         ((0..side).contains(&x) && (0..side).contains(&y)).then(|| (y * side + x) as usize)
     }
 
+    /// Whether an obstacle could stand there: every tile it would cover is
+    /// on the map, open and crossable on `domain`.
+    pub fn room_for(&self, o: &Obstacle, domain: Domain) -> bool {
+        covered(o)
+            .into_iter()
+            .all(|(x, y)| self.passable(x, y, domain))
+    }
+
     /// Keeps movers off the tiles an obstacle covers.
     pub fn block(&mut self, o: &Obstacle) {
         for (x, y) in covered(o) {

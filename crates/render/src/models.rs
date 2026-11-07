@@ -51,6 +51,26 @@ pub fn pose(
     (world(x, y, tilt.height), rotation)
 }
 
+/// Where a placed object's model goes and how it's turned and sized.
+fn placed(thing: &Thing, view: &View) -> Transform {
+    // Maps store each object's height as the game places it: on the
+    // ground, the seabed or the waterline.
+    let [x, y, z] = thing.position;
+    // Models face their -y axis, which turns to the object's facing:
+    // roads run along it and waves roll back against it to shore.
+    let [fx, fy, _] = thing.facing;
+    Transform::from_translation(world(x, y, z))
+        .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
+        .with_scale(Vec3::splat(view.scale * thing.scale))
+}
+
+/// Draws one of a model's meshes in `material` instead of what it was
+/// drawn in, as a placement preview's are.
+pub fn repaint(mesh: &mut EntityCommands, material: Handle<StandardMaterial>) {
+    mesh.remove::<(MeshMaterial3d<TeamMaterial>, MeshMaterial3d<GlowMaterial>)>()
+        .insert(MeshMaterial3d(material));
+}
+
 /// One mesh of a model, in Bevy axes, ready to instance.
 #[derive(Clone)]
 pub(crate) struct Part {
@@ -296,6 +316,52 @@ impl Models {
         self.spawn_model(commands, game, assets, thing, owner(thing), &view, None)
     }
 
+    /// Spawns a building of the player `owner`'s, such as one that's just
+    /// unpacked. `None` if its model can't be drawn.
+    pub fn spawn_building(
+        &mut self,
+        commands: &mut Commands,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        thing: &Thing,
+        owner: u32,
+    ) -> Option<Entity> {
+        let view = self
+            .views
+            .get(&Id::from(thing.template.as_str()))?
+            .clone()?;
+        self.spawn_model(commands, game, assets, thing, Some(owner), &view, None)
+    }
+
+    /// Spawns the model a building plays once as it unpacks, `into`
+    /// seconds in, painted in its owner's colour. `None` if it has none
+    /// that can be drawn.
+    pub fn spawn_unpacking(
+        &mut self,
+        commands: &mut Commands,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        thing: &Thing,
+        owner: u32,
+        into: f32,
+    ) -> Option<Entity> {
+        let view = self
+            .views
+            .get(&Id::from(thing.template.as_str()))?
+            .clone()?;
+        let path = view.unpacking.clone()?;
+        let model = self.own_animation(game, assets, &path, view.clone())?;
+        if !matches!(model.meshes, Meshes::Rig(_)) {
+            return None;
+        }
+        let root = commands
+            .spawn((Name::new(path), placed(thing, &view), Visibility::default()))
+            .id();
+        let colour = self.colours.get(&owner).copied();
+        self.spawn_meshes(commands, assets, root, model.meshes, colour, into);
+        Some(root)
+    }
+
     /// Spawns one object, or, for an invisible organization such as a herd,
     /// its members where the map has them standing. Members belong to their
     /// organization's owner, `within`, unless they name their own.
@@ -347,19 +413,10 @@ impl Models {
         let model = &view.models[variation % view.models.len()];
         let model = self.model(game, assets, model, view, moving)?;
         let colour = owner.and_then(|o| self.colours.get(&o).copied());
-        // Maps store each object's height as the game places it: on the
-        // ground, the seabed or the waterline.
-        let [x, y, z] = thing.position;
-        // Models face their -y axis, which turns to the object's facing:
-        // roads run along it and waves roll back against it to shore.
-        let [fx, fy, _] = thing.facing;
-        let transform = Transform::from_translation(world(x, y, z))
-            .with_rotation(Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2))
-            .with_scale(Vec3::splat(view.scale * thing.scale));
         let mut root = commands.spawn((
             Name::new(thing.template.clone()),
             MapObject(thing.clone()),
-            transform,
+            placed(thing, view),
             Visibility::default(),
         ));
         if let Some(size) = model.selection {
@@ -384,29 +441,6 @@ impl Models {
         path: &str,
         transform: Transform,
     ) -> Option<Entity> {
-        let model = self.effect(game, assets, path)?;
-        let root = commands
-            .spawn((
-                Name::new(path.to_string()),
-                transform,
-                Visibility::default(),
-            ))
-            .id();
-        self.spawn_meshes(commands, assets, root, model.meshes, None, 0.0);
-        Some(root)
-    }
-
-    /// An effect's model, as a rig if its nodes are animated.
-    fn effect(
-        &mut self,
-        game: &mut GameData,
-        assets: &mut ModelAssets,
-        path: &str,
-    ) -> Option<Model> {
-        let key = format!("{path}#own");
-        if let Some(model) = self.models.get(&key) {
-            return model.clone();
-        }
         let view = View {
             models: vec![path.to_string()],
             texture_dirs: path
@@ -418,7 +452,33 @@ impl Models {
             scale: 1.0,
             animations: Vec::new(),
             conform: None,
+            unpacking: None,
         };
+        let model = self.own_animation(game, assets, path, view)?;
+        let root = commands
+            .spawn((
+                Name::new(path.to_string()),
+                transform,
+                Visibility::default(),
+            ))
+            .id();
+        self.spawn_meshes(commands, assets, root, model.meshes, None, 0.0);
+        Some(root)
+    }
+
+    /// A model that plays the animation its own nodes carry, as a rig if
+    /// they're animated, its textures found as `view` finds them.
+    fn own_animation(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        path: &str,
+        view: View,
+    ) -> Option<Model> {
+        let key = format!("{path}#own");
+        if let Some(model) = self.models.get(&key) {
+            return model.clone();
+        }
         let rig = Nif::parse(&game.read(path)?)
             .map_err(|e| warn!("{path}: {e}"))
             .ok()

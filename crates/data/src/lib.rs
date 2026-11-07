@@ -45,6 +45,8 @@ pub struct View {
     /// The outline under which the ground is sampled to tilt the model to
     /// follow it, as vehicles do; `None` for models that stay upright.
     pub conform: Option<Shape>,
+    /// Archive path of the model a building plays once as it unpacks.
+    pub unpacking: Option<String>,
 }
 
 /// An animation a template's models can play.
@@ -193,6 +195,38 @@ pub enum Shape {
         width: f32,
         height: f32,
     },
+}
+
+/// How a template shows on the button that commissions or recruits it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Listing {
+    pub name: String,
+    /// Archive path of its button's icon.
+    pub icon: Option<String>,
+    /// Money it costs.
+    pub cost: f32,
+}
+
+/// How a template packs and unpacks.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Deployment {
+    /// For a packed building, such as a supply truck, the template it
+    /// unpacks into.
+    pub unpacks_into: Option<Id>,
+    /// Where the packed building stands from the building, x across the
+    /// building's facing and y along it, and the way it faces there.
+    pub packed_offset: [f32; 2],
+    pub packed_facing: [f32; 2],
+    /// For a building, the seconds unpacking takes.
+    pub unpacking: f32,
+}
+
+/// Where what a building recruits appears and goes, from where it stands:
+/// x across its facing and y along it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct DeployPoints {
+    pub creation: [f32; 2],
+    pub deployment: [f32; 2],
 }
 
 /// An order the player can give, shown as one of the action buttons.
@@ -747,6 +781,76 @@ impl GameData {
         })
     }
 
+    /// What each template that recruits lists, in the order its buttons
+    /// take, by template id: for a Corps HQ, what it commissions.
+    pub fn recruit_lists(&mut self) -> HashMap<Id, Vec<Id>> {
+        self.by_template(|t| {
+            let list = &t.recruit_component.as_ref()?.recruit_actor;
+            let ids: Vec<Id> = list.iter().filter_map(|r| r.actor_ids.clone()).collect();
+            (!ids.is_empty()).then_some(ids)
+        })
+    }
+
+    /// How each template that packs or unpacks does, by template id.
+    pub fn deployments(&mut self) -> HashMap<Id, Deployment> {
+        self.by_template(|t| {
+            let m = t.mobile_deployment_component.as_ref()?;
+            Some(Deployment {
+                unpacks_into: m
+                    .unpack_to_actor_ids
+                    .clone()
+                    .filter(|i| *i != Id::from("null")),
+                packed_offset: m.packed_position_offset.unwrap_or([0.0, 0.0]),
+                packed_facing: m.packed_orientation.unwrap_or([0.0, -1.0]),
+                unpacking: m.unpacking_length.unwrap_or(7.0),
+            })
+        })
+    }
+
+    /// Seconds recruiting or commissioning one of each template takes, by
+    /// template id: an organization's recruit time, else the inverse of
+    /// how fast it resupplies.
+    pub fn recruit_times(&mut self) -> HashMap<Id, f32> {
+        self.by_template(|t| match &t.organization_component {
+            Some(o) => o.recruit_time,
+            None => {
+                let rate = t.element_component.as_ref()?.resupply_rate?;
+                // The game takes half a tick for what never resupplies.
+                Some(if rate > 0.0 { 1.0 / rate } else { 0.05 })
+            }
+        })
+    }
+
+    /// Where what each template recruits appears, by template id.
+    pub fn deploy_points(&mut self) -> HashMap<Id, DeployPoints> {
+        self.by_template(|t| {
+            let d = t.denizen_component.as_ref()?.deployment_info.as_ref()?;
+            let creation = d.creation_offset.unwrap_or([0.0, 0.0]);
+            Some(DeployPoints {
+                creation,
+                deployment: d.deployment_offset.unwrap_or(creation),
+            })
+        })
+    }
+
+    /// How each template that has a name shows on the button that
+    /// commissions or recruits it, by template id.
+    pub fn listings(&mut self) -> HashMap<Id, Listing> {
+        let strings = self.strings();
+        self.by_template(|t| {
+            let view = t.view.as_ref();
+            Some(Listing {
+                name: localized(&strings, t.name.as_deref())?,
+                icon: view.and_then(|v| ui_path(v.icon.as_deref()?)),
+                cost: t
+                    .economy_component
+                    .as_ref()
+                    .and_then(|e| e.cost.as_ref()?.money)
+                    .unwrap_or(0.0),
+            })
+        })
+    }
+
     /// What `of` finds in each template that has it, by template id,
     /// including the ids the game has since renamed.
     fn by_template<T: Clone>(&mut self, of: impl Fn(&defs::Thing) -> Option<T>) -> HashMap<Id, T> {
@@ -823,7 +927,16 @@ impl GameData {
         if aspects.is_empty() && normal.is_none() {
             return None;
         }
-        let aspects: Vec<String> = aspects.into_iter().filter(|p| self.exists(p)).collect();
+        let unpacking = view
+            .aspect
+            .iter()
+            .filter(|a| a.ids == Some(Id::from("aspect_unpacking")))
+            .find_map(|a| a.model.as_deref().map(path))
+            .filter(|p| self.exists(p));
+        let aspects: Vec<String> = aspects
+            .into_iter()
+            .filter(|p| self.exists(p) && Some(p) != unpacking.as_ref())
+            .collect();
         let normal = normal.filter(|p| self.exists(p));
         let models = match normal {
             Some(n) if !view.aspects_as_variations => vec![n],
@@ -879,6 +992,7 @@ impl GameData {
             scale,
             animations,
             conform: conform(thing),
+            unpacking,
         })
     }
 
@@ -947,7 +1061,9 @@ impl GameData {
     /// The orders the player can give, in the order the files list them.
     pub fn commands(&mut self) -> Vec<Command> {
         let strings = self.strings();
-        let files = self.parse_tgis(|n| n.starts_with("game/actor_commands"));
+        let files = self.parse_tgis(|n| {
+            n.starts_with("game/actor_commands") || n.starts_with("game/actorcommands/")
+        });
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         files
             .iter()
@@ -1711,6 +1827,7 @@ mod tests {
                 scale: 1.0,
                 animations: Vec::new(),
                 conform: None,
+                unpacking: None,
             })
         };
         let mut views: HashMap<Id, Option<View>> = [
