@@ -108,6 +108,8 @@ pub struct Weapon {
     pub animation: Option<String>,
     /// It's on a turret, which aims it without turning its user.
     pub turret: bool,
+    /// Played each shot.
+    pub sounds: Vec<Cue>,
 }
 
 /// Which flags a target must have, and must not, for a weapon to fire on
@@ -237,6 +239,58 @@ pub struct DepthColor {
     pub depth: f32,
     pub color: [f32; 3],
     pub alpha: f32,
+}
+
+/// An [`Audio`] an object plays when something happens.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Cue {
+    pub audio: Id,
+    /// Where it plays, e.g. `SELF`, or `TARGET_GROUND` for a shot's landing.
+    pub at: String,
+    /// Seconds after what sets it off.
+    pub delay: f32,
+    pub looping: bool,
+    /// It plays on one in this many of the times it's set off.
+    pub every: u32,
+}
+
+/// The audio an object template plays, by what sets it off; its weapons'
+/// are on its [`Weapon`]s.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ObjectAudio {
+    pub selected: Vec<Cue>,
+    /// Given an order, or an order to attack.
+    pub commanded: Vec<Cue>,
+    pub commanded_aggressive: Vec<Cue>,
+    pub created: Vec<Cue>,
+    pub destroyed: Vec<Cue>,
+    pub start_moving: Vec<Cue>,
+    pub stop_moving: Vec<Cue>,
+    /// On entering and leaving states, by state, e.g. `construction`.
+    pub entered: Vec<(Id, Cue)>,
+    pub left: Vec<(Id, Cue)>,
+    /// When something disturbs it, as a vehicle crushing a doodad does.
+    pub disturbed: Vec<Cue>,
+    /// Played as its model's animations start.
+    pub animations: Vec<AnimationAudio>,
+}
+
+impl ObjectAudio {
+    fn is_empty(&self) -> bool {
+        *self == ObjectAudio::default()
+    }
+}
+
+/// An [`Audio`] played as one of a model's animations starts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnimationAudio {
+    /// The animation's kind, e.g. `RANDOM` or `SELECTED`.
+    pub kind: String,
+    pub ids: Option<String>,
+    /// For `RANDOM` animations, the range of seconds between plays.
+    pub interval: Option<[f32; 2]>,
+    pub audio: Id,
+    pub looping: bool,
 }
 
 /// A sound, speech or music, as the game asks for it by id.
@@ -834,6 +888,13 @@ impl GameData {
             .collect()
     }
 
+    /// The audio of each object template that plays any, by template id.
+    pub fn object_audio(&mut self) -> HashMap<Id, ObjectAudio> {
+        let mut out = self.by_template(|t| Some(object_audio(t)));
+        out.retain(|_, a| !a.is_empty());
+        out
+    }
+
     /// Every sound, speech and music, by id.
     pub fn audio(&mut self) -> HashMap<Id, Audio> {
         let files = self.parse_tgis(|n| n.starts_with("audio/") || n.starts_with("templates/"));
@@ -1061,6 +1122,7 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
                 .turret_ids
                 .as_deref()
                 .is_some_and(|ids| !ids.eq_ignore_ascii_case("null")),
+            sounds: cues(&d.when_do),
         });
     }
     Some(fighter)
@@ -1156,6 +1218,85 @@ fn resolve(renames: &HashMap<Id, Id>, id: &Id) -> Id {
         }
     }
     id.clone()
+}
+
+fn object_audio(thing: &defs::Thing) -> ObjectAudio {
+    let view = thing.view.as_ref();
+    let mover = thing.mover_component.as_ref();
+    let of_view =
+        |f: fn(&defs::View) -> &Vec<defs::Fxc>| view.map(|v| cues(f(v))).unwrap_or_default();
+    let of_mover = |f: fn(&defs::MoverComponent) -> &Vec<defs::Fxc>| {
+        mover.map(|m| cues(f(m))).unwrap_or_default()
+    };
+    let by_state = |fxcs: &[defs::Fxc]| -> Vec<(Id, Cue)> {
+        fxcs.iter()
+            .filter_map(|f| Some((Id::from(f.actor_state.as_deref()?), cue(f)?)))
+            .filter(|(state, _)| *state != Id::from("null"))
+            .collect()
+    };
+    let aspects = view
+        .into_iter()
+        .flat_map(|v| v.aspect.iter().chain(&v.aspect_normal));
+    let animations = aspects
+        .flat_map(|a| &a.animation)
+        .flat_map(|anim| {
+            let kind = anim.kind.clone().unwrap_or_default().to_ascii_uppercase();
+            let interval = match (kind.as_str(), anim.start_min, anim.start_max) {
+                ("RANDOM", Some(min), Some(max)) => Some([min / 1000.0, max / 1000.0]),
+                _ => None,
+            };
+            anim.play_sfx.iter().filter_map(move |p| {
+                Some(AnimationAudio {
+                    kind: kind.clone(),
+                    ids: anim.ids.clone(),
+                    interval,
+                    audio: p.sfx_ids.clone()?,
+                    looping: p.looping,
+                })
+            })
+        })
+        .collect();
+    ObjectAudio {
+        selected: of_view(|v| &v.when_selected),
+        commanded: of_view(|v| &v.when_commanded),
+        commanded_aggressive: of_view(|v| &v.when_commanded_aggressive),
+        created: of_view(|v| &v.when_created),
+        destroyed: of_view(|v| &v.when_destroyed),
+        start_moving: of_mover(|m| &m.when_start_moving),
+        stop_moving: of_mover(|m| &m.when_stop_moving),
+        entered: by_state(&thing.when_enter),
+        left: by_state(&thing.when_leave),
+        disturbed: thing
+            .component
+            .iter()
+            .flat_map(|c| cues(&c.action))
+            .collect(),
+        animations,
+    }
+}
+
+/// The audio the commands play.
+fn cues(fxcs: &[defs::Fxc]) -> Vec<Cue> {
+    fxcs.iter().filter_map(cue).collect()
+}
+
+/// The audio a command plays, if it's one that plays audio.
+fn cue(f: &defs::Fxc) -> Option<Cue> {
+    let plays = f
+        .kind
+        .as_deref()
+        .is_some_and(|k| k.eq_ignore_ascii_case("PLAY_SFX"));
+    let every = f.frequency.unwrap_or(1);
+    if !plays || every == 0 {
+        return None;
+    }
+    Some(Cue {
+        audio: f.audio_ids.clone()?,
+        at: f.at.as_deref().unwrap_or("SELF").to_ascii_uppercase(),
+        delay: f.delay.unwrap_or(0.0),
+        looping: f.looping.unwrap_or(false),
+        every,
+    })
 }
 
 /// An audio definition with its files found by `find`, which gives an
@@ -1453,6 +1594,68 @@ mod tests {
         assert_eq!((quiet.falloff, quiet.range, quiet.limit), (4.0, 64.0, 2));
         assert_eq!(quiet.volume, 0.8);
         assert_eq!(quiet.subtitle.as_deref(), Some("#quiet_text"));
+    }
+
+    #[test]
+    fn objects_play_audio_from_their_sound_commands() {
+        let parsed = tgi::parse(
+            "[Template FXC]\n{\n\tstring type\n\tint frequency = 1\n\tfloat delay = 0\n\
+             \tstring actor_state = NULL\n}\n\
+             [Template FXC_PlaySFX inherit=FXC]\n{\n\ttype = PLAY_SFX\n\tstring audio_ids\n\
+             \tstring at = SELF\n\tflag looping = false\n}\n\
+             [Template FXC_CreateVFX inherit=FXC]\n{\n\ttype = CREATE_VFX\n\tstring vfx_ids\n}\n\
+             [Thing]\n{\n\tIDS = bunker\n\
+             \t[View]\n\t{\n\
+             \t\t[WhenSelected Template=FXC_CreateVFX]\n\t\tvfx_ids = glow\n\
+             \t\t[WhenSelected Template=FXC_PlaySFX]\n\t\taudio_ids = bunker_select\n\
+             \t\t[WhenDestroyed Template=FXC_PlaySFX]\n\t\taudio_ids = rare\n\t\tfrequency = 0\n\
+             \t\t[AspectNormal]\n\t\t{\n\t\t\t[Animation]\n\t\t\t{\n\
+             \t\t\t\ttype = RANDOM\n\t\t\t\tstart_min = 20\n\t\t\t\tstart_max = 60\n\
+             \t\t\t\t[PlaySFX]\n\t\t\t\tsfx_ids = crickets\n\t\t\t}\n\t\t}\n\t}\n\
+             \t[WhenLeave Template=FXC_PlaySFX]\n\taudio_ids = built\n\
+             \tactor_state = construction\n\
+             \t[PerformerComponent]\n\t{\n\t\t[Ability]\n\t\t{\n\
+             \t\t\t[AbilityDefinition]\n\t\t\t{\n\t\t\t\tability_type = attack\n\
+             \t\t\t\trange = 10\n\
+             \t\t\t\t[Effect]\n\t\t\t\ttype = MAIN_DAMAGE\n\
+             \t\t\t\tdamage_type_IDS = gunfire\n\t\t\t\tamount = 5\n\
+             \t\t\t\t[WhenDo Template=FXC_PlaySFX]\n\t\t\t\taudio_ids = shot\n\
+             \t\t\t\tat = target_ground\n\t\t\t\tdelay = 0.5\n\
+             \t\t\t}\n\t\t}\n\t}\n\
+             \t[BodyComponent]\n\thealth = 100\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        let cue = |audio: &str, at: &str, delay| Cue {
+            audio: Id::from(audio),
+            at: at.to_string(),
+            delay,
+            looping: false,
+            every: 1,
+        };
+
+        let audio = object_audio(&thing);
+        assert_eq!(audio.selected, [cue("bunker_select", "SELF", 0.0)]);
+        assert!(audio.destroyed.is_empty());
+        assert_eq!(
+            audio.left,
+            [(Id::from("construction"), cue("built", "SELF", 0.0))]
+        );
+        let crickets = AnimationAudio {
+            kind: "RANDOM".to_string(),
+            ids: None,
+            interval: Some([0.02, 0.06]),
+            audio: Id::from("crickets"),
+            looping: false,
+        };
+        assert_eq!(audio.animations, [crickets]);
+
+        let fighter = fighter(&thing, &HashMap::new()).unwrap();
+        assert_eq!(
+            fighter.weapons[0].sounds,
+            [cue("shot", "TARGET_GROUND", 0.5)]
+        );
     }
 
     #[test]

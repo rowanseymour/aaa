@@ -9,7 +9,8 @@ const USAGE: &str = "\
 usage:
   aaa-data coverage <game dir>          how much of each top-level block kind the definitions read
   aaa-data coverage <game dir> <kind>   each key of one kind, e.g. Thing, with how often it is read
-  aaa-data audio    <game dir> [filter] sounds, speech and music by id, with their files and any missing";
+  aaa-data audio    <game dir> [filter] sounds, speech and music by id, with their files and any missing
+  aaa-data cues     <game dir> [filter] the audio object templates play, by what sets it off";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -23,6 +24,8 @@ fn main() -> ExitCode {
         ["coverage", dir, kind] => coverage(dir, Some(kind)),
         ["audio", dir] => audio(dir, ""),
         ["audio", dir, filter] => audio(dir, filter),
+        ["cues", dir] => cues(dir, ""),
+        ["cues", dir, filter] => cues(dir, filter),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -111,6 +114,69 @@ fn audio(dir: &str, filter: &str) -> Res {
         missing += a.missing.len();
     }
     outln!("{} audio, {missing} missing files", audio.len());
+    Ok(())
+}
+
+/// The audio of each object template whose id contains `filter`, ignoring
+/// case, with a `?` on audio that isn't defined.
+fn cues(dir: &str, filter: &str) -> Res {
+    let filter = filter.to_ascii_lowercase();
+    let mut game = GameData::open(dir.as_ref())?;
+    let audio = game.audio();
+    let fighters = game.fighters();
+    let mut objects: Vec<_> = game
+        .object_audio()
+        .into_iter()
+        .filter(|(id, _)| id.as_str().to_ascii_lowercase().contains(&filter))
+        .collect();
+    objects.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut undefined = BTreeMap::new();
+    let mut line = |event: &str, id: &aaa_data::Id| -> std::io::Result<()> {
+        let mark = match audio.contains_key(id) {
+            true => "",
+            false => {
+                *undefined.entry(id.to_string()).or_insert(0) += 1;
+                " ?"
+            }
+        };
+        writeln!(std::io::stdout(), "    {event}: {id}{mark}")
+    };
+    for (id, a) in &objects {
+        outln!("{id}");
+        let events = [
+            ("selected", &a.selected),
+            ("commanded", &a.commanded),
+            ("commanded aggressive", &a.commanded_aggressive),
+            ("created", &a.created),
+            ("destroyed", &a.destroyed),
+            ("start moving", &a.start_moving),
+            ("stop moving", &a.stop_moving),
+            ("disturbed", &a.disturbed),
+        ];
+        for (event, cues) in events {
+            for c in cues {
+                line(event, &c.audio)?;
+            }
+        }
+        for (state, c) in &a.entered {
+            line(&format!("entered {state}"), &c.audio)?;
+        }
+        for (state, c) in &a.left {
+            line(&format!("left {state}"), &c.audio)?;
+        }
+        for anim in &a.animations {
+            line(&format!("animation {}", anim.kind), &anim.audio)?;
+        }
+        for (i, w) in fighters.get(id).iter().flat_map(|f| &f.weapons).enumerate() {
+            for c in &w.sounds {
+                line(&format!("weapon {i}"), &c.audio)?;
+            }
+        }
+    }
+    outln!("{} templates with audio", objects.len());
+    for (id, n) in undefined {
+        outln!("undefined: {id} ({n})");
+    }
     Ok(())
 }
 
