@@ -103,7 +103,7 @@ pub struct Unit {
     pub domain: Domain,
     /// In world units.
     pub position: [f32; 2],
-    /// Where it was a tick ago, to draw it in between.
+    /// Where it was a tick ago; see [`Unit::drawn_at`].
     pub previous: [f32; 2],
     /// The way it faces, a unit vector.
     pub facing: [f32; 2],
@@ -131,6 +131,13 @@ impl Unit {
 
     pub fn alive(&self) -> bool {
         self.died.is_none()
+    }
+
+    /// Where to draw it a fraction `t` of the way through the tick that
+    /// moved it from [`Unit::previous`] to [`Unit::position`].
+    pub fn drawn_at(&self, t: f32) -> [f32; 2] {
+        let ([px, py], [x, y]) = (self.previous, self.position);
+        [px + (x - px) * t, py + (y - py) * t]
     }
 }
 

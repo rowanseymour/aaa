@@ -26,13 +26,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aaa_data::GameData;
-use aaa_map::{Ground, Map, Shape};
+use aaa_map::{Ground, Map, Member, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
-use aaa_render::models::{Footprint, Models, pose};
+use aaa_render::models::{Footprint, ModelAssets, Models, pose};
 use aaa_render::overlay::{self, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET};
 use aaa_render::shot::{self, ShotPlugin};
-use aaa_render::terrain::world;
+use aaa_render::terrain::{map_point, world};
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{Relation, State, TICK, World};
 use bevy::image::CompressedImageFormatSupport;
@@ -143,6 +143,30 @@ struct UnitView {
     conform: Option<Shape>,
 }
 
+/// Spawns the model of the sim's `unit`, placed from `member`; false if it has
+/// none.
+fn spawn_unit_view(
+    commands: &mut Commands,
+    models: &mut Models,
+    game: &mut GameData,
+    assets: &mut ModelAssets,
+    member: &Member,
+    owner: u32,
+    unit: usize,
+) -> bool {
+    let thing = &member.thing;
+    let Some(e) = models.spawn_unit(commands, game, assets, thing, owner, member.speed) else {
+        return false;
+    };
+    commands.entity(e).insert(UnitView {
+        unit,
+        shot: None,
+        dead: false,
+        conform: models.conform(&thing.template),
+    });
+    true
+}
+
 /// Draws one of the simulation's buildings.
 #[derive(Component)]
 struct BuildingView {
@@ -154,61 +178,71 @@ struct BuildingView {
     shot: Option<(u64, usize)>,
 }
 
-fn main() -> ExitCode {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let side = match args.iter().position(|a| a == "--side") {
-        Some(i) => match args.get(i + 1).and_then(|n| n.parse().ok()) {
-            Some(n @ 1..) => {
-                args.drain(i..i + 2);
-                Some(n)
-            }
-            _ => {
-                eprintln!("{USAGE}");
-                return ExitCode::from(2);
-            }
-        },
+/// Removes `flag` and the value after it from `args`; `None` if the value is
+/// missing.
+fn take_option(args: &mut Vec<String>, flag: &str) -> Option<Option<String>> {
+    match args.iter().position(|a| a == flag) {
+        Some(i) if i + 1 < args.len() => {
+            let value = args.remove(i + 1);
+            args.remove(i);
+            Some(Some(value))
+        }
+        Some(_) => None,
+        None => Some(None),
+    }
+}
+
+/// What the command line asks for besides the game and map.
+struct Options {
+    side: Option<usize>,
+    scripts: Vec<String>,
+    console: Option<u16>,
+    screenshot: Option<String>,
+}
+
+/// Takes the options out of `args`; `None` if any is malformed.
+fn options(args: &mut Vec<String>) -> Option<Options> {
+    let side = match take_option(args, "--side")? {
+        Some(n) => Some(n.parse().ok().filter(|&n| n >= 1)?),
         None => None,
     };
     let mut scripts = Vec::new();
-    while let Some(i) = args.iter().position(|a| a == "--exec") {
-        if i + 1 >= args.len() {
-            eprintln!("{USAGE}");
-            return ExitCode::from(2);
-        }
-        scripts.push(args.remove(i + 1));
-        args.remove(i);
+    while let Some(script) = take_option(args, "--exec")? {
+        scripts.push(script);
     }
-    let remote = match args.iter().position(|a| a == "--console") {
-        Some(i) => match args.get(i + 1).and_then(|p| p.parse().ok()) {
-            Some(port) => {
-                args.drain(i..i + 2);
-                match remote::Remote::listen(port) {
-                    Ok(r) => Some(r),
-                    Err(e) => {
-                        eprintln!("aaa-game: {e}");
-                        return ExitCode::FAILURE;
-                    }
-                }
-            }
-            None => {
-                eprintln!("{USAGE}");
-                return ExitCode::from(2);
-            }
-        },
+    let console = match take_option(args, "--console")? {
+        Some(p) => Some(p.parse().ok()?),
         None => None,
     };
-    let screenshot = match args.iter().position(|a| a == "--screenshot") {
-        Some(i) if i + 1 < args.len() => {
-            let path = args.remove(i + 1);
-            args.remove(i);
-            Some(ShotPlugin { path: path.into() })
-        }
-        Some(_) => {
-            eprintln!("{USAGE}");
-            return ExitCode::from(2);
-        }
-        None => None,
+    let screenshot = take_option(args, "--screenshot")?;
+    Some(Options {
+        side,
+        scripts,
+        console,
+        screenshot,
+    })
+}
+
+fn main() -> ExitCode {
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(Options {
+        side,
+        scripts,
+        console,
+        screenshot,
+    }) = options(&mut args)
+    else {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
     };
+    let remote = match console.map(remote::Remote::listen).transpose() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("aaa-game: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let screenshot = screenshot.map(|path| ShotPlugin { path: path.into() });
     let (dir, map) = match args.as_slice() {
         [dir] => (dir, None),
         [dir, map] => (dir, Some(map)),
@@ -235,16 +269,7 @@ fn main() -> ExitCode {
     };
 
     let mut app = App::new();
-    let window = match screenshot {
-        Some(_) => shot::no_window(),
-        None => WindowPlugin {
-            primary_window: Some(Window {
-                title: "aaa-game".into(),
-                ..default()
-            }),
-            ..default()
-        },
-    };
+    let window = shot::window("aaa-game".into(), screenshot.is_some());
     app.add_plugins(DefaultPlugins.set(window));
     if let Some(s) = screenshot {
         app.add_plugins(s);
@@ -559,23 +584,16 @@ fn setup(
         debug_assert_eq!(sim.0.units[i].id, m.thing.id);
         let owner = sim.0.regiments[sim.0.units[i].regiment].owner;
         let mut model_assets = assets.models();
-        match models.spawn_unit(
+        if !spawn_unit_view(
             &mut commands,
+            &mut models,
             game,
             &mut model_assets,
-            &m.thing,
+            m,
             owner,
-            m.speed,
+            i,
         ) {
-            Some(e) => {
-                commands.entity(e).insert(UnitView {
-                    unit: i,
-                    shot: None,
-                    dead: false,
-                    conform: models.conform(&m.thing.template),
-                });
-            }
-            None => missing += 1,
+            missing += 1;
         }
     }
     info!(
@@ -658,11 +676,12 @@ fn show_units(
                 p.use_ability(ids);
             }
         }
-        let [px, py] = unit.previous;
-        let [x, y] = unit.position;
-        let (x, y) = (px + (x - px) * t, py + (y - py) * t);
-        (transform.translation, transform.rotation) =
-            pose(&loaded.map.ground, [x, y], unit.facing, view.conform);
+        (transform.translation, transform.rotation) = pose(
+            &loaded.map.ground,
+            unit.drawn_at(t),
+            unit.facing,
+            view.conform,
+        );
         if let Some(mut playing) = playing.filter(|_| unit.alive()) {
             let speed = sim.0.regiments[unit.regiment].speed;
             playing.set_moving(unit.moving().then_some(speed));
@@ -939,7 +958,10 @@ fn choose_formation(
 
 /// Where a ray from the camera first meets the ground, in world units.
 fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
-    let above = |p: Vec3| p.y - ground.height_at(p.x, -p.z);
+    let above = |p: Vec3| {
+        let [x, y] = map_point(p);
+        p.y - ground.height_at(x, y)
+    };
     let step = 0.5;
     let mut t = 0.0;
     let mut was = ray.origin;
@@ -955,7 +977,7 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
                 if above(mid) > 0.0 { a = mid } else { b = mid }
             }
             let size = ground.size();
-            let (x, y) = (b.x, -b.z);
+            let [x, y] = map_point(b);
             return ((0.0..=size).contains(&x) && (0.0..=size).contains(&y)).then_some([x, y]);
         }
         was = p;
@@ -1017,9 +1039,7 @@ fn show_focus(
                 if unit.regiment != r || !unit.alive() {
                     continue;
                 }
-                let [px, py] = unit.previous;
-                let [x, y] = unit.position;
-                let at = [px + (x - px) * t, py + (y - py) * t];
+                let at = unit.drawn_at(t);
                 // An oval through the footprint's corners.
                 let size =
                     footprint.map_or(SMALLEST, |f| f.0) * std::f32::consts::SQRT_2 / RING_FILL;
@@ -1095,9 +1115,7 @@ fn show_health(
             let Some(image) = images.health_bar(unit.health / fighter.health) else {
                 continue;
             };
-            let [px, py] = unit.previous;
-            let [x, y] = unit.position;
-            let (x, y) = (px + (x - px) * t, py + (y - py) * t);
+            let [x, y] = unit.drawn_at(t);
             // At the edge of its footprint nearest the camera, so the bar
             // clears the model.
             let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
