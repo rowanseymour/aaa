@@ -209,6 +209,9 @@ pub struct Command {
     pub cursor: Option<Id>,
     /// The effect marking where it was given, from [`GameData::vfx_models`].
     pub marker: Option<Id>,
+    /// Whether each of a group goes to its own place, keeping its place
+    /// relative to the rest, rather than all to the one place.
+    pub group_offset: bool,
 }
 
 /// A mouse cursor's frames, which loop.
@@ -959,6 +962,7 @@ impl GameData {
                     slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
                     cursor: c.cursor_ids,
                     marker: c.command_vfx_ids_location,
+                    group_offset: c.apply_group_offset.unwrap_or(true),
                 })
             })
             .collect()
