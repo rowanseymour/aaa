@@ -29,7 +29,7 @@ const PAD: f32 = 8.0;
 /// The game leaves the rest of the commands off a regiment's grid.
 const ORDERS: [(&str, Option<Give>); 7] = [
     ("move", Some(Give::Aim(Aim::Move))),
-    ("kill", None),
+    ("kill", Some(Give::Aim(Aim::Attack))),
     ("retreat", Some(Give::Aim(Aim::Run))),
     ("stop", Some(Give::Stop)),
     ("guard", None),
@@ -53,7 +53,12 @@ enum Give {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Aim {
     Move,
+    Attack,
     Run,
+}
+
+impl Aim {
+    pub const ALL: [Aim; 3] = [Aim::Move, Aim::Attack, Aim::Run];
 }
 
 /// What the grid is showing.
@@ -348,6 +353,7 @@ pub fn show(
     }
     let text = match (hovered, *page) {
         (Some(name), _) => name,
+        (None, Page::Aiming(Aim::Attack)) => "Left click where to attack".into(),
         (None, Page::Aiming(_)) => "Left click where to go".into(),
         (None, _) => String::new(),
     };
@@ -429,7 +435,7 @@ pub fn aim(
         player,
         &selected.0,
         point,
-        aim == Aim::Run,
+        aim,
         loaded.map.ground.size(),
     );
     sent.write(crate::waypoints::Sent {

@@ -20,7 +20,9 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::PrimaryWindow;
 
+use crate::actions::Aim;
 use crate::remote::Remote;
+use crate::waypoints::Sent;
 use crate::{Drawn, Loaded, Local, Screen, Selected, Sim, spawn_unit_view};
 
 /// Lines kept for scrolling back through.
@@ -189,6 +191,11 @@ const VERBS: &[Verb] = &[
         "sends a regiment, by its id, to x y",
     ),
     verb(
+        "attack",
+        "regiment x y",
+        "sends a regiment, by its id, to x y, taking on enemies in reach on the way",
+    ),
+    verb(
         "select",
         "[regiment ...]",
         "selects the player's regiments, by their ids; without any, says which are selected",
@@ -318,7 +325,8 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "create" => create(world, &args),
                 "placementkingdom" => placement_kingdom(world, &args),
                 "playerkingdom" => player_kingdom(world, &args),
-                "move" => move_regiment(world, &args),
+                "move" => order(world, &args, Aim::Move),
+                "attack" => order(world, &args, Aim::Attack),
                 "select" => select(world, &args),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
@@ -711,9 +719,13 @@ fn recruits(world: &mut World) -> &Recruits {
 #[derive(Resource)]
 struct Raising(Recruits);
 
-fn move_regiment(world: &mut World, args: &[&str]) -> Reply {
+/// Gives a regiment an order at a place, marked as if clicked there.
+fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     let [id, x, y] = args else {
-        return Err(usage("move"));
+        return Err(usage(match aim {
+            Aim::Attack => "attack",
+            _ => "move",
+        }));
     };
     let point = place(&world.resource::<Loaded>().map.ground, x, y)?;
     let sim = &mut world.resource_mut::<Sim>().0;
@@ -723,8 +735,17 @@ fn move_regiment(world: &mut World, args: &[&str]) -> Reply {
         .position(|r| r.id.to_string() == *id)
         .ok_or_else(|| format!("no regiment {id}"))?;
     let owner = sim.regiments[r].owner;
-    sim.order_move(owner, r, point)
-        .map_err(|_| format!("regiment {id} is destroyed"))?;
+    let ordered = match aim {
+        Aim::Move => sim.order_move(owner, r, point),
+        Aim::Attack => sim.order_attack(owner, r, point),
+        Aim::Run => sim.order_run(owner, r, point),
+    };
+    ordered.map_err(|_| format!("regiment {id} is destroyed"))?;
+    world.write_message(Sent {
+        to: point,
+        aim,
+        regiments: vec![(r, point)],
+    });
     Ok(String::new())
 }
 

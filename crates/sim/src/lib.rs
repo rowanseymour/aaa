@@ -92,6 +92,9 @@ pub enum Order {
     Move,
     /// Ignoring enemies all the way there, then back to [`Order::Move`].
     Run,
+    /// As [`Order::Move`], and engaging any enemy its members can fire on
+    /// too, until it gets there; then back to [`Order::Move`].
+    Attack,
 }
 
 pub struct Unit {
@@ -404,11 +407,32 @@ impl World {
         regiment: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
+        self.advance(player, regiment, target, Order::Move)
+    }
+
+    /// Sends a regiment to `target` as [`World::order_move`] does, taking
+    /// on every enemy it comes within reach of on the way.
+    pub fn order_attack(
+        &mut self,
+        player: u32,
+        regiment: usize,
+        target: [f32; 2],
+    ) -> Result<(), NotYours> {
+        self.advance(player, regiment, target, Order::Attack)
+    }
+
+    fn advance(
+        &mut self,
+        player: u32,
+        regiment: usize,
+        target: [f32; 2],
+        order: Order,
+    ) -> Result<(), NotYours> {
         if !self.commands(player, regiment) {
             return Err(NotYours);
         }
         let r = &mut self.regiments[regiment];
-        r.order = Order::Move;
+        r.order = order;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
@@ -517,11 +541,14 @@ impl World {
 
     /// Ends the engagements whose enemies are gone, then engages regiments
     /// with what `fired_on` says fired on them, by regiment, where it's in
-    /// their operational range, and moving ones with enemy units they run
-    /// into. Regiments on [`Order::Run`] engage nothing.
+    /// their operational range, moving ones with enemy units they run
+    /// into, and those on [`Order::Attack`] with enemies they can fire on.
+    /// Regiments on [`Order::Run`] engage nothing.
     fn engage(&mut self, fired_on: &[(usize, Target)]) {
         for r in 0..self.regiments.len() {
-            if self.regiments[r].order == Order::Run
+            let regiment = &self.regiments[r];
+            if regiment.order != Order::Move
+                && regiment.engaged.is_empty()
                 && !self.survivors(r).any(|u| self.units[u].moving())
             {
                 self.regiments[r].order = Order::Move;
@@ -565,6 +592,13 @@ impl World {
                 meetings.push((unit.regiment, Enemy::Regiment(other.regiment)));
             }
         }
+        for r in 0..self.regiments.len() {
+            if self.regiments[r].order == Order::Attack
+                && let Some(enemy) = self.in_reach(r)
+            {
+                meetings.push((r, enemy));
+            }
+        }
         for (r, enemy) in meetings {
             let regiment = &self.regiments[r];
             if regiment.order == Order::Run
@@ -580,6 +614,27 @@ impl World {
                 self.hold(r, enemy);
             }
         }
+    }
+
+    /// The nearest enemy any of a regiment's members can fire on.
+    fn in_reach(&self, r: usize) -> Option<Enemy> {
+        let enemy = |t| match t {
+            Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
+            Target::Building(b) => Enemy::Building(b),
+        };
+        self.survivors(r)
+            .filter_map(|u| Some((u, self.units[u].fighter.as_ref()?)))
+            .flat_map(|(u, f)| {
+                let s = Target::Unit(u);
+                let from = self.units[u].position;
+                f.weapons.iter().flat_map(move |w| {
+                    self.targets()
+                        .filter(move |&t| self.can_hit(s, w, t) && self.hostile(r, enemy(t)))
+                        .map(move |t| (self.reach(from, t), t))
+                })
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map(|(_, t)| enemy(t))
     }
 
     fn hostile(&self, r: usize, enemy: Enemy) -> bool {
@@ -1440,6 +1495,37 @@ mod tests {
         assert!(w.regiments[0].engaged.is_empty());
         run(&mut w, 20.0);
         assert!(near(w.units[0].position, [10.0, 50.0]));
+    }
+
+    #[test]
+    fn attacking_regiments_engage_what_they_can_fire_on_then_carry_on() {
+        let mut w = skirmish();
+        // Unarmed, so a regiment only moving would walk on until it ran
+        // into it.
+        w.units[1].fighter = Some(soldier(Vec::new()));
+        w.order_attack(1, 0, [10.0, 50.0]).unwrap();
+        // In its range after 4s, at 18.
+        run(&mut w, 4.5);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert!(!w.units[0].moving());
+        assert!(w.units[0].position[1] < 20.0);
+        assert_eq!(w.regiments[0].order, Order::Attack);
+        assert!(w.underway(0));
+        run(&mut w, 3.0);
+        assert!(!w.units[1].alive());
+        run(&mut w, 20.0);
+        assert!(near(w.units[0].position, [10.0, 50.0]));
+        assert_eq!(w.regiments[0].order, Order::Move);
+    }
+
+    #[test]
+    fn attacking_regiments_leave_friends_alone() {
+        let mut w = skirmish();
+        w.regiments[1].owner = 1;
+        w.order_attack(1, 0, [10.0, 50.0]).unwrap();
+        run(&mut w, 6.0);
+        assert!(w.regiments[0].engaged.is_empty());
+        assert!(w.units[1].alive());
     }
 
     #[test]
