@@ -24,6 +24,9 @@ pub struct Player {
     pub independent: bool,
     /// A person may play it.
     pub playable: bool,
+    /// The nation it plays as, e.g. `nation_usa`, where the map fixes one or
+    /// it was loaded with one.
+    pub nation: Option<String>,
     /// How it stands toward each player, by index in
     /// [`Map::players`](crate::Map::players).
     pub relations: Vec<Relation>,
@@ -43,6 +46,28 @@ pub struct Team {
     /// How it stands toward each team, by index in
     /// [`Map::teams`](crate::Map::teams).
     pub team_relations: Vec<Relation>,
+}
+
+/// How the player `from` stands toward the player `to`, by their ids;
+/// neutral toward a player that isn't among `players`.
+pub fn relation(players: &[Player], teams: &[Team], from: u32, to: u32) -> Relation {
+    if from == to {
+        return Relation::Itself;
+    }
+    let index = |id| players.iter().position(|p| p.id == id);
+    let (Some(a), Some(b)) = (index(from), index(to)) else {
+        return Relation::Neutral;
+    };
+    let (pa, pb) = (&players[a], &players[b]);
+    // Players put in a team keep their own stored relations at war with
+    // everyone, so the team's speak for them.
+    let stance = match (pa.team, pb.team) {
+        (Some(ta), Some(tb)) => teams[ta].team_relations.get(tb),
+        (Some(ta), None) => teams[ta].relations.get(b),
+        (None, Some(tb)) => pa.team_relations.get(tb),
+        (None, None) => pa.relations.get(b),
+    };
+    stance.copied().unwrap_or(Relation::Neutral)
 }
 
 /// The players and teams, with their relations by index rather than by
@@ -74,6 +99,7 @@ pub fn sides(
                 .position(|t| t.head.id == k.team && k.team != 0),
             independent: k.independent != 0,
             playable: k.playable,
+            nation: (!k.nation.is_empty()).then(|| k.nation.clone()),
             relations: by_player(&k.relations),
             team_relations: by_team(&k.team_relations),
         })

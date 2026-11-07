@@ -502,11 +502,22 @@ pub struct Sun {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Nation {
     pub ids: Option<Id>,
+    pub name: Option<String>,
     /// The group of the templates it fields.
     pub placement_group_ids: Option<Id>,
     /// What its divisions wear on their banners, each division one.
     #[serde(default)]
     pub badge: Vec<Badge>,
+    #[serde(default)]
+    pub placeholder: Vec<Placeholder>,
+}
+
+/// A template of the nation's that a map's placeholder stands for, such as
+/// its Corps HQ.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Placeholder {
+    pub placeholder_ids: Option<Id>,
+    pub thing_ids: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

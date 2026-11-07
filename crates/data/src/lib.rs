@@ -13,6 +13,18 @@ use std::path::{Path, PathBuf};
 
 use tgck::{Archive, Map};
 
+/// A nation a side can play as.
+#[derive(Debug, Clone)]
+pub struct Nation {
+    /// E.g. `nation_usa`.
+    pub id: Id,
+    /// E.g. `United States`.
+    pub name: String,
+    /// The template it puts in place of each of a map's placeholders, by
+    /// placeholder id: its Corps HQ for `placeholder_corpsunpacked`.
+    pub placeholders: HashMap<Id, Id>,
+}
+
 pub struct GameData {
     archives: Vec<Archive<BufReader<File>>>,
     /// Lower-case path to entry; where archives share a path the first wins.
@@ -1044,6 +1056,31 @@ impl GameData {
             .collect();
         out.sort_by(|a, b| a.ids.cmp(&b.ids));
         out
+    }
+
+    /// The nations sides can play as, by name.
+    pub fn nations(&mut self) -> Vec<Nation> {
+        let strings = self.strings();
+        let files = self.parse_tgis(|n| n.starts_with("nations/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut nations: Vec<Nation> = files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Nation"))
+            .filter_map(|b| templates.deserialize::<defs::Nation>(b).ok())
+            .filter_map(|n| {
+                let id = n.ids?;
+                let placeholders = n.placeholder.into_iter();
+                Some(Nation {
+                    name: localized(&strings, n.name.as_deref()).unwrap_or_else(|| id.to_string()),
+                    id,
+                    placeholders: placeholders
+                        .filter_map(|p| Some((p.placeholder_ids?, p.thing_ids?)))
+                        .collect(),
+                })
+            })
+            .collect();
+        nations.sort_by(|a, b| a.name.cmp(&b.name));
+        nations
     }
 
     /// The colours players can take, by id, e.g. `blue`.

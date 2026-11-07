@@ -36,7 +36,7 @@ const QUEUED: usize = 6;
 /// The game leaves the rest of the commands off a regiment's grid.
 const ORDERS: [(&str, Option<Give>); 8] = [
     ("move", Some(Give::Aim(Aim::Move))),
-    ("kill", None),
+    ("kill", Some(Give::Aim(Aim::Attack))),
     ("retreat", Some(Give::Aim(Aim::Run))),
     ("stop", Some(Give::Stop)),
     ("guard", None),
@@ -67,8 +67,13 @@ enum Give {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Aim {
     Move,
+    Attack,
     Run,
     Unpack,
+}
+
+impl Aim {
+    pub const ALL: [Aim; 4] = [Aim::Move, Aim::Attack, Aim::Run, Aim::Unpack];
 }
 
 /// What the grid is showing.
@@ -588,6 +593,7 @@ pub fn show(
     let text = match (hovered, *page) {
         (Some(name), _) => name,
         (None, Page::Aiming(Aim::Unpack)) => "Left click where to unpack".into(),
+        (None, Page::Aiming(Aim::Attack)) => "Left click where to attack".into(),
         (None, Page::Aiming(_)) => "Left click where to go".into(),
         (None, _) => String::new(),
     };
@@ -704,14 +710,14 @@ pub fn aim(
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             vec![(r, at)]
         }
-        Aim::Move | Aim::Run => {
+        Aim::Move | Aim::Attack | Aim::Run => {
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             crate::send(
                 &mut sim.0,
                 player,
                 &selected.0,
                 point,
-                aim == Aim::Run,
+                aim,
                 loaded.map.ground.size(),
             )
         }

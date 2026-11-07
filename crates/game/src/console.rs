@@ -17,7 +17,10 @@ use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::window::PrimaryWindow;
 
+use crate::actions::Aim;
+use crate::lobby::Lineup;
 use crate::remote::Remote;
+use crate::waypoints::Sent;
 use crate::{Loaded, Local, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 /// Lines kept for scrolling back through.
@@ -184,6 +187,11 @@ const VERBS: &[Verb] = &[
         "sends a regiment, by its id, to x y",
     ),
     verb(
+        "attack",
+        "regiment x y",
+        "sends a regiment, by its id, to x y, taking on enemies in reach on the way",
+    ),
+    verb(
         "select",
         "[id ...]",
         "selects the player's regiments, or one of its buildings, by their ids; without any, says what's selected",
@@ -323,7 +331,8 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "create" => create(world, &args),
                 "placementkingdom" => placement_kingdom(world, &args),
                 "playerkingdom" => player_kingdom(world, &args),
-                "move" => move_regiment(world, &args),
+                "move" => order(world, &args, Aim::Move),
+                "attack" => order(world, &args, Aim::Attack),
                 "select" => select(world, &args),
                 "commission" => commission(world, &args),
                 "unpack" => unpack(world, &args),
@@ -613,6 +622,9 @@ fn player_kingdom(world: &mut World, args: &[&str]) -> Reply {
         [word] => {
             let id = kingdom(sim, word)?;
             world.resource_mut::<Local>().0 = Some(id);
+            if let Some(mut lineup) = world.get_resource_mut::<Lineup>() {
+                lineup.seat(Some(id));
+            }
             world.resource_mut::<Selected>().0.clear();
             Ok(String::new())
         }
@@ -664,9 +676,13 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
     ))
 }
 
-fn move_regiment(world: &mut World, args: &[&str]) -> Reply {
+/// Gives a regiment an order at a place, marked as if clicked there.
+fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     let [id, x, y] = args else {
-        return Err(usage("move"));
+        return Err(usage(match aim {
+            Aim::Attack => "attack",
+            _ => "move",
+        }));
     };
     let point = place(&world.resource::<Loaded>().map.ground, x, y)?;
     let sim = &mut world.resource_mut::<Sim>().0;
@@ -676,8 +692,21 @@ fn move_regiment(world: &mut World, args: &[&str]) -> Reply {
         .position(|r| r.id.to_string() == *id)
         .ok_or_else(|| format!("no regiment {id}"))?;
     let owner = sim.regiments[r].owner;
-    sim.order_move(owner, r, point)
-        .map_err(|_| format!("regiment {id} is destroyed"))?;
+    let ordered = match aim {
+        Aim::Move => sim.order_move(owner, r, point),
+        Aim::Attack => sim.order_attack(owner, r, point),
+        Aim::Run => sim.order_run(owner, r, point),
+        Aim::Unpack => sim
+            .order_unpack(owner, r, point)
+            .map(drop)
+            .map_err(|_| aaa_sim::NotYours),
+    };
+    ordered.map_err(|_| format!("regiment {id} is destroyed"))?;
+    world.write_message(Sent {
+        to: point,
+        aim,
+        regiments: vec![(r, point)],
+    });
     Ok(String::new())
 }
 
