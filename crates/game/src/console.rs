@@ -189,7 +189,7 @@ const VERBS: &[Verb] = &[
     verb(
         "attack",
         "regiment (x y | enemy)",
-        "sends a regiment, by its id, to x y, taking on enemies in reach on the way, or after an enemy regiment, by its id",
+        "sends a regiment, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy regiment, by its id",
     ),
     verb(
         "select",

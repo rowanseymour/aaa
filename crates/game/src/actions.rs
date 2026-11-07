@@ -679,6 +679,7 @@ pub fn aim(
     local: Res<Local>,
     selected: Res<Selected>,
     focus: Res<crate::Focus>,
+    looks: Res<crate::waypoints::Looks>,
     mut sim: ResMut<Sim>,
     mut page: ResMut<Page>,
     time: Res<Time>,
@@ -730,7 +731,7 @@ pub fn aim(
                 player,
                 &selected.0,
                 point,
-                aim,
+                (aim, looks.together(aim)),
                 loaded.map.ground.size(),
             )
         }

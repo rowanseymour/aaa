@@ -87,11 +87,24 @@ pub struct Regiment {
 
 impl Regiment {
     /// Index into `formations` of the one it's in: its combat formation
-    /// while engaged.
+    /// while engaged or attacking.
     pub fn current_formation(&self) -> usize {
-        match self.engaged.is_empty() {
-            true => self.formation,
-            false => self.combat.unwrap_or(self.formation),
+        let fighting =
+            !self.engaged.is_empty() || matches!(self.order, Order::Attack | Order::Pursue(_));
+        match fighting {
+            true => self.combat.unwrap_or(self.formation),
+            false => self.formation,
+        }
+    }
+
+    /// Whether it takes on enemies that come within its control range or
+    /// that it runs into, not only what fires on it: always while engaged
+    /// or attacking, never while running, else as its formation is.
+    pub fn aggressive(&self) -> bool {
+        match self.order {
+            Order::Run => false,
+            Order::Attack | Order::Pursue(_) => true,
+            Order::Move => !self.engaged.is_empty() || self.formations[self.formation].aggressive,
         }
     }
 }
@@ -114,8 +127,9 @@ pub enum Order {
     Move,
     /// Ignoring enemies all the way there, then back to [`Order::Move`].
     Run,
-    /// As [`Order::Move`], and engaging any enemy its members can fire on
-    /// too, until it gets there; then back to [`Order::Move`].
+    /// As [`Order::Move`], but in its combat formation and aggressive
+    /// whatever formation it was put in, until it gets there; then back to
+    /// [`Order::Move`].
     Attack,
     /// Going after the enemy regiment at this index into
     /// [`World::regiments`] wherever it goes, engaging it once near enough
@@ -521,8 +535,9 @@ impl World {
         self.advance(player, regiment, target, Order::Move)
     }
 
-    /// Sends a regiment to `target` as [`World::order_move`] does, taking
-    /// on every enemy it comes within reach of on the way.
+    /// Sends a regiment to `target` as [`World::order_move`] does, but in
+    /// its combat formation and taking on every enemy that comes within
+    /// its control range on the way.
     pub fn order_attack(
         &mut self,
         player: u32,
@@ -875,10 +890,10 @@ impl World {
 
     /// Ends the engagements whose enemies are gone, then engages regiments
     /// with what `fired_on` says fired on them, by regiment, where it's in
-    /// their operational range, moving ones with enemy units they run
-    /// into, those on [`Order::Attack`] with enemies they can fire on, and
-    /// those on [`Order::Pursue`] with their enemy once near enough.
-    /// Regiments on [`Order::Run`] engage nothing.
+    /// their operational range, [`Regiment::aggressive`] ones with enemies
+    /// that come within their control range and enemy units their moving
+    /// units run into, and those on [`Order::Pursue`] with their enemy
+    /// once near enough. Regiments on [`Order::Run`] engage nothing.
     fn engage(&mut self, fired_on: &[(usize, Target)]) {
         for r in 0..self.regiments.len() {
             if let Order::Pursue(e) = self.regiments[r].order
@@ -891,7 +906,11 @@ impl World {
                 && regiment.engaged.is_empty()
                 && !self.survivors(r).any(|u| self.units[u].moving())
             {
+                let before = regiment.current_formation();
                 self.regiments[r].order = Order::Move;
+                if self.regiments[r].current_formation() != before {
+                    self.take_places(r);
+                }
             }
             let engaged = std::mem::take(&mut self.regiments[r].engaged);
             if engaged.is_empty() {
@@ -919,7 +938,7 @@ impl World {
             }
         }
         for (u, unit) in self.units.iter().enumerate() {
-            if !unit.alive() || !unit.moving() {
+            if !unit.alive() || !unit.moving() || !self.regiments[unit.regiment].aggressive() {
                 continue;
             }
             let met = self.units.iter().enumerate().find(|&(v, other)| {
@@ -933,10 +952,8 @@ impl World {
             }
         }
         for r in 0..self.regiments.len() {
-            if self.regiments[r].order == Order::Attack
-                && let Some(enemy) = self.in_reach(r)
-            {
-                meetings.push((r, enemy));
+            if self.regiments[r].aggressive() && !self.destroyed(r) {
+                meetings.extend(self.in_control(r).into_iter().map(|e| (r, e)));
             }
         }
         for (r, enemy) in meetings {
@@ -1109,25 +1126,33 @@ impl World {
         true
     }
 
-    /// The nearest enemy any of a regiment's members can fire on.
-    fn in_reach(&self, r: usize) -> Option<Enemy> {
-        let enemy = |t| match t {
-            Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
-            Target::Building(b) => Enemy::Building(b),
-        };
-        self.survivors(r)
-            .filter_map(|u| Some((u, self.units[u].fighter.as_ref()?)))
-            .flat_map(|(u, f)| {
-                let s = Target::Unit(u);
-                let from = self.units[u].position;
-                f.weapons.iter().flat_map(move |w| {
-                    self.targets()
-                        .filter(move |&t| self.can_hit(s, w, t) && self.hostile(r, enemy(t)))
-                        .map(move |t| (self.reach(from, t), t))
-                })
+    /// The enemies with something within a regiment's control range that
+    /// its members can fire on.
+    fn in_control(&self, r: usize) -> Vec<Enemy> {
+        let here = self.centre(r);
+        let reach = self.regiments[r].control_range;
+        let fires_on = |t: Target| {
+            self.survivors(r).any(|u| {
+                let f = self.units[u].fighter.iter().flat_map(|f| &f.weapons);
+                f.into_iter()
+                    .any(|w| self.can_target(Target::Unit(u), w, t))
             })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-            .map(|(_, t)| enemy(t))
+        };
+        let mut found = Vec::new();
+        for t in self.targets() {
+            let enemy = match t {
+                Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
+                Target::Building(b) => Enemy::Building(b),
+            };
+            if !found.contains(&enemy)
+                && self.reach(here, t) <= reach
+                && self.hostile(r, enemy)
+                && fires_on(t)
+            {
+                found.push(enemy);
+            }
+        }
+        found
     }
 
     fn hostile(&self, r: usize, enemy: Enemy) -> bool {
@@ -1665,6 +1690,7 @@ mod tests {
         let formation = |id: &str, offsets| aaa_map::Formation {
             id: id.into(),
             offsets,
+            aggressive: false,
         };
         let regiment = aaa_map::Regiment {
             id: 1,
@@ -1789,6 +1815,7 @@ mod tests {
             formations: vec![aaa_map::Formation {
                 id: "line".into(),
                 offsets: vec![[0.0, 0.0]],
+                aggressive: false,
             }],
             formation: 0,
             combat: None,
@@ -1866,6 +1893,7 @@ mod tests {
                     formations: vec![aaa_map::Formation {
                         id: "line".into(),
                         offsets: vec![[0.0, 0.0]],
+                        aggressive: false,
                     }],
                     formation: 0,
                     combat: None,
@@ -1955,6 +1983,7 @@ mod tests {
         r.formations.push(aaa_map::Formation {
             id: "wide".into(),
             offsets: vec![[0.0, 0.0]],
+            aggressive: false,
         });
         r.combat = Some(1);
         w
@@ -1985,8 +2014,11 @@ mod tests {
     }
 
     #[test]
-    fn moving_regiments_engage_enemies_they_run_into() {
+    fn aggressive_regiments_engage_enemies_they_run_into() {
         let mut w = skirmish();
+        w.regiments[0].formations[0].aggressive = true;
+        // Too short a control range to see it coming.
+        w.regiments[0].control_range = 1.0;
         // Unarmed, so it doesn't fire on them first.
         w.units[1].fighter = Some(soldier(Vec::new()));
         w.units[0].fighter = Some(soldier(vec![rifle(2.0, 50.0)]));
@@ -2020,24 +2052,39 @@ mod tests {
     }
 
     #[test]
-    fn attacking_regiments_engage_what_they_can_fire_on_then_carry_on() {
+    fn attacking_regiments_engage_what_comes_within_control_range_then_carry_on() {
         let mut w = skirmish();
-        // Unarmed, so a regiment only moving would walk on until it ran
-        // into it.
+        // Unarmed, so it never fires on them to draw them in.
         w.units[1].fighter = Some(soldier(Vec::new()));
         w.order_attack(1, 0, [10.0, 50.0]).unwrap();
-        // In its range after 4s, at 18.
-        run(&mut w, 4.5);
+        assert_eq!(w.regiments[0].current_formation(), 1);
+        // Within its control range of 18 from 12, after 1s; its rifle
+        // reaches from 18.
+        run(&mut w, 1.5);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
-        assert!(!w.units[0].moving());
-        assert!(w.units[0].position[1] < 20.0);
-        assert_eq!(w.regiments[0].order, Order::Attack);
+        assert!(w.regiments[0].position[1] < 14.0);
         assert!(w.underway(0));
-        run(&mut w, 3.0);
+        run(&mut w, 6.0);
         assert!(!w.units[1].alive());
-        run(&mut w, 20.0);
-        assert!(near(w.units[0].position, [10.0, 50.0]));
+        run(&mut w, 25.0);
+        assert!(near(w.regiments[0].position, [10.0, 50.0]));
+        assert!(!w.underway(0));
         assert_eq!(w.regiments[0].order, Order::Move);
+        assert_eq!(w.regiments[0].current_formation(), 0);
+    }
+
+    #[test]
+    fn passive_regiments_only_answer_fire() {
+        let mut w = skirmish();
+        w.units[1].position = [10.0, 26.0];
+        // The enemy's within its control range but out of its own reach.
+        w.units[1].fighter = Some(soldier(vec![rifle(12.0, 10.0)]));
+        w.units[0].fighter = Some(soldier(vec![rifle(12.0, 50.0)]));
+        run(&mut w, 3.0);
+        assert!(w.regiments[0].engaged.is_empty());
+        w.regiments[0].formations[0].aggressive = true;
+        w.tick();
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
     }
 
     #[test]
@@ -2051,28 +2098,45 @@ mod tests {
     }
 
     #[test]
-    fn pursuing_regiments_engage_their_enemy_once_near_enough() {
+    fn pursuing_regiments_engage_their_enemy_once_within_control_range() {
         let mut w = skirmish();
         w.units[1].fighter = Some(soldier(Vec::new()));
         w.order_pursue(1, 0, 1).unwrap();
         assert_eq!(w.regiments[0].order, Order::Pursue(1));
-        // Away to 38 by 4s; near enough within 0.6 of its control range
-        // of 18, from 27.2, after 8.6s.
+        assert_eq!(w.regiments[0].current_formation(), 1);
+        // Away to 38 by 4s; within its control range of 18 after 5s.
         w.order_move(2, 1, [10.0, 38.0]).unwrap();
-        run(&mut w, 6.0);
+        run(&mut w, 4.5);
         assert!(w.regiments[0].engaged.is_empty());
         assert!(w.units[0].moving());
-        assert!(distance(w.regiments[0].position, [10.0, 38.0]) < 4.0);
-        run(&mut w, 3.0);
+        run(&mut w, 1.0);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
-        let stopped = w.units[0].position;
-        assert!((27.0..28.5).contains(&stopped[1]), "{stopped:?}");
-        run(&mut w, 3.0);
+        assert!(w.regiments[0].position[1] < 22.0);
+        run(&mut w, 6.0);
         assert!(!w.units[1].alive());
         assert_eq!(w.regiments[0].order, Order::Move);
-        // It stays where it caught up.
+        // It forms up again where it engaged, and goes no further.
+        let stopped = w.regiments[0].position;
         run(&mut w, 5.0);
-        assert!(near(w.units[0].position, stopped));
+        assert!(near(w.regiments[0].position, stopped));
+        assert!(!w.underway(0));
+    }
+
+    #[test]
+    fn pursuing_regiments_engage_what_they_cant_fire_on_once_near_enough() {
+        let mut w = skirmish();
+        // Nothing of the pursuer's fires on it, so it never draws it in.
+        w.units[1].fighter = Some(Fighter {
+            flags: vec![Id::from("tank")],
+            ..soldier(Vec::new())
+        });
+        w.order_pursue(1, 0, 1).unwrap();
+        // Within 0.6 of its control range of 18, from 19.2, after 4.6s.
+        run(&mut w, 4.0);
+        assert!(w.regiments[0].engaged.is_empty());
+        run(&mut w, 1.0);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert!((18.5..20.5).contains(&w.units[0].position[1]));
     }
 
     #[test]
@@ -2563,6 +2627,7 @@ mod tests {
             formations: vec![aaa_map::Formation {
                 id: String::new(),
                 offsets: vec![[0.0, 0.0]],
+                aggressive: false,
             }],
             formation: 0,
             combat: None,

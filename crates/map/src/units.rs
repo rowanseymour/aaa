@@ -243,6 +243,9 @@ pub struct Formation {
     /// Per member, where it stands from the regiment's position: x to its
     /// right and y ahead.
     pub offsets: Vec<[f32; 2]>,
+    /// Whether a regiment standing or moving in it takes on enemies that
+    /// come within its operational range, or runs into.
+    pub aggressive: bool,
 }
 
 /// The owned organizations whose members can all move.
@@ -573,6 +576,7 @@ impl Recruits {
             members: vec![member],
             formations: vec![Formation {
                 id: String::new(),
+                aggressive: false,
                 offsets: vec![[0.0, 0.0]],
             }],
             formation: 0,
@@ -599,6 +603,7 @@ fn arrange(
         .iter()
         .map(|f| Formation {
             id: f.id.to_string(),
+            aggressive: f.aggressive,
             offsets: f
                 .slots
                 .iter()
@@ -626,6 +631,7 @@ fn as_placed(members: &[Member], facing: [f32; 2]) -> Formation {
     });
     Formation {
         id: String::new(),
+        aggressive: false,
         offsets: members
             .iter()
             .map(|m| {
@@ -645,6 +651,7 @@ mod tests {
         // A front slot of two, an optional flank and the captain.
         let formation = |id: &str, dy: f32| LayoutFormation {
             id: Id::from(id),
+            aggressive: false,
             slots: vec![
                 vec![[-1.0, dy], [1.0, dy]],
                 vec![[3.0, 0.0]],

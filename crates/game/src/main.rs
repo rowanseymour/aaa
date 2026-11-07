@@ -1256,6 +1256,7 @@ fn command(
     loaded: Res<Loaded>,
     local: Res<Local>,
     focus: Res<Focus>,
+    looks: Res<waypoints::Looks>,
     mut sim: ResMut<Sim>,
     selected: Res<Selected>,
     time: Res<Time>,
@@ -1290,7 +1291,7 @@ fn command(
         player,
         &moving,
         point,
-        actions::Aim::Move,
+        (actions::Aim::Move, looks.together(actions::Aim::Move)),
         ground.size(),
     );
     sent.write(waypoints::Sent {
@@ -1339,14 +1340,14 @@ fn acknowledge(
 }
 
 /// Gives regiments an order at a point, each keeping its place relative to
-/// the rest, within a map `size` across. Returns those that went, each with
-/// where to.
+/// the rest within a map `size` across, unless they all go `together` to
+/// the point itself. Returns those that went, each with where to.
 fn send(
     sim: &mut World,
     player: u32,
     regiments: &[usize],
     [px, py]: [f32; 2],
-    aim: actions::Aim,
+    (aim, together): (actions::Aim, bool),
     size: f32,
 ) -> Vec<(usize, [f32; 2])> {
     let centres: Vec<[f32; 2]> = regiments.iter().map(|&r| sim.centre(r)).collect();
@@ -1356,10 +1357,13 @@ fn send(
         .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
     let mut sent = Vec::new();
     for (&r, [x, y]) in regiments.iter().zip(centres) {
-        let target = [
-            (px + x - cx).clamp(0.0, size),
-            (py + y - cy).clamp(0.0, size),
-        ];
+        let target = match together {
+            true => [px, py],
+            false => [
+                (px + x - cx).clamp(0.0, size),
+                (py + y - cy).clamp(0.0, size),
+            ],
+        };
         let ordered = match aim {
             actions::Aim::Move => sim.order_move(player, r, target),
             actions::Aim::Attack => sim.order_attack(player, r, target),

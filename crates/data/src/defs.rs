@@ -595,6 +595,10 @@ pub struct Formation {
     pub name: Option<String>,
     /// Relative to its file's folder unless it starts with `/`.
     pub icon: Option<String>,
+    /// Whether a regiment standing or moving in it takes on enemies that
+    /// come within its operational range, or runs into.
+    #[serde(default)]
+    pub aggressive: bool,
 }
 
 /// A sound, speech or music the game plays by id. Its base templates are

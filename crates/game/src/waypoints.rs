@@ -44,6 +44,16 @@ struct Frames {
 pub struct Looks {
     cursors: HashMap<Aim, Frames>,
     waypoints: HashMap<Aim, Marking>,
+    /// The orders that send every regiment to the very place pointed at,
+    /// instead of each keeping its place relative to the rest.
+    together: Vec<Aim>,
+}
+
+impl Looks {
+    /// Whether `aim` sends every regiment to the very place pointed at.
+    pub fn together(&self, aim: Aim) -> bool {
+        self.together.contains(&aim)
+    }
 }
 
 /// How an order marks where it sends regiments.
@@ -88,6 +98,9 @@ pub fn load(
         let Some(c) = by_id.get(&Id::from(command(aim))) else {
             continue;
         };
+        if !c.group_offset {
+            looks.together.push(aim);
+        }
         if let Some(model) = c.marker.as_ref().and_then(|m| models.get(m)) {
             let marking = Marking {
                 model: model.clone(),
