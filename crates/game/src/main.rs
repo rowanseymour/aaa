@@ -1008,6 +1008,7 @@ fn command(
     selected: Res<Selected>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
+    mut sent: MessageWriter<waypoints::Sent>,
 ) {
     let Some(player) = local.0 else {
         return;
@@ -1022,7 +1023,12 @@ fn command(
         return;
     };
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-    send(&mut sim.0, player, &selected.0, point, false, ground.size());
+    let regiments = send(&mut sim.0, player, &selected.0, point, false, ground.size());
+    sent.write(waypoints::Sent {
+        to: point,
+        aim: actions::Aim::Move,
+        regiments,
+    });
 }
 
 /// Plays the first of the regiments answering an order.
