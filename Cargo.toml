@@ -15,3 +15,13 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# For CI's tests, which want fast builds rather than fast binaries. Custom
+# profiles inherit dev's package overrides, so undo the Bevy one explicitly.
+[profile.ci]
+inherits = "dev"
+opt-level = 0
+debug = "line-tables-only"
+
+[profile.ci.package."*"]
+opt-level = 0
