@@ -105,6 +105,7 @@ const ELEMENT: u32 = 8;
 const CONSTRUCTION: u32 = 15;
 const AIRCRAFT: u32 = 23;
 const CITY: u32 = 29;
+const HQ: u32 = 30;
 
 /// Its id among the world's updatable objects.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1315,6 +1316,18 @@ impl Actor {
         })
     }
 
+    /// Which of its nation's division badges this HQ's regiments wear, if
+    /// it's an HQ; -1 for none.
+    pub fn hq_badge(&self) -> Option<i32> {
+        let data = self.decoded()?.iter().find_map(|c| match c {
+            Component::Framed { bit: HQ, data } => Some(data),
+            _ => None,
+        })?;
+        // After the updatable header and the component's version.
+        let badge = data.get(12..16)?;
+        Some(i32::from_le_bytes(badge.try_into().ok()?))
+    }
+
     pub fn body(&self) -> Option<&Body> {
         self.decoded()?.iter().find_map(|c| match c {
             Component::Body(b) => Some(b),
@@ -1491,6 +1504,23 @@ mod tests {
         .write(&mut w)
         .unwrap();
         w.0
+    }
+
+    #[test]
+    fn reads_an_hq_badge() {
+        let mut hq = Writer::default();
+        Updatable { version: 1, id: 20 }.write(&mut hq);
+        hq.u32(3);
+        hq.i32(7);
+        // No attachments.
+        hq.u32(0);
+        let mut w = Writer::default();
+        actor(1 << HQ, vec![]).write(&mut w).unwrap();
+        let trailer_at = 24;
+        let bytes = [&w.0[..trailer_at], &hq.0, &w.0[trailer_at..]].concat();
+        let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
+        assert_eq!(parsed.hq_badge(), Some(7));
+        assert_eq!(actor(0, vec![]).hq_badge(), None);
     }
 
     #[test]

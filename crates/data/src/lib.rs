@@ -508,6 +508,27 @@ impl GameData {
         })
     }
 
+    /// The archive paths of the badges that divisions of each organization
+    /// template's nation wear, in the order HQs number them, by template id.
+    pub fn division_badges(&mut self) -> HashMap<Id, Vec<String>> {
+        let files = self.parse_tgis(|n| n.starts_with("nations/") || n.starts_with("templates/"));
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let by_group: HashMap<Id, Vec<String>> = files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Nation"))
+            .filter_map(|b| templates.deserialize::<defs::Nation>(b).ok())
+            .filter_map(|n| {
+                let badges = n.badge.iter();
+                let paths = badges.map(|b| format!("Nations/{}", b.badge_texture));
+                Some((n.placement_group_ids?, paths.collect()))
+            })
+            .collect();
+        self.by_template(|t| {
+            let group = t.placement.as_ref()?.placement_group_ids.as_ref()?;
+            by_group.get(group).cloned()
+        })
+    }
+
     /// How far from where they stand organizations take on enemies that
     /// fire on them, by template id, including the ids the game has since
     /// renamed.

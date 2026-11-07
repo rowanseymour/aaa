@@ -76,6 +76,13 @@ pub struct Thing {
     pub performer_component: Option<PerformerComponent>,
     pub city_component: Option<CityComponent>,
     pub organization_component: Option<OrganizationComponent>,
+    pub placement: Option<Placement>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Placement {
+    /// The group of templates a [`Nation`] fields, e.g. `group_nation_rus`.
+    pub placement_group_ids: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -338,6 +345,23 @@ pub struct Sun {
     pub diffuse: [f32; 3],
     pub ambient: [f32; 3],
     pub specular: [f32; 3],
+}
+
+/// A nation players can play.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Nation {
+    pub ids: Option<Id>,
+    /// The group of the templates it fields.
+    pub placement_group_ids: Option<Id>,
+    /// What its divisions wear on their banners, each division one.
+    #[serde(default)]
+    pub badge: Vec<Badge>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Badge {
+    /// Its image, relative to `Nations/`.
+    pub badge_texture: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use aaa_data::{GameData, Id};
-use aaa_map::{Ground, Shape};
+use aaa_map::{Division, Ground, Shape};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageSampler};
 use bevy::light::NotShadowCaster;
@@ -97,8 +97,11 @@ pub struct BannerImages {
     pub focus: Option<Handle<Image>>,
     /// The archive path of each organization template's icon.
     icon_paths: HashMap<Id, String>,
-    /// Icons loaded so far, by path.
-    icons: HashMap<String, Option<Handle<Image>>>,
+    /// The archive paths of the division badges of each organization
+    /// template's nation.
+    badge_paths: HashMap<Id, Vec<String>>,
+    /// Images loaded so far, by path.
+    loaded: HashMap<String, Option<Handle<Image>>>,
     formats: CompressedImageFormats,
 }
 
@@ -124,7 +127,8 @@ impl BannerImages {
             engaged,
             focus,
             icon_paths: game.banner_icons(),
-            icons: HashMap::new(),
+            badge_paths: game.division_badges(),
+            loaded: HashMap::new(),
             formats,
         }
     }
@@ -137,14 +141,38 @@ impl BannerImages {
         images: &mut Assets<Image>,
         template: &str,
     ) -> Option<Handle<Image>> {
-        let path = self.icon_paths.get(&Id::from(template))?;
-        if let Some(icon) = self.icons.get(path) {
-            return icon.clone();
+        let path = self.icon_paths.get(&Id::from(template))?.clone();
+        self.image(game, images, path)
+    }
+
+    /// The badge an organization in `division` wears below its banner's
+    /// plate, drawn the banner's size; loaded the first time it's asked for.
+    pub fn badge(
+        &mut self,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        division: &Division,
+    ) -> Option<Handle<Image>> {
+        let badges = self
+            .badge_paths
+            .get(&Id::from(division.template.as_str()))?;
+        let path = badges.get(division.badge)?.clone();
+        self.image(game, images, path)
+    }
+
+    fn image(
+        &mut self,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        path: String,
+    ) -> Option<Handle<Image>> {
+        if let Some(image) = self.loaded.get(&path) {
+            return image.clone();
         }
-        let icon =
-            textures::decode(&game.read(path)?, path, self.formats, true).map(|i| images.add(i));
-        self.icons.insert(path.clone(), icon.clone());
-        icon
+        let image =
+            textures::decode(&game.read(&path)?, &path, self.formats, true).map(|i| images.add(i));
+        self.loaded.insert(path, image.clone());
+        image
     }
 }
 

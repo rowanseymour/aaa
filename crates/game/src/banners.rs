@@ -1,7 +1,11 @@
 //! The banner over each regiment: a plate in its owner's colour showing
-//! what the regiment is, with crossed rifles behind it while it's engaged
-//! and brackets around it while the cursor is on it.
+//! what the regiment is and its division's badge, with crossed rifles
+//! behind it while it's engaged and brackets around it while the cursor is
+//! on it.
 
+use std::collections::HashMap;
+
+use aaa_map::Division;
 use aaa_render::camera::RtsCamera;
 use aaa_render::overlay::BannerImages;
 use aaa_render::terrain::world;
@@ -26,6 +30,10 @@ pub struct Banner {
     focus: Entity,
 }
 
+/// The division of each regiment the map starts in one, by regiment id.
+#[derive(Resource)]
+pub struct Divisions(HashMap<u32, Division>);
+
 /// Loads what banners are drawn with.
 pub fn setup_banners(
     mut commands: Commands,
@@ -34,6 +42,7 @@ pub fn setup_banners(
     formats: Res<CompressedImageFormatSupport>,
 ) {
     commands.insert_resource(BannerImages::load(&mut loaded.game, &mut images, formats.0));
+    commands.insert_resource(Divisions(aaa_map::divisions(&loaded.map.things)));
 }
 
 /// Spawns a banner, hidden until [`show_banners`] places it, for each
@@ -43,6 +52,7 @@ pub fn add_banners(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
     sim: Res<Sim>,
+    divisions: Res<Divisions>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
     existing: Query<&Banner>,
@@ -72,6 +82,10 @@ pub fn add_banners(
             .player(regiment.owner)
             .map_or([1.0; 3], |p| p.rgb);
         let icon = banners.icon(&mut loaded.game, &mut images, &regiment.template);
+        let badge = divisions
+            .0
+            .get(&regiment.id)
+            .and_then(|d| banners.badge(&mut loaded.game, &mut images, d));
         let mut root = commands.spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -96,6 +110,10 @@ pub fn add_banners(
                 banner.spawn(layer(&icon, Color::WHITE));
             }
             banner.spawn(layer(&banners.frame, Color::WHITE));
+            // Over the frame's lower edge.
+            if badge.is_some() {
+                banner.spawn(layer(&badge, Color::WHITE));
+            }
         });
         root.add_child(focus);
         root.insert(Banner {
