@@ -19,7 +19,9 @@
 //!
 //! Values parse from their text: numbers, `true`/`false` (or `1`/`0`), unit
 //! enum variants by name (matched like keys), and tuples or arrays from comma
-//! separated lists. Unknown keys are skipped unless the type denies them.
+//! separated lists. Unknown keys are skipped unless the type denies them. A
+//! float with a stray second decimal part, such as `1.5.0`, reads as far as
+//! it's a number, as the game does.
 //!
 //! With [`Templates::deserialize`] every block is resolved against its
 //! template before its contents are read, nested blocks included.
@@ -277,9 +279,9 @@ impl<'a> Node<'a> {
         }
     }
 
-    fn parse<T: std::str::FromStr>(self, expected: &str) -> Result<T, Error> {
+    fn parse<T>(self, expected: &str, read: fn(&str) -> Option<T>) -> Result<T, Error> {
         let (text, line) = self.text(expected)?;
-        text.trim().parse().map_err(|_| Error {
+        read(text.trim()).ok_or_else(|| Error {
             line: Some(line),
             message: format!("expected {expected}, found {text:?}"),
         })
@@ -352,17 +354,9 @@ impl<'de> IntoDeserializer<'de, Error> for Node<'_> {
 }
 
 macro_rules! parse_scalars {
-    ($($method:ident $visit:ident $ty:ty, $expected:literal;)*) => {
+    ($($method:ident $visit:ident $ty:ty, $expected:literal, $read:ident;)*) => {
         $(fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-            visitor.$visit(self.parse::<$ty>($expected)?)
-        })*
-    };
-}
-
-macro_rules! parse_floats {
-    ($($method:ident $visit:ident $ty:ty;)*) => {
-        $(fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-            visitor.$visit(self.parse::<Float<$ty>>("a number")?.0)
+            visitor.$visit(self.parse::<$ty>($expected, $read)?)
         })*
     };
 }
@@ -382,20 +376,17 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
     }
 
     parse_scalars! {
-        deserialize_i8 visit_i8 i8, "an integer";
-        deserialize_i16 visit_i16 i16, "an integer";
-        deserialize_i32 visit_i32 i32, "an integer";
-        deserialize_i64 visit_i64 i64, "an integer";
-        deserialize_u8 visit_u8 u8, "an integer";
-        deserialize_u16 visit_u16 u16, "an integer";
-        deserialize_u32 visit_u32 u32, "an integer";
-        deserialize_u64 visit_u64 u64, "an integer";
-        deserialize_char visit_char char, "a character";
-    }
-
-    parse_floats! {
-        deserialize_f32 visit_f32 f32;
-        deserialize_f64 visit_f64 f64;
+        deserialize_i8 visit_i8 i8, "an integer", whole;
+        deserialize_i16 visit_i16 i16, "an integer", whole;
+        deserialize_i32 visit_i32 i32, "an integer", whole;
+        deserialize_i64 visit_i64 i64, "an integer", whole;
+        deserialize_u8 visit_u8 u8, "an integer", whole;
+        deserialize_u16 visit_u16 u16, "an integer", whole;
+        deserialize_u32 visit_u32 u32, "an integer", whole;
+        deserialize_u64 visit_u64 u64, "an integer", whole;
+        deserialize_f32 visit_f32 f32, "a number", float;
+        deserialize_f64 visit_f64 f64, "a number", float;
+        deserialize_char visit_char char, "a character", whole;
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
@@ -551,20 +542,17 @@ impl<'de> de::Deserializer<'de> for Scalar<'_> {
     }
 
     parse_scalars! {
-        deserialize_i8 visit_i8 i8, "an integer";
-        deserialize_i16 visit_i16 i16, "an integer";
-        deserialize_i32 visit_i32 i32, "an integer";
-        deserialize_i64 visit_i64 i64, "an integer";
-        deserialize_u8 visit_u8 u8, "an integer";
-        deserialize_u16 visit_u16 u16, "an integer";
-        deserialize_u32 visit_u32 u32, "an integer";
-        deserialize_u64 visit_u64 u64, "an integer";
-        deserialize_char visit_char char, "a character";
-    }
-
-    parse_floats! {
-        deserialize_f32 visit_f32 f32;
-        deserialize_f64 visit_f64 f64;
+        deserialize_i8 visit_i8 i8, "an integer", whole;
+        deserialize_i16 visit_i16 i16, "an integer", whole;
+        deserialize_i32 visit_i32 i32, "an integer", whole;
+        deserialize_i64 visit_i64 i64, "an integer", whole;
+        deserialize_u8 visit_u8 u8, "an integer", whole;
+        deserialize_u16 visit_u16 u16, "an integer", whole;
+        deserialize_u32 visit_u32 u32, "an integer", whole;
+        deserialize_u64 visit_u64 u64, "an integer", whole;
+        deserialize_f32 visit_f32 f32, "a number", float;
+        deserialize_f64 visit_f64 f64, "a number", float;
+        deserialize_char visit_char char, "a character", whole;
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
@@ -591,23 +579,26 @@ fn resolved<'b>(templates: Option<&Templates>, block: &'b Block) -> Cow<'b, Bloc
     }
 }
 
-/// A number that, like the game's `atof`, is `text`'s longest leading part
-/// that parses: some files have typos such as `1.5.0`, which the game takes
-/// as 1.5.
-#[derive(Clone, Copy)]
-struct Float<T>(T);
+fn whole<T: std::str::FromStr>(text: &str) -> Option<T> {
+    text.parse().ok()
+}
 
-impl<T: std::str::FromStr> std::str::FromStr for Float<T> {
-    type Err = ();
-
-    fn from_str(text: &str) -> Result<Self, ()> {
-        text.char_indices()
-            .map(|(i, c)| i + c.len_utf8())
-            .rev()
-            .find_map(|end| text[..end].parse().ok())
-            .map(Float)
-            .ok_or(())
+/// Like [`whole`], but where `text` is a number followed by more digits and
+/// points, as in the typo `1.5.0`, the number, which is what the game reads.
+/// Other trailing text, such as a unit, still fails.
+fn float<T: std::str::FromStr>(text: &str) -> Option<T> {
+    if let Some(n) = whole(text) {
+        return Some(n);
     }
+    let digits = |t: &str| t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+    let sign = usize::from(text.starts_with(['+', '-']));
+    let mut end = sign + digits(&text[sign..]);
+    if text[end..].starts_with('.') {
+        end += 1 + digits(&text[end + 1..]);
+    }
+    let rest = &text[end..];
+    let typo = rest.starts_with('.') && rest.chars().all(|c| c == '.' || c.is_ascii_digit());
+    if typo { whole(&text[..end]) } else { None }
 }
 
 /// `true` or `false`, in any case, or `1` or `0`.
@@ -620,10 +611,9 @@ fn parse_bool(text: &str) -> Option<bool> {
 }
 
 impl Scalar<'_> {
-    fn parse<T: std::str::FromStr>(&self, expected: &str) -> Result<T, Error> {
-        self.0
-            .parse()
-            .map_err(|_| de::Error::custom(format!("expected {expected}, found {:?}", self.0)))
+    fn parse<T>(&self, expected: &str, read: fn(&str) -> Option<T>) -> Result<T, Error> {
+        read(self.0)
+            .ok_or_else(|| de::Error::custom(format!("expected {expected}, found {:?}", self.0)))
     }
 }
 
@@ -719,9 +709,15 @@ mod tests {
             depth: f64,
             count: Option<u8>,
         }
-        let block = first("[Info]\noffset = 2.5, 1.5.0\ndepth = 3m\n");
+        let block = first("[Info]\noffset = 2.5, 1.5.0\ndepth = -3.25.1.0\n");
         let i: Info = from_block(&block).unwrap();
-        assert_eq!((i.offset, i.depth, i.count), ([2.5, 1.5], 3.0, None));
+        assert_eq!((i.offset, i.depth, i.count), ([2.5, 1.5], -3.25, None));
+
+        // Other trailing text is no typo, and words aren't infinities.
+        for depth in ["3m", "50%", "Infantry", "nano"] {
+            let block = first(&format!("[Info]\noffset = 0, 0\ndepth = {depth}\n"));
+            assert!(from_block::<Info>(&block).is_err(), "{depth}");
+        }
 
         // Integers stay whole, so one too big isn't cut short.
         let block = first("[Info]\noffset = 0, 0\ndepth = 0\ncount = 300\n");
