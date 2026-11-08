@@ -1,7 +1,7 @@
-//! Plays the audio the game data gives objects as things happen to them.
-//! What sets off which [`Cue`] lives with what notices it happening; this
-//! queues the cues and plays them, read from the archives the first time
-//! each file is needed.
+//! Plays the audio the game data gives objects as things happen to them,
+//! and the interface's own. What sets off which [`Cue`] lives with what
+//! notices it happening; this queues the cues and plays them, read from the
+//! archives the first time each file is needed.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use aaa_sim::Relation;
 use bevy::audio::Volume;
 use bevy::prelude::*;
 
-use crate::{Loaded, Local, Sim};
+use crate::{Data, Loaded, Local, Sim};
 
 #[derive(Resource)]
 pub struct Sounds {
@@ -32,7 +32,7 @@ struct Request {
     audio: Id,
     /// Where in the world it plays, for audio heard from a place.
     at: Option<[f32; 2]>,
-    /// The player whose object set it off.
+    /// The player whose object set it off; none for the interface's.
     owner: Option<u32>,
 }
 
@@ -106,6 +106,16 @@ impl Sounds {
         }
     }
 
+    /// Queues an interface audio, such as a button's click.
+    pub fn interface(&mut self, time: &Time, audio: &str) {
+        let request = Request {
+            audio: Id::from(audio),
+            at: None,
+            owner: None,
+        };
+        self.queued.push((time.elapsed_secs_f64(), request));
+    }
+
     /// A number in `0..1`.
     fn random(&mut self) -> f32 {
         // xorshift64
@@ -143,10 +153,14 @@ impl Sounds {
 
     fn source(
         &mut self,
-        game: &mut GameData,
+        game: Option<&mut GameData>,
         assets: &mut Assets<AudioSource>,
         path: &str,
     ) -> Option<Handle<AudioSource>> {
+        if let Some(source) = self.sources.get(path) {
+            return source.clone();
+        }
+        let game = game?;
         self.sources
             .entry(path.to_string())
             .or_insert_with(|| {
@@ -163,11 +177,11 @@ impl Sounds {
 }
 
 /// Whether the local player hears audio for `who` set off by an object of a
-/// player it stands toward as `relation`; audio no object set off is for
-/// the local player.
+/// player it stands toward as `relation`; the interface's, which no object
+/// set off, always.
 fn hears(who: AudioWho, relation: Option<Relation>) -> bool {
     match relation {
-        None => who.local,
+        None => true,
         Some(Relation::Itself) => who.local || who.player,
         Some(Relation::Ally) => who.allies,
         Some(_) => who.enemies,
@@ -194,15 +208,17 @@ impl Plugin for SoundPlugin {
 }
 
 /// Plays the queued cues that are due, to whoever hears them where the
-/// camera looks.
+/// camera looks. Files are read from the game data wherever it is, the
+/// menus' or the match's; one not read before can't be while a match loads.
 #[allow(clippy::too_many_arguments)]
 fn play(
     mut commands: Commands,
     mut sounds: ResMut<Sounds>,
-    mut loaded: ResMut<Loaded>,
+    mut loaded: Option<ResMut<Loaded>>,
+    mut data: Option<ResMut<Data>>,
     mut assets: ResMut<Assets<AudioSource>>,
-    sim: Res<Sim>,
-    local: Res<Local>,
+    sim: Option<Res<Sim>>,
+    local: Option<Res<Local>>,
     time: Res<Time>,
     cameras: Query<&RtsCamera>,
     playing: Query<(Entity, &Playing)>,
@@ -227,11 +243,12 @@ fn play(
         let Some(audio) = sounds.audio.get(&request.audio).cloned() else {
             continue;
         };
-        let relation = request.owner.map(|o| {
-            local
-                .0
-                .map_or(Relation::Neutral, |p| sim.0.sides.relation(p, o))
-        });
+        let relation = request
+            .owner
+            .map(|o| match (&sim, local.as_ref().and_then(|l| l.0)) {
+                (Some(sim), Some(p)) => sim.0.sides.relation(p, o),
+                _ => Relation::Neutral,
+            });
         if !hears(audio.who, relation) {
             continue;
         }
@@ -258,7 +275,12 @@ fn play(
         let Some(file) = sounds.pick(&request.audio, &audio) else {
             continue;
         };
-        let Some(source) = sounds.source(&mut loaded.game, &mut assets, &file) else {
+        let game = match (&mut loaded, &mut data) {
+            (Some(loaded), _) => Some(&mut loaded.game),
+            (None, Some(data)) => Some(&mut data.0),
+            (None, None) => None,
+        };
+        let Some(source) = sounds.source(game, &mut assets, &file) else {
             continue;
         };
         let speed = 1.0 + sounds.between(audio.pitch_adjust);
@@ -308,11 +330,6 @@ mod tests {
         };
         assert!(hears(everyone, Some(Relation::Ally)));
         assert!(hears(everyone, Some(Relation::Neutral)));
-        let interface = AudioWho {
-            local: true,
-            ..AudioWho::default()
-        };
-        assert!(hears(interface, None));
-        assert!(!hears(everyone, None));
+        assert!(hears(AudioWho::default(), None));
     }
 }

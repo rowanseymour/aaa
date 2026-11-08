@@ -10,7 +10,7 @@ use aaa_map::{Brief, Player};
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
 
-use crate::menu::{Chosen, DIM, PANEL, button, clickable, go, inert, padded, text};
+use crate::menu::{Chosen, DIM, PANEL, button, clickable, go, inert, opener, padded, text};
 use crate::presets::Preset;
 use crate::{Data, Pending, Screen, Side};
 
@@ -489,7 +489,7 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
     commands
         .spawn((
             ChildOf(presets),
-            clickable(row.clone()),
+            opener(row.clone()),
             children![text(lobby.preset.label(), SIZE)],
         ))
         .observe(open_presets);
@@ -651,7 +651,7 @@ fn nation_list(
     commands
         .spawn((
             ChildOf(holder),
-            clickable(cell.clone()),
+            opener(cell.clone()),
             NationsOf(player),
             children![text(label, SIZE)],
         ))

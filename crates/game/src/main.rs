@@ -542,6 +542,7 @@ fn main() -> ExitCode {
         app.insert_resource(remote);
     }
     app.insert_resource(lobby::Nations(game.nations()))
+        .insert_resource(sound::Sounds::new(&mut game))
         .insert_resource(Data(game));
     match map {
         Some(name) => {
@@ -935,7 +936,6 @@ fn setup(
         buildings: sim.0.buildings.len(),
     });
     commands.insert_resource(Drawn(models));
-    commands.insert_resource(sound::Sounds::new(game));
 }
 
 /// Plays the callout of a regiment newly added to the selection.
