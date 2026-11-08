@@ -326,6 +326,16 @@ pub struct Deployment {
     pub pack_health_min: f32,
 }
 
+/// The buildings a player needs standing to recruit a template.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Requires {
+    /// Each building, by every id it may go by on a map: its current one
+    /// first, then any it was renamed from.
+    pub structures: Vec<Vec<Id>>,
+    /// Whether one of them is enough, rather than all.
+    pub any: bool,
+}
+
 /// Where what a building recruits appears and goes, from where it stands:
 /// x across its facing and y along it.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -924,15 +934,59 @@ impl GameData {
         })
     }
 
+    /// What buildings recruiting each template needs, by template id, for
+    /// those that need any.
+    pub fn requirements(&mut self) -> HashMap<Id, Requires> {
+        // Maps may still place a building under any id it once had.
+        let renames = self.thing_renames();
+        let mut aliases: HashMap<Id, Vec<Id>> = HashMap::new();
+        for old in renames.keys() {
+            aliases
+                .entry(resolve(&renames, old))
+                .or_default()
+                .push(old.clone());
+        }
+        for olds in aliases.values_mut() {
+            olds.sort_unstable();
+        }
+        self.by_template(|t| {
+            let e = t.element_component.as_ref()?;
+            let structures: Vec<Vec<Id>> = e
+                .required_structures
+                .as_deref()?
+                .split(',')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(|s| {
+                    let id = resolve(&renames, &Id::from(s));
+                    let olds = aliases.get(&id).cloned().unwrap_or_default();
+                    std::iter::once(id).chain(olds).collect()
+                })
+                .collect();
+            (!structures.is_empty()).then_some(Requires {
+                structures,
+                any: e.required_structures_any,
+            })
+        })
+    }
+
     /// The old ids of object templates the game has since renamed, which
     /// maps may still use and the other methods answer for too.
     pub fn renamed_things(&mut self) -> std::collections::HashSet<Id> {
+        self.thing_renames().into_keys().collect()
+    }
+
+    /// Each renamed object template's old id to its next one. As in
+    /// `add_renames`, those a stray comment hides count too, but a live
+    /// rename wins over a hidden one.
+    fn thing_renames(&mut self) -> HashMap<Id, Id> {
         let Some(bytes) = self.read("translate.tgi") else {
-            return Default::default();
+            return HashMap::new();
         };
-        // As in `add_renames`, including those a stray comment hides.
-        let translate = tgi::decode(&bytes).replace("/*", "").replace("*/", "");
-        renames(&translate, "Thing").into_keys().collect()
+        let translate = tgi::decode(&bytes);
+        let mut all = renames(&translate.replace("/*", "").replace("*/", ""), "Thing");
+        all.extend(renames(&translate, "Thing"));
+        all
     }
 
     /// Where what each template recruits appears, by template id.

@@ -225,6 +225,9 @@ pub struct Looks {
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
+    /// What each template is called, for saying which buildings a
+    /// commission needs.
+    names: HashMap<Id, String>,
 }
 
 impl Looks {
@@ -360,6 +363,7 @@ pub fn spawn(
         pack,
         cancel,
         menus,
+        names: listings.into_iter().map(|(id, l)| (id, l.name)).collect(),
     });
     commands.init_resource::<Shown>();
     commands.insert_resource(Page::Orders);
@@ -535,6 +539,8 @@ pub fn show(
         let Some(entry) = entry else {
             continue;
         };
+        // Why it can't be pressed, when that's down to the player.
+        let mut why = None;
         let (icon, name, ready, lit) = match entry {
             Entry::Order(i) => {
                 let look = &looks.orders[i].1;
@@ -565,13 +571,27 @@ pub fn show(
             Entry::Recruit(i) => {
                 let r = &menu[i];
                 let name = format!("{} ({} money, {:.0} s)", r.look.name, r.cost, r.seconds);
-                (r.look.icon.clone(), name, r.regiment.is_some(), false)
+                let lacking: Vec<&str> = match (&r.regiment, local.0) {
+                    (Some(regiment), Some(player)) => sim
+                        .0
+                        .lacks(player, regiment)
+                        .into_iter()
+                        .map(|id| looks.names.get(id).map_or(id.as_str(), String::as_str))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                if !lacking.is_empty() {
+                    why = Some(format!("requires {}", lacking.join(", ")));
+                }
+                let ready = r.regiment.is_some() && lacking.is_empty();
+                (r.look.icon.clone(), name, ready, false)
             }
         };
         if hover.get() {
-            hovered = Some(match ready {
-                true => name,
-                false => format!("{name} (not yet)"),
+            hovered = Some(match (ready, why) {
+                (true, _) => name,
+                (false, Some(why)) => format!("{name} ({why})"),
+                (false, None) => format!("{name} (not yet)"),
             });
         }
         let colour = match (lit, hover.get() && ready) {
