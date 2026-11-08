@@ -182,16 +182,18 @@ pub fn spawn(
         colours: palette,
     });
     commands.spawn((
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(crate::MARGIN),
-            bottom: px(crate::MARGIN),
-            width: px(DISC),
-            height: px(DISC),
-            border_radius: BorderRadius::MAX,
-            ..default()
-        },
-        crate::ui::Surface::Hud,
+        crate::ui::panel(
+            crate::ui::Surface::Hud,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(crate::MARGIN),
+                bottom: px(crate::MARGIN),
+                width: px(DISC),
+                height: px(DISC),
+                border_radius: BorderRadius::MAX,
+                ..default()
+            },
+        ),
         // Over the banners, which stack by where they are on screen.
         GlobalZIndex(1),
         children![(

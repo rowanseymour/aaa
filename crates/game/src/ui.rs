@@ -244,8 +244,40 @@ pub fn text(words: impl Into<String>, size: Font) -> impl Bundle {
     label(words, size, Ink::Body)
 }
 
+/// The corners of a [`panel`] that doesn't give its own.
+const CORNER: f32 = 12.0;
+
+/// The box the interface's boxes are built on: a background for what it's
+/// for, laid out as `node`, with rounded corners unless `node` gives its
+/// own.
 pub fn panel(surface: Surface, node: Node) -> impl Bundle {
-    (node, surface)
+    let border_radius = match node.border_radius == BorderRadius::ZERO {
+        true => BorderRadius::all(px(CORNER)),
+        false => node.border_radius,
+    };
+    (
+        Node {
+            border_radius,
+            ..node
+        },
+        surface,
+    )
+}
+
+/// A [`panel`] of text over the map, which the pointer passes through.
+pub fn tooltip(node: Node) -> impl Bundle {
+    (
+        panel(
+            Surface::Popup,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+                padding: UiRect::all(px(CORNER)),
+                ..node
+            },
+        ),
+        Pickable::IGNORE,
+    )
 }
 
 /// A solid box with a thin border, such as a card.
@@ -312,18 +344,17 @@ pub fn scrim() -> impl Bundle {
     )
 }
 
-/// A column of buttons in a panel, such as a menu over the match.
+/// A column of buttons in a [`panel`], such as a menu over the match.
 pub fn dialog() -> impl Bundle {
-    (
+    panel(
+        Surface::Panel,
         Node {
             width: px(320),
             flex_direction: FlexDirection::Column,
             padding: UiRect::all(px(32)),
             row_gap: px(12),
-            border_radius: BorderRadius::all(px(12)),
             ..default()
         },
-        Surface::Panel,
     )
 }
 
@@ -491,6 +522,22 @@ mod tests {
         assert!((grey(Surface::Panel).red - 0.07).abs() < 1e-5);
         assert!((grey(Surface::Hovered).green - 0.3).abs() < 1e-5);
         assert_eq!(grey(Surface::Hud).alpha, 0.85);
+    }
+
+    #[test]
+    fn a_panel_rounds_its_corners_unless_given_its_own() {
+        let mut world = World::new();
+        let corners = |world: &mut World, node: Node| {
+            let panel = world.spawn(panel(Surface::Hud, node)).id();
+            world.get::<Node>(panel).unwrap().border_radius
+        };
+        let plain = corners(&mut world, Node::default());
+        assert_eq!(plain, BorderRadius::all(px(CORNER)));
+        let round = Node {
+            border_radius: BorderRadius::MAX,
+            ..default()
+        };
+        assert_eq!(corners(&mut world, round), BorderRadius::MAX);
     }
 
     #[test]

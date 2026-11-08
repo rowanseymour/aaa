@@ -177,13 +177,14 @@ pub fn spawn(
             Pane,
             Blocks,
             RelativeCursorPosition::default(),
-            Node {
-                width: px(SIZE.x),
-                height: px(SIZE.y),
-                border_radius: BorderRadius::all(px(12)),
-                ..default()
-            },
-            Surface::Hud,
+            ui::panel(
+                Surface::Hud,
+                Node {
+                    width: px(SIZE.x),
+                    height: px(SIZE.y),
+                    ..default()
+                },
+            ),
             Visibility::Hidden,
             GlobalZIndex(1),
         ));

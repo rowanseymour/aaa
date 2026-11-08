@@ -22,7 +22,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::resource_bar::{Preview, Previewed};
-use crate::ui::{Click, Edge, Font, Ink, Shade, Surface, label};
+use crate::ui::{Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
@@ -521,35 +521,30 @@ pub fn spawn(
             // tall as its text wraps to, growing upwards.
             root.spawn((
                 Tooltip,
-                Node {
+                tooltip(Node {
                     display: Display::None,
                     width: px(SIZE.x),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(PAD),
-                    padding: UiRect::all(px(PAD * 1.5)),
-                    border_radius: BorderRadius::all(px(PAD * 1.5)),
                     ..default()
-                },
-                Surface::Popup,
-                Pickable::IGNORE,
+                }),
             ));
             root.spawn((
                 Grid,
                 Blocks,
                 RelativeCursorPosition::default(),
-                Node {
-                    display: Display::Grid,
-                    width: px(SIZE.x),
-                    height: px(SIZE.y),
-                    grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
-                    grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
-                    column_gap: px(GAP),
-                    row_gap: px(GAP),
-                    padding: UiRect::all(px(PAD)),
-                    border_radius: BorderRadius::all(px(PAD * 1.5)),
-                    ..default()
-                },
-                Surface::Hud,
+                panel(
+                    Surface::Hud,
+                    Node {
+                        display: Display::Grid,
+                        width: px(SIZE.x),
+                        height: px(SIZE.y),
+                        grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
+                        grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
+                        column_gap: px(GAP),
+                        row_gap: px(GAP),
+                        padding: UiRect::all(px(PAD)),
+                        ..default()
+                    },
+                ),
             ))
             .with_children(|grid| {
                 for s in 0..SLOTS {

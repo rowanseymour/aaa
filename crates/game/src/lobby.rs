@@ -13,7 +13,8 @@ use bevy::ui_widgets::{Activate, ScrollArea};
 use crate::menu::go;
 use crate::presets::Preset;
 use crate::ui::{
-    Chosen, Font, Ink, Surface, button, clickable, dropdown, inert, label, opener, padded, text,
+    Chosen, Font, Ink, Surface, button, clickable, dropdown, inert, label, opener, padded, panel,
+    text,
 };
 use crate::{Data, Pending, Screen, Side};
 
@@ -320,14 +321,16 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
     commands.spawn((
         Slots,
         ChildOf(left),
-        Node {
-            flex_grow: 1.0,
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(px(12)),
-            row_gap: px(4),
-            ..default()
-        },
-        Surface::Panel,
+        panel(
+            Surface::Panel,
+            Node {
+                flex_grow: 1.0,
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(12)),
+                row_gap: px(4),
+                ..default()
+            },
+        ),
     ));
     let right = commands
         .spawn((
@@ -346,29 +349,33 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
     commands.spawn((
         About,
         ChildOf(right),
-        Node {
-            flex_direction: FlexDirection::Column,
-            padding: UiRect::all(px(12)),
-            row_gap: px(4),
-            ..default()
-        },
-        Surface::Panel,
+        panel(
+            Surface::Panel,
+            Node {
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(12)),
+                row_gap: px(4),
+                ..default()
+            },
+        ),
     ));
     let list = commands
         .spawn((
             ChildOf(right),
             ScrollArea,
-            Node {
-                flex_grow: 1.0,
-                flex_basis: px(0),
-                flex_direction: FlexDirection::Column,
-                overflow: Overflow::scroll_y(),
-                min_height: px(0),
-                padding: UiRect::all(px(12)),
-                row_gap: px(2),
-                ..default()
-            },
-            Surface::Panel,
+            panel(
+                Surface::Panel,
+                Node {
+                    flex_grow: 1.0,
+                    flex_basis: px(0),
+                    flex_direction: FlexDirection::Column,
+                    overflow: Overflow::scroll_y(),
+                    min_height: px(0),
+                    padding: UiRect::all(px(12)),
+                    row_gap: px(2),
+                    ..default()
+                },
+            ),
         ))
         .id();
     commands.spawn((ChildOf(list), text("Scenario Maps", Font::Body)));
