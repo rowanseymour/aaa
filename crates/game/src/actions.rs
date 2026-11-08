@@ -21,8 +21,8 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
-use crate::menu::Click;
 use crate::resource_bar::{Preview, Previewed};
+use crate::ui::{Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
@@ -40,9 +40,6 @@ pub const SIZE: Vec2 = Vec2::new(span(COLUMNS), span(ROWS));
 const fn span(n: usize) -> f32 {
     n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD
 }
-/// Behind every slot, darker than the panel around it, so the grid reads as
-/// one even with slots empty.
-const SLOT: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 
 /// The orders a regiment has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
@@ -73,11 +70,6 @@ const MENU_CANCEL: usize = 11;
 /// The command whose look the cancel button borrows, as the game gives
 /// none of its own for backing out of an order or a menu.
 const CANCEL_LOOK: &str = "construction_cancel";
-/// Behind the tooltip, see-through enough to show the map.
-const TIP: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
-/// The tooltip's help and what's in the way of a press.
-const HELP: Color = Color::srgb(0.8, 0.8, 0.8);
-const WHY: Color = Color::srgb(1.0, 0.75, 0.3);
 /// Where the game's font keeps the glyphs it draws resources with, and
 /// each resource's, by its field name in the data.
 pub(crate) const GLYPH_DIR: &str = "Fonts/medium/1280";
@@ -529,35 +521,30 @@ pub fn spawn(
             // tall as its text wraps to, growing upwards.
             root.spawn((
                 Tooltip,
-                Node {
+                tooltip(Node {
                     display: Display::None,
                     width: px(SIZE.x),
-                    flex_direction: FlexDirection::Column,
-                    row_gap: px(PAD),
-                    padding: UiRect::all(px(PAD * 1.5)),
-                    border_radius: BorderRadius::all(px(PAD * 1.5)),
                     ..default()
-                },
-                BackgroundColor(TIP),
-                Pickable::IGNORE,
+                }),
             ));
             root.spawn((
                 Grid,
                 Blocks,
                 RelativeCursorPosition::default(),
-                Node {
-                    display: Display::Grid,
-                    width: px(SIZE.x),
-                    height: px(SIZE.y),
-                    grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
-                    grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
-                    column_gap: px(GAP),
-                    row_gap: px(GAP),
-                    padding: UiRect::all(px(PAD)),
-                    border_radius: BorderRadius::all(px(PAD * 1.5)),
-                    ..default()
-                },
-                BackgroundColor(crate::CHROME),
+                panel(
+                    Surface::Hud,
+                    Node {
+                        display: Display::Grid,
+                        width: px(SIZE.x),
+                        height: px(SIZE.y),
+                        grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
+                        grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
+                        column_gap: px(GAP),
+                        row_gap: px(GAP),
+                        padding: UiRect::all(px(PAD)),
+                        ..default()
+                    },
+                ),
             ))
             .with_children(|grid| {
                 for s in 0..SLOTS {
@@ -571,11 +558,11 @@ pub fn spawn(
                             border: UiRect::all(px(2)),
                             ..default()
                         },
-                        BackgroundColor(SLOT),
-                        BorderColor::all(Color::NONE),
+                        Surface::Slot,
+                        Edge::Clear,
                         children![(
                             SlotIcon,
-                            ImageNode::default(),
+                            Shade::Full,
                             Node {
                                 width: percent(100),
                                 height: percent(100),
@@ -631,7 +618,7 @@ type SlotParts<'a> = (
     &'a Slot,
     &'a Hovered,
     &'a Children,
-    &'a mut BorderColor,
+    &'a mut Edge,
     &'a mut Pickable,
 );
 
@@ -647,7 +634,7 @@ pub fn show(
     mut shown: ResMut<Shown>,
     mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
     mut slots: Query<SlotParts, Without<SlotIcon>>,
-    mut icons: Query<(&mut ImageNode, &mut Visibility), With<SlotIcon>>,
+    mut icons: Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
     mut tooltip: TipParts,
     local: Res<Local>,
     focus: Res<crate::Focus>,
@@ -703,7 +690,7 @@ pub fn show(
             refusal.0 = None;
         }
         let Some(entry) = entry else {
-            border.set_if_neq(BorderColor::all(Color::NONE));
+            border.set_if_neq(Edge::Clear);
             set_icon(children, &mut icons, None);
             continue;
         };
@@ -791,17 +778,16 @@ pub fn show(
                 why,
             });
         }
-        let colour = match (lit, hover.get() && ready) {
-            (true, _) => Color::srgb(0.1, 0.9, 0.1),
-            (false, true) => Color::WHITE,
-            (false, false) => Color::NONE,
+        border.set_if_neq(match (lit, hover.get() && ready) {
+            (true, _) => Edge::Lit,
+            (false, true) => Edge::Hovered,
+            (false, false) => Edge::Clear,
+        });
+        let shade = match ready {
+            true => Shade::Full,
+            false => Shade::Dimmed,
         };
-        border.set_if_neq(BorderColor::all(colour));
-        let tint = match ready {
-            true => Color::WHITE,
-            false => Color::srgb(0.35, 0.35, 0.35),
-        };
-        set_icon(children, &mut icons, icon.map(|i| (i, tint)));
+        set_icon(children, &mut icons, icon.map(|i| (i, shade)));
     }
     let prompt = |title: &str| {
         Some(Tip {
@@ -867,9 +853,9 @@ impl TipParts<'_, '_> {
         let mut tooltip = self.commands.entity(*entity);
         tooltip.despawn_children();
         tooltip.with_children(|parent| {
-            parent.spawn(words(tip.title.clone(), 15.0, Color::WHITE));
+            parent.spawn(label(tip.title.clone(), Font::HudTitle, Ink::Body));
             if let Some(help) = &tip.help {
-                parent.spawn(words(help.clone(), 13.0, HELP));
+                parent.spawn(label(help.clone(), Font::Small, Ink::Help));
             }
             if !tip.table.is_empty() {
                 parent
@@ -882,7 +868,7 @@ impl TipParts<'_, '_> {
                     })
                     .with_children(|table| {
                         for row in &tip.table {
-                            table.spawn(words(row.label.clone(), 13.0, HELP));
+                            table.spawn(label(row.label.clone(), Font::Small, Ink::Help));
                             table
                                 .spawn(Node {
                                     column_gap: px(PAD),
@@ -898,24 +884,11 @@ impl TipParts<'_, '_> {
                     });
             }
             if let Some(why) = &tip.why {
-                parent.spawn(words(why.clone(), 13.0, WHY));
+                parent.spawn(label(why.clone(), Font::Small, Ink::Warn));
             }
         });
         *self.said = tip;
     }
-}
-
-/// A run of the tooltip's text.
-fn words(text: String, size: f32, colour: Color) -> impl Bundle {
-    (
-        Text(text),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
-        TextColor(colour),
-        Pickable::IGNORE,
-    )
 }
 
 /// An amount after its resource's glyph, as the game's tooltips show it,
@@ -937,38 +910,38 @@ fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
                 },
                 Pickable::IGNORE,
             ));
-            pair.spawn(words(q.number(), 13.0, Color::WHITE));
+            pair.spawn(label(q.number(), Font::Small, Ink::Body));
         }
         None => {
-            pair.spawn(words(
+            pair.spawn(label(
                 format!("{} {}", q.number(), q.resource),
-                13.0,
-                Color::WHITE,
+                Font::Small,
+                Ink::Body,
             ));
         }
     });
 }
 
-/// Shows a slot's icon in this tint, or hides it, say for an empty slot
+/// Shows a slot's icon in this shade, or hides it, say for an empty slot
 /// or a command the data gives no icon, which would otherwise draw white.
 fn set_icon(
     children: &Children,
-    icons: &mut Query<(&mut ImageNode, &mut Visibility), With<SlotIcon>>,
-    icon: Option<(Handle<Image>, Color)>,
+    icons: &mut Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
+    icon: Option<(Handle<Image>, Shade)>,
 ) {
     for &child in children {
-        let Ok((mut image, mut visibility)) = icons.get_mut(child) else {
+        let Ok((mut image, mut shade, mut visibility)) = icons.get_mut(child) else {
             continue;
         };
         visibility.set_if_neq(match icon {
             Some(_) => Visibility::Inherited,
             None => Visibility::Hidden,
         });
-        if let Some((handle, tint)) = icon.clone()
-            && (image.image != handle || image.color != tint)
-        {
-            image.image = handle;
-            image.color = tint;
+        if let Some((handle, want)) = icon.clone() {
+            if image.image != handle {
+                image.image = handle;
+            }
+            shade.set_if_neq(want);
         }
     }
 }

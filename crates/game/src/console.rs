@@ -20,6 +20,7 @@ use bevy::window::PrimaryWindow;
 use crate::actions::Aim;
 use crate::lobby::Lineup;
 use crate::remote::Remote;
+use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::waypoints::Sent;
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
@@ -233,6 +234,11 @@ const VERBS: &[Verb] = &[
         "draws the interface that many times as big, 0.5 to 2, though smaller if the window's too narrow for it; without, says how big it's asked to be and is",
     ),
     verb(
+        "uitint",
+        "[r g b]",
+        "shades the interface's backgrounds and borders from a colour, each part 0 to 1; without, says it",
+    ),
+    verb(
         "resolution",
         "[width height]",
         "resizes the window; without, says its size",
@@ -325,6 +331,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
         "gamespeed" => game_speed(world, &args),
         "gamepause" => game_pause(world, &args),
         "uiscale" => ui_scale(world, &args),
+        "uitint" => ui_tint(world, &args),
         "resolution" => resolution(world, &args),
         name => {
             let playing = world
@@ -478,6 +485,25 @@ fn ui_scale(world: &mut World, args: &[&str]) -> Reply {
             Ok(String::new())
         }
         _ => Err(usage("uiscale")),
+    }
+}
+
+fn ui_tint(world: &mut World, args: &[&str]) -> Reply {
+    let mut theme = world.resource_mut::<crate::ui::Theme>();
+    match args {
+        [] => {
+            let [r, g, b, _] = theme.tint.to_srgba().to_f32_array();
+            Ok(format!("{r} {g} {b}"))
+        }
+        [r, g, b] => {
+            let [r, g, b] = [number(r)?, number(g)?, number(b)?];
+            if ![r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) {
+                return Err("takes each part from 0 to 1".into());
+            }
+            theme.tint = Color::srgb(r, g, b);
+            Ok(String::new())
+        }
+        _ => Err(usage("uitint")),
     }
 }
 
@@ -1149,24 +1175,18 @@ struct PanelText;
 fn spawn(mut commands: Commands) {
     commands.spawn((
         Panel,
-        Node {
-            display: Display::None,
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            padding: UiRect::all(px(8)),
-            ..default()
-        },
-        GlobalZIndex(100),
-        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.75)),
-        children![(
-            PanelText,
-            Text::default(),
-            TextFont {
-                font_size: FontSize::Px(14.0),
+        backed(
+            Surface::Popup,
+            Node {
+                display: Display::None,
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                padding: UiRect::all(px(8)),
                 ..default()
             },
-            TextColor(Color::srgb(0.85, 0.85, 0.85)),
-        )],
+        ),
+        GlobalZIndex(100),
+        children![(PanelText, label("", Font::Hud, Ink::Help))],
     ));
 }
 

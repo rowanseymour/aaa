@@ -692,6 +692,7 @@ pub(crate) fn spawn(
             state: State::new(seed.wrapping_mul(31).wrapping_add(i as u32), offset),
             corners: Vec::new(),
             copies: Vec::new(),
+            rate: 1.0,
         });
     }
 }
@@ -708,6 +709,8 @@ pub struct Particles {
     corners: Vec<[f32; 3]>,
     /// The entity showing each mesh particle's copy, by particle.
     copies: Vec<(u32, Entity)>,
+    /// Seconds of its animation per second played.
+    pub(crate) rate: f32,
 }
 
 /// Marks the entity a mesh particle's copy hangs from.
@@ -721,7 +724,6 @@ pub struct MeshCopy;
 #[allow(clippy::too_many_arguments)]
 pub fn place_copies(
     mut commands: Commands,
-    time: Res<Time>,
     mut systems: Query<(&mut Particles, &GlobalTransform)>,
     mut copies: Query<(&mut Transform, &mut GlobalTransform, &Children), CopyParts>,
     mut parts: Query<(&Transform, &mut GlobalTransform), CopyMeshes>,
@@ -729,7 +731,6 @@ pub fn place_copies(
     mut glow_materials: ResMut<Assets<GlowMaterial>>,
     mut team_materials: ResMut<Assets<TeamMaterial>>,
 ) {
-    let elapsed = time.elapsed_secs();
     for (mut particles, home) in &mut systems {
         let particles = &mut *particles;
         if particles.system.copies.is_empty() {
@@ -769,8 +770,7 @@ pub fn place_copies(
             let meshes = &particles.system.copies;
             let meshes = &meshes[(p.generation as usize).min(meshes.len() - 1)];
             // Their own controllers play on the system's clock.
-            let clock = particles.system.clock;
-            let offset = state.time - elapsed * clock;
+            let rate = particles.rate * particles.system.clock;
             let copy = commands
                 .spawn((
                     transform,
@@ -791,16 +791,11 @@ pub fn place_copies(
                     false => part.material.clone(),
                 };
                 let animated = part.animation.as_ref().map(|animation| {
-                    Animated::at_rate(animation.clone(), offset, clock, material.clone())
+                    Animated::at_rate(animation.clone(), state.time, rate, material.clone())
                 });
-                let posed = animated.as_ref().and_then(|a| {
-                    a.pose(
-                        elapsed,
-                        &mut materials,
-                        &mut glow_materials,
-                        &mut team_materials,
-                    )
-                });
+                let posed = animated
+                    .as_ref()
+                    .and_then(|a| a.pose(&mut materials, &mut glow_materials, &mut team_materials));
                 let t = posed.unwrap_or_default();
                 let mut child =
                     commands.spawn((Mesh3d(part.mesh.clone()), t, global * t, ChildOf(copy)));
@@ -1390,10 +1385,8 @@ pub fn play(
                     .map(|&a| to_space * anchors.get(a).map_or(own, |g| g.affine()))
                     .collect(),
             };
-            let clock = particles.system.clock;
-            particles
-                .system
-                .step(&mut particles.state, &space, dt * clock);
+            let dt = dt * particles.rate * particles.system.clock;
+            particles.system.step(&mut particles.state, &space, dt);
         }
         let Some(camera) = camera else { continue };
         let (right, up) = (camera.right().as_vec3(), camera.up().as_vec3());

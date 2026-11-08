@@ -14,12 +14,14 @@
 //! orders in [`actions`]. Clicking the minimap moves the camera there, or
 //! gives an aimed order there, and the key left of 1 opens a console for
 //! script commands. Units and buildings make their sounds as they're
-//! selected, ordered, move, fire and die. Escape opens a menu that holds
+//! selected, ordered, move, fire and die, and show their [`effects`] as they
+//! fire, are hurt, die, and pack or unpack. Escape opens a menu that holds
 //! the match still while it's up.
 
 mod actions;
 mod banners;
 mod console;
+mod effects;
 mod ghost;
 mod lobby;
 mod menu;
@@ -30,6 +32,7 @@ mod presets;
 mod remote;
 mod resource_bar;
 mod sound;
+mod ui;
 mod waypoints;
 
 use std::collections::{HashMap, HashSet};
@@ -66,6 +69,7 @@ options:
   --console <port>          take console lines on a port of this machine, each
                             answered with what the console says, then an empty line
   --screenshot <file.png>   save a frame to a file and exit, without a window
+  --shot-after <seconds>    with --screenshot, play that long into the match first
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it";
 
@@ -358,6 +362,22 @@ struct BuildingView {
     packing: Option<(Entity, bool)>,
 }
 
+/// Seconds of a match to play before its capture.
+#[derive(Resource)]
+struct ShotAfter(f64);
+
+/// When the match started.
+#[derive(Resource)]
+struct MatchStarted(f64);
+
+fn note_start(mut commands: Commands, time: Res<Time>) {
+    commands.insert_resource(MatchStarted(time.elapsed_secs_f64()));
+}
+
+fn shot_due(after: Res<ShotAfter>, started: Option<Res<MatchStarted>>, time: Res<Time>) -> bool {
+    started.is_some_and(|s| time.elapsed_secs_f64() - s.0 >= after.0)
+}
+
 /// Removes `flag` and the value after it from `args`; `None` if the value is
 /// missing.
 fn take_option(args: &mut Vec<String>, flag: &str) -> Option<Option<String>> {
@@ -378,6 +398,7 @@ struct Options {
     scripts: Vec<String>,
     console: Option<u16>,
     screenshot: Option<String>,
+    shot_after: f64,
     ui_scale: f32,
 }
 
@@ -396,6 +417,10 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         None => None,
     };
     let screenshot = take_option(args, "--screenshot")?;
+    let shot_after = match take_option(args, "--shot-after")? {
+        Some(s) => s.parse().ok().filter(|s: &f64| (0.0..=600.0).contains(s))?,
+        None => 0.0,
+    };
     let ui_scale = match take_option(args, "--ui-scale")? {
         Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
         None => 1.0,
@@ -405,6 +430,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         scripts,
         console,
         screenshot,
+        shot_after,
         ui_scale,
     })
 }
@@ -416,6 +442,7 @@ fn main() -> ExitCode {
         scripts,
         console,
         screenshot,
+        shot_after,
         ui_scale,
     }) = options(&mut args)
     else {
@@ -462,7 +489,14 @@ fn main() -> ExitCode {
         app.add_plugins(s);
         // Of the match, not the loading screen before it.
         if map.is_some() {
-            app.configure_sets(Update, shot::Capture.run_if(in_state(Screen::Match)));
+            app.insert_resource(ShotAfter(shot_after))
+                .add_systems(OnEnter(Screen::Match), note_start)
+                .configure_sets(
+                    Update,
+                    shot::Capture
+                        .run_if(in_state(Screen::Match))
+                        .run_if(shot_due),
+                );
         }
     }
     let mut console = console::Console::default();
@@ -472,6 +506,7 @@ fn main() -> ExitCode {
     app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
+        .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .add_systems(PreUpdate, fit_ui)
@@ -484,7 +519,12 @@ fn main() -> ExitCode {
         .init_resource::<ghost::Ghost>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
-        .add_plugins((menu::MenuPlugin, lobby::LobbyPlugin, pause::PausePlugin))
+        .add_plugins((
+            ui::UiPlugin,
+            menu::MenuPlugin,
+            lobby::LobbyPlugin,
+            pause::PausePlugin,
+        ))
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
@@ -572,7 +612,7 @@ fn main() -> ExitCode {
         app.insert_resource(remote);
     }
     app.insert_resource(lobby::Nations(game.nations()))
-        .insert_resource(sound::Sounds::new(&mut game, &menu::CLICKS))
+        .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
         .insert_resource(Data(game));
     match map {
         Some(name) => {
@@ -687,11 +727,8 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
 /// Shows the map being loaded, as the game does: its name over what it's
 /// about, and how loading goes.
 fn loading(mut commands: Commands, pending: Res<Pending>) {
+    use ui::{Edge, Font, Ink, Surface, label, text};
     commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
-    let font = |size: f32| TextFont {
-        font_size: FontSize::Px(size),
-        ..default()
-    };
     let root = commands
         .spawn((
             LoadingScreen,
@@ -704,11 +741,11 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
                 row_gap: px(24),
                 ..default()
             },
-            BackgroundColor(Color::BLACK),
+            Surface::Solid,
             GlobalZIndex(10),
         ))
         .id();
-    commands.spawn((ChildOf(root), Text::new(pending.title.clone()), font(22.0)));
+    commands.spawn((ChildOf(root), text(pending.title.clone(), Font::Title)));
     if !pending.description.is_empty() {
         commands.spawn((
             ChildOf(root),
@@ -719,8 +756,8 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
                 border: UiRect::all(px(2)),
                 ..default()
             },
-            BorderColor::all(Color::srgb(0.75, 0.6, 0.3)),
-            children![(Text::new(pending.description.clone()), font(16.0))],
+            Edge::Accent,
+            children![text(pending.description.clone(), Font::Body)],
         ));
     }
     commands.spawn((
@@ -738,12 +775,7 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
             ..default()
         },
         children![
-            (
-                LoadingStatus,
-                Text::new("Loading..."),
-                font(16.0),
-                TextColor(Color::srgb(0.6, 0.6, 0.6)),
-            ),
+            (LoadingStatus, label("Loading...", Font::Body, Ink::Help)),
             (
                 ContinueSlot,
                 Node {
@@ -829,7 +861,7 @@ fn ready(
     }
     for slot in &slot {
         commands
-            .spawn((ChildOf(slot), menu::button("Continue", menu::SIZE)))
+            .spawn((ChildOf(slot), ui::button("Continue", ui::Font::Large)))
             .observe(start);
     }
 }
@@ -996,6 +1028,7 @@ fn setup(
         buildings: sim.0.buildings.len(),
     });
     commands.insert_resource(Drawn(models));
+    commands.insert_resource(effects::Effects::new(game, map));
     sounds.load_objects(game);
 }
 
@@ -1900,9 +1933,6 @@ fn place_on_map(node: &mut Node, corner: Vec2, size: Vec2, ui: &UiScale) {
 }
 
 const OWN: Color = Color::srgb(0.1, 0.9, 0.1);
-/// Behind the minimap, the selection pane and the action grid, letting a
-/// little of the map show through.
-const CHROME: Color = Color::srgba(0.0, 0.0, 0.0, 0.85);
 const FRIEND: Color = Color::srgb(0.2, 0.55, 1.0);
 const OTHER: Color = Color::srgb(0.95, 0.15, 0.1);
 /// What marks things by how their owner stands toward the player, by
