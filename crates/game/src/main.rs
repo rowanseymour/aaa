@@ -44,7 +44,6 @@ use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{Relation, State, TICK, Target, World};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
-use bevy::tasks::{AsyncComputeTaskPool, Task, futures::check_ready};
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 use tgck::map::{Detail, Thing};
@@ -125,10 +124,11 @@ struct Loaded {
 }
 
 /// A match being set up off the main thread, which would otherwise stop the
-/// window responding for seconds.
+/// window responding. A thread of its own rather than a task pool's, which
+/// would hold up quitting mid-load until it finished.
 #[derive(Resource)]
 struct Preparing {
-    task: Task<Result<Prepared, (Box<GameData>, String)>>,
+    thread: std::thread::JoinHandle<Result<Prepared, (Box<GameData>, String)>>,
     from_menu: bool,
 }
 
@@ -399,6 +399,10 @@ fn main() -> ExitCode {
     app.add_plugins(DefaultPlugins.set(window));
     if let Some(s) = screenshot {
         app.add_plugins(s);
+        // Of the match, not the loading screen before it.
+        if map.is_some() {
+            app.configure_sets(Update, shot::Capture.run_if(in_state(Screen::Match)));
+        }
     }
     let mut console = console::Console::default();
     for s in &scripts {
@@ -674,21 +678,22 @@ fn load(world: &mut bevy::ecs::world::World) {
         let nations = world.resource::<lobby::Nations>().0.clone();
         let side = *world.resource::<Side>();
         let from_menu = pending.from_menu;
-        let task = AsyncComputeTaskPool::get()
-            .spawn(async move { prepare(game, pending, &nations, side) });
-        world.insert_resource(Preparing { task, from_menu });
-        world.insert_resource(shot::Hold);
+        let thread = std::thread::spawn(move || prepare(game, pending, &nations, side));
+        world.insert_resource(Preparing { thread, from_menu });
         return;
     }
-    let Some(mut preparing) = world.get_resource_mut::<Preparing>() else {
+    if !world
+        .get_resource::<Preparing>()
+        .is_some_and(|p| p.thread.is_finished())
+    {
+        return;
+    }
+    let Some(Preparing { thread, from_menu }) = world.remove_resource::<Preparing>() else {
         return;
     };
-    let Some(prepared) = check_ready(&mut preparing.task) else {
-        return;
-    };
-    let from_menu = preparing.from_menu;
-    world.remove_resource::<Preparing>();
-    world.remove_resource::<shot::Hold>();
+    let prepared = thread
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     match prepared {
         Ok(prepared) => {
             begin(world, prepared);
