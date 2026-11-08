@@ -44,14 +44,13 @@ editor() {
 }
 
 game top-right allies03_stalingrad <<'EOF'
-create regiment_rus_tank_heavy 62 392
-create regiment_rus_tank_medium 66 384
-placementkingdom kingdom_1
-create regiment_ger_tank_heavy 77 400
-create regiment_ger_tank_medium 80 390
-advance 12
-select 13457 13462
-lookat 71 393
+select 2551
+destroyselected
+advance 1
+select 2762
+commission regiment_rus_tank_light
+advance 4
+lookat 30 423
 zoom 0.55
 EOF
 
@@ -69,8 +68,8 @@ placementkingdom kingdom_1
 create regiment_ger_tank_heavy 330 280
 create regiment_ger_halftrack_at 342 278
 advance 8
-select 10744 10749
-lookat 339 290
+select 10744
+lookat 342 289
 zoom 0.6
 EOF
 
