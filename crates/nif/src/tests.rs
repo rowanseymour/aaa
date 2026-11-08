@@ -1562,6 +1562,60 @@ fn reads_older_particle_meshes() {
 }
 
 #[test]
+fn places_older_particles_at_their_parent() {
+    let mut b = Builder::new();
+    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1]));
+    let mut smoke = scene("smoke", 0x10, [0.0, 0.0, 2.0], 1.0, &[]);
+    smoke.extend(refs(&[2]));
+    smoke.extend(refs(&[]));
+    b.add("NiNode", smoke);
+    // Hidden, moved and with a property of its own.
+    b.add("NiParticles", shape("Blizzard", 0x11, 3, &[4]));
+    b.add("NiTriShapeData", geometry(false));
+    b.add("NiSpecularProperty", {
+        let mut v = string("");
+        v.extend(refs(&[]));
+        v.extend((-1i32).to_le_bytes());
+        v.extend(0u16.to_le_bytes());
+        v
+    });
+    // A mesh outside the scene, its root moved.
+    b.add("NiNode", node("NewRoot", [5.0, 0.0, 0.0], 2.0, &[6]));
+    let mut quad = scene("quad", 0x10, [1.0, 0.0, 0.0], 1.0, &[]);
+    quad.extend(3i32.to_le_bytes());
+    quad.extend((-1i32).to_le_bytes());
+    quad.push(0);
+    b.add("NiTriShape", quad);
+
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    let old = nif.old_particle_systems();
+    assert_eq!(old.len(), 1);
+    let (particles, placed) = &old[0];
+    assert_eq!(particles.shape.av.name, "Blizzard");
+    assert_eq!(placed.transform.translation, [0.0, 0.0, 2.0]);
+    assert_eq!(placed.properties, [Some(4)]);
+    assert_eq!(placed.path, [0, 1, 2]);
+
+    let below = nif.shapes_below(Some(5));
+    assert_eq!(below.len(), 1);
+    assert_eq!(below[0].transform.translation, [1.0, 0.0, 0.0]);
+    assert!(nif.shapes().is_empty());
+}
+
+#[test]
+fn transforms_undo() {
+    let t = Transform {
+        translation: [1.0, 2.0, 3.0],
+        rotation: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        scale: 2.0,
+    };
+    let p = t.inverse().apply(t.apply([0.5, -1.0, 4.0]));
+    for (a, b) in p.iter().zip([0.5, -1.0, 4.0]) {
+        assert!((a - b).abs() < 1e-5);
+    }
+}
+
+#[test]
 fn reads_animation_sequences() {
     let mut b = Builder::new();
     let mut sequence = string("SoldierJog");

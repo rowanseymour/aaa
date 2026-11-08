@@ -79,7 +79,13 @@ impl Plugin for MapRenderPlugin {
             .insert_resource(self.edge)
             .add_systems(
                 PostUpdate,
-                particles::play.after(bevy::transform::TransformSystems::Propagate),
+                (
+                    particles::play.after(bevy::transform::TransformSystems::Propagate),
+                    particles::place_copies
+                        .after(particles::play)
+                        .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                        .before(bevy::camera::visibility::VisibilitySystems::CalculateBounds),
+                ),
             )
             .add_systems(
                 Update,

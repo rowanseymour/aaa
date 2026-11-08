@@ -115,13 +115,27 @@ impl PartMaterial {
 
     /// A copy of the material of its own, to animate.
     fn copy(&self, assets: &mut ModelAssets) -> Self {
+        self.copied(
+            assets.materials,
+            assets.glow_materials,
+            assets.team_materials,
+        )
+    }
+
+    /// [`Self::copy`], into the stores themselves.
+    pub(crate) fn copied(
+        &self,
+        materials: &mut Assets<StandardMaterial>,
+        glow_materials: &mut Assets<GlowMaterial>,
+        team_materials: &mut Assets<TeamMaterial>,
+    ) -> Self {
         fn copy<M: Asset + Clone>(store: &mut Assets<M>, h: &Handle<M>) -> Handle<M> {
             store.get(h).cloned().map_or(h.clone(), |m| store.add(m))
         }
         match self {
-            PartMaterial::Standard(h) => PartMaterial::Standard(copy(assets.materials, h)),
-            PartMaterial::Glow(h) => PartMaterial::Glow(copy(assets.glow_materials, h)),
-            PartMaterial::Team(h) => PartMaterial::Team(copy(assets.team_materials, h)),
+            PartMaterial::Standard(h) => PartMaterial::Standard(copy(materials, h)),
+            PartMaterial::Glow(h) => PartMaterial::Glow(copy(glow_materials, h)),
+            PartMaterial::Team(h) => PartMaterial::Team(copy(team_materials, h)),
         }
     }
 }
@@ -243,7 +257,7 @@ fn painting(nif: &Nif, props: &[nif::Ref]) -> Option<Animation> {
 
 impl Animation {
     /// Whether instances need their own material to animate.
-    fn paints(&self) -> bool {
+    pub(crate) fn paints(&self) -> bool {
         self.fade.is_some() || self.texture.is_some()
     }
 
@@ -278,6 +292,62 @@ impl Animated {
             material,
         }
     }
+
+    /// One played at `rate` seconds of animation per second, from `offset`.
+    pub(crate) fn at_rate(
+        animation: Arc<Animation>,
+        offset: f32,
+        rate: f32,
+        material: PartMaterial,
+    ) -> Self {
+        Animated {
+            rate,
+            ..Animated::new(animation, offset, material)
+        }
+    }
+
+    /// Paints its part at its time, and gives the part's transform then if
+    /// it moves.
+    pub(crate) fn pose(
+        &self,
+        materials: &mut Assets<StandardMaterial>,
+        glow_materials: &mut Assets<GlowMaterial>,
+        team_materials: &mut Assets<TeamMaterial>,
+    ) -> Option<Transform> {
+        let t = self.time;
+        let moved = self
+            .animation
+            .motion
+            .is_some()
+            .then(|| self.animation.transform(t));
+        let alpha = self
+            .animation
+            .fade
+            .as_ref()
+            .and_then(|(c, keys)| keys.sample(c.key_time(t)));
+        let uv = self
+            .animation
+            .texture
+            .as_ref()
+            .map(|m| uv_transform(&m.at(t)));
+        if alpha.is_none() && uv.is_none() {
+            return moved;
+        }
+        let base = match &self.material {
+            PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
+            PartMaterial::Glow(h) => glow_materials.get_mut(h).map(|m| &mut m.into_inner().base),
+            PartMaterial::Team(h) => team_materials.get_mut(h).map(|m| &mut m.into_inner().base),
+        };
+        if let Some(m) = base {
+            if let Some(alpha) = alpha {
+                m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
+            }
+            if let Some(uv) = uv {
+                m.uv_transform = uv;
+            }
+        }
+        moved
+    }
 }
 
 pub fn animate(
@@ -289,34 +359,9 @@ pub fn animate(
 ) {
     for (mut a, mut transform) in &mut parts {
         a.time += time.delta_secs() * a.rate;
-        let t = a.time;
-        if a.animation.motion.is_some() {
-            *transform = a.animation.transform(t);
-        }
-        let alpha = a
-            .animation
-            .fade
-            .as_ref()
-            .and_then(|(c, keys)| keys.sample(c.key_time(t)));
-        let uv = a.animation.texture.as_ref().map(|m| uv_transform(&m.at(t)));
-        if alpha.is_some() || uv.is_some() {
-            let base = match &a.material {
-                PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
-                PartMaterial::Glow(h) => {
-                    glow_materials.get_mut(h).map(|m| &mut m.into_inner().base)
-                }
-                PartMaterial::Team(h) => {
-                    team_materials.get_mut(h).map(|m| &mut m.into_inner().base)
-                }
-            };
-            if let Some(m) = base {
-                if let Some(alpha) = alpha {
-                    m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
-                }
-                if let Some(uv) = uv {
-                    m.uv_transform = uv;
-                }
-            }
+        let moved = a.pose(&mut materials, &mut glow_materials, &mut team_materials);
+        if let Some(moved) = moved {
+            *transform = moved;
         }
     }
 }
@@ -961,36 +1006,8 @@ impl Models {
                 selection,
             });
         }
-        let mut parts = Vec::new();
         // Skinned shapes are drawn in the pose they were modelled in.
-        for placed in nif.shapes() {
-            let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
-                continue;
-            };
-            let props = &placed.properties;
-            let painting = painting(&nif, props);
-            // An animated mesh is built relative to the object that moves.
-            let (mesh_transform, animation) = match (motion(&nif, &placed.path), painting) {
-                (Some(m), painting) => {
-                    let (fade, texture) = painting.map_or((None, None), |p| (p.fade, p.texture));
-                    let animation = Animation {
-                        motion: Some((m.controller, m.keys, m.base)),
-                        above: m.above,
-                        fade,
-                        texture,
-                    };
-                    (m.below, Some(animation))
-                }
-                (None, painting) => (placed.transform, painting),
-            };
-            if let Some(mut part) =
-                self.part(game, assets, &nif, path, view, g, props, &mesh_transform)
-            {
-                part.animation = animation.map(Arc::new);
-                part.team = team::marked(&nif, &placed.shape.av);
-                parts.push(part);
-            }
-        }
+        let parts = self.scene_parts(game, assets, &nif, path, view, nif.shapes(), true);
         (!parts.is_empty() || !particles.is_empty()).then_some(Model {
             meshes: Meshes::Parts(parts),
             particles,
@@ -1153,7 +1170,8 @@ impl Models {
         view: &View,
     ) -> Vec<Arc<System>> {
         let placed = nif.particle_systems();
-        if placed.is_empty() {
+        let old = nif.old_particle_systems();
+        if placed.is_empty() && old.is_empty() {
             return Vec::new();
         }
         let frames = Nodes::new(nif).frames;
@@ -1165,7 +1183,93 @@ impl Models {
                 out.push(Arc::new(system));
             }
         }
+        for (particles, p) in old {
+            let look = self.particle_look(game, assets, nif, path, view, &p.properties);
+            let copies = self.mesh_copies(game, assets, nif, path, view, particles);
+            if let Some(system) = System::read_old(nif, &frames, &p, look, copies) {
+                out.push(Arc::new(system));
+            }
+        }
         out
+    }
+
+    /// The meshes an older-format mesh particle system's particles show,
+    /// one set for each in its modifier's list; empty for other systems.
+    fn mesh_copies(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        particles: &nif::OldParticles,
+    ) -> Vec<Arc<Vec<Part>>> {
+        let meshes = nif
+            .get_as::<nif::OldParticleData>(particles.shape.data)
+            .is_some_and(|d| matches!(d.kind, nif::OldParticleKind::Meshes { .. }));
+        let Some(c) = particles::old_controller(nif, particles).filter(|_| meshes) else {
+            return Vec::new();
+        };
+        let list: Vec<nif::Ref> = particles::old_modifiers(nif, c)
+            .flat_map(|m| match &m.kind {
+                nif::OldModifierKind::Meshes { meshes } => meshes.clone(),
+                _ => Vec::new(),
+            })
+            .collect();
+        list.into_iter()
+            .map(|r| {
+                let shapes = nif.shapes_below(r);
+                Arc::new(self.scene_parts(game, assets, nif, path, view, shapes, false))
+            })
+            .collect()
+    }
+
+    /// The parts of `shapes`, each animated by its own controllers and
+    /// those of the objects above it, with the first object on each path
+    /// taken as having no transform of its own unless `root_placed`.
+    #[allow(clippy::too_many_arguments)]
+    fn scene_parts(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        shapes: Vec<nif::Placed>,
+        root_placed: bool,
+    ) -> Vec<Part> {
+        let mut parts = Vec::new();
+        for placed in shapes {
+            let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
+                continue;
+            };
+            let props = &placed.properties;
+            let painting = painting(nif, props);
+            // An animated mesh is built relative to the object that moves.
+            let (mesh_transform, animation) =
+                match (motion(nif, &placed.path, root_placed), painting) {
+                    (Some(m), painting) => {
+                        let (fade, texture) =
+                            painting.map_or((None, None), |p| (p.fade, p.texture));
+                        let animation = Animation {
+                            motion: Some((m.controller, m.keys, m.base)),
+                            above: m.above,
+                            fade,
+                            texture,
+                        };
+                        (m.below, Some(animation))
+                    }
+                    (None, painting) => (placed.transform, painting),
+                };
+            if let Some(mut part) =
+                self.part(game, assets, nif, path, view, g, props, &mesh_transform)
+            {
+                part.animation = animation.map(Arc::new);
+                part.team = team::marked(nif, &placed.shape.av);
+                parts.push(part);
+            }
+        }
+        parts
     }
 
     /// How a particle system's squares are drawn: its texture whole, lit
@@ -1365,8 +1469,15 @@ struct Motion {
     below: nif::Transform,
 }
 
-fn motion(nif: &Nif, path: &[usize]) -> Option<Motion> {
+/// The animation moving the shape at the end of `path`, if any object on
+/// it has one, with the first object's own transform left out unless
+/// `root_placed`.
+fn motion(nif: &Nif, path: &[usize], root_placed: bool) -> Option<Motion> {
     let scene = |i: usize| nif.get(Some(i)).and_then(Object::scene);
+    let transform = |i: usize| match path.first() {
+        Some(&root) if i == root && !root_placed => Some(nif::Transform::IDENTITY),
+        _ => scene(i).map(|av| av.transform),
+    };
     let (at, controller, keys) = path.iter().enumerate().rev().find_map(|(at, &i)| {
         let c = controller(nif, scene(i)?.controller, ControllerKind::Keyframe)?;
         Some((at, c, nif.get_as::<Keyframes>(c.data)?))
@@ -1374,14 +1485,14 @@ fn motion(nif: &Nif, path: &[usize]) -> Option<Motion> {
     let chain = |range: &[usize]| {
         range
             .iter()
-            .filter_map(|&i| scene(i))
-            .fold(nif::Transform::IDENTITY, |t, av| t.then(&av.transform))
+            .filter_map(|&i| transform(i))
+            .fold(nif::Transform::IDENTITY, |t, av| t.then(&av))
     };
     Some(Motion {
         controller: controller.clone(),
         keys: keys.clone(),
         above: chain(&path[..at]),
-        base: scene(path[at])?.transform,
+        base: transform(path[at])?,
         below: chain(&path[at + 1..]),
     })
 }

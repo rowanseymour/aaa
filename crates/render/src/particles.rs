@@ -17,9 +17,11 @@ use bevy::light::NotShadowCaster;
 use bevy::math::Affine3A;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif};
+use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif, Object};
 
-use crate::models::{bevy_transform, controllers};
+use crate::glow::GlowMaterial;
+use crate::models::{Animated, Part, bevy_transform, controllers};
+use crate::team::TeamMaterial;
 use crate::terrain::world;
 
 /// A model's particle system, as read from it once for every object that
@@ -36,6 +38,11 @@ pub(crate) struct System {
     /// Its squares take each particle's colour, which its lighting may
     /// ignore.
     tinted: bool,
+    /// How fast its particles age and move against the model's clock.
+    clock: f32,
+    /// The meshes each particle shows a copy of instead of a square, by
+    /// generation: the last for any later one.
+    copies: Vec<Arc<Vec<Part>>>,
 }
 
 /// How a particle system is drawn.
@@ -79,6 +86,18 @@ impl<K> Timed<K> {
     fn loops(&self) -> bool {
         (self.controller.flags >> 1) & 3 == 0
     }
+
+    /// Whether its key time wraps round between `before` and `t`, however
+    /// many cycles apart they are.
+    fn wraps(&self, before: f32, t: f32) -> bool {
+        let c = &self.controller;
+        let span = c.stop - c.start;
+        if !self.loops() || span <= 0.0 {
+            return false;
+        }
+        let cycle = |t: f32| ((t * c.frequency + c.phase - c.start) / span).floor();
+        cycle(t) != cycle(before)
+    }
 }
 
 enum StepKind {
@@ -104,6 +123,12 @@ enum StepKind {
     GrowFade(nif::GrowFade),
     Colour(Keys<[f32; 4]>),
     Collide(Vec<Collider>),
+    /// Turns each particle about its axis, given or random per particle.
+    Spin {
+        random: bool,
+        axis: Vec3,
+        speed: f32,
+    },
 }
 
 /// Something particles bounce off, or die on.
@@ -135,6 +160,11 @@ struct Emitter {
     keys: Option<Timed<nif::EmitterKeys>>,
     radius: Option<Timed<Keys<f32>>>,
     speed: Option<Timed<Keys<f32>>>,
+    /// Births count from the start of each cycle of its keys, as in the
+    /// older format, rather than from when it came on.
+    cycles: bool,
+    /// Every particle goes when its keys wrap round.
+    reset: bool,
 }
 
 enum Shape {
@@ -338,6 +368,8 @@ impl System {
                                 keys,
                             })
                         }),
+                        cycles: false,
+                        reset: false,
                     }))
                 }
                 _ => continue,
@@ -370,8 +402,227 @@ impl System {
                 material: look.material,
                 // Without colour keys the squares are white.
                 tinted: look.tinted && has_colours,
+                clock: 1.0,
+                copies: Vec::new(),
             })
     }
+
+    /// The older-format system `placed` finds, drawn in `look`, or as
+    /// `copies` of meshes for mesh particles; `None` if it can't be placed.
+    pub fn read_old(
+        nif: &Nif,
+        frames: &Frames,
+        placed: &nif::Placed,
+        look: Look,
+        copies: Vec<Arc<Vec<Part>>>,
+    ) -> Option<System> {
+        let (&at, parents) = placed.path.split_last()?;
+        let old = nif.get_as::<nif::OldParticles>(Some(at))?;
+        let c = old_controller(nif, old)?;
+        let data = nif.get_as::<nif::OldParticleData>(old.shape.data)?;
+        // It sits at its parent node, without its own transform.
+        let home = *frames.0.get(parents.last()?)?;
+        let mut anchors = vec![home];
+        let mut anchor = |r: nif::Ref| -> Option<usize> {
+            let a = *frames.0.get(&r?)?;
+            anchors.push(a);
+            Some(anchors.len() - 1)
+        };
+        let capacity = data.geometry.positions.len();
+        let t = &c.timing;
+        let rate = if c.use_birth_rate {
+            c.birth_rate
+        } else if t.stop - t.start > c.life_span {
+            capacity as f32 / c.life_span
+        } else {
+            capacity as f32 / (emit_stop(c) - c.emit_start)
+        };
+        let mut timing = t.clone();
+        if c.reset {
+            timing.flags &= !6;
+        }
+        let active = match t.flags & 1 {
+            0 => old_switching(t.start, t.stop, c.emit_start, emit_stop(c)),
+            _ => vec![(t.start, false)],
+        };
+        let emitter = Emitter {
+            settings: nif::Emitter {
+                speed: c.speed,
+                speed_variation: c.speed_variation,
+                declination: c.declination,
+                declination_variation: c.declination_variation,
+                planar_angle: c.planar_angle,
+                planar_angle_variation: c.planar_angle_variation,
+                color: c.color,
+                radius: c.size,
+                life_span: c.life_span,
+                life_span_variation: c.life_span_variation,
+                shape: EmitterShape::Box {
+                    object: c.emitter,
+                    size: c.emitter_size,
+                },
+            },
+            shape: Shape::Box {
+                anchor: anchor(c.emitter).unwrap_or(0),
+                size: Vec3::from(c.emitter_size),
+            },
+            keys: Some(Timed {
+                controller: timing,
+                keys: nif::EmitterKeys {
+                    birth_rate: Keys {
+                        interpolation: nif::Interpolation::Linear,
+                        keys: vec![nif::Key {
+                            time: t.start,
+                            value: if rate.is_finite() { rate } else { 0.0 },
+                            tangents: None,
+                        }],
+                    },
+                    active,
+                },
+            }),
+            radius: None,
+            speed: None,
+            cycles: true,
+            reset: c.reset,
+        };
+        let mut kinds = vec![StepKind::Age, StepKind::Emit(Box::new(emitter))];
+        let mut gravity = Vec::new();
+        let own = &old.shape.av.transform;
+        for m in old_modifiers(nif, c) {
+            match &m.kind {
+                nif::OldModifierKind::GrowFade { grow, fade } => {
+                    kinds.push(StepKind::GrowFade(nif::GrowFade {
+                        grow: *grow,
+                        grow_generation: 0,
+                        fade: *fade,
+                        fade_generation: c.spawn_generations,
+                    }))
+                }
+                nif::OldModifierKind::Color { data } => {
+                    if let Some(keys) = nif.get_as::<Keys<[f32; 4]>>(*data) {
+                        kinds.push(StepKind::Colour(keys.clone()));
+                    }
+                }
+                // Only mesh copies show the turn, and only of particles
+                // with rotations.
+                nif::OldModifierKind::Rotation {
+                    random_axis,
+                    axis,
+                    speed,
+                } if !data.rotations.is_empty() && !copies.is_empty() => {
+                    kinds.push(StepKind::Spin {
+                        random: *random_axis,
+                        axis: world_vec(*axis).normalize_or_zero(),
+                        speed: *speed,
+                    })
+                }
+                nif::OldModifierKind::Gravity {
+                    decay,
+                    strength,
+                    force,
+                    position,
+                    direction,
+                } => {
+                    // Placed by the particle object's own transform, under
+                    // its parent, with its position not turned.
+                    let place = nif::Transform {
+                        translation: std::array::from_fn(|i| position[i] + own.translation[i]),
+                        ..*own
+                    };
+                    anchors.push(Anchor {
+                        node: home.node,
+                        below: home.below.then(&place),
+                        model: home.model.then(&place),
+                    });
+                    gravity.push(StepKind::Gravity {
+                        anchor: anchors.len() - 1,
+                        axis: world_vec(*direction).normalize_or_zero(),
+                        decay: *decay,
+                        strength: *strength,
+                        spherical: *force == 1,
+                        turbulence: 0.0,
+                    });
+                }
+                _ => {}
+            }
+        }
+        kinds.extend(gravity);
+        kinds.push(StepKind::Move);
+        let has_colours = kinds.iter().any(|k| matches!(k, StepKind::Colour(_)));
+        Some(System {
+            anchors,
+            world_space: false,
+            capacity,
+            steps: kinds
+                .into_iter()
+                .map(|kind| Step {
+                    kind,
+                    active: None,
+                    on: true,
+                })
+                .collect(),
+            material: look.material,
+            tinted: look.tinted && has_colours,
+            clock: t.frequency,
+            copies,
+        })
+    }
+}
+
+/// The controller playing an older-format particle object, found down its
+/// chain whether or not it's marked active.
+pub(crate) fn old_controller<'a>(
+    nif: &'a Nif,
+    old: &nif::OldParticles,
+) -> Option<&'a nif::OldParticleController> {
+    let mut next = old.shape.av.controller;
+    for _ in 0..16 {
+        if let Some(Object::OldParticleController(c)) = nif.get(next) {
+            return Some(c);
+        }
+        next = nif.get_as::<nif::Controller>(next)?.next;
+    }
+    None
+}
+
+/// An older-format controller's modifiers, in the order of its chain.
+pub(crate) fn old_modifiers<'a>(
+    nif: &'a Nif,
+    c: &nif::OldParticleController,
+) -> impl Iterator<Item = &'a nif::OldModifier> {
+    let mut next = c.modifier;
+    std::iter::from_fn(move || {
+        let m = nif.get_as::<nif::OldModifier>(next)?;
+        next = m.next;
+        Some(m)
+    })
+    .take(16)
+}
+
+/// An older-format emitter's stop time, kept apart from its start.
+fn emit_stop(c: &nif::OldParticleController) -> f32 {
+    match c.emit_stop == c.emit_start {
+        true => c.emit_start + 0.00001,
+        false => c.emit_stop,
+    }
+}
+
+/// When an older-format emitter is on, as keys over its controller's
+/// `start` to `stop`, from its emit start and stop times.
+fn old_switching(start: f32, stop: f32, emit_start: f32, emit_stop: f32) -> BoolKeys {
+    // A window ending before the keys or before it opens is never on.
+    if emit_start >= stop || emit_stop <= start.max(emit_start) {
+        return vec![(start, false)];
+    }
+    let mut keys = match emit_start > start {
+        true => vec![(start, false), (emit_start, true)],
+        false => vec![(start, true)],
+    };
+    if emit_stop < stop {
+        keys.push((emit_stop, false));
+    }
+    keys.push((stop, false));
+    keys
 }
 
 /// A vector in the model's z-up axes, in Bevy's.
@@ -440,6 +691,7 @@ pub(crate) fn spawn(
             mesh,
             state: State::new(seed.wrapping_mul(31).wrapping_add(i as u32), offset),
             corners: Vec::new(),
+            copies: Vec::new(),
             rate: 1.0,
         });
     }
@@ -455,9 +707,119 @@ pub struct Particles {
     state: State,
     /// Each square's corners, relative to the mesh, kept to fill it from.
     corners: Vec<[f32; 3]>,
+    /// The entity showing each mesh particle's copy, by particle.
+    copies: Vec<(u32, Entity)>,
     /// Seconds of its animation per second played.
     pub(crate) rate: f32,
 }
+
+/// Marks the entity a mesh particle's copy hangs from.
+#[derive(Component)]
+pub struct MeshCopy;
+
+/// Gives each mesh particle its copy of its meshes as it's born, takes it
+/// away when it dies, and puts it where the particle is, turned and sized
+/// as it is. Runs after [`play`] and before anything is drawn, so it places
+/// the copies itself rather than waiting for transforms to be propagated.
+#[allow(clippy::too_many_arguments)]
+pub fn place_copies(
+    mut commands: Commands,
+    mut systems: Query<(&mut Particles, &GlobalTransform)>,
+    mut copies: Query<(&mut Transform, &mut GlobalTransform, &Children), CopyParts>,
+    mut parts: Query<(&Transform, &mut GlobalTransform), CopyMeshes>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut glow_materials: ResMut<Assets<GlowMaterial>>,
+    mut team_materials: ResMut<Assets<TeamMaterial>>,
+) {
+    for (mut particles, home) in &mut systems {
+        let particles = &mut *particles;
+        if particles.system.copies.is_empty() {
+            continue;
+        }
+        let state = &particles.state;
+        // Both are in order of birth, so they're matched up in one pass.
+        let mut shown = std::mem::take(&mut particles.copies).into_iter().peekable();
+        for p in &state.particles {
+            while let Some((_, e)) = shown.next_if(|&(id, _)| id < p.id) {
+                commands.entity(e).despawn();
+            }
+            let transform = Transform {
+                translation: p.position,
+                rotation: p
+                    .axis
+                    .filter(|a| *a != Vec3::ZERO)
+                    .map_or(Quat::IDENTITY, |a| {
+                        Quat::from_axis_angle(a.normalize(), p.angle)
+                    }),
+                scale: Vec3::splat(p.radius * p.size),
+            };
+            let global = *home * transform;
+            if let Some((id, e)) = shown.next_if(|&(id, _)| id == p.id) {
+                if let Ok((mut t, mut g, children)) = copies.get_mut(e) {
+                    *t = transform;
+                    *g = global;
+                    for &child in children {
+                        if let Ok((t, mut g)) = parts.get_mut(child) {
+                            *g = global * *t;
+                        }
+                    }
+                }
+                particles.copies.push((id, e));
+                continue;
+            }
+            let meshes = &particles.system.copies;
+            let meshes = &meshes[(p.generation as usize).min(meshes.len() - 1)];
+            // Their own controllers play on the system's clock.
+            let rate = particles.rate * particles.system.clock;
+            let copy = commands
+                .spawn((
+                    transform,
+                    global,
+                    Visibility::default(),
+                    MeshCopy,
+                    ChildOf(particles.anchors[0]),
+                ))
+                .id();
+            for part in meshes.iter() {
+                let painted = part.animation.as_ref().is_some_and(|a| a.paints());
+                let material = match painted {
+                    true => part.material.copied(
+                        &mut materials,
+                        &mut glow_materials,
+                        &mut team_materials,
+                    ),
+                    false => part.material.clone(),
+                };
+                let animated = part.animation.as_ref().map(|animation| {
+                    Animated::at_rate(animation.clone(), state.time, rate, material.clone())
+                });
+                let posed = animated
+                    .as_ref()
+                    .and_then(|a| a.pose(&mut materials, &mut glow_materials, &mut team_materials));
+                let t = posed.unwrap_or_default();
+                let mut child =
+                    commands.spawn((Mesh3d(part.mesh.clone()), t, global * t, ChildOf(copy)));
+                if part.blended {
+                    child.insert(NotShadowCaster);
+                }
+                material.insert(&mut child);
+                if let Some(animated) = animated {
+                    child.insert(animated);
+                }
+            }
+            particles.copies.push((p.id, copy));
+        }
+        for (_, e) in shown {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+/// The entities showing mesh particles' copies.
+type CopyParts = (With<MeshCopy>, Without<Particles>);
+
+/// The meshes of those copies, among others.
+type CopyMeshes = (Without<MeshCopy>, Without<Particles>);
 
 /// Marks the entity a system's squares are drawn by.
 #[derive(Component)]
@@ -471,6 +833,7 @@ struct State {
     owed: f32,
     played: bool,
     particles: Vec<Particle>,
+    born: u32,
     rng: Rng,
 }
 
@@ -482,6 +845,7 @@ impl State {
             owed: 0.0,
             played: false,
             particles: Vec::new(),
+            born: 0,
             rng: Rng(u64::from(seed) ^ 0x9e37_79b9_7f4a_7c15),
         }
     }
@@ -498,6 +862,11 @@ struct Particle {
     size: f32,
     colour: [f32; 4],
     generation: u16,
+    /// Which particle of its system it is.
+    id: u32,
+    /// What it turns about, once something turns it, and how far.
+    axis: Option<Vec3>,
+    angle: f32,
     /// Born this frame, already moved on by its age.
     new: bool,
     /// Seconds of the frame left after it hit something this frame.
@@ -637,6 +1006,22 @@ impl System {
                         }
                     }
                 }
+                StepKind::Spin {
+                    random,
+                    axis,
+                    speed,
+                } => {
+                    for p in &mut state.particles {
+                        if p.axis.is_none() {
+                            p.axis = Some(match random {
+                                true => random_axis(&mut state.rng),
+                                false => *axis,
+                            });
+                        }
+                        let turned = if p.new { p.age } else { dt };
+                        p.angle = (p.angle + speed * turned).rem_euclid(TAU);
+                    }
+                }
             }
         }
         state.played = true;
@@ -655,6 +1040,16 @@ impl System {
             }
             None => (false, 0.0),
         };
+        if let Some(k) = e.keys.as_ref().filter(|_| e.cycles)
+            && k.wraps(t - dt, t)
+        {
+            if e.reset {
+                state.particles.clear();
+            }
+            // What came due since the cycle started is never born.
+            state.owed = ((k.time(t) - k.controller.start) * rate).fract();
+            return;
+        }
         if !on || rate <= 0.0 {
             state.owed = 0.0;
             return;
@@ -681,6 +1076,8 @@ impl System {
             let age = (state.owed + (due - 1.0 - k as f32)) / rate;
             let mut p = birth(&settings, &e.shape, space, &mut state.rng);
             p.age = age;
+            p.id = state.born;
+            state.born = state.born.wrapping_add(1);
             p.position += p.velocity * age;
             state.particles.push(p);
         }
@@ -788,9 +1185,21 @@ fn birth(e: &nif::Emitter, shape: &Shape, space: &Space, rng: &mut Rng) -> Parti
         size: 1.0,
         colour: e.color,
         generation: 0,
+        id: 0,
+        axis: None,
+        angle: 0.0,
         new: true,
         left: None,
     }
+}
+
+/// An axis with its z a random cos(πu) and its direction about z a random
+/// 2πv, in Bevy's axes.
+fn random_axis(rng: &mut Rng) -> Vec3 {
+    let z = (std::f32::consts::PI * rng.unit()).cos();
+    let about = TAU * rng.unit();
+    let r = (1.0 - z * z).max(0.0).sqrt();
+    world_vec([r * about.cos(), r * about.sin(), z])
 }
 
 /// Where a particle's path over a frame meets a collider.
@@ -976,7 +1385,7 @@ pub fn play(
                     .map(|&a| to_space * anchors.get(a).map_or(own, |g| g.affine()))
                     .collect(),
             };
-            let dt = dt * particles.rate;
+            let dt = dt * particles.rate * particles.system.clock;
             particles.system.step(&mut particles.state, &space, dt);
         }
         let Some(camera) = camera else { continue };
@@ -1002,7 +1411,9 @@ pub fn play(
             *global = GlobalTransform::from(own) * GlobalTransform::from(*t);
         }
         particles.corners.clear();
-        for (p, w) in state.particles.iter().zip(points) {
+        // Mesh particles draw as copies of their meshes instead.
+        let squares = particles.system.copies.is_empty();
+        for (p, w) in state.particles.iter().zip(points).filter(|_| squares) {
             let half = p.radius * p.size * scale;
             for (x, y) in CORNERS {
                 let corner = w + (right * x + up * y) * half;
@@ -1017,6 +1428,7 @@ pub fn play(
         let colours: Vec<[f32; 4]> = state
             .particles
             .iter()
+            .filter(|_| squares)
             .map(|p| match tinted {
                 // The model's colours are sRGB, as everywhere else.
                 true => {
@@ -1131,6 +1543,8 @@ mod tests {
             }),
             radius: None,
             speed: None,
+            cycles: false,
+            reset: false,
         }
     }
 
@@ -1149,6 +1563,8 @@ mod tests {
                 .collect(),
             material: Handle::default(),
             tinted: true,
+            clock: 1.0,
+            copies: Vec::new(),
         }
     }
 
@@ -1224,6 +1640,9 @@ mod tests {
             size: 1.0,
             colour: [1.0; 4],
             generation: 0,
+            id: 0,
+            axis: None,
+            angle: 0.0,
             new: false,
             left: None,
         };
@@ -1262,6 +1681,9 @@ mod tests {
             size: 1.0,
             colour: [1.0; 4],
             generation: 0,
+            id: 0,
+            axis: None,
+            angle: 0.0,
             new: false,
             left: None,
         });
@@ -1314,6 +1736,9 @@ mod tests {
             size: 1.0,
             colour: [1.0; 4],
             generation: 0,
+            id: 0,
+            axis: None,
+            angle: 0.0,
             new: false,
             left: None,
         }
@@ -1394,5 +1819,93 @@ mod tests {
             .push(moving(Vec3::new(2.0, 0.0, 0.0), Vec3::new(-4.0, 0.0, 0.0)));
         s.step(&mut state, &space, 0.5);
         assert!(state.particles.is_empty());
+    }
+
+    #[test]
+    fn old_emitters_switch_by_their_emit_times() {
+        // On throughout, as in both stock models.
+        assert_eq!(
+            old_switching(0.0, 5.0, 0.0, 6.67),
+            [(0.0, true), (5.0, false)]
+        );
+        assert_eq!(
+            old_switching(0.0, 33.3, -16.7, 33.3),
+            [(0.0, true), (33.3, false)]
+        );
+        assert_eq!(
+            old_switching(0.0, 2.0, 0.25, 0.5),
+            [(0.0, false), (0.25, true), (0.5, false), (2.0, false)]
+        );
+        assert_eq!(old_switching(0.0, 2.0, 2.0, 3.0), [(0.0, false)]);
+        assert_eq!(old_switching(0.0, 2.0, -5.0, -1.0), [(0.0, false)]);
+        assert_eq!(old_switching(0.0, 2.0, 1.0, 0.5), [(0.0, false)]);
+    }
+
+    #[test]
+    fn old_births_start_over_each_cycle() {
+        let mut e = emitter(3.75);
+        e.cycles = true;
+        if let Some(k) = &mut e.keys {
+            // Looping over five seconds, on throughout.
+            k.controller.flags = 0x08;
+            k.controller.stop = 5.0;
+            k.keys.active = vec![(0.0, true), (5.0, false)];
+        }
+        let mut s = system(vec![StepKind::Emit(Box::new(e))]);
+        // Eighteen in the first cycle, the last at 4.8 s; the nineteenth
+        // would be due at 5.07 s, but the second cycle starts its count
+        // over, so its first is at 5.27 s.
+        assert_eq!(play(&s, 5.2, 0.05).born, 18);
+        assert_eq!(play(&s, 5.3, 0.05).born, 19);
+        if let StepKind::Emit(e) = &mut s.steps[0].kind {
+            e.cycles = false;
+        }
+        assert_eq!(play(&s, 5.2, 0.05).born, 19);
+    }
+
+    #[test]
+    fn cycles_wrap_however_long_the_frame() {
+        let mut e = emitter(3.75);
+        if let Some(k) = &mut e.keys {
+            k.controller.flags = 0x08;
+            k.controller.stop = 5.0;
+            assert!(k.wraps(4.9, 5.1));
+            // A frame of a whole cycle lands at the same key time.
+            assert!(k.wraps(1.0, 6.0));
+            assert!(!k.wraps(1.0, 4.0));
+            // Held at the end, it never wraps.
+            k.controller.flags = 0x0c;
+            assert!(!k.wraps(1.0, 6.0));
+        }
+    }
+
+    #[test]
+    fn spun_particles_turn_from_their_birth() {
+        let spin = StepKind::Spin {
+            random: false,
+            axis: Vec3::Y,
+            speed: 2.0,
+        };
+        let s = system(vec![spin]);
+        let space = Space {
+            anchors: vec![Affine3A::IDENTITY],
+        };
+        let mut state = State::new(1, 0.0);
+        let mut p = moving(Vec3::ZERO, Vec3::ZERO);
+        p.new = true;
+        p.age = 0.25;
+        state.particles.push(p);
+        s.step(&mut state, &space, 0.5);
+        // Its age at birth is cleared with the frame's new flags, so it
+        // turns for the whole frame.
+        assert_eq!(state.particles[0].axis, Some(Vec3::Y));
+        assert!((state.particles[0].angle - 1.0).abs() < 1e-5);
+        s.step(&mut state, &space, 3.0);
+        assert!((state.particles[0].angle - (7.0 - TAU)).abs() < 1e-4);
+
+        let mut rng = Rng(3);
+        for _ in 0..50 {
+            assert!((random_axis(&mut rng).length() - 1.0).abs() < 1e-5);
+        }
     }
 }
