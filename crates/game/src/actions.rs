@@ -22,7 +22,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::resource_bar::{Preview, Previewed};
-use crate::ui::{Click, Font, Ink, Surface, label};
+use crate::ui::{Click, Edge, Font, Ink, Shade, Surface, label};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
@@ -564,10 +564,10 @@ pub fn spawn(
                             ..default()
                         },
                         Surface::Slot,
-                        BorderColor::all(Color::NONE),
+                        Edge::Clear,
                         children![(
                             SlotIcon,
-                            ImageNode::default(),
+                            Shade::Full,
                             Node {
                                 width: percent(100),
                                 height: percent(100),
@@ -623,7 +623,7 @@ type SlotParts<'a> = (
     &'a Slot,
     &'a Hovered,
     &'a Children,
-    &'a mut BorderColor,
+    &'a mut Edge,
     &'a mut Pickable,
 );
 
@@ -639,7 +639,7 @@ pub fn show(
     mut shown: ResMut<Shown>,
     mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
     mut slots: Query<SlotParts, Without<SlotIcon>>,
-    mut icons: Query<(&mut ImageNode, &mut Visibility), With<SlotIcon>>,
+    mut icons: Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
     mut tooltip: TipParts,
     local: Res<Local>,
     focus: Res<crate::Focus>,
@@ -695,7 +695,7 @@ pub fn show(
             refusal.0 = None;
         }
         let Some(entry) = entry else {
-            border.set_if_neq(BorderColor::all(Color::NONE));
+            border.set_if_neq(Edge::Clear);
             set_icon(children, &mut icons, None);
             continue;
         };
@@ -783,17 +783,16 @@ pub fn show(
                 why,
             });
         }
-        let colour = match (lit, hover.get() && ready) {
-            (true, _) => Color::srgb(0.1, 0.9, 0.1),
-            (false, true) => Color::WHITE,
-            (false, false) => Color::NONE,
+        border.set_if_neq(match (lit, hover.get() && ready) {
+            (true, _) => Edge::Lit,
+            (false, true) => Edge::Hovered,
+            (false, false) => Edge::Clear,
+        });
+        let shade = match ready {
+            true => Shade::Full,
+            false => Shade::Dimmed,
         };
-        border.set_if_neq(BorderColor::all(colour));
-        let tint = match ready {
-            true => Color::WHITE,
-            false => Color::srgb(0.35, 0.35, 0.35),
-        };
-        set_icon(children, &mut icons, icon.map(|i| (i, tint)));
+        set_icon(children, &mut icons, icon.map(|i| (i, shade)));
     }
     let prompt = |title: &str| {
         Some(Tip {
@@ -928,26 +927,26 @@ fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
     });
 }
 
-/// Shows a slot's icon in this tint, or hides it, say for an empty slot
+/// Shows a slot's icon in this shade, or hides it, say for an empty slot
 /// or a command the data gives no icon, which would otherwise draw white.
 fn set_icon(
     children: &Children,
-    icons: &mut Query<(&mut ImageNode, &mut Visibility), With<SlotIcon>>,
-    icon: Option<(Handle<Image>, Color)>,
+    icons: &mut Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
+    icon: Option<(Handle<Image>, Shade)>,
 ) {
     for &child in children {
-        let Ok((mut image, mut visibility)) = icons.get_mut(child) else {
+        let Ok((mut image, mut shade, mut visibility)) = icons.get_mut(child) else {
             continue;
         };
         visibility.set_if_neq(match icon {
             Some(_) => Visibility::Inherited,
             None => Visibility::Hidden,
         });
-        if let Some((handle, tint)) = icon.clone()
-            && (image.image != handle || image.color != tint)
-        {
-            image.image = handle;
-            image.color = tint;
+        if let Some((handle, want)) = icon.clone() {
+            if image.image != handle {
+                image.image = handle;
+            }
+            shade.set_if_neq(want);
         }
     }
 }

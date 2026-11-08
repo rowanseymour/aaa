@@ -6,7 +6,7 @@ use bevy::ui_widgets::Activate;
 
 use crate::actions::Page;
 use crate::menu;
-use crate::ui::{self, Font, Surface};
+use crate::ui::{self, Font};
 use crate::{Focus, LoadingScreen, Screen, SelectionBox, console};
 
 /// Whether the menu is up, and whether the match was already paused
@@ -79,35 +79,9 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
     time.pause();
 
     let overlay = commands
-        .spawn((
-            Overlay,
-            DespawnOnExit(Screen::Match),
-            Node {
-                position_type: PositionType::Absolute,
-                width: percent(100),
-                height: percent(100),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            Surface::Scrim,
-            GlobalZIndex(10),
-        ))
+        .spawn((Overlay, DespawnOnExit(Screen::Match), ui::scrim()))
         .id();
-    let column = commands
-        .spawn((
-            ChildOf(overlay),
-            Node {
-                width: px(320),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(px(32)),
-                row_gap: px(12),
-                border_radius: BorderRadius::all(px(12)),
-                ..default()
-            },
-            Surface::Panel,
-        ))
-        .id();
+    let column = commands.spawn((ChildOf(overlay), ui::dialog())).id();
     commands.spawn((ui::disabled("Options", Font::Large), ChildOf(column)));
     commands
         .spawn((ui::button("Quit to Desktop", Font::Large), ChildOf(column)))

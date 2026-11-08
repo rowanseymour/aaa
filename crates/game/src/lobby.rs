@@ -13,7 +13,7 @@ use bevy::ui_widgets::{Activate, ScrollArea};
 use crate::menu::go;
 use crate::presets::Preset;
 use crate::ui::{
-    Chosen, Edge, Font, Ink, Surface, button, clickable, inert, label, opener, padded, text,
+    Chosen, Font, Ink, Surface, button, clickable, dropdown, inert, label, opener, padded, text,
 };
 use crate::{Data, Pending, Screen, Side};
 
@@ -498,21 +498,7 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
     let Some(brief) = lobby.brief.as_ref().ok().filter(|_| picking) else {
         return;
     };
-    let list = commands
-        .spawn((
-            ChildOf(presets),
-            Node {
-                position_type: PositionType::Absolute,
-                top: percent(100),
-                width: percent(100),
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(1)),
-                ..default()
-            },
-            Edge::Border,
-            Surface::Panel,
-        ))
-        .id();
+    let list = commands.spawn((ChildOf(presets), dropdown())).id();
     for preset in Preset::offered(&brief.players) {
         commands
             .spawn((
@@ -663,20 +649,7 @@ fn nation_list(
         return;
     }
     let list = commands
-        .spawn((
-            ChildOf(holder),
-            Node {
-                position_type: PositionType::Absolute,
-                top: percent(100),
-                width: percent(100),
-                flex_direction: FlexDirection::Column,
-                border: UiRect::all(px(1)),
-                ..default()
-            },
-            Edge::Border,
-            Surface::Panel,
-            GlobalZIndex(2),
-        ))
+        .spawn((ChildOf(holder), dropdown(), GlobalZIndex(2)))
         .id();
     let random = std::iter::once((None, "Random".to_string()));
     let choices = nations.iter().map(|n| (Some(n.id.clone()), n.name.clone()));

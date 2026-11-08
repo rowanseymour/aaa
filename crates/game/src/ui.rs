@@ -1,7 +1,8 @@
 //! The interface's look, and the pieces screens are built from. Screens say
 //! what part each colour plays, as a [`Surface`], [`Ink`] or [`Edge`], and
 //! [`Theme`] says what that looks like, so changing the theme restyles the
-//! whole interface, even while it's up.
+//! whole interface, even while it's up. [`Shade`] and [`Meter`] do the same
+//! for pictures and bars.
 
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -15,7 +16,7 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
             .add_systems(Update, highlight)
-            .add_systems(PostUpdate, (paint, ink, edge))
+            .add_systems(PostUpdate, (paint, ink, edge, shade, fill))
             .add_observer(click);
     }
 }
@@ -28,6 +29,8 @@ pub struct Theme {
     /// What stands out from the surfaces: a chosen button, a frame to read
     /// inside.
     pub accent: Color,
+    /// What marks something as switched on, such as the order being aimed.
+    pub lit: Color,
 }
 
 impl Default for Theme {
@@ -35,6 +38,7 @@ impl Default for Theme {
         Theme {
             tint: Color::BLACK,
             accent: Color::srgb(0.75, 0.6, 0.3),
+            lit: Color::srgb(0.1, 0.9, 0.1),
         }
     }
 }
@@ -71,6 +75,27 @@ impl Theme {
         match edge {
             Edge::Border => mix(self.tint, Color::WHITE, 0.45),
             Edge::Accent => self.accent,
+            Edge::Clear => Color::NONE,
+            Edge::Hovered => Color::WHITE,
+            Edge::Lit => self.lit,
+        }
+    }
+
+    pub fn shade(&self, shade: Shade) -> Color {
+        match shade {
+            Shade::Full => Color::WHITE,
+            Shade::Dimmed => Color::srgb(0.35, 0.35, 0.35),
+            Shade::Dark => Color::srgb(0.2, 0.2, 0.2),
+        }
+    }
+
+    /// A [`Meter`] `share` full.
+    pub fn gauge(&self, gauge: Gauge, share: f32) -> Color {
+        match (gauge, share) {
+            (Gauge::Progress, _) => Color::srgb(0.95, 0.45, 0.1),
+            (Gauge::Health, s) if s > 0.66 => Color::srgb(0.1, 0.85, 0.1),
+            (Gauge::Health, s) if s > 0.33 => Color::srgb(0.9, 0.85, 0.1),
+            (Gauge::Health, _) => Color::srgb(0.9, 0.15, 0.1),
         }
     }
 }
@@ -129,7 +154,45 @@ pub enum Edge {
     Border,
     /// Frames what's there to be read.
     Accent,
+    /// Leaves room for a frame, but draws none.
+    Clear,
+    /// Frames what's under the pointer.
+    Hovered,
+    /// Frames what's switched on.
+    Lit,
 }
+
+/// How brightly a picture is drawn.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
+#[require(ImageNode)]
+pub enum Shade {
+    Full,
+    /// What can't be used yet.
+    Dimmed,
+    /// What's gone, such as a dead unit.
+    Dark,
+}
+
+/// A bar on a [`Surface::Track`], filled to a share of its width in a
+/// colour that says how that share reads.
+#[derive(Component, Clone, Copy, PartialEq, Debug)]
+#[require(Surface = Surface::Track)]
+pub struct Meter {
+    pub gauge: Gauge,
+    /// From 0, empty, to 1, full.
+    pub share: f32,
+}
+
+/// What a [`Meter`] measures.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gauge {
+    /// Green when full, then yellow and red as it drops.
+    Health,
+    Progress,
+}
+
+#[derive(Component)]
+struct MeterFill;
 
 /// How big a run of text is drawn.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -194,6 +257,73 @@ pub fn framed(node: Node) -> impl Bundle {
         },
         Edge::Border,
         Surface::Solid,
+    )
+}
+
+/// A [`Meter`] laid out as `node`, empty until it's given a share.
+pub fn meter(node: Node, gauge: Gauge) -> impl Bundle {
+    (
+        node,
+        Meter { gauge, share: 0.0 },
+        Pickable::IGNORE,
+        children![(
+            MeterFill,
+            Node {
+                height: percent(100),
+                width: percent(0),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            Pickable::IGNORE,
+        )],
+    )
+}
+
+/// A list that drops below what opens it, over what's there, as wide as
+/// it.
+pub fn dropdown() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            top: percent(100),
+            width: percent(100),
+            flex_direction: FlexDirection::Column,
+            border: UiRect::all(px(1)),
+            ..default()
+        },
+        Edge::Border,
+        Surface::Panel,
+    )
+}
+
+/// Dims the whole screen under a [`dialog`] on top of it.
+pub fn scrim() -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            justify_content: JustifyContent::Center,
+            align_items: AlignItems::Center,
+            ..default()
+        },
+        Surface::Scrim,
+        GlobalZIndex(10),
+    )
+}
+
+/// A column of buttons in a panel, such as a menu over the match.
+pub fn dialog() -> impl Bundle {
+    (
+        Node {
+            width: px(320),
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(32)),
+            row_gap: px(12),
+            border_radius: BorderRadius::all(px(12)),
+            ..default()
+        },
+        Surface::Panel,
     )
 }
 
@@ -318,6 +448,38 @@ fn edge(theme: Res<Theme>, mut nodes: Query<(Ref<Edge>, &mut BorderColor)>) {
     }
 }
 
+fn shade(theme: Res<Theme>, mut pictures: Query<(Ref<Shade>, &mut ImageNode)>) {
+    for (shade, mut image) in &mut pictures {
+        let colour = theme.shade(*shade);
+        if (theme.is_changed() || shade.is_changed()) && image.color != colour {
+            image.color = colour;
+        }
+    }
+}
+
+fn fill(
+    theme: Res<Theme>,
+    meters: Query<(Ref<Meter>, &Children)>,
+    mut fills: Query<(&mut Node, &mut BackgroundColor), With<MeterFill>>,
+) {
+    for (meter, children) in &meters {
+        if !theme.is_changed() && !meter.is_changed() {
+            continue;
+        }
+        let share = meter.share.clamp(0.0, 1.0);
+        for &child in children {
+            let Ok((mut node, mut colour)) = fills.get_mut(child) else {
+                continue;
+            };
+            let width = percent(share * 100.0);
+            if node.width != width {
+                node.width = width;
+            }
+            colour.set_if_neq(BackgroundColor(theme.gauge(meter.gauge, share)));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -329,6 +491,23 @@ mod tests {
         assert!((grey(Surface::Panel).red - 0.07).abs() < 1e-5);
         assert!((grey(Surface::Hovered).green - 0.3).abs() < 1e-5);
         assert_eq!(grey(Surface::Hud).alpha, 0.85);
+    }
+
+    #[test]
+    fn a_meter_fills_to_its_share() {
+        let mut app = App::new();
+        app.init_resource::<Theme>().add_systems(Update, fill);
+        let bar = app
+            .world_mut()
+            .spawn(meter(Node::default(), Gauge::Health))
+            .id();
+        app.world_mut().get_mut::<Meter>(bar).unwrap().share = 0.25;
+        app.update();
+        let child = app.world().get::<Children>(bar).unwrap()[0];
+        let node = app.world().get::<Node>(child).unwrap();
+        assert_eq!(node.width, percent(25));
+        let colour = app.world().get::<BackgroundColor>(child).unwrap().0;
+        assert_eq!(colour, Theme::default().gauge(Gauge::Health, 0.25));
     }
 
     #[test]

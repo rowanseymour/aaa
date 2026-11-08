@@ -23,7 +23,7 @@ use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
 use crate::banners::Divisions;
-use crate::ui::{self, Font, Ink, Surface, framed, label};
+use crate::ui::{self, Font, Gauge, Ink, Meter, Shade, Surface, framed, label, meter};
 use crate::{Drawn, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint};
 
 /// How many regiments can be selected at once, as many as the pane has
@@ -427,6 +427,7 @@ impl Ui<'_> {
                                     },
                                     picture_node(picture),
                                     UnitPicture(u),
+                                    Shade::Full,
                                 ));
                                 bar(
                                     card,
@@ -553,12 +554,12 @@ impl Ui<'_> {
 pub fn refresh(
     sim: Res<Sim>,
     looks: Res<Looks>,
-    mut bars: Query<(&Fill, &mut Node, &mut BackgroundColor)>,
-    mut pictures: Query<(&UnitPicture, &mut ImageNode)>,
+    mut bars: Query<(&Fill, &mut Meter)>,
+    mut pictures: Query<(&UnitPicture, &mut Shade)>,
     mut statuses: Query<(&Status, &mut Text)>,
 ) {
     let sim = &sim.0;
-    for (fill, mut node, mut colour) in &mut bars {
+    for (fill, mut meter) in &mut bars {
         let share = match *fill {
             Fill::Unit(u) => unit_health(sim, u),
             Fill::Regiment(r) => {
@@ -585,26 +586,15 @@ pub fn refresh(
                     .map_or(0.0, |c| b.progress as f32 / c.ticks as f32)
             }
         };
-        let width = percent(share.clamp(0.0, 1.0) * 100.0);
-        if node.width != width {
-            node.width = width;
-        }
-        let tone = match fill {
-            Fill::Progress(_) => Color::srgb(0.95, 0.45, 0.1),
-            _ => health_colour(share),
-        };
-        if colour.0 != tone {
-            colour.0 = tone;
+        if meter.share != share {
+            meter.share = share;
         }
     }
-    for (picture, mut image) in &mut pictures {
-        let tone = match sim.units[picture.0].alive() {
-            true => Color::WHITE,
-            false => Color::srgb(0.2, 0.2, 0.2),
-        };
-        if image.color != tone {
-            image.color = tone;
-        }
+    for (picture, mut shade) in &mut pictures {
+        shade.set_if_neq(match sim.units[picture.0].alive() {
+            true => Shade::Full,
+            false => Shade::Dark,
+        });
     }
     for (status, mut text) in &mut statuses {
         let ids = match *status {
@@ -658,15 +648,6 @@ fn unit_health(sim: &World, u: usize) -> f32 {
     }
 }
 
-/// Green when healthy, then yellow and red as health drops.
-fn health_colour(share: f32) -> Color {
-    match share {
-        s if s > 0.66 => Color::srgb(0.1, 0.85, 0.1),
-        s if s > 0.33 => Color::srgb(0.9, 0.85, 0.1),
-        _ => Color::srgb(0.9, 0.15, 0.1),
-    }
-}
-
 /// Whether a regiment is a single unit, such as a truck.
 fn lone(sim: &World, r: usize) -> bool {
     let regiment = &sim.regiments[r];
@@ -705,20 +686,13 @@ fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
     ImageNode::new(picture.unwrap_or_default())
 }
 
-/// A bar in `node`, on a dark track, filled as `fill` says.
+/// A bar in `node`, filled as `fill` says.
 fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill) {
-    parent
-        .spawn((node, Surface::Track, Pickable::IGNORE))
-        .with_child((
-            Node {
-                height: percent(100),
-                width: percent(100),
-                ..default()
-            },
-            BackgroundColor(Color::NONE),
-            fill,
-            Pickable::IGNORE,
-        ));
+    let gauge = match fill {
+        Fill::Progress(_) => Gauge::Progress,
+        _ => Gauge::Health,
+    };
+    parent.spawn((meter(node, gauge), fill));
 }
 
 /// A regiment's card clicked: selects it alone.
