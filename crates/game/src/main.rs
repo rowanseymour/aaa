@@ -14,11 +14,13 @@
 //! orders in [`actions`]. Clicking the minimap moves the camera there, or
 //! gives an aimed order there, and the key left of 1 opens a console for
 //! script commands. Units and buildings make their sounds as they're
-//! selected, ordered, move, fire and die.
+//! selected, ordered, move, fire and die, and show their [`effects`] as they
+//! fire, are hurt, die, and pack or unpack.
 
 mod actions;
 mod banners;
 mod console;
+mod effects;
 mod ghost;
 mod lobby;
 mod menu;
@@ -64,6 +66,7 @@ options:
   --console <port>          take console lines on a port of this machine, each
                             answered with what the console says, then an empty line
   --screenshot <file.png>   save a frame to a file and exit, without a window
+  --shot-after <seconds>    with --screenshot, play that long into the match first
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it";
 
@@ -355,6 +358,22 @@ struct BuildingView {
     packing: Option<(Entity, bool)>,
 }
 
+/// Seconds of a match to play before its capture.
+#[derive(Resource)]
+struct ShotAfter(f64);
+
+/// When the match started.
+#[derive(Resource)]
+struct MatchStarted(f64);
+
+fn note_start(mut commands: Commands, time: Res<Time>) {
+    commands.insert_resource(MatchStarted(time.elapsed_secs_f64()));
+}
+
+fn shot_due(after: Res<ShotAfter>, started: Option<Res<MatchStarted>>, time: Res<Time>) -> bool {
+    started.is_some_and(|s| time.elapsed_secs_f64() - s.0 >= after.0)
+}
+
 /// Removes `flag` and the value after it from `args`; `None` if the value is
 /// missing.
 fn take_option(args: &mut Vec<String>, flag: &str) -> Option<Option<String>> {
@@ -375,6 +394,7 @@ struct Options {
     scripts: Vec<String>,
     console: Option<u16>,
     screenshot: Option<String>,
+    shot_after: f64,
     ui_scale: f32,
 }
 
@@ -393,6 +413,10 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         None => None,
     };
     let screenshot = take_option(args, "--screenshot")?;
+    let shot_after = match take_option(args, "--shot-after")? {
+        Some(s) => s.parse().ok().filter(|s: &f64| (0.0..=600.0).contains(s))?,
+        None => 0.0,
+    };
     let ui_scale = match take_option(args, "--ui-scale")? {
         Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
         None => 1.0,
@@ -402,6 +426,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         scripts,
         console,
         screenshot,
+        shot_after,
         ui_scale,
     })
 }
@@ -413,6 +438,7 @@ fn main() -> ExitCode {
         scripts,
         console,
         screenshot,
+        shot_after,
         ui_scale,
     }) = options(&mut args)
     else {
@@ -459,7 +485,14 @@ fn main() -> ExitCode {
         app.add_plugins(s);
         // Of the match, not the loading screen before it.
         if map.is_some() {
-            app.configure_sets(Update, shot::Capture.run_if(in_state(Screen::Match)));
+            app.insert_resource(ShotAfter(shot_after))
+                .add_systems(OnEnter(Screen::Match), note_start)
+                .configure_sets(
+                    Update,
+                    shot::Capture
+                        .run_if(in_state(Screen::Match))
+                        .run_if(shot_due),
+                );
         }
     }
     let mut console = console::Console::default();
@@ -469,6 +502,7 @@ fn main() -> ExitCode {
     app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
+        .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .add_systems(PreUpdate, fit_ui)
@@ -984,6 +1018,7 @@ fn setup(
         buildings: sim.0.buildings.len(),
     });
     commands.insert_resource(Drawn(models));
+    commands.insert_resource(effects::Effects::new(game, map));
     sounds.load_objects(game);
 }
 

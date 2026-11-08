@@ -385,6 +385,7 @@ mod tests {
             land: true,
             naval: false,
             kind,
+            group: None,
         };
         let variations = HashMap::from([
             (Id::from("grass"), variation(TerrainKind::Land)),

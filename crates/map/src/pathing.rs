@@ -367,6 +367,7 @@ mod tests {
             land: true,
             naval: false,
             kind: aaa_data::TerrainKind::Land,
+            group: None,
         };
         let variations = HashMap::from([(Id::from("grass"), grass)]);
         let p = Pathing::new(&terrain, &variations, []);

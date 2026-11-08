@@ -216,6 +216,7 @@ pub fn mark(
                 &mut loaded.game,
                 &mut models,
                 &marking.model,
+                &[],
                 Transform::from_translation(at),
             );
             if let Some(e) = spawned {
@@ -274,6 +275,7 @@ pub fn rally(
         &mut loaded.game,
         &mut models,
         model,
+        &[],
         Transform::from_translation(at),
     );
     if let Some(e) = spawned {

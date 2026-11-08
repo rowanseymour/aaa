@@ -56,6 +56,12 @@ pub fn pose(
     (world(x, y, tilt.height), rotation)
 }
 
+/// Which of its view's models a thing is drawn with, before wrapping round
+/// them: things with no variation set pick one by id, so neighbours differ.
+fn variation(thing: &Thing) -> usize {
+    usize::try_from(thing.variation).unwrap_or(thing.id as usize)
+}
+
 /// Where a placed object's model goes and how it's turned and sized.
 fn placed(thing: &Thing, view: &View) -> Transform {
     // Maps store each object's height as the game places it: on the
@@ -251,12 +257,15 @@ impl Animation {
     }
 }
 
-/// Plays a part's animation, `offset` seconds in so neighbouring objects
-/// don't move in step.
+/// Plays a part's animation from when it's spawned, `offset` seconds in so
+/// neighbouring objects don't move in step.
 #[derive(Component)]
 pub struct Animated {
     animation: Arc<Animation>,
-    offset: f32,
+    /// Seconds into the animation.
+    time: f32,
+    /// Seconds of animation per second played.
+    rate: f32,
     material: PartMaterial,
 }
 
@@ -264,7 +273,8 @@ impl Animated {
     pub(crate) fn new(animation: Arc<Animation>, offset: f32, material: PartMaterial) -> Self {
         Animated {
             animation,
-            offset,
+            time: offset,
+            rate: 1.0,
             material,
         }
     }
@@ -272,13 +282,14 @@ impl Animated {
 
 pub fn animate(
     time: Res<Time>,
-    mut parts: Query<(&Animated, &mut Transform)>,
+    mut parts: Query<(&mut Animated, &mut Transform)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut glow_materials: ResMut<Assets<GlowMaterial>>,
     mut team_materials: ResMut<Assets<TeamMaterial>>,
 ) {
-    for (a, mut transform) in &mut parts {
-        let t = time.elapsed_secs() + a.offset;
+    for (mut a, mut transform) in &mut parts {
+        a.time += time.delta_secs() * a.rate;
+        let t = a.time;
         if a.animation.motion.is_some() {
             *transform = a.animation.transform(t);
         }
@@ -305,6 +316,36 @@ pub fn animate(
                 if let Some(uv) = uv {
                     m.uv_transform = uv;
                 }
+            }
+        }
+    }
+}
+
+/// Plays a model, as spawned under the entity this is on, at this many
+/// seconds of its animation per second, as an effect stretched or squeezed
+/// to a duration is.
+#[derive(Component, Clone, Copy)]
+pub struct Rate(pub f32);
+
+/// Sets the pace of the animations and particle systems under a newly
+/// [`Rate`]d model.
+pub fn pace(
+    rated: Query<(Entity, &Rate), Added<Rate>>,
+    children: Query<&Children>,
+    mut animated: Query<&mut Animated>,
+    mut rigs: Query<&mut crate::rig::Playing>,
+    mut systems: Query<&mut particles::Particles>,
+) {
+    for (root, &Rate(rate)) in &rated {
+        for e in std::iter::once(root).chain(children.iter_descendants(root)) {
+            if let Ok(mut a) = animated.get_mut(e) {
+                a.rate = rate;
+            }
+            if let Ok(mut p) = rigs.get_mut(e) {
+                p.rate = rate;
+            }
+            if let Ok(mut s) = systems.get_mut(e) {
+                s.rate = rate;
             }
         }
     }
@@ -339,6 +380,46 @@ pub struct Models {
     /// Team-coloured copies of materials, by the material and the colour's
     /// bits.
     painted: HashMap<(AssetId<StandardMaterial>, [u32; 3]), Handle<TeamMaterial>>,
+    /// Each model's named nodes, by path, as [`Nodes::points`] has them.
+    points: HashMap<String, HashMap<String, nif::Transform>>,
+    /// Each model's lowest and highest point, by path.
+    extents: HashMap<String, Option<[f32; 2]>>,
+    timings: HashMap<String, Option<EffectTiming>>,
+}
+
+/// How an effect's model plays.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectTiming {
+    /// Seconds until the last of its keys has passed.
+    pub length: f32,
+    /// Some of it plays over and over rather than holding its end.
+    pub loops: bool,
+}
+
+impl EffectTiming {
+    /// The timing of a model's controllers; none if nothing in it is
+    /// animated.
+    pub fn of(nif: &Nif) -> Option<EffectTiming> {
+        let mut out: Option<EffectTiming> = None;
+        for object in &nif.objects {
+            let Object::Controller(c) = object else {
+                continue;
+            };
+            if c.stop <= c.start || c.frequency <= 0.0 {
+                continue;
+            }
+            // Flag bits 1-2 of 2 hold the end; the rest repeat.
+            let loops = (c.flags >> 1) & 3 != 2;
+            let length = (c.stop - c.phase) / c.frequency;
+            let t = out.get_or_insert(EffectTiming {
+                length: 0.0,
+                loops: false,
+            });
+            t.length = t.length.max(length);
+            t.loops |= loops;
+        }
+        out
+    }
 }
 
 impl Models {
@@ -350,7 +431,67 @@ impl Models {
             formats,
             colours: players.iter().map(|p| (p.id, p.rgb)).collect(),
             painted: HashMap::new(),
+            points: HashMap::new(),
+            extents: HashMap::new(),
+            timings: HashMap::new(),
         }
+    }
+
+    /// The archive path of the model `thing` is drawn with, or with
+    /// `packing` its packing model, unpacking if that's true.
+    pub fn model_path(&self, thing: &Thing, packing: Option<bool>) -> Option<&str> {
+        let view = self
+            .views
+            .get(&Id::from(thing.template.as_str()))?
+            .as_ref()?;
+        match packing {
+            Some(true) => view.unpacking.as_deref(),
+            Some(false) => view.packing.as_deref(),
+            None if view.models.is_empty() => None,
+            None => Some(&view.models[variation(thing) % view.models.len()]),
+        }
+    }
+
+    /// Where the node named `name`, exactly, is in the model at `path`,
+    /// from its origin in its own units; `None` if it has no such node.
+    pub fn point(&mut self, game: &mut GameData, path: &str, name: &str) -> Option<Transform> {
+        let points = self.points.entry(path.to_string()).or_insert_with(|| {
+            game.read(path)
+                .and_then(|b| Nif::parse(&b).ok())
+                .map(|nif| Nodes::new(&nif).points())
+                .unwrap_or_default()
+        });
+        points.get(name).map(bevy_transform)
+    }
+
+    /// The heights of the lowest and highest of the meshes of the model at
+    /// `path`, as modelled, in its own units.
+    pub fn extent(&mut self, game: &mut GameData, path: &str) -> Option<[f32; 2]> {
+        *self.extents.entry(path.to_string()).or_insert_with(|| {
+            let nif = Nif::parse(&game.read(path)?).ok()?;
+            let mut out: Option<[f32; 2]> = None;
+            for placed in nif.shapes() {
+                let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
+                    continue;
+                };
+                for &p in &g.positions {
+                    let z = placed.transform.apply(p)[2];
+                    let [lo, hi] = out.get_or_insert([z, z]);
+                    *lo = lo.min(z);
+                    *hi = hi.max(z);
+                }
+            }
+            out
+        })
+    }
+
+    /// How the effect model at `path` plays; `None` if it can't be read or
+    /// doesn't animate.
+    pub fn effect_timing(&mut self, game: &mut GameData, path: &str) -> Option<EffectTiming> {
+        *self.timings.entry(path.to_string()).or_insert_with(|| {
+            let nif = Nif::parse(&game.read(path)?).ok()?;
+            EffectTiming::of(&nif)
+        })
     }
 
     /// Spawns every object whose template has a readable model and returns
@@ -565,9 +706,7 @@ impl Models {
         if view.models.is_empty() {
             return None;
         }
-        // Things with no variation set pick one by id, so neighbours differ.
-        let variation = usize::try_from(thing.variation).unwrap_or(thing.id as usize);
-        let model = &view.models[variation % view.models.len()];
+        let model = &view.models[variation(thing) % view.models.len()];
         let model = self.model(game, assets, model, view, moving)?;
         let colour = owner.and_then(|o| self.colours.get(&o).copied());
         let mut root = commands.spawn((
@@ -588,19 +727,20 @@ impl Models {
     }
 
     /// Spawns an effect's model, such as the flag marking where an order
-    /// was given, playing the animation its own nodes carry. `None` if it
-    /// can't be drawn.
+    /// was given, playing the animation its own nodes carry, its textures
+    /// found beside it or in `texture_dirs`. `None` if it can't be drawn.
     pub fn spawn_effect(
         &mut self,
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
         path: &str,
+        texture_dirs: &[String],
         transform: Transform,
     ) -> Option<Entity> {
         let view = View {
             models: vec![path.to_string()],
-            texture_dirs: Vec::new(),
+            texture_dirs: texture_dirs.to_vec(),
             texture_renames: HashMap::new(),
             scale: 1.0,
             animations: Vec::new(),

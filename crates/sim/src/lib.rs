@@ -22,6 +22,35 @@ pub use economy::{Balance, Change, Ledger, Limit, Notice, Treasury};
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
 
+/// Ticks [`World::landings`] keeps each landing for.
+pub const LANDINGS_KEPT: u64 = 50;
+
+/// A shot's projectile, flying to where it lands.
+#[derive(Debug, Clone)]
+pub struct Projectile {
+    /// What fired it, of which player, and the index of its weapon.
+    pub from: Target,
+    pub by: u32,
+    pub weapon: usize,
+    /// The weapon, which outlives its firer once fired.
+    shot: Weapon,
+    pub target: Target,
+    /// Where it lands.
+    pub at: [f32; 2],
+    /// The tick it lands on.
+    pub lands: u64,
+}
+
+/// A projectile that has landed.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Landing {
+    pub tick: u64,
+    pub from: Target,
+    pub weapon: usize,
+    pub target: Target,
+    pub at: [f32; 2],
+}
+
 /// The share of its health a building taken over by force is left with.
 pub const CAPTURE_HEALTH: f32 = 0.3;
 
@@ -68,6 +97,11 @@ pub struct World {
     pub notices: Vec<Notice>,
     /// Ticks played.
     pub ticks: u64,
+    /// Projectiles on their way.
+    pub flying: Vec<Projectile>,
+    /// Projectiles that landed in the last [`LANDINGS_KEPT`] ticks, oldest
+    /// first, for what shows them to find.
+    pub landings: Vec<Landing>,
     /// An id no object has yet.
     next_id: u32,
     /// An id no commission has yet.
@@ -564,7 +598,7 @@ impl Building {
 }
 
 /// Something a weapon can fire on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Target {
     /// Index into [`World::units`].
     Unit(usize),
@@ -625,6 +659,8 @@ impl World {
             ticks: 0,
             next_id: 1,
             next_commission: 0,
+            flying: Vec::new(),
+            landings: Vec::new(),
             packing: HashMap::new(),
             requires: HashMap::new(),
             economies: HashMap::new(),
@@ -1850,6 +1886,7 @@ impl World {
     /// Returns, for each unit hit, its regiment and what fired.
     fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
+        let mut launched = Vec::new();
         let shooters: Vec<Target> = self.targets().collect();
         for s in shooters {
             let fighter = self.fighter(s).expect("shooters can fight");
@@ -1875,7 +1912,10 @@ impl World {
                 target = Some(t);
                 shot = Some((self.ticks, w));
                 reloads[w] = weapon.recharge;
-                self.strike(weapon, self.position(t), t, (s, by), &mut hits);
+                match weapon.flight {
+                    Some(flight) => launched.push(self.launch(s, by, w, weapon, flight, t)),
+                    None => self.strike(weapon, self.position(t), t, (s, by), &mut hits),
+                }
             }
             match s {
                 Target::Unit(u) => {
@@ -1887,6 +1927,23 @@ impl World {
                     (b.reloads, b.target, b.shot) = (reloads, target, shot);
                 }
             }
+        }
+        self.flying.extend(launched);
+        let ticks = self.ticks;
+        let (landed, flying): (Vec<_>, Vec<_>) = std::mem::take(&mut self.flying)
+            .into_iter()
+            .partition(|p| p.lands <= ticks);
+        self.flying = flying;
+        self.landings.retain(|l| l.tick + LANDINGS_KEPT > ticks);
+        for p in landed {
+            self.strike(&p.shot, p.at, p.target, (p.from, p.by), &mut hits);
+            self.landings.push(Landing {
+                tick: ticks,
+                from: p.from,
+                weapon: p.weapon,
+                target: p.target,
+                at: p.at,
+            });
         }
         let mut fired_on = Vec::new();
         for hit in hits {
@@ -1907,6 +1964,44 @@ impl World {
             }
         }
         fired_on
+    }
+
+    /// The projectile `s`, of player `by`, fires with its weapon `w` at
+    /// `t`: flying for its life if it has one, else from `s` to where it
+    /// aims at its speed, and aimed ahead of a moving target by as far as
+    /// it moves in that time. Heights aren't simulated, so distances are
+    /// across the ground.
+    fn launch(
+        &self,
+        s: Target,
+        by: u32,
+        w: usize,
+        weapon: &Weapon,
+        flight: aaa_map::Flight,
+        t: Target,
+    ) -> Projectile {
+        let aim = self.position(t);
+        let seconds = match (flight.life > 0.0, flight.speed > 0.0) {
+            (true, _) => flight.life,
+            (false, true) => distance(self.position(s), aim) / flight.speed,
+            (false, false) => 0.0,
+        };
+        let velocity = match t {
+            Target::Unit(u) => {
+                let u = &self.units[u];
+                [0, 1].map(|i| (u.position[i] - u.previous[i]) / TICK)
+            }
+            Target::Building(_) => [0.0; 2],
+        };
+        Projectile {
+            from: s,
+            by,
+            weapon: w,
+            shot: weapon.clone(),
+            target: t,
+            at: [0, 1].map(|i| aim[i] + velocity[i] * seconds),
+            lands: self.ticks + (seconds / TICK - 1e-4).ceil().max(0.0) as u64,
+        }
     }
 
     /// Takes a hit's damage off what it lands on. A building whose health
@@ -2034,7 +2129,18 @@ impl World {
 
     /// Whether `weapon` fires on what `t` is, wherever it stands.
     fn can_target(&self, s: Target, weapon: &Weapon, t: Target) -> bool {
-        let Some(fighter) = self.fighter(t).filter(|_| t != s) else {
+        t != s && self.fighter(t).is_some() && self.matches(s, &weapon.targets, t)
+    }
+
+    /// Whether what `t` is, a fighter with its flags and its side's
+    /// standing toward `s`'s, has the flags `targets` asks for, alive or
+    /// not.
+    pub fn matches(&self, s: Target, targets: &aaa_map::Targets, t: Target) -> bool {
+        let fighter = match t {
+            Target::Unit(u) => self.units[u].fighter.as_ref(),
+            Target::Building(b) => Some(&self.buildings[b].fighter),
+        };
+        let Some(fighter) = fighter else {
             return false;
         };
         let side = match self.sides.relation(self.owner(s), self.owner(t)) {
@@ -2043,9 +2149,7 @@ impl World {
             _ => "neutral",
         };
         let side = Id::from(side);
-        weapon
-            .targets
-            .allow(fighter.flags.iter().chain(std::iter::once(&side)))
+        targets.allow(fighter.flags.iter().chain(std::iter::once(&side)))
     }
 
     /// Records the damage a shot fired by `from` of `by`'s side, landing at
@@ -2711,9 +2815,12 @@ mod tests {
             }],
             animation: None,
             turret: false,
+            turret_point: None,
+            spawn_position: [0.0; 3],
             sounds: Vec::new(),
             effects: Default::default(),
             projectile: None,
+            flight: None,
         }
     }
 
@@ -2726,6 +2833,7 @@ mod tests {
             resists: HashMap::new(),
             flags: vec![Id::from("infantry")],
             weapons,
+            attack_height: 1.45,
         }
     }
 
@@ -2796,6 +2904,40 @@ mod tests {
         assert!(w.destroyed(1) && !w.destroyed(0));
         assert_eq!(w.units[0].target, None);
         assert_eq!(w.order_move(2, 1, [0.0, 0.0]), Err(NotYours));
+    }
+
+    #[test]
+    fn projectiles_hit_when_their_flight_ends() {
+        // 10 apart at 25 a second takes 0.4s; a life overrides the speed.
+        let gun = |life| Weapon {
+            flight: Some(aaa_map::Flight {
+                kind: aaa_map::FlightKind::Straight,
+                speed: 25.0,
+                life,
+            }),
+            ..rifle(12.0, 30.0)
+        };
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![gun(0.0)]), soldier(vec![gun(1.0)])],
+            at_war(),
+        );
+        w.tick();
+        assert_eq!(w.units[0].shot, Some((0, 0)));
+        assert_eq!((w.units[0].health, w.units[1].health), (100.0, 100.0));
+        assert_eq!(w.flying.len(), 2);
+        run(&mut w, 0.3);
+        assert_eq!((w.units[0].health, w.units[1].health), (100.0, 100.0));
+        w.tick();
+        assert_eq!((w.units[0].health, w.units[1].health), (100.0, 70.0));
+        let landed = &w.landings[0];
+        assert_eq!(
+            (landed.tick, landed.from, landed.target),
+            (4, Target::Unit(0), Target::Unit(1))
+        );
+        run(&mut w, 0.6);
+        assert_eq!(w.units[0].health, 70.0);
+        assert_eq!(w.landings.len(), 2);
     }
 
     #[test]

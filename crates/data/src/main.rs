@@ -199,10 +199,19 @@ fn effects(dir: &str, filter: &str) -> Res {
     let mut undefined = BTreeMap::new();
     let mut line = |event: &str, c: &aaa_data::VfxCue| -> std::io::Result<()> {
         let what = match vfx.get(&c.vfx) {
-            Some(v) => match &v.model {
-                Some(m) => format!("{} {m}", v.category),
-                None => v.category.clone(),
-            },
+            Some(v) => {
+                let mut what = match &v.model {
+                    Some(m) => format!("{} {m}", v.category),
+                    None => v.category.clone(),
+                };
+                if v.permanent {
+                    what += " permanent";
+                }
+                if let Some(d) = v.duration {
+                    what += &format!(" {d}s");
+                }
+                what
+            }
             None => {
                 *undefined.entry(c.vfx.to_string()).or_insert(0) += 1;
                 "?".into()
@@ -210,9 +219,32 @@ fn effects(dir: &str, filter: &str) -> Res {
         };
         let verb = if c.stop { "stop " } else { "" };
         let at = c.location.as_deref().unwrap_or("");
+        let mut extra = String::new();
+        if let Some(d) = c.duration {
+            extra += &format!(" for {d}s");
+        }
+        if c.delay > 0.0 {
+            extra += &format!(" after {}s", c.delay);
+        }
+        if c.every > 1 {
+            extra += &format!(" every {}", c.every);
+        }
+        if !c.attached {
+            extra += " detached";
+        }
+        if let Some(t) = &c.terrain {
+            extra += &format!(" on {t}");
+        }
+        let flags = c.targets.required.iter().map(|f| format!("+{f}"));
+        let flags: Vec<_> = flags
+            .chain(c.targets.excluded.iter().map(|f| format!("-{f}")))
+            .collect();
+        if !flags.is_empty() {
+            extra += &format!(" if {}", flags.join(","));
+        }
         writeln!(
             std::io::stdout(),
-            "    {event}: {verb}{} at {} {at}  ({what})",
+            "    {event}: {verb}{} at {} {at}{extra}  ({what})",
             c.vfx,
             c.at
         )

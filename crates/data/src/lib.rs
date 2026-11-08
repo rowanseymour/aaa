@@ -244,6 +244,8 @@ pub struct Fighter {
     /// `infantry`.
     pub flags: Vec<Id>,
     pub weapons: Vec<Weapon>,
+    /// How high above it its attacks start, where they don't say.
+    pub attack_height: f32,
 }
 
 /// An attack a fighter makes by itself on what comes in range.
@@ -265,11 +267,48 @@ pub struct Weapon {
     pub animation: Option<String>,
     /// It's on a turret, which aims it without turning its user.
     pub turret: bool,
+    /// The id of the model point of that turret.
+    pub turret_point: Option<Id>,
+    /// Where its projectiles appear from its user, in the user's model's
+    /// axes, forward along -y.
+    pub spawn_position: [f32; 3],
     /// Played each shot.
     pub sounds: Vec<Cue>,
     pub effects: WeaponEffects,
     /// The template of the projectile a shot fires, if it fires one.
     pub projectile: Option<Id>,
+    /// How that projectile flies, if its template says.
+    pub flight: Option<Flight>,
+}
+
+/// How a projectile flies to what it's fired at.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Flight {
+    pub kind: FlightKind,
+    /// World units a second.
+    pub speed: f32,
+    /// Seconds it flies, whatever the distance, if above 0.
+    pub life: f32,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FlightKind {
+    /// Straight at its target.
+    #[default]
+    Straight,
+    /// In an arc.
+    Lob,
+    /// Dropped from above.
+    Bomb,
+}
+
+/// How far up their targets projectiles aim, as shares of the targets'
+/// heights.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AimHeights {
+    pub straight: f32,
+    /// Lobbed and dropped.
+    pub arcing: f32,
 }
 
 /// Which flags a target must have, and must not, for a weapon to fire on
@@ -505,6 +544,8 @@ pub struct Variation {
     /// Ships can cross it.
     pub naval: bool,
     pub kind: TerrainKind,
+    /// What effects take it for, e.g. `dirt`, `snow` or `water`.
+    pub group: Option<Id>,
 }
 
 /// What a terrain is, which decides how the ground stands on it.
@@ -981,6 +1022,7 @@ impl GameData {
                             land: terrain.land,
                             naval: terrain.water,
                             kind,
+                            group: not_null(terrain.terrain_group.clone()),
                         },
                     );
                 }
@@ -1025,7 +1067,25 @@ impl GameData {
     /// template id, including the ids the game has since renamed.
     pub fn fighters(&mut self) -> HashMap<Id, Fighter> {
         let definitions = self.definitions();
-        self.by_template(|t| fighter(t, &definitions.properties))
+        let flights = self.by_template(|t| flight(t.projectile_component.as_ref()?));
+        let mut out = self.by_template(|t| fighter(t, &definitions.properties));
+        for w in out.values_mut().flat_map(|f| &mut f.weapons) {
+            w.flight = w.projectile.as_ref().and_then(|p| flights.get(p)).copied();
+        }
+        out
+    }
+
+    /// How far up their targets projectiles aim.
+    pub fn aim_heights(&mut self) -> AimHeights {
+        let svars = self.svars();
+        AimHeights {
+            straight: (svars.iter())
+                .find_map(|v| v.projectile_target_height_ratio)
+                .unwrap_or(0.65),
+            arcing: (svars.iter())
+                .find_map(|v| v.projectile_arcing_target_height_ratio)
+                .unwrap_or(0.35),
+        }
     }
 
     /// How far around them city centres hold sway, by template id, including
@@ -1673,6 +1733,18 @@ impl GameData {
         out
     }
 
+    /// The node names of the model points effects name by id, such as
+    /// `gun_ae_01`.
+    pub fn bones(&mut self) -> HashMap<Id, String> {
+        let files = self.parse_tgis(|n| n.starts_with("game/bones"));
+        let files = scoped(&files);
+        files
+            .iter()
+            .flat_map(|f| f.read::<defs::Bone>("Bone"))
+            .filter_map(|b| Some((b.ids?, b.bone_name?.trim().to_string())))
+            .collect()
+    }
+
     /// Every sound, speech and music, by id.
     pub fn audio(&mut self) -> HashMap<Id, Audio> {
         let files = self.parse_tgis(|n| n.starts_with("audio/") || n.starts_with("templates/"));
@@ -1919,6 +1991,9 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
             }
         }
     }
+    fighter.attack_height = (thing.performer_component.iter())
+        .find_map(|p| p.attack_height)
+        .unwrap_or(1.45);
     let abilities = thing.performer_component.iter().flat_map(|p| &p.ability);
     for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
         let attack = d
@@ -1960,6 +2035,8 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
                 .turret_ids
                 .as_deref()
                 .is_some_and(|ids| !ids.eq_ignore_ascii_case("null")),
+            turret_point: not_null(a.turret_ids.as_deref().map(Id::from)),
+            spawn_position: a.spawn_position.unwrap_or_default(),
             sounds: cues(&d.when_do),
             effects: WeaponEffects {
                 start: vfx_cues(&d.when_start),
@@ -1968,9 +2045,23 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
                 end: vfx_cues(&d.when_end),
             },
             projectile: not_null(d.projectile_ids.clone()),
+            flight: None,
         });
     }
     Some(fighter)
+}
+
+fn flight(p: &defs::ProjectileComponent) -> Option<Flight> {
+    let kind = match p.projectile_type.as_deref().map(str::to_ascii_uppercase) {
+        Some(k) if k == "LOB" => FlightKind::Lob,
+        Some(k) if k == "BOMB" => FlightKind::Bomb,
+        _ => FlightKind::Straight,
+    };
+    Some(Flight {
+        kind,
+        speed: p.projectile_speed.unwrap_or(0.0),
+        life: p.projectile_life.unwrap_or(0.0),
+    })
 }
 
 /// The depth colours of each water terrain, by IDS. Biomes name a
@@ -2137,13 +2228,15 @@ fn object_effects(thing: &defs::Thing) -> ObjectEffects {
         .filter_map(|f| {
             let trigger = match f
                 .health_trigger_type
-                .as_deref()
-                .map(str::to_ascii_uppercase)
+                .as_deref()?
+                .to_ascii_uppercase()
+                .as_str()
             {
-                Some(t) if t == "ABSOLUTE_ABOVE" => HealthTrigger::Above,
-                Some(t) if t == "RELATIVE_DECREASE" => HealthTrigger::Decrease,
-                Some(t) if t == "RELATIVE_INCREASE" => HealthTrigger::Increase,
-                _ => HealthTrigger::Below,
+                "ABSOLUTE_BELOW" => HealthTrigger::Below,
+                "ABSOLUTE_ABOVE" => HealthTrigger::Above,
+                "RELATIVE_DECREASE" => HealthTrigger::Decrease,
+                "RELATIVE_INCREASE" => HealthTrigger::Increase,
+                _ => return None,
             };
             Some(HealthCue {
                 health: f.health.filter(|h| *h >= 0.0)?,
