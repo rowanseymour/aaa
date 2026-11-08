@@ -102,6 +102,8 @@ pub struct View {
     /// The outline under which the ground is sampled to tilt the model to
     /// follow it, as vehicles do; `None` for models that stay upright.
     pub conform: Option<Shape>,
+    /// What height its objects stand at.
+    pub footing: Footing,
     /// Archive path of the model a building plays once as it unpacks.
     pub unpacking: Option<String>,
     /// Archive path of the model a building plays once as it packs.
@@ -109,6 +111,18 @@ pub struct View {
     /// Archive path of its picture in the interface, such as a unit's
     /// portrait in its regiment's panel or a building's button.
     pub icon: Option<String>,
+}
+
+/// What height a template's objects stand at.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Footing {
+    /// On the ground, under water on its bed.
+    #[default]
+    Ground,
+    /// On the water where it's above the ground, as ships do.
+    Water,
+    /// At its own height, as aircraft and shells do.
+    Air,
 }
 
 /// An animation a template's models can play.
@@ -1192,6 +1206,7 @@ impl GameData {
             scale,
             animations,
             conform: conform(thing),
+            footing: footing(thing),
             unpacking,
             packing,
             icon,
@@ -1563,6 +1578,18 @@ fn conform(thing: &defs::Thing) -> Option<Shape> {
         .rev()
         .find_map(|s| s.soft_shape.as_deref());
     conforms.then(|| shape(thing, kind, |s| s.soft_radius))
+}
+
+fn footing(thing: &defs::Thing) -> Footing {
+    let flag =
+        |f: fn(&defs::Flags) -> Option<bool>| thing.flags.iter().rev().find_map(f) == Some(true);
+    if flag(|f| f.water_based) {
+        Footing::Water
+    } else if flag(|f| f.flying) {
+        Footing::Air
+    } else {
+        Footing::Ground
+    }
 }
 
 /// A shape of the template's `[Size]`, which its shapes share all but the
@@ -2166,6 +2193,7 @@ mod tests {
                 scale: 1.0,
                 animations: Vec::new(),
                 conform: None,
+                footing: Footing::Ground,
                 unpacking: None,
                 packing: None,
                 icon: None,
@@ -2383,6 +2411,33 @@ mod tests {
         };
         assert_eq!(conform(0), Some(footprint));
         assert_eq!(conform(1), None);
+    }
+
+    #[test]
+    fn footing_follows_the_last_flags_set() {
+        let parsed = tgi::parse(
+            "[Template Ship]\n{\n\t[Flags]\n\twater_based = true\n}\n\
+             [Template Plane]\n{\n\t[Flags]\n\tflying = true\n\twater_based = false\n}\n\
+             [Thing Template=Ship]\n{\n\tIDS = battleship\n}\n\
+             [Thing Template=Plane]\n{\n\tIDS = fighter\n}\n\
+             [Thing Template=Ship]\n{\n\tIDS = dock\n\t[Flags]\n\twater_based = false\n}\n\
+             [Thing]\n{\n\tIDS = tank\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let footings: Vec<_> = parsed
+            .root
+            .blocks_of("Thing")
+            .map(|b| footing(&templates.deserialize(b).unwrap()))
+            .collect();
+        assert_eq!(
+            footings,
+            [
+                Footing::Water,
+                Footing::Air,
+                Footing::Ground,
+                Footing::Ground
+            ]
+        );
     }
 
     #[test]

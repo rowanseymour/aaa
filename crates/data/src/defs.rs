@@ -373,6 +373,10 @@ pub struct Flags {
     pub blocking: Option<bool>,
     /// Its model tilts to follow the ground under its soft shape.
     pub conform_to_terrain: Option<bool>,
+    /// It floats on water rather than standing on the bed under it.
+    pub water_based: Option<bool>,
+    /// It keeps its own height rather than standing on the ground.
+    pub flying: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
