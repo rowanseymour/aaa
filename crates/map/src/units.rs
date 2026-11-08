@@ -215,8 +215,8 @@ pub struct Unpacks {
     /// The building, standing at the origin facing [`UNPACKED_FACING`]
     /// and owned by nobody.
     pub building: Building,
-    /// The ground that must be clear for it to unpack: its blocking shape,
-    /// padded all round where it blocks, so buildings keep apart.
+    /// The ground that must be clear for it to unpack: its blocking shape
+    /// padded all round, so buildings keep apart.
     pub room: Shape,
     /// Where the packed building stands from where the building will, in
     /// the map's axes.
@@ -228,9 +228,13 @@ pub struct Unpacks {
 /// What a building packs into.
 #[derive(Debug, Clone)]
 pub struct Packs {
-    /// The packed building, such as a truck, standing anywhere and owned
-    /// by nobody: it's placed and given ids as it's put out.
+    /// The packed building, such as a truck, alone, standing anywhere and
+    /// owned by nobody: it's placed and given ids as it's put out.
     pub truck: Regiment,
+    /// The regiment its truck is commissioned in, for a building that
+    /// stands in an organization: it packs into the truck in its place
+    /// there.
+    pub regiment: Option<Regiment>,
     /// Where it stands from the building, in the map's axes, and the way
     /// it faces there.
     pub offset: [f32; 2],
@@ -565,9 +569,8 @@ impl Recruits {
     /// What each building template packs into, by template, for those
     /// some packed building unpacks into and that can be raised.
     pub fn packings(&self) -> HashMap<String, Packs> {
-        // A Division HQ packs back into the regiment its truck is
-        // commissioned as, rather than a bare truck; where several hold
-        // the truck, the first by name.
+        // A Division HQ unpacked from its regiment packs back into it;
+        // where several regiments hold the truck, the first by name.
         let mut listed: Vec<&Id> = self.lists.values().flatten().collect();
         listed.sort_unstable();
         listed.dedup();
@@ -583,11 +586,7 @@ impl Recruits {
         }
         let mut out = HashMap::new();
         for (building, truck) in &self.packs_into {
-            let raised = match regiments.get(truck) {
-                Some(r) => Ok(r.clone()),
-                None => self.raise(truck.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]),
-            };
-            let Ok(raised) = raised else {
+            let Ok(raised) = self.raise(truck.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]) else {
                 continue;
             };
             let (Some(_), Some(deployment)) = (&raised.unpacks, self.deployments.get(truck)) else {
@@ -600,6 +599,7 @@ impl Recruits {
                 seconds: packing.map_or(7.0, |b| b.packing),
                 health_min: packing.map_or(0.5, |b| b.pack_health_min),
                 truck: raised,
+                regiment: regiments.get(truck).cloned(),
             };
             out.insert(building.as_str().to_string(), packs);
         }
@@ -641,11 +641,9 @@ impl Recruits {
                 members: Vec::new(),
                 obstacle,
                 deploy: self.deploy_points.get(into).copied(),
+                organized: false,
             },
-            room: match body.blocking {
-                Some(shape) => shape.padded(self.padding),
-                None => body.shape,
-            },
+            room: body.shape.padded(self.padding),
             offset: d.packed_offset,
             seconds,
         })
@@ -1030,7 +1028,12 @@ mod tests {
                             width: 8.0,
                             height: 8.0,
                         }),
+                        shape: aaa_data::Shape::Rect {
+                            width: 8.0,
+                            height: 8.0,
+                        },
                         speed: None,
+                        fixed: true,
                         ..Body::default()
                     },
                 ),
@@ -1137,7 +1140,8 @@ mod tests {
             .lists
             .insert(Id::from("corps"), vec![Id::from("convoy")]);
         let packs = &recruits.packings()["depot"];
-        assert_eq!(packs.truck.template, "convoy");
+        assert_eq!(packs.truck.template, "truck");
+        assert_eq!(packs.regiment.as_ref().unwrap().template, "convoy");
         assert_eq!(packs.facing, [1.0, 0.0]);
 
         // As does one the map starts with.

@@ -96,7 +96,7 @@ impl Obstacle {
 
     /// The low and high corners of the box `shape` takes up standing as it
     /// does.
-    fn bounds(&self, shape: Shape) -> ([f32; 2], [f32; 2]) {
+    pub(crate) fn bounds(&self, shape: Shape) -> ([f32; 2], [f32; 2]) {
         let [x, y] = self.position;
         let (half_x, half_y) = match shape {
             Shape::Point => (0.0, 0.0),
@@ -113,7 +113,7 @@ impl Obstacle {
 
 /// The tiles from the one under a box's low corner to the one just short
 /// of its high corner, which may be off the map.
-fn spanned((lo, hi): ([f32; 2], [f32; 2])) -> impl Iterator<Item = (i32, i32)> {
+pub(crate) fn spanned((lo, hi): ([f32; 2], [f32; 2])) -> impl Iterator<Item = (i32, i32)> {
     let (x0, y0) = tile_at(lo);
     let (x1, y1) = tile_at([hi[0] - EDGE, hi[1] - EDGE]);
     let (x1, y1) = (x1.max(x0), y1.max(y0));
@@ -125,7 +125,7 @@ pub struct Pathing {
     /// Tiles per side.
     pub side: usize,
     /// Row-major bits per tile.
-    tiles: Vec<u8>,
+    pub(crate) tiles: Vec<u8>,
     /// Row-major, how many obstacles cover each tile, so that one going
     /// leaves the others' tiles blocked.
     blockers: Vec<u16>,
@@ -218,21 +218,32 @@ impl Pathing {
         ((0..side).contains(&x) && (0..side).contains(&y)).then(|| (y * side + x) as usize)
     }
 
-    /// Whether something taking up `o`'s shape could stand there among the
-    /// blocking things `others`: its shape is on the map, every tile under
-    /// it is `domain`'s, and it overlaps none of them. Its size makes no
-    /// difference, so a shape too small to block a tile still needs these.
+    /// Whether `o`'s shape lies wholly on the map.
+    pub fn on_map(&self, o: &Obstacle) -> bool {
+        let size = self.side as f32 * CELL_SIZE;
+        let (lo, hi) = o.bounds(o.shape);
+        lo.iter().chain(&hi).all(|&c| (0.0..size).contains(&c))
+    }
+
+    /// Whether every tile under `o`'s shape is `domain`'s, whatever stands
+    /// on it.
+    pub fn ground_for(&self, o: &Obstacle, domain: Domain) -> bool {
+        spanned(o.bounds(o.shape)).all(|(x, y)| self.crossable(x, y, domain))
+    }
+
+    /// Whether something blocking that takes up `o`'s shape could stand
+    /// there among the blocking things `others`: its shape is on the map,
+    /// every tile under it is `domain`'s, and it overlaps none of them. Its
+    /// size makes no difference, so a shape too small to block a tile still
+    /// needs these.
     pub fn room_for<'a>(
         &self,
         o: &Obstacle,
         domain: Domain,
         others: impl IntoIterator<Item = &'a Obstacle>,
     ) -> bool {
-        let size = self.side as f32 * CELL_SIZE;
-        let (lo, hi) = o.bounds(o.shape);
-        let on_map = lo.iter().chain(&hi).all(|&c| (0.0..size).contains(&c));
-        on_map
-            && spanned((lo, hi)).all(|(x, y)| self.crossable(x, y, domain))
+        self.on_map(o)
+            && self.ground_for(o, domain)
             && others.into_iter().all(|other| !other.overlaps(o))
     }
 
