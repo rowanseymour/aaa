@@ -226,6 +226,80 @@ fn dump(file: &str) -> io::Result<ExitCode> {
             }
             Object::Colors(k) => format!("colours {}", keys(k)),
             Object::Visibility(v) => format!("visibility {v:?}"),
+            Object::OldParticles(p) => format!(
+                "old particles {:?} flags {:#06x} data {:?} controller {:?} properties {:?}",
+                p.shape.av.name,
+                p.shape.av.flags,
+                p.shape.data,
+                p.shape.av.controller,
+                p.shape.av.properties
+            ),
+            Object::OldParticleData(d) => format!(
+                "old particle data {:?}, {} particles, {} active, radii {:?} sizes {:?} rotations {} colours {}",
+                d.kind,
+                d.geometry.positions.len(),
+                d.active,
+                d.radii,
+                d.sizes,
+                d.rotations.len(),
+                !d.geometry.colors.is_empty()
+            ),
+            Object::OldParticleController(c) => {
+                let t = &c.timing;
+                let particles: String = c
+                    .particles
+                    .iter()
+                    .map(|p| format!("\n       {p:?}"))
+                    .collect();
+                format!(
+                    "old particle controller target {:?} flags {:#06x} frequency {} phase {} time {}..{} next {:?}\n       \
+                     speed {} ± {} declination {} ± {} planar angle {} ± {} normal {:?} colour {:?} size {}\n       \
+                     emit {}..{} reset {} birth rate {} (use {}) life span {} ± {} spawn on death {}\n       \
+                     emitter {:?} size {:?} spawn generations {} percentage {} multiplier {} speed chaos {} direction chaos {}\n       \
+                     emitter modifier {:?} modifier {:?} collider {:?} static bound {}, {} particles, {} valid{particles}",
+                    t.target,
+                    t.flags,
+                    t.frequency,
+                    t.phase,
+                    t.start,
+                    t.stop,
+                    t.next,
+                    c.speed,
+                    c.speed_variation,
+                    c.declination,
+                    c.declination_variation,
+                    c.planar_angle,
+                    c.planar_angle_variation,
+                    c.normal,
+                    c.color,
+                    c.size,
+                    c.emit_start,
+                    c.emit_stop,
+                    c.reset,
+                    c.birth_rate,
+                    c.use_birth_rate,
+                    c.life_span,
+                    c.life_span_variation,
+                    c.spawn_on_death,
+                    c.emitter,
+                    c.emitter_size,
+                    c.spawn_generations,
+                    c.spawn_percentage,
+                    c.spawn_multiplier,
+                    c.spawn_speed_chaos,
+                    c.spawn_direction_chaos,
+                    c.emitter_modifier,
+                    c.modifier,
+                    c.collider,
+                    c.static_bound,
+                    c.particles.len(),
+                    c.valid
+                )
+            }
+            Object::OldModifier(m) => format!(
+                "old modifier {:?} next {:?} controller {:?}",
+                m.kind, m.next, m.controller
+            ),
             Object::Other(kind) => kind.clone(),
         };
         outln!("{i:4} {line}");

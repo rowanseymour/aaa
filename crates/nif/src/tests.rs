@@ -47,6 +47,15 @@ impl Builder {
         out
     }
 
+    /// Writes the model as version 10.0.1.0, which has no user version.
+    fn finish_old(&self, roots: &[i32]) -> Vec<u8> {
+        let mut bytes = self.finish(roots);
+        let at = bytes.iter().position(|&c| c == b'\n').unwrap() + 1;
+        bytes[at..at + 4].copy_from_slice(&OLD_VERSION.to_le_bytes());
+        bytes.drain(at + 4..at + 8);
+        bytes
+    }
+
     /// Writes the model as version 4.2.2.0, which names each object's type
     /// in front of it instead of in a table.
     fn finish_netimmerse(&self, roots: &[i32]) -> Vec<u8> {
@@ -242,12 +251,7 @@ fn objects_strip(points: &[u16]) -> Vec<[u16; 3]> {
 fn reads_the_older_version() {
     let mut b = Builder::new();
     b.add("NiNode", node("root", [0.0; 3], 1.0, &[]));
-    let mut bytes = b.finish(&[0]);
-    // 10.0.1.0 has no user version after the version number.
-    let at = bytes.iter().position(|&c| c == b'\n').unwrap() + 1;
-    bytes[at..at + 4].copy_from_slice(&OLD_VERSION.to_le_bytes());
-    bytes.drain(at + 4..at + 8);
-    let nif = Nif::parse(&bytes).unwrap();
+    let nif = Nif::parse(&b.finish_old(&[0])).unwrap();
     assert!(matches!(&nif.objects[0], Object::Node(n) if n.av.name == "root"));
 }
 
@@ -1313,53 +1317,248 @@ fn reads_texture_controllers() {
     assert_eq!(keys.sample(c.key_time(1.0)), Some(0.0));
 }
 
+/// An older-format particle controller emitting from `emitter`, with
+/// modifiers from `modifier` and one saved particle.
+fn old_particle_controller(target: i32, emitter: i32, modifier: i32) -> Vec<u8> {
+    let mut v = time_controller(target);
+    v.extend(floats(&[2.0, 0.5, 3.0, 0.1, 0.0, 6.0]));
+    v.extend(floats(&[1.0, 0.0, 0.0]));
+    v.extend(floats(&[1.0, 0.5, 0.25, 1.0]));
+    v.extend(floats(&[0.3, 0.0, 0.5]));
+    v.push(0); // no reset
+    v.extend(floats(&[60.0, 0.4, 0.1]));
+    v.extend([1, 0]);
+    v.extend(floats(&[0.7, 0.7, 0.2]));
+    v.extend(emitter.to_le_bytes());
+    v.extend(0u16.to_le_bytes());
+    v.extend(floats(&[1.0]));
+    v.extend(1u16.to_le_bytes());
+    v.extend(floats(&[0.0, 0.0]));
+    v.extend(1u16.to_le_bytes());
+    v.extend(1u16.to_le_bytes());
+    v.extend(floats(&[0.0, 0.0, 1.5, 0.0, 1.0, 0.0, 0.25, 0.4, 2.0]));
+    v.extend(0u16.to_le_bytes());
+    v.extend(1u16.to_le_bytes());
+    v.extend((-1i32).to_le_bytes());
+    v.extend(modifier.to_le_bytes());
+    v.extend((-1i32).to_le_bytes());
+    v.push(1);
+    v
+}
+
+/// The links every older-format modifier starts with.
+fn old_modifier(next: i32, controller: i32) -> Vec<u8> {
+    let mut v = next.to_le_bytes().to_vec();
+    v.extend(controller.to_le_bytes());
+    v
+}
+
 #[test]
-fn steps_over_netimmerse_particles() {
+fn reads_netimmerse_particles() {
     let mut b = Builder::new();
     let mut root = netimmerse_scene("Scene Root", -1, [0.0; 3], &[]);
     root.push(0);
-    root.extend(refs(&[1]));
+    root.extend(refs(&[1, 2]));
     root.extend(refs(&[]));
     b.add("NiNode", root);
+    let mut emitter = netimmerse_scene("sparks Emitter", -1, [0.0, 0.0, 1.0], &[]);
+    emitter.push(0);
+    emitter.extend(refs(&[]));
+    emitter.extend(refs(&[]));
+    b.add("NiNode", emitter);
 
     let mut sparks = netimmerse_scene("sparks", -1, [0.0; 3], &[]);
-    sparks[string("sparks").len() + 4..][..4].copy_from_slice(&3i32.to_le_bytes());
+    sparks[string("sparks").len() + 4..][..4].copy_from_slice(&4i32.to_le_bytes());
     sparks.push(0);
-    sparks.extend(2i32.to_le_bytes());
+    sparks.extend(3i32.to_le_bytes());
     sparks.extend((-1i32).to_le_bytes());
     b.add("NiRotatingParticles", sparks);
     let mut data = particles_data(true);
     data.push(1);
-    data.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0]));
+    data.extend(floats(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
     b.add("NiRotatingParticlesData", data);
 
-    let mut ctlr = time_controller(1);
-    ctlr.extend(floats(&[0.0; 16]));
-    ctlr.push(0);
-    ctlr.extend(floats(&[0.0; 3]));
-    ctlr.extend([0, 0]);
-    ctlr.extend(floats(&[0.0; 3]));
-    ctlr.extend((-1i32).to_le_bytes());
-    ctlr.extend(0u16.to_le_bytes());
-    ctlr.extend(floats(&[1.0]));
-    ctlr.extend(0u16.to_le_bytes());
-    ctlr.extend(floats(&[0.0, 0.0]));
-    ctlr.extend(1u16.to_le_bytes());
-    ctlr.extend(1u16.to_le_bytes());
-    ctlr.extend([0; 40]);
-    ctlr.extend((-1i32).to_le_bytes());
-    ctlr.extend(4i32.to_le_bytes());
-    ctlr.extend((-1i32).to_le_bytes());
-    ctlr.push(0);
-    b.add("NiParticleSystemController", ctlr);
-    let mut grow = (-1i32).to_le_bytes().to_vec();
-    grow.extend(3i32.to_le_bytes());
+    b.add(
+        "NiParticleSystemController",
+        old_particle_controller(2, 1, 5),
+    );
+    let mut spin = old_modifier(6, 4);
+    spin.push(1);
+    spin.extend(floats(&[0.0, 1.0, 0.0, 18.0]));
+    b.add("NiParticleRotation", spin);
+    let mut color = old_modifier(7, 4);
+    color.extend(8i32.to_le_bytes());
+    b.add("NiParticleColorModifier", color);
+    let mut grow = old_modifier(-1, 4);
     grow.extend(floats(&[0.1, 0.5]));
     b.add("NiParticleGrowFade", grow);
+    let mut colors = 2u32.to_le_bytes().to_vec();
+    colors.extend(1u32.to_le_bytes());
+    colors.extend(floats(&[0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]));
+    b.add("NiColorData", colors);
 
     let nif = Nif::parse(&b.finish_netimmerse(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
     assert!(nif.shapes().is_empty());
+
+    let Some(Object::OldParticles(sparks)) = nif.get(Some(2)) else {
+        panic!("no particles");
+    };
+    assert_eq!(sparks.shape.av.name, "sparks");
+    assert_eq!(sparks.shape.data, Some(3));
+    let data: &OldParticleData = nif.get_as(sparks.shape.data).unwrap();
+    assert_eq!(data.kind, OldParticleKind::Rotating);
+    assert_eq!(data.geometry.positions.len(), 2);
+    assert_eq!(data.radii, [1.0]);
+    assert_eq!(data.active, 2);
+    assert_eq!(data.sizes, [0.5, 0.5]);
+    assert_eq!(data.rotations, [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]]);
+
+    let Some(Object::OldParticleController(c)) = nif.get(sparks.shape.av.controller) else {
+        panic!("no controller");
+    };
+    // It is found as a controller like any other.
+    let timing: &Controller = nif.get_as(sparks.shape.av.controller).unwrap();
+    assert_eq!(timing.kind, ControllerKind::OldParticles);
+    assert_eq!((timing.target, timing.stop), (Some(2), 2.0));
+    assert_eq!(
+        [
+            c.speed,
+            c.speed_variation,
+            c.declination,
+            c.declination_variation
+        ],
+        [2.0, 0.5, 3.0, 0.1]
+    );
+    assert_eq!([c.planar_angle, c.planar_angle_variation], [0.0, 6.0]);
+    assert_eq!(c.normal, [1.0, 0.0, 0.0]);
+    assert_eq!(c.color, [1.0, 0.5, 0.25, 1.0]);
+    assert_eq!([c.size, c.emit_start, c.emit_stop], [0.3, 0.0, 0.5]);
+    assert!(!c.reset);
+    assert_eq!(
+        [c.birth_rate, c.life_span, c.life_span_variation],
+        [60.0, 0.4, 0.1]
+    );
+    assert!(c.use_birth_rate && !c.spawn_on_death);
+    assert_eq!((c.emitter, c.emitter_size), (Some(1), [0.7, 0.7, 0.2]));
+    assert_eq!(
+        (c.spawn_generations, c.spawn_percentage, c.spawn_multiplier),
+        (0, 1.0, 1)
+    );
+    assert_eq!(c.valid, 1);
+    assert_eq!(
+        c.particles,
+        [SavedParticle {
+            velocity: [0.0, 0.0, 1.5],
+            axis: [0.0, 1.0, 0.0],
+            age: 0.25,
+            life_span: 0.4,
+            last_update: 2.0,
+            generation: 0,
+            vertex: 1,
+        }]
+    );
+    assert_eq!((c.emitter_modifier, c.collider), (None, None));
+    assert!(c.static_bound);
+
+    let chain: Vec<_> = std::iter::successors(c.modifier, |&m| {
+        nif.get_as::<OldModifier>(Some(m)).and_then(|m| m.next)
+    })
+    .map(|m| nif.get_as::<OldModifier>(Some(m)).unwrap())
+    .collect();
+    assert_eq!(chain.len(), 3);
+    assert!(chain.iter().all(|m| m.controller == Some(4)));
+    assert!(matches!(
+        chain[0].kind,
+        OldModifierKind::Rotation {
+            random_axis: true,
+            axis: [0.0, 1.0, 0.0],
+            speed: 18.0
+        }
+    ));
+    let OldModifierKind::Color { data } = chain[1].kind else {
+        panic!("no colour modifier");
+    };
+    let colors: &Keys<[f32; 4]> = nif.get_as(data).unwrap();
+    assert_eq!(colors.sample(0.5), Some([0.5, 0.5, 0.5, 0.5]));
+    assert!(matches!(
+        chain[2].kind,
+        OldModifierKind::GrowFade {
+            grow: 0.1,
+            fade: 0.5
+        }
+    ));
+}
+
+#[test]
+fn reads_older_particle_meshes() {
+    let mut b = Builder::new();
+    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 2]));
+    b.add("NiNode", node("mist Emitter", [0.0; 3], 1.0, &[]));
+    let mut mist = shape("mist", 0x10, 3, &[]);
+    mist[string("mist").len() + 4..][..4].copy_from_slice(&4i32.to_le_bytes());
+    b.add("NiParticleMeshes", mist);
+
+    // 10.0.1.0 geometry: no keep or compress bytes, and one radius.
+    let mut data = 1u16.to_le_bytes().to_vec();
+    data.push(1);
+    data.extend(floats(&[0.0, 0.0, 1.0]));
+    data.extend(0u16.to_le_bytes());
+    data.push(0); // no normals
+    data.extend(floats(&[0.0; 4]));
+    data.push(0); // no colours
+    data.extend(0u16.to_le_bytes());
+    data.extend(floats(&[3.5]));
+    data.extend(1u16.to_le_bytes());
+    data.push(0); // no sizes
+    data.push(1);
+    data.extend(floats(&[1.0, 0.0, 0.0, 0.0]));
+    data.extend(7i32.to_le_bytes());
+    b.add("NiParticleMeshesData", data);
+
+    b.add(
+        "NiParticleSystemController",
+        old_particle_controller(2, 1, 5),
+    );
+    let mut gravity = old_modifier(6, 4);
+    gravity.extend(floats(&[6.0, 0.9]));
+    gravity.extend(0u32.to_le_bytes());
+    gravity.extend(floats(&[0.0, 0.0, 1.0, 1.0, 0.0, 0.0]));
+    b.add("NiGravity", gravity);
+    let mut meshes = old_modifier(-1, 4);
+    meshes.extend(refs(&[7]));
+    b.add("NiParticleMeshModifier", meshes);
+    b.add("NiNode", node("NewRoot", [0.0; 3], 1.0, &[]));
+
+    let nif = Nif::parse(&b.finish_old(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let mist: &OldParticles = nif.get_as(Some(2)).unwrap();
+    let data: &OldParticleData = nif.get_as(mist.shape.data).unwrap();
+    assert_eq!(data.kind, OldParticleKind::Meshes { node: Some(7) });
+    assert_eq!(data.geometry.positions, [[0.0, 0.0, 1.0]]);
+    assert_eq!(data.radii, [3.5]);
+    assert!(data.sizes.is_empty());
+    assert_eq!(data.rotations, [[1.0, 0.0, 0.0, 0.0]]);
+
+    let c: &OldParticleController = nif.get_as(mist.shape.av.controller).unwrap();
+    let Some(Object::OldModifier(gravity)) = nif.get(c.modifier) else {
+        panic!("no gravity");
+    };
+    assert!(matches!(
+        gravity.kind,
+        OldModifierKind::Gravity {
+            decay: 6.0,
+            strength: 0.9,
+            force: 0,
+            position: [0.0, 0.0, 1.0],
+            direction: [1.0, 0.0, 0.0],
+        }
+    ));
+    let Some(Object::OldModifier(meshes)) = nif.get(gravity.next) else {
+        panic!("no meshes");
+    };
+    assert!(matches!(&meshes.kind, OldModifierKind::Meshes { meshes } if meshes == &[Some(7)]));
+    assert_eq!(meshes.next, None);
 }
 
 #[test]

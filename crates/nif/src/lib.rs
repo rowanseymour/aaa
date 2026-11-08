@@ -425,6 +425,10 @@ impl<'a> Reader<'a> {
             .map(|c| c.map(u16::from_le_bytes))
             .collect())
     }
+    /// `n` f32s.
+    pub(crate) fn f32s(&mut self, n: usize) -> Result<Vec<f32>> {
+        Ok(self.float_array::<1>(n)?.into_iter().map(|[v]| v).collect())
+    }
     /// `n` u16s.
     pub(crate) fn u16s(&mut self, n: usize) -> Result<Vec<u16>> {
         Ok(self.u16_array::<1>(n)?.into_iter().map(|[v]| v).collect())
