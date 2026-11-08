@@ -840,3 +840,22 @@ fn rejects_corrupt_sequences() {
         Err(Error::Corrupt(_))
     ));
 }
+
+#[test]
+fn walks_a_cyclic_or_branching_graph_in_bounded_time() {
+    // A node that is its own child, twice.
+    let mut b = Builder::new();
+    b.add("NiNode", node("root", [0.0; 3], 1.0, &[0, 0, 1]));
+    b.add("NiTriShape", shape("mesh", 0x10, 3, &[]));
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert_eq!(nif.shapes().len(), 1);
+
+    // Each node lists the next one twice: 2^40 paths without a budget.
+    let mut b = Builder::new();
+    for i in 0..40 {
+        b.add("NiNode", node("n", [0.0; 3], 1.0, &[i + 1, i + 1]));
+    }
+    b.add("NiTriShape", shape("mesh", 0x10, 3, &[]));
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.shapes().len() <= 41 * 64);
+}
