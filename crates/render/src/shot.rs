@@ -53,6 +53,12 @@ pub struct ShotPlugin {
     pub path: PathBuf,
 }
 
+/// Counts frames towards the capture and takes it. An app whose scene isn't
+/// ready from the start, such as one that loads it in the background, gives
+/// this set a run condition to hold the count off until it is.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Capture;
+
 /// How many pipelines the render world is still compiling.
 #[derive(Resource, Clone, Default)]
 struct Compiling(Arc<AtomicUsize>);
@@ -104,7 +110,7 @@ impl Plugin for ShotPlugin {
                 quiet: 0,
                 asked: false,
             })
-            .add_systems(Update, (aim_cameras, capture));
+            .add_systems(Update, (aim_cameras, capture.in_set(Capture)));
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render
                 .insert_resource(compiling)

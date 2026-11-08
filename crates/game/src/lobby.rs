@@ -460,7 +460,6 @@ fn launch(
         teams: lobby.preset.arrange(&brief.players),
         person: lobby.person,
         nations: nations(&brief.players, &lobby.nations, &all.0),
-        frames: 0,
         from_menu: true,
     });
     next.set(Screen::Loading);

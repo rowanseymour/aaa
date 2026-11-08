@@ -75,8 +75,7 @@ enum Screen {
 #[derive(Resource)]
 struct Data(GameData);
 
-/// The map to play, loaded once the loading screen has had a chance to show,
-/// since loading holds up the frame.
+/// The map to play, which [`load`] sets up off the main thread.
 #[derive(Resource)]
 struct Pending {
     name: String,
@@ -93,7 +92,6 @@ struct Pending {
     /// The nation each side plays as, by player id, when launched from the
     /// lobby.
     nations: HashMap<u32, aaa_data::Nation>,
-    frames: u32,
     /// Whether it was launched from the lobby, which failing to load it goes
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
@@ -123,6 +121,23 @@ struct ContinueSlot;
 struct Loaded {
     game: GameData,
     map: Map,
+}
+
+/// A match being set up off the main thread, which would otherwise stop the
+/// window responding. A thread of its own rather than a task pool's, which
+/// would hold up quitting mid-load until it finished.
+#[derive(Resource)]
+struct Preparing {
+    thread: std::thread::JoinHandle<Result<Prepared, (Box<GameData>, String)>>,
+    from_menu: bool,
+}
+
+/// What [`prepare`] sets a match up with.
+struct Prepared {
+    loaded: Loaded,
+    sim: World,
+    raising: Recruits,
+    person: Option<u32>,
 }
 
 #[derive(Resource)]
@@ -384,6 +399,10 @@ fn main() -> ExitCode {
     app.add_plugins(DefaultPlugins.set(window));
     if let Some(s) = screenshot {
         app.add_plugins(s);
+        // Of the match, not the loading screen before it.
+        if map.is_some() {
+            app.configure_sets(Update, shot::Capture.run_if(in_state(Screen::Match)));
+        }
     }
     let mut console = console::Console::default();
     for s in &scripts {
@@ -489,7 +508,6 @@ fn main() -> ExitCode {
                 teams: None,
                 person: None,
                 nations: HashMap::new(),
-                frames: 0,
                 from_menu: false,
             })
             .insert_state(Screen::Loading);
@@ -504,10 +522,63 @@ fn main() -> ExitCode {
     }
 }
 
-/// Readies a match on a loaded map, with a person playing the `person`
-/// player's side, if any, for [`setup`] to start.
-fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded, person: Option<u32>) {
-    let sim = World::new(&loaded.map);
+/// Loads a map and sets up the sim and recruits for a match on it.
+fn prepare(
+    mut game: GameData,
+    pending: Pending,
+    nations: &[aaa_data::Nation],
+    side: Side,
+) -> Result<Prepared, (Box<GameData>, String)> {
+    let Pending {
+        name,
+        teams,
+        person,
+        nations: chosen,
+        from_menu,
+        ..
+    } = pending;
+    // Given on the command line, each side plays as the nation its map
+    // fixes or one at random.
+    let chosen = match from_menu {
+        true => chosen,
+        false => aaa_map::Brief::load(&mut game, &name).map_or_else(
+            |_| HashMap::new(),
+            |b| lobby::nations(&b.players, &HashMap::new(), nations),
+        ),
+    };
+    let mut map = match Map::load_as(&mut game, &name, &chosen) {
+        Ok(map) => map,
+        Err(e) => return Err((Box::new(game), e)),
+    };
+    if let Some(teams) = &teams {
+        map.arrange(teams);
+    }
+    let person = match from_menu {
+        true => person,
+        false => lobby::default_person(&map.players, side),
+    };
+    if !from_menu && side.0.is_some() && person.is_none() {
+        warn!("{}: no such side to play", map.title);
+    }
+    let mut sim = World::new(&map);
+    let raising = Recruits::new(&mut game);
+    sim.packing = raising.packings();
+    Ok(Prepared {
+        loaded: Loaded { game, map },
+        sim,
+        raising,
+        person,
+    })
+}
+
+/// Puts a [`prepare`]d match in place.
+fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
+    let Prepared {
+        loaded,
+        sim,
+        raising,
+        person,
+    } = prepared;
     let lineup = lobby::Lineup::new(&loaded.map.players, person);
     for &(id, control) in &lineup.0 {
         if let Some(p) = sim.sides.player(id) {
@@ -521,9 +592,6 @@ fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded, person: Option<u32
     world.insert_resource(Local(lineup.person()));
     world.insert_resource(lineup);
     world.insert_resource(Sim(sim));
-    let mut loaded = loaded;
-    let raising = Recruits::new(&mut loaded.game);
-    world.resource_mut::<Sim>().0.packing = raising.packings();
     world.insert_resource(Raising(raising));
     world.insert_resource(loaded);
 }
@@ -600,72 +668,49 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
     ));
 }
 
-/// Loads the pending map and starts setting a match up on it behind the
-/// loading screen, or goes back to the lobby or exits if it can't.
+/// Starts [`prepare`]ing the pending map, then once it's ready starts the
+/// match on it behind the loading screen, or goes back to the lobby or exits
+/// if it can't be loaded.
 fn load(world: &mut bevy::ecs::world::World) {
-    // One frame to lay the screen out and one to draw it.
-    let Some(mut pending) = world.get_resource_mut::<Pending>() else {
-        return;
-    };
-    pending.frames += 1;
-    if pending.frames < 3 {
+    if let Some(pending) = world.remove_resource::<Pending>() {
+        let Some(Data(game)) = world.remove_resource::<Data>() else {
+            return;
+        };
+        let nations = world.resource::<lobby::Nations>().0.clone();
+        let side = *world.resource::<Side>();
+        let from_menu = pending.from_menu;
+        let thread = std::thread::spawn(move || prepare(game, pending, &nations, side));
+        world.insert_resource(Preparing { thread, from_menu });
         return;
     }
-    let Some(Pending {
-        name,
-        teams,
-        person,
-        nations,
-        from_menu,
-        ..
-    }) = world.remove_resource::<Pending>()
-    else {
+    if !world
+        .get_resource::<Preparing>()
+        .is_some_and(|p| p.thread.is_finished())
+    {
+        return;
+    }
+    let Some(Preparing { thread, from_menu }) = world.remove_resource::<Preparing>() else {
         return;
     };
-    let Some(Data(mut game)) = world.remove_resource::<Data>() else {
-        return;
-    };
-    // Given on the command line, each side plays as the nation its map
-    // fixes or one at random.
-    let nations = match from_menu {
-        true => nations,
-        false => aaa_map::Brief::load(&mut game, &name).map_or_else(
-            |_| HashMap::new(),
-            |b| {
-                lobby::nations(
-                    &b.players,
-                    &HashMap::new(),
-                    &world.resource::<lobby::Nations>().0,
-                )
-            },
-        ),
-    };
-    match Map::load_as(&mut game, &name, &nations) {
-        Ok(mut map) => {
-            if let Some(teams) = &teams {
-                map.arrange(teams);
-            }
-            let person = match from_menu {
-                true => person,
-                false => lobby::default_person(&map.players, *world.resource::<Side>()),
-            };
-            if !from_menu && world.resource::<Side>().0.is_some() && person.is_none() {
-                warn!("{}: no such side to play", map.title);
-            }
-            begin(world, Loaded { game, map }, person);
+    let prepared = thread
+        .join()
+        .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+    match prepared {
+        Ok(prepared) => {
+            begin(world, prepared);
             world.insert_resource(Readying { wait: from_menu });
             world.resource_mut::<NextState<Screen>>().set(Screen::Match);
         }
-        Err(e) if from_menu => {
+        Err((game, e)) if from_menu => {
             error!("{e}");
             let mut screens = world.query_filtered::<Entity, With<LoadingScreen>>();
             for screen in screens.iter(world).collect::<Vec<_>>() {
                 world.despawn(screen);
             }
-            world.insert_resource(Data(game));
+            world.insert_resource(Data(*game));
             world.resource_mut::<NextState<Screen>>().set(Screen::Lobby);
         }
-        Err(e) => {
+        Err((_, e)) => {
             error!("{e}");
             world.write_message(AppExit::error());
         }
