@@ -8,7 +8,7 @@ real-time strategy game.
 
 > [!NOTE]
 > This is not a decompilation of the game - everything is written from scratch, clean-room style.
-> Whoever studies the executable writes up its behavior as specs, and the code here is written
+> Whoever studies the original game writes up its behavior as specs, and the code here is written
 > only from those specs, the data files and what the running game shows.
 
 ## Crates
