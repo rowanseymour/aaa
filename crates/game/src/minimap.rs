@@ -24,7 +24,7 @@ use aaa_sim::{Relation, State};
 
 /// Width of the disc on screen, in logical pixels, which the diamond's
 /// corners touch.
-const DISC: f32 = 236.0;
+pub const DISC: f32 = 236.0;
 /// Pixels across the minimap's image, enough for a sharp diamond on a
 /// high-density screen.
 const PIXELS: usize = 512;
@@ -183,8 +183,8 @@ pub fn spawn(
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
-            left: px(12),
-            bottom: px(12),
+            left: px(crate::MARGIN),
+            bottom: px(crate::MARGIN),
             width: px(DISC),
             height: px(DISC),
             border_radius: BorderRadius::MAX,

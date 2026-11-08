@@ -60,7 +60,9 @@ options:
                             may be given more than once
   --console <port>          take console lines on a port of this machine, each
                             answered with what the console says, then an empty line
-  --screenshot <file.png>   save a frame to a file and exit, without a window";
+  --screenshot <file.png>   save a frame to a file and exit, without a window
+  --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
+                            though smaller if the window's too narrow for it";
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
@@ -361,6 +363,7 @@ struct Options {
     scripts: Vec<String>,
     console: Option<u16>,
     screenshot: Option<String>,
+    ui_scale: f32,
 }
 
 /// Takes the options out of `args`; `None` if any is malformed.
@@ -378,11 +381,16 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         None => None,
     };
     let screenshot = take_option(args, "--screenshot")?;
+    let ui_scale = match take_option(args, "--ui-scale")? {
+        Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
+        None => 1.0,
+    };
     Some(Options {
         side,
         scripts,
         console,
         screenshot,
+        ui_scale,
     })
 }
 
@@ -393,6 +401,7 @@ fn main() -> ExitCode {
         scripts,
         console,
         screenshot,
+        ui_scale,
     }) = options(&mut args)
     else {
         eprintln!("{USAGE}");
@@ -449,6 +458,8 @@ fn main() -> ExitCode {
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
         .insert_resource(console)
+        .insert_resource(UiScaleSetting(ui_scale))
+        .add_systems(PreUpdate, fit_ui)
         .configure_sets(Update, camera::Controls.run_if(console::closed))
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<waypoints::Sent>()
@@ -1397,6 +1408,7 @@ fn select(
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
     mut start: bevy::prelude::Local<Option<Vec2>>,
+    ui: Res<UiScale>,
     mut shown: Single<(&mut Node, &mut Visibility), With<SelectionBox>>,
 ) {
     // How far the cursor goes before a click becomes a drag, in pixels.
@@ -1420,10 +1432,7 @@ fn select(
     let (node, visibility) = &mut *shown;
     match dragged.filter(|_| !released) {
         Some(r) => {
-            node.left = px(r.min.x);
-            node.top = px(r.min.y);
-            node.width = px(r.width());
-            node.height = px(r.height());
+            place_on_map(node, r.min, r.size(), &ui);
             visibility.set_if_neq(Visibility::Inherited);
         }
         None => {
@@ -1714,6 +1723,57 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
     None
 }
 
+/// What [`UiScaleSetting`] may be: smaller for a small window, bigger to
+/// suit a large one.
+const UI_SCALES: std::ops::RangeInclusive<f32> = 0.5..=2.0;
+/// Between the screen's edges and the minimap, selection pane and action
+/// grid along its bottom, in logical pixels.
+const MARGIN: f32 = 12.0;
+
+/// How big the player wants the interface drawn; [`UiScale`] is this, less
+/// as a narrow window needs to fit the bottom of the screen in.
+#[derive(Resource)]
+struct UiScaleSetting(f32);
+
+/// How much of the window's height the bottom of the screen may take.
+const UI_HEIGHT_SHARE: f32 = 1.0 / 3.0;
+
+/// Sets [`UiScale`] from [`UiScaleSetting`], shrunk until the selection
+/// pane, centred, clears the minimap and action grid either side of it, and
+/// they take no more than [`UI_HEIGHT_SHARE`] of the window's height.
+fn fit_ui(
+    setting: Res<UiScaleSetting>,
+    windows: Query<Ref<Window>, With<PrimaryWindow>>,
+    mut scale: ResMut<UiScale>,
+) {
+    let window = windows.single().ok();
+    if !setting.is_changed() && !window.as_ref().is_some_and(|w| w.is_changed()) {
+        return;
+    }
+    // Without a window, a screenshot's image.
+    let size = window.map_or(shot::SIZE.as_vec2(), |w| w.size());
+    if size.min_element() <= 0.0 {
+        return;
+    }
+    let side = MARGIN + minimap::DISC.max(actions::SIZE.x) + MARGIN;
+    let wide = size.x / (2.0 * side + pane::SIZE.x);
+    let tallest = minimap::DISC.max(actions::SIZE.y).max(pane::SIZE.y);
+    let tall = size.y * UI_HEIGHT_SHARE / (MARGIN + tallest);
+    let wanted = setting.0.min(wide).min(tall).max(*UI_SCALES.start());
+    if scale.0 != wanted {
+        scale.0 = wanted;
+    }
+}
+
+/// Places a node over the map at a rectangle in viewport pixels, which
+/// [`UiScale`] mustn't scale.
+fn place_on_map(node: &mut Node, corner: Vec2, size: Vec2, ui: &UiScale) {
+    node.left = px(corner.x / ui.0);
+    node.top = px(corner.y / ui.0);
+    node.width = px(size.x / ui.0);
+    node.height = px(size.y / ui.0);
+}
+
 const OWN: Color = Color::srgb(0.1, 0.9, 0.1);
 /// Behind the minimap, the selection pane and the action grid, letting a
 /// little of the map show through.
@@ -1857,6 +1917,7 @@ fn show_health(
     loaded: Res<Loaded>,
     images: Res<OverlayImages>,
     fixed: Res<Time<Fixed>>,
+    ui: Res<UiScale>,
     cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
     units: Query<(&UnitView, Option<&Footprint>)>,
     mut bars: Query<(&mut Node, &mut ImageNode, &mut Visibility), With<HealthBar>>,
@@ -1901,12 +1962,7 @@ fn show_health(
             ));
         }
     }
-    let place = |node: &mut Node, corner: Vec2, size: Vec2| {
-        node.left = px(corner.x);
-        node.top = px(corner.y);
-        node.width = px(size.x);
-        node.height = px(size.y);
-    };
+    let place = |node: &mut Node, corner: Vec2, size: Vec2| place_on_map(node, corner, size, &ui);
     let mut wanted = wanted.into_iter();
     for (mut node, mut image, mut visibility) in &mut bars {
         match wanted.next() {
