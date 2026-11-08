@@ -23,6 +23,7 @@ use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
 use crate::banners::Divisions;
+use crate::ui::{self, Font, Ink, Surface, framed, label};
 use crate::{Drawn, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint};
 
 /// How many regiments can be selected at once, as many as the pane has
@@ -36,8 +37,6 @@ const WIDTH: f32 = 495.0;
 /// The pane's size, in logical pixels.
 pub const SIZE: Vec2 = Vec2::new(WIDTH * SCALE, HEIGHT * SCALE);
 const HEIGHT: f32 = 183.0;
-const BORDER: Color = Color::srgb(0.45, 0.45, 0.45);
-const EMPTY: Color = Color::srgb(0.12, 0.12, 0.12);
 
 /// A box at `left`, `top`, `width` across and `height` down, in the
 /// game's interface units.
@@ -184,7 +183,7 @@ pub fn spawn(
                 border_radius: BorderRadius::all(px(12)),
                 ..default()
             },
-            BackgroundColor(crate::CHROME),
+            Surface::Hud,
             Visibility::Hidden,
             GlobalZIndex(1),
         ));
@@ -293,11 +292,17 @@ impl Ui<'_> {
         let player = self.sim.sides.player(owner);
         let colour = TINTS[tint(self.sim, self.local, owner)];
         commands.entity(root).with_children(|pane| {
-            pane.spawn((at(8.0, 5.0, 300.0, 14.0), text(name, 15.0, Color::WHITE)));
+            pane.spawn((
+                at(8.0, 5.0, 300.0, 14.0),
+                label(name, Font::HudTitle, Ink::Body),
+            ));
             if let Some(p) = player {
                 pane.spawn((
                     at(8.0, 21.0, 300.0, 14.0),
-                    text(p.name.clone(), 14.0, colour),
+                    Text::new(p.name.clone()),
+                    ui::font(Font::Hud),
+                    TextColor(colour),
+                    Pickable::IGNORE,
                 ));
             }
         });
@@ -316,7 +321,7 @@ impl Ui<'_> {
     /// The line along the bottom saying what it's doing.
     fn status(&self, commands: &mut Commands, root: Entity, status: Status) {
         commands.entity(root).with_children(|pane| {
-            pane.spawn((at(144.0, 158.0, 286.0, 18.0), BackgroundColor(EMPTY)))
+            pane.spawn((at(144.0, 158.0, 286.0, 18.0), Surface::Track))
                 .with_child((
                     Node {
                         position_type: PositionType::Absolute,
@@ -324,7 +329,7 @@ impl Ui<'_> {
                         top: px(2),
                         ..default()
                     },
-                    text(String::new(), 14.0, Color::WHITE),
+                    label("", Font::Hud, Ink::Body),
                     status,
                 ));
         });
@@ -696,30 +701,6 @@ fn ordinal(n: usize) -> String {
     format!("{n}{suffix}")
 }
 
-fn text(words: String, size: f32, colour: Color) -> impl Bundle {
-    (
-        Text::new(words),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
-        TextColor(colour),
-        Pickable::IGNORE,
-    )
-}
-
-/// A box with a thin grey edge, as the game frames its cards.
-fn framed(node: Node) -> impl Bundle {
-    (
-        Node {
-            border: UiRect::all(px(1)),
-            ..node
-        },
-        BorderColor::all(BORDER),
-        BackgroundColor(Color::BLACK),
-    )
-}
-
 fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
     ImageNode::new(picture.unwrap_or_default())
 }
@@ -727,7 +708,7 @@ fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
 /// A bar in `node`, on a dark track, filled as `fill` says.
 fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill) {
     parent
-        .spawn((node, BackgroundColor(EMPTY), Pickable::IGNORE))
+        .spawn((node, Surface::Track, Pickable::IGNORE))
         .with_child((
             Node {
                 height: percent(100),

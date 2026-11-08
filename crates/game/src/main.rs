@@ -30,6 +30,7 @@ mod presets;
 mod remote;
 mod resource_bar;
 mod sound;
+mod ui;
 mod waypoints;
 
 use std::collections::{HashMap, HashSet};
@@ -484,7 +485,12 @@ fn main() -> ExitCode {
         .init_resource::<ghost::Ghost>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
-        .add_plugins((menu::MenuPlugin, lobby::LobbyPlugin, pause::PausePlugin))
+        .add_plugins((
+            ui::UiPlugin,
+            menu::MenuPlugin,
+            lobby::LobbyPlugin,
+            pause::PausePlugin,
+        ))
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
@@ -572,7 +578,7 @@ fn main() -> ExitCode {
         app.insert_resource(remote);
     }
     app.insert_resource(lobby::Nations(game.nations()))
-        .insert_resource(sound::Sounds::new(&mut game, &menu::CLICKS))
+        .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
         .insert_resource(Data(game));
     match map {
         Some(name) => {
@@ -687,11 +693,8 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
 /// Shows the map being loaded, as the game does: its name over what it's
 /// about, and how loading goes.
 fn loading(mut commands: Commands, pending: Res<Pending>) {
+    use ui::{Edge, Font, Ink, Surface, label, text};
     commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
-    let font = |size: f32| TextFont {
-        font_size: FontSize::Px(size),
-        ..default()
-    };
     let root = commands
         .spawn((
             LoadingScreen,
@@ -704,11 +707,11 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
                 row_gap: px(24),
                 ..default()
             },
-            BackgroundColor(Color::BLACK),
+            Surface::Solid,
             GlobalZIndex(10),
         ))
         .id();
-    commands.spawn((ChildOf(root), Text::new(pending.title.clone()), font(22.0)));
+    commands.spawn((ChildOf(root), text(pending.title.clone(), Font::Title)));
     if !pending.description.is_empty() {
         commands.spawn((
             ChildOf(root),
@@ -719,8 +722,8 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
                 border: UiRect::all(px(2)),
                 ..default()
             },
-            BorderColor::all(Color::srgb(0.75, 0.6, 0.3)),
-            children![(Text::new(pending.description.clone()), font(16.0))],
+            Edge::Accent,
+            children![text(pending.description.clone(), Font::Body)],
         ));
     }
     commands.spawn((
@@ -738,12 +741,7 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
             ..default()
         },
         children![
-            (
-                LoadingStatus,
-                Text::new("Loading..."),
-                font(16.0),
-                TextColor(Color::srgb(0.6, 0.6, 0.6)),
-            ),
+            (LoadingStatus, label("Loading...", Font::Body, Ink::Help)),
             (
                 ContinueSlot,
                 Node {
@@ -829,7 +827,7 @@ fn ready(
     }
     for slot in &slot {
         commands
-            .spawn((ChildOf(slot), menu::button("Continue", menu::SIZE)))
+            .spawn((ChildOf(slot), ui::button("Continue", ui::Font::Large)))
             .observe(start);
     }
 }
@@ -1900,9 +1898,6 @@ fn place_on_map(node: &mut Node, corner: Vec2, size: Vec2, ui: &UiScale) {
 }
 
 const OWN: Color = Color::srgb(0.1, 0.9, 0.1);
-/// Behind the minimap, the selection pane and the action grid, letting a
-/// little of the map show through.
-const CHROME: Color = Color::srgba(0.0, 0.0, 0.0, 0.85);
 const FRIEND: Color = Color::srgb(0.2, 0.55, 1.0);
 const OTHER: Color = Color::srgb(0.95, 0.15, 0.1);
 /// What marks things by how their owner stands toward the player, by

@@ -5,7 +5,8 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::actions::Page;
-use crate::menu::{self, PANEL, SIZE};
+use crate::menu;
+use crate::ui::{self, Font, Surface};
 use crate::{Focus, LoadingScreen, Screen, SelectionBox, console};
 
 /// Whether the menu is up, and whether the match was already paused
@@ -89,7 +90,7 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::BLACK.with_alpha(0.4)),
+            Surface::Scrim,
             GlobalZIndex(10),
         ))
         .id();
@@ -104,15 +105,15 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
                 border_radius: BorderRadius::all(px(12)),
                 ..default()
             },
-            BackgroundColor(PANEL),
+            Surface::Panel,
         ))
         .id();
-    commands.spawn((menu::disabled("Options", SIZE), ChildOf(column)));
+    commands.spawn((ui::disabled("Options", Font::Large), ChildOf(column)));
     commands
-        .spawn((menu::button("Quit to Desktop", SIZE), ChildOf(column)))
+        .spawn((ui::button("Quit to Desktop", Font::Large), ChildOf(column)))
         .observe(menu::quit);
     commands
-        .spawn((menu::button("Return to Game", SIZE), ChildOf(column)))
+        .spawn((ui::button("Return to Game", Font::Large), ChildOf(column)))
         .observe(resume);
 }
 

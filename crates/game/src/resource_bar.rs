@@ -12,6 +12,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use crate::actions::fill;
+use crate::ui::{Font, Ink, Surface, label};
 use crate::{Loaded, Local, Screen, Sim};
 
 /// What each cell shows, in order: a rate, or a limit by what it uses.
@@ -130,7 +131,7 @@ pub fn spawn(
                 border_radius: BorderRadius::all(px(6)),
                 ..default()
             },
-            BackgroundColor(crate::CHROME),
+            Surface::Hud,
         ))
         .with_children(|bar| {
             for (i, kind) in CELLS.into_iter().enumerate() {
@@ -151,15 +152,7 @@ pub fn spawn(
                             },
                         ));
                     }
-                    cell.spawn((
-                        Cell(preview, i),
-                        Text::default(),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
+                    cell.spawn((Cell(preview, i), label("", Font::Hud, Ink::Body)));
                 });
             }
         });
@@ -184,12 +177,7 @@ pub fn spawn(
             bar(root, true);
             root.spawn((
                 Message(0.0),
-                Text::default(),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 0.75, 0.3)),
+                label("", Font::HudTitle, Ink::Warn),
                 TextShadow::default(),
             ));
         });

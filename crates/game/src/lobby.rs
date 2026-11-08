@@ -10,8 +10,11 @@ use aaa_map::{Brief, Player};
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
 
-use crate::menu::{Chosen, DIM, PANEL, button, clickable, go, inert, opener, padded, text};
+use crate::menu::go;
 use crate::presets::Preset;
+use crate::ui::{
+    Chosen, Edge, Font, Ink, Surface, button, clickable, inert, label, opener, padded, text,
+};
 use crate::{Data, Pending, Screen, Side};
 
 /// Who plays a side.
@@ -276,8 +279,6 @@ fn scenarios(data: &Data) -> Vec<String> {
     top.map(str::to_string).collect()
 }
 
-const SIZE: f32 = 16.0;
-
 /// Lays out the lobby as the game does: the preset over the sides on the
 /// left, the map and the buttons on the right.
 fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
@@ -326,7 +327,7 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
             row_gap: px(4),
             ..default()
         },
-        BackgroundColor(PANEL),
+        Surface::Panel,
     ));
     let right = commands
         .spawn((
@@ -351,7 +352,7 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
             row_gap: px(4),
             ..default()
         },
-        BackgroundColor(PANEL),
+        Surface::Panel,
     ));
     let list = commands
         .spawn((
@@ -367,22 +368,22 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
                 row_gap: px(2),
                 ..default()
             },
-            BackgroundColor(PANEL),
+            Surface::Panel,
         ))
         .id();
-    commands.spawn((ChildOf(list), text("Scenario Maps", SIZE)));
+    commands.spawn((ChildOf(list), text("Scenario Maps", Font::Body)));
     for name in scenarios(&data) {
         let label = Brief::load(&mut data.0, &name)
             .map_or_else(|_| aaa_data::map_title(&name).to_string(), |b| b.name);
         commands
-            .spawn((ChildOf(list), button(label, SIZE), MapChoice(name)))
+            .spawn((ChildOf(list), button(label, Font::Body), MapChoice(name)))
             .observe(choose_map);
     }
     commands
-        .spawn((ChildOf(right), button("Launch", 20.0)))
+        .spawn((ChildOf(right), button("Launch", Font::Large)))
         .observe(launch);
     commands
-        .spawn((ChildOf(right), button("Back", 20.0)))
+        .spawn((ChildOf(right), button("Back", Font::Large)))
         .observe(go(Screen::NewGame));
 }
 
@@ -490,7 +491,7 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
         .spawn((
             ChildOf(presets),
             opener(row.clone()),
-            children![text(lobby.preset.label(), SIZE)],
+            children![text(lobby.preset.label(), Font::Body)],
         ))
         .observe(open_presets);
     let picking = lobby.open == Open::Presets;
@@ -508,8 +509,8 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
                 border: UiRect::all(px(1)),
                 ..default()
             },
-            BorderColor::all(DIM),
-            BackgroundColor(PANEL),
+            Edge::Border,
+            Surface::Panel,
         ))
         .id();
     for preset in Preset::offered(&brief.players) {
@@ -518,7 +519,7 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
                 ChildOf(list),
                 clickable(row.clone()),
                 PresetChoice(preset),
-                children![text(preset.label(), SIZE)],
+                children![text(preset.label(), Font::Body)],
             ))
             .observe(choose_preset);
     }
@@ -537,14 +538,14 @@ fn show_slots(
     let brief = match &lobby.brief {
         Ok(b) => b,
         Err(e) => {
-            commands.spawn((ChildOf(slots), text(e.clone(), SIZE)));
+            commands.spawn((ChildOf(slots), text(e.clone(), Font::Body)));
             return;
         }
     };
     let sides: Vec<&Player> = brief.sides().collect();
     let number = |id: u32| sides.iter().position(|p| p.id == id);
     for (heading, members) in lobby.teams() {
-        commands.spawn((ChildOf(slots), text(heading, 18.0)));
+        commands.spawn((ChildOf(slots), text(heading, Font::Heading)));
         for id in members {
             let Some(i) = number(id) else {
                 continue;
@@ -570,7 +571,7 @@ fn show_slots(
                     children![
                         swatch(player),
                         (
-                            text(format!("Side {}", i + 1), SIZE),
+                            text(format!("Side {}", i + 1), Font::Body),
                             Node {
                                 width: px(64),
                                 ..default()
@@ -584,11 +585,13 @@ fn show_slots(
                     ChildOf(row),
                     clickable(cell(140.0)),
                     SideChoice(Some(id)),
-                    children![text(who, SIZE)],
+                    children![text(who, Font::Body)],
                 )),
-                false => {
-                    commands.spawn((ChildOf(row), inert(cell(140.0)), children![text(who, SIZE)]))
-                }
+                false => commands.spawn((
+                    ChildOf(row),
+                    inert(cell(140.0)),
+                    children![text(who, Font::Body)],
+                )),
             }
             .observe(choose_side);
             match &player.nation {
@@ -596,7 +599,7 @@ fn show_slots(
                     commands.spawn((
                         ChildOf(row),
                         inert(cell(200.0)),
-                        children![(text(name_of(&all.0, fixed), SIZE), TextColor(DIM))],
+                        children![label(name_of(&all.0, fixed), Font::Body, Ink::Muted)],
                     ));
                 }
                 None => {
@@ -621,7 +624,7 @@ fn show_slots(
             ChildOf(slots),
             clickable(watch),
             SideChoice(None),
-            children![text(label, SIZE)],
+            children![text(label, Font::Body)],
         ))
         .observe(choose_side);
 }
@@ -653,7 +656,7 @@ fn nation_list(
             ChildOf(holder),
             opener(cell.clone()),
             NationsOf(player),
-            children![text(label, SIZE)],
+            children![text(label, Font::Body)],
         ))
         .observe(open_nations);
     if lobby.open != Open::Nations(player) {
@@ -670,8 +673,8 @@ fn nation_list(
                 border: UiRect::all(px(1)),
                 ..default()
             },
-            BorderColor::all(DIM),
-            BackgroundColor(PANEL),
+            Edge::Border,
+            Surface::Panel,
             GlobalZIndex(2),
         ))
         .id();
@@ -683,7 +686,7 @@ fn nation_list(
                 ChildOf(list),
                 clickable(cell.clone()),
                 NationChoice(player, nation),
-                children![text(name, SIZE)],
+                children![text(name, Font::Body)],
             ))
             .observe(choose_nation);
     }
@@ -694,18 +697,20 @@ fn show_about(mut commands: Commands, lobby: Res<Lobby>, about: Single<Entity, W
     let about = *about;
     commands.entity(about).despawn_children();
     let Ok(brief) = &lobby.brief else {
-        commands.spawn((ChildOf(about), text(aaa_data::map_title(&lobby.map), 20.0)));
+        commands.spawn((
+            ChildOf(about),
+            text(aaa_data::map_title(&lobby.map), Font::Large),
+        ));
         return;
     };
-    commands.spawn((ChildOf(about), text(brief.name.clone(), 20.0)));
+    commands.spawn((ChildOf(about), text(brief.name.clone(), Font::Large)));
     if let Some([w, h]) = brief.size {
-        commands.spawn((ChildOf(about), text(format!("{w}x{h}"), SIZE)));
+        commands.spawn((ChildOf(about), text(format!("{w}x{h}"), Font::Body)));
     }
     if brief.sides().next().is_none() {
         commands.spawn((
             ChildOf(about),
-            text("No sides to play", SIZE),
-            TextColor(DIM),
+            label("No sides to play", Font::Body, Ink::Muted),
         ));
     }
     for (i, player) in brief.sides().enumerate() {
@@ -716,7 +721,7 @@ fn show_about(mut commands: Commands, lobby: Res<Lobby>, about: Single<Entity, W
                 align_items: AlignItems::Center,
                 ..default()
             },
-            children![swatch(player), text(format!("Side {}", i + 1), SIZE)],
+            children![swatch(player), text(format!("Side {}", i + 1), Font::Body)],
         ));
     }
 }

@@ -21,8 +21,8 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
-use crate::menu::Click;
 use crate::resource_bar::{Preview, Previewed};
+use crate::ui::{Click, Font, Ink, Surface, label};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
@@ -40,9 +40,6 @@ pub const SIZE: Vec2 = Vec2::new(span(COLUMNS), span(ROWS));
 const fn span(n: usize) -> f32 {
     n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD
 }
-/// Behind every slot, darker than the panel around it, so the grid reads as
-/// one even with slots empty.
-const SLOT: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 
 /// The orders a regiment has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
@@ -73,11 +70,6 @@ const MENU_CANCEL: usize = 11;
 /// The command whose look the cancel button borrows, as the game gives
 /// none of its own for backing out of an order or a menu.
 const CANCEL_LOOK: &str = "construction_cancel";
-/// Behind the tooltip, see-through enough to show the map.
-const TIP: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
-/// The tooltip's help and what's in the way of a press.
-const HELP: Color = Color::srgb(0.8, 0.8, 0.8);
-const WHY: Color = Color::srgb(1.0, 0.75, 0.3);
 /// Where the game's font keeps the glyphs it draws resources with, and
 /// each resource's, by its field name in the data.
 pub(crate) const GLYPH_DIR: &str = "Fonts/medium/1280";
@@ -538,7 +530,7 @@ pub fn spawn(
                     border_radius: BorderRadius::all(px(PAD * 1.5)),
                     ..default()
                 },
-                BackgroundColor(TIP),
+                Surface::Popup,
                 Pickable::IGNORE,
             ));
             root.spawn((
@@ -557,7 +549,7 @@ pub fn spawn(
                     border_radius: BorderRadius::all(px(PAD * 1.5)),
                     ..default()
                 },
-                BackgroundColor(crate::CHROME),
+                Surface::Hud,
             ))
             .with_children(|grid| {
                 for s in 0..SLOTS {
@@ -571,7 +563,7 @@ pub fn spawn(
                             border: UiRect::all(px(2)),
                             ..default()
                         },
-                        BackgroundColor(SLOT),
+                        Surface::Slot,
                         BorderColor::all(Color::NONE),
                         children![(
                             SlotIcon,
@@ -867,9 +859,9 @@ impl TipParts<'_, '_> {
         let mut tooltip = self.commands.entity(*entity);
         tooltip.despawn_children();
         tooltip.with_children(|parent| {
-            parent.spawn(words(tip.title.clone(), 15.0, Color::WHITE));
+            parent.spawn(label(tip.title.clone(), Font::HudTitle, Ink::Body));
             if let Some(help) = &tip.help {
-                parent.spawn(words(help.clone(), 13.0, HELP));
+                parent.spawn(label(help.clone(), Font::Small, Ink::Help));
             }
             if !tip.table.is_empty() {
                 parent
@@ -882,7 +874,7 @@ impl TipParts<'_, '_> {
                     })
                     .with_children(|table| {
                         for row in &tip.table {
-                            table.spawn(words(row.label.clone(), 13.0, HELP));
+                            table.spawn(label(row.label.clone(), Font::Small, Ink::Help));
                             table
                                 .spawn(Node {
                                     column_gap: px(PAD),
@@ -898,24 +890,11 @@ impl TipParts<'_, '_> {
                     });
             }
             if let Some(why) = &tip.why {
-                parent.spawn(words(why.clone(), 13.0, WHY));
+                parent.spawn(label(why.clone(), Font::Small, Ink::Warn));
             }
         });
         *self.said = tip;
     }
-}
-
-/// A run of the tooltip's text.
-fn words(text: String, size: f32, colour: Color) -> impl Bundle {
-    (
-        Text(text),
-        TextFont {
-            font_size: FontSize::Px(size),
-            ..default()
-        },
-        TextColor(colour),
-        Pickable::IGNORE,
-    )
 }
 
 /// An amount after its resource's glyph, as the game's tooltips show it,
@@ -937,13 +916,13 @@ fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
                 },
                 Pickable::IGNORE,
             ));
-            pair.spawn(words(q.number(), 13.0, Color::WHITE));
+            pair.spawn(label(q.number(), Font::Small, Ink::Body));
         }
         None => {
-            pair.spawn(words(
+            pair.spawn(label(
                 format!("{} {}", q.number(), q.resource),
-                13.0,
-                Color::WHITE,
+                Font::Small,
+                Ink::Body,
             ));
         }
     });
