@@ -304,8 +304,19 @@ pub struct Listing {
     pub name: String,
     /// Archive path of its button's icon.
     pub icon: Option<String>,
-    /// Money it costs.
-    pub cost: f32,
+    /// What it costs, then what it takes to keep, by resource.
+    pub cost: Vec<Amount>,
+    pub upkeep: Vec<Amount>,
+}
+
+/// So much of a resource.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Amount {
+    /// The resource's field name in the data, such as `money`.
+    pub kind: &'static str,
+    /// Its localized name, such as Money.
+    pub resource: String,
+    pub amount: f32,
 }
 
 /// How a template packs and unpacks.
@@ -350,6 +361,9 @@ pub struct Command {
     /// E.g. `move`, `kill`, `stop`.
     pub ids: Id,
     pub name: String,
+    /// What it does, and why it can't be given when it can't.
+    pub tooltip: Option<String>,
+    pub disabled: Option<String>,
     /// Archive path of its icon.
     pub icon: Option<String>,
     /// Which button it takes, numbered across then down.
@@ -1017,22 +1031,40 @@ impl GameData {
     }
 
     /// How each template that has a name shows on the button that
-    /// commissions or recruits it, by template id.
+    /// commissions or recruits it, by template id. An organization costs
+    /// and takes to keep what its captain, the one member it's raised
+    /// with, does as well as its own, which for a Division HQ is all of it.
     pub fn listings(&mut self) -> HashMap<Id, Listing> {
         let strings = self.strings();
+        let definitions = self.definitions();
+        let things: HashMap<&Id, &defs::Thing> = definitions
+            .things
+            .iter()
+            .map(|t| (&t.id, &t.thing))
+            .collect();
         self.by_template(|t| {
             let view = t.view.as_ref();
+            let captain = t
+                .organization_component
+                .as_ref()
+                .and_then(|o| o.slot.last()?.element_ids.as_ref())
+                .and_then(|id| things.get(id));
+            let economies: Vec<&defs::EconomyComponent> = [Some(t), captain.copied()]
+                .into_iter()
+                .flatten()
+                .filter_map(|t| t.economy_component.as_ref())
+                .collect();
+            let economy = |of: fn(&defs::EconomyComponent) -> Option<&defs::Resources>| {
+                amounts(&strings, economies.iter().filter_map(|&e| of(e)))
+            };
             Some(Listing {
                 name: localized(&strings, t.name.as_deref())?,
                 icon: view
                     .and_then(|v| v.icon.as_deref())
                     .filter(|i| i.to_ascii_lowercase().starts_with("/ui/"))
                     .and_then(ui_path),
-                cost: t
-                    .economy_component
-                    .as_ref()
-                    .and_then(|e| e.cost.as_ref()?.money)
-                    .unwrap_or(0.0),
+                cost: economy(|e| e.cost.as_ref()),
+                upkeep: economy(|e| e.upkeep.as_ref()),
             })
         })
     }
@@ -1316,6 +1348,9 @@ impl GameData {
                 Some(Command {
                     name: localized(&strings, c.name.as_deref()).unwrap_or(ids.to_string()),
                     ids,
+                    tooltip: localized(&strings, c.tooltip.as_deref()).filter(|t| !t.is_empty()),
+                    disabled: localized(&strings, c.description_disabled.as_deref())
+                        .filter(|t| !t.is_empty()),
                     icon: c.icon.as_deref().and_then(ui_path),
                     slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
                     cursor: not_null(c.cursor_ids),
@@ -2005,6 +2040,33 @@ fn localized(strings: &HashMap<String, String>, name: Option<&str>) -> Option<St
         Some(key) => strings.get(&key.to_ascii_lowercase()).cloned(),
         None => Some(name.to_string()),
     }
+}
+
+/// The resources given, totalled, with their localized names; those the
+/// strings don't name keep their field name.
+fn amounts<'a>(
+    strings: &HashMap<String, String>,
+    of: impl Iterator<Item = &'a defs::Resources>,
+) -> Vec<Amount> {
+    let mut totals: Vec<(&str, f32)> = Vec::new();
+    for (field, amount) in of.flat_map(defs::Resources::amounts) {
+        match totals.iter_mut().find(|(f, _)| *f == field) {
+            Some((_, total)) => *total += amount,
+            None => totals.push((field, amount)),
+        }
+    }
+    totals
+        .into_iter()
+        .filter(|&(_, amount)| amount != 0.0)
+        .map(|(field, amount)| Amount {
+            kind: field,
+            resource: strings
+                .get(&format!("resources_{field}_name"))
+                .cloned()
+                .unwrap_or_else(|| field.to_string()),
+            amount,
+        })
+        .collect()
 }
 
 fn terrain_kind(t: &defs::Terrain) -> TerrainKind {

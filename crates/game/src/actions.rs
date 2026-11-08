@@ -13,6 +13,7 @@ use aaa_data::{GameData, Id};
 use aaa_map::Regiment;
 use aaa_render::textures;
 use aaa_sim::Commission;
+use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -67,7 +68,24 @@ pub const RALLY: &str = "set_rally_point";
 const CANCEL: usize = 8;
 /// Where the commission menu's way back goes.
 const MENU_CANCEL: usize = 11;
-const CANCEL_ICON: &str = "UI/Game/ActionButtons/IconCancel.png";
+/// The command whose look the cancel button borrows, as the game gives
+/// none of its own for backing out of an order or a menu.
+const CANCEL_LOOK: &str = "construction_cancel";
+/// Behind the tooltip, see-through enough to show the map.
+const TIP: Color = Color::srgba(0.0, 0.0, 0.0, 0.7);
+/// The tooltip's help and what's in the way of a press.
+const HELP: Color = Color::srgb(0.8, 0.8, 0.8);
+const WHY: Color = Color::srgb(1.0, 0.75, 0.3);
+/// Where the game's font keeps the glyphs it draws resources with, and
+/// each resource's, by its field name in the data.
+const GLYPH_DIR: &str = "Fonts/medium/1280";
+const GLYPHS: [(&str, &str); 5] = [
+    ("money", "money"),
+    ("ammo", "ammo"),
+    ("oil", "fuel"),
+    ("unit_limit_consumed", "unitlimit"),
+    ("building_limit_consumed", "building"),
+];
 
 /// What an order does once its button is pressed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -212,13 +230,17 @@ fn layout(
 #[derive(Clone)]
 struct Look {
     name: String,
+    /// What it does, and why it can't be pressed when it can't.
+    help: Option<String>,
+    disabled: Option<String>,
     icon: Option<Handle<Image>>,
 }
 
 /// One of the things a building commissions.
 struct Recruit {
     look: Look,
-    cost: f32,
+    /// Its cost and upkeep, for the tooltip.
+    economy: Vec<Row>,
     /// What it raises; `None` for what can't be raised yet, shown dimmed.
     regiment: Option<Regiment>,
     seconds: f32,
@@ -232,7 +254,9 @@ pub struct Looks {
     commission: (Option<usize>, Look),
     rally: (Option<usize>, Look),
     pack: (Option<usize>, Look),
-    cancel: Option<Handle<Image>>,
+    cancel: Look,
+    /// The tooltip's heading for what a recruit needs.
+    requires: String,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
@@ -265,9 +289,34 @@ pub struct Panel;
 #[derive(Component)]
 pub struct Grid;
 
-/// Says what the button under the cursor is.
+/// The box above the grid saying what the button under the cursor is.
 #[derive(Component)]
-pub struct Caption;
+pub struct Tooltip;
+
+/// What the tooltip says: the button's name, what it does, a table of
+/// such as what it costs, and why it can't be pressed.
+#[derive(Clone, PartialEq, Default, Debug)]
+struct Tip {
+    title: String,
+    help: Option<String>,
+    table: Vec<Row>,
+    why: Option<String>,
+}
+
+/// A row of the tooltip's table, such as Cost and what it is.
+#[derive(Clone, PartialEq, Debug)]
+struct Row {
+    label: String,
+    amounts: Vec<Quantity>,
+}
+
+/// So much of a resource, shown by its glyph, or its name without one.
+#[derive(Clone, PartialEq, Debug)]
+struct Quantity {
+    glyph: Option<Handle<Image>>,
+    amount: f32,
+    resource: String,
+}
 
 /// Part of the interface that takes clicks, so they don't go to the map
 /// under it.
@@ -306,6 +355,8 @@ pub fn spawn(
             c.slot,
             Look {
                 name: c.name.clone(),
+                help: c.tooltip.clone(),
+                disabled: c.disabled.clone(),
                 icon: c.icon.as_deref().and_then(|p| image(game, p)),
             },
         ),
@@ -315,6 +366,8 @@ pub fn spawn(
                 None,
                 Look {
                     name: ids.to_string(),
+                    help: None,
+                    disabled: None,
                     icon: None,
                 },
             )
@@ -324,7 +377,26 @@ pub fn spawn(
     let commission = look_of(game, COMMISSION);
     let rally = look_of(game, RALLY);
     let pack = look_of(game, PACK);
-    let cancel = image(game, CANCEL_ICON);
+    let cancel = look_of(game, CANCEL_LOOK).1;
+    let strings = game.strings();
+    let title = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+    let cost = title("ui_tooltip_item_title_cost", "Cost");
+    let upkeep = title("ui_tooltip_item_title_upkeep", "Upkeep");
+    let requires = title("ui_tooltip_item_title_requires", "Requires");
+    let glyphs: HashMap<&str, Handle<Image>> = GLYPHS
+        .iter()
+        .filter_map(|&(kind, name)| Some((kind, image(game, &format!("{GLYPH_DIR}/{name}.png"))?)))
+        .collect();
+    let quantities = |amounts: &[aaa_data::Amount]| -> Vec<Quantity> {
+        amounts
+            .iter()
+            .map(|a| Quantity {
+                glyph: glyphs.get(a.kind).cloned(),
+                amount: a.amount,
+                resource: a.resource.clone(),
+            })
+            .collect()
+    };
     let listings = game.listings();
     // Buildings unpacked during the match need menus too: those of the
     // map's trucks, and of what any menu commissions.
@@ -350,14 +422,26 @@ pub fn spawn(
                     .raise(id.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])
                     .map_err(|e| debug!("can't commission {id}: {e}"))
                     .ok();
+                let economy = listing.map_or_else(Vec::new, |l| {
+                    [(&cost, &l.cost), (&upkeep, &l.upkeep)]
+                        .into_iter()
+                        .filter(|(_, amounts)| !amounts.is_empty())
+                        .map(|(label, amounts)| Row {
+                            label: label.clone(),
+                            amounts: quantities(amounts),
+                        })
+                        .collect()
+                });
                 Recruit {
                     look: Look {
                         name: listing.map_or_else(|| id.to_string(), |l| l.name.clone()),
+                        help: None,
+                        disabled: None,
                         icon: listing
                             .and_then(|l| l.icon.as_deref())
                             .and_then(|p| image(game, p)),
                     },
-                    cost: listing.map_or(0.0, |l| l.cost),
+                    economy,
                     regiment,
                     seconds: raising.0.recruit_time(id.as_str()),
                 }
@@ -382,6 +466,7 @@ pub fn spawn(
         rally,
         pack,
         cancel,
+        requires,
         menus,
         names: listings.into_iter().map(|(id, l)| (id, l.name)).collect(),
     });
@@ -398,7 +483,7 @@ pub fn spawn(
                 bottom: px(crate::MARGIN),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::End,
-                row_gap: px(4),
+                row_gap: px(PAD),
                 ..default()
             },
             Visibility::Hidden,
@@ -406,19 +491,21 @@ pub fn spawn(
             DespawnOnExit(Screen::Match),
         ))
         .with_children(|root| {
+            // As wide as the grid, which the pane is kept clear of, and as
+            // tall as its text wraps to, growing upwards.
             root.spawn((
-                Caption,
-                // Wrapped to the grid's width, which the pane is kept clear of.
+                Tooltip,
                 Node {
-                    max_width: px(SIZE.x),
+                    display: Display::None,
+                    width: px(SIZE.x),
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(PAD),
+                    padding: UiRect::all(px(PAD * 1.5)),
+                    border_radius: BorderRadius::all(px(PAD * 1.5)),
                     ..default()
                 },
-                Text::default(),
-                TextFont {
-                    font_size: FontSize::Px(14.0),
-                    ..default()
-                },
-                TextShadow::default(),
+                BackgroundColor(TIP),
+                Pickable::IGNORE,
             ));
             root.spawn((
                 Grid,
@@ -523,7 +610,7 @@ pub fn show(
     mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
     mut slots: Query<SlotParts, Without<SlotIcon>>,
     mut icons: Query<(&mut ImageNode, &mut Visibility), With<SlotIcon>>,
-    mut caption: Single<&mut Text, With<Caption>>,
+    mut tooltip: TipParts,
     local: Res<Local>,
     focus: Res<crate::Focus>,
     mut refusal: ResMut<Refusal>,
@@ -575,36 +662,24 @@ pub fn show(
         };
         // Why it can't be pressed, when that's down to the player.
         let mut why = None;
-        let (icon, name, ready, lit) = match entry {
+        let mut table = Vec::new();
+        let (look, ready, lit) = match entry {
             Entry::Order(i) => {
-                let look = &looks.orders[i].1;
                 let ready = ORDERS[i].1.is_some();
                 let lit =
                     matches!((*page, ORDERS[i].1), (Page::Aiming(a), Some(Give::Aim(b))) if a == b);
-                (look.icon.clone(), look.name.clone(), ready, lit)
+                (&looks.orders[i].1, ready, lit)
             }
-            Entry::Cancel => (looks.cancel.clone(), "Cancel".into(), true, false),
-            Entry::Commission => {
-                let look = &looks.commission.1;
-                (look.icon.clone(), look.name.clone(), true, false)
-            }
-            Entry::Rally => {
-                let look = &looks.rally.1;
-                (
-                    look.icon.clone(),
-                    look.name.clone(),
-                    true,
-                    *page == Page::Rally,
-                )
-            }
+            Entry::Cancel => (&looks.cancel, true, false),
+            Entry::Commission => (&looks.commission.1, true, false),
+            Entry::Rally => (&looks.rally.1, true, *page == Page::Rally),
             Entry::Pack => {
-                let look = &looks.pack.1;
                 let ready = building.is_some_and(|b| can_pack(&sim.0, b));
-                (look.icon.clone(), look.name.clone(), ready, false)
+                (&looks.pack.1, ready, false)
             }
             Entry::Recruit(i) => {
                 let r = &menu[i];
-                let name = format!("{} ({} money, {:.0} s)", r.look.name, r.cost, r.seconds);
+                table.extend(r.economy.iter().cloned());
                 let lacking: Vec<&str> = match (&r.regiment, local.0) {
                     (Some(regiment), Some(player)) => sim
                         .0
@@ -615,12 +690,13 @@ pub fn show(
                     _ => Vec::new(),
                 };
                 if !lacking.is_empty() {
-                    why = Some(format!("requires {}", lacking.join(", ")));
+                    why = Some(format!("{}: {}", looks.requires, lacking.join(", ")));
                 }
                 let ready = r.regiment.is_some() && lacking.is_empty();
-                (r.look.icon.clone(), name, ready, false)
+                (&r.look, ready, false)
             }
         };
+        let icon = look.icon.clone();
         // Only a press that can do something sounds like it.
         match (ready, clicks) {
             (true, false) => {
@@ -633,11 +709,17 @@ pub fn show(
         }
         if hover.get() {
             let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
-            hovered = Some(match (ready, why, refused) {
-                (_, _, Some(refused)) => format!("{name} ({})", refused_why(refused)),
-                (true, _, _) => name,
-                (false, Some(why), _) => format!("{name} ({why})"),
-                (false, None, _) => format!("{name} (not yet)"),
+            let why = match (ready, why, refused) {
+                (_, _, Some(refused)) => Some(refused_why(refused).to_string()),
+                (true, _, _) => None,
+                (false, Some(why), _) => Some(why),
+                (false, None, _) => Some(look.disabled.clone().unwrap_or("Not yet".into())),
+            };
+            hovered = Some(Tip {
+                title: look.name.clone(),
+                help: look.help.clone(),
+                table,
+                why,
             });
         }
         let colour = match (lit, hover.get() && ready) {
@@ -652,24 +734,139 @@ pub fn show(
         };
         set_icon(children, &mut icons, icon.map(|i| (i, tint)));
     }
-    let text = match (hovered, *page) {
-        (Some(name), _) => name,
-        (None, Page::Aiming(Aim::Unpack)) => "Left click where to unpack".into(),
+    let prompt = |title: &str| {
+        Some(Tip {
+            title: title.into(),
+            ..default()
+        })
+    };
+    let tip = match (hovered, *page) {
+        (Some(tip), _) => Some(tip),
+        (None, Page::Aiming(Aim::Unpack)) => prompt("Left click where to unpack"),
         (None, Page::Aiming(Aim::Attack))
             if local
                 .0
                 .is_some_and(|p| attack_at(&sim.0, p, *focus) == Struck::Friend) =>
         {
-            "Can't attack a friend".into()
+            prompt("Can't attack a friend")
         }
-        (None, Page::Aiming(Aim::Attack)) => "Left click an enemy or where to attack".into(),
-        (None, Page::Aiming(_)) => "Left click where to go".into(),
-        (None, Page::Rally) => "Left click where new regiments go".into(),
-        (None, _) => String::new(),
+        (None, Page::Aiming(Aim::Attack)) => prompt("Left click an enemy or where to attack"),
+        (None, Page::Aiming(_)) => prompt("Left click where to go"),
+        (None, Page::Rally) => prompt("Left click where new regiments go"),
+        (None, _) => None,
     };
-    if caption.0 != text {
-        caption.0 = text;
+    tooltip.say(tip);
+}
+
+/// The tooltip's node, not the slots'.
+type TooltipOnly = (With<Tooltip>, Without<Slot>);
+
+/// The tooltip's box and what it last said.
+#[derive(SystemParam)]
+pub struct TipParts<'w, 's> {
+    tooltip: Single<'w, 's, (Entity, &'static mut Node), TooltipOnly>,
+    said: bevy::ecs::system::Local<'s, Tip>,
+    commands: Commands<'w, 's>,
+}
+
+impl TipParts<'_, '_> {
+    /// Shows the tip, or hides the box for none.
+    fn say(&mut self, tip: Option<Tip>) {
+        let (entity, node) = &mut *self.tooltip;
+        let display = match tip {
+            Some(_) => Display::Flex,
+            None => Display::None,
+        };
+        if node.display != display {
+            node.display = display;
+        }
+        let tip = tip.unwrap_or_default();
+        if *self.said == tip {
+            return;
+        }
+        let mut tooltip = self.commands.entity(*entity);
+        tooltip.despawn_children();
+        tooltip.with_children(|parent| {
+            parent.spawn(words(tip.title.clone(), 15.0, Color::WHITE));
+            if let Some(help) = &tip.help {
+                parent.spawn(words(help.clone(), 13.0, HELP));
+            }
+            if !tip.table.is_empty() {
+                parent
+                    .spawn(Node {
+                        display: Display::Grid,
+                        grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
+                        column_gap: px(PAD * 2.0),
+                        row_gap: px(2),
+                        ..default()
+                    })
+                    .with_children(|table| {
+                        for row in &tip.table {
+                            table.spawn(words(row.label.clone(), 13.0, HELP));
+                            table
+                                .spawn(Node {
+                                    column_gap: px(PAD),
+                                    align_items: AlignItems::Center,
+                                    ..default()
+                                })
+                                .with_children(|cell| {
+                                    for q in &row.amounts {
+                                        quantity(cell, q);
+                                    }
+                                });
+                        }
+                    });
+            }
+            if let Some(why) = &tip.why {
+                parent.spawn(words(why.clone(), 13.0, WHY));
+            }
+        });
+        *self.said = tip;
     }
+}
+
+/// A run of the tooltip's text.
+fn words(text: String, size: f32, colour: Color) -> impl Bundle {
+    (
+        Text(text),
+        TextFont {
+            font_size: FontSize::Px(size),
+            ..default()
+        },
+        TextColor(colour),
+        Pickable::IGNORE,
+    )
+}
+
+/// An amount after its resource's glyph, as the game's tooltips show it,
+/// or before its name where there's no glyph.
+fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
+    cell.spawn(Node {
+        column_gap: px(2),
+        align_items: AlignItems::Center,
+        ..default()
+    })
+    .with_children(|pair| match &q.glyph {
+        Some(glyph) => {
+            pair.spawn((
+                ImageNode::new(glyph.clone()),
+                Node {
+                    width: px(16),
+                    height: px(16),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ));
+            pair.spawn(words(q.amount.to_string(), 13.0, Color::WHITE));
+        }
+        None => {
+            pair.spawn(words(
+                format!("{} {}", q.amount, q.resource),
+                13.0,
+                Color::WHITE,
+            ));
+        }
+    });
 }
 
 /// Shows a slot's icon in this tint, or hides it, say for an empty slot
@@ -772,13 +969,13 @@ fn commissioned(page: Page, given: Result<(), aaa_sim::Refused>) -> Page {
     }
 }
 
-/// Why an order was refused, for the caption.
+/// Why an order was refused, for the tooltip.
 fn refused_why(refused: aaa_sim::Refused) -> &'static str {
     match refused {
-        aaa_sim::Refused::NotYours => "not yours",
-        aaa_sim::Refused::Unable => "can't now",
-        aaa_sim::Refused::NoRoom => "no room",
-        aaa_sim::Refused::Lacking => "lacks a building it needs",
+        aaa_sim::Refused::NotYours => "Not yours",
+        aaa_sim::Refused::Unable => "Can't now",
+        aaa_sim::Refused::NoRoom => "No room",
+        aaa_sim::Refused::Lacking => "Lacks a building it needs",
     }
 }
 

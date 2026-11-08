@@ -191,11 +191,34 @@ pub struct MobileDeploymentComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct EconomyComponent {
     pub cost: Option<Resources>,
+    /// What it takes to keep, for as long as it's kept.
+    pub upkeep: Option<Resources>,
 }
 
+/// Amounts of the resources the data's costs and upkeeps name, each
+/// called `resources_<field>_name` in the localized strings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Resources {
     pub money: Option<f32>,
+    pub ammo: Option<f32>,
+    pub oil: Option<f32>,
+    pub unit_limit_consumed: Option<f32>,
+    pub building_limit_consumed: Option<f32>,
+}
+
+impl Resources {
+    /// Each resource given, by field name.
+    pub fn amounts(&self) -> impl Iterator<Item = (&'static str, f32)> {
+        [
+            ("money", self.money),
+            ("ammo", self.ammo),
+            ("oil", self.oil),
+            ("unit_limit_consumed", self.unit_limit_consumed),
+            ("building_limit_consumed", self.building_limit_consumed),
+        ]
+        .into_iter()
+        .filter_map(|(k, v)| Some((k, v?)))
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -586,6 +609,10 @@ pub struct ActorCommand {
     pub ids: Option<Id>,
     /// A `#` key into the localized strings.
     pub name: Option<String>,
+    /// `#` keys into the localized strings: what it does, and why it
+    /// can't be given when it can't.
+    pub tooltip: Option<String>,
+    pub description_disabled: Option<String>,
     pub icon: Option<String>,
     /// Which of the action buttons it takes, numbered across then down;
     /// negative for none.
