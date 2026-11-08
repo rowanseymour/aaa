@@ -107,8 +107,9 @@ pub struct Regiment {
     resume: Option<([f32; 2], [f32; 2])>,
     /// For a packed building, such as a supply truck, what it unpacks into.
     pub unpacks: Option<Unpacks>,
-    /// Where it's on its way to unpack.
-    pub unpack_at: Option<[f32; 2]>,
+    /// Where it's on its way to unpack, and the way the building will
+    /// face there.
+    pub unpack_at: Option<([f32; 2], [f32; 2])>,
     /// The building it unpacked into, by index into [`World::buildings`].
     pub unpacked_into: Option<usize>,
     /// For one just put out by a building, the building's rally point, to
@@ -254,6 +255,15 @@ impl Trailer {
         }
     }
 
+    /// Stands it straight behind its unit.
+    fn behind(&mut self, position: [f32; 2], facing: [f32; 2]) {
+        let hitch = aaa_map::from_local(position, facing, self.hitch);
+        let [x, y] = self.coupling;
+        self.position = aaa_map::from_local(hitch, facing, [-x, -y]);
+        self.previous = self.position;
+        self.facing = facing;
+    }
+
     /// Turns to point at its unit's hitch, and moves so that its coupling
     /// meets it.
     fn follow(&mut self, position: [f32; 2], facing: [f32; 2]) {
@@ -387,13 +397,16 @@ pub struct Building {
     pub paused: Option<Pause>,
     /// Where what it commissions appears, then goes.
     pub deploy: Option<DeployPoints>,
-    /// It stands in an organization, so it packs back into its place
-    /// there rather than into a lone truck.
-    pub organized: bool,
+    /// The organization the map has it standing in, without its members:
+    /// packing puts its truck in the building's place there.
+    pub organization: Option<Box<aaa_map::Regiment>>,
     /// Where what it commissions moves on to once out, if set.
     pub rally: Option<[f32; 2]>,
     /// The tick it last changed hands on.
     pub captured: Option<u64>,
+    /// For one unpacked during the match, the regiment it unpacked from,
+    /// by index into [`World::regiments`], which packing brings back.
+    pub unpacked_from: Option<usize>,
     /// For a city's centre, how far around it the city reaches.
     pub zone: Option<f32>,
     /// For a city's centre, the ids of the buildings that change hands
@@ -503,9 +516,14 @@ pub enum Command {
     /// average, and drops where it was headed, so that once done with any
     /// engagement it stays put.
     Stop { regiment: usize },
-    /// Sends a packed building to unpack at [`unpack_site`] for `at`.
-    /// Refused where it can't unpack or the building wouldn't fit.
-    Unpack { regiment: usize, at: [f32; 2] },
+    /// Sends a packed building to unpack at [`unpack_site`] for `at`, the
+    /// building facing `facing`. Refused where it can't unpack or the
+    /// building wouldn't fit.
+    Unpack {
+        regiment: usize,
+        at: [f32; 2],
+        facing: [f32; 2],
+    },
     /// Switches a regiment to another of its formations, its members
     /// taking their new places where it stands, or is headed.
     Formation { regiment: usize, formation: usize },
@@ -536,6 +554,12 @@ pub enum Command {
 /// whole units to it.
 pub fn unpack_site(at: [f32; 2]) -> [f32; 2] {
     at.map(f32::round)
+}
+
+/// The way a building ordered to unpack facing `facing` faces, as a unit
+/// vector.
+fn unpack_facing(facing: [f32; 2]) -> [f32; 2] {
+    normalised(facing).unwrap_or(aaa_map::UNPACKED_FACING)
 }
 
 impl Building {
@@ -749,6 +773,7 @@ impl World {
                     false => State::Disabled,
                 },
                 captured: None,
+                unpacked_from: None,
                 zone: b.zone,
                 members: b.members.clone(),
                 obstacle: b.obstacle.clone(),
@@ -758,7 +783,7 @@ impl World {
                 progress: 0,
                 paused: None,
                 deploy: b.deploy,
-                organized: b.organized,
+                organization: b.organization.clone(),
                 rally: None,
             });
             self.next_id = self.next_id.max(b.id + 1);
@@ -833,7 +858,11 @@ impl World {
             | Command::Stop { regiment }
             | Command::Formation { regiment, .. } => Ok(self.may_command(player, regiment)?),
             Command::Pursue { regiment, enemy } => self.may_pursue(player, regiment, enemy),
-            Command::Unpack { regiment, at } => self.may_unpack(player, regiment, at).map(drop),
+            Command::Unpack {
+                regiment,
+                at,
+                facing,
+            } => self.may_unpack(player, regiment, at, facing).map(drop),
             Command::Pack { building } => self.may_pack(player, building).map(drop),
             Command::Commission {
                 building,
@@ -855,8 +884,12 @@ impl World {
             Command::Run { regiment, to } => self.order_run(player, regiment, to)?,
             Command::Pursue { regiment, enemy } => self.order_pursue(player, regiment, enemy)?,
             Command::Stop { regiment } => self.order_stop(player, regiment)?,
-            Command::Unpack { regiment, at } => {
-                self.order_unpack(player, regiment, at)?;
+            Command::Unpack {
+                regiment,
+                at,
+                facing,
+            } => {
+                self.order_unpack(player, regiment, at, facing)?;
             }
             Command::Formation {
                 regiment,
@@ -911,12 +944,18 @@ impl World {
 
     /// Where the regiment stops to unpack, relative to where it unpacks,
     /// if it can there.
-    fn may_unpack(&self, player: u32, regiment: usize, at: [f32; 2]) -> Result<[f32; 2], Refused> {
+    fn may_unpack(
+        &self,
+        player: u32,
+        regiment: usize,
+        at: [f32; 2],
+        facing: [f32; 2],
+    ) -> Result<[f32; 2], Refused> {
         self.may_command(player, regiment)?;
         let Some(unpacks) = &self.regiments[regiment].unpacks else {
             return Err(Refused::Unable);
         };
-        if !self.room_to_unpack(unpacks, unpack_site(at)) {
+        if !self.room_to_unpack(unpacks, unpack_site(at), facing) {
             return Err(Refused::NoRoom);
         }
         Ok(unpacks.offset)
@@ -1101,23 +1140,25 @@ impl World {
         player: u32,
         regiment: usize,
         at: [f32; 2],
+        facing: [f32; 2],
     ) -> Result<[f32; 2], Refused> {
-        let offset = self.may_unpack(player, regiment, at)?;
+        let offset = self.may_unpack(player, regiment, at, facing)?;
         let at = unpack_site(at);
         let stop = [at[0] + offset[0], at[1] + offset[1]];
         self.order_move(player, regiment, stop)?;
-        self.regiments[regiment].unpack_at = Some(at);
+        self.regiments[regiment].unpack_at = Some((at, unpack_facing(facing)));
         Ok(at)
     }
 
-    /// Whether what `unpacks` makes would fit standing at `at`, with the
-    /// room around it buildings need: among the buildings and scenery
-    /// where it blocks, and anywhere on the map where it doesn't.
-    pub fn room_to_unpack(&self, unpacks: &Unpacks, at: [f32; 2]) -> bool {
+    /// Whether what `unpacks` makes would fit standing at `at` facing
+    /// `facing`, with the room around it buildings need: among the
+    /// buildings and scenery where it blocks, and anywhere on the map
+    /// where it doesn't.
+    pub fn room_to_unpack(&self, unpacks: &Unpacks, at: [f32; 2], facing: [f32; 2]) -> bool {
         let obstacle = unpacks.building.obstacle.as_ref();
         let placed = Obstacle {
             position: at,
-            facing: obstacle.map_or(aaa_map::UNPACKED_FACING, |o| o.facing),
+            facing: unpack_facing(facing),
             shape: unpacks.room,
             soft: unpacks.room,
         };
@@ -1367,7 +1408,7 @@ impl World {
     /// calls it off for those that can't get there or no longer have room.
     fn unpack(&mut self) {
         for r in 0..self.regiments.len() {
-            let Some(at) = self.regiments[r].unpack_at else {
+            let Some((at, facing)) = self.regiments[r].unpack_at else {
                 continue;
             };
             if self.destroyed(r) {
@@ -1382,9 +1423,17 @@ impl World {
                 continue;
             };
             let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
-            if !within(self.centre(r), stop, UNPACK_REACH) || !self.room_to_unpack(&unpacks, at) {
+            if !within(self.centre(r), stop, UNPACK_REACH)
+                || !self.room_to_unpack(&unpacks, at, facing)
+            {
                 continue;
             }
+            // The truck is the regiment's one survivor: the regiment
+            // isn't destroyed and holds a single packed building.
+            let Some(truck) = self.survivors(r).next() else {
+                continue;
+            };
+            let truck_id = self.units[truck].id;
             // It keeps the share of its health it had as a truck.
             let health = self
                 .survivors(r)
@@ -1399,21 +1448,22 @@ impl World {
                 }
             }
             let mut building = unpacks.building;
-            building.id = self.take_ids(1);
+            // The truck and its building are one thing to the player, so
+            // it keeps its id and its place in the truck's organization.
+            building.id = truck_id;
             building.owner = self.regiments[r].owner;
-            // It takes the truck's place in the truck's organization.
-            let truck = &self.regiments[r];
-            building.organized =
-                truck.units.len() != 1 || self.units[truck.units[0]].template != truck.template;
             building.position = at;
+            building.facing = facing;
             building.health = health;
             if let Some(o) = &mut building.obstacle {
                 o.position = at;
+                o.facing = facing;
                 self.pathing.block(o);
             }
             let b = self.buildings.len();
             self.regiments[r].unpacked_into = Some(b);
             self.add_buildings(std::slice::from_ref(&building));
+            self.buildings[b].unpacked_from = Some(r);
             let ticks = (unpacks.seconds / TICK).round() as u64;
             self.buildings[b].unpacking = Some((self.ticks, self.ticks + ticks));
         }
@@ -1450,26 +1500,88 @@ impl World {
         if let Some(o) = building.obstacle.clone() {
             self.pathing.unblock(&o);
         }
-        let organized = building.organized;
-        let mut truck = match (organized, packs.regiment) {
-            (true, Some(regiment)) => regiment,
-            _ => packs.truck,
+        let (id, organization) = (building.id, building.organization.clone());
+        let from = building.unpacked_from;
+        let stand = [at[0] + packs.offset[0], at[1] + packs.offset[1]];
+        // A truck that unpacked here comes back, in its organization, to
+        // whoever holds the building now.
+        let r = match from {
+            Some(r) => {
+                self.return_truck(r, stand, packs.facing);
+                self.regiments[r].owner = owner;
+                r
+            }
+            None => {
+                // It hands the truck its id.
+                let mut truck = packs.truck;
+                match truck.lone() {
+                    true => truck.renumber(id),
+                    // A truck that's an organization takes the id itself,
+                    // its members new ones.
+                    false => {
+                        let first = self.take_ids(truck.members.len() as u32);
+                        for (m, id) in truck.members.iter_mut().zip(first..) {
+                            m.thing.id = id;
+                        }
+                        truck.id = id;
+                    }
+                }
+                if let Some(mut within) = organization.map(|o| *o) {
+                    within.members = std::mem::take(&mut truck.members);
+                    within.unpacks = truck.unpacks.take();
+                    truck = within;
+                }
+                truck.owner = owner;
+                truck.place(stand, packs.facing);
+                self.add_regiment(&truck)
+            }
         };
-        truck.owner = owner;
-        let ids = truck.members.len() as u32 + u32::from(!truck.lone());
-        truck.renumber(self.take_ids(ids));
-        truck.place(
-            [at[0] + packs.offset[0], at[1] + packs.offset[1]],
-            packs.facing,
-        );
-        let r = self.add_regiment(&truck);
         for u in self.regiments[r].units.clone() {
             let unit = &mut self.units[u];
-            if let Some(f) = &unit.fighter {
+            if unit.alive()
+                && let Some(f) = &unit.fighter
+            {
                 unit.health = f.health * share;
             }
         }
         self.buildings[b].state = State::Packed(self.ticks, r);
+    }
+
+    /// Puts the members of a regiment that unpacked back on the map, in
+    /// its formation around `position` facing `facing`, as if just made:
+    /// it keeps only its ids and place.
+    fn return_truck(&mut self, regiment: usize, position: [f32; 2], facing: [f32; 2]) {
+        let r = &mut self.regiments[regiment];
+        r.unpacked_into = None;
+        r.unpack_at = None;
+        r.rally = None;
+        r.order = Order::Move;
+        r.engaged.clear();
+        r.resume = None;
+        r.position = position;
+        r.facing = facing;
+        let offsets = &r.formations[r.current_formation()].offsets;
+        for (&u, &offset) in r.units.iter().zip(offsets) {
+            let unit = &mut self.units[u];
+            if unit.unpacked.take().is_none() {
+                continue;
+            }
+            let at = aaa_map::from_local(position, facing, offset);
+            unit.position = at;
+            unit.previous = at;
+            unit.facing = facing;
+            unit.end_facing = facing;
+            unit.path.clear();
+            unit.course = None;
+            unit.speed = 0.0;
+            unit.closing = false;
+            unit.target = None;
+            unit.shot = None;
+            unit.reloads.fill(0.0);
+            if let Some(t) = &mut unit.trailer {
+                t.behind(at, facing);
+            }
+        }
     }
 
     /// Ends the engagements whose enemies are gone, then engages regiments
@@ -3384,7 +3496,7 @@ mod tests {
                 },
             }),
             deploy: None,
-            organized: false,
+            organization: None,
         }
     }
 
@@ -3775,6 +3887,9 @@ mod tests {
         w
     }
 
+    /// The way buildings face unless told otherwise.
+    const NORTH: [f32; 2] = aaa_map::UNPACKED_FACING;
+
     /// A truck that unpacks into an 8-wide depot, standing at the origin.
     fn truck() -> aaa_map::Regiment {
         let mut depot = building(0, 0, [0.0, 0.0]);
@@ -4015,11 +4130,23 @@ mod tests {
         t.place([30.0, 30.0], [0.0, 1.0]);
         let r = w.add_regiment(&t);
         // Over the HQ, too close beside it, and over the map's edge.
-        assert_eq!(w.order_unpack(1, r, [22.0, 22.0]), Err(Refused::NoRoom));
-        assert_eq!(w.order_unpack(1, r, [28.0, 20.0]), Err(Refused::NoRoom));
-        assert_eq!(w.order_unpack(1, r, [78.0, 30.0]), Err(Refused::NoRoom));
-        assert_eq!(w.order_unpack(2, r, [30.0, 40.0]), Err(Refused::NotYours));
-        assert_eq!(w.order_unpack(1, r, [30.2, 39.6]), Ok([30.0, 40.0]));
+        assert_eq!(
+            w.order_unpack(1, r, [22.0, 22.0], NORTH),
+            Err(Refused::NoRoom)
+        );
+        assert_eq!(
+            w.order_unpack(1, r, [28.0, 20.0], NORTH),
+            Err(Refused::NoRoom)
+        );
+        assert_eq!(
+            w.order_unpack(1, r, [78.0, 30.0], NORTH),
+            Err(Refused::NoRoom)
+        );
+        assert_eq!(
+            w.order_unpack(2, r, [30.0, 40.0], NORTH),
+            Err(Refused::NotYours)
+        );
+        assert_eq!(w.order_unpack(1, r, [30.2, 39.6], NORTH), Ok([30.0, 40.0]));
         run(&mut w, 3.0);
         assert!(w.units[0].alive());
         assert_eq!(w.buildings.len(), 1);
@@ -4029,6 +4156,8 @@ mod tests {
         assert!(w.destroyed(r));
         let depot = &w.buildings[1];
         assert_eq!((depot.template.as_str(), depot.owner), ("depot", 1));
+        // It takes over the truck's id.
+        assert_eq!(depot.id, 9);
         assert_eq!(depot.position, [30.0, 40.0]);
         let (from, to) = depot.unpacking.unwrap();
         assert_eq!(to - from, 70);
@@ -4049,6 +4178,7 @@ mod tests {
             Command::Unpack {
                 regiment: r,
                 at: [30.0, 40.0],
+                facing: NORTH,
             },
         )
         .unwrap();
@@ -4068,54 +4198,109 @@ mod tests {
     }
 
     #[test]
+    fn trucks_unpack_facing_the_way_theyre_told() {
+        let mut w = headquarters();
+        let mut t = truck();
+        t.owner = 1;
+        let unpacks = t.unpacks.as_mut().unwrap();
+        let long = Shape::Rect {
+            width: 4.0,
+            height: 16.0,
+        };
+        let obstacle = unpacks.building.obstacle.as_mut().unwrap();
+        (obstacle.shape, obstacle.soft) = (long, long);
+        unpacks.room = Shape::Rect {
+            width: 4.0,
+            height: 20.0,
+        };
+        t.place([30.0, 60.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        // Long side north to south it would reach the map's edge; east to
+        // west it fits.
+        assert_eq!(
+            w.order_unpack(1, r, [30.0, 70.0], NORTH),
+            Err(Refused::NoRoom)
+        );
+        assert_eq!(
+            w.order_unpack(1, r, [30.0, 70.0], [2.0, 0.0]),
+            Ok([30.0, 70.0])
+        );
+        run(&mut w, 5.0);
+        let depot = &w.buildings[1];
+        assert_eq!(depot.facing, [1.0, 0.0]);
+        assert_eq!(depot.obstacle.as_ref().unwrap().facing, [1.0, 0.0]);
+        assert!(!w.pathing.passable(12, 35, Domain::Land));
+        assert!(w.pathing.passable(15, 32, Domain::Land));
+    }
+
+    #[test]
     fn buildings_pack_back_into_their_place_in_an_organization() {
         let mut w = headquarters();
-        let packs = |regiment| Packs {
-            truck: truck(),
-            regiment,
-            offset: [0.0, 0.0],
-            facing: [1.0, 0.0],
-            seconds: 7.0,
-            health_min: 0.5,
-        };
-        w.packing.insert("depot".into(), packs(Some(convoy())));
+        w.packing.insert("depot".into(), packs());
         let mut c = convoy();
         c.owner = 1;
+        c.renumber(30);
         c.place([30.0, 30.0], [0.0, 1.0]);
         let r = w.add_regiment(&c);
+        let u = w.regiments[r].units[0];
         w.apply(
             1,
             Command::Unpack {
                 regiment: r,
                 at: [30.0, 40.0],
+                facing: NORTH,
             },
         )
         .unwrap();
         run(&mut w, 11.0);
         let depot = w.regiments[r].unpacked_into.unwrap();
-        assert!(w.buildings[depot].organized);
+        assert_eq!(w.buildings[depot].id, 31);
+        w.buildings[depot].health *= 0.8;
         w.apply(1, Command::Pack { building: depot }).unwrap();
         run(&mut w, 7.1);
         let State::Packed(_, packed) = w.buildings[depot].state else {
             panic!("not packed: {:?}", w.buildings[depot].state);
         };
-        assert_eq!(w.regiments[packed].template, "convoy");
+        // The same regiment, with the same truck, back where the depot stood.
+        assert_eq!(packed, r);
+        assert_eq!((w.regiments.len(), w.units.len()), (1, 1));
+        let regiment = &w.regiments[r];
+        assert_eq!((regiment.id, regiment.template.as_str()), (30, "convoy"));
+        assert_eq!(regiment.unpacked_into, None);
+        assert!(!w.destroyed(r));
+        assert_eq!(w.units[u].id, 31);
+        assert!(near(w.units[u].position, [30.0, 40.0]));
+        assert!(near(w.units[u].facing, [1.0, 0.0]));
+        assert!((w.units[u].health - 80.0).abs() < 1e-3);
+        // And it can go and unpack again.
+        w.apply(
+            1,
+            Command::Unpack {
+                regiment: r,
+                at: [30.0, 60.0],
+                facing: NORTH,
+            },
+        )
+        .unwrap();
+        run(&mut w, 15.0);
+        assert_eq!(w.regiments[r].unpacked_into, Some(2));
+    }
+
+    /// The depot packing into [`truck`], facing east.
+    fn packs() -> Packs {
+        Packs {
+            truck: truck(),
+            offset: [0.0, 0.0],
+            facing: [1.0, 0.0],
+            seconds: 7.0,
+            health_min: 0.5,
+        }
     }
 
     #[test]
-    fn buildings_pack_back_into_their_trucks() {
+    fn captured_buildings_pack_into_trucks_for_their_new_owner() {
         let mut w = headquarters();
-        w.packing.insert(
-            "depot".into(),
-            Packs {
-                truck: truck(),
-                regiment: Some(convoy()),
-                offset: [0.0, 0.0],
-                facing: [1.0, 0.0],
-                seconds: 7.0,
-                health_min: 0.5,
-            },
-        );
+        w.packing.insert("depot".into(), packs());
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
@@ -4125,6 +4310,75 @@ mod tests {
             Command::Unpack {
                 regiment: r,
                 at: [30.0, 40.0],
+                facing: NORTH,
+            },
+        )
+        .unwrap();
+        run(&mut w, 11.0);
+        let depot = w.regiments[r].unpacked_into.unwrap();
+        w.change_hands(depot, 2);
+        w.apply(2, Command::Pack { building: depot }).unwrap();
+        run(&mut w, 7.1);
+        assert!(matches!(w.buildings[depot].state, State::Packed(_, p) if p == r));
+        assert_eq!(w.regiments[r].owner, 2);
+    }
+
+    #[test]
+    fn buildings_a_map_has_pack_into_their_place_there() {
+        let mut w = headquarters();
+        w.packing.insert("depot".into(), packs());
+        let depot = |id, x| {
+            let mut depot = truck().unpacks.unwrap().building;
+            (depot.id, depot.owner, depot.position) = (id, 1, [x, 40.0]);
+            depot.obstacle.as_mut().unwrap().position = depot.position;
+            depot
+        };
+        // One standing in an organization, with another member beside it,
+        // and one on its own.
+        let mut within = depot(41, 30.0);
+        within.organization = Some(Box::new(aaa_map::Regiment {
+            id: 40,
+            template: "hq_unpacked".into(),
+            members: Vec::new(),
+            ..convoy()
+        }));
+        w.add_buildings(&[within, depot(50, 60.0)]);
+        for b in [1, 2] {
+            w.apply(1, Command::Pack { building: b }).unwrap();
+        }
+        run(&mut w, 7.1);
+        let packed = |b: usize| match w.buildings[b].state {
+            State::Packed(_, r) => &w.regiments[r],
+            ref state => panic!("not packed: {state:?}"),
+        };
+        // The truck takes the building's id and place in the organization,
+        // which keeps its own.
+        let r = packed(1);
+        assert_eq!((r.id, r.template.as_str(), r.owner), (40, "hq_unpacked", 1));
+        assert_eq!(w.units[r.units[0]].id, 41);
+        assert!(near(w.units[r.units[0]].position, [30.0, 40.0]));
+        assert!(r.unpacks.is_some());
+        // Alone it packs into a lone truck under its id.
+        let r = packed(2);
+        assert_eq!((r.id, r.template.as_str()), (50, "truck"));
+        assert_eq!(w.units[r.units[0]].id, 50);
+        assert_eq!(w.regiments.len(), 2);
+    }
+
+    #[test]
+    fn buildings_pack_back_into_their_trucks() {
+        let mut w = headquarters();
+        w.packing.insert("depot".into(), packs());
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        w.apply(
+            1,
+            Command::Unpack {
+                regiment: r,
+                at: [30.0, 40.0],
+                facing: NORTH,
             },
         )
         .unwrap();
@@ -4151,7 +4405,9 @@ mod tests {
         assert!(w.buildings[depot].gone());
         assert!(w.pathing.passable(15, 20, Domain::Land));
         // A lone truck's building stands in no organization, so packs into
-        // a lone truck.
+        // a lone truck: the one it unpacked from, under its old id.
+        assert_eq!(packed, r);
+        assert_eq!(w.regiments.len(), 1);
         assert_eq!(w.regiments[packed].template, "truck");
         let u = w.regiments[packed].units[0];
         assert_eq!(w.regiments[packed].owner, 1);
@@ -4164,6 +4420,7 @@ mod tests {
             Command::Unpack {
                 regiment: packed,
                 at: [30.0, 60.0],
+                facing: NORTH,
             },
         )
         .unwrap();

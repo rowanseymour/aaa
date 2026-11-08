@@ -3,11 +3,11 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Body, DeployPoints, Fighter, Id};
+use aaa_data::{Body, DeployPoints, Fighter, Id, Ranges};
 use tgck::map::{Detail, Thing};
 
 use crate::pathing::Obstacle;
-use crate::units::{facing, owner};
+use crate::units::{Regiment, emptied, facing, owner};
 
 /// An owned object that can be hurt but not move and isn't a regiment.
 #[derive(Debug, Clone)]
@@ -32,9 +32,10 @@ pub struct Building {
     pub obstacle: Option<Obstacle>,
     /// Where what it recruits appears and goes, for one that recruits.
     pub deploy: Option<DeployPoints>,
-    /// It stands in an organization, as a Division HQ's building does, so
-    /// it packs back into it.
-    pub organized: bool,
+    /// The organization it stands in, as a Division HQ's building does,
+    /// without its members: packing puts the truck in the building's
+    /// place there.
+    pub organization: Option<Box<Regiment>>,
 }
 
 /// The owned objects that can be hurt but not move and aren't regiments,
@@ -47,9 +48,10 @@ pub fn buildings(
     zones: &HashMap<Id, f32>,
     obstacles: &HashMap<u32, Obstacle>,
     deploy_points: &HashMap<Id, DeployPoints>,
+    ranges: &HashMap<Id, Ranges>,
 ) -> Vec<Building> {
     in_organizations(things)
-        .filter_map(|(t, owner, organized)| {
+        .filter_map(|(t, owner, within)| {
             let owner = owner?;
             let template = Id::from(t.template.as_str());
             let fighter = fighters.get(&template)?;
@@ -76,7 +78,10 @@ pub fn buildings(
                     .unwrap_or_default(),
                 obstacle: obstacles.get(&t.id).cloned(),
                 deploy: deploy_points.get(&template).copied(),
-                organized,
+                organization: within.map(|o| {
+                    let ranges = ranges.get(&Id::from(o.template.as_str()));
+                    Box::new(emptied(o, owner, ranges.copied().unwrap_or_default()))
+                }),
             })
         })
         .collect()
@@ -89,12 +94,16 @@ pub(crate) fn standing(things: &[Thing]) -> impl Iterator<Item = (&Thing, Option
     in_organizations(things).map(|(t, owner, _)| (t, owner))
 }
 
-/// [`standing`], with whether each stands in an organization.
-fn in_organizations(things: &[Thing]) -> impl Iterator<Item = (&Thing, Option<u32>, bool)> {
+/// [`standing`], with the organization each stands in, if any.
+fn in_organizations(
+    things: &[Thing],
+) -> impl Iterator<Item = (&Thing, Option<u32>, Option<&Thing>)> {
     things.iter().flat_map(|t| {
         let within = owner(t);
         let members = t.organization().map_or(&[][..], |o| &o.members[..]);
-        let members = members.iter().map(move |m| (m, owner(m).or(within), true));
-        std::iter::once((t, within, false)).chain(members)
+        let members = members
+            .iter()
+            .map(move |m| (m, owner(m).or(within), Some(t)));
+        std::iter::once((t, within, None)).chain(members)
     })
 }

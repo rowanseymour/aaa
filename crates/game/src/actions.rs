@@ -99,6 +99,10 @@ enum Give {
     Stop,
 }
 
+/// The way buildings the player unpacks face, for the order and its
+/// preview alike.
+pub const UNPACK_FACING: [f32; 2] = aaa_map::UNPACKED_FACING;
+
 /// An order given at a place.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Aim {
@@ -1220,6 +1224,7 @@ pub fn aim(
             let unpack = aaa_sim::Command::Unpack {
                 regiment: r,
                 at: point,
+                facing: UNPACK_FACING,
             };
             if orders.give(&sim.0, player, unpack).is_err() {
                 return;
