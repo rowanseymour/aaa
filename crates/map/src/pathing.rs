@@ -100,24 +100,29 @@ pub struct Pathing {
 }
 
 impl Pathing {
-    /// Tiles whose terrain isn't among `variations` count as land.
+    /// Tiles whose terrain isn't among `variations` count as water where
+    /// the map has them in a body of water, as the game's own water
+    /// terrains almost all are, and as land elsewhere.
     pub fn new(
         terrain: &Terrain,
         variations: &HashMap<Id, Variation>,
         obstacles: impl IntoIterator<Item = Obstacle>,
     ) -> Self {
-        let by_index: Vec<u8> = terrain
+        let by_index: Vec<Option<u8>> = terrain
             .names
             .iter()
-            .map(|n| match variations.get(&Id::from(n.as_str())) {
-                Some(v) => (u8::from(v.land) * LAND) | (u8::from(v.naval) * NAVAL),
-                None => LAND,
+            .map(|n| {
+                let v = variations.get(&Id::from(n.as_str()))?;
+                Some((u8::from(v.land) * LAND) | (u8::from(v.naval) * NAVAL))
             })
             .collect();
         let tiles: Vec<u8> = terrain
             .tiles
             .iter()
-            .map(|t| by_index.get(t.terrain as usize).copied().unwrap_or(LAND))
+            .map(|t| {
+                let defined = by_index.get(usize::from(t.terrain)).copied().flatten();
+                defined.unwrap_or(if t.water_body != 0 { NAVAL } else { LAND })
+            })
             .collect();
         let mut pathing = Pathing {
             side: terrain.side,
@@ -269,6 +274,51 @@ mod tests {
             }
         }
         out
+    }
+
+    #[test]
+    fn undefined_terrain_is_water_where_the_map_has_water() {
+        let tile = |terrain, water_body| tgck::map::Tile {
+            terrain,
+            water_body,
+            flags: 0,
+            seen_by: 0,
+            padding: 0,
+            unused: 0,
+        };
+        let terrain = Terrain {
+            version: 7,
+            unknown: 0,
+            biome: String::new(),
+            names: vec!["grass".into(), "undefined".into()],
+            side: 2,
+            // A defined land tile under water stays land.
+            tiles: vec![tile(0, 0), tile(1, 0), tile(1, 2), tile(0, 2)],
+            ai_map: None,
+            shore_mesh: None,
+        };
+        let grass = Variation {
+            texture: String::new(),
+            repeat: [8.0; 2],
+            color: [0.5; 3],
+            water: None,
+            animation: None,
+            priority: 0,
+            land: true,
+            naval: false,
+        };
+        let variations = HashMap::from([(Id::from("grass"), grass)]);
+        let p = Pathing::new(&terrain, &variations, []);
+        let at = |x, y| {
+            (
+                p.passable(x, y, Domain::Land),
+                p.passable(x, y, Domain::Naval),
+            )
+        };
+        assert_eq!(at(0, 0), (true, false));
+        assert_eq!(at(1, 0), (true, false));
+        assert_eq!(at(0, 1), (false, true));
+        assert_eq!(at(1, 1), (true, false));
     }
 
     #[test]
