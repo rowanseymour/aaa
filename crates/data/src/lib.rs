@@ -1211,6 +1211,9 @@ impl GameData {
                 "actorcommand" => coverage.read::<defs::ActorCommand>(block, t).map(drop),
                 "formation" => coverage.read::<defs::Formation>(block, t).map(drop),
                 "audio" => coverage.read::<defs::Audio>(block, t).map(drop),
+                "vfx" => coverage.read::<defs::Vfx>(block, t).map(drop),
+                "cursor" => coverage.read::<defs::Cursor>(block, t).map(drop),
+                "svars" => coverage.read::<defs::SVars>(block, t).map(drop),
                 _ => {
                     coverage.skip(block, t);
                     continue;
@@ -1274,10 +1277,12 @@ impl GameData {
     /// clear for it to be put there, in world units.
     pub fn building_padding(&mut self) -> Option<f32> {
         let files = self.parse_tgis(|n| n == "game/svars.tgi");
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         files
             .iter()
             .flat_map(|(_, p)| p.root.blocks_of("SVars"))
-            .find_map(|b| b.parse_value("BuildingPaddingMeters"))
+            .filter_map(|b| templates.deserialize::<defs::SVars>(b).ok())
+            .find_map(|v| v.building_padding_meters)
     }
 
     /// The orders the player can give, in the order the files list them.
@@ -1298,7 +1303,7 @@ impl GameData {
                     ids,
                     icon: c.icon.as_deref().and_then(ui_path),
                     slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
-                    cursor: c.cursor_ids,
+                    cursor: not_null(c.cursor_ids),
                     marker: c.command_vfx_ids_location,
                     group_offset: c.apply_group_offset.unwrap_or(true),
                 })
@@ -1339,7 +1344,8 @@ impl GameData {
 
     /// The archive path of each effect's model that's there, by effect id.
     pub fn vfx_models(&mut self) -> HashMap<Id, String> {
-        let files = self.parse_tgis(|n| n.starts_with("effects/"));
+        // Effects live beside what uses them as well as in their own folder.
+        let files = self.parse_tgis(|_| true);
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
         for (file, parsed) in &files {
@@ -1950,7 +1956,14 @@ fn percent(text: &str) -> Option<f32> {
 /// A map's file name without its `.rmp` extension.
 pub fn map_title(path: &str) -> &str {
     let file = path.rsplit('/').next().unwrap_or(path);
-    &file[..file.len() - 4]
+    let ext = file
+        .len()
+        .checked_sub(4)
+        .filter(|&i| file.is_char_boundary(i));
+    match ext {
+        Some(i) if file[i..].eq_ignore_ascii_case(".rmp") => &file[..i],
+        _ => file,
+    }
 }
 
 fn find_case_insensitive(dir: &Path, name: &str) -> Option<PathBuf> {
@@ -1979,8 +1992,11 @@ fn localized(strings: &HashMap<String, String>, name: Option<&str>) -> Option<St
     }
 }
 
-/// The archive path of an interface image, whose `%s` folder, for a
-/// screen size, is empty for the default images.
+/// The id, unless it's the data's word for none.
+fn not_null(id: Option<Id>) -> Option<Id> {
+    id.filter(|id| !id.as_str().eq_ignore_ascii_case("null"))
+}
+
 /// A path a file gives relative to its own folder, unless it starts with `/`.
 fn beside(file: &str, path: &str) -> String {
     match path.strip_prefix('/') {
@@ -1993,13 +2009,21 @@ fn beside(file: &str, path: &str) -> String {
 }
 
 /// The numbered files a `%d` pattern names, counting up from 0 or 1 for as
-/// long as they're there.
+/// long as they're there; a pattern without one names a single file.
 fn frames(pattern: &str, exists: impl Fn(&str) -> bool) -> Vec<String> {
+    if !pattern.contains("%d") {
+        return exists(pattern)
+            .then(|| pattern.to_string())
+            .into_iter()
+            .collect();
+    }
     let frame = |n: usize| pattern.replace("%d", &n.to_string());
     let first = usize::from(!exists(&frame(0)));
     (first..).map(frame).take_while(|f| exists(f)).collect()
 }
 
+/// The archive path of an interface image, whose `%s` folder, for a
+/// screen size, is empty for the default images.
 fn ui_path(path: &str) -> Option<String> {
     let path = path.split_whitespace().next()?;
     (!path.eq_ignore_ascii_case("null"))
@@ -2041,6 +2065,33 @@ mod tests {
         let from_zero = |n: &str| ["b_0.tga", "b_1.tga"].contains(&n);
         assert_eq!(frames("b_%d.tga", from_zero), ["b_0.tga", "b_1.tga"]);
         assert!(frames("c_%d.tga", |_| false).is_empty());
+        // A cursor of one frame names its file whole.
+        assert_eq!(frames("d.tga", |n| n == "d.tga"), ["d.tga"]);
+        assert!(frames("e.tga", |_| false).is_empty());
+    }
+
+    #[test]
+    fn map_titles_drop_only_the_extension() {
+        assert_eq!(map_title("Maps/Campaign/axis01_crete.RMP"), "axis01_crete");
+        assert_eq!(map_title("(2v2)Berlin.rmp"), "(2v2)Berlin");
+        assert_eq!(map_title("a"), "a");
+        assert_eq!(map_title("notes.txt"), "notes.txt");
+        assert_eq!(map_title("écu"), "écu");
+    }
+
+    #[test]
+    fn null_ids_are_none() {
+        assert_eq!(not_null(Some(Id::from("NULL"))), None);
+        assert_eq!(not_null(Some(Id::from("move"))), Some(Id::from("move")));
+    }
+
+    #[test]
+    fn settings_read_the_building_padding() {
+        let parsed = tgi::parse("[SVars]\n{\n\tBuildingPaddingMeters = 3\n\tOther = 1\n}\n");
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("SVars").next().unwrap();
+        let svars: defs::SVars = templates.deserialize(block).unwrap();
+        assert_eq!(svars.building_padding_meters, Some(3.0));
     }
 
     #[test]
