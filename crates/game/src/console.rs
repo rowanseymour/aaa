@@ -36,7 +36,11 @@ impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Console>()
             .add_systems(Startup, spawn)
-            .add_systems(Update, (keys, run, show).chain());
+            // Not while the pause menu is up, whose pause the console could undo.
+            .add_systems(
+                Update,
+                (keys.run_if(crate::pause::closed), run, show).chain(),
+            );
     }
 }
 
@@ -204,8 +208,8 @@ const VERBS: &[Verb] = &[
     verb("pack", "", "packs up the selected building"),
     verb(
         "unpack",
-        "x y",
-        "sends the selected packed building to unpack at x y",
+        "x y [degrees]",
+        "sends the selected packed building to unpack at x y, facing that far counter-clockwise from the map's x axis",
     ),
     verb("destroyselected", "", "destroys the selected regiments"),
     verb(
@@ -751,7 +755,11 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
         Aim::Move => aaa_sim::Command::Move { regiment, to },
         Aim::Attack => aaa_sim::Command::Attack { regiment, to },
         Aim::Run => aaa_sim::Command::Run { regiment, to },
-        Aim::Unpack => aaa_sim::Command::Unpack { regiment, at: to },
+        Aim::Unpack => aaa_sim::Command::Unpack {
+            regiment,
+            at: to,
+            facing: crate::actions::UNPACK_FACING,
+        },
     };
     give(world, owner, command).map_err(|e| match e {
         aaa_sim::Refused::NotYours => format!("regiment {id} is destroyed"),
@@ -809,7 +817,11 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
     let scenery = world.resource::<crate::banners::Scenery>();
     if let [id] = args
-        && let Some(b) = sim.buildings.iter().position(|b| b.id.to_string() == *id)
+        // A building packed up has handed its id to its truck.
+        && let Some(b) = sim
+            .buildings
+            .iter()
+            .position(|b| !b.gone() && b.id.to_string() == *id)
     {
         if sim.buildings[b].owner != player || !sim.buildings[b].standing() {
             return Err(format!("building {id} isn't the player's to select"));
@@ -876,8 +888,13 @@ fn pack(world: &mut World, args: &[&str]) -> Reply {
 }
 
 fn unpack(world: &mut World, args: &[&str]) -> Reply {
-    let [x, y] = args else {
-        return Err(usage("unpack"));
+    let (x, y, facing) = match args {
+        [x, y] => (x, y, crate::actions::UNPACK_FACING),
+        [x, y, degrees] => {
+            let a = number(degrees)?.to_radians();
+            (x, y, [a.cos(), a.sin()])
+        }
+        _ => return Err(usage("unpack")),
     };
     let point = place(&world.resource::<Loaded>().map.ground, x, y)?;
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
@@ -887,6 +904,7 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
     let command = aaa_sim::Command::Unpack {
         regiment: r,
         at: point,
+        facing,
     };
     give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
     let at = aaa_sim::unpack_site(point);

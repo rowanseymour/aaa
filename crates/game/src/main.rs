@@ -15,7 +15,8 @@
 //! gives an aimed order there, and the key left of 1 opens a console for
 //! script commands. Units and buildings make their sounds as they're
 //! selected, ordered, move, fire and die, and show their [`effects`] as they
-//! fire, are hurt, die, and pack or unpack.
+//! fire, are hurt, die, and pack or unpack. Escape opens a menu that holds
+//! the match still while it's up.
 
 mod actions;
 mod banners;
@@ -26,6 +27,7 @@ mod lobby;
 mod menu;
 mod minimap;
 mod pane;
+mod pause;
 mod presets;
 mod remote;
 mod resource_bar;
@@ -333,6 +335,7 @@ fn show_trailers(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
+        visibility.set_if_neq(Visibility::Inherited);
         (transform.translation, transform.rotation) = pose(
             &loaded.map.ground,
             trailer.drawn_at(t),
@@ -506,7 +509,7 @@ fn main() -> ExitCode {
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .add_systems(PreUpdate, fit_ui)
-        .configure_sets(Update, camera::Controls.run_if(console::closed))
+        .configure_sets(Update, camera::Controls.run_if(takes_input))
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<waypoints::Sent>()
         .init_resource::<Selected>()
@@ -515,7 +518,7 @@ fn main() -> ExitCode {
         .init_resource::<ghost::Ghost>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
-        .add_plugins((menu::MenuPlugin, lobby::LobbyPlugin))
+        .add_plugins((menu::MenuPlugin, lobby::LobbyPlugin, pause::PausePlugin))
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
@@ -556,7 +559,10 @@ fn main() -> ExitCode {
         .add_systems(
             Update,
             (
-                minimap::steer.before(camera::Controls).before(actions::aim),
+                minimap::steer
+                    .before(camera::Controls)
+                    .before(actions::aim)
+                    .run_if(takes_input),
                 minimap::update.after(camera::Controls),
                 (actions::back_out, actions::show).chain(),
                 (pane::lay_out, pane::refresh).chain(),
@@ -587,7 +593,7 @@ fn main() -> ExitCode {
                 choose_formation,
             )
                 .run_if(in_state(Screen::Match))
-                .run_if(console::closed)
+                .run_if(takes_input)
                 .before(carry_out),
         )
         .add_systems(
@@ -623,6 +629,12 @@ fn main() -> ExitCode {
         AppExit::Success => ExitCode::SUCCESS,
         AppExit::Error(code) => ExitCode::from(code.get()),
     }
+}
+
+/// Whether neither the console nor the pause menu is up, so the match takes
+/// the keyboard and mouse.
+fn takes_input(console: Res<console::Console>, menu: Res<pause::PauseMenu>) -> bool {
+    console::closed(console) && pause::closed(menu)
 }
 
 /// Loads a map and sets up the sim and recruits for a match on it.
@@ -851,7 +863,7 @@ fn ready(
     }
     for slot in &slot {
         commands
-            .spawn((ChildOf(slot), menu::button("Continue", 20.0)))
+            .spawn((ChildOf(slot), menu::button("Continue", menu::SIZE)))
             .observe(start);
     }
 }
@@ -1280,6 +1292,10 @@ fn show_units(
         if unit.unpacked.is_some() {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
+        }
+        // A truck that packed back up from its building is seen again.
+        if unit.alive() {
+            visibility.set_if_neq(Visibility::Inherited);
         }
         if !unit.alive() && !view.dead {
             view.dead = true;
@@ -1789,7 +1805,11 @@ fn send(
             actions::Aim::Move => aaa_sim::Command::Move { regiment, to },
             actions::Aim::Attack => aaa_sim::Command::Attack { regiment, to },
             actions::Aim::Run => aaa_sim::Command::Run { regiment, to },
-            actions::Aim::Unpack => aaa_sim::Command::Unpack { regiment, at: to },
+            actions::Aim::Unpack => aaa_sim::Command::Unpack {
+                regiment,
+                at: to,
+                facing: actions::UNPACK_FACING,
+            },
         };
         if orders.give(sim, player, command).is_ok() {
             sent.push((r, target));

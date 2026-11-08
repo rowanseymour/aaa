@@ -30,8 +30,8 @@ use crate::{Drawn, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Si
 pub const MAX_SELECTED: usize = 6;
 
 /// Our pixels to one of the game's interface units, in which its layout is
-/// given; the action buttons are drawn at the same scale.
-const SCALE: f32 = 4.0 / 3.0;
+/// given, chosen so the pane stands as tall as the action buttons beside it.
+const SCALE: f32 = crate::actions::SIZE.y / HEIGHT;
 const WIDTH: f32 = 495.0;
 /// The pane's size, in logical pixels.
 pub const SIZE: Vec2 = Vec2::new(WIDTH * SCALE, HEIGHT * SCALE);
