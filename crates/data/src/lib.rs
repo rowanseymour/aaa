@@ -10,6 +10,7 @@ use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use tgck::{Archive, Map};
 
@@ -31,6 +32,16 @@ pub struct GameData {
     paths: HashMap<String, EntryRef>,
     /// Lower-case file name to entries.
     files: HashMap<String, Vec<EntryRef>>,
+    /// See [`GameData::things`].
+    things: Option<Arc<[Template]>>,
+}
+
+/// An object template as some `.tgi` file defines it.
+struct Template {
+    /// The defining file's archive path.
+    file: String,
+    id: Id,
+    thing: defs::Thing,
 }
 
 /// An entry of one of [`GameData`]'s archives: `(archive, entry)` indices.
@@ -529,6 +540,7 @@ impl GameData {
             archives,
             paths,
             files,
+            things: None,
         })
     }
 
@@ -690,32 +702,21 @@ impl GameData {
     /// that name no model, such as sound emitters, or are invisible.
     /// Templates without a view, of their own or inherited, are left out.
     pub fn views(&mut self) -> HashMap<Id, Option<View>> {
-        let files = self.parse_tgis(|_| true);
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         let mut out = HashMap::new();
-        for (file, parsed) in &files {
+        for Template { file, id, thing } in self.things().iter() {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            for block in parsed.root.blocks_of("Thing") {
-                let Some(id) = block.value("ids") else {
-                    continue;
-                };
-                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
-                    continue;
-                };
-                let invisible = thing.flags.iter().any(|f| f.invisible);
-                let view = match &thing.view {
-                    _ if invisible => None,
-                    Some(view) => self.view(dir, &thing, view),
-                    None => continue,
-                };
-                // Model paths are relative to the defining file, so where an
-                // id is defined more than once keep a definition that finds
-                // its models.
-                let drawable = |v: &Option<View>| v.as_ref().is_some_and(|v| !v.models.is_empty());
-                let id = Id::from(id);
-                if drawable(&view) || !out.get(&id).is_some_and(drawable) {
-                    out.insert(id, view);
-                }
+            let invisible = thing.flags.iter().any(|f| f.invisible);
+            let view = match &thing.view {
+                _ if invisible => None,
+                Some(view) => self.view(dir, thing, view),
+                None => continue,
+            };
+            // Model paths are relative to the defining file, so where an id
+            // is defined more than once keep a definition that finds its
+            // models.
+            let drawable = |v: &Option<View>| v.as_ref().is_some_and(|v| !v.models.is_empty());
+            if drawable(&view) || !out.get(id).is_some_and(drawable) {
+                out.insert(id.clone(), view);
             }
         }
         if let Some(bytes) = self.read("translate.tgi") {
@@ -741,7 +742,7 @@ impl GameData {
             .filter_map(|b| templates.deserialize::<defs::Property>(b).ok())
             .filter_map(|p| Some((p.ids.clone()?, p)))
             .collect();
-        self.things_by_template(&files, &templates, |t| fighter(t, &properties))
+        self.by_template(|t| fighter(t, &properties))
     }
 
     /// How far around them city centres hold sway, by template id, including
@@ -927,36 +928,40 @@ impl GameData {
     /// What `of` finds in each template that has it, by template id,
     /// including the ids the game has since renamed.
     fn by_template<T: Clone>(&mut self, of: impl Fn(&defs::Thing) -> Option<T>) -> HashMap<Id, T> {
-        let files = self.parse_tgis(|_| true);
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        self.things_by_template(&files, &templates, of)
-    }
-
-    /// [`GameData::by_template`] over files already parsed.
-    fn things_by_template<T: Clone>(
-        &mut self,
-        files: &[(String, tgi::Parsed)],
-        templates: &tgi::Templates,
-        of: impl Fn(&defs::Thing) -> Option<T>,
-    ) -> HashMap<Id, T> {
         let mut out = HashMap::new();
-        for (_, parsed) in files {
-            for block in parsed.root.blocks_of("Thing") {
-                let Some(id) = block.value("ids") else {
-                    continue;
-                };
-                let Ok(thing) = templates.deserialize::<defs::Thing>(block) else {
-                    continue;
-                };
-                if let Some(v) = of(&thing) {
-                    out.insert(Id::from(id), v);
-                }
+        for t in self.things().iter() {
+            if let Some(v) = of(&t.thing) {
+                out.insert(t.id.clone(), v);
             }
         }
         if let Some(bytes) = self.read("translate.tgi") {
             add_renames(&mut out, &tgi::decode(&bytes), "Thing", |_| true);
         }
         out
+    }
+
+    /// Every object template, in archive order. Deserialized once and kept,
+    /// as there are thousands and much of the game asks after them.
+    fn things(&mut self) -> Arc<[Template]> {
+        if let Some(things) = &self.things {
+            return things.clone();
+        }
+        let files = self.parse_tgis(|_| true);
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let things: Arc<[Template]> = files
+            .iter()
+            .flat_map(|(file, parsed)| {
+                parsed.root.blocks_of("Thing").filter_map(|block| {
+                    Some(Template {
+                        file: file.clone(),
+                        id: Id::from(block.value("ids")?),
+                        thing: templates.deserialize(block).ok()?,
+                    })
+                })
+            })
+            .collect();
+        self.things = Some(things.clone());
+        things
     }
 
     /// The organization layouts, by id.
