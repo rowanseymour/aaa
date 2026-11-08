@@ -98,14 +98,14 @@ impl<'a> Cursor<'a> {
         let len = self.u16()? as usize;
         Ok(utf16_lossy(self.bytes(len * 2)?))
     }
-    /// A `u32` count, then that many items; the count is capped by what's
-    /// left so a corrupt one can't reserve too much.
+    /// A `u32` count, then that many items; what's reserved up front is
+    /// capped by the bytes left so a corrupt count can't reserve too much.
     pub(crate) fn list<T>(
         &mut self,
         mut item: impl FnMut(&mut Cursor<'a>) -> Result<T>,
     ) -> Result<Vec<T>> {
         let n = self.u32()? as usize;
-        let mut items = Vec::with_capacity(n.min(self.remaining()));
+        let mut items = Vec::with_capacity(n.min(self.remaining() / size_of::<T>().max(1)));
         for _ in 0..n {
             items.push(item(self)?);
         }

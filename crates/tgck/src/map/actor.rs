@@ -274,7 +274,7 @@ impl Actor {
     pub(super) fn parse_whole(cur: &mut Cursor, world: u32) -> Result<Self> {
         let mut actor = Actor::parse_header(cur)?;
         let start = cur.pos();
-        let decoded = actor.parse_state(cur, world);
+        let decoded = actor.parse_state(cur, world, 0);
         actor.state = match decoded {
             Ok(state) if cur.at_end() => state,
             _ => {
@@ -287,8 +287,13 @@ impl Actor {
 
     /// Reads an actor in a stream, which only a fully decoded state allows.
     pub(super) fn parse(cur: &mut Cursor, world: u32) -> Result<Self> {
+        Actor::parse_nested(cur, world, 0)
+    }
+
+    /// As [`Actor::parse`], for an actor `depth` organizations down.
+    pub(super) fn parse_nested(cur: &mut Cursor, world: u32, depth: u32) -> Result<Self> {
         let mut actor = Actor::parse_header(cur)?;
-        actor.state = actor.parse_state(cur, world)?;
+        actor.state = actor.parse_state(cur, world, depth)?;
         Ok(actor)
     }
 
@@ -305,9 +310,9 @@ impl Actor {
         })
     }
 
-    fn parse_state(&self, cur: &mut Cursor, world: u32) -> Result<State> {
+    fn parse_state(&self, cur: &mut Cursor, world: u32, depth: u32) -> Result<State> {
         let components = record_order(self.components)
-            .map(|bit| self.parse_component(cur, bit, world))
+            .map(|bit| self.parse_component(cur, bit, world, depth))
             .collect::<Result<_>>()?;
         Ok(State::Decoded {
             components,
@@ -315,13 +320,19 @@ impl Actor {
         })
     }
 
-    fn parse_component(&self, cur: &mut Cursor, bit: u32, world: u32) -> Result<Component> {
+    fn parse_component(
+        &self,
+        cur: &mut Cursor,
+        bit: u32,
+        world: u32,
+        depth: u32,
+    ) -> Result<Component> {
         Ok(match bit {
             CONSTRUCTION => Component::Construction(Construction::parse(cur)?),
             BODY => Component::Body(Body::parse(cur)?),
             MOVER => Component::Mover(Mover::parse(cur)?),
             PROPERTIES => Component::Properties(Properties::parse(cur)?),
-            ORGANIZATION => Component::Organization(Organization::parse(cur, world)?),
+            ORGANIZATION => Component::Organization(Organization::parse_nested(cur, world, depth)?),
             ELEMENT => Component::Element(ElementState::parse(cur, world)?),
             CITY => Component::City(City::parse(cur)?),
             _ => {

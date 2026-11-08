@@ -168,6 +168,9 @@ impl Nif {
     /// then those inherited from its parents, nearest first.
     pub fn shapes(&self) -> Vec<Placed<'_>> {
         let mut out = Vec::new();
+        // Shared children make the graph a DAG that a corrupt file can make
+        // exponentially wide; real models visit each object about once.
+        let mut budget = self.objects.len().saturating_mul(64);
         for &root in &self.roots {
             let mut path = Vec::new();
             self.walk(
@@ -175,6 +178,7 @@ impl Nif {
                 Transform::IDENTITY,
                 &mut Vec::new(),
                 &mut path,
+                &mut budget,
                 &mut out,
             );
         }
@@ -187,11 +191,16 @@ impl Nif {
         parent: Transform,
         props: &mut Vec<Ref>,
         path: &mut Vec<usize>,
+        budget: &mut usize,
         out: &mut Vec<Placed<'a>>,
     ) {
-        let Some(index) = r.filter(|_| path.len() <= 64) else {
+        let Some(index) = r.filter(|i| path.len() <= 64 && !path.contains(i)) else {
             return;
         };
+        let Some(left) = budget.checked_sub(1) else {
+            return;
+        };
+        *budget = left;
         let Some(object) = self.get(r) else { return };
         let Some(av) = object.scene().filter(|av| !av.hidden()) else {
             return;
@@ -212,7 +221,7 @@ impl Nif {
             }),
             Object::Node(node) => {
                 for &c in &node.children {
-                    self.walk(c, transform, props, path, out);
+                    self.walk(c, transform, props, path, budget, out);
                 }
             }
             _ => {}

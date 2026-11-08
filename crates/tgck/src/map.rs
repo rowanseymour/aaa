@@ -661,7 +661,8 @@ fn parse_things(name: &str, index: &[u8], data: &[u8], world_version: u32) -> Re
     let mut cur = Cursor::new(data);
     expect(&mut cur, &format!("{name} data version"), 0)?;
     expect(&mut cur, &format!("{name} version"), THINGS_VERSION)?;
-    let mut things = Vec::with_capacity(count.min(1 << 20) as usize);
+    // Each thing has its size in the index.
+    let mut things = Vec::with_capacity((count as usize).min(idx.remaining() / 4));
     for i in 0..count {
         let size = idx.u32()? as usize;
         let thing = Thing::parse(cur.bytes(size)?, world_version).map_err(|e| match e {
@@ -756,12 +757,12 @@ impl Thing {
 
     /// An organization's member, whose record has no length: only actors'
     /// can be told where they end.
-    fn parse_member(rec: &mut Cursor, world_version: u32) -> Result<Self> {
+    fn parse_member(rec: &mut Cursor, world_version: u32, depth: u32) -> Result<Self> {
         let mut thing = Thing::parse_shared(rec)?;
         if thing.class != ACTOR {
             return Err(Error::Corrupt(format!("member of class {}", thing.class)));
         }
-        thing.detail = Detail::Actor(Actor::parse(rec, world_version)?);
+        thing.detail = Detail::Actor(Actor::parse_nested(rec, world_version, depth)?);
         Ok(thing)
     }
 
@@ -854,13 +855,13 @@ impl Detail {
         let detail = match class {
             ACTOR => Detail::Actor(Actor::parse_whole(&mut cur, world_version)?),
             AREA => {
-                // Records without the id are 8 bytes shorter; the name's
-                // length tells which this is.
-                let name_len = |at: usize| {
-                    data.get(at..at + 2)
-                        .map(|b| u16::from_le_bytes([b[0], b[1]]) as usize * 2)
-                };
-                let has_id = name_len(4) != data.len().checked_sub(34);
+                // Records without the id are 8 bytes shorter. Testing for the
+                // id's layout, rather than for its absence, matters: an id's
+                // low half can pass for the name's length of the shorter one.
+                let has_id = data.get(8..14).is_some_and(|b| {
+                    let name_len = u16::from_le_bytes([b[4], b[5]]) as usize * 2;
+                    b[..4] == 2u32.to_le_bytes() && Some(name_len) == data.len().checked_sub(42)
+                });
                 let version = cur.u32()?;
                 let id = if has_id {
                     let id = cur.u32()?;
@@ -1147,6 +1148,58 @@ mod tests {
         assert_eq!(write_things(&t).unwrap(), (index, things));
     }
 
+    /// An actor that is an organization of one member, `depth` deep.
+    fn nested_organizations(depth: usize) -> Vec<u8> {
+        let actor = |components: u32| {
+            let mut a = [14u32, 0].map(u32::to_le_bytes).concat();
+            a.extend(0u64.to_le_bytes());
+            a.extend([components, components].map(u32::to_le_bytes).concat());
+            a
+        };
+        let mut trailer = (-1i32).to_le_bytes().to_vec();
+        trailer.extend(0u32.to_le_bytes());
+        trailer.extend([0u8, 0]);
+        trailer.extend(string(""));
+        trailer.extend([0u32; 8].map(u32::to_le_bytes).concat());
+        // A version 0 organization up to its one position's index, then
+        // what follows its member.
+        let mut head = [1u32, 5, 0, 0].map(u32::to_le_bytes).concat();
+        head.extend(string(""));
+        head.extend([0u32, 1, 0].map(u32::to_le_bytes).concat());
+        let mut tail = [0i32, 0, -1, 0].map(i32::to_le_bytes).concat();
+        tail.extend([0f32; 2].map(f32::to_le_bytes).concat());
+        tail.extend(&trailer);
+        let member = thing_record(ACTOR, "x", 1, [0.0; 3], &[]);
+
+        let mut detail = actor(1 << 7);
+        detail.extend(&head);
+        for _ in 0..depth {
+            detail.extend(&member);
+            detail.extend(actor(1 << 7));
+            detail.extend(&head);
+        }
+        detail.extend(&member);
+        detail.extend(actor(0));
+        detail.extend(&trailer);
+        for _ in 0..=depth {
+            detail.extend(&tail);
+        }
+        detail
+    }
+
+    #[test]
+    fn limits_how_deep_organizations_nest() {
+        for (depth, decoded) in [(2, true), (100_000, false)] {
+            let record = thing_record(ACTOR, "x", 1, [0.0; 3], &nested_organizations(depth));
+            let (index, data) = things_sections(&[record]);
+            let things = parse_things("DYNAMIC_THINGS", &index, &data, 28).unwrap();
+            let Detail::Actor(actor) = &things[0].detail else {
+                panic!("{:?}", things[0].detail)
+            };
+            assert_eq!(matches!(actor.state, State::Decoded { .. }), decoded);
+        }
+    }
+
     #[test]
     fn parses_areas_and_cameras() {
         let mut circle = 1u32.to_le_bytes().to_vec();
@@ -1167,9 +1220,15 @@ mod tests {
         camera.extend(string("Intro"));
         camera.extend(1.3f32.to_le_bytes());
 
+        // An id whose low half equals the length the id-less layout would
+        // take for the name.
+        let mut small_id = circle.clone();
+        small_id[4..8].copy_from_slice(&10u32.to_le_bytes());
+
         let (index, data) = things_sections(&[
             thing_record(AREA, "circle_area", 1, [0.0; 3], &circle),
             thing_record(AREA, "circle_area", 2, [0.0; 3], &no_id),
+            thing_record(AREA, "circle_area", 4, [0.0; 3], &small_id),
             thing_record(CAMERA, "camera", 3, [0.0; 3], &camera),
         ]);
         let things = parse_things("DYNAMIC_THINGS", &index, &data, 28).unwrap();
@@ -1183,8 +1242,12 @@ mod tests {
             panic!("{:?}", things[1].detail)
         };
         assert_eq!((area.id, area.name.as_str()), (None, "area_0"));
+        let Detail::Area(area) = &things[2].detail else {
+            panic!("{:?}", things[2].detail)
+        };
+        assert_eq!((area.id, area.name.as_str()), (Some(10), "Ambush"));
         assert_eq!(
-            things[2].detail,
+            things[3].detail,
             Detail::Camera(Camera {
                 version: 2,
                 name: "Intro".into(),

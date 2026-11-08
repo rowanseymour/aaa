@@ -108,8 +108,23 @@ pub struct ElementState {
 
 impl Organization {
     const MAX_VERSION: u32 = 10;
+    /// Members are actors that may be organizations themselves; real maps go
+    /// one level down, and each level costs far more stack than input.
+    const MAX_DEPTH: u32 = 8;
 
+    #[cfg(test)]
     pub(super) fn parse(cur: &mut Cursor, world: u32) -> Result<Self> {
+        Organization::parse_nested(cur, world, 0)
+    }
+
+    /// Reads an organization `depth` organizations down.
+    pub(super) fn parse_nested(cur: &mut Cursor, world: u32, depth: u32) -> Result<Self> {
+        if depth >= Self::MAX_DEPTH {
+            return Err(Error::Corrupt(format!(
+                "organizations nested more than {} deep",
+                Self::MAX_DEPTH
+            )));
+        }
         let updatable = Updatable::parse(cur)?;
         let v = version(cur, "organization", Self::MAX_VERSION)?;
         expect(cur, "organization layout version", 0)?;
@@ -121,7 +136,7 @@ impl Organization {
         for _ in 0..n {
             let index = cur.i32()?;
             if index >= 0 {
-                members.push(Thing::parse_member(cur, world)?);
+                members.push(Thing::parse_member(cur, world, depth + 1)?);
             }
             positions.push(Position {
                 index,
