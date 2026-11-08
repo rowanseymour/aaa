@@ -377,9 +377,10 @@ pub struct Building {
     pub captured: Option<u64>,
     /// For a city's centre, how far around it the city reaches.
     pub zone: Option<f32>,
-    /// For a city's centre, indices into [`World::buildings`] of the
-    /// buildings that change hands with it.
-    pub members: Vec<usize>,
+    /// For a city's centre, the ids of the buildings that change hands
+    /// with it, as the map lists them: looked up as it changes hands, so
+    /// one that names nothing then is passed over.
+    pub members: Vec<u32>,
     /// The ground it keeps movers off until it's destroyed.
     pub obstacle: Option<Obstacle>,
 }
@@ -669,7 +670,6 @@ impl World {
     /// Adds buildings as the map has them, those out of health already
     /// disabled. Their ground is taken to be blocked already.
     pub fn add_buildings(&mut self, buildings: &[aaa_map::Building]) {
-        let first = self.buildings.len();
         for b in buildings {
             let health = b.fighter.health * b.health;
             self.buildings.push(Building {
@@ -689,7 +689,7 @@ impl World {
                 },
                 captured: None,
                 zone: b.zone,
-                members: Vec::new(),
+                members: b.members.clone(),
                 obstacle: b.obstacle.clone(),
                 unpacking: None,
                 packing: None,
@@ -699,11 +699,6 @@ impl World {
                 rally: None,
             });
             self.next_id = self.next_id.max(b.id + 1);
-        }
-        for (i, b) in buildings.iter().enumerate() {
-            let index =
-                |id: &u32| (first..self.buildings.len()).find(|&j| self.buildings[j].id == *id);
-            self.buildings[first + i].members = b.members.iter().filter_map(index).collect();
         }
     }
 
@@ -1050,22 +1045,22 @@ impl World {
     }
 
     /// Whether what `unpacks` makes would fit standing at `at`, with the
-    /// room around it buildings need.
+    /// room around it buildings need, among the buildings and scenery.
     pub fn room_to_unpack(&self, unpacks: &Unpacks, at: [f32; 2]) -> bool {
-        match (&unpacks.building.obstacle, unpacks.room) {
-            (Some(o), Some(shape)) => {
-                let placed = Obstacle {
-                    position: at,
-                    facing: o.facing,
-                    shape,
-                };
-                self.pathing.room_for(&placed, Domain::Land)
-            }
-            _ => {
-                let (x, y) = tile_at(at);
-                self.pathing.passable(x, y, Domain::Land)
-            }
-        }
+        let placed = Obstacle {
+            position: at,
+            facing: unpacks
+                .building
+                .obstacle
+                .as_ref()
+                .map_or(aaa_map::UNPACKED_FACING, |o| o.facing),
+            shape: unpacks.room,
+            soft: unpacks.room,
+        };
+        let standing = self.buildings.iter().filter(|b| !b.gone());
+        let others = standing.filter_map(|b| b.obstacle.as_ref());
+        self.pathing
+            .room_for(&placed, Domain::Land, others.chain(&self.scenery))
     }
 
     fn order_pack(&mut self, player: u32, building: usize) -> Result<(), Refused> {
@@ -1178,6 +1173,7 @@ impl World {
             position: unit.position,
             facing: unit.facing,
             shape,
+            soft: shape,
         });
         let caught: Vec<&Obstacle> = self
             .buildings
@@ -1862,7 +1858,10 @@ impl World {
     /// Gives a building, and the rest of its city if it's one's centre, to
     /// `owner`.
     fn change_hands(&mut self, b: usize, owner: u32) {
-        let members = self.buildings[b].members.clone();
+        let ids = &self.buildings[b].members;
+        let members: Vec<usize> = (0..self.buildings.len())
+            .filter(|&i| i != b && ids.contains(&self.buildings[i].id))
+            .collect();
         for i in std::iter::once(b).chain(members) {
             let building = &mut self.buildings[i];
             building.owner = owner;
@@ -2487,6 +2486,7 @@ mod tests {
             position: [9.0, 10.0],
             facing: [0.0, 1.0],
             shape: Shape::Circle { radius: 3.0 },
+            soft: Shape::Circle { radius: 4.0 },
         };
         let mut pathing = Pathing::uniform(20, Domain::Land);
         pathing.block(&rock);
@@ -2514,6 +2514,10 @@ mod tests {
             shape: Shape::Rect {
                 width: 40.0,
                 height: 1.0,
+            },
+            soft: Shape::Rect {
+                width: 41.0,
+                height: 2.0,
             },
         };
         let mut pathing = Pathing::uniform(20, Domain::Land);
@@ -3271,6 +3275,10 @@ mod tests {
                     width: 6.0,
                     height: 6.0,
                 },
+                soft: Shape::Rect {
+                    width: 7.0,
+                    height: 7.0,
+                },
             }),
             deploy: None,
         }
@@ -3371,6 +3379,24 @@ mod tests {
             Command::Move {
                 regiment: 0,
                 to: [10.0, 10.0],
+            },
+        )
+        .unwrap();
+        run(&mut w, 15.0);
+        assert!(w.buildings.iter().all(|b| b.owner == 1));
+    }
+
+    #[test]
+    fn cities_take_members_by_id_when_they_change_hands() {
+        let mut w = siege(&city()[..1]);
+        // Its member 31 comes after it, and nothing has the id 99.
+        w.buildings[0].members.push(99);
+        w.add_buildings(&city()[1..]);
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [30.0, 10.0],
             },
         )
         .unwrap();
@@ -3566,6 +3592,7 @@ mod tests {
             position: [13.0, 13.0],
             facing: [0.0, 1.0],
             shape: Shape::Circle { radius: 1.5 },
+            soft: Shape::Circle { radius: 2.5 },
         };
         towing.pathing.block(&rock);
         towing.scenery.push(rock);
@@ -3672,10 +3699,10 @@ mod tests {
             primary: Some(0),
             unpacks: Some(Unpacks {
                 building: depot,
-                room: Some(Shape::Rect {
+                room: Shape::Rect {
                     width: 12.0,
                     height: 12.0,
-                }),
+                },
                 offset: [0.0, 0.0],
                 seconds: 7.0,
             }),
