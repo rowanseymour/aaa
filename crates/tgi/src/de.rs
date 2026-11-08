@@ -399,14 +399,14 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
     }
 
     parse_scalars! {
-        deserialize_i8 visit_i8 i8, "an integer", whole;
-        deserialize_i16 visit_i16 i16, "an integer", whole;
-        deserialize_i32 visit_i32 i32, "an integer", whole;
-        deserialize_i64 visit_i64 i64, "an integer", whole;
-        deserialize_u8 visit_u8 u8, "an integer", whole;
-        deserialize_u16 visit_u16 u16, "an integer", whole;
-        deserialize_u32 visit_u32 u32, "an integer", whole;
-        deserialize_u64 visit_u64 u64, "an integer", whole;
+        deserialize_i8 visit_i8 i8, "an integer", integer;
+        deserialize_i16 visit_i16 i16, "an integer", integer;
+        deserialize_i32 visit_i32 i32, "an integer", integer;
+        deserialize_i64 visit_i64 i64, "an integer", integer;
+        deserialize_u8 visit_u8 u8, "an integer", integer;
+        deserialize_u16 visit_u16 u16, "an integer", integer;
+        deserialize_u32 visit_u32 u32, "an integer", integer;
+        deserialize_u64 visit_u64 u64, "an integer", integer;
         deserialize_f32 visit_f32 f32, "a number", float;
         deserialize_f64 visit_f64 f64, "a number", float;
         deserialize_char visit_char char, "a character", whole;
@@ -587,14 +587,14 @@ impl<'de> de::Deserializer<'de> for Scalar<'_> {
     }
 
     parse_scalars! {
-        deserialize_i8 visit_i8 i8, "an integer", whole;
-        deserialize_i16 visit_i16 i16, "an integer", whole;
-        deserialize_i32 visit_i32 i32, "an integer", whole;
-        deserialize_i64 visit_i64 i64, "an integer", whole;
-        deserialize_u8 visit_u8 u8, "an integer", whole;
-        deserialize_u16 visit_u16 u16, "an integer", whole;
-        deserialize_u32 visit_u32 u32, "an integer", whole;
-        deserialize_u64 visit_u64 u64, "an integer", whole;
+        deserialize_i8 visit_i8 i8, "an integer", integer;
+        deserialize_i16 visit_i16 i16, "an integer", integer;
+        deserialize_i32 visit_i32 i32, "an integer", integer;
+        deserialize_i64 visit_i64 i64, "an integer", integer;
+        deserialize_u8 visit_u8 u8, "an integer", integer;
+        deserialize_u16 visit_u16 u16, "an integer", integer;
+        deserialize_u32 visit_u32 u32, "an integer", integer;
+        deserialize_u64 visit_u64 u64, "an integer", integer;
         deserialize_f32 visit_f32 f32, "a number", float;
         deserialize_f64 visit_f64 f64, "a number", float;
         deserialize_char visit_char char, "a character", whole;
@@ -628,26 +628,52 @@ fn whole<T: std::str::FromStr>(text: &str) -> Option<T> {
     text.parse().ok()
 }
 
-/// Like [`whole`], but where `text` is a number followed by more digits and
-/// points, as in the typo `1.5.0`, the number, which is what the game reads.
-/// Other trailing text, such as a unit, still fails.
-fn float<T: std::str::FromStr>(text: &str) -> Option<T> {
+/// A whole number, where a `%` makes no difference.
+fn integer<T: std::str::FromStr>(text: &str) -> Option<T> {
+    whole(&text.replace('%', ""))
+}
+
+/// A number that may have a fraction: as [`whole`] reads it, divided by 100
+/// where the text has a `%`. Where `text` is a number followed by more
+/// digits and points, as in the typo `1.5.0`, the number, which is what the
+/// game reads. Other trailing text, such as a unit, still fails.
+fn float<T: Fraction>(text: &str) -> Option<T> {
+    let percent = text.contains('%');
+    let text = text.replace('%', "");
+    let text = text.trim();
     // Rust reads `inf`, `infinity` and `nan`; the game reads them as 0.
     if text.contains(|c: char| c.is_ascii_alphabetic() && !matches!(c, 'e' | 'E')) {
         return None;
     }
-    if let Some(n) = whole(text) {
-        return Some(n);
+    let n: T = whole(text).or_else(|| {
+        let digits = |t: &str| t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
+        let sign = usize::from(text.starts_with(['+', '-']));
+        let mut end = sign + digits(&text[sign..]);
+        if text[end..].starts_with('.') {
+            end += 1 + digits(&text[end + 1..]);
+        }
+        let rest = &text[end..];
+        let typo = rest.starts_with('.') && rest.chars().all(|c| c == '.' || c.is_ascii_digit());
+        if typo { whole(&text[..end]) } else { None }
+    })?;
+    Some(if percent { n.hundredth() } else { n })
+}
+
+/// A number type with fractions.
+trait Fraction: std::str::FromStr {
+    fn hundredth(self) -> Self;
+}
+
+impl Fraction for f32 {
+    fn hundredth(self) -> Self {
+        self / 100.0
     }
-    let digits = |t: &str| t.find(|c: char| !c.is_ascii_digit()).unwrap_or(t.len());
-    let sign = usize::from(text.starts_with(['+', '-']));
-    let mut end = sign + digits(&text[sign..]);
-    if text[end..].starts_with('.') {
-        end += 1 + digits(&text[end + 1..]);
+}
+
+impl Fraction for f64 {
+    fn hundredth(self) -> Self {
+        self / 100.0
     }
-    let rest = &text[end..];
-    let typo = rest.starts_with('.') && rest.chars().all(|c| c == '.' || c.is_ascii_digit());
-    if typo { whole(&text[..end]) } else { None }
 }
 
 /// `true` or `false`, in any case, or `1` or `0`.
@@ -763,9 +789,7 @@ mod tests {
         assert_eq!((i.offset, i.depth, i.count), ([2.5, 1.5], -3.25, None));
 
         // Other trailing text is no typo, and words aren't infinities.
-        for depth in [
-            "3m", "50%", "Infantry", "nano", "inf", "-inf", "infinity", "NaN",
-        ] {
+        for depth in ["3m", "Infantry", "nano", "inf", "-inf", "infinity", "NaN"] {
             let block = first(&format!("[Info]\noffset = 0, 0\ndepth = {depth}\n"));
             assert!(from_block::<Info>(&block).is_err(), "{depth}");
         }
@@ -775,6 +799,21 @@ mod tests {
         assert!(from_block::<Info>(&block).is_err());
         let block = first("[Info]\noffset = x, 0\ndepth = 0\n");
         assert!(from_block::<Info>(&block).is_err());
+    }
+
+    #[test]
+    fn percents_divide_only_fractions() {
+        #[derive(Debug, Deserialize)]
+        struct Sound {
+            volume: f32,
+            pitch: [f32; 2],
+            count: u32,
+        }
+        let read = |text: &str| from_block::<Sound>(&first(text)).unwrap();
+        let s = read("[Sound]\nvolume = 80%\npitch = -5%, 10\ncount = 3%\n");
+        assert_eq!((s.volume, s.pitch, s.count), (0.8, [-0.05, 10.0], 3));
+        let s = read("[Sound]\nvolume = 80\npitch = 0.5, 1.5.0%\ncount = 3\n");
+        assert_eq!((s.volume, s.pitch, s.count), (80.0, [0.5, 0.015], 3));
     }
 
     #[test]
