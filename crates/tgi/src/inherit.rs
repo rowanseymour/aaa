@@ -12,50 +12,85 @@
 //! so both are resolved first.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::{Block, Item};
+
+type ByName<'a> = HashMap<String, &'a Block>;
 
 /// The `[Template]` blocks of a set of files, by name.
 pub struct Templates<'a> {
     /// By lower-case name; the first of duplicate names wins.
-    by_name: HashMap<String, &'a Block>,
+    by_name: ByName<'a>,
+    /// Templates that other files lend, which `by_name` never shares a name
+    /// with.
+    shared: Arc<ByName<'a>>,
     /// Lower-case kinds declared as lists.
-    lists: HashSet<String>,
+    lists: Arc<HashSet<String>>,
 }
 
 impl<'a> Templates<'a> {
     /// Indexes the templates and list declarations in the given documents.
     pub fn new(roots: impl IntoIterator<Item = &'a Block>) -> Self {
-        let mut t = Templates {
-            by_name: HashMap::new(),
-            lists: HashSet::new(),
-        };
+        let mut by_name = HashMap::new();
+        let mut lists = HashSet::new();
         for root in roots {
-            for b in root.blocks_of("Template") {
-                if let Some(name) = b.name() {
-                    t.by_name.entry(name.to_ascii_lowercase()).or_insert(b);
-                }
+            for (name, b) in templates_of(root) {
+                by_name.entry(name).or_insert(b);
             }
-            t.find_lists(root);
+            find_lists(root, &mut lists);
         }
-        t
+        Templates {
+            by_name,
+            shared: Arc::default(),
+            lists: Arc::new(lists),
+        }
     }
 
-    fn find_lists(&mut self, block: &Block) {
-        let words = &block.header.words;
-        if let Some(i) = words.iter().position(|w| w.eq_ignore_ascii_case("list"))
-            && let Some(kind) = words.get(i + 1)
-        {
-            self.lists.insert(kind.to_ascii_lowercase());
+    /// The templates each of a sequence of files, in the order they load,
+    /// sees as the game reads them: its own, and those of the files before
+    /// it that hold nothing but templates; a file that holds anything else
+    /// lets its templates go once read. `None` for a file that defines a
+    /// template already seen, which fails to load whole.
+    pub fn scoped(roots: impl IntoIterator<Item = &'a Block>) -> Vec<Option<Self>> {
+        let roots: Vec<&Block> = roots.into_iter().collect();
+        let mut lists = HashSet::new();
+        for root in &roots {
+            find_lists(root, &mut lists);
         }
-        for b in block.blocks() {
-            self.find_lists(b);
+        let lists = Arc::new(lists);
+        let mut shared: Arc<ByName> = Arc::default();
+        let mut out = Vec::with_capacity(roots.len());
+        for root in roots {
+            let mut by_name = HashMap::new();
+            let clash = templates_of(root)
+                .any(|(name, b)| shared.contains_key(&name) || by_name.insert(name, b).is_some());
+            if clash {
+                out.push(None);
+                continue;
+            }
+            let only_templates = (root.blocks())
+                .all(|b| b.kind().is_some_and(|k| k.eq_ignore_ascii_case("Template")));
+            if only_templates && !by_name.is_empty() {
+                let mut grown = (*shared).clone();
+                grown.extend(by_name.iter().map(|(k, v)| (k.clone(), *v)));
+                shared = Arc::new(grown);
+            }
+            out.push(Some(Templates {
+                by_name,
+                shared: shared.clone(),
+                lists: lists.clone(),
+            }));
         }
+        out
     }
 
     /// A template by name, case-insensitive.
     pub fn get(&self, name: &str) -> Option<&'a Block> {
-        self.by_name.get(&name.to_ascii_lowercase()).copied()
+        let name = name.to_ascii_lowercase();
+        (self.by_name.get(&name))
+            .or_else(|| self.shared.get(&name))
+            .copied()
     }
 
     /// The template a block inherits from, if it names one that exists.
@@ -172,6 +207,24 @@ impl<'a> Templates<'a> {
             }
             _ => false,
         }
+    }
+}
+
+/// A document's `[Template]` blocks, by lower-case name.
+fn templates_of(root: &Block) -> impl Iterator<Item = (String, &Block)> {
+    (root.blocks_of("Template")).filter_map(|b| Some((b.name()?.to_ascii_lowercase(), b)))
+}
+
+/// Adds the lower-case kinds `block` declares as lists, at any depth.
+fn find_lists(block: &Block, lists: &mut HashSet<String>) {
+    let words = &block.header.words;
+    if let Some(i) = words.iter().position(|w| w.eq_ignore_ascii_case("list"))
+        && let Some(kind) = words.get(i + 1)
+    {
+        lists.insert(kind.to_ascii_lowercase());
+    }
+    for b in block.blocks() {
+        find_lists(b, lists);
     }
 }
 
