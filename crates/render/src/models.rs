@@ -411,11 +411,13 @@ impl Models {
     ) -> Placed {
         let owner = owner(thing).or(within);
         if self.by_members(thing, buildings) {
+            // One member drawn shows the organization, as an HQ's crates
+            // can lack a model its building has.
             let members = thing.organization().map_or(&[][..], |o| &o.members);
             return members
                 .iter()
                 .map(|m| self.place(commands, game, assets, m, owner, buildings))
-                .max()
+                .min()
                 .unwrap_or(Placed::NoModel);
         }
         let Some(Some(view)) = self.views.get(&Id::from(thing.template.as_str())) else {
