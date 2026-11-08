@@ -2,7 +2,7 @@
 //! aimed, and its waypoints, such as Move's flags, until the regiments sent
 //! there have arrived or been ordered elsewhere. Orders that send each
 //! regiment to its own spot mark each spot; those that send all to the one
-//! place mark it once.
+//! place mark it once. A selected building's rally point is marked too.
 
 use std::collections::HashMap;
 
@@ -17,7 +17,10 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow, SystemCursorIcon};
 
 use crate::actions::{self, Aim, Page};
-use crate::{Drawn, Loaded, Screen, Sim, minimap};
+use crate::{Drawn, Loaded, Screen, SelectedBuilding, Sim, minimap};
+
+/// The effect marking a building's rally point.
+const RALLY_MARKER: &str = "recruit_marker_rally_point";
 
 /// Regiments, each with the spot it was sent to.
 type Spots = Vec<(usize, [f32; 2])>;
@@ -43,7 +46,10 @@ struct Frames {
 #[derive(Resource, Default)]
 pub struct Looks {
     cursors: HashMap<Aim, Frames>,
+    rally_cursor: Option<Frames>,
     waypoints: HashMap<Aim, Marking>,
+    /// The archive path of the rally point marker's model.
+    rally: Option<String>,
     /// The orders that send every regiment to the very place pointed at,
     /// instead of each keeping its place relative to the rest.
     together: Vec<Aim>,
@@ -69,6 +75,11 @@ struct Marking {
 #[derive(Component)]
 pub struct Waypoint(Spots);
 
+/// The marker on a building's rally point, by index into
+/// [`aaa_sim::World::buildings`].
+#[derive(Component)]
+pub struct RallyMarker(usize, [f32; 2]);
+
 /// The command each kind of aimed order is in the game's data.
 fn command(aim: Aim) -> &'static str {
     match aim {
@@ -93,7 +104,32 @@ pub fn load(
         .collect();
     let cursors = game.cursors();
     let models = game.vfx_models();
-    let mut looks = Looks::default();
+    let mut looks = Looks {
+        rally: models.get(&Id::from(RALLY_MARKER)).cloned(),
+        ..default()
+    };
+    let mut frames_of = |c: &aaa_data::Command| {
+        let cursor = c.cursor.as_ref().and_then(|c| cursors.get(c))?;
+        let frames: Vec<Handle<Image>> = cursor
+            .frames
+            .iter()
+            .filter_map(|f| {
+                let mut image = textures::decode(&game.read(f)?, f, formats.0, true)?;
+                // The window reads the cursor's pixels, so they stay here too.
+                image.asset_usage = RenderAssetUsages::all();
+                Some(images.add(image))
+            })
+            .collect();
+        let [x, y] = cursor.hotspot;
+        (frames.len() == cursor.frames.len()).then_some(Frames {
+            images: frames,
+            hotspot: (x, y),
+            period: cursor.period,
+        })
+    };
+    looks.rally_cursor = by_id
+        .get(&Id::from(actions::RALLY))
+        .and_then(&mut frames_of);
     for aim in Aim::ALL {
         let Some(c) = by_id.get(&Id::from(command(aim))) else {
             continue;
@@ -108,29 +144,8 @@ pub fn load(
             };
             looks.waypoints.insert(aim, marking);
         }
-        let Some(cursor) = c.cursor.as_ref().and_then(|c| cursors.get(c)) else {
-            continue;
-        };
-        let frames: Vec<Handle<Image>> = cursor
-            .frames
-            .iter()
-            .filter_map(|f| {
-                let mut image = textures::decode(&game.read(f)?, f, formats.0, true)?;
-                // The window reads the cursor's pixels, so they stay here too.
-                image.asset_usage = RenderAssetUsages::all();
-                Some(images.add(image))
-            })
-            .collect();
-        if frames.len() == cursor.frames.len() {
-            let [x, y] = cursor.hotspot;
-            looks.cursors.insert(
-                aim,
-                Frames {
-                    images: frames,
-                    hotspot: (x, y),
-                    period: cursor.period,
-                },
-            );
+        if let Some(frames) = frames_of(c) {
+            looks.cursors.insert(aim, frames);
         }
     }
     commands.insert_resource(looks);
@@ -150,6 +165,7 @@ pub fn cursor(
     let over_map = actions::pointer_away(grid) && minimap::pointer_away(minimap);
     let frames = match *page {
         Page::Aiming(aim) if over_map => looks.cursors.get(&aim),
+        Page::Rally if over_map => looks.rally_cursor.as_ref(),
         _ => None,
     };
     let icon = match frames {
@@ -221,6 +237,46 @@ fn places(sent: &Sent, each: bool) -> Vec<([f32; 2], Spots)> {
             .map(|&(r, to)| (to, vec![(r, to)]))
             .collect(),
         false => vec![(to, sent.regiments.clone())],
+    }
+}
+
+/// Keeps a marker on the selected building's rally point, if it has one.
+#[allow(clippy::too_many_arguments)]
+pub fn rally(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    chosen: Res<SelectedBuilding>,
+    looks: Res<Looks>,
+    markers: Query<(Entity, &RallyMarker)>,
+    mut drawn: ResMut<Drawn>,
+    mut loaded: ResMut<Loaded>,
+    mut assets: MapAssets,
+) {
+    let wanted = chosen.0.and_then(|b| Some((b, sim.0.buildings[b].rally?)));
+    let mut kept = false;
+    for (e, m) in &markers {
+        match Some((m.0, m.1)) == wanted && !kept {
+            true => kept = true,
+            false => commands.entity(e).despawn(),
+        }
+    }
+    let (Some((b, at)), Some(model), false) = (wanted, &looks.rally, kept) else {
+        return;
+    };
+    let [x, y] = at;
+    let at = world(x, y, loaded.map.ground.height_at(x, y));
+    let mut models = assets.models();
+    let spawned = drawn.0.spawn_effect(
+        &mut commands,
+        &mut loaded.game,
+        &mut models,
+        model,
+        Transform::from_translation(at),
+    );
+    if let Some(e) = spawned {
+        commands
+            .entity(e)
+            .insert((RallyMarker(b, [x, y]), DespawnOnExit(Screen::Match)));
     }
 }
 
