@@ -322,6 +322,8 @@ pub struct Tile {
     pub seen_by: u16,
     /// Never read; kept because some version 6 maps hold leftover bytes here.
     pub padding: u8,
+    /// A version 7 tile's last byte, never read; kept so it saves unchanged.
+    pub unused: u8,
 }
 
 impl Terrain {
@@ -365,6 +367,7 @@ impl Terrain {
                         water_body: t[4],
                         padding: t[5],
                         flags: t[6],
+                        unused: t[7],
                     }
                 } else {
                     // Older tiles hold the same fields in a different order.
@@ -374,6 +377,7 @@ impl Terrain {
                         seen_by: u16_at(2),
                         water_body: t.get(4).copied().unwrap_or(0),
                         padding: t.get(5).copied().unwrap_or(0),
+                        unused: 0,
                     }
                 }
             })
@@ -423,7 +427,7 @@ impl Terrain {
             if self.version >= 7 {
                 w.u16(t.terrain);
                 w.u16(t.seen_by);
-                w.bytes(&[t.water_body, t.padding, t.flags, 0]);
+                w.bytes(&[t.water_body, t.padding, t.flags, t.unused]);
                 continue;
             }
             let terrain = u8::try_from(t.terrain).map_err(|_| {
@@ -1028,6 +1032,7 @@ mod tests {
                 flags: 0x21,
                 seen_by: 0,
                 padding: 0,
+                unused: 0,
             }
         );
         assert_eq!(v7.name_of(v7.at(0, 0)), "ocean");
@@ -1331,7 +1336,7 @@ mod tests {
             "trailing byte"
         );
         for (version, tile) in [
-            (7, &[1, 0, 2, 0, 3, 9, 0x21, 0][..]),
+            (7, &[1, 0, 2, 0, 3, 9, 0x21, 0x5a][..]),
             (6, &[1, 0x21, 2, 0, 3, 9]),
         ] {
             let terrain = terrain_section(version, &[tile; 4]);
