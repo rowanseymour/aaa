@@ -109,7 +109,7 @@
 //!                  as NiTriShape; NiParticleSystem adds bool world space,
 //!                  refs modifiers
 //! particle info    40 bytes: f32 velocity[3], axis[3], age, life span,
-//!                  last update, u16 generation, u16 code
+//!                  last update, u16 generation, u16 vertex
 //! NiParticlesData, NiRotatingParticlesData, NiParticleMeshesData, NiPSysData
 //!                  geometry, bool + f32 radii[n] [old: f32 radius],
 //!                  u16 active, bool + f32 sizes[n], bool + f32
@@ -117,17 +117,19 @@
 //!                  ends with them]; NiParticleMeshesData adds ref node,
 //!                  NiPSysData particle info[n], u16 added, u16 added base
 //! NiParticleSystemController
-//!                  controller, f32 emission[16], u8 reset, f32 birth rate,
-//!                  life span[2], u8 use birth rate, u8 spawn on death,
-//!                  f32 emitter size[3], ref emitter, u16 generations,
-//!                  f32 spawned, u16 multiplier, f32 speed chaos, direction
-//!                  chaos, u16 n, u16 valid, particle info[n], ref emitter
-//!                  modifier, ref modifier, ref collider, u8 static bound
+//!                  controller, f32 speed[2], declination[2], planar
+//!                  angle[2], normal[3], colour[4], size, emit start, emit
+//!                  stop, u8 reset, f32 birth rate, life span[2], u8 use
+//!                  birth rate, u8 spawn on death, f32 emitter size[3], ref
+//!                  emitter, u16 spawn generations, f32 spawn percentage,
+//!                  u16 multiplier, f32 speed chaos, direction chaos, u16 n,
+//!                  u16 valid, particle info[n], ref emitter modifier, ref
+//!                  modifier, ref collider, u8 static bound
 //! NiGravity, NiParticleColorModifier, NiParticleGrowFade,
 //! NiParticleRotation, NiParticleMeshModifier
-//!                  ref next, ref controller, then f32 decay, force, u32
-//!                  kind, f32 position[3], direction[3]; ref colour data;
-//!                  f32 grow, fade; u8 random, f32 axis[3], speed; refs
+//!                  ref next, ref controller, then f32 decay, strength, u32
+//!                  force, f32 position[3], direction[3]; ref colour data;
+//!                  f32 grow, fade; u8 random axis, f32 axis[3], speed; refs
 //!                  meshes
 //! ```
 //!
@@ -194,6 +196,10 @@ pub enum Object {
     EmitterKeys(EmitterKeys),
     Colors(Keys<[f32; 4]>),
     Visibility(BoolKeys),
+    OldParticles(OldParticles),
+    OldParticleData(OldParticleData),
+    OldParticleController(OldParticleController),
+    OldModifier(OldModifier),
     /// Understood well enough to step over; the type name.
     Other(String),
 }
@@ -205,6 +211,7 @@ impl Object {
             Object::Node(n) => Some(&n.av),
             Object::Shape(s) => Some(&s.av),
             Object::ParticleSystem(p) => Some(&p.shape.av),
+            Object::OldParticles(p) => Some(&p.shape.av),
             _ => None,
         }
     }
@@ -240,7 +247,6 @@ object_types!(
     Stencil(Stencil),
     VertexColor(VertexColor),
     ExtraData(ExtraData),
-    Controller(Controller),
     Keyframes(Keyframes),
     Floats(Keys<f32>),
     Sequence(Sequence),
@@ -254,7 +260,23 @@ object_types!(
     EmitterKeys(EmitterKeys),
     Colors(Keys<[f32; 4]>),
     Visibility(BoolKeys),
+    OldParticles(OldParticles),
+    OldParticleData(OldParticleData),
+    OldParticleController(OldParticleController),
+    OldModifier(OldModifier),
 );
+
+/// An [`OldParticleController`] is a controller too, so chains of
+/// controllers can be followed past it.
+impl ObjectType for Controller {
+    fn of(object: &Object) -> Option<&Self> {
+        match object {
+            Object::Controller(c) => Some(c),
+            Object::OldParticleController(c) => Some(&c.timing),
+            _ => None,
+        }
+    }
+}
 
 /// Fields shared by everything placed in the scene.
 #[derive(Debug, Clone)]
@@ -661,6 +683,130 @@ pub enum ColliderShape {
     },
 }
 
+/// A shape of the older format whose vertices are particles. Its data is
+/// an [`OldParticleData`]; its controller chain holds an
+/// [`OldParticleController`].
+#[derive(Debug, Clone)]
+pub struct OldParticles {
+    pub shape: Shape,
+}
+
+#[derive(Debug, Clone)]
+pub struct OldParticleData {
+    pub kind: OldParticleKind,
+    /// Where the particles were when the model was saved.
+    pub geometry: Geometry,
+    /// One for all the particles in the older versions.
+    pub radii: Vec<f32>,
+    pub active: u16,
+    pub sizes: Vec<f32>,
+    /// w, x, y, z, for rotating particles.
+    pub rotations: Vec<[f32; 4]>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OldParticleKind {
+    Points,
+    Rotating,
+    /// `node` holds a copy of the meshes for each saved particle.
+    Meshes {
+        node: Ref,
+    },
+}
+
+/// The emitter and particle list of an [`OldParticles`]. Each `_variation`
+/// goes with the value before it; angles are in radians.
+#[derive(Debug, Clone)]
+pub struct OldParticleController {
+    /// Of kind [`ControllerKind::OldParticles`], with no data.
+    pub timing: Controller,
+    pub speed: f32,
+    pub speed_variation: f32,
+    pub declination: f32,
+    pub declination_variation: f32,
+    pub planar_angle: f32,
+    pub planar_angle_variation: f32,
+    pub normal: [f32; 3],
+    pub color: [f32; 4],
+    pub size: f32,
+    pub emit_start: f32,
+    pub emit_stop: f32,
+    pub reset: bool,
+    pub birth_rate: f32,
+    pub life_span: f32,
+    pub life_span_variation: f32,
+    pub use_birth_rate: bool,
+    pub spawn_on_death: bool,
+    pub emitter_size: [f32; 3],
+    /// A scene object; in the game's models, a node named for the
+    /// particles' parent node with ` Emitter` added.
+    pub emitter: Ref,
+    pub spawn_generations: u16,
+    pub spawn_percentage: f32,
+    pub spawn_multiplier: u16,
+    pub spawn_speed_chaos: f32,
+    pub spawn_direction_chaos: f32,
+    pub particles: Vec<SavedParticle>,
+    pub valid: u16,
+    pub emitter_modifier: Ref,
+    /// The first of a chain of [`OldModifier`]s.
+    pub modifier: Ref,
+    pub collider: Ref,
+    pub static_bound: bool,
+}
+
+/// One particle's state as saved in a model.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SavedParticle {
+    pub velocity: [f32; 3],
+    pub axis: [f32; 3],
+    pub age: f32,
+    pub life_span: f32,
+    pub last_update: f32,
+    pub generation: u16,
+    /// Which vertex of the data it is.
+    pub vertex: u16,
+}
+
+/// One of an [`OldParticleController`]'s modifiers, linked to the next by
+/// `next`.
+#[derive(Debug, Clone)]
+pub struct OldModifier {
+    pub next: Ref,
+    /// The [`OldParticleController`] it belongs to.
+    pub controller: Ref,
+    pub kind: OldModifierKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum OldModifierKind {
+    Gravity {
+        decay: f32,
+        strength: f32,
+        /// 0 planar, 1 spherical.
+        force: u32,
+        position: [f32; 3],
+        direction: [f32; 3],
+    },
+    /// `data` is an [`Object::Colors`].
+    Color {
+        data: Ref,
+    },
+    GrowFade {
+        grow: f32,
+        fade: f32,
+    },
+    Rotation {
+        random_axis: bool,
+        axis: [f32; 3],
+        speed: f32,
+    },
+    /// Scene objects for an [`OldParticleKind::Meshes`]'s particles.
+    Meshes {
+        meshes: Vec<Ref>,
+    },
+}
+
 /// What a [`ControllerKind::Emitter`] plays.
 #[derive(Debug, Clone)]
 pub struct EmitterKeys {
@@ -707,6 +853,8 @@ pub enum ControllerKind {
     EmitterInitialRadius,
     /// Steps its particle system; it has no data.
     ParticleUpdate,
+    /// That of an [`OldParticleController`].
+    OldParticles,
     /// One whose own fields are stepped over; kept so chains of
     /// controllers can be followed past it.
     Unread,
@@ -1352,8 +1500,7 @@ impl Object {
             "NiColorData" => Object::Colors(key_group(r)?),
             "NiVisData" => Object::Visibility(bool_keys(r)?),
             "NiParticles" | "NiRotatingParticles" | "NiParticleMeshes" => {
-                shape(r)?;
-                other()
+                Object::OldParticles(OldParticles { shape: shape(r)? })
             }
             "NiParticleSystem" => Object::ParticleSystem(ParticleSystem {
                 shape: shape(r)?,
@@ -1361,60 +1508,60 @@ impl Object {
                 modifiers: r.references()?,
             }),
             "NiParticlesData" | "NiRotatingParticlesData" | "NiParticleMeshesData" => {
-                let n = particles_data(r)?;
-                match kind {
-                    "NiRotatingParticlesData" if r.netimmerse() => {
-                        if r.bool()? {
-                            r.float_array::<4>(n)?;
-                        }
-                    }
-                    "NiParticleMeshesData" => {
-                        r.reference()?;
-                    }
-                    _ => {}
+                let (n, mut data) = particles_data(r)?;
+                if kind == "NiRotatingParticlesData" && r.netimmerse() && r.bool()? {
+                    data.rotations = r.float_array(n)?;
                 }
-                other()
+                let kind = match kind {
+                    "NiParticlesData" => OldParticleKind::Points,
+                    "NiRotatingParticlesData" => OldParticleKind::Rotating,
+                    _ => OldParticleKind::Meshes {
+                        node: r.reference()?,
+                    },
+                };
+                Object::OldParticleData(OldParticleData { kind, ..data })
             }
             "NiPSysData" => {
-                let n = particles_data(r)?;
+                let (n, _) = particles_data(r)?;
                 r.skip(n * 40)?; // particle info
                 r.skip(2 + 2)?;
                 Object::ParticleData(ParticleData { capacity: n })
             }
             "NiParticleSystemController" => {
-                let c = time_controller(r)?;
-                r.floats::<16>()?;
-                r.u8()?;
-                r.floats::<3>()?;
-                r.skip(1 + 1 + 3 * 4)?;
-                r.reference()?;
-                r.skip(2 + 4 + 2 + 4 + 4)?;
-                let n = r.u16()? as usize;
-                r.u16()?;
-                r.skip(n * 40)?;
-                r.skip(3 * 4 + 1)?;
-                Object::Controller(c)
+                Object::OldParticleController(old_particle_controller(r)?)
             }
             "NiGravity"
             | "NiParticleColorModifier"
             | "NiParticleGrowFade"
             | "NiParticleRotation"
-            | "NiParticleMeshModifier" => {
-                r.reference()?; // next
-                r.reference()?; // controller
-                match kind {
-                    "NiGravity" => r.skip(2 * 4 + 4 + 6 * 4)?,
-                    "NiParticleColorModifier" => {
-                        r.reference()?;
-                    }
-                    "NiParticleGrowFade" => r.skip(2 * 4)?,
-                    "NiParticleRotation" => r.skip(1 + 4 * 4)?,
-                    _ => {
-                        r.references()?;
-                    }
-                }
-                other()
-            }
+            | "NiParticleMeshModifier" => Object::OldModifier(OldModifier {
+                next: r.reference()?,
+                controller: r.reference()?,
+                kind: match kind {
+                    "NiGravity" => OldModifierKind::Gravity {
+                        decay: r.f32()?,
+                        strength: r.f32()?,
+                        force: r.u32()?,
+                        position: r.floats()?,
+                        direction: r.floats()?,
+                    },
+                    "NiParticleColorModifier" => OldModifierKind::Color {
+                        data: r.reference()?,
+                    },
+                    "NiParticleGrowFade" => OldModifierKind::GrowFade {
+                        grow: r.f32()?,
+                        fade: r.f32()?,
+                    },
+                    "NiParticleRotation" => OldModifierKind::Rotation {
+                        random_axis: r.bool()?,
+                        axis: r.floats()?,
+                        speed: r.f32()?,
+                    },
+                    _ => OldModifierKind::Meshes {
+                        meshes: r.references()?,
+                    },
+                },
+            }),
             "NiPSysAgeDeathModifier"
             | "NiPSysBoundUpdateModifier"
             | "NiPSysColliderManager"
@@ -1495,6 +1642,90 @@ fn time_controller(r: &mut Reader) -> Result<Controller> {
     })
 }
 
+fn old_particle_controller(r: &mut Reader) -> Result<OldParticleController> {
+    let timing = Controller {
+        kind: ControllerKind::OldParticles,
+        ..time_controller(r)?
+    };
+    let [
+        speed,
+        speed_variation,
+        declination,
+        declination_variation,
+        planar_angle,
+        planar_angle_variation,
+        nx,
+        ny,
+        nz,
+        red,
+        green,
+        blue,
+        alpha,
+        size,
+        emit_start,
+        emit_stop,
+    ] = r.floats()?;
+    let reset = r.bool()?;
+    let [birth_rate, life_span, life_span_variation] = r.floats()?;
+    let use_birth_rate = r.bool()?;
+    let spawn_on_death = r.bool()?;
+    let emitter_size = r.floats()?;
+    let emitter = r.reference()?;
+    let spawn_generations = r.u16()?;
+    let spawn_percentage = r.f32()?;
+    let spawn_multiplier = r.u16()?;
+    let [spawn_speed_chaos, spawn_direction_chaos] = r.floats()?;
+    let n = r.u16()? as usize;
+    let valid = r.u16()?;
+    r.ensure(n * 40)?;
+    let particles = (0..n)
+        .map(|_| {
+            Ok(SavedParticle {
+                velocity: r.floats()?,
+                axis: r.floats()?,
+                age: r.f32()?,
+                life_span: r.f32()?,
+                last_update: r.f32()?,
+                generation: r.u16()?,
+                vertex: r.u16()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(OldParticleController {
+        timing,
+        speed,
+        speed_variation,
+        declination,
+        declination_variation,
+        planar_angle,
+        planar_angle_variation,
+        normal: [nx, ny, nz],
+        color: [red, green, blue, alpha],
+        size,
+        emit_start,
+        emit_stop,
+        reset,
+        birth_rate,
+        life_span,
+        life_span_variation,
+        use_birth_rate,
+        spawn_on_death,
+        emitter_size,
+        emitter,
+        spawn_generations,
+        spawn_percentage,
+        spawn_multiplier,
+        spawn_speed_chaos,
+        spawn_direction_chaos,
+        particles,
+        valid,
+        emitter_modifier: r.reference()?,
+        modifier: r.reference()?,
+        collider: r.reference()?,
+        static_bound: r.bool()?,
+    })
+}
+
 /// Linear keys of f32 time and a u8 on/off value.
 fn bool_keys(r: &mut Reader) -> Result<BoolKeys> {
     let n = r.u32()? as usize;
@@ -1502,25 +1733,30 @@ fn bool_keys(r: &mut Reader) -> Result<BoolKeys> {
     (0..n).map(|_| Ok((r.f32()?, r.u8()? != 0))).collect()
 }
 
-/// Geometry plus per-particle sizes and rotations; returns the particle
-/// count.
-fn particles_data(r: &mut Reader) -> Result<usize> {
-    let (n, _) = geometry(r)?;
-    if !r.old() {
-        if r.bool()? {
-            r.skip(n * 4)?; // radii
-        }
+/// Geometry plus per-particle sizes and rotations, and the particle count.
+fn particles_data(r: &mut Reader) -> Result<(usize, OldParticleData)> {
+    let (n, geometry) = geometry(r)?;
+    let radii = match r.old() {
+        true => vec![r.f32()?],
+        false if r.bool()? => r.f32s(n)?,
+        false => Vec::new(),
+    };
+    let active = r.u16()?;
+    let sizes = if r.bool()? { r.f32s(n)? } else { Vec::new() };
+    let rotations = if !r.netimmerse() && r.bool()? {
+        r.float_array(n)?
     } else {
-        r.f32()?; // radius
-    }
-    r.u16()?; // active
-    if r.bool()? {
-        r.skip(n * 4)?; // sizes
-    }
-    if !r.netimmerse() && r.bool()? {
-        r.float_array::<4>(n)?; // rotations
-    }
-    Ok(n)
+        Vec::new()
+    };
+    let data = OldParticleData {
+        kind: OldParticleKind::Points,
+        geometry,
+        radii,
+        active,
+        sizes,
+        rotations,
+    };
+    Ok((n, data))
 }
 
 fn modifier(kind: &str, r: &mut Reader) -> Result<Modifier> {
