@@ -23,6 +23,13 @@ pub struct MenuButton;
 #[derive(Component)]
 pub struct Click(&'static str);
 
+impl Click {
+    /// The game's plain button press.
+    pub const PUSH: Click = Click(PUSH);
+    /// The game's press of a button that opens a list.
+    pub const OPEN: Click = Click(OPEN);
+}
+
 const PUSH: &str = "push_button";
 const OPEN: &str = "tiled_button";
 
@@ -57,12 +64,12 @@ pub fn text(label: impl Into<String>, size: f32) -> impl Bundle {
 /// A button laid out as `node`, that does something when [`Activate`]d,
 /// given an observer.
 pub fn clickable(node: Node) -> impl Bundle {
-    sounding(node, Click(PUSH))
+    sounding(node, Click::PUSH)
 }
 
 /// A [`clickable`] that opens a list to choose from.
 pub fn opener(node: Node) -> impl Bundle {
-    sounding(node, Click(OPEN))
+    sounding(node, Click::OPEN)
 }
 
 fn sounding(node: Node, click: Click) -> impl Bundle {
