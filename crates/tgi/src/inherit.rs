@@ -127,7 +127,11 @@ impl<'a> Templates<'a> {
                     let child = self.resolve_in(b, active);
                     self.merge(&mut merged.items, &child.items, true, active);
                     active.pop();
-                    merged.header = b.header.clone();
+                    // The inherited block's other attributes stay, under the
+                    // child's.
+                    merged.header.words = b.header.words.clone();
+                    merged.header.attrs = e.header.attrs.clone();
+                    set_attrs(&mut merged.header.attrs, &b.header.attrs);
                     merged.header.attrs.retain(|(k, _)| !is_template_attr(k));
                     merged.braced = b.braced;
                     merged.line = b.line;
@@ -135,13 +139,7 @@ impl<'a> Templates<'a> {
                 }
                 (Some(Item::Block(e)), Item::Block(b)) => {
                     e.header.words = b.header.words.clone();
-                    for (k, v) in &b.header.attrs {
-                        let attrs = &mut e.header.attrs;
-                        match attrs.iter_mut().find(|(ek, _)| ek.eq_ignore_ascii_case(k)) {
-                            Some(attr) => *attr = (k.clone(), v.clone()),
-                            None => attrs.push((k.clone(), v.clone())),
-                        }
-                    }
+                    set_attrs(&mut e.header.attrs, &b.header.attrs);
                     e.braced = b.braced;
                     e.line = b.line;
                     self.merge(&mut e.items, &b.items, shared, active);
@@ -196,6 +194,16 @@ fn slot(block: &Block) -> &str {
 fn pair(inherited: &Block, child: &Block) -> (String, String) {
     let name = |b| template(b).unwrap_or("").to_ascii_lowercase();
     (name(inherited), name(child))
+}
+
+/// Sets each of `over` in `attrs`, replacing one with the same key.
+fn set_attrs(attrs: &mut Vec<(String, String)>, over: &[(String, String)]) {
+    for (k, v) in over {
+        match attrs.iter_mut().find(|(ek, _)| ek.eq_ignore_ascii_case(k)) {
+            Some(attr) => *attr = (k.clone(), v.clone()),
+            None => attrs.push((k.clone(), v.clone())),
+        }
+    }
 }
 
 fn is_template_attr(key: &str) -> bool {

@@ -338,6 +338,13 @@ impl<'a> Node<'a> {
                 None => groups.push((k, vec![item])),
             }
         }
+        // A key both declared and given a value reads as its values.
+        for (_, items) in &mut groups {
+            let valued = |i: &&Item| !matches!(i, Item::Field(Field { value: None, .. }));
+            if items.iter().any(valued) {
+                items.retain(valued);
+            }
+        }
         let name = |k: &str| fields.and_then(|f| f.iter().find(|f| same_key(f, k)).copied());
         // Groups that are read are counted as they're read, when it's known
         // whether all of them or only the first is.
@@ -882,5 +889,16 @@ mod tests {
                 ("t/depthinfo", "kind", count(1, 1)),
             ]
         );
+    }
+
+    #[test]
+    fn a_declared_key_reads_its_later_values() {
+        #[derive(Deserialize)]
+        struct T {
+            v: Option<Vec<i32>>,
+            w: Option<i32>,
+        }
+        let t: T = from_block(&first("[T]\nint v\nint v = 3\nint v = 4\nint w\n")).unwrap();
+        assert_eq!((t.v, t.w), (Some(vec![3, 4]), None));
     }
 }

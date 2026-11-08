@@ -100,7 +100,9 @@ fn schema_fields() {
 
 #[test]
 fn typed_values() {
-    let root = ok("scale = 1.5\nbad = x\ninvisible = TRUE\nvisible = false\nquoted = \" 2 \"");
+    let root = ok(
+        "scale = 1.5\nbad = x\ninvisible = TRUE\nvisible = false\nquoted = \" 2 \"\non = 1\noff = 0",
+    );
     assert_eq!(root.parse_value::<f32>("SCALE"), Some(1.5));
     assert_eq!(root.parse_value::<f32>("bad"), None);
     assert_eq!(root.parse_value::<f32>("missing"), None);
@@ -108,6 +110,7 @@ fn typed_values() {
     assert!(root.flag("invisible"));
     assert!(!root.flag("visible"));
     assert!(!root.flag("missing"));
+    assert!(root.flag("on") && !root.flag("off"));
 }
 
 #[test]
@@ -425,4 +428,34 @@ fn block_comments_start_outside_quotes_and_line_comments() {
         (a.value("x"), a.value("y"), a.value("z"), a.value("w")),
         (Some("1"), Some("2"), Some("/* kept */"), Some("3"))
     );
+}
+
+#[test]
+fn block_comment_closes_from_its_star() {
+    let root = ok("[A]\nx = 1\n/*/\ny = 2\nz = 3\n");
+    let a = root.blocks().next().unwrap();
+    assert_eq!(
+        (a.value("x"), a.value("y"), a.value("z")),
+        (Some("1"), Some("2"), Some("3"))
+    );
+}
+
+#[test]
+fn retemplated_block_keeps_inherited_attributes() {
+    let root = ok("
+[Template Base]
+{
+    [View Template=X Layer=3]
+}
+[Template X]
+[Template Y]
+[Thing Template=Base]
+{
+    [View Template=Y]
+}
+");
+    let templates = Templates::new([&root]);
+    let thing = templates.resolve(root.blocks_of("Thing").next().unwrap());
+    let view = thing.blocks_of("View").next().unwrap();
+    assert_eq!(view.header.attrs, [("Layer".to_string(), "3".to_string())]);
 }
