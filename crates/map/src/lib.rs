@@ -2,6 +2,8 @@
 //! that [`tgck::Map`] reads and the definitions in [`aaa_data`].
 
 mod buildings;
+#[cfg(test)]
+mod fixtures;
 mod ground;
 pub mod pathing;
 mod units;
@@ -67,14 +69,15 @@ impl Map {
             }
         }
         let world_version = map.world_version().map_err(err)?;
-        let bodies = game.bodies();
-        let obstacles = obstacles(&things, &bodies);
+        let recruits = Recruits::new(game);
+        let bodies = &recruits.bodies;
+        let obstacles = obstacles(&things, bodies);
         let pathing = Pathing::new(
             &terrain,
             &game.terrain_variations(),
             obstacles.iter().map(|(_, o)| o.clone()),
         );
-        let fighters = game.fighters();
+        let fighters = &recruits.fighters;
         let (mut players, teams) = read_sides(game, &mut map).map_err(err)?;
         for player in &mut players {
             if let Some(n) = nations.get(&player.id) {
@@ -83,8 +86,8 @@ impl Map {
         }
         let buildings = buildings::buildings(
             &things,
-            &bodies,
-            &fighters,
+            bodies,
+            fighters,
             &game.city_zones(),
             &obstacles.iter().cloned().collect(),
             &game.deploy_points(),
@@ -95,16 +98,20 @@ impl Map {
             .filter(|(id, _)| !ids.contains(id))
             .map(|(_, o)| o)
             .collect();
+        let mut regiments = units::regiments(
+            &things,
+            bodies,
+            fighters,
+            &recruits.layouts,
+            &recruits.ranges,
+        );
+        for r in &mut regiments {
+            recruits.give_unpacks(r);
+        }
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
-            regiments: units::regiments(
-                &things,
-                &bodies,
-                &fighters,
-                &game.layouts(),
-                &game.organization_ranges(),
-            ),
+            regiments,
             buildings,
             scenery,
             players,
@@ -135,8 +142,28 @@ impl Map {
         let owned_by_leaver = |t: &Thing| owner(t).is_some_and(|o| leaving.contains(&o));
         self.things.retain(|t| !owned_by_leaver(t));
         self.regiments.retain(|r| !leaving.contains(&r.owner));
-        self.buildings.retain(|b| !leaving.contains(&b.owner));
+        take_buildings(&mut self.buildings, &mut self.pathing, |b| {
+            leaving.contains(&b.owner)
+        });
     }
+}
+
+/// Takes the buildings that `gone` picks off the map, giving back the
+/// ground they kept movers off.
+fn take_buildings(
+    buildings: &mut Vec<Building>,
+    pathing: &mut Pathing,
+    gone: impl Fn(&Building) -> bool,
+) {
+    buildings.retain(|b| {
+        if !gone(b) {
+            return true;
+        }
+        if let Some(o) = &b.obstacle {
+            pathing.unblock(o);
+        }
+        false
+    });
 }
 
 /// What blocks the ground, by id, of the objects standing on the map.
@@ -302,6 +329,7 @@ pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fixtures::{organization, placed};
 
     /// Sides 1 and 2 on the map's first team, 3 and 4 on its second, and an
     /// independent 9 at war with 1 and neutral to the rest.
@@ -339,88 +367,6 @@ mod tests {
         let mut teams = vec![team(0, 0), team(1, 1)];
         teams[0].relations[4] = Enemy;
         (players, teams)
-    }
-
-    /// An object at `id` metres along x owned by `kingdom`, 0 for nobody,
-    /// towing the object `towing` or standing as `organization`.
-    fn placed(
-        id: u32,
-        template: &str,
-        kingdom: u32,
-        towing: Option<u32>,
-        organization: Option<tgck::map::Organization>,
-    ) -> Thing {
-        use tgck::map::{Actor, Component, Detail, State, Trailer};
-        let trailer = Trailer {
-            main_component: -1,
-            required_object: None,
-            old_stance: None,
-            saved_group: None,
-            group: None,
-            map_string: None,
-            towing: towing.map(|t| [t, 0]),
-            number: None,
-            lists: None,
-            num_deploying: None,
-        };
-        let components = organization
-            .map(Component::Organization)
-            .into_iter()
-            .collect();
-        Thing {
-            template: template.into(),
-            class: tgck::map::ACTOR,
-            id,
-            name: String::new(),
-            position: [id as f32, 0.0, 0.0],
-            facing: [0.0, 1.0, 0.0],
-            flags: 0,
-            scale: 1.0,
-            variation: -1,
-            seen_by: 0,
-            detail: Detail::Actor(Actor {
-                version: 14,
-                kingdom,
-                states: 0,
-                template_components: 0,
-                components: 0,
-                state: State::Decoded {
-                    components,
-                    trailer,
-                },
-            }),
-        }
-    }
-
-    fn organization(layout: &str, members: Vec<Thing>) -> tgck::map::Organization {
-        use tgck::map::{Organization, Position, Updatable};
-        Organization {
-            updatable: Updatable { version: 1, id: 0 },
-            version: 10,
-            layout: layout.into(),
-            slots: members.iter().map(|m| m.template.clone()).collect(),
-            positions: (0..members.len() as i32)
-                .map(|index| Position {
-                    index,
-                    old: None,
-                    template: Some(String::new()),
-                    offset: [0.0, 0.0],
-                    unknown1: Some(0),
-                })
-                .collect(),
-            members,
-            leader: -1,
-            morale: 1.0,
-            formation: 0,
-            desired_formation: Some(0),
-            old: None,
-            fighting: None,
-            level: Some(1.0),
-            time: Some(0.0),
-            position: Some([0.0, 0.0]),
-            hq: Some(0),
-            transport: Some(0),
-        }
     }
 
     fn moves(trailer: Option<&str>) -> aaa_data::Body {
@@ -519,6 +465,36 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn buildings_taken_off_the_map_stop_blocking() {
+        let wall = |id, owner, x| Building {
+            id,
+            template: "wall".into(),
+            owner,
+            position: [x, 8.0],
+            facing: [0.0, -1.0],
+            fighter: Fighter::default(),
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle: Some(Obstacle {
+                position: [x, 8.0],
+                facing: [0.0, -1.0],
+                shape: Shape::Circle { radius: 1.0 },
+            }),
+            deploy: None,
+        };
+        let mut buildings = vec![wall(1, 2, 4.0), wall(2, 3, 12.0)];
+        let mut pathing = Pathing::uniform(8, Domain::Land);
+        for b in &buildings {
+            pathing.block(b.obstacle.as_ref().unwrap());
+        }
+        take_buildings(&mut buildings, &mut pathing, |b| b.owner == 3);
+        assert_eq!(buildings.iter().map(|b| b.id).collect::<Vec<_>>(), [1]);
+        assert!(!pathing.passable(2, 4, Domain::Land));
+        assert!(pathing.passable(6, 4, Domain::Land));
     }
 
     #[test]

@@ -337,16 +337,9 @@ pub fn regiments(
                 .collect::<Option<Vec<_>>>()?;
             let facing = facing(t);
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
+            let places = layout.map(|l| stored_places(l, organization, members.len()));
             let ranges = ranges(&t.template);
-            regiment(
-                t.id,
-                &t.template,
-                owner,
-                facing,
-                members,
-                layout.map(|l| (l, &organization.slots[..])),
-                ranges,
-            )
+            regiment(t.id, &t.template, owner, facing, members, places, ranges)
         })
         .collect()
 }
@@ -408,7 +401,58 @@ fn member(
     })
 }
 
-/// A regiment of `members`, arranged by its layout and the slots they fill
+/// Which of a layout's places a regiment's members fill, and the formation
+/// it's in.
+struct Places<'a> {
+    layout: &'a Layout,
+    /// Per place in the layout, slot by slot, whether a member stands
+    /// there; the members fill them in order.
+    filled: Vec<bool>,
+    /// Index into the layout's formations.
+    formation: usize,
+}
+
+/// The places a regiment of `slots`, each slot's element template or
+/// empty, fills when it's whole, in the layout's starting formation.
+fn whole<'a>(layout: &'a Layout, slots: &[String]) -> Places<'a> {
+    let start = &layout.formations[layout.default];
+    let filled = start.slots.iter().enumerate().flat_map(|(i, places)| {
+        let filled = slots.get(i).is_some_and(|s| !s.is_empty());
+        std::iter::repeat_n(filled, places.len())
+    });
+    Places {
+        layout,
+        filled: filled.collect(),
+        formation: layout.default,
+    }
+}
+
+/// The places a map's organization records its `members` filling, and the
+/// formation it records; a regiment that has lost members still knows
+/// where the rest stand. Where the record doesn't fit the layout, as when
+/// the layout has changed since, it's taken as whole.
+fn stored_places<'a>(
+    layout: &'a Layout,
+    o: &tgck::map::Organization,
+    members: usize,
+) -> Places<'a> {
+    let mut places = whole(layout, &o.slots);
+    let filled: Vec<bool> = o.positions.iter().map(|p| p.index >= 0).collect();
+    let fits =
+        filled.len() == places.filled.len() && filled.iter().filter(|&&f| f).count() == members;
+    if fits {
+        places.filled = filled;
+    }
+    if let Some(f) = usize::try_from(o.formation)
+        .ok()
+        .filter(|&f| f < layout.formations.len())
+    {
+        places.formation = f;
+    }
+    places
+}
+
+/// A regiment of `members`, arranged by its layout and the places they fill
 /// where those account for them all, else as they stand.
 fn regiment(
     id: u32,
@@ -416,13 +460,13 @@ fn regiment(
     owner: u32,
     facing: [f32; 2],
     members: Vec<Member>,
-    layout: Option<(&Layout, &[String])>,
+    places: Option<Places>,
     ranges: Ranges,
 ) -> Option<Regiment> {
     if members.is_empty() {
         return None;
     }
-    let arranged = layout.and_then(|(l, slots)| Some((l, arrange(l, slots, members.len())?)));
+    let arranged = places.and_then(|p| Some((p.layout, arrange(&p, members.len())?)));
     // The layout's formations keep their order once arranged.
     let combat = arranged.as_ref().and_then(|(l, _)| l.combat);
     let (formations, formation, primary) = match arranged {
@@ -449,10 +493,10 @@ fn regiment(
 /// made of, and what its members are.
 pub struct Recruits {
     organizations: HashMap<Id, Organization>,
-    bodies: HashMap<Id, Body>,
-    fighters: HashMap<Id, Fighter>,
-    layouts: HashMap<Id, Layout>,
-    ranges: HashMap<Id, Ranges>,
+    pub(crate) bodies: HashMap<Id, Body>,
+    pub(crate) fighters: HashMap<Id, Fighter>,
+    pub(crate) layouts: HashMap<Id, Layout>,
+    pub(crate) ranges: HashMap<Id, Ranges>,
     lists: HashMap<Id, Vec<Id>>,
     deployments: HashMap<Id, Deployment>,
     deploy_points: HashMap<Id, DeployPoints>,
@@ -555,6 +599,14 @@ impl Recruits {
             out.entry(into).or_insert(packs);
         }
         out
+    }
+
+    /// Gives a regiment of one packed building, such as a truck, what it
+    /// unpacks into.
+    pub(crate) fn give_unpacks(&self, regiment: &mut Regiment) {
+        if let [m] = &regiment.members[..] {
+            regiment.unpacks = self.unpacks(&m.thing.template);
+        }
     }
 
     /// What a packed building of `template` unpacks into, if it does and
@@ -666,14 +718,12 @@ impl Recruits {
             owner,
             facing,
             members,
-            Some((layout, &slots)),
+            Some(whole(layout, &slots)),
             ranges,
         )
         .ok_or_else(|| format!("{template} has no members"))?;
         regiment.place(position, facing);
-        if let [m] = &regiment.members[..] {
-            regiment.unpacks = self.unpacks(&m.thing.template);
-        }
+        self.give_unpacks(&mut regiment);
         Ok(regiment)
     }
 
@@ -733,38 +783,41 @@ fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regimen
     }
 }
 
-/// A layout's formations for the members filling `slots`, each slot's
-/// element template or empty, and the member in the primary slot. `None`
-/// where the layout doesn't account for every member.
-fn arrange(
-    layout: &Layout,
-    slots: &[String],
-    members: usize,
-) -> Option<(Vec<Formation>, usize, Option<usize>)> {
-    let filled = |i: usize| slots.get(i).is_some_and(|s| !s.is_empty());
-    let formations: Vec<Formation> = layout
-        .formations
-        .iter()
-        .map(|f| Formation {
-            id: f.id.to_string(),
-            aggressive: f.aggressive,
-            offsets: f
-                .slots
-                .iter()
-                .enumerate()
-                .filter(|&(i, _)| filled(i))
-                .flat_map(|(_, p)| p.iter().copied())
-                .collect(),
-        })
-        .collect();
-    if formations.iter().any(|f| f.offsets.len() != members) {
+/// The layout's formations for the members filling `places`, the one
+/// they're in, and the member in the primary slot. `None` where the places
+/// don't account for every member, or a formation's places don't match.
+fn arrange(places: &Places, members: usize) -> Option<(Vec<Formation>, usize, Option<usize>)> {
+    let Places {
+        layout,
+        filled,
+        formation,
+    } = places;
+    if filled.iter().filter(|&&f| f).count() != members {
         return None;
     }
-    let primary = layout.primary.filter(|&p| filled(p)).map(|p| {
+    let formations = layout
+        .formations
+        .iter()
+        .map(|f| {
+            let all: Vec<[f32; 2]> = f.slots.iter().flatten().copied().collect();
+            (all.len() == filled.len()).then(|| Formation {
+                id: f.id.to_string(),
+                aggressive: f.aggressive,
+                offsets: all
+                    .into_iter()
+                    .zip(filled)
+                    .filter_map(|(o, &f)| f.then_some(o))
+                    .collect(),
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let primary = layout.primary.and_then(|p| {
         let slots = &layout.formations[layout.default].slots;
-        (0..p).filter(|&i| filled(i)).map(|i| slots[i].len()).sum()
+        let first: usize = slots.get(..p)?.iter().map(Vec::len).sum();
+        let here = *filled.get(first)?;
+        here.then(|| filled[..first].iter().filter(|&&f| f).count())
     });
-    Some((formations, layout.default, primary))
+    Some((formations, *formation, primary))
 }
 
 /// Where the members stand from their average position.
@@ -813,7 +866,7 @@ mod tests {
     #[test]
     fn arranges_the_filled_slots() {
         let slots = ["rifle".to_string(), String::new(), "captain".to_string()];
-        let (formations, formation, primary) = arrange(&layout(), &slots, 3).unwrap();
+        let (formations, formation, primary) = arrange(&whole(&layout(), &slots), 3).unwrap();
         assert_eq!(formation, 1);
         assert_eq!(primary, Some(2));
         assert_eq!(formations[1].id, "defensive");
@@ -824,7 +877,66 @@ mod tests {
     #[test]
     fn refuses_layouts_that_miss_members() {
         let slots = ["rifle".to_string(), String::new(), "captain".to_string()];
-        assert!(arrange(&layout(), &slots, 4).is_none());
+        assert!(arrange(&whole(&layout(), &slots), 4).is_none());
+    }
+
+    /// A squad of `layout()` placed on a map, with a rifle in the front
+    /// slot's first place and the captain, in formation `formation`.
+    fn squad(formation: i32, positions: &[i32]) -> Vec<Regiment> {
+        use crate::fixtures::{organization, placed};
+        let members = vec![
+            placed(2, "rifle", 0, None, None),
+            placed(3, "captain", 0, None, None),
+        ];
+        let mut o = organization("line", members);
+        o.slots = vec!["rifle".into(), String::new(), "captain".into()];
+        let place = o.positions[0].clone();
+        o.positions = positions
+            .iter()
+            .map(|&index| tgck::map::Position {
+                index,
+                ..place.clone()
+            })
+            .collect();
+        o.formation = formation;
+        let moves = Body {
+            speed: Some(3.0),
+            ..Body::default()
+        };
+        regiments(
+            &[placed(1, "squad", 2, None, Some(o))],
+            &HashMap::from([
+                (Id::from("rifle"), moves.clone()),
+                (Id::from("captain"), moves),
+            ]),
+            &HashMap::new(),
+            &HashMap::from([(Id::from("line"), layout())]),
+            &HashMap::new(),
+        )
+    }
+
+    #[test]
+    fn regiments_that_lost_members_keep_their_places() {
+        // The front's second rifle is gone.
+        let [r] = &squad(1, &[0, -1, -1, 3])[..] else {
+            panic!();
+        };
+        assert_eq!(r.formations.len(), 2);
+        assert_eq!(r.formations[1].offsets, [[-1.0, 1.0], [0.0, 0.0]]);
+        assert_eq!(r.formations[0].offsets, [[-1.0, 2.0], [0.0, 0.0]]);
+        assert_eq!((r.primary, r.combat), (Some(1), Some(0)));
+    }
+
+    #[test]
+    fn regiments_start_in_the_formation_the_map_has_them_in() {
+        assert_eq!(squad(0, &[0, -1, -1, 3])[0].formation, 0);
+        assert_eq!(squad(1, &[0, -1, -1, 3])[0].formation, 1);
+        // One the layout doesn't have leaves them in its starting one.
+        assert_eq!(squad(5, &[0, -1, -1, 3])[0].formation, 1);
+        // Places that don't fit the layout leave them as they stand.
+        let r = &squad(0, &[0, 1])[0];
+        assert_eq!((r.formations.len(), r.formation), (1, 0));
+        assert!(r.formations[0].id.is_empty());
     }
 
     #[test]
@@ -1006,6 +1118,22 @@ mod tests {
         let packs = &recruits.packings()["depot"];
         assert_eq!(packs.truck.template, "convoy");
         assert_eq!(packs.facing, [1.0, 0.0]);
+
+        // As does one the map starts with.
+        let truck = crate::fixtures::placed(5, "truck", 2, None, None);
+        let mut placed = regiments(
+            &[truck],
+            &recruits.bodies,
+            &recruits.fighters,
+            &recruits.layouts,
+            &recruits.ranges,
+        );
+        recruits.give_unpacks(&mut placed[0]);
+        let unpacks = placed[0]
+            .unpacks
+            .as_ref()
+            .map(|u| u.building.template.as_str());
+        assert_eq!(unpacks, Some("depot"));
     }
 
     #[test]
