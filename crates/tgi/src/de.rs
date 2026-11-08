@@ -359,6 +359,14 @@ macro_rules! parse_scalars {
     };
 }
 
+macro_rules! parse_floats {
+    ($($method:ident $visit:ident $ty:ty;)*) => {
+        $(fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+            visitor.$visit(self.parse::<Float<$ty>>("a number")?.0)
+        })*
+    };
+}
+
 impl<'de> de::Deserializer<'de> for Node<'_> {
     type Error = Error;
 
@@ -382,9 +390,12 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
         deserialize_u16 visit_u16 u16, "an integer";
         deserialize_u32 visit_u32 u32, "an integer";
         deserialize_u64 visit_u64 u64, "an integer";
-        deserialize_f32 visit_f32 f32, "a number";
-        deserialize_f64 visit_f64 f64, "a number";
         deserialize_char visit_char char, "a character";
+    }
+
+    parse_floats! {
+        deserialize_f32 visit_f32 f32;
+        deserialize_f64 visit_f64 f64;
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
@@ -548,9 +559,12 @@ impl<'de> de::Deserializer<'de> for Scalar<'_> {
         deserialize_u16 visit_u16 u16, "an integer";
         deserialize_u32 visit_u32 u32, "an integer";
         deserialize_u64 visit_u64 u64, "an integer";
-        deserialize_f32 visit_f32 f32, "a number";
-        deserialize_f64 visit_f64 f64, "a number";
         deserialize_char visit_char char, "a character";
+    }
+
+    parse_floats! {
+        deserialize_f32 visit_f32 f32;
+        deserialize_f64 visit_f64 f64;
     }
 
     fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
@@ -574,6 +588,25 @@ fn resolved<'b>(templates: Option<&Templates>, block: &'b Block) -> Cow<'b, Bloc
     match templates {
         Some(t) if t.parent(block).is_some() => Cow::Owned(t.resolve(block)),
         _ => Cow::Borrowed(block),
+    }
+}
+
+/// A number that, like the game's `atof`, is `text`'s longest leading part
+/// that parses: some files have typos such as `1.5.0`, which the game takes
+/// as 1.5.
+#[derive(Clone, Copy)]
+struct Float<T>(T);
+
+impl<T: std::str::FromStr> std::str::FromStr for Float<T> {
+    type Err = ();
+
+    fn from_str(text: &str) -> Result<Self, ()> {
+        text.char_indices()
+            .map(|(i, c)| i + c.len_utf8())
+            .rev()
+            .find_map(|end| text[..end].parse().ok())
+            .map(Float)
+            .ok_or(())
     }
 }
 
@@ -676,6 +709,25 @@ mod tests {
         let block = first("[Mixed]\nlist = TRUE, 7, -3, x\n");
         let m: Mixed = from_block(&block).unwrap();
         assert_eq!(m.list, (true, 7, -3, 'x'));
+    }
+
+    #[test]
+    fn reads_numbers_as_far_as_they_go() {
+        #[derive(Debug, Deserialize)]
+        struct Info {
+            offset: [f32; 2],
+            depth: f64,
+            count: Option<u8>,
+        }
+        let block = first("[Info]\noffset = 2.5, 1.5.0\ndepth = 3m\n");
+        let i: Info = from_block(&block).unwrap();
+        assert_eq!((i.offset, i.depth, i.count), ([2.5, 1.5], 3.0, None));
+
+        // Integers stay whole, so one too big isn't cut short.
+        let block = first("[Info]\noffset = 0, 0\ndepth = 0\ncount = 300\n");
+        assert!(from_block::<Info>(&block).is_err());
+        let block = first("[Info]\noffset = x, 0\ndepth = 0\n");
+        assert!(from_block::<Info>(&block).is_err());
     }
 
     #[test]
