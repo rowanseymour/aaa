@@ -93,6 +93,17 @@ impl Sounds {
         self.play(time, &cues, |_| at, owner);
     }
 
+    /// Queues the cues of `owner`'s projectile of a template landing at
+    /// `at`, on a target at `to`: each where it says, the projectile's own
+    /// where it landed.
+    pub fn landed(&mut self, time: &Time, template: &Id, at: [f32; 2], to: [f32; 2], owner: u32) {
+        let cues = match self.objects.get(template) {
+            Some(o) => o.destroyed.clone(),
+            None => return,
+        };
+        self.shot(time, &cues, at, to, owner);
+    }
+
     /// Queues the cues of a shot from `from` at `to`, each where it says.
     pub fn shot(&mut self, time: &Time, cues: &[Cue], from: [f32; 2], to: [f32; 2], owner: u32) {
         let at = |c: &Cue| match c.at.starts_with("TARGET") {

@@ -84,8 +84,8 @@ impl Plugin for MapRenderPlugin {
             .add_systems(
                 Update,
                 (
-                    models::animate,
-                    rig::play,
+                    models::pace,
+                    (models::animate, rig::play).after(models::pace),
                     camera::update.in_set(camera::Controls),
                 ),
             );

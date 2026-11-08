@@ -20,6 +20,8 @@ pub struct Terrain {
     /// `LAND`, `MOUNTAIN` or `WATER`.
     #[serde(rename = "type")]
     pub kind: Option<String>,
+    /// What effects take it for, e.g. `dirt`, `snow` or `water`.
+    pub terrain_group: Option<Id>,
     /// The range a mountain's tiles are raised by, each its own amount.
     pub noise_min: Option<f32>,
     pub noise_max: Option<f32>,
@@ -177,7 +179,13 @@ pub struct CityComponent {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-pub struct ProjectileComponent {}
+pub struct ProjectileComponent {
+    pub projectile_speed: Option<f32>,
+    /// `ANTIGRAV`, `LOB` or `BOMB`.
+    pub projectile_type: Option<String>,
+    /// Seconds it flies, if above 0.
+    pub projectile_life: Option<f32>,
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationComponent {
@@ -334,6 +342,8 @@ pub struct PerformerComponent {
     pub check_damage_resistance: bool,
     #[serde(default)]
     pub ability: Vec<Ability>,
+    /// How high above its user an attack starts, unless it says.
+    pub attack_height: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -342,6 +352,8 @@ pub struct Ability {
     pub animation1: Option<String>,
     /// The bone of the turret that aims it, if it has one.
     pub turret_ids: Option<String>,
+    /// Where its projectiles appear, from its user, forward along -y.
+    pub spawn_position: Option<[f32; 3]>,
     pub ability_definition: Option<AbilityDefinition>,
 }
 
@@ -701,6 +713,12 @@ pub struct Cursor {
 pub struct SVars {
     #[serde(rename = "BuildingPaddingMeters")]
     pub building_padding_meters: Option<f32>,
+    /// How far up its target a projectile flying straight aims.
+    #[serde(rename = "ProjectileTargetHeightRatio")]
+    pub projectile_target_height_ratio: Option<f32>,
+    /// How far up its target a lobbed or dropped projectile aims.
+    #[serde(rename = "ProjectileArcingTargetHeightRatio")]
+    pub projectile_arcing_target_height_ratio: Option<f32>,
     /// The most a resource that limits another provides, in total.
     #[serde(rename = "EconomyLimitedResourceMax")]
     pub economy_limited_resource_max: Option<f32>,
@@ -758,6 +776,14 @@ pub struct Vfx {
 #[derive(Debug, Clone, Deserialize)]
 pub struct VfxFlags {
     pub random_orientation: Option<bool>,
+}
+
+/// A well-known point of models, which effects name by id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Bone {
+    pub ids: Option<Id>,
+    /// The node it is in a model.
+    pub bone_name: Option<String>,
 }
 
 /// A way of arranging an organization, which its layout places its slots

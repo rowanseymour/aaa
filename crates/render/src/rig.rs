@@ -187,6 +187,30 @@ impl Nodes {
         }
     }
 
+    /// Where each node is in the model, by its name; the first of a name,
+    /// each node before its children, wins. As the game loads a model, its
+    /// top node becomes `base`, under a new top node with no offset that
+    /// takes the old one's name.
+    pub fn points(&self) -> HashMap<String, nif::Transform> {
+        let mut model: Vec<nif::Transform> = Vec::with_capacity(self.nodes.len());
+        let mut out = HashMap::new();
+        if let Some(top) = self.nodes.first() {
+            out.insert(top.name.clone(), nif::Transform::IDENTITY);
+            out.insert("base".to_string(), top.rest);
+        }
+        for (i, n) in self.nodes.iter().enumerate() {
+            let t = match n.parent {
+                Some(p) => model[p].then(&n.rest),
+                None => n.rest,
+            };
+            model.push(t);
+            if i > 0 {
+                out.entry(n.name.clone()).or_insert(t);
+            }
+        }
+        out
+    }
+
     /// The nif index of rig node `node`.
     fn nif_index(&self, node: usize) -> Option<usize> {
         self.nodes.get(node).map(|n| n.nif)
@@ -479,6 +503,7 @@ impl Rig {
             time: offset,
             moving: None,
             once: None,
+            rate: 1.0,
         });
         joints
     }
@@ -543,6 +568,8 @@ pub struct Playing {
     moving: Option<f32>,
     /// An animation it's playing once instead.
     once: Option<Once>,
+    /// Seconds of animation per second played.
+    pub(crate) rate: f32,
 }
 
 struct Once {
@@ -619,9 +646,9 @@ impl Playing {
 }
 
 pub fn play(time: Res<Time>, mut rigs: Query<&mut Playing>, mut transforms: Query<&mut Transform>) {
-    let dt = time.delta_secs();
     for mut p in &mut rigs {
         let p = &mut *p;
+        let dt = time.delta_secs() * p.rate;
         if let Some(once) = &mut p.once {
             once.time += dt;
             let ended = once.time >= p.rig.once(once.clip).length;
@@ -791,5 +818,38 @@ mod tests {
         let mut t = bevy_transform(&turned);
         squash(&mut t, &turned);
         assert_eq!(t, bevy_transform(&turned));
+    }
+
+    fn rig_node(name: &str, parent: Option<usize>, at: [f32; 3]) -> RigNode {
+        RigNode {
+            nif: 0,
+            name: name.into(),
+            parent,
+            rest: nif::Transform {
+                translation: at,
+                ..nif::Transform::IDENTITY
+            },
+        }
+    }
+
+    #[test]
+    fn points_are_found_first_from_the_top_with_the_top_as_base() {
+        let nodes = Nodes {
+            nodes: vec![
+                rig_node("Scene Root", None, [0.0, 0.0, 1.0]),
+                rig_node("Gun", Some(0), [2.0, 0.0, 0.0]),
+                rig_node("base", Some(1), [0.0, 3.0, 0.0]),
+                rig_node("Gun", Some(0), [9.0, 0.0, 0.0]),
+            ],
+            index: HashMap::new(),
+            shapes: Vec::new(),
+            frames: Frames::default(),
+        };
+        let points = nodes.points();
+        let at = |name: &str| points.get(name).map(|t| t.translation);
+        assert_eq!(at("Scene Root"), Some([0.0; 3]));
+        assert_eq!(at("base"), Some([0.0, 0.0, 1.0]));
+        assert_eq!(at("Gun"), Some([2.0, 0.0, 1.0]));
+        assert_eq!(at("gun"), None);
     }
 }

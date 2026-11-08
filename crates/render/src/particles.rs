@@ -440,6 +440,7 @@ pub(crate) fn spawn(
             mesh,
             state: State::new(seed.wrapping_mul(31).wrapping_add(i as u32), offset),
             corners: Vec::new(),
+            rate: 1.0,
         });
     }
 }
@@ -454,6 +455,8 @@ pub struct Particles {
     state: State,
     /// Each square's corners, relative to the mesh, kept to fill it from.
     corners: Vec<[f32; 3]>,
+    /// Seconds of its animation per second played.
+    pub(crate) rate: f32,
 }
 
 /// Marks the entity a system's squares are drawn by.
@@ -973,6 +976,7 @@ pub fn play(
                     .map(|&a| to_space * anchors.get(a).map_or(own, |g| g.affine()))
                     .collect(),
             };
+            let dt = dt * particles.rate;
             particles.system.step(&mut particles.state, &space, dt);
         }
         let Some(camera) = camera else { continue };
