@@ -84,6 +84,7 @@ pub struct Thing {
     pub performer_component: Option<PerformerComponent>,
     pub city_component: Option<CityComponent>,
     pub organization_component: Option<OrganizationComponent>,
+    pub projectile_component: Option<ProjectileComponent>,
     pub recruit_component: Option<RecruitComponent>,
     pub mobile_deployment_component: Option<MobileDeploymentComponent>,
     pub economy_component: Option<EconomyComponent>,
@@ -174,6 +175,9 @@ pub struct BodyComponent {
 pub struct CityComponent {
     pub zone_radius: Option<f32>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectileComponent {}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationComponent {
@@ -443,6 +447,10 @@ pub struct Flags {
     pub water_based: Option<bool>,
     /// It keeps its own height rather than standing on the ground.
     pub flying: Option<bool>,
+    /// It stands on the half-tile grid.
+    pub tile_locked: Option<bool>,
+    /// Nothing gets in its way.
+    pub ethereal: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -453,7 +461,8 @@ pub struct Size {
     pub blocking_shape: Option<String>,
     pub blocking_radius: Option<f32>,
     /// The outline it occupies the ground with, sized by the fields of the
-    /// blocking shape but for a circle's `soft_radius`.
+    /// blocking shape but for a circle's `soft_radius`; `null` for the
+    /// blocking shape's kind.
     pub soft_shape: Option<String>,
     pub soft_radius: Option<f32>,
     pub square_size: Option<f32>,
@@ -787,9 +796,9 @@ pub struct Audio {
     /// How steeply it falls off, and the distance it is silent beyond.
     pub range: Option<[f32; 2]>,
     pub simultaneous_limit: Option<u32>,
-    pub volume: Option<String>,
-    pub volume_adjust: Option<String>,
-    pub pitch_adjust: Option<[String; 2]>,
+    pub volume: Option<f32>,
+    pub volume_adjust: Option<f32>,
+    pub pitch_adjust: Option<[f32; 2]>,
     pub delay_ms: Option<[f32; 2]>,
     /// Seconds to fade in and out.
     pub fade_time_s: Option<[f32; 2]>,

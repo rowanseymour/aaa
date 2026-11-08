@@ -26,8 +26,15 @@ pub struct Obstacle {
     pub position: [f32; 2],
     /// The direction its model's -y axis points, a unit vector.
     pub facing: [f32; 2],
+    /// Its blocking shape.
     pub shape: Shape,
+    /// Its soft shape, which bounds the tiles it blocks.
+    pub soft: Shape,
 }
+
+/// How far short of a box's high edges the tiles it spans stop, so that an
+/// edge lying on a tile's edge doesn't take in the tile beyond.
+const EDGE: f32 = 0.0001;
 
 impl Obstacle {
     /// How far a point is from the shape's edge; 0 within it.
@@ -86,6 +93,31 @@ impl Obstacle {
     pub fn covers(&self, tile: (i32, i32)) -> bool {
         covered(self).contains(&tile)
     }
+
+    /// The low and high corners of the box `shape` takes up standing as it
+    /// does.
+    pub(crate) fn bounds(&self, shape: Shape) -> ([f32; 2], [f32; 2]) {
+        let [x, y] = self.position;
+        let (half_x, half_y) = match shape {
+            Shape::Point => (0.0, 0.0),
+            Shape::Circle { radius } => (radius, radius),
+            Shape::Rect { width, height } => {
+                let [fx, fy] = self.facing;
+                let (w, h) = (width / 2.0, height / 2.0);
+                (w * fy.abs() + h * fx.abs(), w * fx.abs() + h * fy.abs())
+            }
+        };
+        ([x - half_x, y - half_y], [x + half_x, y + half_y])
+    }
+}
+
+/// The tiles from the one under a box's low corner to the one just short
+/// of its high corner, which may be off the map.
+pub(crate) fn spanned((lo, hi): ([f32; 2], [f32; 2])) -> impl Iterator<Item = (i32, i32)> {
+    let (x0, y0) = tile_at(lo);
+    let (x1, y1) = tile_at([hi[0] - EDGE, hi[1] - EDGE]);
+    let (x1, y1) = (x1.max(x0), y1.max(y0));
+    (y0..=y1).flat_map(move |y| (x0..=x1).map(move |x| (x, y)))
 }
 
 #[derive(Clone)]
@@ -93,7 +125,7 @@ pub struct Pathing {
     /// Tiles per side.
     pub side: usize,
     /// Row-major bits per tile.
-    tiles: Vec<u8>,
+    pub(crate) tiles: Vec<u8>,
     /// Row-major, how many obstacles cover each tile, so that one going
     /// leaves the others' tiles blocked.
     blockers: Vec<u16>,
@@ -145,10 +177,14 @@ impl Pathing {
 
     /// Whether a mover on `domain` can enter the tile; off the map it can't.
     pub fn passable(&self, x: i32, y: i32, domain: Domain) -> bool {
-        let Some(i) = self.index(x, y) else {
-            return false;
-        };
-        self.blockers[i] == 0 && self.tiles[i] & bits(domain) != 0
+        self.index(x, y)
+            .is_some_and(|i| self.blockers[i] == 0 && self.tiles[i] & bits(domain) != 0)
+    }
+
+    /// Whether the tile's terrain is `domain`'s, whatever stands on it.
+    fn crossable(&self, x: i32, y: i32, domain: Domain) -> bool {
+        self.index(x, y)
+            .is_some_and(|i| self.tiles[i] & bits(domain) != 0)
     }
 
     /// Keeps movers off one tile.
@@ -182,12 +218,33 @@ impl Pathing {
         ((0..side).contains(&x) && (0..side).contains(&y)).then(|| (y * side + x) as usize)
     }
 
-    /// Whether an obstacle could stand there: every tile it would cover is
-    /// on the map, open and crossable on `domain`.
-    pub fn room_for(&self, o: &Obstacle, domain: Domain) -> bool {
-        covered(o)
-            .into_iter()
-            .all(|(x, y)| self.passable(x, y, domain))
+    /// Whether `o`'s shape lies wholly on the map.
+    pub fn on_map(&self, o: &Obstacle) -> bool {
+        let size = self.side as f32 * CELL_SIZE;
+        let (lo, hi) = o.bounds(o.shape);
+        lo.iter().chain(&hi).all(|&c| (0.0..size).contains(&c))
+    }
+
+    /// Whether every tile under `o`'s shape is `domain`'s, whatever stands
+    /// on it.
+    pub fn ground_for(&self, o: &Obstacle, domain: Domain) -> bool {
+        spanned(o.bounds(o.shape)).all(|(x, y)| self.crossable(x, y, domain))
+    }
+
+    /// Whether something blocking that takes up `o`'s shape could stand
+    /// there among the blocking things `others`: its shape is on the map,
+    /// every tile under it is `domain`'s, and it overlaps none of them. Its
+    /// size makes no difference, so a shape too small to block a tile still
+    /// needs these.
+    pub fn room_for<'a>(
+        &self,
+        o: &Obstacle,
+        domain: Domain,
+        others: impl IntoIterator<Item = &'a Obstacle>,
+    ) -> bool {
+        self.on_map(o)
+            && self.ground_for(o, domain)
+            && others.into_iter().all(|other| !other.overlaps(o))
     }
 
     /// Keeps movers off the tiles an obstacle covers.
@@ -198,12 +255,12 @@ impl Pathing {
     }
 }
 
-/// The tiles whose centres lie within a quarter of a tile's width of the
-/// obstacle's shape, as the game blocks them: so shapes reaching no further
-/// than that from their middle cover none.
+/// The tiles an obstacle blocks: of those under its soft shape's box, the
+/// ones whose centres lie within a quarter of a tile of its blocking shape.
+/// So a blocking shape reaching no further than that from its middle blocks
+/// none, and one reaching beyond its soft shape's box blocks nothing there.
 fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     const MARGIN: f32 = CELL_SIZE / 4.0;
-    let [px, py] = o.position;
     let reach = match o.shape {
         Shape::Point => 0.0,
         Shape::Circle { radius } => radius,
@@ -212,24 +269,16 @@ fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     if reach <= MARGIN {
         return Vec::new();
     }
-    let covers = |wx: f32, wy: f32| match o.shape {
+    // A centre exactly a quarter tile from a circle counts, but not from a
+    // rectangle.
+    let covers = |centre: [f32; 2]| match o.shape {
         Shape::Point => false,
-        Shape::Circle { .. } => o.distance([wx, wy]) <= MARGIN,
-        Shape::Rect { .. } => o.distance([wx, wy]) < MARGIN,
+        Shape::Circle { .. } => o.distance(centre) <= MARGIN + EDGE,
+        Shape::Rect { .. } => o.distance(centre) < MARGIN,
     };
-    let extent = reach + MARGIN;
-    let (x0, y0) = tile_at([px - extent, py - extent]);
-    let (x1, y1) = tile_at([px + extent, py + extent]);
-    let mut out = Vec::new();
-    for y in y0..=y1 {
-        for x in x0..=x1 {
-            let [cx, cy] = tile_centre(x, y);
-            if covers(cx, cy) {
-                out.push((x, y));
-            }
-        }
-    }
-    out
+    spanned(o.bounds(o.soft))
+        .filter(|&(x, y)| covers(tile_centre(x, y)))
+        .collect()
 }
 
 /// Whether a tile whose terrain the data doesn't define is water: where the
@@ -265,11 +314,16 @@ mod tests {
     use super::*;
 
     fn blocked(shape: Shape, facing: [f32; 2]) -> Vec<(i32, i32)> {
+        blocked_within(shape, Shape::Circle { radius: 5.0 }, facing)
+    }
+
+    fn blocked_within(shape: Shape, soft: Shape, facing: [f32; 2]) -> Vec<(i32, i32)> {
         let mut p = Pathing::uniform(10, Domain::Land);
         p.block(&Obstacle {
             position: [11.0, 11.0],
             facing,
             shape,
+            soft,
         });
         let mut out = Vec::new();
         for y in 0..10 {
@@ -372,11 +426,53 @@ mod tests {
     }
 
     #[test]
+    fn only_tiles_under_the_soft_shapes_box_are_blocked() {
+        let wide = Shape::Circle { radius: 1.6 };
+        // A box edge on a tile's edge doesn't take in the tile beyond.
+        let soft = Shape::Circle { radius: 1.0 };
+        assert_eq!(blocked_within(wide, soft, [0.0, -1.0]), [(5, 5)]);
+        // A rectangle's box turns with it.
+        let soft = Shape::Rect {
+            width: 4.0,
+            height: 2.0,
+        };
+        let turned = blocked_within(wide, soft, [1.0, 0.0]);
+        assert_eq!(turned, [(5, 4), (5, 5), (5, 6)]);
+    }
+
+    #[test]
+    fn room_takes_the_terrain_under_the_shape_and_clear_of_other_blockers() {
+        let mut p = Pathing::uniform(4, Domain::Land);
+        p.tiles[3] = NAVAL;
+        let at = |position, shape| Obstacle {
+            position,
+            facing: [0.0, -1.0],
+            shape,
+            soft: shape,
+        };
+        let small = Shape::Circle { radius: 0.2 };
+        assert!(p.room_for(&at([1.0, 1.0], small), Domain::Land, []));
+        // Too small to block a tile, it still needs its own to be land.
+        assert!(!p.room_for(&at([7.0, 1.0], small), Domain::Land, []));
+        assert!(p.room_for(&at([7.0, 1.0], small), Domain::Naval, []));
+        // And to be on the map.
+        assert!(!p.room_for(&at([0.1, 1.0], small), Domain::Land, []));
+        assert!(!p.room_for(&at([7.9, 7.0], small), Domain::Naval, []));
+        // A blocked tile is no matter, only overlapping what blocks it.
+        let hut = at([3.0, 5.0], Shape::Circle { radius: 1.0 });
+        p.block(&hut);
+        assert!(!p.passable(1, 2, Domain::Land));
+        assert!(p.room_for(&at([2.5, 3.5], small), Domain::Land, [&hut]));
+        assert!(!p.room_for(&at([3.0, 4.5], small), Domain::Land, [&hut]));
+    }
+
+    #[test]
     fn tiles_stay_blocked_until_everything_on_them_is_gone() {
         let o = |x| Obstacle {
             position: [x, 11.0],
             facing: [0.0, -1.0],
             shape: Shape::Circle { radius: 1.0 },
+            soft: Shape::Circle { radius: 1.0 },
         };
         let mut p = Pathing::uniform(10, Domain::Land);
         let (a, b) = (o(11.0), o(11.5));
@@ -394,6 +490,7 @@ mod tests {
             position,
             facing,
             shape,
+            soft: shape,
         };
         let square = Shape::Rect {
             width: 2.0,

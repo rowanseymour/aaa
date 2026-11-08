@@ -459,3 +459,27 @@ fn retemplated_block_keeps_inherited_attributes() {
     let view = thing.blocks_of("View").next().unwrap();
     assert_eq!(view.header.attrs, [("Layer".to_string(), "3".to_string())]);
 }
+
+#[test]
+fn templates_last_as_long_as_their_file() {
+    let schema = ok("[Template Base]\n{\n\tx = 1\n}\n");
+    let unit = ok("[Template Local Template=Base]\n{\n\ty = 2\n}\n[Thing Template=Local]\n{\n}\n");
+    // Its own template of the same name is no clash, as the first let its go.
+    let other = ok("[Template Local]\n{\n\ty = 3\n}\n[Thing Template=Local]\n{\n}\n");
+    // Defining one still loaded fails the whole file.
+    let clash = ok("[Template Base]\n{\n}\n[Thing Template=Base]\n{\n}\n");
+    let after = ok("[Thing Template=Local]\n{\n}\n");
+    let scoped = Templates::scoped([&schema, &unit, &other, &clash, &after]);
+    let y = |i: usize, root: &Block| {
+        let t = scoped[i].as_ref().unwrap();
+        let thing = t.resolve(root.blocks_of("Thing").next().unwrap());
+        (
+            thing.value("x").map(str::to_string),
+            thing.value("y").map(str::to_string),
+        )
+    };
+    assert_eq!(y(1, &unit), (Some("1".into()), Some("2".into())));
+    assert_eq!(y(2, &other), (None, Some("3".into())));
+    assert!(scoped[3].is_none());
+    assert_eq!(y(4, &after), (None, None));
+}

@@ -619,6 +619,9 @@ fn prepare(
         Ok(map) => map,
         Err(e) => return Err((Box::new(game), e)),
     };
+    for w in &map.warnings {
+        warn!("{name}: {w}");
+    }
     if let Some(teams) = &teams {
         map.arrange(teams);
     }
@@ -890,6 +893,7 @@ fn setup(
         .iter()
         .filter(|t| aaa_render::models::holds_building(t, &building_ids));
     let leave_out: HashSet<u32> = ids
+        .chain(map.crowded.iter().copied())
         .chain(trailers)
         .chain(building_ids.iter().copied())
         .chain(holding_buildings.map(|t| t.id))

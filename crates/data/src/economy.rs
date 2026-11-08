@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 
-use crate::{GameData, Id, defs};
+use crate::{GameData, Id, defs, scoped};
 
 /// The resources the data's costs, upkeeps and production name, by field
 /// name, in the order [`Amounts`] keeps them.
@@ -152,11 +152,10 @@ impl GameData {
                 || n == "game/world_rules_aa.tgi"
                 || n.starts_with("templates/")
         });
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let resources: Vec<defs::Resource> = files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Resource"))
-            .filter_map(|b| templates.deserialize::<defs::Resource>(b).ok())
+            .flat_map(|f| f.read::<defs::Resource>("Resource"))
             .collect();
         let known = |id: &Id| {
             RESOURCES
@@ -193,8 +192,7 @@ impl GameData {
         // The match's setting stands in for the tuning one.
         let rule = files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("WorldRule"))
-            .filter_map(|b| templates.deserialize::<defs::WorldRule>(b).ok())
+            .flat_map(|f| f.read::<defs::WorldRule>("WorldRule"))
             .find(|r| {
                 r.ids
                     .as_ref()
@@ -211,14 +209,13 @@ impl GameData {
     /// precedence, before the engine's.
     pub(crate) fn svars(&mut self) -> Vec<defs::SVars> {
         let files = self.parse_tgis(|n| n == "game/svars_aa.tgi" || n == "game/svars.tgi");
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let mut out: Vec<(bool, defs::SVars)> = files
             .iter()
-            .flat_map(|(n, p)| {
-                let own = n.to_ascii_lowercase().ends_with("svars_aa.tgi");
-                p.root.blocks_of("SVars").map(move |b| (own, b))
+            .flat_map(|f| {
+                let own = f.file.to_ascii_lowercase().ends_with("svars_aa.tgi");
+                f.read::<defs::SVars>("SVars").map(move |s| (own, s))
             })
-            .filter_map(|(own, b)| Some((own, templates.deserialize::<defs::SVars>(b).ok()?)))
             .collect();
         out.sort_by_key(|(own, _)| !own);
         out.into_iter().map(|(_, s)| s).collect()

@@ -32,6 +32,9 @@ pub struct Building {
     pub obstacle: Option<Obstacle>,
     /// Where what it recruits appears and goes, for one that recruits.
     pub deploy: Option<DeployPoints>,
+    /// It stands in an organization, as a Division HQ's building does, so
+    /// it packs back into it.
+    pub organized: bool,
 }
 
 /// The owned objects that can be hurt but not move and aren't regiments,
@@ -45,8 +48,8 @@ pub fn buildings(
     obstacles: &HashMap<u32, Obstacle>,
     deploy_points: &HashMap<Id, DeployPoints>,
 ) -> Vec<Building> {
-    standing(things)
-        .filter_map(|(t, owner)| {
+    in_organizations(things)
+        .filter_map(|(t, owner, organized)| {
             let owner = owner?;
             let template = Id::from(t.template.as_str());
             let fighter = fighters.get(&template)?;
@@ -73,6 +76,7 @@ pub fn buildings(
                     .unwrap_or_default(),
                 obstacle: obstacles.get(&t.id).cloned(),
                 deploy: deploy_points.get(&template).copied(),
+                organized,
             })
         })
         .collect()
@@ -82,10 +86,15 @@ pub fn buildings(
 /// on the map as objects do, each with its owner: its own, else its
 /// organization's.
 pub(crate) fn standing(things: &[Thing]) -> impl Iterator<Item = (&Thing, Option<u32>)> {
+    in_organizations(things).map(|(t, owner, _)| (t, owner))
+}
+
+/// [`standing`], with whether each stands in an organization.
+fn in_organizations(things: &[Thing]) -> impl Iterator<Item = (&Thing, Option<u32>, bool)> {
     things.iter().flat_map(|t| {
         let within = owner(t);
         let members = t.organization().map_or(&[][..], |o| &o.members[..]);
-        let members = members.iter().map(move |m| (m, owner(m).or(within)));
-        std::iter::once((t, within)).chain(members)
+        let members = members.iter().map(move |m| (m, owner(m).or(within), true));
+        std::iter::once((t, within, false)).chain(members)
     })
 }
