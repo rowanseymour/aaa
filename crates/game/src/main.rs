@@ -11,9 +11,10 @@
 //! regiments' places relative to each other and stopping to fight enemies on
 //! the way. The number keys pick the selection's formation, in the order each regiment's
 //! layout lists them, and the buttons in the corner give the selection the
-//! orders in [`actions`]. Clicking the minimap moves the camera there, and the
-//! key left of 1 opens a console for script commands. Units and buildings
-//! make their sounds as they're selected, ordered, move, fire and die.
+//! orders in [`actions`]. Clicking the minimap moves the camera there, or
+//! gives an aimed order there, and the key left of 1 opens a console for
+//! script commands. Units and buildings make their sounds as they're
+//! selected, ordered, move, fire and die.
 
 mod actions;
 mod banners;
@@ -43,6 +44,7 @@ use aaa_render::shot::{self, ShotPlugin};
 use aaa_render::terrain::{map_point, world};
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_sim::{Relation, State, TICK, Target, World};
+use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
@@ -520,7 +522,7 @@ fn main() -> ExitCode {
         .add_systems(
             Update,
             (
-                minimap::steer.before(camera::Controls),
+                minimap::steer.before(camera::Controls).before(actions::aim),
                 minimap::update.after(camera::Controls),
                 (actions::back_out, actions::show).chain(),
                 (pane::lay_out, pane::refresh).chain(),
@@ -545,9 +547,7 @@ fn main() -> ExitCode {
                             .run_if(actions::pointer_away),
                     )
                         .run_if(not(actions::aiming)),
-                    actions::aim
-                        .run_if(minimap::pointer_away)
-                        .run_if(actions::pointer_away),
+                    actions::aim.run_if(actions::pointer_away),
                 )
                     .chain(),
                 choose_formation,
@@ -1347,6 +1347,94 @@ fn show_buildings(
     }
 }
 
+/// What the cursor points at on the map, on the ground or through the
+/// minimap, and not through the action grid.
+#[derive(SystemParam)]
+struct Pointer<'w, 's> {
+    windows: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    cameras: Query<
+        'w,
+        's,
+        (
+            &'static Camera,
+            &'static GlobalTransform,
+            &'static RtsCamera,
+        ),
+    >,
+    grid: Query<
+        'w,
+        's,
+        (
+            &'static RelativeCursorPosition,
+            &'static InheritedVisibility,
+        ),
+        With<actions::Blocks>,
+    >,
+    minimap: Res<'w, minimap::Minimap>,
+    views: Query<'w, 's, &'static RelativeCursorPosition, With<minimap::MinimapView>>,
+}
+
+/// A point on the map the cursor's at, in world units.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Pointing {
+    Ground([f32; 2]),
+    Minimap([f32; 2]),
+}
+
+impl Pointing {
+    fn point(self) -> [f32; 2] {
+        match self {
+            Pointing::Ground(p) | Pointing::Minimap(p) => p,
+        }
+    }
+}
+
+impl Pointer<'_, '_> {
+    fn at(&self, ground: &Ground) -> Option<Pointing> {
+        if actions::over_grid(&self.grid) {
+            return None;
+        }
+        match self.minimap.spot(&self.views) {
+            minimap::Spot::Off => {
+                pointed(&self.windows, &self.cameras, ground).map(Pointing::Ground)
+            }
+            minimap::Spot::OffMap => None,
+            minimap::Spot::At(p) => Some(Pointing::Minimap(p)),
+        }
+    }
+}
+
+/// The regiment, of those `taking` takes, with the living unit nearest
+/// `point`, if one's within `reach`.
+fn nearest_regiment(
+    sim: &World,
+    point: [f32; 2],
+    reach: f32,
+    taking: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    nearest(
+        sim.units
+            .iter()
+            .filter(|u| u.alive() && taking(u.regiment))
+            .map(|u| (u.regiment, u.position)),
+        point,
+        reach,
+    )
+}
+
+fn nearest(
+    units: impl Iterator<Item = (usize, [f32; 2])>,
+    point: [f32; 2],
+    reach: f32,
+) -> Option<usize> {
+    let near = |p: [f32; 2]| (p[0] - point[0]).hypot(p[1] - point[1]);
+    units
+        .map(|(r, p)| (r, near(p)))
+        .filter(|(_, d)| *d < reach)
+        .min_by(|a, b| a.1.total_cmp(&b.1))
+        .map(|(r, _)| r)
+}
+
 /// The point on the ground under the cursor, in world units.
 fn pointed(
     windows: &Query<&Window, With<PrimaryWindow>>,
@@ -1388,15 +1476,7 @@ fn focus(
         focus.set_if_neq(Focus::Nothing);
         return;
     };
-    let near = |p: [f32; 2]| (p[0] - point[0]).hypot(p[1] - point[1]);
-    let unit = sim
-        .0
-        .units
-        .iter()
-        .filter(|u| u.alive() && !scenery.has(&sim.0, u.regiment))
-        .map(|u| (u.regiment, near(u.position)))
-        .filter(|(_, d)| *d < REACH)
-        .min_by(|a, b| a.1.total_cmp(&b.1));
+    let unit = nearest_regiment(&sim.0, point, REACH, |r| !scenery.has(&sim.0, r));
     let building = || {
         sim.0.buildings.iter().position(|b| {
             !b.gone()
@@ -1406,7 +1486,7 @@ fn focus(
         })
     };
     let found = match unit {
-        Some((r, _)) => Focus::Regiment(r),
+        Some(r) => Focus::Regiment(r),
         None => building().map_or(Focus::Nothing, Focus::Building),
     };
     focus.set_if_neq(found);
@@ -2016,5 +2096,18 @@ fn show_health(
             Pickable::IGNORE,
             DespawnOnExit(Screen::Match),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_nearest_unit_within_reach_is_pointed_at() {
+        let units = || [(0, [0.0, 0.0]), (1, [3.0, 0.0]), (2, [1.5, 0.0])].into_iter();
+        assert_eq!(nearest(units(), [2.0, 0.0], 1.0), Some(2));
+        assert_eq!(nearest(units(), [2.9, 0.0], 1.0), Some(1));
+        assert_eq!(nearest(units(), [0.0, 5.0], 1.0), None);
     }
 }

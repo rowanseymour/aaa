@@ -13,11 +13,10 @@ use aaa_render::textures;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
-use bevy::ui::RelativeCursorPosition;
 use bevy::window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow, SystemCursorIcon};
 
 use crate::actions::{self, Aim, Page};
-use crate::{Drawn, Loaded, Screen, SelectedBuilding, Sim, minimap};
+use crate::{Drawn, Loaded, Pointer, Screen, SelectedBuilding, Sim};
 
 /// The effect marking a building's rally point.
 const RALLY_MARKER: &str = "recruit_marker_rally_point";
@@ -155,18 +154,18 @@ pub fn load(
     commands.insert_resource(looks);
 }
 
-/// Shows the aimed order's cursor over the map, and the usual one
-/// elsewhere.
+/// Shows the aimed order's cursor over the map and the minimap's diamond,
+/// and the usual one elsewhere.
 pub fn cursor(
     mut commands: Commands,
     page: Res<Page>,
     looks: Res<Looks>,
     time: Res<Time>,
-    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
-    minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
+    pointer: Pointer,
+    loaded: Res<Loaded>,
     window: Single<(Entity, Option<&CursorIcon>), With<PrimaryWindow>>,
 ) {
-    let over_map = actions::pointer_away(grid) && minimap::pointer_away(minimap);
+    let over_map = pointer.at(&loaded.map.ground).is_some();
     let frames = match *page {
         Page::Aiming(aim) if over_map => looks.cursors.get(&aim),
         Page::Rally if over_map => looks.rally_cursor.as_ref(),

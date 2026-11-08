@@ -36,6 +36,13 @@ pub struct Obstacle {
 /// edge lying on a tile's edge doesn't take in the tile beyond.
 const EDGE: f32 = 0.0001;
 
+/// Whether shapes that only touch are apart or together.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Contact {
+    Separates,
+    Joins,
+}
+
 impl Obstacle {
     /// How far a point is from the shape's edge; 0 within it.
     pub fn distance(&self, [x, y]: [f32; 2]) -> f32 {
@@ -55,24 +62,38 @@ impl Obstacle {
     /// Whether it and `other` share any ground; touching isn't enough.
     pub fn overlaps(&self, other: &Obstacle) -> bool {
         match (self.shape, other.shape) {
-            (Shape::Rect { .. }, Shape::Rect { .. }) => {
-                !self.separated_from(other) && !other.separated_from(self)
-            }
+            (Shape::Rect { .. }, Shape::Rect { .. }) => !self.apart(other, Contact::Separates),
             (Shape::Rect { .. }, _) => other.overlaps(self),
             (Shape::Circle { radius }, _) => other.distance(self.position) < radius,
             (Shape::Point, _) => other.distance(self.position) == 0.0,
         }
     }
 
+    /// Like [`overlaps`](Self::overlaps), except that two rectangles only
+    /// touching meet.
+    pub fn meets(&self, other: &Obstacle) -> bool {
+        match (self.shape, other.shape) {
+            (Shape::Rect { .. }, Shape::Rect { .. }) => !self.apart(other, Contact::Joins),
+            _ => self.overlaps(other),
+        }
+    }
+
+    /// Whether an axis of either rectangle keeps the other clear of it.
+    fn apart(&self, other: &Obstacle, contact: Contact) -> bool {
+        self.separated_from(other, contact) || other.separated_from(self, contact)
+    }
+
     /// Whether one of this rectangle's axes keeps `other`'s corners clear
     /// of it.
-    fn separated_from(&self, other: &Obstacle) -> bool {
+    fn separated_from(&self, other: &Obstacle, contact: Contact) -> bool {
         let (Shape::Rect { width, height }, Some(corners)) = (self.shape, other.corners()) else {
             return false;
         };
         let local = corners.map(|c| crate::to_local(self.position, self.facing, c));
+        let beyond = |c: f32, edge: f32| c > edge || (contact == Contact::Separates && c == edge);
         let clear = |axis: usize, half: f32| {
-            local.iter().all(|c| c[axis] >= half) || local.iter().all(|c| c[axis] <= -half)
+            local.iter().all(|c| beyond(c[axis], half))
+                || local.iter().all(|c| beyond(-half, c[axis]))
         };
         clear(0, width / 2.0) || clear(1, height / 2.0)
     }
@@ -225,15 +246,26 @@ impl Pathing {
         lo.iter().chain(&hi).all(|&c| (0.0..size).contains(&c))
     }
 
-    /// Whether every tile under `o`'s shape is `domain`'s, whatever stands
-    /// on it.
+    /// Whether every tile `o`'s shape overlaps is `domain`'s, whatever
+    /// stands on it. Tiles in the corners of a turned rectangle's or a
+    /// circle's box that the shape doesn't reach are no matter; within its
+    /// box a rectangle takes in the tiles it only touches, a circle doesn't.
     pub fn ground_for(&self, o: &Obstacle, domain: Domain) -> bool {
-        spanned(o.bounds(o.shape)).all(|(x, y)| self.crossable(x, y, domain))
+        if reach(o.shape) < EDGE {
+            let (x, y) = tile_at(o.position);
+            return self.crossable(x, y, domain);
+        }
+        // A rectangle square to the map meets every tile in its box.
+        let square_to_map = matches!(o.shape, Shape::Rect { .. }) && o.facing.contains(&0.0);
+        spanned(o.bounds(o.shape))
+            .filter(|&(x, y)| square_to_map || o.meets(&tile_square(x, y)))
+            .all(|(x, y)| self.crossable(x, y, domain))
     }
 
     /// Whether something blocking that takes up `o`'s shape could stand
     /// there among the blocking things `others`: its shape is on the map,
-    /// every tile under it is `domain`'s, and it overlaps none of them. Its
+    /// its ground is `domain`'s (see [`ground_for`](Self::ground_for)), and
+    /// it overlaps none of them. Its
     /// size makes no difference, so a shape too small to block a tile still
     /// needs these.
     pub fn room_for<'a>(
@@ -261,12 +293,7 @@ impl Pathing {
 /// none, and one reaching beyond its soft shape's box blocks nothing there.
 fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     const MARGIN: f32 = CELL_SIZE / 4.0;
-    let reach = match o.shape {
-        Shape::Point => 0.0,
-        Shape::Circle { radius } => radius,
-        Shape::Rect { width, height } => libm::hypotf(width, height) / 2.0,
-    };
-    if reach <= MARGIN {
+    if reach(o.shape) <= MARGIN {
         return Vec::new();
     }
     // A centre exactly a quarter tile from a circle counts, but not from a
@@ -279,6 +306,29 @@ fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     spanned(o.bounds(o.soft))
         .filter(|&(x, y)| covers(tile_centre(x, y)))
         .collect()
+}
+
+/// How far a shape reaches from its centre at most.
+fn reach(shape: Shape) -> f32 {
+    match shape {
+        Shape::Point => 0.0,
+        Shape::Circle { radius } => radius,
+        Shape::Rect { width, height } => libm::hypotf(width, height) / 2.0,
+    }
+}
+
+/// A tile's square, to test what overlaps it.
+fn tile_square(x: i32, y: i32) -> Obstacle {
+    let side = Shape::Rect {
+        width: CELL_SIZE,
+        height: CELL_SIZE,
+    };
+    Obstacle {
+        position: tile_centre(x, y),
+        facing: [0.0, 1.0],
+        shape: side,
+        soft: side,
+    }
 }
 
 /// Whether a tile whose terrain the data doesn't define is water: where the
@@ -464,6 +514,81 @@ mod tests {
         assert!(!p.passable(1, 2, Domain::Land));
         assert!(p.room_for(&at([2.5, 3.5], small), Domain::Land, [&hut]));
         assert!(!p.room_for(&at([3.0, 4.5], small), Domain::Land, [&hut]));
+    }
+
+    #[test]
+    fn room_takes_only_the_tiles_the_shape_overlaps() {
+        let at = |facing, shape| Obstacle {
+            position: [10.0, 10.0],
+            facing,
+            shape,
+            soft: shape,
+        };
+        let water = |tiles: &[(usize, usize)]| {
+            let mut p = Pathing::uniform(10, Domain::Land);
+            for &(x, y) in tiles {
+                p.tiles[y * 10 + x] = NAVAL;
+            }
+            p
+        };
+        // A 4 by 2 rectangle turned 45° spans tiles 3 to 6 each way but
+        // reaches none of the four in its box's corners.
+        let turned = at(
+            [0.70710677, 0.70710677],
+            Shape::Rect {
+                width: 4.0,
+                height: 2.0,
+            },
+        );
+        let corners = [(3, 3), (6, 3), (3, 6), (6, 6)];
+        assert!(water(&corners).room_for(&turned, Domain::Land, []));
+        // One of its corners just reaches into (5, 3).
+        assert!(!water(&[(5, 3)]).room_for(&turned, Domain::Land, []));
+        // A circle of radius 2.5 likewise misses its box's corners, but not
+        // the tiles beside them.
+        let circle = at([0.0, -1.0], Shape::Circle { radius: 2.5 });
+        assert!(water(&corners).room_for(&circle, Domain::Land, []));
+        assert!(!water(&[(4, 3)]).room_for(&circle, Domain::Land, []));
+    }
+
+    #[test]
+    fn room_on_tile_lines() {
+        let at = |position, facing, shape| Obstacle {
+            position,
+            facing,
+            shape,
+            soft: shape,
+        };
+        let water = |tiles: &[(usize, usize)]| {
+            let mut p = Pathing::uniform(10, Domain::Land);
+            for &(x, y) in tiles {
+                p.tiles[y * 10 + x] = NAVAL;
+            }
+            p
+        };
+        // A circle just reaching a tile's corner (10, 8) leaves it out.
+        let circle = at([13.0, 12.0], [0.0, -1.0], Shape::Circle { radius: 5.0 });
+        assert!(water(&[(4, 3)]).room_for(&circle, Domain::Land, []));
+        assert!(!water(&[(4, 4)]).room_for(&circle, Domain::Land, []));
+        // A turned rectangle whose edge runs through that corner takes the
+        // tile in, though it only touches it.
+        let side = Shape::Rect {
+            width: 5.0,
+            height: 5.0,
+        };
+        let turned = at([11.5, 10.0], [0.6, 0.8], side);
+        assert!(water(&[]).room_for(&turned, Domain::Land, []));
+        assert!(!water(&[(4, 3)]).room_for(&turned, Domain::Land, []));
+        // It misses (7, 3) in its box's corner.
+        assert!(water(&[(7, 3)]).room_for(&turned, Domain::Land, []));
+        // A point, or a shape hardly bigger, on a tile corner has only the
+        // tile with the larger x and y.
+        let others = [(1, 1), (1, 2), (2, 1)];
+        for shape in [Shape::Point, Shape::Circle { radius: 0.00005 }] {
+            let o = at([4.0, 4.0], [0.0, -1.0], shape);
+            assert!(water(&others).ground_for(&o, Domain::Land));
+            assert!(!water(&[(2, 2)]).ground_for(&o, Domain::Land));
+        }
     }
 
     #[test]

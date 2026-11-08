@@ -22,6 +22,7 @@ use tgck::map::Thing;
 
 use crate::MapObject;
 use crate::glow::{Glow, GlowMaterial, Source};
+use crate::particles::{self, Look, System};
 use crate::rig::{Nodes, Rig};
 use crate::team::{self, Team, TeamMaterial};
 use crate::terrain::world;
@@ -123,6 +124,7 @@ impl PartMaterial {
 #[derive(Clone)]
 struct Model {
     meshes: Meshes,
+    particles: Vec<Arc<System>>,
     /// Its selection box's width and length, in model units.
     selection: Option<Vec2>,
 }
@@ -499,7 +501,7 @@ impl Models {
             .spawn((Name::new(path), placed(thing, &view), Visibility::default()))
             .id();
         let colour = self.colours.get(&owner).copied();
-        self.spawn_meshes(commands, assets, root, model.meshes, colour, into);
+        self.spawn_meshes(commands, assets, root, model, colour, into);
         Some(root)
     }
 
@@ -581,7 +583,7 @@ impl Models {
         // well apart.
         let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
         let root = root.id();
-        self.spawn_meshes(commands, assets, root, model.meshes, colour, offset);
+        self.spawn_meshes(commands, assets, root, model, colour, offset);
         Some(root)
     }
 
@@ -616,7 +618,7 @@ impl Models {
                 Visibility::default(),
             ))
             .id();
-        self.spawn_meshes(commands, assets, root, model.meshes, None, 0.0);
+        self.spawn_meshes(commands, assets, root, model, None, 0.0);
         Some(root)
     }
 
@@ -639,7 +641,7 @@ impl Models {
             .and_then(|nif| {
                 let nodes = Nodes::new(&nif);
                 let meshes = self.rig_meshes(game, assets, &nif, path, &view, &nodes);
-                nodes.rig(
+                let rig = nodes.rig(
                     &nif,
                     meshes,
                     None,
@@ -648,11 +650,13 @@ impl Models {
                     &[],
                     assets.meshes,
                     assets.skins,
-                )
+                )?;
+                Some((rig, self.particles(game, assets, &nif, path, &view)))
             });
         let model = match rig {
-            Some(rig) => Some(Model {
+            Some((rig, particles)) => Some(Model {
                 meshes: Meshes::Rig(Arc::new(rig)),
+                particles,
                 selection: None,
             }),
             None => self.load(game, assets, path, &view, None, None),
@@ -661,25 +665,45 @@ impl Models {
         model
     }
 
-    /// Spawns a model's meshes under `root`, painted in `colour` where
-    /// they take their owner's, animations `offset` seconds in.
+    /// Spawns a model's meshes and particle systems under `root`, painted
+    /// in `colour` where they take their owner's, animations `offset`
+    /// seconds in.
     fn spawn_meshes(
         &mut self,
         commands: &mut Commands,
         assets: &mut ModelAssets,
         root: Entity,
-        meshes: Meshes,
+        model: Model,
         colour: Option<[f32; 3]>,
         offset: f32,
     ) {
-        let parts = match meshes {
-            Meshes::Parts(parts) => parts,
+        let parts = match model.meshes {
+            Meshes::Parts(parts) => {
+                particles::spawn(
+                    commands,
+                    assets.meshes,
+                    &model.particles,
+                    root,
+                    |_| None,
+                    offset,
+                );
+                parts
+            }
             Meshes::Rig(rig) => {
                 let materials = rig
                     .parts()
                     .map(|p| self.own_paint(assets, p, colour))
                     .collect();
-                rig.spawn(commands, root, offset, materials);
+                let joints = rig.spawn(commands, root, offset, materials);
+                let node = |i| rig.joint(i).map(|j| joints[j]);
+                particles::spawn(
+                    commands,
+                    assets.meshes,
+                    &model.particles,
+                    root,
+                    node,
+                    offset,
+                );
                 return;
             }
         };
@@ -789,9 +813,11 @@ impl Models {
             debug!("{path}: stops at {kind}");
         }
         let selection = selection_box(&nif);
+        let particles = self.particles(game, assets, &nif, path, view);
         if let Some(rig) = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving)) {
             return Some(Model {
                 meshes: Meshes::Rig(Arc::new(rig)),
+                particles,
                 selection,
             });
         }
@@ -825,8 +851,9 @@ impl Models {
                 parts.push(part);
             }
         }
-        (!parts.is_empty()).then_some(Model {
+        (!parts.is_empty() || !particles.is_empty()).then_some(Model {
             meshes: Meshes::Parts(parts),
+            particles,
             selection,
         })
     }
@@ -931,28 +958,14 @@ impl Models {
         let material = nif.property::<nif::Material>(props);
         let uv_set = base.map_or(0, |b| b.uv_set as usize);
         let mesh = mesh(g, transform, uv_set)?;
-        let source = base.and_then(|b| nif.get_as::<nif::SourceTexture>(b.source));
-        let texture = source.and_then(|t| match (&t.file, nif.get_as(t.pixels)) {
-            (Some(file), _) => self.texture(game, assets, file, view, path),
-            (None, Some(p)) => {
-                let key = format!("{path}#{}", t.pixels.unwrap_or_default());
-                self.embedded(assets, key, p)
-            }
-            _ => None,
-        });
+        let texture = self.base_texture(game, assets, nif, path, view, props);
         let alpha = nif.property::<nif::Alpha>(props);
         let double_sided = nif
             .property::<nif::Stencil>(props)
             .is_some_and(|s| s.double_sided());
         let [r, g, b] = material.map_or([1.0; 3], |m| m.diffuse);
         let opacity = material.map_or(1.0, |m| m.alpha);
-        let alpha_mode = match alpha {
-            Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
-            Some(a) if a.blend() && a.adds() => AlphaMode::Add,
-            Some(a) if a.blend() => AlphaMode::Blend,
-            _ if opacity < 1.0 => AlphaMode::Blend,
-            _ => AlphaMode::Opaque,
-        };
+        let alpha_mode = alpha_mode(alpha, opacity);
         let standard = StandardMaterial {
             base_color: Color::srgba(r, g, b, opacity),
             base_color_texture: texture,
@@ -988,6 +1001,118 @@ impl Models {
             blended: matches!(alpha_mode, AlphaMode::Blend | AlphaMode::Add),
             team: false,
         })
+    }
+
+    /// A model's particle systems that can be drawn.
+    fn particles(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+    ) -> Vec<Arc<System>> {
+        let placed = nif.particle_systems();
+        if placed.is_empty() {
+            return Vec::new();
+        }
+        let frames = Nodes::new(nif).frames;
+        let mut out = Vec::new();
+        for (_, p) in placed {
+            let Some(&at) = p.path.last() else { continue };
+            let look = self.particle_look(game, assets, nif, path, view, &p.properties);
+            if let Some(system) = System::read(nif, &frames, at, look) {
+                out.push(Arc::new(system));
+            }
+        }
+        out
+    }
+
+    /// How a particle system's squares are drawn: its texture whole, lit
+    /// as its vertex colour property says and blended as its alpha
+    /// property says.
+    fn particle_look(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        props: &[nif::Ref],
+    ) -> Look {
+        let texturing = nif.property::<nif::Texturing>(props);
+        let texture = self.base_texture(game, assets, nif, path, view, props);
+        let m = nif.property::<nif::Material>(props);
+        let opacity = m.map_or(1.0, |m| m.alpha);
+        // Squares that also test alpha still blend: cut out instead, soft
+        // smoke turns to specks.
+        let alpha = nif.property::<nif::Alpha>(props);
+        let alpha_mode = match alpha_mode(alpha, opacity) {
+            AlphaMode::Mask(_) if alpha.is_some_and(|a| a.blend()) => AlphaMode::Blend,
+            mode => mode,
+        };
+        let rgb = |c: Option<[f32; 3]>, a: f32| {
+            let [r, g, b] = c.unwrap_or([1.0; 3]);
+            Color::srgba(r, g, b, a)
+        };
+        let emissive = m.map(|m| m.emissive);
+        // Without a property, vertex colours stand for ambient and diffuse,
+        // lit.
+        let (vertex, lit) = nif
+            .property::<nif::VertexColor>(props)
+            .map_or((2, true), |v| (v.vertex_mode, v.lighting == 1));
+        let replace = texture.is_some() && texturing.is_some_and(|t| t.apply_mode == 0);
+        let (base_color, emissive, lit, tinted) = match (replace, vertex, lit) {
+            // The texture alone.
+            (true, _, _) => (Color::WHITE, None, false, false),
+            (false, 1, false) => (Color::WHITE, None, false, true),
+            // Lit by no light, so only the emissive colour shows.
+            (false, _, false) => (rgb(emissive, opacity), None, false, false),
+            // The particle's colour is its ambient and diffuse, and alpha.
+            (false, 2, true) => (Color::WHITE, emissive, true, true),
+            (false, _, true) => (rgb(m.map(|m| m.diffuse), opacity), emissive, true, false),
+        };
+        // Bevy scales emissive light by the exposure, which the lights undo.
+        let unit = 1.0 / bevy::camera::Exposure::default().exposure();
+        let emissive = emissive.map_or(LinearRgba::BLACK, |[r, g, b]| {
+            LinearRgba::from(Color::srgb(r, g, b)) * unit
+        });
+        let material = assets.materials.add(StandardMaterial {
+            base_color,
+            base_color_texture: texture,
+            emissive,
+            alpha_mode,
+            unlit: !lit,
+            double_sided: true,
+            cull_mode: None,
+            // Without highlights, as the game draws them.
+            perceptual_roughness: 1.0,
+            reflectance: 0.0,
+            ..default()
+        });
+        Look { material, tinted }
+    }
+
+    /// The base texture `props` give a shape, from a file or embedded.
+    fn base_texture(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        props: &[nif::Ref],
+    ) -> Option<Handle<Image>> {
+        let base = nif.property::<nif::Texturing>(props)?.base.as_ref()?;
+        let source = nif.get_as::<nif::SourceTexture>(base.source)?;
+        match (&source.file, nif.get_as(source.pixels)) {
+            (Some(file), _) => self.texture(game, assets, file, view, path),
+            (None, Some(p)) => {
+                let key = format!("{path}#{}", source.pixels.unwrap_or_default());
+                self.embedded(assets, key, p)
+            }
+            _ => None,
+        }
     }
 
     fn texture(
@@ -1029,6 +1154,17 @@ impl Models {
     }
 }
 
+/// How a shape with `alpha` and its material's `opacity` blends.
+fn alpha_mode(alpha: Option<&nif::Alpha>, opacity: f32) -> AlphaMode {
+    match alpha {
+        Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
+        Some(a) if a.blend() && a.adds() => AlphaMode::Add,
+        Some(a) if a.blend() => AlphaMode::Blend,
+        _ if opacity < 1.0 => AlphaMode::Blend,
+        _ => AlphaMode::Opaque,
+    }
+}
+
 /// The size of the hidden box a model marks its selectable extent with:
 /// width across its -y facing and length along it.
 fn selection_box(nif: &Nif) -> Option<Vec2> {
@@ -1066,7 +1202,7 @@ pub(crate) fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Op
 }
 
 /// The active controllers in the chain starting at `first`.
-fn controllers(nif: &Nif, first: nif::Ref) -> impl Iterator<Item = &Controller> {
+pub(crate) fn controllers(nif: &Nif, first: nif::Ref) -> impl Iterator<Item = &Controller> {
     let mut next = first;
     std::iter::from_fn(move || {
         let c = nif.get_as::<Controller>(next)?;

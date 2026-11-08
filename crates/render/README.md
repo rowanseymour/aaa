@@ -18,12 +18,14 @@ and the game can share.
 - Units and animals bending on their skeletons: idling, moving, attacking and
   dying
 - Models painted in their owner's colour, and the game's additive glow
+- Models' particle systems, such as chimney smoke, born from their emitters
+  and drawn as squares facing the camera
 - Hover marks, health bars and regiments' banners, in `overlay`
 - Lighting from the map's sun, combined the way the game's fixed-function
   renderer does
 - Placeholder markers for objects without a drawable model
 
-`shot` captures a frame without a window. Particle effects aren't drawn.
+`shot` captures a frame without a window.
 Some developer test maps refer to terrain types the game no longer
 defines; those tiles show as magenta.
 
