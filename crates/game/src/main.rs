@@ -128,6 +128,43 @@ struct Loaded {
 #[derive(Resource)]
 struct Sim(World);
 
+/// Commands from every player, in the order given, waiting to be carried
+/// out between ticks. They're the only way players change a match, so that
+/// every copy of it can play the same commands out on the same tick.
+#[derive(Resource, Default)]
+struct Orders(Vec<(u32, aaa_sim::Command)>);
+
+impl Orders {
+    /// Queues `command` from `player`, unless the sim would refuse it now.
+    fn give(
+        &mut self,
+        sim: &World,
+        player: u32,
+        command: aaa_sim::Command,
+    ) -> Result<(), aaa_sim::Refused> {
+        sim.check(player, &command)?;
+        self.0.push((player, command));
+        Ok(())
+    }
+
+    /// Carries out every command waiting. Checked when given, they're only
+    /// refused where one before them changed things, such as a building
+    /// told to pack and then to commission.
+    fn carry_out(&mut self, sim: &mut World) {
+        for (player, command) in self.0.drain(..) {
+            if let Err(e) = sim.apply(player, command) {
+                info!("player {player}'s order refused: {e:?}");
+            }
+        }
+    }
+}
+
+/// Carries out orders as soon as they're given, ticking or not, so that
+/// what shows them sees them taken up.
+fn carry_out(mut sim: ResMut<Sim>, mut orders: ResMut<Orders>) {
+    orders.carry_out(&mut sim.0);
+}
+
 /// The models objects are drawn with, for drawing more mid-match.
 #[derive(Resource)]
 struct Drawn(Models);
@@ -448,7 +485,7 @@ fn main() -> ExitCode {
                 (pane::lay_out, pane::refresh).chain(),
                 (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
-                (waypoints::mark, waypoints::clear).chain(),
+                (waypoints::mark, waypoints::clear).chain().after(carry_out),
                 waypoints::rally,
             )
                 .run_if(in_state(Screen::Match)),
@@ -473,7 +510,14 @@ fn main() -> ExitCode {
                 choose_formation,
             )
                 .run_if(in_state(Screen::Match))
-                .run_if(console::closed),
+                .run_if(console::closed)
+                .before(carry_out),
+        )
+        .add_systems(
+            Update,
+            carry_out
+                .after(console::run)
+                .run_if(in_state(Screen::Match)),
         );
     if let Some(remote) = remote {
         app.insert_resource(remote);
@@ -521,6 +565,7 @@ fn begin(world: &mut bevy::ecs::world::World, loaded: Loaded, person: Option<u32
     world.insert_resource(Local(lineup.person()));
     world.insert_resource(lineup);
     world.insert_resource(Sim(sim));
+    world.insert_resource(Orders::default());
     let mut loaded = loaded;
     let raising = Recruits::new(&mut loaded.game);
     world.resource_mut::<Sim>().0.packing = raising.packings();
@@ -883,17 +928,24 @@ fn target_position(sim: &World, target: Target) -> [f32; 2] {
 
 fn step(
     mut sim: ResMut<Sim>,
+    mut orders: ResMut<Orders>,
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
 ) {
-    step_world(&mut sim.0, &mut selected.0, &mut chosen.0);
+    step_world(&mut sim.0, &mut orders, &mut selected.0, &mut chosen.0);
 }
 
-/// Plays a tick of the game, dropping destroyed regiments from the
-/// selection. A packed building selected on its own that unpacks hands the
-/// selection to the building, and a building that packs to what it packed
-/// into.
-fn step_world(sim: &mut World, selected: &mut Vec<usize>, chosen: &mut Option<usize>) {
+/// Plays a tick of the game after carrying out the orders waiting,
+/// dropping destroyed regiments from the selection. A packed building
+/// selected on its own that unpacks hands the selection to the building,
+/// and a building that packs to what it packed into.
+fn step_world(
+    sim: &mut World,
+    orders: &mut Orders,
+    selected: &mut Vec<usize>,
+    chosen: &mut Option<usize>,
+) {
+    orders.carry_out(sim);
     sim.tick();
     if let &[r] = &selected[..]
         && let Some(b) = sim.regiments[r].unpacked_into
@@ -1391,7 +1443,8 @@ fn command(
     local: Res<Local>,
     focus: Res<Focus>,
     looks: Res<waypoints::Looks>,
-    mut sim: ResMut<Sim>,
+    sim: Res<Sim>,
+    mut orders: ResMut<Orders>,
     selected: Res<Selected>,
     chosen: Res<SelectedBuilding>,
     time: Res<Time>,
@@ -1413,14 +1466,18 @@ fn command(
     if selected.0.is_empty() {
         // Buildings that don't commission have no rally point to set.
         if let Some(b) = chosen.0 {
-            let _ = sim.0.set_rally(player, b, Some(point));
+            let rally = aaa_sim::Command::Rally {
+                building: b,
+                at: Some(point),
+            };
+            let _ = orders.give(&sim.0, player, rally);
         }
         return;
     }
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
     let mut moving = selected.0.clone();
     if let Some(e) = enemy_at(&sim.0, player, *focus) {
-        let (pursuing, rest) = pursue(&mut sim.0, player, &selected.0, e);
+        let (pursuing, rest) = pursue(&sim.0, &mut orders, player, &selected.0, e);
         sent.write(waypoints::Sent {
             to: None,
             aim: actions::Aim::Attack,
@@ -1429,7 +1486,8 @@ fn command(
         moving = rest;
     }
     let regiments = send(
-        &mut sim.0,
+        &sim.0,
+        &mut orders,
         player,
         &moving,
         point,
@@ -1455,15 +1513,20 @@ fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
 /// Sends regiments after the enemy regiment `e`. Returns those that went,
 /// each with where the enemy is, and those that can't.
 fn pursue(
-    sim: &mut World,
+    sim: &World,
+    orders: &mut Orders,
     player: u32,
     regiments: &[usize],
     e: usize,
 ) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
     let there = sim.centre(e);
-    let (went, rest): (Vec<usize>, Vec<usize>) = regiments
-        .iter()
-        .partition(|&&r| sim.order_pursue(player, r, e).is_ok());
+    let (went, rest): (Vec<usize>, Vec<usize>) = regiments.iter().partition(|&&r| {
+        let command = aaa_sim::Command::Pursue {
+            regiment: r,
+            enemy: e,
+        };
+        orders.give(sim, player, command).is_ok()
+    });
     (went.into_iter().map(|r| (r, there)).collect(), rest)
 }
 
@@ -1485,7 +1548,8 @@ fn acknowledge(
 /// the rest within a map `size` across, unless they all go `together` to
 /// the point itself. Returns those that went, each with where to.
 fn send(
-    sim: &mut World,
+    sim: &World,
+    orders: &mut Orders,
     player: u32,
     regiments: &[usize],
     [px, py]: [f32; 2],
@@ -1506,16 +1570,14 @@ fn send(
                 (py + y - cy).clamp(0.0, size),
             ],
         };
-        let ordered = match aim {
-            actions::Aim::Move => sim.order_move(player, r, target),
-            actions::Aim::Attack => sim.order_attack(player, r, target),
-            actions::Aim::Run => sim.order_run(player, r, target),
-            actions::Aim::Unpack => sim
-                .order_unpack(player, r, target)
-                .map(drop)
-                .map_err(|_| aaa_sim::NotYours),
+        let (regiment, to) = (r, target);
+        let command = match aim {
+            actions::Aim::Move => aaa_sim::Command::Move { regiment, to },
+            actions::Aim::Attack => aaa_sim::Command::Attack { regiment, to },
+            actions::Aim::Run => aaa_sim::Command::Run { regiment, to },
+            actions::Aim::Unpack => aaa_sim::Command::Unpack { regiment, at: to },
         };
-        if ordered.is_ok() {
+        if orders.give(sim, player, command).is_ok() {
             sent.push((r, target));
         }
     }
@@ -1526,7 +1588,8 @@ fn choose_formation(
     keys: Res<ButtonInput<KeyCode>>,
     selected: Res<Selected>,
     local: Res<Local>,
-    mut sim: ResMut<Sim>,
+    sim: Res<Sim>,
+    mut orders: ResMut<Orders>,
 ) {
     const KEYS: [KeyCode; 9] = [
         KeyCode::Digit1,
@@ -1543,12 +1606,16 @@ fn choose_formation(
         return;
     };
     for &r in &selected.0 {
-        if sim.0.set_formation(player, r, f).is_ok() {
-            let regiment = &sim.0.regiments[r];
-            info!(
-                "{} in formation {}",
-                regiment.template, regiment.formations[regiment.formation].id
-            );
+        let regiment = &sim.0.regiments[r];
+        let Some(formation) = regiment.formations.get(f) else {
+            continue;
+        };
+        let command = aaa_sim::Command::Formation {
+            regiment: r,
+            formation: f,
+        };
+        if orders.give(&sim.0, player, command).is_ok() {
+            info!("{} to formation {}", regiment.template, formation.id);
         }
     }
 }
