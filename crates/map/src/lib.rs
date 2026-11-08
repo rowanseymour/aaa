@@ -44,7 +44,8 @@ pub struct Map {
     pub pathing: Pathing,
     /// The ids of the things among [`Map::things`] with no room where the
     /// map has them, for the ground under them or something stored before
-    /// them, which the game leaves out and the editor keeps.
+    /// them, which the game leaves out and the editor keeps. An
+    /// organization with a member like that is here whole, members and all.
     pub crowded: HashSet<u32>,
     /// What the map holds that the game can't place, as it loads.
     pub warnings: Vec<String>,
@@ -99,12 +100,13 @@ impl Map {
             }
         }
         let mut pathing = Pathing::new(&terrain, &variations, []);
-        let (off_map, crowded) = placed(&things, bodies, &pathing);
+        let Placed {
+            off_map,
+            crowded,
+            warnings: unplaced,
+        } = placed(&things, bodies, &pathing);
         retain(&mut things, |t| !off_map.contains(&t.id));
-        warnings.extend(
-            standing_ids(&things, &crowded).map(|t| format!("{} {}: no room", t.id, t.template)),
-        );
-        warnings.extend(off_map.iter().map(|id| format!("{id}: off the map")));
+        warnings.extend(unplaced);
         let standing = without(&things, &crowded);
         let obstacles = obstacles(&standing, bodies);
         for (_, o) in &obstacles {
@@ -244,13 +246,6 @@ fn retain(things: &mut Vec<Thing>, mut keep: impl FnMut(&Thing) -> bool) {
     }
 }
 
-/// The things among those standing whose ids are `ids`.
-fn standing_ids<'a>(things: &'a [Thing], ids: &'a HashSet<u32>) -> impl Iterator<Item = &'a Thing> {
-    buildings::standing(things)
-        .map(|(t, _)| t)
-        .filter(|t| ids.contains(&t.id))
-}
-
 /// The things, organizations' members among them, without those `gone`.
 fn without(things: &[Thing], gone: &HashSet<u32>) -> Vec<Thing> {
     let mut out = things.to_vec();
@@ -258,24 +253,41 @@ fn without(things: &[Thing], gone: &HashSet<u32>) -> Vec<Thing> {
     out
 }
 
+/// What [`placed`] found.
+#[derive(Debug, Default)]
+struct Placed {
+    /// The ids of the things off the map.
+    off_map: HashSet<u32>,
+    /// The ids of the things without room otherwise.
+    crowded: HashSet<u32>,
+    /// Why each of those went, in the order stored.
+    warnings: Vec<String>,
+}
+
 /// Places the things in the order stored, each with its plain blocking
-/// shape, and gives the ids of those off the map, and of those without
-/// room otherwise: on ground they can't stand on, or overlapping a static
-/// blocking thing placed before them. Things that don't block, and
-/// ethereal ones, need only be on the map.
-fn placed(
-    things: &[Thing],
-    bodies: &HashMap<Id, aaa_data::Body>,
-    pathing: &Pathing,
-) -> (HashSet<u32>, HashSet<u32>) {
-    let (mut off_map, mut crowded) = (HashSet::new(), HashSet::new());
+/// shape, to find those off the map and those without room otherwise: on
+/// ground they can't stand on, or overlapping a static blocking thing
+/// placed before them. Things that don't block, and ethereal ones, need
+/// only be on the map. An organization's members are placed with it, and
+/// one without room takes the organization and all its members with it.
+fn placed(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>, pathing: &Pathing) -> Placed {
+    enum Fit {
+        Room,
+        OffMap,
+        Crowded,
+    }
+    let mut out = Placed::default();
+    type Near = HashMap<(i32, i32), Vec<usize>>;
     let mut fixed: Vec<Obstacle> = Vec::new();
     // The static blocking things by the tiles their boxes span, to test
     // only those nearby.
-    let mut near: HashMap<(i32, i32), Vec<usize>> = HashMap::new();
-    for (t, _) in buildings::standing(things) {
+    let mut near: Near = HashMap::new();
+    // The tiles the group being placed has added to `near`, to take back
+    // if the group goes.
+    let mut added: Vec<(i32, i32)> = Vec::new();
+    let place = |t: &Thing, fixed: &mut Vec<Obstacle>, near: &mut Near, added: &mut Vec<_>| {
         let Some(body) = bodies.get(&Id::from(t.template.as_str())) else {
-            continue;
+            return Fit::Room;
         };
         let [x, y, _] = t.position;
         let o = Obstacle {
@@ -285,11 +297,10 @@ fn placed(
             soft: body.soft,
         };
         if !pathing.on_map(&o) {
-            off_map.insert(t.id);
-            continue;
+            return Fit::OffMap;
         }
         if body.blocking.is_none() || body.ethereal {
-            continue;
+            return Fit::Room;
         }
         let domain = match body.water_based {
             true => Domain::Naval,
@@ -302,17 +313,60 @@ fn placed(
         others.sort_unstable();
         others.dedup();
         if !pathing.ground_for(&o, domain) || others.iter().any(|&i| fixed[i].overlaps(&o)) {
-            crowded.insert(t.id);
-            continue;
+            return Fit::Crowded;
         }
         if body.fixed {
             for tile in tiles {
                 near.entry(tile).or_default().push(fixed.len());
+                added.push(tile);
             }
             fixed.push(o);
         }
+        Fit::Room
+    };
+    for t in things {
+        let members = t.organization().map_or(&[][..], |o| &o.members[..]);
+        let group = std::iter::once(t).chain(members);
+        let before = fixed.len();
+        added.clear();
+        // The editor keeps a member that only lacks room and goes on, so
+        // one further on off the map still drops the lot.
+        let mut first_crowded = None;
+        let mut off_map = None;
+        for m in group.clone() {
+            match place(m, &mut fixed, &mut near, &mut added) {
+                Fit::Room => {}
+                Fit::Crowded => {
+                    first_crowded.get_or_insert(m);
+                }
+                Fit::OffMap => {
+                    off_map = Some(m);
+                    break;
+                }
+            }
+        }
+        let Some(cause) = off_map.or(first_crowded) else {
+            continue;
+        };
+        // Nothing of a group that's gone stands in the way of what follows.
+        fixed.truncate(before);
+        for tile in added.drain(..).rev() {
+            near.get_mut(&tile).and_then(Vec::pop);
+        }
+        let (why, set) = match off_map.is_some() {
+            true => ("off the map", &mut out.off_map),
+            false => ("no room", &mut out.crowded),
+        };
+        out.warnings.push(match cause.id == t.id {
+            true => format!("{} {}: {why}", t.id, t.template),
+            false => format!(
+                "{} {}: {why} for member {} {}",
+                t.id, t.template, cause.id, cause.template
+            ),
+        });
+        set.extend(group.map(|m| m.id));
     }
-    (off_map, crowded)
+    out
 }
 
 /// What blocks the ground, by id, of the objects standing on the map:
@@ -573,20 +627,90 @@ mod tests {
             at(5, "hut", [13.0, 3.0]),
             at(6, "ripple", [13.0, 3.0]),
             at(7, "ripple", [0.5, 3.0]),
-            // Members are placed like any other thing.
+            // Members are placed like any other thing, and one without room
+            // takes its organization and the other members with it.
             placed(
                 8,
                 "squad",
                 0,
                 None,
-                Some(organization("line", vec![at(9, "hut", [5.0, 6.0])])),
+                Some(organization(
+                    "line",
+                    vec![at(9, "tank", [9.0, 9.0]), at(10, "hut", [5.0, 6.0])],
+                )),
+            ),
+            // One off the map drops the lot even after one without room.
+            placed(
+                11,
+                "squad",
+                0,
+                None,
+                Some(organization(
+                    "line",
+                    vec![at(12, "tank", [5.0, 5.0]), at(13, "tank", [-1.0, 5.0])],
+                )),
             ),
         ];
         let mut pathing = Pathing::uniform(8, Domain::Land);
         pathing.tiles[6 + 8] = 2;
-        let (off_map, crowded) = super::placed(&things, &bodies, &pathing);
-        assert_eq!(off_map, HashSet::from([7]));
-        assert_eq!(crowded, HashSet::from([3, 4, 5, 9]));
+        let placed = super::placed(&things, &bodies, &pathing);
+        assert_eq!(placed.off_map, HashSet::from([7, 11, 12, 13]));
+        assert_eq!(placed.crowded, HashSet::from([3, 4, 5, 8, 9, 10]));
+        assert_eq!(
+            placed.warnings,
+            [
+                "3 tank: no room",
+                "4 hut: no room",
+                "5 hut: no room",
+                "7 ripple: off the map",
+                "8 squad: no room for member 10 hut",
+                "11 squad: off the map for member 13 tank",
+            ]
+        );
+    }
+
+    #[test]
+    fn members_are_placed_when_their_organization_is() {
+        let circle = Shape::Circle { radius: 1.0 };
+        let body = |fixed| aaa_data::Body {
+            blocking: Some(circle),
+            shape: circle,
+            soft: circle,
+            fixed,
+            ..aaa_data::Body::default()
+        };
+        let bodies = HashMap::from([
+            (Id::from("hut"), body(true)),
+            (Id::from("tank"), body(false)),
+        ]);
+        let at = |id, template, [x, y]: [f32; 2]| {
+            let mut t = placed(id, template, 0, None, None);
+            t.position = [x, y, 0.0];
+            t
+        };
+        let squad = |id, member| {
+            let tank = at(member, "tank", [5.0, 5.0]);
+            placed(id, "squad", 0, None, Some(organization("line", vec![tank])))
+        };
+        // The member's id is higher than the hut's, but its squad comes
+        // first, so both stand; the squad stored after the hut doesn't.
+        // A hut in an organization that goes is no obstacle to a hut
+        // stored after it.
+        let camp = organization(
+            "line",
+            vec![at(5, "hut", [12.0, 12.0]), at(6, "tank", [5.0, 5.0])],
+        );
+        let things = [
+            squad(1, 10),
+            at(2, "hut", [5.0, 5.0]),
+            squad(3, 11),
+            placed(4, "squad", 0, None, Some(camp)),
+            at(7, "hut", [12.0, 12.0]),
+        ];
+        let pathing = Pathing::uniform(8, Domain::Land);
+        let placed = super::placed(&things, &bodies, &pathing);
+        assert!(placed.off_map.is_empty());
+        assert_eq!(placed.crowded, HashSet::from([3, 11, 4, 5, 6]));
     }
 
     #[test]
@@ -618,9 +742,9 @@ mod tests {
         for (x, y) in [(3, 3), (6, 3), (3, 6), (6, 6), (15, 3)] {
             pathing.tiles[y * 20 + x] = 2;
         }
-        let (off_map, crowded) = super::placed(&things, &bodies, &pathing);
-        assert!(off_map.is_empty());
-        assert_eq!(crowded, HashSet::from([2]));
+        let placed = super::placed(&things, &bodies, &pathing);
+        assert!(placed.off_map.is_empty());
+        assert_eq!(placed.crowded, HashSet::from([2]));
     }
 
     #[test]
