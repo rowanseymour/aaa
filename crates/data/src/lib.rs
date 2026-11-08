@@ -304,8 +304,9 @@ pub struct Listing {
     pub name: String,
     /// Archive path of its button's icon.
     pub icon: Option<String>,
-    /// What it costs, then what it takes to keep, by resource.
+    /// What it costs, earns and takes to keep, by resource.
     pub cost: Vec<Amount>,
+    pub production: Vec<Amount>,
     pub upkeep: Vec<Amount>,
 }
 
@@ -1064,6 +1065,7 @@ impl GameData {
                     .filter(|i| i.to_ascii_lowercase().starts_with("/ui/"))
                     .and_then(ui_path),
                 cost: economy(|e| e.cost.as_ref()),
+                production: amounts(&strings, production(t, &things)),
                 upkeep: economy(|e| e.upkeep.as_ref()),
             })
         })
@@ -2069,6 +2071,24 @@ fn amounts<'a>(
         .collect()
 }
 
+/// What a template earns as it's shown: its own `[Production]`, or for a
+/// regiment the sum of its members'.
+fn production<'a>(
+    t: &'a defs::Thing,
+    things: &HashMap<&Id, &'a defs::Thing>,
+) -> impl Iterator<Item = &'a defs::Resources> {
+    let members: Vec<&defs::Thing> = t
+        .organization_component
+        .iter()
+        .flat_map(|o| &o.slot)
+        .filter_map(|s| things.get(s.element_ids.as_ref()?).copied())
+        .collect();
+    let earners = if members.is_empty() { vec![t] } else { members };
+    earners
+        .into_iter()
+        .filter_map(|t| t.economy_component.as_ref()?.production.as_ref())
+}
+
 fn terrain_kind(t: &defs::Terrain) -> TerrainKind {
     match t.kind.as_deref().map(str::to_ascii_uppercase).as_deref() {
         Some("MOUNTAIN") => TerrainKind::Mountain {
@@ -2140,6 +2160,41 @@ mod tests {
             Some("UI/Game/ActionButtons/IconMove.png")
         );
         assert_eq!(ui_path("NULL"), None);
+    }
+
+    #[test]
+    fn production_is_the_templates_own_or_its_members() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = truck\n\t[EconomyComponent]\n\t{\n\
+             \t\t[Production]\n\t\t{\n\t\t\tmoney = 12\n\t\t\tunit_limit_provided = 5\n\t\t}\n\
+             \t}\n}\n\
+             [Thing]\n{\n\tIDS = regiment\n\t[EconomyComponent]\n\t{\n\
+             \t\t[Production]\n\t\t{\n\t\t\tmoney = 99\n\t\t}\n\t}\n\
+             \t[OrganizationComponent]\n\t{\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = truck\n\t\t}\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = truck\n\t\t}\n\t}\n}\n",
+        );
+        let things: Vec<(Id, defs::Thing)> = parsed
+            .root
+            .blocks_of("Thing")
+            .zip(["truck", "regiment"])
+            .map(|(b, id)| (Id::from(id), tgi::from_block(b).unwrap()))
+            .collect();
+        let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
+        let earned = |id: &str| -> Vec<(&str, f32)> {
+            amounts(&HashMap::new(), production(by_id[&Id::from(id)], &by_id))
+                .into_iter()
+                .map(|a| (a.kind, a.amount))
+                .collect()
+        };
+        assert_eq!(
+            earned("truck"),
+            [("money", 12.0), ("unit_limit_provided", 5.0)]
+        );
+        assert_eq!(
+            earned("regiment"),
+            [("money", 24.0), ("unit_limit_provided", 10.0)]
+        );
     }
 
     #[test]

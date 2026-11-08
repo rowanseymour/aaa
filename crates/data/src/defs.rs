@@ -193,9 +193,11 @@ pub struct EconomyComponent {
     pub cost: Option<Resources>,
     /// What it takes to keep, for as long as it's kept.
     pub upkeep: Option<Resources>,
+    /// What it earns its owner, per minute.
+    pub production: Option<Resources>,
 }
 
-/// Amounts of the resources the data's costs and upkeeps name, each
+/// Amounts of the resources the data's costs, upkeeps and production name, each
 /// called `resources_<field>_name` in the localized strings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Resources {
@@ -204,6 +206,8 @@ pub struct Resources {
     pub oil: Option<f32>,
     pub unit_limit_consumed: Option<f32>,
     pub building_limit_consumed: Option<f32>,
+    pub unit_limit_provided: Option<f32>,
+    pub building_limit_provided: Option<f32>,
 }
 
 impl Resources {
@@ -215,6 +219,8 @@ impl Resources {
             ("oil", self.oil),
             ("unit_limit_consumed", self.unit_limit_consumed),
             ("building_limit_consumed", self.building_limit_consumed),
+            ("unit_limit_provided", self.unit_limit_provided),
+            ("building_limit_provided", self.building_limit_provided),
         ]
         .into_iter()
         .filter_map(|(k, v)| Some((k, v?)))
