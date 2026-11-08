@@ -237,6 +237,22 @@ pub enum Shape {
     },
 }
 
+impl Shape {
+    /// The shape grown by `by` on every side; a point grows into a circle.
+    pub fn padded(self, by: f32) -> Shape {
+        match self {
+            Shape::Point => Shape::Circle { radius: by },
+            Shape::Circle { radius } => Shape::Circle {
+                radius: radius + by,
+            },
+            Shape::Rect { width, height } => Shape::Rect {
+                width: width + 2.0 * by,
+                height: height + 2.0 * by,
+            },
+        }
+    }
+}
+
 /// How a template shows on the button that commissions or recruits it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Listing {
@@ -1179,6 +1195,16 @@ impl GameData {
             .filter_map(|b| templates.deserialize::<defs::KingdomColor>(b).ok())
             .filter_map(|c| Some((c.ids?, c.color)))
             .collect()
+    }
+
+    /// How far beyond a blocking building's footprint the ground must be
+    /// clear for it to be put there, in world units.
+    pub fn building_padding(&mut self) -> Option<f32> {
+        let files = self.parse_tgis(|n| n == "game/svars.tgi");
+        files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("SVars"))
+            .find_map(|b| b.parse_value("BuildingPaddingMeters"))
     }
 
     /// The orders the player can give, in the order the files list them.
