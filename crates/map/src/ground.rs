@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Id, Shape, TerrainKind, Variation};
+use aaa_data::{Footing, Id, Shape, TerrainKind, Variation};
 use tgck::map::{CELL_SIZE, HeightMap, Terrain};
 
 /// The ground: the height map, with the mountain height map added around
@@ -145,6 +145,24 @@ impl Ground {
         relief.map_or(base, |r| base + self.sample(&self.mountain, wx, wy) + r)
     }
 
+    /// The height a floating thing keeps at a world position: on the water,
+    /// which lies half a unit under the height map, where that's above the
+    /// ground.
+    pub fn float_at(&self, wx: f32, wy: f32) -> f32 {
+        let surface = self.sample(&self.base, wx, wy) - WATERLINE;
+        self.height_at(wx, wy).max(surface)
+    }
+
+    /// The height a thing of `footing` stands at at a world position.
+    /// Flying things have a height of their own; without one they're on the
+    /// ground.
+    pub fn stand_at(&self, footing: Footing, wx: f32, wy: f32) -> f32 {
+        match footing {
+            Footing::Water => self.float_at(wx, wy),
+            Footing::Ground | Footing::Air => self.height_at(wx, wy),
+        }
+    }
+
     /// A height map's height at a world position: bilinear within a cell,
     /// but the mean of the two vertices either side of it on a grid line,
     /// and held at the edge beyond the map.
@@ -170,6 +188,9 @@ impl Ground {
         }
     }
 }
+
+/// How far the water's surface lies under the height map.
+const WATERLINE: f32 = 0.5;
 
 /// Where in its terrain's range a mountain tile's extra height lies, from 0
 /// to just under 1, fixed by the tile's row-major index.
@@ -410,6 +431,31 @@ mod tests {
         // Vertices take their ground from the tile they're the corner of
         // nearest the origin.
         assert!((ground.at(1, 1) - 7.95).abs() < 1e-5);
+    }
+
+    #[test]
+    fn floating_things_keep_to_the_water_or_the_ground_above_it() {
+        let (terrain, variations) = terrain(4);
+        let ground = |mountain| {
+            Ground::new(
+                &height_map(5, 1.0),
+                &height_map(5, mountain),
+                &terrain,
+                &variations,
+            )
+            .unwrap()
+        };
+        let sea = ground(-5.0);
+        // On the sea and the shore beside it, the bed is under the water.
+        assert_eq!(sea.height_at(7.0, 1.0), -4.0);
+        assert_eq!(sea.float_at(7.0, 1.0), 0.5);
+        assert_eq!(sea.float_at(5.0, 1.0), 0.5);
+        assert_eq!(sea.stand_at(Footing::Water, 7.0, 1.0), 0.5);
+        assert_eq!(sea.stand_at(Footing::Ground, 7.0, 1.0), -4.0);
+        assert_eq!(sea.stand_at(Footing::Air, 7.0, 1.0), -4.0);
+        // Away from water, and where the bed rises above it, on the ground.
+        assert_eq!(sea.float_at(7.0, 7.0), 1.0);
+        assert_eq!(ground(5.0).float_at(7.0, 1.0), 6.0);
     }
 
     #[test]
