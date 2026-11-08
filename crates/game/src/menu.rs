@@ -23,8 +23,11 @@ pub struct MenuButton;
 #[derive(Component)]
 pub struct Click(&'static str);
 
-const PUSH: Click = Click("push_button");
-const OPEN: Click = Click("tiled_button");
+const PUSH: &str = "push_button";
+const OPEN: &str = "tiled_button";
+
+/// Every [`Click`], for [`Sounds`] to have ready.
+pub const CLICKS: [&str; 2] = [PUSH, OPEN];
 
 /// Marks a menu button as the current choice.
 #[derive(Component, Default, PartialEq)]
@@ -54,12 +57,12 @@ pub fn text(label: impl Into<String>, size: f32) -> impl Bundle {
 /// A button laid out as `node`, that does something when [`Activate`]d,
 /// given an observer.
 pub fn clickable(node: Node) -> impl Bundle {
-    sounding(node, PUSH)
+    sounding(node, Click(PUSH))
 }
 
 /// A [`clickable`] that opens a list to choose from.
 pub fn opener(node: Node) -> impl Bundle {
-    sounding(node, OPEN)
+    sounding(node, Click(OPEN))
 }
 
 fn sounding(node: Node, click: Click) -> impl Bundle {
@@ -188,13 +191,13 @@ fn highlight(mut buttons: Query<(&Hovered, &Chosen, &mut BackgroundColor), With<
 fn click(
     press: On<PointerPress>,
     buttons: Query<&Click>,
-    sounds: Option<ResMut<Sounds>>,
+    mut sounds: ResMut<Sounds>,
     time: Res<Time>,
 ) {
     if press.button != PointerButton::Primary {
         return;
     }
-    if let (Ok(Click(audio)), Some(mut sounds)) = (buttons.get(press.entity), sounds) {
+    if let Ok(Click(audio)) = buttons.get(press.entity) {
         sounds.interface(&time, audio);
     }
 }

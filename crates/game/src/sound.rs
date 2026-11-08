@@ -21,6 +21,9 @@ pub struct Sounds {
     objects: HashMap<Id, ObjectAudio>,
     /// By archive path; `None` for files that couldn't be read.
     sources: HashMap<String, Option<Handle<AudioSource>>>,
+    /// Files read ahead, by archive path, to play even while no game data
+    /// is at hand.
+    read: HashMap<String, Arc<[u8]>>,
     /// Each sequential audio's next file.
     next: HashMap<Id, usize>,
     /// Cues waiting to play, with when.
@@ -45,22 +48,32 @@ struct Playing {
 }
 
 impl Sounds {
-    pub fn new(game: &mut GameData) -> Sounds {
+    /// With the files of the `ready` audio read ahead. Objects' audio is
+    /// left to [`Sounds::load_objects`], for a match.
+    pub fn new(game: &mut GameData, ready: &[&str]) -> Sounds {
         let audio = game.audio();
-        let objects = game.object_audio();
-        info!(
-            "{} audio, played by {} object templates",
-            audio.len(),
-            objects.len()
-        );
+        info!("{} audio", audio.len());
+        let read = ready
+            .iter()
+            .filter_map(|id| audio.get(&Id::from(*id)))
+            .flat_map(|a| a.leadin.iter().chain(&a.files))
+            .filter_map(|path| Some((path.clone(), Arc::from(game.read(path)?))))
+            .collect();
         Sounds {
             audio,
-            objects,
+            objects: HashMap::new(),
             sources: HashMap::new(),
+            read,
             next: HashMap::new(),
             queued: Vec::new(),
             rng: 0x2545_f491_4f6c_dd1d,
         }
+    }
+
+    /// Reads the audio object templates play.
+    pub fn load_objects(&mut self, game: &mut GameData) {
+        self.objects = game.object_audio();
+        info!("audio played by {} object templates", self.objects.len());
     }
 
     /// Queues the cues `owner`'s object of a template plays for an event,
@@ -160,17 +173,18 @@ impl Sounds {
         if let Some(source) = self.sources.get(path) {
             return source.clone();
         }
-        let game = game?;
+        let ahead = self.read.remove(path);
+        if ahead.is_none() && game.is_none() {
+            return None;
+        }
         self.sources
             .entry(path.to_string())
             .or_insert_with(|| {
-                let bytes = game.read(path);
+                let bytes = ahead.or_else(|| game?.read(path).map(Arc::from));
                 if bytes.is_none() {
                     warn!("{path}: can't be read");
                 }
-                Some(assets.add(AudioSource {
-                    bytes: Arc::from(bytes?),
-                }))
+                Some(assets.add(AudioSource { bytes: bytes? }))
             })
             .clone()
     }
@@ -203,7 +217,7 @@ pub struct SoundPlugin;
 
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, play.run_if(resource_exists::<Sounds>));
+        app.add_systems(Update, play);
     }
 }
 
@@ -265,7 +279,9 @@ fn play(
         }
         let plays = counts.entry(request.audio.clone()).or_default();
         if plays.len() >= audio.limit as usize {
-            if !audio.control.interrupt {
+            // The interface's own cut off its oldest, as the game's
+            // interface audio template has them do.
+            if !audio.control.interrupt && request.owner.is_some() {
                 continue;
             }
             plays.sort_by(|a, b| a.0.total_cmp(&b.0));
