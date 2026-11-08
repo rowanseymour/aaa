@@ -589,6 +589,40 @@ mod tests {
     }
 
     #[test]
+    fn only_the_tiles_a_thing_overlaps_need_to_be_its_ground() {
+        let rect = Shape::Rect {
+            width: 4.0,
+            height: 2.0,
+        };
+        let bunker = aaa_data::Body {
+            blocking: Some(rect),
+            shape: rect,
+            soft: rect,
+            fixed: true,
+            ..aaa_data::Body::default()
+        };
+        let bodies = HashMap::from([(Id::from("bunker"), bunker)]);
+        // Turned 45°, each spans two tiles below its centre tile and one
+        // above, on x and y.
+        let at = |id, [x, y]: [f32; 2]| {
+            let mut t = placed(id, "bunker", 0, None, None);
+            t.position = [x, y, 0.0];
+            t.facing = [0.70710677, 0.70710677, 0.0];
+            t
+        };
+        let things = [at(1, [10.0, 10.0]), at(2, [30.0, 10.0])];
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // Water only in the first's box corners, and where the second's
+        // corner reaches into (15, 3).
+        for (x, y) in [(3, 3), (6, 3), (3, 6), (6, 6), (15, 3)] {
+            pathing.tiles[y * 20 + x] = 2;
+        }
+        let (off_map, crowded) = super::placed(&things, &bodies, &pathing);
+        assert!(off_map.is_empty());
+        assert_eq!(crowded, HashSet::from([2]));
+    }
+
+    #[test]
     fn tile_locked_things_snap_to_the_half_tile_grid() {
         let locked = aaa_data::Body {
             tile_locked: true,
