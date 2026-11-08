@@ -207,18 +207,36 @@ struct UnitView {
     conform: Option<Shape>,
 }
 
-/// Spawns the model of the sim's `unit`, placed from `member`; false if it has
-/// none.
+/// Draws the trailer one of the sim's units tows.
+#[derive(Component)]
+struct TrailerView {
+    /// Index into the sim's units.
+    unit: usize,
+    conform: Option<Shape>,
+}
+
+/// Spawns the model of the sim's `unit`, placed from `member`, and of any
+/// `trailer` it tows; false if the unit has none.
+#[allow(clippy::too_many_arguments)]
 fn spawn_unit_view(
     commands: &mut Commands,
     models: &mut Models,
     game: &mut GameData,
     assets: &mut ModelAssets,
+    ground: &Ground,
     member: &Member,
+    trailer: Option<&aaa_sim::Trailer>,
     owner: u32,
     unit: usize,
 ) -> bool {
     let thing = &member.thing;
+    if let Some(t) = trailer {
+        let towed = thing_at(ground, thing.id, &t.template, t.position, t.facing);
+        if let Some(e) = models.spawn_building(commands, game, assets, &towed, owner) {
+            let conform = models.conform(&t.template);
+            commands.entity(e).insert(TrailerView { unit, conform });
+        }
+    }
     let Some(e) = models.spawn_unit(commands, game, assets, thing, owner, member.speed) else {
         return false;
     };
@@ -230,6 +248,30 @@ fn spawn_unit_view(
         conform: models.conform(&thing.template),
     });
     true
+}
+
+/// Places trailers between where the last two ticks left them, hiding
+/// them along with what towed them.
+fn show_trailers(
+    sim: Res<Sim>,
+    loaded: Res<Loaded>,
+    fixed: Res<Time<Fixed>>,
+    mut views: Query<(&TrailerView, &mut Transform, &mut Visibility)>,
+) {
+    let t = fixed.overstep_fraction();
+    for (view, mut transform, mut visibility) in &mut views {
+        let unit = &sim.0.units[view.unit];
+        let Some(trailer) = unit.trailer.as_ref().filter(|_| unit.alive()) else {
+            visibility.set_if_neq(Visibility::Hidden);
+            continue;
+        };
+        (transform.translation, transform.rotation) = pose(
+            &loaded.map.ground,
+            trailer.drawn_at(t),
+            trailer.facing,
+            view.conform,
+        );
+    }
 }
 
 /// Draws one of the simulation's buildings.
@@ -382,7 +424,11 @@ fn main() -> ExitCode {
         .add_systems(
             Update,
             (
-                (spawn_views, (show_units, show_buildings, show_packing)).chain(),
+                (
+                    spawn_views,
+                    (show_units, show_trailers, show_buildings, show_packing),
+                )
+                    .chain(),
                 drop_lost_building,
                 selection_sounds,
                 show_focus,
@@ -713,7 +759,13 @@ fn setup(
         window.title = format!("{} - aaa-game", map.title);
     }
     let ids = map.regiments.iter().map(|r| r.id);
-    let leave_out: HashSet<u32> = ids.chain(map.buildings.iter().map(|b| b.id)).collect();
+    // The sim's units draw the trailers they tow.
+    let members = map.regiments.iter().flat_map(|r| &r.members);
+    let trailers = members.filter_map(|m| Some(m.trailer.as_ref()?.placed?.0));
+    let leave_out: HashSet<u32> = ids
+        .chain(trailers)
+        .chain(map.buildings.iter().map(|b| b.id))
+        .collect();
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
         leave_out.contains(&t.id)
     });
@@ -728,7 +780,9 @@ fn setup(
             &mut models,
             game,
             &mut model_assets,
+            &map.ground,
             m,
+            sim.0.units[i].trailer.as_ref(),
             owner,
             i,
         ) {
@@ -902,6 +956,9 @@ fn spawn_views(
             ),
             speed: regiment.speed,
             shape: unit.shape,
+            acceleration: 0.0,
+            turn_rate: 0.0,
+            trailer: None,
             fighter: unit.fighter.clone(),
         };
         let mut models = assets.models();
@@ -910,7 +967,9 @@ fn spawn_views(
             &mut drawn.0,
             game,
             &mut models,
+            &map.ground,
             &member,
+            unit.trailer.as_ref(),
             regiment.owner,
             u,
         );

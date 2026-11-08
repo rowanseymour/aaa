@@ -88,6 +88,17 @@ pub struct Body {
     pub blocking: Option<Shape>,
     /// Top speed in world units a second; `None` if it can't move.
     pub speed: Option<f32>,
+    /// World units a second it gains each second, speeding up; 0 for
+    /// reaching top speed at once. It slows down at once.
+    pub acceleration: f32,
+    /// Radians a second it turns while moving; 0 for facing its way at
+    /// once.
+    pub turn_rate: f32,
+    /// Where it's coupled to what tows it or what it tows: x to its right
+    /// and y ahead.
+    pub hitch: Option<[f32; 2]>,
+    /// The template of the trailer it tows.
+    pub trailer: Option<Id>,
 }
 
 /// How a template's objects fight: what they can take and what they deal.
@@ -1399,13 +1410,28 @@ fn body(thing: &defs::Thing) -> Body {
         .rev()
         .find_map(|s| s.blocking_shape.as_deref());
     let shape = shape(thing, kind, |s| s.blocking_radius);
+    let mover = thing.mover_component.as_ref();
+    let speed = mover.and_then(|m| m.speed_max).filter(|&s| s > 0.0);
+    // Turning takes time only for turn types that name a radius to turn
+    // round, at top speed.
+    let turns = mover
+        .and_then(|m| m.turn_type.as_deref())
+        .is_some_and(|t| !t.eq_ignore_ascii_case("INSTANT"));
+    let radius = mover.and_then(|m| m.turn_radius).filter(|&r| r > 0.0);
+    let turn_rate = match (turns, speed, radius) {
+        (true, Some(s), Some(r)) => s / r,
+        _ => 0.0,
+    };
+    let hitch = mover.and_then(|m| m.trailer_hitch.as_ref()?.node_offset);
     Body {
         blocking: blocking.then_some(shape),
-        speed: thing
-            .mover_component
-            .as_ref()
-            .and_then(|m| m.speed_max)
-            .filter(|&s| s > 0.0),
+        speed,
+        acceleration: mover.and_then(|m| m.acceleration).unwrap_or(0.0).max(0.0),
+        turn_rate,
+        hitch: hitch.map(|[x, y, _]| [x, y]),
+        trailer: mover
+            .and_then(|m| m.trailer_actor.clone())
+            .filter(|t| !t.as_str().eq_ignore_ascii_case("null")),
     }
 }
 

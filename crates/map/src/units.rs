@@ -250,8 +250,29 @@ pub struct Member {
     /// The ground it takes up, which those of things it's on are tested
     /// against; `None` if it takes up none.
     pub shape: Option<Shape>,
+    /// World units a second it gains each second, speeding up; 0 for
+    /// reaching top speed at once.
+    pub acceleration: f32,
+    /// Radians a second it turns while moving; 0 for facing its way at
+    /// once.
+    pub turn_rate: f32,
+    pub trailer: Option<Trailer>,
     /// What it can take and deal; `None` for what can't be hurt.
     pub fighter: Option<Fighter>,
+}
+
+/// What a member tows, dragged after the point it's coupled to.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Trailer {
+    pub template: String,
+    /// Where it's coupled to the member, from the member: x to its right
+    /// and y ahead.
+    pub hitch: [f32; 2],
+    /// The same point from the trailer.
+    pub coupling: [f32; 2],
+    /// The id of the object the map has for it, and where that stands and
+    /// the way it faces; `None` for one to put straight behind the member.
+    pub placed: Option<(u32, [f32; 2], [f32; 2])>,
 }
 
 #[derive(Debug, Clone)]
@@ -275,6 +296,7 @@ pub fn regiments(
     layouts: &HashMap<Id, Layout>,
     ranges: &HashMap<Id, Ranges>,
 ) -> Vec<Regiment> {
+    let by_id: HashMap<u32, &Thing> = things.iter().map(|t| (t.id, t)).collect();
     things
         .iter()
         .filter_map(|t| {
@@ -283,7 +305,15 @@ pub fn regiments(
             let members = organization
                 .members
                 .iter()
-                .map(|m| member(m.clone(), bodies, fighters))
+                .map(|m| {
+                    let mut member = member(m.clone(), bodies, fighters)?;
+                    let towed = m.towed().and_then(|id| by_id.get(&id));
+                    if let (Some(trailer), Some(towed)) = (&mut member.trailer, towed) {
+                        let [x, y, _] = towed.position;
+                        trailer.placed = Some((towed.id, [x, y], facing(towed)));
+                    }
+                    Some(member)
+                })
                 .collect::<Option<Vec<_>>>()?;
             let facing = facing(t);
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
@@ -342,9 +372,20 @@ fn member(
 ) -> Option<Member> {
     let template = Id::from(thing.template.as_str());
     let body = bodies.get(&template)?;
+    let trailer = body.trailer.as_ref().and_then(|t| {
+        Some(Trailer {
+            template: t.as_str().to_string(),
+            hitch: body.hitch.unwrap_or_default(),
+            coupling: bodies.get(t)?.hitch.unwrap_or_default(),
+            placed: None,
+        })
+    });
     Some(Member {
         speed: body.speed?,
+        acceleration: body.acceleration,
+        turn_rate: body.turn_rate,
         shape: body.blocking,
+        trailer,
         fighter: fighters.get(&template).cloned(),
         thing,
     })
@@ -758,6 +799,7 @@ mod tests {
         let body = Body {
             blocking: None,
             speed: Some(3.0),
+            ..Body::default()
         };
         let recruits = Recruits {
             organizations: HashMap::from([(
@@ -823,6 +865,7 @@ mod tests {
                     Body {
                         blocking: None,
                         speed: Some(3.0),
+                        ..Body::default()
                     },
                 ),
                 (
@@ -833,6 +876,7 @@ mod tests {
                             height: 8.0,
                         }),
                         speed: None,
+                        ..Body::default()
                     },
                 ),
             ]),
