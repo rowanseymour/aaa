@@ -17,6 +17,12 @@ pub struct Terrain {
     /// Ships can cross it.
     #[serde(default)]
     pub water: bool,
+    /// `LAND`, `MOUNTAIN` or `WATER`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    /// The range a mountain's tiles are raised by, each its own amount.
+    pub noise_min: Option<f32>,
+    pub noise_max: Option<f32>,
     /// Path of a water terrain's animation frames, numbered by a `%04d`.
     pub anim_textures_path_prefix: Option<String>,
     pub anim_fps: Option<f32>,

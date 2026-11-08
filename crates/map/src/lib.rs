@@ -60,13 +60,9 @@ impl Map {
         let hm = map.height_map().map_err(err)?;
         let mountain = map.mountain_height_map().map_err(err)?;
         let terrain = map.terrain().map_err(err)?;
-        let ground = Ground::new(&hm, &mountain).map_err(|e| format!("{name}: {e}"))?;
-        if terrain.side + 1 != ground.side {
-            return Err(format!(
-                "{name}: {} tiles a side don't fit height maps of {} vertices",
-                terrain.side, ground.side
-            ));
-        }
+        let variations = game.terrain_variations();
+        let ground = Ground::new(&hm, &mountain, &terrain, &variations)
+            .map_err(|e| format!("{name}: {e}"))?;
         let mut things = map.things().map_err(err)?;
         for thing in &mut things {
             let nation = owner(thing).and_then(|o| nations.get(&o));
@@ -81,7 +77,7 @@ impl Map {
         let obstacles = obstacles(&things, bodies);
         let pathing = Pathing::new(
             &terrain,
-            &game.terrain_variations(),
+            &variations,
             obstacles.iter().map(|(_, o)| o.clone()),
         );
         let fighters = &recruits.fighters;
