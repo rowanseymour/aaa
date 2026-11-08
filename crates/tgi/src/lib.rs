@@ -163,29 +163,40 @@ pub fn parse(text: &str) -> Parsed {
 }
 
 /// Replaces `/* ... */` with spaces, keeping newlines so line numbers survive.
+/// One can't start inside quotes or after a `;` comment on its line.
 fn strip_block_comments(text: &str, warnings: &mut Vec<Warning>) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     let mut line = 1;
-    while let Some(start) = rest.find("/*") {
-        out.push_str(&rest[..start]);
-        line += rest[..start].matches('\n').count();
-        let after = &rest[start + 2..];
-        let (comment, next) = match after.find("*/") {
-            Some(end) => (&rest[start..start + 2 + end + 2], &after[end + 2..]),
-            None => {
-                warnings.push(Warning {
-                    line,
-                    message: "unterminated /* comment".into(),
-                });
-                (&rest[start..], "")
-            }
-        };
-        out.extend(comment.chars().map(|c| if c == '\n' { '\n' } else { ' ' }));
-        line += comment.matches('\n').count();
-        rest = next;
+    let (mut quoted, mut commented) = (false, false);
+    while let Some(c) = rest.chars().next() {
+        if c == '\n' {
+            line += 1;
+            (quoted, commented) = (false, false);
+        } else if !commented && c == '"' {
+            quoted = !quoted;
+        } else if !commented && !quoted && c == ';' {
+            commented = true;
+        } else if !commented && !quoted && rest.starts_with("/*") {
+            let len = match rest[2..].find("*/") {
+                Some(end) => end + 4,
+                None => {
+                    warnings.push(Warning {
+                        line,
+                        message: "unterminated /* comment".into(),
+                    });
+                    rest.len()
+                }
+            };
+            let comment = &rest[..len];
+            out.extend(comment.chars().map(|c| if c == '\n' { '\n' } else { ' ' }));
+            line += comment.matches('\n').count();
+            rest = &rest[len..];
+            continue;
+        }
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
     }
-    out.push_str(rest);
     out
 }
 

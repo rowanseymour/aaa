@@ -93,10 +93,20 @@ impl<'a> Cursor<'a> {
         }
         Ok(out)
     }
-    /// `u16` length in code units, then UTF-16LE.
+    /// `u16` length in code units, then UTF-16LE. Decoded strictly, NULs
+    /// and all, so that a string saves back as it was read.
     pub(crate) fn string(&mut self) -> Result<String> {
+        let at = self.pos();
         let len = self.u16()? as usize;
-        Ok(utf16_lossy(self.bytes(len * 2)?))
+        let units: Vec<u16> = self
+            .bytes(len * 2)?
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|&c| u16::from_le_bytes(c))
+            .collect();
+        String::from_utf16(&units)
+            .map_err(|_| Error::Corrupt(format!("string at byte {at} isn't valid UTF-16")))
     }
     /// A `u32` count, then that many items; what's reserved up front is
     /// capped by the bytes left so a corrupt count can't reserve too much.
@@ -195,6 +205,7 @@ impl Writer {
     }
 }
 
+/// A fixed-size, NUL-padded name, such as a section's.
 pub(crate) fn utf16_lossy(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
         .as_chunks::<2>()
@@ -243,5 +254,19 @@ pub(crate) mod tests {
         }
         out.extend(table);
         out
+    }
+
+    #[test]
+    fn reads_strings_as_they_will_be_written() {
+        let s = "a\0b\u{e9}";
+        let bytes = string(s);
+        assert_eq!(crate::Cursor::new(&bytes).string().unwrap(), s);
+        let mut w = crate::Writer::default();
+        w.string(s).unwrap();
+        assert_eq!(w.0, bytes);
+
+        // An unpaired surrogate can't be held in a `String`.
+        let bad = [1, 0, 0x00, 0xd8];
+        assert!(crate::Cursor::new(&bad).string().is_err());
     }
 }

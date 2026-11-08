@@ -97,6 +97,11 @@ impl<R: Read + Seek> Container<R> {
                     section.name
                 )));
             }
+            check_name(
+                sections.iter().map(|s: &Section| s.name.as_str()),
+                &section.name,
+            )
+            .map_err(Error::Corrupt)?;
             sections.push(section);
         }
         Ok(Container {
@@ -106,8 +111,11 @@ impl<R: Read + Seek> Container<R> {
         })
     }
 
+    /// A section by name, ignoring ASCII case as the game does.
     pub fn section(&self, name: &str) -> Option<&Section> {
-        self.sections.iter().find(|s| s.name == name)
+        self.sections
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     /// Like [`Container::section`], but a missing section is an error.
@@ -133,7 +141,8 @@ impl<R: Read + Seek> Container<R> {
             &stored,
             section.unpacked_size as usize,
         )
-        .map_err(|e| Error::Corrupt(format!("section {:?}: zlib: {e:?}", section.name)))?;
+        // The error's Debug includes everything inflated before it.
+        .map_err(|e| Error::Corrupt(format!("section {:?}: zlib: {:?}", section.name, e.status)))?;
         if data.len() as u64 != section.unpacked_size {
             return Err(Error::Corrupt(format!(
                 "section {:?} inflated to {} bytes, expected {}",
@@ -160,14 +169,17 @@ pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()>
     w.u32(2);
     w.u32(sections.len() as u32);
     let mut table = Writer::default();
-    for (section, payload) in sections {
+    for (i, (section, payload)) in sections.iter().enumerate() {
+        let earlier = sections[..i].iter().map(|(s, _)| s.name.as_str());
+        check_name(earlier, &section.name).map_err(Error::Unwritable)?;
         let stored = if section.is_compressed() {
             miniz_oxide::deflate::compress_to_vec_zlib(payload, ZLIB_LEVEL)
         } else {
             payload.to_vec()
         };
         let name: Vec<u16> = section.name.encode_utf16().collect();
-        if name.len() > SECTION_NAME_LEN / 2 {
+        // The name needs room for its terminating NUL.
+        if name.len() >= SECTION_NAME_LEN / 2 {
             return Err(Error::Unwritable(format!(
                 "section name {:?} is too long",
                 section.name
@@ -184,6 +196,21 @@ pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()>
     }
     w.bytes(&table.0);
     out.write_all(&w.0)?;
+    Ok(())
+}
+
+/// The game won't load a container whose sections have no name or share one,
+/// and as lookups take the first, a later namesake would be lost on saving.
+fn check_name<'a>(
+    mut earlier: impl Iterator<Item = &'a str>,
+    name: &str,
+) -> std::result::Result<(), String> {
+    if name.is_empty() {
+        return Err("section with no name".into());
+    }
+    if earlier.any(|e| e.eq_ignore_ascii_case(name)) {
+        return Err(format!("two sections named {name:?}"));
+    }
     Ok(())
 }
 
@@ -228,5 +255,46 @@ mod tests {
         for s in &sections {
             assert_eq!(c.read_section(s).unwrap(), payload);
         }
+    }
+
+    #[test]
+    fn rejects_sections_without_a_name_or_sharing_one() {
+        for names in [["MAPSTRINGS", "MapStrings"], ["A", ""]] {
+            let bytes = build_container(&[(names[0], b"one", false), (names[1], b"two", false)]);
+            assert!(matches!(
+                Container::new(io::Cursor::new(&bytes)),
+                Err(Error::Corrupt(_))
+            ));
+            let section = |name: &str| Section {
+                name: name.into(),
+                offset: 0,
+                stored_size: 0,
+                flags: 0,
+                unknown: 0,
+                unpacked_size: 0,
+            };
+            let (a, b) = (section(names[0]), section(names[1]));
+            let pairs: [(&Section, &[u8]); 2] = [(&a, b"one"), (&b, b"two")];
+            assert!(matches!(
+                write(&mut Vec::new(), &pairs),
+                Err(Error::Unwritable(_))
+            ));
+        }
+        let bytes = build_container(&[("Terrain", b"x", false)]);
+        let c = Container::new(io::Cursor::new(&bytes)).unwrap();
+        assert!(c.section("TERRAIN").is_some());
+    }
+
+    #[test]
+    fn zlib_errors_leave_out_the_data() {
+        let payload = vec![7u8; 100_000];
+        let mut bytes = build_container(&[("PACKED", &payload, true)]);
+        let mut c = Container::new(io::Cursor::new(&bytes)).unwrap();
+        let section = c.sections[0].clone();
+        // Spoil the stream's checksum, its last byte.
+        bytes[(section.offset + section.stored_size - 1) as usize] ^= 0xff;
+        c = Container::new(io::Cursor::new(&bytes)).unwrap();
+        let err = c.read_section(&section).unwrap_err().to_string();
+        assert!(err.len() < 200, "{err}");
     }
 }
