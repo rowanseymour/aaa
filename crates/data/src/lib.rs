@@ -803,7 +803,8 @@ impl GameData {
     /// The views of all object templates, by template id,
     /// including the ids the game has since renamed: `None` for templates
     /// that name no model, such as sound emitters, or are invisible.
-    /// Templates without a view, of their own or inherited, are left out.
+    /// Visible templates without a view, of their own or inherited, are left
+    /// out.
     pub fn views(&mut self) -> HashMap<Id, Option<View>> {
         let mut out = HashMap::new();
         for Template { file, id, thing } in &self.definitions().things {
@@ -1276,6 +1277,10 @@ impl GameData {
                 "vfx" => coverage.read::<defs::Vfx>(block, t).map(drop),
                 "cursor" => coverage.read::<defs::Cursor>(block, t).map(drop),
                 "svars" => coverage.read::<defs::SVars>(block, t).map(drop),
+                // A string table, read whole.
+                "text" => coverage
+                    .read::<HashMap<String, String>>(block, None)
+                    .map(drop),
                 _ => {
                     coverage.skip(block, t);
                     continue;
