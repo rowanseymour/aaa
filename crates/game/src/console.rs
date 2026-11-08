@@ -36,7 +36,11 @@ impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Console>()
             .add_systems(Startup, spawn)
-            .add_systems(Update, (keys, run, show).chain());
+            // Not while the pause menu is up, whose pause the console could undo.
+            .add_systems(
+                Update,
+                (keys.run_if(crate::pause::closed), run, show).chain(),
+            );
     }
 }
 

@@ -109,6 +109,11 @@ pub fn disabled(label: impl Into<String>, size: f32) -> impl Bundle {
     )
 }
 
+/// An observer that exits the game.
+pub fn quit(_: On<Activate>, mut exit: MessageWriter<AppExit>) {
+    exit.write(AppExit::Success);
+}
+
 /// An observer that moves to another screen.
 pub fn go(to: Screen) -> impl Fn(On<Activate>, ResMut<NextState<Screen>>) {
     move |_, mut next| next.set(to)
@@ -152,7 +157,8 @@ fn spacer() -> impl Bundle {
     }
 }
 
-const SIZE: f32 = 20.0;
+/// The size of a menu button's label.
+pub const SIZE: f32 = 20.0;
 
 fn main_menu(mut commands: Commands) {
     let column = column(&mut commands, Screen::MainMenu);
@@ -163,9 +169,7 @@ fn main_menu(mut commands: Commands) {
     commands.spawn((spacer(), ChildOf(column)));
     commands
         .spawn((button("Exit", SIZE), ChildOf(column)))
-        .observe(|_: On<Activate>, mut exit: MessageWriter<AppExit>| {
-            exit.write(AppExit::Success);
-        });
+        .observe(quit);
 }
 
 fn new_game(mut commands: Commands) {
