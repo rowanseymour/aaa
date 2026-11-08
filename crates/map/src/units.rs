@@ -214,6 +214,10 @@ pub struct Unpacks {
     /// The building, standing at the origin facing [`UNPACKED_FACING`]
     /// and owned by nobody.
     pub building: Building,
+    /// The ground that must be clear for it to unpack: its blocking shape
+    /// padded all round, so buildings keep apart. `None` if it doesn't
+    /// block.
+    pub room: Option<Shape>,
     /// Where the packed building stands from where the building will, in
     /// the map's axes.
     pub offset: [f32; 2],
@@ -442,7 +446,12 @@ pub struct Recruits {
     recruit_times: HashMap<Id, f32>,
     /// Ids the game has since renamed.
     renamed: HashSet<Id>,
+    /// How far beyond its footprint a building needs clear ground.
+    padding: f32,
 }
+
+/// [`Recruits::padding`] where the game's settings don't give it.
+const BUILDING_PADDING: f32 = 2.0;
 
 impl Recruits {
     pub fn new(game: &mut GameData) -> Recruits {
@@ -457,6 +466,7 @@ impl Recruits {
             deploy_points: game.deploy_points(),
             recruit_times: game.recruit_times(),
             renamed: game.renamed_things(),
+            padding: game.building_padding().unwrap_or(BUILDING_PADDING),
         }
     }
 
@@ -561,6 +571,7 @@ impl Recruits {
                 obstacle,
                 deploy: self.deploy_points.get(into).copied(),
             },
+            room: body.blocking.map(|s| s.padded(self.padding)),
             offset: d.packed_offset,
             seconds,
         })
@@ -821,6 +832,7 @@ mod tests {
             deploy_points: HashMap::new(),
             recruit_times: HashMap::new(),
             renamed: HashSet::new(),
+            padding: BUILDING_PADDING,
         };
         assert_eq!(recruits.templates(), ["squad"]);
         // Facing +x, so the front's left-hand man stands on the +y side.
@@ -923,6 +935,7 @@ mod tests {
             )]),
             recruit_times: HashMap::new(),
             renamed: HashSet::new(),
+            padding: BUILDING_PADDING,
         };
         let mut truck = recruits
             .raise("truck", 1, 2, [0.0, 0.0], [0.0, 1.0])
@@ -931,6 +944,13 @@ mod tests {
         assert_eq!(unpacks.building.template, "depot");
         assert_eq!(unpacks.seconds, 9.0);
         assert!(unpacks.building.obstacle.is_some());
+        assert_eq!(
+            unpacks.room,
+            Some(aaa_data::Shape::Rect {
+                width: 12.0,
+                height: 12.0
+            })
+        );
         // So it can commission what it lists once unpacked.
         assert_eq!(
             unpacks.building.deploy.map(|d| d.deployment),
