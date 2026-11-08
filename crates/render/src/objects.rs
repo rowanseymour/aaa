@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 
+use aaa_data::Footing;
 use aaa_map::Ground;
 use bevy::prelude::*;
 use tgck::map::Thing;
@@ -61,6 +62,7 @@ pub fn spawn(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     ground: &Ground,
+    footing: impl Fn(&str) -> Footing,
     things: &[(&Thing, bool)],
     show: bool,
 ) {
@@ -83,7 +85,11 @@ pub fn spawn(
             })
             .clone();
         let [x, y, _] = thing.position;
-        let mut transform = Transform::from_translation(world(x, y, ground.height_at(x, y) + lift));
+        let mut transform = Transform::from_translation(world(
+            x,
+            y,
+            ground.stand_at(footing(&thing.template), x, y) + lift,
+        ));
         let [fx, fy, _] = thing.facing;
         if fx != 0.0 || fy != 0.0 {
             transform.look_to(world(fx, fy, 0.0), Vec3::Y);

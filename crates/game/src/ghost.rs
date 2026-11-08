@@ -75,12 +75,14 @@ pub fn show(
                 && let Ok(mut t) = transforms.get_mut(*e)
             {
                 *placed = at;
-                t.translation = world(x, y, ground.height_at(x, y));
+                let footing = drawn.0.footing(&unpacks.building.template);
+                t.translation = world(x, y, ground.stand_at(footing, x, y));
             }
         }
         None => {
             let b = &unpacks.building;
-            let thing = thing_at(ground, b.id, &b.template, at, b.facing);
+            let footing = drawn.0.footing(&b.template);
+            let thing = thing_at(ground, footing, b.id, &b.template, at, b.facing);
             let owner = local.0.unwrap_or(0);
             let Loaded { game, .. } = &mut *loaded;
             let mut models = assets.models();

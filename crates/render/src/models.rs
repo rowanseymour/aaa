@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use aaa_data::{GameData, Id, Shape, View};
+use aaa_data::{Footing, GameData, Id, Shape, View};
 use aaa_map::{Ground, Player, owner};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
@@ -24,19 +24,20 @@ use crate::team::{self, Team, TeamMaterial};
 use crate::terrain::world;
 use crate::textures;
 
-/// Where and how turned to draw an object at `position` facing `facing`: on
-/// the ground and turned only about the vertical, or tilted to rest on the
-/// ground under `conform`'s outline.
+/// Where and how turned to draw an object at `position` facing `facing`: at
+/// the height its `footing` stands at and turned only about the vertical, or
+/// tilted to rest on the ground under `conform`'s outline.
 pub fn pose(
     ground: &Ground,
     position: [f32; 2],
     facing: [f32; 2],
     conform: Option<Shape>,
+    footing: Footing,
 ) -> (Vec3, Quat) {
     let [x, y] = position;
     let [fx, fy] = facing;
     let Some(footprint) = conform else {
-        let translation = world(x, y, ground.height_at(x, y));
+        let translation = world(x, y, ground.stand_at(footing, x, y));
         return (translation, Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2));
     };
     // Objects never turned face their model's -y.
@@ -298,6 +299,14 @@ impl Models {
         self.views.get(&Id::from(template))?.as_ref()?.conform
     }
 
+    /// What height a template's objects stand at, for [`pose`]; on the
+    /// ground for templates without a view.
+    pub fn footing(&self, template: &str) -> Footing {
+        let view = self.views.get(&Id::from(template));
+        view.and_then(Option::as_ref)
+            .map_or(Footing::Ground, |v| v.footing)
+    }
+
     /// Spawns a unit of the player `owner` that moves at `speed`, its model
     /// playing the moving animation that suits that speed while
     /// [`crate::Playing::set_moving`] says it's moving. `None` if its model
@@ -490,6 +499,7 @@ impl Models {
             scale: 1.0,
             animations: Vec::new(),
             conform: None,
+            footing: Footing::Ground,
             unpacking: None,
             packing: None,
             icon: None,
@@ -1156,8 +1166,8 @@ mod tests {
     fn conforming_on_the_flat_turns_like_upright() {
         let flat = ground(|_, _| 3.0);
         for facing in [[0.0, -1.0], [1.0, 0.0], [0.6, 0.8]] {
-            let upright = pose(&flat, [8.0, 8.0], facing, None);
-            let conform = pose(&flat, [8.0, 8.0], facing, Some(TANK));
+            let upright = pose(&flat, [8.0, 8.0], facing, None, Footing::Ground);
+            let conform = pose(&flat, [8.0, 8.0], facing, Some(TANK), Footing::Ground);
             assert!(upright.0.abs_diff_eq(conform.0, 1e-5));
             assert!(upright.1.abs_diff_eq(conform.1, 1e-5), "{facing:?}");
         }
@@ -1166,7 +1176,7 @@ mod tests {
     #[test]
     fn climbing_points_the_nose_up_the_slope() {
         let slope = ground(|_, y| y * 0.5);
-        let (_, rotation) = pose(&slope, [8.0, 8.0], [0.0, 1.0], Some(TANK));
+        let (_, rotation) = pose(&slope, [8.0, 8.0], [0.0, 1.0], Some(TANK), Footing::Ground);
         // The model's -y is its front, which is Bevy's +z.
         let nose = rotation * Vec3::Z;
         let ahead = world(0.0, 1.0, 0.5).normalize();

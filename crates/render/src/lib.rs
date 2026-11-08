@@ -167,7 +167,16 @@ pub fn spawn_map(
         &buildings,
     );
     let (meshes, materials) = (&mut assets.meshes, &mut assets.materials);
-    objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
+    let footing = |t: &str| models.footing(t);
+    objects::spawn(
+        commands,
+        meshes,
+        materials,
+        &map.ground,
+        footing,
+        &rest,
+        markers,
+    );
     light(commands, &map.sun, map.ground.size());
     models
 }

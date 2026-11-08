@@ -14,7 +14,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
-use crate::{Focus, Loaded, Local, Screen, Sim, TINTS, tint};
+use crate::{Drawn, Focus, Loaded, Local, Screen, Sim, TINTS, tint};
 
 /// How high over the ground under its regiment a banner floats, in world
 /// units.
@@ -160,6 +160,7 @@ pub fn add_banners(
 pub fn show_banners(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
+    drawn: Res<Drawn>,
     local: Res<Local>,
     focus: Res<Focus>,
     fixed: Res<Time<Fixed>>,
@@ -186,10 +187,11 @@ pub fn show_banners(
                 .filter(|u| u.alive())
         };
         let count = live().count();
-        let at = (count > 0).then(|| {
+        let at = live().next().map(|first| {
             let sum = live().fold(Vec2::ZERO, |sum, u| sum + Vec2::from(u.drawn_at(t)));
             let [x, y] = (sum / count as f32).to_array();
-            world(x, y, ground.height_at(x, y) + HEIGHT)
+            let footing = drawn.0.footing(&first.template);
+            world(x, y, ground.stand_at(footing, x, y) + HEIGHT)
         });
         let Some(p) = at.and_then(|p| camera.world_to_viewport(&global, p).ok()) else {
             *visibility = Visibility::Hidden;
