@@ -103,7 +103,11 @@ pub fn load(
         .map(|c| (c.ids.clone(), c))
         .collect();
     let cursors = game.cursors();
-    let models = game.vfx_models();
+    let vfx = game.vfx();
+    let models: HashMap<Id, String> = vfx
+        .into_iter()
+        .filter_map(|(id, v)| Some((id, v.model?)))
+        .collect();
     let mut looks = Looks {
         rally: models.get(&Id::from(RALLY_MARKER)).cloned(),
         ..default()

@@ -110,7 +110,8 @@ pub struct Component {
 }
 
 /// An effects command, run when the event its block is named after happens;
-/// its template sets its `type`. Declared in `Templates/template_fx.tgi`.
+/// its template sets its `type`. Declared in `Templates/template_fx.tgi`,
+/// which documents the fields.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Fxc {
     /// E.g. `PLAY_SFX` or `CREATE_VFX`.
@@ -118,14 +119,38 @@ pub struct Fxc {
     pub kind: Option<String>,
     /// The [`Audio`] a `PLAY_SFX` plays.
     pub audio_ids: Option<Id>,
+    /// The [`Vfx`] a `CREATE_VFX` creates or a `STOP_VFX` stops.
+    pub vfx_ids: Option<Id>,
     /// Where it happens, e.g. `SELF` or `TARGET_GROUND`.
     pub at: Option<String>,
+    /// The point of the model it happens at, e.g. `cannon_ae_01`.
+    pub location: Option<String>,
+    pub attached: Option<bool>,
+    pub translation: Option<[f32; 3]>,
+    pub orientation: Option<[f32; 3]>,
+    /// Seconds the effect lasts, 0 for the effect's own.
+    pub duration: Option<f32>,
     pub looping: Option<bool>,
     /// Seconds after the event.
     pub delay: Option<f32>,
     /// It runs on one in this many of the events, never for 0.
     pub frequency: Option<u32>,
     pub actor_state: Option<String>,
+    /// The terrain group it's limited to.
+    pub terrain_group_filter: Option<String>,
+    /// Flags the event's target must have or lack, written like an
+    /// ability's `targets`.
+    pub target_flags: Option<String>,
+    /// For `WhenHealth`, the share of its health whose crossing runs it,
+    /// and which way.
+    pub health: Option<f32>,
+    pub health_trigger_type: Option<String>,
+    pub stop_on_destructed: Option<bool>,
+    /// Run when this one's effect ends, and alongside it.
+    #[serde(default)]
+    pub chain: Vec<Fxc>,
+    #[serde(default)]
+    pub chain_immediate: Vec<Fxc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -137,6 +162,9 @@ pub struct Placement {
 #[derive(Debug, Clone, Deserialize)]
 pub struct BodyComponent {
     pub health: Option<f32>,
+    /// Run as its health crosses each command's `health`.
+    #[serde(default)]
+    pub when_health: Vec<Fxc>,
     pub defense: Option<f32>,
     pub captureable: Option<bool>,
     pub destructible: Option<bool>,
@@ -334,9 +362,18 @@ pub struct AbilityDefinition {
     pub targets: Option<String>,
     #[serde(default)]
     pub effect: Vec<Effect>,
-    /// Run each time it's used.
+    /// The projectile template a shot fires.
+    pub projectile_ids: Option<Id>,
+    /// Run as a use starts, each time it's used, once for each target a use
+    /// lands on, and as a use ends.
+    #[serde(default)]
+    pub when_start: Vec<Fxc>,
     #[serde(default)]
     pub when_do: Vec<Fxc>,
+    #[serde(default)]
+    pub when_do_per_target: Vec<Fxc>,
+    #[serde(default)]
+    pub when_end: Vec<Fxc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -454,6 +491,9 @@ pub struct View {
     pub when_created: Vec<Fxc>,
     #[serde(default)]
     pub when_destroyed: Vec<Fxc>,
+    /// When a building is finished.
+    #[serde(default)]
+    pub when_constructed: Vec<Fxc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -654,12 +694,34 @@ pub struct SVars {
     pub building_padding_meters: Option<f32>,
 }
 
-/// A visual effect; those with a model draw it, relative to their file's
-/// folder.
+/// A visual effect. Its base templates are declared in
+/// `Templates/template_vfx.tgi`, which documents the fields.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Vfx {
     pub ids: Option<Id>,
+    /// What kind it is, e.g. `VFXMODEL` or `VFXTRACER`.
+    pub category: Option<String>,
+    /// Relative to its file's folder.
     pub model: Option<String>,
+    #[serde(default)]
+    pub texture_search_path: Vec<TextureSearchPath>,
+    pub permanent: Option<bool>,
+    pub critical: Option<bool>,
+    /// Seconds, 0 for its model's own length.
+    pub duration: Option<f32>,
+    pub attached_scale: Option<f32>,
+    pub never_discard_temporary: Option<bool>,
+    pub nightonly: Option<bool>,
+    pub constant_screen_size: Option<bool>,
+    pub force_real_time: Option<bool>,
+    pub gyroscope: Option<bool>,
+    #[serde(default)]
+    pub flags: Vec<VfxFlags>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct VfxFlags {
+    pub random_orientation: Option<bool>,
 }
 
 /// A way of arranging an organization, which its layout places its slots

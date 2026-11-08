@@ -2607,6 +2607,8 @@ mod tests {
             animation: None,
             turret: false,
             sounds: Vec::new(),
+            effects: Default::default(),
+            projectile: None,
         }
     }
 
