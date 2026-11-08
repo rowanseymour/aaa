@@ -132,10 +132,12 @@ impl Block {
         self.value(key)?.trim().parse().ok()
     }
 
-    /// Whether the first field with this key is `true`, case-insensitive.
+    /// Whether the first field with this key is `true` (in any case) or `1`,
+    /// as the game reads flags.
     pub fn flag(&self, key: &str) -> bool {
         self.value(key)
-            .is_some_and(|v| v.trim().eq_ignore_ascii_case("true"))
+            .map(str::trim)
+            .is_some_and(|v| v.eq_ignore_ascii_case("true") || v == "1")
     }
 
     /// Child blocks whose first header word matches, case-insensitive.
@@ -178,8 +180,10 @@ fn strip_block_comments(text: &str, warnings: &mut Vec<Warning>) -> String {
         } else if !commented && !quoted && c == ';' {
             commented = true;
         } else if !commented && !quoted && rest.starts_with("/*") {
-            let len = match rest[2..].find("*/") {
-                Some(end) => end + 4,
+            // The close is looked for from the opening `*`, so `/*/` is a
+            // whole comment, as the game reads it.
+            let len = match rest[1..].find("*/") {
+                Some(end) => end + 3,
                 None => {
                     warnings.push(Warning {
                         line,

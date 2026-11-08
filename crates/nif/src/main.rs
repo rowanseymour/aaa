@@ -1,3 +1,4 @@
+use std::io::{self, Write};
 use std::process::ExitCode;
 
 use nif::{Keys, Nif, Object, Rotation};
@@ -15,8 +16,8 @@ fn main() -> ExitCode {
         .collect::<Vec<_>>()
         .as_slice()
     {
-        ["check", files @ ..] if !files.is_empty() => check(files),
-        ["dump", file] => dump(file),
+        ["check", files @ ..] if !files.is_empty() => finish(check(files)),
+        ["dump", file] => finish(dump(file)),
         _ => {
             eprintln!("{USAGE}");
             ExitCode::from(2)
@@ -24,46 +25,64 @@ fn main() -> ExitCode {
     }
 }
 
+/// Output cut short by a closed pipe (`nif dump x | head`) is no failure.
+fn finish(result: io::Result<ExitCode>) -> ExitCode {
+    match result {
+        Ok(code) => code,
+        Err(e) if e.kind() == io::ErrorKind::BrokenPipe => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("nif: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+macro_rules! outln {
+    ($($arg:tt)*) => {
+        writeln!(io::stdout(), $($arg)*)?
+    };
+}
+
 fn read(path: &str) -> Result<Nif, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
     Nif::parse(&bytes).map_err(|e| format!("{path}: {e}"))
 }
 
-fn check(files: &[&str]) -> ExitCode {
+fn check(files: &[&str]) -> io::Result<ExitCode> {
     let (mut complete, mut partial, mut failed) = (0, 0, 0);
     for &file in files {
         match read(file) {
             Ok(nif) => match nif.incomplete {
                 None => complete += 1,
                 Some(kind) => {
-                    println!("{file}: stops at {kind}");
+                    outln!("{file}: stops at {kind}");
                     partial += 1;
                 }
             },
             Err(e) => {
-                println!("{e}");
+                outln!("{e}");
                 failed += 1;
             }
         }
     }
-    println!("{complete} complete, {partial} stop early, {failed} failed");
-    if failed > 0 {
+    outln!("{complete} complete, {partial} stop early, {failed} failed");
+    Ok(if failed > 0 {
         ExitCode::FAILURE
     } else {
         ExitCode::SUCCESS
-    }
+    })
 }
 
-fn dump(file: &str) -> ExitCode {
+fn dump(file: &str) -> io::Result<ExitCode> {
     let nif = match read(file) {
         Ok(n) => n,
         Err(e) => {
             eprintln!("nif: {e}");
-            return ExitCode::FAILURE;
+            return Ok(ExitCode::FAILURE);
         }
     };
     if let Some(kind) = &nif.incomplete {
-        println!("(stops at {kind}; later objects are missing)");
+        outln!("(stops at {kind}; later objects are missing)");
     }
     for (i, o) in nif.objects.iter().enumerate() {
         let line = match o {
@@ -166,10 +185,10 @@ fn dump(file: &str) -> ExitCode {
             }
             Object::Other(kind) => kind.clone(),
         };
-        println!("{i:4} {line}");
+        outln!("{i:4} {line}");
     }
-    println!("roots {:?}", nif.roots);
-    ExitCode::SUCCESS
+    outln!("roots {:?}", nif.roots);
+    Ok(ExitCode::SUCCESS)
 }
 
 fn keys<T: std::fmt::Debug>(k: &Keys<T>) -> String {

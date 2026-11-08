@@ -218,6 +218,14 @@ fn rejects_other_versions() {
         Err(Error::UnsupportedVersion(v)) if v == "4.0.0.2"
     ));
     assert!(matches!(Nif::parse(b"hello"), Err(Error::NotNif)));
+
+    // The error names the version checked, whatever the text says.
+    let mut bytes = b"Gamebryo File Format, Version 10.1.0.0\r\n".to_vec();
+    bytes.extend(0x1400_0004u32.to_le_bytes());
+    assert!(matches!(
+        Nif::parse(&bytes),
+        Err(Error::UnsupportedVersion(v)) if v == "20.0.0.4"
+    ));
 }
 
 #[test]

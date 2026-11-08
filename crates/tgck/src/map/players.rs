@@ -112,7 +112,7 @@ impl RestrictionGroup {
 }
 
 impl World {
-    const MAX_VERSION: u32 = 28;
+    pub(super) const MAX_VERSION: u32 = 28;
 
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
@@ -490,7 +490,9 @@ impl Kingdom {
         expect(cur, "recruits version", 1)?;
         expect(cur, "recruit count", 0)?;
         let current_recruit = cur.i32()?;
-        let faction = (cur.u8()? != 0).then(|| Faction::parse(cur)).transpose()?;
+        let faction = bool(cur, "faction flag")?
+            .then(|| Faction::parse(cur))
+            .transpose()?;
         let nation = cur.string()?;
         let objectives = pairs(cur, Cursor::u32)?;
         let outcome = cur.u32()?;

@@ -55,6 +55,11 @@ impl<R: Read + Seek> Container<R> {
         reader.seek(SeekFrom::Start(0))?;
 
         let mut head = [0u8; 12];
+        if len < head.len() as u64 {
+            return Err(Error::Corrupt(format!(
+                "{len} bytes is too short for a TGCK file"
+            )));
+        }
         reader.read_exact(&mut head)?;
         let mut cur = Cursor::new(&head);
         let magic: [u8; 4] = cur.bytes(4)?.try_into().unwrap();

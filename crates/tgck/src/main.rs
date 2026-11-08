@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -34,7 +34,7 @@ fn main() -> ExitCode {
         ["cat", ar, name] => cat(ar, name),
         ["sections", file] => sections(file),
         ["unpack", file, out] => unpack(file, out),
-        ["map", maps @ ..] if !maps.is_empty() => maps.iter().try_for_each(|m| map(m)),
+        ["map", maps @ ..] if !maps.is_empty() => each_map(maps),
         ["check", maps @ ..] if !maps.is_empty() => check(maps),
         _ => {
             eprintln!("{USAGE}");
@@ -80,6 +80,8 @@ fn list(path: &str, filter: Option<&str>) -> Res {
     for e in ar.entries.iter().filter(|e| matches(&e.name, filter)) {
         writeln!(out, "{:>10}  {}", e.size, e.name)?;
     }
+    // Dropping it would flush too, but drop the error with it.
+    out.flush()?;
     Ok(())
 }
 
@@ -113,17 +115,34 @@ fn extract(path: &str, out_dir: &str, filter: Option<&str>) -> Res {
         .cloned()
         .collect();
     let (mut written, mut bytes, mut skipped) = (0usize, 0u64, 0usize);
+    // Lower-case, as names differing only in case would land on one file
+    // where the file system ignores case.
+    let mut seen = HashSet::new();
     for e in &entries {
         let Some(rel) = e.safe_path() else {
             eprintln!("skipping unsafe path: {:?}", e.name);
             skipped += 1;
             continue;
         };
-        let dest = Path::new(out_dir).join(rel);
-        if let Some(parent) = dest.parent() {
-            fs::create_dir_all(parent)?;
+        if !seen.insert(rel.to_string_lossy().to_lowercase()) {
+            eprintln!("skipping {:?}, which another entry already wrote", e.name);
+            skipped += 1;
+            continue;
         }
-        let mut f = BufWriter::new(File::create(&dest)?);
+        let dest = Path::new(out_dir).join(rel);
+        let created = dest
+            .parent()
+            .map_or(Ok(()), fs::create_dir_all)
+            .and_then(|()| File::create(&dest));
+        let file = match created {
+            Ok(f) => f,
+            Err(err) => {
+                eprintln!("skipping {:?}: {}: {err}", e.name, dest.display());
+                skipped += 1;
+                continue;
+            }
+        };
+        let mut f = BufWriter::new(file);
         bytes += ar.copy_to(e, &mut f)?;
         f.flush()?;
         written += 1;
@@ -138,7 +157,7 @@ fn extract(path: &str, out_dir: &str, filter: Option<&str>) -> Res {
 fn cat(path: &str, name: &str) -> Res {
     let mut ar = Archive::open(path)?;
     let e = ar
-        .find(name)
+        .find(&name.replace('\\', "/"))
         .ok_or_else(|| format!("no entry named {name:?}"))?
         .clone();
     let stdout = std::io::stdout();
@@ -189,6 +208,24 @@ fn unpack(path: &str, out_dir: &str) -> Res {
     Ok(())
 }
 
+/// Summarises each map, going on past ones that fail.
+fn each_map(paths: &[&str]) -> Res {
+    let mut failed = 0;
+    for path in paths {
+        if let Err(e) = map(path) {
+            if is_broken_pipe(e.as_ref()) {
+                return Err(e);
+            }
+            eprintln!("{path}: {e}");
+            failed += 1;
+        }
+    }
+    match failed {
+        0 => Ok(()),
+        n => Err(format!("{n} of {} maps failed", paths.len()).into()),
+    }
+}
+
 fn map(path: &str) -> Res {
     let mut m = Map::open(path)?;
     let header = m.header()?;
@@ -203,13 +240,13 @@ fn map(path: &str) -> Res {
     let terrain = m.terrain()?;
     if terrain.side + 1 != hm.side {
         return Err(format!(
-            "{path}: {} terrain tiles per side but {} height vertices",
+            "{} terrain tiles per side but {} height vertices",
             terrain.side, hm.side
         )
         .into());
     }
     let things = m.things()?;
-    let extent = (hm.side - 1) as f32 * tgck::map::CELL_SIZE;
+    let extent = hm.side.saturating_sub(1) as f32 * tgck::map::CELL_SIZE;
     outln!("{path}: \"{name}\"");
     let side = hm.side;
     let water_pct = 100.0 * water as f64 / hm.layer.len() as f64;
@@ -280,37 +317,50 @@ fn map(path: &str) -> Res {
 fn check(paths: &[&str]) -> Res {
     let mut failed = 0;
     for path in paths {
-        let bytes = fs::read(path)?;
-        let mut original = Map::new(std::io::Cursor::new(&bytes))?;
-        let file = original.load()?.to_bytes()?;
-        let mut written = Map::new(std::io::Cursor::new(&file))?;
-        let mut diffs = Vec::new();
-        let sections = original.sections().to_vec();
-        for (s, w) in sections.iter().zip(written.sections().to_vec()) {
-            let (a, b) = (original.read_section(s)?, written.read_section(&w)?);
-            if let Some(at) = first_difference(&a, &b) {
-                diffs.push(format!("{} differs at byte {at}", s.name));
+        match round_trip(path) {
+            Ok((diffs, _)) if !diffs.is_empty() => {
+                failed += 1;
+                outln!("{path}: {}", diffs.join(", "));
             }
-        }
-        if let Err(e) = written.load() {
-            diffs.push(format!("doesn't load back: {e}"));
-        }
-        let file = if file == bytes {
-            "identical"
-        } else {
-            "recompressed"
-        };
-        if diffs.is_empty() {
-            outln!("{path}: ok, file {file}");
-        } else {
-            failed += 1;
-            outln!("{path}: {}", diffs.join(", "));
+            Ok((_, identical)) => {
+                let file = if identical {
+                    "identical"
+                } else {
+                    "recompressed"
+                };
+                outln!("{path}: ok, file {file}");
+            }
+            Err(e) => {
+                failed += 1;
+                outln!("{path}: {e}");
+            }
         }
     }
     match failed {
         0 => Ok(()),
-        n => Err(format!("{n} of {} maps don't round-trip", paths.len()).into()),
+        n => Err(format!("{n} of {} maps don't load or round-trip", paths.len()).into()),
     }
+}
+
+/// The sections that differ once `path` is saved again, and whether the
+/// whole file came out the same.
+fn round_trip(path: &str) -> Result<(Vec<String>, bool), Box<dyn std::error::Error>> {
+    let bytes = fs::read(path)?;
+    let mut original = Map::new(std::io::Cursor::new(&bytes))?;
+    let file = original.load()?.to_bytes()?;
+    let mut written = Map::new(std::io::Cursor::new(&file))?;
+    let mut diffs = Vec::new();
+    let sections = original.sections().to_vec();
+    for (s, w) in sections.iter().zip(written.sections().to_vec()) {
+        let (a, b) = (original.read_section(s)?, written.read_section(&w)?);
+        if let Some(at) = first_difference(&a, &b) {
+            diffs.push(format!("{} differs at byte {at}", s.name));
+        }
+    }
+    if let Err(e) = written.load() {
+        diffs.push(format!("doesn't load back: {e}"));
+    }
+    Ok((diffs, file == bytes))
 }
 
 fn first_difference(a: &[u8], b: &[u8]) -> Option<usize> {

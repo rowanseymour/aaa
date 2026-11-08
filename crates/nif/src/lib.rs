@@ -83,8 +83,9 @@ impl Nif {
         let mut r = Reader::new(&bytes[line_end + 1..]);
         r.version = r.u32()?;
         if ![VERSION, OLD_VERSION, NETIMMERSE_VERSION].contains(&r.version) {
-            let v = line.rsplit(' ').next().unwrap_or_default();
-            return Err(Error::UnsupportedVersion(v.to_string()));
+            // The version that was checked, not the header's text of it.
+            let [a, b, c, d] = r.version.to_be_bytes();
+            return Err(Error::UnsupportedVersion(format!("{a}.{b}.{c}.{d}")));
         }
         if !r.old() {
             r.u32()?; // user version

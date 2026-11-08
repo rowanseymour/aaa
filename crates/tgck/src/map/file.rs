@@ -87,14 +87,14 @@ impl MapFile {
             "GWORLD" => self.world.to_bytes()?,
             "RULES" => self.rules.to_bytes()?,
             "TERRAIN" => self.terrain.to_bytes()?,
-            "HEIGHT_MAP" => self.height_map.to_bytes(),
+            "HEIGHT_MAP" => self.height_map.to_bytes()?,
             "MOUNTAIN_HEIGHT_MAP" => {
                 if self.cutscene_mode.is_some() != (world_version >= 10) {
                     return Err(Error::Unwritable(
                         "cutscene mode must be set exactly from world version 10".into(),
                     ));
                 }
-                super::write_mountain_height_map(&self.mountain_height_map, self.cutscene_mode)
+                super::write_mountain_height_map(&self.mountain_height_map, self.cutscene_mode)?
             }
             "IDMGR" => self.ids.to_bytes(),
             "RESTRICTION_GROUPS" => self.restriction_groups.to_bytes()?,
