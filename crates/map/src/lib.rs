@@ -60,6 +60,13 @@ impl Map {
         let hm = map.height_map().map_err(err)?;
         let mountain = map.mountain_height_map().map_err(err)?;
         let terrain = map.terrain().map_err(err)?;
+        let ground = Ground::new(&hm, &mountain).map_err(|e| format!("{name}: {e}"))?;
+        if terrain.side + 1 != ground.side {
+            return Err(format!(
+                "{name}: {} tiles a side don't fit height maps of {} vertices",
+                terrain.side, ground.side
+            ));
+        }
         let mut things = map.things().map_err(err)?;
         for thing in &mut things {
             let nation = owner(thing).and_then(|o| nations.get(&o));
@@ -110,7 +117,7 @@ impl Map {
         }
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
-            ground: Ground::new(&hm, &mountain),
+            ground,
             regiments,
             buildings,
             scenery,
@@ -398,8 +405,18 @@ mod tests {
         };
         assert!(truck.lone());
         assert_eq!((truck.id, truck.owner, truck.primary), (1, 2, Some(0)));
+        assert_eq!(truck.members[0].health, 1.0);
         let trailer = truck.members[0].trailer.as_ref().unwrap();
         assert_eq!(trailer.placed.map(|p| p.0), Some(2));
+    }
+
+    #[test]
+    fn members_keep_the_health_the_map_has_them_at() {
+        let things = [crate::fixtures::hurt(placed(1, "gun", 2, None, None), 0.4)];
+        let bodies = HashMap::from([(Id::from("gun"), moves(None))]);
+        let none = HashMap::new();
+        let regiments = units::regiments(&things, &bodies, &HashMap::new(), &none, &HashMap::new());
+        assert_eq!(regiments[0].members[0].health, 0.4);
     }
 
     #[test]

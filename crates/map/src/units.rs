@@ -263,6 +263,8 @@ pub struct Member {
     pub trailer: Option<Trailer>,
     /// What it can take and deal; `None` for what can't be hurt.
     pub fighter: Option<Fighter>,
+    /// Its health as a fraction of its fighter's.
+    pub health: f32,
 }
 
 /// What a member tows, dragged after the point it's coupled to.
@@ -390,7 +392,12 @@ fn member(
             placed: None,
         })
     });
+    let health = match &thing.detail {
+        Detail::Actor(actor) => actor.body().map_or(1.0, |b| b.health),
+        _ => 1.0,
+    };
     Some(Member {
+        health,
         speed: body.speed?,
         acceleration: body.acceleration,
         turn_rate: body.turn_rate,

@@ -2179,6 +2179,7 @@ mod tests {
             turn_rate: 0.0,
             trailer: None,
             fighter: None,
+            health: 1.0,
         }
     }
 
