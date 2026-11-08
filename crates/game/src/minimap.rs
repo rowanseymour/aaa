@@ -3,7 +3,8 @@
 //! coloured by how their owner stands toward the player, buildings such as
 //! HQs marked by their own icons, and the ground the camera sees outlined
 //! in white.
-//! Clicking or dragging on it moves the camera there.
+//! Clicking or dragging on it moves the camera there, unless an order is
+//! being aimed, which a click on it gives there instead.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -487,27 +488,79 @@ fn clip(a: Vec2, b: Vec2, n: f32) -> Option<(Vec2, Vec2)> {
 
 /// Whether the pointer is off the minimap's disc, so clicks go to the map.
 pub fn pointer_away(views: Query<&RelativeCursorPosition, With<MinimapView>>) -> bool {
-    views.iter().all(|v| match v.normalized {
-        Some(p) => p.distance(Vec2::ZERO) > 0.5,
-        None => true,
-    })
+    on_disc(over(&views)).is_none()
 }
 
-/// Clicking or dragging on the diamond centres the camera there.
+/// Where the pointer is across the minimap's node, -0.5 to 0.5 from its
+/// centre each way.
+fn over(views: &Query<&RelativeCursorPosition, With<MinimapView>>) -> Option<Vec2> {
+    views
+        .iter()
+        .find_map(|v| v.cursor_over.then_some(v.normalized?))
+}
+
+/// The point across the node, if it's on the disc rather than in the
+/// node's corners.
+fn on_disc(over: Option<Vec2>) -> Option<Vec2> {
+    over.filter(|p| p.length() <= 0.5)
+}
+
+/// The world position at a point across the minimap's node, if it's on the
+/// diamond.
+fn on_map(size: f32, p: Vec2) -> Option<[f32; 2]> {
+    let [x, y] = from_image(size, p + 0.5);
+    let on = |v: f32| (0.0..=size).contains(&v);
+    (on(x) && on(y)).then_some([x, y])
+}
+
+/// Where the pointer is on the minimap.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Spot {
+    /// Off the disc, so on whatever's behind it.
+    Off,
+    /// On the disc, but off the diamond the map is drawn in.
+    OffMap,
+    /// On the map, at this world position.
+    At([f32; 2]),
+}
+
+fn spot(size: f32, over: Option<Vec2>) -> Spot {
+    match on_disc(over) {
+        None => Spot::Off,
+        Some(p) => on_map(size, p).map_or(Spot::OffMap, Spot::At),
+    }
+}
+
+impl Minimap {
+    pub fn spot(&self, views: &Query<&RelativeCursorPosition, With<MinimapView>>) -> Spot {
+        spot(self.size, over(views))
+    }
+
+    /// How far from a click on the minimap a unit may be and still be
+    /// clicked, in world units: a little past the edge of its mark.
+    pub fn reach(&self) -> f32 {
+        const PIXELS_AWAY: f32 = 6.0;
+        // The diamond's diagonals span the image, so its sides are the
+        // image's width over root two.
+        PIXELS_AWAY * self.size * std::f32::consts::SQRT_2 / PIXELS as f32
+    }
+}
+
+/// Clicking or dragging on the diamond centres the camera there, while no
+/// order is aimed for the click to give.
 pub fn steer(
     buttons: Res<ButtonInput<MouseButton>>,
     mut dragging: Local<bool>,
     minimap: Res<Minimap>,
     loaded: Res<Loaded>,
+    page: Res<crate::actions::Page>,
     views: Query<&RelativeCursorPosition, With<MinimapView>>,
     mut cameras: Query<&mut RtsCamera>,
 ) {
-    let over = views
-        .iter()
-        .find_map(|v| v.cursor_over.then_some(v.normalized?));
+    let over = over(&views);
     // Only a press that starts on the minimap drags across it.
     if buttons.just_pressed(MouseButton::Left) {
-        *dragging = over.is_some();
+        *dragging = over.is_some() && !crate::actions::aiming(page);
     }
     if !buttons.pressed(MouseButton::Left) {
         *dragging = false;
@@ -515,11 +568,9 @@ pub fn steer(
     let (true, Some(p)) = (*dragging, over) else {
         return;
     };
-    // Normalized from the node's centre, -0.5 to 0.5.
-    let [x, y] = from_image(minimap.size, p + 0.5);
-    if !(0.0..=minimap.size).contains(&x) || !(0.0..=minimap.size).contains(&y) {
+    let Some([x, y]) = on_map(minimap.size, p) else {
         return;
-    }
+    };
     for mut cam in &mut cameras {
         cam.focus = world(x, y, loaded.map.ground.height_at(x, y));
     }
@@ -537,6 +588,18 @@ mod tests {
         assert_eq!(at([10.0, 0.0]), Vec2::new(0.5, 1.0));
         assert_eq!(at([0.0, 0.0]), Vec2::new(0.0, 0.5));
         assert_eq!(from_image(10.0, Vec2::new(0.75, 0.25)), [5.0, 10.0]);
+    }
+
+    #[test]
+    fn spots() {
+        let at = |x, y| spot(10.0, Some(Vec2::new(x, y)));
+        assert_eq!(at(0.0, 0.0), Spot::At([5.0, 5.0]));
+        assert_eq!(at(0.25, -0.25), Spot::At([5.0, 10.0]));
+        // The disc's edge between two of the diamond's corners.
+        assert_eq!(at(0.35, 0.35), Spot::OffMap);
+        // The node's corner, outside the disc.
+        assert_eq!(at(0.45, 0.45), Spot::Off);
+        assert_eq!(spot(10.0, None), Spot::Off);
     }
 
     #[test]

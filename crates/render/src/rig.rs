@@ -13,11 +13,14 @@ use bevy::prelude::*;
 use nif::{Controller, ControllerKind, Keyframes, Nif, Object};
 
 use crate::models::{Animated, Part, PartMaterial, bevy_transform, controller};
+use crate::particles::{Anchor, Frames};
 
 /// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
     /// Parents come before their children.
     nodes: Vec<RigNode>,
+    /// Node indices by nif object index.
+    index: HashMap<usize, usize>,
     meshes: Vec<RigMesh>,
     idle: Clip,
     /// Timed per world unit moved rather than per second.
@@ -29,6 +32,8 @@ pub struct Rig {
 }
 
 struct RigNode {
+    /// Its nif object index.
+    nif: usize,
     name: String,
     parent: Option<usize>,
     rest: nif::Transform,
@@ -69,6 +74,9 @@ pub struct Nodes {
     /// By nif object index.
     index: HashMap<usize, usize>,
     pub shapes: Vec<RigShape>,
+    /// Where every scene object is, hidden ones included, as particle
+    /// emitters may be placed by hidden helpers.
+    pub frames: Frames,
 }
 
 /// A visible shape among a rig's nodes.
@@ -90,6 +98,7 @@ impl Nodes {
             nodes: Vec::new(),
             index: HashMap::new(),
             shapes: Vec::new(),
+            frames: Frames::default(),
         };
         for &root in &nif.roots {
             nodes.walk(nif, root, None, nif::Transform::IDENTITY, &[], false);
@@ -116,11 +125,29 @@ impl Nodes {
         };
         let hidden = hidden || av.hidden();
         let transform = above.then(&av.transform);
+        let parent_index = parent.and_then(|p| self.nif_index(p));
+        let anchor = match (object, parent_index) {
+            (Object::Node(_), _) => Some(Anchor {
+                node: i,
+                below: nif::Transform::IDENTITY,
+                model: transform,
+            }),
+            (_, Some(node)) => Some(Anchor {
+                node,
+                below: av.transform,
+                model: transform,
+            }),
+            _ => None,
+        };
+        if let Some(anchor) = anchor {
+            self.frames.0.entry(i).or_insert(anchor);
+        }
         let properties: Vec<nif::Ref> = av.properties.iter().chain(inherited).copied().collect();
         match object {
             Object::Node(node) => {
                 let at = self.nodes.len();
                 self.nodes.push(RigNode {
+                    nif: i,
                     name: av.name.clone(),
                     parent,
                     rest: av.transform,
@@ -142,6 +169,11 @@ impl Nodes {
             }
             _ => {}
         }
+    }
+
+    /// The nif index of rig node `node`.
+    fn nif_index(&self, node: usize) -> Option<usize> {
+        self.nodes.get(node).map(|n| n.nif)
     }
 
     /// The rig for these nodes, with parts for [`Nodes::shapes`] by index:
@@ -202,6 +234,7 @@ impl Nodes {
             .collect();
         Some(Rig {
             nodes: self.nodes,
+            index: self.index,
             meshes,
             idle,
             moving,
@@ -362,15 +395,20 @@ impl Rig {
         self.meshes.iter().map(|m| &m.part)
     }
 
+    /// The node a nif object index is, if it's one of the rig's.
+    pub fn joint(&self, nif_index: usize) -> Option<usize> {
+        self.index.get(&nif_index).copied()
+    }
+
     /// Spawns its nodes and meshes under `root`, each mesh with its own of
-    /// `materials`.
+    /// `materials`, returning the nodes' entities.
     pub fn spawn(
         self: &Arc<Rig>,
         commands: &mut Commands,
         root: Entity,
         offset: f32,
         materials: Vec<PartMaterial>,
-    ) {
+    ) -> Vec<Entity> {
         let mut joints: Vec<Entity> = Vec::with_capacity(self.nodes.len());
         for (i, node) in self.nodes.iter().enumerate() {
             let parent = node.parent.map_or(root, |p| joints[p]);
@@ -408,11 +446,12 @@ impl Rig {
         }
         commands.entity(root).insert(Playing {
             rig: self.clone(),
-            joints,
+            joints: joints.clone(),
             time: offset,
             moving: None,
             once: None,
         });
+        joints
     }
 
     /// Node `i`'s transform below its parent, `t` seconds into idling.

@@ -1,11 +1,12 @@
 //! The action buttons: a grid in the bottom-right corner of the orders the
 //! selection can take, with the game's icons in the places its data gives
 //! them. Orders given at a place, such as Move, wait for a left click on the
-//! map, with a button to cancel; right click or Escape does too. A selected
-//! building that commissions, such as a Corps HQ, has a button opening a
-//! menu of what it commissions; [`crate::pane`] shows what it's been asked
-//! for, and one to set the rally point what it commissions moves on to. A
-//! building that packs, into a truck say, has Pack, dimmed while it can't.
+//! map or minimap, with a button to cancel; right click or Escape does too.
+//! A selected building that commissions, such as a Corps HQ, has a button
+//! opening a menu of what it commissions; [`crate::pane`] shows what it's
+//! been asked for, and one to set the rally point what it commissions moves
+//! on to. A building that packs, into a truck say, has Pack, dimmed while
+//! it can't.
 
 use std::collections::HashMap;
 
@@ -593,9 +594,13 @@ pub fn spawn(
 pub fn pointer_away(
     grids: Query<(&RelativeCursorPosition, &InheritedVisibility), With<Blocks>>,
 ) -> bool {
-    grids
-        .iter()
-        .all(|(p, shown)| !shown.get() || !p.cursor_over)
+    !over_grid(&grids)
+}
+
+pub fn over_grid(
+    grids: &Query<(&RelativeCursorPosition, &InheritedVisibility), With<Blocks>>,
+) -> bool {
+    grids.iter().any(|(p, shown)| shown.get() && p.cursor_over)
 }
 
 pub fn aiming(page: Res<Page>) -> bool {
@@ -1110,16 +1115,16 @@ fn struck(focus: crate::Focus, toward: Option<aaa_sim::Relation>) -> Struck {
     }
 }
 
-/// While an order is aimed, a left click on the map gives it there and a
-/// right click calls it off. Attacking an enemy regiment sends the
-/// selected after it instead. Attacking a friend, or unpacking somewhere
-/// the building wouldn't fit, waits for another click. A rally point is set for the selected
-/// building.
+/// While an order is aimed, a left click on the map or minimap gives it
+/// there and a right click calls it off. Attacking an enemy regiment, or
+/// its mark on the minimap, sends the selected after it instead. Attacking
+/// a friend, or unpacking somewhere the building wouldn't fit, waits for
+/// another click. A rally point is set for the selected building.
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
     buttons: Res<ButtonInput<MouseButton>>,
-    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform, &aaa_render::camera::RtsCamera)>,
+    pointer: crate::Pointer,
+    scenery: Res<crate::banners::Scenery>,
     loaded: Res<Loaded>,
     local: Res<Local>,
     selected: Res<Selected>,
@@ -1143,11 +1148,22 @@ pub fn aim(
     if !buttons.just_pressed(MouseButton::Left) {
         return;
     }
-    let (Some(player), Some(point)) = (
-        local.0,
-        crate::pointed(&windows, &cameras, &loaded.map.ground),
-    ) else {
+    let (Some(player), Some(at)) = (local.0, pointer.at(&loaded.map.ground)) else {
         return;
+    };
+    let point = at.point();
+    let focus = match at {
+        crate::Pointing::Ground(_) => *focus,
+        // The minimap's marks are too close together to pick out friends,
+        // so a click there is only ever on an enemy or the ground.
+        crate::Pointing::Minimap(p) => {
+            crate::nearest_regiment(&sim.0, p, pointer.minimap.reach(), |r| {
+                !scenery.has(&sim.0, r)
+                    && sim.0.sides.relation(player, sim.0.regiments[r].owner)
+                        == aaa_sim::Relation::Enemy
+            })
+            .map_or(crate::Focus::Nothing, crate::Focus::Regiment)
+        }
     };
     let Page::Aiming(aim) = *page else {
         if let Some(b) = chosen.0
@@ -1166,7 +1182,7 @@ pub fn aim(
         return;
     };
     if aim == Aim::Attack {
-        match attack_at(&sim.0, player, *focus) {
+        match attack_at(&sim.0, player, focus) {
             Struck::Friend => return,
             Struck::Ground => {}
             Struck::Enemy(e) => {

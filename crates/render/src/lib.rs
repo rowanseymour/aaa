@@ -7,6 +7,7 @@ mod glow;
 pub mod models;
 pub mod objects;
 pub mod overlay;
+mod particles;
 mod rig;
 pub mod shot;
 mod team;
@@ -76,6 +77,10 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<TeamMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
+            .add_systems(
+                PostUpdate,
+                particles::play.after(bevy::transform::TransformSystems::Propagate),
+            )
             .add_systems(
                 Update,
                 (
