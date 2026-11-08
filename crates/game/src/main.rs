@@ -856,9 +856,17 @@ fn setup(
     // The sim's units draw the trailers they tow.
     let members = map.regiments.iter().flat_map(|r| &r.members);
     let trailers = members.filter_map(|m| Some(m.trailer.as_ref()?.placed?.0));
+    let building_ids: HashSet<u32> = map.buildings.iter().map(|b| b.id).collect();
+    // A building can stand in an organization, as an unpacked Division HQ
+    // does, whose own model is the truck it packs into.
+    let holding_buildings = map.things.iter().filter(|t| {
+        t.organization()
+            .is_some_and(|o| o.members.iter().any(|m| building_ids.contains(&m.id)))
+    });
     let leave_out: HashSet<u32> = ids
         .chain(trailers)
-        .chain(map.buildings.iter().map(|b| b.id))
+        .chain(building_ids.iter().copied())
+        .chain(holding_buildings.map(|t| t.id))
         .collect();
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
         leave_out.contains(&t.id)
@@ -888,8 +896,16 @@ fn setup(
         sim.0.regiments.len(),
         sim.0.units.len()
     );
-    let things = map.things.iter().filter(|t| leave_out.contains(&t.id));
-    let things: std::collections::HashMap<u32, _> = things.map(|t| (t.id, t)).collect();
+    let members = map
+        .things
+        .iter()
+        .flat_map(|t| t.organization())
+        .flat_map(|o| &o.members);
+    let things = map.things.iter().chain(members);
+    let things: std::collections::HashMap<u32, _> = things
+        .filter(|t| building_ids.contains(&t.id))
+        .map(|t| (t.id, t))
+        .collect();
     let mut missing = 0;
     for (i, b) in map.buildings.iter().enumerate() {
         debug_assert_eq!(sim.0.buildings[i].id, b.id);

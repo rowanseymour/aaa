@@ -34,6 +34,9 @@ pub struct Building {
     pub deploy: Option<DeployPoints>,
 }
 
+/// The owned objects that can be hurt but not move and aren't regiments,
+/// placed on their own or standing in an organization, as a Division HQ's
+/// building does while it's unpacked.
 pub fn buildings(
     things: &[Thing],
     bodies: &HashMap<Id, Body>,
@@ -42,10 +45,9 @@ pub fn buildings(
     obstacles: &HashMap<u32, Obstacle>,
     deploy_points: &HashMap<Id, DeployPoints>,
 ) -> Vec<Building> {
-    things
-        .iter()
-        .filter_map(|t| {
-            let owner = owner(t)?;
+    standing(things)
+        .filter_map(|(t, owner)| {
+            let owner = owner?;
             let template = Id::from(t.template.as_str());
             let fighter = fighters.get(&template)?;
             let moves = bodies.get(&template).is_some_and(|b| b.speed.is_some());
@@ -74,4 +76,16 @@ pub fn buildings(
             })
         })
         .collect()
+}
+
+/// The placed objects and the members of their organizations, which stand
+/// on the map as objects do, each with its owner: its own, else its
+/// organization's.
+pub(crate) fn standing(things: &[Thing]) -> impl Iterator<Item = (&Thing, Option<u32>)> {
+    things.iter().flat_map(|t| {
+        let within = owner(t);
+        let members = t.organization().map_or(&[][..], |o| &o.members[..]);
+        let members = members.iter().map(move |m| (m, owner(m).or(within)));
+        std::iter::once((t, within)).chain(members)
+    })
 }

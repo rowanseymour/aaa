@@ -68,21 +68,7 @@ impl Map {
         }
         let world_version = map.world_version().map_err(err)?;
         let bodies = game.bodies();
-        // Movers don't block the ground they start on.
-        let obstacles: Vec<(u32, Obstacle)> = things
-            .iter()
-            .filter_map(|t| {
-                let body = bodies.get(&Id::from(t.template.as_str()))?;
-                let shape = body.blocking.filter(|_| body.speed.is_none())?;
-                let [x, y, _] = t.position;
-                let obstacle = Obstacle {
-                    position: [x, y],
-                    facing: units::facing(t),
-                    shape,
-                };
-                Some((t.id, obstacle))
-            })
-            .collect();
+        let obstacles = obstacles(&things, &bodies);
         let pathing = Pathing::new(
             &terrain,
             &game.terrain_variations(),
@@ -151,6 +137,24 @@ impl Map {
         self.regiments.retain(|r| !leaving.contains(&r.owner));
         self.buildings.retain(|b| !leaving.contains(&b.owner));
     }
+}
+
+/// What blocks the ground, by id, of the objects standing on the map.
+/// Movers don't block the ground they start on.
+fn obstacles(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>) -> Vec<(u32, Obstacle)> {
+    buildings::standing(things)
+        .filter_map(|(t, _)| {
+            let body = bodies.get(&Id::from(t.template.as_str()))?;
+            let shape = body.blocking.filter(|_| body.speed.is_none())?;
+            let [x, y, _] = t.position;
+            let obstacle = Obstacle {
+                position: [x, y],
+                facing: units::facing(t),
+                shape,
+            };
+            Some((t.id, obstacle))
+        })
+        .collect()
 }
 
 /// The players and teams of [`Map::arrange`].
@@ -335,6 +339,186 @@ mod tests {
         let mut teams = vec![team(0, 0), team(1, 1)];
         teams[0].relations[4] = Enemy;
         (players, teams)
+    }
+
+    /// An object at `id` metres along x owned by `kingdom`, 0 for nobody,
+    /// towing the object `towing` or standing as `organization`.
+    fn placed(
+        id: u32,
+        template: &str,
+        kingdom: u32,
+        towing: Option<u32>,
+        organization: Option<tgck::map::Organization>,
+    ) -> Thing {
+        use tgck::map::{Actor, Component, Detail, State, Trailer};
+        let trailer = Trailer {
+            main_component: -1,
+            required_object: None,
+            old_stance: None,
+            saved_group: None,
+            group: None,
+            map_string: None,
+            towing: towing.map(|t| [t, 0]),
+            number: None,
+            lists: None,
+            num_deploying: None,
+        };
+        let components = organization
+            .map(Component::Organization)
+            .into_iter()
+            .collect();
+        Thing {
+            template: template.into(),
+            class: tgck::map::ACTOR,
+            id,
+            name: String::new(),
+            position: [id as f32, 0.0, 0.0],
+            facing: [0.0, 1.0, 0.0],
+            flags: 0,
+            scale: 1.0,
+            variation: -1,
+            seen_by: 0,
+            detail: Detail::Actor(Actor {
+                version: 14,
+                kingdom,
+                states: 0,
+                template_components: 0,
+                components: 0,
+                state: State::Decoded {
+                    components,
+                    trailer,
+                },
+            }),
+        }
+    }
+
+    fn organization(layout: &str, members: Vec<Thing>) -> tgck::map::Organization {
+        use tgck::map::{Organization, Position, Updatable};
+        Organization {
+            updatable: Updatable { version: 1, id: 0 },
+            version: 10,
+            layout: layout.into(),
+            slots: members.iter().map(|m| m.template.clone()).collect(),
+            positions: (0..members.len() as i32)
+                .map(|index| Position {
+                    index,
+                    old: None,
+                    template: Some(String::new()),
+                    offset: [0.0, 0.0],
+                    unknown1: Some(0),
+                })
+                .collect(),
+            members,
+            leader: -1,
+            morale: 1.0,
+            formation: 0,
+            desired_formation: Some(0),
+            old: None,
+            fighting: None,
+            level: Some(1.0),
+            time: Some(0.0),
+            position: Some([0.0, 0.0]),
+            hq: Some(0),
+            transport: Some(0),
+        }
+    }
+
+    fn moves(trailer: Option<&str>) -> aaa_data::Body {
+        aaa_data::Body {
+            speed: Some(3.0),
+            trailer: trailer.map(Id::from),
+            ..aaa_data::Body::default()
+        }
+    }
+
+    #[test]
+    fn owned_units_of_no_organization_are_regiments_of_their_own() {
+        let things = [
+            placed(1, "truck", 2, Some(2), None),
+            placed(2, "gun", 2, None, None),
+            placed(3, "cow", 0, None, None),
+            placed(4, "rock", 2, None, None),
+        ];
+        let bodies = HashMap::from([
+            (Id::from("truck"), moves(Some("gun"))),
+            (Id::from("gun"), moves(None)),
+            (Id::from("cow"), moves(None)),
+        ]);
+        let none = HashMap::new();
+        let regiments = units::regiments(&things, &bodies, &HashMap::new(), &none, &HashMap::new());
+        // The gun goes with the truck, and the cow is nobody's.
+        let [truck] = &regiments[..] else {
+            panic!("{regiments:?}");
+        };
+        assert!(truck.lone());
+        assert_eq!((truck.id, truck.owner, truck.primary), (1, 2, Some(0)));
+        let trailer = truck.members[0].trailer.as_ref().unwrap();
+        assert_eq!(trailer.placed.map(|p| p.0), Some(2));
+    }
+
+    #[test]
+    fn buildings_standing_in_organizations_are_buildings() {
+        // A Division HQ standing unpacked: its building and a bunker that
+        // can't be hurt, both owned through the HQ.
+        let hq = placed(
+            10,
+            "hq_unpacked",
+            2,
+            None,
+            Some(organization(
+                "regiment_hq",
+                vec![
+                    placed(11, "hq", 0, None, None),
+                    placed(12, "bunker", 0, None, None),
+                ],
+            )),
+        );
+        let things = [hq];
+        let bodies = HashMap::from([(
+            Id::from("hq"),
+            aaa_data::Body {
+                blocking: Some(Shape::Rect {
+                    width: 8.0,
+                    height: 8.0,
+                }),
+                ..aaa_data::Body::default()
+            },
+        )]);
+        let obstacles = obstacles(&things, &bodies);
+        assert_eq!(
+            obstacles.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            [11]
+        );
+        let fighters = HashMap::from([(
+            Id::from("hq"),
+            Fighter {
+                health: 2000.0,
+                ..Fighter::default()
+            },
+        )]);
+        let buildings = buildings::buildings(
+            &things,
+            &bodies,
+            &fighters,
+            &HashMap::new(),
+            &obstacles.into_iter().collect(),
+            &HashMap::new(),
+        );
+        let [b] = &buildings[..] else {
+            panic!("{buildings:?}");
+        };
+        assert_eq!((b.id, b.owner, b.position), (11, 2, [11.0, 0.0]));
+        assert!(b.obstacle.is_some());
+        assert!(
+            units::regiments(
+                &things,
+                &bodies,
+                &fighters,
+                &HashMap::new(),
+                &HashMap::new()
+            )
+            .is_empty()
+        );
     }
 
     #[test]
