@@ -541,6 +541,7 @@ fn samples_keys() {
 fn cycles_controller_time() {
     let c = |flags| Controller {
         kind: ControllerKind::Keyframe,
+        modifier: String::new(),
         next: None,
         flags,
         frequency: 1.0,
@@ -597,9 +598,9 @@ fn particles_data(netimmerse: bool) -> Vec<u8> {
 }
 
 #[test]
-fn steps_over_particle_systems() {
+fn reads_particle_systems() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 3]));
+    b.add("NiNode", node("root", [0.0, 0.0, 2.0], 1.0, &[1, 3]));
     b.add("NiTriShape", shape("chimney", 0x10, 2, &[]));
     b.add("NiTriShapeData", geometry(false));
 
@@ -626,7 +627,9 @@ fn steps_over_particle_systems() {
         v
     };
     let mut emitter = modifier("Box");
-    emitter.extend(floats(&[0.0; 13]));
+    emitter.extend(floats(&[
+        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.1, 0.2, 0.3, 0.4, 11.0, 12.0, 13.0,
+    ]));
     emitter.extend(1i32.to_le_bytes());
     emitter.extend(floats(&[1.0, 2.0, 3.0]));
     b.add("NiPSysBoxEmitter", emitter);
@@ -653,13 +656,316 @@ fn steps_over_particle_systems() {
 
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
-    assert!(matches!(&nif.objects[3], Object::Other(k) if k == "NiParticleSystem"));
     let names: Vec<_> = nif
         .shapes()
         .iter()
         .map(|p| p.shape.av.name.clone())
         .collect();
     assert_eq!(names, ["chimney"]);
+
+    let systems = nif.particle_systems();
+    let [(system, placed)] = systems.as_slice() else {
+        panic!("one particle system");
+    };
+    assert_eq!(system.shape.av.name, "smoke");
+    assert!(system.world_space);
+    assert_eq!(system.modifiers, [Some(5), Some(6)]);
+    assert_eq!(placed.transform.translation, [0.0, 0.0, 2.0]);
+    assert_eq!(placed.path, [0, 3]);
+    assert!(matches!(
+        nif.get(system.shape.data),
+        Some(Object::ParticleData(ParticleData { capacity: 2 }))
+    ));
+
+    let Some(Object::Modifier(box_emitter)) = nif.get(Some(5)) else {
+        panic!("an emitter");
+    };
+    assert_eq!(
+        (box_emitter.name.as_str(), box_emitter.system),
+        ("Box", Some(3))
+    );
+    let ModifierKind::Emitter(e) = &box_emitter.kind else {
+        panic!("an emitter");
+    };
+    assert_eq!(
+        (e.speed, e.planar_angle_variation, e.radius),
+        (1.0, 6.0, 11.0)
+    );
+    assert_eq!(e.color, [0.1, 0.2, 0.3, 0.4]);
+    assert_eq!((e.life_span, e.life_span_variation), (12.0, 13.0));
+    assert!(matches!(
+        e.shape,
+        EmitterShape::Box {
+            object: Some(1),
+            size: [1.0, 2.0, 3.0]
+        }
+    ));
+    assert!(matches!(
+        nif.get(Some(6)),
+        Some(Object::Modifier(Modifier {
+            kind: ModifierKind::GrowFade(GrowFade {
+                grow: 1.0,
+                fade: 1.0,
+                ..
+            }),
+            ..
+        }))
+    ));
+
+    let Some(Object::Controller(c)) = nif.get(Some(7)) else {
+        panic!("a controller");
+    };
+    assert_eq!(c.kind, ControllerKind::Emitter);
+    assert_eq!(
+        (c.modifier.as_str(), c.target, c.data),
+        ("Box", Some(3), Some(8))
+    );
+    let Some(Object::EmitterKeys(keys)) = nif.get(c.data) else {
+        panic!("emitter keys");
+    };
+    assert_eq!(keys.birth_rate.sample(0.0), Some(10.0));
+    assert_eq!(keys.active, [(0.0, true), (2.0, false)]);
+}
+
+#[test]
+fn reads_particle_modifiers_and_colliders() {
+    let mut b = Builder::new();
+    let modifier = |name| {
+        let mut v = string(name);
+        v.extend(2000u32.to_le_bytes());
+        v.extend((-1i32).to_le_bytes());
+        v.push(0);
+        v
+    };
+    let mut gravity = modifier("Gravity");
+    gravity.extend(3i32.to_le_bytes());
+    gravity.extend(floats(&[0.0, 0.0, -1.0, 0.5, 9.8]));
+    gravity.extend(1u32.to_le_bytes());
+    gravity.extend(floats(&[0.02, 0.9]));
+    b.add("NiPSysGravityModifier", gravity);
+    let mut manager = modifier("Colliders");
+    manager.extend(2i32.to_le_bytes());
+    b.add("NiPSysColliderManager", manager);
+    let mut plane = floats(&[0.4]);
+    plane.extend([0, 1]);
+    for r in [-1i32, 1, -1, 3] {
+        plane.extend(r.to_le_bytes());
+    }
+    plane.extend(floats(&[10.0, 20.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
+    b.add("NiPSysPlanarCollider", plane);
+    b.add("NiNode", node("ground", [0.0; 3], 1.0, &[]));
+
+    let nif = Nif::parse(&b.finish(&[3])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let Some(Object::Modifier(m)) = nif.get(Some(0)) else {
+        panic!("a modifier");
+    };
+    assert_eq!((m.order, m.active), (2000, false));
+    let ModifierKind::Gravity(g) = &m.kind else {
+        panic!("gravity");
+    };
+    assert_eq!(
+        (g.object, g.axis, g.decay, g.strength),
+        (Some(3), [0.0, 0.0, -1.0], 0.5, 9.8)
+    );
+    assert_eq!((g.force, g.turbulence, g.turbulence_scale), (1, 0.02, 0.9));
+    assert!(matches!(
+        nif.get(Some(1)),
+        Some(Object::Modifier(Modifier {
+            kind: ModifierKind::ColliderManager { collider: Some(2) },
+            ..
+        }))
+    ));
+    let Some(Object::Collider(c)) = nif.get(Some(2)) else {
+        panic!("a collider");
+    };
+    assert_eq!(c.bounce, 0.4);
+    assert!(!c.spawn_on_collide && c.die_on_collide);
+    assert_eq!(
+        (c.spawn, c.manager, c.next, c.object),
+        (None, Some(1), None, Some(3))
+    );
+    assert!(matches!(
+        c.shape,
+        ColliderShape::Plane {
+            width: 10.0,
+            height: 20.0,
+            x_axis: [1.0, 0.0, 0.0],
+            y_axis: [0.0, 1.0, 0.0],
+        }
+    ));
+}
+
+#[test]
+fn reads_the_other_emitters_modifiers_and_controllers() {
+    let mut b = Builder::new();
+    let header = |name| {
+        let mut v = string(name);
+        v.extend(0u32.to_le_bytes());
+        v.extend((-1i32).to_le_bytes());
+        v.push(1);
+        v
+    };
+    let base: Vec<f32> = (1..=13).map(|i| i as f32).collect();
+    let mut cylinder = header("Cylinder");
+    cylinder.extend(floats(&base));
+    cylinder.extend(9i32.to_le_bytes());
+    cylinder.extend(floats(&[2.0, 5.0]));
+    b.add("NiPSysCylinderEmitter", cylinder);
+    let mut sphere = header("Sphere");
+    sphere.extend(floats(&base));
+    sphere.extend(9i32.to_le_bytes());
+    sphere.extend(floats(&[3.0]));
+    b.add("NiPSysSphereEmitter", sphere);
+    let mut mesh = header("Mesh");
+    mesh.extend(floats(&base));
+    mesh.extend(refs(&[9]));
+    mesh.extend(1u32.to_le_bytes());
+    mesh.extend(3u32.to_le_bytes());
+    mesh.extend(floats(&[0.0, 1.0, 0.0]));
+    b.add("NiPSysMeshEmitter", mesh);
+    let mut spawn = header("Spawn");
+    spawn.extend(2u16.to_le_bytes());
+    spawn.extend(floats(&[0.5]));
+    spawn.extend(1u16.to_le_bytes());
+    spawn.extend(4u16.to_le_bytes());
+    spawn.extend(floats(&[0.1, 0.2, 3.0, 0.3]));
+    b.add("NiPSysSpawnModifier", spawn);
+    let mut drag = header("Drag");
+    drag.extend(9i32.to_le_bytes());
+    drag.extend(floats(&[0.0, 0.0, 1.0, 0.5, 7.0, 8.0]));
+    b.add("NiPSysDragModifier", drag);
+    let mut rotation = header("Rotation");
+    rotation.extend(floats(&[0.25]));
+    rotation.push(1);
+    rotation.extend(floats(&[1.0, 0.0, 0.0]));
+    b.add("NiPSysRotationModifier", rotation);
+    let mut age = header("Age");
+    age.push(1);
+    age.extend(3i32.to_le_bytes());
+    b.add("NiPSysAgeDeathModifier", age);
+    let mut ball = floats(&[0.6]);
+    ball.extend([1, 0]);
+    for r in [3i32, -1, -1, 9] {
+        ball.extend(r.to_le_bytes());
+    }
+    ball.extend(floats(&[4.0]));
+    b.add("NiPSysSphericalCollider", ball);
+    b.add("NiPSysUpdateCtlr", time_controller(10));
+    b.add("NiNode", node("emitter", [0.0; 3], 1.0, &[]));
+    for kind in [
+        "NiPSysModifierActiveCtlr",
+        "NiPSysEmitterSpeedCtlr",
+        "NiPSysEmitterInitialRadiusCtlr",
+    ] {
+        let mut c = time_controller(10);
+        c.extend(string("Drag"));
+        c.extend(9i32.to_le_bytes());
+        b.add(kind, c);
+    }
+
+    let nif = Nif::parse(&b.finish(&[9])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let kind = |i| match nif.get(Some(i)) {
+        Some(Object::Modifier(m)) => &m.kind,
+        o => panic!("a modifier, not {o:?}"),
+    };
+    let shape = |i| match kind(i) {
+        ModifierKind::Emitter(e) => {
+            assert_eq!(
+                (e.speed, e.declination, e.color[3], e.life_span_variation),
+                (1.0, 3.0, 10.0, 13.0)
+            );
+            &e.shape
+        }
+        k => panic!("an emitter, not {k:?}"),
+    };
+    assert!(matches!(
+        shape(0),
+        EmitterShape::Cylinder {
+            object: Some(9),
+            radius: 2.0,
+            height: 5.0
+        }
+    ));
+    assert!(matches!(
+        shape(1),
+        EmitterShape::Sphere {
+            object: Some(9),
+            radius: 3.0
+        }
+    ));
+    assert!(matches!(
+        shape(2),
+        EmitterShape::Mesh { meshes, velocity: 1, emission: 3, axis: [0.0, 1.0, 0.0] }
+            if meshes == &[Some(9)]
+    ));
+    assert!(matches!(
+        kind(3),
+        ModifierKind::Spawn(Spawn {
+            generations: 2,
+            percentage: 0.5,
+            min: 1,
+            max: 4,
+            speed_chaos: 0.1,
+            direction_chaos: 0.2,
+            life_span: 3.0,
+            life_span_variation: 0.3,
+        })
+    ));
+    assert!(matches!(
+        kind(4),
+        ModifierKind::Drag(Drag {
+            object: Some(9),
+            axis: [0.0, 0.0, 1.0],
+            percentage: 0.5,
+            range: 7.0,
+            falloff: 8.0,
+        })
+    ));
+    assert!(matches!(
+        kind(5),
+        ModifierKind::Rotation(ParticleRotation {
+            speed: 0.25,
+            random_axis: true,
+            axis: [1.0, 0.0, 0.0]
+        })
+    ));
+    assert!(matches!(
+        kind(6),
+        ModifierKind::AgeDeath {
+            spawn_on_death: true,
+            spawn: Some(3)
+        }
+    ));
+    let Some(Object::Collider(c)) = nif.get(Some(7)) else {
+        panic!("a collider");
+    };
+    assert_eq!(
+        (c.bounce, c.spawn_on_collide, c.die_on_collide),
+        (0.6, true, false)
+    );
+    assert_eq!((c.spawn, c.object), (Some(3), Some(9)));
+    assert!(matches!(c.shape, ColliderShape::Sphere { radius: 4.0 }));
+
+    let controllers: Vec<_> = (8..14)
+        .filter_map(|i| nif.get_as::<Controller>(Some(i)))
+        .map(|c| (c.kind, c.modifier.as_str(), c.target, c.data))
+        .collect();
+    assert_eq!(
+        controllers,
+        [
+            (ControllerKind::ParticleUpdate, "", Some(10), None),
+            (ControllerKind::ModifierActive, "Drag", Some(10), Some(9)),
+            (ControllerKind::EmitterSpeed, "Drag", Some(10), Some(9)),
+            (
+                ControllerKind::EmitterInitialRadius,
+                "Drag",
+                Some(10),
+                Some(9)
+            ),
+        ]
+    );
 }
 
 #[test]
@@ -720,6 +1026,7 @@ fn steps_over_controllers() {
 
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
+    assert!(matches!(&nif.objects[7], Object::Visibility(v) if v == &[(0.0, true), (1.0, false)]));
     assert!(
         matches!(&nif.objects[10], Object::SourceTexture(t) if t.file.as_deref() == Some("frame.dds"))
     );

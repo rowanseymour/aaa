@@ -123,8 +123,20 @@ fn dump(file: &str) -> io::Result<ExitCode> {
             }
             Object::ExtraData(e) => format!("extra {:?} = {:?}", e.name, e.value),
             Object::Controller(c) => format!(
-                "{:?} controller target {:?} data {:?} flags {:#06x} frequency {} phase {} time {}..{} next {:?}",
-                c.kind, c.target, c.data, c.flags, c.frequency, c.phase, c.start, c.stop, c.next
+                "{:?} controller target {:?}{} data {:?} flags {:#06x} frequency {} phase {} time {}..{} next {:?}",
+                c.kind,
+                c.target,
+                match c.modifier.as_str() {
+                    "" => String::new(),
+                    m => format!(" modifier {m:?}"),
+                },
+                c.data,
+                c.flags,
+                c.frequency,
+                c.phase,
+                c.start,
+                c.stop,
+                c.next
             ),
             Object::Keyframes(k) => {
                 let rotation = match &k.rotation {
@@ -189,6 +201,30 @@ fn dump(file: &str) -> io::Result<ExitCode> {
                     s.bones.len()
                 )
             }
+            Object::ParticleSystem(p) => format!(
+                "particle system {:?} flags {:#06x} data {:?} world space {} modifiers {:?} properties {:?}",
+                p.shape.av.name,
+                p.shape.av.flags,
+                p.shape.data,
+                p.world_space,
+                p.modifiers,
+                p.shape.av.properties
+            ),
+            Object::ParticleData(d) => format!("particle data for {}", d.capacity),
+            Object::Modifier(m) => format!(
+                "modifier {:?} order {} active {} {:?}",
+                m.name, m.order, m.active, m.kind
+            ),
+            Object::Collider(c) => format!("collider {c:?}"),
+            Object::EmitterKeys(e) => {
+                format!(
+                    "emitter birth rate {} active {:?}",
+                    keys(&e.birth_rate),
+                    e.active
+                )
+            }
+            Object::Colors(k) => format!("colours {}", keys(k)),
+            Object::Visibility(v) => format!("visibility {v:?}"),
             Object::Other(kind) => kind.clone(),
         };
         outln!("{i:4} {line}");

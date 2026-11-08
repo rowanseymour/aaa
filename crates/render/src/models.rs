@@ -1294,6 +1294,7 @@ mod tests {
                 slot: 0,
                 change: kind,
             },
+            modifier: String::new(),
             next: None,
             flags: 8,
             frequency: 1.0,

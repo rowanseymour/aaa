@@ -168,67 +168,81 @@ impl Nif {
     /// relative to the model and the properties in effect for it: its own,
     /// then those inherited from its parents, nearest first.
     pub fn shapes(&self) -> Vec<Placed<'_>> {
+        self.placed(|object, av, place| match object {
+            Object::Shape(shape) if !self.casts_shadow_only(av) => Some(place.of(shape)),
+            _ => None,
+        })
+    }
+
+    /// Every visible particle system reachable from the roots, placed as
+    /// [`Nif::shapes`] places meshes.
+    pub fn particle_systems(&self) -> Vec<(&ParticleSystem, Placed<'_>)> {
+        self.placed(|object, _, place| match object {
+            Object::ParticleSystem(system) => Some((system, place.of(&system.shape))),
+            _ => None,
+        })
+    }
+
+    /// What `pick` makes of each visible scene object reachable from the
+    /// roots.
+    fn placed<'a, T>(
+        &'a self,
+        pick: impl Fn(&'a Object, &'a SceneObject, Place<'_>) -> Option<T>,
+    ) -> Vec<T> {
         let mut out = Vec::new();
         // Shared children make the graph a DAG that a corrupt file can make
         // exponentially wide; real models visit each object about once.
         let mut budget = self.objects.len().saturating_mul(64);
         for &root in &self.roots {
-            let mut path = Vec::new();
-            self.walk(
-                root,
-                Transform::IDENTITY,
-                &mut Vec::new(),
-                &mut path,
-                &mut budget,
-                &mut out,
-            );
+            let mut walk = Walk {
+                props: Vec::new(),
+                path: Vec::new(),
+                budget: &mut budget,
+            };
+            self.walk(root, Transform::IDENTITY, &mut walk, &pick, &mut out);
         }
         out
     }
 
-    fn walk<'a>(
+    fn walk<'a, T>(
         &'a self,
         r: Ref,
         parent: Transform,
-        props: &mut Vec<Ref>,
-        path: &mut Vec<usize>,
-        budget: &mut usize,
-        out: &mut Vec<Placed<'a>>,
+        walk: &mut Walk<'_>,
+        pick: &impl Fn(&'a Object, &'a SceneObject, Place<'_>) -> Option<T>,
+        out: &mut Vec<T>,
     ) {
-        let Some(index) = r.filter(|i| path.len() <= 64 && !path.contains(i)) else {
+        let Some(index) = r.filter(|i| walk.path.len() <= 64 && !walk.path.contains(i)) else {
             return;
         };
-        let Some(left) = budget.checked_sub(1) else {
+        let Some(left) = walk.budget.checked_sub(1) else {
             return;
         };
-        *budget = left;
+        *walk.budget = left;
         let Some(object) = self.get(r) else { return };
         let Some(av) = object.scene().filter(|av| !av.hidden()) else {
             return;
         };
-        if matches!(object, Object::Shape(_)) && self.casts_shadow_only(av) {
-            return;
-        }
         let transform = parent.then(&av.transform);
-        let inherited = props.len();
-        props.splice(0..0, av.properties.iter().copied());
-        path.push(index);
-        match object {
-            Object::Shape(shape) => out.push(Placed {
-                shape,
-                transform,
-                properties: props.clone(),
-                path: path.clone(),
-            }),
-            Object::Node(node) => {
-                for &c in &node.children {
-                    self.walk(c, transform, props, path, budget, out);
-                }
-            }
-            _ => {}
+        let inherited = walk.props.len();
+        walk.props.splice(0..0, av.properties.iter().copied());
+        walk.path.push(index);
+        let place = Place {
+            transform,
+            properties: &walk.props,
+            path: &walk.path,
+        };
+        if let Some(found) = pick(object, av, place) {
+            out.push(found);
         }
-        path.pop();
-        props.drain(0..props.len() - inherited);
+        if let Object::Node(node) = object {
+            for &c in &node.children {
+                self.walk(c, transform, walk, pick, out);
+            }
+        }
+        walk.path.pop();
+        let added = walk.props.len() - inherited;
+        walk.props.drain(0..added);
     }
 
     /// The object `r` refers to, if it is a `T`.
@@ -242,7 +256,32 @@ impl Nif {
     }
 }
 
-/// A mesh placed in its model.
+/// The state of a walk down the scene graph.
+struct Walk<'b> {
+    props: Vec<Ref>,
+    path: Vec<usize>,
+    budget: &'b mut usize,
+}
+
+/// Where the walk has reached a scene object.
+struct Place<'p> {
+    transform: Transform,
+    properties: &'p [Ref],
+    path: &'p [usize],
+}
+
+impl Place<'_> {
+    fn of<'a>(&self, shape: &'a Shape) -> Placed<'a> {
+        Placed {
+            shape,
+            transform: self.transform,
+            properties: self.properties.to_vec(),
+            path: self.path.to_vec(),
+        }
+    }
+}
+
+/// A mesh, or a particle system's shape, placed in its model.
 pub struct Placed<'a> {
     pub shape: &'a Shape,
     pub transform: Transform,
