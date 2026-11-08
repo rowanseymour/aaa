@@ -10,7 +10,9 @@ pub mod path;
 use std::collections::{HashMap, VecDeque};
 
 use aaa_map::pathing::tile_at;
-use aaa_map::{DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Unpacks, Weapon};
+use aaa_map::{
+    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Shape, Unpacks, Weapon,
+};
 
 pub use aaa_map::{Player, Relation, Team};
 
@@ -44,6 +46,8 @@ pub struct World {
     pub regiments: Vec<Regiment>,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
+    /// The obstacles that aren't buildings, such as trees and rocks.
+    pub scenery: Vec<Obstacle>,
     /// Ticks played.
     pub ticks: u64,
     /// An id no object has yet.
@@ -87,6 +91,9 @@ pub struct Regiment {
     pub unpack_at: Option<[f32; 2]>,
     /// The building it unpacked into, by index into [`World::buildings`].
     pub unpacked_into: Option<usize>,
+    /// For one just put out by a building, the building's rally point, to
+    /// move on to once it's rolled out.
+    pub rally: Option<[f32; 2]>,
 }
 
 impl Regiment {
@@ -156,6 +163,8 @@ pub struct Unit {
     pub previous: [f32; 2],
     /// The way it faces, a unit vector.
     pub facing: [f32; 2],
+    /// The ground it takes up; `None` if it takes up none.
+    pub shape: Option<Shape>,
     /// The way to face once it arrives.
     end_facing: [f32; 2],
     /// Waypoints still ahead, the next last.
@@ -356,6 +365,8 @@ pub struct Building {
     pub progress: u64,
     /// Where what it commissions appears, then goes.
     pub deploy: Option<DeployPoints>,
+    /// Where what it commissions moves on to once out, if set.
+    pub rally: Option<[f32; 2]>,
     /// The tick it last changed hands on.
     pub captured: Option<u64>,
     /// For a city's centre, how far around it the city reaches.
@@ -460,6 +471,7 @@ impl World {
         };
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
         world.add_buildings(&map.buildings);
+        world.scenery = map.scenery.clone();
         let members = map
             .things
             .iter()
@@ -481,6 +493,7 @@ impl World {
             regiments: Vec::new(),
             units: Vec::new(),
             buildings: Vec::new(),
+            scenery: Vec::new(),
             ticks: 0,
             next_id: 1,
             packing: HashMap::new(),
@@ -525,6 +538,7 @@ impl World {
                 position: [x, y],
                 previous: [x, y],
                 facing,
+                shape: m.shape,
                 end_facing: facing,
                 path: Vec::new(),
                 course: None,
@@ -563,6 +577,7 @@ impl World {
             unpacks: regiment.unpacks.clone(),
             unpack_at: None,
             unpacked_into: None,
+            rally: None,
         });
         let ids = regiment.members.iter().map(|m| m.thing.id);
         self.next_id = ids
@@ -608,6 +623,7 @@ impl World {
                 queue: VecDeque::new(),
                 progress: 0,
                 deploy: b.deploy,
+                rally: None,
             });
             self.next_id = self.next_id.max(b.id + 1);
         }
@@ -721,6 +737,7 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = Order::Pursue(enemy);
         r.unpack_at = None;
+        r.rally = None;
         r.engaged.clear();
         r.resume = None;
         self.chase(regiment, enemy, true);
@@ -740,6 +757,7 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = order;
         r.unpack_at = None;
+        r.rally = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
@@ -763,6 +781,7 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = Order::Run;
         r.unpack_at = None;
+        r.rally = None;
         r.engaged.clear();
         r.resume = None;
         let from = r.position;
@@ -783,6 +802,7 @@ impl World {
         r.order = Order::Move;
         r.resume = None;
         r.unpack_at = None;
+        r.rally = None;
         if r.engaged.is_empty() {
             let facing = r.facing;
             self.send(regiment, here, facing);
@@ -875,6 +895,26 @@ impl World {
         Ok(())
     }
 
+    /// Sets where what a building commissions moves on to once it's out,
+    /// or, given `None`, has it stay where it comes out. Refused for a
+    /// building that doesn't commission.
+    pub fn set_rally(
+        &mut self,
+        player: u32,
+        building: usize,
+        at: Option<[f32; 2]>,
+    ) -> Result<(), Refused> {
+        let b = &mut self.buildings[building];
+        if b.owner != player || !b.standing() {
+            return Err(Refused::NotYours);
+        }
+        if b.deploy.is_none() {
+            return Err(Refused::Unable);
+        }
+        b.rally = at;
+        Ok(())
+    }
+
     /// Calls off the `index`th of what a building was asked to
     /// commission, starting the next over if it was under way.
     pub fn cancel_commission(
@@ -926,22 +966,57 @@ impl World {
     /// Sends each of a regiment's members to its place in the formation.
     fn take_places(&mut self, regiment: usize) {
         let r = &self.regiments[regiment];
+        let facing = r.facing;
         let offsets = &r.formations[r.current_formation()].offsets;
-        for (&u, &offset) in r.units.iter().zip(offsets) {
-            let place = aaa_map::from_local(r.position, r.facing, offset);
-            let unit = &mut self.units[u];
-            if !unit.alive() {
+        let places: Vec<(usize, [f32; 2])> = r
+            .units
+            .iter()
+            .zip(offsets)
+            .map(|(&u, &offset)| (u, aaa_map::from_local(r.position, facing, offset)))
+            .collect();
+        for (u, place) in places {
+            if !self.units[u].alive() {
                 continue;
             }
-            let mut way = path::find(&self.pathing, unit.domain, unit.position, place);
-            way.reverse();
+            let way = self.way(u, place);
+            let unit = &mut self.units[u];
             unit.path = way;
             unit.closing = false;
-            unit.end_facing = r.facing;
+            unit.end_facing = facing;
             if unit.path.is_empty() {
-                unit.facing = r.facing;
+                unit.facing = facing;
             }
         }
+    }
+
+    /// A unit's way to `to`, last waypoint first. It passes through the
+    /// obstacles it's caught on, as one put out through its building, or
+    /// beside one unpacked next to it, is: those its shape overlaps, and
+    /// those blocking its tile, which reach further than their shapes do.
+    fn way(&self, u: usize, to: [f32; 2]) -> Vec<[f32; 2]> {
+        let unit = &self.units[u];
+        let tile = tile_at(unit.position);
+        let body = unit.shape.map(|shape| Obstacle {
+            position: unit.position,
+            facing: unit.facing,
+            shape,
+        });
+        let caught: Vec<&Obstacle> = self
+            .buildings
+            .iter()
+            .filter(|b| !b.gone())
+            .filter_map(|b| b.obstacle.as_ref())
+            .chain(&self.scenery)
+            .filter(|o| o.covers(tile) || body.as_ref().is_some_and(|b| b.overlaps(o)))
+            .collect();
+        let mut way = if caught.is_empty() {
+            path::find(&self.pathing, unit.domain, unit.position, to)
+        } else {
+            let pathing = self.pathing.without(caught);
+            path::find(&pathing, unit.domain, unit.position, to)
+        };
+        way.reverse();
+        way
     }
 
     /// Plays one [`TICK`].
@@ -952,6 +1027,7 @@ impl World {
         self.close_in();
         self.occupy();
         self.produce();
+        self.rally();
         self.unpack();
         self.ticks += 1;
     }
@@ -976,6 +1052,7 @@ impl World {
                 continue;
             };
             let (position, facing, owner) = (building.position, building.facing, building.owner);
+            let rally = building.rally;
             let from = deploy_point(position, facing, deploy.creation);
             let to = deploy_point(position, facing, deploy.deployment);
             let heading = normalised([to[0] - from[0], to[1] - from[1]]).unwrap_or(facing);
@@ -986,6 +1063,23 @@ impl World {
             regiment.place(from, heading);
             let r = self.add_regiment(&regiment);
             self.roll_out(r, to, heading);
+            self.regiments[r].rally = rally;
+        }
+    }
+
+    /// Moves regiments that have rolled out of what put them out on to its
+    /// rally point.
+    fn rally(&mut self) {
+        for r in 0..self.regiments.len() {
+            let Some(at) = self.regiments[r].rally else {
+                continue;
+            };
+            if self.destroyed(r) {
+                self.regiments[r].rally = None;
+            } else if !self.underway(r) {
+                let owner = self.regiments[r].owner;
+                let _ = self.order_move(owner, r, at);
+            }
         }
     }
 
@@ -1238,13 +1332,7 @@ impl World {
             {
                 continue;
             }
-            let mut way = path::find(
-                &self.pathing,
-                unit.domain,
-                unit.position,
-                self.position(goal),
-            );
-            way.reverse();
+            let way = self.way(u, self.position(goal));
             let unit = &mut self.units[u];
             unit.path = way;
             unit.closing = true;
@@ -1603,6 +1691,7 @@ impl World {
             building.owner = owner;
             building.captured = Some(self.ticks);
             building.target = None;
+            building.rally = None;
         }
     }
 
@@ -1897,6 +1986,7 @@ mod tests {
                 detail: Detail::Raw(Vec::new()),
             },
             speed,
+            shape: None,
             acceleration: 0.0,
             turn_rate: 0.0,
             trailer: None,
@@ -2102,6 +2192,46 @@ mod tests {
             }
         }
         assert!(near(w.units[0].position, [9.0, 30.0]));
+    }
+
+    #[test]
+    fn units_pass_through_scenery_they_stand_in() {
+        // A rock around the left-hand man, blocking every tile near him.
+        let rock = Obstacle {
+            position: [9.0, 10.0],
+            facing: [0.0, 1.0],
+            shape: Shape::Circle { radius: 3.0 },
+        };
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        pathing.block(&rock);
+        let mut w = world(pathing);
+        w.scenery.push(rock);
+        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        run(&mut w, 10.0);
+        assert!(near(w.units[0].position, [9.0, 30.0]));
+    }
+
+    #[test]
+    fn units_pass_through_what_their_shape_overlaps() {
+        // A wall right across the map, 2 ahead of them: it doesn't block
+        // their tiles, but the left-hand man is big enough to overlap it.
+        let wall = Obstacle {
+            position: [20.0, 12.5],
+            facing: [0.0, 1.0],
+            shape: Shape::Rect {
+                width: 40.0,
+                height: 1.0,
+            },
+        };
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        pathing.block(&wall);
+        let mut w = world(pathing);
+        w.scenery.push(wall);
+        w.units[0].shape = Some(Shape::Circle { radius: 2.5 });
+        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        run(&mut w, 10.0);
+        assert!(near(w.units[0].position, [9.0, 30.0]));
+        assert!(w.units[1].position[1] < 12.0);
     }
 
     #[test]
@@ -2982,6 +3112,63 @@ mod tests {
         w.cancel_commission(1, 0, 0).unwrap();
         run(&mut w, 10.0);
         assert_eq!(w.regiments.len(), 1);
+    }
+
+    #[test]
+    fn commissions_put_out_onto_a_neighbours_ground_can_leave_it() {
+        // A depot beside the HQ covers where it puts out what it makes,
+        // and a house stands in the way out.
+        let mut w = headquarters();
+        let depot = building(6, 1, [28.0, 20.0]);
+        let house = building(7, 1, [26.0, 12.0]);
+        for b in [&depot, &house] {
+            w.pathing.block(b.obstacle.as_ref().unwrap());
+        }
+        w.add_buildings(&[depot, house]);
+        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        run(&mut w, 4.0);
+        assert!(near(w.units[0].position, [26.0, 20.0]));
+        w.order_move(1, 0, [26.0, 4.0]).unwrap();
+        for _ in 0..300 {
+            w.tick();
+            assert!(w.buildings[2].distance(w.units[0].position) > 0.0);
+        }
+        assert!(near(w.units[0].position, [26.0, 4.0]));
+    }
+
+    #[test]
+    fn commissions_move_on_to_the_rally_point() {
+        let mut w = headquarters();
+        assert_eq!(
+            w.set_rally(2, 0, Some([26.0, 30.0])),
+            Err(Refused::NotYours)
+        );
+        w.set_rally(1, 0, Some([26.0, 30.0])).unwrap();
+        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        run(&mut w, 1.0);
+        // Out to its deployment point first, then on to the rally point.
+        assert_eq!(w.destination(0), [26.0, 20.0]);
+        run(&mut w, 3.0);
+        assert_eq!(w.destination(0), [26.0, 30.0]);
+        run(&mut w, 5.0);
+        assert!(near(w.units[0].position, [26.0, 30.0]));
+        assert!(w.regiments[0].rally.is_none());
+        // An order on the way calls it off.
+        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        run(&mut w, 2.0);
+        w.order_stop(1, 1).unwrap();
+        run(&mut w, 8.0);
+        assert!(w.units[1].position[1] < 25.0);
+        // Without one, they stay where they come out.
+        w.set_rally(1, 0, None).unwrap();
+        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        run(&mut w, 10.0);
+        assert!(near(w.units[2].position, [26.0, 20.0]));
+        let mut house = siege(&[building(9, 1, [10.0, 30.0])]);
+        assert_eq!(
+            house.set_rally(1, 0, Some([0.0, 0.0])),
+            Err(Refused::Unable)
+        );
     }
 
     #[test]

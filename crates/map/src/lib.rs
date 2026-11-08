@@ -34,6 +34,8 @@ pub struct Map {
     pub teams: Vec<Team>,
     pub regiments: Vec<Regiment>,
     pub buildings: Vec<Building>,
+    /// The obstacles that aren't buildings, such as trees and rocks.
+    pub scenery: Vec<Obstacle>,
     pub pathing: Pathing,
 }
 
@@ -93,6 +95,20 @@ impl Map {
                 player.nation = Some(n.id.to_string());
             }
         }
+        let buildings = buildings::buildings(
+            &things,
+            &bodies,
+            &fighters,
+            &game.city_zones(),
+            &obstacles.iter().cloned().collect(),
+            &game.deploy_points(),
+        );
+        let ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
+        let scenery = obstacles
+            .into_iter()
+            .filter(|(id, _)| !ids.contains(id))
+            .map(|(_, o)| o)
+            .collect();
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
             ground: Ground::new(&hm, &mountain),
@@ -103,14 +119,8 @@ impl Map {
                 &game.layouts(),
                 &game.organization_ranges(),
             ),
-            buildings: buildings::buildings(
-                &things,
-                &bodies,
-                &fighters,
-                &game.city_zones(),
-                &obstacles.into_iter().collect(),
-                &game.deploy_points(),
-            ),
+            buildings,
+            scenery,
             players,
             teams,
             pathing,
