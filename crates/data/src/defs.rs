@@ -312,10 +312,28 @@ pub struct Effect {
 pub struct MoverComponent {
     /// World units a second.
     pub speed_max: Option<f32>,
+    /// World units a second gained each second; 0 to reach top speed at
+    /// once.
+    pub acceleration: Option<f32>,
+    /// The radius of the circle it drives round when turning, for turn
+    /// types other than `INSTANT`.
+    pub turn_radius: Option<f32>,
+    /// `INSTANT`, `IN_PLACE` or `WHILE_MOVING`, in any case.
+    pub turn_type: Option<String>,
+    /// The template of the trailer it tows.
+    pub trailer_actor: Option<Id>,
+    /// Where it's coupled to what tows it or what it tows.
+    pub trailer_hitch: Option<TrailerHitch>,
     #[serde(default)]
     pub when_start_moving: Vec<Fxc>,
     #[serde(default)]
     pub when_stop_moving: Vec<Fxc>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TrailerHitch {
+    /// From the object's middle: x to its right, y ahead and z up.
+    pub node_offset: Option<[f32; 3]>,
 }
 
 /// How a unit's model is animated.
