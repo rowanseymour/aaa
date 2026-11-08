@@ -18,6 +18,8 @@ use crate::models::{Animated, Part, PartMaterial, bevy_transform, controller};
 pub struct Rig {
     /// Parents come before their children.
     nodes: Vec<RigNode>,
+    /// Node indices by nif object index.
+    index: HashMap<usize, usize>,
     meshes: Vec<RigMesh>,
     idle: Clip,
     /// Timed per world unit moved rather than per second.
@@ -202,6 +204,7 @@ impl Nodes {
             .collect();
         Some(Rig {
             nodes: self.nodes,
+            index: self.index,
             meshes,
             idle,
             moving,
@@ -362,15 +365,20 @@ impl Rig {
         self.meshes.iter().map(|m| &m.part)
     }
 
+    /// The node a nif object index is, if it's one of the rig's.
+    pub fn joint(&self, nif_index: usize) -> Option<usize> {
+        self.index.get(&nif_index).copied()
+    }
+
     /// Spawns its nodes and meshes under `root`, each mesh with its own of
-    /// `materials`.
+    /// `materials`, returning the nodes' entities.
     pub fn spawn(
         self: &Arc<Rig>,
         commands: &mut Commands,
         root: Entity,
         offset: f32,
         materials: Vec<PartMaterial>,
-    ) {
+    ) -> Vec<Entity> {
         let mut joints: Vec<Entity> = Vec::with_capacity(self.nodes.len());
         for (i, node) in self.nodes.iter().enumerate() {
             let parent = node.parent.map_or(root, |p| joints[p]);
@@ -408,11 +416,12 @@ impl Rig {
         }
         commands.entity(root).insert(Playing {
             rig: self.clone(),
-            joints,
+            joints: joints.clone(),
             time: offset,
             moving: None,
             once: None,
         });
+        joints
     }
 
     /// Node `i`'s transform below its parent, `t` seconds into idling.

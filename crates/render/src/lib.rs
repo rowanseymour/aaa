@@ -7,6 +7,7 @@ mod glow;
 pub mod models;
 pub mod objects;
 pub mod overlay;
+mod particles;
 mod rig;
 pub mod shot;
 mod team;
@@ -81,6 +82,7 @@ impl Plugin for MapRenderPlugin {
                 (
                     models::animate,
                     rig::play,
+                    particles::play.after(rig::play),
                     camera::update.in_set(camera::Controls),
                 ),
             );
