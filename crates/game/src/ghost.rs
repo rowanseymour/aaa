@@ -7,7 +7,7 @@ use aaa_render::models::repaint;
 use aaa_render::terrain::world;
 use bevy::prelude::*;
 
-use crate::actions::{Aim, Page};
+use crate::actions::{self, Aim, Page};
 use crate::{Drawn, Loaded, Local, Pointer, Pointing, Screen, Selected, Sim, thing_at};
 
 /// The preview shown: its root, what it is, where, and whether it fits.
