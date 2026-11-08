@@ -84,6 +84,7 @@ pub struct Thing {
     pub performer_component: Option<PerformerComponent>,
     pub city_component: Option<CityComponent>,
     pub organization_component: Option<OrganizationComponent>,
+    pub projectile_component: Option<ProjectileComponent>,
     pub recruit_component: Option<RecruitComponent>,
     pub mobile_deployment_component: Option<MobileDeploymentComponent>,
     pub economy_component: Option<EconomyComponent>,
@@ -146,6 +147,9 @@ pub struct BodyComponent {
 pub struct CityComponent {
     pub zone_radius: Option<f32>,
 }
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ProjectileComponent {}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrganizationComponent {
@@ -408,6 +412,8 @@ pub struct Flags {
     pub flying: Option<bool>,
     /// It stands on the half-tile grid.
     pub tile_locked: Option<bool>,
+    /// Nothing gets in its way.
+    pub ethereal: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -55,30 +55,77 @@ struct Template {
 }
 
 impl Definitions {
+    /// Defining a Thing id again is an error that ends the reading of its
+    /// file there, the blocks before it kept.
     fn new(files: &[(String, tgi::Parsed)]) -> Self {
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
         let mut ids = HashSet::new();
-        let things = files
-            .iter()
-            .flat_map(|(file, parsed)| {
-                parsed.root.blocks_of("Thing").filter_map(|block| {
-                    Some(Template {
-                        file: file.clone(),
-                        id: Id::from(block.value("ids")?),
-                        thing: templates.deserialize(block).ok()?,
-                    })
-                })
-            })
-            .filter(|t| ids.insert(t.id.clone()))
-            .collect();
-        let properties = files
-            .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Property"))
-            .filter_map(|b| templates.deserialize::<defs::Property>(b).ok())
-            .filter_map(|p| Some((p.ids.clone()?, p)))
-            .collect();
+        let mut things = Vec::new();
+        let mut properties = HashMap::new();
+        for Scoped {
+            file,
+            root,
+            templates,
+        } in scoped(files)
+        {
+            for block in root.blocks() {
+                let kind = block.kind().unwrap_or("");
+                if kind.eq_ignore_ascii_case("Thing") {
+                    let Some(id) = block.value("ids").map(Id::from) else {
+                        continue;
+                    };
+                    if ids.contains(&id) {
+                        break;
+                    }
+                    if let Ok(thing) = templates.deserialize(block) {
+                        ids.insert(id.clone());
+                        things.push(Template {
+                            file: file.to_string(),
+                            id,
+                            thing,
+                        });
+                    }
+                } else if kind.eq_ignore_ascii_case("Property")
+                    && let Ok(p) = templates.deserialize::<defs::Property>(block)
+                    && let Some(id) = p.ids.clone()
+                {
+                    properties.insert(id, p);
+                }
+            }
+        }
         Definitions { things, properties }
     }
+}
+
+/// A `.tgi` file that loads, with the templates its blocks see.
+struct Scoped<'a> {
+    file: &'a str,
+    root: &'a tgi::Block,
+    templates: tgi::Templates<'a>,
+}
+
+impl Scoped<'_> {
+    /// Its blocks of `kind` that read as `T`.
+    fn read<'s, T: serde::de::DeserializeOwned>(
+        &'s self,
+        kind: &'s str,
+    ) -> impl Iterator<Item = T> + 's {
+        (self.root.blocks_of(kind)).filter_map(|b| self.templates.deserialize(b).ok())
+    }
+}
+
+/// The files, in the order they load, that don't fail to, with the
+/// templates each sees.
+fn scoped(files: &[(String, tgi::Parsed)]) -> Vec<Scoped<'_>> {
+    let scopes = tgi::Templates::scoped(files.iter().map(|(_, p)| &p.root));
+    (files.iter().zip(scopes))
+        .filter_map(|((file, parsed), templates)| {
+            Some(Scoped {
+                file,
+                root: &parsed.root,
+                templates: templates?,
+            })
+        })
+        .collect()
 }
 
 /// An entry of one of [`GameData`]'s archives: `(archive, entry)` indices.
@@ -158,6 +205,12 @@ pub struct Body {
     pub water_based: bool,
     /// It stands on the half-tile grid.
     pub tile_locked: bool,
+    /// Nothing gets in its way, so it can stand anywhere on the map.
+    pub ethereal: bool,
+    /// It never moves: it has no mover with a top speed, and is neither an
+    /// organization nor a projectile. Only such things get in the way of
+    /// what's placed as a map loads or a building unpacks.
+    pub fixed: bool,
     /// Top speed in world units a second; `None` if it can't move.
     pub speed: Option<f32>,
     /// World units a second it gains each second, speeding up; 0 for
@@ -749,15 +802,20 @@ impl GameData {
     /// which is how maps refer to them.
     pub fn terrain_variations(&mut self) -> HashMap<Id, Variation> {
         let files = self.parse_tgis(|n| n.starts_with("terrain/") || n.starts_with("templates/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        let water = water_colors(&templates, files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
+        let water = water_colors(&files);
         let mut out = HashMap::new();
-        for (file, parsed) in &files {
+        for Scoped {
+            file,
+            root,
+            templates,
+        } in &files
+        {
             if !file.to_ascii_lowercase().starts_with("terrain/") {
                 continue;
             }
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            for block in parsed.root.blocks_of("Terrain") {
+            for block in root.blocks_of("Terrain") {
                 let Ok(terrain) = templates.deserialize::<defs::Terrain>(block) else {
                     continue;
                 };
@@ -878,22 +936,18 @@ impl GameData {
     /// The minimap's colours.
     pub fn minimap(&mut self) -> Option<defs::Minimap> {
         let files = self.parse_tgis(|n| n == "minimap/minimap.tgi");
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        let block = files
-            .iter()
-            .find_map(|(_, p)| p.root.blocks_of("Minimap").next())?;
-        templates.deserialize(block).ok()
+        let files = scoped(&files);
+        files.iter().find_map(|f| f.read("Minimap").next())
     }
 
     /// The archive paths of the badges that divisions of each organization
     /// template's nation wear, in the order HQs number them, by template id.
     pub fn division_badges(&mut self) -> HashMap<Id, Vec<String>> {
         let files = self.parse_tgis(|n| n.starts_with("nations/") || n.starts_with("templates/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let by_group: HashMap<Id, Vec<String>> = files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Nation"))
-            .filter_map(|b| templates.deserialize::<defs::Nation>(b).ok())
+            .flat_map(|f| f.read::<defs::Nation>("Nation"))
             .filter_map(|n| {
                 let badges = n.badge.iter();
                 let paths = badges.map(|b| format!("Nations/{}", b.badge_texture));
@@ -1119,18 +1173,16 @@ impl GameData {
     pub fn layouts(&mut self) -> HashMap<Id, Layout> {
         let files =
             self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("templates/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let aggressive: HashSet<Id> = files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Formation"))
-            .filter_map(|b| templates.deserialize::<defs::Formation>(b).ok())
+            .flat_map(|f| f.read::<defs::Formation>("Formation"))
             .filter(|f| f.aggressive)
             .filter_map(|f| f.ids)
             .collect();
         files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("OrganizationLayout"))
-            .filter_map(|b| templates.deserialize::<defs::OrganizationLayout>(b).ok())
+            .flat_map(|f| f.read::<defs::OrganizationLayout>("OrganizationLayout"))
             .filter_map(|l| Some((l.ids.clone()?, layout(&l, &aggressive)?)))
             .collect()
     }
@@ -1251,10 +1303,11 @@ impl GameData {
     /// blocks that inherit from them.
     pub fn coverage(&mut self) -> tgi::de::Coverage {
         let files = self.parse_tgis(|_| true);
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let mut coverage = tgi::de::Coverage::default();
-        for block in files.iter().flat_map(|(_, p)| p.root.blocks()) {
-            let t = Some(&templates);
+        for (block, t) in
+            (files.iter()).flat_map(|f| f.root.blocks().map(|b| (b, Some(&f.templates))))
+        {
             // Blocks that don't deserialize still count what they read.
             let _ = match block.kind().unwrap_or("").to_ascii_lowercase().as_str() {
                 "template" => continue,
@@ -1292,12 +1345,8 @@ impl GameData {
     /// The lighting presets the player can pick from, by id.
     pub fn sun_presets(&mut self) -> Vec<defs::Sun> {
         let files = self.parse_tgis(|n| n.starts_with("sun/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        let mut out: Vec<defs::Sun> = files
-            .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Sun"))
-            .filter_map(|b| templates.deserialize(b).ok())
-            .collect();
+        let files = scoped(&files);
+        let mut out: Vec<defs::Sun> = files.iter().flat_map(|f| f.read("Sun")).collect();
         out.sort_by(|a, b| a.ids.cmp(&b.ids));
         out
     }
@@ -1306,11 +1355,10 @@ impl GameData {
     pub fn nations(&mut self) -> Vec<Nation> {
         let strings = self.strings();
         let files = self.parse_tgis(|n| n.starts_with("nations/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let mut nations: Vec<Nation> = files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Nation"))
-            .filter_map(|b| templates.deserialize::<defs::Nation>(b).ok())
+            .flat_map(|f| f.read::<defs::Nation>("Nation"))
             .filter_map(|n| {
                 let id = n.ids?;
                 let placeholders = n.placeholder.into_iter();
@@ -1330,11 +1378,10 @@ impl GameData {
     /// The colours players can take, by id, e.g. `blue`.
     pub fn kingdom_colors(&mut self) -> HashMap<Id, [f32; 3]> {
         let files = self.parse_tgis(|n| n == "game/kingdom_colors.tgi");
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("KingdomColor"))
-            .filter_map(|b| templates.deserialize::<defs::KingdomColor>(b).ok())
+            .flat_map(|f| f.read::<defs::KingdomColor>("KingdomColor"))
             .filter_map(|c| Some((c.ids?, c.color)))
             .collect()
     }
@@ -1343,11 +1390,10 @@ impl GameData {
     /// clear for it to be put there, in world units.
     pub fn building_padding(&mut self) -> Option<f32> {
         let files = self.parse_tgis(|n| n == "game/svars.tgi");
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("SVars"))
-            .filter_map(|b| templates.deserialize::<defs::SVars>(b).ok())
+            .flat_map(|f| f.read::<defs::SVars>("SVars"))
             .find_map(|v| v.building_padding_meters)
     }
 
@@ -1357,11 +1403,10 @@ impl GameData {
         let files = self.parse_tgis(|n| {
             n.starts_with("game/actor_commands") || n.starts_with("game/actorcommands/")
         });
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("ActorCommand"))
-            .filter_map(|b| templates.deserialize::<defs::ActorCommand>(b).ok())
+            .flat_map(|f| f.read::<defs::ActorCommand>("ActorCommand"))
             .filter_map(|c| {
                 let ids = c.ids?;
                 Some(Command {
@@ -1383,10 +1428,15 @@ impl GameData {
     /// The mouse cursors whose frames are all there, by id.
     pub fn cursors(&mut self) -> HashMap<Id, CursorLook> {
         let files = self.parse_tgis(|n| n.starts_with("cursors/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let mut out = HashMap::new();
-        for (file, parsed) in &files {
-            for block in parsed.root.blocks_of("Cursor") {
+        for Scoped {
+            file,
+            root,
+            templates,
+        } in &files
+        {
+            for block in root.blocks_of("Cursor") {
                 let Ok(c) = templates.deserialize::<defs::Cursor>(block) else {
                     continue;
                 };
@@ -1415,10 +1465,15 @@ impl GameData {
     pub fn vfx_models(&mut self) -> HashMap<Id, String> {
         // Effects live beside what uses them as well as in their own folder.
         let files = self.parse_tgis(|_| true);
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let mut out = HashMap::new();
-        for (file, parsed) in &files {
-            for block in parsed.root.blocks_of("VFX") {
+        for Scoped {
+            file,
+            root,
+            templates,
+        } in &files
+        {
+            for block in root.blocks_of("VFX") {
                 let Ok(v) = templates.deserialize::<defs::Vfx>(block) else {
                     continue;
                 };
@@ -1437,11 +1492,16 @@ impl GameData {
     pub fn formation_looks(&mut self) -> HashMap<Id, FormationLook> {
         let strings = self.strings();
         let files = self.parse_tgis(|n| n.starts_with("organizations/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         let mut out = HashMap::new();
-        for (file, parsed) in &files {
+        for Scoped {
+            file,
+            root,
+            templates,
+        } in &files
+        {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            for block in parsed.root.blocks_of("Formation") {
+            for block in root.blocks_of("Formation") {
                 let Ok(f) = templates.deserialize::<defs::Formation>(block) else {
                     continue;
                 };
@@ -1480,11 +1540,10 @@ impl GameData {
     /// Every sound, speech and music, by id.
     pub fn audio(&mut self) -> HashMap<Id, Audio> {
         let files = self.parse_tgis(|n| n.starts_with("audio/") || n.starts_with("templates/"));
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let files = scoped(&files);
         files
             .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Audio"))
-            .filter_map(|b| templates.deserialize::<defs::Audio>(b).ok())
+            .flat_map(|f| f.read::<defs::Audio>("Audio"))
             .filter_map(|a| Some((a.ids.clone()?, audio(&a, |p| self.path(p))?)))
             .collect()
     }
@@ -1599,6 +1658,10 @@ fn body(thing: &defs::Thing) -> Body {
         soft: soft_shape(thing),
         water_based: flag(|f| f.water_based),
         tile_locked: flag(|f| f.tile_locked),
+        ethereal: flag(|f| f.ethereal),
+        fixed: speed.is_none()
+            && thing.organization_component.is_none()
+            && thing.projectile_component.is_none(),
         speed,
         acceleration: mover.and_then(|m| m.acceleration).unwrap_or(0.0).max(0.0),
         turn_rate,
@@ -1769,13 +1832,10 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
 
 /// The depth colours of each water terrain, by IDS. Biomes name a
 /// `WaterInfo` template for each of their water terrains.
-fn water_colors<'a>(
-    templates: &tgi::Templates,
-    roots: impl Iterator<Item = &'a tgi::Block>,
-) -> HashMap<Id, Vec<DepthColor>> {
-    roots
-        .flat_map(|r| r.blocks_of("Biome"))
-        .filter_map(|b| templates.deserialize::<defs::Biome>(b).ok())
+fn water_colors(files: &[Scoped]) -> HashMap<Id, Vec<DepthColor>> {
+    files
+        .iter()
+        .flat_map(|f| f.read::<defs::Biome>("Biome"))
         .flat_map(|b| b.water_info)
         .filter_map(|w| {
             let mut stops: Vec<DepthColor> = w
@@ -2499,6 +2559,7 @@ mod tests {
             "Units/b.tgi",
             "Units/A.tgi",
             "Units/x.TGI",
+            "Units/Vulture.tgi",
             "Units/Old/c.tgi",
             "units/notes.txt",
             "more.lst",
@@ -2523,6 +2584,7 @@ mod tests {
             [
                 "first.tgi",
                 "Units/A.tgi",
+                "Units/Vulture.tgi",
                 "Units/b.tgi",
                 "Units/x.TGI",
                 "translate.tgi"
@@ -2814,7 +2876,8 @@ mod tests {
              [Thing]\n{\n\t[BodyComponent]\n\thealth = 60\n}\n",
         );
         let b = tgi::parse(
-            "[Thing]\n{\n\tIDS = tank\n}\n[Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 70\n}\n",
+            "[Thing]\n{\n\tIDS = tank\n}\n[Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 70\n}\n\
+             [Thing]\n{\n\tIDS = car\n}\n[Property]\n{\n\tIDS = wheels\n}\n",
         );
         let files = [("a/a.tgi".to_string(), a), ("b/b.tgi".to_string(), b)];
         let definitions = Definitions::new(&files);
