@@ -44,6 +44,48 @@ impl Obstacle {
             }
         }
     }
+
+    /// Whether it and `other` share any ground; touching isn't enough.
+    pub fn overlaps(&self, other: &Obstacle) -> bool {
+        match (self.shape, other.shape) {
+            (Shape::Rect { .. }, Shape::Rect { .. }) => {
+                !self.separated_from(other) && !other.separated_from(self)
+            }
+            (Shape::Rect { .. }, _) => other.overlaps(self),
+            (Shape::Circle { radius }, _) => other.distance(self.position) < radius,
+            (Shape::Point, _) => other.distance(self.position) == 0.0,
+        }
+    }
+
+    /// Whether one of this rectangle's axes keeps `other`'s corners clear
+    /// of it.
+    fn separated_from(&self, other: &Obstacle) -> bool {
+        let (Shape::Rect { width, height }, Some(corners)) = (self.shape, other.corners()) else {
+            return false;
+        };
+        let local = corners.map(|c| crate::to_local(self.position, self.facing, c));
+        let clear = |axis: usize, half: f32| {
+            local.iter().all(|c| c[axis] >= half) || local.iter().all(|c| c[axis] <= -half)
+        };
+        clear(0, width / 2.0) || clear(1, height / 2.0)
+    }
+
+    /// A rectangle's corners in world units.
+    fn corners(&self) -> Option<[[f32; 2]; 4]> {
+        let Shape::Rect { width, height } = self.shape else {
+            return None;
+        };
+        let (w, h) = (width / 2.0, height / 2.0);
+        Some(
+            [[-w, -h], [w, -h], [w, h], [-w, h]]
+                .map(|c| crate::from_local(self.position, self.facing, c)),
+        )
+    }
+
+    /// Whether it keeps movers off a tile.
+    pub fn covers(&self, tile: (i32, i32)) -> bool {
+        covered(self).contains(&tile)
+    }
 }
 
 #[derive(Clone)]
@@ -119,6 +161,16 @@ impl Pathing {
                 self.blockers[i] = self.blockers[i].saturating_sub(1);
             }
         }
+    }
+
+    /// A copy with the tiles that `obstacles` cover given back, for a mover
+    /// that passes through them.
+    pub fn without<'a>(&self, obstacles: impl IntoIterator<Item = &'a Obstacle>) -> Pathing {
+        let mut p = self.clone();
+        for o in obstacles {
+            p.unblock(o);
+        }
+        p
     }
 
     fn index(&self, x: i32, y: i32) -> Option<usize> {
@@ -277,6 +329,30 @@ mod tests {
         assert!(!p.passable(5, 5, Domain::Land));
         p.unblock(&b);
         assert!(p.passable(5, 5, Domain::Land));
+    }
+
+    #[test]
+    fn overlaps() {
+        let at = |position, facing, shape| Obstacle {
+            position,
+            facing,
+            shape,
+        };
+        let square = Shape::Rect {
+            width: 2.0,
+            height: 2.0,
+        };
+        let a = at([0.0, 0.0], [0.0, 1.0], square);
+        let circle = |x| at([x, 0.0], [0.0, 1.0], Shape::Circle { radius: 1.0 });
+        assert!(a.overlaps(&circle(1.9)) && circle(1.9).overlaps(&a));
+        assert!(!a.overlaps(&circle(2.0)));
+        // A square turned 45° reaches √2 from its middle along the axes.
+        let turned = |x| at([x, 0.0], [0.70710677, 0.70710677], square);
+        assert!(a.overlaps(&turned(2.3)) && turned(2.3).overlaps(&a));
+        assert!(!a.overlaps(&turned(2.5)));
+        let point = |x| at([x, 0.0], [0.0, 1.0], Shape::Point);
+        assert!(point(0.5).overlaps(&a) && a.overlaps(&point(0.5)));
+        assert!(!point(1.5).overlaps(&a));
     }
 
     #[test]

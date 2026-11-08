@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use aaa_data::{
-    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges,
+    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges, Shape,
 };
 use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
 
@@ -247,6 +247,9 @@ pub struct Member {
     pub thing: Thing,
     /// Top speed in world units a second.
     pub speed: f32,
+    /// The ground it takes up, which those of things it's on are tested
+    /// against; `None` if it takes up none.
+    pub shape: Option<Shape>,
     /// World units a second it gains each second, speeding up; 0 for
     /// reaching top speed at once.
     pub acceleration: f32,
@@ -381,6 +384,7 @@ fn member(
         speed: body.speed?,
         acceleration: body.acceleration,
         turn_rate: body.turn_rate,
+        shape: body.blocking,
         trailer,
         fighter: fighters.get(&template).cloned(),
         thing,

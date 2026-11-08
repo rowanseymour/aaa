@@ -956,6 +956,7 @@ fn spawn_views(
                 unit.facing,
             ),
             speed: regiment.speed,
+            shape: unit.shape,
             acceleration: 0.0,
             turn_rate: 0.0,
             trailer: None,
