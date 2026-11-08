@@ -1239,7 +1239,7 @@ impl World {
                 continue;
             };
             let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
-            if distance(self.centre(r), stop) > UNPACK_REACH || !self.room_to_unpack(&unpacks, at) {
+            if !within(self.centre(r), stop, UNPACK_REACH) || !self.room_to_unpack(&unpacks, at) {
                 continue;
             }
             // It keeps the share of its health it had as a truck.
@@ -1377,7 +1377,7 @@ impl World {
             let met = self.units.iter().enumerate().find(|&(v, other)| {
                 v != u
                     && other.alive()
-                    && distance(unit.position, other.position) <= CONTACT
+                    && within(unit.position, other.position, CONTACT)
                     && self.hostile(unit.regiment, Enemy::Regiment(other.regiment))
             });
             if let Some((_, other)) = met {
@@ -1526,7 +1526,7 @@ impl World {
             return;
         }
         let reach = PURSUIT_REACH * self.regiments[r].control_range;
-        if distance(self.centre(r), self.centre(e)) <= reach {
+        if within(self.centre(r), self.centre(e), reach) {
             let enemy = Enemy::Regiment(e);
             self.regiments[r].engaged.push(enemy);
             self.hold(r, enemy);
@@ -1542,9 +1542,8 @@ impl World {
     /// the regiment's headed. Returns whether it was sent.
     fn chase(&mut self, r: usize, e: usize, afresh: bool) -> bool {
         let (here, there) = (self.centre(r), self.centre(e));
-        let squared = |a: [f32; 2], b: [f32; 2]| distance(a, b).powi(2);
-        let off = squared(self.regiments[r].position, there);
-        if !afresh && off <= PURSUIT_DRIFT * squared(here, there) {
+        let off = squared_distance(self.regiments[r].position, there);
+        if !afresh && off <= PURSUIT_DRIFT * squared_distance(here, there) {
             return false;
         }
         let facing = normalised([there[0] - here[0], there[1] - here[1]]);
@@ -1598,7 +1597,7 @@ impl World {
         let near = match enemy {
             Enemy::Regiment(e) => self
                 .survivors(e)
-                .any(|u| distance(here, self.units[u].position) <= reach),
+                .any(|u| within(here, self.units[u].position, reach)),
             Enemy::Building(b) => {
                 self.buildings[b].standing() && self.buildings[b].distance(here) <= reach
             }
@@ -2034,7 +2033,18 @@ fn deploy_point(position: [f32; 2], facing: [f32; 2], offset: [f32; 2]) -> [f32;
 }
 
 fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
-    (a[0] - b[0]).hypot(a[1] - b[1])
+    libm::hypotf(a[0] - b[0], a[1] - b[1])
+}
+
+fn squared_distance(a: [f32; 2], b: [f32; 2]) -> f32 {
+    let (dx, dy) = (a[0] - b[0], a[1] - b[1]);
+    dx * dx + dy * dy
+}
+
+/// Whether `a` and `b` are no further than `reach` apart, without the cost
+/// of [`distance`], for checks made of many pairs every tick.
+fn within(a: [f32; 2], b: [f32; 2], reach: f32) -> bool {
+    squared_distance(a, b) <= reach * reach
 }
 
 /// An order to a regiment from a player that doesn't own it.
@@ -2066,7 +2076,7 @@ impl Sides {
 }
 
 fn normalised([x, y]: [f32; 2]) -> Option<[f32; 2]> {
-    let length = x.hypot(y);
+    let length = libm::hypotf(x, y);
     (length > 1e-6).then(|| [x / length, y / length])
 }
 
@@ -2074,12 +2084,12 @@ fn normalised([x, y]: [f32; 2]) -> Option<[f32; 2]> {
 /// returning how far it turned.
 fn steer(facing: &mut [f32; 2], to: [f32; 2], most: f32) -> f32 {
     let [fx, fy] = *facing;
-    let angle = (fx * to[1] - fy * to[0]).atan2(fx * to[0] + fy * to[1]);
+    let angle = libm::atan2f(fx * to[1] - fy * to[0], fx * to[0] + fy * to[1]);
     if angle.abs() <= most {
         *facing = to;
         return angle.abs();
     }
-    let (sin, cos) = (most * angle.signum()).sin_cos();
+    let (sin, cos) = libm::sincosf(most * angle.signum());
     *facing = [fx * cos - fy * sin, fx * sin + fy * cos];
     most
 }
@@ -2151,7 +2161,7 @@ mod tests {
     }
 
     fn near(a: [f32; 2], b: [f32; 2]) -> bool {
-        (a[0] - b[0]).hypot(a[1] - b[1]) < 1e-3
+        distance(a, b) < 1e-3
     }
 
     #[test]
@@ -2241,7 +2251,7 @@ mod tests {
         w.tick();
         // A tenth of a radian toward +x, having gone 0.2 that way.
         let u = &w.units[0];
-        let (sin, cos) = 0.1f32.sin_cos();
+        let (sin, cos) = libm::sincosf(0.1);
         assert!(near(u.facing, [sin, cos]), "{:?}", u.facing);
         assert!(near(u.position, [10.0 + 0.2 * sin, 10.0 + 0.2 * cos]));
         run(&mut w, 2.0);
@@ -3388,27 +3398,103 @@ mod tests {
         format!("{:?}", (w.ticks, units, regiments, buildings))
     }
 
+    /// Four regiments of riflemen moving, running and fighting around a
+    /// house, played out to the end.
+    fn played_battle() -> World {
+        let rifles = |n| (0..n).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
+        let mut w = battle(&[1, 2, 3, 2], rifles(4), at_war());
+        let house = building(20, 2, [30.0, 10.0]);
+        w.pathing.block(house.obstacle.as_ref().unwrap());
+        w.add_buildings(&[house]);
+        let to = [30.0, 30.0];
+        w.apply(1, Command::Move { regiment: 0, to }).unwrap();
+        let to = [10.0, 50.0];
+        w.apply(3, Command::Run { regiment: 2, to }).unwrap();
+        run(&mut w, 15.0);
+        let to = [20.0, 20.0];
+        w.apply(2, Command::Move { regiment: 3, to }).unwrap();
+        run(&mut w, 30.0);
+        w
+    }
+
     #[test]
     fn the_same_orders_play_out_the_same_way() {
-        let play = || {
-            let rifles = |n| (0..n).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
-            let mut w = battle(&[1, 2, 3, 2], rifles(4), at_war());
-            let house = building(20, 2, [30.0, 10.0]);
-            w.pathing.block(house.obstacle.as_ref().unwrap());
-            w.add_buildings(&[house]);
-            let to = [30.0, 30.0];
-            w.apply(1, Command::Move { regiment: 0, to }).unwrap();
-            let to = [10.0, 50.0];
-            w.apply(3, Command::Run { regiment: 2, to }).unwrap();
-            run(&mut w, 15.0);
-            let to = [20.0, 20.0];
-            w.apply(2, Command::Move { regiment: 3, to }).unwrap();
-            run(&mut w, 30.0);
-            w
-        };
-        let (a, b) = (play(), play());
+        let (a, b) = (played_battle(), played_battle());
         assert!(a.units.iter().any(|u| u.died.is_some()));
         assert_eq!(snapshot(&a), snapshot(&b));
+    }
+
+    /// A match's numbers hashed with FNV-1a, which unlike std's hashers is
+    /// fixed for good, and which unlike hashing its Debug output doesn't
+    /// change when something's renamed.
+    fn fingerprint(worlds: &[&World]) -> u64 {
+        let f = |x: &f32| u64::from(x.to_bits());
+        let mut numbers = Vec::new();
+        for w in worlds {
+            numbers.push(w.ticks);
+            for u in &w.units {
+                numbers.extend(u.position.iter().chain(&u.facing).map(f));
+                numbers.extend([f(&u.health), u.died.unwrap_or(u64::MAX)]);
+                if let Some(t) = &u.trailer {
+                    numbers.extend(t.position.iter().chain(&t.facing).map(f));
+                }
+            }
+            for r in &w.regiments {
+                numbers.extend(r.position.iter().chain(&r.facing).map(f));
+                numbers.push(r.formation as u64);
+            }
+            for b in &w.buildings {
+                numbers.extend([u64::from(b.owner), f(&b.health)]);
+                numbers.push(b.captured.unwrap_or(u64::MAX));
+            }
+        }
+        numbers
+            .iter()
+            .flat_map(|n| n.to_le_bytes())
+            .fold(0xcbf2_9ce4_8422_2325, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            })
+    }
+
+    /// CI runs this on each platform it tests, so a match that plays out
+    /// differently on one, as the platforms' own float functions can make
+    /// it, fails there. The fingerprint changes whenever the rules do, and
+    /// is then updated to the new one.
+    #[test]
+    fn matches_play_out_the_same_on_every_platform() {
+        let trailer = aaa_map::Trailer {
+            template: "gun".into(),
+            hitch: [0.0, -2.0],
+            coupling: [0.0, 1.0],
+            placed: None,
+        };
+        // Towing round corners and a rock, which steering and going round
+        // obstacles do with trigonometry and distances to their shapes.
+        let mut towing = vehicle(2.0, 1.0, Some(trailer));
+        let rock = Obstacle {
+            position: [13.0, 13.0],
+            facing: [0.0, 1.0],
+            shape: Shape::Circle { radius: 1.5 },
+        };
+        towing.pathing.block(&rock);
+        towing.scenery.push(rock);
+        for to in [[16.0, 16.0], [4.0, 14.0], [12.0, 4.0]] {
+            towing.apply(7, Command::Move { regiment: 0, to }).unwrap();
+            run(&mut towing, 8.0);
+        }
+        let battle = played_battle();
+        let played = format!("{}\n{}", snapshot(&battle), snapshot(&towing));
+        assert_eq!(
+            fingerprint(&[&battle, &towing]),
+            0xe9cb6e6bcdf9ca03,
+            "{played}"
+        );
+    }
+
+    #[test]
+    fn the_sim_and_map_forbid_the_same_float_functions() {
+        let map = include_str!("../../map/clippy.toml");
+        assert_eq!(include_str!("../clippy.toml"), map);
     }
 
     #[test]

@@ -39,6 +39,7 @@ name = "aaa-map"
 version = "0.1.0"
 dependencies = [
  "aaa-data",
+ "libm",
  "tgck",
 ]
 
@@ -58,6 +59,7 @@ name = "aaa-sim"
 version = "0.1.0"
 dependencies = [
  "aaa-map",
+ "libm",
  "tgck",
 ]
 
