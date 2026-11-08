@@ -1,17 +1,14 @@
 //! While Unpack is being aimed, the building the truck would unpack into
-//! follows the cursor where it would stand, drawn all in red where it
-//! wouldn't fit.
+//! follows the cursor where it would stand, on the map or through the
+//! minimap, drawn all in red where it wouldn't fit.
 
 use aaa_render::MapAssets;
-use aaa_render::camera::RtsCamera;
 use aaa_render::models::repaint;
 use aaa_render::terrain::world;
 use bevy::prelude::*;
-use bevy::ui::RelativeCursorPosition;
-use bevy::window::PrimaryWindow;
 
-use crate::actions::{self, Aim, Page};
-use crate::{Drawn, Loaded, Local, Screen, Selected, Sim, minimap, thing_at};
+use crate::actions::{Aim, Page};
+use crate::{Drawn, Loaded, Local, Pointer, Pointing, Screen, Selected, Sim, thing_at};
 
 /// The preview shown: its root, what it is, where, and whether it fits.
 #[derive(Resource, Default)]
@@ -37,20 +34,14 @@ pub fn show(
     mut drawn: ResMut<Drawn>,
     mut assets: MapAssets,
     mut ghost: ResMut<Ghost>,
-    windows: Query<&Window, With<PrimaryWindow>>,
-    cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
-    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
-    minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
+    pointer: Pointer,
     mut transforms: Query<&mut Transform>,
 ) {
-    let over_map = actions::pointer_away(grid) && minimap::pointer_away(minimap);
     let unpacks = match (*page, &selected.0[..]) {
         (Page::Aiming(Aim::Unpack), &[r]) => sim.0.regiments[r].unpacks.as_ref(),
         _ => None,
     };
-    let point = over_map
-        .then(|| crate::pointed(&windows, &cameras, &loaded.map.ground))
-        .flatten();
+    let point = pointer.at(&loaded.map.ground).map(Pointing::point);
     let wanted = unpacks.zip(point).map(|(u, p)| {
         let at = p.map(f32::round);
         (u, at, sim.0.room_to_unpack(u, at))
