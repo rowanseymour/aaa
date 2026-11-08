@@ -12,7 +12,7 @@ use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
 use nif::{Controller, ControllerKind, Keyframes, Nif, Object};
 
-use crate::models::{Part, PartMaterial, bevy_transform, controller};
+use crate::models::{Animated, Part, PartMaterial, bevy_transform, controller};
 
 /// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
@@ -393,6 +393,9 @@ impl Rig {
                 ChildOf(parent),
             ));
             material.insert(&mut child);
+            if let Some(animation) = &mesh.part.animation {
+                child.insert(Animated::new(animation.clone(), offset, material));
+            }
             if mesh.part.blended {
                 child.insert(NotShadowCaster);
             }

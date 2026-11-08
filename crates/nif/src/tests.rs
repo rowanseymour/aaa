@@ -723,6 +723,55 @@ fn steps_over_controllers() {
     assert!(
         matches!(&nif.objects[10], Object::SourceTexture(t) if t.file.as_deref() == Some("frame.dds"))
     );
+    // Kept so chains through them can be followed.
+    assert!(
+        matches!(&nif.objects[8], Object::Controller(c) if c.kind == ControllerKind::Unread && c.target == Some(9))
+    );
+}
+
+#[test]
+fn reads_texture_controllers() {
+    let mut b = Builder::new();
+    b.add("NiTexturingProperty", {
+        let mut t = string("");
+        t.extend(refs(&[]));
+        t.extend(1i32.to_le_bytes());
+        t.extend(2u32.to_le_bytes());
+        t.extend(0u32.to_le_bytes());
+        t.extend([0; 5]);
+        t.extend(0u32.to_le_bytes());
+        t
+    });
+    let mut scroll = time_controller(0);
+    scroll.push(0);
+    scroll.extend(0u32.to_le_bytes());
+    scroll.extend(1u32.to_le_bytes());
+    scroll.extend(2i32.to_le_bytes());
+    b.add("NiTextureTransformController", scroll);
+    let mut keys = 2u32.to_le_bytes().to_vec();
+    keys.extend(1u32.to_le_bytes());
+    keys.extend(floats(&[0.0, 1.0, 2.0, -1.0]));
+    b.add("NiFloatData", keys);
+
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let Some(Object::Texturing(t)) = nif.get(Some(0)) else {
+        panic!("no texturing");
+    };
+    let Some(Object::Controller(c)) = nif.get(t.controller) else {
+        panic!("no controller");
+    };
+    assert_eq!(
+        c.kind,
+        ControllerKind::Texture {
+            slot: 0,
+            change: TextureChange::OffsetV
+        }
+    );
+    let Some(Object::Floats(keys)) = nif.get(c.data) else {
+        panic!("no keys");
+    };
+    assert_eq!(keys.sample(c.key_time(1.0)), Some(0.0));
 }
 
 #[test]

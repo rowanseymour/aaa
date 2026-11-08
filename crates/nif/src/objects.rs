@@ -286,6 +286,7 @@ pub struct Geometry {
 
 #[derive(Debug, Clone)]
 pub struct Texturing {
+    pub controller: Ref,
     pub apply_mode: u32,
     pub base: Option<TextureSlot>,
     pub dark: Option<TextureSlot>,
@@ -300,6 +301,21 @@ pub struct TextureSlot {
     pub clamp: u32,
     pub filter: u32,
     pub uv_set: u32,
+    /// Where the texture lies on the mesh, if the slot moves it.
+    pub placement: Option<TexturePlacement>,
+}
+
+/// How a texture slot moves, turns and stretches its texture.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TexturePlacement {
+    pub offset: [f32; 2],
+    pub scale: [f32; 2],
+    /// Radians.
+    pub turn: f32,
+    /// Which order the changes are made in.
+    pub order: u32,
+    /// The point it turns and stretches about.
+    pub centre: [f32; 2],
 }
 
 #[derive(Debug, Clone)]
@@ -460,7 +476,8 @@ pub struct TextKey {
 
 /// Plays its data on its target: a [`Keyframes`] on a scene object for
 /// [`ControllerKind::Keyframe`], a [`Keys`] on a material's alpha for
-/// [`ControllerKind::Alpha`].
+/// [`ControllerKind::Alpha`] or on a texture's placement for
+/// [`ControllerKind::Texture`].
 #[derive(Debug, Clone)]
 pub struct Controller {
     pub kind: ControllerKind,
@@ -479,6 +496,26 @@ pub struct Controller {
 pub enum ControllerKind {
     Keyframe,
     Alpha,
+    /// One whose own fields are stepped over; kept so chains of
+    /// controllers can be followed past it.
+    Unread,
+    /// Moves, turns or stretches the texture in one of a texturing
+    /// property's slots.
+    Texture {
+        slot: u32,
+        change: TextureChange,
+    },
+}
+
+/// What a texture controller's keys set of where the texture lies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureChange {
+    OffsetU,
+    OffsetV,
+    /// Radians.
+    Turn,
+    ScaleU,
+    ScaleV,
 }
 
 impl Controller {
@@ -741,7 +778,7 @@ impl Object {
                 Object::Geometry(g)
             }
             "NiTexturingProperty" => {
-                named(r)?;
+                let (_, _, controller) = named(r)?;
                 if r.old() {
                     r.u16()?;
                 }
@@ -770,6 +807,7 @@ impl Object {
                     }
                 }
                 Object::Texturing(Texturing {
+                    controller,
                     apply_mode,
                     base,
                     dark,
@@ -1045,41 +1083,57 @@ impl Object {
                 other()
             }
             "NiVisController" | "NiPSysUpdateCtlr" => {
-                time_controller(r)?;
+                let c = time_controller(r)?;
                 if kind == "NiVisController" {
                     r.reference()?;
                 }
-                other()
+                Object::Controller(c)
             }
             "NiLookAtController" | "NiMaterialColorController" | "NiLightColorController" => {
-                time_controller(r)?;
+                let c = time_controller(r)?;
                 if !r.old() {
                     r.u16()?;
                 }
                 r.reference()?;
-                other()
+                Object::Controller(c)
             }
             "NiPathController" => {
-                time_controller(r)?;
+                let c = time_controller(r)?;
                 if !r.old() {
                     r.u16()?;
                 }
                 r.skip(4 + 4 + 4 + 2)?;
                 r.reference()?;
                 r.reference()?;
-                other()
+                Object::Controller(c)
             }
             "NiTextureTransformController" => {
-                time_controller(r)?;
-                r.skip(1 + 4 + 4)?;
-                r.reference()?;
-                other()
+                let c = time_controller(r)?;
+                let shader_map = r.bool()?;
+                let slot = r.u32()?;
+                let change = match r.u32()? {
+                    0 => Some(TextureChange::OffsetU),
+                    1 => Some(TextureChange::OffsetV),
+                    2 => Some(TextureChange::Turn),
+                    3 => Some(TextureChange::ScaleU),
+                    4 => Some(TextureChange::ScaleV),
+                    _ => None,
+                };
+                let data = r.reference()?;
+                match change.filter(|_| !shader_map) {
+                    Some(change) => Object::Controller(Controller {
+                        kind: ControllerKind::Texture { slot, change },
+                        data,
+                        ..c
+                    }),
+                    None => Object::Controller(c),
+                }
             }
             "NiFlipController" => {
-                time_controller(r)?;
+                let c = time_controller(r)?;
                 r.skip(4 + 4 + 4)?;
                 r.references()?;
-                other()
+                Object::Controller(c)
             }
             "NiPosData" => {
                 key_group::<[f32; 3]>(r)?;
@@ -1124,7 +1178,7 @@ impl Object {
                 other()
             }
             "NiParticleSystemController" => {
-                time_controller(r)?;
+                let c = time_controller(r)?;
                 r.floats::<16>()?;
                 r.u8()?;
                 r.floats::<3>()?;
@@ -1135,7 +1189,7 @@ impl Object {
                 r.u16()?;
                 r.skip(n * 40)?;
                 r.skip(3 * 4 + 1)?;
-                other()
+                Object::Controller(c)
             }
             "NiGravity"
             | "NiParticleColorModifier"
@@ -1225,10 +1279,10 @@ impl Object {
             | "NiPSysModifierActiveCtlr"
             | "NiPSysEmitterInitialRadiusCtlr"
             | "NiPSysEmitterSpeedCtlr" => {
-                time_controller(r)?;
+                let c = time_controller(r)?;
                 r.string()?; // modifier
                 r.reference()?;
-                other()
+                Object::Controller(c)
             }
             "NiPSysEmitterCtlrData" => {
                 key_group::<f32>(r)?;
@@ -1240,12 +1294,23 @@ impl Object {
     }
 }
 
-/// The fields every controller starts with, as for [`Controller`].
-fn time_controller(r: &mut Reader) -> Result<()> {
-    r.reference()?;
-    r.skip(2 + 4 * 4)?;
-    r.reference()?;
-    Ok(())
+/// The fields every controller starts with, as a controller of a kind not
+/// read further.
+fn time_controller(r: &mut Reader) -> Result<Controller> {
+    let next = r.reference()?;
+    let flags = r.u16()?;
+    let [frequency, phase, start, stop] = r.floats::<4>()?;
+    Ok(Controller {
+        kind: ControllerKind::Unread,
+        next,
+        flags,
+        frequency,
+        phase,
+        start,
+        stop,
+        target: r.reference()?,
+        data: None,
+    })
 }
 
 /// Linear keys of f32 time and a u8 on/off value.
@@ -1423,10 +1488,23 @@ fn texture_slot(r: &mut Reader) -> Result<TextureSlot> {
         clamp: r.u32()?,
         filter: r.u32()?,
         uv_set: r.u32()?,
+        placement: None,
     };
     r.skip(4)?;
     if !r.old() && r.bool()? {
-        r.skip(5 * 4 + 4 + 2 * 4)?;
+        let [ou, ov, su, sv, turn] = r.floats::<5>()?;
+        let order = r.u32()?;
+        let centre = r.floats::<2>()?;
+        return Ok(TextureSlot {
+            placement: Some(TexturePlacement {
+                offset: [ou, ov],
+                scale: [su, sv],
+                turn,
+                order,
+                centre,
+            }),
+            ..slot
+        });
     }
     Ok(slot)
 }
