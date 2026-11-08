@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::Screen;
+use crate::sound::Sounds;
 
 const IDLE: Color = Color::srgb(0.15, 0.15, 0.15);
 const HOVER: Color = Color::srgb(0.3, 0.3, 0.3);
@@ -17,6 +18,17 @@ pub const DIM: Color = Color::srgb(0.45, 0.45, 0.45);
 #[derive(Component)]
 pub struct MenuButton;
 
+/// The interface audio a menu button plays as it's pressed, as the game's
+/// widget templates give each kind of widget.
+#[derive(Component)]
+pub struct Click(&'static str);
+
+const PUSH: &str = "push_button";
+const OPEN: &str = "tiled_button";
+
+/// Every [`Click`], for [`Sounds`] to have ready.
+pub const CLICKS: [&str; 2] = [PUSH, OPEN];
+
 /// Marks a menu button as the current choice.
 #[derive(Component, Default, PartialEq)]
 pub struct Chosen(pub bool);
@@ -27,7 +39,8 @@ impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(Screen::MainMenu), main_menu)
             .add_systems(OnEnter(Screen::NewGame), new_game)
-            .add_systems(Update, highlight);
+            .add_systems(Update, highlight)
+            .add_observer(click);
     }
 }
 
@@ -44,8 +57,18 @@ pub fn text(label: impl Into<String>, size: f32) -> impl Bundle {
 /// A button laid out as `node`, that does something when [`Activate`]d,
 /// given an observer.
 pub fn clickable(node: Node) -> impl Bundle {
+    sounding(node, Click(PUSH))
+}
+
+/// A [`clickable`] that opens a list to choose from.
+pub fn opener(node: Node) -> impl Bundle {
+    sounding(node, Click(OPEN))
+}
+
+fn sounding(node: Node, click: Click) -> impl Bundle {
     (
         MenuButton,
+        click,
         Button,
         Hovered::default(),
         Chosen::default(),
@@ -160,5 +183,21 @@ fn highlight(mut buttons: Query<(&Hovered, &Chosen, &mut BackgroundColor), With<
         if background.0 != color {
             background.0 = color;
         }
+    }
+}
+
+/// Plays a button's [`Click`] as it's pressed, not once it's let go and
+/// [`Activate`]s.
+fn click(
+    press: On<PointerPress>,
+    buttons: Query<&Click>,
+    mut sounds: ResMut<Sounds>,
+    time: Res<Time>,
+) {
+    if press.button != PointerButton::Primary {
+        return;
+    }
+    if let Ok(Click(audio)) = buttons.get(press.entity) {
+        sounds.interface(&time, audio);
     }
 }
