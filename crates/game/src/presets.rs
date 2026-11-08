@@ -146,6 +146,7 @@ mod tests {
             nation: None,
             relations: vec![Relation::Neutral; 6],
             team_relations: Vec::new(),
+            stockpile: 0.0,
         }
     }
 

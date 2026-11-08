@@ -8,7 +8,10 @@ mod ground;
 pub mod pathing;
 mod units;
 
-pub use aaa_data::{Damage, DeployPoints, Fighter, Id, Requires, Shape, Targets, Weapon};
+pub use aaa_data::{
+    Amounts, Damage, DeployPoints, Economy, EconomyRules, Fighter, Id, Requires, Shape, Targets,
+    Weapon,
+};
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
 pub use pathing::{Domain, Obstacle, Pathing};
@@ -451,10 +454,24 @@ fn read_sides<R: std::io::Read + std::io::Seek>(
     game: &mut GameData,
     map: &mut tgck::Map<R>,
 ) -> tgck::Result<(Vec<Player>, Vec<Team>)> {
+    let rules = game.economy_rules();
+    let default = map
+        .rules()?
+        .rules
+        .iter()
+        .find(|r| r.name == "ResourceStockpileDefault")
+        .and_then(|r| match r.value {
+            tgck::map::RuleValue::Float(v) => Some(v),
+            tgck::map::RuleValue::Int(v) => Some(v as f32),
+            _ => None,
+        })
+        .unwrap_or(rules.stockpile_default)
+        .clamp(0.0, rules.stockpile_max);
     Ok(units::sides(
         &map.kingdoms()?,
         &map.teams()?,
         &game.kingdom_colors(),
+        default,
     ))
 }
 
@@ -492,6 +509,7 @@ mod tests {
             nation: None,
             relations: vec![Enemy; 5],
             team_relations: vec![Enemy; 2],
+            stockpile: 0.0,
         };
         let mut players = vec![side(1, 0), side(2, 0), side(3, 1), side(4, 1)];
         players.push(Player {

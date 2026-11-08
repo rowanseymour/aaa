@@ -2,8 +2,10 @@
 //! definitions built from their files (terrain, object views, ...).
 
 pub mod defs;
+mod economy;
 mod id;
 
+pub use economy::{Amounts, Economy, EconomyRules, RESOURCES};
 pub use id::Id;
 
 use std::collections::{HashMap, HashSet};
@@ -265,6 +267,9 @@ pub struct Weapon {
     pub turret: bool,
     /// Played each shot.
     pub sounds: Vec<Cue>,
+    pub effects: WeaponEffects,
+    /// The template of the projectile a shot fires, if it fires one.
+    pub projectile: Option<Id>,
 }
 
 /// Which flags a target must have, and must not, for a weapon to fire on
@@ -589,6 +594,129 @@ pub struct AnimationAudio {
     pub interval: Option<[f32; 2]>,
     pub audio: Id,
     pub looping: bool,
+}
+
+/// A visual effect the game shows by id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Vfx {
+    /// What kind it is, e.g. `VFXMODEL`, `VFXPROJECTEDTEXTURE` or
+    /// `VFXTRACER`.
+    pub category: String,
+    /// Archive path of its model, if it has one that's there.
+    pub model: Option<String>,
+    /// Archive folders searched for the model's textures.
+    pub texture_dirs: Vec<String>,
+    /// It lasts until stopped, rather than for a time.
+    pub permanent: bool,
+    /// It shows whatever the effects detail setting.
+    pub critical: bool,
+    /// Seconds a temporary one lasts; `None` for its model's own length.
+    pub duration: Option<f32>,
+    /// Attached, its size as a multiple of what it's attached to; 0 for
+    /// its own size.
+    pub attached_scale: f32,
+    /// A temporary one is created off screen too.
+    pub never_discard: bool,
+    pub night_only: bool,
+    /// The same size on screen however far the camera is.
+    pub constant_screen_size: bool,
+    /// It runs in real time rather than game time.
+    pub real_time: bool,
+    /// Each one is turned a random way about the vertical.
+    pub random_orientation: bool,
+    /// Attached, it keeps its facing as what it's attached to turns.
+    pub gyroscope: bool,
+}
+
+/// A [`Vfx`] an object creates, or stops, when something happens.
+#[derive(Debug, Clone, PartialEq)]
+pub struct VfxCue {
+    pub vfx: Id,
+    /// It stops the effect of that id that the object's cues created,
+    /// rather than creating one.
+    pub stop: bool,
+    /// Where it appears, e.g. `SELF`, `TARGET_GROUND` or
+    /// `TARGET_HIT_POSITION`.
+    pub at: String,
+    /// The point of the model it appears at, e.g. `cannon_ae_01`; `None`
+    /// for the model's origin.
+    pub location: Option<String>,
+    /// It follows what it's at as that moves.
+    pub attached: bool,
+    /// Offset from its spot, and the way it faces there.
+    pub translation: [f32; 3],
+    pub orientation: [f32; 3],
+    /// Seconds it lasts in place of the effect's own.
+    pub duration: Option<f32>,
+    /// Seconds after what sets it off.
+    pub delay: f32,
+    /// It plays on one in this many of the times it's set off.
+    pub every: u32,
+    /// The terrain group it plays on, if only one.
+    pub terrain: Option<Id>,
+    /// What the event's target must be for it to play.
+    pub targets: Targets,
+    /// For a building being finished, it stops when the building's
+    /// destroyed.
+    pub stop_on_destructed: bool,
+    /// Run when its effect ends, and alongside it.
+    pub chain: Vec<VfxCue>,
+    pub chain_immediate: Vec<VfxCue>,
+}
+
+/// A [`VfxCue`] run as an object's health crosses a share of its maximum.
+#[derive(Debug, Clone, PartialEq)]
+pub struct HealthCue {
+    pub health: f32,
+    pub trigger: HealthTrigger,
+    pub cue: VfxCue,
+}
+
+/// Which crossing of a [`HealthCue`]'s health runs it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum HealthTrigger {
+    #[default]
+    Below,
+    Above,
+    /// Relative to the health it had, falling or rising by that share.
+    Decrease,
+    Increase,
+}
+
+/// The effects an object template shows, by what sets them off; its
+/// weapons' are on its [`Weapon`]s.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ObjectEffects {
+    pub created: Vec<VfxCue>,
+    /// As a projectile, on reaching its target.
+    pub destroyed: Vec<VfxCue>,
+    /// When a building's finished.
+    pub constructed: Vec<VfxCue>,
+    pub start_moving: Vec<VfxCue>,
+    pub stop_moving: Vec<VfxCue>,
+    /// On entering and leaving states, by state, e.g. `construction`.
+    pub entered: Vec<(Id, VfxCue)>,
+    pub left: Vec<(Id, VfxCue)>,
+    pub health: Vec<HealthCue>,
+    /// When something disturbs it, as a vehicle crushing a doodad does.
+    pub disturbed: Vec<VfxCue>,
+}
+
+impl ObjectEffects {
+    fn is_empty(&self) -> bool {
+        *self == ObjectEffects::default()
+    }
+}
+
+/// The effects a [`Weapon`] shows each time it fires.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WeaponEffects {
+    /// As a shot begins, e.g. a tank gun's muzzle flash.
+    pub start: Vec<VfxCue>,
+    pub shot: Vec<VfxCue>,
+    /// For each target a shot lands on.
+    pub per_target: Vec<VfxCue>,
+    pub end: Vec<VfxCue>,
 }
 
 /// A sound, speech or music, as the game asks for it by id.
@@ -1105,8 +1233,9 @@ impl GameData {
 
     /// How each template that has a name shows on the button that
     /// commissions or recruits it, by template id. An organization costs
-    /// and takes to keep what its captain, the one member it's raised
-    /// with, does as well as its own, which for a Division HQ is all of it.
+    /// what its captain, the one member it's raised with, does as well as
+    /// its own, which for a Division HQ is all of it, and takes to keep its
+    /// own upkeep and each member's.
     pub fn listings(&mut self) -> HashMap<Id, Listing> {
         let strings = self.strings();
         let definitions = self.definitions();
@@ -1138,7 +1267,7 @@ impl GameData {
                     .and_then(ui_path),
                 cost: economy(|e| e.cost.as_ref()),
                 production: amounts(&strings, production(t, &things)),
-                upkeep: economy(|e| e.upkeep.as_ref()),
+                upkeep: amounts(&strings, upkeep(t, &things)),
             })
         })
     }
@@ -1247,12 +1376,7 @@ impl GameData {
             Some(n) if !view.aspects_as_variations => vec![n],
             _ => aspects,
         };
-        let texture_dirs = view
-            .texture_search_path
-            .iter()
-            .filter_map(|b| b.path.as_deref())
-            .map(|p| p.trim_matches('/').to_string())
-            .collect();
+        let texture_dirs = texture_dirs(&view.texture_search_path);
         let scale_min = thing.size.iter().find_map(|s| s.scale_min);
         let scale_max = thing.size.iter().find_map(|s| s.scale_max);
         let scale = match (scale_min, scale_max) {
@@ -1329,6 +1453,7 @@ impl GameData {
                 "vfx" => coverage.read::<defs::Vfx>(block, t).map(drop),
                 "cursor" => coverage.read::<defs::Cursor>(block, t).map(drop),
                 "svars" => coverage.read::<defs::SVars>(block, t).map(drop),
+                "resource" => coverage.read::<defs::Resource>(block, t).map(drop),
                 // A string table, read whole.
                 "text" => coverage
                     .read::<HashMap<String, String>>(block, None)
@@ -1389,12 +1514,7 @@ impl GameData {
     /// How far beyond a blocking building's footprint the ground must be
     /// clear for it to be put there, in world units.
     pub fn building_padding(&mut self) -> Option<f32> {
-        let files = self.parse_tgis(|n| n == "game/svars.tgi");
-        let files = scoped(&files);
-        files
-            .iter()
-            .flat_map(|f| f.read::<defs::SVars>("SVars"))
-            .find_map(|v| v.building_padding_meters)
+        self.svars().iter().find_map(|v| v.building_padding_meters)
     }
 
     /// The orders the player can give, in the order the files list them.
@@ -1461,8 +1581,8 @@ impl GameData {
         out
     }
 
-    /// The archive path of each effect's model that's there, by effect id.
-    pub fn vfx_models(&mut self) -> HashMap<Id, String> {
+    /// Every visual effect, by id.
+    pub fn vfx(&mut self) -> HashMap<Id, Vfx> {
         // Effects live beside what uses them as well as in their own folder.
         let files = self.parse_tgis(|_| true);
         let files = scoped(&files);
@@ -1473,16 +1593,25 @@ impl GameData {
             templates,
         } in &files
         {
-            for block in root.blocks_of("VFX") {
+            // Ground decals are declared as things of a VFX category.
+            let blocks = root.blocks_of("VFX").chain(root.blocks_of("Thing"));
+            for block in blocks {
                 let Ok(v) = templates.deserialize::<defs::Vfx>(block) else {
                     continue;
                 };
-                if let (Some(ids), Some(model)) = (v.ids, v.model) {
-                    let model = beside(file, &model);
-                    if self.exists(&model) {
-                        out.insert(ids, model);
-                    }
-                }
+                let is_vfx = v
+                    .category
+                    .as_deref()
+                    .is_some_and(|c| c.get(..3).is_some_and(|p| p.eq_ignore_ascii_case("VFX")));
+                let (true, Some(ids)) = (is_vfx, v.ids.clone()) else {
+                    continue;
+                };
+                let model = v
+                    .model
+                    .as_deref()
+                    .map(|m| beside(file, m))
+                    .filter(|m| self.exists(m));
+                out.insert(ids, vfx(v, model));
             }
         }
         out
@@ -1534,6 +1663,13 @@ impl GameData {
     pub fn object_audio(&mut self) -> HashMap<Id, ObjectAudio> {
         let mut out = self.by_template(|t| Some(object_audio(t)));
         out.retain(|_, a| !a.is_empty());
+        out
+    }
+
+    /// The effects of each object template that shows any, by template id.
+    pub fn object_effects(&mut self) -> HashMap<Id, ObjectEffects> {
+        let mut out = self.by_template(|t| Some(object_effects(t)));
+        out.retain(|_, e| !e.is_empty());
         out
     }
 
@@ -1825,6 +1961,13 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
                 .as_deref()
                 .is_some_and(|ids| !ids.eq_ignore_ascii_case("null")),
             sounds: cues(&d.when_do),
+            effects: WeaponEffects {
+                start: vfx_cues(&d.when_start),
+                shot: vfx_cues(&d.when_do),
+                per_target: vfx_cues(&d.when_do_per_target),
+                end: vfx_cues(&d.when_end),
+            },
+            projectile: not_null(d.projectile_ids.clone()),
         });
     }
     Some(fighter)
@@ -1949,6 +2092,124 @@ fn object_audio(thing: &defs::Thing) -> ObjectAudio {
             .collect(),
         animations,
     }
+}
+
+fn vfx(v: defs::Vfx, model: Option<String>) -> Vfx {
+    Vfx {
+        category: v.category.unwrap_or_default().to_ascii_uppercase(),
+        model,
+        texture_dirs: texture_dirs(&v.texture_search_path),
+        permanent: v.permanent.unwrap_or(false),
+        critical: v.critical.unwrap_or(true),
+        duration: v.duration.filter(|d| *d > 0.0),
+        attached_scale: v.attached_scale.unwrap_or(0.0),
+        never_discard: v.never_discard_temporary.unwrap_or(false),
+        night_only: v.nightonly.unwrap_or(false),
+        constant_screen_size: v.constant_screen_size.unwrap_or(false),
+        real_time: v.force_real_time.unwrap_or(false),
+        random_orientation: v.flags.iter().rev().find_map(|f| f.random_orientation) == Some(true),
+        gyroscope: v.gyroscope.unwrap_or(true),
+    }
+}
+
+fn object_effects(thing: &defs::Thing) -> ObjectEffects {
+    let view = thing.view.as_ref();
+    let mover = thing.mover_component.as_ref();
+    let of_view =
+        |f: fn(&defs::View) -> &Vec<defs::Fxc>| view.map(|v| vfx_cues(f(v))).unwrap_or_default();
+    let of_mover = |f: fn(&defs::MoverComponent) -> &Vec<defs::Fxc>| {
+        mover.map(|m| vfx_cues(f(m))).unwrap_or_default()
+    };
+    let by_state = |fxcs: &[defs::Fxc]| -> Vec<(Id, VfxCue)> {
+        fxcs.iter()
+            .filter_map(|f| {
+                Some((
+                    not_null(f.actor_state.as_deref().map(Id::from))?,
+                    vfx_cue(f)?,
+                ))
+            })
+            .collect()
+    };
+    let health = thing
+        .body_component
+        .iter()
+        .flat_map(|b| &b.when_health)
+        .filter_map(|f| {
+            let trigger = match f
+                .health_trigger_type
+                .as_deref()
+                .map(str::to_ascii_uppercase)
+            {
+                Some(t) if t == "ABSOLUTE_ABOVE" => HealthTrigger::Above,
+                Some(t) if t == "RELATIVE_DECREASE" => HealthTrigger::Decrease,
+                Some(t) if t == "RELATIVE_INCREASE" => HealthTrigger::Increase,
+                _ => HealthTrigger::Below,
+            };
+            Some(HealthCue {
+                health: f.health.filter(|h| *h >= 0.0)?,
+                trigger,
+                cue: vfx_cue(f)?,
+            })
+        })
+        .collect();
+    ObjectEffects {
+        created: of_view(|v| &v.when_created),
+        destroyed: of_view(|v| &v.when_destroyed),
+        constructed: of_view(|v| &v.when_constructed),
+        start_moving: of_mover(|m| &m.when_start_moving),
+        stop_moving: of_mover(|m| &m.when_stop_moving),
+        entered: by_state(&thing.when_enter),
+        left: by_state(&thing.when_leave),
+        health,
+        disturbed: thing
+            .component
+            .iter()
+            .flat_map(|c| vfx_cues(&c.action))
+            .collect(),
+    }
+}
+
+/// The effects the commands create or stop.
+fn vfx_cues(fxcs: &[defs::Fxc]) -> Vec<VfxCue> {
+    fxcs.iter().filter_map(vfx_cue).collect()
+}
+
+/// The effect a command creates or stops, if it's one that does.
+fn vfx_cue(f: &defs::Fxc) -> Option<VfxCue> {
+    let stop = match f.kind.as_deref()?.to_ascii_uppercase().as_str() {
+        "CREATE_VFX" => false,
+        "STOP_VFX" => true,
+        _ => return None,
+    };
+    let every = f.frequency.unwrap_or(1);
+    if every == 0 {
+        return None;
+    }
+    Some(VfxCue {
+        vfx: not_null(f.vfx_ids.clone())?,
+        stop,
+        at: f.at.as_deref().unwrap_or("SELF").to_ascii_uppercase(),
+        location: f
+            .location
+            .clone()
+            .filter(|l| !l.is_empty() && !l.eq_ignore_ascii_case("null")),
+        attached: f.attached.unwrap_or(true),
+        translation: f.translation.unwrap_or_default(),
+        orientation: f.orientation.unwrap_or([0.0, -1.0, 0.0]),
+        duration: f.duration.filter(|d| *d > 0.0),
+        delay: f.delay.unwrap_or(0.0),
+        every,
+        terrain: not_null(f.terrain_group_filter.as_deref().map(Id::from)),
+        targets: f
+            .target_flags
+            .as_deref()
+            .filter(|t| !t.eq_ignore_ascii_case("null"))
+            .map(Targets::parse)
+            .unwrap_or_default(),
+        stop_on_destructed: f.stop_on_destructed.unwrap_or(true),
+        chain: vfx_cues(&f.chain),
+        chain_immediate: vfx_cues(&f.chain_immediate),
+    })
 }
 
 /// The audio the commands play.
@@ -2346,6 +2607,22 @@ fn production<'a>(
         .filter_map(|t| t.economy_component.as_ref()?.production.as_ref())
 }
 
+/// What a template takes to keep as it's shown: its own `[Upkeep]` and,
+/// for a regiment, each of its members'.
+fn upkeep<'a>(
+    t: &'a defs::Thing,
+    things: &HashMap<&Id, &'a defs::Thing>,
+) -> impl Iterator<Item = &'a defs::Resources> {
+    let members = t
+        .organization_component
+        .iter()
+        .flat_map(|o| &o.slot)
+        .filter_map(|s| things.get(s.element_ids.as_ref()?).copied());
+    std::iter::once(t)
+        .chain(members)
+        .filter_map(|t| t.economy_component.as_ref()?.upkeep.as_ref())
+}
+
 fn terrain_kind(t: &defs::Terrain) -> TerrainKind {
     match t.kind.as_deref().map(str::to_ascii_uppercase).as_deref() {
         Some("MOUNTAIN") => TerrainKind::Mountain {
@@ -2357,6 +2634,15 @@ fn terrain_kind(t: &defs::Terrain) -> TerrainKind {
 }
 
 /// The id, unless it's the data's word for none.
+/// The archive folders a model's textures are searched for in.
+fn texture_dirs(paths: &[defs::TextureSearchPath]) -> Vec<String> {
+    paths
+        .iter()
+        .filter_map(|b| b.path.as_deref())
+        .map(|p| p.trim_matches('/').to_string())
+        .collect()
+}
+
 fn not_null(id: Option<Id>) -> Option<Id> {
     id.filter(|id| !id.as_str().eq_ignore_ascii_case("null"))
 }
@@ -2452,6 +2738,35 @@ mod tests {
             earned("regiment"),
             [("money", 24.0), ("unit_limit_provided", 10.0)]
         );
+    }
+
+    #[test]
+    fn upkeep_is_the_templates_own_and_each_members() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = man\n\t[EconomyComponent]\n\t{\n\
+             \t\t[Upkeep]\n\t\t{\n\t\t\tammo = 1\n\t\t}\n\t}\n}\n\
+             [Thing]\n{\n\tIDS = regiment\n\t[EconomyComponent]\n\t{\n\
+             \t\t[Upkeep]\n\t\t{\n\t\t\tunit_limit_consumed = 1\n\t\t}\n\t}\n\
+             \t[OrganizationComponent]\n\t{\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\t}\n}\n",
+        );
+        let things: Vec<(Id, defs::Thing)> = parsed
+            .root
+            .blocks_of("Thing")
+            .zip(["man", "regiment"])
+            .map(|(b, id)| (Id::from(id), tgi::from_block(b).unwrap()))
+            .collect();
+        let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
+        let kept: Vec<(&str, f32)> = amounts(
+            &HashMap::new(),
+            upkeep(by_id[&Id::from("regiment")], &by_id),
+        )
+        .into_iter()
+        .map(|a| (a.kind, a.amount))
+        .collect();
+        assert_eq!(kept, [("unit_limit_consumed", 1.0), ("ammo", 3.0)]);
     }
 
     #[test]
@@ -2744,6 +3059,151 @@ mod tests {
         assert_eq!(
             fighter.weapons[0].sounds,
             [cue("shot", "TARGET_GROUND", 0.5)]
+        );
+    }
+
+    #[test]
+    fn objects_show_effects_from_their_vfx_commands() {
+        let parsed = tgi::parse(
+            "[Template FXC]\n{\n\tstring type\n\tint frequency = 1\n\tfloat delay = 0\n\
+             \tstring target_flags = null\n\tstring terrain_group_filter = null\n\
+             \tfloat health = -1\n\tflag stop_on_destructed = true\n\
+             \tstring health_trigger_type = ABSOLUTE_BELOW\n\tstring actor_state = NULL\n\
+             \t[list Chain]\n\t[list ChainImmediate]\n}\n\
+             [Template FXC_CreateVFX inherit=FXC]\n{\n\ttype = CREATE_VFX\n\tstring VFX_IDS\n\
+             \tfloat duration = 0\n\tstring at = SELF\n\tflag attached = true\n\
+             \tstring location = null\n\tpoint3 translation = 0,0,0\n\
+             \tpoint3 orientation = 0,-1,0\n}\n\
+             [Template FXC_StopVFX inherit=FXC]\n{\n\ttype = STOP_VFX\n\tstring VFX_IDS\n}\n\
+             [Template FXC_PlaySFX inherit=FXC]\n{\n\ttype = PLAY_SFX\n\tstring audio_ids\n}\n\
+             [Thing]\n{\n\tIDS = bunker\n\
+             \t[View]\n\t{\n\
+             \t\t[WhenConstructed Template=FXC_CreateVFX]\n\t\tvfx_ids = lit_window\n\
+             \t\tlocation = window_01\n\t\tstop_on_destructed = false\n\
+             \t\t[WhenDestroyed Template=FXC_PlaySFX]\n\t\taudio_ids = boom\n\
+             \t\t[WhenDestroyed Template=FXC_CreateVFX]\n\t\tvfx_ids = rare\n\t\tfrequency = 0\n\
+             \t}\n\
+             \t[WhenEnter Template=FXC_CreateVFX]\n\tvfx_ids = dust\n\
+             \tactor_state = construction\n\
+             \t[WhenLeave Template=FXC_StopVFX]\n\tvfx_ids = dust\n\
+             \tactor_state = construction\n\
+             \t[BodyComponent]\n\t{\n\t\thealth = 100\n\
+             \t\t[WhenHealth Template=FXC_CreateVFX]\n\t\t{\n\t\t\tvfx_ids = flame\n\
+             \t\t\thealth = 0.4\n\t\t\tattached = false\n\
+             \t\t\t[Chain Template=FXC_CreateVFX]\n\t\t\tvfx_ids = smoke\n\t\t}\n\t}\n\
+             \t[PerformerComponent]\n\t{\n\t\t[Ability]\n\t\t{\n\
+             \t\t\t[AbilityDefinition]\n\t\t\t{\n\t\t\t\tability_type = attack\n\
+             \t\t\t\trange = 10\n\t\t\t\tprojectile_IDS = shell\n\
+             \t\t\t\t[Effect]\n\t\t\t\ttype = MAIN_DAMAGE\n\
+             \t\t\t\tdamage_type_IDS = gunfire\n\t\t\t\tamount = 5\n\
+             \t\t\t\t[WhenStart Template=FXC_CreateVFX]\n\t\t\t\tvfx_ids = flash\n\
+             \t\t\t\tlocation = cannon_ae_01\n\
+             \t\t\t\t[WhenDo Template=FXC_CreateVFX]\n\t\t\t\tvfx_ids = puff\n\
+             \t\t\t\tat = target_hit_position\n\t\t\t\ttarget_flags = +infantry\n\
+             \t\t\t\tterrain_group_filter = snow\n\t\t\t\tdelay = 0.5\n\t\t\t\tfrequency = 2\n\
+             \t\t\t}\n\t\t}\n\t}\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        let cue = |vfx: &str| VfxCue {
+            vfx: Id::from(vfx),
+            stop: false,
+            at: "SELF".to_string(),
+            location: None,
+            attached: true,
+            translation: [0.0; 3],
+            orientation: [0.0, -1.0, 0.0],
+            duration: None,
+            delay: 0.0,
+            every: 1,
+            terrain: None,
+            targets: Targets::default(),
+            stop_on_destructed: true,
+            chain: vec![],
+            chain_immediate: vec![],
+        };
+
+        let effects = object_effects(&thing);
+        let window = VfxCue {
+            location: Some("window_01".to_string()),
+            stop_on_destructed: false,
+            ..cue("lit_window")
+        };
+        assert_eq!(effects.constructed, [window]);
+        assert!(effects.destroyed.is_empty());
+        let construction = Id::from("construction");
+        assert_eq!(effects.entered, [(construction.clone(), cue("dust"))]);
+        let stop = VfxCue {
+            stop: true,
+            ..cue("dust")
+        };
+        assert_eq!(effects.left, [(construction, stop)]);
+        let flame = VfxCue {
+            attached: false,
+            chain: vec![cue("smoke")],
+            ..cue("flame")
+        };
+        let health = HealthCue {
+            health: 0.4,
+            trigger: HealthTrigger::Below,
+            cue: flame,
+        };
+        assert_eq!(effects.health, [health]);
+
+        let weapon = &fighter(&thing, &HashMap::new()).unwrap().weapons[0];
+        assert_eq!(weapon.projectile, Some(Id::from("shell")));
+        let flash = VfxCue {
+            location: Some("cannon_ae_01".to_string()),
+            ..cue("flash")
+        };
+        assert_eq!(weapon.effects.start, [flash]);
+        let puff = VfxCue {
+            at: "TARGET_HIT_POSITION".to_string(),
+            targets: Targets::parse("+infantry"),
+            terrain: Some(Id::from("snow")),
+            delay: 0.5,
+            every: 2,
+            ..cue("puff")
+        };
+        assert_eq!(weapon.effects.shot, [puff]);
+    }
+
+    #[test]
+    fn vfx_take_their_template_defaults() {
+        let parsed = tgi::parse(
+            "[Template VFX]\n{\n\tcategory = VFX\n\tflag permanent\n\tflag critical = true\n\
+             \tfloat duration = 0\n\tfloat attached_scale = 0\n}\n\
+             [Template VFXModel inherit=VFX]\n{\n\tcategory = VFXMODEL\n\tstring model\n\
+             \tflag gyroscope = true\n}\n\
+             [Template VFXModelTemporary inherit=VFXModel]\n{\n\tpermanent = false\n\
+             \tcritical = false\n\t[TextureSearchPath]\n\tpath = /Shared/SharedTextures\n}\n\
+             [VFX Template=VFXModelTemporary]\n{\n\tIDS = boom\n\tmodel = Boom.NIF\n\
+             \tduration = 2\n\t[Flags]\n\trandom_orientation = true\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("VFX").next().unwrap();
+        let v = vfx(
+            templates.deserialize(block).unwrap(),
+            Some("Effects/Boom.NIF".to_string()),
+        );
+        assert_eq!(
+            v,
+            Vfx {
+                category: "VFXMODEL".to_string(),
+                model: Some("Effects/Boom.NIF".to_string()),
+                texture_dirs: vec!["Shared/SharedTextures".to_string()],
+                permanent: false,
+                critical: false,
+                duration: Some(2.0),
+                attached_scale: 0.0,
+                never_discard: false,
+                night_only: false,
+                constant_screen_size: false,
+                real_time: false,
+                random_orientation: true,
+                gyroscope: true,
+            }
         );
     }
 

@@ -5,9 +5,10 @@
 //! their nations, teams and rules) once it's running. Each *player* is a side
 //! in it, controlled by a person or an AI.
 
+pub mod economy;
 pub mod path;
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 
 use aaa_map::pathing::tile_at;
 use aaa_map::{
@@ -16,6 +17,7 @@ use aaa_map::{
 };
 
 pub use aaa_map::{Player, Relation, Team};
+pub use economy::{Balance, Change, Ledger, Limit, Notice, Treasury};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
@@ -52,6 +54,18 @@ pub struct World {
     pub buildings: Vec<Building>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
+    /// Each template's own cost, production and upkeep, by template.
+    pub economies: HashMap<Id, aaa_map::Economy>,
+    pub economy: aaa_map::EconomyRules,
+    /// What sides own that's neither a regiment nor a building but may
+    /// still add to their economy, such as where they start: each owner
+    /// and template.
+    pub holdings: Vec<(u32, String)>,
+    /// Each side's money, by player id.
+    pub treasuries: BTreeMap<u32, Treasury>,
+    /// What sides have been told about their economies since these were
+    /// last taken.
+    pub notices: Vec<Notice>,
     /// Ticks played.
     pub ticks: u64,
     /// An id no object has yet.
@@ -369,6 +383,8 @@ pub struct Building {
     pub queue: VecDeque<Commission>,
     /// Ticks spent on the first of the queue.
     pub progress: u64,
+    /// Why its queue is held up, once its owner's been told.
+    pub paused: Option<Pause>,
     /// Where what it commissions appears, then goes.
     pub deploy: Option<DeployPoints>,
     /// It stands in an organization, so it packs back into its place
@@ -410,6 +426,11 @@ pub struct Commission {
     pub regiment: aaa_map::Regiment,
     /// Ticks it takes.
     pub ticks: u64,
+    /// The money taken for it, given back if it's called off.
+    pub paid: f32,
+    /// Whether it's taken its share of its owner's limits, which it does
+    /// on reaching the front of the queue once there's room.
+    pub held: bool,
     /// Set once a building takes it on, to call it off by: unlike its
     /// place in the queue, it stays the same while orders are on their way.
     pub id: u32,
@@ -421,9 +442,20 @@ impl Commission {
         Commission {
             regiment,
             ticks: ((seconds / TICK).round() as u64).max(1),
+            paid: 0.0,
+            held: false,
             id: 0,
         }
     }
+}
+
+/// Why a building's queue is held up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Pause {
+    /// Its owner hasn't room under a limit, such as `unit_limit_consumed`,
+    /// for the first of the queue.
+    Limit(&'static str),
+    Disabled,
 }
 
 /// Why an order wasn't given.
@@ -437,6 +469,8 @@ pub enum Refused {
     NoRoom,
     /// Its owner lacks buildings that what it would raise needs.
     Lacking,
+    /// Its owner hasn't the money for it.
+    Unaffordable,
 }
 
 impl From<NotYours> for Refused {
@@ -547,6 +581,25 @@ impl World {
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
         world.add_buildings(&map.buildings);
         world.scenery = map.scenery.clone();
+        let regiments = map.regiments.iter().map(|r| r.id);
+        let taken: HashSet<u32> = regiments
+            .chain(map.buildings.iter().map(|b| b.id))
+            .collect();
+        world.holdings = map
+            .things
+            .iter()
+            .filter(|t| !taken.contains(&t.id))
+            .filter_map(|t| Some((aaa_map::owner(t)?, t.template.clone())))
+            .collect();
+        for p in &map.players {
+            world.treasuries.insert(
+                p.id,
+                Treasury {
+                    stockpile: p.stockpile,
+                    shortage: None,
+                },
+            );
+        }
         let members = map
             .things
             .iter()
@@ -574,6 +627,11 @@ impl World {
             next_commission: 0,
             packing: HashMap::new(),
             requires: HashMap::new(),
+            economies: HashMap::new(),
+            economy: aaa_map::EconomyRules::default(),
+            holdings: Vec::new(),
+            treasuries: BTreeMap::new(),
+            notices: Vec::new(),
         };
         for regiment in regiments {
             world.add_regiment(regiment);
@@ -698,6 +756,7 @@ impl World {
                 packing: None,
                 queue: VecDeque::new(),
                 progress: 0,
+                paused: None,
                 deploy: b.deploy,
                 organized: b.organized,
                 rally: None,
@@ -888,6 +947,9 @@ impl World {
         if !self.lacks(player, regiment).is_empty() {
             return Err(Refused::Lacking);
         }
+        if self.cost(regiment) > self.stockpile(player) {
+            return Err(Refused::Unaffordable);
+        }
         Ok(())
     }
 
@@ -1070,9 +1132,8 @@ impl World {
 
     fn order_pack(&mut self, player: u32, building: usize) -> Result<(), Refused> {
         let ticks = self.may_pack(player, building)?;
+        self.drop_queue(building);
         let b = &mut self.buildings[building];
-        b.queue.clear();
-        b.progress = 0;
         b.packing = Some((self.ticks, self.ticks + ticks));
         Ok(())
     }
@@ -1084,6 +1145,9 @@ impl World {
         mut commission: Commission,
     ) -> Result<(), Refused> {
         self.may_commission(player, building, &commission.regiment)?;
+        commission.paid = self.cost(&commission.regiment);
+        let left = self.stockpile(player) - commission.paid;
+        self.set_stockpile(player, left);
         commission.id = self.next_commission;
         self.next_commission += 1;
         self.buildings[building].queue.push_back(commission);
@@ -1109,11 +1173,32 @@ impl World {
     ) -> Result<(), Refused> {
         let index = self.may_cancel(player, building, commission)?;
         let b = &mut self.buildings[building];
-        b.queue.remove(index);
+        let paid = b.queue.remove(index).map_or(0.0, |c| c.paid);
+        self.refund(player, paid);
+        let b = &mut self.buildings[building];
         if index == 0 {
             b.progress = 0;
+            b.paused = None;
         }
         Ok(())
+    }
+
+    /// Calls off all a building's commissions, giving its owner back what
+    /// they paid.
+    fn drop_queue(&mut self, building: usize) {
+        let b = &mut self.buildings[building];
+        let refund: f32 = b.queue.drain(..).map(|c| c.paid).sum();
+        b.progress = 0;
+        b.paused = None;
+        let owner = b.owner;
+        self.refund(owner, refund);
+    }
+
+    fn refund(&mut self, player: u32, amount: f32) {
+        if amount > 0.0 {
+            let back = self.stockpile(player) + amount;
+            self.set_stockpile(player, back);
+        }
     }
 
     fn send(&mut self, regiment: usize, target: [f32; 2], facing: [f32; 2]) {
@@ -1208,6 +1293,7 @@ impl World {
         self.produce();
         self.rally();
         self.unpack();
+        self.earn();
         self.ticks += 1;
     }
 
@@ -1215,10 +1301,10 @@ impl World {
     /// what's done where they deploy it, sent on to where it goes.
     fn produce(&mut self) {
         for b in 0..self.buildings.len() {
-            let building = &mut self.buildings[b];
-            if !building.standing() || building.busy() {
+            if self.held_up(b) {
                 continue;
             }
+            let building = &mut self.buildings[b];
             let (Some(first), Some(deploy)) = (building.queue.front(), building.deploy) else {
                 continue;
             };
@@ -1861,6 +1947,7 @@ impl World {
                     if let Some(o) = building.obstacle.take() {
                         self.pathing.unblock(&o);
                     }
+                    self.drop_queue(b);
                 } else {
                     building.state = State::Disabled;
                 }
@@ -1876,6 +1963,7 @@ impl World {
             .filter(|&i| i != b && ids.contains(&self.buildings[i].id))
             .collect();
         for i in std::iter::once(b).chain(members) {
+            self.drop_queue(i);
             let building = &mut self.buildings[i];
             building.owner = owner;
             building.captured = Some(self.ticks);
@@ -2624,6 +2712,8 @@ mod tests {
             animation: None,
             turret: false,
             sounds: Vec::new(),
+            effects: Default::default(),
+            projectile: None,
         }
     }
 
@@ -3459,6 +3549,7 @@ mod tests {
             nation: None,
             relations: stored(relations),
             team_relations: stored(team_relations),
+            stockpile: 0.0,
         }
     }
 
@@ -4076,5 +4167,340 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    fn amounts(of: &[(&str, f32)]) -> aaa_map::Amounts {
+        let mut a = aaa_map::Amounts::default();
+        for &(kind, amount) in of {
+            a.set(kind, amount);
+        }
+        a
+    }
+
+    /// [`headquarters`] earning and keeping up like a Corps HQ, its trucks
+    /// like a Division HQ's and the depot they unpack into earning twice
+    /// theirs, with the game's limits and shortfall prices, and player 1
+    /// holding 500.
+    fn economy() -> World {
+        let mut w = headquarters();
+        let economy = |cost, production, upkeep| aaa_map::Economy {
+            cost: amounts(cost),
+            production: amounts(production),
+            upkeep: amounts(upkeep),
+        };
+        w.economies.insert(
+            Id::from("house"),
+            economy(
+                &[],
+                &[("money", 25.0), ("ammo", 20.0), ("oil", 10.0)],
+                &[("building_limit_consumed", 1.0)],
+            ),
+        );
+        w.economies.insert(
+            Id::from("truck"),
+            economy(
+                &[("money", 250.0)],
+                &[
+                    ("money", 12.0),
+                    ("ammo", 5.0),
+                    ("oil", 2.0),
+                    ("unit_limit_provided", 6.0),
+                ],
+                &[("building_limit_consumed", 1.0)],
+            ),
+        );
+        w.economies.insert(
+            Id::from("depot"),
+            economy(
+                &[],
+                &[
+                    ("money", 25.0),
+                    ("ammo", 10.0),
+                    ("oil", 5.0),
+                    ("unit_limit_provided", 6.0),
+                ],
+                &[("building_limit_consumed", 1.0)],
+            ),
+        );
+        w.economy = aaa_map::EconomyRules {
+            purchase_cost: amounts(&[("ammo", 2.0), ("oil", 3.0)]),
+            limits: vec![
+                ("unit_limit_consumed", "unit_limit_provided"),
+                ("building_limit_consumed", "building_limit_provided"),
+            ],
+            limited_max: 20.0,
+            stockpile_max: 99999.0,
+            ..Default::default()
+        };
+        w.set_stockpile(1, 500.0);
+        w
+    }
+
+    /// A regiment of three soldiers of `owner`'s, which with each soldier
+    /// keeps up ammo.
+    fn company(w: &mut World, owner: u32) -> usize {
+        let regiment = raised_company(w, owner);
+        w.add_regiment(&regiment)
+    }
+
+    /// A [`company`] yet to be put on the map, taking a place under the
+    /// regiment limit.
+    fn raised_company(w: &mut World, owner: u32) -> aaa_map::Regiment {
+        let members = (0..3).map(|i| member(20 + i, [5.0 + i as f32, 5.0], 1.0));
+        let mut regiment = truck();
+        regiment.template = "company".into();
+        regiment.owner = owner;
+        regiment.members = members.collect();
+        regiment.unpacks = None;
+        regiment.primary = None;
+        regiment.formations[0].offsets = vec![[0.0, 0.0]; 3];
+        let economy = |upkeep| aaa_map::Economy {
+            upkeep: amounts(upkeep),
+            ..Default::default()
+        };
+        w.economies.insert(
+            Id::from("company"),
+            economy(&[("ammo", 10.0), ("unit_limit_consumed", 1.0)]),
+        );
+        w.economies
+            .insert(Id::from("soldier"), economy(&[("ammo", 2.0)]));
+        regiment
+    }
+
+    #[test]
+    fn sides_earn_what_they_own_produces_less_its_upkeep() {
+        let mut w = economy();
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        w.add_regiment(&t);
+        let r = company(&mut w, 1);
+        company(&mut w, 2);
+        let balance = w.balance(1);
+        assert_eq!(balance.net.get("money"), 37.0);
+        // The company keeps up its own 10 and its three soldiers' 2 each.
+        assert_eq!(balance.net.get("ammo"), 25.0 - 16.0);
+        assert_eq!(balance.net.get("oil"), 12.0);
+        assert_eq!(
+            balance.limits,
+            [
+                Limit {
+                    consumed: "unit_limit_consumed",
+                    used: 1.0,
+                    provided: 6.0
+                },
+                Limit {
+                    consumed: "building_limit_consumed",
+                    used: 2.0,
+                    provided: 0.0
+                },
+            ]
+        );
+        // Those that die stop costing anything.
+        w.units[w.regiments[r].units[0]].die(0);
+        assert_eq!(w.balance(1).net.get("ammo"), 11.0);
+        w.destroy(r);
+        assert_eq!(w.balance(1).net.get("ammo"), 25.0);
+        // A disabled building earns nothing but is still kept up.
+        w.buildings[0].state = State::Disabled;
+        let ledger = w.ledger(1);
+        assert_eq!(ledger.production.get("money"), 12.0);
+        assert_eq!(ledger.upkeep.get("building_limit_consumed"), 2.0);
+    }
+
+    #[test]
+    fn shortfalls_are_bought_with_money() {
+        let mut w = economy();
+        for _ in 0..4 {
+            company(&mut w, 1);
+        }
+        // 64 ammo kept up against 20 made, so 44 bought at 2 each.
+        let balance = w.balance(1);
+        assert_eq!(balance.net.get("ammo"), -44.0);
+        assert_eq!(balance.net.get("money"), 25.0 - 88.0);
+        assert_eq!((balance.income, balance.costs), (25.0, 88.0));
+        // Limits provided are capped.
+        w.economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .production
+            .set("unit_limit_provided", 30.0);
+        assert_eq!(w.balance(1).limits[0].provided, 20.0);
+    }
+
+    #[test]
+    fn stockpiles_fill_with_what_sides_net_and_tell_them_when_short() {
+        let mut w = economy();
+        run(&mut w, 60.0);
+        assert!((w.stockpile(1) - 525.0).abs() < 0.01);
+        w.set_stockpile(1, 1.0);
+        for _ in 0..4 {
+            company(&mut w, 1);
+        }
+        // Netting -63 a minute, 1 lasts under a second.
+        run(&mut w, 1.0);
+        assert_eq!(w.stockpile(1), 0.0);
+        let percent = (88.0 - 25.0) / 88.0 * 100.0;
+        assert_eq!(w.notices, [Notice::Short { player: 1, percent }]);
+        // Told again only once it moves on by more than 5 points.
+        let earn = |w: &mut World, money| {
+            let house = w.economies.get_mut(&Id::from("house")).unwrap();
+            house.production.set("money", money);
+            run(w, 1.0);
+        };
+        earn(&mut w, 27.0);
+        assert_eq!(w.notices.len(), 1);
+        earn(&mut w, 15.0);
+        assert_eq!(w.notices.len(), 2);
+        w.set_stockpile(1, 99999.0);
+        run(&mut w, 1.0);
+        assert_eq!(w.notices[2], Notice::Repaired { player: 1 });
+        // Never more than the most a stockpile holds.
+        w.set_stockpile(1, 200000.0);
+        assert_eq!(w.stockpile(1), 99999.0);
+    }
+
+    #[test]
+    fn commissions_are_paid_for_up_front_and_refunded_if_called_off() {
+        let mut w = economy();
+        let order = |w: &mut World| {
+            w.apply(
+                1,
+                Command::Commission {
+                    building: 0,
+                    commission: Box::new(Commission::new(truck(), 10.0)),
+                },
+            )
+        };
+        order(&mut w).unwrap();
+        order(&mut w).unwrap();
+        assert_eq!(w.stockpile(1), 0.0);
+        assert_eq!(order(&mut w), Err(Refused::Unaffordable));
+        let second = w.buildings[0].queue[1].id;
+        w.apply(
+            1,
+            Command::CancelCommission {
+                building: 0,
+                commission: second,
+            },
+        )
+        .unwrap();
+        assert_eq!(w.stockpile(1), 250.0);
+    }
+
+    #[test]
+    fn previews_show_the_economy_after_an_order() {
+        let mut w = economy();
+        let (stockpile, balance) = w.preview(1, Change::Commission(&truck()));
+        assert_eq!(stockpile, 250.0);
+        assert_eq!(balance.net.get("money"), 37.0);
+        assert_eq!(balance.limits[0].provided, 6.0);
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        // Unpacking swaps the truck's production for the depot's.
+        let (stockpile, balance) = w.preview(1, Change::Unpack(r));
+        assert_eq!(stockpile, 500.0);
+        assert_eq!(balance.net.get("money"), 50.0);
+        assert_eq!(balance.limits[1].used, 2.0);
+    }
+
+    #[test]
+    fn start_locations_give_their_side_room_to_build() {
+        let mut w = economy();
+        w.economies.insert(
+            Id::from("start_loc"),
+            aaa_map::Economy {
+                production: amounts(&[("building_limit_provided", 20.0)]),
+                ..Default::default()
+            },
+        );
+        w.holdings.push((1, "start_loc".into()));
+        let building = w.balance(1).limits[1];
+        assert_eq!((building.used, building.provided), (1.0, 20.0));
+    }
+
+    #[test]
+    fn commissions_wait_at_the_front_of_the_queue_for_room_under_limits() {
+        let mut w = economy();
+        let company = raised_company(&mut w, 1);
+        let order = Command::Commission {
+            building: 0,
+            commission: Box::new(Commission::new(company, 1.0)),
+        };
+        // Accepted and paid for though there's no room.
+        w.apply(1, order).unwrap();
+        for _ in 0..20 {
+            w.tick();
+        }
+        assert_eq!(w.buildings[0].progress, 0);
+        assert_eq!(
+            w.buildings[0].paused,
+            Some(Pause::Limit("unit_limit_consumed"))
+        );
+        let paused = |w: &World| {
+            w.notices
+                .iter()
+                .filter(|n| matches!(n, Notice::Paused { player: 1, .. }))
+                .count()
+        };
+        assert_eq!(paused(&w), 1, "told once");
+        // Room once a truck provides it, taken while it's raised.
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        w.add_regiment(&t);
+        w.tick();
+        assert_eq!(w.buildings[0].paused, None);
+        assert_eq!(w.balance(1).limits[0].used, 1.0);
+        for _ in 0..10 {
+            w.tick();
+        }
+        assert!(w.buildings[0].queue.is_empty());
+        assert_eq!(
+            w.balance(1).limits[0].used,
+            1.0,
+            "the raised company holds it"
+        );
+    }
+
+    #[test]
+    fn disabled_buildings_hold_their_queues() {
+        let mut w = economy();
+        let order = Command::Commission {
+            building: 0,
+            commission: Box::new(Commission::new(truck(), 1.0)),
+        };
+        w.apply(1, order).unwrap();
+        w.tick();
+        w.buildings[0].state = State::Disabled;
+        for _ in 0..20 {
+            w.tick();
+        }
+        assert_eq!(w.buildings[0].queue.len(), 1);
+        assert_eq!(w.buildings[0].paused, Some(Pause::Disabled));
+        assert!(w.notices.iter().any(|n| matches!(
+            n,
+            Notice::Paused {
+                why: Pause::Disabled,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn queues_are_refunded_to_their_owner_when_their_building_changes_hands() {
+        let mut w = economy();
+        let order = Command::Commission {
+            building: 0,
+            commission: Box::new(Commission::new(truck(), 10.0)),
+        };
+        w.apply(1, order).unwrap();
+        assert_eq!(w.stockpile(1), 250.0);
+        w.change_hands(0, 2);
+        assert!(w.buildings[0].queue.is_empty());
+        assert_eq!(w.stockpile(1), 500.0);
+        assert_eq!(w.stockpile(2), 0.0);
     }
 }

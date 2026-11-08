@@ -21,6 +21,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::menu::Click;
+use crate::resource_bar::{Preview, Previewed};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
@@ -78,8 +79,8 @@ const HELP: Color = Color::srgb(0.8, 0.8, 0.8);
 const WHY: Color = Color::srgb(1.0, 0.75, 0.3);
 /// Where the game's font keeps the glyphs it draws resources with, and
 /// each resource's, by its field name in the data.
-const GLYPH_DIR: &str = "Fonts/medium/1280";
-const GLYPHS: [(&str, &str); 7] = [
+pub(crate) const GLYPH_DIR: &str = "Fonts/medium/1280";
+pub(crate) const GLYPHS: [(&str, &str); 7] = [
     ("money", "money"),
     ("ammo", "ammo"),
     ("oil", "fuel"),
@@ -259,6 +260,9 @@ pub struct Looks {
     cancel: Look,
     /// The tooltip's heading for what a recruit needs.
     requires: String,
+    /// What a recruit the player can't afford says, given its name and
+    /// cost.
+    affording: String,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
@@ -398,6 +402,10 @@ pub fn spawn(
     let production = title("ui_tooltip_item_title_production", "Production");
     let upkeep = title("ui_tooltip_item_title_upkeep", "Upkeep");
     let requires = title("ui_tooltip_item_title_requires", "Requires");
+    let affording = title(
+        "recruit_error_affording",
+        "Insufficient funds for %s. Requires %s.",
+    );
     let glyphs: HashMap<&str, Handle<Image>> = GLYPHS
         .iter()
         .filter_map(|&(kind, name)| Some((kind, image(game, &format!("{GLYPH_DIR}/{name}.png"))?)))
@@ -487,6 +495,7 @@ pub fn spawn(
         pack,
         cancel,
         requires,
+        affording,
         menus,
         names: listings.into_iter().map(|(id, l)| (id, l.name)).collect(),
     });
@@ -634,10 +643,19 @@ pub fn show(
     local: Res<Local>,
     focus: Res<crate::Focus>,
     mut refusal: ResMut<Refusal>,
+    mut preview: ResMut<Preview>,
     mut commands: Commands,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
     let nothing = selected.0.is_empty() && building.is_none();
+    // What hovering, or aiming, the order would do to the economy.
+    let unpacking = selected.0.first().copied().filter(|&r| {
+        selected.0.len() == 1 && sim.0.regiments.get(r).is_some_and(|r| r.unpacks.is_some())
+    });
+    let mut previewed = match *page {
+        Page::Aiming(Aim::Unpack) => unpacking.map(Previewed::Unpack),
+        _ => None,
+    };
     panel.set_if_neq(match nothing {
         false => Visibility::Inherited,
         true => Visibility::Hidden,
@@ -728,8 +746,30 @@ pub fn show(
             _ => {}
         }
         if hover.get() {
+            match entry {
+                Entry::Recruit(i) => {
+                    previewed = menu[i]
+                        .regiment
+                        .clone()
+                        .map(|r| Previewed::Commission(Box::new(r)));
+                }
+                Entry::Order(i) if ORDERS[i].1 == Some(Give::Aim(Aim::Unpack)) => {
+                    previewed = unpacking.map(Previewed::Unpack);
+                }
+                _ => {}
+            }
             let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
+            let unaffordable = match (entry, refused) {
+                (Entry::Recruit(i), Some(aaa_sim::Refused::Unaffordable)) => {
+                    menu[i].regiment.as_ref()
+                }
+                _ => None,
+            };
             let why = match (ready, why, refused) {
+                (_, _, Some(_)) if unaffordable.is_some() => unaffordable.map(|r| {
+                    let cost = sim.0.cost(r).ceil().to_string();
+                    fill(&looks.affording, &[&look.name, &cost])
+                }),
                 (_, _, Some(refused)) => Some(refused_why(refused).to_string()),
                 (true, _, _) => None,
                 (false, Some(why), _) => Some(why),
@@ -776,6 +816,17 @@ pub fn show(
         (None, _) => None,
     };
     tooltip.say(tip);
+    let changed = match (&preview.0, &previewed) {
+        (None, None) => false,
+        (Some(Previewed::Unpack(a)), Some(Previewed::Unpack(b))) => a != b,
+        (Some(Previewed::Commission(a)), Some(Previewed::Commission(b))) => {
+            a.template != b.template
+        }
+        _ => true,
+    };
+    if changed {
+        preview.0 = previewed;
+    }
 }
 
 /// The tooltip's node, not the slots'.
@@ -989,6 +1040,22 @@ fn commissioned(page: Page, given: Result<(), aaa_sim::Refused>) -> Page {
     }
 }
 
+/// `text` with each `%s` filled in turn from `with`.
+pub(crate) fn fill(text: &str, with: &[&str]) -> String {
+    let mut out = String::new();
+    let mut rest = text;
+    for w in with {
+        let Some((before, after)) = rest.split_once("%s") else {
+            break;
+        };
+        out.push_str(before);
+        out.push_str(w);
+        rest = after;
+    }
+    out.push_str(rest);
+    out
+}
+
 /// Why an order was refused, for the tooltip.
 fn refused_why(refused: aaa_sim::Refused) -> &'static str {
     match refused {
@@ -996,6 +1063,7 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::Unable => "Can't now",
         aaa_sim::Refused::NoRoom => "No room",
         aaa_sim::Refused::Lacking => "Lacks a building it needs",
+        aaa_sim::Refused::Unaffordable => "Not enough money",
     }
 }
 

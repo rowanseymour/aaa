@@ -35,6 +35,8 @@ pub struct Player {
     /// How it stands toward each team, by index in
     /// [`Map::teams`](crate::Map::teams).
     pub team_relations: Vec<Relation>,
+    /// The money it starts with.
+    pub stockpile: f32,
 }
 
 /// Players that share victory.
@@ -79,7 +81,14 @@ pub fn sides(
     kingdoms: &Kingdoms,
     teams: &[Option<StoredTeam>],
     colors: &HashMap<Id, [f32; 3]>,
+    default_stockpile: f32,
 ) -> (Vec<Player>, Vec<Team>) {
+    let money = |stockpiles: &[(String, f32)]| {
+        stockpiles
+            .iter()
+            .find(|(id, _)| id.eq_ignore_ascii_case("money"))
+            .map_or(0.0, |&(_, amount)| amount)
+    };
     let kingdom_slots: Vec<bool> = kingdoms.kingdoms.iter().map(Option::is_some).collect();
     let team_slots: Vec<bool> = teams.iter().map(Option::is_some).collect();
     let by_player = |stored: &[u32]| by_index(&kingdom_slots, stored);
@@ -105,6 +114,10 @@ pub fn sides(
             nation: (!k.nation.is_empty()).then(|| k.nation.clone()),
             relations: by_player(&k.relations),
             team_relations: by_team(&k.team_relations),
+            stockpile: match k.use_default_stockpile {
+                true => default_stockpile,
+                false => money(&k.resources),
+            } + k.bonus_stockpile.as_deref().map_or(0.0, money),
         })
         .collect();
     let teams = teams
