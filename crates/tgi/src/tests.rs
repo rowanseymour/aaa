@@ -416,3 +416,13 @@ fn slot_declarations_are_kept_apart() {
     );
     assert_eq!(child.blocks().next().unwrap().value("x"), Some("1"));
 }
+
+#[test]
+fn block_comments_start_outside_quotes_and_line_comments() {
+    let root = ok("[A]\nx = 1 ; was /* off\ny = 2\nz = \"/* kept */\"\n/* gone */ w = 3\n");
+    let a = root.blocks().next().unwrap();
+    assert_eq!(
+        (a.value("x"), a.value("y"), a.value("z"), a.value("w")),
+        (Some("1"), Some("2"), Some("/* kept */"), Some("3"))
+    );
+}

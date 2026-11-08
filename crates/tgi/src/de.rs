@@ -14,7 +14,8 @@
 //! A key matches a struct field ignoring case and underscores, as the game
 //! does with case and the files are inconsistent about both (`IDS`,
 //! `DepthInfo` for `depth_info`). Fields and blocks are matched the same way,
-//! a block by its kind. Where a key repeats, a sequence field takes every
+//! a block by its kind. A map's keys ignore only case, since they are the
+//! file's own names. Where a key repeats, a sequence field takes every
 //! occurrence and any other field the first, like [`Block::value`].
 //!
 //! Values parse from their text: numbers, `true`/`false` (or `1`/`0`), unit
@@ -248,11 +249,29 @@ impl<'a> Node<'a> {
     }
 
     /// The single node a scalar or struct is read from: a group's first item.
+    /// The group's other items go unread.
     fn first(self) -> Self {
         match self {
-            Node::Group(items, ctx) => Node::item(items[0], &ctx),
+            Node::Group(items, ctx) => {
+                tally(&items, &ctx, 1);
+                Node::item(items[0], &ctx)
+            }
             n => n,
         }
+    }
+
+    /// Whether the node read as a scalar is a typed declaration without a
+    /// value.
+    fn is_declaration(&self) -> bool {
+        let field = match self {
+            Node::Field(f) => Some(*f),
+            Node::Group(items, _) => match items[0] {
+                Item::Field(f) => Some(f),
+                Item::Block(_) => None,
+            },
+            Node::Block(..) => None,
+        };
+        field.is_some_and(|f| f.value.is_none())
     }
 
     /// A field's value, for parsing into a scalar.
@@ -305,29 +324,26 @@ impl<'a> Node<'a> {
             }
         };
         let block = &*resolved(ctx.templates, block);
+        // Only a struct's own field names fold underscores: a map's keys are
+        // what the file says, and `a_b` and `ab` are different ones.
+        let same = |a: &str, b: &str| match fields {
+            Some(_) => same_key(a, b),
+            None => a.eq_ignore_ascii_case(b),
+        };
         let mut groups: Vec<(&str, Vec<&Item>)> = Vec::new();
         for item in &block.items {
             let k = key(item);
-            match groups.iter_mut().find(|(g, _)| same_key(g, k)) {
+            match groups.iter_mut().find(|(g, _)| same(g, k)) {
                 Some((_, items)) => items.push(item),
                 None => groups.push((k, vec![item])),
             }
         }
         let name = |k: &str| fields.and_then(|f| f.iter().find(|f| same_key(f, k)).copied());
-        if let Some(coverage) = ctx.coverage {
-            let mut coverage = coverage.borrow_mut();
-            for (k, items) in &groups {
-                let read = fields.is_none() || name(k).is_some();
-                for item in items {
-                    match item {
-                        Item::Field(f) => coverage.count(&ctx.path, f, read),
-                        // Blocks that are read count their own keys.
-                        Item::Block(b) if !read && !is_slot(b) => {
-                            coverage.unread(&child_path(&ctx.path, b), b, ctx.templates);
-                        }
-                        Item::Block(_) => {}
-                    }
-                }
+        // Groups that are read are counted as they're read, when it's known
+        // whether all of them or only the first is.
+        for (k, items) in &groups {
+            if fields.is_some() && name(k).is_none() {
+                tally(items, &ctx, 0);
             }
         }
         let groups = groups.into_iter().map(|(k, items)| {
@@ -419,13 +435,15 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
     /// Present, since a missing key never reaches the deserializer; a typed
     /// declaration without a value is `None`.
     fn deserialize_option<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        match self.clone().first() {
-            Node::Field(Field { value: None, .. }) => visitor.visit_none(),
-            _ => visitor.visit_some(self),
+        if self.is_declaration() {
+            self.first();
+            return visitor.visit_none();
         }
+        visitor.visit_some(self)
     }
 
     fn deserialize_unit<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
+        self.first();
         visitor.visit_unit()
     }
 
@@ -434,7 +452,7 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
         _name: &'static str,
         visitor: V,
     ) -> Result<V::Value, Error> {
-        visitor.visit_unit()
+        self.deserialize_unit(visitor)
     }
 
     fn deserialize_newtype_struct<V: Visitor<'de>>(
@@ -448,7 +466,10 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
     /// Every item of a repeated key.
     fn deserialize_seq<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         let items = match self {
-            Node::Group(items, ctx) => items.into_iter().map(|i| Node::item(i, &ctx)).collect(),
+            Node::Group(items, ctx) => {
+                tally(&items, &ctx, items.len());
+                items.into_iter().map(|i| Node::item(i, &ctx)).collect()
+            }
             n => vec![n],
         };
         let mut seq = de::value::SeqDeserializer::new(items.into_iter());
@@ -518,8 +539,25 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
         self.deserialize_str(visitor)
     }
 
+    /// Unknown keys, which [`Node::visit_block`] has already counted.
     fn deserialize_ignored_any<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         visitor.visit_unit()
+    }
+}
+
+/// Counts the items of a group of the block `ctx` is reading, the first
+/// `read` of them as read. Blocks that are read count their own keys.
+fn tally(items: &[&Item], ctx: &Ctx, read: usize) {
+    let Some(coverage) = ctx.coverage else { return };
+    let mut coverage = coverage.borrow_mut();
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            Item::Field(f) => coverage.count(&ctx.path, f, i < read),
+            Item::Block(b) if i >= read && !is_slot(b) => {
+                coverage.unread(&child_path(&ctx.path, b), b, ctx.templates);
+            }
+            Item::Block(_) => {}
+        }
     }
 }
 
@@ -587,6 +625,10 @@ fn whole<T: std::str::FromStr>(text: &str) -> Option<T> {
 /// points, as in the typo `1.5.0`, the number, which is what the game reads.
 /// Other trailing text, such as a unit, still fails.
 fn float<T: std::str::FromStr>(text: &str) -> Option<T> {
+    // Rust reads `inf`, `infinity` and `nan`; the game reads them as 0.
+    if text.contains(|c: char| c.is_ascii_alphabetic() && !matches!(c, 'e' | 'E')) {
+        return None;
+    }
     if let Some(n) = whole(text) {
         return Some(n);
     }
@@ -714,7 +756,9 @@ mod tests {
         assert_eq!((i.offset, i.depth, i.count), ([2.5, 1.5], -3.25, None));
 
         // Other trailing text is no typo, and words aren't infinities.
-        for depth in ["3m", "50%", "Infantry", "nano"] {
+        for depth in [
+            "3m", "50%", "Infantry", "nano", "inf", "-inf", "infinity", "NaN",
+        ] {
             let block = first(&format!("[Info]\noffset = 0, 0\ndepth = {depth}\n"));
             assert!(from_block::<Info>(&block).is_err(), "{depth}");
         }
@@ -795,6 +839,47 @@ mod tests {
                 ("terrain/sound", "file", count(0, 2)),
                 ("terrain/variation", "shine", count(0, 1)),
                 ("terrain/variation", "texture", count(1, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn map_keys_keep_their_underscores() {
+        let block = first(
+            "[Text]\nhires_texas__name = Cannon\nhires_texas_name = Texas\nHIRES_TEXAS_NAME = again\n",
+        );
+        let text: BTreeMap<String, String> = from_block(&block).unwrap();
+        assert_eq!(
+            text.into_iter().collect::<Vec<_>>(),
+            [
+                ("hires_texas__name".to_string(), "Cannon".to_string()),
+                ("hires_texas_name".to_string(), "Texas".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn counts_only_the_first_of_a_repeated_key_a_field_takes() {
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct T {
+            ids: String,
+            depth_info: Option<DepthInfo>,
+        }
+        let block = first(
+            "[T]\n{\nids = a\nids = b\n[DepthInfo]\ndepth = 1\nkind = Shallow\n\
+             [DepthInfo]\ndepth = 2\nkind = Shallow\nextra = 3\n}",
+        );
+        let mut coverage = Coverage::default();
+        coverage.read::<T>(&block, None).unwrap();
+        let count = |read, unread| Count { read, unread };
+        assert_eq!(
+            coverage.keys().collect::<Vec<_>>(),
+            vec![
+                ("t", "ids", count(1, 1)),
+                ("t/depthinfo", "depth", count(1, 1)),
+                ("t/depthinfo", "extra", count(0, 1)),
+                ("t/depthinfo", "kind", count(1, 1)),
             ]
         );
     }
