@@ -23,7 +23,7 @@ use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
 use crate::banners::Divisions;
-use crate::{Drawn, Loaded, Local, Screen, Selected, SelectedBuilding, Sim, TINTS, tint};
+use crate::{Drawn, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint};
 
 /// How many regiments can be selected at once, as many as the pane has
 /// cards for.
@@ -751,10 +751,18 @@ fn cancel(
     places: Query<&Queued>,
     chosen: Res<SelectedBuilding>,
     local: Res<Local>,
-    mut sim: ResMut<Sim>,
+    sim: Res<Sim>,
+    mut orders: ResMut<Orders>,
 ) {
     if let (Ok(place), Some(b), Some(player)) = (places.get(activate.entity), chosen.0, local.0) {
-        let _ = sim.0.cancel_commission(player, b, place.0);
+        // By id, as what's at that place may change before it's carried out.
+        if let Some(c) = sim.0.buildings[b].queue.get(place.0) {
+            let cancel = aaa_sim::Command::CancelCommission {
+                building: b,
+                commission: c.id,
+            };
+            let _ = orders.give(&sim.0, player, cancel);
+        }
     }
 }
 

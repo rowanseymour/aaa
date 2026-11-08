@@ -21,7 +21,7 @@ use crate::actions::Aim;
 use crate::lobby::Lineup;
 use crate::remote::Remote;
 use crate::waypoints::Sent;
-use crate::{Loaded, Local, Raising, Screen, Selected, SelectedBuilding, Sim};
+use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 /// Lines kept for scrolling back through.
 const SCROLLBACK: usize = 200;
@@ -690,23 +690,24 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
         }));
     };
     let point = place(&world.resource::<Loaded>().map.ground, x, y)?;
-    let sim = &mut world.resource_mut::<Sim>().0;
+    let sim = &world.resource::<Sim>().0;
     let r = sim
         .regiments
         .iter()
         .position(|r| r.id.to_string() == *id)
         .ok_or_else(|| format!("no regiment {id}"))?;
     let owner = sim.regiments[r].owner;
-    let ordered = match aim {
-        Aim::Move => sim.order_move(owner, r, point),
-        Aim::Attack => sim.order_attack(owner, r, point),
-        Aim::Run => sim.order_run(owner, r, point),
-        Aim::Unpack => sim
-            .order_unpack(owner, r, point)
-            .map(drop)
-            .map_err(|_| aaa_sim::NotYours),
+    let (regiment, to) = (r, point);
+    let command = match aim {
+        Aim::Move => aaa_sim::Command::Move { regiment, to },
+        Aim::Attack => aaa_sim::Command::Attack { regiment, to },
+        Aim::Run => aaa_sim::Command::Run { regiment, to },
+        Aim::Unpack => aaa_sim::Command::Unpack { regiment, at: to },
     };
-    ordered.map_err(|_| format!("regiment {id} is destroyed"))?;
+    give(world, owner, command).map_err(|e| match e {
+        aaa_sim::Refused::NotYours => format!("regiment {id} is destroyed"),
+        e => format!("refused: {e:?}"),
+    })?;
     world.write_message(Sent {
         to: Some(point),
         aim,
@@ -717,7 +718,7 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
 
 /// Sends a regiment after an enemy regiment, both by their ids.
 fn pursue(world: &mut World, id: &str, enemy: &str) -> Reply {
-    let sim = &mut world.resource_mut::<Sim>().0;
+    let sim = &world.resource::<Sim>().0;
     let find = |id: &str| {
         sim.regiments
             .iter()
@@ -727,8 +728,11 @@ fn pursue(world: &mut World, id: &str, enemy: &str) -> Reply {
     let (r, e) = (find(id)?, find(enemy)?);
     let there = sim.centre(e);
     let owner = sim.regiments[r].owner;
-    sim.order_pursue(owner, r, e)
-        .map_err(|e| format!("refused: {e:?}"))?;
+    let command = aaa_sim::Command::Pursue {
+        regiment: r,
+        enemy: e,
+    };
+    give(world, owner, command).map_err(|e| format!("refused: {e:?}"))?;
     world.write_message(Sent {
         to: None,
         aim: Aim::Attack,
@@ -802,11 +806,11 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
     let template = listed.ok_or_else(|| format!("{hq} doesn't commission {template}"))?;
     let regiment = raising.raise(template.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])?;
     let seconds = raising.recruit_time(template.as_str());
-    world
-        .resource_mut::<Sim>()
-        .0
-        .commission(player, b, aaa_sim::Commission::new(regiment, seconds))
-        .map_err(|e| format!("refused: {e:?}"))?;
+    let command = aaa_sim::Command::Commission {
+        building: b,
+        commission: Box::new(aaa_sim::Commission::new(regiment, seconds)),
+    };
+    give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
     Ok(String::new())
 }
 
@@ -817,10 +821,7 @@ fn pack(world: &mut World, args: &[&str]) -> Reply {
         .resource::<SelectedBuilding>()
         .0
         .ok_or("no building selected")?;
-    world
-        .resource_mut::<Sim>()
-        .0
-        .order_pack(player, b)
+    give(world, player, aaa_sim::Command::Pack { building: b })
         .map_err(|e| format!("refused: {e:?}"))?;
     Ok(String::new())
 }
@@ -834,17 +835,25 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
     let &[r] = &world.resource::<Selected>().0[..] else {
         return Err("select one packed building".into());
     };
-    let at = world
-        .resource_mut::<Sim>()
-        .0
-        .order_unpack(player, r, point)
-        .map_err(|e| format!("refused: {e:?}"))?;
+    let command = aaa_sim::Command::Unpack {
+        regiment: r,
+        at: point,
+    };
+    give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
+    let at = aaa_sim::unpack_site(point);
     world.write_message(crate::waypoints::Sent {
         to: Some(at),
         aim: crate::actions::Aim::Unpack,
         regiments: vec![(r, at)],
     });
     Ok(format!("unpacking at {:.0} {:.0}", at[0], at[1]))
+}
+
+/// Queues `command` from `player` for the next tick, as a click would.
+fn give(world: &mut World, player: u32, command: aaa_sim::Command) -> Result<(), aaa_sim::Refused> {
+    world.resource_scope(|world, mut orders: Mut<Orders>| {
+        orders.give(&world.resource::<Sim>().0, player, command)
+    })
 }
 
 fn advance(world: &mut World, args: &[&str]) -> Reply {
@@ -857,10 +866,12 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
     }
     let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
     let mut chosen = world.resource::<SelectedBuilding>().0;
+    let mut orders = world.remove_resource::<Orders>().unwrap_or_default();
     let sim = &mut world.resource_mut::<Sim>().0;
     for _ in 0..(seconds / aaa_sim::TICK).round() as u32 {
-        crate::step_world(sim, &mut selected, &mut chosen);
+        crate::step_world(sim, &mut orders, &mut selected, &mut chosen);
     }
+    world.insert_resource(orders);
     world.resource_mut::<Selected>().0 = selected;
     world.resource_mut::<SelectedBuilding>().0 = chosen;
     Ok(String::new())
@@ -1032,7 +1043,7 @@ fn keys(mut presses: MessageReader<KeyboardInput>, mut console: ResMut<Console>)
 }
 
 /// Runs what's been entered or queued, and completes what's being typed.
-fn run(world: &mut World) {
+pub(crate) fn run(world: &mut World) {
     if std::mem::take(&mut world.resource_mut::<Console>().complete) {
         complete(world);
     }

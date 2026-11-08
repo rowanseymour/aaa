@@ -52,6 +52,8 @@ pub struct World {
     pub ticks: u64,
     /// An id no object has yet.
     next_id: u32,
+    /// An id no commission has yet.
+    next_commission: u32,
 }
 
 pub struct Regiment {
@@ -400,6 +402,9 @@ pub struct Commission {
     pub regiment: aaa_map::Regiment,
     /// Ticks it takes.
     pub ticks: u64,
+    /// Set once a building takes it on, to call it off by: unlike its
+    /// place in the queue, it stays the same while orders are on their way.
+    pub id: u32,
 }
 
 impl Commission {
@@ -408,6 +413,7 @@ impl Commission {
         Commission {
             regiment,
             ticks: ((seconds / TICK).round() as u64).max(1),
+            id: 0,
         }
     }
 }
@@ -427,6 +433,65 @@ impl From<NotYours> for Refused {
     fn from(_: NotYours) -> Self {
         Refused::NotYours
     }
+}
+
+/// An order a player gives, as data, so that every copy of a match can
+/// play the same orders out on the same tick. Regiments and buildings are
+/// by index into [`World::regiments`] and [`World::buildings`], which only
+/// ever grow, so the same in every copy.
+#[derive(Debug, Clone)]
+pub enum Command {
+    /// Sends a regiment to `to`, turned to face the way it's going, each
+    /// member making for its place in the formation there. An engaged
+    /// regiment only sets off once it's done.
+    Move { regiment: usize, to: [f32; 2] },
+    /// As [`Command::Move`], but in its combat formation and taking on
+    /// every enemy that comes within its control range on the way.
+    Attack { regiment: usize, to: [f32; 2] },
+    /// As [`Command::Move`], but breaking off any engagement and engaging
+    /// nothing on the way.
+    Run { regiment: usize, to: [f32; 2] },
+    /// Sends a regiment after the enemy regiment `enemy`, breaking off any
+    /// engagement, to engage it once near enough. Refused for a regiment
+    /// with nothing to fire, or what isn't an enemy's.
+    Pursue { regiment: usize, enemy: usize },
+    /// Halts a regiment, its members forming up around where they stand on
+    /// average, and drops where it was headed, so that once done with any
+    /// engagement it stays put.
+    Stop { regiment: usize },
+    /// Sends a packed building to unpack at [`unpack_site`] for `at`.
+    /// Refused where it can't unpack or the building wouldn't fit.
+    Unpack { regiment: usize, at: [f32; 2] },
+    /// Switches a regiment to another of its formations, its members
+    /// taking their new places where it stands, or is headed.
+    Formation { regiment: usize, formation: usize },
+    /// Starts a building packing into what it packs into, such as a
+    /// truck, dropping whatever it was asked to commission. Refused while
+    /// it's unpacking or packing, or too hurt to pack.
+    Pack { building: usize },
+    /// Asks a building to commission something once it's done with what
+    /// it was asked for before.
+    Commission {
+        building: usize,
+        commission: Box<Commission>,
+    },
+    /// Calls off the commission with the [`Commission::id`] `commission`
+    /// that a building was asked for, starting the next over if it was
+    /// under way. Refused once it's gone.
+    CancelCommission { building: usize, commission: u32 },
+    /// Sets where what a building commissions moves on to once it's out,
+    /// or, given `None`, has it stay where it comes out. Refused for a
+    /// building that doesn't commission.
+    Rally {
+        building: usize,
+        at: Option<[f32; 2]>,
+    },
+}
+
+/// Where a packed building sent to unpack at `at` stands: the nearest
+/// whole units to it.
+pub fn unpack_site(at: [f32; 2]) -> [f32; 2] {
+    at.map(f32::round)
 }
 
 impl Building {
@@ -496,6 +561,7 @@ impl World {
             scenery: Vec::new(),
             ticks: 0,
             next_id: 1,
+            next_commission: 0,
             packing: HashMap::new(),
         };
         for regiment in regiments {
@@ -686,13 +752,149 @@ impl World {
 
     /// Whether `player` may give `regiment` orders.
     pub fn commands(&self, player: u32, regiment: usize) -> bool {
-        self.regiments[regiment].owner == player && !self.destroyed(regiment)
+        self.regiments
+            .get(regiment)
+            .is_some_and(|r| r.owner == player)
+            && !self.destroyed(regiment)
     }
 
-    /// Sends a regiment to `target`, turned to face the way it's going,
-    /// each member making for its place in the formation there. An engaged
-    /// regiment only sets off once it's done.
-    pub fn order_move(
+    /// Whether `player` may give `command` now: what [`World::apply`]
+    /// would refuse it for, without carrying it out.
+    pub fn check(&self, player: u32, command: &Command) -> Result<(), Refused> {
+        match *command {
+            Command::Move { regiment, .. }
+            | Command::Attack { regiment, .. }
+            | Command::Run { regiment, .. }
+            | Command::Stop { regiment }
+            | Command::Formation { regiment, .. } => Ok(self.may_command(player, regiment)?),
+            Command::Pursue { regiment, enemy } => self.may_pursue(player, regiment, enemy),
+            Command::Unpack { regiment, at } => self.may_unpack(player, regiment, at).map(drop),
+            Command::Pack { building } => self.may_pack(player, building).map(drop),
+            Command::Commission { building, .. } => self.may_commission(player, building),
+            Command::CancelCommission {
+                building,
+                commission,
+            } => self.may_cancel(player, building, commission).map(drop),
+            Command::Rally { building, .. } => self.may_rally(player, building),
+        }
+    }
+
+    /// Carries out `command` from `player`, unless it's refused.
+    pub fn apply(&mut self, player: u32, command: Command) -> Result<(), Refused> {
+        match command {
+            Command::Move { regiment, to } => self.order_move(player, regiment, to)?,
+            Command::Attack { regiment, to } => self.order_attack(player, regiment, to)?,
+            Command::Run { regiment, to } => self.order_run(player, regiment, to)?,
+            Command::Pursue { regiment, enemy } => self.order_pursue(player, regiment, enemy)?,
+            Command::Stop { regiment } => self.order_stop(player, regiment)?,
+            Command::Unpack { regiment, at } => {
+                self.order_unpack(player, regiment, at)?;
+            }
+            Command::Formation {
+                regiment,
+                formation,
+            } => self.set_formation(player, regiment, formation)?,
+            Command::Pack { building } => self.order_pack(player, building)?,
+            Command::Commission {
+                building,
+                commission,
+            } => self.commission(player, building, *commission)?,
+            Command::CancelCommission {
+                building,
+                commission,
+            } => self.cancel_commission(player, building, commission)?,
+            Command::Rally { building, at } => self.set_rally(player, building, at)?,
+        }
+        Ok(())
+    }
+
+    fn may_command(&self, player: u32, regiment: usize) -> Result<(), NotYours> {
+        match self.commands(player, regiment) {
+            true => Ok(()),
+            false => Err(NotYours),
+        }
+    }
+
+    /// The building, if `player`'s and standing.
+    fn standing_for(&self, player: u32, building: usize) -> Result<&Building, Refused> {
+        self.buildings
+            .get(building)
+            .filter(|b| b.owner == player && b.standing())
+            .ok_or(Refused::NotYours)
+    }
+
+    fn may_pursue(&self, player: u32, regiment: usize, enemy: usize) -> Result<(), Refused> {
+        self.may_command(player, regiment)?;
+        let armed = self.survivors(regiment).any(|u| {
+            self.units[u]
+                .fighter
+                .as_ref()
+                .is_some_and(|f| !f.weapons.is_empty())
+        });
+        if !armed
+            || enemy >= self.regiments.len()
+            || self.destroyed(enemy)
+            || !self.hostile(regiment, Enemy::Regiment(enemy))
+        {
+            return Err(Refused::Unable);
+        }
+        Ok(())
+    }
+
+    /// Where the regiment stops to unpack, relative to where it unpacks,
+    /// if it can there.
+    fn may_unpack(&self, player: u32, regiment: usize, at: [f32; 2]) -> Result<[f32; 2], Refused> {
+        self.may_command(player, regiment)?;
+        let Some(unpacks) = &self.regiments[regiment].unpacks else {
+            return Err(Refused::Unable);
+        };
+        if !self.room_to_unpack(unpacks, unpack_site(at)) {
+            return Err(Refused::NoRoom);
+        }
+        Ok(unpacks.offset)
+    }
+
+    /// How long the building takes to pack, if it can now.
+    fn may_pack(&self, player: u32, building: usize) -> Result<u64, Refused> {
+        let b = self.standing_for(player, building)?;
+        let Some(packs) = self.packing.get(&b.template) else {
+            return Err(Refused::Unable);
+        };
+        if b.busy() || b.health <= packs.health_min * b.fighter.health {
+            return Err(Refused::Unable);
+        }
+        Ok((packs.seconds / TICK).round() as u64)
+    }
+
+    fn may_commission(&self, player: u32, building: usize) -> Result<(), Refused> {
+        let b = self.standing_for(player, building)?;
+        if b.deploy.is_none() || b.busy() {
+            return Err(Refused::Unable);
+        }
+        Ok(())
+    }
+
+    fn may_rally(&self, player: u32, building: usize) -> Result<(), Refused> {
+        if self.standing_for(player, building)?.deploy.is_none() {
+            return Err(Refused::Unable);
+        }
+        Ok(())
+    }
+
+    /// Where the commission is in the building's queue, if it's there.
+    fn may_cancel(&self, player: u32, building: usize, commission: u32) -> Result<usize, Refused> {
+        let b = self
+            .buildings
+            .get(building)
+            .filter(|b| b.owner == player)
+            .ok_or(Refused::NotYours)?;
+        b.queue
+            .iter()
+            .position(|c| c.id == commission)
+            .ok_or(Refused::Unable)
+    }
+
+    fn order_move(
         &mut self,
         player: u32,
         regiment: usize,
@@ -701,10 +903,7 @@ impl World {
         self.advance(player, regiment, target, Order::Move)
     }
 
-    /// Sends a regiment to `target` as [`World::order_move`] does, but in
-    /// its combat formation and taking on every enemy that comes within
-    /// its control range on the way.
-    pub fn order_attack(
+    fn order_attack(
         &mut self,
         player: u32,
         regiment: usize,
@@ -713,27 +912,8 @@ impl World {
         self.advance(player, regiment, target, Order::Attack)
     }
 
-    /// Sends a regiment after the enemy regiment `enemy`, breaking off any
-    /// engagement, to engage it once near enough. Refused for a regiment
-    /// with nothing to fire, or what isn't an enemy's.
-    pub fn order_pursue(
-        &mut self,
-        player: u32,
-        regiment: usize,
-        enemy: usize,
-    ) -> Result<(), Refused> {
-        if !self.commands(player, regiment) {
-            return Err(Refused::NotYours);
-        }
-        let armed = self.survivors(regiment).any(|u| {
-            self.units[u]
-                .fighter
-                .as_ref()
-                .is_some_and(|f| !f.weapons.is_empty())
-        });
-        if !armed || self.destroyed(enemy) || !self.hostile(regiment, Enemy::Regiment(enemy)) {
-            return Err(Refused::Unable);
-        }
+    fn order_pursue(&mut self, player: u32, regiment: usize, enemy: usize) -> Result<(), Refused> {
+        self.may_pursue(player, regiment, enemy)?;
         let r = &mut self.regiments[regiment];
         r.order = Order::Pursue(enemy);
         r.unpack_at = None;
@@ -751,9 +931,7 @@ impl World {
         target: [f32; 2],
         order: Order,
     ) -> Result<(), NotYours> {
-        if !self.commands(player, regiment) {
-            return Err(NotYours);
-        }
+        self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
         r.order = order;
         r.unpack_at = None;
@@ -767,17 +945,13 @@ impl World {
         Ok(())
     }
 
-    /// Sends a regiment to `target` as [`World::order_move`] does, but
-    /// breaking off any engagement and engaging nothing on the way.
-    pub fn order_run(
+    fn order_run(
         &mut self,
         player: u32,
         regiment: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
-        if !self.commands(player, regiment) {
-            return Err(NotYours);
-        }
+        self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
         r.order = Order::Run;
         r.unpack_at = None;
@@ -790,13 +964,8 @@ impl World {
         Ok(())
     }
 
-    /// Halts a regiment, its members forming up around where they stand on
-    /// average, and drops where it was headed, so that once done with any
-    /// engagement it stays put.
-    pub fn order_stop(&mut self, player: u32, regiment: usize) -> Result<(), NotYours> {
-        if !self.commands(player, regiment) {
-            return Err(NotYours);
-        }
+    fn order_stop(&mut self, player: u32, regiment: usize) -> Result<(), NotYours> {
+        self.may_command(player, regiment)?;
         let here = self.centre(regiment);
         let r = &mut self.regiments[regiment];
         r.order = Order::Move;
@@ -810,26 +979,15 @@ impl World {
         Ok(())
     }
 
-    /// Sends a packed building to unpack at `at`, or the nearest whole
-    /// units to it, where buildings stand. Refused where it can't unpack
-    /// or the building wouldn't fit.
-    pub fn order_unpack(
+    fn order_unpack(
         &mut self,
         player: u32,
         regiment: usize,
         at: [f32; 2],
     ) -> Result<[f32; 2], Refused> {
-        if !self.commands(player, regiment) {
-            return Err(Refused::NotYours);
-        }
-        let at = at.map(f32::round);
-        let Some(unpacks) = &self.regiments[regiment].unpacks else {
-            return Err(Refused::Unable);
-        };
-        if !self.room_to_unpack(unpacks, at) {
-            return Err(Refused::NoRoom);
-        }
-        let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
+        let offset = self.may_unpack(player, regiment, at)?;
+        let at = unpack_site(at);
+        let stop = [at[0] + offset[0], at[1] + offset[1]];
         self.order_move(player, regiment, stop)?;
         self.regiments[regiment].unpack_at = Some(at);
         Ok(at)
@@ -854,21 +1012,8 @@ impl World {
         }
     }
 
-    /// Starts a building packing into what it packs into, such as a
-    /// truck, dropping whatever it was asked to commission. Refused while
-    /// it's unpacking or packing, or too hurt to pack.
-    pub fn order_pack(&mut self, player: u32, building: usize) -> Result<(), Refused> {
-        let b = &self.buildings[building];
-        if b.owner != player || !b.standing() {
-            return Err(Refused::NotYours);
-        }
-        let Some(packs) = self.packing.get(&b.template) else {
-            return Err(Refused::Unable);
-        };
-        if b.busy() || b.health <= packs.health_min * b.fighter.health {
-            return Err(Refused::Unable);
-        }
-        let ticks = (packs.seconds / TICK).round() as u64;
+    fn order_pack(&mut self, player: u32, building: usize) -> Result<(), Refused> {
+        let ticks = self.may_pack(player, building)?;
         let b = &mut self.buildings[building];
         b.queue.clear();
         b.progress = 0;
@@ -876,58 +1021,39 @@ impl World {
         Ok(())
     }
 
-    /// Asks a building to commission something once it's done with what
-    /// it was asked for before.
-    pub fn commission(
+    fn commission(
         &mut self,
         player: u32,
         building: usize,
-        commission: Commission,
+        mut commission: Commission,
     ) -> Result<(), Refused> {
-        let b = &mut self.buildings[building];
-        if b.owner != player || !b.standing() {
-            return Err(Refused::NotYours);
-        }
-        if b.deploy.is_none() || b.busy() {
-            return Err(Refused::Unable);
-        }
-        b.queue.push_back(commission);
+        self.may_commission(player, building)?;
+        commission.id = self.next_commission;
+        self.next_commission += 1;
+        self.buildings[building].queue.push_back(commission);
         Ok(())
     }
 
-    /// Sets where what a building commissions moves on to once it's out,
-    /// or, given `None`, has it stay where it comes out. Refused for a
-    /// building that doesn't commission.
-    pub fn set_rally(
+    fn set_rally(
         &mut self,
         player: u32,
         building: usize,
         at: Option<[f32; 2]>,
     ) -> Result<(), Refused> {
-        let b = &mut self.buildings[building];
-        if b.owner != player || !b.standing() {
-            return Err(Refused::NotYours);
-        }
-        if b.deploy.is_none() {
-            return Err(Refused::Unable);
-        }
-        b.rally = at;
+        self.may_rally(player, building)?;
+        self.buildings[building].rally = at;
         Ok(())
     }
 
-    /// Calls off the `index`th of what a building was asked to
-    /// commission, starting the next over if it was under way.
-    pub fn cancel_commission(
+    fn cancel_commission(
         &mut self,
         player: u32,
         building: usize,
-        index: usize,
+        commission: u32,
     ) -> Result<(), Refused> {
+        let index = self.may_cancel(player, building, commission)?;
         let b = &mut self.buildings[building];
-        if b.owner != player {
-            return Err(Refused::NotYours);
-        }
-        b.queue.remove(index).ok_or(Refused::Unable)?;
+        b.queue.remove(index);
         if index == 0 {
             b.progress = 0;
         }
@@ -941,17 +1067,13 @@ impl World {
         self.take_places(regiment);
     }
 
-    /// Switches a regiment to another of its formations, its members
-    /// taking their new places where it stands, or is headed.
-    pub fn set_formation(
+    fn set_formation(
         &mut self,
         player: u32,
         regiment: usize,
         formation: usize,
     ) -> Result<(), NotYours> {
-        if !self.commands(player, regiment) {
-            return Err(NotYours);
-        }
+        self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
         if formation < r.formations.len() && formation != r.formation {
             r.formation = formation;
@@ -2035,7 +2157,14 @@ mod tests {
     #[test]
     fn regiments_move_at_their_slowest_members_speed() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
-        w.order_move(7, 0, [10.0, 20.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 1.0);
         assert!(near(w.units[0].position, [9.0, 12.0]));
         assert!(near(w.units[1].position, [11.0, 12.0]));
@@ -2077,7 +2206,14 @@ mod tests {
     #[test]
     fn units_speed_up_to_their_top_speed_and_stop_at_once() {
         let mut w = vehicle(2.0, 0.0, None);
-        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 30.0],
+            },
+        )
+        .unwrap();
         // 0.2 a tick until it's at 2 a second after a second.
         run(&mut w, 1.0);
         assert!((w.units[0].speed - 2.0).abs() < 1e-4);
@@ -2094,7 +2230,14 @@ mod tests {
     #[test]
     fn units_that_turn_over_time_drive_round_corners() {
         let mut w = vehicle(0.0, 1.0, None);
-        w.order_move(7, 0, [20.0, 10.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [20.0, 10.0],
+            },
+        )
+        .unwrap();
         w.tick();
         // A tenth of a radian toward +x, having gone 0.2 that way.
         let u = &w.units[0];
@@ -2121,7 +2264,14 @@ mod tests {
         let t = w.units[0].trailer.as_ref().unwrap();
         assert!(near(t.position, [10.0, 7.0]), "{:?}", t.position);
         assert!(near(t.facing, [0.0, 1.0]));
-        w.order_move(7, 0, [20.0, 10.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [20.0, 10.0],
+            },
+        )
+        .unwrap();
         w.tick();
         // The truck turns to +x at once and goes 0.2: the hitch swings out
         // behind it to 8.2,10 and the trailer swings round after it.
@@ -2140,7 +2290,14 @@ mod tests {
     fn formations_turn_to_face_the_way_they_go() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         // Facing +x now, so the left-hand man ends up on the +y side.
-        w.order_move(7, 0, [30.0, 10.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [30.0, 10.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 20.0);
         assert!(
             near(w.units[0].position, [30.0, 11.0]),
@@ -2157,10 +2314,24 @@ mod tests {
         // The right-hand man's place at 11,20 is blocked.
         pathing.set_blocked(5, 10);
         let mut w = world(pathing);
-        w.order_move(7, 0, [10.0, 20.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 10.0);
         assert!(!near(w.units[1].position, [11.0, 20.0]));
-        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 30.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [9.0, 30.0]));
         assert!(near(w.units[1].position, [11.0, 30.0]));
@@ -2169,7 +2340,14 @@ mod tests {
     #[test]
     fn changing_formation_rearranges_them_where_they_stand() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
-        w.set_formation(7, 0, 1).unwrap();
+        w.apply(
+            7,
+            Command::Formation {
+                regiment: 0,
+                formation: 1,
+            },
+        )
+        .unwrap();
         run(&mut w, 5.0);
         assert!(near(w.units[0].position, [10.0, 11.0]));
         assert!(near(w.units[1].position, [10.0, 9.0]));
@@ -2183,7 +2361,14 @@ mod tests {
             pathing.set_blocked(x, 8);
         }
         let mut w = world(pathing.clone());
-        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 30.0],
+            },
+        )
+        .unwrap();
         for _ in 0..400 {
             w.tick();
             for u in &w.units {
@@ -2206,7 +2391,14 @@ mod tests {
         pathing.block(&rock);
         let mut w = world(pathing);
         w.scenery.push(rock);
-        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 30.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [9.0, 30.0]));
     }
@@ -2228,7 +2420,14 @@ mod tests {
         let mut w = world(pathing);
         w.scenery.push(wall);
         w.units[0].shape = Some(Shape::Circle { radius: 2.5 });
-        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 30.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [9.0, 30.0]));
         assert!(w.units[1].position[1] < 12.0);
@@ -2267,7 +2466,14 @@ mod tests {
         };
         let r = w.add_regiment(&second);
         assert_eq!((r, w.units[2].regiment), (1, 1));
-        w.order_move(7, r, [20.0, 20.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: r,
+                to: [20.0, 20.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 10.0);
         assert!(near(w.units[2].position, [20.0, 20.0]));
         assert!(near(w.units[0].position, [9.0, 10.0]));
@@ -2397,7 +2603,14 @@ mod tests {
                 at_war(),
             );
             // 2 units a second toward the enemy, in range all the way.
-            w.order_move(1, 0, [10.0, 14.0]).unwrap();
+            w.apply(
+                1,
+                Command::Move {
+                    regiment: 0,
+                    to: [10.0, 14.0],
+                },
+            )
+            .unwrap();
             run(&mut w, 1.5);
             assert!(w.units[0].moving());
             assert_eq!(w.units[1].health < 100.0, fires_on_the_move);
@@ -2433,7 +2646,14 @@ mod tests {
     #[test]
     fn moving_regiments_stop_to_fight_what_fires_on_them_then_carry_on() {
         let mut w = skirmish();
-        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         // In the enemy's range after 4s, at 18.
         run(&mut w, 4.5);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
@@ -2442,7 +2662,14 @@ mod tests {
         let stopped = w.units[0].position;
         assert!(stopped[1] < 20.0, "{stopped:?}");
         // Orders to move only take effect once it's done.
-        w.order_move(1, 0, [30.0, 20.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [30.0, 20.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 1.0);
         assert!(near(w.units[0].position, stopped));
         assert!(near(w.units[0].facing, [0.0, 1.0]));
@@ -2463,7 +2690,14 @@ mod tests {
         // Unarmed, so it doesn't fire on them first.
         w.units[1].fighter = Some(soldier(Vec::new()));
         w.units[0].fighter = Some(soldier(vec![rifle(2.0, 50.0)]));
-        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 9.5);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
         assert!(!w.units[0].moving());
@@ -2480,7 +2714,14 @@ mod tests {
         pillbox.fighter.weapons = vec![rifle(12.0, 10.0)];
         let mut w = siege(&[pillbox]);
         w.units[0].fighter = Some(soldier(vec![rifle(12.0, 50.0)]));
-        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         // In its range from 15.2, after 2.6s.
         run(&mut w, 3.0);
         assert_eq!(w.regiments[0].engaged, [Enemy::Building(0)]);
@@ -2497,7 +2738,14 @@ mod tests {
         let mut w = skirmish();
         // Unarmed, so it never fires on them to draw them in.
         w.units[1].fighter = Some(soldier(Vec::new()));
-        w.order_attack(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Attack {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         assert_eq!(w.regiments[0].current_formation(), 1);
         // Within its control range of 18 from 12, after 1s; its rifle
         // reaches from 18.
@@ -2532,7 +2780,14 @@ mod tests {
     fn attacking_regiments_leave_friends_alone() {
         let mut w = skirmish();
         w.regiments[1].owner = 1;
-        w.order_attack(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Attack {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 6.0);
         assert!(w.regiments[0].engaged.is_empty());
         assert!(w.units[1].alive());
@@ -2542,11 +2797,25 @@ mod tests {
     fn pursuing_regiments_engage_their_enemy_once_within_control_range() {
         let mut w = skirmish();
         w.units[1].fighter = Some(soldier(Vec::new()));
-        w.order_pursue(1, 0, 1).unwrap();
+        w.apply(
+            1,
+            Command::Pursue {
+                regiment: 0,
+                enemy: 1,
+            },
+        )
+        .unwrap();
         assert_eq!(w.regiments[0].order, Order::Pursue(1));
         assert_eq!(w.regiments[0].current_formation(), 1);
         // Away to 38 by 4s; within its control range of 18 after 5s.
-        w.order_move(2, 1, [10.0, 38.0]).unwrap();
+        w.apply(
+            2,
+            Command::Move {
+                regiment: 1,
+                to: [10.0, 38.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 4.5);
         assert!(w.regiments[0].engaged.is_empty());
         assert!(w.units[0].moving());
@@ -2571,7 +2840,14 @@ mod tests {
             flags: vec![Id::from("tank")],
             ..soldier(Vec::new())
         });
-        w.order_pursue(1, 0, 1).unwrap();
+        w.apply(
+            1,
+            Command::Pursue {
+                regiment: 0,
+                enemy: 1,
+            },
+        )
+        .unwrap();
         // Within 0.6 of its control range of 18, from 19.2, after 4.6s.
         run(&mut w, 4.0);
         assert!(w.regiments[0].engaged.is_empty());
@@ -2585,7 +2861,14 @@ mod tests {
         let mut w = skirmish();
         w.units[1].fighter = Some(soldier(Vec::new()));
         w.units[0].fighter = Some(soldier(vec![rifle(4.0, 50.0)]));
-        w.order_pursue(1, 0, 1).unwrap();
+        w.apply(
+            1,
+            Command::Pursue {
+                regiment: 0,
+                enemy: 1,
+            },
+        )
+        .unwrap();
         // Engaged from 19.2, after 4.6s, then closing in alone to 26.
         run(&mut w, 5.5);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
@@ -2610,7 +2893,14 @@ mod tests {
         );
         w.units[1].position = [20.0, 10.0];
         w.units[2].position = [10.0, 38.0];
-        w.order_pursue(1, 0, 2).unwrap();
+        w.apply(
+            1,
+            Command::Pursue {
+                regiment: 0,
+                enemy: 2,
+            },
+        )
+        .unwrap();
         run(&mut w, 1.0);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
         assert!(!w.units[0].moving());
@@ -2637,7 +2927,14 @@ mod tests {
         // Armed and nearer, but not the one pursued.
         w.units[1].position = [16.0, 10.0];
         w.units[2].position = [10.0, 20.0];
-        w.order_pursue(1, 0, 2).unwrap();
+        w.apply(
+            1,
+            Command::Pursue {
+                regiment: 0,
+                enemy: 2,
+            },
+        )
+        .unwrap();
         run(&mut w, 0.5);
         assert_eq!(w.units[0].target, Some(Target::Unit(2)));
         run(&mut w, 2.0);
@@ -2654,7 +2951,14 @@ mod tests {
         for x in 0..40 {
             w.pathing.set_blocked(x, 10);
         }
-        w.order_pursue(1, 0, 1).unwrap();
+        w.apply(
+            1,
+            Command::Pursue {
+                regiment: 0,
+                enemy: 1,
+            },
+        )
+        .unwrap();
         run(&mut w, 10.0);
         assert!(w.regiments[0].engaged.is_empty());
         assert_eq!(w.regiments[0].order, Order::Move);
@@ -2678,10 +2982,24 @@ mod tests {
         let mut w = skirmish();
         // Too slow to keep after it.
         w.regiments[1].speed = 0.5;
-        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 4.5);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
-        w.order_run(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Run {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         assert_eq!(w.regiments[0].order, Order::Run);
         for _ in 0..200 {
             w.tick();
@@ -2695,9 +3013,16 @@ mod tests {
     #[test]
     fn stopped_regiments_form_up_where_they_are() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
-        w.order_move(7, 0, [10.0, 20.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 1.0);
-        w.order_stop(7, 0).unwrap();
+        w.apply(7, Command::Stop { regiment: 0 }).unwrap();
         run(&mut w, 5.0);
         assert!(near(w.regiments[0].position, [10.0, 12.0]));
         assert!(near(w.units[0].position, [9.0, 12.0]));
@@ -2710,21 +3035,42 @@ mod tests {
     fn regiments_are_underway_until_they_arrive() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         assert!(!w.underway(0));
-        w.order_move(7, 0, [10.0, 20.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+        )
+        .unwrap();
         assert!(w.underway(0));
         assert!(near(w.destination(0), [10.0, 20.0]));
         run(&mut w, 30.0);
         assert!(!w.underway(0));
-        w.order_move(7, 0, [10.0, 5.0]).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 5.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 0.5);
-        w.order_stop(7, 0).unwrap();
+        w.apply(7, Command::Stop { regiment: 0 }).unwrap();
         assert!(!near(w.destination(0), [10.0, 5.0]));
     }
 
     #[test]
     fn fighting_on_the_way_keeps_the_destination() {
         let mut w = skirmish();
-        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 4.5);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
         assert!(w.underway(0));
@@ -2734,11 +3080,18 @@ mod tests {
     #[test]
     fn stopped_regiments_stay_put_after_fighting() {
         let mut w = skirmish();
-        w.order_move(1, 0, [10.0, 50.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 50.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 4.5);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
         let held = w.regiments[0].position;
-        w.order_stop(1, 0).unwrap();
+        w.apply(1, Command::Stop { regiment: 0 }).unwrap();
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
         w.destroy(1);
         run(&mut w, 10.0);
@@ -2900,12 +3253,26 @@ mod tests {
         let mut w = siege(&city());
         run(&mut w, 1.0);
         assert_eq!(w.buildings[0].owner, 2);
-        w.order_move(1, 0, [30.0, 10.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [30.0, 10.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 15.0);
         assert!(w.buildings.iter().all(|b| b.owner == 1));
         assert!(w.buildings[0].captured.is_some());
         // Leaving doesn't give it back.
-        w.order_move(1, 0, [10.0, 10.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 10.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 15.0);
         assert!(w.buildings.iter().all(|b| b.owner == 1));
     }
@@ -2923,7 +3290,14 @@ mod tests {
         w.add_buildings(&city());
         // Player 2's soldier inside the zone, out of the other's reach.
         w.units[1].position = [40.0, 15.0];
-        w.order_move(1, 0, [30.0, 10.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [30.0, 10.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 15.0);
         assert_eq!(w.buildings[0].owner, 2);
         w.units[1].died = Some(w.ticks);
@@ -3022,16 +3396,60 @@ mod tests {
             let house = building(20, 2, [30.0, 10.0]);
             w.pathing.block(house.obstacle.as_ref().unwrap());
             w.add_buildings(&[house]);
-            w.order_move(1, 0, [30.0, 30.0]).unwrap();
-            w.order_run(3, 2, [10.0, 50.0]).unwrap();
+            let to = [30.0, 30.0];
+            w.apply(1, Command::Move { regiment: 0, to }).unwrap();
+            let to = [10.0, 50.0];
+            w.apply(3, Command::Run { regiment: 2, to }).unwrap();
             run(&mut w, 15.0);
-            w.order_move(2, 3, [20.0, 20.0]).unwrap();
+            let to = [20.0, 20.0];
+            w.apply(2, Command::Move { regiment: 3, to }).unwrap();
             run(&mut w, 30.0);
             w
         };
         let (a, b) = (play(), play());
         assert!(a.units.iter().any(|u| u.died.is_some()));
         assert_eq!(snapshot(&a), snapshot(&b));
+    }
+
+    #[test]
+    fn commands_are_refused_as_checked_without_being_carried_out() {
+        let mut w = headquarters();
+        let truck = Commission::new(truck(), 1.0);
+        let refused = [
+            (
+                2,
+                Command::Rally {
+                    building: 0,
+                    at: None,
+                },
+                Refused::NotYours,
+            ),
+            (1, Command::Pack { building: 0 }, Refused::Unable),
+            (
+                1,
+                Command::CancelCommission {
+                    building: 0,
+                    commission: 0,
+                },
+                Refused::Unable,
+            ),
+            // What isn't there is refused, not a panic.
+            (1, Command::Stop { regiment: 9 }, Refused::NotYours),
+            (1, Command::Pack { building: 9 }, Refused::NotYours),
+        ];
+        for (player, command, why) in refused {
+            assert_eq!(w.check(player, &command), Err(why), "{command:?}");
+            assert_eq!(w.apply(player, command.clone()), Err(why), "{command:?}");
+        }
+        let command = Command::Commission {
+            building: 0,
+            commission: Box::new(truck),
+        };
+        assert_eq!(w.check(1, &command), Ok(()));
+        // Checking alone changes nothing.
+        assert!(w.buildings[0].queue.is_empty());
+        w.apply(1, command).unwrap();
+        assert_eq!(w.buildings[0].queue.len(), 1);
     }
 
     /// Player 1's HQ at 20,20, putting out what it commissions 6 to its
@@ -3094,8 +3512,22 @@ mod tests {
             w.commission(2, 0, Commission::new(truck(), 10.0)),
             Err(Refused::NotYours)
         );
-        w.commission(1, 0, Commission::new(truck(), 10.0)).unwrap();
-        w.commission(1, 0, Commission::new(truck(), 10.0)).unwrap();
+        w.apply(
+            1,
+            Command::Commission {
+                building: 0,
+                commission: Box::new(Commission::new(truck(), 10.0)),
+            },
+        )
+        .unwrap();
+        w.apply(
+            1,
+            Command::Commission {
+                building: 0,
+                commission: Box::new(Commission::new(truck(), 10.0)),
+            },
+        )
+        .unwrap();
         run(&mut w, 9.0);
         assert!(w.regiments.is_empty());
         run(&mut w, 1.0);
@@ -3109,7 +3541,13 @@ mod tests {
         assert!(near(w.units[0].position, [20.0, 20.0]));
         run(&mut w, 3.0);
         assert!(near(w.units[0].position, [26.0, 20.0]));
-        w.cancel_commission(1, 0, 0).unwrap();
+        // The first is out, so calling it off is refused; the second isn't.
+        let cancel = |commission| Command::CancelCommission {
+            building: 0,
+            commission,
+        };
+        assert_eq!(w.apply(1, cancel(0)), Err(Refused::Unable));
+        w.apply(1, cancel(1)).unwrap();
         run(&mut w, 10.0);
         assert_eq!(w.regiments.len(), 1);
     }
@@ -3125,10 +3563,24 @@ mod tests {
             w.pathing.block(b.obstacle.as_ref().unwrap());
         }
         w.add_buildings(&[depot, house]);
-        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        w.apply(
+            1,
+            Command::Commission {
+                building: 0,
+                commission: Box::new(Commission::new(truck(), 1.0)),
+            },
+        )
+        .unwrap();
         run(&mut w, 4.0);
         assert!(near(w.units[0].position, [26.0, 20.0]));
-        w.order_move(1, 0, [26.0, 4.0]).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [26.0, 4.0],
+            },
+        )
+        .unwrap();
         for _ in 0..300 {
             w.tick();
             assert!(w.buildings[2].distance(w.units[0].position) > 0.0);
@@ -3143,8 +3595,22 @@ mod tests {
             w.set_rally(2, 0, Some([26.0, 30.0])),
             Err(Refused::NotYours)
         );
-        w.set_rally(1, 0, Some([26.0, 30.0])).unwrap();
-        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        w.apply(
+            1,
+            Command::Rally {
+                building: 0,
+                at: Some([26.0, 30.0]),
+            },
+        )
+        .unwrap();
+        w.apply(
+            1,
+            Command::Commission {
+                building: 0,
+                commission: Box::new(Commission::new(truck(), 1.0)),
+            },
+        )
+        .unwrap();
         run(&mut w, 1.0);
         // Out to its deployment point first, then on to the rally point.
         assert_eq!(w.destination(0), [26.0, 20.0]);
@@ -3154,14 +3620,35 @@ mod tests {
         assert!(near(w.units[0].position, [26.0, 30.0]));
         assert!(w.regiments[0].rally.is_none());
         // An order on the way calls it off.
-        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        w.apply(
+            1,
+            Command::Commission {
+                building: 0,
+                commission: Box::new(Commission::new(truck(), 1.0)),
+            },
+        )
+        .unwrap();
         run(&mut w, 2.0);
-        w.order_stop(1, 1).unwrap();
+        w.apply(1, Command::Stop { regiment: 1 }).unwrap();
         run(&mut w, 8.0);
         assert!(w.units[1].position[1] < 25.0);
         // Without one, they stay where they come out.
-        w.set_rally(1, 0, None).unwrap();
-        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        w.apply(
+            1,
+            Command::Rally {
+                building: 0,
+                at: None,
+            },
+        )
+        .unwrap();
+        w.apply(
+            1,
+            Command::Commission {
+                building: 0,
+                commission: Box::new(Commission::new(truck(), 1.0)),
+            },
+        )
+        .unwrap();
         run(&mut w, 10.0);
         assert!(near(w.units[2].position, [26.0, 20.0]));
         let mut house = siege(&[building(9, 1, [10.0, 30.0])]);
@@ -3209,9 +3696,16 @@ mod tests {
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
         let r = w.add_regiment(&t);
-        w.order_unpack(1, r, [30.0, 40.0]).unwrap();
+        w.apply(
+            1,
+            Command::Unpack {
+                regiment: r,
+                at: [30.0, 40.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 1.0);
-        w.order_stop(1, r).unwrap();
+        w.apply(1, Command::Stop { regiment: r }).unwrap();
         run(&mut w, 5.0);
         assert!(w.units[0].alive());
         assert_eq!(w.buildings.len(), 1);
@@ -3234,7 +3728,14 @@ mod tests {
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
         let r = w.add_regiment(&t);
-        w.order_unpack(1, r, [30.0, 40.0]).unwrap();
+        w.apply(
+            1,
+            Command::Unpack {
+                regiment: r,
+                at: [30.0, 40.0],
+            },
+        )
+        .unwrap();
         run(&mut w, 4.0);
         let depot = w.regiments[r].unpacked_into.unwrap();
         // Not while it's unpacking, nor someone else's, nor what packs to
@@ -3247,7 +3748,7 @@ mod tests {
         w.buildings[depot].health = full * 0.5;
         assert_eq!(w.order_pack(1, depot), Err(Refused::Unable));
         w.buildings[depot].health = full * 0.8;
-        w.order_pack(1, depot).unwrap();
+        w.apply(1, Command::Pack { building: depot }).unwrap();
         run(&mut w, 6.9);
         assert!(w.buildings[depot].standing());
         assert!(!w.pathing.passable(15, 20, Domain::Land));
@@ -3263,6 +3764,13 @@ mod tests {
         assert!(near(w.units[u].facing, [1.0, 0.0]));
         assert!((w.units[u].health - 80.0).abs() < 1e-3);
         // And the truck can go and unpack again.
-        w.order_unpack(1, packed, [30.0, 60.0]).unwrap();
+        w.apply(
+            1,
+            Command::Unpack {
+                regiment: packed,
+                at: [30.0, 60.0],
+            },
+        )
+        .unwrap();
     }
 }

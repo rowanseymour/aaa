@@ -19,7 +19,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
-use crate::{Loaded, Local, Raising, Screen, Selected, SelectedBuilding, Sim};
+use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
 const ROWS: usize = 3;
@@ -615,7 +615,8 @@ fn press(
     chosen: Res<SelectedBuilding>,
     looks: Res<Looks>,
     local: Res<Local>,
-    mut sim: ResMut<Sim>,
+    sim: Res<Sim>,
+    mut orders: ResMut<Orders>,
     mut page: ResMut<Page>,
     time: Res<Time>,
     mut sounds: ResMut<crate::sound::Sounds>,
@@ -631,8 +632,8 @@ fn press(
             Some(Give::Aim(aim)) => *page = Page::Aiming(aim),
             Some(Give::Stop) => {
                 crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-                for &r in &selected.0 {
-                    let _ = sim.0.order_stop(player, r);
+                for &regiment in &selected.0 {
+                    let _ = orders.give(&sim.0, player, aaa_sim::Command::Stop { regiment });
                 }
                 *page = Page::Orders;
             }
@@ -643,7 +644,7 @@ fn press(
         Entry::Rally => *page = Page::Rally,
         Entry::Pack => {
             if let Some(b) = chosen.0
-                && let Err(e) = sim.0.order_pack(player, b)
+                && let Err(e) = orders.give(&sim.0, player, aaa_sim::Command::Pack { building: b })
             {
                 info!("can't pack {}: {e:?}", sim.0.buildings[b].template);
             }
@@ -654,8 +655,11 @@ fn press(
             };
             let recruit = &looks.menu(&sim.0, Some(b))[i];
             if let Some(regiment) = &recruit.regiment {
-                let commission = Commission::new(regiment.clone(), recruit.seconds);
-                if let Err(e) = sim.0.commission(player, b, commission) {
+                let command = aaa_sim::Command::Commission {
+                    building: b,
+                    commission: Box::new(Commission::new(regiment.clone(), recruit.seconds)),
+                };
+                if let Err(e) = orders.give(&sim.0, player, command) {
                     info!("can't commission {}: {e:?}", regiment.template);
                 }
             }
@@ -687,7 +691,8 @@ pub fn aim(
     chosen: Res<SelectedBuilding>,
     focus: Res<crate::Focus>,
     looks: Res<crate::waypoints::Looks>,
-    mut sim: ResMut<Sim>,
+    sim: Res<Sim>,
+    mut orders: ResMut<Orders>,
     mut page: ResMut<Page>,
     time: Res<Time>,
     mut sounds: ResMut<crate::sound::Sounds>,
@@ -711,7 +716,14 @@ pub fn aim(
     };
     let Page::Aiming(aim) = *page else {
         if let Some(b) = chosen.0
-            && let Err(e) = sim.0.set_rally(player, b, Some(point))
+            && let Err(e) = orders.give(
+                &sim.0,
+                player,
+                aaa_sim::Command::Rally {
+                    building: b,
+                    at: Some(point),
+                },
+            )
         {
             info!("can't rally {}: {e:?}", sim.0.buildings[b].template);
         }
@@ -720,7 +732,7 @@ pub fn aim(
     };
     if let Some(e) = crate::enemy_at(&sim.0, player, *focus).filter(|_| aim == Aim::Attack) {
         crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-        let (regiments, _) = crate::pursue(&mut sim.0, player, &selected.0, e);
+        let (regiments, _) = crate::pursue(&sim.0, &mut orders, player, &selected.0, e);
         sent.write(crate::waypoints::Sent {
             to: None,
             aim,
@@ -734,16 +746,22 @@ pub fn aim(
             let &[r] = &selected.0[..] else {
                 return;
             };
-            let Ok(at) = sim.0.order_unpack(player, r, point) else {
-                return;
+            let unpack = aaa_sim::Command::Unpack {
+                regiment: r,
+                at: point,
             };
+            if orders.give(&sim.0, player, unpack).is_err() {
+                return;
+            }
+            let at = aaa_sim::unpack_site(point);
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             vec![(r, at)]
         }
         Aim::Move | Aim::Attack | Aim::Run => {
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             crate::send(
-                &mut sim.0,
+                &sim.0,
+                &mut orders,
                 player,
                 &selected.0,
                 point,
