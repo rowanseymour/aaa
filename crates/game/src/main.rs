@@ -857,12 +857,12 @@ fn setup(
     let members = map.regiments.iter().flat_map(|r| &r.members);
     let trailers = members.filter_map(|m| Some(m.trailer.as_ref()?.placed?.0));
     let building_ids: HashSet<u32> = map.buildings.iter().map(|b| b.id).collect();
-    // A building can stand in an organization, as an unpacked Division HQ
-    // does, whose own model is the truck it packs into.
-    let holding_buildings = map.things.iter().filter(|t| {
-        t.organization()
-            .is_some_and(|o| o.members.iter().any(|m| building_ids.contains(&m.id)))
-    });
+    // An unpacked Division HQ's building is drawn below, and what else the
+    // HQ holds would be left standing when it packs.
+    let holding_buildings = map
+        .things
+        .iter()
+        .filter(|t| aaa_render::models::holds_building(t, &building_ids));
     let leave_out: HashSet<u32> = ids
         .chain(trailers)
         .chain(building_ids.iter().copied())
