@@ -602,7 +602,8 @@ mod tests {
             ..aaa_data::Body::default()
         };
         let bodies = HashMap::from([(Id::from("bunker"), bunker)]);
-        // Turned 45°, each spans tiles 3 to 6 each way from its tile 5.
+        // Turned 45°, each spans two tiles below its centre tile and one
+        // above, on x and y.
         let at = |id, [x, y]: [f32; 2]| {
             let mut t = placed(id, "bunker", 0, None, None);
             t.position = [x, y, 0.0];
