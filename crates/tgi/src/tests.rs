@@ -349,3 +349,70 @@ fn nested_block_naming_another_template() {
     assert_eq!(definition.blocks_of("Effect").count(), 1);
     assert_eq!(definition.attr("template"), None);
 }
+
+#[test]
+fn template_cycle_through_nested_block() {
+    let files = ok("
+[Template A Template=B]
+{
+[View Template=X]
+}
+[Template B]
+{
+[View Template=A]
+}
+[Template X]
+{
+}
+[Thing Template=A]
+[Template T]
+{
+[X Template=T]
+{
+[X Template=U]
+}
+}
+");
+    let templates = Templates::new([&files]);
+    let thing = templates.resolve(files.blocks_of("Thing").next().unwrap());
+    assert_eq!(thing.blocks_of("View").count(), 1);
+    let t = templates.get("T").unwrap();
+    let nested = t.blocks_of("X").next().unwrap();
+    assert_eq!(templates.resolve(nested).blocks_of("X").count(), 1);
+}
+
+#[test]
+fn slot_declarations_are_kept_apart() {
+    let schema = ok("
+[template Base]
+{
+    [list Property]
+    [optional OnDeath]
+}
+[template Child template=Base]
+{
+    [list Upgrade]
+    [optional OnBirth]
+    [list Property]
+    {
+        x = 1
+    }
+}
+");
+    let templates = Templates::new([&schema]);
+    let child = templates.resolve(templates.get("Child").unwrap());
+    let slots: Vec<_> = child
+        .blocks()
+        .map(|b| format!("{} {}", b.kind().unwrap(), b.name().unwrap()))
+        .collect();
+    assert_eq!(
+        slots,
+        [
+            "list Property",
+            "optional OnDeath",
+            "list Upgrade",
+            "optional OnBirth"
+        ]
+    );
+    assert_eq!(child.blocks().next().unwrap().value("x"), Some("1"));
+}

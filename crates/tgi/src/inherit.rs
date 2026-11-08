@@ -66,6 +66,12 @@ impl<'a> Templates<'a> {
     /// The block with everything it inherits merged in. The chain stops at a
     /// missing template or one already visited.
     pub fn resolve(&self, block: &Block) -> Block {
+        self.resolve_in(block, &mut Vec::new())
+    }
+
+    /// `active` holds the template pairs being merged by re-templated nested
+    /// blocks (see [`Templates::merge`]), outermost first.
+    fn resolve_in(&self, block: &Block, active: &mut Vec<(String, String)>) -> Block {
         let mut chain = vec![block];
         while let Some(p) = self.parent(chain[chain.len() - 1]) {
             if chain.iter().any(|&b| std::ptr::eq(b, p)) {
@@ -80,7 +86,7 @@ impl<'a> Templates<'a> {
             line: block.line,
         };
         for b in chain.iter().rev() {
-            self.merge(&mut out.items, &b.items, false);
+            self.merge(&mut out.items, &b.items, false, active);
         }
         out
     }
@@ -88,7 +94,20 @@ impl<'a> Templates<'a> {
     /// Merges `items` over `into`. With `shared`, list blocks already in
     /// `into` aren't added again, as both sides may have them from a
     /// template they have in common.
-    fn merge(&self, into: &mut Vec<Item>, items: &[Item], shared: bool) {
+    ///
+    /// A nested block that names another template than the one it merges
+    /// into has both resolved first, and resolving them can come back to the
+    /// same pair of templates (`[Template A Template=B]` holding
+    /// `[View Template=X]` where B holds `[View Template=A]`). A pair already
+    /// being merged is merged as plain blocks instead, which ends the cycle;
+    /// a template met again under a different pair is fine and common.
+    fn merge(
+        &self,
+        into: &mut Vec<Item>,
+        items: &[Item],
+        shared: bool,
+        active: &mut Vec<(String, String)>,
+    ) {
         // Only inherited items are overridden, so a block may repeat a key.
         let inherited = into.len();
         for item in items {
@@ -100,9 +119,14 @@ impl<'a> Templates<'a> {
                 continue;
             }
             match (existing.map(|i| &mut into[i]), item) {
-                (Some(Item::Block(e)), Item::Block(b)) if self.retemplates(e, b) => {
-                    let mut merged = self.resolve(e);
-                    self.merge(&mut merged.items, &self.resolve(b).items, true);
+                (Some(Item::Block(e)), Item::Block(b))
+                    if self.retemplates(e, b) && !active.contains(&pair(e, b)) =>
+                {
+                    active.push(pair(e, b));
+                    let mut merged = self.resolve_in(e, active);
+                    let child = self.resolve_in(b, active);
+                    self.merge(&mut merged.items, &child.items, true, active);
+                    active.pop();
                     merged.header = b.header.clone();
                     merged.header.attrs.retain(|(k, _)| !is_template_attr(k));
                     merged.braced = b.braced;
@@ -120,7 +144,7 @@ impl<'a> Templates<'a> {
                     }
                     e.braced = b.braced;
                     e.line = b.line;
-                    self.merge(&mut e.items, &b.items, shared);
+                    self.merge(&mut e.items, &b.items, shared, active);
                 }
                 (Some(e), _) => *e = item.clone(),
                 (None, _) => into.push(item.clone()),
@@ -144,7 +168,9 @@ impl<'a> Templates<'a> {
             (Item::Field(f), Item::Field(e)) => f.key.eq_ignore_ascii_case(&e.key),
             (Item::Block(b), Item::Block(e)) => {
                 let kind = b.kind().unwrap_or("").to_ascii_lowercase();
-                !self.lists.contains(&kind) && e.kind().unwrap_or("").eq_ignore_ascii_case(&kind)
+                !self.lists.contains(&kind)
+                    && slot(b).eq_ignore_ascii_case(slot(e))
+                    && e.kind().unwrap_or("").eq_ignore_ascii_case(&kind)
             }
             _ => false,
         }
@@ -153,6 +179,23 @@ impl<'a> Templates<'a> {
 
 fn template(block: &Block) -> Option<&str> {
     block.attr("Template").or_else(|| block.attr("Inherit"))
+}
+
+/// What a schema's slot declaration (`[list Property]`, `[optional OnDeath]`)
+/// declares; every one has the same kind, so the kind alone can't pair them.
+fn slot(block: &Block) -> &str {
+    match block.kind() {
+        Some(k) if k.eq_ignore_ascii_case("list") || k.eq_ignore_ascii_case("optional") => {
+            block.name().unwrap_or("")
+        }
+        _ => "",
+    }
+}
+
+/// The templates an inherited block and the child block over it name.
+fn pair(inherited: &Block, child: &Block) -> (String, String) {
+    let name = |b| template(b).unwrap_or("").to_ascii_lowercase();
+    (name(inherited), name(child))
 }
 
 fn is_template_attr(key: &str) -> bool {
