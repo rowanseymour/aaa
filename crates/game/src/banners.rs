@@ -108,8 +108,9 @@ pub fn add_banners(
             .player(regiment.owner)
             .map_or([1.0; 3], |p| p.rgb);
         let icon = banners.icon(&mut loaded.game, &mut images, &regiment.template);
-        // Packed buildings such as supply trucks fly none of their own.
-        if icon.is_none() && regiment.unpacks.is_some() {
+        // Only organization templates name a banner icon, so a unit outside
+        // one, such as a supply truck, flies no banner.
+        if icon.is_none() {
             continue;
         }
         let badge = divisions
@@ -137,9 +138,7 @@ pub fn add_banners(
         root.add_child(engaged);
         root.with_children(|banner| {
             banner.spawn(layer(&banners.plate, Color::srgb(red, green, blue)));
-            if icon.is_some() {
-                banner.spawn(layer(&icon, Color::WHITE));
-            }
+            banner.spawn(layer(&icon, Color::WHITE));
             banner.spawn(layer(&banners.frame, Color::WHITE));
             // Over the frame's lower edge.
             if badge.is_some() {
