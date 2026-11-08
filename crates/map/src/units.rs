@@ -292,7 +292,9 @@ pub struct Formation {
     pub aggressive: bool,
 }
 
-/// The owned organizations whose members can all move.
+/// The owned organizations whose members can all move, and the owned units
+/// that move on their own, such as trucks and ships, each a regiment of its
+/// own.
 pub fn regiments(
     things: &[Thing],
     bodies: &HashMap<Id, Body>,
@@ -301,30 +303,41 @@ pub fn regiments(
     ranges: &HashMap<Id, Ranges>,
 ) -> Vec<Regiment> {
     let by_id: HashMap<u32, &Thing> = things.iter().map(|t| (t.id, t)).collect();
+    // Trailers move but go with what tows them.
+    let towed: HashSet<u32> = things
+        .iter()
+        .flat_map(|t| t.organization().map_or(&[][..], |o| &o.members[..]))
+        .chain(things)
+        .filter_map(Thing::towed)
+        .collect();
+    let placed = |m: &Thing| {
+        let mut member = member(m.clone(), bodies, fighters)?;
+        let towed = m.towed().and_then(|id| by_id.get(&id));
+        if let (Some(trailer), Some(towed)) = (&mut member.trailer, towed) {
+            let [x, y, _] = towed.position;
+            trailer.placed = Some((towed.id, [x, y], facing(towed)));
+        }
+        Some(member)
+    };
+    let ranges = |template: &str| ranges.get(&Id::from(template)).copied().unwrap_or_default();
     things
         .iter()
         .filter_map(|t| {
             let owner = owner(t)?;
-            let organization = t.organization()?;
+            let Some(organization) = t.organization() else {
+                if towed.contains(&t.id) {
+                    return None;
+                }
+                return Some(lone(placed(t)?, owner, facing(t), ranges(&t.template)));
+            };
             let members = organization
                 .members
                 .iter()
-                .map(|m| {
-                    let mut member = member(m.clone(), bodies, fighters)?;
-                    let towed = m.towed().and_then(|id| by_id.get(&id));
-                    if let (Some(trailer), Some(towed)) = (&mut member.trailer, towed) {
-                        let [x, y, _] = towed.position;
-                        trailer.placed = Some((towed.id, [x, y], facing(towed)));
-                    }
-                    Some(member)
-                })
+                .map(placed)
                 .collect::<Option<Vec<_>>>()?;
             let facing = facing(t);
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
-            let ranges = ranges
-                .get(&Id::from(t.template.as_str()))
-                .copied()
-                .unwrap_or_default();
+            let ranges = ranges(&t.template);
             regiment(
                 t.id,
                 &t.template,
@@ -691,23 +704,32 @@ impl Recruits {
         let member = member(thing, &self.bodies, &self.fighters)
             .ok_or_else(|| format!("{template} isn't a regiment or a unit that can move"))?;
         Ok(Regiment {
-            id,
-            template: template.to_string(),
-            owner,
-            facing,
-            members: vec![member],
-            formations: vec![Formation {
-                id: String::new(),
-                aggressive: false,
-                offsets: vec![[0.0, 0.0]],
-            }],
-            formation: 0,
-            combat: None,
-            operational_range: self.ranges(template).operational,
-            control_range: self.ranges(template).control,
-            primary: Some(0),
             unpacks: self.unpacks(template),
+            ..lone(member, owner, facing, self.ranges(template))
         })
+    }
+}
+
+/// A unit that's no organization's member as a regiment of its own, which
+/// shares its id and template.
+fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regiment {
+    Regiment {
+        id: member.thing.id,
+        template: member.thing.template.clone(),
+        owner,
+        facing,
+        members: vec![member],
+        formations: vec![Formation {
+            id: String::new(),
+            aggressive: false,
+            offsets: vec![[0.0, 0.0]],
+        }],
+        formation: 0,
+        combat: None,
+        operational_range: ranges.operational,
+        control_range: ranges.control,
+        primary: Some(0),
+        unpacks: None,
     }
 }
 
