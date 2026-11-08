@@ -495,6 +495,8 @@ pub fn show(
     mut slots: Query<SlotParts, Without<SlotIcon>>,
     mut icons: Query<&mut ImageNode, With<SlotIcon>>,
     mut caption: Single<&mut Text, With<Caption>>,
+    local: Res<Local>,
+    focus: Res<crate::Focus>,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
     let nothing = selected.0.is_empty() && building.is_none();
@@ -594,6 +596,13 @@ pub fn show(
     let text = match (hovered, *page) {
         (Some(name), _) => name,
         (None, Page::Aiming(Aim::Unpack)) => "Left click where to unpack".into(),
+        (None, Page::Aiming(Aim::Attack))
+            if local
+                .0
+                .is_some_and(|p| attack_at(&sim.0, p, *focus) == Struck::Friend) =>
+        {
+            "Can't attack a friend".into()
+        }
         (None, Page::Aiming(Aim::Attack)) => "Left click an enemy or where to attack".into(),
         (None, Page::Aiming(_)) => "Left click where to go".into(),
         (None, Page::Rally) => "Left click where new regiments go".into(),
@@ -675,10 +684,41 @@ fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
     !b.busy() && b.health > floor * b.fighter.health
 }
 
+/// What an attack aimed at `focus` would strike.
+#[derive(Debug, PartialEq, Eq)]
+enum Struck {
+    /// The enemy regiment, to go after.
+    Enemy(usize),
+    /// A regiment or building that's no enemy's, so nothing to attack.
+    Friend,
+    /// The ground, or an enemy building on it, to attack-move to.
+    Ground,
+}
+
+fn attack_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Struck {
+    let owner = match focus {
+        crate::Focus::Nothing => None,
+        crate::Focus::Regiment(r) => Some(sim.regiments[r].owner),
+        crate::Focus::Building(b) => Some(sim.buildings[b].owner),
+    };
+    struck(focus, owner.map(|o| sim.sides.relation(player, o)))
+}
+
+/// What an attack strikes at `focus`, toward whose owner `player` stands
+/// as `toward`.
+fn struck(focus: crate::Focus, toward: Option<aaa_sim::Relation>) -> Struck {
+    match (focus, toward) {
+        (crate::Focus::Nothing, _) => Struck::Ground,
+        (crate::Focus::Regiment(e), Some(aaa_sim::Relation::Enemy)) => Struck::Enemy(e),
+        (crate::Focus::Building(_), Some(aaa_sim::Relation::Enemy)) => Struck::Ground,
+        _ => Struck::Friend,
+    }
+}
+
 /// While an order is aimed, a left click on the map gives it there and a
 /// right click calls it off. Attacking an enemy regiment sends the
-/// selected after it instead. Unpacking somewhere the building wouldn't
-/// fit waits for another click. A rally point is set for the selected
+/// selected after it instead. Attacking a friend, or unpacking somewhere
+/// the building wouldn't fit, waits for another click. A rally point is set for the selected
 /// building.
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
@@ -730,16 +770,40 @@ pub fn aim(
         *page = Page::Orders;
         return;
     };
-    if let Some(e) = crate::enemy_at(&sim.0, player, *focus).filter(|_| aim == Aim::Attack) {
-        crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-        let (regiments, _) = crate::pursue(&sim.0, &mut orders, player, &selected.0, e);
-        sent.write(crate::waypoints::Sent {
-            to: None,
-            aim,
-            regiments,
-        });
-        *page = Page::Orders;
-        return;
+    if aim == Aim::Attack {
+        match attack_at(&sim.0, player, *focus) {
+            Struck::Friend => return,
+            Struck::Ground => {}
+            Struck::Enemy(e) => {
+                let (pursuing, rest) = crate::pursue(&sim.0, &mut orders, player, &selected.0, e);
+                // Those with nothing to fire go there as they would anywhere.
+                let regiments = crate::send(
+                    &sim.0,
+                    &mut orders,
+                    player,
+                    &rest,
+                    point,
+                    (aim, looks.together(aim)),
+                    loaded.map.ground.size(),
+                );
+                if pursuing.is_empty() && regiments.is_empty() {
+                    return;
+                }
+                crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+                sent.write(crate::waypoints::Sent {
+                    to: None,
+                    aim,
+                    regiments: pursuing,
+                });
+                sent.write(crate::waypoints::Sent {
+                    to: Some(point),
+                    aim,
+                    regiments,
+                });
+                *page = Page::Orders;
+                return;
+            }
+        }
     }
     let regiments = match aim {
         Aim::Unpack => {
@@ -793,6 +857,19 @@ mod tests {
         Some(11),
         Some(9),
     ];
+
+    #[test]
+    fn attacks_strike_only_enemies() {
+        use crate::Focus::{Building, Nothing, Regiment};
+        use aaa_sim::Relation::{Ally, Enemy, Itself, Neutral};
+        assert_eq!(struck(Regiment(3), Some(Enemy)), Struck::Enemy(3));
+        for friend in [Itself, Ally, Neutral] {
+            assert_eq!(struck(Regiment(3), Some(friend)), Struck::Friend);
+            assert_eq!(struck(Building(3), Some(friend)), Struck::Friend);
+        }
+        assert_eq!(struck(Building(3), Some(Enemy)), Struck::Ground);
+        assert_eq!(struck(Nothing, None), Struck::Ground);
+    }
 
     #[test]
     fn orders_take_their_slots() {
