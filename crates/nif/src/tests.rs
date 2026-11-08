@@ -723,6 +723,10 @@ fn steps_over_controllers() {
     assert!(
         matches!(&nif.objects[10], Object::SourceTexture(t) if t.file.as_deref() == Some("frame.dds"))
     );
+    // Kept so chains through them can be followed.
+    assert!(
+        matches!(&nif.objects[8], Object::Controller(c) if c.kind == ControllerKind::Unread && c.target == Some(9))
+    );
 }
 
 #[test]

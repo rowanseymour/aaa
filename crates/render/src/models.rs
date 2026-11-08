@@ -10,11 +10,14 @@ use aaa_map::{Ground, Player, owner};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
+use bevy::math::Affine2;
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
-use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object, TextureChange};
+use nif::{
+    Controller, ControllerKind, Keyframes, Keys, Nif, Object, TextureChange, TexturePlacement,
+};
 use tgck::map::Thing;
 
 use crate::MapObject;
@@ -77,7 +80,7 @@ pub fn repaint(mesh: &mut EntityCommands, material: Handle<StandardMaterial>) {
 pub(crate) struct Part {
     pub mesh: Handle<Mesh>,
     pub material: PartMaterial,
-    animation: Option<Arc<Animation>>,
+    pub animation: Option<Arc<Animation>>,
     /// Bevy's shadows ignore alpha blending, so a faded or see-through mesh
     /// would cast a solid one.
     pub blended: bool,
@@ -148,36 +151,92 @@ pub struct Animation {
     /// Fades the material's alpha; each instance gets its own material.
     fade: Option<(Controller, Keys<f32>)>,
     /// Moves, turns or stretches the material's texture, as fades do.
-    texture: Vec<(Controller, TextureChange, Keys<f32>)>,
+    texture: Option<TextureMotion>,
+}
+
+/// Changes to where a texture lies, from where its slot puts it.
+struct TextureMotion {
+    rest: TexturePlacement,
+    changes: Vec<(Controller, TextureChange, Keys<f32>)>,
+}
+
+impl TextureMotion {
+    /// Where the texture lies at `t`.
+    fn at(&self, t: f32) -> TexturePlacement {
+        let mut p = self.rest;
+        for (c, change, keys) in &self.changes {
+            let Some(v) = keys.sample(c.key_time(t)) else {
+                continue;
+            };
+            match change {
+                TextureChange::OffsetU => p.offset[0] = v,
+                TextureChange::OffsetV => p.offset[1] = v,
+                TextureChange::Turn => p.turn = v,
+                TextureChange::ScaleU => p.scale[0] = v,
+                TextureChange::ScaleV => p.scale[1] = v,
+            }
+        }
+        p
+    }
+}
+
+/// Where a texture lies when its slot doesn't say: unmoved, about the
+/// centre every slot in the game's models that does say turns about.
+const UNPLACED: TexturePlacement = TexturePlacement {
+    offset: [0.0, 0.0],
+    scale: [1.0, 1.0],
+    turn: 0.0,
+    order: 0,
+    centre: [0.5, 0.5],
+};
+
+/// The UV transform that lays a texture as `p` places it: stretched and
+/// turned about its centre, then moved.
+fn uv_transform(p: &TexturePlacement) -> Affine2 {
+    let centre = Vec2::from(p.centre);
+    Affine2::from_translation(centre + Vec2::from(p.offset))
+        * Affine2::from_angle(p.turn)
+        * Affine2::from_scale(Vec2::from(p.scale))
+        * Affine2::from_translation(-centre)
+}
+
+/// What a mesh's material and texture controllers do to it, for meshes
+/// that don't move.
+fn painting(nif: &Nif, props: &[nif::Ref]) -> Option<Animation> {
+    let fade = nif
+        .property::<nif::Material>(props)
+        .and_then(|m| controller(nif, m.controller, ControllerKind::Alpha))
+        .and_then(|c| Some((c.clone(), nif.get_as::<Keys<f32>>(c.data)?.clone())));
+    let texturing = nif.property::<nif::Texturing>(props);
+    let changes: Vec<_> = texturing
+        .into_iter()
+        .flat_map(|t| controllers(nif, t.controller))
+        .filter_map(|c| match c.kind {
+            // Only the base texture is drawn.
+            ControllerKind::Texture { slot: 0, change } => {
+                Some((c.clone(), change, nif.get_as::<Keys<f32>>(c.data)?.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let texture = (!changes.is_empty()).then(|| TextureMotion {
+        rest: texturing
+            .and_then(|t| t.base.as_ref()?.placement)
+            .unwrap_or(UNPLACED),
+        changes,
+    });
+    (fade.is_some() || texture.is_some()).then_some(Animation {
+        motion: None,
+        above: nif::Transform::IDENTITY,
+        fade,
+        texture,
+    })
 }
 
 impl Animation {
     /// Whether instances need their own material to animate.
     fn paints(&self) -> bool {
-        self.fade.is_some() || !self.texture.is_empty()
-    }
-
-    /// Where the texture lies at `t`, if it moves.
-    fn uv_transform(&self, t: f32) -> Option<bevy::math::Affine2> {
-        if self.texture.is_empty() {
-            return None;
-        }
-        let (mut offset, mut turn, mut scale) = (Vec2::ZERO, 0.0, Vec2::ONE);
-        for (c, change, keys) in &self.texture {
-            let Some(v) = keys.sample(c.key_time(t)) else {
-                continue;
-            };
-            match change {
-                TextureChange::OffsetU => offset.x = v,
-                TextureChange::OffsetV => offset.y = v,
-                TextureChange::Turn => turn = v,
-                TextureChange::ScaleU => scale.x = v,
-                TextureChange::ScaleV => scale.y = v,
-            }
-        }
-        Some(bevy::math::Affine2::from_scale_angle_translation(
-            scale, turn, offset,
-        ))
+        self.fade.is_some() || self.texture.is_some()
     }
 
     fn transform(&self, t: f32) -> Transform {
@@ -199,6 +258,16 @@ pub struct Animated {
     material: PartMaterial,
 }
 
+impl Animated {
+    pub(crate) fn new(animation: Arc<Animation>, offset: f32, material: PartMaterial) -> Self {
+        Animated {
+            animation,
+            offset,
+            material,
+        }
+    }
+}
+
 pub fn animate(
     time: Res<Time>,
     mut parts: Query<(&Animated, &mut Transform)>,
@@ -216,7 +285,7 @@ pub fn animate(
             .fade
             .as_ref()
             .and_then(|(c, keys)| keys.sample(c.key_time(t)));
-        let uv = a.animation.uv_transform(t);
+        let uv = a.animation.texture.as_ref().map(|m| uv_transform(&m.at(t)));
         if alpha.is_some() || uv.is_some() {
             let base = match &a.material {
                 PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
@@ -610,14 +679,17 @@ impl Models {
         let parts = match meshes {
             Meshes::Parts(parts) => parts,
             Meshes::Rig(rig) => {
-                let materials = rig.parts().map(|p| self.paint(assets, p, colour)).collect();
+                let materials = rig
+                    .parts()
+                    .map(|p| self.own_paint(assets, p, colour))
+                    .collect();
                 rig.spawn(commands, root, offset, materials);
                 return;
             }
         };
         let materials: Vec<_> = parts
             .iter()
-            .map(|p| self.paint(assets, p, colour))
+            .map(|p| self.own_paint(assets, p, colour))
             .collect();
         commands.entity(root).with_children(|parent| {
             for (part, material) in parts.into_iter().zip(materials) {
@@ -625,25 +697,30 @@ impl Models {
                 if part.blended {
                     child.insert(NotShadowCaster);
                 }
-                let Some(animation) = part.animation else {
-                    material.insert(&mut child);
-                    continue;
-                };
-                let material = match animation.paints() {
-                    true => material.copy(assets),
-                    false => material,
-                };
                 material.insert(&mut child);
-                child.insert((
-                    animation.transform(offset),
-                    Animated {
-                        animation,
-                        offset,
-                        material,
-                    },
-                ));
+                if let Some(animation) = part.animation {
+                    child.insert((
+                        animation.transform(offset),
+                        Animated::new(animation, offset, material),
+                    ));
+                }
             }
         });
+    }
+
+    /// A part's material as [`Self::paint`] gives it, copied if the part's
+    /// animation changes it.
+    fn own_paint(
+        &mut self,
+        assets: &mut ModelAssets,
+        part: &Part,
+        colour: Option<[f32; 3]>,
+    ) -> PartMaterial {
+        let material = self.paint(assets, part, colour);
+        match part.animation.as_ref().is_some_and(|a| a.paints()) {
+            true => material.copy(assets),
+            false => material,
+        }
     }
 
     /// A part's material, painted in `colour` if the part takes its owner's.
@@ -729,34 +806,21 @@ impl Models {
                 continue;
             };
             let props = &placed.properties;
-            let fade = nif
-                .property::<nif::Material>(props)
-                .and_then(|m| controller(&nif, m.controller, ControllerKind::Alpha))
-                .and_then(|c| Some((c.clone(), nif.get_as::<Keys<f32>>(c.data)?.clone())));
-            let texture: Vec<_> = nif
-                .property::<nif::Texturing>(props)
-                .into_iter()
-                .flat_map(|t| controllers(&nif, t.controller))
-                .filter_map(|c| match c.kind {
-                    // Only the base texture is drawn.
-                    ControllerKind::Texture { slot: 0, change } => {
-                        Some((c.clone(), change, nif.get_as::<Keys<f32>>(c.data)?.clone()))
-                    }
-                    _ => None,
-                })
-                .collect();
+            let painting = painting(&nif, props);
             // An animated mesh is built relative to the object that moves.
-            let (mesh_transform, above, motion) = match motion(&nif, &placed.path) {
-                Some(m) => (m.below, m.above, Some((m.controller, m.keys, m.base))),
-                None => (placed.transform, nif::Transform::IDENTITY, None),
+            let (mesh_transform, animation) = match (motion(&nif, &placed.path), painting) {
+                (Some(m), painting) => {
+                    let (fade, texture) = painting.map_or((None, None), |p| (p.fade, p.texture));
+                    let animation = Animation {
+                        motion: Some((m.controller, m.keys, m.base)),
+                        above: m.above,
+                        fade,
+                        texture,
+                    };
+                    (m.below, Some(animation))
+                }
+                (None, painting) => (placed.transform, painting),
             };
-            let animation =
-                (motion.is_some() || fade.is_some() || !texture.is_empty()).then_some(Animation {
-                    motion,
-                    above,
-                    fade,
-                    texture,
-                });
             if let Some(mut part) =
                 self.part(game, assets, &nif, path, view, g, props, &mesh_transform)
             {
@@ -844,6 +908,7 @@ impl Models {
             let props = &shape.properties;
             if let Some(mut part) = self.part(game, assets, nif, path, view, g, props, &transform) {
                 part.team = team::marked(nif, &s.av);
+                part.animation = painting(nif, props).map(Arc::new);
                 meshes.push((part, i));
             }
         }
@@ -895,6 +960,9 @@ impl Models {
         let standard = StandardMaterial {
             base_color: Color::srgba(r, g, b, opacity),
             base_color_texture: texture,
+            uv_transform: base
+                .and_then(|b| b.placement)
+                .map_or(Affine2::IDENTITY, |p| uv_transform(&p)),
             alpha_mode,
             double_sided,
             cull_mode: (!double_sided).then_some(Face::Back),
@@ -1205,6 +1273,86 @@ fn load_image(bytes: &[u8], name: &str, formats: CompressedImageFormats) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn linear(keys: &[(f32, f32)]) -> Keys<f32> {
+        Keys {
+            interpolation: nif::Interpolation::Linear,
+            keys: keys
+                .iter()
+                .map(|&(time, value)| nif::Key {
+                    time,
+                    value,
+                    tangents: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn looping(kind: TextureChange) -> Controller {
+        Controller {
+            kind: ControllerKind::Texture {
+                slot: 0,
+                change: kind,
+            },
+            next: None,
+            flags: 8,
+            frequency: 1.0,
+            phase: 0.0,
+            start: 0.0,
+            stop: 4.0,
+            target: None,
+            data: None,
+        }
+    }
+
+    #[test]
+    fn textures_turn_and_stretch_about_their_centre() {
+        let turned = TexturePlacement {
+            turn: std::f32::consts::PI,
+            ..UNPLACED
+        };
+        let at = |p: &TexturePlacement, uv: [f32; 2]| {
+            let v = uv_transform(p).transform_point2(Vec2::from(uv));
+            [v.x, v.y].map(|c| (c * 1e4).round() / 1e4)
+        };
+        assert_eq!(at(&turned, [0.5, 0.5]), [0.5, 0.5]);
+        assert_eq!(at(&turned, [0.0, 0.0]), [1.0, 1.0]);
+        let stretched = TexturePlacement {
+            scale: [2.0, 1.0],
+            offset: [0.0, 0.25],
+            ..UNPLACED
+        };
+        assert_eq!(at(&stretched, [0.5, 0.5]), [0.5, 0.75]);
+        assert_eq!(at(&stretched, [1.0, 0.0]), [1.5, 0.25]);
+    }
+
+    #[test]
+    fn texture_motion_changes_only_what_it_animates() {
+        let rest = TexturePlacement {
+            offset: [0.0, 1.0],
+            turn: 0.5,
+            ..UNPLACED
+        };
+        let motion = TextureMotion {
+            rest,
+            changes: vec![
+                (
+                    looping(TextureChange::OffsetV),
+                    TextureChange::OffsetV,
+                    linear(&[(0.0, 1.0), (4.0, -1.0)]),
+                ),
+                (
+                    looping(TextureChange::ScaleU),
+                    TextureChange::ScaleU,
+                    linear(&[]),
+                ),
+            ],
+        };
+        let p = motion.at(1.0);
+        assert_eq!(p.offset, [0.0, 0.5]);
+        assert_eq!((p.turn, p.scale), (0.5, [1.0, 1.0]));
+        assert_eq!(motion.at(5.0).offset, [0.0, 0.5]);
+    }
 
     fn ground(height: impl Fn(f32, f32) -> f32) -> Ground {
         let side = 9;
