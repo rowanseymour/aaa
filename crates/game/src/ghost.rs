@@ -53,7 +53,7 @@ pub fn show(
         .flatten();
     let wanted = unpacks.zip(point).map(|(u, p)| {
         let at = p.map(f32::round);
-        (u, at, sim.0.room_to_unpack(u, at))
+        (u, at, sim.0.room_to_unpack(u, at, actions::UNPACK_FACING))
     });
     // A different building, or one that's turned to fit or not, is drawn
     // afresh.
@@ -82,7 +82,14 @@ pub fn show(
         None => {
             let b = &unpacks.building;
             let footing = drawn.0.footing(&b.template);
-            let thing = thing_at(ground, footing, b.id, &b.template, at, b.facing);
+            let thing = thing_at(
+                ground,
+                footing,
+                b.id,
+                &b.template,
+                at,
+                actions::UNPACK_FACING,
+            );
             let owner = local.0.unwrap_or(0);
             let Loaded { game, .. } = &mut *loaded;
             let mut models = assets.models();

@@ -328,6 +328,7 @@ fn show_trailers(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
+        visibility.set_if_neq(Visibility::Inherited);
         (transform.translation, transform.rotation) = pose(
             &loaded.map.ground,
             trailer.drawn_at(t),
@@ -1246,6 +1247,10 @@ fn show_units(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
+        // A truck that packed back up from its building is seen again.
+        if unit.alive() {
+            visibility.set_if_neq(Visibility::Inherited);
+        }
         if !unit.alive() && !view.dead {
             view.dead = true;
             sounds.cue(
@@ -1674,7 +1679,11 @@ fn send(
             actions::Aim::Move => aaa_sim::Command::Move { regiment, to },
             actions::Aim::Attack => aaa_sim::Command::Attack { regiment, to },
             actions::Aim::Run => aaa_sim::Command::Run { regiment, to },
-            actions::Aim::Unpack => aaa_sim::Command::Unpack { regiment, at: to },
+            actions::Aim::Unpack => aaa_sim::Command::Unpack {
+                regiment,
+                at: to,
+                facing: actions::UNPACK_FACING,
+            },
         };
         if orders.give(sim, player, command).is_ok() {
             sent.push((r, target));
