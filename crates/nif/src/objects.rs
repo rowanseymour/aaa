@@ -286,6 +286,7 @@ pub struct Geometry {
 
 #[derive(Debug, Clone)]
 pub struct Texturing {
+    pub controller: Ref,
     pub apply_mode: u32,
     pub base: Option<TextureSlot>,
     pub dark: Option<TextureSlot>,
@@ -460,7 +461,8 @@ pub struct TextKey {
 
 /// Plays its data on its target: a [`Keyframes`] on a scene object for
 /// [`ControllerKind::Keyframe`], a [`Keys`] on a material's alpha for
-/// [`ControllerKind::Alpha`].
+/// [`ControllerKind::Alpha`] or on a texture's placement for
+/// [`ControllerKind::Texture`].
 #[derive(Debug, Clone)]
 pub struct Controller {
     pub kind: ControllerKind,
@@ -479,6 +481,23 @@ pub struct Controller {
 pub enum ControllerKind {
     Keyframe,
     Alpha,
+    /// Moves, turns or stretches the texture in one of a texturing
+    /// property's slots.
+    Texture {
+        slot: u32,
+        change: TextureChange,
+    },
+}
+
+/// What a texture controller's keys set of where the texture lies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TextureChange {
+    OffsetU,
+    OffsetV,
+    /// Radians.
+    Turn,
+    ScaleU,
+    ScaleV,
 }
 
 impl Controller {
@@ -741,7 +760,7 @@ impl Object {
                 Object::Geometry(g)
             }
             "NiTexturingProperty" => {
-                named(r)?;
+                let (_, _, controller) = named(r)?;
                 if r.old() {
                     r.u16()?;
                 }
@@ -770,6 +789,7 @@ impl Object {
                     }
                 }
                 Object::Texturing(Texturing {
+                    controller,
                     apply_mode,
                     base,
                     dark,
@@ -1070,10 +1090,35 @@ impl Object {
                 other()
             }
             "NiTextureTransformController" => {
-                time_controller(r)?;
-                r.skip(1 + 4 + 4)?;
-                r.reference()?;
-                other()
+                let next = r.reference()?;
+                let flags = r.u16()?;
+                let [frequency, phase, start, stop] = r.floats::<4>()?;
+                let target = r.reference()?;
+                let shader_map = r.bool()?;
+                let slot = r.u32()?;
+                let change = match r.u32()? {
+                    0 => Some(TextureChange::OffsetU),
+                    1 => Some(TextureChange::OffsetV),
+                    2 => Some(TextureChange::Turn),
+                    3 => Some(TextureChange::ScaleU),
+                    4 => Some(TextureChange::ScaleV),
+                    _ => None,
+                };
+                let data = r.reference()?;
+                match change.filter(|_| !shader_map) {
+                    Some(change) => Object::Controller(Controller {
+                        kind: ControllerKind::Texture { slot, change },
+                        next,
+                        flags,
+                        frequency,
+                        phase,
+                        start,
+                        stop,
+                        target,
+                        data,
+                    }),
+                    None => other(),
+                }
             }
             "NiFlipController" => {
                 time_controller(r)?;

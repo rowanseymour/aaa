@@ -14,7 +14,7 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
-use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
+use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object, TextureChange};
 use tgck::map::Thing;
 
 use crate::MapObject;
@@ -147,9 +147,39 @@ pub struct Animation {
     above: nif::Transform,
     /// Fades the material's alpha; each instance gets its own material.
     fade: Option<(Controller, Keys<f32>)>,
+    /// Moves, turns or stretches the material's texture, as fades do.
+    texture: Vec<(Controller, TextureChange, Keys<f32>)>,
 }
 
 impl Animation {
+    /// Whether instances need their own material to animate.
+    fn paints(&self) -> bool {
+        self.fade.is_some() || !self.texture.is_empty()
+    }
+
+    /// Where the texture lies at `t`, if it moves.
+    fn uv_transform(&self, t: f32) -> Option<bevy::math::Affine2> {
+        if self.texture.is_empty() {
+            return None;
+        }
+        let (mut offset, mut turn, mut scale) = (Vec2::ZERO, 0.0, Vec2::ONE);
+        for (c, change, keys) in &self.texture {
+            let Some(v) = keys.sample(c.key_time(t)) else {
+                continue;
+            };
+            match change {
+                TextureChange::OffsetU => offset.x = v,
+                TextureChange::OffsetV => offset.y = v,
+                TextureChange::Turn => turn = v,
+                TextureChange::ScaleU => scale.x = v,
+                TextureChange::ScaleV => scale.y = v,
+            }
+        }
+        Some(bevy::math::Affine2::from_scale_angle_translation(
+            scale, turn, offset,
+        ))
+    }
+
     fn transform(&self, t: f32) -> Transform {
         match &self.motion {
             Some((c, keys, base)) => {
@@ -181,9 +211,13 @@ pub fn animate(
         if a.animation.motion.is_some() {
             *transform = a.animation.transform(t);
         }
-        if let Some((c, keys)) = &a.animation.fade
-            && let Some(alpha) = keys.sample(c.key_time(t))
-        {
+        let alpha = a
+            .animation
+            .fade
+            .as_ref()
+            .and_then(|(c, keys)| keys.sample(c.key_time(t)));
+        let uv = a.animation.uv_transform(t);
+        if alpha.is_some() || uv.is_some() {
             let base = match &a.material {
                 PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
                 PartMaterial::Glow(h) => {
@@ -194,7 +228,12 @@ pub fn animate(
                 }
             };
             if let Some(m) = base {
-                m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
+                if let Some(alpha) = alpha {
+                    m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
+                }
+                if let Some(uv) = uv {
+                    m.uv_transform = uv;
+                }
             }
         }
     }
@@ -590,9 +629,9 @@ impl Models {
                     material.insert(&mut child);
                     continue;
                 };
-                let material = match animation.fade {
-                    Some(_) => material.copy(assets),
-                    None => material,
+                let material = match animation.paints() {
+                    true => material.copy(assets),
+                    false => material,
                 };
                 material.insert(&mut child);
                 child.insert((
@@ -694,16 +733,30 @@ impl Models {
                 .property::<nif::Material>(props)
                 .and_then(|m| controller(&nif, m.controller, ControllerKind::Alpha))
                 .and_then(|c| Some((c.clone(), nif.get_as::<Keys<f32>>(c.data)?.clone())));
+            let texture: Vec<_> = nif
+                .property::<nif::Texturing>(props)
+                .into_iter()
+                .flat_map(|t| controllers(&nif, t.controller))
+                .filter_map(|c| match c.kind {
+                    // Only the base texture is drawn.
+                    ControllerKind::Texture { slot: 0, change } => {
+                        Some((c.clone(), change, nif.get_as::<Keys<f32>>(c.data)?.clone()))
+                    }
+                    _ => None,
+                })
+                .collect();
             // An animated mesh is built relative to the object that moves.
             let (mesh_transform, above, motion) = match motion(&nif, &placed.path) {
                 Some(m) => (m.below, m.above, Some((m.controller, m.keys, m.base))),
                 None => (placed.transform, nif::Transform::IDENTITY, None),
             };
-            let animation = (motion.is_some() || fade.is_some()).then_some(Animation {
-                motion,
-                above,
-                fade,
-            });
+            let animation =
+                (motion.is_some() || fade.is_some() || !texture.is_empty()).then_some(Animation {
+                    motion,
+                    above,
+                    fade,
+                    texture,
+                });
             if let Some(mut part) =
                 self.part(game, assets, &nif, path, view, g, props, &mesh_transform)
             {
@@ -956,16 +1009,20 @@ pub(crate) fn cached<T: Clone>(
 
 /// The first active controller of `kind` in the chain starting at `first`.
 pub(crate) fn controller(nif: &Nif, first: nif::Ref, kind: ControllerKind) -> Option<&Controller> {
+    controllers(nif, first).find(|c| c.kind == kind)
+}
+
+/// The active controllers in the chain starting at `first`.
+fn controllers(nif: &Nif, first: nif::Ref) -> impl Iterator<Item = &Controller> {
     let mut next = first;
-    for _ in 0..16 {
+    std::iter::from_fn(move || {
         let c = nif.get_as::<Controller>(next)?;
-        // Flag bit 3 marks the controller active.
-        if c.kind == kind && c.flags & 8 != 0 {
-            return Some(c);
-        }
         next = c.next;
-    }
-    None
+        Some(c)
+    })
+    .take(16)
+    // Flag bit 3 marks the controller active.
+    .filter(|c| c.flags & 8 != 0)
 }
 
 /// The keyframes on the nearest animated object along a shape's path.
