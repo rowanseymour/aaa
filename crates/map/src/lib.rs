@@ -124,6 +124,7 @@ impl Map {
             &game.city_zones(),
             &obstacles.iter().cloned().collect(),
             &game.deploy_points(),
+            &recruits.ranges,
         );
         let ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
         let scenery = obstacles
@@ -689,11 +690,16 @@ mod tests {
             &HashMap::new(),
             &obstacles.into_iter().collect(),
             &HashMap::new(),
+            &HashMap::new(),
         );
         let [b] = &buildings[..] else {
             panic!("{buildings:?}");
         };
         assert_eq!((b.id, b.owner, b.position), (11, 2, [11.0, 0.0]));
+        // It packs into its place in the organization, which keeps its id.
+        let o = b.organization.as_ref().unwrap();
+        assert_eq!((o.id, o.template.as_str(), o.owner), (10, "hq_unpacked", 2));
+        assert!(o.members.is_empty());
         assert!(b.obstacle.is_some());
         assert!(
             units::regiments(
@@ -726,7 +732,7 @@ mod tests {
                 soft: Shape::Circle { radius: 1.0 },
             }),
             deploy: None,
-            organized: false,
+            organization: None,
         };
         let mut buildings = vec![wall(1, 2, 4.0), wall(2, 3, 12.0)];
         let mut pathing = Pathing::uniform(8, Domain::Land);

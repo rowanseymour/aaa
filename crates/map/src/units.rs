@@ -244,10 +244,6 @@ pub struct Packs {
     /// The packed building, such as a truck, alone, standing anywhere and
     /// owned by nobody: it's placed and given ids as it's put out.
     pub truck: Regiment,
-    /// The regiment its truck is commissioned in, for a building that
-    /// stands in an organization: it packs into the truck in its place
-    /// there.
-    pub regiment: Option<Regiment>,
     /// Where it stands from the building, in the map's axes, and the way
     /// it faces there.
     pub offset: [f32; 2],
@@ -258,8 +254,8 @@ pub struct Packs {
     pub health_min: f32,
 }
 
-/// The way buildings that unpack face, as all of them on the game's maps
-/// do.
+/// The way buildings face as they unpack unless told otherwise, as all of
+/// them on the game's maps do.
 pub const UNPACKED_FACING: [f32; 2] = [0.0, -1.0];
 
 #[derive(Debug, Clone)]
@@ -582,21 +578,6 @@ impl Recruits {
     /// What each building template packs into, by template, for those
     /// some packed building unpacks into and that can be raised.
     pub fn packings(&self) -> HashMap<String, Packs> {
-        // A Division HQ unpacked from its regiment packs back into it;
-        // where several regiments hold the truck, the first by name.
-        let mut listed: Vec<&Id> = self.lists.values().flatten().collect();
-        listed.sort_unstable();
-        listed.dedup();
-        let mut regiments: HashMap<Id, Regiment> = HashMap::new();
-        for id in listed {
-            let Ok(raised) = self.raise(id.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]) else {
-                continue;
-            };
-            if let ([m], false) = (&raised.members[..], raised.lone()) {
-                let truck = Id::from(m.thing.template.as_str());
-                regiments.entry(truck).or_insert(raised);
-            }
-        }
         let mut out = HashMap::new();
         for (building, truck) in &self.packs_into {
             let Ok(raised) = self.raise(truck.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]) else {
@@ -612,7 +593,6 @@ impl Recruits {
                 seconds: packing.map_or(7.0, |b| b.packing),
                 health_min: packing.map_or(0.5, |b| b.pack_health_min),
                 truck: raised,
-                regiment: regiments.get(truck).cloned(),
             };
             out.insert(building.as_str().to_string(), packs);
         }
@@ -654,7 +634,7 @@ impl Recruits {
                 members: Vec::new(),
                 obstacle,
                 deploy: self.deploy_points.get(into).copied(),
-                organized: false,
+                organization: None,
             },
             room: body.shape.padded(self.padding),
             offset: d.packed_offset,
@@ -782,13 +762,28 @@ impl Recruits {
 
 /// A unit that's no organization's member as a regiment of its own, which
 /// shares its id and template.
-fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regiment {
+/// The organization `t`, owned by `owner`, without its members, for a
+/// building standing in it to put a truck in when it packs: the truck
+/// stands where it's put.
+pub(crate) fn emptied(t: &Thing, owner: u32, ranges: Ranges) -> Regiment {
     Regiment {
-        id: member.thing.id,
-        template: member.thing.template.clone(),
+        id: t.id,
+        template: t.template.clone(),
         owner,
-        facing,
-        members: vec![member],
+        facing: facing(t),
+        members: Vec::new(),
+        ..one_place(ranges)
+    }
+}
+
+/// A regiment of nothing, owned by nobody, in a formation of one place.
+fn one_place(ranges: Ranges) -> Regiment {
+    Regiment {
+        id: 0,
+        template: String::new(),
+        owner: 0,
+        facing: [0.0, -1.0],
+        members: Vec::new(),
         formations: vec![Formation {
             id: String::new(),
             aggressive: false,
@@ -800,6 +795,17 @@ fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regimen
         control_range: ranges.control,
         primary: Some(0),
         unpacks: None,
+    }
+}
+
+fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regiment {
+    Regiment {
+        id: member.thing.id,
+        template: member.thing.template.clone(),
+        owner,
+        facing,
+        members: vec![member],
+        ..one_place(ranges)
     }
 }
 
@@ -1140,24 +1146,7 @@ mod tests {
             .insert(Id::from("battleship"), vec![Id::from("a_boat")]);
         assert_eq!(recruits.packings()["depot"].truck.template, "truck");
 
-        // A regiment of the truck that a building lists comes first.
-        recruits.organizations.insert(
-            Id::from("convoy"),
-            Organization {
-                layout: Id::from("line"),
-                slots: vec![None, None, Some(Id::from("truck"))],
-            },
-        );
-        recruits.layouts.insert(Id::from("line"), layout());
-        recruits
-            .lists
-            .insert(Id::from("corps"), vec![Id::from("convoy")]);
-        let packs = &recruits.packings()["depot"];
-        assert_eq!(packs.truck.template, "truck");
-        assert_eq!(packs.regiment.as_ref().unwrap().template, "convoy");
-        assert_eq!(packs.facing, [1.0, 0.0]);
-
-        // As does one the map starts with.
+        // A truck the map starts with unpacks too.
         let truck = crate::fixtures::placed(5, "truck", 2, None, None);
         let mut placed = regiments(
             &[truck],
