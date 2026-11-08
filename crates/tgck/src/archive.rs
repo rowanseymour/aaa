@@ -121,7 +121,8 @@ impl<R: Read + Seek> Archive<R> {
 fn parse_directory(dir: &[u8], files: &Section) -> Result<Vec<Entry>> {
     let mut cur = Cursor::new(dir);
     let count = cur.u32()?;
-    let mut entries = Vec::with_capacity(count.min(1 << 20) as usize);
+    // An entry takes at least 26 bytes.
+    let mut entries = Vec::with_capacity((count as usize).min(cur.remaining() / 26));
     for i in 0..count {
         let name = cur.string()?;
         let rel = cur.u64()?;

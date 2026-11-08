@@ -17,8 +17,9 @@ const SECTION_RECORD_LEN: u64 = 0x60;
 const SECTION_NAME_LEN: usize = 0x40;
 /// The zlib level the game compresses sections with.
 const ZLIB_LEVEL: u8 = 6;
-/// Refuse to inflate sections claiming more than this; real ones are a few MB.
-const MAX_UNPACKED: u64 = 256 << 20;
+/// Refuse to inflate sections claiming more than this; real ones are at most
+/// a couple of MB, and zlib lets a small file claim far more.
+const MAX_UNPACKED: u64 = 32 << 20;
 
 #[derive(Debug, Clone)]
 pub struct Section {

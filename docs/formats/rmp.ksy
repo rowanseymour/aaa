@@ -1771,14 +1771,18 @@ types:
         type: u4
         valid: 0
     instances:
-      name_len_without_id:
-        pos: 4
+      id_version_if_any:
+        pos: 8
+        type: u4
+      name_len_with_id:
+        pos: 12
         type: u2
       has_id:
-        value: name_len_without_id * 2 != _io.size - 34
+        value: id_version_if_any == 2 and name_len_with_id * 2 == _io.size - 42
         doc: |
-          Some maps, such as the cutscenes, leave out the id; the name's
-          length tells which.
+          Some maps, such as the cutscenes, leave out the id. Its layout is
+          tested for directly, as an id's low half can pass for the name's
+          length where the id is left out.
   camera:
     doc: A camera position for cutscenes and scripted views.
     seq:
