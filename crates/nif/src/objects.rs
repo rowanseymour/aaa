@@ -187,6 +187,13 @@ pub enum Object {
     TextKeys(TextKeys),
     SkinInstance(SkinInstance),
     SkinData(SkinData),
+    ParticleSystem(ParticleSystem),
+    ParticleData(ParticleData),
+    Modifier(Modifier),
+    Collider(Collider),
+    EmitterKeys(EmitterKeys),
+    Colors(Keys<[f32; 4]>),
+    Visibility(BoolKeys),
     /// Understood well enough to step over; the type name.
     Other(String),
 }
@@ -197,6 +204,7 @@ impl Object {
         match self {
             Object::Node(n) => Some(&n.av),
             Object::Shape(s) => Some(&s.av),
+            Object::ParticleSystem(p) => Some(&p.shape.av),
             _ => None,
         }
     }
@@ -239,6 +247,13 @@ object_types!(
     TextKeys(TextKeys),
     SkinInstance(SkinInstance),
     SkinData(SkinData),
+    ParticleSystem(ParticleSystem),
+    ParticleData(ParticleData),
+    Modifier(Modifier),
+    Collider(Collider),
+    EmitterKeys(EmitterKeys),
+    Colors(Keys<[f32; 4]>),
+    Visibility(BoolKeys),
 );
 
 /// Fields shared by everything placed in the scene.
@@ -458,12 +473,198 @@ pub struct TextKey {
     pub text: String,
 }
 
+/// A shape whose vertices are particles.
+#[derive(Debug, Clone)]
+pub struct ParticleSystem {
+    /// The data is a [`ParticleData`].
+    pub shape: Shape,
+    pub world_space: bool,
+    /// [`Modifier`]s, emitters among them.
+    pub modifiers: Vec<Ref>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParticleData {
+    /// The most particles alive at once.
+    pub capacity: usize,
+}
+
+/// One of a particle system's modifiers.
+#[derive(Debug, Clone)]
+pub struct Modifier {
+    /// What particle controllers name it by.
+    pub name: String,
+    pub order: u32,
+    pub system: Ref,
+    pub active: bool,
+    pub kind: ModifierKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum ModifierKind {
+    /// `spawn` is a [`ModifierKind::Spawn`].
+    AgeDeath {
+        spawn_on_death: bool,
+        spawn: Ref,
+    },
+    BoundUpdate,
+    /// `collider` is the first of a chain of [`Collider`]s.
+    ColliderManager {
+        collider: Ref,
+    },
+    /// `data` is an [`Object::Colors`].
+    Color {
+        data: Ref,
+    },
+    Drag(Drag),
+    Gravity(Gravity),
+    GrowFade(GrowFade),
+    Position,
+    Rotation(ParticleRotation),
+    Spawn(Spawn),
+    Emitter(Emitter),
+}
+
+#[derive(Debug, Clone)]
+pub struct Drag {
+    pub object: Ref,
+    pub axis: [f32; 3],
+    pub percentage: f32,
+    pub range: f32,
+    pub falloff: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct Gravity {
+    pub object: Ref,
+    pub axis: [f32; 3],
+    pub decay: f32,
+    pub strength: f32,
+    /// 0 planar, 1 spherical.
+    pub force: u32,
+    pub turbulence: f32,
+    pub turbulence_scale: f32,
+}
+
+#[derive(Debug, Clone)]
+pub struct GrowFade {
+    pub grow: f32,
+    pub grow_generation: u16,
+    pub fade: f32,
+    pub fade_generation: u16,
+}
+
+#[derive(Debug, Clone)]
+pub struct ParticleRotation {
+    pub speed: f32,
+    pub random_axis: bool,
+    pub axis: [f32; 3],
+}
+
+/// Named by the `spawn` of a [`ModifierKind::AgeDeath`] or [`Collider`].
+#[derive(Debug, Clone)]
+pub struct Spawn {
+    pub generations: u16,
+    pub percentage: f32,
+    pub min: u16,
+    pub max: u16,
+    pub speed_chaos: f32,
+    pub direction_chaos: f32,
+    pub life_span: f32,
+    pub life_span_variation: f32,
+}
+
+/// Its birth rate comes from its [`ControllerKind::Emitter`] controller.
+/// Each `_variation` goes with the value before it.
+#[derive(Debug, Clone)]
+pub struct Emitter {
+    pub speed: f32,
+    pub speed_variation: f32,
+    pub declination: f32,
+    pub declination_variation: f32,
+    pub planar_angle: f32,
+    pub planar_angle_variation: f32,
+    pub color: [f32; 4],
+    pub radius: f32,
+    pub life_span: f32,
+    pub life_span_variation: f32,
+    pub shape: EmitterShape,
+}
+
+/// A volume placed by a node, or meshes.
+#[derive(Debug, Clone)]
+pub enum EmitterShape {
+    Box {
+        object: Ref,
+        size: [f32; 3],
+    },
+    Cylinder {
+        object: Ref,
+        radius: f32,
+        height: f32,
+    },
+    Sphere {
+        object: Ref,
+        radius: f32,
+    },
+    Mesh {
+        meshes: Vec<Ref>,
+        /// 0 along the normals, 1 random, 2 along `axis`.
+        velocity: u32,
+        /// 0 at vertices, 1 face centres, 2 edge centres, 3 face surfaces,
+        /// 4 edge surfaces.
+        emission: u32,
+        axis: [f32; 3],
+    },
+}
+
+/// Linked to the next of a chain by `next`.
+#[derive(Debug, Clone)]
+pub struct Collider {
+    pub bounce: f32,
+    pub spawn_on_collide: bool,
+    pub die_on_collide: bool,
+    pub spawn: Ref,
+    pub manager: Ref,
+    pub next: Ref,
+    /// The node it's placed by.
+    pub object: Ref,
+    pub shape: ColliderShape,
+}
+
+#[derive(Debug, Clone)]
+pub enum ColliderShape {
+    Plane {
+        width: f32,
+        height: f32,
+        x_axis: [f32; 3],
+        y_axis: [f32; 3],
+    },
+    Sphere {
+        radius: f32,
+    },
+}
+
+/// What a [`ControllerKind::Emitter`] plays.
+#[derive(Debug, Clone)]
+pub struct EmitterKeys {
+    pub birth_rate: Keys<f32>,
+    /// Whether it emits.
+    pub active: BoolKeys,
+}
+
+/// Times and an on/off value, each holding until the next key's time.
+pub type BoolKeys = Vec<(f32, bool)>;
+
 /// Plays its data on its target: a [`Keyframes`] on a scene object for
 /// [`ControllerKind::Keyframe`], a [`Keys`] on a material's alpha for
-/// [`ControllerKind::Alpha`].
+/// [`ControllerKind::Alpha`], and for the particle kinds, on the
+/// [`Modifier`] named `modifier` of the [`ParticleSystem`] it targets.
 #[derive(Debug, Clone)]
 pub struct Controller {
     pub kind: ControllerKind,
+    /// Empty for kinds that don't drive a modifier.
+    pub modifier: String,
     /// The next controller on the same target.
     pub next: Ref,
     pub flags: u16,
@@ -479,6 +680,16 @@ pub struct Controller {
 pub enum ControllerKind {
     Keyframe,
     Alpha,
+    /// An emitter's birth rate and when it's on, from an [`EmitterKeys`].
+    Emitter,
+    /// When a modifier runs, from [`Object::Visibility`] keys.
+    ModifierActive,
+    /// An emitter's speed, from [`Object::Floats`].
+    EmitterSpeed,
+    /// An emitter's initial radius, from [`Object::Floats`].
+    EmitterInitialRadius,
+    /// Steps its particle system; it has no data.
+    ParticleUpdate,
 }
 
 impl Controller {
@@ -934,20 +1145,17 @@ impl Object {
                     blocks,
                 })
             }
-            "NiKeyframeController" | "NiAlphaController" => Object::Controller(Controller {
-                kind: match kind {
-                    "NiKeyframeController" => ControllerKind::Keyframe,
-                    _ => ControllerKind::Alpha,
-                },
-                next: r.reference()?,
-                flags: r.u16()?,
-                frequency: r.f32()?,
-                phase: r.f32()?,
-                start: r.f32()?,
-                stop: r.f32()?,
-                target: r.reference()?,
-                data: r.reference()?,
-            }),
+            "NiKeyframeController" | "NiAlphaController" => {
+                let mut c = controller(
+                    r,
+                    match kind {
+                        "NiKeyframeController" => ControllerKind::Keyframe,
+                        _ => ControllerKind::Alpha,
+                    },
+                )?;
+                c.data = r.reference()?;
+                Object::Controller(c)
+            }
             "NiKeyframeData" => {
                 let n = r.u32()? as usize;
                 let rotation = match n {
@@ -1044,12 +1252,13 @@ impl Object {
                 }
                 other()
             }
-            "NiVisController" | "NiPSysUpdateCtlr" => {
+            "NiVisController" => {
                 time_controller(r)?;
-                if kind == "NiVisController" {
-                    r.reference()?;
-                }
+                r.reference()?;
                 other()
+            }
+            "NiPSysUpdateCtlr" => {
+                Object::Controller(controller(r, ControllerKind::ParticleUpdate)?)
             }
             "NiLookAtController" | "NiMaterialColorController" | "NiLightColorController" => {
                 time_controller(r)?;
@@ -1085,26 +1294,18 @@ impl Object {
                 key_group::<[f32; 3]>(r)?;
                 other()
             }
-            "NiColorData" => {
-                key_group::<[f32; 4]>(r)?;
-                other()
-            }
-            "NiVisData" => {
-                bool_keys(r)?;
-                other()
-            }
-            "NiParticles" | "NiRotatingParticles" | "NiParticleMeshes" | "NiParticleSystem" => {
+            "NiColorData" => Object::Colors(key_group(r)?),
+            "NiVisData" => Object::Visibility(bool_keys(r)?),
+            "NiParticles" | "NiRotatingParticles" | "NiParticleMeshes" => {
                 shape(r)?;
-                if kind == "NiParticleSystem" {
-                    r.bool()?;
-                    r.references()?;
-                }
                 other()
             }
-            "NiParticlesData"
-            | "NiRotatingParticlesData"
-            | "NiParticleMeshesData"
-            | "NiPSysData" => {
+            "NiParticleSystem" => Object::ParticleSystem(ParticleSystem {
+                shape: shape(r)?,
+                world_space: r.bool()?,
+                modifiers: r.references()?,
+            }),
+            "NiParticlesData" | "NiRotatingParticlesData" | "NiParticleMeshesData" => {
                 let n = particles_data(r)?;
                 match kind {
                     "NiRotatingParticlesData" if r.netimmerse() => {
@@ -1115,13 +1316,15 @@ impl Object {
                     "NiParticleMeshesData" => {
                         r.reference()?;
                     }
-                    "NiPSysData" => {
-                        r.skip(n * 40)?;
-                        r.skip(2 + 2)?;
-                    }
                     _ => {}
                 }
                 other()
+            }
+            "NiPSysData" => {
+                let n = particles_data(r)?;
+                r.skip(n * 40)?; // particle info
+                r.skip(2 + 2)?;
+                Object::ParticleData(ParticleData { capacity: n })
             }
             "NiParticleSystemController" => {
                 time_controller(r)?;
@@ -1166,92 +1369,80 @@ impl Object {
             | "NiPSysGrowFadeModifier"
             | "NiPSysPositionModifier"
             | "NiPSysRotationModifier"
-            | "NiPSysSpawnModifier" => {
-                psys_modifier(r)?;
-                match kind {
-                    "NiPSysAgeDeathModifier" => {
-                        r.bool()?;
-                        r.reference()?;
-                    }
-                    "NiPSysBoundUpdateModifier" => r.skip(2)?,
-                    "NiPSysColliderManager" | "NiPSysColorModifier" => {
-                        r.reference()?;
-                    }
-                    "NiPSysDragModifier" => {
-                        r.reference()?;
-                        r.floats::<6>()?;
-                    }
-                    "NiPSysGravityModifier" => {
-                        r.reference()?;
-                        r.skip(5 * 4 + 4 + 2 * 4)?;
-                    }
-                    "NiPSysGrowFadeModifier" => r.skip(2 * (4 + 2))?,
-                    "NiPSysRotationModifier" => r.skip(4 + 1 + 3 * 4)?,
-                    "NiPSysSpawnModifier" => r.skip(2 + 4 + 2 + 2 + 4 * 4)?,
-                    _ => {}
-                }
-                other()
-            }
-            "NiPSysBoxEmitter"
+            | "NiPSysSpawnModifier"
+            | "NiPSysBoxEmitter"
             | "NiPSysCylinderEmitter"
             | "NiPSysSphereEmitter"
-            | "NiPSysMeshEmitter" => {
-                psys_modifier(r)?;
-                r.floats::<13>()?;
-                if kind == "NiPSysMeshEmitter" {
-                    r.references()?;
-                    r.skip(4 + 4 + 3 * 4)?;
+            | "NiPSysMeshEmitter" => Object::Modifier(modifier(kind, r)?),
+            "NiPSysPlanarCollider" | "NiPSysSphericalCollider" => Object::Collider(Collider {
+                bounce: r.f32()?,
+                spawn_on_collide: r.bool()?,
+                die_on_collide: r.bool()?,
+                spawn: r.reference()?,
+                manager: r.reference()?,
+                next: r.reference()?,
+                object: r.reference()?,
+                shape: if kind == "NiPSysPlanarCollider" {
+                    ColliderShape::Plane {
+                        width: r.f32()?,
+                        height: r.f32()?,
+                        x_axis: r.floats()?,
+                        y_axis: r.floats()?,
+                    }
                 } else {
-                    r.reference()?; // emitter object
-                    let floats = match kind {
-                        "NiPSysBoxEmitter" => 3,
-                        "NiPSysCylinderEmitter" => 2,
-                        _ => 1,
-                    };
-                    r.skip(floats * 4)?;
-                }
-                other()
-            }
-            "NiPSysPlanarCollider" | "NiPSysSphericalCollider" => {
-                r.skip(4 + 1 + 1)?;
-                for _ in 0..4 {
-                    r.reference()?; // spawn modifier, manager, next, collider object
-                }
-                let floats = if kind == "NiPSysPlanarCollider" { 8 } else { 1 };
-                r.skip(floats * 4)?;
-                other()
-            }
+                    ColliderShape::Sphere { radius: r.f32()? }
+                },
+            }),
             "NiPSysEmitterCtlr"
             | "NiPSysModifierActiveCtlr"
             | "NiPSysEmitterInitialRadiusCtlr"
             | "NiPSysEmitterSpeedCtlr" => {
-                time_controller(r)?;
-                r.string()?; // modifier
-                r.reference()?;
-                other()
+                let kind = match kind {
+                    "NiPSysEmitterCtlr" => ControllerKind::Emitter,
+                    "NiPSysModifierActiveCtlr" => ControllerKind::ModifierActive,
+                    "NiPSysEmitterInitialRadiusCtlr" => ControllerKind::EmitterInitialRadius,
+                    _ => ControllerKind::EmitterSpeed,
+                };
+                let mut c = controller(r, kind)?;
+                c.modifier = r.string()?;
+                c.data = r.reference()?;
+                Object::Controller(c)
             }
-            "NiPSysEmitterCtlrData" => {
-                key_group::<f32>(r)?;
-                bool_keys(r)?;
-                other()
-            }
+            "NiPSysEmitterCtlrData" => Object::EmitterKeys(EmitterKeys {
+                birth_rate: key_group(r)?,
+                active: bool_keys(r)?,
+            }),
             _ => return Ok(None),
         }))
     }
 }
 
-/// The fields every controller starts with, as for [`Controller`].
+/// Steps over the fields every controller starts with.
 fn time_controller(r: &mut Reader) -> Result<()> {
-    r.reference()?;
-    r.skip(2 + 4 * 4)?;
-    r.reference()?;
-    Ok(())
+    controller(r, ControllerKind::Keyframe).map(drop)
+}
+
+/// The fields every controller starts with, without data.
+fn controller(r: &mut Reader, kind: ControllerKind) -> Result<Controller> {
+    Ok(Controller {
+        kind,
+        modifier: String::new(),
+        next: r.reference()?,
+        flags: r.u16()?,
+        frequency: r.f32()?,
+        phase: r.f32()?,
+        start: r.f32()?,
+        stop: r.f32()?,
+        target: r.reference()?,
+        data: None,
+    })
 }
 
 /// Linear keys of f32 time and a u8 on/off value.
-fn bool_keys(r: &mut Reader) -> Result<()> {
+fn bool_keys(r: &mut Reader) -> Result<BoolKeys> {
     let n = r.u32()? as usize;
-    r.skip(n.saturating_mul(5))
+    r.ensure(n.saturating_mul(5))?;
+    (0..n).map(|_| Ok((r.f32()?, r.u8()? != 0))).collect()
 }
 
 /// Geometry plus per-particle sizes and rotations; returns the particle
@@ -1275,12 +1466,125 @@ fn particles_data(r: &mut Reader) -> Result<usize> {
     Ok(n)
 }
 
-fn psys_modifier(r: &mut Reader) -> Result<()> {
-    r.string()?;
-    r.u32()?; // order
-    r.reference()?; // particle system
-    r.bool()?; // active
-    Ok(())
+fn modifier(kind: &str, r: &mut Reader) -> Result<Modifier> {
+    let name = r.string()?;
+    let order = r.u32()?;
+    let system = r.reference()?;
+    let active = r.bool()?;
+    let kind = match kind {
+        "NiPSysAgeDeathModifier" => ModifierKind::AgeDeath {
+            spawn_on_death: r.bool()?,
+            spawn: r.reference()?,
+        },
+        "NiPSysBoundUpdateModifier" => {
+            r.u16()?; // particles skipped when bounding
+            ModifierKind::BoundUpdate
+        }
+        "NiPSysColliderManager" => ModifierKind::ColliderManager {
+            collider: r.reference()?,
+        },
+        "NiPSysColorModifier" => ModifierKind::Color {
+            data: r.reference()?,
+        },
+        "NiPSysDragModifier" => ModifierKind::Drag(Drag {
+            object: r.reference()?,
+            axis: r.floats()?,
+            percentage: r.f32()?,
+            range: r.f32()?,
+            falloff: r.f32()?,
+        }),
+        "NiPSysGravityModifier" => ModifierKind::Gravity(Gravity {
+            object: r.reference()?,
+            axis: r.floats()?,
+            decay: r.f32()?,
+            strength: r.f32()?,
+            force: r.u32()?,
+            turbulence: r.f32()?,
+            turbulence_scale: r.f32()?,
+        }),
+        "NiPSysGrowFadeModifier" => ModifierKind::GrowFade(GrowFade {
+            grow: r.f32()?,
+            grow_generation: r.u16()?,
+            fade: r.f32()?,
+            fade_generation: r.u16()?,
+        }),
+        "NiPSysPositionModifier" => ModifierKind::Position,
+        "NiPSysRotationModifier" => ModifierKind::Rotation(ParticleRotation {
+            speed: r.f32()?,
+            random_axis: r.bool()?,
+            axis: r.floats()?,
+        }),
+        "NiPSysSpawnModifier" => ModifierKind::Spawn(Spawn {
+            generations: r.u16()?,
+            percentage: r.f32()?,
+            min: r.u16()?,
+            max: r.u16()?,
+            speed_chaos: r.f32()?,
+            direction_chaos: r.f32()?,
+            life_span: r.f32()?,
+            life_span_variation: r.f32()?,
+        }),
+        _ => ModifierKind::Emitter(emitter(kind, r)?),
+    };
+    Ok(Modifier {
+        name,
+        order,
+        system,
+        active,
+        kind,
+    })
+}
+
+fn emitter(kind: &str, r: &mut Reader) -> Result<Emitter> {
+    let [
+        speed,
+        speed_variation,
+        declination,
+        declination_variation,
+        planar_angle,
+        planar_angle_variation,
+        red,
+        green,
+        blue,
+        alpha,
+        radius,
+        life_span,
+        life_span_variation,
+    ] = r.floats()?;
+    let shape = match kind {
+        "NiPSysMeshEmitter" => EmitterShape::Mesh {
+            meshes: r.references()?,
+            velocity: r.u32()?,
+            emission: r.u32()?,
+            axis: r.floats()?,
+        },
+        "NiPSysBoxEmitter" => EmitterShape::Box {
+            object: r.reference()?,
+            size: r.floats()?,
+        },
+        "NiPSysCylinderEmitter" => EmitterShape::Cylinder {
+            object: r.reference()?,
+            radius: r.f32()?,
+            height: r.f32()?,
+        },
+        _ => EmitterShape::Sphere {
+            object: r.reference()?,
+            radius: r.f32()?,
+        },
+    };
+    Ok(Emitter {
+        speed,
+        speed_variation,
+        declination,
+        declination_variation,
+        planar_angle,
+        planar_angle_variation,
+        color: [red, green, blue, alpha],
+        radius,
+        life_span,
+        life_span_variation,
+        shape,
+    })
 }
 
 fn named(r: &mut Reader) -> Result<(String, Vec<Ref>, Ref)> {

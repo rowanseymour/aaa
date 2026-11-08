@@ -14,7 +14,7 @@ real-time strategy game.
 |---|---|---|
 | [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool | Done; a few map fields still unnamed |
 | [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) | Done |
-| [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool | Done; particle systems skipped |
+| [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool | Done; the older particle system format is skipped |
 | [`aaa‑data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, as a library and a command-line tool | Partial: definitions cover what rendering and the rules use so far |
 | [`aaa‑map`](crates/map) | Maps as loaded: the ground, objects and players | Early: ground, placed objects, players and teams, regiments, buildings and cities, and where movers can go |
 | [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: sides and how they stand toward each other; regiments take their owner's orders, move in formation around what blocks them, their vehicles speeding up, steering and towing trailers, fire on enemies in range until they're destroyed, and stop to fight enemies they meet unless told to run; buildings are captured, destroyed or disabled, and cities go to whoever holds them |
