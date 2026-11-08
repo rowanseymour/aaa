@@ -155,6 +155,7 @@ fn dump(file: &str) -> io::Result<ExitCode> {
                 )
             }
             Object::Floats(k) => format!("floats {}", keys(k)),
+            Object::Positions(k) => format!("positions {}", keys(k)),
             Object::Sequence(s) => {
                 let blocks: String = s
                     .blocks
