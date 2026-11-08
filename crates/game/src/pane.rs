@@ -182,7 +182,7 @@ pub fn spawn(
                 border_radius: BorderRadius::all(px(12)),
                 ..default()
             },
-            BackgroundColor(Color::BLACK),
+            BackgroundColor(crate::CHROME),
             Visibility::Hidden,
             GlobalZIndex(1),
         ));

@@ -1714,6 +1714,9 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
 }
 
 const OWN: Color = Color::srgb(0.1, 0.9, 0.1);
+/// Behind the minimap, the selection pane and the action grid, letting a
+/// little of the map show through.
+const CHROME: Color = Color::srgba(0.0, 0.0, 0.0, 0.85);
 const FRIEND: Color = Color::srgb(0.2, 0.55, 1.0);
 const OTHER: Color = Color::srgb(0.95, 0.15, 0.1);
 /// What marks things by how their owner stands toward the player, by

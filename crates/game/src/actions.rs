@@ -29,6 +29,9 @@ const BUTTON: f32 = 56.0;
 const GAP: f32 = 4.0;
 /// Black margin between the buttons and the panel's rounded edge.
 const PAD: f32 = 8.0;
+/// Behind every slot, darker than the panel around it, so the grid reads as
+/// one even with slots empty.
+const SLOT: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 
 /// The orders a regiment has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
@@ -246,6 +249,10 @@ pub struct Slot(usize);
 #[derive(Component)]
 pub struct SlotIcon;
 
+/// The panel holding the caption and the grid.
+#[derive(Component)]
+pub struct Panel;
+
 /// The grid, whose cursor position says whether clicks are for it.
 #[derive(Component)]
 pub struct Grid;
@@ -371,6 +378,7 @@ pub fn spawn(
     let size = |n: usize| px(n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD);
     commands
         .spawn((
+            Panel,
             Node {
                 position_type: PositionType::Absolute,
                 right: px(12),
@@ -410,8 +418,7 @@ pub fn spawn(
                     border_radius: BorderRadius::all(px(PAD * 1.5)),
                     ..default()
                 },
-                // Black like the minimap's disc, so the icons stand out.
-                BackgroundColor(Color::BLACK),
+                BackgroundColor(crate::CHROME),
             ))
             .with_children(|grid| {
                 for s in 0..SLOTS {
@@ -419,11 +426,12 @@ pub fn spawn(
                         Slot(s),
                         Button,
                         Hovered::default(),
+                        Pickable::default(),
                         Node {
                             border: UiRect::all(px(2)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+                        BackgroundColor(SLOT),
                         BorderColor::all(Color::NONE),
                         children![(
                             SlotIcon,
@@ -473,15 +481,12 @@ pub fn back_out(
     }
 }
 
-/// The grid's panel, its root.
-type PanelFilter = (With<Node>, Without<Slot>);
-
 type SlotParts<'a> = (
     &'a Slot,
     &'a Hovered,
     &'a Children,
-    &'a mut Visibility,
     &'a mut BorderColor,
+    &'a mut Pickable,
 );
 
 /// Fills the grid's slots for the page and the selection, and says what's
@@ -494,22 +499,19 @@ pub fn show(
     sim: Res<Sim>,
     looks: Res<Looks>,
     mut shown: ResMut<Shown>,
-    mut root: Query<&mut Visibility, PanelFilter>,
-    grid: Single<&ChildOf, With<Grid>>,
+    mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
     mut slots: Query<SlotParts, Without<SlotIcon>>,
-    mut icons: Query<&mut ImageNode, With<SlotIcon>>,
+    mut icons: Query<(&mut ImageNode, &mut Visibility), With<SlotIcon>>,
     mut caption: Single<&mut Text, With<Caption>>,
     local: Res<Local>,
     focus: Res<crate::Focus>,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
     let nothing = selected.0.is_empty() && building.is_none();
-    if let Ok(mut v) = root.get_mut(grid.parent()) {
-        v.set_if_neq(match nothing {
-            false => Visibility::Inherited,
-            true => Visibility::Hidden,
-        });
-    }
+    panel.set_if_neq(match nothing {
+        false => Visibility::Inherited,
+        true => Visibility::Hidden,
+    });
     if nothing {
         return;
     }
@@ -530,13 +532,19 @@ pub fn show(
         }),
     );
     let mut hovered = None;
-    for (slot, hover, children, mut visibility, mut border) in &mut slots {
+    for (slot, hover, children, mut border, mut pickable) in &mut slots {
         let entry = shown.0[slot.0];
-        visibility.set_if_neq(match entry {
-            Some(_) => Visibility::Inherited,
-            None => Visibility::Hidden,
-        });
+        // Empty slots are just boxes, which nothing should hear clicks on.
+        let want = match entry {
+            Some(_) => Pickable::default(),
+            None => Pickable::IGNORE,
+        };
+        if *pickable != want {
+            *pickable = want;
+        }
         let Some(entry) = entry else {
+            border.set_if_neq(BorderColor::all(Color::NONE));
+            set_icon(children, &mut icons, None);
             continue;
         };
         // Why it can't be pressed, when that's down to the player.
@@ -600,18 +608,11 @@ pub fn show(
             (false, false) => Color::NONE,
         };
         border.set_if_neq(BorderColor::all(colour));
-        for &child in children {
-            if let Ok(mut image) = icons.get_mut(child) {
-                let tint = match ready {
-                    true => Color::WHITE,
-                    false => Color::srgb(0.35, 0.35, 0.35),
-                };
-                if image.image != icon.clone().unwrap_or_default() || image.color != tint {
-                    image.image = icon.clone().unwrap_or_default();
-                    image.color = tint;
-                }
-            }
-        }
+        let tint = match ready {
+            true => Color::WHITE,
+            false => Color::srgb(0.35, 0.35, 0.35),
+        };
+        set_icon(children, &mut icons, icon.map(|i| (i, tint)));
     }
     let text = match (hovered, *page) {
         (Some(name), _) => name,
@@ -630,6 +631,30 @@ pub fn show(
     };
     if caption.0 != text {
         caption.0 = text;
+    }
+}
+
+/// Shows a slot's icon in this tint, or hides it, say for an empty slot
+/// or a command the data gives no icon, which would otherwise draw white.
+fn set_icon(
+    children: &Children,
+    icons: &mut Query<(&mut ImageNode, &mut Visibility), With<SlotIcon>>,
+    icon: Option<(Handle<Image>, Color)>,
+) {
+    for &child in children {
+        let Ok((mut image, mut visibility)) = icons.get_mut(child) else {
+            continue;
+        };
+        visibility.set_if_neq(match icon {
+            Some(_) => Visibility::Inherited,
+            None => Visibility::Hidden,
+        });
+        if let Some((handle, tint)) = icon.clone()
+            && (image.image != handle || image.color != tint)
+        {
+            image.image = handle;
+            image.color = tint;
+        }
     }
 }
 
