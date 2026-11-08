@@ -12,6 +12,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use crate::actions::fill;
+use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::{Loaded, Local, Screen, Sim};
 
 /// What each cell shows, in order: a rate, or a limit by what it uses.
@@ -119,18 +120,20 @@ pub fn spawn(
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
         root.spawn((
             Bar(preview),
-            Node {
-                display: match preview {
-                    true => Display::None,
-                    false => Display::Flex,
+            backed(
+                Surface::Hud,
+                Node {
+                    display: match preview {
+                        true => Display::None,
+                        false => Display::Flex,
+                    },
+                    height: px(HEIGHT),
+                    column_gap: px(GAP),
+                    padding: UiRect::horizontal(px(GAP * 2.0)),
+                    border_radius: BorderRadius::all(px(6)),
+                    ..default()
                 },
-                height: px(HEIGHT),
-                column_gap: px(GAP),
-                padding: UiRect::horizontal(px(GAP * 2.0)),
-                border_radius: BorderRadius::all(px(6)),
-                ..default()
-            },
-            BackgroundColor(crate::CHROME),
+            ),
         ))
         .with_children(|bar| {
             for (i, kind) in CELLS.into_iter().enumerate() {
@@ -151,15 +154,7 @@ pub fn spawn(
                             },
                         ));
                     }
-                    cell.spawn((
-                        Cell(preview, i),
-                        Text::default(),
-                        TextFont {
-                            font_size: FontSize::Px(14.0),
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                    ));
+                    cell.spawn((Cell(preview, i), label("", Font::Hud, Ink::Body)));
                 });
             }
         });
@@ -184,12 +179,7 @@ pub fn spawn(
             bar(root, true);
             root.spawn((
                 Message(0.0),
-                Text::default(),
-                TextFont {
-                    font_size: FontSize::Px(15.0),
-                    ..default()
-                },
-                TextColor(Color::srgb(1.0, 0.75, 0.3)),
+                label("", Font::HudTitle, Ink::Warn),
                 TextShadow::default(),
             ));
         });
