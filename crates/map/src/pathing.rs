@@ -225,10 +225,13 @@ impl Pathing {
         lo.iter().chain(&hi).all(|&c| (0.0..size).contains(&c))
     }
 
-    /// Whether every tile under `o`'s shape is `domain`'s, whatever stands
-    /// on it.
+    /// Whether every tile `o`'s shape overlaps is `domain`'s, whatever
+    /// stands on it. Tiles in the corners of a turned rectangle's or a
+    /// circle's box that the shape doesn't reach are no matter.
     pub fn ground_for(&self, o: &Obstacle, domain: Domain) -> bool {
-        spanned(o.bounds(o.shape)).all(|(x, y)| self.crossable(x, y, domain))
+        spanned(o.bounds(o.shape))
+            .filter(|&(x, y)| o.shape == Shape::Point || o.overlaps(&tile_square(x, y)))
+            .all(|(x, y)| self.crossable(x, y, domain))
     }
 
     /// Whether something blocking that takes up `o`'s shape could stand
@@ -279,6 +282,20 @@ fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     spanned(o.bounds(o.soft))
         .filter(|&(x, y)| covers(tile_centre(x, y)))
         .collect()
+}
+
+/// A tile's square, to test what overlaps it.
+fn tile_square(x: i32, y: i32) -> Obstacle {
+    let side = Shape::Rect {
+        width: CELL_SIZE,
+        height: CELL_SIZE,
+    };
+    Obstacle {
+        position: tile_centre(x, y),
+        facing: [0.0, 1.0],
+        shape: side,
+        soft: side,
+    }
 }
 
 /// Whether a tile whose terrain the data doesn't define is water: where the
@@ -464,6 +481,41 @@ mod tests {
         assert!(!p.passable(1, 2, Domain::Land));
         assert!(p.room_for(&at([2.5, 3.5], small), Domain::Land, [&hut]));
         assert!(!p.room_for(&at([3.0, 4.5], small), Domain::Land, [&hut]));
+    }
+
+    #[test]
+    fn room_takes_only_the_tiles_the_shape_overlaps() {
+        let at = |facing, shape| Obstacle {
+            position: [10.0, 10.0],
+            facing,
+            shape,
+            soft: shape,
+        };
+        let water = |tiles: &[(usize, usize)]| {
+            let mut p = Pathing::uniform(10, Domain::Land);
+            for &(x, y) in tiles {
+                p.tiles[y * 10 + x] = NAVAL;
+            }
+            p
+        };
+        // A 4 by 2 rectangle turned 45° spans tiles 3 to 6 each way but
+        // reaches none of the four in its box's corners.
+        let turned = at(
+            [0.70710677, 0.70710677],
+            Shape::Rect {
+                width: 4.0,
+                height: 2.0,
+            },
+        );
+        let corners = [(3, 3), (6, 3), (3, 6), (6, 6)];
+        assert!(water(&corners).room_for(&turned, Domain::Land, []));
+        // One of its corners just reaches into (5, 3).
+        assert!(!water(&[(5, 3)]).room_for(&turned, Domain::Land, []));
+        // A circle of radius 2.5 likewise misses its box's corners, but not
+        // the tiles beside them.
+        let circle = at([0.0, -1.0], Shape::Circle { radius: 2.5 });
+        assert!(water(&corners).room_for(&circle, Domain::Land, []));
+        assert!(!water(&[(4, 3)]).room_for(&circle, Domain::Land, []));
     }
 
     #[test]
