@@ -19,6 +19,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
+use crate::menu::Click;
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
@@ -270,6 +271,11 @@ pub struct Blocks;
 #[derive(Resource, Default)]
 pub struct Shown([Option<Entry>; SLOTS]);
 
+/// The slot whose press was just refused and why, said while the cursor
+/// stays on it.
+#[derive(Resource, Default)]
+pub struct Refusal(Option<(usize, aaa_sim::Refused)>);
+
 pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -373,6 +379,7 @@ pub fn spawn(
         names: listings.into_iter().map(|(id, l)| (id, l.name)).collect(),
     });
     commands.init_resource::<Shown>();
+    commands.init_resource::<Refusal>();
     commands.insert_resource(Page::Orders);
 
     let size = |n: usize| px(n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD);
@@ -427,6 +434,7 @@ pub fn spawn(
                         Button,
                         Hovered::default(),
                         Pickable::default(),
+                        Click::PUSH,
                         Node {
                             border: UiRect::all(px(2)),
                             ..default()
@@ -482,6 +490,8 @@ pub fn back_out(
 }
 
 type SlotParts<'a> = (
+    Entity,
+    Has<Click>,
     &'a Slot,
     &'a Hovered,
     &'a Children,
@@ -505,6 +515,8 @@ pub fn show(
     mut caption: Single<&mut Text, With<Caption>>,
     local: Res<Local>,
     focus: Res<crate::Focus>,
+    mut refusal: ResMut<Refusal>,
+    mut commands: Commands,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
     let nothing = selected.0.is_empty() && building.is_none();
@@ -532,7 +544,7 @@ pub fn show(
         }),
     );
     let mut hovered = None;
-    for (slot, hover, children, mut border, mut pickable) in &mut slots {
+    for (id, clicks, slot, hover, children, mut border, mut pickable) in &mut slots {
         let entry = shown.0[slot.0];
         // Empty slots are just boxes, which nothing should hear clicks on.
         let want = match entry {
@@ -541,6 +553,9 @@ pub fn show(
         };
         if *pickable != want {
             *pickable = want;
+        }
+        if !hover.get() && refusal.0.is_some_and(|(s, _)| s == slot.0) {
+            refusal.0 = None;
         }
         let Some(entry) = entry else {
             border.set_if_neq(BorderColor::all(Color::NONE));
@@ -595,11 +610,23 @@ pub fn show(
                 (r.look.icon.clone(), name, ready, false)
             }
         };
+        // Only a press that can do something sounds like it.
+        match (ready, clicks) {
+            (true, false) => {
+                commands.entity(id).insert(Click::PUSH);
+            }
+            (false, true) => {
+                commands.entity(id).remove::<Click>();
+            }
+            _ => {}
+        }
         if hover.get() {
-            hovered = Some(match (ready, why) {
-                (true, _) => name,
-                (false, Some(why)) => format!("{name} ({why})"),
-                (false, None) => format!("{name} (not yet)"),
+            let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
+            hovered = Some(match (ready, why, refused) {
+                (_, _, Some(refused)) => format!("{name} ({})", refused_why(refused)),
+                (true, _, _) => name,
+                (false, Some(why), _) => format!("{name} ({why})"),
+                (false, None, _) => format!("{name} (not yet)"),
             });
         }
         let colour = match (lit, hover.get() && ready) {
@@ -674,6 +701,7 @@ fn press(
     mut page: ResMut<Page>,
     time: Res<Time>,
     mut sounds: ResMut<crate::sound::Sounds>,
+    mut refusal: ResMut<Refusal>,
 ) {
     let Ok(slot) = slots.get(activate.entity) else {
         return;
@@ -713,11 +741,33 @@ fn press(
                     building: b,
                     commission: Box::new(Commission::new(regiment.clone(), recruit.seconds)),
                 };
-                if let Err(e) = orders.give(&sim.0, player, command) {
+                let given = orders.give(&sim.0, player, command);
+                if let Err(e) = given {
                     info!("can't commission {}: {e:?}", regiment.template);
+                    refusal.0 = Some((slot.0, e));
                 }
+                *page = commissioned(*page, given);
             }
         }
+    }
+}
+
+/// The page after a press of a recruit in the commission menu: as the
+/// game does, back to the building's own buttons once it's been given.
+fn commissioned(page: Page, given: Result<(), aaa_sim::Refused>) -> Page {
+    match given {
+        Ok(()) => Page::Orders,
+        Err(_) => page,
+    }
+}
+
+/// Why an order was refused, for the caption.
+fn refused_why(refused: aaa_sim::Refused) -> &'static str {
+    match refused {
+        aaa_sim::Refused::NotYours => "not yours",
+        aaa_sim::Refused::Unable => "can't now",
+        aaa_sim::Refused::NoRoom => "no room",
+        aaa_sim::Refused::Lacking => "lacks a building it needs",
     }
 }
 
@@ -937,6 +987,15 @@ mod tests {
         assert_eq!(grid[2], Some(Entry::Order(2)));
         assert_eq!(grid[CANCEL], Some(Entry::Cancel));
         assert_eq!(grid.iter().flatten().count(), 2);
+    }
+
+    #[test]
+    fn commissioning_goes_back_to_the_buildings_buttons() {
+        assert_eq!(commissioned(Page::Commission, Ok(())), Page::Orders);
+        assert_eq!(
+            commissioned(Page::Commission, Err(aaa_sim::Refused::Unable)),
+            Page::Commission
+        );
     }
 
     #[test]
