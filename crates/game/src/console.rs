@@ -223,6 +223,16 @@ const VERBS: &[Verb] = &[
         "[1/0]",
         "pauses or resumes the game; without, switches",
     ),
+    verb(
+        "uiscale",
+        "[scale]",
+        "draws the interface that many times as big, 0.5 to 2, though smaller if the window's too narrow for it; without, says how big it's asked to be and is",
+    ),
+    verb(
+        "resolution",
+        "[width height]",
+        "resizes the window; without, says its size",
+    ),
 ];
 
 fn find(name: &str) -> Option<&'static Verb> {
@@ -310,6 +320,8 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
         "screenshot" => screenshot(world, &args),
         "gamespeed" => game_speed(world, &args),
         "gamepause" => game_pause(world, &args),
+        "uiscale" => ui_scale(world, &args),
+        "resolution" => resolution(world, &args),
         name => {
             let playing = world
                 .get_resource::<State<Screen>>()
@@ -444,6 +456,43 @@ fn game_speed(world: &mut World, args: &[&str]) -> Reply {
             Ok(String::new())
         }
         _ => Err(usage("gamespeed")),
+    }
+}
+
+fn ui_scale(world: &mut World, args: &[&str]) -> Reply {
+    let drawn = world.resource::<UiScale>().0;
+    let mut scale = world.resource_mut::<crate::UiScaleSetting>();
+    match args {
+        [] => Ok(format!("{} (drawn at {drawn})", scale.0)),
+        [n] => {
+            let n = number(n)?;
+            if !crate::UI_SCALES.contains(&n) {
+                let (low, high) = crate::UI_SCALES.into_inner();
+                return Err(format!("takes {low} to {high}"));
+            }
+            scale.0 = n;
+            Ok(String::new())
+        }
+        _ => Err(usage("uiscale")),
+    }
+}
+
+fn resolution(world: &mut World, args: &[&str]) -> Reply {
+    let mut windows = world.query_filtered::<&mut Window, With<PrimaryWindow>>();
+    let Ok(mut window) = windows.single_mut(world) else {
+        return Err("no window".into());
+    };
+    match args {
+        [] => Ok(format!("{} {}", window.width(), window.height())),
+        [w, h] => {
+            let (w, h) = (number(w)?, number(h)?);
+            if w < 1.0 || h < 1.0 {
+                return Err("takes a width and height of at least 1".into());
+            }
+            window.resolution.set(w, h);
+            Ok(String::new())
+        }
+        _ => Err(usage("resolution")),
     }
 }
 

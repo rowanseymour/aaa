@@ -30,6 +30,13 @@ const BUTTON: f32 = 56.0;
 const GAP: f32 = 4.0;
 /// Black margin between the buttons and the panel's rounded edge.
 const PAD: f32 = 8.0;
+/// The grid's size, in logical pixels.
+pub const SIZE: Vec2 = Vec2::new(span(COLUMNS), span(ROWS));
+
+/// Across `n` buttons and the padding either side.
+const fn span(n: usize) -> f32 {
+    n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD
+}
 /// Behind every slot, darker than the panel around it, so the grid reads as
 /// one even with slots empty.
 const SLOT: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
@@ -382,14 +389,13 @@ pub fn spawn(
     commands.init_resource::<Refusal>();
     commands.insert_resource(Page::Orders);
 
-    let size = |n: usize| px(n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD);
     commands
         .spawn((
             Panel,
             Node {
                 position_type: PositionType::Absolute,
-                right: px(12),
-                bottom: px(12),
+                right: px(crate::MARGIN),
+                bottom: px(crate::MARGIN),
                 flex_direction: FlexDirection::Column,
                 align_items: AlignItems::End,
                 row_gap: px(4),
@@ -402,6 +408,11 @@ pub fn spawn(
         .with_children(|root| {
             root.spawn((
                 Caption,
+                // Wrapped to the grid's width, which the pane is kept clear of.
+                Node {
+                    max_width: px(SIZE.x),
+                    ..default()
+                },
                 Text::default(),
                 TextFont {
                     font_size: FontSize::Px(14.0),
@@ -415,8 +426,8 @@ pub fn spawn(
                 RelativeCursorPosition::default(),
                 Node {
                     display: Display::Grid,
-                    width: size(COLUMNS),
-                    height: size(ROWS),
+                    width: px(SIZE.x),
+                    height: px(SIZE.y),
                     grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
                     grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
                     column_gap: px(GAP),

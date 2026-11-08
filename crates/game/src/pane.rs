@@ -33,6 +33,8 @@ pub const MAX_SELECTED: usize = 6;
 /// given; the action buttons are drawn at the same scale.
 const SCALE: f32 = 4.0 / 3.0;
 const WIDTH: f32 = 495.0;
+/// The pane's size, in logical pixels.
+pub const SIZE: Vec2 = Vec2::new(WIDTH * SCALE, HEIGHT * SCALE);
 const HEIGHT: f32 = 183.0;
 const BORDER: Color = Color::srgb(0.45, 0.45, 0.45);
 const EMPTY: Color = Color::srgb(0.12, 0.12, 0.12);
@@ -165,7 +167,7 @@ pub fn spawn(
                 position_type: PositionType::Absolute,
                 left: px(0),
                 right: px(0),
-                bottom: px(12),
+                bottom: px(crate::MARGIN),
                 justify_content: JustifyContent::Center,
                 ..default()
             },
@@ -177,8 +179,8 @@ pub fn spawn(
             Blocks,
             RelativeCursorPosition::default(),
             Node {
-                width: px(WIDTH * SCALE),
-                height: px(HEIGHT * SCALE),
+                width: px(SIZE.x),
+                height: px(SIZE.y),
                 border_radius: BorderRadius::all(px(12)),
                 ..default()
             },

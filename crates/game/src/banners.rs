@@ -164,6 +164,7 @@ pub fn show_banners(
     local: Res<Local>,
     focus: Res<Focus>,
     fixed: Res<Time<Fixed>>,
+    ui: Res<UiScale>,
     cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
     mut banners: Query<(&Banner, &mut Node, &mut ZIndex, &mut Visibility)>,
     mut layers: Query<(&mut ImageNode, &mut Visibility), Without<Banner>>,
@@ -196,10 +197,7 @@ pub fn show_banners(
             continue;
         };
         *visibility = Visibility::Inherited;
-        node.left = px(p.x - side / 2.0);
-        node.top = px(p.y - side / 2.0);
-        node.width = px(side);
-        node.height = px(side);
+        crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
         // Lower on the screen is nearer the camera.
         *z = ZIndex(p.y as i32);
         let show = |on: bool| match on {
