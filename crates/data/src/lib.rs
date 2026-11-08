@@ -32,8 +32,17 @@ pub struct GameData {
     paths: HashMap<String, EntryRef>,
     /// Lower-case file name to entries.
     files: HashMap<String, Vec<EntryRef>>,
-    /// See [`GameData::things`].
-    things: Option<Arc<[Template]>>,
+    /// See [`GameData::definitions`].
+    definitions: Option<Arc<Definitions>>,
+}
+
+/// The object templates and shared properties the `.tgi` files define,
+/// deserialized.
+struct Definitions {
+    /// In the order the files and their blocks come, which decides between
+    /// definitions sharing an id.
+    things: Vec<Template>,
+    properties: HashMap<Id, defs::Property>,
 }
 
 /// An object template as some `.tgi` file defines it.
@@ -42,6 +51,31 @@ struct Template {
     file: String,
     id: Id,
     thing: defs::Thing,
+}
+
+impl Definitions {
+    fn new(files: &[(String, tgi::Parsed)]) -> Self {
+        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let things = files
+            .iter()
+            .flat_map(|(file, parsed)| {
+                parsed.root.blocks_of("Thing").filter_map(|block| {
+                    Some(Template {
+                        file: file.clone(),
+                        id: Id::from(block.value("ids")?),
+                        thing: templates.deserialize(block).ok()?,
+                    })
+                })
+            })
+            .collect();
+        let properties = files
+            .iter()
+            .flat_map(|(_, p)| p.root.blocks_of("Property"))
+            .filter_map(|b| templates.deserialize::<defs::Property>(b).ok())
+            .filter_map(|p| Some((p.ids.clone()?, p)))
+            .collect();
+        Definitions { things, properties }
+    }
 }
 
 /// An entry of one of [`GameData`]'s archives: `(archive, entry)` indices.
@@ -540,7 +574,7 @@ impl GameData {
             archives,
             paths,
             files,
-            things: None,
+            definitions: None,
         })
     }
 
@@ -703,7 +737,7 @@ impl GameData {
     /// Templates without a view, of their own or inherited, are left out.
     pub fn views(&mut self) -> HashMap<Id, Option<View>> {
         let mut out = HashMap::new();
-        for Template { file, id, thing } in self.things().iter() {
+        for Template { file, id, thing } in &self.definitions().things {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             let invisible = thing.flags.iter().any(|f| f.invisible);
             let view = match &thing.view {
@@ -734,15 +768,8 @@ impl GameData {
     /// How the objects of every template that can be hurt fight, by
     /// template id, including the ids the game has since renamed.
     pub fn fighters(&mut self) -> HashMap<Id, Fighter> {
-        let files = self.parse_tgis(|_| true);
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        let properties: HashMap<Id, defs::Property> = files
-            .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("Property"))
-            .filter_map(|b| templates.deserialize::<defs::Property>(b).ok())
-            .filter_map(|p| Some((p.ids.clone()?, p)))
-            .collect();
-        self.by_template(|t| fighter(t, &properties))
+        let definitions = self.definitions();
+        self.by_template(|t| fighter(t, &definitions.properties))
     }
 
     /// How far around them city centres hold sway, by template id, including
@@ -929,7 +956,7 @@ impl GameData {
     /// including the ids the game has since renamed.
     fn by_template<T: Clone>(&mut self, of: impl Fn(&defs::Thing) -> Option<T>) -> HashMap<Id, T> {
         let mut out = HashMap::new();
-        for t in self.things().iter() {
+        for t in &self.definitions().things {
             if let Some(v) = of(&t.thing) {
                 out.insert(t.id.clone(), v);
             }
@@ -940,28 +967,15 @@ impl GameData {
         out
     }
 
-    /// Every object template, in archive order. Deserialized once and kept,
-    /// as there are thousands and much of the game asks after them.
-    fn things(&mut self) -> Arc<[Template]> {
-        if let Some(things) = &self.things {
-            return things.clone();
+    /// Every `.tgi` file's [`Definitions`]. Deserialized once and kept, as
+    /// there are thousands of templates and much of the game asks after them.
+    fn definitions(&mut self) -> Arc<Definitions> {
+        if let Some(definitions) = &self.definitions {
+            return definitions.clone();
         }
-        let files = self.parse_tgis(|_| true);
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        let things: Arc<[Template]> = files
-            .iter()
-            .flat_map(|(file, parsed)| {
-                parsed.root.blocks_of("Thing").filter_map(|block| {
-                    Some(Template {
-                        file: file.clone(),
-                        id: Id::from(block.value("ids")?),
-                        thing: templates.deserialize(block).ok()?,
-                    })
-                })
-            })
-            .collect();
-        self.things = Some(things.clone());
-        things
+        let definitions = Arc::new(Definitions::new(&self.parse_tgis(|_| true)));
+        self.definitions = Some(definitions.clone());
+        definitions
     }
 
     /// The organization layouts, by id.
@@ -2189,6 +2203,37 @@ mod tests {
         };
         assert_eq!(conform(0), Some(footprint));
         assert_eq!(conform(1), None);
+    }
+
+    #[test]
+    fn definitions_keep_file_order_and_skip_blocks_without_ids() {
+        let a = tgi::parse(
+            "[Property]\n{\n\tIDS = vehicle\n}\n\
+             [Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 50\n}\n\
+             [Thing]\n{\n\t[BodyComponent]\n\thealth = 60\n}\n",
+        );
+        let b = tgi::parse(
+            "[Thing]\n{\n\tIDS = tank\n}\n[Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 70\n}\n",
+        );
+        let files = [("a/a.tgi".to_string(), a), ("b/b.tgi".to_string(), b)];
+        let definitions = Definitions::new(&files);
+        let found: Vec<_> = definitions
+            .things
+            .iter()
+            .map(|t| {
+                let health = t.thing.body_component.as_ref().and_then(|b| b.health);
+                (t.file.as_str(), t.id.as_str(), health)
+            })
+            .collect();
+        assert_eq!(
+            found,
+            [
+                ("a/a.tgi", "jeep", Some(50.0)),
+                ("b/b.tgi", "tank", None),
+                ("b/b.tgi", "jeep", Some(70.0)),
+            ]
+        );
+        assert!(definitions.properties.contains_key(&Id::from("vehicle")));
     }
 
     #[test]
