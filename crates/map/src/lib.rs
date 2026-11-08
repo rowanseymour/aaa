@@ -74,6 +74,12 @@ impl Map {
         let world_version = map.world_version().map_err(err)?;
         let recruits = Recruits::new(game);
         let bodies = &recruits.bodies;
+        for thing in &mut things {
+            snap(thing, bodies);
+            for member in members_mut(thing) {
+                snap(member, bodies);
+            }
+        }
         let obstacles = obstacles(&things, bodies);
         let pathing = Pathing::new(
             &terrain,
@@ -169,6 +175,34 @@ fn take_buildings(
     });
 }
 
+/// Moves a thing whose template keeps it to the half-tile grid onto it.
+fn snap(thing: &mut Thing, bodies: &HashMap<Id, aaa_data::Body>) {
+    if bodies
+        .get(&Id::from(thing.template.as_str()))
+        .is_some_and(|b| b.tile_locked)
+    {
+        let step = pathing::CELL_SIZE / 2.0;
+        for c in &mut thing.position[..2] {
+            *c = (*c / step).round() * step;
+        }
+    }
+}
+
+/// The members of a thing that's an organization.
+fn members_mut(thing: &mut Thing) -> &mut [Thing] {
+    use tgck::map::{Component, Detail, State};
+    if let Detail::Actor(actor) = &mut thing.detail
+        && let State::Decoded { components, .. } = &mut actor.state
+        && let Some(o) = components.iter_mut().find_map(|c| match c {
+            Component::Organization(o) => Some(o),
+            _ => None,
+        })
+    {
+        return &mut o.members;
+    }
+    &mut []
+}
+
 /// What blocks the ground, by id, of the objects standing on the map.
 /// Movers don't block the ground they start on.
 fn obstacles(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>) -> Vec<(u32, Obstacle)> {
@@ -181,6 +215,7 @@ fn obstacles(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>) -> Vec<(u32
                 position: [x, y],
                 facing: units::facing(t),
                 shape,
+                soft: body.soft,
             };
             Some((t.id, obstacle))
         })
@@ -381,6 +416,24 @@ mod tests {
     }
 
     #[test]
+    fn tile_locked_things_snap_to_the_half_tile_grid() {
+        let locked = aaa_data::Body {
+            tile_locked: true,
+            ..aaa_data::Body::default()
+        };
+        let bodies = HashMap::from([(Id::from("wall"), locked)]);
+        let at = |template, [x, y]: [f32; 2]| {
+            let mut t = placed(1, template, 0, None, None);
+            t.position = [x, y, 3.0];
+            snap(&mut t, &bodies);
+            t.position
+        };
+        assert_eq!(at("wall", [10.4, 7.6]), [10.0, 8.0, 3.0]);
+        assert_eq!(at("wall", [10.6, -0.4]), [11.0, 0.0, 3.0]);
+        assert_eq!(at("tree", [10.4, 7.6]), [10.4, 7.6, 3.0]);
+    }
+
+    #[test]
     fn owned_units_of_no_organization_are_regiments_of_their_own() {
         let things = [
             placed(1, "truck", 2, Some(2), None),
@@ -496,6 +549,7 @@ mod tests {
                 position: [x, 8.0],
                 facing: [0.0, -1.0],
                 shape: Shape::Circle { radius: 1.0 },
+                soft: Shape::Circle { radius: 1.0 },
             }),
             deploy: None,
         };

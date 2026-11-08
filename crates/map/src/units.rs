@@ -50,8 +50,9 @@ pub struct Team {
     pub team_relations: Vec<Relation>,
 }
 
-/// How the player `from` stands toward the player `to`, by their ids;
-/// neutral toward a player that isn't among `players`.
+/// How the player `from` stands toward the player `to`, by their ids:
+/// neutral where either isn't among `players`, as for things that belong
+/// to nobody, and at war where the map doesn't say.
 pub fn relation(players: &[Player], teams: &[Team], from: u32, to: u32) -> Relation {
     if from == to {
         return Relation::Itself;
@@ -69,7 +70,7 @@ pub fn relation(players: &[Player], teams: &[Team], from: u32, to: u32) -> Relat
         (None, Some(tb)) => pa.team_relations.get(tb),
         (None, None) => pa.relations.get(b),
     };
-    stance.copied().unwrap_or(Relation::Neutral)
+    stance.copied().unwrap_or(Relation::Enemy)
 }
 
 /// The players and teams, with their relations by index rather than by
@@ -119,7 +120,7 @@ pub fn sides(
 }
 
 /// Relations stored by section position, kept for the positions holding
-/// something; neutral where none is stored.
+/// something; at war where none is stored.
 fn by_index(slots: &[bool], stored: &[u32]) -> Vec<Relation> {
     slots
         .iter()
@@ -129,7 +130,7 @@ fn by_index(slots: &[bool], stored: &[u32]) -> Vec<Relation> {
             stored
                 .get(i)
                 .and_then(|&r| Relation::from_u32(r))
-                .unwrap_or(Relation::Neutral)
+                .unwrap_or(Relation::Enemy)
         })
         .collect()
 }
@@ -214,10 +215,9 @@ pub struct Unpacks {
     /// The building, standing at the origin facing [`UNPACKED_FACING`]
     /// and owned by nobody.
     pub building: Building,
-    /// The ground that must be clear for it to unpack: its blocking shape
-    /// padded all round, so buildings keep apart. `None` if it doesn't
-    /// block.
-    pub room: Option<Shape>,
+    /// The ground that must be clear for it to unpack: its blocking shape,
+    /// padded all round where it blocks, so buildings keep apart.
+    pub room: Shape,
     /// Where the packed building stands from where the building will, in
     /// the map's axes.
     pub offset: [f32; 2],
@@ -508,8 +508,8 @@ pub struct Recruits {
     deployments: HashMap<Id, Deployment>,
     deploy_points: HashMap<Id, DeployPoints>,
     recruit_times: HashMap<Id, f32>,
-    /// Ids the game has since renamed.
-    renamed: HashSet<Id>,
+    /// The packed building each building packs into.
+    packs_into: HashMap<Id, Id>,
     /// How far beyond its footprint a building needs clear ground.
     padding: f32,
 }
@@ -529,7 +529,7 @@ impl Recruits {
             deployments: game.deployments(),
             deploy_points: game.deploy_points(),
             recruit_times: game.recruit_times(),
-            renamed: game.renamed_things(),
+            packs_into: game.packs_into(),
             padding: game.building_padding().unwrap_or(BUILDING_PADDING),
         }
     }
@@ -565,45 +565,43 @@ impl Recruits {
     /// What each building template packs into, by template, for those
     /// some packed building unpacks into and that can be raised.
     pub fn packings(&self) -> HashMap<String, Packs> {
-        // What buildings commission comes first, so a Division HQ packs
-        // back into its regiment rather than a bare truck; then any packed
-        // building under its current id. Where several still pack to one
-        // building the first by name wins, so it's always the same one.
-        fn sorted<'a>(ids: impl Iterator<Item = &'a Id>) -> Vec<&'a str> {
-            let mut ids: Vec<&str> = ids.map(Id::as_str).collect();
-            ids.sort_unstable();
-            ids.dedup();
-            ids
+        // A Division HQ packs back into the regiment its truck is
+        // commissioned as, rather than a bare truck; where several hold
+        // the truck, the first by name.
+        let mut listed: Vec<&Id> = self.lists.values().flatten().collect();
+        listed.sort_unstable();
+        listed.dedup();
+        let mut regiments: HashMap<Id, Regiment> = HashMap::new();
+        for id in listed {
+            let Ok(raised) = self.raise(id.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]) else {
+                continue;
+            };
+            if let ([m], false) = (&raised.members[..], raised.lone()) {
+                let truck = Id::from(m.thing.template.as_str());
+                regiments.entry(truck).or_insert(raised);
+            }
         }
-        let listed = sorted(self.lists.values().flatten());
-        let packed = self
-            .deployments
-            .keys()
-            .filter(|id| !self.renamed.contains(*id));
         let mut out = HashMap::new();
-        for id in listed.into_iter().chain(sorted(packed)) {
-            let Ok(raised) = self.raise(id, 0, 0, [0.0, 0.0], [0.0, -1.0]) else {
+        for (building, truck) in &self.packs_into {
+            let raised = match regiments.get(truck) {
+                Some(r) => Ok(r.clone()),
+                None => self.raise(truck.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]),
+            };
+            let Ok(raised) = raised else {
                 continue;
             };
-            let Some(unpacks) = &raised.unpacks else {
+            let (Some(_), Some(deployment)) = (&raised.unpacks, self.deployments.get(truck)) else {
                 continue;
             };
-            let into = unpacks.building.template.clone();
-            let member = Id::from(raised.members[0].thing.template.as_str());
-            let (Some(truck), building) = (
-                self.deployments.get(&member),
-                self.deployments.get(&Id::from(into.as_str())),
-            ) else {
-                continue;
-            };
+            let packing = self.deployments.get(building);
             let packs = Packs {
-                offset: truck.packed_offset,
-                facing: truck.packed_facing,
-                seconds: building.map_or(7.0, |b| b.packing),
-                health_min: building.map_or(0.5, |b| b.pack_health_min),
+                offset: deployment.packed_offset,
+                facing: deployment.packed_facing,
+                seconds: packing.map_or(7.0, |b| b.packing),
+                health_min: packing.map_or(0.5, |b| b.pack_health_min),
                 truck: raised,
             };
-            out.entry(into).or_insert(packs);
+            out.insert(building.as_str().to_string(), packs);
         }
         out
     }
@@ -628,6 +626,7 @@ impl Recruits {
             position: [0.0, 0.0],
             facing: UNPACKED_FACING,
             shape,
+            soft: body.soft,
         });
         Some(Unpacks {
             building: Building {
@@ -643,7 +642,10 @@ impl Recruits {
                 obstacle,
                 deploy: self.deploy_points.get(into).copied(),
             },
-            room: body.blocking.map(|s| s.padded(self.padding)),
+            room: match body.blocking {
+                Some(shape) => shape.padded(self.padding),
+                None => body.shape,
+            },
             offset: d.packed_offset,
             seconds,
         })
@@ -972,7 +974,7 @@ mod tests {
             deployments: HashMap::new(),
             deploy_points: HashMap::new(),
             recruit_times: HashMap::new(),
-            renamed: HashSet::new(),
+            packs_into: HashMap::new(),
             padding: BUILDING_PADDING,
         };
         assert_eq!(recruits.templates(), ["squad"]);
@@ -1075,7 +1077,7 @@ mod tests {
                 },
             )]),
             recruit_times: HashMap::new(),
-            renamed: HashSet::new(),
+            packs_into: HashMap::new(),
             padding: BUILDING_PADDING,
         };
         let mut truck = recruits
@@ -1087,10 +1089,10 @@ mod tests {
         assert!(unpacks.building.obstacle.is_some());
         assert_eq!(
             unpacks.room,
-            Some(aaa_data::Shape::Rect {
+            aaa_data::Shape::Rect {
                 width: 12.0,
                 height: 12.0
-            })
+            }
         );
         // So it can commission what it lists once unpacked.
         assert_eq!(
@@ -1099,18 +1101,30 @@ mod tests {
         );
         truck.renumber(40);
         assert_eq!((truck.id, truck.members[0].thing.id), (40, 40));
+        let mut recruits = recruits;
+        recruits
+            .packs_into
+            .insert(Id::from("depot"), Id::from("truck"));
         let packings = recruits.packings();
         let packs = &packings["depot"];
         assert_eq!(packs.truck.template, "truck");
         assert_eq!((packs.seconds, packs.facing), (8.0, [1.0, 0.0]));
 
-        // A renamed id comes before by name but is passed over, and a
-        // regiment of the truck that a building lists comes first.
-        let mut recruits = recruits;
-        let truck = recruits.deployments[&Id::from("truck")].clone();
-        recruits.deployments.insert(Id::from("an_old_truck"), truck);
-        recruits.renamed.insert(Id::from("an_old_truck"));
+        // The truck the data gives, though another, listed by a building as
+        // the battleship lists amphibious ones, unpacks into it too.
+        let mut boat = recruits.deployments[&Id::from("truck")].clone();
+        boat.packed_facing = [0.0, 1.0];
+        recruits.deployments.insert(Id::from("a_boat"), boat);
+        recruits.bodies.insert(
+            Id::from("a_boat"),
+            recruits.bodies[&Id::from("truck")].clone(),
+        );
+        recruits
+            .lists
+            .insert(Id::from("battleship"), vec![Id::from("a_boat")]);
         assert_eq!(recruits.packings()["depot"].truck.template, "truck");
+
+        // A regiment of the truck that a building lists comes first.
         recruits.organizations.insert(
             Id::from("convoy"),
             Organization {
@@ -1144,11 +1158,11 @@ mod tests {
     }
 
     #[test]
-    fn relations_skip_empty_slots() {
+    fn relations_skip_empty_slots_and_are_at_war_where_unset() {
         use Relation::{Ally, Enemy, Neutral};
         assert_eq!(
-            by_index(&[true, false, true, true], &[1, 0, 3]),
-            [Ally, Enemy, Neutral]
+            by_index(&[true, false, true, true], &[1, 0, 2]),
+            [Ally, Neutral, Enemy]
         );
     }
 }
