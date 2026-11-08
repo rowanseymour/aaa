@@ -901,6 +901,7 @@ fn spawn_views(
                 unit.facing,
             ),
             speed: regiment.speed,
+            shape: unit.shape,
             fighter: unit.fighter.clone(),
         };
         let mut models = assets.models();
