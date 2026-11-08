@@ -158,11 +158,13 @@ pub fn spawn_map(
         ));
     }
     let mut models = Models::new(game, assets.formats.0, &map.players);
+    let buildings: std::collections::HashSet<u32> = map.buildings.iter().map(|b| b.id).collect();
     let rest = models.spawn(
         commands,
         game,
         &mut assets.models(),
         map.things.iter().filter(|t| !leave_out(t)),
+        &buildings,
     );
     let (meshes, materials) = (&mut assets.meshes, &mut assets.materials);
     objects::spawn(commands, meshes, materials, &map.ground, &rest, markers);
