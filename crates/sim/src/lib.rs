@@ -91,6 +91,9 @@ pub struct Regiment {
     pub unpack_at: Option<[f32; 2]>,
     /// The building it unpacked into, by index into [`World::buildings`].
     pub unpacked_into: Option<usize>,
+    /// For one just put out by a building, the building's rally point, to
+    /// move on to once it's rolled out.
+    pub rally: Option<[f32; 2]>,
 }
 
 impl Regiment {
@@ -362,6 +365,8 @@ pub struct Building {
     pub progress: u64,
     /// Where what it commissions appears, then goes.
     pub deploy: Option<DeployPoints>,
+    /// Where what it commissions moves on to once out, if set.
+    pub rally: Option<[f32; 2]>,
     /// The tick it last changed hands on.
     pub captured: Option<u64>,
     /// For a city's centre, how far around it the city reaches.
@@ -572,6 +577,7 @@ impl World {
             unpacks: regiment.unpacks.clone(),
             unpack_at: None,
             unpacked_into: None,
+            rally: None,
         });
         let ids = regiment.members.iter().map(|m| m.thing.id);
         self.next_id = ids
@@ -617,6 +623,7 @@ impl World {
                 queue: VecDeque::new(),
                 progress: 0,
                 deploy: b.deploy,
+                rally: None,
             });
             self.next_id = self.next_id.max(b.id + 1);
         }
@@ -730,6 +737,7 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = Order::Pursue(enemy);
         r.unpack_at = None;
+        r.rally = None;
         r.engaged.clear();
         r.resume = None;
         self.chase(regiment, enemy, true);
@@ -749,6 +757,7 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = order;
         r.unpack_at = None;
+        r.rally = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
@@ -772,6 +781,7 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = Order::Run;
         r.unpack_at = None;
+        r.rally = None;
         r.engaged.clear();
         r.resume = None;
         let from = r.position;
@@ -792,6 +802,7 @@ impl World {
         r.order = Order::Move;
         r.resume = None;
         r.unpack_at = None;
+        r.rally = None;
         if r.engaged.is_empty() {
             let facing = r.facing;
             self.send(regiment, here, facing);
@@ -879,6 +890,26 @@ impl World {
             return Err(Refused::Unable);
         }
         b.queue.push_back(commission);
+        Ok(())
+    }
+
+    /// Sets where what a building commissions moves on to once it's out,
+    /// or, given `None`, has it stay where it comes out. Refused for a
+    /// building that doesn't commission.
+    pub fn set_rally(
+        &mut self,
+        player: u32,
+        building: usize,
+        at: Option<[f32; 2]>,
+    ) -> Result<(), Refused> {
+        let b = &mut self.buildings[building];
+        if b.owner != player || !b.standing() {
+            return Err(Refused::NotYours);
+        }
+        if b.deploy.is_none() {
+            return Err(Refused::Unable);
+        }
+        b.rally = at;
         Ok(())
     }
 
@@ -994,6 +1025,7 @@ impl World {
         self.close_in();
         self.occupy();
         self.produce();
+        self.rally();
         self.unpack();
         self.ticks += 1;
     }
@@ -1018,6 +1050,7 @@ impl World {
                 continue;
             };
             let (position, facing, owner) = (building.position, building.facing, building.owner);
+            let rally = building.rally;
             let from = deploy_point(position, facing, deploy.creation);
             let to = deploy_point(position, facing, deploy.deployment);
             let heading = normalised([to[0] - from[0], to[1] - from[1]]).unwrap_or(facing);
@@ -1028,6 +1061,23 @@ impl World {
             regiment.place(from, heading);
             let r = self.add_regiment(&regiment);
             self.roll_out(r, to, heading);
+            self.regiments[r].rally = rally;
+        }
+    }
+
+    /// Moves regiments that have rolled out of what put them out on to its
+    /// rally point.
+    fn rally(&mut self) {
+        for r in 0..self.regiments.len() {
+            let Some(at) = self.regiments[r].rally else {
+                continue;
+            };
+            if self.destroyed(r) {
+                self.regiments[r].rally = None;
+            } else if !self.underway(r) {
+                let owner = self.regiments[r].owner;
+                let _ = self.order_move(owner, r, at);
+            }
         }
     }
 
@@ -1639,6 +1689,7 @@ impl World {
             building.owner = owner;
             building.captured = Some(self.ticks);
             building.target = None;
+            building.rally = None;
         }
     }
 
@@ -3077,6 +3128,41 @@ mod tests {
             assert!(w.buildings[2].distance(w.units[0].position) > 0.0);
         }
         assert!(near(w.units[0].position, [26.0, 4.0]));
+    }
+
+    #[test]
+    fn commissions_move_on_to_the_rally_point() {
+        let mut w = headquarters();
+        assert_eq!(
+            w.set_rally(2, 0, Some([26.0, 30.0])),
+            Err(Refused::NotYours)
+        );
+        w.set_rally(1, 0, Some([26.0, 30.0])).unwrap();
+        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        run(&mut w, 1.0);
+        // Out to its deployment point first, then on to the rally point.
+        assert_eq!(w.destination(0), [26.0, 20.0]);
+        run(&mut w, 3.0);
+        assert_eq!(w.destination(0), [26.0, 30.0]);
+        run(&mut w, 5.0);
+        assert!(near(w.units[0].position, [26.0, 30.0]));
+        assert!(w.regiments[0].rally.is_none());
+        // An order on the way calls it off.
+        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        run(&mut w, 2.0);
+        w.order_stop(1, 1).unwrap();
+        run(&mut w, 8.0);
+        assert!(w.units[1].position[1] < 25.0);
+        // Without one, they stay where they come out.
+        w.set_rally(1, 0, None).unwrap();
+        w.commission(1, 0, Commission::new(truck(), 1.0)).unwrap();
+        run(&mut w, 10.0);
+        assert!(near(w.units[2].position, [26.0, 20.0]));
+        let mut house = siege(&[building(9, 1, [10.0, 30.0])]);
+        assert_eq!(
+            house.set_rally(1, 0, Some([0.0, 0.0])),
+            Err(Refused::Unable)
+        );
     }
 
     #[test]

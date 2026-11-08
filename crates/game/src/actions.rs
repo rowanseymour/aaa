@@ -4,8 +4,8 @@
 //! map, with a button to cancel; right click or Escape does too. A selected
 //! building that commissions, such as a Corps HQ, has a button opening a
 //! menu of what it commissions; [`crate::pane`] shows what it's been asked
-//! for. A building that packs, into a truck say, has Pack, dimmed while it
-//! can't.
+//! for, and one to set the rally point what it commissions moves on to. A
+//! building that packs, into a truck say, has Pack, dimmed while it can't.
 
 use std::collections::HashMap;
 
@@ -49,6 +49,8 @@ const ORDERS: [(&str, Option<Give>); 8] = [
 const COMMISSION: &str = "commission";
 /// The command that packs a building up, such as into a truck.
 const PACK: &str = "pack";
+/// The command that sets where what a building commissions moves on to.
+pub const RALLY: &str = "set_rally_point";
 
 /// Where the game puts the button that cancels an order being aimed.
 const CANCEL: usize = 8;
@@ -84,6 +86,9 @@ pub enum Page {
     Orders,
     /// Waiting for a click on the map to give an order there.
     Aiming(Aim),
+    /// Waiting for a click on the map to set the selected building's
+    /// rally point there.
+    Rally,
     /// What the selected building commissions.
     Commission,
 }
@@ -100,15 +105,18 @@ pub enum Entry {
     Recruit(usize),
     /// Packs the selected building up.
     Pack,
+    /// Waits for a place to set the selected building's rally point.
+    Rally,
 }
 
-/// The buttons a selected building has: where its commission button goes
-/// and how much the menu behind it holds, and where its Pack button goes,
-/// if it packs.
+/// The buttons a selected building has: where its commission and rally
+/// point buttons go and how much the menu behind the first holds, and
+/// where its Pack button goes, if it packs.
 #[derive(Clone, Copy, Debug)]
 struct BuildingButtons {
     commission: Option<usize>,
     menu: usize,
+    rally: Option<usize>,
     pack: Option<usize>,
 }
 
@@ -141,8 +149,13 @@ fn layout(
     let mut out = [None; SLOTS];
     match (page, building) {
         (Page::Orders, Some(b)) => {
-            if let Some(s) = b.commission.filter(|&s| s < SLOTS && b.menu > 0) {
-                out[s] = Some(Entry::Commission);
+            if b.menu > 0 {
+                if let Some(s) = b.commission.filter(|&s| s < SLOTS) {
+                    out[s] = Some(Entry::Commission);
+                }
+                if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
+                    out[s] = Some(Entry::Rally);
+                }
             }
             if let Some(s) = b.pack.filter(|&s| s < SLOTS && out[s].is_none()) {
                 out[s] = Some(Entry::Pack);
@@ -154,7 +167,13 @@ fn layout(
             }
             out[MENU_CANCEL] = Some(Entry::Cancel);
         }
-        (Page::Commission, None) => {}
+        (Page::Rally, Some(b)) => {
+            if let Some(s) = b.rally.filter(|&s| s < SLOTS && s != CANCEL) {
+                out[s] = Some(Entry::Rally);
+            }
+            out[CANCEL] = Some(Entry::Cancel);
+        }
+        (Page::Commission | Page::Rally, None) => {}
         (Page::Orders, None) => {
             for (i, slot) in slots.iter().enumerate() {
                 if !offered[i] {
@@ -200,6 +219,7 @@ pub struct Looks {
     /// Per [`ORDERS`], its slot and look.
     orders: Vec<(Option<usize>, Look)>,
     commission: (Option<usize>, Look),
+    rally: (Option<usize>, Look),
     pack: (Option<usize>, Look),
     cancel: Option<Handle<Image>>,
     /// What each of the map's building templates commissions, in its
@@ -279,6 +299,7 @@ pub fn spawn(
     };
     let orders = ORDERS.iter().map(|(ids, _)| look_of(game, ids)).collect();
     let commission = look_of(game, COMMISSION);
+    let rally = look_of(game, RALLY);
     let pack = look_of(game, PACK);
     let cancel = image(game, CANCEL_ICON);
     let listings = game.listings();
@@ -335,6 +356,7 @@ pub fn spawn(
     commands.insert_resource(Looks {
         orders,
         commission,
+        rally,
         pack,
         cancel,
         menus,
@@ -426,7 +448,7 @@ pub fn pointer_away(
 }
 
 pub fn aiming(page: Res<Page>) -> bool {
-    matches!(*page, Page::Aiming(_))
+    matches!(*page, Page::Aiming(_) | Page::Rally)
 }
 
 /// Goes back to the orders on Escape, and when what the page is for is
@@ -440,7 +462,7 @@ pub fn back_out(
     let gone = match *page {
         Page::Orders => false,
         Page::Aiming(_) => selected.0.is_empty(),
-        Page::Commission => chosen.0.is_none(),
+        Page::Commission | Page::Rally => chosen.0.is_none(),
     };
     if gone || keys.just_pressed(KeyCode::Escape) {
         page.set_if_neq(Page::Orders);
@@ -494,6 +516,7 @@ pub fn show(
         building.map(|b| BuildingButtons {
             commission: looks.commission.0,
             menu: menu.len(),
+            rally: looks.rally.0,
             pack: looks
                 .pack
                 .0
@@ -522,6 +545,15 @@ pub fn show(
             Entry::Commission => {
                 let look = &looks.commission.1;
                 (look.icon.clone(), look.name.clone(), true, false)
+            }
+            Entry::Rally => {
+                let look = &looks.rally.1;
+                (
+                    look.icon.clone(),
+                    look.name.clone(),
+                    true,
+                    *page == Page::Rally,
+                )
             }
             Entry::Pack => {
                 let look = &looks.pack.1;
@@ -564,6 +596,7 @@ pub fn show(
         (None, Page::Aiming(Aim::Unpack)) => "Left click where to unpack".into(),
         (None, Page::Aiming(Aim::Attack)) => "Left click an enemy or where to attack".into(),
         (None, Page::Aiming(_)) => "Left click where to go".into(),
+        (None, Page::Rally) => "Left click where new regiments go".into(),
         (None, _) => String::new(),
     };
     if caption.0 != text {
@@ -607,6 +640,7 @@ fn press(
         },
         Entry::Cancel => *page = Page::Orders,
         Entry::Commission => *page = Page::Commission,
+        Entry::Rally => *page = Page::Rally,
         Entry::Pack => {
             if let Some(b) = chosen.0
                 && let Err(e) = sim.0.order_pack(player, b)
@@ -640,7 +674,8 @@ fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
 /// While an order is aimed, a left click on the map gives it there and a
 /// right click calls it off. Attacking an enemy regiment sends the
 /// selected after it instead. Unpacking somewhere the building wouldn't
-/// fit waits for another click.
+/// fit waits for another click. A rally point is set for the selected
+/// building.
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -649,6 +684,7 @@ pub fn aim(
     loaded: Res<Loaded>,
     local: Res<Local>,
     selected: Res<Selected>,
+    chosen: Res<SelectedBuilding>,
     focus: Res<crate::Focus>,
     looks: Res<crate::waypoints::Looks>,
     mut sim: ResMut<Sim>,
@@ -657,9 +693,9 @@ pub fn aim(
     mut sounds: ResMut<crate::sound::Sounds>,
     mut sent: MessageWriter<crate::waypoints::Sent>,
 ) {
-    let Page::Aiming(aim) = *page else {
+    if !matches!(*page, Page::Aiming(_) | Page::Rally) {
         return;
-    };
+    }
     if buttons.just_pressed(MouseButton::Right) {
         *page = Page::Orders;
         return;
@@ -671,6 +707,15 @@ pub fn aim(
         local.0,
         crate::pointed(&windows, &cameras, &loaded.map.ground),
     ) else {
+        return;
+    };
+    let Page::Aiming(aim) = *page else {
+        if let Some(b) = chosen.0
+            && let Err(e) = sim.0.set_rally(player, b, Some(point))
+        {
+            info!("can't rally {}: {e:?}", sim.0.buildings[b].template);
+        }
+        *page = Page::Orders;
         return;
     };
     if let Some(e) = crate::enemy_at(&sim.0, player, *focus).filter(|_| aim == Aim::Attack) {
@@ -759,12 +804,14 @@ mod tests {
         let hq = BuildingButtons {
             commission: Some(0),
             menu: 11,
+            rally: Some(5),
             pack: Some(9),
         };
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq));
         assert_eq!(grid[0], Some(Entry::Commission));
+        assert_eq!(grid[5], Some(Entry::Rally));
         assert_eq!(grid[9], Some(Entry::Pack));
-        assert_eq!(grid.iter().flatten().count(), 2);
+        assert_eq!(grid.iter().flatten().count(), 3);
         let depot = BuildingButtons {
             menu: 0,
             pack: None,
@@ -778,5 +825,9 @@ mod tests {
         let menu = layout(Page::Commission, &GAME, &[true; 8], Some(hq));
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
+        let rally = layout(Page::Rally, &GAME, &[true; 8], Some(hq));
+        assert_eq!(rally[5], Some(Entry::Rally));
+        assert_eq!(rally[CANCEL], Some(Entry::Cancel));
+        assert_eq!(rally.iter().flatten().count(), 2);
     }
 }

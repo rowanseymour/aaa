@@ -449,6 +449,7 @@ fn main() -> ExitCode {
                 (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain(),
+                waypoints::rally,
             )
                 .run_if(in_state(Screen::Match)),
         )
@@ -1379,7 +1380,8 @@ fn select(
 
 /// Right click sends the selected regiments where it points, each keeping
 /// its place relative to the rest, or after the enemy regiment it's on,
-/// those that can't fight it going there instead.
+/// those that can't fight it going there instead. With a building that
+/// commissions selected, it sets its rally point there.
 #[allow(clippy::too_many_arguments)]
 fn command(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -1391,6 +1393,7 @@ fn command(
     looks: Res<waypoints::Looks>,
     mut sim: ResMut<Sim>,
     selected: Res<Selected>,
+    chosen: Res<SelectedBuilding>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
     mut sent: MessageWriter<waypoints::Sent>,
@@ -1400,13 +1403,20 @@ fn command(
     };
     // The free camera turns with the right button.
     let free = cameras.single().is_ok_and(|(_, _, rts)| rts.free);
-    if !buttons.just_pressed(MouseButton::Right) || free || selected.0.is_empty() {
+    if !buttons.just_pressed(MouseButton::Right) || free {
         return;
     }
     let ground = &loaded.map.ground;
     let Some(point) = pointed(&windows, &cameras, ground) else {
         return;
     };
+    if selected.0.is_empty() {
+        // Buildings that don't commission have no rally point to set.
+        if let Some(b) = chosen.0 {
+            let _ = sim.0.set_rally(player, b, Some(point));
+        }
+        return;
+    }
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
     let mut moving = selected.0.clone();
     if let Some(e) = enemy_at(&sim.0, player, *focus) {
