@@ -78,11 +78,14 @@ impl Plugin for MapRenderPlugin {
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .add_systems(
+                PostUpdate,
+                particles::play.after(bevy::transform::TransformSystems::Propagate),
+            )
+            .add_systems(
                 Update,
                 (
                     models::animate,
                     rig::play,
-                    particles::play.after(rig::play),
                     camera::update.in_set(camera::Controls),
                 ),
             );

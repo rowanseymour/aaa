@@ -13,6 +13,7 @@ use bevy::prelude::*;
 use nif::{Controller, ControllerKind, Keyframes, Nif, Object};
 
 use crate::models::{Animated, Part, PartMaterial, bevy_transform, controller};
+use crate::particles::{Anchor, Frames};
 
 /// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
@@ -31,6 +32,8 @@ pub struct Rig {
 }
 
 struct RigNode {
+    /// Its nif object index.
+    nif: usize,
     name: String,
     parent: Option<usize>,
     rest: nif::Transform,
@@ -71,6 +74,9 @@ pub struct Nodes {
     /// By nif object index.
     index: HashMap<usize, usize>,
     pub shapes: Vec<RigShape>,
+    /// Where every scene object is, hidden ones included, as particle
+    /// emitters may be placed by hidden helpers.
+    pub frames: Frames,
 }
 
 /// A visible shape among a rig's nodes.
@@ -92,6 +98,7 @@ impl Nodes {
             nodes: Vec::new(),
             index: HashMap::new(),
             shapes: Vec::new(),
+            frames: Frames::default(),
         };
         for &root in &nif.roots {
             nodes.walk(nif, root, None, nif::Transform::IDENTITY, &[], false);
@@ -118,11 +125,29 @@ impl Nodes {
         };
         let hidden = hidden || av.hidden();
         let transform = above.then(&av.transform);
+        let parent_index = parent.and_then(|p| self.nif_index(p));
+        let anchor = match (object, parent_index) {
+            (Object::Node(_), _) => Some(Anchor {
+                node: i,
+                below: nif::Transform::IDENTITY,
+                model: transform,
+            }),
+            (_, Some(node)) => Some(Anchor {
+                node,
+                below: av.transform,
+                model: transform,
+            }),
+            _ => None,
+        };
+        if let Some(anchor) = anchor {
+            self.frames.0.entry(i).or_insert(anchor);
+        }
         let properties: Vec<nif::Ref> = av.properties.iter().chain(inherited).copied().collect();
         match object {
             Object::Node(node) => {
                 let at = self.nodes.len();
                 self.nodes.push(RigNode {
+                    nif: i,
                     name: av.name.clone(),
                     parent,
                     rest: av.transform,
@@ -144,6 +169,11 @@ impl Nodes {
             }
             _ => {}
         }
+    }
+
+    /// The nif index of rig node `node`.
+    fn nif_index(&self, node: usize) -> Option<usize> {
+        self.nodes.get(node).map(|n| n.nif)
     }
 
     /// The rig for these nodes, with parts for [`Nodes::shapes`] by index:

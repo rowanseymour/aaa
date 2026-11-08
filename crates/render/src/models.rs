@@ -22,7 +22,7 @@ use tgck::map::Thing;
 
 use crate::MapObject;
 use crate::glow::{Glow, GlowMaterial, Source};
-use crate::particles::{self, Frames, Look, System};
+use crate::particles::{self, Look, System};
 use crate::rig::{Nodes, Rig};
 use crate::team::{self, Team, TeamMaterial};
 use crate::terrain::world;
@@ -677,7 +677,6 @@ impl Models {
         colour: Option<[f32; 3]>,
         offset: f32,
     ) {
-        let seed = offset.to_bits();
         let parts = match model.meshes {
             Meshes::Parts(parts) => {
                 particles::spawn(
@@ -686,7 +685,7 @@ impl Models {
                     &model.particles,
                     root,
                     |_| None,
-                    seed,
+                    offset,
                 );
                 parts
             }
@@ -697,7 +696,14 @@ impl Models {
                     .collect();
                 let joints = rig.spawn(commands, root, offset, materials);
                 let node = |i| rig.joint(i).map(|j| joints[j]);
-                particles::spawn(commands, assets.meshes, &model.particles, root, node, seed);
+                particles::spawn(
+                    commands,
+                    assets.meshes,
+                    &model.particles,
+                    root,
+                    node,
+                    offset,
+                );
                 return;
             }
         };
@@ -952,28 +958,14 @@ impl Models {
         let material = nif.property::<nif::Material>(props);
         let uv_set = base.map_or(0, |b| b.uv_set as usize);
         let mesh = mesh(g, transform, uv_set)?;
-        let source = base.and_then(|b| nif.get_as::<nif::SourceTexture>(b.source));
-        let texture = source.and_then(|t| match (&t.file, nif.get_as(t.pixels)) {
-            (Some(file), _) => self.texture(game, assets, file, view, path),
-            (None, Some(p)) => {
-                let key = format!("{path}#{}", t.pixels.unwrap_or_default());
-                self.embedded(assets, key, p)
-            }
-            _ => None,
-        });
+        let texture = self.base_texture(game, assets, nif, path, view, props);
         let alpha = nif.property::<nif::Alpha>(props);
         let double_sided = nif
             .property::<nif::Stencil>(props)
             .is_some_and(|s| s.double_sided());
         let [r, g, b] = material.map_or([1.0; 3], |m| m.diffuse);
         let opacity = material.map_or(1.0, |m| m.alpha);
-        let alpha_mode = match alpha {
-            Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
-            Some(a) if a.blend() && a.adds() => AlphaMode::Add,
-            Some(a) if a.blend() => AlphaMode::Blend,
-            _ if opacity < 1.0 => AlphaMode::Blend,
-            _ => AlphaMode::Opaque,
-        };
+        let alpha_mode = alpha_mode(alpha, opacity);
         let standard = StandardMaterial {
             base_color: Color::srgba(r, g, b, opacity),
             base_color_texture: texture,
@@ -1024,7 +1016,7 @@ impl Models {
         if placed.is_empty() {
             return Vec::new();
         }
-        let frames = Frames::new(nif);
+        let frames = Nodes::new(nif).frames;
         let mut out = Vec::new();
         for (_, p) in placed {
             let Some(&at) = p.path.last() else { continue };
@@ -1049,24 +1041,16 @@ impl Models {
         props: &[nif::Ref],
     ) -> Look {
         let texturing = nif.property::<nif::Texturing>(props);
-        let source = texturing
-            .and_then(|t| t.base.as_ref())
-            .and_then(|b| nif.get_as::<nif::SourceTexture>(b.source));
-        let texture = source.and_then(|t| match (&t.file, nif.get_as(t.pixels)) {
-            (Some(file), _) => self.texture(game, assets, file, view, path),
-            (None, Some(p)) => {
-                let key = format!("{path}#{}", t.pixels.unwrap_or_default());
-                self.embedded(assets, key, p)
-            }
-            _ => None,
-        });
-        let alpha_mode = match nif.property::<nif::Alpha>(props) {
-            Some(a) if a.blend() && a.adds() => AlphaMode::Add,
-            Some(a) if a.test() && !a.blend() => AlphaMode::Mask(a.threshold as f32 / 255.0),
-            _ => AlphaMode::Blend,
-        };
+        let texture = self.base_texture(game, assets, nif, path, view, props);
         let m = nif.property::<nif::Material>(props);
         let opacity = m.map_or(1.0, |m| m.alpha);
+        // Squares that also test alpha still blend: cut out instead, soft
+        // smoke turns to specks.
+        let alpha = nif.property::<nif::Alpha>(props);
+        let alpha_mode = match alpha_mode(alpha, opacity) {
+            AlphaMode::Mask(_) if alpha.is_some_and(|a| a.blend()) => AlphaMode::Blend,
+            mode => mode,
+        };
         let rgb = |c: Option<[f32; 3]>, a: f32| {
             let [r, g, b] = c.unwrap_or([1.0; 3]);
             Color::srgba(r, g, b, a)
@@ -1109,6 +1093,28 @@ impl Models {
         Look { material, tinted }
     }
 
+    /// The base texture `props` give a shape, from a file or embedded.
+    fn base_texture(
+        &mut self,
+        game: &mut GameData,
+        assets: &mut ModelAssets,
+        nif: &Nif,
+        path: &str,
+        view: &View,
+        props: &[nif::Ref],
+    ) -> Option<Handle<Image>> {
+        let base = nif.property::<nif::Texturing>(props)?.base.as_ref()?;
+        let source = nif.get_as::<nif::SourceTexture>(base.source)?;
+        match (&source.file, nif.get_as(source.pixels)) {
+            (Some(file), _) => self.texture(game, assets, file, view, path),
+            (None, Some(p)) => {
+                let key = format!("{path}#{}", source.pixels.unwrap_or_default());
+                self.embedded(assets, key, p)
+            }
+            _ => None,
+        }
+    }
+
     fn texture(
         &mut self,
         game: &mut GameData,
@@ -1145,6 +1151,17 @@ impl Models {
             };
             Some(assets.images.add(image))
         })
+    }
+}
+
+/// How a shape with `alpha` and its material's `opacity` blends.
+fn alpha_mode(alpha: Option<&nif::Alpha>, opacity: f32) -> AlphaMode {
+    match alpha {
+        Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
+        Some(a) if a.blend() && a.adds() => AlphaMode::Add,
+        Some(a) if a.blend() => AlphaMode::Blend,
+        _ if opacity < 1.0 => AlphaMode::Blend,
+        _ => AlphaMode::Opaque,
     }
 }
 

@@ -17,7 +17,7 @@ use bevy::light::NotShadowCaster;
 use bevy::math::Affine3A;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif, Object};
+use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif};
 
 use crate::models::{bevy_transform, controllers};
 use crate::terrain::world;
@@ -44,15 +44,15 @@ pub(crate) struct Look {
     pub tinted: bool,
 }
 
-/// Where one of a system's objects is in its model.
+/// Where one of a model's scene objects is.
 #[derive(Clone, Copy)]
-struct Anchor {
+pub(crate) struct Anchor {
     /// The nif index of the node above it, or the node itself.
-    node: usize,
+    pub node: usize,
     /// From the node to it.
-    below: nif::Transform,
+    pub below: nif::Transform,
     /// From the model's root to it.
-    model: nif::Transform,
+    pub model: nif::Transform,
 }
 
 /// One of a system's modifiers, run each frame in the model's order.
@@ -72,6 +72,12 @@ struct Timed<K> {
 impl<K> Timed<K> {
     fn time(&self, t: f32) -> f32 {
         self.controller.key_time(t)
+    }
+
+    /// Whether its key time wraps round to the start, rather than holding
+    /// or turning back, at the end.
+    fn loops(&self) -> bool {
+        (self.controller.flags >> 1) & 3 == 0
     }
 }
 
@@ -161,50 +167,10 @@ struct EmitterMesh {
     triangles: Vec<[u16; 3]>,
 }
 
-/// The scene objects of a model, by nif index.
-pub(crate) struct Frames(HashMap<usize, Anchor>);
-
-impl Frames {
-    /// Every scene object under the model's roots, hidden ones included, as
-    /// emitters may be placed by hidden helpers.
-    pub fn new(nif: &Nif) -> Frames {
-        let mut frames = Frames(HashMap::new());
-        for &root in &nif.roots {
-            frames.walk(nif, root, None, nif::Transform::IDENTITY);
-        }
-        frames
-    }
-
-    fn walk(&mut self, nif: &Nif, r: nif::Ref, parent: Option<usize>, above: nif::Transform) {
-        let Some(i) = r else { return };
-        let Some(av) = nif.get(r).and_then(Object::scene) else {
-            return;
-        };
-        if self.0.contains_key(&i) || self.0.len() > 4096 {
-            return;
-        }
-        let model = above.then(&av.transform);
-        let anchor = match (nif.get(r), parent) {
-            (Some(Object::Node(_)), _) => Anchor {
-                node: i,
-                below: nif::Transform::IDENTITY,
-                model,
-            },
-            (_, Some(node)) => Anchor {
-                node,
-                below: av.transform,
-                model,
-            },
-            _ => return,
-        };
-        self.0.insert(i, anchor);
-        if let Some(Object::Node(node)) = nif.get(r) {
-            for &c in &node.children {
-                self.walk(nif, c, Some(i), model);
-            }
-        }
-    }
-}
+/// The scene objects of a model, by nif index, as [`crate::rig::Nodes`]
+/// finds them.
+#[derive(Default)]
+pub(crate) struct Frames(pub HashMap<usize, Anchor>);
 
 impl System {
     /// The system at nif index `at`, drawn in `material`, or `None` if it
@@ -296,7 +262,7 @@ impl System {
                 ModifierKind::Emitter(e) => {
                     let shape = match &e.shape {
                         EmitterShape::Box { object, size } => Shape::Box {
-                            anchor: anchor(*object)?,
+                            anchor: anchor(*object).unwrap_or(0),
                             size: Vec3::from(*size),
                         },
                         EmitterShape::Cylinder {
@@ -304,12 +270,12 @@ impl System {
                             radius,
                             height,
                         } => Shape::Cylinder {
-                            anchor: anchor(*object)?,
+                            anchor: anchor(*object).unwrap_or(0),
                             radius: *radius,
                             height: *height,
                         },
                         EmitterShape::Sphere { object, radius } => Shape::Sphere {
-                            anchor: anchor(*object)?,
+                            anchor: anchor(*object).unwrap_or(0),
                             radius: *radius,
                         },
                         EmitterShape::Mesh {
@@ -392,6 +358,7 @@ impl System {
         let capacity = nif
             .get_as::<nif::ParticleData>(system.shape.data)
             .map_or(0, |d| d.capacity);
+        let has_colours = steps.iter().any(|s| matches!(s.kind, StepKind::Colour(_)));
         steps
             .iter()
             .any(|s| matches!(s.kind, StepKind::Emit(_)))
@@ -401,7 +368,8 @@ impl System {
                 capacity,
                 steps,
                 material: look.material,
-                tinted: look.tinted,
+                // Without colour keys the squares are white.
+                tinted: look.tinted && has_colours,
             })
     }
 }
@@ -411,16 +379,18 @@ fn world_vec([x, y, z]: [f32; 3]) -> Vec3 {
     world(x, y, z)
 }
 
-/// Spawns a model's particle systems: their anchors under `root`, or under
-/// the entity `node` gives for a nif node where a rig has one.
+/// Spawns a model's particle systems `offset` seconds into its animation:
+/// their anchors under `root`, or under the entity `node` gives for a nif
+/// node where a rig has one.
 pub(crate) fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     systems: &[Arc<System>],
     root: Entity,
     node: impl Fn(usize) -> Option<Entity>,
-    seed: u32,
+    offset: f32,
 ) {
+    let seed = offset.to_bits();
     for (i, system) in systems.iter().enumerate() {
         let anchors: Vec<Entity> = system
             .anchors
@@ -435,26 +405,28 @@ pub(crate) fn spawn(
                     .id()
             })
             .collect();
-        // Bevy can't upload a mesh without vertices, so it starts with an
-        // empty triangle, hidden until there are particles.
         let mesh = meshes.add(
             Mesh::new(
                 PrimitiveTopology::TriangleList,
                 RenderAssetUsages::default(),
             )
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3])
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, vec![[0.0f32, 1.0, 0.0]; 3])
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0f32; 2]; 3])
-            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vec![[0.0f32; 4]; 3])
-            .with_inserted_indices(Indices::U32(vec![0, 1, 2])),
+            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, Vec::<[f32; 2]>::new())
+            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new())
+            .with_inserted_indices(Indices::U32(Vec::new())),
         );
+        if let Some(mut m) = meshes.get_mut(&mesh) {
+            fill(&mut m, &[], Vec3::Y, &[]);
+        }
         let draw = commands
             .spawn((
                 Name::new("particles"),
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(system.material.clone()),
                 Transform::default(),
-                Visibility::Hidden,
+                Visibility::default(),
+                ParticleMesh,
                 // Its bounds change every frame.
                 NoFrustumCulling,
                 NotShadowCaster,
@@ -466,7 +438,8 @@ pub(crate) fn spawn(
             anchors,
             draw,
             mesh,
-            state: State::new(seed.wrapping_mul(31).wrapping_add(i as u32)),
+            state: State::new(seed.wrapping_mul(31).wrapping_add(i as u32), offset),
+            corners: Vec::new(),
         });
     }
 }
@@ -479,11 +452,17 @@ pub struct Particles {
     draw: Entity,
     mesh: Handle<Mesh>,
     state: State,
+    /// Each square's corners, relative to the mesh, kept to fill it from.
+    corners: Vec<[f32; 3]>,
 }
+
+/// Marks the entity a system's squares are drawn by.
+#[derive(Component)]
+pub struct ParticleMesh;
 
 /// What changes as a system plays.
 struct State {
-    /// Seconds it has played.
+    /// Seconds into its model's animation, which its keys are read at.
     time: f32,
     /// Particles owed to the birth rate since the emitter came on.
     owed: f32,
@@ -493,9 +472,10 @@ struct State {
 }
 
 impl State {
-    fn new(seed: u32) -> State {
+    /// A system `start` seconds into its model's animation.
+    fn new(seed: u32, start: f32) -> State {
         State {
-            time: 0.0,
+            time: start,
             owed: 0.0,
             played: false,
             particles: Vec::new(),
@@ -540,7 +520,9 @@ impl System {
             // An emitter switched off still emits: its own keys decide.
             let on = match (&step.active, &step.kind) {
                 (_, StepKind::Emit(_)) => true,
-                (Some(a), _) => on_since(&a.keys, a.time(before), a.time(t)).unwrap_or(step.on),
+                (Some(a), _) => {
+                    on_since(&a.keys, a.time(before), a.time(t), a.loops()).unwrap_or(step.on)
+                }
                 (None, _) => step.on,
             };
             if !on {
@@ -702,12 +684,14 @@ impl System {
     }
 }
 
-/// Whether on/off keys are on at `t`, or turned on at any point since
-/// `before`, allowing for keys that looped round in between.
-fn on_since(keys: &BoolKeys, before: f32, t: f32) -> Option<bool> {
-    let passed = |at: f32| match before <= t {
-        true => at > before && at <= t,
-        false => at > before || at <= t,
+/// Whether on/off keys are on at key time `t`, or turned on at any point
+/// since `before`: wrapping round from the end to the start if they
+/// `loop`, else playing backwards.
+fn on_since(keys: &BoolKeys, before: f32, t: f32, looping: bool) -> Option<bool> {
+    let passed = |at: f32| match (before <= t, looping) {
+        (true, _) => at > before && at <= t,
+        (false, true) => at > before || at <= t,
+        (false, false) => at >= t && at < before,
     };
     let switched_on = keys.iter().any(|&(at, on)| on && passed(at));
     Some(switched_on || bool_at(keys, t)?)
@@ -958,20 +942,22 @@ impl Rng {
     }
 }
 
+/// The 3D cameras, which aren't particle meshes.
+type Cameras = (With<Camera3d>, Without<ParticleMesh>);
+
 /// Plays every particle system and redraws its squares to face the camera.
+/// Runs once transforms are propagated, so it sees where the anchors are
+/// this frame.
 pub fn play(
     time: Res<Time>,
-    mut systems: Query<(&mut Particles, &GlobalTransform)>,
-    anchors: Query<&GlobalTransform>,
-    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
-    mut draws: Query<(&mut Transform, &mut Visibility)>,
+    mut systems: Query<(&mut Particles, &GlobalTransform), Without<ParticleMesh>>,
+    anchors: Query<&GlobalTransform, Without<ParticleMesh>>,
+    cameras: Query<(&Camera, &GlobalTransform), Cameras>,
+    mut draws: Query<(&mut Transform, &mut GlobalTransform), With<ParticleMesh>>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let dt = time.delta_secs();
-    let Some((_, camera)) = cameras.iter().find(|(c, _)| c.is_active) else {
-        return;
-    };
-    let (right, up) = (camera.right().as_vec3(), camera.up().as_vec3());
+    let camera = cameras.iter().find(|(c, _)| c.is_active).map(|(_, g)| g);
     for (mut particles, own) in &mut systems {
         let particles = &mut *particles;
         let own = own.affine();
@@ -979,80 +965,111 @@ pub fn play(
             true => Affine3A::IDENTITY,
             false => own.inverse(),
         };
-        let space = Space {
-            anchors: particles
-                .anchors
-                .iter()
-                .map(|&a| to_space * anchors.get(a).map_or(own, |g| g.affine()))
-                .collect(),
-        };
         if dt > 0.0 {
+            let space = Space {
+                anchors: particles
+                    .anchors
+                    .iter()
+                    .map(|&a| to_space * anchors.get(a).map_or(own, |g| g.affine()))
+                    .collect(),
+            };
             particles.system.step(&mut particles.state, &space, dt);
         }
+        let Some(camera) = camera else { continue };
+        let (right, up) = (camera.right().as_vec3(), camera.up().as_vec3());
         let to_world = to_space.inverse();
         let scale = own.matrix3.x_axis.length();
         let from_world = own.inverse();
-        let points: Vec<Vec3> = particles
-            .state
+        let state = &particles.state;
+        let points = state
             .particles
             .iter()
-            .map(|p| to_world.transform_point3(p.position))
-            .collect();
+            .map(|p| to_world.transform_point3(p.position));
         // Placed at the middle of its particles, which is what systems sort
         // back to front by.
-        let centre = match points.len() {
+        let centre = match state.particles.len() {
             0 => own.translation.into(),
-            n => points.iter().sum::<Vec3>() / n as f32,
+            n => points.clone().sum::<Vec3>() / n as f32,
         };
         let local_centre = from_world.transform_point3(centre);
-        if let Ok((mut t, mut visibility)) = draws.get_mut(particles.draw) {
-            if t.translation != local_centre {
-                t.translation = local_centre;
-            }
-            let shown = match points.is_empty() {
-                true => Visibility::Hidden,
-                false => Visibility::Inherited,
-            };
-            visibility.set_if_neq(shown);
-            if points.is_empty() {
-                continue;
+        if let Ok((mut t, mut global)) = draws.get_mut(particles.draw) {
+            t.translation = local_centre;
+            // Propagation has run, so its place this frame is set here.
+            *global = GlobalTransform::from(own) * GlobalTransform::from(*t);
+        }
+        particles.corners.clear();
+        for (p, w) in state.particles.iter().zip(points) {
+            let half = p.radius * p.size * scale;
+            for (x, y) in CORNERS {
+                let corner = w + (right * x + up * y) * half;
+                let local = from_world.transform_point3(corner) - local_centre;
+                particles.corners.push(local.to_array());
             }
         }
-        let Some(mut mesh) = meshes.get_mut(&particles.mesh) else {
-            continue;
-        };
-        let n = points.len();
-        let (mut positions, mut colours) = (Vec::with_capacity(n * 4), Vec::with_capacity(n * 4));
-        let (mut uvs, mut normals) = (Vec::with_capacity(n * 4), Vec::with_capacity(n * 4));
-        let mut indices = Vec::with_capacity(n * 6);
         let facing = from_world
             .transform_vector3(camera.back().as_vec3())
             .normalize_or_zero();
-        for (p, w) in particles.state.particles.iter().zip(&points) {
-            let half = p.radius * p.size * scale;
-            let base = positions.len() as u32;
-            for (x, y, uv) in [
-                (-1.0, -1.0, [0.0, 1.0]),
-                (1.0, -1.0, [1.0, 1.0]),
-                (1.0, 1.0, [1.0, 0.0]),
-                (-1.0, 1.0, [0.0, 0.0]),
-            ] {
-                let corner = *w + (right * x + up * y) * half;
-                positions.push((from_world.transform_point3(corner) - local_centre).to_array());
-                colours.push(match particles.system.tinted {
-                    true => p.colour,
-                    false => [1.0; 4],
-                });
-                uvs.push(uv);
-                normals.push(facing.to_array());
-            }
-            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        let tinted = particles.system.tinted;
+        let colours: Vec<[f32; 4]> = state
+            .particles
+            .iter()
+            .map(|p| match tinted {
+                // The model's colours are sRGB, as everywhere else.
+                true => {
+                    let [r, g, b, a] = p.colour;
+                    Color::srgba(r, g, b, a).to_linear().to_f32_array()
+                }
+                false => [1.0; 4],
+            })
+            .collect();
+        if let Some(mut mesh) = meshes.get_mut(&particles.mesh) {
+            fill(&mut mesh, &particles.corners, facing, &colours);
         }
-        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, normals);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
-        mesh.insert_indices(Indices::U32(indices));
+    }
+}
+
+/// A square's corners, across and up the screen, in drawing order.
+const CORNERS: [(f32, f32); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
+const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
+
+/// Refills a system's mesh in place: four `corners` a square, each square
+/// in its particle's colour, all facing `facing`. With no squares it holds
+/// one empty triangle, as Bevy can't upload a mesh without vertices.
+fn fill(mesh: &mut Mesh, corners: &[[f32; 3]], facing: Vec3, colours: &[[f32; 4]]) {
+    use bevy::mesh::VertexAttributeValues as V;
+    let empty = corners.is_empty();
+    let n = if empty { 3 } else { corners.len() };
+    if let Some(V::Float32x3(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) {
+        v.clear();
+        match empty {
+            true => v.extend([[0.0; 3]; 3]),
+            false => v.extend_from_slice(corners),
+        }
+    }
+    if let Some(V::Float32x3(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL) {
+        v.clear();
+        v.extend(std::iter::repeat_n(facing.to_array(), n));
+    }
+    if let Some(V::Float32x2(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
+        v.clear();
+        v.extend(UVS.iter().cycle().take(n));
+    }
+    if let Some(V::Float32x4(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
+        v.clear();
+        match empty {
+            true => v.extend([[0.0; 4]; 3]),
+            false => v.extend(colours.iter().flat_map(|&c| [c; 4])),
+        }
+    }
+    if let Some(Indices::U32(v)) = mesh.indices_mut() {
+        v.clear();
+        match empty {
+            true => v.extend([0, 1, 2]),
+            false => v.extend((0..corners.len() as u32 / 4).flat_map(|q| {
+                let b = q * 4;
+                [b, b + 1, b + 2, b, b + 2, b + 3]
+            })),
+        }
     }
 }
 
@@ -1135,7 +1152,7 @@ mod tests {
         let space = Space {
             anchors: vec![Affine3A::IDENTITY],
         };
-        let mut state = State::new(1);
+        let mut state = State::new(1, 0.0);
         let mut t = 0.0;
         while t < seconds - 1e-4 {
             system.step(&mut state, &space, dt);
@@ -1231,7 +1248,7 @@ mod tests {
         let space = Space {
             anchors: vec![Affine3A::IDENTITY],
         };
-        let mut state = State::new(1);
+        let mut state = State::new(1, 0.0);
         state.particles.push(Particle {
             position: Vec3::ZERO,
             velocity: Vec3::new(1.0, 2.0, 0.0),
@@ -1271,12 +1288,16 @@ mod tests {
     #[test]
     fn a_modifier_counts_as_on_if_switched_on_since_the_last_frame() {
         let keys: BoolKeys = vec![(0.0, false), (1.0, true), (1.05, false)];
-        assert_eq!(on_since(&keys, 0.5, 0.9), Some(false));
-        assert_eq!(on_since(&keys, 0.9, 1.1), Some(true));
-        assert_eq!(on_since(&keys, 1.1, 1.2), Some(false));
+        assert_eq!(on_since(&keys, 0.5, 0.9, true), Some(false));
+        assert_eq!(on_since(&keys, 0.9, 1.1, true), Some(true));
+        assert_eq!(on_since(&keys, 1.1, 1.2, true), Some(false));
         // Looped round from near the end back to the start.
         let keys: BoolKeys = vec![(0.0, true), (0.5, false)];
-        assert_eq!(on_since(&keys, 3.9, 0.1), Some(true));
+        assert_eq!(on_since(&keys, 3.9, 0.1, true), Some(true));
+        // Turning back, it passes only the keys it plays back over.
+        assert_eq!(on_since(&keys, 1.9, 1.8, false), Some(false));
+        let keys: BoolKeys = vec![(0.0, false), (1.0, true), (1.05, false)];
+        assert_eq!(on_since(&keys, 1.2, 0.9, false), Some(true));
     }
 
     fn moving(position: Vec3, velocity: Vec3) -> Particle {
@@ -1312,7 +1333,7 @@ mod tests {
         let space = Space {
             anchors: vec![Affine3A::IDENTITY],
         };
-        let mut state = State::new(1);
+        let mut state = State::new(1, 0.0);
         state
             .particles
             .push(moving(Vec3::new(0.0, 1.0, 0.0), Vec3::new(0.0, -4.0, 0.0)));
@@ -1341,7 +1362,7 @@ mod tests {
         let space = Space {
             anchors: vec![Affine3A::IDENTITY],
         };
-        let mut state = State::new(1);
+        let mut state = State::new(1, 0.0);
         state
             .particles
             .push(moving(Vec3::ZERO, Vec3::new(4.0, 0.0, 0.0)));
@@ -1363,7 +1384,7 @@ mod tests {
         let space = Space {
             anchors: vec![Affine3A::IDENTITY],
         };
-        let mut state = State::new(1);
+        let mut state = State::new(1, 0.0);
         state
             .particles
             .push(moving(Vec3::new(2.0, 0.0, 0.0), Vec3::new(-4.0, 0.0, 0.0)));
