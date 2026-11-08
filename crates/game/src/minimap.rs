@@ -182,7 +182,7 @@ pub fn spawn(
         colours: palette,
     });
     commands.spawn((
-        crate::ui::panel(
+        crate::ui::backed(
             crate::ui::Surface::Hud,
             Node {
                 position_type: PositionType::Absolute,

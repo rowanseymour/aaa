@@ -300,10 +300,7 @@ impl Ui<'_> {
             if let Some(p) = player {
                 pane.spawn((
                     at(8.0, 21.0, 300.0, 14.0),
-                    Text::new(p.name.clone()),
-                    ui::font(Font::Hud),
-                    TextColor(colour),
-                    Pickable::IGNORE,
+                    ui::coloured(p.name.clone(), Font::Hud, colour),
                 ));
             }
         });

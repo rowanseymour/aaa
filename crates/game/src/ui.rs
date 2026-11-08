@@ -16,7 +16,11 @@ impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
             .add_systems(Update, highlight)
-            .add_systems(PostUpdate, (paint, ink, edge, shade, fill))
+            // Before layout, which a meter's fill width feeds.
+            .add_systems(
+                PostUpdate,
+                (paint, ink, edge, shade, fill).before(bevy::ui::UiSystems::Prepare),
+            )
             .add_observer(click);
     }
 }
@@ -38,7 +42,7 @@ impl Default for Theme {
         Theme {
             tint: Color::BLACK,
             accent: Color::srgb(0.75, 0.6, 0.3),
-            lit: Color::srgb(0.1, 0.9, 0.1),
+            lit: crate::OWN,
         }
     }
 }
@@ -234,9 +238,20 @@ pub fn font(font: Font) -> TextFont {
     }
 }
 
-/// Text that the pointer passes through.
+/// Text that the pointer passes through, coloured by what's added to it.
+fn words(words: impl Into<String>, size: Font) -> impl Bundle {
+    (Text::new(words), font(size), Pickable::IGNORE)
+}
+
+/// Text in one of the theme's [`Ink`]s.
 pub fn label(words: impl Into<String>, size: Font, ink: Ink) -> impl Bundle {
-    (Text::new(words), font(size), ink, Pickable::IGNORE)
+    (self::words(words, size), ink)
+}
+
+/// Text in a colour of its own, which the theme leaves alone, such as a
+/// side's.
+pub fn coloured(words: impl Into<String>, size: Font, colour: Color) -> impl Bundle {
+    (self::words(words, size), TextColor(colour))
 }
 
 /// A [`label`] in [`Ink::Body`].
@@ -244,23 +259,24 @@ pub fn text(words: impl Into<String>, size: Font) -> impl Bundle {
     label(words, size, Ink::Body)
 }
 
-/// The corners of a [`panel`] that doesn't give its own.
+/// A [`panel`]'s corners.
 const CORNER: f32 = 12.0;
 
 /// The box the interface's boxes are built on: a background for what it's
-/// for, laid out as `node`, with rounded corners unless `node` gives its
-/// own.
+/// for, laid out and shaped as `node`, such as the minimap's disc or a strip
+/// along the screen's edge.
+pub fn backed(surface: Surface, node: Node) -> impl Bundle {
+    (node, surface)
+}
+
+/// A [`backed`] box with the interface's rounded corners.
 pub fn panel(surface: Surface, node: Node) -> impl Bundle {
-    let border_radius = match node.border_radius == BorderRadius::ZERO {
-        true => BorderRadius::all(px(CORNER)),
-        false => node.border_radius,
-    };
-    (
+    backed(
+        surface,
         Node {
-            border_radius,
+            border_radius: BorderRadius::all(px(CORNER)),
             ..node
         },
-        surface,
     )
 }
 
@@ -522,22 +538,6 @@ mod tests {
         assert!((grey(Surface::Panel).red - 0.07).abs() < 1e-5);
         assert!((grey(Surface::Hovered).green - 0.3).abs() < 1e-5);
         assert_eq!(grey(Surface::Hud).alpha, 0.85);
-    }
-
-    #[test]
-    fn a_panel_rounds_its_corners_unless_given_its_own() {
-        let mut world = World::new();
-        let corners = |world: &mut World, node: Node| {
-            let panel = world.spawn(panel(Surface::Hud, node)).id();
-            world.get::<Node>(panel).unwrap().border_radius
-        };
-        let plain = corners(&mut world, Node::default());
-        assert_eq!(plain, BorderRadius::all(px(CORNER)));
-        let round = Node {
-            border_radius: BorderRadius::MAX,
-            ..default()
-        };
-        assert_eq!(corners(&mut world, round), BorderRadius::MAX);
     }
 
     #[test]

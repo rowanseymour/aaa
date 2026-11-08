@@ -4,7 +4,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::Screen;
-use crate::ui::{Font, Surface, button, disabled};
+use crate::ui::{Font, Surface, backed, button, disabled};
 
 pub struct MenuPlugin;
 
@@ -42,15 +42,17 @@ fn column(commands: &mut Commands, screen: Screen) -> Entity {
     commands
         .spawn((
             ChildOf(root),
-            Node {
-                width: px(320),
-                height: percent(100),
-                flex_direction: FlexDirection::Column,
-                padding: UiRect::all(px(32)),
-                row_gap: px(12),
-                ..default()
-            },
-            Surface::Panel,
+            backed(
+                Surface::Panel,
+                Node {
+                    width: px(320),
+                    height: percent(100),
+                    flex_direction: FlexDirection::Column,
+                    padding: UiRect::all(px(32)),
+                    row_gap: px(12),
+                    ..default()
+                },
+            ),
         ))
         .id()
 }

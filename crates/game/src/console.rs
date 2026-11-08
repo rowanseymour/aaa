@@ -20,7 +20,7 @@ use bevy::window::PrimaryWindow;
 use crate::actions::Aim;
 use crate::lobby::Lineup;
 use crate::remote::Remote;
-use crate::ui::{Font, Ink, Surface, label};
+use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::waypoints::Sent;
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
@@ -236,7 +236,7 @@ const VERBS: &[Verb] = &[
     verb(
         "uitint",
         "[r g b]",
-        "shades the interface's backgrounds from a colour, each part 0 to 1; without, says it",
+        "shades the interface's backgrounds and borders from a colour, each part 0 to 1; without, says it",
     ),
     verb(
         "resolution",
@@ -1175,15 +1175,17 @@ struct PanelText;
 fn spawn(mut commands: Commands) {
     commands.spawn((
         Panel,
-        Node {
-            display: Display::None,
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            padding: UiRect::all(px(8)),
-            ..default()
-        },
+        backed(
+            Surface::Popup,
+            Node {
+                display: Display::None,
+                position_type: PositionType::Absolute,
+                width: percent(100),
+                padding: UiRect::all(px(8)),
+                ..default()
+            },
+        ),
         GlobalZIndex(100),
-        Surface::Popup,
         children![(PanelText, label("", Font::Hud, Ink::Help))],
     ));
 }

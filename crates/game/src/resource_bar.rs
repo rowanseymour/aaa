@@ -12,7 +12,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use crate::actions::fill;
-use crate::ui::{Font, Ink, Surface, label, panel};
+use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::{Loaded, Local, Screen, Sim};
 
 /// What each cell shows, in order: a rate, or a limit by what it uses.
@@ -120,7 +120,7 @@ pub fn spawn(
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
         root.spawn((
             Bar(preview),
-            panel(
+            backed(
                 Surface::Hud,
                 Node {
                     display: match preview {
