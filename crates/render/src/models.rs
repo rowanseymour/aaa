@@ -1144,12 +1144,7 @@ mod tests {
         let heights = (0..side * side)
             .map(|i| height((i % side) as f32 * 2.0, (i / side) as f32 * 2.0))
             .collect();
-        Ground {
-            side,
-            heights,
-            water: vec![false; side * side],
-            surface: vec![0.0; side * side],
-        }
+        Ground::from_heights(heights)
     }
 
     const TANK: Shape = Shape::Rect {

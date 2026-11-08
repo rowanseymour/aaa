@@ -100,9 +100,8 @@ pub struct Pathing {
 }
 
 impl Pathing {
-    /// Tiles whose terrain isn't among `variations` count as water where
-    /// the map has them in a body of water, as the game's own water
-    /// terrains almost all are, and as land elsewhere.
+    /// Tiles whose terrain isn't among `variations` count as water or land
+    /// by [`undefined_is_water`].
     pub fn new(
         terrain: &Terrain,
         variations: &HashMap<Id, Variation>,
@@ -121,7 +120,7 @@ impl Pathing {
             .iter()
             .map(|t| {
                 let defined = by_index.get(usize::from(t.terrain)).copied().flatten();
-                defined.unwrap_or(if t.water_body != 0 { NAVAL } else { LAND })
+                defined.unwrap_or(if undefined_is_water(t) { NAVAL } else { LAND })
             })
             .collect();
         let mut pathing = Pathing {
@@ -233,6 +232,13 @@ fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     out
 }
 
+/// Whether a tile whose terrain the data doesn't define is water: where the
+/// map has it in a body of water, as the game's own water terrains almost
+/// all are.
+pub(crate) fn undefined_is_water(tile: &tgck::map::Tile) -> bool {
+    tile.water_body != 0
+}
+
 /// The tile bit a mover on `domain` needs.
 fn bits(domain: Domain) -> u8 {
     match domain {
@@ -306,6 +312,7 @@ mod tests {
             priority: 0,
             land: true,
             naval: false,
+            kind: aaa_data::TerrainKind::Land,
         };
         let variations = HashMap::from([(Id::from("grass"), grass)]);
         let p = Pathing::new(&terrain, &variations, []);

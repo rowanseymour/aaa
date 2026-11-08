@@ -1,22 +1,40 @@
-//! The ground's shape, from a map's height maps.
+//! The ground's shape, from a map's height maps and its tiles' terrain.
 
-use aaa_data::Shape;
-use tgck::map::{CELL_SIZE, HeightMap};
+use std::collections::HashMap;
 
-/// Ground heights with the water bed below the water. The height map stores
-/// the water surface at water vertices, and the mountain height map how far
-/// the bed lies below it.
+use aaa_data::{Id, Shape, TerrainKind, Variation};
+use tgck::map::{CELL_SIZE, HeightMap, Terrain};
+
+/// The ground: the height map, with the mountain height map added around
+/// mountains and water (where it lays the water's bed), and mountains'
+/// tiles each raised a little more.
 pub struct Ground {
+    /// Vertices per side.
     pub side: usize,
+    /// The ground at each vertex as the tile it's the corner of nearest the
+    /// origin has it, row-major, for drawing: one height a vertex can't
+    /// show the steps between tiles that [`Ground::height_at`] has.
     pub heights: Vec<f32>,
     pub water: Vec<bool>,
     /// Water level at water vertices and the land beside them.
     pub surface: Vec<f32>,
+    /// The two height maps, row-major by vertex.
+    base: Vec<f32>,
+    mountain: Vec<f32>,
+    /// Per tile, row-major: how far it's raised on top of the mountain
+    /// height map, or `None` where that doesn't count.
+    relief: Vec<Option<f32>>,
 }
 
 impl Ground {
-    /// The ground of two height maps the same size, of at least one cell.
-    pub fn new(hm: &HeightMap, mountain: &HeightMap) -> Result<Self, String> {
+    /// The ground of two height maps the same size, of at least one cell,
+    /// and the terrain of the tiles between their vertices.
+    pub fn new(
+        hm: &HeightMap,
+        mountain: &HeightMap,
+        terrain: &Terrain,
+        variations: &HashMap<Id, Variation>,
+    ) -> Result<Self, String> {
         let side = hm.side;
         if side < 2 || mountain.side != side {
             return Err(format!(
@@ -24,16 +42,36 @@ impl Ground {
                 mountain.side
             ));
         }
-        let water: Vec<bool> = hm.layer.iter().map(|&l| l != 0).collect();
-        // Off water the mountain heights are leftovers the game ignores:
-        // objects there sit on the height map alone.
-        let heights = hm
-            .heights
+        let tiles = terrain.side;
+        if tiles + 1 != side || terrain.tiles.len() != tiles * tiles {
+            return Err(format!(
+                "{tiles} tiles a side don't fit height maps of {side} vertices"
+            ));
+        }
+        let kinds: Vec<TerrainKind> = terrain
+            .tiles
             .iter()
-            .zip(&mountain.heights)
-            .zip(&water)
-            .map(|((&h, &d), &w)| if w { h + d } else { h })
+            .map(|t| {
+                let name = terrain.names.get(usize::from(t.terrain));
+                match name.and_then(|n| variations.get(&Id::from(n.as_str()))) {
+                    Some(v) => v.kind,
+                    None if crate::pathing::undefined_is_water(t) => TerrainKind::Water,
+                    None => TerrainKind::Land,
+                }
+            })
             .collect();
+        let relief = (0..tiles * tiles)
+            .map(|k| {
+                let rugged = |j: usize| !matches!(kinds[j], TerrainKind::Land);
+                neighbours(tiles, k).any(rugged).then(|| match kinds[k] {
+                    TerrainKind::Mountain { noise: [low, high] } => {
+                        low + (high - low) * tile_share(k)
+                    }
+                    _ => 0.0,
+                })
+            })
+            .collect();
+        let water: Vec<bool> = hm.layer.iter().map(|&l| l != 0).collect();
         let surface = (0..side * side)
             .map(|i| {
                 if water[i] {
@@ -49,12 +87,43 @@ impl Ground {
                 }
             })
             .collect();
-        Ok(Ground {
+        let mut ground = Ground {
             side,
-            heights,
+            heights: Vec::new(),
             water,
             surface,
-        })
+            base: hm.heights.clone(),
+            mountain: mountain.heights.clone(),
+            relief,
+        };
+        ground.heights = (0..side * side)
+            .map(|i| {
+                let (x, y) = ((i % side) as f32, (i / side) as f32);
+                ground.height_at(x * CELL_SIZE, y * CELL_SIZE)
+            })
+            .collect();
+        Ok(ground)
+    }
+
+    /// A ground of plain `heights`, row-major by vertex over a square of at
+    /// least one cell, with no water or mountains, for tests and tools.
+    pub fn from_heights(heights: Vec<f32>) -> Self {
+        let side = heights.len().isqrt();
+        assert!(
+            side >= 2 && side * side == heights.len(),
+            "{} heights aren't a square of at least one cell",
+            heights.len()
+        );
+        let tiles = side.saturating_sub(1);
+        Ground {
+            side,
+            water: vec![false; heights.len()],
+            surface: heights.clone(),
+            base: heights.clone(),
+            mountain: vec![0.0; heights.len()],
+            relief: vec![None; tiles * tiles],
+            heights,
+        }
     }
 
     /// Height at a vertex.
@@ -67,18 +136,46 @@ impl Ground {
         (self.side - 1) as f32 * CELL_SIZE
     }
 
-    /// Ground height at a world position, interpolated.
+    /// Ground height at a world position.
     pub fn height_at(&self, wx: f32, wy: f32) -> f32 {
-        let max = (self.side - 1) as f32;
-        let fx = (wx / CELL_SIZE).clamp(0.0, max);
-        let fy = (wy / CELL_SIZE).clamp(0.0, max);
-        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
-        let (x1, y1) = ((x0 + 1).min(self.side - 1), (y0 + 1).min(self.side - 1));
-        let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
-        let top = self.at(x0, y0) * (1.0 - tx) + self.at(x1, y0) * tx;
-        let bottom = self.at(x0, y1) * (1.0 - tx) + self.at(x1, y1) * tx;
-        top * (1.0 - ty) + bottom * ty
+        let tiles = self.side - 1;
+        let tile = |w: f32| ((w / CELL_SIZE).floor().max(0.0) as usize).min(tiles - 1);
+        let relief = self.relief[tile(wy) * tiles + tile(wx)];
+        let base = self.sample(&self.base, wx, wy);
+        relief.map_or(base, |r| base + self.sample(&self.mountain, wx, wy) + r)
     }
+
+    /// A height map's height at a world position: bilinear within a cell,
+    /// but the mean of the two vertices either side of it on a grid line,
+    /// and held at the edge beyond the map.
+    fn sample(&self, grid: &[f32], wx: f32, wy: f32) -> f32 {
+        let last = self.side - 1;
+        let at = |x: f32, y: f32| {
+            let index = |v: f32| (v.max(0.0) as usize).min(last);
+            grid[index(y) * self.side + index(x)]
+        };
+        let (fx, fy) = (wx / CELL_SIZE, wy / CELL_SIZE);
+        let (x0, y0) = (fx.floor(), fy.floor());
+        let on_line = |f: f32| (f - f.round()).abs() * CELL_SIZE < 1e-4;
+        match (on_line(fx), on_line(fy)) {
+            (true, true) => at(fx.round(), fy.round()),
+            (true, false) => (at(fx.round(), y0) + at(fx.round(), y0 + 1.0)) / 2.0,
+            (false, true) => (at(x0, fy.round()) + at(x0 + 1.0, fy.round())) / 2.0,
+            (false, false) => {
+                let (tx, ty) = (fx - x0, fy - y0);
+                let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1.0, y0) * tx;
+                let bottom = at(x0, y0 + 1.0) * (1.0 - tx) + at(x0 + 1.0, y0 + 1.0) * tx;
+                top * (1.0 - ty) + bottom * ty
+            }
+        }
+    }
+}
+
+/// Where in its terrain's range a mountain tile's extra height lies, from 0
+/// to just under 1, fixed by the tile's row-major index.
+fn tile_share(k: usize) -> f32 {
+    let r = (k as u64 * 4723 + 6323) % 6997 % 1000;
+    r as f32 / 1000.0
 }
 
 /// How an object that follows the ground sits on it, in world axes with z up.
@@ -184,12 +281,7 @@ mod tests {
         let heights = (0..side * side)
             .map(|i| height((i % side) as f32 * CELL_SIZE, (i / side) as f32 * CELL_SIZE))
             .collect();
-        Ground {
-            side,
-            heights,
-            water: vec![false; side * side],
-            surface: vec![0.0; side * side],
-        }
+        Ground::from_heights(heights)
     }
 
     fn near(a: [f32; 3], b: [f32; 3]) -> bool {
@@ -223,23 +315,121 @@ mod tests {
         assert!(near(tilt.up, [0.0, 0.0, 1.0]));
     }
 
-    #[test]
-    fn height_maps_must_match_and_hold_a_cell() {
-        let hm = |side: usize| HeightMap {
+    fn height_map(side: usize, height: f32) -> HeightMap {
+        HeightMap {
             version: 1,
             min: 0.0,
             max: 0.0,
             default: 0.0,
             unknown: 0,
             side,
-            heights: vec![1.0; side * side],
+            heights: vec![height; side * side],
             layer: vec![0; side * side],
+        }
+    }
+
+    /// `tiles` a side of grass, but for a mountain at 1,1 and sea at 3,0,
+    /// and the terrains they name.
+    fn terrain(tiles: usize) -> (Terrain, HashMap<Id, Variation>) {
+        let tile = |terrain| tgck::map::Tile {
+            terrain,
+            water_body: 0,
+            flags: 0,
+            seen_by: 0,
+            padding: 0,
+            unused: 0,
         };
-        assert!(Ground::new(&hm(5), &hm(4)).is_err());
-        assert!(Ground::new(&hm(1), &hm(1)).is_err());
-        assert!(Ground::new(&hm(0), &hm(0)).is_err());
-        let ground = Ground::new(&hm(5), &hm(5)).unwrap();
-        assert_eq!(ground.height_at(8.0, 8.0), 1.0);
+        let mut grid = vec![tile(0); tiles * tiles];
+        if tiles >= 4 {
+            grid[tiles + 1] = tile(1);
+            grid[3] = tile(2);
+        }
+        let terrain = Terrain {
+            version: 7,
+            unknown: 0,
+            biome: String::new(),
+            names: vec!["grass".into(), "rock".into(), "sea".into()],
+            side: tiles,
+            tiles: grid,
+            ai_map: None,
+            shore_mesh: None,
+        };
+        let variation = |kind| Variation {
+            texture: String::new(),
+            repeat: [8.0; 2],
+            color: [0.5; 3],
+            water: None,
+            animation: None,
+            priority: 0,
+            land: true,
+            naval: false,
+            kind,
+        };
+        let variations = HashMap::from([
+            (Id::from("grass"), variation(TerrainKind::Land)),
+            (
+                Id::from("rock"),
+                variation(TerrainKind::Mountain { noise: [1.0, 2.0] }),
+            ),
+            (Id::from("sea"), variation(TerrainKind::Water)),
+        ]);
+        (terrain, variations)
+    }
+
+    #[test]
+    fn height_maps_must_match_and_hold_a_cell() {
+        let (t4, v) = terrain(4);
+        let new = |a, b, t: &Terrain| Ground::new(&height_map(a, 1.0), &height_map(b, 1.0), t, &v);
+        assert!(new(5, 4, &t4).is_err());
+        assert!(new(1, 1, &terrain(0).0).is_err());
+        assert!(new(0, 0, &terrain(0).0).is_err());
+        // Tiles must sit between the vertices.
+        assert!(new(6, 6, &t4).is_err());
+        assert!(new(5, 5, &t4).is_ok());
+    }
+
+    #[test]
+    fn the_mountain_map_raises_mountains_water_and_the_land_beside_them() {
+        let (terrain, variations) = terrain(4);
+        let ground = Ground::new(
+            &height_map(5, 1.0),
+            &height_map(5, 5.0),
+            &terrain,
+            &variations,
+        )
+        .unwrap();
+        // The mountain's own tile, 5 in row-major order, is raised 1.95.
+        assert!((ground.height_at(3.0, 3.0) - 7.95).abs() < 1e-5);
+        // Beside it, and beside the sea, the mountain map counts alone.
+        assert_eq!(ground.height_at(5.0, 5.0), 6.0);
+        assert_eq!(ground.height_at(5.0, 1.0), 6.0);
+        // As it does on the sea itself.
+        assert_eq!(ground.height_at(7.0, 1.0), 6.0);
+        // Away from both it doesn't.
+        assert_eq!(ground.height_at(7.0, 7.0), 1.0);
+        // Vertices take their ground from the tile they're the corner of
+        // nearest the origin.
+        assert!((ground.at(1, 1) - 7.95).abs() < 1e-5);
+    }
+
+    #[test]
+    #[should_panic(expected = "aren't a square")]
+    fn plain_ground_needs_a_cell() {
+        Ground::from_heights(vec![1.0]);
+    }
+
+    #[test]
+    fn grid_lines_take_the_mean_of_the_vertices_either_side() {
+        // The height of each vertex is its column.
+        let ground = ground(|x, _| x / CELL_SIZE);
+        assert!((ground.height_at(2.5, 3.0) - 1.25).abs() < 1e-5);
+        // On a row the mean of the vertices either side, wherever along it.
+        assert_eq!(ground.height_at(2.5, 2.0), 1.5);
+        assert_eq!(ground.height_at(2.0, 3.0), 1.0);
+        assert_eq!(ground.height_at(4.0, 4.0), 2.0);
+        // Beyond the map, held at the edge.
+        assert_eq!(ground.height_at(100.0, 3.0), 8.0);
+        assert_eq!(ground.height_at(-5.0, 3.0), 0.0);
     }
 
     #[test]

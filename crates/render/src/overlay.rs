@@ -328,12 +328,7 @@ mod tests {
         let heights = (0..side * side)
             .map(|i| if i % side == 8 { 5.0 } else { 0.0 })
             .collect();
-        let ground = Ground {
-            side,
-            heights,
-            water: vec![false; side * side],
-            surface: vec![0.0; side * side],
-        };
+        let ground = Ground::from_heights(heights);
         let mesh = draped_square(&ground, [16.0, 16.0], [0.0, 1.0], Vec2::splat(12.0));
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
