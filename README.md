@@ -1,15 +1,15 @@
 ![Matches in aaa-game and a map in aaa-editor](docs/banner.jpg)
 
-Experiments with the data files of [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)), the
+A work-in-progress [Rust](https://rust-lang.org)+[Bevy](https://bevy.org) re-implementation of [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)), the
 real-time strategy game.
 
 > [!IMPORTANT]
 > You need your own copy of the game. This project contains no game code or data.
 
 > [!NOTE]
-> This is not a decompilation of the game - everything is written from scratch, clean-room style.
-> Whoever studies the original game writes up its behavior as specs, and the code here is written
-> only from those specs, the data files and what the running game shows.
+> This is not a decompilation of the game: the code is written from scratch, clean-room style.
+> The original game's behavior is written up as specs, and the code here is written only from
+> those specs, the data files and the game itself, played.
 
 ## Crates
 
