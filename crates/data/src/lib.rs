@@ -402,6 +402,19 @@ pub struct Variation {
     pub land: bool,
     /// Ships can cross it.
     pub naval: bool,
+    pub kind: TerrainKind,
+}
+
+/// What a terrain is, which decides how the ground stands on it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TerrainKind {
+    Land,
+    /// Its tiles each stand raised by an amount from `noise`, lowest and
+    /// highest.
+    Mountain {
+        noise: [f32; 2],
+    },
+    Water,
 }
 
 /// A looping sequence of textures.
@@ -715,6 +728,7 @@ impl GameData {
                     continue;
                 };
                 let water = terrain.ids.as_ref().and_then(|id| water.get(id));
+                let kind = terrain_kind(&terrain);
                 let animation =
                     terrain
                         .anim_textures_path_prefix
@@ -746,6 +760,7 @@ impl GameData {
                             priority: terrain.base_priority + i as i32,
                             land: terrain.land,
                             naval: terrain.water,
+                            kind,
                         },
                     );
                 }
@@ -1992,6 +2007,16 @@ fn localized(strings: &HashMap<String, String>, name: Option<&str>) -> Option<St
     }
 }
 
+fn terrain_kind(t: &defs::Terrain) -> TerrainKind {
+    match t.kind.as_deref().map(str::to_ascii_uppercase).as_deref() {
+        Some("MOUNTAIN") => TerrainKind::Mountain {
+            noise: [t.noise_min.unwrap_or(0.0), t.noise_max.unwrap_or(0.0)],
+        },
+        Some("WATER") => TerrainKind::Water,
+        _ => TerrainKind::Land,
+    }
+}
+
 /// The id, unless it's the data's word for none.
 fn not_null(id: Option<Id>) -> Option<Id> {
     id.filter(|id| !id.as_str().eq_ignore_ascii_case("null"))
@@ -2068,6 +2093,30 @@ mod tests {
         // A cursor of one frame names its file whole.
         assert_eq!(frames("d.tga", |n| n == "d.tga"), ["d.tga"]);
         assert!(frames("e.tga", |_| false).is_empty());
+    }
+
+    #[test]
+    fn terrains_take_their_kind_and_noise_from_their_templates() {
+        let parsed = tgi::parse(
+            "[template Terrain]\n{\n\tstring IDS\n\tstring type = LAND\n}\n\
+             [template MountainTerrain inherit=Terrain]\n{\n\ttype = MOUNTAIN\n\
+             \tfixed noise_min = 1.0\n\tfixed noise_max = 2.0\n}\n\
+             [Terrain template=MountainTerrain]\n{\n\tIDS = rock\n\tfixed noise_min = 0.25\n}\n\
+             [Terrain template=Terrain]\n{\n\tIDS = grass\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let kinds: Vec<TerrainKind> = parsed
+            .root
+            .blocks_of("Terrain")
+            .map(|b| terrain_kind(&templates.deserialize::<defs::Terrain>(b).unwrap()))
+            .collect();
+        assert_eq!(
+            kinds,
+            [
+                TerrainKind::Mountain { noise: [0.25, 2.0] },
+                TerrainKind::Land
+            ]
+        );
     }
 
     #[test]
