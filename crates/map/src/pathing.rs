@@ -35,12 +35,12 @@ impl Obstacle {
         // The shape's y axis runs along the facing.
         let [across, along] = crate::to_local(self.position, self.facing, [x, y]);
         match self.shape {
-            Shape::Point => across.hypot(along),
-            Shape::Circle { radius } => (across.hypot(along) - radius).max(0.0),
+            Shape::Point => libm::hypotf(across, along),
+            Shape::Circle { radius } => (libm::hypotf(across, along) - radius).max(0.0),
             Shape::Rect { width, height } => {
                 let across = across.abs() - width / 2.0;
                 let along = along.abs() - height / 2.0;
-                across.max(0.0).hypot(along.max(0.0))
+                libm::hypotf(across.max(0.0), along.max(0.0))
             }
         }
     }
@@ -203,7 +203,7 @@ fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     let reach = match o.shape {
         Shape::Point => 0.0,
         Shape::Circle { radius } => radius,
-        Shape::Rect { width, height } => width.hypot(height) / 2.0,
+        Shape::Rect { width, height } => libm::hypotf(width, height) / 2.0,
     };
     if reach <= MARGIN {
         return Vec::new();

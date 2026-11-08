@@ -9,6 +9,7 @@ publish = false
 
 [dependencies]
 aaa-map = { path = "../map" }
+libm = "0.2.16"
 
 [dev-dependencies]
 tgck = { path = "../tgck" }

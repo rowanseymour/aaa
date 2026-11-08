@@ -9,4 +9,5 @@ publish = false
 
 [dependencies]
 aaa-data = { path = "../data" }
+libm = "0.2.16"
 tgck = { path = "../tgck" }

@@ -161,7 +161,7 @@ fn smooth(
 fn clear(pathing: &Pathing, domain: Domain, a: [f32; 2], b: [f32; 2]) -> bool {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     // A tenth of a tile at a time, so corners aren't cut by much.
-    let steps = ((dx.hypot(dy) / CELL_SIZE) * 10.0).ceil().max(1.0) as usize;
+    let steps = ((libm::hypotf(dx, dy) / CELL_SIZE) * 10.0).ceil().max(1.0) as usize;
     let first = tile_at(a);
     (1..=steps).all(|s| {
         let t = s as f32 / steps as f32;
