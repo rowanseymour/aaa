@@ -197,6 +197,11 @@ pub struct ElementComponent {
     /// Health it gets back a second in supply, as a share of its own;
     /// recruiting one alone takes its inverse in seconds.
     pub resupply_rate: Option<f32>,
+    /// Comma separated templates of the buildings its owner needs to
+    /// recruit it, read into a [`Requires`](crate::Requires).
+    pub required_structures: Option<String>,
+    #[serde(default)]
+    pub required_structures_any: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

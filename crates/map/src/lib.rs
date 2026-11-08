@@ -6,7 +6,7 @@ mod ground;
 pub mod pathing;
 mod units;
 
-pub use aaa_data::{Damage, DeployPoints, Fighter, Id, Shape, Targets, Weapon};
+pub use aaa_data::{Damage, DeployPoints, Fighter, Id, Requires, Shape, Targets, Weapon};
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
 pub use pathing::{Domain, Obstacle, Pathing};

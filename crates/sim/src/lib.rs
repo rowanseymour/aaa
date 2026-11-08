@@ -11,7 +11,8 @@ use std::collections::{HashMap, VecDeque};
 
 use aaa_map::pathing::tile_at;
 use aaa_map::{
-    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Shape, Unpacks, Weapon,
+    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Shape, Unpacks,
+    Weapon,
 };
 
 pub use aaa_map::{Player, Relation, Team};
@@ -43,6 +44,9 @@ pub struct World {
     pub pathing: Pathing,
     /// What each building template packs into, for those that can.
     pub packing: HashMap<String, Packs>,
+    /// The buildings a player needs to commission a regiment with a member
+    /// of each template, by template.
+    pub requires: HashMap<Id, Requires>,
     pub regiments: Vec<Regiment>,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
@@ -427,6 +431,8 @@ pub enum Refused {
     Unable,
     /// What it would put down doesn't fit there.
     NoRoom,
+    /// Its owner lacks buildings that what it would raise needs.
+    Lacking,
 }
 
 impl From<NotYours> for Refused {
@@ -563,6 +569,7 @@ impl World {
             next_id: 1,
             next_commission: 0,
             packing: HashMap::new(),
+            requires: HashMap::new(),
         };
         for regiment in regiments {
             world.add_regiment(regiment);
@@ -770,7 +777,10 @@ impl World {
             Command::Pursue { regiment, enemy } => self.may_pursue(player, regiment, enemy),
             Command::Unpack { regiment, at } => self.may_unpack(player, regiment, at).map(drop),
             Command::Pack { building } => self.may_pack(player, building).map(drop),
-            Command::Commission { building, .. } => self.may_commission(player, building),
+            Command::Commission {
+                building,
+                ref commission,
+            } => self.may_commission(player, building, &commission.regiment),
             Command::CancelCommission {
                 building,
                 commission,
@@ -866,12 +876,58 @@ impl World {
         Ok((packs.seconds / TICK).round() as u64)
     }
 
-    fn may_commission(&self, player: u32, building: usize) -> Result<(), Refused> {
+    fn may_commission(
+        &self,
+        player: u32,
+        building: usize,
+        regiment: &aaa_map::Regiment,
+    ) -> Result<(), Refused> {
         let b = self.standing_for(player, building)?;
         if b.deploy.is_none() || b.busy() {
             return Err(Refused::Unable);
         }
+        if !self.lacks(player, regiment).is_empty() {
+            return Err(Refused::Lacking);
+        }
         Ok(())
+    }
+
+    /// The buildings `player` would need to commission `regiment` but
+    /// hasn't standing, by their current ids.
+    pub fn lacks(&self, player: u32, regiment: &aaa_map::Regiment) -> Vec<&Id> {
+        // Only buildings done unpacking count, and only the player's own,
+        // not its allies'.
+        let has = |ids: &[Id]| {
+            self.buildings.iter().any(|b| {
+                b.owner == player
+                    && b.standing()
+                    && !b.busy()
+                    && ids
+                        .iter()
+                        .any(|id| id.as_str().eq_ignore_ascii_case(&b.template))
+            })
+        };
+        let mut out: Vec<&Id> = Vec::new();
+        for m in &regiment.members {
+            let Some(r) = self.requires.get(&Id::from(m.thing.template.as_str())) else {
+                continue;
+            };
+            let missing: Vec<&Id> = r
+                .structures
+                .iter()
+                .filter(|ids| !has(ids))
+                .map(|ids| &ids[0])
+                .collect();
+            if r.any && missing.len() < r.structures.len() {
+                continue;
+            }
+            for id in missing {
+                if !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+        }
+        out
     }
 
     fn may_rally(&self, player: u32, building: usize) -> Result<(), Refused> {
@@ -1027,7 +1083,7 @@ impl World {
         building: usize,
         mut commission: Commission,
     ) -> Result<(), Refused> {
-        self.may_commission(player, building)?;
+        self.may_commission(player, building, &commission.regiment)?;
         commission.id = self.next_commission;
         self.next_commission += 1;
         self.buildings[building].queue.push_back(commission);
@@ -3636,6 +3692,45 @@ mod tests {
         w.apply(1, cancel(1)).unwrap();
         run(&mut w, 10.0);
         assert_eq!(w.regiments.len(), 1);
+    }
+
+    #[test]
+    fn commissions_need_their_owners_required_buildings() {
+        let mut w = headquarters();
+        let ids = |ids: &[&str]| ids.iter().map(|&id| Id::from(id)).collect();
+        w.requires.insert(
+            Id::from("TRUCK"),
+            Requires {
+                structures: vec![ids(&["pool", "old_pool"]), ids(&["depot"])],
+                any: false,
+            },
+        );
+        let commission = || Command::Commission {
+            building: 0,
+            commission: Box::new(Commission::new(truck(), 1.0)),
+        };
+        let lacks = |w: &World| -> Vec<String> {
+            w.lacks(1, &truck())
+                .iter()
+                .map(|id| id.to_string())
+                .collect()
+        };
+        assert_eq!(lacks(&w), ["pool", "depot"]);
+        assert_eq!(w.check(1, &commission()), Err(Refused::Lacking));
+        assert_eq!(w.apply(1, commission()), Err(Refused::Lacking));
+        // An enemy's doesn't count; one under a name it once had does.
+        let mut theirs = building(6, 2, [5.0, 5.0]);
+        theirs.template = "pool".into();
+        let mut ours = building(7, 1, [35.0, 5.0]);
+        ours.template = "Old_Pool".into();
+        w.add_buildings(&[theirs, ours]);
+        assert_eq!(lacks(&w), ["depot"]);
+        w.requires.get_mut(&Id::from("truck")).unwrap().any = true;
+        assert!(lacks(&w).is_empty());
+        w.apply(1, commission()).unwrap();
+        // Losing it stops further commissions.
+        w.buildings[2].state = State::Destroyed(0);
+        assert_eq!(w.apply(1, commission()), Err(Refused::Lacking));
     }
 
     #[test]

@@ -608,6 +608,7 @@ fn prepare(
     let mut sim = World::new(&map);
     let raising = Recruits::new(&mut game);
     sim.packing = raising.packings();
+    sim.requires = game.requirements();
     Ok(Prepared {
         loaded: Loaded { game, map },
         sim,
