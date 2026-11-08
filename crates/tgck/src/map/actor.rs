@@ -1283,6 +1283,15 @@ fn skip_organization_mind(cur: &mut Cursor) -> Result<()> {
 }
 
 impl Actor {
+    /// The [`Thing::id`](super::Thing::id) of the trailer it tows, if it
+    /// tows one.
+    pub fn towed(&self) -> Option<u32> {
+        match &self.state {
+            State::Decoded { trailer, .. } => trailer.towing.map(|[t, _]| t).filter(|&t| t != 0),
+            State::Raw(_) => None,
+        }
+    }
+
     /// The herd or regiment this actor is, if its record holds one.
     pub fn organization(&self) -> Option<&Organization> {
         self.decoded()?.iter().find_map(|c| match c {

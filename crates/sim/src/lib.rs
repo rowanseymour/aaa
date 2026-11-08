@@ -160,6 +160,17 @@ pub struct Unit {
     end_facing: [f32; 2],
     /// Waypoints still ahead, the next last.
     path: Vec<[f32; 2]>,
+    /// The waypoint it set off for, and the way to it from where it set
+    /// off: the course it steers for, and is there once it's come as far
+    /// along.
+    course: Option<([f32; 2], [f32; 2])>,
+    /// World units a second it's going at.
+    pub speed: f32,
+    /// World units a second it gains each second; 0 for at once.
+    acceleration: f32,
+    /// Radians a second it turns; 0 for at once.
+    turn_rate: f32,
+    pub trailer: Option<Trailer>,
     /// Whether it's left its place to come within reach of an enemy.
     closing: bool,
     /// What it can take and deal; `None` for what can't be hurt.
@@ -177,6 +188,60 @@ pub struct Unit {
     pub unpacked: Option<u64>,
 }
 
+/// What a unit tows, dragged after the point it's coupled to so that it
+/// trails round corners.
+pub struct Trailer {
+    pub template: String,
+    pub position: [f32; 2],
+    /// Where it was a tick ago, as [`Unit::previous`].
+    pub previous: [f32; 2],
+    /// The way it faces, a unit vector.
+    pub facing: [f32; 2],
+    /// Where it's coupled to its unit, from the unit: x to its right and y
+    /// ahead.
+    hitch: [f32; 2],
+    /// The same point from the trailer.
+    coupling: [f32; 2],
+}
+
+impl Trailer {
+    fn new(trailer: &aaa_map::Trailer, position: [f32; 2], facing: [f32; 2]) -> Trailer {
+        let (position, facing) = match trailer.placed {
+            Some((_, at, way)) => (at, normalised(way).unwrap_or(facing)),
+            None => {
+                // Straight behind it.
+                let hitch = aaa_map::from_local(position, facing, trailer.hitch);
+                let [x, y] = trailer.coupling;
+                (aaa_map::from_local(hitch, facing, [-x, -y]), facing)
+            }
+        };
+        Trailer {
+            template: trailer.template.clone(),
+            position,
+            previous: position,
+            facing,
+            hitch: trailer.hitch,
+            coupling: trailer.coupling,
+        }
+    }
+
+    /// Turns to point at its unit's hitch, and moves so that its coupling
+    /// meets it.
+    fn follow(&mut self, position: [f32; 2], facing: [f32; 2]) {
+        let hitch = aaa_map::from_local(position, facing, self.hitch);
+        let to = [hitch[0] - self.position[0], hitch[1] - self.position[1]];
+        self.facing = normalised(to).unwrap_or(self.facing);
+        let [x, y] = self.coupling;
+        self.position = aaa_map::from_local(hitch, self.facing, [-x, -y]);
+    }
+
+    /// Where to draw it, as [`Unit::drawn_at`].
+    pub fn drawn_at(&self, t: f32) -> [f32; 2] {
+        let ([px, py], [x, y]) = (self.previous, self.position);
+        [px + (x - px) * t, py + (y - py) * t]
+    }
+}
+
 impl Unit {
     pub fn moving(&self) -> bool {
         !self.path.is_empty()
@@ -191,7 +256,65 @@ impl Unit {
         self.health = 0.0;
         self.died = Some(tick);
         self.path.clear();
+        self.speed = 0.0;
         self.target = None;
+    }
+
+    /// Plays out a tick of heading along its path at up to `top` speed:
+    /// it speeds up to that, turns toward the way to its next waypoint as
+    /// fast as it can and goes the way it faces, until it's come as far as
+    /// that waypoint along that way.
+    fn drive(&mut self, top: f32) {
+        if self.path.is_empty() {
+            self.speed = 0.0;
+            return;
+        }
+        self.speed = match self.speed < top && self.acceleration > 0.0 {
+            true => (self.speed + self.acceleration * TICK).min(top),
+            false => top,
+        };
+        let mut left = self.speed * TICK;
+        let mut turn = self.turn_rate * TICK;
+        while let Some(&next) = self.path.last() {
+            let course = match self.course {
+                Some((to, course)) if to == next => course,
+                _ => {
+                    let way = [next[0] - self.position[0], next[1] - self.position[1]];
+                    let course = normalised(way).unwrap_or(self.facing);
+                    self.course = Some((next, course));
+                    course
+                }
+            };
+            match self.turn_rate > 0.0 {
+                true => turn -= steer(&mut self.facing, course, turn),
+                false => self.facing = course,
+            }
+            let (dx, dy) = (next[0] - self.position[0], next[1] - self.position[1]);
+            let ahead = dx * course[0] + dy * course[1];
+            if ahead > left {
+                self.position[0] += self.facing[0] * left;
+                self.position[1] += self.facing[1] * left;
+                break;
+            }
+            match self.turn_rate > 0.0 {
+                true => {
+                    let ahead = ahead.max(0.0);
+                    self.position[0] += self.facing[0] * ahead;
+                    self.position[1] += self.facing[1] * ahead;
+                    left -= ahead;
+                }
+                false => {
+                    self.position = next;
+                    left -= ahead.max(0.0);
+                }
+            }
+            self.path.pop();
+            self.course = None;
+        }
+        if self.path.is_empty() {
+            self.speed = 0.0;
+            self.facing = self.end_facing;
+        }
     }
 
     /// Where to draw it a fraction `t` of the way through the tick that
@@ -404,6 +527,11 @@ impl World {
                 facing,
                 end_facing: facing,
                 path: Vec::new(),
+                course: None,
+                speed: 0.0,
+                acceleration: m.acceleration,
+                turn_rate: m.turn_rate,
+                trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
                 closing: false,
             });
         }
@@ -1300,24 +1428,10 @@ impl World {
     fn travel(&mut self) {
         for unit in &mut self.units {
             unit.previous = unit.position;
-            let mut left = self.regiments[unit.regiment].speed * TICK;
-            while let Some(&next) = unit.path.last() {
-                let (dx, dy) = (next[0] - unit.position[0], next[1] - unit.position[1]);
-                let distance = dx.hypot(dy);
-                if let Some(f) = normalised([dx, dy]) {
-                    unit.facing = f;
-                }
-                if distance > left {
-                    unit.position[0] += dx / distance * left;
-                    unit.position[1] += dy / distance * left;
-                    break;
-                }
-                unit.position = next;
-                left -= distance;
-                unit.path.pop();
-                if unit.path.is_empty() {
-                    unit.facing = unit.end_facing;
-                }
+            unit.drive(self.regiments[unit.regiment].speed);
+            if let Some(t) = &mut unit.trailer {
+                t.previous = t.position;
+                t.follow(unit.position, unit.facing);
             }
         }
     }
@@ -1743,6 +1857,20 @@ fn normalised([x, y]: [f32; 2]) -> Option<[f32; 2]> {
     (length > 1e-6).then(|| [x / length, y / length])
 }
 
+/// Turns `facing` toward `to`, both unit vectors, by up to `most` radians,
+/// returning how far it turned.
+fn steer(facing: &mut [f32; 2], to: [f32; 2], most: f32) -> f32 {
+    let [fx, fy] = *facing;
+    let angle = (fx * to[1] - fy * to[0]).atan2(fx * to[0] + fy * to[1]);
+    if angle.abs() <= most {
+        *facing = to;
+        return angle.abs();
+    }
+    let (sin, cos) = (most * angle.signum()).sin_cos();
+    *facing = [fx * cos - fy * sin, fx * sin + fy * cos];
+    most
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
@@ -1767,6 +1895,9 @@ mod tests {
                 detail: Detail::Raw(Vec::new()),
             },
             speed,
+            acceleration: 0.0,
+            turn_rate: 0.0,
+            trailer: None,
             fighter: None,
         }
     }
@@ -1820,6 +1951,97 @@ mod tests {
         run(&mut w, 5.0);
         assert!(near(w.units[0].position, [9.0, 20.0]));
         assert!(!w.units.iter().any(Unit::moving));
+    }
+
+    /// A lone vehicle at 10,10 facing +y.
+    fn vehicle(acceleration: f32, turn_rate: f32, trailer: Option<aaa_map::Trailer>) -> World {
+        let mut m = member(2, [10.0, 10.0], 2.0);
+        (m.acceleration, m.turn_rate, m.trailer) = (acceleration, turn_rate, trailer);
+        let regiment = aaa_map::Regiment {
+            id: 1,
+            template: "tank".into(),
+            owner: 7,
+            facing: [0.0, 1.0],
+            members: vec![m],
+            formations: vec![aaa_map::Formation {
+                id: "lone".into(),
+                offsets: vec![[0.0, 0.0]],
+                aggressive: false,
+            }],
+            formation: 0,
+            combat: None,
+            operational_range: None,
+            control_range: None,
+            primary: None,
+            unpacks: None,
+        };
+        World::from_regiments(
+            Sides::default(),
+            Pathing::uniform(20, Domain::Land),
+            &[regiment],
+        )
+    }
+
+    #[test]
+    fn units_speed_up_to_their_top_speed_and_stop_at_once() {
+        let mut w = vehicle(2.0, 0.0, None);
+        w.order_move(7, 0, [10.0, 30.0]).unwrap();
+        // 0.2 a tick until it's at 2 a second after a second.
+        run(&mut w, 1.0);
+        assert!((w.units[0].speed - 2.0).abs() < 1e-4);
+        assert!(
+            near(w.units[0].position, [10.0, 11.1]),
+            "{:?}",
+            w.units[0].position
+        );
+        run(&mut w, 15.0);
+        assert!(near(w.units[0].position, [10.0, 30.0]));
+        assert_eq!(w.units[0].speed, 0.0);
+    }
+
+    #[test]
+    fn units_that_turn_over_time_drive_round_corners() {
+        let mut w = vehicle(0.0, 1.0, None);
+        w.order_move(7, 0, [20.0, 10.0]).unwrap();
+        w.tick();
+        // A tenth of a radian toward +x, having gone 0.2 that way.
+        let u = &w.units[0];
+        let (sin, cos) = 0.1f32.sin_cos();
+        assert!(near(u.facing, [sin, cos]), "{:?}", u.facing);
+        assert!(near(u.position, [10.0 + 0.2 * sin, 10.0 + 0.2 * cos]));
+        run(&mut w, 2.0);
+        assert!(w.units[0].position[1] > 10.5, "it swings wide");
+        run(&mut w, 20.0);
+        let u = &w.units[0];
+        assert!(!u.moving());
+        assert!((u.position[0] - 20.0).abs() < 0.5, "{:?}", u.position);
+    }
+
+    #[test]
+    fn trailers_follow_their_hitch_round_corners() {
+        let trailer = aaa_map::Trailer {
+            template: "gun".into(),
+            hitch: [0.0, -2.0],
+            coupling: [0.0, 1.0],
+            placed: None,
+        };
+        let mut w = vehicle(0.0, 0.0, Some(trailer));
+        let t = w.units[0].trailer.as_ref().unwrap();
+        assert!(near(t.position, [10.0, 7.0]), "{:?}", t.position);
+        assert!(near(t.facing, [0.0, 1.0]));
+        w.order_move(7, 0, [20.0, 10.0]).unwrap();
+        w.tick();
+        // The truck turns to +x at once and goes 0.2: the hitch swings out
+        // behind it to 8.2,10 and the trailer swings round after it.
+        let t = w.units[0].trailer.as_ref().unwrap();
+        let hitch = [8.2, 10.0];
+        let coupled = aaa_map::from_local(t.position, t.facing, [0.0, 1.0]);
+        assert!(near(coupled, hitch), "{coupled:?}");
+        assert!(t.facing[0] < 0.0 && t.facing[1] > 0.0, "{:?}", t.facing);
+        run(&mut w, 10.0);
+        let t = w.units[0].trailer.as_ref().unwrap();
+        assert!(near(t.facing, [1.0, 0.0]), "{:?}", t.facing);
+        assert!(near(t.position, [17.0, 10.0]), "{:?}", t.position);
     }
 
     #[test]

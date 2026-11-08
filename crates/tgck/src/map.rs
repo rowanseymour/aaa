@@ -831,6 +831,14 @@ impl Thing {
         }
     }
 
+    /// The id of the trailer this thing tows, if it tows one.
+    pub fn towed(&self) -> Option<u32> {
+        match &self.detail {
+            Detail::Actor(actor) => actor.towed(),
+            _ => None,
+        }
+    }
+
     /// Which of its nation's division badges this thing wears as an HQ.
     pub fn hq_badge(&self) -> Option<i32> {
         match &self.detail {
