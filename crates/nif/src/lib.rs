@@ -168,7 +168,7 @@ impl Nif {
     /// relative to the model and the properties in effect for it: its own,
     /// then those inherited from its parents, nearest first.
     pub fn shapes(&self) -> Vec<Placed<'_>> {
-        self.placed(|object, av, place| match object {
+        self.placed(&self.roots, true, |object, av, place| match object {
             Object::Shape(shape) if !self.casts_shadow_only(av) => Some(place.of(shape)),
             _ => None,
         })
@@ -177,29 +177,75 @@ impl Nif {
     /// Every visible particle system reachable from the roots, placed as
     /// [`Nif::shapes`] places meshes.
     pub fn particle_systems(&self) -> Vec<(&ParticleSystem, Placed<'_>)> {
-        self.placed(|object, _, place| match object {
+        self.placed(&self.roots, true, |object, _, place| match object {
             Object::ParticleSystem(system) => Some((system, place.of(&system.shape))),
             _ => None,
         })
     }
 
-    /// What `pick` makes of each visible scene object reachable from the
-    /// roots.
+    /// Every particle object of the older format reachable from the roots
+    /// below a visible node, whether or not it's hidden itself. Each is
+    /// placed at its parent node, with its own properties before the
+    /// inherited ones and its own index ending the path.
+    pub fn old_particle_systems(&self) -> Vec<(&OldParticles, Placed<'_>)> {
+        let found = self.placed(&self.roots, true, |object, _, place| {
+            let Object::Node(node) = object else {
+                return None;
+            };
+            let found: Vec<_> = node
+                .children
+                .iter()
+                .filter_map(|&c| Some((c?, self.get_as::<OldParticles>(c)?)))
+                .map(|(c, p)| {
+                    let mut path = place.path.to_vec();
+                    path.push(c);
+                    let properties = p.shape.av.properties.iter();
+                    let placed = Placed {
+                        shape: &p.shape,
+                        transform: place.transform,
+                        properties: properties.chain(place.properties).copied().collect(),
+                        path,
+                    };
+                    (p, placed)
+                })
+                .collect();
+            Some(found)
+        });
+        found.into_iter().flatten().collect()
+    }
+
+    /// Every visible triangle mesh at or below the scene object `r`, placed
+    /// relative to `r` as if `r` had no transform of its own.
+    pub fn shapes_below(&self, r: Ref) -> Vec<Placed<'_>> {
+        self.placed(&[r], false, |object, av, place| match object {
+            Object::Shape(shape) if !self.casts_shadow_only(av) => Some(place.of(shape)),
+            _ => None,
+        })
+    }
+
+    /// What `pick` makes of each visible scene object reachable from
+    /// `roots`, placed with or without the roots' own transforms.
     fn placed<'a, T>(
         &'a self,
+        roots: &[Ref],
+        root_placed: bool,
         pick: impl Fn(&'a Object, &'a SceneObject, Place<'_>) -> Option<T>,
     ) -> Vec<T> {
         let mut out = Vec::new();
         // Shared children make the graph a DAG that a corrupt file can make
         // exponentially wide; real models visit each object about once.
         let mut budget = self.objects.len().saturating_mul(64);
-        for &root in &self.roots {
+        for &root in roots {
             let mut walk = Walk {
                 props: Vec::new(),
                 path: Vec::new(),
                 budget: &mut budget,
             };
-            self.walk(root, Transform::IDENTITY, &mut walk, &pick, &mut out);
+            let parent = match self.get(root).and_then(Object::scene) {
+                Some(av) if !root_placed => av.transform.inverse(),
+                _ => Transform::IDENTITY,
+            };
+            self.walk(root, parent, &mut walk, &pick, &mut out);
         }
         out
     }
@@ -315,6 +361,26 @@ impl Transform {
     pub fn rotate(&self, v: [f32; 3]) -> [f32; 3] {
         self.rotation
             .map(|row| row[0] * v[0] + row[1] * v[1] + row[2] * v[2])
+    }
+
+    /// The transform that undoes this one; identity for one that scales to
+    /// nothing.
+    pub fn inverse(&self) -> Transform {
+        if self.scale == 0.0 {
+            return Transform::IDENTITY;
+        }
+        let r = &self.rotation;
+        let rotation = std::array::from_fn(|i| std::array::from_fn(|j| r[j][i]));
+        let undo = Transform {
+            translation: [0.0; 3],
+            rotation,
+            scale: 1.0 / self.scale,
+        };
+        let t = undo.apply(self.translation);
+        Transform {
+            translation: t.map(|v| -v),
+            ..undo
+        }
     }
 
     /// `child` expressed in this transform's parent space.
