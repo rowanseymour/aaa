@@ -190,7 +190,7 @@ pub fn spawn(
             border_radius: BorderRadius::MAX,
             ..default()
         },
-        BackgroundColor(Color::BLACK),
+        BackgroundColor(crate::CHROME),
         // Over the banners, which stack by where they are on screen.
         GlobalZIndex(1),
         children![(

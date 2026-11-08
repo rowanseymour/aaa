@@ -418,8 +418,7 @@ pub fn spawn(
                     border_radius: BorderRadius::all(px(PAD * 1.5)),
                     ..default()
                 },
-                // Black like the minimap's disc, so the icons stand out.
-                BackgroundColor(Color::BLACK),
+                BackgroundColor(crate::CHROME),
             ))
             .with_children(|grid| {
                 for s in 0..SLOTS {
