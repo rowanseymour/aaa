@@ -154,7 +154,12 @@ fn main() -> ExitCode {
         Map::load(&mut game, &name).map(|map| Some(Loaded { game, map }))
     });
     let mut loaded = match loaded {
-        Ok(Some(l)) => l,
+        Ok(Some(l)) => {
+            for w in &l.map.warnings {
+                eprintln!("aaa-editor: {w}");
+            }
+            l
+        }
         Ok(None) => return ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("aaa-editor: {e}");
