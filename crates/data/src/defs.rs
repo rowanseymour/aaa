@@ -604,6 +604,13 @@ pub struct Cursor {
     pub frame_filename: Option<String>,
 }
 
+/// The game's tuning settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SVars {
+    #[serde(rename = "BuildingPaddingMeters")]
+    pub building_padding_meters: Option<f32>,
+}
+
 /// A visual effect; those with a model draw it, relative to their file's
 /// folder.
 #[derive(Debug, Clone, Deserialize)]

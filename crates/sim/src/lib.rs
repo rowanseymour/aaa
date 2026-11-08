@@ -595,7 +595,7 @@ impl World {
             };
             let fighter = m.fighter.clone();
             self.units.push(Unit {
-                health: fighter.as_ref().map_or(0.0, |f| f.health),
+                health: fighter.as_ref().map_or(0.0, |f| f.health * m.health),
                 reloads: fighter
                     .as_ref()
                     .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),
@@ -2179,6 +2179,7 @@ mod tests {
             turn_rate: 0.0,
             trailer: None,
             fighter: None,
+            health: 1.0,
         }
     }
 
@@ -2267,6 +2268,40 @@ mod tests {
             Pathing::uniform(20, Domain::Land),
             &[regiment],
         )
+    }
+
+    #[test]
+    fn units_start_as_hurt_as_the_map_has_them() {
+        let mut m = member(2, [10.0, 10.0], 2.0);
+        m.fighter = Some(aaa_map::Fighter {
+            health: 200.0,
+            ..aaa_map::Fighter::default()
+        });
+        m.health = 0.25;
+        let regiment = aaa_map::Regiment {
+            id: 2,
+            template: "soldier".into(),
+            owner: 7,
+            facing: [0.0, 1.0],
+            members: vec![m],
+            formations: vec![aaa_map::Formation {
+                id: String::new(),
+                offsets: vec![[0.0, 0.0]],
+                aggressive: false,
+            }],
+            formation: 0,
+            combat: None,
+            operational_range: None,
+            control_range: None,
+            primary: Some(0),
+            unpacks: None,
+        };
+        let w = World::from_regiments(
+            Sides::default(),
+            Pathing::uniform(20, Domain::Land),
+            &[regiment],
+        );
+        assert_eq!(w.units[0].health, 50.0);
     }
 
     #[test]

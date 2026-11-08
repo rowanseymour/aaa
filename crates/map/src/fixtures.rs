@@ -83,3 +83,21 @@ pub(crate) fn organization(layout: &str, members: Vec<Thing>) -> tgck::map::Orga
         transport: Some(0),
     }
 }
+
+/// `thing` with its health a fraction `health` of its template's.
+pub(crate) fn hurt(mut thing: Thing, health: f32) -> Thing {
+    use tgck::map::{Body, Component, Detail, State};
+    if let Detail::Actor(actor) = &mut thing.detail
+        && let State::Decoded { components, .. } = &mut actor.state
+    {
+        components.push(Component::Body(Body {
+            version: 4,
+            updatable: None,
+            death_time: Some(-1.0),
+            health,
+            sink_time: Some(0.0),
+            last_damage_time: Some(0.0),
+        }));
+    }
+    thing
+}

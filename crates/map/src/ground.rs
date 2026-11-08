@@ -15,8 +15,15 @@ pub struct Ground {
 }
 
 impl Ground {
-    pub fn new(hm: &HeightMap, mountain: &HeightMap) -> Self {
+    /// The ground of two height maps the same size, of at least one cell.
+    pub fn new(hm: &HeightMap, mountain: &HeightMap) -> Result<Self, String> {
         let side = hm.side;
+        if side < 2 || mountain.side != side {
+            return Err(format!(
+                "height maps of {side} and {} vertices a side don't make ground",
+                mountain.side
+            ));
+        }
         let water: Vec<bool> = hm.layer.iter().map(|&l| l != 0).collect();
         // Off water the mountain heights are leftovers the game ignores:
         // objects there sit on the height map alone.
@@ -42,12 +49,12 @@ impl Ground {
                 }
             })
             .collect();
-        Ground {
+        Ok(Ground {
             side,
             heights,
             water,
             surface,
-        }
+        })
     }
 
     /// Height at a vertex.
@@ -214,6 +221,25 @@ mod tests {
         let tilt = valley.tilt([8.0, 8.0], [0.0, 1.0], TANK);
         assert!((tilt.height - 0.75).abs() < 1e-5);
         assert!(near(tilt.up, [0.0, 0.0, 1.0]));
+    }
+
+    #[test]
+    fn height_maps_must_match_and_hold_a_cell() {
+        let hm = |side: usize| HeightMap {
+            version: 1,
+            min: 0.0,
+            max: 0.0,
+            default: 0.0,
+            unknown: 0,
+            side,
+            heights: vec![1.0; side * side],
+            layer: vec![0; side * side],
+        };
+        assert!(Ground::new(&hm(5), &hm(4)).is_err());
+        assert!(Ground::new(&hm(1), &hm(1)).is_err());
+        assert!(Ground::new(&hm(0), &hm(0)).is_err());
+        let ground = Ground::new(&hm(5), &hm(5)).unwrap();
+        assert_eq!(ground.height_at(8.0, 8.0), 1.0);
     }
 
     #[test]
