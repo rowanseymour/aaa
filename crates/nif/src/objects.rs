@@ -66,15 +66,17 @@
 //!                  per key f32 time + string
 //! NiControllerSequence  string name, string accumulation root, ref text
 //!                  keys, u32 n, per block string target + ref controller
-//! controller       ref next, u16 flags, f32 frequency, phase, start,
-//!                  stop, ref target
+//! controller       ref next, u16 flags [old: only bits 0-3 its own],
+//!                  f32 frequency, phase, start, stop, ref target
 //! NiKeyframeController, NiAlphaController, NiVisController
 //!                  controller, ref data
 //! NiLookAtController, NiMaterialColorController, NiLightColorController
 //!                  controller, u16 flags [old: none], ref node or data
-//! NiPathController controller, u16 flags [old: none], i32 bank direction,
-//!                  f32 max bank, smoothing, i16 follow axis, ref path
-//!                  data, ref percent data
+//! NiPathController controller, u16 flags [old: none; the controller's
+//!                  flags above bit 3 instead], i32 bank direction,
+//!                  f32 max bank, smoothing, i16 follow axis, ref
+//!                  positions (NiPosData), ref fractions along them
+//!                  (NiFloatData)
 //! NiTextureTransformController
 //!                  controller, bool shader map, u32 slot, u32 operation,
 //!                  ref data
@@ -183,6 +185,7 @@ pub enum Object {
     Controller(Controller),
     Keyframes(Keyframes),
     Floats(Keys<f32>),
+    Positions(Keys<[f32; 3]>),
     Sequence(Sequence),
     TextKeys(TextKeys),
     SkinInstance(SkinInstance),
@@ -243,6 +246,7 @@ object_types!(
     Controller(Controller),
     Keyframes(Keyframes),
     Floats(Keys<f32>),
+    Positions(Keys<[f32; 3]>),
     Sequence(Sequence),
     TextKeys(TextKeys),
     SkinInstance(SkinInstance),
@@ -693,7 +697,7 @@ pub struct Controller {
     pub data: Ref,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControllerKind {
     Keyframe,
     Alpha,
@@ -716,6 +720,24 @@ pub enum ControllerKind {
         slot: u32,
         change: TextureChange,
     },
+    /// Moves a scene object along a curve, [`Object::Positions`], by how
+    /// far along it its data, [`Object::Floats`], says.
+    Path(PathSettings),
+}
+
+/// How a path controller moves its object.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PathSettings {
+    /// 0x10: placed by distance along the curve rather than by the
+    /// positions' key times; 0x20: turned to face along it; 0x40: facing
+    /// back along it.
+    pub flags: u16,
+    pub bank_direction: i32,
+    pub max_bank: f32,
+    pub smoothing: f32,
+    /// The axis turned along the curve: 0 x, 1 y, 2 z.
+    pub follow_axis: i16,
+    pub positions: Ref,
 }
 
 /// What a texture controller's keys set of where the texture lies.
@@ -796,6 +818,183 @@ impl Keyframes {
         }
         out
     }
+}
+
+/// A path controller's curve and how far along it its object is, measured
+/// so the object can be placed by distance along it.
+#[derive(Debug, Clone)]
+pub struct Path {
+    pub settings: PathSettings,
+    pub positions: Keys<[f32; 3]>,
+    /// The fraction of the way along, by the controller's key time.
+    pub percent: Keys<f32>,
+    /// Times through the curve's keys, each with the curve's length up to
+    /// it.
+    lengths: Vec<(f32, f32)>,
+}
+
+/// Steps measured along each stretch of curve between two keys.
+const PATH_STEPS: usize = 32;
+
+impl Path {
+    pub fn new(settings: PathSettings, positions: Keys<[f32; 3]>, percent: Keys<f32>) -> Path {
+        let mut lengths = Vec::new();
+        for pair in positions.keys.windows(2) {
+            let (t0, t1) = (pair[0].time, pair[1].time);
+            if t1 <= t0 {
+                continue;
+            }
+            if lengths.is_empty() {
+                lengths.push((t0, 0.0));
+            }
+            let mut at = positions.sample(t0).unwrap_or(pair[0].value);
+            for i in 1..=PATH_STEPS {
+                let t = t0 + (t1 - t0) * i as f32 / PATH_STEPS as f32;
+                let next = positions.sample(t).unwrap_or(pair[1].value);
+                let total = lengths.last().map_or(0.0, |&(_, l)| l) + distance(at, next);
+                lengths.push((t, total));
+                at = next;
+            }
+        }
+        Path {
+            settings,
+            positions,
+            percent,
+            lengths,
+        }
+    }
+
+    pub fn constant_speed(&self) -> bool {
+        self.settings.flags & 0x10 != 0
+    }
+
+    pub fn follows(&self) -> bool {
+        self.settings.flags & 0x20 != 0
+    }
+
+    pub fn flips(&self) -> bool {
+        self.settings.flags & 0x40 != 0
+    }
+
+    /// `base` moved to where the curve puts it at key time `time`, and, if
+    /// it follows the curve, turned along it.
+    pub fn apply(&self, base: &Transform, time: f32) -> Transform {
+        let mut out = *base;
+        let Some(p) = self.percent.sample(time) else {
+            return out;
+        };
+        let t = match self.constant_speed() {
+            true => self.time_at(p.rem_euclid(1.0)),
+            false => p,
+        };
+        let Some(position) = self.positions.sample(t) else {
+            return out;
+        };
+        out.translation = position;
+        if self.follows()
+            && let Some(rotation) = self.facing(t)
+        {
+            out.rotation = rotation;
+        }
+        out
+    }
+
+    /// The curve's key time a fraction `p` of its length along.
+    fn time_at(&self, p: f32) -> f32 {
+        let Some(&(_, total)) = self.lengths.last() else {
+            return self.positions.keys.first().map_or(0.0, |k| k.time);
+        };
+        let d = p * total;
+        let i = self.lengths.partition_point(|&(_, l)| l < d);
+        match i {
+            0 => self.lengths[0].0,
+            i if i >= self.lengths.len() => self.lengths[i - 1].0,
+            i => {
+                let ((t0, l0), (t1, l1)) = (self.lengths[i - 1], self.lengths[i]);
+                match l1 > l0 {
+                    true => t0 + (t1 - t0) * (d - l0) / (l1 - l0),
+                    false => t1,
+                }
+            }
+        }
+    }
+
+    /// Rows of a rotation pointing the follow axis along the curve at key
+    /// time `t` and laying another level beside it, turned half about the
+    /// third for the flip flag (0x40); none where the curve doesn't move.
+    /// Running straight up or down, only the follow axis is left, so the
+    /// node is squashed onto the line of travel.
+    fn facing(&self, t: f32) -> Option<[[f32; 3]; 3]> {
+        let mut travel = normalized(self.tangent(t)?)?;
+        let level = cross([0.0, 0.0, 1.0], travel);
+        let mut level = normalized(level).unwrap_or([0.0; 3]);
+        if self.flips() {
+            travel = travel.map(|v| -v);
+            level = level.map(|v| -v);
+        }
+        let [x, y, z] = match self.settings.follow_axis {
+            0 => [travel, level, cross(travel, level)],
+            1 => {
+                let x = level.map(|v| -v);
+                [x, travel, cross(x, travel)]
+            }
+            2 => [cross(level, travel), level, travel],
+            _ => return None,
+        };
+        // The axes are the matrix's columns.
+        Some(std::array::from_fn(|r| [x[r], y[r], z[r]]))
+    }
+
+    /// The direction of the curve at key time `t`, unscaled: at a key, the
+    /// direction leaving it, at the last key the direction arriving.
+    fn tangent(&self, t: f32) -> Option<[f32; 3]> {
+        let keys = &self.positions.keys;
+        if keys.len() < 2 {
+            return None;
+        }
+        let i = keys
+            .partition_point(|k| k.time <= t)
+            .clamp(1, keys.len() - 1);
+        let (a, b) = (&keys[i - 1], &keys[i]);
+        let u = match b.time > a.time {
+            true => ((t - a.time) / (b.time - a.time)).clamp(0.0, 1.0),
+            false => 1.0,
+        };
+        Some(match (a.tangents, b.tangents) {
+            (Some([_, out]), Some([inc, _]))
+                if self.positions.interpolation == Interpolation::Quadratic =>
+            {
+                let u2 = u * u;
+                a.value
+                    .scaled(6.0 * u2 - 6.0 * u)
+                    .plus(out.scaled(3.0 * u2 - 4.0 * u + 1.0))
+                    .plus(b.value.scaled(6.0 * u - 6.0 * u2))
+                    .plus(inc.scaled(3.0 * u2 - 2.0 * u))
+            }
+            _ => sub(b.value, a.value),
+        })
+    }
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|i| a[i] - b[i])
+}
+
+fn distance(a: [f32; 3], b: [f32; 3]) -> f32 {
+    sub(a, b).iter().map(|v| v * v).sum::<f32>().sqrt()
+}
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    ]
+}
+
+fn normalized(v: [f32; 3]) -> Option<[f32; 3]> {
+    let len = v.iter().map(|c| c * c).sum::<f32>().sqrt();
+    (len > 1e-6).then(|| v.map(|c| c / len))
 }
 
 /// A key group: values at times, eased between by their interpolation.
@@ -1308,14 +1507,24 @@ impl Object {
                 Object::Controller(c)
             }
             "NiPathController" => {
-                let c = time_controller(r)?;
-                if !r.old() {
-                    r.u16()?;
-                }
-                r.skip(4 + 4 + 4 + 2)?;
-                r.reference()?;
-                r.reference()?;
-                Object::Controller(c)
+                let (c, stored) = stored_time_controller(r)?;
+                let flags = if r.old() { stored >> 4 } else { r.u16()? };
+                let bank_direction = r.u32()? as i32;
+                let [max_bank, smoothing] = r.floats()?;
+                let follow_axis = r.u16()? as i16;
+                let positions = r.reference()?;
+                Object::Controller(Controller {
+                    kind: ControllerKind::Path(PathSettings {
+                        flags,
+                        bank_direction,
+                        max_bank,
+                        smoothing,
+                        follow_axis,
+                        positions,
+                    }),
+                    data: r.reference()?,
+                    ..c
+                })
             }
             "NiTextureTransformController" => {
                 let c = time_controller(r)?;
@@ -1345,10 +1554,7 @@ impl Object {
                 r.references()?;
                 Object::Controller(c)
             }
-            "NiPosData" => {
-                key_group::<[f32; 3]>(r)?;
-                other()
-            }
+            "NiPosData" => Object::Positions(key_group(r)?),
             "NiColorData" => Object::Colors(key_group(r)?),
             "NiVisData" => Object::Visibility(bool_keys(r)?),
             "NiParticles" | "NiRotatingParticles" | "NiParticleMeshes" => {
@@ -1478,10 +1684,22 @@ impl Object {
 /// The fields every controller starts with, as a controller of a kind not
 /// read further.
 fn time_controller(r: &mut Reader) -> Result<Controller> {
+    Ok(stored_time_controller(r)?.0)
+}
+
+/// [`time_controller`] and its flags as stored, which in older files also
+/// hold a path controller's own flags above the low four bits.
+fn stored_time_controller(r: &mut Reader) -> Result<(Controller, u16)> {
     let next = r.reference()?;
-    let flags = r.u16()?;
+    let stored = r.u16()?;
+    // Older files keep only the timing bits, and their controllers all
+    // have the manager-update flag (0x20) set.
+    let flags = match r.old() {
+        true => stored & 0xf | 0x20,
+        false => stored,
+    };
     let [frequency, phase, start, stop] = r.floats::<4>()?;
-    Ok(Controller {
+    let c = Controller {
         kind: ControllerKind::Unread,
         modifier: String::new(),
         next,
@@ -1492,7 +1710,8 @@ fn time_controller(r: &mut Reader) -> Result<Controller> {
         stop,
         target: r.reference()?,
         data: None,
-    })
+    };
+    Ok((c, stored))
 }
 
 /// Linear keys of f32 time and a u8 on/off value.
