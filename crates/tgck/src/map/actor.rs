@@ -311,6 +311,13 @@ impl Actor {
     }
 
     fn parse_state(&self, cur: &mut Cursor, world: u32, depth: u32) -> Result<State> {
+        // A component bit no class has would leave its record unread.
+        if (self.components | self.template_components) >> COMPONENTS.len() != 0 {
+            return Err(Error::Corrupt(format!(
+                "actor components {:#x} of {:#x}",
+                self.components, self.template_components
+            )));
+        }
         let components = record_order(self.components)
             .map(|bit| self.parse_component(cur, bit, world, depth))
             .collect::<Result<_>>()?;

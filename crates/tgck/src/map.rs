@@ -123,8 +123,11 @@ impl<R: Read + Seek> Map<R> {
 
     /// The version of the game state the map was saved with, which decides
     /// the layout of some sections.
+    /// Checked as [`World::parse`] checks it, as it decides how other
+    /// sections are read.
     pub fn world_version(&mut self) -> Result<u32> {
-        Cursor::new(&self.container.read_named("GWORLD")?).u32()
+        let version = Cursor::new(&self.container.read_named("GWORLD")?).u32()?;
+        header::check_version("world", version, 0..=World::MAX_VERSION)
     }
 
     pub fn world(&mut self) -> Result<World> {
@@ -263,7 +266,15 @@ impl HeightMap {
         self.heights[y * self.side + x]
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
+        let count = self.heights.len();
+        if self.side * self.side != count || self.layer.len() != count {
+            return Err(Error::Unwritable(format!(
+                "height map of side {} with {count} heights and {} layer bytes",
+                self.side,
+                self.layer.len()
+            )));
+        }
         let mut w = Writer::default();
         w.u32(self.version);
         w.f32(self.min);
@@ -273,7 +284,7 @@ impl HeightMap {
         w.u32(self.heights.len() as u32);
         w.f32s(&self.heights);
         w.bytes(&self.layer);
-        w.0
+        Ok(w.0)
     }
 }
 
@@ -287,10 +298,13 @@ pub fn write_strings(text: &str) -> Result<Vec<u8>> {
 
 /// The MOUNTAIN_HEIGHT_MAP section holding `mountain` and the world's
 /// cutscene-mode flag, which is None exactly before world version 10.
-pub fn write_mountain_height_map(mountain: &HeightMap, cutscene_mode: Option<bool>) -> Vec<u8> {
-    let mut data = mountain.to_bytes();
+pub fn write_mountain_height_map(
+    mountain: &HeightMap,
+    cutscene_mode: Option<bool>,
+) -> Result<Vec<u8>> {
+    let mut data = mountain.to_bytes()?;
     data.extend(cutscene_mode.map(u8::from));
-    data
+    Ok(data)
 }
 
 #[derive(Debug, Clone)]
@@ -886,7 +900,8 @@ impl Detail {
                 Detail::Area(area)
             }
             CAMERA => Detail::Camera(Camera {
-                version: cur.u32()?,
+                // Version 0 holds other fields; no shipped map has one.
+                version: header::check_version("camera", cur.u32()?, 1..=2)?,
                 name: cur.string()?,
                 zoom: cur.f32()?,
             }),
@@ -1263,6 +1278,40 @@ mod tests {
     }
 
     #[test]
+    fn rejects_versions_and_components_the_game_does_not_know() {
+        let bytes = build_container(&[
+            ("MAP_HEADER", &[0; 64], true),
+            ("GWORLD", &29u32.to_le_bytes(), true),
+        ]);
+        let mut map = Map::new(io::Cursor::new(bytes)).unwrap();
+        assert!(map.world_version().is_err());
+
+        let mut camera = 3u32.to_le_bytes().to_vec();
+        camera.extend(string("Intro"));
+        camera.extend(1.3f32.to_le_bytes());
+        let (index, data) =
+            things_sections(&[thing_record(CAMERA, "camera", 1, [0.0; 3], &camera)]);
+        assert!(parse_things("DYNAMIC_THINGS", &index, &data, 28).is_err());
+
+        // An actor with no components but bit 31 set keeps its state raw.
+        let mut actor = [14u32, 0].map(u32::to_le_bytes).concat();
+        actor.extend(0u64.to_le_bytes());
+        actor.extend([0u32, 1 << 31].map(u32::to_le_bytes).concat());
+        let mut trailer = (-1i32).to_le_bytes().to_vec();
+        trailer.extend(0u32.to_le_bytes());
+        trailer.extend([0u8, 0]);
+        trailer.extend(string(""));
+        trailer.extend([0u32; 8].map(u32::to_le_bytes).concat());
+        actor.extend(trailer);
+        let (index, data) = things_sections(&[thing_record(ACTOR, "x", 1, [0.0; 3], &actor)]);
+        let things = parse_things("DYNAMIC_THINGS", &index, &data, 28).unwrap();
+        let Detail::Actor(actor) = &things[0].detail else {
+            panic!("{:?}", things[0].detail)
+        };
+        assert!(matches!(actor.state, State::Raw(_)));
+    }
+
+    #[test]
     fn reads_cutscene_mode_after_the_mountain_height_map() {
         let hm = height_section(3, 4);
         for (world_version, flag, want) in [(28, &[1][..], Some(true)), (9, &[], None)] {
@@ -1276,7 +1325,7 @@ mod tests {
             assert_eq!(map.cutscene_mode().unwrap(), want);
             let parsed = map.mountain_height_map().unwrap();
             assert_eq!(parsed.side, 3);
-            assert_eq!(write_mountain_height_map(&parsed, want), mountain);
+            assert_eq!(write_mountain_height_map(&parsed, want).unwrap(), mountain);
         }
     }
 
@@ -1330,7 +1379,10 @@ mod tests {
     #[test]
     fn writes_sections_back() {
         let hm = height_section(3, 4);
-        assert_eq!(HeightMap::parse(&hm).unwrap().to_bytes(), hm);
+        assert_eq!(HeightMap::parse(&hm).unwrap().to_bytes().unwrap(), hm);
+        let mut short = HeightMap::parse(&hm).unwrap();
+        short.layer.pop();
+        assert!(short.to_bytes().is_err());
         assert!(
             HeightMap::parse(&[&hm[..], &[0]].concat()).is_err(),
             "trailing byte"
