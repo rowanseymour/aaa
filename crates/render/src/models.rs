@@ -600,12 +600,8 @@ impl Models {
     ) -> Option<Entity> {
         let view = View {
             models: vec![path.to_string()],
-            texture_dirs: path
-                .rsplit_once('/')
-                .map(|(d, _)| d.to_string())
-                .into_iter()
-                .collect(),
-            texture_renames: Vec::new(),
+            texture_dirs: Vec::new(),
+            texture_renames: HashMap::new(),
             scale: 1.0,
             animations: Vec::new(),
             conform: None,
@@ -1121,18 +1117,7 @@ impl Models {
         view: &View,
         model: &str,
     ) -> Option<Handle<Image>> {
-        let mut file = file.to_string();
-        for (from, to) in &view.texture_renames {
-            file = file.replace(from.as_str(), to);
-        }
-        let model_dir = model.rsplit_once('/').map_or("", |(d, _)| d).to_string();
-        let dirs: Vec<String> = view
-            .texture_dirs
-            .iter()
-            .cloned()
-            .chain([model_dir])
-            .collect();
-        let Some(path) = game.find_texture(&file, &dirs, model) else {
+        let Some(path) = game.find_texture(view, model, file) else {
             warn!("{model}: texture {file} not found");
             return None;
         };
