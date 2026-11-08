@@ -29,9 +29,9 @@ const BUTTON: f32 = 56.0;
 const GAP: f32 = 4.0;
 /// Black margin between the buttons and the panel's rounded edge.
 const PAD: f32 = 8.0;
-/// The outline every slot has, so the grid reads as one even with slots
-/// empty.
-const LINE: Color = Color::srgb(0.22, 0.22, 0.22);
+/// Behind every slot, darker than the panel around it, so the grid reads as
+/// one even with slots empty.
+const SLOT: Color = Color::srgba(0.0, 0.0, 0.0, 0.6);
 
 /// The orders a regiment has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
@@ -431,8 +431,8 @@ pub fn spawn(
                             border: UiRect::all(px(2)),
                             ..default()
                         },
-                        BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
-                        BorderColor::all(LINE),
+                        BackgroundColor(SLOT),
+                        BorderColor::all(Color::NONE),
                         children![(
                             SlotIcon,
                             ImageNode::default(),
@@ -543,7 +543,7 @@ pub fn show(
             *pickable = want;
         }
         let Some(entry) = entry else {
-            border.set_if_neq(BorderColor::all(LINE));
+            border.set_if_neq(BorderColor::all(Color::NONE));
             set_icon(children, &mut icons, None);
             continue;
         };
@@ -605,7 +605,7 @@ pub fn show(
         let colour = match (lit, hover.get() && ready) {
             (true, _) => Color::srgb(0.1, 0.9, 0.1),
             (false, true) => Color::WHITE,
-            (false, false) => LINE,
+            (false, false) => Color::NONE,
         };
         border.set_if_neq(BorderColor::all(colour));
         let tint = match ready {
