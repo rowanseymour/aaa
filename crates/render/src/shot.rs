@@ -53,6 +53,11 @@ pub struct ShotPlugin {
     pub path: PathBuf,
 }
 
+/// Present while the scene is still being set up elsewhere, holding off the
+/// frame count towards a capture.
+#[derive(Resource)]
+pub struct Hold;
+
 /// How many pipelines the render world is still compiling.
 #[derive(Resource, Clone, Default)]
 struct Compiling(Arc<AtomicUsize>);
@@ -104,7 +109,10 @@ impl Plugin for ShotPlugin {
                 quiet: 0,
                 asked: false,
             })
-            .add_systems(Update, (aim_cameras, capture));
+            .add_systems(
+                Update,
+                (aim_cameras, capture.run_if(not(resource_exists::<Hold>))),
+            );
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render
                 .insert_resource(compiling)
