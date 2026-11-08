@@ -10,10 +10,11 @@ use bevy::light::NotShadowCaster;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
-use nif::{Controller, ControllerKind, Keyframes, Nif, Object};
+use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 
-use crate::models::{Animated, Part, PartMaterial, bevy_transform, controller};
+use crate::models::{Animated, Part, PartMaterial, bevy_transform, controllers};
 use crate::particles::{Anchor, Frames};
+use crate::terrain::world;
 
 /// A model's node tree, its meshes and the animations it plays.
 pub struct Rig {
@@ -62,10 +63,25 @@ struct Clip {
 struct Channel {
     node: usize,
     controller: Controller,
-    keys: Keyframes,
+    keys: Moves,
     /// The translation the accumulation root is held at, so the animation's
     /// own travel doesn't carry the model away from where it is placed.
     hold: Option<[f32; 3]>,
+}
+
+/// What a channel plays on its node.
+enum Moves {
+    Keys(Keyframes),
+    Path(nif::Path),
+}
+
+impl Moves {
+    fn apply(&self, rest: &nif::Transform, time: f32) -> nif::Transform {
+        match self {
+            Moves::Keys(keys) => keys.apply(rest, time),
+            Moves::Path(path) => path.apply(rest, time),
+        }
+    }
 }
 
 /// A rig's nodes as nif indices and the meshes hanging from them.
@@ -306,21 +322,34 @@ impl Nodes {
         Some((joints, skins.add(SkinnedMeshInverseBindposes::from(poses))))
     }
 
-    /// The keyframes on the model's own nodes, looping as each controller
-    /// says.
+    /// The keyframes and paths on the model's own nodes, looping as each
+    /// controller says; a node with several plays them in its chain's
+    /// order, each on top of the last.
     fn own_clip(&self, nif: &Nif) -> Option<Clip> {
         let channels: Vec<Channel> = self
             .index
             .iter()
-            .filter_map(|(&i, &node)| {
-                let av = nif.get(Some(i)).and_then(Object::scene)?;
-                let controller = controller(nif, av.controller, ControllerKind::Keyframe)?;
-                let keys = nif.get_as::<Keyframes>(controller.data)?;
-                Some(Channel {
-                    node,
-                    controller: controller.clone(),
-                    keys: keys.clone(),
-                    hold: None,
+            .flat_map(|(&i, &node)| {
+                let av = nif.get(Some(i)).and_then(Object::scene);
+                let chain = av.map(|av| controllers(nif, av.controller));
+                chain.into_iter().flatten().filter_map(move |c| {
+                    let keys = match c.kind {
+                        ControllerKind::Keyframe => {
+                            Moves::Keys(nif.get_as::<Keyframes>(c.data)?.clone())
+                        }
+                        ControllerKind::Path(settings) => Moves::Path(nif::Path::new(
+                            settings,
+                            nif.get_as::<Keys<[f32; 3]>>(settings.positions)?.clone(),
+                            nif.get_as::<Keys<f32>>(c.data)?.clone(),
+                        )),
+                        _ => return None,
+                    };
+                    Some(Channel {
+                        node,
+                        controller: c.clone(),
+                        keys,
+                        hold: None,
+                    })
                 })
             })
             .collect();
@@ -367,7 +396,7 @@ impl Nodes {
                 Some(Channel {
                     node,
                     controller: controller.clone(),
-                    keys: keys.clone(),
+                    keys: Moves::Keys(keys.clone()),
                     hold,
                 })
             })
@@ -456,11 +485,8 @@ impl Rig {
 
     /// Node `i`'s transform below its parent, `t` seconds into idling.
     fn pose(&self, i: usize, t: f32) -> nif::Transform {
-        let rest = self.nodes[i].rest;
-        let Some(c) = self.idle.channels.iter().find(|c| c.node == i) else {
-            return rest;
-        };
-        c.pose(&rest, t * self.idle.speed)
+        let channels = self.idle.channels.iter().filter(|c| c.node == i);
+        pose(channels, self.nodes[i].rest, t * self.idle.speed)
     }
 }
 
@@ -472,6 +498,37 @@ impl Channel {
         }
         t
     }
+}
+
+/// A node's channels played in turn on its rest pose.
+fn pose<'a>(
+    channels: impl IntoIterator<Item = &'a Channel>,
+    rest: nif::Transform,
+    t: f32,
+) -> nif::Transform {
+    channels.into_iter().fold(rest, |pose, c| c.pose(&pose, t))
+}
+
+/// Squashes `transform` onto the one axis `pose` has left, where a path has
+/// it travelling straight up or down; such a rotation has no Bevy rotation.
+fn squash(transform: &mut Transform, pose: &nif::Transform) {
+    let r = pose.rotation;
+    let column = |c: usize| world(r[0][c], r[1][c], r[2][c]);
+    if column(0).dot(column(1).cross(column(2))).abs() > 1e-6 {
+        return;
+    }
+    let Some(kept) = (0..3).max_by(|&a, &b| column(a).length().total_cmp(&column(b).length()))
+    else {
+        return;
+    };
+    let along = column(kept);
+    let mut local = [0.0; 3];
+    local[kept] = 1.0;
+    let local = world(local[0], local[1], local[2]);
+    transform.rotation = Quat::from_rotation_arc(local, along.normalize_or(local));
+    // Not quite zero, which would leave the node's children with no
+    // inverse.
+    transform.scale = (local.abs() * (along.length() - 1e-4) + Vec3::splat(1e-4)) * pose.scale;
 }
 
 /// Plays a rig's animation on the node entities spawned for it.
@@ -588,11 +645,151 @@ pub fn play(time: Res<Time>, mut rigs: Query<&mut Playing>, mut transforms: Quer
             }
         };
         let t = time * clip.speed;
-        for c in &clip.channels {
-            let rest = &p.rig.nodes[c.node].rest;
-            if let Ok(mut transform) = transforms.get_mut(p.joints[c.node]) {
-                *transform = bevy_transform(&c.pose(rest, t));
+        // Each node's channels are next to each other.
+        for channels in clip.channels.chunk_by(|a, b| a.node == b.node) {
+            let node = channels[0].node;
+            let pose = pose(channels, p.rig.nodes[node].rest, t);
+            if let Ok(mut transform) = transforms.get_mut(p.joints[node]) {
+                *transform = bevy_transform(&pose);
+                if channels.iter().any(|c| matches!(c.keys, Moves::Path(_))) {
+                    squash(&mut transform, &pose);
+                }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nif::{Interpolation, Key, PathSettings, SceneObject};
+
+    fn node(name: &str, controller: nif::Ref, children: Vec<nif::Ref>) -> Object {
+        Object::Node(nif::Node {
+            av: SceneObject {
+                name: name.into(),
+                extra_data: Vec::new(),
+                controller,
+                flags: 0,
+                transform: nif::Transform::IDENTITY,
+                properties: Vec::new(),
+            },
+            children,
+            billboard: None,
+        })
+    }
+
+    fn linear<T>(keys: &[(f32, T)]) -> Keys<T>
+    where
+        T: Copy,
+    {
+        Keys {
+            interpolation: Interpolation::Linear,
+            keys: keys
+                .iter()
+                .map(|&(time, value)| Key {
+                    time,
+                    value,
+                    tangents: None,
+                })
+                .collect(),
+        }
+    }
+
+    /// A streamer node moved 4 along the game's +x over its path's first
+    /// second, the path followed by `axis` with `flags`, and after it in
+    /// its chain, with `scale`, keyframes doubling its size.
+    fn path_model(flags: u16, axis: i16, scale: bool) -> Nif {
+        let timing = |next, data| Controller {
+            kind: ControllerKind::Keyframe,
+            modifier: String::new(),
+            next,
+            flags: 0x28,
+            frequency: 1.0,
+            phase: 0.0,
+            start: 0.0,
+            stop: 2.0,
+            target: Some(1),
+            data,
+        };
+        Nif {
+            objects: vec![
+                node("root", None, vec![Some(1)]),
+                node("streamer", Some(2), Vec::new()),
+                Object::Controller(Controller {
+                    kind: ControllerKind::Path(PathSettings {
+                        flags,
+                        bank_direction: 1,
+                        max_bank: 0.5,
+                        smoothing: 0.02,
+                        follow_axis: axis,
+                        positions: Some(3),
+                    }),
+                    ..timing(scale.then_some(5), Some(4))
+                }),
+                Object::Positions(linear(&[(0.0, [0.0; 3]), (1.0, [4.0, 0.0, 0.0])])),
+                Object::Floats(linear(&[(0.0, 0.0), (2.0, 1.0)])),
+                Object::Controller(timing(None, Some(6))),
+                Object::Keyframes(Keyframes {
+                    scale: linear(&[(0.0, 2.0)]),
+                    ..Default::default()
+                }),
+            ],
+            roots: vec![Some(0)],
+            incomplete: None,
+        }
+    }
+
+    /// The streamer's pose `t` seconds in.
+    fn streamer_pose(nif: &Nif, t: f32) -> nif::Transform {
+        let nodes = Nodes::new(nif);
+        let clip = nodes.own_clip(nif).expect("a path alone makes a clip");
+        assert_eq!(clip.length, 2.0);
+        let streamer = nodes.index[&1];
+        let channels = clip.channels.iter().filter(|c| c.node == streamer);
+        pose(channels, nif::Transform::IDENTITY, t)
+    }
+
+    #[test]
+    fn plays_paths_on_their_own() {
+        let nif = path_model(0x32, 2, false);
+        assert_eq!(streamer_pose(&nif, 0.5).translation, [1.0, 0.0, 0.0]);
+        let t = streamer_pose(&nif, 1.0);
+        assert_eq!(t.translation, [2.0, 0.0, 0.0]);
+        // Facing along +x.
+        assert_eq!(t.rotation.map(|r| r[2]), [1.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn plays_keyframes_after_paths() {
+        let t = streamer_pose(&path_model(0x32, 2, true), 1.0);
+        assert_eq!((t.translation, t.scale), ([2.0, 0.0, 0.0], 2.0));
+    }
+
+    #[test]
+    fn turns_flipped_x_followers_in_bevy() {
+        // The lily fish's flags: its -x leads, its z stays up.
+        let t = bevy_transform(&streamer_pose(&path_model(0x70, 0, false), 1.0));
+        assert!((t.rotation * Vec3::X).distance(Vec3::NEG_X) < 1e-4);
+        assert!((t.rotation * Vec3::Y).distance(Vec3::Y) < 1e-4);
+    }
+
+    #[test]
+    fn squashes_nodes_onto_their_line() {
+        // Only the z axis left, along the game's +x.
+        let pose = nif::Transform {
+            rotation: [[0.0, 0.0, 1.0], [0.0; 3], [0.0; 3]],
+            ..nif::Transform::IDENTITY
+        };
+        let mut t = bevy_transform(&pose);
+        squash(&mut t, &pose);
+        let onto = |v: Vec3| t.transform_point(v);
+        // The game's z is Bevy's y, and lands on the game's x, Bevy's x.
+        assert!(onto(Vec3::Y).distance(Vec3::X) < 1e-3);
+        assert!(onto(Vec3::X).length() < 1e-3 && onto(Vec3::Z).length() < 1e-3);
+        let turned = nif::Transform::IDENTITY;
+        let mut t = bevy_transform(&turned);
+        squash(&mut t, &turned);
+        assert_eq!(t, bevy_transform(&turned));
     }
 }

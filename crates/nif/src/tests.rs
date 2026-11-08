@@ -256,6 +256,33 @@ fn reads_the_older_version() {
 }
 
 #[test]
+fn reads_path_flags_from_older_controllers() {
+    let mut b = Builder::new();
+    let mut path = (-1i32).to_le_bytes().to_vec();
+    path.extend(0x708u16.to_le_bytes());
+    path.extend(floats(&[1.0, 0.0, 0.0, 12.0]));
+    path.extend((-1i32).to_le_bytes());
+    path.extend(1i32.to_le_bytes());
+    path.extend(floats(&[0.5, 0.02]));
+    path.extend(0u16.to_le_bytes());
+    path.extend((-1i32).to_le_bytes());
+    path.extend((-1i32).to_le_bytes());
+    b.add("NiPathController", path);
+    let mut bytes = b.finish(&[]);
+    let at = bytes.iter().position(|&c| c == b'\n').unwrap() + 1;
+    bytes[at..at + 4].copy_from_slice(&OLD_VERSION.to_le_bytes());
+    bytes.drain(at + 4..at + 8);
+    let nif = Nif::parse(&bytes).unwrap();
+    assert!(nif.incomplete.is_none());
+    let Object::Controller(c) = &nif.objects[0] else {
+        panic!("no controller");
+    };
+    // Active and looping, with the manager-update flag older files imply.
+    assert_eq!(c.flags, 0x28);
+    assert!(matches!(c.kind, ControllerKind::Path(p) if p.flags == 0x70 && p.follow_axis == 0));
+}
+
+#[test]
 fn reads_skins() {
     let mut b = Builder::new();
     b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 6]));
@@ -539,6 +566,195 @@ fn samples_keys() {
     let t = base.apply(&Transform::IDENTITY, 1.0);
     let p = t.apply([1.0, 0.0, 0.0]);
     assert!((p[0] + 1.0).abs() < 1e-6 && p[1].abs() < 1e-6);
+}
+
+/// A path along x, 1 long up to key time 0.9 then 2 more by time 1,
+/// constant speed or not, following or not.
+fn straight_path(flags: u16) -> Path {
+    let settings = PathSettings {
+        flags,
+        bank_direction: 1,
+        max_bank: 0.0,
+        smoothing: 0.0,
+        follow_axis: 2,
+        positions: None,
+    };
+    let positions = keys(
+        Interpolation::Linear,
+        &[
+            (0.0, [0.0, 0.0, 0.0], None),
+            (0.9, [1.0, 0.0, 0.0], None),
+            (1.0, [3.0, 0.0, 0.0], None),
+        ],
+    );
+    // The fraction along is the key time itself.
+    let percent = keys(
+        Interpolation::Linear,
+        &[(-10.0, -10.0, None), (10.0, 10.0, None)],
+    );
+    Path::new(settings, positions, percent)
+}
+
+fn x_at(path: &Path, p: f32) -> f32 {
+    path.apply(&Transform::IDENTITY, p).translation[0]
+}
+
+fn close(a: f32, b: f32) -> bool {
+    (a - b).abs() < 1e-4
+}
+
+#[test]
+fn places_by_distance_along_paths() {
+    let even = straight_path(0x10);
+    assert!(close(x_at(&even, 0.0), 0.0));
+    assert!(close(x_at(&even, 0.25), 0.75));
+    assert!(close(x_at(&even, 0.5), 1.5));
+    // Without constant speed, by the keys' times instead.
+    let timed = straight_path(0);
+    assert!(close(x_at(&timed, 0.45), 0.5));
+    assert!(close(x_at(&timed, 0.95), 2.0));
+    assert!(close(x_at(&timed, 2.0), 3.0));
+}
+
+#[test]
+fn wraps_constant_speed_paths() {
+    let even = straight_path(0x10);
+    assert!(close(x_at(&even, 1.25), 0.75));
+    assert!(close(x_at(&even, -0.25), 2.25));
+    assert!(close(x_at(&even, 1.0), 0.0));
+}
+
+#[test]
+fn turns_to_follow_paths() {
+    // Not following, the rotation is left alone.
+    let base = Transform {
+        rotation: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+        ..Transform::IDENTITY
+    };
+    let still = straight_path(0x10).apply(&base, 0.5);
+    assert_eq!(still.rotation, base.rotation);
+
+    // Along x: z along it, y level across it, and so x straight down.
+    let t = straight_path(0x30).apply(&base, 0.5);
+    let axis = |i: usize| t.rotation.map(|row| row[i]);
+    for (a, b) in [
+        (axis(0), [0.0, 0.0, -1.0]),
+        (axis(1), [0.0, 1.0, 0.0]),
+        (axis(2), [1.0, 0.0, 0.0]),
+    ] {
+        assert!((0..3).all(|i| close(a[i], b[i])), "{a:?} is not {b:?}");
+    }
+
+    // Climbing along y, y still lies level.
+    let settings = PathSettings {
+        flags: 0x30,
+        bank_direction: 1,
+        max_bank: 0.0,
+        smoothing: 0.0,
+        follow_axis: 2,
+        positions: None,
+    };
+    let climb = keys(
+        Interpolation::Linear,
+        &[(0.0, [0.0, 0.0, 0.0], None), (1.0, [0.0, 1.0, 1.0], None)],
+    );
+    let percent = keys(Interpolation::Linear, &[(0.0, 0.5, None)]);
+    let t = Path::new(settings, climb, percent).apply(&Transform::IDENTITY, 0.0);
+    let axis = |i: usize| t.rotation.map(|row| row[i]);
+    let h = std::f32::consts::FRAC_1_SQRT_2;
+    for (a, b) in [
+        (axis(0), [0.0, h, -h]),
+        (axis(1), [-1.0, 0.0, 0.0]),
+        (axis(2), [0.0, h, h]),
+    ] {
+        assert!((0..3).all(|i| close(a[i], b[i])), "{a:?} is not {b:?}");
+    }
+    assert!(close(t.translation[1], 0.5) && close(t.translation[2], 0.5));
+}
+
+/// A path followed by `axis` with these flags, through `points` at even
+/// key times from 0 to 1, its fraction along the key time itself.
+fn followed(flags: u16, axis: i16, points: &[[f32; 3]]) -> Path {
+    let settings = PathSettings {
+        flags: 0x20 | flags,
+        bank_direction: 1,
+        max_bank: 0.0,
+        smoothing: 0.0,
+        follow_axis: axis,
+        positions: None,
+    };
+    let last = (points.len() - 1) as f32;
+    let positions = Keys {
+        interpolation: Interpolation::Linear,
+        keys: points
+            .iter()
+            .enumerate()
+            .map(|(i, &value)| Key {
+                time: i as f32 / last,
+                value,
+                tangents: None,
+            })
+            .collect(),
+    };
+    let percent = keys(
+        Interpolation::Linear,
+        &[(-10.0, -10.0, None), (10.0, 10.0, None)],
+    );
+    Path::new(settings, positions, percent)
+}
+
+/// The node's x, y and z axes where `path` puts it at `p`.
+fn axes(path: &Path, p: f32) -> [[f32; 3]; 3] {
+    let t = path.apply(&Transform::IDENTITY, p);
+    std::array::from_fn(|i| t.rotation.map(|row| row[i]))
+}
+
+fn assert_near<const N: usize>(got: [[f32; 3]; N], want: [[f32; 3]; N]) {
+    let same = (0..N).all(|a| (0..3).all(|i| close(got[a][i], want[a][i])));
+    assert!(same, "{got:?} is not {want:?}");
+}
+
+#[test]
+fn lays_out_each_follow_axis() {
+    let level = [[0.0; 3], [1.0, 0.0, 0.0]];
+    let up = [0.0, 0.0, 1.0];
+    assert_near(
+        axes(&followed(0, 0, &level), 0.5),
+        [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], up],
+    );
+    assert_near(
+        axes(&followed(0, 1, &level), 0.5),
+        [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], up],
+    );
+    assert_near(
+        axes(&followed(0, 2, &level), 0.5),
+        [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+    );
+    // Flipped, x leads backwards and y is reversed, z still up.
+    assert_near(
+        axes(&followed(0x40, 0, &level), 0.5),
+        [[-1.0, 0.0, 0.0], [0.0, -1.0, 0.0], up],
+    );
+}
+
+#[test]
+fn squashes_nodes_travelling_straight_up() {
+    let rising = followed(0, 2, &[[0.0; 3], [0.0, 0.0, 1.0]]);
+    assert_near(axes(&rising, 0.5), [[0.0; 3], [0.0; 3], [0.0, 0.0, 1.0]]);
+}
+
+#[test]
+fn heads_along_each_end_of_a_path() {
+    let corner = [[0.0; 3], [1.0, 0.0, 0.0], [1.0, 1.0, 0.0]];
+    let heading = |path: &Path, p| axes(path, p)[2];
+    let timed = followed(0, 2, &corner);
+    assert_near([heading(&timed, 0.0)], [[1.0, 0.0, 0.0]]);
+    // At a key, the way out of it; at the last, the way into it.
+    assert_near([heading(&timed, 0.5)], [[0.0, 1.0, 0.0]]);
+    assert_near([heading(&timed, 1.0)], [[0.0, 1.0, 0.0]]);
+    // At constant speed, p of 1 wraps to the start and its heading.
+    let even = followed(0x10, 2, &corner);
+    assert_near([heading(&even, 1.0)], [[1.0, 0.0, 0.0]]);
 }
 
 #[test]
@@ -988,10 +1204,10 @@ fn steps_over_controllers() {
     b.add("NiLookAtController", look);
 
     let mut path = time_controller(0);
-    path.extend(0u16.to_le_bytes());
-    path.extend(0i32.to_le_bytes());
-    path.extend(floats(&[0.0, 0.0]));
-    path.extend(0u16.to_le_bytes());
+    path.extend(0x32u16.to_le_bytes());
+    path.extend(1i32.to_le_bytes());
+    path.extend(floats(&[0.5, 0.02]));
+    path.extend(2u16.to_le_bytes());
     path.extend(4i32.to_le_bytes());
     path.extend(5i32.to_le_bytes());
     b.add("NiPathController", path);
@@ -1034,6 +1250,22 @@ fn steps_over_controllers() {
     assert!(
         matches!(&nif.objects[10], Object::SourceTexture(t) if t.file.as_deref() == Some("frame.dds"))
     );
+    let Object::Controller(path) = &nif.objects[3] else {
+        panic!("no path controller");
+    };
+    assert_eq!(
+        path.kind,
+        ControllerKind::Path(PathSettings {
+            flags: 0x32,
+            bank_direction: 1,
+            max_bank: 0.5,
+            smoothing: 0.02,
+            follow_axis: 2,
+            positions: Some(4),
+        })
+    );
+    assert_eq!(path.data, Some(5));
+    assert!(matches!(&nif.objects[4], Object::Positions(k) if k.keys.len() == 2));
     // Kept so chains through them can be followed.
     assert!(
         matches!(&nif.objects[8], Object::Controller(c) if c.kind == ControllerKind::Unread && c.target == Some(9))
