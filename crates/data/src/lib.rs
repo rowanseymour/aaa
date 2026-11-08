@@ -2,8 +2,10 @@
 //! definitions built from their files (terrain, object views, ...).
 
 pub mod defs;
+mod economy;
 mod id;
 
+pub use economy::{Amounts, Economy, EconomyRules, RESOURCES};
 pub use id::Id;
 
 use std::collections::{HashMap, HashSet};
@@ -1048,8 +1050,9 @@ impl GameData {
 
     /// How each template that has a name shows on the button that
     /// commissions or recruits it, by template id. An organization costs
-    /// and takes to keep what its captain, the one member it's raised
-    /// with, does as well as its own, which for a Division HQ is all of it.
+    /// what its captain, the one member it's raised with, does as well as
+    /// its own, which for a Division HQ is all of it, and takes to keep its
+    /// own upkeep and each member's.
     pub fn listings(&mut self) -> HashMap<Id, Listing> {
         let strings = self.strings();
         let definitions = self.definitions();
@@ -1081,7 +1084,7 @@ impl GameData {
                     .and_then(ui_path),
                 cost: economy(|e| e.cost.as_ref()),
                 production: amounts(&strings, production(t, &things)),
-                upkeep: economy(|e| e.upkeep.as_ref()),
+                upkeep: amounts(&strings, upkeep(t, &things)),
             })
         })
     }
@@ -1279,6 +1282,7 @@ impl GameData {
                 "vfx" => coverage.read::<defs::Vfx>(block, t).map(drop),
                 "cursor" => coverage.read::<defs::Cursor>(block, t).map(drop),
                 "svars" => coverage.read::<defs::SVars>(block, t).map(drop),
+                "resource" => coverage.read::<defs::Resource>(block, t).map(drop),
                 // A string table, read whole.
                 "text" => coverage
                     .read::<HashMap<String, String>>(block, None)
@@ -1345,13 +1349,7 @@ impl GameData {
     /// How far beyond a blocking building's footprint the ground must be
     /// clear for it to be put there, in world units.
     pub fn building_padding(&mut self) -> Option<f32> {
-        let files = self.parse_tgis(|n| n == "game/svars.tgi");
-        let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
-        files
-            .iter()
-            .flat_map(|(_, p)| p.root.blocks_of("SVars"))
-            .filter_map(|b| templates.deserialize::<defs::SVars>(b).ok())
-            .find_map(|v| v.building_padding_meters)
+        self.svars().iter().find_map(|v| v.building_padding_meters)
     }
 
     /// The orders the player can give, in the order the files list them.
@@ -2121,6 +2119,22 @@ fn production<'a>(
         .filter_map(|t| t.economy_component.as_ref()?.production.as_ref())
 }
 
+/// What a template takes to keep as it's shown: its own `[Upkeep]` and,
+/// for a regiment, each of its members'.
+fn upkeep<'a>(
+    t: &'a defs::Thing,
+    things: &HashMap<&Id, &'a defs::Thing>,
+) -> impl Iterator<Item = &'a defs::Resources> {
+    let members = t
+        .organization_component
+        .iter()
+        .flat_map(|o| &o.slot)
+        .filter_map(|s| things.get(s.element_ids.as_ref()?).copied());
+    std::iter::once(t)
+        .chain(members)
+        .filter_map(|t| t.economy_component.as_ref()?.upkeep.as_ref())
+}
+
 fn terrain_kind(t: &defs::Terrain) -> TerrainKind {
     match t.kind.as_deref().map(str::to_ascii_uppercase).as_deref() {
         Some("MOUNTAIN") => TerrainKind::Mountain {
@@ -2227,6 +2241,35 @@ mod tests {
             earned("regiment"),
             [("money", 24.0), ("unit_limit_provided", 10.0)]
         );
+    }
+
+    #[test]
+    fn upkeep_is_the_templates_own_and_each_members() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = man\n\t[EconomyComponent]\n\t{\n\
+             \t\t[Upkeep]\n\t\t{\n\t\t\tammo = 1\n\t\t}\n\t}\n}\n\
+             [Thing]\n{\n\tIDS = regiment\n\t[EconomyComponent]\n\t{\n\
+             \t\t[Upkeep]\n\t\t{\n\t\t\tunit_limit_consumed = 1\n\t\t}\n\t}\n\
+             \t[OrganizationComponent]\n\t{\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\
+             \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\t}\n}\n",
+        );
+        let things: Vec<(Id, defs::Thing)> = parsed
+            .root
+            .blocks_of("Thing")
+            .zip(["man", "regiment"])
+            .map(|(b, id)| (Id::from(id), tgi::from_block(b).unwrap()))
+            .collect();
+        let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
+        let kept: Vec<(&str, f32)> = amounts(
+            &HashMap::new(),
+            upkeep(by_id[&Id::from("regiment")], &by_id),
+        )
+        .into_iter()
+        .map(|a| (a.kind, a.amount))
+        .collect();
+        assert_eq!(kept, [("unit_limit_consumed", 1.0), ("ammo", 3.0)]);
     }
 
     #[test]

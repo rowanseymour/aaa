@@ -25,6 +25,7 @@ mod minimap;
 mod pane;
 mod presets;
 mod remote;
+mod resource_bar;
 mod sound;
 mod waypoints;
 
@@ -490,6 +491,7 @@ fn main() -> ExitCode {
                 minimap::spawn,
                 actions::spawn,
                 pane::spawn,
+                resource_bar::spawn,
                 waypoints::load,
                 console::start_scripts,
                 ready,
@@ -522,6 +524,8 @@ fn main() -> ExitCode {
                 minimap::update.after(camera::Controls),
                 (actions::back_out, actions::show).chain(),
                 (pane::lay_out, pane::refresh).chain(),
+                resource_bar::show.after(actions::show),
+                resource_bar::tell,
                 (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain().after(carry_out),
@@ -629,6 +633,8 @@ fn prepare(
     let raising = Recruits::new(&mut game);
     sim.packing = raising.packings();
     sim.requires = game.requirements();
+    sim.economies = game.economies();
+    sim.economy = game.economy_rules();
     Ok(Prepared {
         loaded: Loaded { game, map },
         sim,

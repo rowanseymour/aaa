@@ -652,6 +652,33 @@ pub struct Cursor {
 pub struct SVars {
     #[serde(rename = "BuildingPaddingMeters")]
     pub building_padding_meters: Option<f32>,
+    /// The most a resource that limits another provides, in total.
+    #[serde(rename = "EconomyLimitedResourceMax")]
+    pub economy_limited_resource_max: Option<f32>,
+    /// The most a stockpile holds.
+    #[serde(rename = "EconomyStockpileResourceMax")]
+    pub economy_stockpile_resource_max: Option<f32>,
+    /// What stockpiles start at on new and random maps.
+    #[serde(rename = "ResourceStockpileDefault")]
+    pub resource_stockpile_default: Option<f32>,
+}
+
+/// One of the resources sides earn and spend.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Resource {
+    pub ids: Option<Id>,
+    /// The resource that caps how much of it can be used.
+    pub limited_by: Option<Id>,
+    /// What a unit of it costs, for those that can be bought.
+    pub purchase_cost: Option<Resources>,
+}
+
+/// A setting a match is played under, which the lobby can change.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorldRule {
+    pub ids: Option<Id>,
+    /// What it's set to unless changed, a number or a choice's id.
+    pub default: Option<String>,
 }
 
 /// A visual effect; those with a model draw it, relative to their file's
