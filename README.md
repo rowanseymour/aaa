@@ -4,9 +4,12 @@ Experiments with the data files of [Axis & Allies (2004)](https://en.wikipedia.o
 real-time strategy game.
 
 > [!IMPORTANT]
-> You need your own copy of the game. This project contains no game code or data. This is not a decompilation of the game.
-> Its executable was studied to learn how its file formats and rules work, but none of its code is included or translated
-> here: everything is written from scratch.
+> You need your own copy of the game. This project contains no game code or data.
+
+> [!NOTE]
+> This is not a decompilation of the game - everything is written from scratch, clean-room style.
+> Whoever studies the executable writes up its behavior as specs, and the code here is written
+> only from those specs, the data files and what the running game shows.
 
 ## Crates
 

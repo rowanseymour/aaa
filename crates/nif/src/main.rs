@@ -102,7 +102,13 @@ fn dump(file: &str) -> io::Result<ExitCode> {
                 !g.colors.is_empty()
             ),
             Object::Texturing(t) => {
-                format!("texturing base {:?}", t.base.as_ref().map(|b| b.source))
+                let base = t.base.as_ref();
+                format!(
+                    "texturing base {:?} placement {:?} controller {:?}",
+                    base.map(|b| b.source),
+                    base.and_then(|b| b.placement),
+                    t.controller
+                )
             }
             Object::SourceTexture(t) => format!("texture {:?} pixels {:?}", t.file, t.pixels),
             Object::Pixels(p) => format!("pixels format {} levels {:?}", p.format, p.mipmaps),

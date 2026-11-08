@@ -79,12 +79,14 @@ const WHY: Color = Color::srgb(1.0, 0.75, 0.3);
 /// Where the game's font keeps the glyphs it draws resources with, and
 /// each resource's, by its field name in the data.
 const GLYPH_DIR: &str = "Fonts/medium/1280";
-const GLYPHS: [(&str, &str); 5] = [
+const GLYPHS: [(&str, &str); 7] = [
     ("money", "money"),
     ("ammo", "ammo"),
     ("oil", "fuel"),
     ("unit_limit_consumed", "unitlimit"),
     ("building_limit_consumed", "building"),
+    ("unit_limit_provided", "unitlimit"),
+    ("building_limit_provided", "building"),
 ];
 
 /// What an order does once its button is pressed.
@@ -239,7 +241,7 @@ struct Look {
 /// One of the things a building commissions.
 struct Recruit {
     look: Look,
-    /// Its cost and upkeep, for the tooltip.
+    /// Its cost, production and upkeep, for the tooltip.
     economy: Vec<Row>,
     /// What it raises; `None` for what can't be raised yet, shown dimmed.
     regiment: Option<Regiment>,
@@ -315,7 +317,19 @@ struct Row {
 struct Quantity {
     glyph: Option<Handle<Image>>,
     amount: f32,
+    /// Shown signed, as what's earned is.
+    earned: bool,
     resource: String,
+}
+
+impl Quantity {
+    fn number(&self) -> String {
+        if self.earned && self.amount > 0.0 {
+            format!("+{}", self.amount)
+        } else {
+            self.amount.to_string()
+        }
+    }
 }
 
 /// Part of the interface that takes clicks, so they don't go to the map
@@ -381,18 +395,20 @@ pub fn spawn(
     let strings = game.strings();
     let title = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     let cost = title("ui_tooltip_item_title_cost", "Cost");
+    let production = title("ui_tooltip_item_title_production", "Production");
     let upkeep = title("ui_tooltip_item_title_upkeep", "Upkeep");
     let requires = title("ui_tooltip_item_title_requires", "Requires");
     let glyphs: HashMap<&str, Handle<Image>> = GLYPHS
         .iter()
         .filter_map(|&(kind, name)| Some((kind, image(game, &format!("{GLYPH_DIR}/{name}.png"))?)))
         .collect();
-    let quantities = |amounts: &[aaa_data::Amount]| -> Vec<Quantity> {
+    let quantities = |amounts: &[aaa_data::Amount], earned: bool| -> Vec<Quantity> {
         amounts
             .iter()
             .map(|a| Quantity {
                 glyph: glyphs.get(a.kind).cloned(),
                 amount: a.amount,
+                earned,
                 resource: a.resource.clone(),
             })
             .collect()
@@ -423,14 +439,18 @@ pub fn spawn(
                     .map_err(|e| debug!("can't commission {id}: {e}"))
                     .ok();
                 let economy = listing.map_or_else(Vec::new, |l| {
-                    [(&cost, &l.cost), (&upkeep, &l.upkeep)]
-                        .into_iter()
-                        .filter(|(_, amounts)| !amounts.is_empty())
-                        .map(|(label, amounts)| Row {
-                            label: label.clone(),
-                            amounts: quantities(amounts),
-                        })
-                        .collect()
+                    [
+                        (&cost, &l.cost, false),
+                        (&production, &l.production, true),
+                        (&upkeep, &l.upkeep, false),
+                    ]
+                    .into_iter()
+                    .filter(|(_, amounts, _)| !amounts.is_empty())
+                    .map(|(label, amounts, earned)| Row {
+                        label: label.clone(),
+                        amounts: quantities(amounts, earned),
+                    })
+                    .collect()
                 });
                 Recruit {
                     look: Look {
@@ -857,11 +877,11 @@ fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
                 },
                 Pickable::IGNORE,
             ));
-            pair.spawn(words(q.amount.to_string(), 13.0, Color::WHITE));
+            pair.spawn(words(q.number(), 13.0, Color::WHITE));
         }
         None => {
             pair.spawn(words(
-                format!("{} {}", q.amount, q.resource),
+                format!("{} {}", q.number(), q.resource),
                 13.0,
                 Color::WHITE,
             ));
