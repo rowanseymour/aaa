@@ -32,7 +32,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
-use aaa_data::GameData;
+use aaa_data::{Footing, GameData};
 use aaa_map::{Ground, Map, Member, Recruits, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
@@ -259,6 +259,7 @@ struct UnitView {
     moving: bool,
     /// The outline its model tilts on to follow the ground, if it does.
     conform: Option<Shape>,
+    footing: Footing,
 }
 
 /// Draws the trailer one of the sim's units tows.
@@ -267,6 +268,7 @@ struct TrailerView {
     /// Index into the sim's units.
     unit: usize,
     conform: Option<Shape>,
+    footing: Footing,
 }
 
 /// Spawns the model of the sim's `unit`, placed from `member`, and of any
@@ -285,10 +287,15 @@ fn spawn_unit_view(
 ) -> bool {
     let thing = &member.thing;
     if let Some(t) = trailer {
-        let towed = thing_at(ground, thing.id, &t.template, t.position, t.facing);
+        let footing = models.footing(&t.template);
+        let towed = thing_at(ground, footing, thing.id, &t.template, t.position, t.facing);
         if let Some(e) = models.spawn_building(commands, game, assets, &towed, owner) {
             let conform = models.conform(&t.template);
-            commands.entity(e).insert(TrailerView { unit, conform });
+            commands.entity(e).insert(TrailerView {
+                unit,
+                conform,
+                footing,
+            });
         }
     }
     let Some(e) = models.spawn_unit(commands, game, assets, thing, owner, member.speed) else {
@@ -300,6 +307,7 @@ fn spawn_unit_view(
         dead: false,
         moving: false,
         conform: models.conform(&thing.template),
+        footing: models.footing(&thing.template),
     });
     true
 }
@@ -324,6 +332,7 @@ fn show_trailers(
             trailer.drawn_at(t),
             trailer.facing,
             view.conform,
+            view.footing,
         );
     }
 }
@@ -1039,6 +1048,7 @@ fn step_world(
 /// A placed object standing on the ground, for drawing what the sim adds.
 fn thing_at(
     ground: &Ground,
+    footing: Footing,
     id: u32,
     template: &str,
     [x, y]: [f32; 2],
@@ -1049,7 +1059,7 @@ fn thing_at(
         class: tgck::map::ACTOR,
         id,
         name: String::new(),
-        position: [x, y, ground.height_at(x, y)],
+        position: [x, y, ground.stand_at(footing, x, y)],
         facing: [fx, fy, 0.0],
         flags: 0,
         scale: 1.0,
@@ -1077,6 +1087,7 @@ fn spawn_views(
         let member = Member {
             thing: thing_at(
                 &map.ground,
+                drawn.0.footing(&unit.template),
                 unit.id,
                 &unit.template,
                 unit.position,
@@ -1111,6 +1122,7 @@ fn spawn_views(
         let building = &sim.0.buildings[b];
         let thing = thing_at(
             &map.ground,
+            drawn.0.footing(&building.template),
             building.id,
             &building.template,
             building.position,
@@ -1259,6 +1271,7 @@ fn show_units(
             unit.drawn_at(t),
             unit.facing,
             view.conform,
+            view.footing,
         );
         if unit.alive() && unit.moving() != view.moving {
             view.moving = unit.moving();
@@ -1400,7 +1413,7 @@ fn select(
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
     grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
-    loaded: Res<Loaded>,
+    (loaded, drawn): (Res<Loaded>, Res<Drawn>),
     local: Res<Local>,
     focus: Res<Focus>,
     sim: Res<Sim>,
@@ -1480,9 +1493,11 @@ fn select(
     };
     let ground = &loaded.map.ground;
     let inside = |u: usize| {
-        let [x, y] = sim.0.units[u].position;
+        let unit = &sim.0.units[u];
+        let [x, y] = unit.position;
+        let z = ground.stand_at(drawn.0.footing(&unit.template), x, y);
         camera
-            .world_to_viewport(transform, world(x, y, ground.height_at(x, y)))
+            .world_to_viewport(transform, world(x, y, z))
             .is_ok_and(|p| rect.contains(p))
     };
     if !adding {
@@ -1945,7 +1960,7 @@ fn show_health(
             // At the edge of its footprint nearest the camera, so the bar
             // clears the model.
             let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
-            let at = world(x, y, ground.height_at(x, y)) + toward * reach;
+            let at = world(x, y, ground.stand_at(view.footing, x, y)) + toward * reach;
             let (Ok(a), Ok(b)) = (
                 camera.world_to_viewport(&global, at - half),
                 camera.world_to_viewport(&global, at + half),
