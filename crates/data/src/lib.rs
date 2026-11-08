@@ -30,8 +30,9 @@ pub struct GameData {
     archives: Vec<Archive<BufReader<File>>>,
     /// Lower-case path to entry; where archives share a path the first wins.
     paths: HashMap<String, EntryRef>,
-    /// Lower-case file name to entries.
-    files: HashMap<String, Vec<EntryRef>>,
+    /// The archive paths of the `.tgi` files the game loads, in the order
+    /// it loads them.
+    tgis: Vec<String>,
     /// See [`GameData::definitions`].
     definitions: Option<Arc<Definitions>>,
 }
@@ -39,8 +40,8 @@ pub struct GameData {
 /// The object templates and shared properties the `.tgi` files define,
 /// deserialized.
 struct Definitions {
-    /// In the order the files and their blocks come, which decides between
-    /// definitions sharing an id.
+    /// In the order the game loads them. Defining an id twice is an error
+    /// in the data, and only the first definition is kept.
     things: Vec<Template>,
     properties: HashMap<Id, defs::Property>,
 }
@@ -56,6 +57,7 @@ struct Template {
 impl Definitions {
     fn new(files: &[(String, tgi::Parsed)]) -> Self {
         let templates = tgi::Templates::new(files.iter().map(|(_, p)| &p.root));
+        let mut ids = HashSet::new();
         let things = files
             .iter()
             .flat_map(|(file, parsed)| {
@@ -67,6 +69,7 @@ impl Definitions {
                     })
                 })
             })
+            .filter(|t| ids.insert(t.id.clone()))
             .collect();
         let properties = files
             .iter()
@@ -92,8 +95,9 @@ pub struct View {
     pub models: Vec<String>,
     /// Archive folders searched for the models' textures.
     pub texture_dirs: Vec<String>,
-    /// Substitutions applied to texture names, `(from, to)`.
-    pub texture_renames: Vec<(String, String)>,
+    /// Substitutions made in the paths of the textures each model names,
+    /// `(from, to)` in the order declared, by model.
+    pub texture_renames: HashMap<String, Vec<(String, String)>>,
     /// Size multiplier: the middle of the template's random size range, which
     /// each placed object scales again by its own factor.
     pub scale: f32,
@@ -145,6 +149,15 @@ pub struct Animation {
 pub struct Body {
     /// The ground it keeps movers off; `None` if it doesn't block.
     pub blocking: Option<Shape>,
+    /// Its blocking shape, which it takes up the ground with whether or
+    /// not it blocks.
+    pub shape: Shape,
+    /// Its soft shape, which holds its blocking shape.
+    pub soft: Shape,
+    /// It floats, so it stands on water rather than land.
+    pub water_based: bool,
+    /// It stands on the half-tile grid.
+    pub tile_locked: bool,
     /// Top speed in world units a second; `None` if it can't move.
     pub speed: Option<f32>,
     /// World units a second it gains each second, speeding up; 0 for
@@ -283,8 +296,9 @@ pub struct Formation {
 
 /// An outline centred on an object, in world units: an object's own scale
 /// doesn't change it.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub enum Shape {
+    #[default]
     Point,
     Circle {
         radius: f32,
@@ -340,8 +354,9 @@ pub struct Deployment {
     /// For a packed building, such as a supply truck, the template it
     /// unpacks into.
     pub unpacks_into: Option<Id>,
-    /// Where the packed building stands from the building, x across the
-    /// building's facing and y along it, and the way it faces there.
+    /// For a packed building, where it stands from the building it unpacks
+    /// into, and the way it faces when the building packs into it, in world
+    /// space whichever way the building faces.
     pub packed_offset: [f32; 2],
     pub packed_facing: [f32; 2],
     /// For a building, the seconds packing and unpacking take.
@@ -516,7 +531,8 @@ pub struct AnimationAudio {
     /// The animation's kind, e.g. `RANDOM` or `SELECTED`.
     pub kind: String,
     pub ids: Option<String>,
-    /// For `RANDOM` animations, the range of seconds between plays.
+    /// For `RANDOM` animations, the range of seconds it waits, from being
+    /// created and from the end of each play, before it starts again.
     pub interval: Option<[f32; 2]>,
     pub audio: Id,
     pub looping: bool,
@@ -629,21 +645,21 @@ impl GameData {
             }
         }
         let mut paths = HashMap::new();
-        let mut files: HashMap<String, Vec<EntryRef>> = HashMap::new();
         for (a, archive) in archives.iter().enumerate() {
             for (i, e) in archive.entries.iter().enumerate() {
-                let lower = e.name.to_ascii_lowercase();
-                let file = lower.rsplit('/').next().unwrap_or(&lower).to_string();
-                files.entry(file).or_default().push((a, i));
-                paths.entry(lower).or_insert((a, i));
+                paths.entry(e.name.to_ascii_lowercase()).or_insert((a, i));
             }
         }
-        Ok(GameData {
+        let mut game = GameData {
             archives,
             paths,
-            files,
+            tgis: Vec::new(),
             definitions: None,
-        })
+        };
+        let names: Vec<String> = game.entries().map(str::to_string).collect();
+        let tgis = listed_tgis(&names, |name| game.read(name).map(|b| tgi::decode(&b)));
+        game.tgis = tgis;
+        Ok(game)
     }
 
     pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
@@ -677,9 +693,14 @@ impl GameData {
             .collect()
     }
 
-    /// Every `.tgi` file whose lower-case path passes `filter`, parsed.
+    /// Every `.tgi` file the game loads whose lower-case path passes
+    /// `filter`, parsed, in the order the game loads them.
     fn parse_tgis(&mut self, filter: impl Fn(&str) -> bool) -> Vec<(String, tgi::Parsed)> {
-        self.entry_names(|n| n.ends_with(".tgi") && filter(n))
+        let names: Vec<String> = (self.tgis.iter())
+            .filter(|n| filter(&n.to_ascii_lowercase()))
+            .cloned()
+            .collect();
+        names
             .into_iter()
             .filter_map(|n| {
                 let parsed = tgi::parse_bytes(&self.read(&n)?);
@@ -688,31 +709,15 @@ impl GameData {
             .collect()
     }
 
-    /// Finds a texture a model refers to by file name: in the given folders
-    /// first, then anywhere in the archive, preferring the path that shares
-    /// the longest folder prefix with `near`.
-    pub fn find_texture(&self, file: &str, dirs: &[String], near: &str) -> Option<String> {
-        let file = file.replace('\\', "/");
-        let name = file.rsplit('/').next().unwrap_or(&file);
-        for dir in dirs {
-            let path = format!("{dir}/{name}");
-            if self.exists(&path) {
-                return Some(path);
-            }
-        }
-        let near = near.to_ascii_lowercase();
-        let shared = |p: &str| {
-            p.bytes()
-                .zip(near.bytes())
-                .take_while(|(a, b)| a == b)
-                .count()
-        };
-        self.files
-            .get(&name.to_ascii_lowercase())?
-            .iter()
-            .map(|&e| self.entry_name(e))
-            .max_by_key(|p| shared(&p.to_ascii_lowercase()))
-            .map(str::to_string)
+    /// The archive path of a texture that `model`, one of `view`'s, names
+    /// as `file`: beside the model, under the name the model's renames make
+    /// of it, else that file name in each of the view's search paths in
+    /// turn. `None` where none of them exists, as the game then draws the
+    /// default texture.
+    pub fn find_texture(&self, view: &View, model: &str, file: &str) -> Option<String> {
+        texture_paths(view, model, file)
+            .into_iter()
+            .find(|p| self.exists(p))
     }
 
     /// Archive paths of all maps, sorted.
@@ -796,7 +801,7 @@ impl GameData {
             }
         }
         if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Variation", |_| true);
+            add_renames(&mut out, &tgi::decode(&bytes), "Variation");
         }
         out
     }
@@ -816,16 +821,10 @@ impl GameData {
                 Some(view) => self.view(dir, thing, view),
                 None => continue,
             };
-            // Model paths are relative to the defining file, so where an id
-            // is defined more than once keep a definition that finds its
-            // models.
-            let drawable = |v: &Option<View>| v.as_ref().is_some_and(|v| !v.models.is_empty());
-            if drawable(&view) || !out.get(id).is_some_and(drawable) {
-                out.insert(id.clone(), view);
-            }
+            out.insert(id.clone(), view);
         }
         if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Thing", complete);
+            add_renames(&mut out, &tgi::decode(&bytes), "Thing");
         }
         out
     }
@@ -965,6 +964,24 @@ impl GameData {
         })
     }
 
+    /// The packed building, such as a truck, that each building packs into,
+    /// by template id: of those that unpack into it, the one defined first.
+    pub fn packs_into(&mut self) -> HashMap<Id, Id> {
+        let mut out = HashMap::new();
+        for t in &self.definitions().things {
+            let into = (t.thing.mobile_deployment_component.as_ref())
+                .and_then(|m| m.unpack_to_actor_ids.clone())
+                .filter(|i| *i != Id::from("null"));
+            if let Some(into) = into {
+                out.entry(into).or_insert_with(|| t.id.clone());
+            }
+        }
+        if let Some(bytes) = self.read("translate.tgi") {
+            add_renames(&mut out, &tgi::decode(&bytes), "Thing");
+        }
+        out
+    }
+
     /// Seconds recruiting or commissioning one of each template takes, by
     /// template id: an organization's recruit time, else the inverse of
     /// how fast it resupplies.
@@ -985,11 +1002,8 @@ impl GameData {
         // Maps may still place a building under any id it once had.
         let renames = self.thing_renames();
         let mut aliases: HashMap<Id, Vec<Id>> = HashMap::new();
-        for old in renames.keys() {
-            aliases
-                .entry(resolve(&renames, old))
-                .or_default()
-                .push(old.clone());
+        for (old, new) in &renames {
+            aliases.entry(new.clone()).or_default().push(old.clone());
         }
         for olds in aliases.values_mut() {
             olds.sort_unstable();
@@ -1003,7 +1017,7 @@ impl GameData {
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .map(|s| {
-                    let id = resolve(&renames, &Id::from(s));
+                    let id = renamed(&renames, &Id::from(s));
                     let olds = aliases.get(&id).cloned().unwrap_or_default();
                     std::iter::once(id).chain(olds).collect()
                 })
@@ -1015,23 +1029,12 @@ impl GameData {
         })
     }
 
-    /// The old ids of object templates the game has since renamed, which
-    /// maps may still use and the other methods answer for too.
-    pub fn renamed_things(&mut self) -> std::collections::HashSet<Id> {
-        self.thing_renames().into_keys().collect()
-    }
-
-    /// Each renamed object template's old id to its next one. As in
-    /// `add_renames`, those a stray comment hides count too, but a live
-    /// rename wins over a hidden one.
+    /// Each renamed object template's old id to its new one.
     fn thing_renames(&mut self) -> HashMap<Id, Id> {
         let Some(bytes) = self.read("translate.tgi") else {
             return HashMap::new();
         };
-        let translate = tgi::decode(&bytes);
-        let mut all = renames(&translate.replace("/*", "").replace("*/", ""), "Thing");
-        all.extend(renames(&translate, "Thing"));
-        all
+        renames(&tgi::decode(&bytes), "Thing")
     }
 
     /// Where what each template recruits appears, by template id.
@@ -1096,7 +1099,7 @@ impl GameData {
             }
         }
         if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Thing", |_| true);
+            add_renames(&mut out, &tgi::decode(&bytes), "Thing");
         }
         out
     }
@@ -1187,6 +1190,7 @@ impl GameData {
             })
             .collect();
         let normal = normal.filter(|p| self.exists(p));
+        let texture_renames = texture_renames(view, normal.as_deref(), path);
         let models = match normal {
             Some(n) if !view.aspects_as_variations => vec![n],
             _ => aspects,
@@ -1196,13 +1200,6 @@ impl GameData {
             .iter()
             .filter_map(|b| b.path.as_deref())
             .map(|p| p.trim_matches('/').to_string())
-            .collect();
-        let texture_renames = view
-            .aspect_normal
-            .iter()
-            .chain(&view.aspect)
-            .flat_map(|a| &a.texture_rename)
-            .filter_map(|r| Some((r.substring_from.clone()?, r.substring_to.clone()?)))
             .collect();
         let scale_min = thing.size.iter().find_map(|s| s.scale_min);
         let scale_max = thing.size.iter().find_map(|s| s.scale_max);
@@ -1580,13 +1577,9 @@ fn slot_positions(
 }
 
 fn body(thing: &defs::Thing) -> Body {
-    let blocking = thing.flags.iter().rev().find_map(|f| f.blocking) == Some(true);
-    let kind = thing
-        .size
-        .iter()
-        .rev()
-        .find_map(|s| s.blocking_shape.as_deref());
-    let shape = shape(thing, kind, |s| s.blocking_radius);
+    let flag =
+        |f: fn(&defs::Flags) -> Option<bool>| thing.flags.iter().rev().find_map(f) == Some(true);
+    let shape = blocking_shape(thing);
     let mover = thing.mover_component.as_ref();
     let speed = mover.and_then(|m| m.speed_max).filter(|&s| s > 0.0);
     // Turning takes time only for turn types that name a radius to turn
@@ -1601,7 +1594,11 @@ fn body(thing: &defs::Thing) -> Body {
     };
     let hitch = mover.and_then(|m| m.trailer_hitch.as_ref()?.node_offset);
     Body {
-        blocking: blocking.then_some(shape),
+        blocking: flag(|f| f.blocking).then_some(shape),
+        shape,
+        soft: soft_shape(thing),
+        water_based: flag(|f| f.water_based),
+        tile_locked: flag(|f| f.tile_locked),
         speed,
         acceleration: mover.and_then(|m| m.acceleration).unwrap_or(0.0).max(0.0),
         turn_rate,
@@ -1614,12 +1611,35 @@ fn body(thing: &defs::Thing) -> Body {
 
 fn conform(thing: &defs::Thing) -> Option<Shape> {
     let conforms = thing.flags.iter().rev().find_map(|f| f.conform_to_terrain) == Some(true);
+    conforms.then(|| soft_shape(thing))
+}
+
+fn blocking_shape(thing: &defs::Thing) -> Shape {
     let kind = thing
         .size
         .iter()
         .rev()
-        .find_map(|s| s.soft_shape.as_deref());
-    conforms.then(|| shape(thing, kind, |s| s.soft_radius))
+        .find_map(|s| s.blocking_shape.as_deref());
+    shape(thing, kind, |s| s.blocking_radius, 0.2)
+}
+
+/// The soft shape, which where the template leaves it `null` takes the
+/// blocking shape's kind, but still its own radius as a circle.
+fn soft_shape(thing: &defs::Thing) -> Shape {
+    let kind = thing
+        .size
+        .iter()
+        .rev()
+        .find_map(|s| s.soft_shape.as_deref())
+        .filter(|k| !k.trim().is_empty() && !k.trim().eq_ignore_ascii_case("null"));
+    let kind = kind.or_else(|| {
+        thing
+            .size
+            .iter()
+            .rev()
+            .find_map(|s| s.blocking_shape.as_deref())
+    });
+    shape(thing, kind, |s| s.soft_radius, 0.5)
 }
 
 fn footing(thing: &defs::Thing) -> Footing {
@@ -1635,8 +1655,13 @@ fn footing(thing: &defs::Thing) -> Footing {
 }
 
 /// A shape of the template's `[Size]`, which its shapes share all but the
-/// radius of.
-fn shape(thing: &defs::Thing, kind: Option<&str>, radius: fn(&defs::Size) -> Option<f32>) -> Shape {
+/// radius of, `default` where it sets none.
+fn shape(
+    thing: &defs::Thing,
+    kind: Option<&str>,
+    radius: fn(&defs::Size) -> Option<f32>,
+    default: f32,
+) -> Shape {
     let size = |f: fn(&defs::Size) -> Option<f32>| thing.size.iter().rev().find_map(f);
     match kind.unwrap_or("CIRCLE").to_ascii_uppercase().as_str() {
         "POINT" => Shape::Point,
@@ -1652,7 +1677,7 @@ fn shape(thing: &defs::Thing, kind: Option<&str>, radius: fn(&defs::Size) -> Opt
             height: size(|s| s.rect_height).unwrap_or(4.0),
         },
         _ => Shape::Circle {
-            radius: size(radius).unwrap_or(0.2),
+            radius: size(radius).unwrap_or(default),
         },
     }
 }
@@ -1768,43 +1793,28 @@ fn water_colors<'a>(
         .collect()
 }
 
-/// Gives old ids that maps may still use the entries of their replacements,
-/// as `translate.tgi` lists them for `node`, e.g. `Thing`. An entry that
-/// isn't `complete` is treated as missing.
-fn add_renames<T: Clone>(
-    entries: &mut HashMap<Id, T>,
-    translate: &str,
-    node: &str,
-    complete: impl Fn(&T) -> bool,
-) {
-    let live = renames(translate, node);
-    for old in live.keys() {
-        if let Some(v) = entries.get(&resolve(&live, old)).cloned() {
-            entries.insert(old.clone(), v);
-        }
+/// Gives the old ids that maps may still use the entries of their
+/// replacements, as `translate.tgi` lists them for `node`, e.g. `Thing`:
+/// one step on, so an id renamed to one that's itself only a rename has
+/// none, and in place of any entry still made under the old id.
+fn add_renames<T: Clone>(entries: &mut HashMap<Id, T>, translate: &str, node: &str) {
+    let renamed: Vec<(Id, Option<T>)> = renames(translate, node)
+        .into_iter()
+        .map(|(old, new)| {
+            let entry = entries.get(&new).cloned();
+            (old, entry)
+        })
+        .collect();
+    for (old, entry) in renamed {
+        match entry {
+            Some(e) => entries.insert(old, e),
+            None => entries.remove(&old),
+        };
     }
-    // A stray `/*` comments out most of the file, including renames that
-    // older maps rely on, so use those too, but only for missing entries.
-    let mut all = renames(&translate.replace("/*", "").replace("*/", ""), node);
-    all.extend(live);
-    for old in all.keys() {
-        if entries.get(old).is_some_and(&complete) {
-            continue;
-        }
-        if let Some(v) = entries.get(&resolve(&all, old)).filter(|v| complete(v)) {
-            entries.insert(old.clone(), v.clone());
-        }
-    }
-}
-
-/// Whether a view names readable models, or deliberately none.
-fn complete(view: &Option<View>) -> bool {
-    view.as_ref().is_none_or(|v| !v.models.is_empty())
 }
 
 /// Old ids of `node`s that maps may still use, to their replacements, from
-/// `translate.tgi`. Where an id is renamed more than
-/// once the first wins, as the file lists the latest first.
+/// `translate.tgi`. Where an id is renamed more than once the first counts.
 fn renames(translate: &str, node: &str) -> HashMap<Id, Id> {
     let mut out = HashMap::new();
     for t in tgi::parse(translate).root.blocks_of("Translate") {
@@ -1821,17 +1831,9 @@ fn renames(translate: &str, node: &str) -> HashMap<Id, Id> {
     out
 }
 
-/// The latest id of a template that may have been renamed more than once,
-/// stopping at a rename cycle.
-fn resolve(renames: &HashMap<Id, Id>, id: &Id) -> Id {
-    let mut id = id;
-    for _ in 0..renames.len() {
-        match renames.get(id) {
-            Some(new) => id = new,
-            None => break,
-        }
-    }
-    id.clone()
+/// The id the game looks `id` up by.
+fn renamed(renames: &HashMap<Id, Id>, id: &Id) -> Id {
+    renames.get(id).unwrap_or(id).clone()
 }
 
 fn object_audio(thing: &defs::Thing) -> ObjectAudio {
@@ -1856,7 +1858,7 @@ fn object_audio(thing: &defs::Thing) -> ObjectAudio {
         .flat_map(|anim| {
             let kind = anim.kind.clone().unwrap_or_default().to_ascii_uppercase();
             let interval = match (kind.as_str(), anim.start_min, anim.start_max) {
-                ("RANDOM", Some(min), Some(max)) => Some([min / 1000.0, max / 1000.0]),
+                ("RANDOM", Some(min), Some(max)) => Some([min, max]),
                 _ => None,
             };
             anim.play_sfx.iter().filter_map(move |p| {
@@ -1979,11 +1981,6 @@ fn audio(a: &defs::Audio, find: impl Fn(&str) -> Option<String>) -> Option<Audio
         }
     }
     let [falloff, range] = a.range.unwrap_or([4.0, 64.0]);
-    let percents = |p: &Option<[String; 2]>| {
-        p.as_ref().map_or([0.0; 2], |[a, b]| {
-            [percent(a).unwrap_or(0.0), percent(b).unwrap_or(0.0)]
-        })
-    };
     Some(Audio {
         category,
         leadin,
@@ -1997,9 +1994,9 @@ fn audio(a: &defs::Audio, find: impl Fn(&str) -> Option<String>) -> Option<Audio
         falloff,
         range,
         limit: a.simultaneous_limit.unwrap_or(2),
-        volume: a.volume.as_deref().and_then(percent).unwrap_or(0.8),
-        volume_adjust: a.volume_adjust.as_deref().and_then(percent).unwrap_or(0.0),
-        pitch_adjust: percents(&a.pitch_adjust),
+        volume: a.volume.unwrap_or(0.8),
+        volume_adjust: a.volume_adjust.unwrap_or(0.0),
+        pitch_adjust: a.pitch_adjust.unwrap_or([0.0; 2]),
         delay: a.delay_ms.unwrap_or_default().map(|ms| ms / 1000.0),
         fade: a.fade_time_s.unwrap_or_default(),
         subtitle: a.subtitle.as_ref().and_then(|s| s.text.clone()),
@@ -2031,10 +2028,178 @@ fn flags(list: &Option<String>) -> Vec<String> {
         .collect()
 }
 
-/// A percentage as a fraction, e.g. `80%` as 0.8; the `%` is optional.
-fn percent(text: &str) -> Option<f32> {
-    let n: f32 = text.trim().trim_end_matches('%').trim().parse().ok()?;
-    Some(n / 100.0)
+/// The texture renames of each of a view's models, by archive path, which
+/// `path` makes of the paths the aspects give; `normal` is the normal
+/// model's. Each model takes only its own aspect's renames, the first
+/// aspect to name a model keeping it.
+fn texture_renames(
+    view: &defs::View,
+    normal: Option<&str>,
+    path: impl Fn(&str) -> String,
+) -> HashMap<String, Vec<(String, String)>> {
+    let renames = |a: &defs::Aspect| -> Vec<(String, String)> {
+        (a.texture_rename.iter())
+            .filter_map(|r| Some((r.substring_from.clone()?, r.substring_to.clone()?)))
+            .collect()
+    };
+    let mut out = HashMap::new();
+    if let (Some(n), Some(a)) = (normal, view.aspect_normal.first()) {
+        out.insert(n.to_string(), renames(a));
+    }
+    for a in &view.aspect {
+        if let Some(m) = a.model.as_deref() {
+            out.entry(path(m)).or_insert_with(|| renames(a));
+        }
+    }
+    out.retain(|_, r| !r.is_empty());
+    out
+}
+
+/// Where a texture that `model`, one of `view`'s, names as `file` may be,
+/// in the order it's looked for.
+fn texture_paths(view: &View, model: &str, file: &str) -> Vec<String> {
+    let dir = model.rsplit_once('/').map_or("", |(d, _)| d);
+    let mut path = join(dir, &file.replace('\\', "/"));
+    let renames = view
+        .texture_renames
+        .get(model)
+        .map_or(&[][..], Vec::as_slice);
+    for (from, to) in renames.iter().rev() {
+        path = path.replace(from.as_str(), to);
+    }
+    let (folder, name) = path.rsplit_once('/').unwrap_or(("", &path));
+    let searched = view.texture_dirs.iter().map(|d| match d.starts_with('.') {
+        true => join(folder, d),
+        false => d.trim_matches('/').to_string(),
+    });
+    let searched: Vec<String> = searched.map(|d| join(&d, name)).collect();
+    std::iter::once(path).chain(searched).collect()
+}
+
+/// `path` taken from the folder `dir`, with its `.` and `..` folders
+/// resolved.
+fn join(dir: &str, path: &str) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for part in dir.split('/').chain(path.split('/')) {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            p => parts.push(p),
+        }
+    }
+    parts.join("/")
+}
+
+/// The `.tgi` files the game loads, by archive path, in its order: those
+/// the `index*.lst` lists at the archive's root name, in turn, where a line
+/// naming another list takes in its files there and then. `entries` are the
+/// archive paths, `read` gives a list's text.
+fn listed_tgis(entries: &[String], mut read: impl FnMut(&str) -> Option<String>) -> Vec<String> {
+    let mut roots: Vec<&str> = entries
+        .iter()
+        .map(String::as_str)
+        .filter(|n| {
+            let lower = n.to_ascii_lowercase();
+            !lower.contains('/') && lower.starts_with("index") && lower.ends_with(".lst")
+        })
+        .collect();
+    roots.sort_unstable();
+    roots.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for root in roots {
+        take_list(
+            root,
+            entries,
+            &mut read,
+            &mut Vec::new(),
+            &mut seen,
+            &mut out,
+        );
+    }
+    out
+}
+
+/// Adds the `.tgi` files a list names to `out`, `open` holding the lists
+/// being read so that one naming itself, directly or not, stops there.
+fn take_list(
+    list: &str,
+    entries: &[String],
+    read: &mut impl FnMut(&str) -> Option<String>,
+    open: &mut Vec<String>,
+    seen: &mut HashSet<String>,
+    out: &mut Vec<String>,
+) {
+    let lower = list.to_ascii_lowercase();
+    if open.contains(&lower) {
+        return;
+    }
+    let Some(text) = read(list) else {
+        return;
+    };
+    open.push(lower);
+    for line in text.lines() {
+        let spec = line
+            .split(';')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .replace('\\', "/");
+        if spec.is_empty() {
+            continue;
+        }
+        for path in matching(&spec, entries) {
+            if path.to_ascii_lowercase().ends_with(".lst") {
+                take_list(path, entries, read, open, seen, out);
+            } else if path.to_ascii_lowercase().ends_with(".tgi")
+                && seen.insert(path.to_ascii_lowercase())
+            {
+                out.push(path.to_string());
+            }
+        }
+    }
+    open.pop();
+}
+
+/// The archive paths a list's line names: the one path, or where its file
+/// name has a `*`, the files in that one folder it matches, in plain
+/// character order.
+fn matching<'a>(spec: &str, entries: &'a [String]) -> Vec<&'a str> {
+    let (dir, file) = spec.rsplit_once('/').unwrap_or(("", spec));
+    let pattern = file.to_ascii_lowercase();
+    let mut out: Vec<&str> = entries
+        .iter()
+        .map(String::as_str)
+        .filter(|n| {
+            let (d, f) = n.rsplit_once('/').unwrap_or(("", n));
+            d.eq_ignore_ascii_case(dir) && wildcard(&pattern, &f.to_ascii_lowercase())
+        })
+        .collect();
+    out.sort_unstable_by_key(|n| n.rsplit('/').next().unwrap_or(n));
+    out
+}
+
+/// Whether `name` matches `pattern`, where each `*` stands for any run of
+/// characters.
+fn wildcard(pattern: &str, name: &str) -> bool {
+    let mut parts = pattern.split('*');
+    let first = parts.next().unwrap_or("");
+    let Some(mut rest) = name.strip_prefix(first) else {
+        return false;
+    };
+    let parts: Vec<&str> = parts.collect();
+    let Some((last, middle)) = parts.split_last() else {
+        return rest.is_empty();
+    };
+    for part in middle {
+        match rest.find(part) {
+            Some(i) => rest = &rest[i + part.len()..],
+            None => return false,
+        }
+    }
+    rest.len() >= last.len() && rest.ends_with(last)
 }
 
 /// A map's file name without its `.rmp` extension.
@@ -2293,72 +2458,79 @@ mod tests {
     }
 
     #[test]
-    fn renames() {
-        let renames: HashMap<Id, Id> = [("a", "B"), ("b", "c"), ("x", "y"), ("y", "x")]
+    fn renames_go_one_step_and_win_over_the_old_ids() {
+        let mut entries: HashMap<Id, &str> = ["b", "c", "old", "gone", "kept"]
             .into_iter()
-            .map(|(o, n)| (Id::from(o), Id::from(n)))
+            .map(|id| (Id::from(id), id))
             .collect();
-        let resolve = |id| resolve(&renames, &Id::from(id)).to_string();
-        assert_eq!(resolve("A"), "c");
-        assert_eq!(resolve("c"), "c");
-        assert_eq!(resolve("z"), "z");
-        let cycle = resolve("x");
-        assert!(cycle == "x" || cycle == "y");
-    }
-    #[test]
-    fn commented_renames() {
-        let view = |model: &str| {
-            Some(View {
-                models: vec![model.to_string()],
-                texture_dirs: Vec::new(),
-                texture_renames: Vec::new(),
-                scale: 1.0,
-                animations: Vec::new(),
-                conform: None,
-                footing: Footing::Ground,
-                unpacking: None,
-                packing: None,
-                icon: None,
-            })
-        };
-        let mut views: HashMap<Id, Option<View>> = [
-            ("new", view("new.nif")),
-            ("newer", view("newer.nif")),
-            ("kept", view("kept.nif")),
-            ("hidden", None),
-        ]
-        .into_iter()
-        .map(|(id, v)| (Id::from(id), v))
-        .collect();
-        // Renames the game reads, then ones commented out.
         let rename = |node, old, new| {
             format!("[Translate]\nnode = {node}\nids_old = {old}\nids_new = {new}\n")
         };
-        let translate = format!(
-            "{}/*\n{}{}{}{}{}*/\n",
-            rename("Thing", "Live", "NEW"),
-            rename("Thing", "kept", "new"),
-            rename("Thing", "old", "newer"),
-            rename("Thing", "old", "new"),
-            rename("Thing", "hidden", "new"),
-            rename("Variation", "terrain", "new"),
-        );
-        add_renames(&mut views, &translate, "Thing", complete);
-        let model = |id: &str| views[&Id::from(id)].as_ref().map(|v| v.models[0].as_str());
-        assert_eq!(model("live"), Some("new.nif"));
-        assert_eq!(model("old"), Some("newer.nif"));
-        assert_eq!(model("kept"), Some("kept.nif"));
-        assert_eq!(model("hidden"), None);
-        assert!(!views.contains_key(&Id::from("terrain")));
+        let translate = [
+            rename("Thing", "A", "b"),
+            rename("Thing", "b", "C"),
+            // The first rename of an id counts.
+            rename("Thing", "a", "c"),
+            // Even where the old id is still defined.
+            rename("Thing", "old", "b"),
+            // To an id that's only a rename, or nothing, finds nothing.
+            rename("Thing", "gone", "a"),
+            rename("Thing", "lost", "nowhere"),
+            rename("Variation", "kept", "c"),
+            format!("/*\n{}*/\n", rename("Thing", "hidden", "c")),
+        ]
+        .concat();
+        add_renames(&mut entries, &translate, "Thing");
+        let get = |id: &str| entries.get(&Id::from(id)).copied();
+        assert_eq!(get("a"), Some("b"));
+        assert_eq!(get("b"), Some("c"));
+        assert_eq!(get("old"), Some("b"));
+        assert_eq!(get("gone"), None);
+        assert_eq!(get("lost"), None);
+        assert_eq!(get("kept"), Some("kept"));
+        assert_eq!(get("hidden"), None);
     }
+
     #[test]
-    fn variation_renames() {
-        let translate = "[Translate]\nnode = Variation\nids_old = live\nids_new = new\n\
-            /*\n[Translate]\nnode = Variation\nids_old = old\nids_new = live\n*/\n";
-        let mut variations: HashMap<Id, &str> = [(Id::from("new"), "new.tga")].into();
-        add_renames(&mut variations, translate, "Variation", |_| true);
-        assert_eq!(variations[&Id::from("live")], "new.tga");
-        assert_eq!(variations[&Id::from("old")], "new.tga");
+    fn only_listed_tgis_load_in_list_order() {
+        let entries: Vec<String> = [
+            "index_b.lst",
+            "Index_A.lst",
+            "Units/b.tgi",
+            "Units/A.tgi",
+            "Units/x.TGI",
+            "Units/Old/c.tgi",
+            "units/notes.txt",
+            "more.lst",
+            "first.tgi",
+            "translate.tgi",
+            "Sub/index_c.lst",
+        ]
+        .map(String::from)
+        .into();
+        let lists = HashMap::from([
+            (
+                "Index_A.lst",
+                "first.tgi ; comment\n;; units/a.tgi\nmore.lst\n",
+            ),
+            ("more.lst", "units/*.tgi\n\tunits\\b.tgi\n"),
+            ("index_b.lst", "translate.tgi\nindex_b.lst\n"),
+            ("Sub/index_c.lst", "first.tgi"),
+        ]);
+        let tgis = listed_tgis(&entries, |n| lists.get(n).map(|t| t.to_string()));
+        assert_eq!(
+            tgis,
+            [
+                "first.tgi",
+                "Units/A.tgi",
+                "Units/b.tgi",
+                "Units/x.TGI",
+                "translate.tgi"
+            ]
+        );
+        assert!(wildcard("special_glyphs*.tgi", "special_glyphs_x.tgi"));
+        assert!(wildcard("a*b*c", "abc") && !wildcard("a*b*c", "acb"));
+        assert!(!wildcard("*.tgi", "x.tgi.bak"));
     }
 
     #[test]
@@ -2500,7 +2672,7 @@ mod tests {
         let crickets = AnimationAudio {
             kind: "RANDOM".to_string(),
             ids: None,
-            interval: Some([0.02, 0.06]),
+            interval: Some([20.0, 60.0]),
             audio: Id::from("crickets"),
             looping: false,
         };
@@ -2536,6 +2708,78 @@ mod tests {
     }
 
     #[test]
+    fn soft_shapes_left_null_take_the_blocking_kind() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = hut\n\t[Size]\n\tblocking_shape = RECT\n\trect_width = 3\n\
+             \trect_height = 5\n\tsoft_shape = null\n}\n\
+             [Thing]\n{\n\tIDS = tree\n\t[Size]\n\tblocking_shape = CIRCLE\n\
+             \tblocking_radius = 2\n\tsoft_shape = null\n}\n\
+             [Thing]\n{\n\tIDS = rock\n\t[Size]\n\tblocking_shape = CIRCLE\n\
+             \tsoft_shape = CIRCLE\n\tsoft_radius = 3\n}\n\
+             [Thing]\n{\n\tIDS = flag\n\t[Size]\n\tblocking_shape = POINT\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let bodies: Vec<(Shape, Shape)> = parsed
+            .root
+            .blocks_of("Thing")
+            .map(|b| body(&templates.deserialize(b).unwrap()))
+            .map(|b| (b.shape, b.soft))
+            .collect();
+        let rect = Shape::Rect {
+            width: 3.0,
+            height: 5.0,
+        };
+        let circle = |radius| Shape::Circle { radius };
+        assert_eq!(
+            bodies,
+            [
+                (rect, rect),
+                (circle(2.0), circle(0.5)),
+                (circle(0.2), circle(3.0)),
+                (Shape::Point, Shape::Point)
+            ]
+        );
+    }
+
+    #[test]
+    fn textures_take_their_own_models_renames_then_the_search_paths() {
+        let parsed = tgi::parse(
+            "[View]\n{\n\t[AspectNormal]\n\t{\n\t\tmodel = hut.nif\n\
+             \t\t[TextureRename]\n\t\tsubstring_from = Snow\n\t\tsubstring_to = Mud\n\
+             \t\t[TextureRename]\n\t\tsubstring_from = Hut\n\t\tsubstring_to = HutSnow\n\
+             \t}\n\t[Aspect]\n\t{\n\t\tmodel = ruin.nif\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("View").next().unwrap();
+        let view: defs::View = tgi::from_block(block).unwrap();
+        let path = |m: &str| format!("Village/{m}");
+        let view = View {
+            models: vec![path("hut.nif"), path("ruin.nif")],
+            texture_dirs: vec!["Shared/Textures".into(), "../Common".into()],
+            texture_renames: texture_renames(&view, Some("Village/hut.nif"), path),
+            scale: 1.0,
+            animations: Vec::new(),
+            conform: None,
+            footing: Footing::Ground,
+            unpacking: None,
+            packing: None,
+            icon: None,
+        };
+        // The last rename goes first, so the first renames what it made;
+        // they reach into folders too, and case matters.
+        assert_eq!(
+            texture_paths(&view, "Village/hut.nif", "Hut\\Hut_wall.tga"),
+            [
+                "Village/HutMud/HutMud_wall.tga",
+                "Shared/Textures/HutMud_wall.tga",
+                "Village/Common/HutMud_wall.tga"
+            ]
+        );
+        let first = |model, file| texture_paths(&view, model, file).remove(0);
+        assert_eq!(first("Village/hut.nif", "hut.tga"), "Village/hut.tga");
+        assert_eq!(first("Village/ruin.nif", "Hut.tga"), "Village/Hut.tga");
+    }
+
+    #[test]
     fn footing_follows_the_last_flags_set() {
         let parsed = tgi::parse(
             "[Template Ship]\n{\n\t[Flags]\n\twater_based = true\n}\n\
@@ -2563,7 +2807,7 @@ mod tests {
     }
 
     #[test]
-    fn definitions_keep_file_order_and_skip_blocks_without_ids() {
+    fn definitions_keep_file_order_and_skip_blocks_without_ids_or_defined_twice() {
         let a = tgi::parse(
             "[Property]\n{\n\tIDS = vehicle\n}\n\
              [Thing]\n{\n\tIDS = jeep\n\t[BodyComponent]\n\thealth = 50\n}\n\
@@ -2584,11 +2828,7 @@ mod tests {
             .collect();
         assert_eq!(
             found,
-            [
-                ("a/a.tgi", "jeep", Some(50.0)),
-                ("b/b.tgi", "tank", None),
-                ("b/b.tgi", "jeep", Some(70.0)),
-            ]
+            [("a/a.tgi", "jeep", Some(50.0)), ("b/b.tgi", "tank", None),]
         );
         assert!(definitions.properties.contains_key(&Id::from("vehicle")));
     }
