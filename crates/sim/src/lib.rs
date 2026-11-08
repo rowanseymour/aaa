@@ -993,17 +993,19 @@ impl World {
         Ok(at)
     }
 
-    /// Whether what `unpacks` makes would fit standing at `at`.
+    /// Whether what `unpacks` makes would fit standing at `at`, with the
+    /// room around it buildings need.
     pub fn room_to_unpack(&self, unpacks: &Unpacks, at: [f32; 2]) -> bool {
-        match &unpacks.building.obstacle {
-            Some(o) => {
+        match (&unpacks.building.obstacle, unpacks.room) {
+            (Some(o), Some(shape)) => {
                 let placed = Obstacle {
                     position: at,
-                    ..o.clone()
+                    facing: o.facing,
+                    shape,
                 };
                 self.pathing.room_for(&placed, Domain::Land)
             }
-            None => {
+            _ => {
                 let (x, y) = tile_at(at);
                 self.pathing.passable(x, y, Domain::Land)
             }
@@ -3493,6 +3495,10 @@ mod tests {
             primary: Some(0),
             unpacks: Some(Unpacks {
                 building: depot,
+                room: Some(Shape::Rect {
+                    width: 12.0,
+                    height: 12.0,
+                }),
                 offset: [0.0, 0.0],
                 seconds: 7.0,
             }),
@@ -3660,8 +3666,9 @@ mod tests {
         t.renumber(9);
         t.place([30.0, 30.0], [0.0, 1.0]);
         let r = w.add_regiment(&t);
-        // Over the HQ, and over the map's edge.
+        // Over the HQ, too close beside it, and over the map's edge.
         assert_eq!(w.order_unpack(1, r, [22.0, 22.0]), Err(Refused::NoRoom));
+        assert_eq!(w.order_unpack(1, r, [28.0, 20.0]), Err(Refused::NoRoom));
         assert_eq!(w.order_unpack(1, r, [78.0, 30.0]), Err(Refused::NoRoom));
         assert_eq!(w.order_unpack(2, r, [30.0, 40.0]), Err(Refused::NotYours));
         assert_eq!(w.order_unpack(1, r, [30.2, 39.6]), Ok([30.0, 40.0]));
