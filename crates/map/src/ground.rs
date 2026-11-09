@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use aaa_data::{Footing, Id, Shape, TerrainKind, Variation};
-use tgck::map::{CELL_SIZE, HeightMap, Terrain};
+use tgck::map::{CELL_SIZE, HeightMap, RESOLUTION_BITS, Terrain};
 
 /// The ground: the height map, with the mountain height map added around
 /// mountains and water (where it lays the water's bed), and mountains'
@@ -35,6 +35,16 @@ impl Ground {
         terrain: &Terrain,
         variations: &HashMap<Id, Variation>,
     ) -> Result<Self, String> {
+        let resolutions = [
+            hm.resolution_bits,
+            mountain.resolution_bits,
+            terrain.resolution_bits,
+        ];
+        if resolutions != [RESOLUTION_BITS; 3] {
+            return Err(format!(
+                "map made at resolutions {resolutions:?}, not {RESOLUTION_BITS}"
+            ));
+        }
         let side = hm.side;
         if side < 2 || mountain.side != side {
             return Err(format!(
@@ -342,7 +352,7 @@ mod tests {
             min: 0.0,
             max: 0.0,
             default: 0.0,
-            resolution_bits: 0,
+            resolution_bits: RESOLUTION_BITS,
             side,
             heights: vec![height; side * side],
             layer: vec![0; side * side],
@@ -367,7 +377,7 @@ mod tests {
         }
         let terrain = Terrain {
             version: 7,
-            resolution_bits: 0,
+            resolution_bits: RESOLUTION_BITS,
             biome: String::new(),
             names: vec!["grass".into(), "rock".into(), "sea".into()],
             side: tiles,
@@ -408,6 +418,16 @@ mod tests {
         // Tiles must sit between the vertices.
         assert!(new(6, 6, &t4).is_err());
         assert!(new(5, 5, &t4).is_ok());
+    }
+
+    #[test]
+    fn maps_made_at_another_resolution_are_refused() {
+        let (mut t4, v) = terrain(4);
+        let (hm, mut mountain) = (height_map(5, 1.0), height_map(5, 1.0));
+        mountain.resolution_bits = 2;
+        assert!(Ground::new(&hm, &mountain, &t4, &v).is_err());
+        t4.resolution_bits = 0;
+        assert!(Ground::new(&hm, &height_map(5, 1.0), &t4, &v).is_err());
     }
 
     #[test]
