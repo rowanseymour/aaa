@@ -255,6 +255,9 @@ pub struct Fighter {
     pub soft: Shape,
     /// The outline weapons' ranges run to and from.
     pub target: Shape,
+    /// Whether that's a square, which gives way to a rectangle where
+    /// ranges keep only one of two as it is.
+    pub target_square: bool,
 }
 
 /// A part of a fighter that turns to aim its weapons, without turning the
@@ -284,6 +287,9 @@ pub struct Weapon {
     pub recharge: f32,
     /// Radius of the area a shot hits, 0 for only its target.
     pub area: f32,
+    /// The most an area shot hits, the nearest where it lands; 0 for all
+    /// it reaches.
+    pub max_targets: u32,
     /// Within this distance of where a shot lands it does full damage...
     pub full_within: f32,
     /// ...falling to this fraction of it at the area's edge.
@@ -1994,16 +2000,26 @@ fn soft_shape(thing: &defs::Thing) -> Shape {
 /// The target shape, which where the template leaves it `null` is the
 /// soft shape.
 fn target_shape(thing: &defs::Thing) -> Shape {
-    let kind = thing
-        .size
-        .iter()
-        .rev()
-        .find_map(|s| s.target_shape.as_deref())
-        .filter(|k| !k.trim().is_empty() && !k.trim().eq_ignore_ascii_case("null"));
-    match kind {
+    let size = |f: fn(&defs::Size) -> Option<&str>| thing.size.iter().rev().find_map(f);
+    match size(|s| s.target_shape.as_deref()).and_then(named) {
         Some(kind) => shape(thing, Some(kind), |s| s.target_radius, 0.5),
         None => soft_shape(thing),
     }
+}
+
+/// The kind of shape the target shape ends up as.
+fn target_kind(thing: &defs::Thing) -> Option<&str> {
+    let size = |f: fn(&defs::Size) -> Option<&str>| thing.size.iter().rev().find_map(f);
+    (size(|s| s.target_shape.as_deref()).and_then(named))
+        .or_else(|| size(|s| s.soft_shape.as_deref()).and_then(named))
+        .or_else(|| size(|s| s.blocking_shape.as_deref()))
+        .map(str::trim)
+}
+
+/// A shape's kind, unless it's left `null`.
+fn named(kind: &str) -> Option<&str> {
+    let kind = kind.trim();
+    (!kind.is_empty() && !kind.eq_ignore_ascii_case("null")).then_some(kind)
 }
 
 fn footing(thing: &defs::Thing) -> Footing {
@@ -2058,6 +2074,7 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
             .map(|d| d.control_range.unwrap_or(0.0).max(0.0)),
         soft: soft_shape(thing),
         target: target_shape(thing),
+        target_square: target_kind(thing).is_some_and(|k| k.eq_ignore_ascii_case("SQUARE")),
         ..Fighter::default()
     };
     let properties = thing.properties_component.iter().flat_map(|c| {
@@ -2128,6 +2145,7 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
             min_range: d.min_range,
             recharge: d.recharge_time,
             area: d.area,
+            max_targets: d.max_targets.unwrap_or(0),
             full_within: d.attenuation_range_min.unwrap_or(1.0),
             edge_damage: d.attenuation_factor_max.unwrap_or(1.0),
             targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
@@ -3564,6 +3582,14 @@ mod tests {
             .collect();
         let circle = |radius| Shape::Circle { radius };
         assert_eq!(shapes, [circle(2.0), circle(4.0)]);
+        let square =
+            tgi::parse("[Thing]\n{\n\tIDS = hut\n\t[Size]\n\tblocking_shape = SQUARE\n}\n");
+        let templates = tgi::Templates::new([&square.root]);
+        let hut = square.root.blocks_of("Thing").next().unwrap();
+        assert_eq!(
+            target_kind(&templates.deserialize(hut).unwrap()),
+            Some("SQUARE")
+        );
     }
 
     #[test]

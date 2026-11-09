@@ -91,7 +91,7 @@ pub struct Treasury {
     pub shortage: Option<f32>,
 }
 
-/// Something a side is told about its economy.
+/// Something a side is told.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Notice {
     /// Its stockpile has run out, its income `percent` short of its costs.
@@ -106,6 +106,9 @@ pub enum Notice {
         template: String,
         why: Pause,
     },
+    /// A packed building of its, by index into [`World::regiments`],
+    /// couldn't unpack where it was sent.
+    CannotUnpack { player: u32, regiment: usize },
 }
 
 /// How much the shortage has to move by before the side is told again.

@@ -413,6 +413,8 @@ pub struct AbilityDefinition {
     /// Radius of the area it hits, 0 for only its target.
     #[serde(default)]
     pub area: f32,
+    /// The most an area hit lands on, 0 for all it reaches.
+    pub max_targets: Option<u32>,
     /// Within this distance of the centre an area hit does full damage.
     pub attenuation_range_min: Option<f32>,
     /// The fraction of damage an area hit does at its edge.
