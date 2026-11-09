@@ -47,7 +47,7 @@ What `rmp.ksy` keeps as bytes, or reads without naming:
 
 | Section | Undecoded |
 |---|---|
-| DYNAMIC_THINGS | What no shipped map has: things of other classes, kingdoms' memories of things, and actors with a Projectile, Wall, Settlement, Aircraft, Flare or MetaGame component or an aircraft mind. Some component fields, mostly minds', are read to their end but unnamed |
+| DYNAMIC_THINGS | What no shipped map has: things of other classes, kingdoms' memories of things, and actors with a Projectile, Wall, Settlement, Aircraft, Flare or MetaGame component or an aircraft mind |
 | DENIZEN_GROUPS | A group's layout; no shipped map has any |
 
 Every other section is decoded.

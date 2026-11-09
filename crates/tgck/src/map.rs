@@ -665,6 +665,9 @@ pub struct Area {
     pub radius: f32,
     /// The box about the position: min x, min y, max x, max y.
     pub bounds: [f32; 4],
+    /// The thing ids of what's inside it now, each with a byte the game uses
+    /// while checking (0 when saved); empty in a map saved from the editor.
+    pub inside: Vec<(u32, u8)>,
 }
 
 /// A camera position for cutscenes and scripted views.
@@ -886,7 +889,12 @@ impl Detail {
                 // low half can pass for the name's length of the shorter one.
                 let has_id = data.get(8..14).is_some_and(|b| {
                     let name_len = u16::from_le_bytes([b[4], b[5]]) as usize * 2;
-                    b[..4] == 2u32.to_le_bytes() && Some(name_len) == data.len().checked_sub(42)
+                    let Some(list) = data.len().checked_sub(42 + name_len) else {
+                        return false;
+                    };
+                    let count = &data[38 + name_len..42 + name_len];
+                    b[..4] == 2u32.to_le_bytes()
+                        && u32::from_le_bytes(count.try_into().unwrap()) as usize * 5 == list
                 });
                 let version = cur.u32()?;
                 let id = if has_id {
@@ -903,8 +911,8 @@ impl Detail {
                     shape: cur.u32()?,
                     radius: cur.f32()?,
                     bounds: cur.f32s()?,
+                    inside: cur.list(|c| Ok((c.u32()?, c.u8()?)))?,
                 };
-                expect(&mut cur, "area's last field", 0)?;
                 Detail::Area(area)
             }
             CAMERA => Detail::Camera(Camera {
@@ -934,7 +942,11 @@ impl Detail {
                 w.u32(a.shape);
                 w.f32(a.radius);
                 w.f32s(&a.bounds);
-                w.u32(0);
+                w.u32(a.inside.len() as u32);
+                for &(thing, scratch) in &a.inside {
+                    w.u32(thing);
+                    w.u8(scratch);
+                }
             }
             Detail::Camera(c) => {
                 w.u32(c.version);
@@ -1253,11 +1265,26 @@ mod tests {
         let mut small_id = circle.clone();
         small_id[4..8].copy_from_slice(&10u32.to_le_bytes());
 
+        // Areas in a saved game list what's inside them.
+        let occupied = |mut record: Vec<u8>| {
+            let at = record.len() - 4;
+            record[at..].copy_from_slice(&2u32.to_le_bytes());
+            record.extend(7u32.to_le_bytes());
+            record.push(0);
+            record.extend(9u32.to_le_bytes());
+            record.push(1);
+            record
+        };
+        let occupied_circle = occupied(circle.clone());
+        let occupied_no_id = occupied(no_id.clone());
+
         let (index, data) = things_sections(&[
             thing_record(AREA, "circle_area", 1, [0.0; 3], &circle),
             thing_record(AREA, "circle_area", 2, [0.0; 3], &no_id),
             thing_record(AREA, "circle_area", 4, [0.0; 3], &small_id),
             thing_record(CAMERA, "camera", 3, [0.0; 3], &camera),
+            thing_record(AREA, "circle_area", 5, [0.0; 3], &occupied_circle),
+            thing_record(AREA, "circle_area", 6, [0.0; 3], &occupied_no_id),
         ]);
         let things = parse_things("DYNAMIC_THINGS", &index, &data, 28).unwrap();
         let Detail::Area(area) = &things[0].detail else {
@@ -1282,6 +1309,14 @@ mod tests {
                 zoom: 1.3
             })
         );
+        for (i, id) in [(4, Some(0x74)), (5, None)] {
+            let Detail::Area(area) = &things[i].detail else {
+                panic!("{:?}", things[i].detail)
+            };
+            assert_eq!(area.id, id);
+            assert_eq!(area.bounds, [-5.0, -50.0, 5.0, 50.0]);
+            assert_eq!(area.inside, [(7, 0), (9, 1)]);
+        }
         assert_eq!(write_things(&things).unwrap(), (index, data));
     }
 
