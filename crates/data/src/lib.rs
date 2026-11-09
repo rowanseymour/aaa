@@ -349,11 +349,13 @@ pub struct Targets {
 impl Targets {
     fn parse(text: &str) -> Targets {
         let mut out = Targets::default();
-        for word in text.split([',', ' ']).filter(|w| !w.is_empty()) {
-            match word.split_at(1) {
-                ("-", flag) => out.excluded.push(Id::from(flag)),
-                ("+", flag) => out.required.push(Id::from(flag)),
-                _ => out.required.push(Id::from(word)),
+        for word in text.split(|c: char| c == ',' || c.is_whitespace()) {
+            let (list, flag) = match word.strip_prefix(['-', '!']) {
+                Some(flag) => (&mut out.excluded, flag),
+                None => (&mut out.required, word.strip_prefix('+').unwrap_or(word)),
+            };
+            if !flag.is_empty() {
+                list.push(Id::from(flag));
             }
         }
         out
@@ -1235,12 +1237,14 @@ impl GameData {
     /// The packed building, such as a truck, that each building packs into,
     /// by template id: of those that unpack into it, the one defined first.
     pub fn packs_into(&mut self) -> HashMap<Id, Id> {
+        let renames = self.thing_renames();
         let mut out = HashMap::new();
         for t in &self.definitions().things {
             let into = (t.thing.mobile_deployment_component.as_ref())
                 .and_then(|m| m.unpack_to_actor_ids.clone())
                 .filter(|i| *i != Id::from("null"));
             if let Some(into) = into {
+                let into = renamed(&renames, &into);
                 out.entry(into).or_insert_with(|| t.id.clone());
             }
         }
@@ -1325,11 +1329,22 @@ impl GameData {
     pub fn listings(&mut self) -> HashMap<Id, Listing> {
         let strings = self.strings();
         let definitions = self.definitions();
-        let things: HashMap<&Id, &defs::Thing> = definitions
+        let mut things: HashMap<&Id, &defs::Thing> = definitions
             .things
             .iter()
             .map(|t| (&t.id, &t.thing))
             .collect();
+        // Templates may name their members by ids since renamed.
+        let renames = self.thing_renames();
+        let renamed: Vec<_> = (renames.iter())
+            .map(|(old, new)| (old, things.get(new).copied()))
+            .collect();
+        for (old, thing) in renamed {
+            match thing {
+                Some(t) => things.insert(old, t),
+                None => things.remove(old),
+            };
+        }
         self.by_template(|t| {
             let view = t.view.as_ref();
             let captain = t
@@ -2549,7 +2564,8 @@ fn texture_renames(
             .collect()
     };
     let mut out = HashMap::new();
-    if let (Some(n), Some(a)) = (normal, view.aspect_normal.first()) {
+    let named = view.aspect_normal.iter().find(|a| a.model.is_some());
+    if let (Some(n), Some(a)) = (normal, named.or(view.aspect_normal.first())) {
         out.insert(n.to_string(), renames(a));
     }
     for a in &view.aspect {
@@ -2930,6 +2946,15 @@ mod tests {
             Some("UI/Game/ActionButtons/IconMove.png")
         );
         assert_eq!(ui_path("NULL"), None);
+    }
+
+    #[test]
+    fn target_filters_require_and_exclude_flags() {
+        let ids = |flags: &[&str]| flags.iter().copied().map(Id::from).collect::<Vec<_>>();
+        let t = Targets::parse("+enemy, vehicle -air\t!mine,+ - é");
+        assert_eq!(t.required, ids(&["enemy", "vehicle", "é"]));
+        assert_eq!(t.excluded, ids(&["air", "mine"]));
+        assert_eq!(Targets::parse(""), Targets::default());
     }
 
     #[test]
