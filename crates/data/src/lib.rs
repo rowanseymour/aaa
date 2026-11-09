@@ -1580,6 +1580,21 @@ impl GameData {
         self.svars().iter().find_map(|v| v.building_padding_meters)
     }
 
+    /// What colours a figure or option that's no good, such as a shortfall.
+    pub fn invalid_colour(&mut self) -> Option<[f32; 3]> {
+        // Not in the load lists; the game's own settings take precedence
+        // over the engine's.
+        let files: Vec<(String, tgi::Parsed)> = ["UVars_AA.tgi", "UVars.tgi"]
+            .into_iter()
+            .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
+            .collect();
+        let files = scoped(&files);
+        files
+            .iter()
+            .flat_map(|f| f.read::<defs::UVars>("Vars"))
+            .find_map(|v| v.ui_color_option_invalid)
+    }
+
     /// The orders the player can give, in the order the files list them.
     pub fn commands(&mut self) -> Vec<Command> {
         let strings = self.strings();

@@ -740,6 +740,14 @@ pub struct SVars {
     pub resource_stockpile_default: Option<f32>,
 }
 
+/// The interface's settings.
+#[derive(Debug, Clone, Deserialize)]
+pub struct UVars {
+    /// What marks a figure or option that's no good, such as a shortfall.
+    #[serde(rename = "UIColorOptionInvalid")]
+    pub ui_color_option_invalid: Option<[f32; 3]>,
+}
+
 /// One of the resources sides earn and spend.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Resource {
