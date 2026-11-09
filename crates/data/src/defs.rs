@@ -577,7 +577,7 @@ pub struct Aspect {
 pub struct ObjectAnimation {
     pub ids: Option<String>,
     /// E.g. `RANDOM`, which plays every `start_min` to `start_max`
-    /// milliseconds, or `SELECTED`.
+    /// seconds, or `SELECTED`.
     #[serde(rename = "type")]
     pub kind: Option<String>,
     pub start_min: Option<f32>,
@@ -749,6 +749,14 @@ pub struct Cursor {
     pub hotspot_offset: Option<[f32; 2]>,
     /// Relative to its file's folder, with `%d` for the frame number.
     pub frame_filename: Option<String>,
+}
+
+/// A character quoted text names by id.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Glyph {
+    pub ids: Option<Id>,
+    /// The character's code.
+    pub index: Option<u32>,
 }
 
 /// The game's tuning settings.
