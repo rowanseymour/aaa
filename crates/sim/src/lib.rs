@@ -415,6 +415,9 @@ pub struct Building {
     reloads: Vec<f32>,
     /// What it last fired on.
     pub target: Option<Target>,
+    /// For one that defends itself, what it's noticed, which is all it
+    /// fires on.
+    pub noticed: Vec<Enemy>,
     /// The tick it last fired on, and the index of the weapon it fired.
     pub shot: Option<(u64, usize)>,
     pub state: State,
@@ -803,6 +806,7 @@ impl World {
                 fighter: b.fighter.clone(),
                 health,
                 target: None,
+                noticed: Vec::new(),
                 shot: None,
                 state: match health > 0.0 {
                     true => State::Standing,
@@ -1363,6 +1367,7 @@ impl World {
     /// Plays one [`TICK`].
     pub fn tick(&mut self) {
         self.travel();
+        self.notice();
         let fired_on = self.fight();
         self.engage(&fired_on);
         self.close_in();
@@ -1999,9 +2004,20 @@ impl World {
     fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
         let mut launched = Vec::new();
-        let shooters: Vec<Target> = self.targets().collect();
+        // Buildings that defend themselves fire even while disabled.
+        let disabled = (0..self.buildings.len())
+            .filter(|&b| {
+                let b = &self.buildings[b];
+                b.state == State::Disabled && b.fighter.notice.is_some()
+            })
+            .map(Target::Building);
+        let shooters: Vec<Target> = self.targets().chain(disabled).collect();
         for s in shooters {
-            let fighter = self.fighter(s).expect("shooters can fight");
+            let fighter = match s {
+                Target::Unit(u) => self.units[u].fighter.as_ref(),
+                Target::Building(b) => Some(&self.buildings[b].fighter),
+            };
+            let fighter = fighter.expect("shooters can fight");
             let (mut reloads, mut target, mut shot, moving) = match s {
                 Target::Unit(u) => {
                     let u = &self.units[u];
@@ -2185,6 +2201,11 @@ impl World {
     /// A unit whose regiment is pursuing an enemy fires on that enemy
     /// first whenever it can.
     fn aim(&self, s: Target, weapon: &Weapon, last: Option<Target>) -> Option<Target> {
+        if let Target::Building(b) = s
+            && self.buildings[b].fighter.notice.is_some()
+        {
+            return self.defend(b, weapon, last);
+        }
         let from = self.position(s);
         let quarry = match s {
             Target::Unit(u) => match self.regiments[self.units[u].regiment].order {
@@ -2222,6 +2243,87 @@ impl World {
         }
     }
 
+    /// Has each building that defends itself notice what's come near enough
+    /// for one of its weapons to aim at, for good: a unit's whole regiment.
+    fn notice(&mut self) {
+        for b in 0..self.buildings.len() {
+            let building = &self.buildings[b];
+            let Some(near) = building.fighter.notice.filter(|_| !building.gone()) else {
+                continue;
+            };
+            let s = Target::Building(b);
+            let seen: Vec<Enemy> = self
+                .targets()
+                .filter(|&t| distance(building.position, self.position(t)) <= near)
+                .filter(|&t| {
+                    let weapons = &building.fighter.weapons;
+                    weapons.iter().any(|w| self.can_target(s, w, t))
+                })
+                .map(|t| self.enemy(t))
+                .collect();
+            let noticed = &mut self.buildings[b].noticed;
+            for e in seen {
+                if !noticed.contains(&e) {
+                    noticed.push(e);
+                }
+            }
+        }
+    }
+
+    /// The regiment or building a target is, or is in.
+    fn enemy(&self, t: Target) -> Enemy {
+        match t {
+            Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
+            Target::Building(b) => Enemy::Building(b),
+        }
+    }
+
+    /// What a building that defends itself fires a weapon on: of what it's
+    /// noticed and the weapon can hit, its last target while that's worth
+    /// keeping, else the best ranked, nearest first.
+    fn defend(&self, b: usize, weapon: &Weapon, last: Option<Target>) -> Option<Target> {
+        let s = Target::Building(b);
+        let from = self.buildings[b].position;
+        let noticed = &self.buildings[b].noticed;
+        let valid = |t: Target| {
+            noticed.contains(&self.enemy(t))
+                && self.can_hit(s, weapon, t)
+                && self.defended_rank(t) > 0
+        };
+        if let Some(t) = last.filter(|&t| valid(t) && self.defended_rank(t) >= 2) {
+            return Some(t);
+        }
+        let nearer = |a: Target, b: Target| {
+            distance(from, self.position(b)).total_cmp(&distance(from, self.position(a)))
+        };
+        self.targets()
+            .filter(|&t| valid(t))
+            .max_by(|&a, &b| (self.defended_rank(a).cmp(&self.defended_rank(b))).then(nearer(a, b)))
+    }
+
+    /// How much a target is worth a defending building's fire before
+    /// others; 0 for never.
+    fn defended_rank(&self, t: Target) -> u8 {
+        let Some(f) = self.fighter(t) else {
+            return 0;
+        };
+        let armed = !f.weapons.is_empty();
+        if let Target::Unit(u) = t {
+            let unit = &self.units[u];
+            let regiment = &self.regiments[unit.regiment];
+            // A unit in no regiment is one of its own template.
+            let lone = unit.template == regiment.template;
+            if regiment.aggressive() || armed && lone {
+                return 3;
+            }
+        }
+        match (armed, f.capturable || f.destructible) {
+            (true, _) => 2,
+            (false, true) => 1,
+            (false, false) => 0,
+        }
+    }
+
     /// How much a target is worth firing on before others.
     fn rank(&self, t: Target) -> u8 {
         let Some(f) = self.fighter(t) else {
@@ -2236,6 +2338,11 @@ impl World {
 
     fn can_hit(&self, s: Target, weapon: &Weapon, t: Target) -> bool {
         let d = self.reach(self.position(s), t);
+        // Ranges run edge to edge, so a building's from its own edge too.
+        let d = match s {
+            Target::Building(b) => d.min(self.buildings[b].distance(self.position(t))),
+            Target::Unit(_) => d,
+        };
         d <= weapon.range && d >= weapon.min_range && self.can_target(s, weapon, t)
     }
 
@@ -2946,6 +3053,7 @@ mod tests {
             flags: vec![Id::from("infantry")],
             weapons,
             attack_height: 1.45,
+            notice: None,
         }
     }
 
@@ -3171,7 +3279,7 @@ mod tests {
 
     #[test]
     fn moving_regiments_engage_buildings_that_fire_on_them() {
-        let mut pillbox = building(20, 2, [21.0, 20.0]);
+        let mut pillbox = building(20, 2, [21.0, 24.0]);
         pillbox.fighter.destructible = true;
         pillbox.fighter.weapons = vec![rifle(12.0, 10.0)];
         let mut w = siege(&[pillbox]);
@@ -3184,8 +3292,8 @@ mod tests {
             },
         )
         .unwrap();
-        // In its range from 15.2, after 2.6s.
-        run(&mut w, 3.0);
+        // Each in the other's range, edge to edge, from y 12.1, after 1s.
+        run(&mut w, 2.0);
         assert_eq!(w.regiments[0].engaged, [Enemy::Building(0)]);
         assert!(!w.units[0].moving());
         run(&mut w, 2.0);
@@ -3652,6 +3760,39 @@ mod tests {
         }
         w.add_buildings(buildings);
         w
+    }
+
+    #[test]
+    fn buildings_fire_from_their_edge() {
+        // The soldier's 14 from its middle, out of the rifle's 12, but 11
+        // from its edge.
+        let mut pillbox = building(20, 2, [10.0, 24.0]);
+        pillbox.fighter.weapons = vec![rifle(12.0, 10.0)];
+        let mut w = siege(&[pillbox]);
+        w.units[0].fighter = Some(soldier(Vec::new()));
+        w.tick();
+        assert_eq!(w.buildings[0].target, Some(Target::Unit(0)));
+        assert_eq!(w.units[0].health, 90.0);
+    }
+
+    #[test]
+    fn defenders_fire_only_on_what_they_noticed_but_wherever_it_goes() {
+        // The soldier's 14 from its middle, so out of the 10 it notices
+        // within, though in its rifle's 12 from its edge.
+        let mut pillbox = building(20, 2, [10.0, 24.0]);
+        pillbox.fighter.weapons = vec![rifle(12.0, 10.0)];
+        pillbox.fighter.notice = Some(10.0);
+        let mut w = siege(&[pillbox]);
+        w.units[0].fighter = Some(soldier(Vec::new()));
+        run(&mut w, 3.0);
+        assert_eq!(w.units[0].health, 100.0);
+        w.units[0].position = [10.0, 16.0];
+        w.tick();
+        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert_eq!(w.units[0].health, 90.0);
+        w.units[0].position = [10.0, 10.0];
+        run(&mut w, 2.0);
+        assert_eq!(w.units[0].health, 80.0);
     }
 
     #[test]

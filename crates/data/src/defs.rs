@@ -84,6 +84,7 @@ pub struct Thing {
     pub body_component: Option<BodyComponent>,
     pub properties_component: Option<PropertiesComponent>,
     pub performer_component: Option<PerformerComponent>,
+    pub defender_component: Option<DefenderComponent>,
     pub city_component: Option<CityComponent>,
     pub organization_component: Option<OrganizationComponent>,
     pub projectile_component: Option<ProjectileComponent>,
@@ -344,6 +345,15 @@ pub struct PerformerComponent {
     pub ability: Vec<Ability>,
     /// How high above its user an attack starts, unless it says.
     pub attack_height: Option<f32>,
+}
+
+/// What a building fires on its own, at whatever comes near.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DefenderComponent {
+    /// How near something must come for it to notice it.
+    pub control_range: Option<f32>,
+    #[serde(default)]
+    pub ability: Vec<Ability>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
