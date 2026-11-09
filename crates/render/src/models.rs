@@ -165,15 +165,24 @@ pub struct Footprint(pub Vec2);
 
 /// What a model's controllers do to one of its meshes.
 pub struct Animation {
-    /// Moves the mesh's nearest animated ancestor, under `above`, its
-    /// parent's transform in the model; the mesh is then built relative
-    /// to that ancestor.
-    motion: Option<(Controller, Keyframes, nif::Transform)>,
-    above: nif::Transform,
+    /// The animated objects above the mesh, or the mesh itself, from the
+    /// model's root down; the mesh is built relative to the last.
+    motion: Vec<Moved>,
     /// Fades the material's alpha; each instance gets its own material.
     fade: Option<(Controller, Keys<f32>)>,
     /// Moves, turns or stretches the material's texture, as fades do.
     texture: Option<TextureMotion>,
+}
+
+/// An object its keyframes move.
+struct Moved {
+    /// From the animated object above it, or the model's root, down to its
+    /// parent.
+    above: nif::Transform,
+    controller: Controller,
+    keys: Keyframes,
+    /// Its own transform, which the keys change.
+    base: nif::Transform,
 }
 
 /// Changes to where a texture lies, from where its slot puts it.
@@ -248,8 +257,7 @@ fn painting(nif: &Nif, props: &[nif::Ref]) -> Option<Animation> {
         changes,
     });
     (fade.is_some() || texture.is_some()).then_some(Animation {
-        motion: None,
-        above: nif::Transform::IDENTITY,
+        motion: Vec::new(),
         fade,
         texture,
     })
@@ -262,12 +270,11 @@ impl Animation {
     }
 
     fn transform(&self, t: f32) -> Transform {
-        match &self.motion {
-            Some((c, keys, base)) => {
-                bevy_transform(&self.above.then(&keys.apply(base, c.key_time(t))))
-            }
-            None => Transform::IDENTITY,
-        }
+        let placed = self.motion.iter().fold(nif::Transform::IDENTITY, |at, m| {
+            let own = m.keys.apply(&m.base, m.controller.key_time(t));
+            at.then(&m.above).then(&own)
+        });
+        bevy_transform(&placed)
     }
 }
 
@@ -315,11 +322,7 @@ impl Animated {
         team_materials: &mut Assets<TeamMaterial>,
     ) -> Option<Transform> {
         let t = self.time;
-        let moved = self
-            .animation
-            .motion
-            .is_some()
-            .then(|| self.animation.transform(t));
+        let moved = (!self.animation.motion.is_empty()).then(|| self.animation.transform(t));
         let alpha = self
             .animation
             .fade
@@ -816,7 +819,7 @@ impl Models {
         path: &str,
         view: View,
     ) -> Option<Model> {
-        let key = format!("{path}#own");
+        let key = format!("{path}#own{}", lookup_key(path, &view));
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
@@ -974,6 +977,7 @@ impl Models {
         for a in idle.into_iter().chain(moving).chain(once) {
             key += &format!("#{}", a.kf);
         }
+        key += &lookup_key(path, view);
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
@@ -1114,7 +1118,12 @@ impl Models {
             .and_then(|t| t.base.as_ref());
         let material = nif.property::<nif::Material>(props);
         let uv_set = base.map_or(0, |b| b.uv_set as usize);
-        let mesh = mesh(g, transform, uv_set)?;
+        // Vertex colours tint a mesh only where they stand for its ambient
+        // and diffuse colours, as they do without a property to say.
+        let tinted = nif
+            .property::<nif::VertexColor>(props)
+            .is_none_or(|v| v.vertex_mode == 2);
+        let mesh = mesh(g, transform, uv_set, tinted)?;
         let texture = self.base_texture(game, assets, nif, path, view, props);
         let alpha = nif.property::<nif::Alpha>(props);
         let double_sided = nif
@@ -1248,16 +1257,15 @@ impl Models {
             // An animated mesh is built relative to the object that moves.
             let (mesh_transform, animation) =
                 match (motion(nif, &placed.path, root_placed), painting) {
-                    (Some(m), painting) => {
+                    (Some((motion, below)), painting) => {
                         let (fade, texture) =
                             painting.map_or((None, None), |p| (p.fade, p.texture));
                         let animation = Animation {
-                            motion: Some((m.controller, m.keys, m.base)),
-                            above: m.above,
+                            motion,
                             fade,
                             texture,
                         };
-                        (m.below, Some(animation))
+                        (below, Some(animation))
                     }
                     (None, painting) => (placed.transform, painting),
                 };
@@ -1398,6 +1406,13 @@ impl Models {
     }
 }
 
+/// What tells the model at `path` as loaded for `view` from the same one
+/// loaded for a view that finds its textures elsewhere.
+fn lookup_key(path: &str, view: &View) -> String {
+    let renames = view.texture_renames.get(path);
+    format!("#{:?}#{renames:?}", view.texture_dirs)
+}
+
 /// How a shape with `alpha` and its material's `opacity` blends.
 fn alpha_mode(alpha: Option<&nif::Alpha>, opacity: f32) -> AlphaMode {
     match alpha {
@@ -1412,14 +1427,17 @@ fn alpha_mode(alpha: Option<&nif::Alpha>, opacity: f32) -> AlphaMode {
 /// The size of the hidden box a model marks its selectable extent with:
 /// width across its -y facing and length along it.
 fn selection_box(nif: &Nif) -> Option<Vec2> {
-    let shape = nif.objects.iter().find_map(|o| match o {
-        Object::Shape(s) if s.av.name.eq_ignore_ascii_case("SelectionBox") => Some(s),
+    let (at, shape) = nif.objects.iter().enumerate().find_map(|(i, o)| match o {
+        Object::Shape(s) if s.av.name.eq_ignore_ascii_case("SelectionBox") => Some((i, s)),
         _ => None,
     })?;
     let g = nif.get_as::<nif::Geometry>(shape.data)?;
+    // Where the nodes above it put it, which may turn it.
+    let frames = Nodes::new(nif).frames;
+    let placed = frames.0.get(&at).map_or(shape.av.transform, |a| a.model);
     let (mut min, mut max) = (Vec2::MAX, Vec2::MIN);
     for &p in &g.positions {
-        let [x, y, _] = shape.av.transform.apply(p);
+        let [x, y, _] = placed.apply(p);
         (min, max) = (min.min(Vec2::new(x, y)), max.max(Vec2::new(x, y)));
     }
     let size = max - min;
@@ -1458,43 +1476,41 @@ pub(crate) fn controllers(nif: &Nif, first: nif::Ref) -> impl Iterator<Item = &C
     .filter(|c| c.flags & 8 != 0)
 }
 
-/// The keyframes on the nearest animated object along a shape's path.
-struct Motion {
-    controller: Controller,
-    keys: Keyframes,
-    /// Transforms above the animated object, its own, and below it down to
-    /// the shape.
-    above: nif::Transform,
-    base: nif::Transform,
-    below: nif::Transform,
-}
-
-/// The animation moving the shape at the end of `path`, if any object on
-/// it has one, with the first object's own transform left out unless
-/// `root_placed`.
-fn motion(nif: &Nif, path: &[usize], root_placed: bool) -> Option<Motion> {
+/// The keyframes moving the shape at the end of `path`, on it or any
+/// object above it, from the root down, and the transform from the last of
+/// them down to the shape; `None` if nothing on the path is animated. The
+/// first object's own transform is left out unless `root_placed`.
+fn motion(nif: &Nif, path: &[usize], root_placed: bool) -> Option<(Vec<Moved>, nif::Transform)> {
     let scene = |i: usize| nif.get(Some(i)).and_then(Object::scene);
     let transform = |i: usize| match path.first() {
         Some(&root) if i == root && !root_placed => Some(nif::Transform::IDENTITY),
         _ => scene(i).map(|av| av.transform),
     };
-    let (at, controller, keys) = path.iter().enumerate().rev().find_map(|(at, &i)| {
-        let c = controller(nif, scene(i)?.controller, ControllerKind::Keyframe)?;
-        Some((at, c, nif.get_as::<Keyframes>(c.data)?))
-    })?;
     let chain = |range: &[usize]| {
         range
             .iter()
             .filter_map(|&i| transform(i))
             .fold(nif::Transform::IDENTITY, |t, av| t.then(&av))
     };
-    Some(Motion {
-        controller: controller.clone(),
-        keys: keys.clone(),
-        above: chain(&path[..at]),
-        base: transform(path[at])?,
-        below: chain(&path[at + 1..]),
-    })
+    let mut moved = Vec::new();
+    // The first object below the last animated one.
+    let mut from = 0;
+    for (at, &i) in path.iter().enumerate() {
+        let keyed = scene(i)
+            .and_then(|av| controller(nif, av.controller, ControllerKind::Keyframe))
+            .and_then(|c| Some((c, nif.get_as::<Keyframes>(c.data)?, transform(i)?)));
+        let Some((controller, keys, base)) = keyed else {
+            continue;
+        };
+        moved.push(Moved {
+            above: chain(&path[from..at]),
+            controller: controller.clone(),
+            keys: keys.clone(),
+            base,
+        });
+        from = at + 1;
+    }
+    (!moved.is_empty()).then(|| (moved, chain(&path[from..])))
 }
 
 /// A model-space transform in Bevy axes.
@@ -1552,8 +1568,14 @@ fn idle(view: &View) -> Option<&aaa_data::Animation> {
         .or_else(|| idles.next())
 }
 
-/// A mesh in model space, converted from the game's z-up axes to Bevy's.
-fn mesh(g: &nif::Geometry, transform: &nif::Transform, uv_set: usize) -> Option<Mesh> {
+/// A mesh in model space, converted from the game's z-up axes to Bevy's,
+/// with its vertex colours if it's `tinted` by them.
+fn mesh(
+    g: &nif::Geometry,
+    transform: &nif::Transform,
+    uv_set: usize,
+    tinted: bool,
+) -> Option<Mesh> {
     if g.positions.is_empty() || g.triangles.is_empty() {
         return None;
     }
@@ -1578,8 +1600,14 @@ fn mesh(g: &nif::Geometry, transform: &nif::Transform, uv_set: usize) -> Option<
     if let Some(uvs) = g.uv_sets.get(uv_set).or(g.uv_sets.first()) {
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs.clone());
     }
-    if g.colors.len() == g.positions.len() {
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, g.colors.clone());
+    if tinted && g.colors.len() == g.positions.len() {
+        // The model's colours are sRGB, as everywhere else.
+        let colours: Vec<[f32; 4]> = g
+            .colors
+            .iter()
+            .map(|&[r, g, b, a]| Color::srgba(r, g, b, a).to_linear().to_f32_array())
+            .collect();
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
     }
     if g.normals.len() == g.positions.len() {
         let normals: Vec<[f32; 3]> = g
@@ -1725,6 +1753,186 @@ mod tests {
         assert_eq!(p.offset, [0.0, 0.5]);
         assert_eq!((p.turn, p.scale), (0.5, [1.0, 1.0]));
         assert_eq!(motion.at(5.0).offset, [0.0, 0.5]);
+    }
+
+    fn scene(name: &str, controller: nif::Ref, transform: nif::Transform) -> nif::SceneObject {
+        nif::SceneObject {
+            name: name.into(),
+            extra_data: Vec::new(),
+            controller,
+            flags: 0,
+            transform,
+            properties: Vec::new(),
+        }
+    }
+
+    fn node(av: nif::SceneObject, children: Vec<nif::Ref>) -> Object {
+        Object::Node(nif::Node {
+            av,
+            children,
+            billboard: None,
+        })
+    }
+
+    fn moved_to(at: [f32; 3]) -> nif::Transform {
+        nif::Transform {
+            translation: at,
+            ..nif::Transform::IDENTITY
+        }
+    }
+
+    /// Keyframes holding an object at `at`, and the controller playing
+    /// them from the object at `data`.
+    fn held(at: [f32; 3], data: usize) -> [Object; 2] {
+        let keys = Keys {
+            interpolation: nif::Interpolation::Linear,
+            keys: vec![nif::Key {
+                time: 0.0,
+                value: at,
+                tangents: None,
+            }],
+        };
+        [
+            Object::Controller(Controller {
+                kind: ControllerKind::Keyframe,
+                data: Some(data),
+                ..looping(TextureChange::OffsetU)
+            }),
+            Object::Keyframes(Keyframes {
+                translation: keys,
+                ..Default::default()
+            }),
+        ]
+    }
+
+    #[test]
+    fn every_animated_object_above_a_mesh_moves_it() {
+        // A mesh under an arm that its keys lift by 1, itself under a body
+        // moved 5 along x that its keys move to 2 along x instead.
+        let [body_c, body_k] = held([2.0, 0.0, 0.0], 5);
+        let [arm_c, arm_k] = held([0.0, 0.0, 1.0], 7);
+        let nif = Nif {
+            objects: vec![
+                node(
+                    scene("root", None, moved_to([0.0, 9.0, 0.0])),
+                    vec![Some(1)],
+                ),
+                node(
+                    scene("body", Some(4), moved_to([5.0, 0.0, 0.0])),
+                    vec![Some(2)],
+                ),
+                node(
+                    scene("arm", Some(6), nif::Transform::IDENTITY),
+                    vec![Some(3)],
+                ),
+                Object::Shape(nif::Shape {
+                    av: scene("mesh", None, moved_to([0.0, 0.5, 0.0])),
+                    data: None,
+                    skin: None,
+                }),
+                body_c,
+                body_k,
+                arm_c,
+                arm_k,
+            ],
+            roots: vec![Some(0)],
+            incomplete: None,
+        };
+        let (motion, below) = motion(&nif, &[0, 1, 2, 3], true).expect("animated");
+        assert_eq!(motion.len(), 2);
+        assert_eq!(below.translation, [0.0, 0.5, 0.0]);
+        let animation = Animation {
+            motion,
+            fade: None,
+            texture: None,
+        };
+        let at = animation.transform(0.0).translation;
+        assert!(at.abs_diff_eq(world(2.0, 9.0, 1.0), 1e-5), "{at}");
+        // Unanimated, nothing moves it.
+        assert!(super::motion(&nif, &[0], true).is_none());
+    }
+
+    #[test]
+    fn selection_boxes_turn_with_the_nodes_above_them() {
+        // A box 4 wide and 2 long under a node turned a quarter turn.
+        let turned = nif::Transform {
+            rotation: [[0.0, -1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]],
+            ..nif::Transform::IDENTITY
+        };
+        let mut hidden = scene("SelectionBox", None, nif::Transform::IDENTITY);
+        hidden.flags = 1;
+        let nif = Nif {
+            objects: vec![
+                node(scene("root", None, turned), vec![Some(1)]),
+                Object::Shape(nif::Shape {
+                    av: hidden,
+                    data: Some(2),
+                    skin: None,
+                }),
+                Object::Geometry(nif::Geometry {
+                    positions: vec![[-2.0, -1.0, 0.0], [2.0, 1.0, 0.0]],
+                    ..Default::default()
+                }),
+            ],
+            roots: vec![Some(0)],
+            incomplete: None,
+        };
+        let size = selection_box(&nif).expect("a box");
+        assert!(size.abs_diff_eq(Vec2::new(2.0, 4.0), 1e-5), "{size}");
+    }
+
+    #[test]
+    fn meshes_take_vertex_colours_only_when_tinted() {
+        let g = nif::Geometry {
+            positions: vec![[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            colors: vec![[0.5, 0.5, 0.5, 1.0]; 3],
+            triangles: vec![[0, 1, 2]],
+            ..Default::default()
+        };
+        let colours = |tinted| {
+            mesh(&g, &nif::Transform::IDENTITY, 0, tinted)
+                .expect("a mesh")
+                .attribute(Mesh::ATTRIBUTE_COLOR)
+                .is_some()
+        };
+        assert!(colours(true));
+        assert!(!colours(false));
+    }
+
+    #[test]
+    fn models_are_kept_apart_by_where_their_textures_are() {
+        let view = |dirs: &[&str]| View {
+            models: Vec::new(),
+            texture_dirs: dirs.iter().map(|d| d.to_string()).collect(),
+            texture_renames: HashMap::new(),
+            scale: 1.0,
+            animations: Vec::new(),
+            conform: None,
+            footing: Footing::Ground,
+            unpacking: None,
+            packing: None,
+            icon: None,
+        };
+        let (unit, regiment) = (view(&["Shared/SharedTextures"]), view(&[]));
+        assert_ne!(
+            lookup_key("Tank.nif", &unit),
+            lookup_key("Tank.nif", &regiment)
+        );
+        assert_eq!(
+            lookup_key("Tank.nif", &unit),
+            lookup_key("Tank.nif", &unit.clone())
+        );
+        let mut renamed = unit.clone();
+        let renames = vec![("Base".to_string(), "Snow".to_string())];
+        renamed.texture_renames.insert("Tank.nif".into(), renames);
+        assert_ne!(
+            lookup_key("Tank.nif", &unit),
+            lookup_key("Tank.nif", &renamed)
+        );
+        assert_eq!(
+            lookup_key("Truck.nif", &unit),
+            lookup_key("Truck.nif", &renamed)
+        );
     }
 
     fn ground(height: impl Fn(f32, f32) -> f32) -> Ground {

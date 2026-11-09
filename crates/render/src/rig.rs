@@ -396,12 +396,11 @@ impl Nodes {
             .roots
             .iter()
             .find_map(|&r| kf.get_as::<nif::Sequence>(r))?;
-        let by_name: HashMap<&str, usize> = self
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, n)| (n.name.as_str(), i))
-            .collect();
+        // The first of a name wins, as for [`Nodes::points`].
+        let mut by_name: HashMap<&str, usize> = HashMap::new();
+        for (i, n) in self.nodes.iter().enumerate() {
+            by_name.entry(n.name.as_str()).or_insert(i);
+        }
         let channels: Vec<Channel> = sequence
             .blocks
             .iter()
@@ -830,6 +829,53 @@ mod tests {
                 ..nif::Transform::IDENTITY
             },
         }
+    }
+
+    #[test]
+    fn clips_move_the_first_node_of_a_name() {
+        let nodes = Nodes {
+            nodes: vec![
+                rig_node("Scene Root", None, [0.0; 3]),
+                rig_node("Gun", Some(0), [0.0; 3]),
+                rig_node("Gun", Some(1), [0.0; 3]),
+            ],
+            index: HashMap::new(),
+            shapes: Vec::new(),
+            frames: Frames::default(),
+        };
+        let kf = Nif {
+            objects: vec![
+                Object::Sequence(nif::Sequence {
+                    name: "idle".into(),
+                    accumulation_root: String::new(),
+                    text_keys: None,
+                    blocks: vec![nif::ControlledBlock {
+                        target: "Gun".into(),
+                        controller: Some(1),
+                    }],
+                }),
+                Object::Controller(Controller {
+                    kind: ControllerKind::Keyframe,
+                    modifier: String::new(),
+                    next: None,
+                    flags: 8,
+                    frequency: 1.0,
+                    phase: 0.0,
+                    start: 0.0,
+                    stop: 1.0,
+                    target: None,
+                    data: Some(2),
+                }),
+                Object::Keyframes(Keyframes::default()),
+            ],
+            roots: vec![Some(0)],
+            incomplete: None,
+        };
+        let clip = nodes.clip(&kf, 1.0).expect("a clip");
+        assert_eq!(
+            clip.channels.iter().map(|c| c.node).collect::<Vec<_>>(),
+            [1]
+        );
     }
 
     #[test]

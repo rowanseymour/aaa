@@ -33,10 +33,19 @@ fn flip(ground: &Ground, x: usize, y: usize) -> bool {
 }
 
 fn normal(ground: &Ground, x: usize, y: usize) -> [f32; 3] {
-    let h = |x: usize, y: usize| ground.at(x.min(ground.side - 1), y.min(ground.side - 1));
-    let dx = h(x + 1, y) - h(x.saturating_sub(1), y);
-    let dy = h(x, y + 1) - h(x, y.saturating_sub(1));
-    Vec3::new(-dx, 2.0 * CELL_SIZE, dy).normalize().to_array()
+    let last = ground.side - 1;
+    // The slope between the vertices either side, or at the map's edge from
+    // the one that's there.
+    let slope = |(ax, ay): (usize, usize), (bx, by): (usize, usize)| {
+        let run = ((bx - ax) + (by - ay)) as f32 * CELL_SIZE;
+        match run > 0.0 {
+            true => (ground.at(bx, by) - ground.at(ax, ay)) / run,
+            false => 0.0,
+        }
+    };
+    let dx = slope((x.saturating_sub(1), y), ((x + 1).min(last), y));
+    let dy = slope((x, y.saturating_sub(1)), (x, (y + 1).min(last)));
+    Vec3::new(-dx, 1.0, dy).normalize().to_array()
 }
 
 /// Game space (x east, y north, z up) to Bevy's (x east, y up, -z north).
@@ -403,6 +412,10 @@ fn load_frames(game: &mut GameData, animation: &TextureAnimation) -> Vec<Image> 
     let mut frames = Vec::new();
     loop {
         let name = animation.frame(frames.len());
+        // A path with no number in it names one frame, however often.
+        if !frames.is_empty() && name == animation.frame(0) {
+            break;
+        }
         let Some(frame) = game
             .read(&name)
             .and_then(|b| load_texture(&b, &name, FRAME_SIZE))
@@ -491,6 +504,18 @@ fn generate_mipmaps(image: &mut Image) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn normals_lean_the_same_at_the_edge_of_a_slope() {
+        // Rising a unit per vertex eastwards, all the way across.
+        let side = 5;
+        let ground = Ground::from_heights((0..side * side).map(|i| (i % side) as f32).collect());
+        let inside = normal(&ground, 2, 2);
+        assert!(inside[0] < 0.0 && inside[2] == 0.0);
+        for (x, y) in [(0, 2), (4, 2), (2, 0), (2, 4), (0, 0), (4, 4)] {
+            assert_eq!(normal(&ground, x, y), inside, "{x},{y}");
+        }
+    }
 
     #[test]
     fn corners_take_the_lowest_tile_meeting_there() {

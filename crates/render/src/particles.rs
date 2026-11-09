@@ -438,6 +438,8 @@ impl System {
             capacity as f32 / (emit_stop(c) - c.emit_start)
         };
         let mut timing = t.clone();
+        // The system's clock already runs at its frequency.
+        timing.frequency = 1.0;
         if c.reset {
             timing.flags &= !6;
         }
@@ -641,7 +643,9 @@ pub(crate) fn spawn(
     node: impl Fn(usize) -> Option<Entity>,
     offset: f32,
 ) {
-    let seed = offset.to_bits();
+    // By the object too, so effects that start together don't play alike.
+    let object = root.to_bits();
+    let seed = offset.to_bits() ^ object as u32 ^ (object >> 32) as u32;
     for (i, system) in systems.iter().enumerate() {
         let anchors: Vec<Entity> = system
             .anchors
