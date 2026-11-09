@@ -48,14 +48,9 @@ What `rmp.ksy` keeps as bytes, or reads without naming:
 | Section | Undecoded |
 |---|---|
 | DYNAMIC_THINGS | What no shipped map has: things of other classes, kingdoms' memories of things, and actors with a Projectile, Wall, Settlement, Aircraft, Flare or MetaGame component or an aircraft mind. Some component fields, mostly minds', are read to their end but unnamed |
-| KINGDOMS | Two fields of an ability and one of a saved group |
-| MAP_HEADER | One byte's meaning |
 | DENIZEN_GROUPS | A group's layout; no shipped map has any |
 
-Every other section is decoded: MAP, GWORLD, RULES, TERRAIN, HEIGHT_MAP,
-MOUNTAIN_HEIGHT_MAP, IDMGR, UPDATABLES, RESTRICTION_GROUPS, TEAMS,
-OBJECTIVES, TRIGGERS, SUN, MISC_DATA, MAPSTRINGS and
-USED_REQUIRED_OBJECTS.
+Every other section is decoded.
 
 ## Using the specs
 

@@ -398,7 +398,7 @@ mod tests {
         };
         let terrain = Terrain {
             version: 7,
-            unknown: 0,
+            resolution_bits: 0,
             biome: String::new(),
             names: vec!["grass".into(), "undefined".into()],
             side: 2,

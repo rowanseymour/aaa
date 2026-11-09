@@ -455,9 +455,12 @@ types:
         doc: 10.
       - id: default
         type: f4
-      - id: unknown
+      - id: resolution_bits
         type: u4
-        doc: Unknown; 1.
+        doc: |
+          The vertex spacing it was made with, as a power of two: 1 for 2
+          world units. The game refuses a map made with another spacing than
+          its own.
       - id: num_vertices
         type: u4
         doc: side * side, a square; side is 257 on standard maps.
@@ -485,9 +488,12 @@ types:
         valid:
           max: 7
         doc: 6 or 7 in shipped maps.
-      - id: unknown
+      - id: resolution_bits
         type: u4
-        doc: Unknown; the game requires 1.
+        doc: |
+          The tile size it was made with, as a power of two: 1 for 2 world
+          units square. The game refuses a map made with another size than
+          its own.
       - id: biome
         type: string
         doc: E.g. `temperate_grassland`.
@@ -749,9 +755,9 @@ types:
       - id: edition
         type: string
         doc: The edition of the game that saved it, e.g. `North America AA Dev`.
-      - id: unknown
+      - id: unused
         type: u1
-        doc: Unknown; 0 in every shipped map.
+        doc: Kept and saved again, but never read; 0 in every shipped map.
       - id: path
         type: string
         doc: The map's path when it was saved.
@@ -1009,10 +1015,10 @@ types:
         type: u4
         if: version == 4
         doc: Read and ignored by the game.
-      - id: unknown_strings
+      - id: unused_strings
         type: strings
         if: version >= 5
-        doc: Unknown.
+        doc: Kept and saved again, but never read; empty in every shipped map.
   int_value:
     seq:
       - id: value
@@ -1449,12 +1455,12 @@ types:
       - id: last_used
         type: f4
         doc: The game time it was last used; -1000 or the lowest f4 for never.
-      - id: unknown
+      - id: unused1
         type: u4
-        doc: Unknown; 0 in every shipped map.
-      - id: unknown2
+        doc: Never used; 0 in every shipped map.
+      - id: unused2
         type: u1
-        doc: Unknown; 1 in every shipped map.
+        doc: Never used; 1 in every shipped map.
       - id: active_targets
         type: u4s
         if: version >= 1
@@ -1468,9 +1474,9 @@ types:
       - id: name
         type: string
         doc: Its digits are the group's number.
-      - id: unknown
+      - id: display_name
         type: string
-        doc: Unknown.
+        doc: The name it's shown by, "Group N" in the player's language.
       - id: ids
         type: u4s
         doc: The actors' thing ids.
@@ -2209,7 +2215,8 @@ types:
   property:
     doc: |
       A shared property, such as a nation's technology. No shipped map's
-      actors have any, so the fields are unverified.
+      actors have any, so the fields are unverified. The game drops every
+      property actors hold in maps of world version 20 or below.
     params:
       - id: property_class
         type: u4
@@ -2218,20 +2225,29 @@ types:
         type: u4
         valid:
           max: 3
-      - id: unknown
-        type: u4
-      - id: unknown2
+      - id: gained_at
+        type: f4
+        doc: The game time the actor gained it.
+      - id: source
         type: u4
         if: version >= 1
+        doc: |
+          Where it came from, e.g. 1 an ability's effect, 2 granted
+          kingdom-wide (technology and the like), 5 the terrain the actor
+          stands on, 9 its stance.
       - id: id
         type: string
         doc: The shared property data's id.
-      - id: unknown3
+      - id: duplicate
         type: u1
         if: version >= 2
-      - id: unknown4
+        doc: |
+          Set when the actor already held it from the same source, so this
+          copy adds nothing.
+      - id: from_actor
         type: u4
         if: version >= 2
+        doc: The thing id of the actor it came from; 0 for none.
       - id: extra_version
         type: u4
         valid: 0
@@ -2239,6 +2255,7 @@ types:
       - id: extra
         type: u4
         if: property_class == 1 and version >= 3
+        doc: A second actor's thing id, set when an ability hands the property over.
   plain_component:
     doc: Economy, Builder, Detection and Portal, which save nothing of their own.
     seq:
@@ -2269,10 +2286,13 @@ types:
         valid: 0
       - id: animation_state
         size: 13
-      - id: unknown
+      - id: pending_stance
         type: s4
         if: version >= 2
-        doc: -2 in every map, as when nothing is playing.
+        doc: |
+          A stance waiting for the next animation to take effect, when the
+          new stance needs other animations: a stance's index, -1 the
+          template's default, -2 none, as in every map.
   performer:
     doc: Uses the actor's abilities, aiming its turrets.
     seq:
@@ -2316,10 +2336,13 @@ types:
       - id: current_turret
         type: s4
         doc: The index of the turret the ability uses; -1 for none.
-      - id: unknown
+      - id: use_kind
         type: u4
         if: version >= 6
-        doc: Passed in when an ability starts; 0 in every map.
+        doc: |
+          How the ability under way was started: 1 an ordinary use, 3 a
+          bombardment or a commander's own ability; 0 until the actor first
+          uses one, as in every map.
       - id: num_abilities
         type: u4
         if: version >= 5
@@ -2357,23 +2380,37 @@ types:
         if: version >= 9
         doc: The thing id it's aimed at; ignored on load.
   damage:
-    doc: The damage an element deals; its tail depends on the world version.
+    doc: A hit an element or organization took; its tail depends on the world version.
     seq:
-      - id: unknown1
-        size: 8
+      - id: attacker
+        type: u4
+        doc: The thing id of the attacker.
+      - id: credited
+        type: u4
+        doc: |
+          The thing id of the one credited with the attack when that's
+          someone else, such as the commander for its own abilities; 0
+          otherwise.
       - id: name
         type: string
-      - id: unknown2
-        size: 8
-      - id: unknown3_v15
+        doc: The damage type.
+      - id: amount
+        type: f4
+      - id: time
+        type: f4
+        doc: The game time it landed.
+      - id: old
         type: u1
         if: _root.world_version >= 15 and _root.world_version < 18
-      - id: unknown3
+        doc: Read and ignored by the game.
+      - id: use_kind
         type: u4
         if: _root.world_version >= 18
-      - id: unknown4
+        doc: How the attack was started, as the performer's `use_kind`.
+      - id: cause
         type: u4
         if: _root.world_version >= 20
+        doc: What dealt it, e.g. 4 an ability's main damage, 5 its added damage.
   element:
     seq:
       - id: version
@@ -2394,6 +2431,10 @@ types:
         repeat: expr
         repeat-expr: num_damages
         if: version >= 3
+        doc: |
+          The hits it took in the last few seconds (3 by default), kept only
+          while it's the regiment member whose fate the regiment watches;
+          empty otherwise.
   organization:
     doc: A herd or regiment, holding its members' whole records.
     seq:
@@ -2449,29 +2490,35 @@ types:
         repeat: expr
         repeat-expr: num_positions
         doc: Where each position stands relative to the organization.
-      - id: unknown1
-        type: u4
+      - id: replenished
+        type: f4
         repeat: expr
         repeat-expr: num_positions
         if: version >= 1
-        doc: One per position; 0 in every map.
-      - id: unknown2
+        doc: |
+          For each position whose member was lost, the health its
+          replacement has built up, the member returning at full health; 0
+          for a filled position.
+      - id: efficiency
         type: f4
         if: version >= 4
-        doc: Eases over time towards `level`.
-      - id: unknown3
+        doc: Its attack efficiency, which eases over time towards `level`.
+      - id: formation_aggressive
         type: u1
         if: version >= 4
-      - id: unknown4
+        doc: Whether its formation is an aggressive one.
+      - id: aggressive
         type: u1
         if: version >= 4
+        doc: Whether it's aggressive now.
       - id: damage
         type: damage
         if: version >= 4
+        doc: The last hit any of its members took.
       - id: level
         type: f4
         if: version >= 5
-        doc: A level its properties set; 1 in every map.
+        doc: The attack efficiency its properties set; 1 in every map.
       - id: time
         type: f4
         if: version >= 6
@@ -2505,12 +2552,14 @@ types:
         type: u4
         valid:
           max: 4
-      - id: unknown1
+      - id: sallied
         type: u1
         if: version >= 1
-      - id: unknown2
+        doc: Whether its denizens have sallied out.
+      - id: escort
         type: u1
         if: version >= 2
+        doc: Whether fighter escort is on.
       - id: num_inventory
         type: u4
         if: version >= 3
@@ -2520,28 +2569,33 @@ types:
         repeat-expr: num_inventory
         if: version >= 3
         doc: One per denizen it holds.
-      - id: unknown3
+      - id: last_takeoff
         type: f4
         if: version >= 4
-        doc: -1 or -0 in every map.
-      - id: ids
+        doc: |
+          When the last aircraft took off from its runway. It starts at minus
+          the runway's `delay`, so the first can go at once.
+      - id: waiting
         type: u4s
         if: version >= 3
-        doc: Thing ids of some actors; empty in every map.
-      - id: unknown4
+        doc: Thing ids of the aircraft waiting their turn to take off.
+      - id: sorties
         type: u4s
         if: version >= 3
         doc: |
-          A count of saved objects, read here as u4s since every map has
-          none.
+          A count of the sorties under way (air attacks, recon flights,
+          sallies), each saved as a record of its own; read here as u4s
+          since no map has any.
   denizen_item:
     seq:
-      - id: unknown
+      - id: outside
         type: u4
-        doc: 0 in every map.
+        doc: The denizen's thing id while it's out of the building; 0 while it's inside.
       - id: health
         type: f4
-        doc: A fraction of the denizen's maximum.
+        doc: |
+          The health it keeps while inside, where it heals, as a fraction of
+          the denizen's maximum.
   supply:
     seq:
       - id: version
@@ -2618,12 +2672,13 @@ types:
         type: u4
         valid:
           max: 3
-      - id: has_unknown1
+      - id: has_rally_point
         type: u1
         if: version >= 1
-      - id: unknown1
-        size: 8
-        if: version >= 1 and has_unknown1 != 0
+      - id: rally_point
+        type: vec2
+        if: version >= 1 and has_rally_point != 0
+        doc: Where new recruits head.
       - id: num_entries
         type: u4
         if: version >= 1 and version <= 2
@@ -2632,10 +2687,11 @@ types:
         repeat: expr
         repeat-expr: num_entries
         if: version >= 1 and version <= 2
-      - id: unknown2
+        doc: Read and ignored by the game, as are the two fields after them.
+      - id: old_value
         type: u4
         if: version >= 1 and version <= 2
-      - id: unknown3
+      - id: old_flag
         type: u1
         if: version == 2
   recruit_entry:
@@ -2664,9 +2720,9 @@ types:
         type: u4
         valid:
           max: 3
-      - id: unknown
+      - id: unused
         type: f4
-        doc: 1 in every map.
+        doc: 1 when the component is made, and never used.
       - id: finish_time
         type: f4
         if: version >= 1
@@ -2697,12 +2753,25 @@ types:
         repeat: expr
         repeat-expr: num_abilities
         if: version >= 1
-      - id: num_unknown
+      - id: num_engagements
         type: u4
         if: version >= 2
-      - id: unknown
-        size: num_unknown * 8
+      - id: engagements
+        type: defender_engagement
+        repeat: expr
+        repeat-expr: num_engagements
         if: version >= 2
+        doc: One per target its abilities are working on.
+  defender_engagement:
+    seq:
+      - id: target
+        type: u4
+        doc: The target's thing id.
+      - id: organization
+        type: u4
+        doc: |
+          The thing id of the organization registered as engaging it: the
+          defender's own regiment, or the defender itself.
   research:
     seq:
       - id: updatable
@@ -2710,10 +2779,13 @@ types:
       - id: version
         type: u4
         valid: 0
-      - id: unknown
+      - id: completed
         type: strings
+        doc: The research, as shared property ids, completed at the building.
   transport:
-    doc: Every field is empty or 0 in every map.
+    doc: |
+      A unit bringing others onto the map, such as a summoned force. Every
+      field is empty or 0 in every map.
     seq:
       - id: version
         type: u4
@@ -2721,38 +2793,55 @@ types:
           max: 6
       - id: template
         type: string
-        doc: An actor template's id.
+        doc: The actor template it delivers.
       - id: has_layout
         type: u1
       - id: layout
         type: layout
         if: has_layout != 0
-      - id: unknown2
-        size: 18
-      - id: unknown3
+        doc: The layout of the organization it delivers.
+      - id: destination
+        type: vec2
+        doc: Where to put them.
+      - id: started
+        type: u1
+        doc: Whether it has put down its first unit.
+      - id: assigned
+        type: u1
+        doc: Whether it has been given a delivery; once set, nothing clears it.
+      - id: num_to_deliver
+        type: u4
+        doc: The layout's filled slots, or 1 without a layout.
+      - id: num_delivered
+        type: u4
+      - id: old
         type: u4s
         if: version == 0
-      - id: unknown4
+      - id: last_delivered
         type: u4
         if: version >= 4
-      - id: unknown5
+        doc: The thing id of the last one it delivered.
+      - id: next_slot
         type: u4
-      - id: unknown6
+        doc: The next layout slot to deliver.
+      - id: unknown1
         type: id_list
-      - id: unknown7
+      - id: unknown2
         type: id_list
-      - id: has_unknown8
+      - id: has_summon
         type: u1
         if: version >= 3
-      - id: unknown8
+      - id: summon
         size: 8
-        if: version >= 3 and has_unknown8 != 0
-      - id: unknown9
+        if: version >= 3 and has_summon != 0
+        doc: Two values the summoning ability sets.
+      - id: unknown3
         type: string
         if: version >= 5
-      - id: unknown10
+      - id: hq
         type: u4
         if: version >= 6
+        doc: The thing id of the HQ the delivered organization attaches to; 0 for none.
   lair:
     seq:
       - id: updatable
@@ -2763,12 +2852,15 @@ types:
       - id: children
         type: u4s
         doc: Thing ids of the lairs it has spawned.
-      - id: unknown1
+      - id: unguarded
         type: u4
-        doc: 0 in every map.
-      - id: unknown2
+        doc: |
+          0 for a lair that guards itself and the lairs it spawned, sending
+          its denizens after whatever damages them; non-zero turns that off.
+          Nothing in the game sets it.
+      - id: unused
         type: f4
-        doc: -1 in every map.
+        doc: -1 when the component is made, and never used.
   city:
     seq:
       - id: updatable
@@ -2794,9 +2886,10 @@ types:
         doc: |
           Index into the HQ's nation's `[Badge]` list, worn on the banners of
           the HQ and the organizations attached to it; -1 for none.
-      - id: unknown1
+      - id: old
         type: u4s
         if: version == 1
+        doc: Read and ignored by the game.
       - id: num_attachments
         type: u4
         if: version >= 2
@@ -2819,18 +2912,18 @@ types:
       - id: old
         size: 5
         if: present != 0 and version < 3
-      - id: unknown1
+      - id: kind
         type: u4
         if: present != 0 and version >= 3
-        doc: 0 in every map.
+        doc: What's attached, 0 an organization, 1 a transport, 3 anything else.
       - id: organization
         type: u4
         if: present != 0 and version >= 3
-        doc: The attached organization's thing id.
-      - id: unknown2
+        doc: The attached thing's id.
+      - id: unused
         type: s4
         if: present != 0 and version >= 3
-        doc: -1 in every map.
+        doc: -1, and never changes.
 
   # Minds: an organization's or an element's, as the template's components
   # decide. Aircraft minds are undecoded. A mind is a set of states, such as
@@ -2857,8 +2950,12 @@ types:
         type: u4
         valid:
           max: 3
-      - id: unknown1
+      - id: denizen_jobs
         type: u4
+        doc: |
+          Flags for what a building's denizens are sent out to do, such as
+          defending the building, sallying or flying a mission; 0 for actors
+          that aren't denizens.
       - id: target
         type: u4
         doc: The thing id of the enemy it's set on.
@@ -2869,9 +2966,10 @@ types:
         repeat: expr
         repeat-expr: num_commands
         doc: Orders queued after the current one.
-      - id: unknown2
+      - id: attack_target
         type: u4
         if: version >= 1
+        doc: The thing id of the actor an organization was ordered to attack; 0 for none.
       - id: states
         type: strings
         if: version >= 1
@@ -2949,9 +3047,11 @@ types:
       - id: version
         type: u4
     seq:
-      - id: unknown1
+      - id: aggressiveness
         type: u4
-        doc: 1 in every map.
+        doc: |
+          The unit's own, used only outside a regiment: 2 aggressive, 0 not;
+          units start at 1.
       - id: sleep_activity
         type: u4
       - id: sleep_unknown
@@ -3027,9 +3127,12 @@ types:
         type: u4
       - id: reattach_activity
         type: u4
-      - id: unknown2
+      - id: engage_after
         type: u4
         if: version >= 3
+        doc: |
+          After falling back to its position, the time before which it won't
+          fight again; 0 for none.
       - id: bombard_activity
         type: u4
         if: version >= 4
@@ -3136,15 +3239,16 @@ types:
         type: s4
         if: version >= 3
         doc: The index of the formation to move in; -1 for none.
-      - id: unknown8
-        size: 16
-        doc: |
-          The kill state's activity and target and the bombard state's
-          activity, then a u4, 0 in every map, that the game's loader
-          doesn't appear to read. That it comes last is a guess.
+      - id: kill_activity
+        type: u4
+      - id: kill_target
+        type: u4
+      - id: bombard_activity
+        type: u4
       - id: old
         type: u1
         if: version < 8
+        doc: Ignored by the game.
       - id: bombard_target
         type: u4
       - id: bombard_unknown
@@ -3161,7 +3265,7 @@ types:
         if: version >= 4
       - id: siege_unknown2
         type: u4
-        if: version >= 5 and version < 13
+        if: version == 4 or version >= 13
       - id: chasing_activity
         type: u4
       - id: chasing_unknown

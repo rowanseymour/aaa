@@ -217,7 +217,9 @@ pub struct HeightMap {
     pub min: f32,
     pub max: f32,
     pub default: f32,
-    pub unknown: u32,
+    /// The vertex spacing it was made with, as a power of two: 1 for 2 world
+    /// units. The game refuses a map made with another spacing than its own.
+    pub resolution_bits: u32,
     /// Vertices per side.
     pub side: usize,
     /// Row-major heights, `side * side` entries.
@@ -233,7 +235,7 @@ impl HeightMap {
         let min = cur.f32()?;
         let max = cur.f32()?;
         let default = cur.f32()?;
-        let unknown = cur.u32()?;
+        let resolution_bits = cur.u32()?;
         let count = cur.u32()? as usize;
         let side = count.isqrt();
         if side * side != count {
@@ -255,7 +257,7 @@ impl HeightMap {
             min,
             max,
             default,
-            unknown,
+            resolution_bits,
             side,
             heights,
             layer,
@@ -280,7 +282,7 @@ impl HeightMap {
         w.f32(self.min);
         w.f32(self.max);
         w.f32(self.default);
-        w.u32(self.unknown);
+        w.u32(self.resolution_bits);
         w.u32(self.heights.len() as u32);
         w.f32s(&self.heights);
         w.bytes(&self.layer);
@@ -310,7 +312,10 @@ pub fn write_mountain_height_map(
 #[derive(Debug, Clone)]
 pub struct Terrain {
     pub version: u32,
-    pub unknown: u32,
+    /// The tile size it was made with, as a power of two: 1 for 2 world
+    /// units square. The game refuses a map made with another size than its
+    /// own.
+    pub resolution_bits: u32,
     pub biome: String,
     /// Terrain type ids, e.g. `temperate_grass03`; tiles index into this.
     pub names: Vec<String>,
@@ -349,7 +354,7 @@ impl Terrain {
                 "TERRAIN version {version} is newer than the game supports"
             )));
         }
-        let unknown = cur.u32()?;
+        let resolution_bits = cur.u32()?;
         let biome = cur.string()?;
         let names = cur.strings()?;
         let count = cur.u32()? as usize;
@@ -410,7 +415,7 @@ impl Terrain {
         cur.finish("TERRAIN")?;
         Ok(Terrain {
             version,
-            unknown,
+            resolution_bits,
             biome,
             names,
             side,
@@ -431,7 +436,7 @@ impl Terrain {
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut w = Writer::default();
         w.u32(self.version);
-        w.u32(self.unknown);
+        w.u32(self.resolution_bits);
         w.string(&self.biome)?;
         w.strings(&self.names)?;
         let size = tile_size(self.version);

@@ -57,27 +57,39 @@ pub struct Position {
     pub template: Option<String>,
     /// Where it stands relative to the organization.
     pub offset: [f32; 2],
-    /// From version 1 on; 0 in every map.
-    pub unknown1: Option<u32>,
+    /// From version 1 on, for a position whose member was lost: the health
+    /// its replacement has built up, the member returning at full health.
+    /// 0 for a filled position.
+    pub replenished: Option<f32>,
 }
 
 /// What an organization keeps for fighting, from version 4 on.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fighting {
-    /// Eases over time towards [`Organization::level`].
-    pub unknown2: f32,
-    pub unknown3: u8,
-    pub unknown4: u8,
+    /// Its attack efficiency, which eases over time towards
+    /// [`Organization::level`].
+    pub efficiency: f32,
+    /// Whether its formation is an aggressive one.
+    pub formation_aggressive: u8,
+    /// Whether it's aggressive now.
+    pub aggressive: u8,
+    /// The last hit any of its members took.
     pub damage: Damage,
 }
 
-/// The damage an element deals.
+/// A hit an element or organization took.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Damage {
-    pub unknown1: [u32; 2],
+    /// The attacker's thing id.
+    pub attacker: u32,
+    /// The thing id of the one credited with the attack when that's someone
+    /// else, such as the commander for its own abilities; 0 otherwise.
+    pub credited: u32,
     /// The damage type's id.
     pub name: String,
-    pub unknown2: [u32; 2],
+    pub amount: f32,
+    /// The game time it landed.
+    pub time: f32,
     pub tail: DamageTail,
 }
 
@@ -86,11 +98,14 @@ pub struct Damage {
 pub enum DamageTail {
     /// Before world version 15.
     None,
-    /// World versions 15 to 17.
+    /// World versions 15 to 17: a byte the game ignores.
     Byte(u8),
-    /// World versions 18 and 19.
+    /// World versions 18 and 19: `use_kind`, as `damage` in [`rmp.ksy`]
+    /// describes.
+    ///
+    /// [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
     Word(u32),
-    /// From world version 20 on.
+    /// From world version 20 on: `use_kind`, then `cause`.
     Words([u32; 2]),
 }
 
@@ -102,7 +117,8 @@ pub struct ElementState {
     pub updatable: Option<Updatable>,
     /// Up to version 1.
     pub old: Option<u8>,
-    /// From version 3 on.
+    /// From version 3 on: the hits it took lately, kept only while it's the
+    /// member whose fate its regiment watches.
     pub damages: Option<Vec<Damage>>,
 }
 
@@ -143,7 +159,7 @@ impl Organization {
                 old: None,
                 template: None,
                 offset: [0.0; 2],
-                unknown1: None,
+                replenished: None,
             });
         }
         if (2..=6).contains(&v) {
@@ -166,15 +182,15 @@ impl Organization {
         }
         if v >= 1 {
             for p in &mut positions {
-                p.unknown1 = Some(cur.u32()?);
+                p.replenished = Some(cur.f32()?);
             }
         }
         let fighting = (v >= 4)
             .then(|| -> Result<_> {
                 Ok(Fighting {
-                    unknown2: cur.f32()?,
-                    unknown3: cur.u8()?,
-                    unknown4: cur.u8()?,
+                    efficiency: cur.f32()?,
+                    formation_aggressive: cur.u8()?,
+                    aggressive: cur.u8()?,
                     damage: Damage::parse(cur, world)?,
                 })
             })
@@ -253,15 +269,15 @@ impl Organization {
             w.f32s(&p.offset);
         }
         for p in &self.positions {
-            optional(v >= 1, "position's unknown", p.unknown1, |u| {
-                w.u32(u);
+            optional(v >= 1, "position's replenishment", p.replenished, |r| {
+                w.f32(r);
                 Ok(())
             })?;
         }
         optional(v >= 4, "fighting", self.fighting.as_ref(), |f| {
-            w.f32(f.unknown2);
-            w.u8(f.unknown3);
-            w.u8(f.unknown4);
+            w.f32(f.efficiency);
+            w.u8(f.formation_aggressive);
+            w.u8(f.aggressive);
             f.damage.write(w)
         })?;
         let words = [
@@ -291,9 +307,11 @@ impl Organization {
 impl Damage {
     fn parse(cur: &mut Cursor, world: u32) -> Result<Self> {
         Ok(Damage {
-            unknown1: [cur.u32()?, cur.u32()?],
+            attacker: cur.u32()?,
+            credited: cur.u32()?,
             name: cur.string()?,
-            unknown2: [cur.u32()?, cur.u32()?],
+            amount: cur.f32()?,
+            time: cur.f32()?,
             tail: match world {
                 ..15 => DamageTail::None,
                 15..18 => DamageTail::Byte(cur.u8()?),
@@ -304,9 +322,11 @@ impl Damage {
     }
 
     fn write(&self, w: &mut Writer) -> Result<()> {
-        self.unknown1.iter().for_each(|&v| w.u32(v));
+        w.u32(self.attacker);
+        w.u32(self.credited);
         w.string(&self.name)?;
-        self.unknown2.iter().for_each(|&v| w.u32(v));
+        w.f32(self.amount);
+        w.f32(self.time);
         match self.tail {
             DamageTail::None => {}
             DamageTail::Byte(b) => w.u8(b),
@@ -354,9 +374,11 @@ mod tests {
 
     fn damage(tail: DamageTail) -> Damage {
         Damage {
-            unknown1: [1, 2],
+            attacker: 1,
+            credited: 2,
             name: "dmg_bullet".into(),
-            unknown2: [3, 4],
+            amount: 3.0,
+            time: 4.0,
             tail,
         }
     }
@@ -374,7 +396,7 @@ mod tests {
                 old: (2..=6).contains(&version).then_some(0),
                 template: has(7).then(String::new),
                 offset: [1.5, -2.0],
-                unknown1: has(1).then_some(0),
+                replenished: has(1).then_some(0.0),
             }],
             leader: -1,
             morale: 1.0,
@@ -382,9 +404,9 @@ mod tests {
             desired_formation: has(3).then_some(1),
             old: (version == 0).then_some(0),
             fighting: has(4).then(|| Fighting {
-                unknown2: 1.0,
-                unknown3: 0,
-                unknown4: 1,
+                efficiency: 1.0,
+                formation_aggressive: 0,
+                aggressive: 1,
                 damage: damage(DamageTail::Byte(2)),
             }),
             level: has(5).then_some(1.0),
