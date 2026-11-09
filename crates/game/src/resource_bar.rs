@@ -92,19 +92,19 @@ pub fn spawn(
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     commands.insert_resource(Looks {
         shortage: said(
-            "game_events_kingdom_upkeep_shortage_game_message",
+            "game_events_kingdom_upkeep_shortage_game_message|*",
             "Your production is %d%% short of your costs",
         ),
         repaired: said(
-            "game_events_kingdom_upkeep_repaired_game_message",
+            "game_events_kingdom_upkeep_repaired_game_message|*",
             "You have repaired your upkeep",
         ),
         unit_limit: said(
-            "recruit_error_unit_limit",
+            "recruit_error_unit_limit|s",
             "Insufficient unit limit to recruit %s",
         ),
         disabled: said(
-            "structure_error_queue_disabled",
+            "structure_error_queue_disabled|s",
             "%s paused production queue - disabled",
         ),
         names: game

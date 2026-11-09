@@ -400,7 +400,7 @@ pub fn spawn(
     let upkeep = title("ui_tooltip_item_title_upkeep", "Upkeep");
     let requires = title("ui_tooltip_item_title_requires", "Requires");
     let affording = title(
-        "recruit_error_affording",
+        "recruit_error_affording|ss",
         "Insufficient funds for %s. Requires %s.",
     );
     let glyphs: HashMap<&str, Handle<Image>> = GLYPHS
