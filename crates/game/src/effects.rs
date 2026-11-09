@@ -1155,6 +1155,7 @@ mod tests {
             min_range: 0.0,
             recharge: 1.0,
             area: 0.0,
+            max_targets: 0,
             full_within: 0.0,
             edge_damage: 1.0,
             targets: Targets::default(),

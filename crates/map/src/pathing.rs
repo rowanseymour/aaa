@@ -2,6 +2,8 @@
 //! units or ships can cross a tile, and objects that block keep both off
 //! the tiles they cover until they're gone.
 
+use std::cmp::Reverse;
+use std::collections::BinaryHeap;
 use std::collections::HashMap;
 
 use aaa_data::{Id, Shape, Variation};
@@ -139,6 +141,40 @@ pub(crate) fn spanned((lo, hi): ([f32; 2], [f32; 2])) -> impl Iterator<Item = (i
     let (x1, y1) = tile_at([hi[0] - EDGE, hi[1] - EDGE]);
     let (x1, y1) = (x1.max(x0), y1.max(y0));
     (y0..=y1).flat_map(move |y| (x0..=x1).map(move |x| (x, y)))
+}
+
+/// What a diagonal step between tiles costs, in steps straight across.
+const DIAGONAL: f32 = std::f32::consts::SQRT_2;
+
+/// The whole tiles near something, as [`Pathing::zone`] finds them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Zone {
+    /// The tile its box of tiles starts at, and how many it is a side.
+    low: (i32, i32),
+    side: usize,
+    tiles: Vec<bool>,
+}
+
+impl Zone {
+    pub fn has(&self, (x, y): (i32, i32)) -> bool {
+        let (dx, dy) = (x - self.low.0, y - self.low.1);
+        let side = self.side as i32;
+        (0..side).contains(&dx)
+            && (0..side).contains(&dy)
+            && self.tiles[dy as usize * self.side + dx as usize]
+    }
+
+    /// Whether what stands at `at` with no ground of its own is in it: by
+    /// the tile under it.
+    pub fn holds(&self, at: [f32; 2]) -> bool {
+        self.has(tile_at(at))
+    }
+
+    /// Whether something that blocks tiles is in it: by any tile under its
+    /// soft shape's box.
+    pub fn meets(&self, o: &Obstacle) -> bool {
+        spanned(o.bounds(o.soft)).any(|tile| self.has(tile))
+    }
 }
 
 #[derive(Clone)]
@@ -279,6 +315,63 @@ impl Pathing {
             && others.into_iter().all(|other| !other.overlaps(o))
     }
 
+    /// The zone of `radius` around `centre`: the tiles a walk from the one
+    /// under it reaches for less than that, tile to tile, a diagonal step
+    /// costing as much further. The walk keeps to land if it starts on
+    /// land, and off it otherwise, whatever stands on the tiles; a centre
+    /// nothing can stand on has no zone.
+    pub fn zone(&self, centre: [f32; 2], radius: f32) -> Zone {
+        let (cx, cy) = tile_at(centre);
+        let reach = (radius / CELL_SIZE).ceil().max(0.0) as i32;
+        let side = (2 * reach + 1) as usize;
+        let mut zone = Zone {
+            low: (cx - reach, cy - reach),
+            side,
+            tiles: vec![false; side * side],
+        };
+        let Some(start) = self.index(cx, cy).filter(|&i| self.tiles[i] != 0) else {
+            return zone;
+        };
+        let land = self.tiles[start] & LAND != 0;
+        let slot =
+            |x: i32, y: i32| ((y - (cy - reach)) as usize) * side + (x - (cx - reach)) as usize;
+        let mut cost = vec![f32::INFINITY; side * side];
+        cost[slot(cx, cy)] = 0.0;
+        // Nearest first: costs are never negative, so their bits sort as
+        // they do.
+        let mut open = BinaryHeap::from([Reverse((0, cx, cy))]);
+        while let Some(Reverse((bits, x, y))) = open.pop() {
+            let so_far = cost[slot(x, y)];
+            if so_far.to_bits() < bits {
+                continue;
+            }
+            for dy in -1..=1 {
+                for dx in -1..=1 {
+                    let (nx, ny) = (x + dx, y + dy);
+                    let inside = (nx - cx).abs() <= reach && (ny - cy).abs() <= reach;
+                    let same = self.index(nx, ny).is_some()
+                        && self.crossable(nx, ny, Domain::Land) == land;
+                    if (dx, dy) == (0, 0) || !inside || !same {
+                        continue;
+                    }
+                    let step = match dx != 0 && dy != 0 {
+                        true => CELL_SIZE * DIAGONAL,
+                        false => CELL_SIZE,
+                    };
+                    let next = so_far + step;
+                    if next < radius && next < cost[slot(nx, ny)] {
+                        cost[slot(nx, ny)] = next;
+                        open.push(Reverse((next.to_bits(), nx, ny)));
+                    }
+                }
+            }
+        }
+        for (tile, cost) in zone.tiles.iter_mut().zip(&cost) {
+            *tile = *cost < radius;
+        }
+        zone
+    }
+
     /// Keeps movers off the tiles an obstacle covers.
     pub fn block(&mut self, o: &Obstacle) {
         for (x, y) in covered(o) {
@@ -362,6 +455,62 @@ pub fn tile_centre(x: i32, y: i32) -> [f32; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn zones_are_octagons_of_tiles_on_open_ground() {
+        let p = Pathing::uniform(40, Domain::Land);
+        // 8 tiles straight out and 6 along a diagonal, for 18 on 2-unit
+        // tiles.
+        let zone = p.zone([41.0, 41.0], 18.0);
+        assert!(zone.has((28, 20)) && !zone.has((29, 20)));
+        assert!(zone.has((26, 26)) && !zone.has((27, 27)));
+        assert!(zone.has((28, 22)) && !zone.has((28, 23)));
+        assert!(zone.holds([40.5, 25.9]) && !zone.holds([40.5, 23.9]));
+    }
+
+    #[test]
+    fn zones_stop_at_shores_but_not_at_obstacles() {
+        let mut p = Pathing::uniform(40, Domain::Land);
+        // Water down column 22 but for a ford at row 30.
+        for y in (0..40).filter(|&y| y != 30) {
+            let i = p.index(22, y).unwrap();
+            p.tiles[i] = NAVAL;
+        }
+        p.set_blocked(21, 20);
+        let zone = p.zone([41.0, 41.0], 18.0);
+        assert!(zone.has((21, 20)));
+        assert!(!zone.has((22, 20)) && !zone.has((23, 20)));
+        // Round by the ford is too far for most of the far bank.
+        assert!(!zone.has((23, 29)));
+        let wide = p.zone([41.0, 41.0], 40.0);
+        assert!(wide.has((23, 29)) && !wide.has((22, 20)));
+        // From the water it's the water alone.
+        let wet = p.zone([45.0, 41.0], 18.0);
+        assert!(wet.has((22, 15)) && !wet.has((21, 20)) && !wet.has((22, 30)));
+        // And nothing from ground nothing stands on.
+        let i = p.index(5, 5).unwrap();
+        p.tiles[i] = 0;
+        assert!(!p.zone([11.0, 11.0], 18.0).has((5, 5)));
+    }
+
+    #[test]
+    fn blocking_things_are_in_a_zone_by_any_tile_under_them() {
+        let p = Pathing::uniform(40, Domain::Land);
+        let zone = p.zone([41.0, 41.0], 18.0);
+        let rect = Shape::Rect {
+            width: 6.0,
+            height: 6.0,
+        };
+        let house = |x: f32| Obstacle {
+            position: [x, 41.0],
+            facing: [0.0, 1.0],
+            shape: rect,
+            soft: rect,
+        };
+        // Tiles 29 to 31 across, and the zone ends at 28.
+        assert!(!zone.meets(&house(61.0)));
+        assert!(zone.meets(&house(59.0)));
+    }
 
     fn blocked(shape: Shape, facing: [f32; 2]) -> Vec<(i32, i32)> {
         blocked_within(shape, Shape::Circle { radius: 5.0 }, facing)

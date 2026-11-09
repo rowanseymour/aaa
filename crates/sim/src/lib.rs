@@ -14,7 +14,7 @@ use std::f32::consts::{FRAC_PI_4, PI, TAU};
 use aaa_map::pathing::tile_at;
 use aaa_map::{
     DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Shape, Turret,
-    Unpacks, Weapon,
+    Unpacks, Weapon, Zone,
 };
 
 pub use aaa_map::{Player, Relation, Team};
@@ -57,9 +57,6 @@ pub const CAPTURE_HEALTH: f32 = 0.3;
 
 /// How near a moving unit comes to an enemy to run into it.
 pub const CONTACT: f32 = 1.5;
-
-/// How near a packed building has to get to where it was sent to unpack.
-pub const UNPACK_REACH: f32 = 1.5;
 
 /// How near where it was going a unit has to stop to have arrived, and how
 /// near on a move that has to end right there, such as to unpack.
@@ -170,6 +167,8 @@ pub struct Regiment {
     /// Where it's on its way to unpack, and the way the building will
     /// face there.
     pub unpack_at: Option<([f32; 2], [f32; 2])>,
+    /// The tick it asks again for room to unpack, once refused it.
+    unpack_again: Option<u64>,
     /// The building it unpacked into, by index into [`World::buildings`].
     pub unpacked_into: Option<usize>,
     /// For one just put out by a building, the building's rally point, to
@@ -996,6 +995,7 @@ impl World {
             resume: None,
             unpacks: regiment.unpacks.clone(),
             unpack_at: None,
+            unpack_again: None,
             unpacked_into: None,
             rally: None,
         });
@@ -1360,6 +1360,7 @@ impl World {
         let r = &mut self.regiments[regiment];
         r.order = order;
         r.unpack_at = unpack_at;
+        r.unpack_again = None;
         r.rally = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
@@ -1712,24 +1713,39 @@ impl World {
                 self.regiments[r].unpack_at = None;
                 continue;
             }
-            if self.underway(r) {
-                continue;
-            }
-            self.regiments[r].unpack_at = None;
-            let Some(unpacks) = self.regiments[r].unpacks.clone() else {
-                continue;
-            };
-            let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
-            if !within(self.centre(r), stop, UNPACK_REACH)
-                || !self.room_to_unpack(&unpacks, at, facing)
-            {
+            let again = self.regiments[r].unpack_again;
+            if self.underway(r) || again.is_some_and(|tick| self.ticks < tick) {
                 continue;
             }
             // The truck is the regiment's one survivor: the regiment
             // isn't destroyed and holds a single packed building.
-            let Some(truck) = self.survivors(r).next() else {
+            let (Some(unpacks), Some(truck)) =
+                (self.regiments[r].unpacks.clone(), self.survivors(r).next())
+            else {
+                self.regiments[r].unpack_at = None;
                 continue;
             };
+            // It unpacks where it's stopped, if that's where it was sent.
+            let stop = [at[0] + unpacks.offset[0], at[1] + unpacks.offset[1]];
+            let here = self.units[truck].position;
+            let at = unpack_site([here[0] - unpacks.offset[0], here[1] - unpacks.offset[1]]);
+            let there = within(here, stop, ARRIVAL_REACH);
+            if there && !self.room_to_unpack(&unpacks, at, facing) && again.is_none() {
+                self.regiments[r].unpack_again = Some(self.ticks + u64::from(LOOK));
+                continue;
+            }
+            let regiment = &mut self.regiments[r];
+            regiment.unpack_at = None;
+            regiment.unpack_again = None;
+            if !there || !self.room_to_unpack(&unpacks, at, facing) {
+                let player = self.regiments[r].owner;
+                let told = Notice::CannotUnpack {
+                    player,
+                    regiment: r,
+                };
+                self.notices.push(told);
+                continue;
+            }
             let truck_id = self.units[truck].id;
             // It keeps the share of its health it had as a truck.
             let health = self
@@ -1921,7 +1937,7 @@ impl World {
         let mut meetings: Vec<(usize, Enemy)> = Vec::new();
         for &(r, from) in fired_on {
             let reach = self.regiments[r].operational_range;
-            if self.reach(self.centre(r), from) <= reach {
+            if within_strictly(self.centre(r), self.position(from), reach) {
                 let enemy = match from {
                     Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
                     Target::Building(b) => Enemy::Building(b),
@@ -2047,7 +2063,7 @@ impl World {
             let pursued = units(e);
             let near = pursued
                 .iter()
-                .any(|&t| self.reach(here, t) <= regiment.operational_range);
+                .any(|&t| within_strictly(here, self.position(t), regiment.operational_range));
             if let Some(found) = nearest(pursued).filter(|_| near) {
                 return Some(found);
             }
@@ -2087,7 +2103,9 @@ impl World {
             return;
         }
         let reach = PURSUIT_REACH * self.regiments[r].control_range;
-        if within(self.centre(r), self.centre(e), reach) {
+        let zone = self.control_zone(r);
+        let in_control = (self.survivors(e)).any(|u| self.in_zone(&zone, Target::Unit(u)));
+        if in_control && within(self.centre(r), self.centre(e), reach) {
             let enemy = Enemy::Regiment(e);
             self.regiments[r].engaged.push(enemy);
             self.hold(r, enemy);
@@ -2116,8 +2134,7 @@ impl World {
     /// The enemies with something within a regiment's control range that
     /// its members can fire on.
     fn in_control(&self, r: usize) -> Vec<Enemy> {
-        let here = self.centre(r);
-        let reach = self.regiments[r].control_range;
+        let zone = self.control_zone(r);
         let fires_on = |t: Target| {
             self.survivors(r).any(|u| {
                 let f = self.units[u].fighter.iter().flat_map(|f| &f.weapons);
@@ -2132,7 +2149,7 @@ impl World {
                 Target::Building(b) => Enemy::Building(b),
             };
             if !found.contains(&enemy)
-                && self.reach(here, t) <= reach
+                && self.in_zone(&zone, t)
                 && self.hostile(r, enemy)
                 && fires_on(t)
             {
@@ -2140,6 +2157,25 @@ impl World {
             }
         }
         found
+    }
+
+    /// The tiles within a regiment's control range of where it stands.
+    fn control_zone(&self, r: usize) -> Zone {
+        let reach = self.regiments[r].control_range;
+        self.pathing.zone(self.centre(r), reach)
+    }
+
+    /// Whether `t` is in `zone`: by the tile under it, or for what blocks
+    /// tiles any of those under it.
+    fn in_zone(&self, zone: &Zone, t: Target) -> bool {
+        let blocking = match t {
+            Target::Building(b) => self.buildings[b].obstacle.as_ref(),
+            Target::Unit(_) => None,
+        };
+        match blocking {
+            Some(o) => zone.meets(o),
+            None => zone.holds(self.position(t)),
+        }
     }
 
     fn hostile(&self, r: usize, enemy: Enemy) -> bool {
@@ -2158,9 +2194,10 @@ impl World {
         let near = match enemy {
             Enemy::Regiment(e) => self
                 .survivors(e)
-                .any(|u| within(here, self.units[u].position, reach)),
+                .any(|u| within_strictly(here, self.units[u].position, reach)),
             Enemy::Building(b) => {
-                self.buildings[b].standing() && self.buildings[b].distance(here) <= reach
+                let building = &self.buildings[b];
+                building.standing() && within_strictly(here, building.position, reach)
             }
         };
         near && self.hostile(r, enemy)
@@ -2562,9 +2599,10 @@ impl World {
                 continue;
             };
             let s = Target::Building(b);
+            let zone = self.pathing.zone(building.position, near);
             let seen: Vec<Enemy> = self
                 .targets()
-                .filter(|&t| distance(building.position, self.position(t)) <= near)
+                .filter(|&t| self.in_zone(&zone, t))
                 .filter(|&t| {
                     let weapons = &building.fighter.weapons;
                     weapons
@@ -2690,22 +2728,30 @@ impl World {
 
     /// How far apart `s` and `t` are, edge to edge, for `s` to fire on
     /// `t`; `None` where one stands on the other. Between a rectangle and
-    /// anything else, the other counts as the circle round it; of two
-    /// rectangles the smaller does, or `t` if they're as big.
+    /// anything else, the other counts as the circle round it: of two, a
+    /// square beside a rectangle does, else the smaller, or `t` if they're
+    /// as big.
     fn gap(&self, s: Target, t: Target) -> Option<f32> {
         let (from, to) = (self.outline(s), self.outline(t));
-        let is_rect = |o: &Obstacle| matches!(o.shape, Shape::Rect { .. });
-        let (kept, other) = match (is_rect(&from), is_rect(&to)) {
-            (false, false) => {
+        // A rectangle before a square before the rest, then the bigger.
+        let rank = |of: Target, o: &Obstacle| {
+            let square = self.fighter(of).is_some_and(|f| f.target_square);
+            match o.shape {
+                Shape::Rect { .. } if square => 1,
+                Shape::Rect { .. } => 2,
+                _ => 0,
+            }
+        };
+        let (kept, other) = match (rank(s, &from), rank(t, &to)) {
+            (0, 0) => {
                 let apart = distance(from.position, to.position);
                 return Some(apart - bounding_radius(from.shape) - bounding_radius(to.shape));
             }
-            (true, false) => (from, to),
-            (false, true) => (to, from),
-            (true, true) => match bounding_radius(to.shape) > bounding_radius(from.shape) {
-                true => (to, from),
-                false => (from, to),
-            },
+            (a, b) if a < b => (to, from),
+            (a, b) if a == b && bounding_radius(to.shape) > bounding_radius(from.shape) => {
+                (to, from)
+            }
+            _ => (from, to),
         };
         let apart = kept.distance(other.position);
         (apart > 0.0).then(|| apart - bounding_radius(other.shape))
@@ -2764,21 +2810,28 @@ impl World {
             }
             return;
         }
+        let mut reached = Vec::new();
         for target in self.targets() {
             let f = self.fighter(target).expect("targets can fight");
             // To the circle round its soft shape, however it's turned.
-            let d = distance(at, self.position(target)) - bounding_radius(f.soft);
-            let d = d.max(0.0);
+            let middle = distance(at, self.position(target));
+            let d = (middle - bounding_radius(f.soft)).max(0.0);
             if d > weapon.area || target == from || !self.fits(by, &weapon.targets, target) {
                 continue;
             }
-            hits.push(Hit {
-                target,
-                amount: damage(weapon, f, falloff(weapon, d)),
-                from,
-                by,
-            });
+            reached.push((middle, target, damage(weapon, f, falloff(weapon, d))));
         }
+        // Those nearest by their middles, where there's a most it hits.
+        if weapon.max_targets > 0 {
+            reached.sort_by(|a, b| a.0.total_cmp(&b.0));
+            reached.truncate(weapon.max_targets as usize);
+        }
+        hits.extend(reached.into_iter().map(|(_, target, amount)| Hit {
+            target,
+            amount,
+            from,
+            by,
+        }));
     }
 
     /// Hands each city to whoever holds its zone, as long as the side
@@ -2801,14 +2854,14 @@ impl World {
     /// own are in the zone or no enemy of its is, else the side there with
     /// none of its enemies there and no ally there stronger or in danger.
     fn holder(&self, c: usize, zone: f32) -> Option<u32> {
-        let centre = self.buildings[c].position;
+        let zone = self.pathing.zone(self.buildings[c].position, zone);
         let owner = self.buildings[c].owner;
         // Armed occupants, each by its health's share. Independent sides'
         // and nobody's don't count.
         let counts = |o: u32| self.sides.player(o).is_some_and(|p| !p.independent);
         let occupants: Vec<(u32, f32)> = self
             .targets()
-            .filter(|&t| t != Target::Building(c) && self.reach(centre, t) <= zone)
+            .filter(|&t| t != Target::Building(c) && self.in_zone(&zone, t))
             .filter(|&t| counts(self.owner(t)))
             .filter_map(|t| {
                 let f = self.fighter(t).filter(|f| !f.weapons.is_empty())?;
@@ -3442,6 +3495,7 @@ mod tests {
             min_range: 0.0,
             recharge: 2.0,
             area: 0.0,
+            max_targets: 0,
             full_within: 1.0,
             edge_damage: 1.0,
             targets: aaa_map::Targets {
@@ -3478,6 +3532,7 @@ mod tests {
             turrets: Vec::new(),
             soft: Shape::Point,
             target: Shape::Point,
+            target_square: false,
         }
     }
 
@@ -3776,11 +3831,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(w.regiments[0].current_formation(), 1);
-        // Within its control range of 18 from 12, after 1s; its rifle
-        // reaches from 18.
+        // In the tiles its control range of 18 takes in from 14, after 2s;
+        // its rifle reaches from 18.
         run(&mut w, 1.5);
+        assert!(w.regiments[0].engaged.is_empty());
+        run(&mut w, 1.0);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
-        assert!(w.regiments[0].position[1] < 14.0);
+        assert!(w.regiments[0].position[1] < 16.0);
         assert!(w.underway(0));
         run(&mut w, 6.0);
         assert!(!w.units[1].alive());
@@ -3836,7 +3893,8 @@ mod tests {
         .unwrap();
         assert_eq!(w.regiments[0].order, Order::Pursue(1));
         assert_eq!(w.regiments[0].current_formation(), 1);
-        // Away to 38 by 4s; within its control range of 18 after 5s.
+        // Away to 38 by 4s; in the tiles its control range of 18 takes in
+        // after 6s.
         w.apply(
             2,
             Command::Move {
@@ -3845,12 +3903,12 @@ mod tests {
             },
         )
         .unwrap();
-        run(&mut w, 4.5);
+        run(&mut w, 5.5);
         assert!(w.regiments[0].engaged.is_empty());
         assert!(w.units[0].moving());
         run(&mut w, 1.0);
         assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
-        assert!(w.regiments[0].position[1] < 22.0);
+        assert!(w.regiments[0].position[1] < 24.0);
         run(&mut w, 6.0);
         assert!(!w.units[1].alive());
         assert_eq!(w.regiments[0].order, Order::Move);
@@ -4483,6 +4541,65 @@ mod tests {
             ..rifle(1.0, 30.0)
         };
         assert!(w.can_hit(s, &weapon, t));
+    }
+
+    #[test]
+    fn area_shots_hit_no_more_than_their_most_the_nearest_first() {
+        let shell = Weapon {
+            area: 6.0,
+            max_targets: 2,
+            ..rifle(30.0, 40.0)
+        };
+        let mut w = battle(
+            &[1, 2, 2, 2],
+            vec![
+                soldier(vec![shell]),
+                soldier(Vec::new()),
+                soldier(Vec::new()),
+                soldier(Vec::new()),
+            ],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 30.0];
+        w.units[2].position = [14.0, 30.0];
+        w.units[3].position = [7.0, 30.0];
+        w.units[0].target = Some(Target::Unit(1));
+        w.tick();
+        let health: Vec<f32> = w.units[1..].iter().map(|u| u.health).collect();
+        assert_eq!(health, [60.0, 100.0, 60.0]);
+    }
+
+    #[test]
+    fn ranges_keep_a_rectangle_before_a_bigger_square() {
+        let mut hall = building(20, 2, [10.0, 10.0]);
+        hall.fighter.target_square = true;
+        let mut shed = building(21, 2, [10.0, 25.0]);
+        shed.fighter.target = Shape::Rect {
+            width: 2.0,
+            height: 4.0,
+        };
+        let w = siege(&[hall, shed]);
+        // To the shed's wall 13 off, less the circle round the hall.
+        let (hall, shed) = (Target::Building(0), Target::Building(1));
+        let round = libm::hypotf(6.0, 6.0) / 2.0;
+        assert!((w.gap(hall, shed).unwrap() - (13.0 - round)).abs() < 1e-5);
+        assert_eq!(w.gap(hall, shed), w.gap(shed, hall));
+    }
+
+    #[test]
+    fn regiments_answer_fire_only_from_nearer_than_their_operational_range() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(Vec::new()), soldier(vec![rifle(40.0, 10.0)])],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 44.0];
+        w.tick();
+        assert!(w.units[0].health < 100.0);
+        assert!(w.regiments[0].engaged.is_empty());
+        w.units[1].position = [10.0, 43.9];
+        run(&mut w, 2.0);
+        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
     }
 
     #[test]
@@ -5199,6 +5316,28 @@ mod tests {
             assert_eq!(w.buildings.len(), 1, "{at:?}: {:?}", w.units[0].position);
             assert_eq!(w.buildings[0].position, at);
         }
+    }
+
+    #[test]
+    fn trucks_left_no_room_ask_again_then_say_they_cant_unpack() {
+        let mut w = headquarters();
+        let mut t = truck();
+        t.owner = 1;
+        t.renumber(9);
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        w.order_unpack(1, r, [30.0, 40.0], NORTH).unwrap();
+        // Something goes up there before it arrives.
+        w.add_buildings(&[building(40, 1, [30.0, 40.0])]);
+        run(&mut w, 4.0);
+        assert!(w.regiments[r].unpack_at.is_some() && w.notices.is_empty());
+        run(&mut w, 1.5);
+        assert!(w.regiments[r].unpack_at.is_none() && w.units[0].alive());
+        let told = Notice::CannotUnpack {
+            player: 1,
+            regiment: r,
+        };
+        assert_eq!(w.notices, [told]);
     }
 
     #[test]
