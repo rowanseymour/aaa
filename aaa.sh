@@ -3,11 +3,11 @@
 # it's run in.
 set -e
 root=$(git rev-parse --show-toplevel)
-data=$AAA_DATA
+data=$AAA_INSTALL
 
 usage() {
     echo "usage: $0 game|editor [map] [--data=dir] [app options...]" >&2
-    echo "  --data=dir  path to your legally owned copy of the game (default: \$AAA_DATA)" >&2
+    echo "  --data=dir  path to your legally owned copy of the game (default: \$AAA_INSTALL)" >&2
     exit 2
 }
 
