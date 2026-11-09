@@ -2023,8 +2023,9 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
         .find_map(|p| p.attack_height)
         .unwrap_or(1.45);
     let turrets = thing.performer_component.iter().flat_map(|p| &p.turret);
+    let name = thing.ids.as_ref().map_or("?", Id::as_str);
     let turrets: Vec<(Option<&Id>, Turret)> = turrets
-        .map(|t| (t.turret_ids.as_ref(), turret(t)))
+        .map(|t| (t.turret_ids.as_ref(), turret(name, t)))
         .collect();
     fighter.turrets = turrets.iter().map(|(_, t)| t.clone()).collect();
     let performs = thing.performer_component.iter().flat_map(|p| &p.ability);
@@ -2071,11 +2072,13 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
                 .as_deref()
                 .is_some_and(|ids| !ids.eq_ignore_ascii_case("null")),
             turret_point: not_null(a.turret_ids.as_deref().map(Id::from)),
-            aimed_by: a
-                .turret_ids
-                .as_deref()
-                .map(Id::from)
-                .and_then(|ids| turrets.iter().position(|(t, _)| *t == Some(&ids))),
+            aimed_by: not_null(a.turret_ids.as_deref().map(Id::from)).and_then(|ids| {
+                let found = turrets.iter().position(|(t, _)| *t == Some(&ids));
+                if found.is_none() {
+                    log::warn!("{name}: no turret {ids} to aim its ability");
+                }
+                found
+            }),
             spawn_position: a.spawn_position.unwrap_or_default(),
             sounds: cues(&d.when_do),
             effects: WeaponEffects {
@@ -2093,8 +2096,13 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
 
 /// A turret's yaw fields must each be 0 to 360 degrees; those outside are
 /// taken to the nearer end.
-fn turret(t: &defs::Turret) -> Turret {
-    let degrees = |d: f32| d.clamp(0.0, 360.0).to_radians();
+fn turret(thing: &str, t: &defs::Turret) -> Turret {
+    let degrees = |d: f32| {
+        if !(0.0..=360.0).contains(&d) {
+            log::warn!("{thing}: turret yaw field {d} isn't within 0 to 360 degrees");
+        }
+        d.clamp(0.0, 360.0).to_radians()
+    };
     Turret {
         turn_rate: degrees(t.yaw_rotation_per_sec_degrees),
         sweep: degrees(t.yaw_rotation_range_degrees),

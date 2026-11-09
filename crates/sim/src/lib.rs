@@ -660,7 +660,7 @@ impl TurretAim {
         let step = turret.turn_rate * TICK;
         let left = wrap(yaw - self.yaw);
         if left.abs() <= step {
-            self.yaw = yaw;
+            self.yaw = wrap(yaw);
             return true;
         }
         self.yaw = wrap(self.yaw + step.copysign(left));
@@ -854,7 +854,7 @@ impl World {
                 reloads: vec![0.0; b.fighter.weapons.len()],
                 turrets: (b.fighter.turrets.iter())
                     .map(|t| TurretAim {
-                        yaw: t.start,
+                        yaw: wrap(t.start),
                         idle: 0.0,
                     })
                     .collect(),
@@ -2068,6 +2068,11 @@ impl World {
             .map(Target::Building);
         let shooters: Vec<Target> = self.targets().chain(disabled).collect();
         for s in shooters {
+            // Nothing aiming reads turrets' yaw, so it's left out meanwhile.
+            let mut turrets = match s {
+                Target::Building(b) => std::mem::take(&mut self.buildings[b].turrets),
+                Target::Unit(_) => Vec::new(),
+            };
             let fighter = match s {
                 Target::Unit(u) => self.units[u].fighter.as_ref(),
                 Target::Building(b) => Some(&self.buildings[b].fighter),
@@ -2084,11 +2089,9 @@ impl World {
                 }
             };
             let by = self.owner(s);
-            let mut turrets = match s {
-                Target::Building(b) => self.buildings[b].turrets.clone(),
-                Target::Unit(_) => Vec::new(),
-            };
-            let mut turned = vec![false; turrets.len()];
+            for aim in &mut turrets {
+                aim.idle += TICK;
+            }
             for (w, weapon) in fighter.weapons.iter().enumerate() {
                 reloads[w] = (reloads[w] - TICK).max(0.0);
                 if reloads[w] > 0.0 || moving && !weapon.turret {
@@ -2102,7 +2105,7 @@ impl World {
                 if let (Target::Building(b), Some(i)) = (s, weapon.aimed_by) {
                     let building = &self.buildings[b];
                     let turret = &building.fighter.turrets[i];
-                    turned[i] = true;
+                    turrets[i].idle = 0.0;
                     let pointing = match building.yaw_to(turret, self.position(t)) {
                         Some(yaw) => turrets[i].turn(turret, yaw),
                         None => true,
@@ -2125,13 +2128,7 @@ impl World {
                 }
                 Target::Building(b) => {
                     let b = &mut self.buildings[b];
-                    for (i, (aim, turret)) in turrets.iter_mut().zip(&b.fighter.turrets).enumerate()
-                    {
-                        if turned[i] {
-                            aim.idle = 0.0;
-                            continue;
-                        }
-                        aim.idle += TICK;
+                    for (aim, turret) in turrets.iter_mut().zip(&b.fighter.turrets) {
                         if turret.reset.is_some_and(|r| aim.idle > r) {
                             aim.turn(turret, turret.start);
                         }
@@ -3980,6 +3977,34 @@ mod tests {
         assert_eq!(w.units[0].health, 90.0);
         run(&mut w, 1.0);
         assert_eq!(w.units[0].health, 80.0);
+    }
+
+    #[test]
+    fn weapons_sharing_a_turret_each_turn_it() {
+        // Two rifles on one turret turn it 90° in half a second, not one.
+        let mut w = turreted(90.0, 360.0);
+        let rifle = w.buildings[0].fighter.weapons[0].clone();
+        w.buildings[0].fighter.weapons.push(rifle);
+        w.buildings[0].reloads.push(0.0);
+        run(&mut w, 0.4);
+        assert_eq!(w.units[0].health, 100.0);
+        run(&mut w, 0.2);
+        assert_eq!(w.buildings[0].turrets[0].yaw, 0.0);
+        assert_eq!(w.units[0].health, 80.0);
+    }
+
+    #[test]
+    fn turrets_that_never_turn_fire_only_in_line() {
+        let mut w = turreted(90.0, 360.0);
+        w.buildings[0].fighter.turrets[0].turn_rate = 0.0;
+        run(&mut w, 3.0);
+        assert_eq!(w.units[0].health, 100.0);
+        assert_eq!(w.buildings[0].turrets[0].yaw, 90f32.to_radians());
+        // Straight ahead of one pointing ahead.
+        let mut w = turreted(0.0, 360.0);
+        w.buildings[0].fighter.turrets[0].turn_rate = 0.0;
+        w.tick();
+        assert_eq!(w.units[0].health, 90.0);
     }
 
     #[test]

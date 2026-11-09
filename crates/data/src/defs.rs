@@ -368,7 +368,7 @@ pub struct Turret {
     pub reset_time: f32,
     #[serde(default = "yes")]
     pub can_reset: bool,
-    /// Where it stands from its object: ahead, then to the left.
+    /// Where it stands on its object, as [`crate::Turret::offset`] reads it.
     pub offset: Option<[f32; 2]>,
 }
 
