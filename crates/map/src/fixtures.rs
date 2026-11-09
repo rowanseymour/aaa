@@ -66,7 +66,7 @@ pub(crate) fn organization(layout: &str, members: Vec<Thing>) -> tgck::map::Orga
                 old: None,
                 template: Some(String::new()),
                 offset: [0.0, 0.0],
-                unknown1: Some(0),
+                replenished: Some(0.0),
             })
             .collect(),
         members,

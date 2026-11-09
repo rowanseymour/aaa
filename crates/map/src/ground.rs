@@ -342,7 +342,7 @@ mod tests {
             min: 0.0,
             max: 0.0,
             default: 0.0,
-            unknown: 0,
+            resolution_bits: 0,
             side,
             heights: vec![height; side * side],
             layer: vec![0; side * side],
@@ -367,7 +367,7 @@ mod tests {
         }
         let terrain = Terrain {
             version: 7,
-            unknown: 0,
+            resolution_bits: 0,
             biome: String::new(),
             names: vec!["grass".into(), "rock".into(), "sea".into()],
             side: tiles,
