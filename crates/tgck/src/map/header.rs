@@ -31,7 +31,8 @@ pub struct MapHeader {
     pub app_id: String,
     /// The edition of the game that saved it, e.g. `North America AA Dev`.
     pub edition: String,
-    pub unknown: u8,
+    /// Kept and saved again, but never read.
+    pub unused: u8,
     /// The map's path when it was saved.
     pub path: String,
     /// The campaign a saved game belongs to; empty for none.
@@ -180,7 +181,7 @@ impl MapHeader {
             app_version: cur.string()?,
             app_id: cur.string()?,
             edition: cur.string()?,
-            unknown: cur.u8()?,
+            unused: cur.u8()?,
             path: cur.string()?,
             campaign: cur.string()?,
             campaign_mission: (version >= 6).then(|| cur.i32()).transpose()?,
@@ -224,7 +225,7 @@ impl MapHeader {
         w.string(&self.app_version)?;
         w.string(&self.app_id)?;
         w.string(&self.edition)?;
-        w.u8(self.unknown);
+        w.u8(self.unused);
         w.string(&self.path)?;
         w.string(&self.campaign)?;
         optional(
@@ -560,7 +561,7 @@ pub(super) mod tests {
             app_version: "0.3.1.0".into(),
             app_id: "A&A".into(),
             edition: "Dev AA Dev".into(),
-            unknown: 0,
+            unused: 0,
             path: "Maps/test.RMP".into(),
             campaign: String::new(),
             campaign_mission: (version >= 6).then_some(-1),

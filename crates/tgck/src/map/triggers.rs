@@ -18,8 +18,8 @@ pub struct Triggers {
     pub variables: Vec<(String, f32)>,
     /// Version 4 only.
     pub legacy: Option<(String, u32)>,
-    /// From version 5 on.
-    pub unknown_strings: Option<Vec<String>>,
+    /// From version 5 on; kept and saved again, but never read.
+    pub unused_strings: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -178,7 +178,7 @@ impl Triggers {
             legacy: (version == 4)
                 .then(|| Ok::<_, Error>((cur.string()?, cur.u32()?)))
                 .transpose()?,
-            unknown_strings: (version >= 5).then(|| cur.strings()).transpose()?,
+            unused_strings: (version >= 5).then(|| cur.strings()).transpose()?,
         };
         cur.finish("TRIGGERS")?;
         Ok(triggers)
@@ -203,8 +203,8 @@ impl Triggers {
         })?;
         optional(
             version >= 5,
-            "unknown_strings",
-            self.unknown_strings.as_ref(),
+            "unused_strings",
+            self.unused_strings.as_ref(),
             |ss| w.strings(ss),
         )?;
         Ok(w.0)
@@ -376,7 +376,7 @@ pub(super) mod tests {
             }],
             variables: vec![("count".into(), 2.0)],
             legacy: (version == 4).then(|| (String::new(), 0)),
-            unknown_strings: (version >= 5).then(|| vec!["x".into()]),
+            unused_strings: (version >= 5).then(|| vec!["x".into()]),
         }
     }
 

@@ -394,7 +394,8 @@ pub struct Snapshot {
 pub struct SavedGroup {
     /// Its digits are the group's number.
     pub name: String,
-    pub unknown: String,
+    /// The name it's shown by, "Group N" in the player's language.
+    pub display_name: String,
     /// The actors' thing ids.
     pub ids: Vec<u32>,
     /// Whether the units move together as one group.
@@ -420,8 +421,10 @@ pub struct Ability {
     pub use_count: u32,
     /// The game time it was last used; -1000 or the lowest f32 for never.
     pub last_used: f32,
-    pub unknown: u32,
-    pub unknown2: u8,
+    /// Never used.
+    pub unused1: u32,
+    /// Never used.
+    pub unused2: u8,
     /// The things it's acting on; from version 1 on.
     pub active_targets: Option<Vec<u32>>,
 }
@@ -782,7 +785,7 @@ impl SavedGroup {
         expect(cur, "saved group version", 0)?;
         Ok(SavedGroup {
             name: cur.string()?,
-            unknown: cur.string()?,
+            display_name: cur.string()?,
             ids: cur.u32s()?,
             grouped: bool(cur, "grouped")?,
             group_thing: cur.u32()?,
@@ -792,7 +795,7 @@ impl SavedGroup {
     fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(0);
         w.string(&self.name)?;
-        w.string(&self.unknown)?;
+        w.string(&self.display_name)?;
         w.u32s(&self.ids);
         w.u8(self.grouped.into());
         w.u32(self.group_thing);
@@ -831,8 +834,8 @@ impl Ability {
             version,
             use_count: cur.u32()?,
             last_used: cur.f32()?,
-            unknown: cur.u32()?,
-            unknown2: cur.u8()?,
+            unused1: cur.u32()?,
+            unused2: cur.u8()?,
             active_targets: (version >= 1).then(|| cur.u32s()).transpose()?,
         })
     }
@@ -841,8 +844,8 @@ impl Ability {
         w.u32(self.version);
         w.u32(self.use_count);
         w.f32(self.last_used);
-        w.u32(self.unknown);
-        w.u8(self.unknown2);
+        w.u32(self.unused1);
+        w.u8(self.unused2);
         if let Some(targets) = &self.active_targets {
             w.u32s(targets);
         }
@@ -1024,8 +1027,8 @@ pub(super) mod tests {
                 version: 1,
                 use_count: 2,
                 last_used: 1.5,
-                unknown: 0,
-                unknown2: 1,
+                unused1: 0,
+                unused2: 1,
                 active_targets: Some(vec![9]),
             }
             .write(w);
@@ -1042,10 +1045,11 @@ pub(super) mod tests {
         Property {
             class: 0,
             version: 3,
-            unknown: 1,
-            unknown2: Some(2),
+            gained_at: 1.0,
+            source: Some(2),
             id: "tech_armor".into(),
-            unknown3: Some((1, 0)),
+            duplicate: Some(1),
+            from_actor: Some(0),
             extra: None,
         }
         .write_body(w)

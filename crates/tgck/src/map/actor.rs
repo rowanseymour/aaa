@@ -216,14 +216,21 @@ pub struct Property {
     /// 0, or 1 for the kind with an extra value.
     pub class: u32,
     pub version: u32,
-    pub unknown: u32,
-    /// From version 1 on.
-    pub unknown2: Option<u32>,
+    /// The game time the actor gained it.
+    pub gained_at: f32,
+    /// From version 1 on: where it came from, e.g. 1 an ability's effect, 2
+    /// granted kingdom-wide (technology and the like), 5 the terrain the
+    /// actor stands on, 9 its stance.
+    pub source: Option<u32>,
     /// The shared property data's id.
     pub id: String,
-    /// From version 2 on.
-    pub unknown3: Option<(u8, u32)>,
-    /// Class 1 from version 3 on.
+    /// From version 2 on: set when the actor already held it from the same
+    /// source, so this copy adds nothing.
+    pub duplicate: Option<u8>,
+    /// From version 2 on: the thing id of the actor it came from; 0 for none.
+    pub from_actor: Option<u32>,
+    /// Class 1 from version 3 on: a second actor's thing id, set when an
+    /// ability hands the property over.
     pub extra: Option<u32>,
 }
 
@@ -663,12 +670,11 @@ impl Property {
         Ok(Property {
             class,
             version,
-            unknown: cur.u32()?,
-            unknown2: (version >= 1).then(|| cur.u32()).transpose()?,
+            gained_at: cur.f32()?,
+            source: (version >= 1).then(|| cur.u32()).transpose()?,
             id: cur.string()?,
-            unknown3: (version >= 2)
-                .then(|| Result::<_>::Ok((cur.u8()?, cur.u32()?)))
-                .transpose()?,
+            duplicate: (version >= 2).then(|| cur.u8()).transpose()?,
+            from_actor: (version >= 2).then(|| cur.u32()).transpose()?,
             extra: (class == 1 && version >= 3)
                 .then(|| {
                     expect(cur, "property extra version", 0)?;
@@ -687,13 +693,15 @@ impl Property {
     /// Writes the property after its class.
     pub(super) fn write_body(&self, w: &mut Writer) -> Result<()> {
         w.u32(self.version);
-        w.u32(self.unknown);
-        if let Some(v) = self.unknown2 {
+        w.f32(self.gained_at);
+        if let Some(v) = self.source {
             w.u32(v);
         }
         w.string(&self.id)?;
-        if let Some((flag, v)) = self.unknown3 {
-            w.u8(flag);
+        if let Some(v) = self.duplicate {
+            w.u8(v);
+        }
+        if let Some(v) = self.from_actor {
             w.u32(v);
         }
         if let Some(v) = self.extra {
@@ -1446,10 +1454,11 @@ mod tests {
         let property = |class, extra| Property {
             class,
             version: 3,
-            unknown: 1,
-            unknown2: Some(2),
+            gained_at: 1.0,
+            source: Some(2),
             id: "tech_armor".into(),
-            unknown3: Some((1, 3)),
+            duplicate: Some(1),
+            from_actor: Some(3),
             extra,
         };
         let properties = Component::Properties(Properties {
