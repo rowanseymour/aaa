@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use bevy::light::NotShadowCaster;
+use bevy::math::Affine3A;
 use bevy::mesh::skinning::{SkinnedMesh, SkinnedMeshInverseBindposes};
 use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
@@ -44,11 +45,54 @@ struct RigMesh {
     part: Part,
     /// The node a rigid mesh is built relative to.
     node: Option<usize>,
-    /// The node index of each of the skin's bones.
-    skin: Option<(Vec<usize>, Handle<SkinnedMeshInverseBindposes>)>,
+    skin: Option<Skin>,
     /// Where a skinned mesh sits as modelled. Skinning places the vertices
     /// by their bones instead, so this only matters for culling.
     transform: Transform,
+}
+
+/// A mesh's hold on the nodes that bend it.
+struct Skin {
+    /// The node index of each of its bones.
+    bones: Vec<usize>,
+    poses: Handle<SkinnedMeshInverseBindposes>,
+    /// Set where the mesh isn't drawn at its bones.
+    apart: Option<Apart>,
+}
+
+/// How a skinned mesh is carried away from its bones: what its bones make
+/// of it is measured from its skeleton's root, moved by the skin's own
+/// transform, and then placed where the mesh itself is in the model.
+struct Apart {
+    /// The node index of the skeleton's root.
+    root: usize,
+    /// The node the mesh hangs from.
+    node: usize,
+    /// The mesh's own transform under that node, after the skin's.
+    below: Affine3A,
+}
+
+/// The transform left between a skinned mesh and its bones as modelled,
+/// from where the mesh and its skeleton's root are in the model and the
+/// skin's own transform; `None` where they cancel out, as in most skins.
+fn left_over(
+    shape: &nif::Transform,
+    skin: &nif::Transform,
+    root: &nif::Transform,
+) -> Option<nif::Transform> {
+    let left = shape.then(skin).then(&root.inverse());
+    let moved = [[0.0; 3], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+        .into_iter()
+        .any(|p| {
+            let q = left.apply(p);
+            (0..3).any(|i| (q[i] - p[i]).abs() > 1e-3)
+        });
+    moved.then_some(left)
+}
+
+/// A model-space transform as a Bevy matrix.
+fn affine(t: &nif::Transform) -> Affine3A {
+    Affine3A::from_mat4(bevy_transform(t).to_matrix())
 }
 
 /// One `.kf` sequence, bound to a rig's nodes by name.
@@ -258,7 +302,7 @@ impl Nodes {
                 let skinned = nif
                     .get_as::<nif::Shape>(Some(shape))
                     .is_some_and(|s| s.skin.is_some());
-                let skin = self.skin(nif, shape, &part.mesh, assets, skins);
+                let skin = self.skin(nif, shape, node, &model, &part.mesh, assets, skins);
                 // A skin that can't be bound stands as it was modelled.
                 let (node, transform) = match skinned {
                     true => (None, bevy_transform(&model)),
@@ -283,17 +327,20 @@ impl Nodes {
         })
     }
 
-    /// Binds the mesh of a skinned shape to its bones: their nodes and
-    /// inverse bind poses, with each vertex's four strongest weights added
-    /// to the mesh.
+    /// Binds the mesh of a skinned shape under rig node `node`, at `model`
+    /// in the model, to its bones: their nodes and inverse bind poses, with
+    /// each vertex's four strongest weights added to the mesh.
+    #[allow(clippy::too_many_arguments)]
     fn skin(
         &self,
         nif: &Nif,
         shape: usize,
+        node: usize,
+        model: &nif::Transform,
         mesh: &Handle<Mesh>,
         assets: &mut Assets<Mesh>,
         skins: &mut Assets<SkinnedMeshInverseBindposes>,
-    ) -> Option<(Vec<usize>, Handle<SkinnedMeshInverseBindposes>)> {
+    ) -> Option<Skin> {
         let shape = nif.get_as::<nif::Shape>(Some(shape))?;
         let instance = nif.get_as::<nif::SkinInstance>(shape.skin)?;
         let data = nif.get_as::<nif::SkinData>(instance.data)?;
@@ -343,7 +390,21 @@ impl Nodes {
             .iter()
             .map(|b| bevy_transform(&b.transform).to_matrix())
             .collect();
-        Some((joints, skins.add(SkinnedMeshInverseBindposes::from(poses))))
+        // Skins that name a root outside the rig are drawn at their bones.
+        let apart = instance.skeleton_root.and_then(|r| {
+            let root = *self.index.get(&r)?;
+            left_over(model, &data.transform, &self.frames.0.get(&r)?.model)?;
+            Some(Apart {
+                root,
+                node,
+                below: affine(&shape.av.transform) * affine(&data.transform),
+            })
+        });
+        Some(Skin {
+            bones: joints,
+            poses: skins.add(SkinnedMeshInverseBindposes::from(poses)),
+            apart,
+        })
     }
 
     /// The keyframes and paths on the model's own nodes, looping as each
@@ -489,12 +550,40 @@ impl Rig {
             if mesh.part.blended {
                 child.insert(NotShadowCaster);
             }
-            if let Some((bones, poses)) = &mesh.skin {
+            let Some(skin) = &mesh.skin else { continue };
+            let bones: Vec<Entity> = skin.bones.iter().map(|&b| joints[b]).collect();
+            let Some(apart) = &skin.apart else {
                 child.insert(SkinnedMesh {
-                    inverse_bindposes: poses.clone(),
-                    joints: bones.iter().map(|&b| joints[b]).collect(),
+                    inverse_bindposes: skin.poses.clone(),
+                    joints: bones,
                 });
-            }
+                continue;
+            };
+            // The mesh follows stand-ins for its bones, which
+            // [`carry_skins`] places; with no transform of their own, they
+            // aren't placed by their parent.
+            let child = child.id();
+            let stand_ins: Vec<Entity> = bones
+                .iter()
+                .map(|_| {
+                    commands
+                        .spawn((GlobalTransform::default(), ChildOf(root)))
+                        .id()
+                })
+                .collect();
+            commands.entity(child).insert((
+                SkinnedMesh {
+                    inverse_bindposes: skin.poses.clone(),
+                    joints: stand_ins.clone(),
+                },
+                Carried {
+                    root: joints[apart.root],
+                    node: joints[apart.node],
+                    below: apart.below,
+                    bones,
+                    stand_ins,
+                },
+            ));
         }
         commands.entity(root).insert(Playing {
             rig: self.clone(),
@@ -531,6 +620,37 @@ fn pose<'a>(
     t: f32,
 ) -> nif::Transform {
     channels.into_iter().fold(rest, |pose, c| c.pose(&pose, t))
+}
+
+/// A skinned mesh drawn away from its bones, on the mesh.
+#[derive(Component)]
+pub struct Carried {
+    root: Entity,
+    node: Entity,
+    below: Affine3A,
+    bones: Vec<Entity>,
+    /// What the mesh is bound to instead of each bone.
+    stand_ins: Vec<Entity>,
+}
+
+/// Puts the stand-ins for each [`Carried`] mesh's bones where its bones
+/// are, carried from its skeleton's root to where the mesh itself is. Runs
+/// once transforms are propagated.
+pub fn carry_skins(skins: Query<&Carried>, mut places: Query<&mut GlobalTransform>) {
+    for skin in &skins {
+        let (Ok(node), Ok(root)) = (places.get(skin.node), places.get(skin.root)) else {
+            continue;
+        };
+        let carry = node.affine() * skin.below * root.affine().inverse();
+        for (&bone, &stand_in) in skin.bones.iter().zip(&skin.stand_ins) {
+            let Ok(bone) = places.get(bone).map(|b| b.affine()) else {
+                continue;
+            };
+            if let Ok(mut place) = places.get_mut(stand_in) {
+                *place = GlobalTransform::from(carry * bone);
+            }
+        }
+    }
 }
 
 /// Squashes `transform` onto the one axis `pose` has left, where a path has
@@ -688,6 +808,7 @@ pub fn play(time: Res<Time>, mut rigs: Query<&mut Playing>, mut transforms: Quer
 #[cfg(test)]
 mod tests {
     use super::*;
+    use bevy::ecs::system::RunSystemOnce;
     use nif::{Interpolation, Key, PathSettings, SceneObject};
 
     fn node(name: &str, controller: nif::Ref, children: Vec<nif::Ref>) -> Object {
@@ -829,6 +950,49 @@ mod tests {
                 ..nif::Transform::IDENTITY
             },
         }
+    }
+
+    #[test]
+    fn skins_are_apart_from_their_bones_only_by_what_is_left_over() {
+        let at = |translation: [f32; 3]| nif::Transform {
+            translation,
+            ..nif::Transform::IDENTITY
+        };
+        // Bound where it is: the skin's transform undoes the mesh's place.
+        let (shape, skin) = (at([1.0, 2.0, 3.0]), at([-1.0, -2.0, -3.0]));
+        assert_eq!(left_over(&shape, &skin, &nif::Transform::IDENTITY), None);
+        // An owl modelled 10 up, bound at its bones.
+        let up = at([0.0, 0.0, 10.0]);
+        let left = left_over(&up, &nif::Transform::IDENTITY, &nif::Transform::IDENTITY);
+        assert_eq!(left.map(|t| t.translation), Some([0.0, 0.0, 10.0]));
+        // Measured from the skeleton's root, wherever that is.
+        assert_eq!(left_over(&up, &nif::Transform::IDENTITY, &up), None);
+    }
+
+    #[test]
+    fn carried_skins_follow_their_bones_from_where_the_mesh_is() {
+        let mut world = World::new();
+        let at = |v: Vec3| GlobalTransform::from(Transform::from_translation(v));
+        // The whole model stands at x = 100; the mesh's node is 10 above
+        // the skeleton's root and a bone is 2 ahead of it.
+        let root = world.spawn(at(Vec3::new(100.0, 0.0, 0.0))).id();
+        let node = world.spawn(at(Vec3::new(100.0, 10.0, 0.0))).id();
+        let bone = world.spawn(at(Vec3::new(100.0, 0.0, 2.0))).id();
+        let stand_in = world.spawn(GlobalTransform::default()).id();
+        world.spawn(Carried {
+            root,
+            node,
+            below: Affine3A::IDENTITY,
+            bones: vec![bone],
+            stand_ins: vec![stand_in],
+        });
+        world.run_system_once(carry_skins).expect("runs");
+        let placed = world.get::<GlobalTransform>(stand_in).expect("placed");
+        assert!(
+            placed
+                .translation()
+                .abs_diff_eq(Vec3::new(100.0, 10.0, 2.0), 1e-5)
+        );
     }
 
     #[test]
