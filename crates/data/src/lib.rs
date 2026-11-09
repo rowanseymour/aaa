@@ -246,6 +246,9 @@ pub struct Fighter {
     pub weapons: Vec<Weapon>,
     /// How high above it its attacks start, where they don't say.
     pub attack_height: f32,
+    /// For one that defends itself, how near something must come for it to
+    /// notice it, and so ever fire on it.
+    pub notice: Option<f32>,
 }
 
 /// An attack a fighter makes by itself on what comes in range.
@@ -1961,6 +1964,8 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
         defense: body.defense.unwrap_or(0.0),
         capturable: body.captureable.unwrap_or(false),
         destructible: body.destructible.unwrap_or(true),
+        notice: (thing.defender_component.as_ref())
+            .map(|d| d.control_range.unwrap_or(0.0).max(0.0)),
         ..Fighter::default()
     };
     let properties = thing.properties_component.iter().flat_map(|c| {
@@ -1994,7 +1999,9 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
     fighter.attack_height = (thing.performer_component.iter())
         .find_map(|p| p.attack_height)
         .unwrap_or(1.45);
-    let abilities = thing.performer_component.iter().flat_map(|p| &p.ability);
+    let performs = thing.performer_component.iter().flat_map(|p| &p.ability);
+    let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
+    let abilities = performs.chain(defends);
     for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
         let attack = d
             .ability_type
@@ -3447,6 +3454,26 @@ mod tests {
             [("a/a.tgi", "jeep", Some(50.0)), ("b/b.tgi", "tank", None),]
         );
         assert!(definitions.properties.contains_key(&Id::from("vehicle")));
+    }
+
+    #[test]
+    fn fighters_take_weapons_from_defenders() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = hq\n\t[BodyComponent]\n\thealth = 3500\n\
+             \t[DefenderComponent]\n\t{\n\t\tcontrol_range = 20\n\t\t[Ability]\n\t\t{\n\
+             \t\t\tturret_ids = Turret\n\t\t\t[AbilityDefinition]\n\t\t\t{\n\
+             \t\t\t\tability_type = attack\n\t\t\t\trange = 20\n\t\t\t\trecharge_time = 2\n\
+             \t\t\t\t[Effect]\n\t\t\t\ttype = MAIN_DAMAGE\n\t\t\t\tdamage_type_IDS = pierce\n\
+             \t\t\t\tamount = 20\n\t\t\t}\n\t\t}\n\t}\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        let hq = fighter(&thing, &HashMap::new()).unwrap();
+        assert_eq!(hq.notice, Some(20.0));
+        let gun = &hq.weapons[0];
+        assert_eq!((gun.range, gun.recharge), (20.0, 2.0));
+        assert!(gun.turret);
     }
 
     #[test]

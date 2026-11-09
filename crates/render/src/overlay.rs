@@ -32,6 +32,8 @@ pub struct OverlayImages {
     pub square: Option<Handle<Image>>,
     /// A unit's health bar, full first and empty last.
     pub health: Vec<Handle<Image>>,
+    /// A building's, the same but longer.
+    pub building_health: Vec<Handle<Image>>,
 }
 
 /// The share of the square image's size between each edge and its outline.
@@ -40,6 +42,9 @@ pub const SQUARE_INSET: f32 = 34.0 / 256.0;
 /// A unit's health bar's width and height in world units; they're drawn
 /// that size at the unit, but square to the screen.
 pub const HEALTH_BAR: Vec2 = Vec2::new(1.12, 0.16);
+
+/// A building's health bar's, likewise.
+pub const BUILDING_HEALTH_BAR: Vec2 = Vec2::new(3.35, 0.16);
 
 impl OverlayImages {
     pub fn load(
@@ -53,34 +58,47 @@ impl OverlayImages {
         };
         let ring = texture("Effects/Selection/FocusedCircle.dds");
         let square = texture("Effects/Selection/FocusedSquare.dds");
-        const BAR: &str = "Effects/HealthBar/HealthBar.nif";
-        let health = game
-            .read(BAR)
-            .and_then(|b| Nif::parse(&b).map_err(|e| warn!("{BAR}: {e}")).ok())
-            .map(|nif| frames(&nif, formats))
-            .unwrap_or_default()
-            .into_iter()
-            .map(|i| images.add(i))
-            .collect();
+        let mut bar = |name: &str| -> Vec<Handle<Image>> {
+            game.read(name)
+                .and_then(|b| Nif::parse(&b).map_err(|e| warn!("{name}: {e}")).ok())
+                .map(|nif| frames(&nif, formats))
+                .unwrap_or_default()
+                .into_iter()
+                .map(|i| images.add(i))
+                .collect()
+        };
+        let health = bar("Effects/HealthBar/HealthBar.nif");
+        let building_health = bar("Effects/HealthBar/HealthBarMedium.nif");
         OverlayImages {
             ring,
             square,
             health,
+            building_health,
         }
     }
 
     /// The health bar for a unit with `share` of its health left.
     pub fn health_bar(&self, share: f32) -> Option<&Handle<Image>> {
-        let last = self.health.len().checked_sub(1)?;
-        let empty = ((1.0 - share.clamp(0.0, 1.0)) * last as f32).round() as usize;
-        // Anything left shows as a sliver, not as nothing.
-        let frame = if share > 0.0 {
-            empty.min(last.saturating_sub(1))
-        } else {
-            last
-        };
-        self.health.get(frame)
+        bar_frame(&self.health, share)
     }
+
+    /// The health bar for a building with `share` of its health left.
+    pub fn building_health_bar(&self, share: f32) -> Option<&Handle<Image>> {
+        bar_frame(&self.building_health, share)
+    }
+}
+
+/// Of a health bar's frames, the one for `share` of health left.
+fn bar_frame(frames: &[Handle<Image>], share: f32) -> Option<&Handle<Image>> {
+    let last = frames.len().checked_sub(1)?;
+    let empty = ((1.0 - share.clamp(0.0, 1.0)) * last as f32).round() as usize;
+    // Anything left shows as a sliver, not as nothing.
+    let frame = if share > 0.0 {
+        empty.min(last.saturating_sub(1))
+    } else {
+        last
+    };
+    frames.get(frame)
 }
 
 /// The layers of the banners that float over regiments, each a square
@@ -353,6 +371,7 @@ mod tests {
             health: (0..33)
                 .map(|i| Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(i), default()))
                 .collect(),
+            building_health: Vec::new(),
         };
         let frame = |share| {
             frames

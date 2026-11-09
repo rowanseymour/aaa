@@ -44,7 +44,9 @@ use aaa_map::{Ground, Map, Member, Recruits, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::models::{Footprint, ModelAssets, Models, pose};
-use aaa_render::overlay::{self, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET};
+use aaa_render::overlay::{
+    self, BUILDING_HEALTH_BAR, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET,
+};
 use aaa_render::shot::{self, ShotPlugin};
 use aaa_render::terrain::{map_point, world};
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
@@ -2006,17 +2008,7 @@ fn show_focus(
             let material = &marks.squares[tint(&sim.0, local.0, building.owner)];
             if let Some((_, object, footprint)) = buildings.iter().find(|(v, ..)| v.building == b) {
                 let [fx, fy, _] = object.0.facing;
-                // Around the ground its template claims, which takes in the
-                // pad and yard; the model's own box is about its walls.
-                let claimed = match building.obstacle.as_ref().map(|o| o.shape) {
-                    Some(Shape::Rect { width, height }) => Some(Vec2::new(width, height)),
-                    Some(Shape::Circle { radius }) => Some(Vec2::splat(2.0 * radius)),
-                    _ => None,
-                };
-                let size = claimed
-                    .or(footprint.map(|f| f.0))
-                    .unwrap_or(Vec2::splat(4.0))
-                    / (1.0 - 2.0 * SQUARE_INSET);
+                let size = claimed_size(building, footprint) / (1.0 - 2.0 * SQUARE_INSET);
                 square = Some((b, size, [fx, fy], material.clone()));
             }
         }
@@ -2067,12 +2059,27 @@ fn show_focus(
     }
 }
 
-/// Draws a health bar below each of the selected regiments' units, the
-/// width a bar has there but square to the screen and over everything.
+/// The ground a building's template claims, which takes in its pad and
+/// yard; the model's own box is about its walls.
+fn claimed_size(building: &aaa_sim::Building, footprint: Option<&Footprint>) -> Vec2 {
+    let claimed = match building.obstacle.as_ref().map(|o| o.shape) {
+        Some(Shape::Rect { width, height }) => Some(Vec2::new(width, height)),
+        Some(Shape::Circle { radius }) => Some(Vec2::splat(2.0 * radius)),
+        _ => None,
+    };
+    claimed
+        .or(footprint.map(|f| f.0))
+        .unwrap_or(Vec2::splat(4.0))
+}
+
+/// Draws a health bar below each unit of the selected regiments and the one
+/// under the cursor, and in front of the selected building and the one
+/// under the cursor, whoever's they are: the width a bar has there but
+/// square to the screen and over everything.
 #[allow(clippy::too_many_arguments)]
 fn show_health(
     mut commands: Commands,
-    selected: Res<Selected>,
+    (selected, chosen, focus): (Res<Selected>, Res<SelectedBuilding>, Res<Focus>),
     sim: Res<Sim>,
     loaded: Res<Loaded>,
     images: Res<OverlayImages>,
@@ -2080,25 +2087,27 @@ fn show_health(
     ui: Res<UiScale>,
     cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
     units: Query<(&UnitView, Option<&Footprint>)>,
+    buildings: Query<&BuildingView>,
     mut bars: Query<(&mut Node, &mut ImageNode, &mut Visibility), With<HealthBar>>,
 ) {
     let mut wanted = Vec::new();
-    if let (false, Ok((camera, transform))) = (selected.0.is_empty(), cameras.single()) {
+    if let Ok((camera, transform)) = cameras.single() {
         // This frame's camera, which moves after transforms propagate.
         let global = GlobalTransform::from(*transform);
-        let half = transform.right() * HEALTH_BAR.x / 2.0;
         let toward = (transform.back().as_vec3() * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
         let ground = &loaded.map.ground;
         let t = fixed.overstep_fraction();
+        // Where on the ground each bar's middle goes, its size there, and
+        // the frame it shows.
+        let mut shown = Vec::new();
+        let regiment_shown = |r: usize| selected.0.contains(&r) || *focus == Focus::Regiment(r);
+        let building_shown = |b: usize| chosen.0 == Some(b) || *focus == Focus::Building(b);
         for (view, footprint) in &units {
             let unit = &sim.0.units[view.unit];
-            if !selected.0.contains(&unit.regiment) || !unit.alive() {
+            if !regiment_shown(unit.regiment) || !unit.alive() {
                 continue;
             }
             let Some(fighter) = &unit.fighter else {
-                continue;
-            };
-            let Some(image) = images.health_bar(unit.health / fighter.health) else {
                 continue;
             };
             let [x, y] = unit.drawn_at(t);
@@ -2106,14 +2115,36 @@ fn show_health(
             // clears the model.
             let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
             let at = world(x, y, ground.stand_at(view.footing, x, y)) + toward * reach;
+            let image = images.health_bar(unit.health / fighter.health);
+            shown.push((at, HEALTH_BAR, image));
+        }
+        for view in &buildings {
+            let b = view.building;
+            let building = &sim.0.buildings[b];
+            // A disabled one shows its empty bar.
+            if !building_shown(b) || building.gone() {
+                continue;
+            }
+            // On the ground at its middle, which from above reads as in
+            // front of it.
+            let [x, y] = building.position;
+            let at = world(x, y, view.placed.y);
+            let image = images.building_health_bar(building.health / building.fighter.health);
+            shown.push((at, BUILDING_HEALTH_BAR, image));
+        }
+        let half = transform.right().as_vec3() / 2.0;
+        for (at, size, image) in shown {
+            let Some(image) = image else {
+                continue;
+            };
             let (Ok(a), Ok(b)) = (
-                camera.world_to_viewport(&global, at - half),
-                camera.world_to_viewport(&global, at + half),
+                camera.world_to_viewport(&global, at - half * size.x),
+                camera.world_to_viewport(&global, at + half * size.x),
             ) else {
                 continue;
             };
             let width = a.distance(b);
-            let height = width * HEALTH_BAR.y / HEALTH_BAR.x;
+            let height = width * size.y / size.x;
             let centre = (a + b) / 2.0 + Vec2::new(0.0, height);
             wanted.push((
                 centre - Vec2::new(width, height) / 2.0,
@@ -2147,7 +2178,7 @@ fn show_health(
             node,
             // Over the banners.
             GlobalZIndex(1),
-            ImageNode::new(frame),
+            ImageNode::new(frame).with_mode(NodeImageMode::Stretch),
             Pickable::IGNORE,
             DespawnOnExit(Screen::Match),
         ));
