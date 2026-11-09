@@ -9,7 +9,7 @@ pub mod economy;
 pub mod path;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::f32::consts::{PI, TAU};
+use std::f32::consts::{FRAC_PI_4, PI, TAU};
 
 use aaa_map::pathing::tile_at;
 use aaa_map::{
@@ -60,6 +60,31 @@ pub const CONTACT: f32 = 1.5;
 
 /// How near a packed building has to get to where it was sent to unpack.
 pub const UNPACK_REACH: f32 = 1.5;
+
+/// How near where it was going a unit has to stop to have arrived, and how
+/// near on a move that has to end right there, such as to unpack.
+pub const ARRIVAL_REACH: f32 = 0.5;
+pub const EXACT_REACH: f32 = 0.1;
+
+/// How near a unit's destination is for a move that has to end right there
+/// to go straight at it.
+const STRAIGHT_REACH: f32 = 3.0;
+
+/// How many times a unit finds a way to a destination before giving up on
+/// stopping there.
+const WAYS_TRIED: u8 = 3;
+
+/// How near a leg's end a unit taking it up has to be to skip it.
+const LEG_REACH: f32 = 0.1;
+
+/// How far to the side of its leg a unit gets before making for it again.
+const OFF_LINE: f32 = 1.0;
+
+/// Ticks between a moving unit's looks at how its move is going, and
+/// between those of one that's given up turning onto its leg. The game
+/// spreads them over 1 to 1.3 seconds and 0.3 to 0.6.
+const LOOK: u32 = 12;
+const LOOK_SNAPPED: u32 = 5;
 
 /// The share of a regiment's control range its pursued enemy has to come
 /// within for it to engage.
@@ -206,6 +231,17 @@ pub enum Order {
     Pursue(usize),
 }
 
+/// The leg of its path a unit is driving, to its next waypoint.
+#[derive(Debug, Clone, Copy)]
+struct Leg {
+    /// The way along it, which the unit turns to and holds.
+    heading: [f32; 2],
+    /// Where it ends: the waypoint, less the room to turn the corner there.
+    aim: [f32; 2],
+    /// Whether the unit's given up turning onto it, and faces along it.
+    snapped: bool,
+}
+
 pub struct Unit {
     /// Its object's id in the map.
     pub id: u32,
@@ -225,16 +261,27 @@ pub struct Unit {
     end_facing: [f32; 2],
     /// Waypoints still ahead, the next last.
     path: Vec<[f32; 2]>,
-    /// The waypoint it set off for, and the way to it from where it set
-    /// off: the course it steers for, and is there once it's come as far
-    /// along.
-    course: Option<([f32; 2], [f32; 2])>,
+    /// Where the leg to the next waypoint starts.
+    from: [f32; 2],
+    /// The leg it's driving, once it's taken it up.
+    leg: Option<Leg>,
+    /// Where it's to stop, until it has or has given up.
+    goal: Option<[f32; 2]>,
+    /// Whether it has to stop within [`EXACT_REACH`] of that.
+    exact: bool,
+    /// How many ways there it's taken.
+    ways: u8,
+    /// Ticks until it next looks at how its move is going.
+    look: u32,
     /// World units a second it's going at.
     pub speed: f32,
     /// World units a second it gains each second; 0 for at once.
     acceleration: f32,
     /// Radians a second it turns; 0 for at once.
     turn_rate: f32,
+    /// The radius of the circle it turns at its own top speed; 0 for one
+    /// that turns at once.
+    turn_radius: f32,
     pub trailer: Option<Trailer>,
     /// Whether it's left its place to come within reach of an enemy.
     closing: bool,
@@ -329,66 +376,183 @@ impl Unit {
     fn die(&mut self, tick: u64) {
         self.health = 0.0;
         self.died = Some(tick);
-        self.path.clear();
+        self.halt();
         self.speed = 0.0;
         self.target = None;
     }
 
-    /// Plays out a tick of heading along its path at up to `top` speed:
-    /// it speeds up to that, turns toward the way to its next waypoint as
-    /// fast as it can and goes the way it faces, until it's come as far as
-    /// that waypoint along that way.
+    /// Sets it off along `path`, next waypoint last, to stop at its end.
+    fn take(&mut self, path: Vec<[f32; 2]>, exact: bool) {
+        self.goal = path.first().copied();
+        self.path = path;
+        self.from = self.position;
+        self.leg = None;
+        self.exact = exact;
+        self.ways = 1;
+        self.look = LOOK;
+    }
+
+    /// Stops it where it is, with nowhere left to go.
+    fn halt(&mut self) {
+        self.path.clear();
+        self.leg = None;
+        self.goal = None;
+    }
+
+    /// The middle of the tightest circle it can turn to its left, for a
+    /// positive `side`, or its right.
+    fn turning_circle(&self, side: f32) -> [f32; 2] {
+        let [x, y] = self.position;
+        let [fx, fy] = self.facing;
+        let r = self.turn_radius.copysign(side);
+        [x - fy * r, y + fx * r]
+    }
+
+    /// Whether `at` is somewhere it can't turn onto: inside the tightest
+    /// circle it can turn either way.
+    fn too_tight(&self, at: [f32; 2]) -> bool {
+        let r = self.turn_radius;
+        r > 0.0
+            && [1.0, -1.0]
+                .iter()
+                .any(|&side| within_strictly(self.turning_circle(side), at, r))
+    }
+
+    /// Takes up the leg to its next waypoint, passing over the waypoints
+    /// it's already level with or past. The leg ends short of a corner by
+    /// the room it takes to turn it.
+    fn take_leg(&mut self) {
+        while self.leg.is_none() {
+            let Some(&next) = self.path.last() else {
+                return;
+            };
+            let along = [next[0] - self.from[0], next[1] - self.from[1]];
+            let heading = normalised(along).unwrap_or(self.facing);
+            let onward = (self.path.len().checked_sub(2))
+                .and_then(|i| normalised([self.path[i][0] - next[0], self.path[i][1] - next[1]]));
+            let lead = match onward {
+                Some(onward) if self.turn_radius > 0.0 => {
+                    let cos = heading[0] * onward[0] + heading[1] * onward[1];
+                    let sin = (heading[0] * onward[1] - heading[1] * onward[0]).abs();
+                    // The tangent of half the angle between the two legs.
+                    let lead = self.turn_radius * sin / (1.0 + cos);
+                    let length = libm::hypotf(along[0], along[1]);
+                    if lead < length { lead } else { length }
+                }
+                _ => 0.0,
+            };
+            let aim = [next[0] - heading[0] * lead, next[1] - heading[1] * lead];
+            let left =
+                (aim[0] - self.position[0]) * heading[0] + (aim[1] - self.position[1]) * heading[1];
+            if left <= 0.0 || within(self.position, aim, LEG_REACH) {
+                self.path.pop();
+                self.from = next;
+                continue;
+            }
+            self.leg = Some(Leg {
+                heading,
+                aim,
+                snapped: self.path.len() == 1 && self.too_tight(next),
+            });
+        }
+    }
+
+    /// Plays out a tick of heading along its path at up to `top` speed: it
+    /// turns toward its leg's heading as fast as it can, speeds up toward
+    /// `top` and goes the way it faces, until it's level with the leg's
+    /// end, however far to the side that leaves it. It never slows to turn.
     fn drive(&mut self, top: f32) {
-        if self.path.is_empty() {
+        self.take_leg();
+        let (Some(&next), Some(leg)) = (self.path.last(), self.leg) else {
             self.speed = 0.0;
             return;
+        };
+        match leg.snapped || self.turn_rate <= 0.0 {
+            true => self.facing = leg.heading,
+            false => {
+                steer(&mut self.facing, leg.heading, self.turn_rate * TICK);
+            }
         }
         self.speed = match self.speed < top && self.acceleration > 0.0 {
             true => (self.speed + self.acceleration * TICK).min(top),
             false => top,
         };
-        let mut left = self.speed * TICK;
-        let mut turn = self.turn_rate * TICK;
-        while let Some(&next) = self.path.last() {
-            let course = match self.course {
-                Some((to, course)) if to == next => course,
-                _ => {
-                    let way = [next[0] - self.position[0], next[1] - self.position[1]];
-                    let course = normalised(way).unwrap_or(self.facing);
-                    self.course = Some((next, course));
-                    course
-                }
-            };
-            match self.turn_rate > 0.0 {
-                true => turn -= steer(&mut self.facing, course, turn),
-                false => self.facing = course,
-            }
-            let (dx, dy) = (next[0] - self.position[0], next[1] - self.position[1]);
-            let ahead = dx * course[0] + dy * course[1];
-            if ahead > left {
-                self.position[0] += self.facing[0] * left;
-                self.position[1] += self.facing[1] * left;
-                break;
-            }
-            match self.turn_rate > 0.0 {
-                true => {
-                    let ahead = ahead.max(0.0);
-                    self.position[0] += self.facing[0] * ahead;
-                    self.position[1] += self.facing[1] * ahead;
-                    left -= ahead;
-                }
-                false => {
-                    self.position = next;
-                    left -= ahead.max(0.0);
-                }
-            }
+        let step = self.speed * TICK;
+        let left = (leg.aim[0] - self.position[0]) * leg.heading[0]
+            + (leg.aim[1] - self.position[1]) * leg.heading[1];
+        let ends = left <= step;
+        // Only one going straight along the leg stops level with its end.
+        let go = match ends && self.facing == leg.heading {
+            true => left.max(0.0),
+            false => step,
+        };
+        self.position[0] += self.facing[0] * go;
+        self.position[1] += self.facing[1] * go;
+        if ends {
             self.path.pop();
-            self.course = None;
+            self.from = next;
+            self.leg = None;
+            if self.path.is_empty() {
+                self.speed = 0.0;
+            }
+            return;
         }
-        if self.path.is_empty() {
-            self.speed = 0.0;
-            self.facing = self.end_facing;
+        self.look = self.look.saturating_sub(1);
+        if self.look == 0 {
+            self.think(next, leg);
         }
+    }
+
+    /// Looks at how the leg to `next` is going: gives up turning onto a
+    /// last leg that ends somewhere it can't turn onto, and, once it's done
+    /// turning but is left well to the side of its leg, makes for the leg
+    /// again at an angle, or straight for the leg's end where that comes
+    /// first.
+    fn think(&mut self, next: [f32; 2], leg: Leg) {
+        self.look = match leg.snapped {
+            true => LOOK_SNAPPED,
+            false => LOOK,
+        };
+        if self.turn_radius <= 0.0 {
+            return;
+        }
+        if self.path.len() == 1 && !leg.snapped && self.too_tight(next) {
+            self.facing = leg.heading;
+            self.leg = Some(Leg {
+                snapped: true,
+                ..leg
+            });
+            self.look = LOOK_SNAPPED;
+            return;
+        }
+        if self.facing != leg.heading {
+            return;
+        }
+        let [hx, hy] = leg.heading;
+        let back = [self.position[0] - next[0], self.position[1] - next[1]];
+        // How far to the leg's left it is, and short of its end.
+        let aside = hx * back[1] - hy * back[0];
+        let short = -(hx * back[0] + hy * back[1]);
+        if aside.abs() < OFF_LINE {
+            return;
+        }
+        // At 45°, or as much less as turning in and back out again leaves
+        // room for.
+        let room = 1.0 - aside.abs() / (2.0 * self.turn_radius);
+        let angle = libm::acosf(room.max(-1.0)).min(FRAC_PI_4);
+        let along = aside.abs() / libm::tanf(angle);
+        self.from = self.position;
+        self.leg = None;
+        self.look = LOOK;
+        if along >= short {
+            let to = [next[0] - self.position[0], next[1] - self.position[1]];
+            self.facing = normalised(to).unwrap_or(self.facing);
+            return;
+        }
+        self.path.push([
+            self.position[0] + hy * aside + hx * along,
+            self.position[1] - hx * aside + hy * along,
+        ]);
     }
 
     /// Where to draw it a fraction `t` of the way through the tick that
@@ -788,7 +952,16 @@ impl World {
                 shape: m.shape,
                 end_facing: facing,
                 path: Vec::new(),
-                course: None,
+                from: [x, y],
+                leg: None,
+                goal: None,
+                exact: false,
+                ways: 0,
+                look: 0,
+                turn_radius: match m.turn_rate > 0.0 {
+                    true => m.speed / m.turn_rate,
+                    false => 0.0,
+                },
                 speed: 0.0,
                 acceleration: m.acceleration,
                 turn_rate: m.turn_rate,
@@ -1151,7 +1324,7 @@ impl World {
         regiment: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
-        self.advance(player, regiment, target, Order::Move)
+        self.advance(player, regiment, target, Order::Move, None)
     }
 
     fn order_attack(
@@ -1160,7 +1333,7 @@ impl World {
         regiment: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
-        self.advance(player, regiment, target, Order::Attack)
+        self.advance(player, regiment, target, Order::Attack, None)
     }
 
     fn order_pursue(&mut self, player: u32, regiment: usize, enemy: usize) -> Result<(), Refused> {
@@ -1181,11 +1354,12 @@ impl World {
         regiment: usize,
         target: [f32; 2],
         order: Order,
+        unpack_at: Option<([f32; 2], [f32; 2])>,
     ) -> Result<(), NotYours> {
         self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
         r.order = order;
-        r.unpack_at = None;
+        r.unpack_at = unpack_at;
         r.rally = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
@@ -1240,8 +1414,8 @@ impl World {
         let offset = self.may_unpack(player, regiment, at, facing)?;
         let at = unpack_site(at);
         let stop = [at[0] + offset[0], at[1] + offset[1]];
-        self.order_move(player, regiment, stop)?;
-        self.regiments[regiment].unpack_at = Some((at, unpack_facing(facing)));
+        let unpack_at = Some((at, unpack_facing(facing)));
+        self.advance(player, regiment, stop, Order::Move, unpack_at)?;
         Ok(at)
     }
 
@@ -1366,6 +1540,8 @@ impl World {
     fn take_places(&mut self, regiment: usize) {
         let r = &self.regiments[regiment];
         let facing = r.facing;
+        // A move to unpack has to end right there.
+        let exact = r.unpack_at.is_some();
         let offsets = &r.formations[r.current_formation()].offsets;
         let places: Vec<(usize, [f32; 2])> = r
             .units
@@ -1377,15 +1553,39 @@ impl World {
             if !self.units[u].alive() {
                 continue;
             }
-            let way = self.way(u, place);
+            let way = self.plan(u, place, exact);
             let unit = &mut self.units[u];
-            unit.path = way;
+            unit.take(way, exact);
             unit.closing = false;
             unit.end_facing = facing;
             if unit.path.is_empty() {
+                unit.goal = None;
                 unit.facing = facing;
             }
         }
+    }
+
+    /// The way a unit takes to stop at `to`, last waypoint first, `exact`
+    /// for a move that has to end right there. It goes straight at what's
+    /// near enough on such a move, and turns at once to what's ahead of it
+    /// but nearer than it could turn onto; otherwise it finds a way.
+    fn plan(&mut self, u: usize, to: [f32; 2], exact: bool) -> Vec<[f32; 2]> {
+        let unit = &self.units[u];
+        let off = [to[0] - unit.position[0], to[1] - unit.position[1]];
+        if exact && within_strictly(unit.position, to, STRAIGHT_REACH) {
+            return vec![to];
+        }
+        let [fx, fy] = unit.facing;
+        let ahead = fx * off[0] + fy * off[1] >= 0.0;
+        let side = fx * off[1] - fy * off[0];
+        let r = unit.turn_radius;
+        if r > 0.0 && ahead && within_strictly(unit.turning_circle(side), to, r) {
+            if let Some(facing) = normalised(off) {
+                self.units[u].facing = facing;
+            }
+            return vec![to];
+        }
+        self.way(u, to)
     }
 
     /// A unit's way to `to`, last waypoint first. It passes through the
@@ -1494,7 +1694,7 @@ impl World {
         let offsets = &r.formations[r.current_formation()].offsets;
         for (&u, &offset) in r.units.iter().zip(offsets) {
             let unit = &mut self.units[u];
-            unit.path = vec![aaa_map::from_local(to, facing, offset)];
+            unit.take(vec![aaa_map::from_local(to, facing, offset)], false);
             unit.end_facing = facing;
         }
     }
@@ -1539,7 +1739,7 @@ impl World {
                 let unit = &mut self.units[u];
                 if unit.alive() {
                     unit.unpacked = Some(self.ticks);
-                    unit.path.clear();
+                    unit.halt();
                     unit.target = None;
                 }
             }
@@ -1667,8 +1867,7 @@ impl World {
             unit.previous = at;
             unit.facing = facing;
             unit.end_facing = facing;
-            unit.path.clear();
-            unit.course = None;
+            unit.halt();
             unit.speed = 0.0;
             unit.closing = false;
             unit.target = None;
@@ -1793,7 +1992,7 @@ impl World {
             {
                 if unit.closing {
                     let unit = &mut self.units[u];
-                    unit.path.clear();
+                    unit.halt();
                     unit.closing = false;
                 }
                 continue;
@@ -1815,7 +2014,7 @@ impl World {
             }
             let way = self.way(u, self.position(goal));
             let unit = &mut self.units[u];
-            unit.path = way;
+            unit.take(way, false);
             unit.closing = true;
         }
     }
@@ -1995,10 +2194,37 @@ impl World {
         }
     }
 
+    /// Moves every unit on along its path. One that's run out of path
+    /// short of where it was to stop finds another way from where it is,
+    /// until it's tried enough; once done it faces as it was told to.
     fn travel(&mut self) {
-        for unit in &mut self.units {
+        for u in 0..self.units.len() {
+            let unit = &mut self.units[u];
             unit.previous = unit.position;
             unit.drive(self.regiments[unit.regiment].speed);
+            if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
+                let reach = match unit.exact {
+                    true => EXACT_REACH,
+                    false => ARRIVAL_REACH,
+                };
+                let (exact, ways) = (unit.exact, unit.ways);
+                let again = match within(unit.position, goal, reach) || ways >= WAYS_TRIED {
+                    true => Vec::new(),
+                    false => self.plan(u, goal, exact),
+                };
+                let unit = &mut self.units[u];
+                match again.is_empty() {
+                    true => {
+                        unit.goal = None;
+                        unit.facing = unit.end_facing;
+                    }
+                    false => {
+                        unit.take(again, exact);
+                        (unit.goal, unit.ways) = (Some(goal), ways + 1);
+                    }
+                }
+            }
+            let unit = &mut self.units[u];
             if let Some(t) = &mut unit.trailer {
                 t.previous = t.position;
                 t.follow(unit.position, unit.facing);
@@ -2619,6 +2845,11 @@ fn within(a: [f32; 2], b: [f32; 2], reach: f32) -> bool {
     squared_distance(a, b) <= reach * reach
 }
 
+/// Whether `a` and `b` are nearer than `reach` apart.
+fn within_strictly(a: [f32; 2], b: [f32; 2], reach: f32) -> bool {
+    squared_distance(a, b) < reach * reach
+}
+
 /// An order to a regiment from a player that doesn't own it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotYours;
@@ -2866,7 +3097,36 @@ mod tests {
         run(&mut w, 20.0);
         let u = &w.units[0];
         assert!(!u.moving());
-        assert!((u.position[0] - 20.0).abs() < 0.5, "{:?}", u.position);
+        // Left to the side of where it was going, but near enough.
+        assert!(!near(u.position, [20.0, 10.0]));
+        assert!(
+            within(u.position, [20.0, 10.0], ARRIVAL_REACH),
+            "{:?}",
+            u.position
+        );
+    }
+
+    #[test]
+    fn units_that_turn_over_time_stop_near_what_is_inside_their_turning_circle() {
+        // It turns round a radius of 2 at its top speed.
+        for to in [
+            [10.0, 4.0],
+            [11.0, 10.0],
+            [8.0, 10.5],
+            [10.0, 9.0],
+            [4.0, 8.0],
+        ] {
+            let mut w = vehicle(0.0, 1.0, None);
+            w.apply(7, Command::Move { regiment: 0, to }).unwrap();
+            let mut ticks = 0;
+            while w.units[0].moving() {
+                w.tick();
+                ticks += 1;
+                assert!(ticks < 300, "{to:?}: {:?}", w.units[0].position);
+            }
+            let at = w.units[0].position;
+            assert!(within(at, to, ARRIVAL_REACH), "{to:?}: {at:?}");
+        }
     }
 
     #[test]
@@ -4335,7 +4595,7 @@ mod tests {
         let played = format!("{}\n{}", snapshot(&battle), snapshot(&towing));
         assert_eq!(
             fingerprint(&[&battle, &towing]),
-            0xe9cb6e6bcdf9ca03,
+            0x79087b9feb5389f6,
             "{played}"
         );
     }
@@ -4678,6 +4938,24 @@ mod tests {
         assert!(!w.pathing.passable(15, 20, Domain::Land));
         run(&mut w, 7.0);
         assert!(w.buildings[1].unpacking.is_none());
+    }
+
+    #[test]
+    fn trucks_that_turn_over_time_unpack_behind_and_beside_themselves() {
+        for at in [[30.0, 24.0], [34.0, 30.0], [27.0, 31.0]] {
+            let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+            let mut t = truck();
+            t.owner = 1;
+            // Round a radius of 3, as the game's trucks turn.
+            t.members[0].turn_rate = 1.0;
+            t.renumber(9);
+            t.place([30.0, 30.0], [0.0, 1.0]);
+            let r = w.add_regiment(&t);
+            w.order_unpack(1, r, at, NORTH).unwrap();
+            run(&mut w, 20.0);
+            assert_eq!(w.buildings.len(), 1, "{at:?}: {:?}", w.units[0].position);
+            assert_eq!(w.buildings[0].position, at);
+        }
     }
 
     #[test]
