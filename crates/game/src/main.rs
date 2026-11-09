@@ -510,7 +510,11 @@ fn main() -> ExitCode {
     for s in &scripts {
         console.exec_on_start(s);
     }
-    app.add_plugins(MapRenderPlugin { edge: Edge::Fade })
+    let render = MapRenderPlugin {
+        edge: Edge::Fade,
+        pickable: false,
+    };
+    app.add_plugins(render)
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
         .add_plugins(effects::EffectsPlugin)

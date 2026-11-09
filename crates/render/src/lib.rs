@@ -19,7 +19,7 @@ pub use rig::Playing;
 
 use aaa_data::GameData;
 use aaa_map::Map;
-use bevy::asset::embedded_asset;
+use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::Exposure;
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
@@ -39,7 +39,14 @@ use water::WaterMaterial;
 /// beyond the map and the camera's controls.
 pub struct MapRenderPlugin {
     pub edge: Edge,
+    /// Whether the ground and models can be clicked on with Bevy's mesh
+    /// picking, which reads meshes that otherwise live only on the GPU.
+    pub pickable: bool,
 }
+
+/// [`MapRenderPlugin::pickable`].
+#[derive(Resource, Clone, Copy)]
+struct MeshPicking(bool);
 
 /// How the map meets what lies beyond it.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Debug)]
@@ -77,6 +84,7 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<TeamMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
+            .insert_resource(MeshPicking(self.pickable))
             .add_systems(
                 PostUpdate,
                 (
@@ -116,6 +124,7 @@ pub struct MapAssets<'w> {
     skins: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,
     formats: Res<'w, CompressedImageFormatSupport>,
     edge: Res<'w, Edge>,
+    picking: Res<'w, MeshPicking>,
 }
 
 impl MapAssets<'_> {
@@ -151,7 +160,11 @@ pub fn spawn_map(
         &mut assets.images,
         assets.edge.fade(),
     );
-    if let Some((mesh, material)) = built.ground {
+    let pickable = assets.picking.0;
+    if let Some((mut mesh, material)) = built.ground {
+        if pickable {
+            mesh.asset_usage = RenderAssetUsages::default();
+        }
         commands.spawn((
             Name::new("ground"),
             Mesh3d(assets.meshes.add(mesh)),
@@ -169,7 +182,7 @@ pub fn spawn_map(
             Pickable::IGNORE,
         ));
     }
-    let mut models = Models::new(game, assets.formats.0, &map.players);
+    let mut models = Models::new(game, assets.formats.0, &map.players, pickable);
     let buildings: std::collections::HashSet<u32> = map.buildings.iter().map(|b| b.id).collect();
     let rest = models.spawn(
         commands,

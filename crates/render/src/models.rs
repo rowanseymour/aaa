@@ -433,6 +433,8 @@ pub struct Models {
     /// Each model's lowest and highest point, by path.
     extents: HashMap<String, Option<[f32; 2]>>,
     timings: HashMap<String, Option<EffectTiming>>,
+    /// Whether meshes stay readable off the GPU, for mesh picking.
+    pickable: bool,
 }
 
 /// How an effect's model plays.
@@ -471,7 +473,12 @@ impl EffectTiming {
 }
 
 impl Models {
-    pub fn new(game: &mut GameData, formats: CompressedImageFormats, players: &[Player]) -> Self {
+    pub fn new(
+        game: &mut GameData,
+        formats: CompressedImageFormats,
+        players: &[Player],
+        pickable: bool,
+    ) -> Self {
         Models {
             views: game.views(),
             models: HashMap::new(),
@@ -482,6 +489,7 @@ impl Models {
             points: HashMap::new(),
             extents: HashMap::new(),
             timings: HashMap::new(),
+            pickable,
         }
     }
 
@@ -1123,7 +1131,10 @@ impl Models {
         let tinted = nif
             .property::<nif::VertexColor>(props)
             .is_none_or(|v| v.vertex_mode == 2);
-        let mesh = mesh(g, transform, uv_set, tinted)?;
+        let mut mesh = mesh(g, transform, uv_set, tinted)?;
+        if self.pickable {
+            mesh.asset_usage = RenderAssetUsages::default();
+        }
         let texture = self.base_texture(game, assets, nif, path, view, props);
         let alpha = nif.property::<nif::Alpha>(props);
         let double_sided = nif
