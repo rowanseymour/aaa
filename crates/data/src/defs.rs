@@ -345,6 +345,39 @@ pub struct PerformerComponent {
     pub ability: Vec<Ability>,
     /// How high above its user an attack starts, unless it says.
     pub attack_height: Option<f32>,
+    #[serde(default)]
+    pub turret: Vec<Turret>,
+}
+
+/// A part of an object that turns to aim its abilities. Left-out fields
+/// take the `Turret` template's values.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Turret {
+    pub turret_ids: Option<Id>,
+    /// Degrees a second.
+    #[serde(default = "full_turn")]
+    pub yaw_rotation_per_sec_degrees: f32,
+    /// The whole sweep it turns within, centred on where it starts.
+    #[serde(default = "full_turn")]
+    pub yaw_rotation_range_degrees: f32,
+    /// Where it points from its object's facing, counter-clockwise.
+    #[serde(default)]
+    pub yaw_start_degrees: f32,
+    /// Seconds without turning to anything before it turns back.
+    #[serde(default = "reset_time")]
+    pub reset_time: f32,
+    #[serde(default = "yes")]
+    pub can_reset: bool,
+    /// Where it stands on its object, as [`crate::Turret::offset`] reads it.
+    pub offset: Option<[f32; 2]>,
+}
+
+fn full_turn() -> f32 {
+    360.0
+}
+
+fn reset_time() -> f32 {
+    10.0
 }
 
 /// What a building fires on its own, at whatever comes near.

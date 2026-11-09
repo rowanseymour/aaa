@@ -1162,6 +1162,7 @@ mod tests {
             animation: None,
             turret: false,
             turret_point: None,
+            aimed_by: None,
             spawn_position: [0.0; 3],
             sounds: Vec::new(),
             effects,

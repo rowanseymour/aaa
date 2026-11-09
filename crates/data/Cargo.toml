@@ -8,6 +8,7 @@ description = "The game data of Axis & Allies (2004): archive access and definit
 publish = false
 
 [dependencies]
+log = "0.4"
 tgck = { path = "../tgck" }
 serde = { version = "1", features = ["derive"] }
 tgi = { path = "../tgi", features = ["serde"] }
