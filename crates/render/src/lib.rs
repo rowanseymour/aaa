@@ -80,6 +80,7 @@ impl Plugin for MapRenderPlugin {
             .add_systems(
                 PostUpdate,
                 (
+                    rig::carry_skins.after(bevy::transform::TransformSystems::Propagate),
                     particles::play.after(bevy::transform::TransformSystems::Propagate),
                     particles::place_copies
                         .after(particles::play)
