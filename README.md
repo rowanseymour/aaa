@@ -15,7 +15,7 @@ real-time strategy game.
 
 | Crate | What it does | Status |
 |---|---|---|
-| [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool | Done; a few map fields still unnamed |
+| [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool | Done |
 | [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) | Done |
 | [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool | Done |
 | [`aaa‑data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, as a library and a command-line tool | Partial: definitions cover what rendering and the rules use so far |

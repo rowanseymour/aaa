@@ -558,6 +558,7 @@ types:
       - id: unused
         type: u1
         if: version >= 7
+        doc: Never read; the game writes 0 when it saves a map.
     instances:
       terrain:
         value: 'version >= 7 ? terrain_v7 : terrain_old'
@@ -1458,9 +1459,13 @@ types:
       - id: unused1
         type: u4
         doc: Never used; 0 in every shipped map.
-      - id: unused2
+      - id: usable
         type: u1
-        doc: Never used; 1 in every shipped map.
+        doc: |
+          Whether the actor may use it now: 0 while it lacks one of the
+          ability's required properties or is outside its required experience
+          levels, when using it is refused. The game works it out again as
+          those change; 1 in every shipped map.
       - id: active_targets
         type: u4s
         if: version >= 1
@@ -1773,9 +1778,15 @@ types:
         repeat: expr
         repeat-expr: 4
         doc: The box about the position, min x, min y, max x, max y.
-      - id: unknown
+      - id: num_inside
         type: u4
-        valid: 0
+      - id: inside
+        type: area_occupant
+        repeat: expr
+        repeat-expr: num_inside
+        doc: |
+          The things inside it now, which have fired its "entered" events;
+          empty in a map saved from the editor.
     instances:
       id_version_if_any:
         pos: 8
@@ -1783,12 +1794,26 @@ types:
       name_len_with_id:
         pos: 12
         type: u2
+      num_inside_with_id:
+        pos: 38 + name_len_with_id * 2
+        type: u4
+        if: _io.size >= 42 + name_len_with_id * 2
       has_id:
-        value: id_version_if_any == 2 and name_len_with_id * 2 == _io.size - 42
+        value: |
+          id_version_if_any == 2
+          and _io.size >= 42 + name_len_with_id * 2
+          and num_inside_with_id * 5 == _io.size - 42 - name_len_with_id * 2
         doc: |
           Some maps, such as the cutscenes, leave out the id. Its layout is
           tested for directly, as an id's low half can pass for the name's
           length where the id is left out.
+  area_occupant:
+    seq:
+      - id: thing
+        type: u4
+      - id: scratch
+        type: u1
+        doc: Used while checking who's inside; 0 when saved.
   camera:
     doc: A camera position for cutscenes and scripted views.
     seq:
@@ -2086,11 +2111,14 @@ types:
         type: string
         if: version >= 1
         doc: The template being upgraded to; empty for none.
-      - id: unknown
+      - id: old_upgrade
         type: u4
         repeat: expr
         repeat-expr: 2
         if: version == 0
+        doc: |
+          An upgrade under the old upgrading rules; the game refuses a map
+          with either value set.
   body:
     seq:
       - id: version
@@ -2660,10 +2688,12 @@ types:
       - id: version
         type: u4
         valid: 0
-      - id: unknown1
+      - id: layout
         type: string
-      - id: unknown2
+        doc: The layout's id again.
+      - id: slots
         type: strings
+        doc: The element template in each slot, in order; empty for an empty slot.
   recruit:
     seq:
       - id: updatable
@@ -2720,9 +2750,12 @@ types:
         type: u4
         valid:
           max: 3
-      - id: unused
+      - id: health_fraction
         type: f4
-        doc: 1 when the component is made, and never used.
+        doc: |
+          The share of full health carried across packing: a packed building's
+          health over its maximum, given back to the building it unpacks into;
+          1 for one that never was a building.
       - id: finish_time
         type: f4
         if: version >= 1
@@ -2730,6 +2763,14 @@ types:
       - id: old
         type: id_list
         if: version == 2
+  resource_amounts:
+    doc: An amount of each resource kind.
+    seq:
+      - id: version
+        type: u4
+        valid: 0
+      - id: amounts
+        type: f4s
   id_list:
     seq:
       - id: version
@@ -2824,20 +2865,27 @@ types:
       - id: next_slot
         type: u4
         doc: The next layout slot to deliver.
-      - id: unknown1
-        type: id_list
-      - id: unknown2
-        type: id_list
+      - id: cargo_cost
+        type: resource_amounts
+        doc: |
+          What the cargo cost, which the transport counts as costing while it
+          carries it; emptied once it's unloaded.
+      - id: cargo_upkeep
+        type: resource_amounts
+        doc: The cargo's upkeep, which the transport charges while it carries it.
       - id: has_summon
         type: u1
         if: version >= 3
       - id: summon
-        size: 8
+        type: vec2
         if: version >= 3 and has_summon != 0
-        doc: Two values the summoning ability sets.
-      - id: unknown3
+        doc: |
+          The point on the map's edge it came in from, (x, y), which it flies
+          back to and leaves by once it's delivered.
+      - id: delivered_name
         type: string
         if: version >= 5
+        doc: The name triggers know the delivered actor by; empty for none.
       - id: hq
         type: u4
         if: version >= 6
@@ -2860,7 +2908,7 @@ types:
           Nothing in the game sets it.
       - id: unused
         type: f4
-        doc: -1 when the component is made, and never used.
+        doc: -1 when the component is made, and never read.
   city:
     seq:
       - id: updatable
@@ -2915,15 +2963,20 @@ types:
       - id: kind
         type: u4
         if: present != 0 and version >= 3
-        doc: What's attached, 0 an organization, 1 a transport, 3 anything else.
+        doc: |
+          What's attached: 0 an organization, 1 a transport, 3 nothing (dropped
+          as the HQ loads). The format also has 2, a place held for an
+          organization still being recruited, which AA never uses.
       - id: organization
         type: u4
         if: present != 0 and version >= 3
         doc: The attached thing's id.
-      - id: unused
+      - id: queue_entry
         type: s4
         if: present != 0 and version >= 3
-        doc: -1, and never changes.
+        doc: |
+          For kind 2, its entry in the recruit queue; always -1 in AA, which
+          never reads it.
 
   # Minds: an organization's or an element's, as the template's components
   # decide. Aircraft minds are undecoded. A mind is a set of states, such as
@@ -2993,6 +3046,10 @@ types:
         doc: What to do, e.g. `stop`, `move`.
       - id: flags
         type: u4
+        doc: |
+          Which of the values below count: 0x1 the target, 0x4 the position,
+          0x8 the facing, 0x10 the speed, 0x20 the layout, 0x40 extra order
+          data, 0x80 the formation, 0x100 the property, 0x200 the option.
       - id: target
         type: u4
         doc: The thing id of the actor it's aimed at.
@@ -3001,11 +3058,24 @@ types:
         doc: An actor template's id, such as one to build.
       - id: position
         type: vec2
-      - id: unknown1
-        size: 13
-      - id: unknown2
+        doc: Counts with flag 0x4.
+      - id: facing
+        type: vec2
+        doc: The way to face on arrival, counting with flag 0x8.
+      - id: speed
+        type: f4
+        doc: |
+          The speed to go at, counting with flag 0x10; 0 for full speed, and
+          never more than the actor's top speed.
+      - id: queued
+        type: u1
+        doc: Whether it goes on the end of the queue instead of replacing what's under way.
+      - id: option
         type: u1
         if: version >= 3
+        doc: |
+          A yes/no whose meaning depends on the order, counting with flag
+          0x200; for `repair`, a raze.
       - id: formation
         type: string
         if: version >= 1
@@ -3054,9 +3124,12 @@ types:
           units start at 1.
       - id: sleep_activity
         type: u4
-      - id: sleep_unknown
-        type: u4
+      - id: sleep_next_pack_check
+        type: f4
         if: version >= 9
+        doc: |
+          When an idle unit next checks whether to follow its regiment's leader
+          in packing or unpacking, every 3 seconds.
       - id: move_activity
         type: u4
       - id: move_target
@@ -3069,31 +3142,48 @@ types:
         doc: The way to face on arrival.
       - id: move_speed
         type: f4
-      - id: move_unknown1
+      - id: move_plans
         type: u4
+        doc: |
+          How many times it has planned its path for this move; it gives up on
+          the third failure.
       - id: move_state
         type: u4
       - id: move_precision
         type: u4
         doc: How close it must get.
-      - id: move_unknown2
-        size: 8
-      - id: move_unknown3
-        type: u4
-      - id: move_unknown4
-        type: u4
+      - id: move_planned_destination
+        type: vec2
+        doc: The destination, (x, y), when the path was last planned.
+      - id: move_turn_lead
+        type: f4
+        doc: |
+          How far before each corner of its path it starts to turn; 0 for units
+          that turn on the spot.
+      - id: move_last_sidestep
+        type: f4
         if: version >= 12
+        doc: When it last worked a way around something close by.
       - id: move_path
         type: path
-      - id: move_unknown5
+      - id: move_blocked
         size: 24
         if: version >= 10
+        doc: |
+          The last thing that blocked the move: what kind (u4: 0 nothing, 1
+          impassable ground, 2 an actor or object, 3 the map's edge), the
+          blocker's thing id (u4), the blocked tile's column and row (s4 each) and
+          the direction it was moving, (x, y). All zeros, direction (0, -1), for
+          none.
       - id: old
         type: u1
         if: version >= 5 and version < 7
-      - id: move_unknown6
-        type: u4
+      - id: move_kept_up
+        type: f4
         if: version >= 7
+        doc: |
+          When it was last keeping up with its regiment while moving; it goes
+          back to the regiment after a while detached.
       - id: kill_activity
         type: u4
       - id: kill_target
@@ -3108,19 +3198,23 @@ types:
       - id: engage_old
         type: u4
         doc: Ignored by the game.
-      - id: engage_unknown1
+      - id: engage_unused
         type: u4
-      - id: engage_unknown2
+        doc: 3 for a new unit; AA never reads or changes it.
+      - id: engage_retarget
         type: u1
+        doc: Set when it must pick a new target, cleared once it has.
       - id: repair_activity
         type: u4
-      - id: repair_unknown1
+      - id: repair_approaching
         type: u1
+        doc: Set while it's still on its way to what it's to repair.
       - id: repair_target
         type: u4
-      - id: repair_unknown2
+      - id: repair_raze
         type: u1
         if: version >= 8
+        doc: Set for a raze order, which carries on past full health.
       - id: join_activity
         type: u4
       - id: join_target
@@ -3128,7 +3222,7 @@ types:
       - id: reattach_activity
         type: u4
       - id: engage_after
-        type: u4
+        type: f4
         if: version >= 3
         doc: |
           After falling back to its position, the time before which it won't
@@ -3145,9 +3239,12 @@ types:
       - id: bombard_location
         type: vec2
         if: version >= 4
-      - id: bombard_unknown
+      - id: bombard_target_name
         type: string
         if: version >= 4
+        doc: |
+          The shelled actor's display name, empty when shelling a place; only
+          whether it's empty matters.
       - id: unpack_activity
         type: u4
         if: version >= 9
@@ -3157,15 +3254,19 @@ types:
       - id: unpack_facing
         type: vec2
         if: version >= 13
-      - id: unload_unknown
-        type: u4
+      - id: unload_next
+        type: f4
         if: version >= 11
+        doc: On a transport, when the next passenger gets off.
       - id: deploy_location
         type: vec2
         if: version >= 11
-      - id: deploy_unknown
+      - id: deploy_blocked
         type: u4
         if: version >= 11
+        doc: |
+          How many times the spot it was put down at was blocked; it dies the
+          sixth time.
       - id: deploy_target
         type: u4
         if: version >= 11
@@ -3202,19 +3303,25 @@ types:
         doc: Thing ids of actors it keeps a list of.
       - id: sleep_activity
         type: u4
-      - id: sleep_unknown1
+      - id: sleep_placing
         type: u1
         if: version >= 9
-      - id: sleep_unknown2
+        doc: Set while it's sending its members to their formation places.
+      - id: sleep_placings
         type: u4
         if: version >= 9
-      - id: sleep_unknown3
+        doc: How many times it has sent them; it tries twice.
+      - id: sleep_on_leader
         type: u1
         if: version >= 12
+        doc: |
+          Set to lay the places out around its leader rather than where it
+          stands; AA never sets it.
       - id: rampage_activity
         type: u4
-      - id: rampage_unknown
+      - id: rampage_gathering
         type: u1
+        doc: Set while it's calling in members gone off on their own.
       - id: move_activity
         type: u4
       - id: move_target
@@ -3225,10 +3332,12 @@ types:
       - id: move_facing
         type: vec2
         doc: The way to face on arrival.
-      - id: move_unknown1
+      - id: move_speed
+        type: f4
+        doc: The speed it moves at; 0 for full speed.
+      - id: move_plans
         type: u4
-      - id: move_unknown2
-        type: u4
+        doc: How many times it has planned its path for this move.
       - id: move_requested_destination
         type: vec2
         if: version >= 15
@@ -3251,57 +3360,75 @@ types:
         doc: Ignored by the game.
       - id: bombard_target
         type: u4
-      - id: bombard_unknown
+      - id: bombard_target_name
         type: string
         if: version >= 6
+        doc: As for a unit's.
       - id: bombard_location
         type: vec2
         if: version >= 6
       - id: siege_activity
         type: u4
         if: version >= 4
-      - id: siege_unknown1
+      - id: siege_target
         type: u4
         if: version >= 4
-      - id: siege_unknown2
+        doc: The thing id of the target under siege.
+      - id: siege_city
         type: u4
         if: version == 4 or version >= 13
+        doc: The thing id of the city the target belongs to.
       - id: chasing_activity
         type: u4
-      - id: chasing_unknown
+      - id: chasing_target
         type: u4
+        doc: The thing id of the organization it's chasing, which got out of reach.
       - id: construct_activity
         type: u4
-      - id: construct_unknown1
+      - id: construct_approaching
         type: u1
+        doc: Set while it's still on its way to the site.
       - id: construct_template
         type: string
         doc: The template of what it's to build.
       - id: construct_location
         type: vec2
-      - id: construct_unknown2
+      - id: construct_value
         type: s4
         if: version >= 11
+        doc: |
+          The number the build order carried, its speed as a whole number; -1
+          for none. It's handed on to the building.
       - id: construct_facing
         type: vec2
         if: version >= 20
       - id: repair_activity
         type: u4
-      - id: repair_unknown1
+      - id: repair_approaching
         type: u1
-      - id: repair_unknown2
+        doc: Set while it's still on its way to the target.
+      - id: repair_target
         type: u4
-      - id: repair_unknown3
+        doc: The thing id of the structure.
+      - id: repair_raze
         type: u1
         if: version >= 10
+        doc: Set for a raze order.
       - id: guard_activity
         type: u4
-      - id: guard_unknown1
+      - id: guard_doing
         type: u4
-      - id: guard_unknown2
+        doc: |
+          0 nothing, 1 resting at its post, 2 going back to it, 3 shelling an
+          intruder, 4 attacking one.
+      - id: guard_sent_back
         type: u1
-      - id: guard_unknown3
+        doc: Set once it's been sent back to its post.
+      - id: guard_target
         type: u4
+        doc: |
+          The thing id of the actor it guards, whose post moves with it; 0 for a
+          place.
       - id: guard_location
         type: vec2
       - id: guard_facing
@@ -3310,8 +3437,9 @@ types:
         type: u4
       - id: reform_activity
         type: u4
-      - id: reform_unknown
-        type: u4
+      - id: reform_started
+        type: f4
+        doc: When it began reforming.
       - id: engage_activity
         type: u4
       - id: num_engage_targets
@@ -3319,12 +3447,16 @@ types:
       - id: engage_targets
         size: num_engage_targets * 8
         doc: Two u4s per target.
-      - id: engage_unknown1
+      - id: engage_siege_city
         type: u4
         if: version >= 18
-      - id: engage_unknown2
+        doc: |
+          The city under siege when the fighting broke out, else 0; AA never
+          reads it.
+      - id: engage_all_fighting
         type: u1
         if: version >= 19
+        doc: Set while every member is fighting a target it may attack.
       - id: engage_old
         type: u1
         if: version >= 5
@@ -3333,43 +3465,57 @@ types:
         type: u4
       - id: retreat_location
         type: vec2
-      - id: retreat_unknown
-        type: u4
+      - id: retreat_started
+        type: f4
+        doc: When it began retreating; AA never reads it.
       - id: rout_activity
         type: u4
       - id: rout_old
         size: 8
         doc: Ignored by the game.
-      - id: rout_unknown
-        type: u4
+      - id: rout_started
+        type: f4
+        doc: When the rout began.
       - id: explore_activity
         type: u4
-      - id: explore_unknown1
-        size: 8
-      - id: explore_unknown2
-        size: 8
-      - id: explore_unknown3
+      - id: explore_around
+        type: vec2
+        doc: The point, (x, y), it explores around; (0, -1) for none.
+      - id: explore_heading
+        type: vec2
+        doc: The place, (x, y), it's heading for now; (0, -1) for none.
+      - id: explore_heading_score
         type: f4
         if: version >= 17
-      - id: explore_unknown4
+        doc: How good that place was judged; -10000 for none.
+      - id: explore_heading_known
         type: u4
         if: version >= 17
-      - id: explore_old
+        doc: |
+          How well its kingdom knows that place: 0 in view, 1 explored, 2 never
+          seen.
+      - id: explore_kind
         type: u4
         if: version >= 17
-        doc: Ignored by the game.
+        doc: |
+          What kind of place it picks: 0 somewhere near it at random, 1 a
+          waypoint or the point it was ordered to.
       - id: join_activity
         type: u4
-      - id: join_unknown1
+      - id: join_target
         type: u4
-      - id: join_unknown2
+        doc: The thing id of the actor it's joining.
+      - id: join_arrived
         type: u1
-      - id: join_unknown3
+        doc: Set once it has arrived.
+      - id: join_portal
         type: u1
         if: version >= 7
-      - id: join_unknown4
+        doc: Set when it's joining a portal, which its members go into one by one.
+      - id: join_through
         type: u4s
         if: version >= 7
+        doc: Thing ids of the members already through the portal.
       - id: exhausted_activity
         type: u4
       - id: unpack_activity
@@ -3381,9 +3527,12 @@ types:
       - id: unpack_facing
         type: vec2
         if: version >= 21
-      - id: unpack_unknown
+      - id: unpack_tries
         type: u4
         if: version >= 16
+        doc: |
+          How many times it has told its leader to unpack; it gives up on the
+          second failure.
       - id: pack_activity
         type: u4
         if: version >= 14

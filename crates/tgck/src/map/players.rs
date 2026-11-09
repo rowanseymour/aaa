@@ -423,8 +423,9 @@ pub struct Ability {
     pub last_used: f32,
     /// Never used.
     pub unused1: u32,
-    /// Never used.
-    pub unused2: u8,
+    /// Whether the actor may use it now: 0 while it lacks a required property
+    /// or is outside the required experience levels.
+    pub usable: u8,
     /// The things it's acting on; from version 1 on.
     pub active_targets: Option<Vec<u32>>,
 }
@@ -835,7 +836,7 @@ impl Ability {
             use_count: cur.u32()?,
             last_used: cur.f32()?,
             unused1: cur.u32()?,
-            unused2: cur.u8()?,
+            usable: cur.u8()?,
             active_targets: (version >= 1).then(|| cur.u32s()).transpose()?,
         })
     }
@@ -845,7 +846,7 @@ impl Ability {
         w.u32(self.use_count);
         w.f32(self.last_used);
         w.u32(self.unused1);
-        w.u8(self.unused2);
+        w.u8(self.usable);
         if let Some(targets) = &self.active_targets {
             w.u32s(targets);
         }
@@ -1028,7 +1029,7 @@ pub(super) mod tests {
                 use_count: 2,
                 last_used: 1.5,
                 unused1: 0,
-                unused2: 1,
+                usable: 1,
                 active_targets: Some(vec![9]),
             }
             .write(w);

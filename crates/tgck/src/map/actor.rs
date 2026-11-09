@@ -122,8 +122,9 @@ pub struct Construction {
     pub progress: Vec<f32>,
     /// From version 1 on.
     pub upgrade: Option<Upgrade>,
-    /// Before version 1.
-    pub unknown: Option<[u32; 2]>,
+    /// Before version 1: an upgrade under the old rules, which the game
+    /// refuses unless both are 0.
+    pub old_upgrade: Option<[u32; 2]>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -474,7 +475,7 @@ impl Construction {
         let updatable = Updatable::parse(cur)?;
         let version = version(cur, "construction", 1)?;
         let progress = cur.list(Cursor::f32)?;
-        let (upgrade, unknown) = if version >= 1 {
+        let (upgrade, old_upgrade) = if version >= 1 {
             let progress = cur.list(Cursor::f32)?;
             let template = cur.string()?;
             (Some(Upgrade { progress, template }), None)
@@ -486,7 +487,7 @@ impl Construction {
             version,
             progress,
             upgrade,
-            unknown,
+            old_upgrade,
         })
     }
 
@@ -498,8 +499,8 @@ impl Construction {
             write_f32s(w, &upgrade.progress);
             w.string(&upgrade.template)?;
         }
-        if let Some(unknown) = self.unknown {
-            unknown.iter().for_each(|&v| w.u32(v));
+        if let Some(old) = self.old_upgrade {
+            old.iter().for_each(|&v| w.u32(v));
         }
         Ok(())
     }
@@ -1045,6 +1046,11 @@ fn skip_id_list(cur: &mut Cursor) -> Result<()> {
     cur.u32s().map(drop)
 }
 
+fn skip_resource_amounts(cur: &mut Cursor) -> Result<()> {
+    version(cur, "resource amounts", 0)?;
+    cur.list(Cursor::f32).map(drop)
+}
+
 fn skip_defender(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
     let v = version(cur, "defender", 2)?;
@@ -1072,8 +1078,9 @@ fn skip_transport(cur: &mut Cursor) -> Result<()> {
         cur.u32()?;
     }
     cur.u32()?;
-    skip_id_list(cur)?;
-    skip_id_list(cur)?;
+    // The cargo's cost and upkeep.
+    skip_resource_amounts(cur)?;
+    skip_resource_amounts(cur)?;
     if v >= 3 && cur.u8()? != 0 {
         cur.bytes(8)?;
     }
@@ -1242,10 +1249,7 @@ fn skip_organization_mind(cur: &mut Cursor) -> Result<()> {
     if v >= 3 {
         cur.u32()?;
     }
-    // Every map has a u32 here, 0, that the game's loader doesn't
-    // appear to read; its place between the path and the string below
-    // is a guess.
-    cur.bytes(16)?;
+    cur.bytes(12)?;
     if v < 8 {
         cur.u8()?;
     }
@@ -1256,7 +1260,7 @@ fn skip_organization_mind(cur: &mut Cursor) -> Result<()> {
     }
     if v >= 4 {
         cur.bytes(8)?;
-        if (5..13).contains(&v) {
+        if v == 4 || v >= 13 {
             cur.u32()?;
         }
     }
@@ -1449,7 +1453,7 @@ mod tests {
                 progress: vec![],
                 template: "ger_factory_2".into(),
             }),
-            unknown: None,
+            old_upgrade: None,
         });
         let property = |class, extra| Property {
             class,
