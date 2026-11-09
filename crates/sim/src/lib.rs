@@ -1456,6 +1456,7 @@ impl World {
     ) -> Result<(), Refused> {
         self.may_commission(player, building, &commission.regiment)?;
         commission.paid = self.cost(&commission.regiment);
+        commission.held = false;
         let left = self.stockpile(player) - commission.paid;
         self.set_stockpile(player, left);
         commission.id = self.next_commission;
@@ -1949,9 +1950,11 @@ impl World {
         }
         for (r, enemy) in meetings {
             let regiment = &self.regiments[r];
+            // What's already gone or out of reach would only be dropped
+            // again, such as what fired the tick it died.
             if regiment.order == Order::Run
                 || regiment.engaged.contains(&enemy)
-                || !self.hostile(r, enemy)
+                || !self.within_range(r, enemy)
                 || self.destroyed(r)
             {
                 continue;
@@ -2656,13 +2659,56 @@ impl World {
     }
 
     fn can_hit(&self, s: Target, weapon: &Weapon, t: Target) -> bool {
-        let d = self.reach(self.position(s), t);
-        // Ranges run edge to edge, so a building's from its own edge too.
-        let d = match s {
-            Target::Building(b) => d.min(self.buildings[b].distance(self.position(t))),
-            Target::Unit(_) => d,
+        // What stands on the other is in range, and never too near.
+        let near_enough = self.gap(s, t).is_none_or(|gap| {
+            gap <= weapon.range && (weapon.min_range <= 0.0 || gap > weapon.min_range)
+        });
+        near_enough && self.can_target(s, weapon, t)
+    }
+
+    /// The outline weapons' ranges run to and from, where `t` stands; a
+    /// point for what can't fight.
+    fn outline(&self, t: Target) -> Obstacle {
+        let (shape, facing) = match t {
+            Target::Unit(u) => {
+                let unit = &self.units[u];
+                (unit.fighter.as_ref().map(|f| f.target), unit.facing)
+            }
+            Target::Building(b) => {
+                let b = &self.buildings[b];
+                (Some(b.fighter.target), b.facing)
+            }
         };
-        d <= weapon.range && d >= weapon.min_range && self.can_target(s, weapon, t)
+        let shape = shape.unwrap_or(Shape::Point);
+        Obstacle {
+            position: self.position(t),
+            facing,
+            shape,
+            soft: shape,
+        }
+    }
+
+    /// How far apart `s` and `t` are, edge to edge, for `s` to fire on
+    /// `t`; `None` where one stands on the other. Between a rectangle and
+    /// anything else, the other counts as the circle round it; of two
+    /// rectangles the smaller does, or `t` if they're as big.
+    fn gap(&self, s: Target, t: Target) -> Option<f32> {
+        let (from, to) = (self.outline(s), self.outline(t));
+        let is_rect = |o: &Obstacle| matches!(o.shape, Shape::Rect { .. });
+        let (kept, other) = match (is_rect(&from), is_rect(&to)) {
+            (false, false) => {
+                let apart = distance(from.position, to.position);
+                return Some(apart - bounding_radius(from.shape) - bounding_radius(to.shape));
+            }
+            (true, false) => (from, to),
+            (false, true) => (to, from),
+            (true, true) => match bounding_radius(to.shape) > bounding_radius(from.shape) {
+                true => (to, from),
+                false => (from, to),
+            },
+        };
+        let apart = kept.distance(other.position);
+        (apart > 0.0).then(|| apart - bounding_radius(other.shape))
     }
 
     /// Whether `weapon` fires on what `t` is, wherever it stands.
@@ -2674,6 +2720,12 @@ impl World {
     /// standing toward `s`'s, has the flags `targets` asks for, alive or
     /// not.
     pub fn matches(&self, s: Target, targets: &aaa_map::Targets, t: Target) -> bool {
+        self.fits(self.owner(s), targets, t)
+    }
+
+    /// As [`World::matches`], for something of player `by`'s, which a shot
+    /// in flight stays whatever becomes of what fired it.
+    fn fits(&self, by: u32, targets: &aaa_map::Targets, t: Target) -> bool {
         let fighter = match t {
             Target::Unit(u) => self.units[u].fighter.as_ref(),
             Target::Building(b) => Some(&self.buildings[b].fighter),
@@ -2681,7 +2733,7 @@ impl World {
         let Some(fighter) = fighter else {
             return false;
         };
-        let side = match self.sides.relation(self.owner(s), self.owner(t)) {
+        let side = match self.sides.relation(by, self.owner(t)) {
             Relation::Enemy => "enemy",
             Relation::Ally | Relation::Itself => "friend",
             _ => "neutral",
@@ -2691,7 +2743,8 @@ impl World {
     }
 
     /// Records the damage a shot fired by `from` of `by`'s side, landing at
-    /// `at` and aimed at `t`, does to what it hits.
+    /// `at` and aimed at `t`, does to what it hits: `t`, or for an area
+    /// shot whatever around `at` the weapon fires on, but never `from`.
     fn strike(
         &self,
         weapon: &Weapon,
@@ -2712,11 +2765,13 @@ impl World {
             return;
         }
         for target in self.targets() {
-            let d = self.reach(at, target);
-            if d > weapon.area {
+            let f = self.fighter(target).expect("targets can fight");
+            // To the circle round its soft shape, however it's turned.
+            let d = distance(at, self.position(target)) - bounding_radius(f.soft);
+            let d = d.max(0.0);
+            if d > weapon.area || target == from || !self.fits(by, &weapon.targets, target) {
                 continue;
             }
-            let f = self.fighter(target).expect("targets can fight");
             hits.push(Hit {
                 target,
                 amount: damage(weapon, f, falloff(weapon, d)),
@@ -2748,10 +2803,13 @@ impl World {
     fn holder(&self, c: usize, zone: f32) -> Option<u32> {
         let centre = self.buildings[c].position;
         let owner = self.buildings[c].owner;
-        // Armed occupants, each by its health's share.
+        // Armed occupants, each by its health's share. Independent sides'
+        // and nobody's don't count.
+        let counts = |o: u32| self.sides.player(o).is_some_and(|p| !p.independent);
         let occupants: Vec<(u32, f32)> = self
             .targets()
             .filter(|&t| t != Target::Building(c) && self.reach(centre, t) <= zone)
+            .filter(|&t| counts(self.owner(t)))
             .filter_map(|t| {
                 let f = self.fighter(t).filter(|f| !f.weapons.is_empty())?;
                 let health = match t {
@@ -2828,6 +2886,15 @@ fn damage(weapon: &Weapon, target: &Fighter, scale: f32) -> f32 {
 /// facing `facing` lies.
 fn deploy_point(position: [f32; 2], facing: [f32; 2], offset: [f32; 2]) -> [f32; 2] {
     aaa_map::from_local(position, facing, offset)
+}
+
+/// The radius of the circle round a shape: through a rectangle's corners.
+fn bounding_radius(shape: Shape) -> f32 {
+    match shape {
+        Shape::Point => 0.0,
+        Shape::Circle { radius } => radius,
+        Shape::Rect { width, height } => libm::hypotf(width, height) / 2.0,
+    }
 }
 
 fn distance(a: [f32; 2], b: [f32; 2]) -> f32 {
@@ -3409,6 +3476,8 @@ mod tests {
             attack_height: 1.45,
             notice: None,
             turrets: Vec::new(),
+            soft: Shape::Point,
+            target: Shape::Point,
         }
     }
 
@@ -3447,11 +3516,15 @@ mod tests {
 
     /// Players 1 and 2 at war, and 3 allied to 1.
     fn at_war() -> Sides {
+        let side = |id, relations: &[u32]| Player {
+            independent: false,
+            ..player(id, None, relations, &[])
+        };
         Sides {
             players: vec![
-                player(1, None, &[0, 3, 1], &[]),
-                player(2, None, &[3, 0, 3], &[]),
-                player(3, None, &[1, 3, 0], &[]),
+                side(1, &[0, 3, 1]),
+                side(2, &[3, 0, 3]),
+                side(3, &[1, 3, 0]),
             ],
             teams: Vec::new(),
         }
@@ -3604,6 +3677,37 @@ mod tests {
         assert_eq!(w.regiments[0].current_formation(), 0);
         run(&mut w, 15.0);
         assert!(near(w.units[0].position, [30.0, 20.0]));
+    }
+
+    #[test]
+    fn moving_regiments_carry_on_past_what_dies_as_it_fires_on_them() {
+        // A gun that fires on the move and kills outright.
+        let mut gun = rifle(12.0, 500.0);
+        gun.turret = true;
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![gun]), soldier(vec![rifle(12.0, 10.0)])],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 30.0];
+        w.apply(
+            1,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 60.0],
+            },
+        )
+        .unwrap();
+        // Each fires as the first comes into range, 4s on.
+        let mut before = w.units[0].position;
+        for _ in 0..60 {
+            w.tick();
+            let u = &w.units[0];
+            assert!(w.regiments[0].engaged.is_empty());
+            assert!(near(u.facing, [0.0, 1.0]) && u.position[1] > before[1]);
+            before = u.position;
+        }
+        assert!(!w.units[1].alive() && w.units[0].health < 100.0);
     }
 
     #[test]
@@ -4071,6 +4175,40 @@ mod tests {
         assert_eq!(falloff(&shell, 6.0), 0.5);
     }
 
+    #[test]
+    fn area_shots_hit_only_what_their_weapon_fires_on() {
+        let shell = || Weapon {
+            area: 6.0,
+            full_within: 2.0,
+            edge_damage: 0.5,
+            ..rifle(30.0, 40.0)
+        };
+        // A friend 2 from where the shell lands, on an enemy.
+        let mut w = battle(
+            &[1, 1, 2],
+            vec![
+                soldier(vec![shell()]),
+                soldier(Vec::new()),
+                soldier(Vec::new()),
+            ],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 28.0];
+        w.tick();
+        assert_eq!(w.units[1].health, 100.0);
+        assert_eq!(w.units[2].health, 60.0);
+        // An enemy near enough for the shell to reach back to what fired it.
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![shell()]), soldier(Vec::new())],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 12.0];
+        w.tick();
+        assert_eq!(w.units[0].health, 100.0);
+        assert_eq!(w.units[1].health, 60.0);
+    }
+
     /// An unarmed building of `owner`'s with 100 health, 6 across and
     /// square to the axes, at `position`.
     fn building(id: u32, owner: u32, position: [f32; 2]) -> aaa_map::Building {
@@ -4083,6 +4221,14 @@ mod tests {
             fighter: Fighter {
                 flags: vec![Id::from("building")],
                 destructible: false,
+                soft: Shape::Rect {
+                    width: 7.0,
+                    height: 7.0,
+                },
+                target: Shape::Rect {
+                    width: 6.0,
+                    height: 6.0,
+                },
                 ..soldier(Vec::new())
             },
             health: 1.0,
@@ -4287,6 +4433,88 @@ mod tests {
     }
 
     #[test]
+    fn ranges_run_between_units_edges() {
+        // 14 apart, out of the rifles' 12 until each reaches 1 from its
+        // middle.
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![rifle(12.0, 30.0)]), soldier(Vec::new())],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 24.0];
+        w.tick();
+        assert_eq!(w.units[1].health, 100.0);
+        for u in &mut w.units {
+            u.fighter.as_mut().unwrap().target = Shape::Circle { radius: 1.0 };
+        }
+        w.tick();
+        assert_eq!(w.units[1].health, 70.0);
+        // Too near once the gap is no more than the least it fires at.
+        let weapon = Weapon {
+            min_range: 12.0,
+            ..rifle(20.0, 30.0)
+        };
+        let (s, t) = (Target::Unit(0), Target::Unit(1));
+        assert!(!w.can_hit(s, &weapon, t));
+        w.units[1].position = [10.0, 24.5];
+        assert!(w.can_hit(s, &weapon, t));
+    }
+
+    #[test]
+    fn ranges_take_what_meets_a_rectangle_as_the_circle_round_it() {
+        // A house 6 square, its edge 12 from a soldier's middle.
+        let mut w = siege(&[building(20, 2, [10.0, 25.0])]);
+        let (s, t) = (Target::Unit(0), Target::Building(0));
+        assert_eq!(w.gap(s, t), Some(12.0));
+        // The soldier as a rectangle 2 by 4: the circle through its
+        // corners, whichever fires.
+        w.units[0].fighter.as_mut().unwrap().target = Shape::Rect {
+            width: 2.0,
+            height: 4.0,
+        };
+        let round = libm::hypotf(2.0, 4.0) / 2.0;
+        assert!((w.gap(s, t).unwrap() - (12.0 - round)).abs() < 1e-5);
+        assert_eq!(w.gap(s, t), w.gap(t, s));
+        // Standing on it is in range of everything.
+        w.units[0].position = [10.0, 24.0];
+        assert_eq!(w.gap(s, t), None);
+        let weapon = Weapon {
+            min_range: 5.0,
+            ..rifle(1.0, 30.0)
+        };
+        assert!(w.can_hit(s, &weapon, t));
+    }
+
+    #[test]
+    fn area_shots_reach_the_circle_round_a_targets_soft_shape() {
+        let shell = Weapon {
+            area: 6.0,
+            ..rifle(30.0, 40.0)
+        };
+        // A bystander 7 from where the shell lands.
+        let mut w = battle(
+            &[1, 2, 2],
+            vec![
+                soldier(vec![shell]),
+                soldier(Vec::new()),
+                soldier(Vec::new()),
+            ],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 30.0];
+        w.units[2].position = [17.0, 30.0];
+        w.units[0].target = Some(Target::Unit(1));
+        w.tick();
+        assert_eq!((w.units[1].health, w.units[2].health), (60.0, 100.0));
+        w.units[2].fighter.as_mut().unwrap().soft = Shape::Rect {
+            width: 2.0,
+            height: 2.0,
+        };
+        run(&mut w, 2.0);
+        assert_eq!((w.units[1].health, w.units[2].health), (20.0, 60.0));
+    }
+
+    #[test]
     fn range_reaches_to_a_buildings_edge() {
         // Its middle is 14 off, out of the rifle's 12, but its edge 11.
         let mut w = siege(&[building(20, 2, [10.0, 24.0])]);
@@ -4418,6 +4646,21 @@ mod tests {
         run(&mut w, 15.0);
         assert_eq!(w.buildings[0].owner, 2);
         w.units[1].died = Some(w.ticks);
+        w.tick();
+        assert_eq!(w.buildings[0].owner, 1);
+    }
+
+    #[test]
+    fn independent_sides_dont_take_cities() {
+        let mut sides = at_war();
+        sides.players[0].independent = true;
+        let mut w = battle(&[1], vec![soldier(vec![rifle(1.0, 30.0)])], sides);
+        w.add_buildings(&city());
+        w.units[0].position = [40.0, 15.0];
+        run(&mut w, 1.0);
+        assert_eq!(w.buildings[0].owner, 2);
+        // The same soldier takes it for a side that isn't.
+        w.sides.players[0].independent = false;
         w.tick();
         assert_eq!(w.buildings[0].owner, 1);
     }
@@ -5474,9 +5717,12 @@ mod tests {
     fn commissions_wait_at_the_front_of_the_queue_for_room_under_limits() {
         let mut w = economy();
         let company = raised_company(&mut w, 1);
+        // An order can't say it has its share of the limits already.
+        let mut commission = Commission::new(company, 1.0);
+        commission.held = true;
         let order = Command::Commission {
             building: 0,
-            commission: Box::new(Commission::new(company, 1.0)),
+            commission: Box::new(commission),
         };
         // Accepted and paid for though there's no room.
         w.apply(1, order).unwrap();

@@ -251,6 +251,10 @@ pub struct Fighter {
     pub notice: Option<f32>,
     /// The parts that turn to aim its weapons.
     pub turrets: Vec<Turret>,
+    /// Its soft shape: area shots reach as far as the circle round it.
+    pub soft: Shape,
+    /// The outline weapons' ranges run to and from.
+    pub target: Shape,
 }
 
 /// A part of a fighter that turns to aim its weapons, without turning the
@@ -1987,6 +1991,21 @@ fn soft_shape(thing: &defs::Thing) -> Shape {
     shape(thing, kind, |s| s.soft_radius, 0.5)
 }
 
+/// The target shape, which where the template leaves it `null` is the
+/// soft shape.
+fn target_shape(thing: &defs::Thing) -> Shape {
+    let kind = thing
+        .size
+        .iter()
+        .rev()
+        .find_map(|s| s.target_shape.as_deref())
+        .filter(|k| !k.trim().is_empty() && !k.trim().eq_ignore_ascii_case("null"));
+    match kind {
+        Some(kind) => shape(thing, Some(kind), |s| s.target_radius, 0.5),
+        None => soft_shape(thing),
+    }
+}
+
 fn footing(thing: &defs::Thing) -> Footing {
     let flag =
         |f: fn(&defs::Flags) -> Option<bool>| thing.flags.iter().rev().find_map(f) == Some(true);
@@ -2037,6 +2056,8 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
         destructible: body.destructible.unwrap_or(true),
         notice: (thing.defender_component.as_ref())
             .map(|d| d.control_range.unwrap_or(0.0).max(0.0)),
+        soft: soft_shape(thing),
+        target: target_shape(thing),
         ..Fighter::default()
     };
     let properties = thing.properties_component.iter().flat_map(|c| {
@@ -3525,6 +3546,24 @@ mod tests {
         };
         assert_eq!(conform(0), Some(footprint));
         assert_eq!(conform(1), None);
+    }
+
+    #[test]
+    fn target_shapes_left_null_are_the_soft_shape() {
+        let parsed = tgi::parse(
+            "[Thing]\n{\n\tIDS = tank\n\t[Size]\n\tblocking_shape = CIRCLE\n\
+             \tsoft_radius = 2\n\ttarget_shape = null\n\ttarget_radius = 3\n}\n\
+             [Thing]\n{\n\tIDS = ship\n\t[Size]\n\tblocking_shape = RECT\n\trect_width = 3\n\
+             \trect_height = 5\n\ttarget_shape = CIRCLE\n\ttarget_radius = 4\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let shapes: Vec<Shape> = parsed
+            .root
+            .blocks_of("Thing")
+            .map(|b| target_shape(&templates.deserialize(b).unwrap()))
+            .collect();
+        let circle = |radius| Shape::Circle { radius };
+        assert_eq!(shapes, [circle(2.0), circle(4.0)]);
     }
 
     #[test]
