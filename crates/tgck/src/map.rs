@@ -46,7 +46,10 @@ use crate::container::{Container, Section};
 use crate::{Cursor, Error, Result, Writer};
 
 /// World units between adjacent height-map vertices.
-pub const CELL_SIZE: f32 = 2.0;
+pub const CELL_SIZE: f32 = (1 << RESOLUTION_BITS) as f32;
+
+/// The `resolution_bits` of maps whose grid is [`CELL_SIZE`] apart.
+pub const RESOLUTION_BITS: u32 = 1;
 
 pub struct Map<R> {
     container: Container<R>,
