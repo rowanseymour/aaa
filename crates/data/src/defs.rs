@@ -520,6 +520,10 @@ pub struct Size {
     /// blocking shape's kind.
     pub soft_shape: Option<String>,
     pub soft_radius: Option<f32>,
+    /// The outline weapons' ranges run to, sized as the soft shape but for
+    /// a circle's `target_radius`; `null` for the soft shape itself.
+    pub target_shape: Option<String>,
+    pub target_radius: Option<f32>,
     pub square_size: Option<f32>,
     pub rect_width: Option<f32>,
     pub rect_height: Option<f32>,
