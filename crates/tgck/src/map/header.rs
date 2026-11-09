@@ -216,10 +216,7 @@ impl MapHeader {
         w.u32(self.checksum);
         w.string(&self.name)?;
         w.string(&self.description)?;
-        optional(version >= 7, "size", self.size, |size| {
-            w.f32s(&size);
-            Ok(())
-        })?;
+        optional_plain(version >= 7, "size", self.size, |size| w.f32s(&size))?;
         w.f32(self.build);
         w.u32(self.version_number);
         w.string(&self.app_version)?;
@@ -243,9 +240,8 @@ impl MapHeader {
             w.u8(player.ai.into());
             w.string(&player.kingdom)?;
             w.string(&player.name)?;
-            optional(version >= 5, "player local", player.local, |v| {
-                w.u8(v.into());
-                Ok(())
+            optional_plain(version >= 5, "player local", player.local, |v| {
+                w.u8(v.into())
             })?;
         }
         w.u8(0);
@@ -269,6 +265,19 @@ pub(super) fn optional<T>(
             "{what} must be set exactly when its version has it"
         ))),
     }
+}
+
+/// [`optional`] for a value written by a call that can't fail.
+pub(super) fn optional_plain<T>(
+    has: bool,
+    what: &str,
+    value: Option<T>,
+    write: impl FnOnce(T),
+) -> Result<()> {
+    optional(has, what, value, |v| {
+        write(v);
+        Ok(())
+    })
 }
 
 impl WorldRules {

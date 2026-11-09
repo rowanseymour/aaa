@@ -3,7 +3,7 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::header::{bool, check_version, optional};
+use super::header::{bool, check_version, optional, optional_plain};
 use super::{Actor, Detail, Head, Property, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
@@ -157,10 +157,7 @@ impl World {
             (v >= 5, "map_status", self.map_status),
             (v >= 7, "mission_state", self.mission_state),
         ] {
-            optional(has, what, value, |value| {
-                w.u32(value);
-                Ok(())
-            })?;
+            optional_plain(has, what, value, |value| w.u32(value))?;
         }
         Ok(w.0)
     }
@@ -244,10 +241,10 @@ impl Team {
         w.string(&self.display_name)?;
         w.u32s(&self.kingdom_relations);
         w.u32s(&self.team_relations);
-        if let Some(group) = &self.restriction_group {
-            w.string(group)?;
-        }
-        Ok(())
+        let group = self.restriction_group.as_deref();
+        optional(self.version >= 1, "team's restriction group", group, |g| {
+            w.string(g)
+        })
     }
 }
 
@@ -725,8 +722,10 @@ impl Favorites {
         let ids = if self.version >= 1 { lists } else { 0 };
         if self.by_template.len() != lists || self.by_id.len() != ids {
             return Err(Error::Unwritable(format!(
-                "favorites version {} has {lists} lists",
-                self.version
+                "favorites version {} has {lists} lists by template and {ids} by id, not {} and {}",
+                self.version,
+                self.by_template.len(),
+                self.by_id.len()
             )));
         }
         w.u32(self.version);
@@ -760,9 +759,10 @@ impl Totals {
     fn write(&self, w: &mut Writer) -> Result<()> {
         if self.values.len() != Self::count(self.version) {
             return Err(Error::Unwritable(format!(
-                "totals version {} have {} values",
+                "totals version {} have {} values, not {}",
                 self.version,
-                Self::count(self.version)
+                Self::count(self.version),
+                self.values.len()
             )));
         }
         w.u32(self.version);
@@ -823,8 +823,7 @@ impl Faction {
         w.u32(0);
         w.f32(self.experience);
         w.u32(self.abilities.len() as u32);
-        self.abilities.iter().for_each(|a| a.write(w));
-        Ok(())
+        self.abilities.iter().try_for_each(|a| a.write(w))
     }
 }
 
@@ -841,15 +840,16 @@ impl Ability {
         })
     }
 
-    fn write(&self, w: &mut Writer) {
+    fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(self.version);
         w.u32(self.use_count);
         w.f32(self.last_used);
         w.u32(self.unused1);
         w.u8(self.usable);
-        if let Some(targets) = &self.active_targets {
-            w.u32s(targets);
-        }
+        let targets = self.active_targets.as_deref();
+        optional_plain(self.version >= 1, "ability's targets", targets, |t| {
+            w.u32s(t)
+        })
     }
 }
 
@@ -1032,7 +1032,8 @@ pub(super) mod tests {
                 usable: 1,
                 active_targets: Some(vec![9]),
             }
-            .write(w);
+            .write(w)
+            .unwrap();
         }
         w.string(if faction.is_some() { "nation_gbr" } else { "" })
             .unwrap();
@@ -1090,6 +1091,40 @@ pub(super) mod tests {
         w.u32s(&[6]);
         w.bytes(&[0, 1, 0]);
         write_pairs(w, &[("ammo".to_string(), 10.0)], Writer::f32).unwrap();
+    }
+
+    #[test]
+    fn refuses_fields_their_version_lacks() {
+        let ability = Ability {
+            version: 0,
+            use_count: 0,
+            last_used: -1000.0,
+            unused1: 0,
+            usable: 1,
+            active_targets: Some(Vec::new()),
+        };
+        assert!(ability.write(&mut Writer::default()).is_err());
+
+        let team = |version, restriction_group: Option<&str>| Team {
+            head: Head {
+                template: "team".into(),
+                class: TEAM,
+                id: 30,
+                name: "team_30".into(),
+                position: [0.0; 3],
+                facing: [0.0, -1.0, 0.0],
+                flags: 0,
+            },
+            version,
+            display_name: String::new(),
+            kingdom_relations: Vec::new(),
+            team_relations: Vec::new(),
+            restriction_group: restriction_group.map(Into::into),
+        };
+        let write = |t: Team| t.write(&mut Writer::default(), 0);
+        assert!(write(team(0, None)).is_ok());
+        assert!(write(team(0, Some("group"))).is_err());
+        assert!(write(team(1, None)).is_err());
     }
 
     #[test]

@@ -73,7 +73,7 @@ impl<R: Read + Seek> Container<R> {
         let section_count = cur.u32()? as u64;
 
         let table_len = section_count * SECTION_RECORD_LEN;
-        if table_len > len {
+        if table_len > len - head.len() as u64 {
             return Err(Error::Corrupt(format!(
                 "{section_count} sections don't fit in {len} bytes"
             )));
@@ -92,11 +92,11 @@ impl<R: Read + Seek> Container<R> {
                 unknown: cur.u32()?,
                 unpacked_size: cur.u64()?,
             };
-            if section
-                .offset
-                .checked_add(section.stored_size)
-                .is_none_or(|end| end > len)
-            {
+            // Between the file's header and the section table, though an
+            // empty section has no bytes to keep clear of the header.
+            let end = section.offset.checked_add(section.stored_size);
+            let in_head = section.stored_size > 0 && section.offset < head.len() as u64;
+            if in_head || end.is_none_or(|end| end > len - table_len) {
                 return Err(Error::Corrupt(format!(
                     "section {:?} out of bounds",
                     section.name
@@ -288,6 +288,22 @@ mod tests {
         let bytes = build_container(&[("Terrain", b"x", false)]);
         let c = Container::new(io::Cursor::new(&bytes)).unwrap();
         assert!(c.section("TERRAIN").is_some());
+    }
+
+    #[test]
+    fn rejects_sections_outside_the_data() {
+        let bytes = build_container(&[("RAW", b"abcd", false)]);
+        let record = bytes.len() - SECTION_RECORD_LEN as usize;
+        let offset = record + SECTION_NAME_LEN;
+        let at = |value: u64, stored_size: u64| {
+            let mut bytes = bytes.clone();
+            bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+            bytes[offset + 8..offset + 16].copy_from_slice(&stored_size.to_le_bytes());
+            Container::new(io::Cursor::new(bytes)).map(|_| ())
+        };
+        assert!(matches!(at(record as u64, 4), Err(Error::Corrupt(_))));
+        assert!(matches!(at(0, 4), Err(Error::Corrupt(_))));
+        assert!(at(0, 0).is_ok(), "an empty section is nowhere");
     }
 
     #[test]

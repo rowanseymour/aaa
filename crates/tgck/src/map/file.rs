@@ -81,7 +81,7 @@ impl MapFile {
             })?;
             write_things(objects)
         };
-        Ok(match name {
+        Ok(match known(name).unwrap_or_default() {
             "MAP" => self.data_version.to_le_bytes().to_vec(),
             "MAP_HEADER" => self.header.to_bytes()?,
             "GWORLD" => self.world.to_bytes()?,
@@ -125,7 +125,7 @@ impl<R: Read + Seek> Map<R> {
     /// nothing is lost when the map is written back.
     pub fn load(&mut self) -> Result<MapFile> {
         let sections = self.sections().to_vec();
-        if let Some(s) = sections.iter().find(|s| !KNOWN.contains(&s.name.as_str())) {
+        if let Some(s) = sections.iter().find(|s| known(&s.name).is_none()) {
             return Err(Error::Corrupt(format!(
                 "section {:?} isn't decoded",
                 s.name
@@ -156,6 +156,12 @@ impl<R: Read + Seek> Map<R> {
             sections,
         })
     }
+}
+
+/// The name in [`KNOWN`] that `name` is, ignoring ASCII case as the
+/// container's lookups do.
+fn known(name: &str) -> Option<&'static str> {
+    KNOWN.iter().copied().find(|k| k.eq_ignore_ascii_case(name))
 }
 
 /// The sections [`MapFile`] decodes.
@@ -310,6 +316,26 @@ mod tests {
         assert_eq!(again.things[0].position, [7.0, 8.0, 0.0]);
         assert_eq!(again.strings, map.strings);
         assert_eq!(again.to_bytes().unwrap(), saved);
+    }
+
+    #[test]
+    fn ignores_the_case_of_section_names() {
+        let mut sections = sections();
+        let terrain = sections.iter_mut().find(|s| s.0 == "TERRAIN").unwrap();
+        terrain.0 = "Terrain";
+        let bytes = file(&sections);
+        let map = Map::new(io::Cursor::new(&bytes)).unwrap().load().unwrap();
+        assert_eq!(map.to_bytes().unwrap(), bytes);
+    }
+
+    #[test]
+    fn refuses_half_a_pair_of_sections() {
+        for name in ["USED_REQUIRED_OBJECTS", "USED_REQUIRED_OBJECTS_INDEX"] {
+            let mut sections = sections();
+            sections.retain(|s| s.0 != name);
+            let mut map = Map::new(io::Cursor::new(file(&sections))).unwrap();
+            assert!(map.load().is_err(), "without {name}");
+        }
     }
 
     #[test]

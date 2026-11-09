@@ -249,7 +249,7 @@ fn map(path: &str) -> Res {
     let extent = hm.side.saturating_sub(1) as f32 * tgck::map::CELL_SIZE;
     outln!("{path}: \"{name}\"");
     let side = hm.side;
-    let water_pct = 100.0 * water as f64 / hm.layer.len() as f64;
+    let water_pct = 100.0 * water as f64 / hm.layer.len().max(1) as f64;
     outln!(
         "  terrain {side}x{side} vertices ({extent} world units), heights {lo:.2}..{hi:.2}, water {water_pct:.1}%"
     );
