@@ -9,11 +9,12 @@ pub mod economy;
 pub mod path;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::f32::consts::{PI, TAU};
 
 use aaa_map::pathing::tile_at;
 use aaa_map::{
-    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Shape, Unpacks,
-    Weapon,
+    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Shape, Turret,
+    Unpacks, Weapon,
 };
 
 pub use aaa_map::{Player, Relation, Team};
@@ -418,6 +419,8 @@ pub struct Building {
     /// For one that defends itself, what it's noticed, which is all it
     /// fires on.
     pub noticed: Vec<Enemy>,
+    /// Where each of its fighter's turrets points.
+    pub turrets: Vec<TurretAim>,
     /// The tick it last fired on, and the index of the weapon it fired.
     pub shot: Option<(u64, usize)>,
     pub state: State,
@@ -622,6 +625,52 @@ impl Building {
             None => distance(from, self.position),
         }
     }
+
+    /// The yaw its turret `turret` would point at `at` with, from where the
+    /// turret stands; `None` from right there.
+    fn yaw_to(&self, turret: &Turret, at: [f32; 2]) -> Option<f32> {
+        let [ahead, left] = turret.offset;
+        let spot = aaa_map::from_local(self.position, self.facing, [-left, ahead]);
+        let [right, ahead] = aaa_map::to_local(spot, self.facing, at);
+        (right != 0.0 || ahead != 0.0).then(|| libm::atan2f(-right, ahead))
+    }
+
+    /// Whether its turret `turret` can be aimed at `at`.
+    fn in_arc(&self, turret: &Turret, at: [f32; 2]) -> bool {
+        turret.sweep >= TAU
+            || self
+                .yaw_to(turret, at)
+                .is_none_or(|yaw| wrap(yaw - turret.start).abs() <= turret.sweep / 2.0)
+    }
+}
+
+/// Where one of a building's turrets points, in radians from the
+/// building's facing, counter-clockwise seen from above.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TurretAim {
+    pub yaw: f32,
+    /// Seconds since it last turned toward something to fire on.
+    idle: f32,
+}
+
+impl TurretAim {
+    /// Turns toward `yaw` by up to a tick's worth of `turret`'s turn rate,
+    /// the short way round, returning whether it got there.
+    fn turn(&mut self, turret: &Turret, yaw: f32) -> bool {
+        let step = turret.turn_rate * TICK;
+        let left = wrap(yaw - self.yaw);
+        if left.abs() <= step {
+            self.yaw = yaw;
+            return true;
+        }
+        self.yaw = wrap(self.yaw + step.copysign(left));
+        false
+    }
+}
+
+/// An angle in radians brought into -π to π.
+fn wrap(angle: f32) -> f32 {
+    angle - TAU * ((angle + PI) / TAU).floor()
 }
 
 /// Something a weapon can fire on.
@@ -803,6 +852,12 @@ impl World {
                 position: b.position,
                 facing: b.facing,
                 reloads: vec![0.0; b.fighter.weapons.len()],
+                turrets: (b.fighter.turrets.iter())
+                    .map(|t| TurretAim {
+                        yaw: t.start,
+                        idle: 0.0,
+                    })
+                    .collect(),
                 fighter: b.fighter.clone(),
                 health,
                 target: None,
@@ -2029,6 +2084,11 @@ impl World {
                 }
             };
             let by = self.owner(s);
+            let mut turrets = match s {
+                Target::Building(b) => self.buildings[b].turrets.clone(),
+                Target::Unit(_) => Vec::new(),
+            };
+            let mut turned = vec![false; turrets.len()];
             for (w, weapon) in fighter.weapons.iter().enumerate() {
                 reloads[w] = (reloads[w] - TICK).max(0.0);
                 if reloads[w] > 0.0 || moving && !weapon.turret {
@@ -2038,6 +2098,19 @@ impl World {
                     continue;
                 };
                 target = Some(t);
+                // A building's turret must point at its target first.
+                if let (Target::Building(b), Some(i)) = (s, weapon.aimed_by) {
+                    let building = &self.buildings[b];
+                    let turret = &building.fighter.turrets[i];
+                    turned[i] = true;
+                    let pointing = match building.yaw_to(turret, self.position(t)) {
+                        Some(yaw) => turrets[i].turn(turret, yaw),
+                        None => true,
+                    };
+                    if !pointing {
+                        continue;
+                    }
+                }
                 shot = Some((self.ticks, w));
                 reloads[w] = weapon.recharge;
                 match weapon.flight {
@@ -2052,7 +2125,18 @@ impl World {
                 }
                 Target::Building(b) => {
                     let b = &mut self.buildings[b];
-                    (b.reloads, b.target, b.shot) = (reloads, target, shot);
+                    for (i, (aim, turret)) in turrets.iter_mut().zip(&b.fighter.turrets).enumerate()
+                    {
+                        if turned[i] {
+                            aim.idle = 0.0;
+                            continue;
+                        }
+                        aim.idle += TICK;
+                        if turret.reset.is_some_and(|r| aim.idle > r) {
+                            aim.turn(turret, turret.start);
+                        }
+                    }
+                    (b.reloads, b.target, b.shot, b.turrets) = (reloads, target, shot, turrets);
                 }
             }
         }
@@ -2257,7 +2341,9 @@ impl World {
                 .filter(|&t| distance(building.position, self.position(t)) <= near)
                 .filter(|&t| {
                     let weapons = &building.fighter.weapons;
-                    weapons.iter().any(|w| self.can_target(s, w, t))
+                    weapons
+                        .iter()
+                        .any(|w| self.can_target(s, w, t) && self.in_arc(b, w, t))
                 })
                 .map(|t| self.enemy(t))
                 .collect();
@@ -2288,6 +2374,7 @@ impl World {
         let valid = |t: Target| {
             noticed.contains(&self.enemy(t))
                 && self.can_hit(s, weapon, t)
+                && self.in_arc(b, weapon, t)
                 && self.defended_rank(t) > 0
         };
         if let Some(t) = last.filter(|&t| valid(t) && self.defended_rank(t) >= 2) {
@@ -2299,6 +2386,15 @@ impl World {
         self.targets()
             .filter(|&t| valid(t))
             .max_by(|&a, &b| (self.defended_rank(a).cmp(&self.defended_rank(b))).then(nearer(a, b)))
+    }
+
+    /// Whether building `b`'s turret for `weapon`, if it has one, can be
+    /// aimed at `t`'s centre.
+    fn in_arc(&self, b: usize, weapon: &Weapon, t: Target) -> bool {
+        let building = &self.buildings[b];
+        weapon
+            .aimed_by
+            .is_none_or(|i| building.in_arc(&building.fighter.turrets[i], self.position(t)))
     }
 
     /// How much a target is worth a defending building's fire before
@@ -3035,6 +3131,7 @@ mod tests {
             animation: None,
             turret: false,
             turret_point: None,
+            aimed_by: None,
             spawn_position: [0.0; 3],
             sounds: Vec::new(),
             effects: Default::default(),
@@ -3054,6 +3151,7 @@ mod tests {
             weapons,
             attack_height: 1.45,
             notice: None,
+            turrets: Vec::new(),
         }
     }
 
@@ -3793,6 +3891,114 @@ mod tests {
         w.units[0].position = [10.0, 10.0];
         run(&mut w, 2.0);
         assert_eq!(w.units[0].health, 80.0);
+    }
+
+    /// A pillbox south of the siege's soldier, facing it, whose rifle is on
+    /// a turret that starts `start` degrees round, turns 90° a second and
+    /// aims within `sweep` degrees.
+    fn turreted(start: f32, sweep: f32) -> World {
+        let mut pillbox = building(20, 2, [10.0, 24.0]);
+        pillbox.fighter.weapons = vec![Weapon {
+            aimed_by: Some(0),
+            ..rifle(12.0, 10.0)
+        }];
+        pillbox.fighter.notice = Some(20.0);
+        pillbox.fighter.turrets = vec![Turret {
+            turn_rate: 90f32.to_radians(),
+            sweep: sweep.to_radians(),
+            start: start.to_radians(),
+            reset: None,
+            offset: [0.0; 2],
+        }];
+        let mut w = siege(&[pillbox]);
+        w.units[0].fighter = Some(soldier(Vec::new()));
+        w
+    }
+
+    #[test]
+    fn defending_turrets_turn_to_their_target_before_firing() {
+        // Pointing 90° off the soldier, it takes a second to turn.
+        let mut w = turreted(90.0, 360.0);
+        run(&mut w, 0.5);
+        assert!((w.buildings[0].turrets[0].yaw - 45f32.to_radians()).abs() < 1e-4);
+        assert_eq!(w.buildings[0].target, Some(Target::Unit(0)));
+        run(&mut w, 0.4);
+        assert_eq!(w.units[0].health, 100.0);
+        run(&mut w, 0.2);
+        assert_eq!(w.units[0].health, 90.0);
+        assert_eq!(w.buildings[0].turrets[0].yaw, 0.0);
+    }
+
+    #[test]
+    fn defending_turrets_fire_only_within_their_arc() {
+        // 35° either side of its start, to its left: the soldier's ahead.
+        let mut w = turreted(90.0, 70.0);
+        run(&mut w, 3.0);
+        assert!(w.buildings[0].noticed.is_empty());
+        assert_eq!(w.units[0].health, 100.0);
+        assert_eq!(w.buildings[0].turrets[0].yaw, 90f32.to_radians());
+        // Facing -y, its left is +x.
+        w.units[0].position = [20.0, 22.0];
+        run(&mut w, 1.0);
+        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert!(w.units[0].health < 100.0);
+        // Back ahead of it, the soldier's out of the arc and left be.
+        w.units[0].position = [10.0, 14.0];
+        let health = w.units[0].health;
+        run(&mut w, 10.0);
+        assert_eq!(w.units[0].health, health);
+    }
+
+    #[test]
+    fn defending_turrets_turn_back_once_idle_long_enough() {
+        let mut w = turreted(90.0, 360.0);
+        w.buildings[0].fighter.turrets[0].reset = Some(1.0);
+        run(&mut w, 1.1);
+        assert_eq!(w.units[0].health, 90.0);
+        // Out of reach it's left with nothing to turn to, a second after it
+        // last turned to fire.
+        w.units[0].position = [10.0, 0.0];
+        run(&mut w, 0.5);
+        assert_eq!(w.buildings[0].turrets[0].yaw, 0.0);
+        run(&mut w, 2.0);
+        assert_eq!(w.buildings[0].turrets[0].yaw, 90f32.to_radians());
+    }
+
+    #[test]
+    fn turrets_hold_while_their_weapon_recharges() {
+        let mut w = turreted(0.0, 360.0);
+        w.buildings[0].fighter.weapons[0].recharge = 3.0;
+        w.tick();
+        assert_eq!(w.units[0].health, 90.0);
+        // Moved to its left (and walking back), it waits for the rifle,
+        // then turns.
+        w.units[0].position = [18.0, 24.0];
+        run(&mut w, 2.0);
+        assert_eq!(w.buildings[0].turrets[0].yaw, 0.0);
+        run(&mut w, 1.1);
+        assert!(w.buildings[0].turrets[0].yaw > 0.0);
+        assert_eq!(w.units[0].health, 90.0);
+        run(&mut w, 1.0);
+        assert_eq!(w.units[0].health, 80.0);
+    }
+
+    #[test]
+    fn turrets_aim_from_their_offset() {
+        let turret = Turret {
+            turn_rate: 1.0,
+            sweep: TAU,
+            start: 0.0,
+            reset: None,
+            offset: [0.0, 2.0],
+        };
+        let mut w = siege(&[building(20, 2, [0.0, 0.0])]);
+        w.buildings[0].facing = [0.0, 1.0];
+        let b = &w.buildings[0];
+        // Two to the left of the building's middle is -x when facing +y.
+        assert_eq!(b.yaw_to(&turret, [-2.0, 5.0]), Some(0.0));
+        assert_eq!(b.yaw_to(&turret, [-2.0, 0.0]), None);
+        let right = b.yaw_to(&turret, [0.0, 0.0]).unwrap();
+        assert!((right + PI / 2.0).abs() < 1e-6);
     }
 
     #[test]

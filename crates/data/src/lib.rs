@@ -249,6 +249,26 @@ pub struct Fighter {
     /// For one that defends itself, how near something must come for it to
     /// notice it, and so ever fire on it.
     pub notice: Option<f32>,
+    /// The parts that turn to aim its weapons.
+    pub turrets: Vec<Turret>,
+}
+
+/// A part of a fighter that turns to aim its weapons, without turning the
+/// fighter. Angles are radians from the fighter's facing, counter-clockwise
+/// seen from above.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Turret {
+    /// Radians a second.
+    pub turn_rate: f32,
+    /// The whole sweep it aims within, centred on `start`; a full turn or
+    /// more aims anywhere.
+    pub sweep: f32,
+    /// Where it points as the fighter appears, and goes back to.
+    pub start: f32,
+    /// Seconds without turning to anything before it goes back, if it does.
+    pub reset: Option<f32>,
+    /// Where it stands from its fighter: ahead, then to the left.
+    pub offset: [f32; 2],
 }
 
 /// An attack a fighter makes by itself on what comes in range.
@@ -272,6 +292,9 @@ pub struct Weapon {
     pub turret: bool,
     /// The id of the model point of that turret.
     pub turret_point: Option<Id>,
+    /// The fighter's turret that must point at a target before it fires,
+    /// by index into [`Fighter::turrets`].
+    pub aimed_by: Option<usize>,
     /// Where its projectiles appear from its user, in the user's model's
     /// axes, forward along -y.
     pub spawn_position: [f32; 3],
@@ -1999,6 +2022,11 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
     fighter.attack_height = (thing.performer_component.iter())
         .find_map(|p| p.attack_height)
         .unwrap_or(1.45);
+    let turrets = thing.performer_component.iter().flat_map(|p| &p.turret);
+    let turrets: Vec<(Option<&Id>, Turret)> = turrets
+        .map(|t| (t.turret_ids.as_ref(), turret(t)))
+        .collect();
+    fighter.turrets = turrets.iter().map(|(_, t)| t.clone()).collect();
     let performs = thing.performer_component.iter().flat_map(|p| &p.ability);
     let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
     let abilities = performs.chain(defends);
@@ -2043,6 +2071,11 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
                 .as_deref()
                 .is_some_and(|ids| !ids.eq_ignore_ascii_case("null")),
             turret_point: not_null(a.turret_ids.as_deref().map(Id::from)),
+            aimed_by: a
+                .turret_ids
+                .as_deref()
+                .map(Id::from)
+                .and_then(|ids| turrets.iter().position(|(t, _)| *t == Some(&ids))),
             spawn_position: a.spawn_position.unwrap_or_default(),
             sounds: cues(&d.when_do),
             effects: WeaponEffects {
@@ -2056,6 +2089,19 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
         });
     }
     Some(fighter)
+}
+
+/// A turret's yaw fields must each be 0 to 360 degrees; those outside are
+/// taken to the nearer end.
+fn turret(t: &defs::Turret) -> Turret {
+    let degrees = |d: f32| d.clamp(0.0, 360.0).to_radians();
+    Turret {
+        turn_rate: degrees(t.yaw_rotation_per_sec_degrees),
+        sweep: degrees(t.yaw_rotation_range_degrees),
+        start: degrees(t.yaw_start_degrees),
+        reset: t.can_reset.then_some(t.reset_time),
+        offset: t.offset.unwrap_or_default(),
+    }
 }
 
 fn flight(p: &defs::ProjectileComponent) -> Option<Flight> {
@@ -3464,7 +3510,7 @@ mod tests {
              \t\t\tturret_ids = Turret\n\t\t\t[AbilityDefinition]\n\t\t\t{\n\
              \t\t\t\tability_type = attack\n\t\t\t\trange = 20\n\t\t\t\trecharge_time = 2\n\
              \t\t\t\t[Effect]\n\t\t\t\ttype = MAIN_DAMAGE\n\t\t\t\tdamage_type_IDS = pierce\n\
-             \t\t\t\tamount = 20\n\t\t\t}\n\t\t}\n\t}\n}\n",
+             \t\t\t\tamount = 20\n\t\t\t}\n\t\t}\n\t}\n             \t[PerformerComponent]\n\t{\n\t\t[Turret]\n\t\t{\n\t\t\tturret_ids = Other\n\t\t}\n             \t\t[Turret]\n\t\t{\n\t\t\tturret_ids = Turret\n\t\t\tyaw_rotation_per_sec_degrees = 60\n             \t\t\tyaw_rotation_range_degrees = 70\n\t\t\tyaw_start_degrees = 400\n             \t\t\tcan_reset = false\n\t\t\toffset = 1, -2\n\t\t}\n\t}\n}\n",
         );
         let templates = tgi::Templates::new([&parsed.root]);
         let block = parsed.root.blocks_of("Thing").next().unwrap();
@@ -3474,6 +3520,23 @@ mod tests {
         let gun = &hq.weapons[0];
         assert_eq!((gun.range, gun.recharge), (20.0, 2.0));
         assert!(gun.turret);
+        assert_eq!(gun.aimed_by, Some(1));
+        let full = std::f32::consts::TAU;
+        let other = Turret {
+            turn_rate: full,
+            sweep: full,
+            start: 0.0,
+            reset: Some(10.0),
+            offset: [0.0; 2],
+        };
+        let turret = Turret {
+            turn_rate: 60f32.to_radians(),
+            sweep: 70f32.to_radians(),
+            start: full,
+            reset: None,
+            offset: [1.0, -2.0],
+        };
+        assert_eq!(hq.turrets, [other, turret]);
     }
 
     #[test]
