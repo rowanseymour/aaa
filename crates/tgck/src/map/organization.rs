@@ -5,7 +5,7 @@
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::actor::{Updatable, version};
-use super::header::optional;
+use super::header::{optional, optional_plain};
 use super::{Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
@@ -244,9 +244,8 @@ impl Organization {
             }
         }
         for p in &self.positions {
-            optional((2..=6).contains(&v), "position's old value", p.old, |o| {
-                w.u32(o);
-                Ok(())
+            optional_plain((2..=6).contains(&v), "position's old value", p.old, |o| {
+                w.u32(o)
             })?;
         }
         for p in &self.positions {
@@ -257,21 +256,16 @@ impl Organization {
         w.i32(self.leader);
         w.f32(self.morale);
         w.i32(self.formation);
-        optional(v >= 3, "desired formation", self.desired_formation, |f| {
-            w.i32(f);
-            Ok(())
+        optional_plain(v >= 3, "desired formation", self.desired_formation, |f| {
+            w.i32(f)
         })?;
-        optional(v == 0, "organization's old value", self.old, |o| {
-            w.u32(o);
-            Ok(())
-        })?;
+        optional_plain(v == 0, "organization's old value", self.old, |o| w.u32(o))?;
         for p in &self.positions {
             w.f32s(&p.offset);
         }
         for p in &self.positions {
-            optional(v >= 1, "position's replenishment", p.replenished, |r| {
-                w.f32(r);
-                Ok(())
+            optional_plain(v >= 1, "position's replenishment", p.replenished, |r| {
+                w.f32(r)
             })?;
         }
         optional(v >= 4, "fighting", self.fighting.as_ref(), |f| {
@@ -285,20 +279,11 @@ impl Organization {
             (6, "time", self.time.map(f32::to_bits)),
         ];
         for (from, what, value) in words {
-            optional(v >= from, what, value, |b| {
-                w.u32(b);
-                Ok(())
-            })?;
+            optional_plain(v >= from, what, value, |b| w.u32(b))?;
         }
-        optional(v >= 8, "position", self.position, |p| {
-            w.f32s(&p);
-            Ok(())
-        })?;
+        optional_plain(v >= 8, "position", self.position, |p| w.f32s(&p))?;
         for (from, what, value) in [(9, "hq", self.hq), (10, "transport", self.transport)] {
-            optional(v >= from, what, value, |id| {
-                w.u32(id);
-                Ok(())
-            })?;
+            optional_plain(v >= from, what, value, |id| w.u32(id))?;
         }
         Ok(())
     }
@@ -353,14 +338,10 @@ impl ElementState {
     pub(super) fn write(&self, w: &mut Writer) -> Result<()> {
         let v = self.version;
         w.u32(v);
-        optional(v >= 1, "element's updatable", self.updatable, |u| {
-            u.write(w);
-            Ok(())
+        optional_plain(v >= 1, "element's updatable", self.updatable, |u| {
+            u.write(w)
         })?;
-        optional(v <= 1, "element's old value", self.old, |o| {
-            w.u8(o);
-            Ok(())
-        })?;
+        optional_plain(v <= 1, "element's old value", self.old, |o| w.u8(o))?;
         optional(v >= 3, "element's damages", self.damages.as_deref(), |ds| {
             w.u32(ds.len() as u32);
             ds.iter().try_for_each(|d| d.write(w))

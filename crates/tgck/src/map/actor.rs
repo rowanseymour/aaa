@@ -9,7 +9,7 @@
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::expect;
-use super::header::{bool, check_version};
+use super::header::{bool, check_version, optional, optional_plain};
 use super::organization::{ElementState, Organization};
 use crate::{Cursor, Error, Result, Writer};
 
@@ -106,6 +106,17 @@ const CONSTRUCTION: u32 = 15;
 const AIRCRAFT: u32 = 23;
 const CITY: u32 = 29;
 const HQ: u32 = 30;
+
+/// The components whose state is decoded, not kept as its bytes.
+const DECODED: [u32; 7] = [
+    CONSTRUCTION,
+    BODY,
+    MOVER,
+    PROPERTIES,
+    ORGANIZATION,
+    ELEMENT,
+    CITY,
+];
 
 /// Its id among the world's updatable objects.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -375,6 +386,18 @@ impl Actor {
                 components,
                 trailer,
             } => {
+                // What reading refuses or would read as something else.
+                let unknown = (self.components | self.template_components) >> COMPONENTS.len();
+                let miscast = components
+                    .iter()
+                    .any(|c| matches!(c, Component::Framed { bit, .. } if DECODED.contains(bit)));
+                let bits = components.iter().map(Component::bit);
+                if unknown != 0 || miscast || !bits.eq(record_order(self.components)) {
+                    return Err(Error::Unwritable(format!(
+                        "actor's components aren't those of its bits {:#x}, in record order",
+                        self.components
+                    )));
+                }
                 for component in components {
                     component.write(w)?;
                 }
@@ -441,18 +464,34 @@ fn bytes<'a>(cur: &mut Cursor<'a>, n: u32, size: usize) -> Result<&'a [u8]> {
 }
 
 impl Component {
+    /// Its bit in [`COMPONENTS`].
+    fn bit(&self) -> u32 {
+        match self {
+            Component::Construction(_) => CONSTRUCTION,
+            Component::Body(_) => BODY,
+            Component::Mover(_) => MOVER,
+            Component::Properties(_) => PROPERTIES,
+            Component::Organization(_) => ORGANIZATION,
+            Component::Element(_) => ELEMENT,
+            Component::City(_) => CITY,
+            Component::Framed { bit, .. } => *bit,
+        }
+    }
+
     fn write(&self, w: &mut Writer) -> Result<()> {
         match self {
-            Component::Construction(c) => c.write(w)?,
+            Component::Construction(c) => c.write(w),
             Component::Body(b) => b.write(w),
             Component::Mover(m) => m.write(w),
-            Component::Properties(p) => p.write(w)?,
-            Component::Organization(o) => o.write(w)?,
-            Component::Element(e) => e.write(w)?,
+            Component::Properties(p) => p.write(w),
+            Component::Organization(o) => o.write(w),
+            Component::Element(e) => e.write(w),
             Component::City(c) => c.write(w),
-            Component::Framed { data, .. } => w.bytes(data),
+            Component::Framed { data, .. } => {
+                w.bytes(data);
+                Ok(())
+            }
         }
-        Ok(())
     }
 }
 
@@ -495,14 +534,17 @@ impl Construction {
         self.updatable.write(w);
         w.u32(self.version);
         write_f32s(w, &self.progress);
-        if let Some(upgrade) = &self.upgrade {
-            write_f32s(w, &upgrade.progress);
-            w.string(&upgrade.template)?;
-        }
-        if let Some(old) = self.old_upgrade {
-            old.iter().for_each(|&v| w.u32(v));
-        }
-        Ok(())
+        let new = self.version >= 1;
+        optional(new, "construction's upgrade", self.upgrade.as_ref(), |u| {
+            write_f32s(w, &u.progress);
+            w.string(&u.template)
+        })?;
+        optional_plain(
+            !new,
+            "construction's old upgrade",
+            self.old_upgrade,
+            |old| old.iter().for_each(|&v| w.u32(v)),
+        )
     }
 }
 
@@ -517,12 +559,13 @@ impl City {
         })
     }
 
-    fn write(&self, w: &mut Writer) {
+    fn write(&self, w: &mut Writer) -> Result<()> {
         self.updatable.write(w);
         w.u32(self.version);
-        if let Some(b) = &self.buildings {
-            w.u32s(b);
-        }
+        let buildings = self.buildings.as_deref();
+        optional_plain(self.version >= 1, "city's buildings", buildings, |b| {
+            w.u32s(b)
+        })
     }
 }
 
@@ -539,21 +582,19 @@ impl Body {
         })
     }
 
-    fn write(&self, w: &mut Writer) {
-        w.u32(self.version);
-        if let Some(u) = &self.updatable {
-            u.write(w);
-        }
-        if let Some(v) = self.death_time {
-            w.f32(v);
-        }
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        let v = self.version;
+        w.u32(v);
+        optional_plain(v >= 2, "body's updatable", self.updatable, |u| u.write(w))?;
+        optional_plain(v >= 1, "body's death time", self.death_time, |t| w.f32(t))?;
         w.f32(self.health);
-        for v in [self.sink_time, self.last_damage_time]
-            .into_iter()
-            .flatten()
-        {
-            w.f32(v);
-        }
+        optional_plain(v >= 3, "body's sink time", self.sink_time, |t| w.f32(t))?;
+        optional_plain(
+            v >= 4,
+            "body's last damage time",
+            self.last_damage_time,
+            |t| w.f32(t),
+        )
     }
 }
 
@@ -592,40 +633,39 @@ impl Mover {
         })
     }
 
-    fn write(&self, w: &mut Writer) {
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        let v = self.version;
         self.updatable.write(w);
-        w.u32(self.version);
+        w.u32(v);
         w.f32s(&self.destination);
         w.f32(self.speed);
         w.f32(self.target_speed);
-        if let Some(v) = self.max_speed {
-            w.f32(v);
-        }
-        if let Some(v) = self.old {
-            w.f32s(&v);
-        }
+        optional_plain(v >= 8, "mover's top speed", self.max_speed, |s| w.f32(s))?;
+        optional_plain(v < 4, "mover's old value", self.old, |o| w.f32s(&o))?;
         w.u32(self.follow);
         w.f32(self.follow_distance);
-        for v in [self.old_flag, self.turn_instantly].into_iter().flatten() {
-            w.u8(v);
-        }
-        if let Some(v) = self.target_facing {
-            w.f32s(&v);
-        }
-        if let Some(v) = self.speed_scale {
-            w.f32(v);
-        }
-        if let Some((flag, drag)) = self.falling {
+        let old_flag = (1..7).contains(&v);
+        optional_plain(old_flag, "mover's old flag", self.old_flag, |f| w.u8(f))?;
+        optional_plain(v >= 2, "mover's instant turn", self.turn_instantly, |t| {
+            w.u8(t)
+        })?;
+        optional_plain(v >= 3, "mover's target facing", self.target_facing, |f| {
+            w.f32s(&f)
+        })?;
+        optional_plain(v >= 3, "mover's speed scale", self.speed_scale, |s| {
+            w.f32(s)
+        })?;
+        optional_plain(v >= 5, "mover's falling", self.falling, |(flag, drag)| {
             w.u8(flag);
             w.f32(drag);
-        }
-        if let Some(fall) = &self.fall {
+        })?;
+        optional_plain(v >= 6, "mover's fall", self.fall.as_ref(), |fall| {
             w.u8(fall.turns);
             w.f32s(&fall.direction);
             w.u8(fall.has_landing);
             w.f32s(&fall.landing);
             w.f32s(&fall.landing_offset);
-        }
+        })
     }
 }
 
@@ -693,23 +733,23 @@ impl Property {
 
     /// Writes the property after its class.
     pub(super) fn write_body(&self, w: &mut Writer) -> Result<()> {
-        w.u32(self.version);
+        if self.class > 1 {
+            return Err(Error::Unwritable(format!("property class {}", self.class)));
+        }
+        let v = self.version;
+        w.u32(v);
         w.f32(self.gained_at);
-        if let Some(v) = self.source {
-            w.u32(v);
-        }
+        optional_plain(v >= 1, "property's source", self.source, |s| w.u32(s))?;
         w.string(&self.id)?;
-        if let Some(v) = self.duplicate {
-            w.u8(v);
-        }
-        if let Some(v) = self.from_actor {
-            w.u32(v);
-        }
-        if let Some(v) = self.extra {
+        optional_plain(v >= 2, "property's duplicate flag", self.duplicate, |d| {
+            w.u8(d)
+        })?;
+        optional_plain(v >= 2, "property's actor", self.from_actor, |a| w.u32(a))?;
+        let extra = self.class == 1 && v >= 3;
+        optional_plain(extra, "property's extra value", self.extra, |e| {
             w.u32(0);
-            w.u32(v);
-        }
-        Ok(())
+            w.u32(e);
+        })
     }
 }
 
@@ -1397,6 +1437,17 @@ mod tests {
         }
     }
 
+    /// An actor's record with `components` set but their state left out,
+    /// for a test to splice in after the 24-byte header.
+    fn hollow(components: u32) -> Writer {
+        let mut w = Writer::default();
+        actor(0, vec![]).write(&mut w).unwrap();
+        for at in [16, 20] {
+            w.0[at..at + 4].copy_from_slice(&components.to_le_bytes());
+        }
+        w
+    }
+
     fn body() -> Component {
         Component::Body(Body {
             version: 4,
@@ -1489,11 +1540,140 @@ mod tests {
     }
 
     #[test]
+    fn refuses_components_that_dont_suit() {
+        let write = |a: Actor| a.write(&mut Writer::default());
+        assert!(write(actor(1, vec![body()])).is_ok());
+        assert!(write(actor(1, vec![])).is_err(), "one missing");
+        let both = 1 | 1 << MOVER;
+        assert!(write(actor(both, vec![mover(), body()])).is_err(), "order");
+
+        let Component::Body(mut old) = body() else {
+            unreachable!()
+        };
+        old.version = 3;
+        let old = Component::Body(old);
+        assert!(write(actor(1, vec![old])).is_err(), "a later field");
+    }
+
+    #[test]
+    fn refuses_components_reading_wouldnt_take() {
+        let write = |a: Actor| a.write(&mut Writer::default());
+        let mut unknown = actor(1, vec![body()]);
+        unknown.components |= 1 << 31;
+        assert!(write(unknown).is_err(), "a bit no component has");
+        let framed = Component::Framed {
+            bit: BODY,
+            data: Vec::new(),
+        };
+        assert!(
+            write(actor(1, vec![framed])).is_err(),
+            "a decoded one's bytes"
+        );
+    }
+
+    #[test]
+    fn writes_old_versions_as_they_are_read() {
+        let updatable = Updatable { version: 1, id: 1 };
+        let construction = Construction {
+            updatable,
+            version: 0,
+            progress: vec![0.5],
+            upgrade: None,
+            old_upgrade: Some([1, 2]),
+        };
+        let mut w = Writer::default();
+        construction.write(&mut w).unwrap();
+        let read = Construction::parse(&mut Cursor::new(&w.0)).unwrap();
+        assert_eq!(read, construction);
+        let newer = Construction {
+            version: 1,
+            ..construction
+        };
+        assert!(newer.write(&mut Writer::default()).is_err());
+
+        let city = City {
+            updatable,
+            version: 0,
+            buildings: None,
+        };
+        let mut w = Writer::default();
+        city.write(&mut w).unwrap();
+        assert_eq!(City::parse(&mut Cursor::new(&w.0)).unwrap(), city);
+        let newer = City { version: 1, ..city };
+        assert!(newer.write(&mut Writer::default()).is_err());
+
+        let Component::Mover(newest) = mover() else {
+            unreachable!()
+        };
+        let olds = [
+            Mover {
+                version: 3,
+                max_speed: None,
+                old: Some([1.0; 3]),
+                old_flag: Some(1),
+                falling: None,
+                fall: None,
+                ..newest.clone()
+            },
+            Mover {
+                version: 6,
+                max_speed: None,
+                old_flag: Some(1),
+                ..newest.clone()
+            },
+            Mover {
+                version: 0,
+                max_speed: None,
+                old: Some([1.0; 3]),
+                turn_instantly: None,
+                target_facing: None,
+                speed_scale: None,
+                falling: None,
+                fall: None,
+                ..newest.clone()
+            },
+        ];
+        for old in olds {
+            let mut w = Writer::default();
+            old.write(&mut w).unwrap();
+            assert_eq!(Mover::parse(&mut Cursor::new(&w.0)).unwrap(), old);
+            let newer = Mover {
+                version: 8,
+                ..old.clone()
+            };
+            assert!(newer.write(&mut Writer::default()).is_err());
+        }
+
+        let property = Property {
+            class: 1,
+            version: 2,
+            gained_at: 1.0,
+            source: Some(2),
+            id: "tech_armor".into(),
+            duplicate: Some(1),
+            from_actor: Some(3),
+            extra: None,
+        };
+        let mut w = Writer::default();
+        property.write_body(&mut w).unwrap();
+        assert_eq!(
+            Property::parse(&mut Cursor::new(&w.0), 1).unwrap(),
+            property
+        );
+        for (class, version) in [(1, 3), (1, 0), (2, 2)] {
+            let other = Property {
+                class,
+                version,
+                ..property.clone()
+            };
+            assert!(other.write_body(&mut Writer::default()).is_err());
+        }
+    }
+
+    #[test]
     fn keeps_undecoded_state_whole() {
         // A projectile's layout isn't decoded.
-        let mut w = Writer::default();
-        let a = actor(1 << 1, vec![]);
-        a.write(&mut w).unwrap();
+        let mut w = hollow(1 << 1);
         w.bytes(&[0xAA; 5]);
         let parsed = Actor::parse_whole(&mut Cursor::new(&w.0), WORLD).unwrap();
         assert!(matches!(&parsed.state, State::Raw(raw) if raw.len() == w.0.len() - 24));
@@ -1529,8 +1709,7 @@ mod tests {
         hq.i32(7);
         // No attachments.
         hq.u32(0);
-        let mut w = Writer::default();
-        actor(1 << HQ, vec![]).write(&mut w).unwrap();
+        let w = hollow(1 << HQ);
         let trailer_at = 24;
         let bytes = [&w.0[..trailer_at], &hq.0, &w.0[trailer_at..]].concat();
         let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
@@ -1565,8 +1744,7 @@ mod tests {
         org.string("dmg_bullet").unwrap();
         org.bytes(&[0; 16]);
         org.bytes(&[0; 24]);
-        let mut w = Writer::default();
-        actor(1 << 7, vec![]).write(&mut w).unwrap();
+        let w = hollow(1 << 7);
         // The organization goes between the header and the trailer.
         let trailer_at = 24;
         let bytes = [&w.0[..trailer_at], &org.0, &w.0[trailer_at..]].concat();

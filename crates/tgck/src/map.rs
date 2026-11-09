@@ -115,7 +115,12 @@ impl<R: Read + Seek> Map<R> {
 
     /// None if the map is older than the sections.
     pub fn used_required_objects(&mut self) -> Result<Option<Vec<Thing>>> {
-        if self.container.section("USED_REQUIRED_OBJECTS").is_none() {
+        // Either without the other is an error, which reading both reports.
+        let pair = ["USED_REQUIRED_OBJECTS", "USED_REQUIRED_OBJECTS_INDEX"];
+        if pair
+            .iter()
+            .all(|name| self.container.section(name).is_none())
+        {
             return Ok(None);
         }
         let world_version = self.world_version()?;
@@ -209,7 +214,11 @@ impl<R: Read + Seek> Map<R> {
             .lines()
             .filter_map(|l| l.trim().split_once('='))
             .find(|(key, _)| key.trim() == id)
-            .map(|(_, text)| text.trim().trim_matches('"').to_string());
+            .map(|(_, text)| {
+                let text = text.trim();
+                let text = text.strip_prefix('"').unwrap_or(text);
+                text.strip_suffix('"').unwrap_or(text).to_string()
+            });
         Ok(text)
     }
 }
