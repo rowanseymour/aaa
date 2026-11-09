@@ -1328,6 +1328,7 @@ impl GameData {
     /// own upkeep and each member's.
     pub fn listings(&mut self) -> HashMap<Id, Listing> {
         let strings = self.strings();
+        let layouts = self.layouts();
         let definitions = self.definitions();
         let mut things: HashMap<&Id, &defs::Thing> = definitions
             .things
@@ -1360,6 +1361,7 @@ impl GameData {
             let economy = |of: fn(&defs::EconomyComponent) -> Option<&defs::Resources>| {
                 amounts(&strings, economies.iter().filter_map(|&e| of(e)))
             };
+            let members = members(t, &things, &layouts);
             Some(Listing {
                 name: localized(&strings, t.name.as_deref())?,
                 icon: view
@@ -1367,8 +1369,8 @@ impl GameData {
                     .filter(|i| i.to_ascii_lowercase().starts_with("/ui/"))
                     .and_then(ui_path),
                 cost: economy(|e| e.cost.as_ref()),
-                production: amounts(&strings, production(t, &things)),
-                upkeep: amounts(&strings, upkeep(t, &things)),
+                production: amounts(&strings, production(t, &members)),
+                upkeep: amounts(&strings, upkeep(t, &members)),
             })
         })
     }
@@ -2829,37 +2831,52 @@ fn amounts<'a>(
         .collect()
 }
 
+/// An organization template's members when whole: each slot's, once for
+/// every place its layout gives the slot in its starting formation, or
+/// once where the layout isn't known.
+fn members<'a>(
+    t: &defs::Thing,
+    things: &HashMap<&Id, &'a defs::Thing>,
+    layouts: &HashMap<Id, Layout>,
+) -> Vec<&'a defs::Thing> {
+    let Some(o) = &t.organization_component else {
+        return Vec::new();
+    };
+    let layout = o.layout_ids.as_ref().and_then(|l| layouts.get(l));
+    let places = |slot: usize| {
+        let start = layout.and_then(|l| l.formations.get(l.default));
+        start.and_then(|f| f.slots.get(slot)).map_or(1, Vec::len)
+    };
+    (o.slot.iter().enumerate())
+        .filter_map(|(i, s)| Some((i, *things.get(s.element_ids.as_ref()?)?)))
+        .flat_map(|(i, member)| std::iter::repeat_n(member, places(i)))
+        .collect()
+}
+
 /// What a template earns as it's shown: its own `[Production]`, or for a
-/// regiment the sum of its members'.
+/// regiment the sum of its `members`'.
 fn production<'a>(
     t: &'a defs::Thing,
-    things: &HashMap<&Id, &'a defs::Thing>,
+    members: &[&'a defs::Thing],
 ) -> impl Iterator<Item = &'a defs::Resources> {
-    let members: Vec<&defs::Thing> = t
-        .organization_component
-        .iter()
-        .flat_map(|o| &o.slot)
-        .filter_map(|s| things.get(s.element_ids.as_ref()?).copied())
-        .collect();
-    let earners = if members.is_empty() { vec![t] } else { members };
+    let earners = if members.is_empty() {
+        vec![t]
+    } else {
+        members.to_vec()
+    };
     earners
         .into_iter()
         .filter_map(|t| t.economy_component.as_ref()?.production.as_ref())
 }
 
 /// What a template takes to keep as it's shown: its own `[Upkeep]` and,
-/// for a regiment, each of its members'.
+/// for a regiment, each of its `members`'.
 fn upkeep<'a>(
     t: &'a defs::Thing,
-    things: &HashMap<&Id, &'a defs::Thing>,
+    members: &[&'a defs::Thing],
 ) -> impl Iterator<Item = &'a defs::Resources> {
-    let members = t
-        .organization_component
-        .iter()
-        .flat_map(|o| &o.slot)
-        .filter_map(|s| things.get(s.element_ids.as_ref()?).copied());
     std::iter::once(t)
-        .chain(members)
+        .chain(members.iter().copied())
         .filter_map(|t| t.economy_component.as_ref()?.upkeep.as_ref())
 }
 
@@ -2987,7 +3004,9 @@ mod tests {
             .collect();
         let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
         let earned = |id: &str| -> Vec<(&str, f32)> {
-            amounts(&HashMap::new(), production(by_id[&Id::from(id)], &by_id))
+            let t = by_id[&Id::from(id)];
+            let members = members(t, &by_id, &HashMap::new());
+            amounts(&HashMap::new(), production(t, &members))
                 .into_iter()
                 .map(|a| (a.kind, a.amount))
                 .collect()
@@ -3009,7 +3028,7 @@ mod tests {
              \t\t[Upkeep]\n\t\t{\n\t\t\tammo = 1\n\t\t}\n\t}\n}\n\
              [Thing]\n{\n\tIDS = regiment\n\t[EconomyComponent]\n\t{\n\
              \t\t[Upkeep]\n\t\t{\n\t\t\tunit_limit_consumed = 1\n\t\t}\n\t}\n\
-             \t[OrganizationComponent]\n\t{\n\
+             \t[OrganizationComponent]\n\t{\n\t\tlayout_ids = line\n\
              \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\
              \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\
              \t\t[Slot]\n\t\t{\n\t\t\telement_ids = man\n\t\t}\n\t}\n}\n",
@@ -3021,14 +3040,31 @@ mod tests {
             .map(|(b, id)| (Id::from(id), tgi::from_block(b).unwrap()))
             .collect();
         let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
-        let kept: Vec<(&str, f32)> = amounts(
-            &HashMap::new(),
-            upkeep(by_id[&Id::from("regiment")], &by_id),
-        )
-        .into_iter()
-        .map(|a| (a.kind, a.amount))
-        .collect();
-        assert_eq!(kept, [("unit_limit_consumed", 1.0), ("ammo", 3.0)]);
+        let regiment = by_id[&Id::from("regiment")];
+        let kept = |layouts: &HashMap<Id, Layout>| -> Vec<(&str, f32)> {
+            let members = members(regiment, &by_id, layouts);
+            amounts(&HashMap::new(), upkeep(regiment, &members))
+                .into_iter()
+                .map(|a| (a.kind, a.amount))
+                .collect()
+        };
+        let whole = [("unit_limit_consumed", 1.0), ("ammo", 3.0)];
+        assert_eq!(kept(&HashMap::new()), whole);
+        // A slot's member counts for each place its layout gives the slot.
+        let line = Layout {
+            formations: vec![Formation {
+                id: Id::from("column"),
+                slots: vec![vec![[0.0; 2]; 3], vec![[0.0; 2]], vec![[0.0; 2]]],
+                aggressive: false,
+            }],
+            default: 0,
+            combat: None,
+            primary: None,
+        };
+        assert_eq!(
+            kept(&HashMap::from([(Id::from("line"), line)])),
+            [("unit_limit_consumed", 1.0), ("ammo", 5.0)]
+        );
     }
 
     #[test]
