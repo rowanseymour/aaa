@@ -35,6 +35,9 @@ pub struct Theme {
     pub accent: Color,
     /// What marks something as switched on, such as the order being aimed.
     pub lit: Color,
+    /// The data's colour for a figure that's gone short; [`Ink::Warn`]'s
+    /// without one.
+    pub short: Option<Color>,
 }
 
 impl Default for Theme {
@@ -43,6 +46,7 @@ impl Default for Theme {
             tint: Color::BLACK,
             accent: Color::srgb(0.75, 0.6, 0.3),
             lit: crate::OWN,
+            short: None,
         }
     }
 }
@@ -72,6 +76,7 @@ impl Theme {
             Ink::Help => Color::srgb(0.8, 0.8, 0.8),
             Ink::Muted => Color::srgb(0.45, 0.45, 0.45),
             Ink::Warn => Color::srgb(1.0, 0.75, 0.3),
+            Ink::Short => self.short.unwrap_or_else(|| self.ink(Ink::Warn)),
         }
     }
 
@@ -148,6 +153,8 @@ pub enum Ink {
     Muted,
     /// What's in the way, or needs the player's attention.
     Warn,
+    /// A figure that's gone short, such as a negative rate.
+    Short,
 }
 
 /// What a node's border is for.
