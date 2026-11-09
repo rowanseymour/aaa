@@ -29,11 +29,13 @@ fit() {
     magick "$work/$1-raw.png" -resize "${W}x$H^" -gravity center -extent "${W}x$H" "$work/$1.png"
 }
 
-# game <name> <map>, with the script on stdin. Regiment ids are the ones
-# `create` gives on that map, which are the same every run.
+# game <name> <map> [seconds], with the script on stdin. Regiment ids are the
+# ones `create` gives on that map, which are the same every run. Effects only
+# play as frames are drawn, not through `advance`, so seconds plays on that
+# long before the shot.
 game() {
     cat >"$work/$1.txt"
-    "$bin/aaa-game" "$game" "$2" --exec "$work/$1.txt" --screenshot "$work/$1-raw.png"
+    "$bin/aaa-game" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" --screenshot "$work/$1-raw.png"
     fit "$1"
 }
 
@@ -61,13 +63,13 @@ zoom 0.6
 advance 3
 EOF
 
-game bottom-left allies01_el_alamein <<'EOF'
+game bottom-left allies01_el_alamein 2.65 <<'EOF'
 create regiment_gbr_tank_heavy 340 300
 create regiment_gbr_tank_medium 348 294
 placementkingdom kingdom_1
 create regiment_ger_tank_heavy 330 280
 create regiment_ger_halftrack_at 342 278
-advance 8
+advance 4
 select 10744
 lookat 342 289
 zoom 0.6

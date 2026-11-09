@@ -487,6 +487,11 @@ fn main() -> ExitCode {
     app.add_plugins(DefaultPlugins.set(window));
     if let Some(s) = screenshot {
         app.add_plugins(s);
+        // Every frame takes the same time, so a shot some way into a match
+        // catches the same moment however fast the machine draws.
+        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+            std::time::Duration::from_secs_f64(1.0 / 60.0),
+        ));
         // Of the match, not the loading screen before it.
         if map.is_some() {
             app.insert_resource(ShotAfter(shot_after))
