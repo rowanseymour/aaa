@@ -54,6 +54,9 @@ pub struct Looks {
     unit_limit: String,
     /// What a disabled building's held up queue says, given the building.
     disabled: String,
+    /// What a held up queue says of a building supply doesn't reach, given
+    /// the building.
+    no_supply: String,
     /// What a packed building that couldn't unpack says, given what it is.
     cannot_unpack: String,
     names: HashMap<Id, String>,
@@ -108,6 +111,10 @@ pub fn spawn(
         disabled: said(
             "structure_error_queue_disabled|s",
             "%s paused production queue - disabled",
+        ),
+        no_supply: said(
+            "structure_error_queue_no_supply|s",
+            "%s paused production queue - no supply",
         ),
         cannot_unpack: said("tai_error_unpack|s", "Cannot unpack %s"),
         names: game
@@ -329,9 +336,13 @@ pub fn tell(
                 why,
             } if Some(player) == local.0 => match why {
                 Pause::Limit(_) => fill(&looks.unit_limit, &[&looks.name(&template)]),
-                Pause::Disabled => {
+                Pause::Disabled | Pause::Supply => {
+                    let said = match why {
+                        Pause::Supply => &looks.no_supply,
+                        _ => &looks.disabled,
+                    };
                     let b = &sim.0.buildings[building].template;
-                    fill(&looks.disabled, &[&looks.name(b)])
+                    fill(said, &[&looks.name(b)])
                 }
             },
             Notice::CannotUnpack { player, regiment } if Some(player) == local.0 => {

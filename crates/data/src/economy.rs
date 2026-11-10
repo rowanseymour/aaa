@@ -96,6 +96,20 @@ pub struct Economy {
     /// Earned, and kept up, per minute.
     pub production: Amounts,
     pub upkeep: Amounts,
+    /// Whether it earns nothing while out of supply.
+    pub supply_required: bool,
+}
+
+/// How a template supplies its side's regiments.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Supply {
+    /// How far around it its zone reaches.
+    pub range: f32,
+    /// Whether it supplies only while supplied itself, as a depot does,
+    /// rather than of itself, as a Corps HQ does.
+    pub relay: bool,
+    /// Seconds a relay keeps going once cut off, when full.
+    pub stockpile_max: f32,
 }
 
 /// The settings that bound every side's economy.
@@ -141,8 +155,29 @@ impl GameData {
                 cost: of(e.cost.as_ref()),
                 production: of(e.production.as_ref()),
                 upkeep: of(e.upkeep.as_ref()),
+                supply_required: e.supply_required.unwrap_or(false),
             })
         })
+    }
+
+    /// Each template's [`Supply`], for those that give it, by template id.
+    pub fn supplies(&mut self) -> HashMap<Id, Supply> {
+        self.by_template(|t| {
+            let s = t.supply_component.as_ref()?;
+            Some(Supply {
+                range: s.supply_range?,
+                relay: s.is_relay.unwrap_or(false),
+                stockpile_max: s.stockpile_max.unwrap_or(0.0),
+            })
+        })
+    }
+
+    /// Seconds a connected relay's stockpile gains each second.
+    pub fn supply_recharge(&mut self) -> f32 {
+        let svars = self.svars();
+        (svars.iter())
+            .find_map(|v| v.supply_stockpile_recharge_rate)
+            .unwrap_or(1.0)
     }
 
     /// The resources' and the tuning settings' bounds on economies.

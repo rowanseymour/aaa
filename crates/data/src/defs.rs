@@ -91,6 +91,7 @@ pub struct Thing {
     pub recruit_component: Option<RecruitComponent>,
     pub mobile_deployment_component: Option<MobileDeploymentComponent>,
     pub economy_component: Option<EconomyComponent>,
+    pub supply_component: Option<SupplyComponent>,
     pub denizen_component: Option<DenizenComponent>,
     pub element_component: Option<ElementComponent>,
     pub placement: Option<Placement>,
@@ -236,6 +237,17 @@ pub struct EconomyComponent {
     pub upkeep: Option<Resources>,
     /// What it earns its owner, per minute.
     pub production: Option<Resources>,
+    /// Whether it earns nothing while out of supply.
+    pub supply_required: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SupplyComponent {
+    pub supply_range: Option<f32>,
+    /// Whether it has to be supplied itself to supply others.
+    pub is_relay: Option<bool>,
+    /// Seconds a relay keeps going once cut off.
+    pub stockpile_max: Option<f32>,
 }
 
 /// Amounts of the resources the data's costs, upkeeps and production name, each
@@ -785,6 +797,9 @@ pub struct SVars {
     /// What stockpiles start at on new and random maps.
     #[serde(rename = "ResourceStockpileDefault")]
     pub resource_stockpile_default: Option<f32>,
+    /// Seconds a connected relay's stockpile gains each second.
+    #[serde(rename = "SupplyStockpileRechargeRate")]
+    pub supply_stockpile_recharge_rate: Option<f32>,
 }
 
 /// The interface's settings.

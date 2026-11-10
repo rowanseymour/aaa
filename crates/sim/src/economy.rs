@@ -181,7 +181,9 @@ impl World {
 
     /// What a building adds to its owner's economy: nothing once gone,
     /// only its upkeep while disabled or unpacking, and the limits taken by
-    /// what it's commissioning.
+    /// what it's commissioning. One that passes supply on and has none
+    /// earns as what it packs into does, or nothing if it needs supply and
+    /// doesn't pack.
     pub fn building_ledger(&self, building: usize) -> Ledger {
         let b = &self.buildings[building];
         if b.gone() {
@@ -195,13 +197,15 @@ impl World {
                 upkeep.set(consumed, upkeep.get(consumed) + taken.get(consumed));
             }
         }
-        Ledger {
-            production: match b.state == State::Standing && b.unpacking.is_none() {
-                true => e.production,
-                false => Amounts::default(),
-            },
-            upkeep,
-        }
+        let working = b.state == State::Standing && b.unpacking.is_none();
+        let production = match self.packing.get(&b.template) {
+            _ if !working => Amounts::default(),
+            _ if !self.out_of_supply(building) => e.production,
+            Some(packs) => self.commission_ledger(&packs.truck).production,
+            None if e.supply_required => Amounts::default(),
+            None => e.production,
+        };
+        Ledger { production, upkeep }
     }
 
     /// Whether a building's queue can't move on this tick: there's nothing
@@ -217,6 +221,7 @@ impl World {
             return true;
         };
         let why = match b.state {
+            State::Standing if self.out_of_supply(building) => Some(Pause::Supply),
             State::Standing if first.held => None,
             State::Standing => {
                 let balance = self.balance(b.owner);

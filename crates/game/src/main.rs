@@ -705,6 +705,8 @@ fn prepare(
     sim.requires = game.requirements();
     sim.economies = game.economies();
     sim.economy = game.economy_rules();
+    sim.supplies = game.supplies();
+    sim.supply_recharge = game.supply_recharge();
     Ok(Prepared {
         loaded: Loaded { game, map },
         sim,

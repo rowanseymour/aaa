@@ -7,6 +7,7 @@
 
 pub mod economy;
 pub mod path;
+mod supply;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::{FRAC_PI_4, PI, TAU};
@@ -19,6 +20,7 @@ use aaa_map::{
 
 pub use aaa_map::{Player, Relation, Team};
 pub use economy::{Balance, Change, Ledger, Limit, Notice, Treasury};
+pub use supply::Supplying;
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
@@ -109,6 +111,10 @@ pub struct World {
     /// Each template's own cost, production and upkeep, by template.
     pub economies: HashMap<Id, aaa_map::Economy>,
     pub economy: aaa_map::EconomyRules,
+    /// How each template gives supply, for those that do, by template.
+    pub supplies: HashMap<Id, aaa_map::Supply>,
+    /// Seconds a connected relay's stockpile gains each second.
+    pub supply_recharge: f32,
     /// What sides own that's neither a regiment nor a building but may
     /// still add to their economy, such as where they start: each owner
     /// and template.
@@ -618,6 +624,7 @@ pub struct Building {
     pub members: Vec<u32>,
     /// The ground it keeps movers off until it's destroyed.
     pub obstacle: Option<Obstacle>,
+    pub supply: Supplying,
 }
 
 /// How a building stands.
@@ -672,6 +679,8 @@ pub enum Pause {
     /// for the first of the queue.
     Limit(&'static str),
     Disabled,
+    /// It passes supply on and has none.
+    Supply,
 }
 
 /// Why an order wasn't given.
@@ -904,6 +913,8 @@ impl World {
             requires: HashMap::new(),
             economies: HashMap::new(),
             economy: aaa_map::EconomyRules::default(),
+            supplies: HashMap::new(),
+            supply_recharge: 1.0,
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),
             notices: Vec::new(),
@@ -1053,6 +1064,7 @@ impl World {
                 deploy: b.deploy,
                 organization: b.organization.clone(),
                 rally: None,
+                supply: Supplying::default(),
             });
             self.next_id = self.next_id.max(b.id + 1);
         }
@@ -1629,6 +1641,7 @@ impl World {
         self.engage(&fired_on);
         self.close_in();
         self.occupy();
+        self.supply();
         self.produce();
         self.rally();
         self.unpack();
@@ -2539,6 +2552,8 @@ impl World {
             building.captured = Some(self.ticks);
             building.target = None;
             building.rally = None;
+            // A relay has to connect on its new side.
+            building.supply.judged = false;
         }
     }
 
@@ -2850,17 +2865,13 @@ impl World {
         }
     }
 
-    /// Who should hold the city centred on `c`: its owner while any of its
-    /// own are in the zone or no enemy of its is, else the side there with
-    /// none of its enemies there and no ally there stronger or in danger.
-    fn holder(&self, c: usize, zone: f32) -> Option<u32> {
+    /// The armed things in the zone of the city centred on `c`, each with
+    /// its owner and its health's share. Independent sides' and nobody's
+    /// don't count, nor does the centre.
+    pub(crate) fn occupants(&self, c: usize, zone: f32) -> Vec<(u32, f32)> {
         let zone = self.pathing.zone(self.buildings[c].position, zone);
-        let owner = self.buildings[c].owner;
-        // Armed occupants, each by its health's share. Independent sides'
-        // and nobody's don't count.
         let counts = |o: u32| self.sides.player(o).is_some_and(|p| !p.independent);
-        let occupants: Vec<(u32, f32)> = self
-            .targets()
+        self.targets()
             .filter(|&t| t != Target::Building(c) && self.in_zone(&zone, t))
             .filter(|&t| counts(self.owner(t)))
             .filter_map(|t| {
@@ -2871,7 +2882,15 @@ impl World {
                 };
                 Some((self.owner(t), health / f.health))
             })
-            .collect();
+            .collect()
+    }
+
+    /// Who should hold the city centred on `c`: its owner while any of its
+    /// own are in the zone or no enemy of its is, else the side there with
+    /// none of its enemies there and no ally there stronger or in danger.
+    fn holder(&self, c: usize, zone: f32) -> Option<u32> {
+        let owner = self.buildings[c].owner;
+        let occupants = self.occupants(c, zone);
         let weight = |of: &dyn Fn(u32) -> bool| -> f32 {
             occupants
                 .iter()
@@ -5618,6 +5637,7 @@ mod tests {
             cost: amounts(cost),
             production: amounts(production),
             upkeep: amounts(upkeep),
+            ..Default::default()
         };
         w.economies.insert(
             Id::from("house"),
@@ -5936,5 +5956,173 @@ mod tests {
         assert!(w.buildings[0].queue.is_empty());
         assert_eq!(w.stockpile(1), 500.0);
         assert_eq!(w.stockpile(2), 0.0);
+    }
+
+    fn supply(range: f32, relay: bool, stockpile_max: f32) -> aaa_map::Supply {
+        aaa_map::Supply {
+            range,
+            relay,
+            stockpile_max,
+        }
+    }
+
+    /// Player 1's Corps HQ at 20,20 and two depots east of it, the first
+    /// in the HQ's zone and the second only in the first's, each reaching
+    /// 20 and the depots stocking up to 3 seconds.
+    fn chain() -> World {
+        let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+        let mut corps = building(5, 1, [20.0, 20.0]);
+        corps.template = "corps".into();
+        let depot = |id, x| {
+            let mut depot = building(id, 1, [x, 20.0]);
+            depot.template = "depot".into();
+            depot
+        };
+        w.add_buildings(&[depot(7, 50.0), depot(6, 34.0), corps]);
+        w.supplies
+            .insert(Id::from("corps"), supply(20.0, false, 0.0));
+        w.supplies
+            .insert(Id::from("depot"), supply(20.0, true, 3.0));
+        w
+    }
+
+    #[test]
+    fn relays_pass_supply_on_down_a_chain_from_a_source() {
+        let mut w = chain();
+        // At once, though the far depot comes first.
+        w.tick();
+        assert!(w.buildings.iter().all(|b| b.supply.zone.is_some()));
+        assert!(w.buildings[0].supply.connected && w.buildings[1].supply.connected);
+        assert!(w.supplied(1, [64.0, 20.0]));
+        assert!(!w.supplied(1, [20.0, 64.0]));
+        // Allies share it, enemies don't.
+        assert_eq!(w.sides.relation(1, 3), Relation::Ally);
+        assert!(w.supplied(3, [64.0, 20.0]));
+        assert!(!w.supplied(2, [64.0, 20.0]));
+    }
+
+    #[test]
+    fn relays_cut_off_live_on_their_stockpiles_but_pass_nothing_on() {
+        let mut w = chain();
+        run(&mut w, 5.0);
+        assert_eq!(w.buildings[0].supply.stockpile, 3.0);
+        w.buildings[2].state = State::Disabled;
+        run(&mut w, 1.5);
+        assert!(w.buildings[2].supply.zone.is_none());
+        // Both still supply what's around them, the far one cut off
+        // though the near one's zone still covers it.
+        for b in 0..2 {
+            let s = &w.buildings[b].supply;
+            assert!(!s.connected && s.zone.is_some() && s.stockpile > 0.0);
+            assert!(!w.out_of_supply(b));
+        }
+        run(&mut w, 3.0);
+        for b in 0..2 {
+            assert!(w.out_of_supply(b) && w.buildings[b].supply.zone.is_none());
+        }
+        assert!(!w.supplied(1, [64.0, 20.0]));
+        w.buildings[2].state = State::Standing;
+        run(&mut w, 3.0);
+        assert!(w.buildings.iter().all(|b| b.supply.zone.is_some()));
+        assert!(!w.out_of_supply(0));
+    }
+
+    #[test]
+    fn relays_dont_keep_each_other_going() {
+        let mut w = chain();
+        w.buildings.pop();
+        run(&mut w, 2.0);
+        assert!(w.out_of_supply(0) && w.out_of_supply(1));
+        assert!(!w.supplied(1, [34.0, 20.0]));
+    }
+
+    #[test]
+    fn captured_relays_connect_on_their_new_side() {
+        let mut w = chain();
+        w.tick();
+        w.change_hands(1, 2);
+        w.tick();
+        // Player 2 has no source, and player 1's far depot has lost its
+        // link by its next look.
+        assert!(w.out_of_supply(1));
+        run(&mut w, 1.0);
+        assert!(!w.buildings[0].supply.connected);
+        assert!(!w.supplied(2, [34.0, 20.0]));
+    }
+
+    #[test]
+    fn cities_supply_only_while_their_side_outweighs_its_enemies_there() {
+        let mut centre = city()[0].clone();
+        centre.template = "centre".into();
+        let mut w = siege(&[centre]);
+        w.supplies
+            .insert(Id::from("centre"), supply(20.0, false, 0.0));
+        // Nobody's there.
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].supply.zone.is_none());
+        let to = |w: &mut World, x| {
+            let to = [x, 10.0];
+            w.apply(1, Command::Move { regiment: 0, to }).unwrap();
+            run(w, 15.0);
+        };
+        to(&mut w, 30.0);
+        assert_eq!(w.buildings[0].owner, 1);
+        assert!(w.supplied(1, [40.0, 20.0]));
+        to(&mut w, 10.0);
+        assert!(!w.supplied(1, [40.0, 20.0]));
+    }
+
+    #[test]
+    fn relays_out_of_supply_earn_as_packed_and_hold_their_queues() {
+        let mut w = economy();
+        w.packing.insert("depot".into(), packs());
+        let mut depot = truck().unpacks.unwrap().building;
+        (depot.id, depot.owner, depot.position) = (41, 1, [50.0, 50.0]);
+        depot.obstacle.as_mut().unwrap().position = depot.position;
+        depot.deploy = w.buildings[0].deploy;
+        w.add_buildings(&[depot]);
+        w.supplies
+            .insert(Id::from("depot"), supply(20.0, true, 2.0));
+        let room = aaa_map::Economy {
+            production: amounts(&[("building_limit_provided", 20.0)]),
+            ..Default::default()
+        };
+        w.economies.insert(Id::from("start_loc"), room);
+        w.holdings.push((1, "start_loc".into()));
+        let order = Command::Commission {
+            building: 1,
+            commission: Box::new(Commission::new(truck(), 1.0)),
+        };
+        w.apply(1, order).unwrap();
+        run(&mut w, 3.0);
+        // The truck's 12, not the depot's 25, on top of the HQ's 25; its
+        // upkeep is the same.
+        assert_eq!(w.building_ledger(1).production.get("money"), 12.0);
+        assert_eq!(w.balance(1).limits[1].used, 2.0);
+        assert_eq!(w.buildings[1].paused, Some(Pause::Supply));
+        assert_eq!(w.buildings[1].progress, 0);
+        let told = |n: &&Notice| {
+            let why = Pause::Supply;
+            matches!(n, Notice::Paused { building: 1, why: w, .. } if *w == why)
+        };
+        assert_eq!(w.notices.iter().filter(told).count(), 1);
+        // The HQ's zone reaching it puts it back to work.
+        w.supplies
+            .insert(Id::from("house"), supply(60.0, false, 0.0));
+        w.buildings[0].supply = Supplying::default();
+        run(&mut w, 3.0);
+        assert_eq!(w.building_ledger(1).production.get("money"), 25.0);
+        assert!(w.buildings[1].queue.is_empty());
+        // What can't pack earns in full without supply unless it needs it.
+        w.packing.clear();
+        w.supplies.remove(&Id::from("house"));
+        run(&mut w, 4.0);
+        assert!(w.out_of_supply(1));
+        assert_eq!(w.building_ledger(1).production.get("money"), 25.0);
+        w.economies
+            .get_mut(&Id::from("depot"))
+            .unwrap()
+            .supply_required = true;
+        assert_eq!(w.building_ledger(1).production.get("money"), 0.0);
     }
 }
