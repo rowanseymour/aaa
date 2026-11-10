@@ -63,6 +63,13 @@ const PACK: &str = "pack";
 /// The command that sets where what a building commissions moves on to.
 pub const RALLY: &str = "set_rally_point";
 
+/// Where the game puts an HQ's button that selects the regiments attached
+/// to it, the image it shows, and its strings' keys.
+const COMMAND_ALL: usize = 4;
+const COMMAND_ALL_ICON: &str = "UI/Game/ActionButtons/IconCommandAll.png";
+const COMMAND_ALL_NAME: &str = "action_buttons_CommandAll_name";
+const COMMAND_ALL_HELP: &str = "action_buttons_CommandAll_tooltip";
+
 /// Where the game puts the button that cancels an order being aimed.
 const CANCEL: usize = 8;
 /// Where the commission menu's way back goes.
@@ -148,6 +155,8 @@ pub enum Entry {
     Pack,
     /// Waits for a place to set the selected building's rally point.
     Rally,
+    /// Selects the regiments attached to the selected HQ.
+    CommandAll,
 }
 
 /// The buttons a selected building has: where its commission and rally
@@ -186,6 +195,7 @@ fn layout(
     slots: &[Option<usize>],
     offered: &[bool],
     building: Option<BuildingButtons>,
+    hq: bool,
 ) -> [Option<Entry>; SLOTS] {
     let mut out = [None; SLOTS];
     match (page, building) {
@@ -235,6 +245,9 @@ fn layout(
             out[CANCEL] = Some(Entry::Cancel);
         }
     }
+    if hq && page == Page::Orders && out[COMMAND_ALL].is_none() {
+        out[COMMAND_ALL] = Some(Entry::CommandAll);
+    }
     out
 }
 
@@ -267,6 +280,7 @@ pub struct Looks {
     rally: (Option<usize>, Look),
     pack: (Option<usize>, Look),
     cancel: Look,
+    command_all: Look,
     /// The tooltip's heading for what a recruit needs.
     requires: String,
     /// What a recruit the player can't afford says, given its name and
@@ -411,6 +425,12 @@ pub fn spawn(
     let production = title("ui_tooltip_item_title_production", "Production");
     let upkeep = title("ui_tooltip_item_title_upkeep", "Upkeep");
     let requires = title("ui_tooltip_item_title_requires", "Requires");
+    let command_all = Look {
+        name: title(COMMAND_ALL_NAME, "Command All"),
+        help: Some(title(COMMAND_ALL_HELP, "Select all attached regiments.")),
+        disabled: None,
+        icon: image(game, COMMAND_ALL_ICON),
+    };
     let affording = title(
         "recruit_error_affording|ss",
         "Insufficient funds for %s. Requires %s.",
@@ -503,6 +523,7 @@ pub fn spawn(
         rally,
         pack,
         cancel,
+        command_all,
         requires,
         affording,
         menus,
@@ -675,6 +696,7 @@ pub fn show(
         }
         return;
     }
+    let hq = shown_hq(&sim.0, &selected.0, building);
     let menu = looks.menu(&sim.0, building);
     let order_slots: Vec<Option<usize>> = looks.orders.iter().map(|(s, _)| *s).collect();
     shown.0 = layout(
@@ -690,6 +712,7 @@ pub fn show(
                 .0
                 .filter(|_| sim.0.packing.contains_key(&sim.0.buildings[b].template)),
         }),
+        hq.is_some(),
     );
     let mut hovered = None;
     for (id, clicks, slot, hover, children, mut border, mut pickable) in &mut slots {
@@ -729,6 +752,7 @@ pub fn show(
             Entry::Cancel => (&looks.cancel, true, false),
             Entry::Commission => (&looks.commission.1, true, false),
             Entry::Rally => (&looks.rally.1, true, *page == Page::Rally),
+            Entry::CommandAll => (&looks.command_all, true, false),
             Entry::Pack => {
                 let ready = building.is_some_and(|b| can_pack(&sim.0, b));
                 (&looks.pack.1, ready, false)
@@ -975,8 +999,8 @@ fn press(
     activate: On<Activate>,
     slots: Query<&Slot>,
     shown: Res<Shown>,
-    selected: Res<Selected>,
-    chosen: Res<SelectedBuilding>,
+    mut selected: ResMut<Selected>,
+    mut chosen: ResMut<SelectedBuilding>,
     looks: Res<Looks>,
     local: Res<Local>,
     sim: Res<Sim>,
@@ -1012,6 +1036,14 @@ fn press(
         Entry::Cancel => *page = Page::Orders,
         Entry::Commission => *page = Page::Commission,
         Entry::Rally => *page = Page::Rally,
+        Entry::CommandAll => {
+            let building = chosen.0.filter(|_| selected.0.is_empty());
+            let attached: Vec<usize> = shown_hq(&sim.0, &selected.0, building)
+                .map_or(Vec::new(), |hq| sim.0.attached(hq).collect());
+            // As the game does, even where that leaves nothing selected.
+            selected.0 = attached;
+            chosen.0 = None;
+        }
         Entry::Pack => {
             if let Some(b) = chosen.0
                 && let Err(e) = orders.give(&sim.0, player, aaa_sim::Command::Pack { building: b })
@@ -1037,6 +1069,16 @@ fn press(
                 *page = commissioned(*page, given);
             }
         }
+    }
+}
+
+/// The HQ the selection is, by its id: the selected building, or the one
+/// selected regiment, packed.
+fn shown_hq(sim: &aaa_sim::World, selected: &[usize], building: Option<usize>) -> Option<u32> {
+    match (selected, building) {
+        ([], Some(b)) => sim.hq_of(b),
+        ([r], _) => sim.packed_hq(*r),
+        _ => None,
     }
 }
 
@@ -1287,21 +1329,36 @@ mod tests {
     #[test]
     fn orders_take_their_slots() {
         let all = [true; 8];
-        let grid = layout(Page::Orders, &GAME, &all, None);
+        let grid = layout(Page::Orders, &GAME, &all, None, false);
         assert_eq!(grid[0], Some(Entry::Order(0)));
         assert_eq!(grid[3], Some(Entry::Order(3)));
         assert_eq!(grid[6], Some(Entry::Order(4)));
         assert_eq!(grid[11], Some(Entry::Order(6)));
         assert_eq!(grid.iter().flatten().count(), 8);
         let truck = [true, false, false, true, false, false, false, true];
-        let grid = layout(Page::Orders, &GAME, &truck, None);
+        let grid = layout(Page::Orders, &GAME, &truck, None, false);
         assert_eq!(grid[9], Some(Entry::Order(7)));
         assert_eq!(grid.iter().flatten().count(), 3);
     }
 
     #[test]
+    fn hqs_have_a_button_for_their_regiments_where_nothing_else_is() {
+        let truck = [true, false, false, true, false, false, false, true];
+        let grid = layout(Page::Orders, &GAME, &truck, None, true);
+        assert_eq!(grid[COMMAND_ALL], Some(Entry::CommandAll));
+        assert_eq!(grid.iter().flatten().count(), 4);
+        // Not over an order, nor while one's aimed.
+        let mut slots = GAME;
+        slots[0] = Some(COMMAND_ALL);
+        let grid = layout(Page::Orders, &slots, &truck, None, true);
+        assert_eq!(grid[COMMAND_ALL], Some(Entry::Order(0)));
+        let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true);
+        assert!(!grid.contains(&Some(Entry::CommandAll)));
+    }
+
+    #[test]
     fn aiming_shows_the_order_and_a_way_out() {
-        let grid = layout(Page::Aiming(Aim::Run), &GAME, &[true; 8], None);
+        let grid = layout(Page::Aiming(Aim::Run), &GAME, &[true; 8], None, false);
         assert_eq!(grid[2], Some(Entry::Order(2)));
         assert_eq!(grid[CANCEL], Some(Entry::Cancel));
         assert_eq!(grid.iter().flatten().count(), 2);
@@ -1324,7 +1381,7 @@ mod tests {
             rally: Some(5),
             pack: Some(9),
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq));
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(grid[0], Some(Entry::Commission));
         assert_eq!(grid[5], Some(Entry::Rally));
         assert_eq!(grid[9], Some(Entry::Pack));
@@ -1335,14 +1392,14 @@ mod tests {
             ..hq
         };
         assert!(
-            layout(Page::Orders, &GAME, &[true; 8], Some(depot))
+            layout(Page::Orders, &GAME, &[true; 8], Some(depot), false)
                 .iter()
                 .all(Option::is_none)
         );
-        let menu = layout(Page::Commission, &GAME, &[true; 8], Some(hq));
+        let menu = layout(Page::Commission, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
-        let rally = layout(Page::Rally, &GAME, &[true; 8], Some(hq));
+        let rally = layout(Page::Rally, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(rally[5], Some(Entry::Rally));
         assert_eq!(rally[CANCEL], Some(Entry::Cancel));
         assert_eq!(rally.iter().flatten().count(), 2);

@@ -756,6 +756,10 @@ pub struct Minimap {
     pub color_enemy_mobile: [f32; 3],
     pub color_neutral_static: [f32; 3],
     pub color_neutral_mobile: [f32; 3],
+    /// What the player's own things blink in while they're being fought,
+    /// and while they're out of the supply they need.
+    pub color_under_siege: Option<[f32; 3]>,
+    pub color_requires_supply: Option<[f32; 3]>,
 }
 
 /// An order the player can give what they've selected, shown as a button.

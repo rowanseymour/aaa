@@ -58,10 +58,19 @@ struct Icon {
     rgba: Arc<[u8]>,
 }
 
+const UNDER_SIEGE: [f32; 3] = [1.0, 0.0, 0.0];
+const REQUIRES_SUPPLY: [f32; 3] = [0.0, 1.0, 0.0];
+/// Seconds a blinking mark spends in each of its colours.
+const BLINK: f32 = 0.5;
+
 /// What things are marked in, buildings and units, by [`Colours::of`].
 struct Colours {
     buildings: [[u8; 3]; 4],
     units: [[u8; 3]; 4],
+    /// What the player's own things blink in while they're being fought,
+    /// and while they're out of the supply they need.
+    under_siege: [u8; 3],
+    requires_supply: [u8; 3],
 }
 
 impl Colours {
@@ -86,6 +95,8 @@ impl Colours {
                     m.color_neutral_mobile,
                 ]
                 .map(rgb),
+                under_siege: rgb(m.color_under_siege.unwrap_or(UNDER_SIEGE)),
+                requires_supply: rgb(m.color_requires_supply.unwrap_or(REQUIRES_SUPPLY)),
             },
             None => {
                 warn!("no minimap colours; using the marks' tints");
@@ -96,6 +107,8 @@ impl Colours {
                 Colours {
                     buildings: tints,
                     units: tints,
+                    under_siege: rgb(UNDER_SIEGE),
+                    requires_supply: rgb(REQUIRES_SUPPLY),
                 }
             }
         }
@@ -282,6 +295,8 @@ pub fn update(
     minimap: Res<Minimap>,
     sim: Res<Sim>,
     local: Res<crate::Local>,
+    outline: Res<crate::supply::Outline>,
+    time: Res<Time<Real>>,
     cameras: Query<(&Camera, &RtsCamera)>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -304,9 +319,26 @@ pub fn update(
             [r, g, b]
         }
     };
+    // The supply border, but for where a zone just runs off the map.
+    let [r, g, b, _] = crate::OWN.to_srgba().to_u8_array();
+    let on_map = |[x, y]: [f32; 2]| {
+        let inside = tgck::map::CELL_SIZE / 2.0..=minimap.size - tgck::map::CELL_SIZE / 2.0;
+        inside.contains(&x) && inside.contains(&y)
+    };
+    for path in &outline.0 {
+        for (i, &from) in path.iter().enumerate() {
+            let to = path[(i + 1) % path.len()];
+            if on_map(from) && on_map(to) {
+                canvas.line(to_px(from), to_px(to), [r, g, b]);
+            }
+        }
+    }
+    // The player's own things in trouble blink.
+    let warn = time.elapsed_secs() % (2.0 * BLINK) < BLINK;
+    let own = |owner: u32| warn && local.0 == Some(owner);
     let neutral = minimap.colours.buildings[Colours::of(Relation::Neutral)];
     let mut icons = Vec::new();
-    for building in &sim.0.buildings {
+    for (b, building) in sim.0.buildings.iter().enumerate() {
         if building.gone() {
             continue;
         }
@@ -321,6 +353,8 @@ pub fn update(
             _ if independent && building.zone.is_none() => continue,
             _ if independent => neutral,
             State::Disabled => [100; 3],
+            _ if own(building.owner) && !building.noticed.is_empty() => minimap.colours.under_siege,
+            _ if own(building.owner) && sim.0.out_of_supply(b) => minimap.colours.requires_supply,
             _ => colour(&minimap.colours.buildings, building.owner),
         };
         // Drawn last, over the units.
@@ -332,12 +366,12 @@ pub fn update(
         canvas.square(to_px(building.position), 3.0, rgb);
     }
     for unit in sim.0.units.iter().filter(|u| u.alive()) {
-        let owner = sim.0.regiments[unit.regiment].owner;
-        canvas.square(
-            to_px(unit.position),
-            2.0,
-            colour(&minimap.colours.units, owner),
-        );
+        let regiment = &sim.0.regiments[unit.regiment];
+        let rgb = match own(regiment.owner) && !regiment.engaged.is_empty() {
+            true => minimap.colours.under_siege,
+            false => colour(&minimap.colours.units, regiment.owner),
+        };
+        canvas.square(to_px(unit.position), 2.0, rgb);
     }
     for (icon, at, rgb) in icons {
         canvas.icon(minimap.size, icon, at, rgb);

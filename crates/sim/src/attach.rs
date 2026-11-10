@@ -38,11 +38,7 @@ impl World {
                 continue;
             };
             let building = &unpacks.building.template;
-            let trucks = self.packing.get(building).map(|p| &p.truck.members);
-            let truck = |&u: &usize| {
-                trucks.is_none_or(|t| t.iter().any(|m| m.thing.template == self.units[u].template))
-            };
-            if self.survivors(r).any(|u| truck(&u)) {
+            if self.truck_survives(r) {
                 out.push(Hq {
                     id: regiment.id,
                     owner: regiment.owner,
@@ -53,7 +49,7 @@ impl World {
             }
         }
         for (b, building) in self.buildings.iter().enumerate() {
-            if let Some((id, places)) = self.hq_behind(b).filter(|_| !building.gone()) {
+            if let Some((id, places, _)) = self.hq_behind(b).filter(|_| !building.gone()) {
                 out.push(Hq {
                     id,
                     owner: building.owner,
@@ -67,22 +63,71 @@ impl World {
         out
     }
 
-    /// The id and places of the HQ the building at `b` is, if it's one:
-    /// the organization a map has it standing in, or the regiment it
-    /// unpacked from.
-    fn hq_behind(&self, b: usize) -> Option<(u32, u32)> {
+    /// Whether any of the truck a packed building's regiment is still
+    /// lives: the units its building packs into, or any where the data
+    /// doesn't say.
+    fn truck_survives(&self, r: usize) -> bool {
+        let unpacks = self.regiments[r].unpacks.as_ref();
+        let trucks = unpacks
+            .and_then(|u| self.packing.get(&u.building.template))
+            .map(|p| &p.truck.members);
+        let truck = |u: usize| {
+            trucks.is_none_or(|t| t.iter().any(|m| m.thing.template == self.units[u].template))
+        };
+        self.survivors(r).any(truck)
+    }
+
+    /// The id, places and organization template of the HQ the building at
+    /// `b` is, if it's one: the organization a map has it standing in, or
+    /// the regiment it unpacked from.
+    fn hq_behind(&self, b: usize) -> Option<(u32, u32, &str)> {
         let building = &self.buildings[b];
         let (id, template) = match (&building.organization, building.unpacked_from) {
             (Some(o), _) => (o.id, o.template.as_str()),
             (None, Some(r)) => (self.regiments[r].id, self.regiments[r].template.as_str()),
             (None, None) => return None,
         };
-        Some((id, self.places(template)?))
+        Some((id, self.places(template)?, template))
+    }
+
+    /// The template of the organization the building at `b` is the HQ of,
+    /// if it's one.
+    pub fn hq_template(&self, b: usize) -> Option<&str> {
+        self.hq_behind(b).map(|(.., template)| template)
+    }
+
+    /// The HQ the regiment at `r` is while it's packed, if it's one.
+    pub fn packed_hq(&self, r: usize) -> Option<u32> {
+        let regiment = &self.regiments[r];
+        self.places(&regiment.template)?;
+        (regiment.unpacks.is_some() && self.truck_survives(r)).then_some(regiment.id)
+    }
+
+    /// `player`'s regiments that need supply and have no HQ, by index.
+    pub fn detached(&self, player: u32) -> Vec<usize> {
+        let needs = |r: usize| {
+            let used = self.logistics_of(&self.regiments[r].template);
+            used.is_some_and(|l| l.supply_used)
+        };
+        (0..self.regiments.len())
+            .filter(|&r| {
+                let regiment = &self.regiments[r];
+                regiment.owner == player && regiment.hq.is_none() && needs(r) && !self.destroyed(r)
+            })
+            .collect()
+    }
+
+    /// Whether any of `player`'s detached regiments is of a kind one of its
+    /// HQs takes, whether or not the HQ has a place.
+    pub fn attachable(&self, player: u32) -> bool {
+        let hqs = self.hqs();
+        let detached = self.detached(player);
+        (detached.iter()).any(|&r| hqs.iter().any(|h| self.suits(h, r)))
     }
 
     /// The HQ the building at `b` is, if it's one.
     pub fn hq_of(&self, b: usize) -> Option<u32> {
-        self.hq_behind(b).map(|(id, _)| id)
+        self.hq_behind(b).map(|(id, ..)| id)
     }
 
     /// The regiments attached to the HQ `hq`, by index.

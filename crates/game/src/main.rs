@@ -530,6 +530,7 @@ fn main() -> ExitCode {
         .init_resource::<Focus>()
         .init_resource::<ghost::Ghost>()
         .init_resource::<supply::Border>()
+        .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
         .add_plugins((
@@ -550,6 +551,7 @@ fn main() -> ExitCode {
                 actions::spawn,
                 pane::spawn,
                 resource_bar::spawn,
+                supply::spawn,
                 waypoints::load,
                 console::start_scripts,
                 ready,
@@ -568,12 +570,17 @@ fn main() -> ExitCode {
                 drop_lost_building,
                 selection_sounds,
                 show_focus,
-                (supply::show_border, supply::tint_buildings),
+                (
+                    supply::show_border,
+                    supply::tint_buildings,
+                    supply::show_cycle_button,
+                ),
                 show_health.after(camera::Controls),
                 (
                     banners::add_banners,
                     banners::badge_banners,
-                    banners::show_banners,
+                    banners::add_hq_banners,
+                    (banners::show_banners, banners::show_hq_banners),
                 )
                     .chain()
                     .after(camera::Controls),
@@ -615,6 +622,7 @@ fn main() -> ExitCode {
                 )
                     .chain(),
                 choose_formation,
+                supply::cycle_detached,
             )
                 .run_if(in_state(Screen::Match))
                 .run_if(takes_input)

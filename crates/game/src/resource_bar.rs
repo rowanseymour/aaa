@@ -12,7 +12,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use crate::actions::fill;
-use crate::ui::{Font, Ink, Surface, Theme, backed, font, label};
+use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};
 
 /// What each cell shows, in order: a rate, or a limit by what it uses.
@@ -88,6 +88,12 @@ pub struct Cell(bool, usize);
 #[derive(Component)]
 pub struct Message(f32);
 
+/// The mark beside the bar while the player can't pay their upkeep.
+#[derive(Component)]
+pub struct ShortageIcon;
+
+const SHORTAGE_ICON: &str = "UI/Game/ControlPanel/BleedIcon.png";
+
 pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -130,6 +136,14 @@ pub fn spawn(
             .collect(),
     });
     commands.init_resource::<Preview>();
+    let shortage = game
+        .read(SHORTAGE_ICON)
+        .and_then(|bytes| textures::decode(&bytes, SHORTAGE_ICON, formats.0, true))
+        .map(|i| images.add(i));
+    let shortage_tip = said(
+        "game_interface_UpkeepShortageIcon_ToolTip",
+        "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
+    );
     let glyphs: HashMap<&str, Handle<Image>> = crate::actions::GLYPHS
         .iter()
         .filter_map(|&(kind, name)| {
@@ -199,7 +213,27 @@ pub fn spawn(
             DespawnOnExit(Screen::Match),
         ))
         .with_children(|root| {
-            bar(root, false);
+            root.spawn(Node {
+                column_gap: px(GAP),
+                align_items: AlignItems::Center,
+                ..default()
+            })
+            .with_children(|row| {
+                if let Some(icon) = shortage {
+                    row.spawn((
+                        ShortageIcon,
+                        Hint(shortage_tip),
+                        ImageNode::new(icon),
+                        Node {
+                            display: Display::None,
+                            width: px(HEIGHT),
+                            height: px(HEIGHT),
+                            ..default()
+                        },
+                    ));
+                }
+                bar(row, false);
+            });
             bar(root, true);
             root.spawn((
                 Message(0.0),
@@ -210,16 +244,28 @@ pub fn spawn(
 }
 
 /// Fills both bars for the player, the preview only while there's
-/// something to preview.
+/// something to preview, and marks a shortage beside them.
+#[allow(clippy::too_many_arguments)]
 pub fn show(
     sim: Res<Sim>,
     local: Res<Local>,
     preview: Res<Preview>,
-    mut bars: Query<(&Bar, &mut Node)>,
+    mut bars: Query<(&Bar, &mut Node), Without<ShortageIcon>>,
+    mut icons: Query<&mut Node, With<ShortageIcon>>,
     mut commands: Commands,
     cells: Query<(Entity, &Cell, Option<&Children>)>,
     mut spans: Query<(&mut TextSpan, &mut Ink)>,
 ) {
+    let short = local.0.is_some_and(|p| sim.0.short(p).is_some());
+    for mut node in &mut icons {
+        let display = match short {
+            true => Display::Flex,
+            false => Display::None,
+        };
+        if node.display != display {
+            node.display = display;
+        }
+    }
     let Some(player) = local.0 else {
         for (_, mut node) in &mut bars {
             node.display = Display::None;

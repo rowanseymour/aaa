@@ -6289,6 +6289,10 @@ mod tests {
         let mut w = division();
         assert_eq!(w.hqs().len(), 1);
         assert_eq!(w.hqs()[0].id, 50);
+        // Packed, it's its regiment, and the company is the one detached.
+        assert_eq!((w.packed_hq(0), w.packed_hq(1)), (Some(50), None));
+        assert_eq!((w.detached(1), w.detached(2)), (vec![1], vec![]));
+        assert!(w.attachable(1) && !w.attachable(2));
         // The HQ itself is in no supply and attaches to nothing.
         assert_eq!(
             w.check(1, &Command::Attach { regiment: 0 }),
@@ -6315,6 +6319,7 @@ mod tests {
         w.add_regiment(&t);
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         assert_eq!(w.regiments[1].hq, Some(70));
+        assert!(w.detached(1).is_empty());
         w.notices.clear();
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         assert_eq!(w.regiments[1].hq, Some(50));
