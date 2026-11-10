@@ -1088,7 +1088,7 @@ impl Presser<'_> {
                     && let Err(e) =
                         (self.orders).give(sim, player, aaa_sim::Command::Pack { building: b })
                 {
-                    info!("can't pack {}: {e:?}", sim.buildings[b].template);
+                    debug!("can't pack {}: {e:?}", sim.buildings[b].template);
                 }
             }
             Entry::Recruit(i) => {
@@ -1105,7 +1105,7 @@ impl Presser<'_> {
                     };
                     let given = self.orders.give(sim, player, command);
                     if let Err(e) = given {
-                        info!("can't commission {}: {e:?}", regiment.template);
+                        debug!("can't commission {}: {e:?}", regiment.template);
                         self.refusal.0 = Some((slot, e));
                     }
                     *self.page = commissioned(*self.page, given);
@@ -1288,7 +1288,7 @@ pub fn aim(
                 },
             )
         {
-            info!("can't rally {}: {e:?}", sim.0.buildings[b].template);
+            debug!("can't rally {}: {e:?}", sim.0.buildings[b].template);
         }
         *page = Page::Orders;
         return;

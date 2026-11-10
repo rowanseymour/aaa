@@ -4,6 +4,7 @@
 pub mod blend;
 pub mod camera;
 mod glow;
+pub mod log;
 pub mod models;
 pub mod objects;
 pub mod overlay;

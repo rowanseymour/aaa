@@ -61,6 +61,7 @@ version = "0.1.0"
 dependencies = [
  "aaa-map",
  "libm",
+ "log",
  "tgck",
 ]
 

@@ -148,7 +148,7 @@ impl Effects {
                 variations.get(&Id::from(name))?.group.clone()
             })
             .collect();
-        info!(
+        debug!(
             "{} effects shown by {} object templates, at {} named points",
             vfx.len(),
             objects.len(),
@@ -982,7 +982,7 @@ fn follow(
             }
         }
         if effect.discard && !on_screen(camera, transform.translation) {
-            debug!("{}: off screen", effect.vfx);
+            trace!("{}: off screen", effect.vfx);
             commands.entity(e).despawn();
         }
     }

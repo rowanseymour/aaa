@@ -27,7 +27,10 @@ options:
                                  and pitch in radians
   --inspect <id,...>             open the windows on the objects with these ids
   --screenshot <file.png>        save a frame to a file and exit, without a
-                                 window, help text or placeholder markers";
+                                 window, help text or placeholder markers
+  --log <filter>                 what to log, as for RUST_LOG, e.g. \"debug\" or
+                                 \"aaa_render=debug\"; RUST_LOG still applies
+                                 on top";
 
 const HELP: &str = "click: inspect   WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
                     (Q/E/right drag: rotate   R/F: tilt)   M: placeholder markers   \
@@ -107,13 +110,21 @@ fn floats<const N: usize>(s: &str) -> Option<[f32; N]> {
 
 fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
-    let (Ok(screenshot), Ok(camera), Ok(inspect_ids)) = (
+    let (Ok(screenshot), Ok(camera), Ok(inspect_ids), Ok(log)) = (
         take_option(&mut args, "--screenshot"),
         take_option(&mut args, "--camera"),
         take_option(&mut args, "--inspect"),
+        take_option(&mut args, "--log"),
     ) else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
+    };
+    let log = match aaa_render::log::plugin(log.as_deref()) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("aaa-editor: {e}");
+            return ExitCode::from(2);
+        }
     };
     let screenshot = screenshot.map(|path| ShotPlugin { path: path.into() });
     let camera = match camera.map(|c| floats(&c)) {
@@ -189,7 +200,11 @@ fn main() -> ExitCode {
 
     let mut app = App::new();
     let title = format!("{} - aaa-editor", loaded.map.title);
-    app.add_plugins(DefaultPlugins.set(shot::window(title, screenshot.is_some())));
+    app.add_plugins(
+        DefaultPlugins
+            .set(shot::window(title, screenshot.is_some()))
+            .set(log),
+    );
     app.add_plugins(MapRenderPlugin {
         edge: Edge::Hard,
         pickable: screenshot.is_none(),

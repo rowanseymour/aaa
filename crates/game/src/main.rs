@@ -77,7 +77,9 @@ options:
   --screenshot <file.png>   save a frame to a file and exit, without a window
   --shot-after <seconds>    with --screenshot, play that long into the match first
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
-                            though smaller if the window's too narrow for it";
+                            though smaller if the window's too narrow for it
+  --log <filter>            what to log, as for RUST_LOG, e.g. \"debug\" or
+                            \"aaa_game=debug\"; RUST_LOG still applies on top";
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
@@ -406,6 +408,7 @@ struct Options {
     screenshot: Option<String>,
     shot_after: f64,
     ui_scale: f32,
+    log: Option<String>,
 }
 
 /// Takes the options out of `args`; `None` if any is malformed.
@@ -431,6 +434,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
         None => 1.0,
     };
+    let log = take_option(args, "--log")?;
     Some(Options {
         side,
         scripts,
@@ -438,6 +442,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         screenshot,
         shot_after,
         ui_scale,
+        log,
     })
 }
 
@@ -450,10 +455,18 @@ fn main() -> ExitCode {
         screenshot,
         shot_after,
         ui_scale,
+        log,
     }) = options(&mut args)
     else {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
+    };
+    let log = match aaa_render::log::plugin(log.as_deref()) {
+        Ok(l) => l,
+        Err(e) => {
+            eprintln!("aaa-game: {e}");
+            return ExitCode::from(2);
+        }
     };
     let remote = match console.map(remote::Remote::listen).transpose() {
         Ok(r) => r,
@@ -490,7 +503,7 @@ fn main() -> ExitCode {
 
     let mut app = App::new();
     let window = shot::window("aaa-game".into(), screenshot.is_some());
-    app.add_plugins(DefaultPlugins.set(window));
+    app.add_plugins(DefaultPlugins.set(window).set(log));
     if let Some(s) = screenshot {
         app.add_plugins(s);
         // Every frame takes the same time, so a shot some way into a match
@@ -1225,9 +1238,6 @@ fn spawn_views(
             regiment.owner,
             u,
         );
-        if regiment.units.first() == Some(&u) {
-            info!("{} {} raised", regiment.template, regiment.id);
-        }
     }
     viewed.units = sim.0.units.len();
     for b in viewed.buildings..sim.0.buildings.len() {
@@ -1920,7 +1930,7 @@ fn choose_formation(
             formation: f,
         };
         if orders.give(&sim.0, player, command).is_ok() {
-            info!("{} to formation {}", regiment.template, formation.id);
+            debug!("{} to formation {}", regiment.template, formation.id);
         }
     }
 }
