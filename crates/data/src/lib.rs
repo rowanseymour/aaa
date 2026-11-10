@@ -4,9 +4,11 @@
 pub mod defs;
 mod economy;
 mod id;
+mod supply;
 
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
 pub use id::Id;
+pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -46,6 +48,9 @@ struct Definitions {
     /// in the data, and only the first definition is kept.
     things: Vec<Template>,
     properties: HashMap<Id, defs::Property>,
+    /// The abilities defined on their own, such as special operations,
+    /// in the order they load, the first kept of those defined twice.
+    abilities: Vec<(Id, defs::AbilityDefinition)>,
 }
 
 /// An object template as some `.tgi` file defines it.
@@ -63,6 +68,7 @@ impl Definitions {
         let mut ids = HashSet::new();
         let mut things = Vec::new();
         let mut properties = HashMap::new();
+        let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
         for Scoped {
             file,
             root,
@@ -91,10 +97,20 @@ impl Definitions {
                     && let Some(id) = p.ids.clone()
                 {
                     properties.insert(id, p);
+                } else if kind.eq_ignore_ascii_case("AbilityDefinition")
+                    && let Ok(a) = templates.deserialize::<defs::AbilityDefinition>(block)
+                    && let Some(id) = a.ids.clone()
+                    && !abilities.iter().any(|(known, _)| *known == id)
+                {
+                    abilities.push((id, a));
                 }
             }
         }
-        Definitions { things, properties }
+        Definitions {
+            things,
+            properties,
+            abilities,
+        }
     }
 }
 
@@ -315,6 +331,9 @@ pub struct Weapon {
     pub projectile: Option<Id>,
     /// How that projectile flies, if its template says.
     pub flight: Option<Flight>,
+    /// An order to bombard can use it, and its hits are bombardment when
+    /// it fires other than by its user's own choice of shot.
+    pub bombard: bool,
 }
 
 /// How a projectile flies to what it's fired at.
@@ -2242,6 +2261,7 @@ fn fighter(thing: &defs::Thing, shared: &HashMap<Id, defs::Property>) -> Option<
             },
             projectile: not_null(d.projectile_ids.clone()),
             flight: None,
+            bombard: d.flags.iter().any(|f| f.bombard),
         });
     }
     Some(fighter)

@@ -721,7 +721,16 @@ fn prepare(
     sim.economies = game.economies();
     sim.economy = game.economy_rules();
     sim.supplies = game.supplies();
-    sim.supply_recharge = game.supply_recharge();
+    sim.supply_rules = game.supply_rules();
+    sim.supply_effects = game.supply_effects();
+    sim.kinds = game.kinds();
+    sim.decays = game.decays();
+    sim.operations = game.operations();
+    let dropped = sim.operations.values().filter_map(|o| match o {
+        aaa_map::Operation::Drop(template) => Some(template.clone()),
+        aaa_map::Operation::Enchant { .. } => None,
+    });
+    sim.drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
     sim.logistics = game.logistics();
     sim.resupply_rates = game.resupply_rates();
     sim.recruit_lists = game.recruit_lists();

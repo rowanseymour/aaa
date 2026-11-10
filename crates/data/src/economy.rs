@@ -213,14 +213,6 @@ impl GameData {
         })
     }
 
-    /// Seconds a connected relay's stockpile gains each second.
-    pub fn supply_recharge(&mut self) -> f32 {
-        let svars = self.svars();
-        (svars.iter())
-            .find_map(|v| v.supply_stockpile_recharge_rate)
-            .unwrap_or(1.0)
-    }
-
     /// The resources' and the tuning settings' bounds on economies.
     pub fn economy_rules(&mut self) -> EconomyRules {
         let files = self.parse_tgis(|n| {
