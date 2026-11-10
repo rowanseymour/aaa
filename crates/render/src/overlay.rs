@@ -411,6 +411,17 @@ fn paced(path: &[Vec2], step: f32) -> Vec<Vec2> {
     points
 }
 
+/// The paths a border along `loops` follows, in map units: each loop
+/// evened out, as [`border`] draws it.
+pub fn border_paths(loops: &[Vec<[f32; 2]>]) -> Vec<Vec<[f32; 2]>> {
+    let long = loops.iter().filter(|l| l.len() > 2);
+    long.map(|path| {
+        let path: Vec<Vec2> = path.iter().map(|&p| Vec2::from(p)).collect();
+        smoothed(&path).iter().map(Vec2::to_array).collect()
+    })
+    .collect()
+}
+
 /// The lines of a border along `loops`, closed paths in map units with
 /// what they bound on their left, laid over the ground in world space: a
 /// solid line on each path and a thinner broken one just inside it.

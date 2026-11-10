@@ -31,8 +31,8 @@ impl Default for Border {
     }
 }
 
-/// The edges the border runs along, as [`aaa_map::outline`] gives them, for
-/// the minimap to draw too; empty while the border's hidden.
+/// The paths the border follows, for the minimap to draw too; empty while
+/// the border's hidden.
 #[derive(Resource, Default)]
 pub struct Outline(pub Vec<Vec<[f32; 2]>>);
 
@@ -75,7 +75,7 @@ pub fn show_border(
     }
     let edges = aaa_map::outline(giving.iter().filter_map(|&b| zone(b)));
     let mesh = overlay::border(&loaded.map.ground, &edges);
-    outline.0 = edges;
+    outline.0 = overlay::border_paths(&edges);
     let material = material
         .get_or_insert_with(|| materials.add(overlay::mark_material(None, OWN)))
         .clone();
