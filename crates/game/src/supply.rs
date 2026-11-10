@@ -1,7 +1,8 @@
 //! Supply as the map shows it: a border along the edge of the ground the
 //! player's side is supplied over, and a tint on buildings going without.
-//! F5, or the button over the minimap, steps through the player's
-//! regiments that have no HQ.
+//! A button at the minimap's corner, or its key, shows and hides the
+//! border, as the options do. Another over the minimap, or its key, steps
+//! through the player's regiments that have no HQ.
 
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
@@ -15,7 +16,8 @@ use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
 use crate::effects::Effects;
-use crate::ui::Hint;
+use crate::keys::{self, Bindings};
+use crate::ui::{Hint, Marked};
 use crate::{BuildingView, Loaded, Local, Screen, Selected, SelectedBuilding, Sim, minimap};
 
 /// The tint a building out of supply is drawn in.
@@ -40,17 +42,30 @@ pub struct Outline(pub Vec<Vec<[f32; 2]>>);
 #[derive(Resource)]
 pub struct BorderLook {
     pub colour: Color,
+    /// What the options call the choice to show it.
+    pub option: String,
     width: f32,
+    /// The side of the squares the map is cut into, in world units.
+    block: f32,
     material: Handle<StandardMaterial>,
 }
 
-/// The border as drawn, around the zones of these buildings, by index into
-/// the sim's.
+/// The border as drawn.
 #[derive(Component)]
-pub struct BorderLine(Vec<usize>);
+pub struct BorderLine;
+
+/// The outline the border follows, of the zones of these buildings, by
+/// index into the sim's, each with where its zone is laid and how far it
+/// reaches; kept while the border's hidden, as where its loops start
+/// follows from how the zones came to be.
+#[derive(Default)]
+pub struct Traced {
+    giving: Vec<(usize, (i32, i32), f32)>,
+    outline: aaa_map::Outline,
+}
 
 /// Draws the border round the zones of the player's side and its allies,
-/// again whenever one comes or goes.
+/// again whenever one comes, goes, moves or changes its reach.
 #[allow(clippy::too_many_arguments)]
 pub fn show_border(
     mut commands: Commands,
@@ -58,33 +73,49 @@ pub fn show_border(
     sim: Res<Sim>,
     local: Res<Local>,
     loaded: Res<Loaded>,
-    lines: Query<(Entity, &BorderLine)>,
+    lines: Query<Entity, With<BorderLine>>,
     look: Res<BorderLook>,
+    mut traced: bevy::prelude::Local<Traced>,
     mut outline: ResMut<Outline>,
     mut meshes: ResMut<Assets<Mesh>>,
 ) {
+    if sim.is_added() {
+        *traced = Traced::default();
+    }
     let sim = &sim.0;
     let zone = |b: usize| sim.buildings[b].supply.zone.as_ref();
-    let giving: Vec<usize> = match local.0.filter(|_| border.0) {
+    let laid = |b: usize| {
+        let (around, reach) = sim.buildings[b].supply.laid()?;
+        Some((b, around, reach))
+    };
+    let giving: Vec<(usize, (i32, i32), f32)> = match local.0 {
         Some(player) => (0..sim.buildings.len())
-            .filter(|&b| zone(b).is_some() && sim.shares_supply(player, sim.buildings[b].owner))
+            .filter(|&b| sim.shares_supply(player, sim.buildings[b].owner))
+            .filter_map(laid)
             .collect(),
         None => Vec::new(),
     };
-    let drawn = lines.iter().next();
-    if drawn.map_or(&[][..], |(_, line)| &line.0) == giving {
+    let moved = traced.giving != giving;
+    if moved {
+        let zones = giving.iter().filter_map(|&(b, ..)| zone(b));
+        let block = (look.block / tgck::map::CELL_SIZE).round() as i32;
+        traced.outline.retrace(zones, block);
+        traced.giving = giving;
+    }
+    let shown = border.0 && !traced.giving.is_empty();
+    if !moved && shown != lines.is_empty() {
         return;
     }
-    lines.iter().for_each(|(e, _)| commands.entity(e).despawn());
-    if giving.is_empty() {
+    lines.iter().for_each(|e| commands.entity(e).despawn());
+    if !shown {
         outline.0.clear();
         return;
     }
-    let edges = aaa_map::outline(giving.iter().filter_map(|&b| zone(b)));
+    let edges = traced.outline.loops();
     let mesh = overlay::border(&loaded.map.ground, &edges, look.width);
     outline.0 = overlay::border_paths(&edges);
     commands.spawn((
-        BorderLine(giving),
+        BorderLine,
         NotShadowCaster,
         Pickable::IGNORE,
         Mesh3d(meshes.add(mesh)),
@@ -123,14 +154,29 @@ const CYCLE_ICON: &str = "UI/Game/Floaters/ButtonDetachedRegimentUnpressed.tga";
 const CYCLE_HELP: &str = "idle_buttons_IdleButton_tooltip_2";
 const CYCLE_SIZE: f32 = 42.0;
 
-/// Loads how the border looks, and spawns the button that cycles through
-/// detached regiments.
+/// The button at the minimap's corner that shows and hides the border,
+/// drawn pressed while it's shown.
+#[derive(Component)]
+pub struct BorderButton {
+    shown: Option<Handle<Image>>,
+    hidden: Option<Handle<Image>>,
+}
+
+const BORDER_SHOWN: &str = "UI/Game/ControlPanel/ButtonSupplyBorderPressedUnfocused.tga";
+const BORDER_HIDDEN: &str = "UI/Game/ControlPanel/ButtonSupplyBorderUnpressed.tga";
+const BORDER_NAME: &str = "control_panel_ButtonSupplyBorder_ToolTip";
+const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
+const BORDER_OPTION: &str = "options_dialog_Child_text_15";
+
+/// Loads how the border looks, and spawns the buttons that show and hide
+/// it and that cycle through detached regiments.
 pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     formats: Res<CompressedImageFormatSupport>,
+    bindings: Res<Bindings>,
 ) {
     let game = &mut loaded.game;
     let border = game.supply_border();
@@ -139,16 +185,53 @@ pub fn spawn(
     let image = (border.texture.as_deref())
         .and_then(|path| overlay::border_image(game, path, formats.0))
         .map(|i| images.add(i));
+    let material = materials.add(overlay::mark_material(image, colour));
+    let mut icon = |path: &str| {
+        let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
+        Some(images.add(image))
+    };
+    let (shown, hidden) = (icon(BORDER_SHOWN), icon(BORDER_HIDDEN));
+    let icon = icon(CYCLE_ICON);
+    let strings = game.strings();
+    let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+    let name = said(BORDER_NAME, "Toggle Supply Border");
+    let what = said(BORDER_HELP, "Toggles the supply border off/on.");
+    commands
+        .spawn((
+            BorderButton { shown, hidden },
+            Blocks,
+            Button,
+            RelativeCursorPosition::default(),
+            match bindings.key(keys::SUPPLY_BORDER) {
+                Some(key) => key.mark(&name),
+                None => Marked::plain(name),
+            },
+            Hint(what),
+            ImageNode::default(),
+            // In the corner the minimap's disc leaves of its square, where
+            // the game's control panel has it.
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(crate::MARGIN),
+                bottom: px(crate::MARGIN + minimap::DISC - CYCLE_SIZE),
+                width: px(CYCLE_SIZE),
+                height: px(CYCLE_SIZE),
+                ..default()
+            },
+            GlobalZIndex(2),
+            DespawnOnExit(Screen::Match),
+        ))
+        .observe(|_: On<Activate>, mut border: ResMut<Border>| {
+            border.0 = !border.0;
+        });
     commands.insert_resource(BorderLook {
         colour,
+        option: said(BORDER_OPTION, "Supply Border"),
         width: border.width,
-        material: materials.add(overlay::mark_material(image, colour)),
+        block: border.block,
+        material,
     });
-    let icon = game
-        .read(CYCLE_ICON)
-        .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
-        .map(|i| images.add(i));
-    let help = game.strings().get(CYCLE_HELP).cloned();
+    let help = strings.get(CYCLE_HELP).cloned();
     commands
         .spawn((
             CycleDetached,
@@ -182,6 +265,7 @@ pub struct CycleParts<'w, 's> {
     loaded: Res<'w, Loaded>,
     selected: ResMut<'w, Selected>,
     chosen: ResMut<'w, SelectedBuilding>,
+    scenery: Res<'w, crate::banners::Scenery>,
     cameras: Query<'w, 's, &'static mut RtsCamera>,
 }
 
@@ -192,7 +276,9 @@ impl CycleParts<'_, '_> {
         let Some(player) = self.local.0 else {
             return;
         };
-        let detached = self.sim.0.detached(player);
+        // Those that can't be selected are passed over.
+        let mut detached = self.sim.0.detached(player);
+        detached.retain(|&r| !self.scenery.has(&self.sim.0, r));
         let after = self.selected.0.first().map_or(0, |&now| now + 1);
         let next = detached.iter().find(|&&r| r >= after).or(detached.first());
         let Some(&r) = next.filter(|&&r| self.selected.0 != [r]) else {
@@ -207,15 +293,48 @@ impl CycleParts<'_, '_> {
     }
 }
 
-/// Steps through the detached regiments on F5.
-pub fn cycle_detached(keys: Res<ButtonInput<KeyCode>>, mut cycle: CycleParts) {
-    if keys.just_pressed(KeyCode::F5) {
+/// Steps through the detached regiments on the key for it.
+pub fn cycle_detached(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<Bindings>,
+    mut cycle: CycleParts,
+) {
+    if bindings.pressed(&keys, keys::CYCLE_DETACHED) {
         cycle.step();
     }
 }
 
+/// Shows or hides the border on the key for it.
+pub fn toggle_border(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<Bindings>,
+    mut border: ResMut<Border>,
+) {
+    if bindings.pressed(&keys, keys::SUPPLY_BORDER) {
+        border.0 = !border.0;
+    }
+}
+
+/// Draws the border's button pressed while the border's shown.
+pub fn show_border_button(
+    border: Res<Border>,
+    mut buttons: Query<(&BorderButton, &mut ImageNode)>,
+) {
+    for (button, mut image) in &mut buttons {
+        let want = match border.0 {
+            true => &button.shown,
+            false => &button.hidden,
+        };
+        let want = want.clone().unwrap_or_default();
+        if image.image != want {
+            image.image = want;
+        }
+    }
+}
+
 /// Shows the button that cycles through detached regiments while there's
-/// one that an HQ of the player's could take, places aside.
+/// one that an HQ of the player's could take, places aside, though the
+/// cycle takes in those none could.
 pub fn show_cycle_button(
     sim: Res<Sim>,
     local: Res<Local>,

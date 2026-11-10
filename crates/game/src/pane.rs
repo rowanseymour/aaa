@@ -9,6 +9,8 @@
 //!   regiment's health and each unit's; clicking one selects it alone.
 //! - A building: its picture over its health, and what it's been asked to
 //!   commission, the first with its progress; clicking one calls it off.
+//! - An HQ, packed or not: a place for each regiment it takes, with the
+//!   regiment attached there or the one it's been asked for.
 
 use std::collections::HashMap;
 
@@ -51,6 +53,37 @@ fn at(left: f32, top: f32, width: f32, height: f32) -> Node {
     }
 }
 
+/// Where the game's layout puts an HQ's places, and how big the area they
+/// share is and each of them.
+const SLOTS_AT: Vec2 = Vec2::new(144.0, 44.0);
+const SLOTS_AREA: Vec2 = Vec2::new(148.0, 101.0);
+const SLOT: Vec2 = Vec2::new(42.0, 50.0);
+/// How many places go across before the next row, and how many the pane
+/// has room for.
+const SLOTS_ACROSS: usize = 3;
+const MAX_SLOTS: usize = 6;
+/// Within a place, where its regiment's banner goes and how big it is,
+/// and its health bar's box.
+const SLOT_BANNER: [f32; 3] = [2.0, 2.0, 38.0];
+const SLOT_HEALTH: [f32; 4] = [2.0, 47.0, 38.0, 2.0];
+/// The box of the bar a place held for a regiment in the queue has
+/// instead, of how far along it is.
+const SLOT_PROGRESS: [f32; 4] = [2.0, 44.0, 38.0, 5.0];
+
+/// Where the `i`th of an HQ's `count` places goes: across then down,
+/// spread evenly over the area they share.
+fn slot_at(i: usize, count: usize) -> [f32; 2] {
+    let rows = count.div_ceil(SLOTS_ACROSS).max(2);
+    let gap = |area: f32, slot: f32, n: usize| (area - n as f32 * slot) / (n - 1) as f32;
+    let step = SLOT
+        + Vec2::new(
+            gap(SLOTS_AREA.x, SLOT.x, SLOTS_ACROSS),
+            gap(SLOTS_AREA.y, SLOT.y, rows),
+        );
+    let place = Vec2::new((i % SLOTS_ACROSS) as f32, (i / SLOTS_ACROSS) as f32);
+    (SLOTS_AT + place * step).to_array()
+}
+
 /// The strings' keys for what an HQ's empty place says under the pointer,
 /// and a relay's stockpile bar, given what's left and what it holds.
 const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
@@ -67,11 +100,21 @@ pub struct Showing(Option<(What, Detail)>);
 /// What of the pane's layout can change while it shows the same thing.
 #[derive(Clone, PartialEq, Debug, Default)]
 struct Detail {
-    /// For an HQ, the regiment in each of its places.
-    slots: Vec<Option<usize>>,
-    /// For each regiment whose banner shows, the HQ whose badge it wears
-    /// and whether it's out of supply.
-    banners: Vec<(usize, Option<u32>, bool)>,
+    /// For an HQ, what's in each of its places.
+    slots: Vec<Place>,
+    /// For each regiment whose banner shows, the badge it wears and
+    /// whether it's out of supply.
+    banners: Vec<(usize, Option<banners::Worn>, bool)>,
+}
+
+/// What's in one of an HQ's places.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Place {
+    Empty,
+    /// The regiment attached there.
+    Regiment(usize),
+    /// What the place is held for, by where it is in the HQ's queue.
+    Queued(usize),
 }
 
 /// What the pane can show; a change in it lays the pane out afresh.
@@ -239,12 +282,17 @@ fn shown_hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], what: &What) -> Option<&'a 
     hqs.iter().find(|h| h.id == id)
 }
 
-fn detail(sim: &World, hqs: &[aaa_sim::Hq], what: &What) -> Detail {
-    let slots: Vec<Option<usize>> = shown_hq(sim, hqs, what).map_or(Vec::new(), |hq| {
-        let attached = sim.attached(hq.id).map(Some);
-        let places = hq.places as usize;
+fn detail(sim: &World, hqs: &[aaa_sim::Hq], badges: &Badges, what: &What) -> Detail {
+    let queued = match what {
+        What::Building(_, queue) => queue.len(),
+        _ => 0,
+    };
+    let slots: Vec<Place> = shown_hq(sim, hqs, what).map_or(Vec::new(), |hq| {
+        let attached = sim.attached(hq.id).map(Place::Regiment);
+        let places = (hq.places as usize).min(MAX_SLOTS);
         attached
-            .chain(std::iter::repeat(None))
+            .chain((0..queued).map(Place::Queued))
+            .chain(std::iter::repeat(Place::Empty))
             .take(places)
             .collect()
     });
@@ -253,10 +301,13 @@ fn detail(sim: &World, hqs: &[aaa_sim::Hq], what: &What) -> Detail {
         What::Regiments(rs) => rs,
         What::Building(..) => &[],
     };
-    let flying = own.iter().copied().chain(slots.iter().flatten().copied());
-    let banners = flying
-        .map(|r| (r, banners::wears(sim, hqs, r), sim.lacks_supply(r)))
-        .collect();
+    let attached = slots.iter().filter_map(|place| match place {
+        Place::Regiment(r) => Some(*r),
+        _ => None,
+    });
+    let flying = own.iter().copied().chain(attached);
+    let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
+    let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
     Detail { slots, banners }
 }
 
@@ -279,7 +330,7 @@ pub fn lay_out(
 ) {
     let what = wanted(&sim.0, &selected.0, chosen.0);
     let what = what.map(|w| {
-        let detail = detail(&sim.0, &sim.0.hqs(), &w);
+        let detail = detail(&sim.0, &sim.0.hqs(), &badges, &w);
         (w, detail)
     });
     if showing.0 == what {
@@ -404,14 +455,18 @@ impl Ui<'_> {
         let icon = self
             .banners
             .icon(self.game, self.images, &regiment.template);
-        let frame = self
-            .banners
-            .frame(self.game, self.images, &regiment.template);
+        let template = &regiment.template;
         let shown = self.detail.banners.iter().find(|(of, ..)| *of == r);
         let (wears, lacks) = shown.map_or((None, false), |&(_, wears, lacks)| (wears, lacks));
-        let badge = wears
-            .and_then(|hq| self.badges.division(&regiment.template, hq))
-            .and_then(|d| self.banners.badge(self.game, self.images, &d));
+        let wears = wears.map(|(hq, _)| hq);
+        let (badges, banners) = (self.badges, &mut *self.banners);
+        // An HQ's own frame goes with its badge.
+        let frame = match wears.filter(|&hq| hq == regiment.id) {
+            Some(hq) => badges.frame(banners, self.game, self.images, template, hq),
+            None => banners.frame(self.game, self.images, template),
+        };
+        let badge =
+            wears.and_then(|hq| badges.badge(banners, self.game, self.images, template, hq));
         let out_of_supply = self.banners.out_of_supply.clone().filter(|_| lacks);
         let layers = [
             (self.banners.plate.clone(), Color::srgb(red, green, blue)),
@@ -445,31 +500,44 @@ impl Ui<'_> {
             });
     }
 
-    /// An HQ's places, each with the banner and health of the regiment in
-    /// it, which a click selects, or empty.
-    fn slots(&mut self, commands: &mut Commands, root: Entity) {
-        const ACROSS: usize = 3;
-        for (i, slot) in self.detail.slots.clone().into_iter().enumerate() {
-            let (col, row) = ((i % ACROSS) as f32, (i / ACROSS) as f32);
-            let node = at(144.0 + col * 32.0, 44.0 + row * 37.0, 30.0, 35.0);
+    /// An HQ's places: each with the banner and health of the regiment in
+    /// it, which a click selects, with the picture and progress of what
+    /// `building`'s queue holds it for, which a click calls off, or empty.
+    fn slots(&mut self, commands: &mut Commands, root: Entity, building: Option<usize>) {
+        let count = self.detail.slots.len();
+        for (i, place) in self.detail.slots.clone().into_iter().enumerate() {
+            let [left, top] = slot_at(i, count);
+            let node = at(left, top, SLOT.x, SLOT.y);
             let mut card = commands.spawn((framed(node), ChildOf(root)));
-            let Some(r) = slot else {
-                card.insert(Hint(self.looks.said(EMPTY_SLOT)));
-                continue;
-            };
-            card.insert((Button, Pick(r))).observe(pick);
-            card.with_children(|card| {
-                let banner = Node {
-                    position_type: PositionType::Absolute,
-                    left: px(1.0 * SCALE),
-                    top: px(0.0),
-                    width: px(26.0 * SCALE),
-                    height: px(26.0 * SCALE),
-                    ..default()
-                };
-                self.banner(card, banner, r);
-                bar(card, at(0.0, 28.0, 28.0, 4.0), Fill::Regiment(r));
-            });
+            let [left, top, side] = SLOT_BANNER;
+            let inside = at(left, top, side, side);
+            match (place, building) {
+                (Place::Regiment(r), _) => {
+                    card.insert((Button, Pick(r))).observe(pick);
+                    card.with_children(|card| {
+                        self.banner(card, inside, r);
+                        let [left, top, width, height] = SLOT_HEALTH;
+                        bar(card, at(left, top, width, height), Fill::Regiment(r));
+                    });
+                }
+                (Place::Queued(n), Some(b)) => {
+                    let queue = &self.sim.buildings[b].queue;
+                    let template = queue.get(n).map(|c| c.regiment.template.clone());
+                    let picture = template.and_then(|t| self.picture(&t));
+                    card.insert((Button, Queued(n))).observe(cancel);
+                    card.with_children(|card| {
+                        card.spawn((inside, picture_node(picture), Pickable::IGNORE));
+                        let [left, top, width, height] = SLOT_PROGRESS;
+                        let node = at(left, top, width, height);
+                        // Only the first is under way.
+                        match n {
+                            0 => bar(card, node, Fill::Progress(b)),
+                            _ => drop(card.spawn(meter(node, Gauge::Progress))),
+                        }
+                    });
+                }
+                _ => drop(card.insert(Hint(self.looks.said(EMPTY_SLOT)))),
+            }
         }
     }
 
@@ -555,7 +623,7 @@ impl Ui<'_> {
                     });
             });
         }
-        self.slots(commands, root);
+        self.slots(commands, root, None);
         self.status(commands, root, Status::Regiment(r));
     }
 
@@ -621,10 +689,10 @@ impl Ui<'_> {
                 .entity(root)
                 .with_child((meter(node, Gauge::Stockpile), fill));
         }
-        self.slots(commands, root);
-        let queue: Vec<String> = building
-            .queue
-            .iter()
+        self.slots(commands, root, Some(b));
+        // An HQ's places show what it's been asked for.
+        let queue: Vec<String> = (building.queue.iter())
+            .filter(|_| self.detail.slots.is_empty())
             .map(|c| c.regiment.template.clone())
             .collect();
         // Commissions are trucks, which show their building's button.
@@ -858,6 +926,20 @@ fn cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_hqs_places_spread_over_their_area() {
+        // Three across, the last flush with the area's right edge.
+        assert_eq!(slot_at(0, 6), [144.0, 44.0]);
+        assert_eq!(slot_at(1, 6), [197.0, 44.0]);
+        assert_eq!(slot_at(2, 6), [250.0, 44.0]);
+        assert_eq!(slot_at(2, 6)[0] + SLOT.x, SLOTS_AT.x + SLOTS_AREA.x);
+        // Then down, the second row flush with its bottom.
+        assert_eq!(slot_at(3, 6), [144.0, 95.0]);
+        assert_eq!(slot_at(5, 6)[1] + SLOT.y, SLOTS_AT.y + SLOTS_AREA.y);
+        // A single row sits where the first of two would.
+        assert_eq!(slot_at(2, 3), slot_at(2, 6));
+    }
 
     #[test]
     fn regiments_are_numbered_in_english() {

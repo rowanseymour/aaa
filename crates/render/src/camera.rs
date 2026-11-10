@@ -35,6 +35,9 @@ pub struct RtsCamera {
     pub free: bool,
     /// The game camera's zoom limits, as multiples of its starting distance.
     pub zoom: (f32, f32),
+    /// Whether the letter keys move it as the arrows do and turn it;
+    /// off where they're bound to other things.
+    pub letter_keys: bool,
 }
 
 /// The game camera's distance from its focus at zoom 1.
@@ -55,6 +58,7 @@ impl RtsCamera {
             distance: game_distance(),
             free: false,
             zoom: GAME_ZOOM,
+            letter_keys: true,
         }
     }
 
@@ -66,7 +70,10 @@ impl RtsCamera {
 
     /// Back to the game's own view, still looking where it is.
     pub fn default_angles(&mut self) {
-        *self = RtsCamera::new(self.focus);
+        *self = RtsCamera {
+            letter_keys: self.letter_keys,
+            ..RtsCamera::new(self.focus)
+        };
     }
 
     /// How near to and far from its focus it can be.
@@ -131,12 +138,15 @@ pub fn update(
             *projection = cam.projection();
         }
 
-        let pressed = |codes: &[KeyCode]| keys.any_pressed(codes.iter().copied()) as i32 as f32;
+        let letters = cam.letter_keys;
+        let letter = |code: KeyCode| letters && keys.pressed(code);
+        let either = |code: KeyCode, arrow: KeyCode| {
+            let down = letter(code) || keys.pressed(arrow);
+            down as i32 as f32
+        };
         let mut pan = Vec2::new(
-            pressed(&[KeyCode::KeyD, KeyCode::ArrowRight])
-                - pressed(&[KeyCode::KeyA, KeyCode::ArrowLeft]),
-            pressed(&[KeyCode::KeyS, KeyCode::ArrowDown])
-                - pressed(&[KeyCode::KeyW, KeyCode::ArrowUp]),
+            either(KeyCode::KeyD, KeyCode::ArrowRight) - either(KeyCode::KeyA, KeyCode::ArrowLeft),
+            either(KeyCode::KeyS, KeyCode::ArrowDown) - either(KeyCode::KeyW, KeyCode::ArrowUp),
         ) * cam.distance
             * dt;
         if buttons.pressed(MouseButton::Middle) {
@@ -146,8 +156,9 @@ pub fn update(
         cam.focus += rotation * Vec3::new(pan.x, 0.0, pan.y);
 
         if cam.free {
-            cam.yaw += (pressed(&[KeyCode::KeyQ]) - pressed(&[KeyCode::KeyE])) * 1.5 * dt;
-            cam.pitch += (pressed(&[KeyCode::KeyR]) - pressed(&[KeyCode::KeyF])) * 1.0 * dt;
+            let turn = |code: KeyCode| letter(code) as i32 as f32;
+            cam.yaw += (turn(KeyCode::KeyQ) - turn(KeyCode::KeyE)) * 1.5 * dt;
+            cam.pitch += (turn(KeyCode::KeyR) - turn(KeyCode::KeyF)) * 1.0 * dt;
             if buttons.pressed(MouseButton::Right) {
                 cam.yaw -= motion.delta.x * 0.005;
                 cam.pitch += motion.delta.y * 0.005;

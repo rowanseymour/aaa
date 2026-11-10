@@ -15,7 +15,7 @@ pub use aaa_data::{
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
-pub use pathing::{Domain, Obstacle, Pathing, Zone, outline};
+pub use pathing::{Domain, Obstacle, Outline, Pathing, Zone};
 pub use tgck::map::Relation;
 pub use units::{
     Division, Formation, Member, Packs, Player, Recruits, Regiment, Team, Trailer, UNPACKED_FACING,

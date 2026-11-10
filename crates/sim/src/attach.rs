@@ -103,16 +103,21 @@ impl World {
         (regiment.unpacks.is_some() && self.truck_survives(r)).then_some(regiment.id)
     }
 
-    /// `player`'s regiments that need supply and have no HQ, by index.
+    /// `player`'s regiments that have no HQ, by index, whether or not any
+    /// HQ takes their kind. An HQ isn't one, nor is a unit outside an
+    /// organization, such as a depot's truck.
     pub fn detached(&self, player: u32) -> Vec<usize> {
-        let needs = |r: usize| {
-            let used = self.logistics_of(&self.regiments[r].template);
-            used.is_some_and(|l| l.supply_used)
+        let regimental = |r: usize| {
+            let logistics = self.logistics_of(&self.regiments[r].template);
+            logistics.is_some_and(|l| l.attachments.is_none())
         };
         (0..self.regiments.len())
             .filter(|&r| {
                 let regiment = &self.regiments[r];
-                regiment.owner == player && regiment.hq.is_none() && needs(r) && !self.destroyed(r)
+                regiment.owner == player
+                    && regiment.hq.is_none()
+                    && regimental(r)
+                    && !self.destroyed(r)
             })
             .collect()
     }

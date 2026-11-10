@@ -53,6 +53,14 @@ pub struct Supplying {
     laid: Option<((i32, i32), f32)>,
 }
 
+impl Supplying {
+    /// The tile its zone is laid around and how far it reaches, which
+    /// between them say what ground it covers.
+    pub fn laid(&self) -> Option<((i32, i32), f32)> {
+        self.laid.filter(|_| self.zone.is_some())
+    }
+}
+
 impl World {
     /// How the building at `b` gives supply, if it does.
     pub fn supply_of(&self, b: usize) -> Option<Supply> {

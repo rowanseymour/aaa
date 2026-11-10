@@ -3,10 +3,12 @@
 
 pub mod defs;
 mod economy;
+mod hotkeys;
 mod id;
 mod supply;
 
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
+pub use hotkeys::Hotkey;
 pub use id::Id;
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 
@@ -694,6 +696,18 @@ pub struct AnimationAudio {
     pub looping: bool,
 }
 
+/// What nations' banners are drawn with, by nation id, e.g. `nation_usa`.
+#[derive(Debug, Clone, Default)]
+pub struct NationBanners {
+    /// The nation each organization template is of, by template id.
+    pub of_template: HashMap<Id, Id>,
+    /// The archive path of the frame round a nation's banners.
+    pub frames: HashMap<Id, String>,
+    /// The archive paths of the badges a nation's divisions wear, in the
+    /// order HQs number them.
+    pub badges: HashMap<Id, Vec<String>>,
+}
+
 /// How the supply border is drawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SupplyBorder {
@@ -702,6 +716,9 @@ pub struct SupplyBorder {
     pub width: f32,
     /// The archive path of the image drawn along it.
     pub texture: Option<String>,
+    /// The side, in world units, of the squares the map is cut into,
+    /// which decide where each of its loops starts.
+    pub block: f32,
 }
 
 /// A visual effect the game shows by id.
@@ -1197,30 +1214,9 @@ impl GameData {
         files.iter().find_map(|f| f.read("Minimap").next())
     }
 
-    /// The archive paths of the badges that divisions of each organization
-    /// template's nation wear, in the order HQs number them, by template id.
-    pub fn division_badges(&mut self) -> HashMap<Id, Vec<String>> {
-        let files = self.parse_tgis(|n| n.starts_with("nations/") || n.starts_with("templates/"));
-        let files = scoped(&files);
-        let by_group: HashMap<Id, Vec<String>> = files
-            .iter()
-            .flat_map(|f| f.read::<defs::Nation>("Nation"))
-            .filter_map(|n| {
-                let badges = n.badge.iter();
-                let paths = badges.map(|b| format!("Nations/{}", b.badge_texture));
-                Some((n.placement_group_ids?, paths.collect()))
-            })
-            .collect();
-        self.by_template(|t| {
-            let group = t.placement.as_ref()?.placement_group_ids.as_ref()?;
-            by_group.get(group).cloned()
-        })
-    }
-
-    /// The archive path of the frame round the banners of each organization
-    /// template's nation, by template id: that of the banner named for the
-    /// nation, `ger_banner` for `nation_ger`.
-    pub fn banner_frames(&mut self) -> HashMap<Id, String> {
+    /// What each nation's banners are drawn with, and which nation each
+    /// organization template is of.
+    pub fn nation_banners(&mut self) -> NationBanners {
         let files = self.parse_tgis(|n| {
             ["nations/", "templates/", "organizations/banners/"]
                 .iter()
@@ -1232,21 +1228,32 @@ impl GameData {
             .flat_map(|f| f.read::<defs::Banner>("Banner"))
             .filter_map(|b| Some((b.ids?, b.resource_prefix?)))
             .collect();
-        let by_group: HashMap<Id, String> = files
-            .iter()
-            .flat_map(|f| f.read::<defs::Nation>("Nation"))
-            .filter_map(|n| {
-                let ids = n.ids?.as_str().to_ascii_lowercase();
-                let name = ids.strip_prefix("nation_")?;
-                let prefix = prefixes.get(&Id::from(format!("{name}_banner").as_str()))?;
+        let mut out = NationBanners::default();
+        let mut by_group = HashMap::new();
+        for nation in files.iter().flat_map(|f| f.read::<defs::Nation>("Nation")) {
+            let Some(ids) = nation.ids else {
+                continue;
+            };
+            let badges = nation.badge.iter();
+            let paths = badges.map(|b| format!("Nations/{}", b.badge_texture));
+            out.badges.insert(ids.clone(), paths.collect());
+            // The banner named for the nation, `ger_banner` for
+            // `nation_ger`.
+            let lower = ids.as_str().to_ascii_lowercase();
+            let banner = lower.strip_prefix("nation_").map(|n| format!("{n}_banner"));
+            if let Some(prefix) = banner.and_then(|b| prefixes.get(&Id::from(b.as_str()))) {
                 let path = format!("Organizations/Banners/{prefix}BannerBase.png");
-                Some((n.placement_group_ids?, path))
-            })
-            .collect();
-        self.by_template(|t| {
+                out.frames.insert(ids.clone(), path);
+            }
+            if let Some(group) = nation.placement_group_ids {
+                by_group.insert(group, ids);
+            }
+        }
+        out.of_template = self.by_template(|t| {
             let group = t.placement.as_ref()?.placement_group_ids.as_ref()?;
             by_group.get(group).cloned()
-        })
+        });
+        out
     }
 
     /// Organizations' ranges, by template id, including the ids the game
@@ -1713,11 +1720,24 @@ impl GameData {
                 .find_map(|v| v.view_zone_friendly_supply_width)
                 .unwrap_or(0.15),
             texture: (vars.iter()).find_map(|v| v.view_zone_friendly_supply_texture.clone()),
+            block: (vars.iter())
+                .find_map(|v| v.terrain_block_size)
+                .unwrap_or(8.0),
         }
     }
 
     /// What colours a figure or option that's no good, such as a shortfall.
     pub fn invalid_colour(&mut self) -> Option<[f32; 3]> {
+        self.interface_setting(|v| v.ui_color_option_invalid)
+    }
+
+    /// What colours the key for something where its name is shown.
+    pub fn highlight_colour(&mut self) -> Option<[f32; 3]> {
+        self.interface_setting(|v| v.ui_color_highlight)
+    }
+
+    /// One of the interface's settings.
+    fn interface_setting<T>(&mut self, of: impl Fn(defs::UVars) -> Option<T>) -> Option<T> {
         // Not in the load lists; the game's own settings take precedence
         // over the engine's.
         let files: Vec<(String, tgi::Parsed)> = ["UVars_AA.tgi", "UVars.tgi"]
@@ -1728,7 +1748,7 @@ impl GameData {
         files
             .iter()
             .flat_map(|f| f.read::<defs::UVars>("Vars"))
-            .find_map(|v| v.ui_color_option_invalid)
+            .find_map(of)
     }
 
     /// The orders the player can give, in the order the files list them.

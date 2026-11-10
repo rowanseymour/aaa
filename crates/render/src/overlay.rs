@@ -127,15 +127,12 @@ pub struct BannerImages {
     pub shortage: Option<Handle<Image>>,
     /// The archive path of each organization template's icon.
     icon_paths: HashMap<Id, String>,
-    /// The archive path of the frame round each organization template's
-    /// nation's banners.
-    frame_paths: HashMap<Id, String>,
     /// The frame for a template of no nation: a nation's, which all share
     /// a shape, with its colour taken out.
     plain_frame: Option<Handle<Image>>,
-    /// The archive paths of the division badges of each organization
-    /// template's nation.
-    badge_paths: HashMap<Id, Vec<String>>,
+    /// The frames and division badges of each nation, and each
+    /// organization template's nation.
+    nations: aaa_data::NationBanners,
     /// Images loaded so far, by path.
     loaded: HashMap<String, Option<Handle<Image>>>,
     formats: CompressedImageFormats,
@@ -156,8 +153,8 @@ impl BannerImages {
         let focus = add("Effects/Selection/BannerFocusBase.tga");
         let out_of_supply = add("Organizations/Banners/Shared/BannerOutOfSupply.png");
         let shortage = add("Organizations/Banners/Shared/BannerBleeding.png");
-        let frame_paths = game.banner_frames();
-        let plain_frame = frame_paths.values().min().and_then(|path| {
+        let nations = game.nation_banners();
+        let plain_frame = nations.frames.values().min().and_then(|path| {
             let image = textures::decode(&game.read(path)?, path, formats, true)?;
             Some(images.add(whitened(image)))
         });
@@ -168,9 +165,8 @@ impl BannerImages {
             out_of_supply,
             shortage,
             icon_paths: game.banner_icons(),
-            frame_paths,
             plain_frame,
-            badge_paths: game.division_badges(),
+            nations,
             loaded: HashMap::new(),
             formats,
         }
@@ -188,6 +184,12 @@ impl BannerImages {
         self.image(game, images, path)
     }
 
+    /// The id of the nation an organization of `template` is of.
+    fn nation_of(&self, template: &str) -> Option<String> {
+        let nation = self.nations.of_template.get(&Id::from(template))?;
+        Some(nation.to_string())
+    }
+
     /// The frame round the banner of an organization of `template`, its
     /// nation's; loaded the first time it's asked for.
     pub fn frame(
@@ -196,7 +198,21 @@ impl BannerImages {
         images: &mut Assets<Image>,
         template: &str,
     ) -> Option<Handle<Image>> {
-        let Some(path) = self.frame_paths.get(&Id::from(template)).cloned() else {
+        match self.nation_of(template) {
+            Some(nation) => self.nation_frame(game, images, &nation),
+            None => self.plain_frame.clone(),
+        }
+    }
+
+    /// The frame round the banners of `nation`, by its id, for what flies
+    /// one that isn't its template's; loaded the first time it's asked for.
+    pub fn nation_frame(
+        &mut self,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        nation: &str,
+    ) -> Option<Handle<Image>> {
+        let Some(path) = self.nations.frames.get(&Id::from(nation)).cloned() else {
             return self.plain_frame.clone();
         };
         self.image(game, images, path)
@@ -204,8 +220,28 @@ impl BannerImages {
 
     /// How many badges the nation of an organization of `template` has.
     pub fn badges(&self, template: &str) -> usize {
-        let badges = self.badge_paths.get(&Id::from(template));
+        let nation = self.nation_of(template);
+        nation.map_or(0, |n| self.nation_badges(&n))
+    }
+
+    /// How many badges `nation` has, by its id.
+    pub fn nation_badges(&self, nation: &str) -> usize {
+        let badges = self.nations.badges.get(&Id::from(nation));
         badges.map_or(0, Vec::len)
+    }
+
+    /// The `badge`th of `nation`'s badges, by its id; loaded the first time
+    /// it's asked for.
+    pub fn nation_badge(
+        &mut self,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        nation: &str,
+        badge: usize,
+    ) -> Option<Handle<Image>> {
+        let badges = self.nations.badges.get(&Id::from(nation))?;
+        let path = badges.get(badge)?.clone();
+        self.image(game, images, path)
     }
 
     /// The badge an organization in `division` wears below its banner's
@@ -217,13 +253,10 @@ impl BannerImages {
         images: &mut Assets<Image>,
         division: &Division,
     ) -> Option<Handle<Image>> {
-        let badges = self
-            .badge_paths
-            .get(&Id::from(division.template.as_str()))?;
-        let path = badges
-            .get(division.badge.checked_rem(badges.len())?)?
-            .clone();
-        self.image(game, images, path)
+        let nation = self.nation_of(&division.template)?;
+        let count = self.nation_badges(&nation);
+        let badge = division.badge.checked_rem(count)?;
+        self.nation_badge(game, images, &nation, badge)
     }
 
     fn image(
@@ -382,21 +415,58 @@ pub fn draped_square(ground: &Ground, position: [f32; 2], facing: [f32; 2], size
     .with_inserted_indices(Indices::U32(indices))
 }
 
-/// A closed path evened out, each point drawn toward its neighbours over
-/// and over, so the steps a few units long that tiles leave in it go and
-/// its broad sweep stays.
-fn smoothed(path: &[Vec2]) -> Vec<Vec2> {
-    let mut path = paced(path, 1.0);
-    let n = path.len();
-    for _ in 0..12 {
-        path = (0..n)
-            .map(|i| (path[(i + n - 1) % n] + 2.0 * path[i] + path[(i + 1) % n]) / 4.0)
-            .collect();
+/// How many of an outline's sides one guide point stands for, at most.
+const RUN: usize = 4;
+
+/// The guide points a border's curve is drawn by: the corners of a closed
+/// outline taken in runs from its start, each of up to [`RUN`] sides and
+/// ending before a side that turns a right angle or more from its first,
+/// with a guide point at the average of each run's corners. A run starts
+/// on the corner the one before ended on. Straight edges give a guide
+/// point every few tiles and a staircase one a side.
+fn guides(corners: &[Vec2]) -> Vec<Vec2> {
+    let n = corners.len();
+    let at = |i: usize| corners[i % n];
+    let mut guides = Vec::new();
+    let mut from = 0;
+    while from < n {
+        let heading = at(from + 1) - at(from);
+        let ahead = |to: usize| (at(to + 1) - at(to)).dot(heading) > 0.0;
+        let mut to = from + 1;
+        while to < n && to - from < RUN && ahead(to) {
+            to += 1;
+        }
+        let run = (from..=to).map(at);
+        guides.push(run.sum::<Vec2>() / (to - from + 1) as f32);
+        from = to;
     }
-    path
+    guides
 }
 
-/// Points along a closed path, about `step` apart all the way round.
+/// The closed uniform cubic B-spline with `guides` as its control points,
+/// as the straight pieces it's drawn in: for each guide point, the
+/// curve's joint by it and the point halfway along to the next joint.
+fn spline(guides: &[Vec2]) -> Vec<Vec2> {
+    let n = guides.len();
+    let g = |i: usize| guides[i % n];
+    (0..n)
+        .flat_map(|i| {
+            let (before, at, next, after) = (g(i + n - 1), g(i), g(i + 1), g(i + 2));
+            let joint = (before + 4.0 * at + next) / 6.0;
+            let halfway = (before + 23.0 * at + 23.0 * next + after) / 48.0;
+            [joint, halfway]
+        })
+        .collect()
+}
+
+/// The line a border along the closed outline `corners` is drawn as.
+fn curve(corners: &[[f32; 2]]) -> Vec<Vec2> {
+    let corners: Vec<Vec2> = corners.iter().map(|&p| Vec2::from(p)).collect();
+    spline(&guides(&corners))
+}
+
+/// Points along a closed path, about `step` apart all the way round, for
+/// what's drawn along it to bend with the ground between its own points.
 fn paced(path: &[Vec2], step: f32) -> Vec<Vec2> {
     let next = |i: usize| path[(i + 1) % path.len()];
     let round: f32 = (0..path.len()).map(|i| path[i].distance(next(i))).sum();
@@ -417,15 +487,12 @@ fn paced(path: &[Vec2], step: f32) -> Vec<Vec2> {
     points
 }
 
-/// The paths a border along `loops` follows, in map units: each loop
-/// evened out, as [`border`] draws it.
+/// The paths a border along `loops` follows, in map units: the straight
+/// pieces of each loop's curve, as [`border`] draws it.
 pub fn border_paths(loops: &[Vec<[f32; 2]>]) -> Vec<Vec<[f32; 2]>> {
     let long = loops.iter().filter(|l| l.len() > 2);
-    long.map(|path| {
-        let path: Vec<Vec2> = path.iter().map(|&p| Vec2::from(p)).collect();
-        smoothed(&path).iter().map(Vec2::to_array).collect()
-    })
-    .collect()
+    long.map(|path| curve(path).iter().map(Vec2::to_array).collect())
+        .collect()
 }
 
 /// The image a border is drawn with, sampled over and over along it.
@@ -442,9 +509,9 @@ pub fn border_image(
     Some(image)
 }
 
-/// A border along `loops`, closed paths in map units with what they bound
-/// on their left: a strip `width` across laid over the ground in world
-/// space, each path down its middle. Its image runs along it, top to
+/// A border along `loops`, closed outlines in map units, a tile's side to
+/// a step, with what they bound on their left: a strip `width` across laid
+/// over the ground in world space, each outline's curve down its middle. Its image runs along it, top to
 /// bottom once for every `width` of the way, its left edge outermost.
 pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
     // How far apart the strip's points are along it, near enough for it
@@ -457,8 +524,7 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
     let mut uvs = Vec::new();
     let mut indices = Vec::new();
     for path in loops.iter().filter(|l| l.len() > 2) {
-        let path: Vec<Vec2> = path.iter().map(|&p| Vec2::from(p)).collect();
-        let path = paced(&smoothed(&path), STEP);
+        let path = paced(&curve(path), STEP);
         let n = path.len();
         let inward = |i: usize| {
             let along = path[(i + 1) % n] - path[(i + n - 1) % n];
@@ -528,14 +594,109 @@ mod tests {
         assert_eq!(xs.fold(f32::MIN, f32::max), 22.0);
     }
 
+    /// The corners, a tile apart, round a square of tiles from `from` to
+    /// `to` each way, what it bounds on the left.
+    fn square(from: i32, to: i32) -> Vec<[f32; 2]> {
+        let along = || (from..to).step_by(CELL_SIZE as usize);
+        let back = || (from + 2..=to).rev().step_by(CELL_SIZE as usize);
+        let (from, to) = (from as f32, to as f32);
+        let near = along().map(|x| [x as f32, from]);
+        let right = along().map(|y| [to, y as f32]);
+        let far = back().map(|x| [x as f32, to]);
+        let left = back().map(|y| [from, y as f32]);
+        near.chain(right).chain(far).chain(left).collect()
+    }
+
+    #[test]
+    fn guide_points_thin_an_outline_by_runs() {
+        let points = |corners: &[[f32; 2]]| -> Vec<[f32; 2]> {
+            let corners: Vec<Vec2> = corners.iter().map(|&c| Vec2::from(c)).collect();
+            guides(&corners).iter().map(Vec2::to_array).collect()
+        };
+        // Four tiles by one: a run of four sides gives a point at its
+        // middle corner, and a turn ends a run on the corner it turns at,
+        // where the next begins.
+        let slab = [
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [4.0, 0.0],
+            [6.0, 0.0],
+            [8.0, 0.0],
+            [8.0, 2.0],
+            [6.0, 2.0],
+            [4.0, 2.0],
+            [2.0, 2.0],
+            [0.0, 2.0],
+        ];
+        assert_eq!(
+            points(&slab),
+            [[4.0, 0.0], [8.0, 1.0], [4.0, 2.0], [0.0, 1.0]]
+        );
+        // A staircase gives one a side, at its middle, evenly along the
+        // slant.
+        let stairs = [
+            [0.0, 0.0],
+            [2.0, 0.0],
+            [2.0, 2.0],
+            [4.0, 2.0],
+            [4.0, 4.0],
+            [2.0, 4.0],
+            [0.0, 4.0],
+            [0.0, 2.0],
+        ];
+        assert_eq!(
+            points(&stairs),
+            [
+                [1.0, 0.0],
+                [2.0, 1.0],
+                [3.0, 2.0],
+                [4.0, 3.0],
+                [2.0, 4.0],
+                [0.0, 2.0]
+            ]
+        );
+    }
+
+    #[test]
+    fn border_curves_lie_on_straight_edges_and_cut_inside_corners() {
+        // Two pieces to a guide point.
+        let line = curve(&square(8, 56));
+        let corners: Vec<Vec2> = square(8, 56).into_iter().map(Vec2::from).collect();
+        assert_eq!(line.len(), 2 * guides(&corners).len());
+        // Along the middle of a side, where the guide points are evenly
+        // spaced, it's on the edge.
+        let near: Vec<&Vec2> = (line.iter())
+            .filter(|p| (20.0..44.0).contains(&p.x) && p.y < 20.0)
+            .collect();
+        assert!(near.len() >= 4);
+        assert!(near.iter().all(|p| (p.y - 8.0).abs() < 1e-4));
+        // Nowhere outside the square, and inside it at the corners.
+        assert!(
+            line.iter()
+                .all(|p| p.min_element() >= 8.0 && p.max_element() <= 56.0)
+        );
+        let corner = Vec2::splat(8.0);
+        let nearest = line
+            .iter()
+            .map(|p| p.distance(corner))
+            .fold(f32::MAX, f32::min);
+        assert!(nearest > 0.5, "{nearest}");
+        // A guide point at a right-angled corner with its neighbours 8
+        // away is cut by 8 cos(45) / 3.
+        let guides = [[0.0, 0.0], [8.0, 0.0], [8.0, 8.0], [0.0, 8.0]].map(Vec2::from);
+        let cut = spline(&guides)[2].distance(Vec2::new(8.0, 0.0));
+        assert!(
+            (cut - 8.0 * 45f32.to_radians().cos() / 3.0).abs() < 1e-4,
+            "{cut}"
+        );
+    }
+
     #[test]
     fn borders_run_along_their_paths_on_the_ground() {
-        let side = 17;
+        let side = 33;
         let heights = (0..side * side).map(|i| (i % 5) as f32).collect();
         let ground = Ground::from_heights(heights);
-        // Round a square, what it bounds on the left.
-        let path = vec![[8.0, 8.0], [24.0, 8.0], [24.0, 24.0], [8.0, 24.0]];
-        let mesh = border(&ground, &[path], 1.0);
+        let mesh = border(&ground, &[square(8, 56)], 1.0);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
@@ -552,9 +713,9 @@ mod tests {
         for (p, [u, _]) in positions.iter().zip(uvs) {
             let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
             assert!((p[1] - ground.height_at(x, y) - LIFT).abs() < 1e-4);
-            assert!((7.49..24.51).contains(&x) && (7.49..24.51).contains(&y));
+            assert!((7.49..56.51).contains(&x) && (7.49..56.51).contains(&y));
             // Along the middle of the near side, clear of the corners.
-            if (12.0..20.0).contains(&x) && y < 12.0 {
+            if (24.0..40.0).contains(&x) && y < 12.0 {
                 assert!(*u != 0.0 || y < 8.0, "{x}, {y}");
                 assert!(*u != 1.0 || y > 8.0, "{x}, {y}");
             }

@@ -6456,6 +6456,30 @@ mod tests {
     }
 
     #[test]
+    fn regiments_no_hq_recruits_are_detached_too() {
+        let mut w = division();
+        // Agents, which nothing recruits, and a truck outside any
+        // organization.
+        w.logistics.insert(Id::from("agents"), logistics(None));
+        let mut agents = raised_company(&mut w, 1);
+        agents.renumber(80);
+        agents.template = "agents".into();
+        agents.place([20.0, 20.0], [0.0, 1.0]);
+        w.add_regiment(&agents);
+        let mut lorry = truck();
+        (lorry.id, lorry.owner, lorry.template) = (90, 1, "lorry".into());
+        lorry.members[0].thing.id = 90;
+        lorry.place([22.0, 30.0], [0.0, 1.0]);
+        w.add_regiment(&lorry);
+        assert_eq!(w.detached(1), [1, 2]);
+        // Only the company is one an HQ could take.
+        assert!(w.attachable(1));
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        assert_eq!(w.detached(1), [2]);
+        assert!(!w.attachable(1));
+    }
+
+    #[test]
     fn regiments_lose_their_hq_when_its_destroyed() {
         let mut w = division();
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
