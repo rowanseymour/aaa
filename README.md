@@ -27,7 +27,7 @@ It's a work in progress, playable in parts.
 
 ## Running
 
-You need [Rust](https://rustup.rs), and on Linux the system packages listed in the
+You need Rust, and on Linux the system packages listed in the
 [editor's README](crates/editor/README.md). `aaa.sh` builds and runs the game or the
 map editor, given the folder your copy of the game is installed in:
 
