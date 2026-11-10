@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Parser for the .tgi text data files of Axis & Allies (2004)"
 keywords = ["gamedev", "parser", "file-format", "config"]
 categories = ["parser-implementations", "game-development"]

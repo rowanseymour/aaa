@@ -5,6 +5,7 @@ edition.workspace = true
 # Bevy 0.20 needs a newer compiler than the libraries do.
 rust-version = "1.97.1"
 license.workspace = true
+repository.workspace = true
 description = "Map editor for Axis & Allies (2004), which views maps"
 publish = false
 

@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/rowanseymour/aaa"
 
 # Keep debug builds of the editor usable: optimise dependencies (Bevy) fully
 # and our own code a little.
