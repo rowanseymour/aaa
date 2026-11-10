@@ -23,6 +23,8 @@ pub struct Supplying {
     pub stockpile: f32,
     /// Whether it's been looked at since it was put down or changed hands.
     pub(crate) judged: bool,
+    /// Whether it was unpacking or packing when last looked at.
+    busy: bool,
 }
 
 impl World {
@@ -53,12 +55,18 @@ impl World {
         a == b || self.sides.relation(a, b) == Relation::Ally
     }
 
-    /// Looks at each building's supply: those just put down or taken at
-    /// once, the rest on their beats.
+    /// Looks at each building's supply: those just put down, taken, or
+    /// starting or done packing or unpacking at once, the rest on their
+    /// beats.
     pub(crate) fn supply(&mut self) {
         let all = 0..self.buildings.len();
+        // And those that have started packing or finished unpacking, whose
+        // zones go and come that moment.
         let fresh: Vec<usize> = (all.clone())
-            .filter(|&b| !self.buildings[b].supply.judged)
+            .filter(|&b| {
+                let building = &self.buildings[b];
+                !building.supply.judged || building.supply.busy != building.busy()
+            })
             .collect();
         // Each zone laid may connect another relay, so chains standing as
         // a match starts link up without waiting a beat a link.
@@ -85,9 +93,18 @@ impl World {
             return false;
         };
         let building = &self.buildings[b];
-        let connected = !supply.relay || self.reached(b, &mut Vec::new());
-        let mut stockpile = building.supply.stockpile;
-        if supply.relay && beat {
+        // Unpacking or packing, it gives nothing and holds nothing, and
+        // is in supply by the ground it stands on, as a regiment is.
+        let busy = building.busy();
+        let connected = match busy {
+            true => self.covered(b),
+            false => !supply.relay || self.reached(b, &mut Vec::new()),
+        };
+        let mut stockpile = match busy {
+            true => 0.0,
+            false => building.supply.stockpile,
+        };
+        if supply.relay && beat && !busy {
             stockpile = match connected {
                 true => (stockpile + self.supply_recharge).min(supply.stockpile_max),
                 false => stockpile - 1.0,
@@ -96,6 +113,7 @@ impl World {
         }
         let sided = (self.sides.player(building.owner)).is_some_and(|p| !p.independent);
         let gives = sided
+            && !busy
             && building.state == State::Standing
             && supply.range >= 0.0
             && (connected || stockpile > 0.0)
@@ -105,11 +123,25 @@ impl World {
         let s = &mut self.buildings[b].supply;
         s.connected = connected;
         s.stockpile = stockpile;
+        s.busy = busy;
         match gives {
             true => s.zone = laid.or(s.zone.take()),
             false => s.zone = None,
         }
         gives != had
+    }
+
+    /// Whether a zone of another building of its side or an ally's covers
+    /// the building at `b`, wherever that zone's supply comes from.
+    fn covered(&self, b: usize) -> bool {
+        let owner = self.buildings[b].owner;
+        (0..self.buildings.len()).any(|p| {
+            let other = &self.buildings[p];
+            let zone = other.supply.zone.as_ref();
+            p != b
+                && self.shares_supply(owner, other.owner)
+                && zone.is_some_and(|z| self.in_zone(z, Target::Building(b)))
+        })
     }
 
     /// Whether supply reaches the relay at `b`: a zone of another of its
@@ -174,11 +206,17 @@ impl World {
 
     /// Whether anything has the regiment at `r` as a target of its
     /// engagement.
-    fn engaged_by(&self, r: usize) -> bool {
+    pub(crate) fn engaged_by(&self, r: usize) -> bool {
         let them = Enemy::Regiment(r);
         (0..self.regiments.len())
             .any(|e| self.regiments[e].engaged.contains(&them) && !self.destroyed(e))
-            || (self.buildings.iter()).any(|b| b.standing() && b.noticed.contains(&them))
+            || (self.buildings.iter()).any(|b| {
+                // A building counts only while it has one of them as its
+                // target, not for having noticed them.
+                let aimed =
+                    matches!(b.target, Some(Target::Unit(u)) if self.units[u].regiment == r);
+                b.standing() && aimed
+            })
     }
 
     /// Looks at each regiment's supply on its beat: those in supply heal
@@ -263,8 +301,8 @@ impl World {
 
     /// Puts the member in place `p` of the regiment at `r` on the map, in
     /// full health: out of a building near the regiment that recruits its
-    /// kind, if there is one, else in its place, and on its way to where
-    /// the regiment's going.
+    /// kind, by the way its recruits leave it, if there is one, else in
+    /// its place, and on its way to where the regiment's going.
     fn arrive(&mut self, r: usize, p: usize) {
         let regiment = &self.regiments[r];
         let (at, facing) = (self.leader_position(r), regiment.facing);
@@ -280,8 +318,13 @@ impl World {
         };
         let nearest = (self.buildings.iter().filter(recruits))
             .min_by(|a, b| distance(at, a.position).total_cmp(&distance(at, b.position)));
-        let out =
-            nearest.and_then(|b| Some(deploy_point(b.position, b.facing, b.deploy?.creation)));
+        // Out of a building it comes as a recruit does: made at one point
+        // and by way of another.
+        let points = nearest.and_then(|b| {
+            let point = |offset| deploy_point(b.position, b.facing, offset);
+            Some((point(b.deploy?.creation), point(b.deploy?.deployment)))
+        });
+        let out = points.map(|(creation, _)| creation);
         // Where it stands from the leader, as in the formation.
         let [lx, ly] = regiment.leader.map_or([0.0, 0.0], offset);
         let [x, y] = offset(p);
@@ -302,7 +345,20 @@ impl World {
         if let Some(t) = &mut unit.trailer {
             t.behind(stand, facing);
         }
-        self.take_place(u, place, facing, false);
+        match points {
+            Some((creation, deployment)) => {
+                // Straight out to the deployment point, then by a way
+                // found from there.
+                self.units[u].position = deployment;
+                let mut way = self.plan(u, place, false);
+                way.push(deployment);
+                let unit = &mut self.units[u];
+                unit.position = creation;
+                unit.take(way, false);
+                unit.end_facing = facing;
+            }
+            None => self.take_place(u, place, facing, false),
+        }
     }
 
     /// A second of going without for the regiment at `r`: each member

@@ -530,6 +530,15 @@ mod tests {
             let along = near(0.0, 0.5) != near(0.0, -0.5);
             assert!(across || along, "{x}, {y}");
         }
+        // What it bounds is on the left of the way round.
+        let path = &alone[0];
+        for i in 0..path.len() {
+            let [x, y] = path[i];
+            let [nx, ny] = path[(i + 1) % path.len()];
+            let (dx, dy) = (nx - x, ny - y);
+            let scale = 0.6 / (dx * dx + dy * dy).sqrt();
+            assert!(a.holds([x - dy * scale, y + dx * scale]), "{x}, {y}");
+        }
         let joined = around(&[&a, &b]);
         assert_eq!(joined.len(), 1);
         assert!(joined[0].len() > alone[0].len());

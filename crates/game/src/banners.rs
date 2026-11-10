@@ -39,10 +39,11 @@ pub struct Banner {
 }
 
 /// Which of its nation's badges each HQ's division wears, by the HQ's id:
-/// what the map gives those it starts with, and the first its side has
-/// spare for each raised since.
+/// what the map gives those it starts with, and for each raised since one
+/// picked from the list, or the first no other of its side's holds where
+/// that one's taken; none where there's none to have.
 #[derive(Resource)]
-pub struct Badges(HashMap<u32, usize>);
+pub struct Badges(HashMap<u32, Option<usize>>);
 
 impl Badges {
     /// The division whose badge a regiment of `template` wears when it's
@@ -51,7 +52,7 @@ impl Badges {
     pub fn division(&self, template: &str, hq: u32) -> Option<Division> {
         Some(Division {
             template: template.to_string(),
-            badge: *self.0.get(&hq)?,
+            badge: (*self.0.get(&hq)?)?,
         })
     }
 }
@@ -91,7 +92,7 @@ pub fn setup_banners(
 ) {
     commands.insert_resource(BannerImages::load(&mut loaded.game, &mut images, formats.0));
     let things = &loaded.map.things;
-    let badge = |t: &tgck::map::Thing| Some((t.id, usize::try_from(t.hq_badge()?).ok()?));
+    let badge = |t: &tgck::map::Thing| Some((t.id, usize::try_from(t.hq_badge()?).ok()));
     commands.insert_resource(Badges(things.iter().filter_map(badge).collect()));
     commands.insert_resource(Scenery(loaded.game.scenery()));
 }
@@ -438,12 +439,25 @@ pub fn badge_banners(
         if badges.0.contains_key(&hq.id) {
             continue;
         }
+        // Its organization's template finds its nation's badges.
+        let packed = sim.0.regiments.iter().find(|r| r.id == hq.id);
+        let unpacked = || (0..sim.0.buildings.len()).find(|&b| sim.0.hq_of(b) == Some(hq.id));
+        let template = match packed {
+            Some(r) => Some(r.template.as_str()),
+            None => unpacked().and_then(|b| sim.0.hq_template(b)),
+        };
+        let count = template.map_or(0, |t| images.0.badges(t));
         let worn = |b: usize| {
             let mut others = hqs.iter().filter(|h| h.owner == hq.owner);
-            others.any(|h| badges.0.get(&h.id) == Some(&b))
+            others.any(|h| badges.0.get(&h.id) == Some(&Some(b)))
         };
-        let spare = (0..).find(|&b| !worn(b)).unwrap_or(0);
-        badges.0.insert(hq.id, spare);
+        // Any of them, the same one every time for the same HQ.
+        let pick = (hq.id as usize).wrapping_mul(2_654_435_761) >> 8;
+        let pick = pick.checked_rem(count).filter(|&b| !worn(b));
+        // None where its nation has none, or every one is held. A lost
+        // HQ's is free again by no longer being among those that hold one.
+        let badge = pick.or_else(|| (0..count).find(|&b| !worn(b)));
+        badges.0.insert(hq.id, badge);
     }
     for mut banner in &mut banners {
         let wears = wears(&sim.0, &hqs, banner.regiment);

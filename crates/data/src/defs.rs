@@ -837,6 +837,19 @@ pub struct UVars {
     pub ui_color_option_invalid: Option<[f32; 3]>,
 }
 
+/// The settings for how the game looks.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AVars {
+    /// The supply border's width in world units, its colour, and the image
+    /// drawn along it, by its archive path.
+    #[serde(rename = "ViewZoneFriendlySupplyWidth")]
+    pub view_zone_friendly_supply_width: Option<f32>,
+    #[serde(rename = "ViewZoneFriendlySupplyColor")]
+    pub view_zone_friendly_supply_color: Option<[f32; 3]>,
+    #[serde(rename = "ViewZoneFriendlySupplyTexture")]
+    pub view_zone_friendly_supply_texture: Option<String>,
+}
+
 /// One of the resources sides earn and spend.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Resource {

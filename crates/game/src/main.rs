@@ -1190,6 +1190,7 @@ fn spawn_views(
             trailer: None,
             fighter: unit.fighter.clone(),
             health: 1.0,
+            lost: None,
         };
         let mut models = assets.models();
         spawn_unit_view(
