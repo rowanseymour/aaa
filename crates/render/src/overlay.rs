@@ -11,7 +11,6 @@ use bevy::image::{CompressedImageFormats, ImageSampler};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::TextureFormat;
 use nif::{Nif, Object};
 use tgck::map::CELL_SIZE;
 
@@ -34,6 +33,8 @@ pub struct OverlayImages {
     pub health: Vec<Handle<Image>>,
     /// A building's, the same but longer.
     pub building_health: Vec<Handle<Image>>,
+    /// A relay's supply stockpile bar, likewise.
+    pub stockpile: Vec<Handle<Image>>,
 }
 
 /// The share of the square image's size between each edge and its outline.
@@ -69,11 +70,13 @@ impl OverlayImages {
         };
         let health = bar("Effects/HealthBar/HealthBar.nif");
         let building_health = bar("Effects/HealthBar/HealthBarMedium.nif");
+        let stockpile = bar("Effects/SupplyStockpileBar/SupplyStockpileBar.nif");
         OverlayImages {
             ring,
             square,
             health,
             building_health,
+            stockpile,
         }
     }
 
@@ -85,6 +88,11 @@ impl OverlayImages {
     /// The health bar for a building with `share` of its health left.
     pub fn building_health_bar(&self, share: f32) -> Option<&Handle<Image>> {
         bar_frame(&self.building_health, share)
+    }
+
+    /// The bar for a relay with `share` of its supply stockpile left.
+    pub fn stockpile_bar(&self, share: f32) -> Option<&Handle<Image>> {
+        bar_frame(&self.stockpile, share)
     }
 }
 
@@ -107,15 +115,20 @@ fn bar_frame(frames: &[Handle<Image>], share: f32) -> Option<&Handle<Image>> {
 pub struct BannerImages {
     /// The plate, grey to be tinted in the owner's colour.
     pub plate: Option<Handle<Image>>,
-    /// The frame around it.
-    pub frame: Option<Handle<Image>>,
     /// Crossed rifles behind it while the regiment is engaged.
     pub engaged: Option<Handle<Image>>,
     /// Corner brackets around it while the cursor is on the regiment, white
     /// to be tinted.
     pub focus: Option<Handle<Image>>,
+    /// The border it wears while the regiment is out of supply.
+    pub out_of_supply: Option<Handle<Image>>,
+    /// The border that flashes on it while its side can't pay its upkeep.
+    pub shortage: Option<Handle<Image>>,
     /// The archive path of each organization template's icon.
     icon_paths: HashMap<Id, String>,
+    /// The archive path of the frame round each organization template's
+    /// nation's banners.
+    frame_paths: HashMap<Id, String>,
     /// The archive paths of the division badges of each organization
     /// template's nation.
     badge_paths: HashMap<Id, Vec<String>>,
@@ -130,22 +143,23 @@ impl BannerImages {
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
     ) -> Self {
-        let mut add = |name: &str, change: fn(Image) -> Image| {
+        let mut add = |name: &str| {
             let image = textures::decode(&game.read(name)?, name, formats, true)?;
-            Some(images.add(change(image)))
+            Some(images.add(image))
         };
-        let plate = add("Organizations/Banners/Shared/BannerPlayerColor.png", |i| i);
-        // Every nation's frame has the same shape; in the field the game
-        // draws its band white instead of the nation's colour.
-        let frame = add("Organizations/Banners/RUS/RUSBannerBase.png", whitened);
-        let engaged = add("Organizations/Banners/Shared/BannerEngaged1.png", |i| i);
-        let focus = add("Effects/Selection/BannerFocusBase.tga", |i| i);
+        let plate = add("Organizations/Banners/Shared/BannerPlayerColor.png");
+        let engaged = add("Organizations/Banners/Shared/BannerEngaged1.png");
+        let focus = add("Effects/Selection/BannerFocusBase.tga");
+        let out_of_supply = add("Organizations/Banners/Shared/BannerOutOfSupply.png");
+        let shortage = add("Organizations/Banners/Shared/BannerBleeding.png");
         BannerImages {
             plate,
-            frame,
             engaged,
             focus,
+            out_of_supply,
+            shortage,
             icon_paths: game.banner_icons(),
+            frame_paths: game.banner_frames(),
             badge_paths: game.division_badges(),
             loaded: HashMap::new(),
             formats,
@@ -164,8 +178,21 @@ impl BannerImages {
         self.image(game, images, path)
     }
 
+    /// The frame round the banner of an organization of `template`, its
+    /// nation's; loaded the first time it's asked for.
+    pub fn frame(
+        &mut self,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        template: &str,
+    ) -> Option<Handle<Image>> {
+        let path = self.frame_paths.get(&Id::from(template))?.clone();
+        self.image(game, images, path)
+    }
+
     /// The badge an organization in `division` wears below its banner's
     /// plate, drawn the banner's size; loaded the first time it's asked for.
+    /// A nation with more divisions than badges goes round them again.
     pub fn badge(
         &mut self,
         game: &mut GameData,
@@ -175,7 +202,9 @@ impl BannerImages {
         let badges = self
             .badge_paths
             .get(&Id::from(division.template.as_str()))?;
-        let path = badges.get(division.badge)?.clone();
+        let path = badges
+            .get(division.badge.checked_rem(badges.len())?)?
+            .clone();
         self.image(game, images, path)
     }
 
@@ -190,24 +219,6 @@ impl BannerImages {
             textures::decode(&game.read(&path)?, &path, formats, true).map(|i| images.add(i))
         })
     }
-}
-
-/// An image with every coloured texel turned white, black and see-through
-/// ones left be.
-fn whitened(mut image: Image) -> Image {
-    if let Some(data) = image.data.as_mut().filter(|_| {
-        matches!(
-            image.texture_descriptor.format,
-            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm
-        )
-    }) {
-        for texel in data.as_chunks_mut::<4>().0 {
-            if texel[3] > 0 && texel[..3] != [0, 0, 0] {
-                texel[..3].fill(255);
-            }
-        }
-    }
-    image
 }
 
 /// A flip book's frames, in the order the model holds them.
@@ -335,6 +346,86 @@ pub fn draped_square(ground: &Ground, position: [f32; 2], facing: [f32; 2], size
     .with_inserted_indices(Indices::U32(indices))
 }
 
+/// A closed path evened out, each point drawn toward its neighbours over
+/// and over, so the steps a few units long that tiles leave in it go and
+/// its broad sweep stays.
+fn smoothed(path: &[Vec2]) -> Vec<Vec2> {
+    let mut path = paced(path, 1.0);
+    let n = path.len();
+    for _ in 0..12 {
+        path = (0..n)
+            .map(|i| (path[(i + n - 1) % n] + 2.0 * path[i] + path[(i + 1) % n]) / 4.0)
+            .collect();
+    }
+    path
+}
+
+/// Points along a closed path, about `step` apart all the way round.
+fn paced(path: &[Vec2], step: f32) -> Vec<Vec2> {
+    let next = |i: usize| path[(i + 1) % path.len()];
+    let round: f32 = (0..path.len()).map(|i| path[i].distance(next(i))).sum();
+    let count = (round / step).round().max(3.0) as usize;
+    let step = round / count as f32;
+    let mut points = Vec::with_capacity(count);
+    // How far round the path the side being walked starts.
+    let (mut side, mut before) = (0, 0.0);
+    for n in 0..count {
+        let along = n as f32 * step;
+        while side + 1 < path.len() && before + path[side].distance(next(side)) < along {
+            before += path[side].distance(next(side));
+            side += 1;
+        }
+        let length = path[side].distance(next(side)).max(f32::EPSILON);
+        points.push(path[side].lerp(next(side), (along - before) / length));
+    }
+    points
+}
+
+/// The lines of a border along `loops`, closed paths in map units with
+/// what they bound on their left, laid over the ground in world space: a
+/// solid line on each path and a thinner broken one just inside it.
+pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>]) -> Mesh {
+    // How far apart the lines' points are, near enough for them to bend
+    // with the ground.
+    const STEP: f32 = 0.2;
+    // Each line's near and far edge in from the path, and how many steps
+    // it's drawn for and then left out for.
+    const LINES: [(f32, f32, usize, usize); 2] = [(0.0, 0.15, 1, 0), (0.23, 0.32, 3, 1)];
+    let mut positions = Vec::new();
+    let mut indices = Vec::new();
+    for path in loops.iter().filter(|l| l.len() > 2) {
+        let path: Vec<Vec2> = path.iter().map(|&p| Vec2::from(p)).collect();
+        let path = paced(&smoothed(&path), STEP);
+        let n = path.len();
+        let inward = |i: usize| {
+            let along = path[(i + 1) % n] - path[(i + n - 1) % n];
+            along.perp().normalize_or_zero()
+        };
+        let at = |i: usize, inset: f32| {
+            let Vec2 { x, y } = path[i] + inward(i) * inset;
+            world(x, y, ground.height_at(x, y) + LIFT).to_array()
+        };
+        for (near, far, on, off) in LINES {
+            for i in (0..n).filter(|i| i % (on + off) < on) {
+                let j = (i + 1) % n;
+                let first = positions.len() as u32;
+                positions.extend([at(i, near), at(i, far), at(j, far), at(j, near)]);
+                indices.extend([0, 1, 2, 0, 2, 3].map(|k| first + k));
+            }
+        }
+    }
+    let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
+    let uvs = vec![[0.0, 0.0]; positions.len()];
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uvs)
+    .with_inserted_indices(Indices::U32(indices))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -364,6 +455,31 @@ mod tests {
     }
 
     #[test]
+    fn borders_run_just_inside_their_paths_on_the_ground() {
+        let side = 17;
+        let heights = (0..side * side).map(|i| (i % 5) as f32).collect();
+        let ground = Ground::from_heights(heights);
+        // Round a square, what it bounds on the left.
+        let path = vec![[8.0, 8.0], [24.0, 8.0], [24.0, 24.0], [8.0, 24.0]];
+        let mesh = border(&ground, &[path]);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("no positions");
+        };
+        assert!(!positions.is_empty());
+        for p in positions {
+            let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
+            assert!((p[1] - ground.height_at(x, y) - LIFT).abs() < 1e-4);
+            assert!((7.99..24.01).contains(&x) && (7.99..24.01).contains(&y));
+        }
+        assert!(
+            mesh.indices()
+                .is_some_and(|i| i.len() == positions.len() / 4 * 6)
+        );
+    }
+
+    #[test]
     fn health_bars_empty_only_with_no_health_left() {
         let frames = OverlayImages {
             ring: None,
@@ -372,6 +488,7 @@ mod tests {
                 .map(|i| Handle::Uuid(bevy::asset::uuid::Uuid::from_u128(i), default()))
                 .collect(),
             building_health: Vec::new(),
+            stockpile: Vec::new(),
         };
         let frame = |share| {
             frames

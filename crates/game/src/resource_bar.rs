@@ -59,6 +59,10 @@ pub struct Looks {
     no_supply: String,
     /// What a packed building that couldn't unpack says, given what it is.
     cannot_unpack: String,
+    /// What's said of a regiment ordered to an HQ, given the HQ and the
+    /// regiment, and of one ordered away from it.
+    attaching: String,
+    detaching: String,
     names: HashMap<Id, String>,
 }
 
@@ -117,6 +121,8 @@ pub fn spawn(
             "%s paused production queue - no supply",
         ),
         cannot_unpack: said("tai_error_unpack|s", "Cannot unpack %s"),
+        attaching: said("game_events_hq_attach_game_message|*", "%s: attaching %s"),
+        detaching: said("game_events_hq_detach_game_message|*", "%s: detaching %s"),
         names: game
             .listings()
             .into_iter()
@@ -348,6 +354,26 @@ pub fn tell(
             Notice::CannotUnpack { player, regiment } if Some(player) == local.0 => {
                 let truck = &sim.0.regiments[regiment].template;
                 fill(&looks.cannot_unpack, &[&looks.name(truck)])
+            }
+            Notice::Attached {
+                player,
+                hq,
+                regiment,
+            }
+            | Notice::Detached {
+                player,
+                hq,
+                regiment,
+            } if Some(player) == local.0 => {
+                let said = match notice {
+                    Notice::Attached { .. } => &looks.attaching,
+                    _ => &looks.detaching,
+                };
+                let hqs = sim.0.hqs();
+                let hq = hqs.iter().find(|h| h.id == hq);
+                let hq = hq.map(|h| looks.name(&h.building)).unwrap_or_default();
+                let joining = &sim.0.regiments[regiment].template;
+                fill(said, &[&hq, &looks.name(joining)])
             }
             _ => continue,
         };

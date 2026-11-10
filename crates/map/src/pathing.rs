@@ -4,7 +4,7 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use aaa_data::{Id, Shape, Variation};
 use tgck::map::Terrain;
@@ -170,11 +170,58 @@ impl Zone {
         self.has(tile_at(at))
     }
 
+    fn tiles(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+        let at = |i: usize| ((i % self.side) as i32, (i / self.side) as i32);
+        let held = self.tiles.iter().enumerate().filter(|(_, held)| **held);
+        held.map(move |(i, _)| (self.low.0 + at(i).0, self.low.1 + at(i).1))
+    }
+
     /// Whether something that blocks tiles is in it: by any tile under its
     /// soft shape's box.
     pub fn meets(&self, o: &Obstacle) -> bool {
         spanned(o.bounds(o.soft)).any(|tile| self.has(tile))
     }
+}
+
+/// The edges of the ground `zones` cover between them, as closed loops of
+/// world points with that ground on their left: one around each patch and
+/// one around each hole in it. The points are the middles of the tile
+/// sides along the edge, which turns the tiles' steps into slopes.
+pub fn outline<'a>(zones: impl IntoIterator<Item = &'a Zone>) -> Vec<Vec<[f32; 2]>> {
+    let covered: HashSet<(i32, i32)> = zones.into_iter().flat_map(Zone::tiles).collect();
+    // Each side with open ground beyond it, from one corner to the next
+    // going round the tile.
+    let mut sides: BTreeMap<(i32, i32), Vec<(i32, i32)>> = BTreeMap::new();
+    for &(x, y) in &covered {
+        let corners = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)];
+        let beyond = [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)];
+        for (i, tile) in beyond.iter().enumerate() {
+            if !covered.contains(tile) {
+                let to = corners[(i + 1) % 4];
+                sides.entry(corners[i]).or_default().push(to);
+            }
+        }
+    }
+    let mut loops = Vec::new();
+    while let Some((&start, _)) = sides.iter().next() {
+        let mut points = Vec::new();
+        let mut at = start;
+        // As many sides come to a corner as leave it, so this ends up
+        // back where it began.
+        while let Some(to) = sides.get_mut(&at).and_then(Vec::pop) {
+            if sides.get(&at).is_some_and(Vec::is_empty) {
+                sides.remove(&at);
+            }
+            let middle = |a: i32, b: i32| (a + b) as f32 / 2.0 * CELL_SIZE;
+            points.push([middle(at.0, to.0), middle(at.1, to.1)]);
+            at = to;
+            if at == start {
+                break;
+            }
+        }
+        loops.push(points);
+    }
+    loops
 }
 
 #[derive(Clone)]
@@ -466,6 +513,29 @@ mod tests {
         assert!(zone.has((26, 26)) && !zone.has((27, 27)));
         assert!(zone.has((28, 22)) && !zone.has((28, 23)));
         assert!(zone.holds([40.5, 25.9]) && !zone.holds([40.5, 23.9]));
+    }
+
+    #[test]
+    fn zones_that_touch_share_one_outline() {
+        let p = Pathing::uniform(40, Domain::Land);
+        let (a, b) = (p.zone([21.0, 41.0], 6.0), p.zone([31.0, 41.0], 6.0));
+        let far = p.zone([61.0, 61.0], 6.0);
+        let around = |zones: &[&Zone]| outline(zones.iter().copied());
+        let alone = around(&[&a]);
+        assert_eq!(alone.len(), 1);
+        // Each point is a tile side's middle, on the zone's edge.
+        for &[x, y] in &alone[0] {
+            let near = |dx: f32, dy: f32| a.holds([x + dx, y + dy]);
+            let across = near(0.5, 0.0) != near(-0.5, 0.0);
+            let along = near(0.0, 0.5) != near(0.0, -0.5);
+            assert!(across || along, "{x}, {y}");
+        }
+        let joined = around(&[&a, &b]);
+        assert_eq!(joined.len(), 1);
+        assert!(joined[0].len() > alone[0].len());
+        assert!(joined[0].len() < 2 * alone[0].len());
+        assert_eq!(around(&[&a, &b, &far]).len(), 2);
+        assert!(around(&[]).is_empty());
     }
 
     #[test]

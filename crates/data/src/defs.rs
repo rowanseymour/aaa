@@ -701,6 +701,14 @@ pub struct Sun {
     pub specular: [f32; 3],
 }
 
+/// How a nation's banners look.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Banner {
+    pub ids: Option<Id>,
+    /// What its own images' paths start with, under the banners' folder.
+    pub resource_prefix: Option<String>,
+}
+
 /// A nation players can play.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Nation {
@@ -864,6 +872,8 @@ pub struct Vfx {
     pub constant_screen_size: Option<bool>,
     pub force_real_time: Option<bool>,
     pub gyroscope: Option<bool>,
+    /// What a tint multiplies its object's colours by.
+    pub color: Option<[f32; 3]>,
     #[serde(default)]
     pub flags: Vec<VfxFlags>,
 }

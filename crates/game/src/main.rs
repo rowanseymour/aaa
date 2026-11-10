@@ -16,7 +16,7 @@
 //! script commands. Units and buildings make their sounds as they're
 //! selected, ordered, move, fire and die, and show their [`effects`] as they
 //! fire, are hurt, die, and pack or unpack. Escape opens a menu that holds
-//! the match still while it's up.
+//! the match still while it's up. [`supply`] is drawn on the map.
 
 mod actions;
 mod banners;
@@ -32,6 +32,7 @@ mod presets;
 mod remote;
 mod resource_bar;
 mod sound;
+mod supply;
 mod ui;
 mod waypoints;
 
@@ -528,6 +529,7 @@ fn main() -> ExitCode {
         .init_resource::<SelectedBuilding>()
         .init_resource::<Focus>()
         .init_resource::<ghost::Ghost>()
+        .init_resource::<supply::Border>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
         .add_plugins((
@@ -566,8 +568,13 @@ fn main() -> ExitCode {
                 drop_lost_building,
                 selection_sounds,
                 show_focus,
+                (supply::show_border, supply::tint_buildings),
                 show_health.after(camera::Controls),
-                (banners::add_banners, banners::show_banners)
+                (
+                    banners::add_banners,
+                    banners::badge_banners,
+                    banners::show_banners,
+                )
                     .chain()
                     .after(camera::Controls),
             )
@@ -2144,7 +2151,7 @@ fn show_health(
             let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
             let at = world(x, y, ground.stand_at(view.footing, x, y)) + toward * reach;
             let image = images.health_bar(unit.health / fighter.health);
-            shown.push((at, HEALTH_BAR, image));
+            shown.push((at, HEALTH_BAR, image, 0.0));
         }
         for view in &buildings {
             let b = view.building;
@@ -2158,10 +2165,20 @@ fn show_health(
             let [x, y] = building.position;
             let at = world(x, y, view.placed.y);
             let image = images.building_health_bar(building.health / building.fighter.health);
-            shown.push((at, BUILDING_HEALTH_BAR, image));
+            shown.push((at, BUILDING_HEALTH_BAR, image, 0.0));
+            // A relay's supply stockpile, below its health.
+            if let Some(supply) = sim
+                .0
+                .supply_of(b)
+                .filter(|s| s.relay && s.stockpile_max > 0.0)
+            {
+                let share = building.supply.stockpile / supply.stockpile_max;
+                let image = images.stockpile_bar(share);
+                shown.push((at, BUILDING_HEALTH_BAR, image, 1.0));
+            }
         }
         let half = transform.right().as_vec3() / 2.0;
-        for (at, size, image) in shown {
+        for (at, size, image, below) in shown {
             let Some(image) = image else {
                 continue;
             };
@@ -2173,7 +2190,7 @@ fn show_health(
             };
             let width = a.distance(b);
             let height = width * size.y / size.x;
-            let centre = (a + b) / 2.0 + Vec2::new(0.0, height);
+            let centre = (a + b) / 2.0 + Vec2::new(0.0, height * (1.0 + 1.5 * below));
             wanted.push((
                 centre - Vec2::new(width, height) / 2.0,
                 Vec2::new(width, height),

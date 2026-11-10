@@ -31,7 +31,8 @@ use tgck::map::Sun;
 use blend::GroundMaterial;
 use glow::GlowMaterial;
 use models::{ModelAssets, Models};
-use team::TeamMaterial;
+pub use team::Tint;
+use team::{TeamMaterial, TintedCopies};
 use tgck::map::Thing;
 use water::WaterMaterial;
 
@@ -82,6 +83,8 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_plugins(MaterialPlugin::<GlowMaterial>::default())
             .add_plugins(MaterialPlugin::<TeamMaterial>::default())
+            .init_resource::<TintedCopies<StandardMaterial>>()
+            .init_resource::<TintedCopies<TeamMaterial>>()
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .insert_resource(MeshPicking(self.pickable))
@@ -102,6 +105,7 @@ impl Plugin for MapRenderPlugin {
                     models::pace,
                     (models::animate, rig::play).after(models::pace),
                     camera::update.in_set(camera::Controls),
+                    (team::tint::<StandardMaterial>, team::tint::<TeamMaterial>),
                 ),
             );
     }

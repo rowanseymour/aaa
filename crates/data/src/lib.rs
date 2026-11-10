@@ -705,6 +705,8 @@ pub struct Vfx {
     pub random_orientation: bool,
     /// Attached, it keeps its facing as what it's attached to turns.
     pub gyroscope: bool,
+    /// For one that tints what it's on, what it multiplies its colours by.
+    pub colour: Option<[f32; 3]>,
 }
 
 /// A [`Vfx`] an object creates, or stops, when something happens.
@@ -1178,6 +1180,38 @@ impl GameData {
                 let badges = n.badge.iter();
                 let paths = badges.map(|b| format!("Nations/{}", b.badge_texture));
                 Some((n.placement_group_ids?, paths.collect()))
+            })
+            .collect();
+        self.by_template(|t| {
+            let group = t.placement.as_ref()?.placement_group_ids.as_ref()?;
+            by_group.get(group).cloned()
+        })
+    }
+
+    /// The archive path of the frame round the banners of each organization
+    /// template's nation, by template id: that of the banner named for the
+    /// nation, `ger_banner` for `nation_ger`.
+    pub fn banner_frames(&mut self) -> HashMap<Id, String> {
+        let files = self.parse_tgis(|n| {
+            ["nations/", "templates/", "organizations/banners/"]
+                .iter()
+                .any(|d| n.starts_with(d))
+        });
+        let files = scoped(&files);
+        let prefixes: HashMap<Id, String> = files
+            .iter()
+            .flat_map(|f| f.read::<defs::Banner>("Banner"))
+            .filter_map(|b| Some((b.ids?, b.resource_prefix?)))
+            .collect();
+        let by_group: HashMap<Id, String> = files
+            .iter()
+            .flat_map(|f| f.read::<defs::Nation>("Nation"))
+            .filter_map(|n| {
+                let ids = n.ids?.as_str().to_ascii_lowercase();
+                let name = ids.strip_prefix("nation_")?;
+                let prefix = prefixes.get(&Id::from(format!("{name}_banner").as_str()))?;
+                let path = format!("Organizations/Banners/{prefix}BannerBase.png");
+                Some((n.placement_group_ids?, path))
             })
             .collect();
         self.by_template(|t| {
@@ -2348,6 +2382,7 @@ fn vfx(v: defs::Vfx, model: Option<String>) -> Vfx {
         real_time: v.force_real_time.unwrap_or(false),
         random_orientation: v.flags.iter().rev().find_map(|f| f.random_orientation) == Some(true),
         gyroscope: v.gyroscope.unwrap_or(true),
+        colour: v.color,
     }
 }
 
@@ -3540,6 +3575,7 @@ mod tests {
                 real_time: false,
                 random_orientation: true,
                 gyroscope: true,
+                colour: None,
             }
         );
     }

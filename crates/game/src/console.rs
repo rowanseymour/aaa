@@ -208,6 +208,16 @@ const VERBS: &[Verb] = &[
     ),
     verb("pack", "", "packs up the selected building"),
     verb(
+        "attach",
+        "regiment",
+        "attaches a regiment, by its id, to an HQ with a place for it, or moves it on to the next",
+    ),
+    verb(
+        "detach",
+        "regiment",
+        "detaches a regiment, by its id, from its HQ",
+    ),
+    verb(
         "unpack",
         "x y [degrees]",
         "sends the selected packed building to unpack at x y, facing that far counter-clockwise from the map's x axis",
@@ -227,6 +237,11 @@ const VERBS: &[Verb] = &[
         "gamepause",
         "[1/0]",
         "pauses or resumes the game; without, switches",
+    ),
+    verb(
+        "toggleshowzonesupply",
+        "",
+        "shows or hides the supply border",
     ),
     verb(
         "uiscale",
@@ -330,6 +345,11 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
         "screenshot" => screenshot(world, &args),
         "gamespeed" => game_speed(world, &args),
         "gamepause" => game_pause(world, &args),
+        "toggleshowzonesupply" => no_args(&args).map(|_| {
+            let mut border = world.resource_mut::<crate::supply::Border>();
+            border.0 = !border.0;
+            String::new()
+        }),
         "uiscale" => ui_scale(world, &args),
         "uitint" => ui_tint(world, &args),
         "resolution" => resolution(world, &args),
@@ -361,6 +381,8 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "commission" => commission(world, &args),
                 "unpack" => unpack(world, &args),
                 "pack" => pack(world, &args),
+                "attach" => attach(world, &args, true),
+                "detach" => attach(world, &args, false),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
                 _ => unreachable!("{name} isn't handled"),
@@ -922,6 +944,23 @@ fn pack(world: &mut World, args: &[&str]) -> Reply {
         .ok_or("no building selected")?;
     give(world, player, aaa_sim::Command::Pack { building: b })
         .map_err(|e| format!("refused: {e:?}"))?;
+    Ok(String::new())
+}
+
+fn attach(world: &mut World, args: &[&str], attach: bool) -> Reply {
+    let [id] = args else {
+        return Err(usage(if attach { "attach" } else { "detach" }));
+    };
+    let sim = &world.resource::<Sim>().0;
+    let regiment = (sim.regiments.iter())
+        .position(|r| r.id.to_string() == *id)
+        .ok_or_else(|| format!("no regiment {id}"))?;
+    let owner = sim.regiments[regiment].owner;
+    let command = match attach {
+        true => aaa_sim::Command::Attach { regiment },
+        false => aaa_sim::Command::Detach { regiment },
+    };
+    give(world, owner, command).map_err(|e| format!("refused: {e:?}"))?;
     Ok(String::new())
 }
 
