@@ -95,13 +95,13 @@ fn take_option(args: &mut Vec<String>, flag: &str) -> Result<Option<String>, ()>
     }
 }
 
-/// Parses a comma separated list such as `0.5,0.5,300,0,0.8`.
+/// Parses a comma separated list of finite numbers such as
+/// `0.5,0.5,300,0,0.8`.
 fn floats<const N: usize>(s: &str) -> Option<[f32; N]> {
     let v: Vec<f32> = s
         .split(',')
-        .map(|p| p.trim().parse())
-        .collect::<Result<_, _>>()
-        .ok()?;
+        .map(|p| p.trim().parse().ok().filter(|f: &f32| f.is_finite()))
+        .collect::<Option<_>>()?;
     v.try_into().ok()
 }
 
@@ -133,6 +133,12 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // What's left that looks like an option is one this doesn't have, not a
+    // game folder or map.
+    if args.iter().any(|a| a.starts_with("--")) {
+        eprintln!("{USAGE}");
+        return ExitCode::from(2);
+    }
     let (dir, map) = match args.as_slice() {
         [dir] => (PathBuf::from(dir), None),
         [dir, map] => (PathBuf::from(dir), Some(map.as_str())),
@@ -184,11 +190,14 @@ fn main() -> ExitCode {
     let mut app = App::new();
     let title = format!("{} - aaa-editor", loaded.map.title);
     app.add_plugins(DefaultPlugins.set(shot::window(title, screenshot.is_some())));
-    app.add_plugins(MapRenderPlugin { edge: Edge::Hard })
-        .insert_resource(loaded)
-        .insert_resource(lighting)
-        .add_systems(Startup, setup)
-        .add_systems(Update, (objects::toggle_markers, cycle_lighting));
+    app.add_plugins(MapRenderPlugin {
+        edge: Edge::Hard,
+        pickable: screenshot.is_none(),
+    })
+    .insert_resource(loaded)
+    .insert_resource(lighting)
+    .add_systems(Startup, setup)
+    .add_systems(Update, (objects::toggle_markers, cycle_lighting));
     if let Some(c) = camera {
         app.insert_resource(c);
     }
@@ -286,7 +295,8 @@ fn cycle_lighting(
     }
 }
 
-/// Opens the windows `--inspect` asks for, once the objects are there.
+/// Opens the windows `--inspect` asks for, on the first frame, when the
+/// objects are there.
 fn start_inspecting(
     mut start: ResMut<StartInspecting>,
     objects: Query<(Entity, &MapObject)>,
@@ -295,11 +305,17 @@ fn start_inspecting(
     if start.0.is_empty() {
         return;
     }
+    let mut ids = std::mem::take(&mut start.0);
+    ids.sort_unstable();
+    ids.dedup();
     for (entity, MapObject(thing)) in &objects {
-        if let Some(i) = start.0.iter().position(|&id| id == thing.id) {
-            start.0.remove(i);
+        if let Ok(i) = ids.binary_search(&thing.id) {
+            ids.remove(i);
             commands.entity(entity).insert(Inspected { raise: true });
         }
+    }
+    for id in ids {
+        eprintln!("aaa-editor: no object with id {id} to inspect");
     }
 }
 
@@ -413,4 +429,28 @@ fn leader(window: egui::Rect, to: egui::Pos2) -> [egui::Pos2; 4] {
     let from = egui::pos2(x, window.top() + 14.0);
     let bend = egui::vec2(out * ((to.x - from.x).abs() / 2.0).max(40.0), 0.0);
     [from, from + bend, to - bend, to]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn floats_wants_every_number_finite() {
+        assert_eq!(floats("0.5, 1,-2"), Some([0.5, 1.0, -2.0]));
+        assert_eq!(floats::<3>("0.5,1"), None);
+        assert_eq!(floats::<2>("0.5,x"), None);
+        assert_eq!(floats::<2>("0.5,nan"), None);
+        assert_eq!(floats::<2>("inf,1"), None);
+    }
+
+    #[test]
+    fn take_option_removes_a_flag_and_its_value() {
+        let mut args: Vec<String> = ["dir", "--camera", "1,2", "map"].map(String::from).into();
+        assert_eq!(take_option(&mut args, "--camera"), Ok(Some("1,2".into())));
+        assert_eq!(args, ["dir", "map"]);
+        assert_eq!(take_option(&mut args, "--camera"), Ok(None));
+        args.push("--inspect".into());
+        assert_eq!(take_option(&mut args, "--inspect"), Err(()));
+    }
 }
