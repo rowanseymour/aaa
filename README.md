@@ -11,33 +11,29 @@ real-time strategy game.
 > The original game's behavior is written up as specs, and the code here is written only from
 > those specs, the data files and the game itself, played.
 
-## Crates
+## Running
 
-| Crate | What it does | Status |
-|---|---|---|
-| [`tgck`](crates/tgck) | Reads the game's `.rwd` archives and `.rmp` maps, as a library and a command-line tool | Done |
-| [`tgi`](crates/tgi) | Parses the game's `.tgi` text data files (units, templates, settings, localisation) | Done |
-| [`nif`](crates/nif) | Reads the game's `.nif` models, as a library and a command-line tool | Done |
-| [`aaa‑data`](crates/data) | The game's data as a whole: archive lookup and definitions built from its files, as a library and a command-line tool | Partial: definitions cover what rendering and the rules use so far |
-| [`aaa‑map`](crates/map) | Maps as loaded: the ground, objects and players | Early: ground, placed objects, players and teams, regiments, buildings and cities, and where movers can go |
-| [`aaa‑sim`](crates/sim) | The game's rules, played out with no rendering | Early: sides and how they stand toward each other; regiments take their owner's orders, move in formation around what blocks them, their vehicles speeding up, steering and towing trailers, fire on enemies in range until they're destroyed, and stop to fight enemies they meet unless told to run; buildings are captured, destroyed or disabled, and cities go to whoever holds them; sides earn and keep up what they own, and pay for what they commission; buildings supply the ground around them, some only while supply reaches them; regiments attach to HQs, heal and fill their ranks in supply, and wear away out of it while their side can't pay its way |
-| [`aaa‑render`](crates/render) | Draws maps with Bevy | Ground, water, models in their owner's colour and their animations, units idling, walking, attacking and dying, models' particle systems, hover marks, health bars and regiments' banners |
-| [`aaa‑editor`](crates/editor) | Map editor built with Bevy | Views maps and inspects objects' records; no editing yet |
-| [`aaa‑game`](crates/game) | Plays matches on a map picked from a menu | Play one side: select your regiments, send them somewhere or run them there and change their formation; they fight enemies in range and take cities by holding them, attach them to HQs, watch their money and rates in the resource bar, with their sounds as they answer orders, move, fire and die, and effects as they fire, are hit and blow up. The interface is drawn in the game's own style |
+You need [Rust](https://rustup.rs), and on Linux the system packages listed in the
+[editor's README](crates/editor/README.md). `aaa.sh` builds and runs the game or the
+map editor, given the folder your copy of the game is installed in:
 
-## Building
+```sh
+./aaa.sh game --data="/path/to/Axis and Allies"
+./aaa.sh editor --data="/path/to/Axis and Allies"
+```
+
+Set `AAA_INSTALL` to that folder to leave `--data` off. Run `./aaa.sh` with no
+arguments for usage.
+
+## Development
+
+The code is a workspace of crates in [`crates/`](crates), from readers for the game's
+file formats up to the game itself.
 
 ```sh
 cargo build --release
 cargo test
 ```
-
-Requires Rust 1.88 or newer (1.97.1 for the Bevy crates). The `tgck`, `tgi`, `nif`, `aaa-data`, `aaa-editor` and `aaa-game` commands end up
-in `target/release/`. The editor has extra system requirements on Linux; see
-[its README](crates/editor/README.md).
-
-`./aaa.sh` builds and runs the game or the editor; run it with no arguments for
-usage.
 
 ## Legal
 
