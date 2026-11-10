@@ -373,26 +373,6 @@ pub struct Division {
     pub badge: usize,
 }
 
-/// The division of each organization in `things` whose HQ has a badge, by
-/// the organization's id.
-pub fn divisions(things: &[Thing]) -> HashMap<u32, Division> {
-    let hqs: HashMap<u32, Division> = things
-        .iter()
-        .filter_map(|t| {
-            let badge = usize::try_from(t.hq_badge()?).ok()?;
-            let template = t.template.clone();
-            Some((t.id, Division { template, badge }))
-        })
-        .collect();
-    things
-        .iter()
-        .filter_map(|t| {
-            let hq = t.organization()?.hq.filter(|&hq| hq != 0).unwrap_or(t.id);
-            Some((t.id, hqs.get(&hq)?.clone()))
-        })
-        .collect()
-}
-
 /// A member standing as `thing` has it, if its template can move.
 fn member(
     thing: Thing,

@@ -1050,7 +1050,8 @@ impl World {
             rally: None,
             leader: regiment.primary,
             hq: regiment.hq,
-            in_supply: false,
+            // Until its first look, so it doesn't start out marked.
+            in_supply: true,
             replacing: vec![0.0; regiment.members.len()],
         });
         let ids = regiment.members.iter().map(|m| m.thing.id);
@@ -1232,11 +1233,29 @@ impl World {
             Command::Rally { building, at } => self.set_rally(player, building, at)?,
             Command::Attach { regiment } => {
                 let hq = self.may_attach(player, regiment)?;
-                self.regiments[regiment].hq = Some(hq);
+                let left = self.regiments[regiment].hq.replace(hq);
+                let left = left.map(|hq| Notice::Detached {
+                    player,
+                    hq,
+                    regiment,
+                });
+                self.notices.extend(left);
+                let joined = Notice::Attached {
+                    player,
+                    hq,
+                    regiment,
+                };
+                self.notices.push(joined);
             }
             Command::Detach { regiment } => {
                 self.may_detach(player, regiment)?;
-                self.regiments[regiment].hq = None;
+                let left = self.regiments[regiment].hq.take();
+                let left = left.map(|hq| Notice::Detached {
+                    player,
+                    hq,
+                    regiment,
+                });
+                self.notices.extend(left);
             }
         }
         Ok(())
@@ -6296,9 +6315,24 @@ mod tests {
         w.add_regiment(&t);
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         assert_eq!(w.regiments[1].hq, Some(70));
+        w.notices.clear();
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         assert_eq!(w.regiments[1].hq, Some(50));
+        // The player's told of each, a move as leaving then joining.
+        let (player, regiment) = (1, 1);
+        let left = |hq| Notice::Detached {
+            player,
+            hq,
+            regiment,
+        };
+        let joined = |hq| Notice::Attached {
+            player,
+            hq,
+            regiment,
+        };
+        assert_eq!(w.notices, [left(70), joined(50)]);
         w.apply(1, Command::Detach { regiment: 1 }).unwrap();
+        assert_eq!(w.notices[2..], [left(50)]);
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         assert_eq!(w.regiments[1].hq, Some(70));
         // Not an enemy's, nor one that doesn't recruit its kind.

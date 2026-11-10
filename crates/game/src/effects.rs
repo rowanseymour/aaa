@@ -129,6 +129,11 @@ impl OnThing {
 }
 
 impl Effects {
+    /// What the tint with this id multiplies its object's colours by.
+    pub fn tint(&self, ids: &str) -> Option<[f32; 3]> {
+        self.vfx.get(&Id::from(ids))?.colour
+    }
+
     pub fn new(game: &mut GameData, map: &Map) -> Effects {
         let vfx = game.vfx();
         let objects = game.object_effects();
@@ -1097,6 +1102,7 @@ mod tests {
             real_time: false,
             random_orientation: false,
             gyroscope: true,
+            colour: None,
         }
     }
 

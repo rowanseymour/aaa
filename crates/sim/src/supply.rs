@@ -48,7 +48,8 @@ impl World {
         })
     }
 
-    pub(crate) fn shares_supply(&self, a: u32, b: u32) -> bool {
+    /// Whether `a`'s zones supply `b`'s regiments too.
+    pub fn shares_supply(&self, a: u32, b: u32) -> bool {
         a == b || self.sides.relation(a, b) == Relation::Ally
     }
 
@@ -162,6 +163,13 @@ impl World {
             Some(u) => u.position,
             None => self.centre(r),
         }
+    }
+
+    /// Whether the regiment at `r` is one that needs supply and, as of its
+    /// last look, is going without.
+    pub fn lacks_supply(&self, r: usize) -> bool {
+        let used = self.logistics_of(&self.regiments[r].template);
+        used.is_some_and(|l| l.supply_used) && !self.destroyed(r) && !self.regiments[r].in_supply
     }
 
     /// Whether anything has the regiment at `r` as a target of its

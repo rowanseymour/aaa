@@ -22,7 +22,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
-use crate::banners::Divisions;
+use crate::banners::{self, Badges};
 use crate::ui::{self, Font, Gauge, Ink, Meter, Shade, Surface, framed, label, meter};
 use crate::{Drawn, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint};
 
@@ -57,7 +57,17 @@ pub struct Pane;
 
 /// What the pane shows now.
 #[derive(Resource, Default)]
-pub struct Showing(Option<What>);
+pub struct Showing(Option<(What, Detail)>);
+
+/// What of the pane's layout can change while it shows the same thing.
+#[derive(Clone, PartialEq, Debug, Default)]
+struct Detail {
+    /// For an HQ, the regiment in each of its places.
+    slots: Vec<Option<usize>>,
+    /// For each regiment whose banner shows, the HQ whose badge it wears
+    /// and whether it's out of supply.
+    banners: Vec<(usize, Option<u32>, bool)>,
+}
 
 /// What the pane can show; a change in it lays the pane out afresh.
 #[derive(Clone, PartialEq, Debug)]
@@ -78,6 +88,8 @@ pub enum Fill {
     Building(usize),
     /// How far along a building's first commission is.
     Progress(usize),
+    /// How much of a relay's supply stockpile is left.
+    Stockpile(usize),
 }
 
 /// The line saying what a regiment or building is doing.
@@ -206,6 +218,38 @@ fn wanted(sim: &World, selected: &[usize], chosen: Option<usize>) -> Option<What
     }
 }
 
+/// The HQ the pane shows, if it shows one: a Division HQ's building, or
+/// its truck.
+fn shown_hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], what: &What) -> Option<&'a aaa_sim::Hq> {
+    let id = match *what {
+        What::Building(b, _) => sim.hq_of(b)?,
+        What::Regiment(r) => sim.regiments[r].id,
+        What::Regiments(_) => return None,
+    };
+    hqs.iter().find(|h| h.id == id)
+}
+
+fn detail(sim: &World, hqs: &[aaa_sim::Hq], what: &What) -> Detail {
+    let slots: Vec<Option<usize>> = shown_hq(sim, hqs, what).map_or(Vec::new(), |hq| {
+        let attached = sim.attached(hq.id).map(Some);
+        let places = hq.places as usize;
+        attached
+            .chain(std::iter::repeat(None))
+            .take(places)
+            .collect()
+    });
+    let own: &[usize] = match what {
+        What::Regiment(r) => std::slice::from_ref(r),
+        What::Regiments(rs) => rs,
+        What::Building(..) => &[],
+    };
+    let flying = own.iter().copied().chain(slots.iter().flatten().copied());
+    let banners = flying
+        .map(|r| (r, banners::wears(sim, hqs, r), sim.lacks_supply(r)))
+        .collect();
+    Detail { slots, banners }
+}
+
 /// Lays the pane out afresh when what it should show changes.
 #[allow(clippy::too_many_arguments)]
 pub fn lay_out(
@@ -215,7 +259,7 @@ pub fn lay_out(
     sim: Res<Sim>,
     local: Res<Local>,
     drawn: Res<Drawn>,
-    divisions: Res<Divisions>,
+    badges: Res<Badges>,
     mut showing: ResMut<Showing>,
     mut loaded: ResMut<Loaded>,
     mut looks: ResMut<Looks>,
@@ -224,6 +268,10 @@ pub fn lay_out(
     mut pane: Single<(Entity, &mut Visibility), With<Pane>>,
 ) {
     let what = wanted(&sim.0, &selected.0, chosen.0);
+    let what = what.map(|w| {
+        let detail = detail(&sim.0, &sim.0.hqs(), &w);
+        (w, detail)
+    });
     if showing.0 == what {
         return;
     }
@@ -234,14 +282,15 @@ pub fn lay_out(
         None => Visibility::Hidden,
     });
     showing.0 = what.clone();
-    let Some(what) = what else {
+    let Some((what, detail)) = what else {
         return;
     };
     let mut ui = Ui {
         sim: &sim.0,
         local: local.0,
         drawn: &drawn,
-        divisions: &divisions,
+        badges: &badges,
+        detail: &detail,
         game: &mut loaded.game,
         looks: &mut looks,
         banners: &mut banners,
@@ -260,7 +309,8 @@ struct Ui<'a> {
     sim: &'a World,
     local: Option<u32>,
     drawn: &'a Drawn,
-    divisions: &'a Divisions,
+    badges: &'a Badges,
+    detail: &'a Detail,
     game: &'a mut GameData,
     looks: &'a mut Looks,
     banners: &'a mut BannerImages,
@@ -344,15 +394,20 @@ impl Ui<'_> {
         let icon = self
             .banners
             .icon(self.game, self.images, &regiment.template);
-        let badge = self
-            .divisions
-            .0
-            .get(&regiment.id)
-            .and_then(|d| self.banners.badge(self.game, self.images, d));
+        let frame = self
+            .banners
+            .frame(self.game, self.images, &regiment.template);
+        let shown = self.detail.banners.iter().find(|(of, ..)| *of == r);
+        let (wears, lacks) = shown.map_or((None, false), |&(_, wears, lacks)| (wears, lacks));
+        let badge = wears
+            .and_then(|hq| self.badges.division(&regiment.template, hq))
+            .and_then(|d| self.banners.badge(self.game, self.images, &d));
+        let out_of_supply = self.banners.out_of_supply.clone().filter(|_| lacks);
         let layers = [
             (self.banners.plate.clone(), Color::srgb(red, green, blue)),
             (icon, Color::WHITE),
-            (self.banners.frame.clone(), Color::WHITE),
+            (frame, Color::WHITE),
+            (out_of_supply, Color::WHITE),
             (badge, Color::WHITE),
         ];
         parent
@@ -380,13 +435,42 @@ impl Ui<'_> {
             });
     }
 
+    /// An HQ's places, each with the banner and health of the regiment in
+    /// it, which a click selects, or empty.
+    fn slots(&mut self, commands: &mut Commands, root: Entity) {
+        const ACROSS: usize = 3;
+        for (i, slot) in self.detail.slots.clone().into_iter().enumerate() {
+            let (col, row) = ((i % ACROSS) as f32, (i / ACROSS) as f32);
+            let node = at(144.0 + col * 32.0, 44.0 + row * 37.0, 30.0, 35.0);
+            let mut card = commands.spawn((framed(node), ChildOf(root)));
+            let Some(r) = slot else {
+                continue;
+            };
+            card.insert((Button, Pick(r))).observe(pick);
+            card.with_children(|card| {
+                let banner = Node {
+                    position_type: PositionType::Absolute,
+                    left: px(1.0 * SCALE),
+                    top: px(0.0),
+                    width: px(26.0 * SCALE),
+                    height: px(26.0 * SCALE),
+                    ..default()
+                };
+                self.banner(card, banner, r);
+                bar(card, at(0.0, 28.0, 28.0, 4.0), Fill::Regiment(r));
+            });
+        }
+    }
+
     fn regiment(&mut self, commands: &mut Commands, root: Entity, r: usize) {
         let regiment = &self.sim.regiments[r];
         self.title(commands, root, self.regiment_name(r), regiment.owner);
         let leader = leader(self.sim, r);
         let template = self.sim.units[leader].template.clone();
         self.portrait(commands, root, &template, Fill::Regiment(r));
-        if !lone(self.sim, r) {
+        // An HQ shows its places where a regiment shows its units.
+        let is_hq = !self.detail.slots.is_empty();
+        if !lone(self.sim, r) && !is_hq {
             // Cards across, wrapping, as the game's company display has them,
             // for all but an officer, who has the portrait.
             let officer = is_officer(&self.sim.units[leader].template);
@@ -440,6 +524,8 @@ impl Ui<'_> {
                     }
                 });
             });
+        }
+        if !lone(self.sim, r) {
             commands.entity(root).with_children(|pane| {
                 pane.spawn(framed(at(366.0, 44.0, 63.0, 77.0)))
                     .with_children(|card| {
@@ -458,6 +544,7 @@ impl Ui<'_> {
                     });
             });
         }
+        self.slots(commands, root);
         self.status(commands, root, Status::Regiment(r));
     }
 
@@ -516,6 +603,12 @@ impl Ui<'_> {
         let template = building.template.clone();
         self.title(commands, root, self.looks.name(&template), building.owner);
         self.portrait(commands, root, &template, Fill::Building(b));
+        if self.sim.supply_of(b).is_some_and(|s| s.relay) {
+            commands.entity(root).with_children(|pane| {
+                bar(pane, at(8.0, 176.0, 124.0, 3.0), Fill::Stockpile(b));
+            });
+        }
+        self.slots(commands, root);
         let queue: Vec<String> = building
             .queue
             .iter()
@@ -577,6 +670,11 @@ pub fn refresh(
                 let b = &sim.buildings[b];
                 b.health / b.fighter.health
             }
+            Fill::Stockpile(b) => {
+                let max = sim.supply_of(b).map_or(0.0, |s| s.stockpile_max);
+                let left = sim.buildings[b].supply.stockpile;
+                if max > 0.0 { left / max } else { 0.0 }
+            }
             Fill::Progress(b) => {
                 let b = &sim.buildings[b];
                 b.queue
@@ -620,6 +718,8 @@ fn regiment_state(sim: &World, r: usize) -> Option<&'static str> {
             Order::Attack | Order::Pursue(_) => "mind_attacking",
             Order::Move => "mind_moving",
         },
+        // Weightier than resting, lighter than anything it's doing.
+        _ if sim.lacks_supply(r) => "out_of_supply",
         _ => "mind_resting",
     })
 }
@@ -631,6 +731,9 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     match () {
         _ if building.packing.is_some() => Some("structure_packing"),
         _ if building.unpacking.is_some() => Some("structure_unpacking"),
+        // Out of supply outweighs disabled, and a queue that either holds
+        // up isn't recruiting.
+        _ if sim.out_of_supply(b) && building.standing() => Some("out_of_supply"),
         _ if building.state == State::Disabled => Some("disabled"),
         _ if !building.queue.is_empty() => Some("structure_recruiting"),
         _ => None,
@@ -688,15 +791,22 @@ fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
 fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill) {
     let gauge = match fill {
         Fill::Progress(_) => Gauge::Progress,
+        Fill::Stockpile(_) => Gauge::Stockpile,
         _ => Gauge::Health,
     };
     parent.spawn((meter(node, gauge), fill));
 }
 
-/// A regiment's card clicked: selects it alone.
-fn pick(activate: On<Activate>, cards: Query<&Pick>, mut selected: ResMut<Selected>) {
+/// A regiment's card clicked: selects it alone, in place of any building.
+fn pick(
+    activate: On<Activate>,
+    cards: Query<&Pick>,
+    mut selected: ResMut<Selected>,
+    mut chosen: ResMut<SelectedBuilding>,
+) {
     if let Ok(card) = cards.get(activate.entity) {
         selected.0 = vec![card.0];
+        chosen.0 = None;
     }
 }
 
