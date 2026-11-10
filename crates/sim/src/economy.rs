@@ -148,15 +148,16 @@ impl World {
 
     /// What a regiment adds to its owner's economy: its members'
     /// production, and its own upkeep and that of every place in it, the
-    /// member there or not. Nothing once it's gone.
+    /// member there or not, but for those that have unpacked into
+    /// buildings. Nothing once it's gone.
     pub fn regiment_ledger(&self, regiment: usize) -> Ledger {
         let r = &self.regiments[regiment];
         if self.destroyed(regiment) {
             return Ledger::default();
         }
-        let template = |&u: &usize| &self.units[u].template;
-        let mut ledger =
-            self.organization_ledger(&r.template, r.units.iter().map(template).collect());
+        let kept = (r.units.iter()).filter(|&&u| self.units[u].unpacked.is_none());
+        let templates = kept.map(|&u| &self.units[u].template).collect();
+        let mut ledger = self.organization_ledger(&r.template, templates);
         let earning = self
             .survivors(regiment)
             .map(|u| self.economy_of(&self.units[u].template));

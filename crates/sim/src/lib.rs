@@ -1760,7 +1760,10 @@ impl World {
             if used.is_some_and(|l| l.supply_used) {
                 let leader = self.regiments[r].leader.unwrap_or(0);
                 for (p, u) in self.regiments[r].units.clone().into_iter().enumerate() {
-                    self.units[u].awaited = p != leader;
+                    // Only those resupply can bring.
+                    let template = Id::from(self.units[u].template.as_str());
+                    let comes = self.resupply_rates.get(&template).is_some_and(|&r| r > 0.0);
+                    self.units[u].awaited = p != leader && comes;
                 }
             }
             self.roll_out(r, to, heading);
@@ -1793,6 +1796,9 @@ impl World {
         let offsets = &r.formations[r.current_formation()].offsets;
         for (&u, &offset) in r.units.iter().zip(offsets) {
             let unit = &mut self.units[u];
+            if unit.awaited {
+                continue;
+            }
             unit.take(vec![aaa_map::from_local(to, facing, offset)], false);
             unit.end_facing = facing;
         }

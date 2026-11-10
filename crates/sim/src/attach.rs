@@ -31,38 +31,34 @@ impl World {
     /// The HQs on the map, in the order the attach order steps through.
     pub fn hqs(&self) -> Vec<Hq> {
         let mut out = Vec::new();
+        // Packed, each is its regiment for as long as its truck lasts.
         for (r, regiment) in self.regiments.iter().enumerate() {
-            let Some(places) = self.places(&regiment.template) else {
+            let places = self.places(&regiment.template);
+            let (Some(places), Some(unpacks)) = (places, &regiment.unpacks) else {
                 continue;
             };
-            // Unpacked, it's where its building is, and whose that is.
-            let unpacked = (regiment.unpacked_into)
-                .map(|b| &self.buildings[b])
-                .filter(|b| !b.gone());
-            let (owner, building, position) = match (unpacked, &regiment.unpacks) {
-                (Some(b), _) => (b.owner, b.template.clone(), b.position),
-                (None, Some(u)) if !self.destroyed(r) => {
-                    (regiment.owner, u.building.template.clone(), self.centre(r))
-                }
-                _ => continue,
+            let building = &unpacks.building.template;
+            let trucks = self.packing.get(building).map(|p| &p.truck.members);
+            let truck = |&u: &usize| {
+                trucks.is_none_or(|t| t.iter().any(|m| m.thing.template == self.units[u].template))
             };
-            out.push(Hq {
-                id: regiment.id,
-                owner,
-                building,
-                position,
-                places,
-            });
-        }
-        // Those a map has unpacked, standing in their organizations.
-        for b in self.buildings.iter().filter(|b| !b.gone()) {
-            let within = b.organization.as_ref();
-            if let Some((o, places)) = within.and_then(|o| Some((o, self.places(&o.template)?))) {
+            if self.survivors(r).any(|u| truck(&u)) {
                 out.push(Hq {
-                    id: o.id,
-                    owner: b.owner,
-                    building: b.template.clone(),
-                    position: b.position,
+                    id: regiment.id,
+                    owner: regiment.owner,
+                    building: building.clone(),
+                    position: self.centre(r),
+                    places,
+                });
+            }
+        }
+        for (b, building) in self.buildings.iter().enumerate() {
+            if let Some((id, places)) = self.hq_behind(b).filter(|_| !building.gone()) {
+                out.push(Hq {
+                    id,
+                    owner: building.owner,
+                    building: building.template.clone(),
+                    position: building.position,
                     places,
                 });
             }
@@ -71,15 +67,22 @@ impl World {
         out
     }
 
-    /// The HQ the building at `b` is, if it's one.
-    pub fn hq_of(&self, b: usize) -> Option<u32> {
+    /// The id and places of the HQ the building at `b` is, if it's one:
+    /// the organization a map has it standing in, or the regiment it
+    /// unpacked from.
+    fn hq_behind(&self, b: usize) -> Option<(u32, u32)> {
         let building = &self.buildings[b];
         let (id, template) = match (&building.organization, building.unpacked_from) {
             (Some(o), _) => (o.id, o.template.as_str()),
             (None, Some(r)) => (self.regiments[r].id, self.regiments[r].template.as_str()),
             (None, None) => return None,
         };
-        self.places(template).map(|_| id)
+        Some((id, self.places(template)?))
+    }
+
+    /// The HQ the building at `b` is, if it's one.
+    pub fn hq_of(&self, b: usize) -> Option<u32> {
+        self.hq_behind(b).map(|(id, _)| id)
     }
 
     /// The regiments attached to the HQ `hq`, by index.
@@ -146,15 +149,11 @@ impl World {
         }
     }
 
-    /// Detaches the regiment at `r` if its HQ is gone or has changed side.
-    pub(crate) fn keep_attached(&mut self, r: usize) {
-        let regiment = &self.regiments[r];
-        let Some(id) = regiment.hq else {
-            return;
-        };
-        let stands = |h: &Hq| h.id == id && h.owner == regiment.owner;
-        if !self.hqs().iter().any(stands) {
-            self.regiments[r].hq = None;
-        }
+    /// Detaches the regiment at `r` if its HQ isn't among `hqs` any more,
+    /// or has changed side.
+    pub(crate) fn keep_attached(&mut self, r: usize, hqs: &[Hq]) {
+        let regiment = &mut self.regiments[r];
+        let stands = |id: u32| hqs.iter().any(|h| h.id == id && h.owner == regiment.owner);
+        regiment.hq = regiment.hq.filter(|&id| stands(id));
     }
 }

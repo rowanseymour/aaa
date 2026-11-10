@@ -2,6 +2,8 @@
 //! that only pass it on stay connected to those that give it of
 //! themselves.
 
+use std::collections::BTreeMap;
+
 use aaa_map::{Id, Supply, Zone};
 
 use crate::{Building, Enemy, Order, Relation, State, TICK, Target, World, deploy_point, distance};
@@ -166,7 +168,8 @@ impl World {
     /// engagement.
     fn engaged_by(&self, r: usize) -> bool {
         let them = Enemy::Regiment(r);
-        self.regiments.iter().any(|e| e.engaged.contains(&them))
+        (0..self.regiments.len())
+            .any(|e| self.regiments[e].engaged.contains(&them) && !self.destroyed(e))
             || (self.buildings.iter()).any(|b| b.standing() && b.noticed.contains(&them))
     }
 
@@ -174,6 +177,9 @@ impl World {
     /// and fill their ranks, and those out of it wear away while their
     /// side can't pay its upkeep.
     pub(crate) fn resupply(&mut self) {
+        // Worked out once for all those looked at this tick.
+        let mut hqs = None;
+        let mut shorts: BTreeMap<u32, Option<f32>> = BTreeMap::new();
         for r in 0..self.regiments.len() {
             if !(self.ticks + r as u64).is_multiple_of(BEAT) {
                 continue;
@@ -184,7 +190,8 @@ impl World {
                 self.regiments[r].in_supply = false;
                 continue;
             };
-            self.keep_attached(r);
+            let hqs = hqs.get_or_insert_with(|| self.hqs());
+            self.keep_attached(r, hqs);
             let regiment = &self.regiments[r];
             let owner = regiment.owner;
             let sided = self.sides.player(owner).is_some_and(|p| !p.independent);
@@ -195,7 +202,7 @@ impl World {
             let resting =
                 regiment.engaged.is_empty() && !matches!(regiment.order, Order::Pursue(_));
             self.regiments[r].in_supply = in_supply;
-            let short = self.short(owner);
+            let short = *shorts.entry(owner).or_insert_with(|| self.short(owner));
             match (in_supply, short) {
                 (true, _) if resting => self.replenish(r, 1.0 - short.unwrap_or(0.0)),
                 (false, Some(_)) if sided => self.wear(r, logistics.shortfall_damage),
@@ -227,7 +234,7 @@ impl World {
         let places: Vec<usize> = (regiment.leader.into_iter())
             .chain((0..regiment.units.len()).filter(|&p| Some(p) != regiment.leader))
             .collect();
-        let zone = self.control_zone(r);
+        let zone = (self.pathing).zone(self.leader_position(r), regiment.control_range);
         let near = |&p: &usize| {
             Some(p) == regiment.leader || self.in_zone(&zone, Target::Unit(regiment.units[p]))
         };

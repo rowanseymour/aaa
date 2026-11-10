@@ -1315,10 +1315,11 @@ fn show_units(
         // is a member that's arrived or been replaced.
         if unit.alive() {
             visibility.set_if_neq(Visibility::Inherited);
-            if std::mem::take(&mut view.dead)
-                && let Some(p) = playing.as_mut()
-            {
-                p.revive();
+            if view.dead {
+                view.dead = false;
+                if let Some(p) = playing.as_mut() {
+                    p.revive();
+                }
             }
         }
         if !unit.alive() && !view.dead {
