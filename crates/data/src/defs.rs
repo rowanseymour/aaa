@@ -91,6 +91,9 @@ pub struct Thing {
     pub recruit_component: Option<RecruitComponent>,
     pub mobile_deployment_component: Option<MobileDeploymentComponent>,
     pub economy_component: Option<EconomyComponent>,
+    pub supply_component: Option<SupplyComponent>,
+    #[serde(rename = "HQComponent")]
+    pub hq_component: Option<HqComponent>,
     pub denizen_component: Option<DenizenComponent>,
     pub element_component: Option<ElementComponent>,
     pub placement: Option<Placement>,
@@ -199,6 +202,19 @@ pub struct OrganizationComponent {
     /// What fills each of the layout's slots, in the layout's order.
     #[serde(default)]
     pub slot: Vec<OrganizationSlot>,
+    /// Whether it's in or out of supply at all.
+    pub supply_used: Option<bool>,
+    /// Whether it can be in supply without an HQ.
+    pub in_supply_detached: Option<bool>,
+    /// The share of their health its members lose a second out of supply
+    /// while their side can't pay its upkeep.
+    pub shortfall_damage_rate: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HqComponent {
+    /// How many regiments it takes.
+    pub max_attachments: Option<u32>,
 }
 
 /// What an object can recruit, which for a Corps HQ is what it commissions.
@@ -236,6 +252,17 @@ pub struct EconomyComponent {
     pub upkeep: Option<Resources>,
     /// What it earns its owner, per minute.
     pub production: Option<Resources>,
+    /// Whether it earns nothing while out of supply.
+    pub supply_required: Option<bool>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SupplyComponent {
+    pub supply_range: Option<f32>,
+    /// Whether it has to be supplied itself to supply others.
+    pub is_relay: Option<bool>,
+    /// Seconds a relay keeps going once cut off.
+    pub stockpile_max: Option<f32>,
 }
 
 /// Amounts of the resources the data's costs, upkeeps and production name, each
@@ -785,6 +812,9 @@ pub struct SVars {
     /// What stockpiles start at on new and random maps.
     #[serde(rename = "ResourceStockpileDefault")]
     pub resource_stockpile_default: Option<f32>,
+    /// Seconds a connected relay's stockpile gains each second.
+    #[serde(rename = "SupplyStockpileRechargeRate")]
+    pub supply_stockpile_recharge_rate: Option<f32>,
 }
 
 /// The interface's settings.

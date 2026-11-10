@@ -191,6 +191,8 @@ pub struct Regiment {
     pub primary: Option<usize>,
     /// For a packed building, such as a supply truck, what it unpacks into.
     pub unpacks: Option<Unpacks>,
+    /// The id of the HQ it's attached to.
+    pub hq: Option<u32>,
 }
 
 impl Regiment {
@@ -354,7 +356,9 @@ pub fn regiments(
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
             let places = layout.map(|l| stored_places(l, organization, members.len()));
             let ranges = ranges(&t.template);
-            regiment(t.id, &t.template, owner, facing, members, places, ranges)
+            let mut regiment = regiment(t.id, &t.template, owner, facing, members, places, ranges)?;
+            regiment.hq = organization.hq.filter(|&id| id != 0);
+            Some(regiment)
         })
         .collect()
 }
@@ -506,6 +510,7 @@ fn regiment(
         control_range: ranges.control,
         primary,
         unpacks: None,
+        hq: None,
     })
 }
 
@@ -782,6 +787,7 @@ fn one_place(ranges: Ranges) -> Regiment {
         id: 0,
         template: String::new(),
         owner: 0,
+        hq: None,
         facing: [0.0, -1.0],
         members: Vec::new(),
         formations: vec![Formation {

@@ -5,7 +5,7 @@ pub mod defs;
 mod economy;
 mod id;
 
-pub use economy::{Amounts, Economy, EconomyRules, RESOURCES};
+pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
 pub use id::Id;
 
 use std::collections::{HashMap, HashSet};

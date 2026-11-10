@@ -96,6 +96,34 @@ pub struct Economy {
     /// Earned, and kept up, per minute.
     pub production: Amounts,
     pub upkeep: Amounts,
+    /// Whether it earns nothing while out of supply.
+    pub supply_required: bool,
+}
+
+/// How a template supplies its side's regiments.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Supply {
+    /// How far around it its zone reaches.
+    pub range: f32,
+    /// Whether it supplies only while supplied itself, as a depot does,
+    /// rather than of itself, as a Corps HQ does.
+    pub relay: bool,
+    /// Seconds a relay keeps going once cut off, when full.
+    pub stockpile_max: f32,
+}
+
+/// How an organization template stands with supply.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Logistics {
+    /// Whether it's in or out of supply at all, as an HQ's isn't.
+    pub supply_used: bool,
+    /// Whether it can be in supply without being attached to an HQ.
+    pub detached: bool,
+    /// The share of their health its members lose a second out of supply
+    /// while their side can't pay its upkeep.
+    pub shortfall_damage: f32,
+    /// For an HQ, how many regiments it takes.
+    pub attachments: Option<u32>,
 }
 
 /// The settings that bound every side's economy.
@@ -141,8 +169,56 @@ impl GameData {
                 cost: of(e.cost.as_ref()),
                 production: of(e.production.as_ref()),
                 upkeep: of(e.upkeep.as_ref()),
+                supply_required: e.supply_required.unwrap_or(false),
             })
         })
+    }
+
+    /// Each template's [`Supply`], for those that give it, by template id.
+    pub fn supplies(&mut self) -> HashMap<Id, Supply> {
+        self.by_template(|t| {
+            let s = t.supply_component.as_ref()?;
+            Some(Supply {
+                range: s.supply_range?,
+                relay: s.is_relay.unwrap_or(false),
+                stockpile_max: s.stockpile_max.unwrap_or(0.0),
+            })
+        })
+    }
+
+    /// Each organization template's [`Logistics`], by template id.
+    pub fn logistics(&mut self) -> HashMap<Id, Logistics> {
+        self.by_template(|t| {
+            let o = t.organization_component.as_ref()?;
+            Some(Logistics {
+                supply_used: o.supply_used.unwrap_or(true),
+                detached: o.in_supply_detached.unwrap_or(true),
+                shortfall_damage: o.shortfall_damage_rate.unwrap_or(0.01),
+                attachments: t
+                    .hq_component
+                    .as_ref()
+                    .map(|h| h.max_attachments.unwrap_or(0)),
+            })
+        })
+    }
+
+    /// The share of its health each template gets back a second in
+    /// supply, for those that get any, by template id.
+    pub fn resupply_rates(&mut self) -> HashMap<Id, f32> {
+        self.by_template(|t| {
+            t.element_component
+                .as_ref()?
+                .resupply_rate
+                .filter(|&r| r > 0.0)
+        })
+    }
+
+    /// Seconds a connected relay's stockpile gains each second.
+    pub fn supply_recharge(&mut self) -> f32 {
+        let svars = self.svars();
+        (svars.iter())
+            .find_map(|v| v.supply_stockpile_recharge_rate)
+            .unwrap_or(1.0)
     }
 
     /// The resources' and the tuning settings' bounds on economies.

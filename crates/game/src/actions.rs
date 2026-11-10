@@ -50,8 +50,8 @@ const ORDERS: [(&str, Option<Give>); 8] = [
     ("retreat", Some(Give::Aim(Aim::Run))),
     ("stop", Some(Give::Stop)),
     ("guard", None),
-    ("hq_attach", None),
-    ("hq_detach", None),
+    ("hq_attach", Some(Give::Attach)),
+    ("hq_detach", Some(Give::Detach)),
     ("unpack", Some(Give::Aim(Aim::Unpack))),
 ];
 
@@ -89,6 +89,18 @@ enum Give {
     /// Waits for a place on the map.
     Aim(Aim),
     Stop,
+    Attach,
+    Detach,
+}
+
+impl Give {
+    /// The order to attach or detach `regiment`.
+    fn command(self, regiment: usize) -> aaa_sim::Command {
+        match self {
+            Give::Attach => aaa_sim::Command::Attach { regiment },
+            _ => aaa_sim::Command::Detach { regiment },
+        }
+    }
 }
 
 /// The way buildings the player unpacks face, for the order and its
@@ -703,7 +715,13 @@ pub fn show(
         let mut table = Vec::new();
         let (look, ready, lit) = match entry {
             Entry::Order(i) => {
-                let ready = ORDERS[i].1.is_some();
+                let ready = match (ORDERS[i].1, local.0) {
+                    (Some(give @ (Give::Attach | Give::Detach)), Some(player)) => {
+                        let can = |&r: &usize| sim.0.check(player, &give.command(r)).is_ok();
+                        selected.0.iter().any(can)
+                    }
+                    (give, _) => give.is_some(),
+                };
                 let lit =
                     matches!((*page, ORDERS[i].1), (Page::Aiming(a), Some(Give::Aim(b))) if a == b);
                 (&looks.orders[i].1, ready, lit)
@@ -984,6 +1002,11 @@ fn press(
                 }
                 *page = Page::Orders;
             }
+            Some(give @ (Give::Attach | Give::Detach)) => {
+                for &regiment in &selected.0 {
+                    let _ = orders.give(&sim.0, player, give.command(regiment));
+                }
+            }
             None => {}
         },
         Entry::Cancel => *page = Page::Orders,
@@ -1050,6 +1073,7 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::NoRoom => "No room",
         aaa_sim::Refused::Lacking => "Lacks a building it needs",
         aaa_sim::Refused::Unaffordable => "Not enough money",
+        aaa_sim::Refused::Full => "HQ is full",
     }
 }
 
