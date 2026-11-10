@@ -147,12 +147,21 @@ impl World {
     }
 
     /// What a regiment adds to its owner's economy: its members'
-    /// production, and its own and its members' upkeep. Nothing once
-    /// it's gone.
+    /// production, and its own upkeep and that of every place in it, the
+    /// member there or not. Nothing once it's gone.
     pub fn regiment_ledger(&self, regiment: usize) -> Ledger {
         let r = &self.regiments[regiment];
-        let members = self.survivors(regiment).map(|u| &self.units[u].template);
-        self.organization_ledger(&r.template, members.collect())
+        if self.destroyed(regiment) {
+            return Ledger::default();
+        }
+        let template = |&u: &usize| &self.units[u].template;
+        let mut ledger =
+            self.organization_ledger(&r.template, r.units.iter().map(template).collect());
+        let earning = self
+            .survivors(regiment)
+            .map(|u| self.economy_of(&self.units[u].template));
+        ledger.production = earning.fold(Amounts::default(), |sum, e| sum + e.production);
+        ledger
     }
 
     /// What a regiment would add to its owner's economy once raised.
@@ -275,6 +284,15 @@ impl World {
 
     pub fn balance(&self, player: u32) -> Balance {
         self.ledger(player).balance(&self.economy)
+    }
+
+    /// While `player` can't pay its upkeep, the share of its costs its
+    /// income falls short by.
+    pub fn short(&self, player: u32) -> Option<f32> {
+        self.treasuries.get(&player)?.shortage?;
+        let balance = self.balance(player);
+        let short = (balance.costs - balance.income) / balance.costs.max(f32::MIN_POSITIVE);
+        Some(short.clamp(0.0, 1.0))
     }
 
     /// How much money `player` has.

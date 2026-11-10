@@ -4,7 +4,7 @@
 
 use aaa_map::{Id, Supply, Zone};
 
-use crate::{Relation, State, TICK, Target, World};
+use crate::{Building, Enemy, Order, Relation, State, TICK, Target, World, deploy_point, distance};
 
 /// Ticks between looks at whether a building gives supply, each building
 /// on its own beat.
@@ -46,7 +46,7 @@ impl World {
         })
     }
 
-    fn shares_supply(&self, a: u32, b: u32) -> bool {
+    pub(crate) fn shares_supply(&self, a: u32, b: u32) -> bool {
         a == b || self.sides.relation(a, b) == Relation::Ally
     }
 
@@ -143,5 +143,173 @@ impl World {
         };
         let enemies = weight(&|o| self.sides.relation(o, owner) == Relation::Enemy);
         weight(&|o| self.shares_supply(owner, o)) > enemies
+    }
+}
+
+/// The least and most of a second's attrition a member takes, as a share
+/// of its regiment's rate.
+const ATTRITION: (f32, f32) = (0.75, 1.75);
+
+impl World {
+    /// Where a regiment is for supply: where its leader is, or, with its
+    /// leader lost, the middle of those left.
+    pub fn leader_position(&self, r: usize) -> [f32; 2] {
+        let regiment = &self.regiments[r];
+        let leader = regiment.leader.map(|p| &self.units[regiment.units[p]]);
+        match leader.filter(|u| u.alive()) {
+            Some(u) => u.position,
+            None => self.centre(r),
+        }
+    }
+
+    /// Whether anything has the regiment at `r` as a target of its
+    /// engagement.
+    fn engaged_by(&self, r: usize) -> bool {
+        let them = Enemy::Regiment(r);
+        self.regiments.iter().any(|e| e.engaged.contains(&them))
+            || (self.buildings.iter()).any(|b| b.standing() && b.noticed.contains(&them))
+    }
+
+    /// Looks at each regiment's supply on its beat: those in supply heal
+    /// and fill their ranks, and those out of it wear away while their
+    /// side can't pay its upkeep.
+    pub(crate) fn resupply(&mut self) {
+        for r in 0..self.regiments.len() {
+            if !(self.ticks + r as u64).is_multiple_of(BEAT) {
+                continue;
+            }
+            let regiment = &self.regiments[r];
+            let used = self.logistics_of(&regiment.template);
+            let Some(logistics) = used.filter(|l| l.supply_used && !self.destroyed(r)) else {
+                self.regiments[r].in_supply = false;
+                continue;
+            };
+            self.keep_attached(r);
+            let regiment = &self.regiments[r];
+            let owner = regiment.owner;
+            let sided = self.sides.player(owner).is_some_and(|p| !p.independent);
+            let in_supply = sided
+                && !self.engaged_by(r)
+                && (regiment.hq.is_some() || logistics.detached)
+                && self.supplied(owner, self.leader_position(r));
+            let resting =
+                regiment.engaged.is_empty() && !matches!(regiment.order, Order::Pursue(_));
+            self.regiments[r].in_supply = in_supply;
+            let short = self.short(owner);
+            match (in_supply, short) {
+                (true, _) if resting => self.replenish(r, 1.0 - short.unwrap_or(0.0)),
+                (false, Some(_)) if sided => self.wear(r, logistics.shortfall_damage),
+                _ => {}
+            }
+        }
+    }
+
+    /// A second of resupply for the regiment at `r`, at `pace` of the
+    /// usual: its leader first, then the first of its members hurt, then
+    /// the first lost.
+    fn replenish(&mut self, r: usize, pace: f32) {
+        let regiment = &self.regiments[r];
+        let rate = |u: usize| {
+            let unit = &self.units[u];
+            let rate = self.resupply_rates.get(&Id::from(unit.template.as_str()));
+            let health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+            (rate.copied().unwrap_or(0.0) * pace.max(0.0), health)
+        };
+        let hurt = |&p: &usize| {
+            let (u, (rate, health)) = (regiment.units[p], rate(regiment.units[p]));
+            self.units[u].alive() && rate > 0.0 && self.units[u].health < health
+        };
+        let lost = |&p: &usize| {
+            let unit = &self.units[regiment.units[p]];
+            !unit.alive() && unit.unpacked.is_none() && rate(regiment.units[p]).0 > 0.0
+        };
+        // The leader's place comes before the rest, in their order.
+        let places: Vec<usize> = (regiment.leader.into_iter())
+            .chain((0..regiment.units.len()).filter(|&p| Some(p) != regiment.leader))
+            .collect();
+        let zone = self.control_zone(r);
+        let near = |&p: &usize| {
+            Some(p) == regiment.leader || self.in_zone(&zone, Target::Unit(regiment.units[p]))
+        };
+        if let Some(&p) = places.iter().find(|p| hurt(p) && near(p)) {
+            let (u, (rate, health)) = (regiment.units[p], rate(regiment.units[p]));
+            let unit = &mut self.units[u];
+            unit.health = (unit.health + rate * health).min(health);
+        } else if let Some(&p) = places.iter().find(|p| lost(p)) {
+            let (rate, health) = rate(regiment.units[p]);
+            let built = self.regiments[r].replacing[p] + rate * health;
+            self.regiments[r].replacing[p] = built;
+            if built >= health {
+                self.regiments[r].replacing[p] = 0.0;
+                self.arrive(r, p);
+            }
+        }
+    }
+
+    /// Puts the member in place `p` of the regiment at `r` on the map, in
+    /// full health: out of a building near the regiment that recruits its
+    /// kind, if there is one, else in its place, and on its way to where
+    /// the regiment's going.
+    fn arrive(&mut self, r: usize, p: usize) {
+        let regiment = &self.regiments[r];
+        let (at, facing) = (self.leader_position(r), regiment.facing);
+        let offsets = &regiment.formations[regiment.current_formation()].offsets;
+        let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
+        let recruits = |b: &&Building| {
+            let list = self.recruit_lists.get(&Id::from(b.template.as_str()));
+            b.standing()
+                && !b.busy()
+                && self.shares_supply(regiment.owner, b.owner)
+                && list.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
+                && distance(at, b.position) < regiment.control_range
+        };
+        let nearest = (self.buildings.iter().filter(recruits))
+            .min_by(|a, b| distance(at, a.position).total_cmp(&distance(at, b.position)));
+        let out =
+            nearest.and_then(|b| Some(deploy_point(b.position, b.facing, b.deploy?.creation)));
+        // Where it stands from the leader, as in the formation.
+        let [lx, ly] = regiment.leader.map_or([0.0, 0.0], offset);
+        let [x, y] = offset(p);
+        let stand = out.unwrap_or(aaa_map::from_local(at, facing, [x - lx, y - ly]));
+        let place = aaa_map::from_local(regiment.position, facing, offset(p));
+        let u = regiment.units[p];
+        let unit = &mut self.units[u];
+        unit.died = None;
+        unit.awaited = false;
+        unit.health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+        unit.position = stand;
+        unit.previous = stand;
+        unit.facing = facing;
+        unit.speed = 0.0;
+        unit.closing = false;
+        unit.target = None;
+        unit.reloads.fill(0.0);
+        if let Some(t) = &mut unit.trailer {
+            t.behind(stand, facing);
+        }
+        self.take_place(u, place, facing, false);
+    }
+
+    /// A second of going without for the regiment at `r`: each member
+    /// loses about `rate` of its full health, some more and some less.
+    fn wear(&mut self, r: usize, rate: f32) {
+        let ticks = self.ticks;
+        for u in self.regiments[r].units.clone() {
+            let (least, most) = ATTRITION;
+            let share = least + (most - least) * self.chance();
+            let unit = &mut self.units[u];
+            let Some(health) = unit
+                .fighter
+                .as_ref()
+                .map(|f| f.health)
+                .filter(|_| unit.alive())
+            else {
+                continue;
+            };
+            unit.health -= rate * health * share;
+            if unit.health <= 0.0 {
+                unit.die(ticks);
+            }
+        }
     }
 }

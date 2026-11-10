@@ -707,6 +707,9 @@ fn prepare(
     sim.economy = game.economy_rules();
     sim.supplies = game.supplies();
     sim.supply_recharge = game.supply_recharge();
+    sim.logistics = game.logistics();
+    sim.resupply_rates = game.resupply_rates();
+    sim.recruit_lists = game.recruit_lists();
     Ok(Prepared {
         loaded: Loaded { game, map },
         sim,
@@ -1304,13 +1307,19 @@ fn show_units(
     for (mut view, mut transform, mut visibility, mut playing) in &mut views {
         let unit = &sim.0.units[view.unit];
         let owner = sim.0.regiments[unit.regiment].owner;
-        if unit.unpacked.is_some() {
+        if unit.unpacked.is_some() || unit.awaited {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
-        // A truck that packed back up from its building is seen again.
+        // A truck that packed back up from its building is seen again, as
+        // is a member that's arrived or been replaced.
         if unit.alive() {
             visibility.set_if_neq(Visibility::Inherited);
+            if std::mem::take(&mut view.dead)
+                && let Some(p) = playing.as_mut()
+            {
+                p.revive();
+            }
         }
         if !unit.alive() && !view.dead {
             view.dead = true;

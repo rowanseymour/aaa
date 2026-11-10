@@ -92,6 +92,8 @@ pub struct Thing {
     pub mobile_deployment_component: Option<MobileDeploymentComponent>,
     pub economy_component: Option<EconomyComponent>,
     pub supply_component: Option<SupplyComponent>,
+    #[serde(rename = "HQComponent")]
+    pub hq_component: Option<HqComponent>,
     pub denizen_component: Option<DenizenComponent>,
     pub element_component: Option<ElementComponent>,
     pub placement: Option<Placement>,
@@ -200,6 +202,19 @@ pub struct OrganizationComponent {
     /// What fills each of the layout's slots, in the layout's order.
     #[serde(default)]
     pub slot: Vec<OrganizationSlot>,
+    /// Whether it's in or out of supply at all.
+    pub supply_used: Option<bool>,
+    /// Whether it can be in supply without an HQ.
+    pub in_supply_detached: Option<bool>,
+    /// The share of their health its members lose a second out of supply
+    /// while their side can't pay its upkeep.
+    pub shortfall_damage_rate: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct HqComponent {
+    /// How many regiments it takes.
+    pub max_attachments: Option<u32>,
 }
 
 /// What an object can recruit, which for a Corps HQ is what it commissions.

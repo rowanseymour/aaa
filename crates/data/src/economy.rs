@@ -112,6 +112,20 @@ pub struct Supply {
     pub stockpile_max: f32,
 }
 
+/// How an organization template stands with supply.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Logistics {
+    /// Whether it's in or out of supply at all, as an HQ's isn't.
+    pub supply_used: bool,
+    /// Whether it can be in supply without being attached to an HQ.
+    pub detached: bool,
+    /// The share of their health its members lose a second out of supply
+    /// while their side can't pay its upkeep.
+    pub shortfall_damage: f32,
+    /// For an HQ, how many regiments it takes.
+    pub attachments: Option<u32>,
+}
+
 /// The settings that bound every side's economy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EconomyRules {
@@ -169,6 +183,33 @@ impl GameData {
                 relay: s.is_relay.unwrap_or(false),
                 stockpile_max: s.stockpile_max.unwrap_or(0.0),
             })
+        })
+    }
+
+    /// Each organization template's [`Logistics`], by template id.
+    pub fn logistics(&mut self) -> HashMap<Id, Logistics> {
+        self.by_template(|t| {
+            let o = t.organization_component.as_ref()?;
+            Some(Logistics {
+                supply_used: o.supply_used.unwrap_or(true),
+                detached: o.in_supply_detached.unwrap_or(true),
+                shortfall_damage: o.shortfall_damage_rate.unwrap_or(0.01),
+                attachments: t
+                    .hq_component
+                    .as_ref()
+                    .map(|h| h.max_attachments.unwrap_or(0)),
+            })
+        })
+    }
+
+    /// The share of its health each template gets back a second in
+    /// supply, for those that get any, by template id.
+    pub fn resupply_rates(&mut self) -> HashMap<Id, f32> {
+        self.by_template(|t| {
+            t.element_component
+                .as_ref()?
+                .resupply_rate
+                .filter(|&r| r > 0.0)
         })
     }
 

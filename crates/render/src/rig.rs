@@ -749,6 +749,14 @@ impl Playing {
         true
     }
 
+    /// Back from its death to idling, for one that's been replaced.
+    pub fn revive(&mut self) {
+        if self.dying() {
+            self.once = None;
+            self.time = 0.0;
+        }
+    }
+
     fn dying(&self) -> bool {
         matches!(&self.once, Some(o) if matches!(o.clip, OnceClip::Death(_)))
     }
