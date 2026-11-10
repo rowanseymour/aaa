@@ -30,6 +30,24 @@ pub struct Nation {
     /// The template it puts in place of each of a map's placeholders, by
     /// placeholder id: its Corps HQ for `placeholder_corpsunpacked`.
     pub placeholders: HashMap<Id, Id>,
+    /// Those who may lead its sides.
+    pub generals: Vec<General>,
+}
+
+/// A general who leads a side.
+#[derive(Debug, Clone, PartialEq)]
+pub struct General {
+    /// E.g. `patton`.
+    pub id: Id,
+    /// E.g. `General Patton`.
+    pub name: String,
+    /// What the lobby calls them, e.g. `Patton`.
+    pub short_name: String,
+    /// The special operations they give their side, by id.
+    pub operations: Vec<Id>,
+    /// Whether the lobby offers them, as it doesn't those only scenarios
+    /// use.
+    pub public: bool,
 }
 
 pub struct GameData {
@@ -53,6 +71,9 @@ struct Definitions {
     /// The abilities defined on their own, such as special operations,
     /// in the order they load, the first kept of those defined twice.
     abilities: Vec<(Id, defs::AbilityDefinition)>,
+    /// The generals, in the order they load, the first kept of those
+    /// defined twice.
+    generals: Vec<defs::General>,
 }
 
 /// An object template as some `.tgi` file defines it.
@@ -71,6 +92,7 @@ impl Definitions {
         let mut things = Vec::new();
         let mut properties = HashMap::new();
         let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
+        let mut generals: Vec<defs::General> = Vec::new();
         for Scoped {
             file,
             root,
@@ -105,6 +127,12 @@ impl Definitions {
                     && !abilities.iter().any(|(known, _)| *known == id)
                 {
                     abilities.push((id, a));
+                } else if kind.eq_ignore_ascii_case("Faction")
+                    && let Ok(g) = templates.deserialize::<defs::General>(block)
+                    && let Some(id) = &g.ids
+                    && !generals.iter().any(|known| known.ids.as_ref() == Some(id))
+                {
+                    generals.push(g);
                 }
             }
         }
@@ -112,6 +140,7 @@ impl Definitions {
             things,
             properties,
             abilities,
+            generals,
         }
     }
 }
@@ -1663,6 +1692,7 @@ impl GameData {
     /// The nations sides can play as, by name.
     pub fn nations(&mut self) -> Vec<Nation> {
         let strings = self.strings();
+        let generals = self.generals(&strings);
         let files = self.parse_tgis(|n| n.starts_with("nations/"));
         let files = scoped(&files);
         let mut nations: Vec<Nation> = files
@@ -1677,11 +1707,36 @@ impl GameData {
                     placeholders: placeholders
                         .filter_map(|p| Some((p.placeholder_ids?, p.thing_ids?)))
                         .collect(),
+                    generals: (n.factions.as_deref().unwrap_or("").split(','))
+                        .filter_map(|id| generals.get(&Id::from(id.trim())).cloned())
+                        .collect(),
                 })
             })
             .collect();
         nations.sort_by(|a, b| a.name.cmp(&b.name));
         nations
+    }
+
+    /// The generals who may lead a side, by id.
+    fn generals(&mut self, strings: &HashMap<String, String>) -> HashMap<Id, General> {
+        let definitions = self.definitions();
+        (definitions.generals.iter())
+            .filter_map(|g| {
+                let id = g.ids.clone()?;
+                let name = localized(strings, g.name.as_deref()).unwrap_or_else(|| id.to_string());
+                let general = General {
+                    short_name: localized(strings, g.staging_name.as_deref())
+                        .unwrap_or_else(|| name.clone()),
+                    name,
+                    operations: (g.ability.iter())
+                        .filter_map(|a| a.ability_ids.clone())
+                        .collect(),
+                    public: g.public != Some(false),
+                    id: id.clone(),
+                };
+                Some((id, general))
+            })
+            .collect()
     }
 
     /// The colours players can take, by id, e.g. `blue`.

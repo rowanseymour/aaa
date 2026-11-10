@@ -563,6 +563,7 @@ mod tests {
             independent: false,
             playable: true,
             nation: None,
+            general: None,
             relations: vec![Enemy; 5],
             team_relations: vec![Enemy; 2],
             stockpile: 0.0,

@@ -744,6 +744,27 @@ pub struct Nation {
     pub badge: Vec<Badge>,
     #[serde(default)]
     pub placeholder: Vec<Placeholder>,
+    /// The ids of the generals who lead it, comma-separated.
+    pub factions: Option<String>,
+}
+
+/// A general a side can be led by.
+#[derive(Debug, Clone, Deserialize)]
+pub struct General {
+    pub ids: Option<Id>,
+    pub name: Option<String>,
+    /// What the lobby calls them.
+    pub staging_name: Option<String>,
+    /// False for generals only scenarios use.
+    pub public: Option<bool>,
+    #[serde(default)]
+    pub ability: Vec<GeneralAbility>,
+}
+
+/// A special operation a general gives their side.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GeneralAbility {
+    pub ability_ids: Option<Id>,
 }
 
 /// A template of the nation's that a map's placeholder stands for, such as

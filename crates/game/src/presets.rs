@@ -144,6 +144,7 @@ mod tests {
             independent: false,
             playable: true,
             nation: None,
+            general: None,
             relations: vec![Relation::Neutral; 6],
             team_relations: Vec::new(),
             stockpile: 0.0,

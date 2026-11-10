@@ -29,6 +29,9 @@ pub struct Player {
     /// The nation it plays as, e.g. `nation_usa`, where the map fixes one or
     /// it was loaded with one.
     pub nation: Option<String>,
+    /// The general who leads it, e.g. `montgomery`, where the map fixes one
+    /// along with its nation.
+    pub general: Option<String>,
     /// How it stands toward each player, by index in
     /// [`Map::players`](crate::Map::players).
     pub relations: Vec<Relation>,
@@ -112,6 +115,11 @@ pub fn sides(
             independent: k.independent != 0,
             playable: k.playable,
             nation: (!k.nation.is_empty()).then(|| k.nation.clone()),
+            // Maps whose nation the lobby chooses can still name a general,
+            // which the lobby's choice replaces.
+            general: (k.faction.as_ref())
+                .map(|f| f.name.clone())
+                .filter(|n| !n.is_empty() && !k.nation.is_empty()),
             relations: by_player(&k.relations),
             team_relations: by_team(&k.team_relations),
             stockpile: match k.use_default_stockpile {

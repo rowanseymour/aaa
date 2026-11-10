@@ -26,7 +26,9 @@ use bevy::ui_widgets::{Activate, Button};
 use crate::actions::Blocks;
 use crate::banners::{self, Badges};
 use crate::ui::{self, Font, Gauge, Hint, Ink, Meter, Shade, Surface, framed, label, meter};
-use crate::{Drawn, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint};
+use crate::{
+    Drawn, Leaders, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint,
+};
 
 /// How many regiments can be selected at once, as many as the pane has
 /// cards for.
@@ -319,6 +321,7 @@ pub fn lay_out(
     chosen: Res<SelectedBuilding>,
     sim: Res<Sim>,
     local: Res<Local>,
+    leaders: Res<Leaders>,
     drawn: Res<Drawn>,
     badges: Res<Badges>,
     mut showing: ResMut<Showing>,
@@ -333,7 +336,8 @@ pub fn lay_out(
         let detail = detail(&sim.0, &sim.0.hqs(), &badges, &w);
         (w, detail)
     });
-    if showing.0 == what {
+    // Who plays decides what owners are called.
+    if showing.0 == what && !local.is_changed() {
         return;
     }
     let (root, visibility) = &mut *pane;
@@ -349,6 +353,7 @@ pub fn lay_out(
     let mut ui = Ui {
         sim: &sim.0,
         local: local.0,
+        leaders: &leaders,
         drawn: &drawn,
         badges: &badges,
         detail: &detail,
@@ -369,6 +374,7 @@ pub fn lay_out(
 struct Ui<'a> {
     sim: &'a World,
     local: Option<u32>,
+    leaders: &'a Leaders,
     drawn: &'a Drawn,
     badges: &'a Badges,
     detail: &'a Detail,
@@ -411,7 +417,7 @@ impl Ui<'_> {
             if let Some(p) = player {
                 pane.spawn((
                     at(8.0, 21.0, 300.0, 14.0),
-                    ui::coloured(p.name.clone(), Font::Hud, colour),
+                    ui::coloured(self.leaders.owner(p, self.local), Font::Hud, colour),
                 ));
             }
         });
