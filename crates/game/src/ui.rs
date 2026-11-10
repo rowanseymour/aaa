@@ -39,6 +39,8 @@ pub struct Theme {
     /// The data's colour for a figure that's gone short; [`Ink::Warn`]'s
     /// without one.
     pub short: Option<Color>,
+    /// The data's colour for the key that gives what a name names.
+    pub key: Option<Color>,
 }
 
 impl Default for Theme {
@@ -48,6 +50,7 @@ impl Default for Theme {
             accent: Color::srgb(0.75, 0.6, 0.3),
             lit: crate::OWN,
             short: None,
+            key: None,
         }
     }
 }
@@ -78,6 +81,7 @@ impl Theme {
             Ink::Muted => Color::srgb(0.45, 0.45, 0.45),
             Ink::Warn => Color::srgb(1.0, 0.75, 0.3),
             Ink::Short => self.short.unwrap_or_else(|| self.ink(Ink::Warn)),
+            Ink::Key => self.key.unwrap_or(Color::srgb(1.0, 1.0, 0.0)),
         }
     }
 
@@ -157,6 +161,8 @@ pub enum Ink {
     Warn,
     /// A figure that's gone short, such as a negative rate.
     Short,
+    /// The key for what a name names, marked in it.
+    Key,
 }
 
 /// What a node's border is for.
@@ -265,6 +271,34 @@ pub fn coloured(words: impl Into<String>, size: Font, colour: Color) -> impl Bun
     (self::words(words, size), TextColor(colour))
 }
 
+/// A name with the key that gives what it names marked in it: what
+/// comes before the key, the key, and what comes after.
+#[derive(Component, Clone, PartialEq, Eq, Default, Debug)]
+pub struct Marked {
+    pub before: String,
+    pub key: String,
+    pub after: String,
+}
+
+impl Marked {
+    /// A name with no key to mark.
+    pub fn plain(name: impl Into<String>) -> Self {
+        Marked {
+            before: name.into(),
+            ..default()
+        }
+    }
+}
+
+/// A [`label`] of a name with its key marked.
+pub fn marked(parent: &mut ChildSpawnerCommands, name: &Marked, size: Font, ink: Ink) {
+    let line = label(name.before.clone(), size, ink);
+    parent.spawn(line).with_children(|line| {
+        line.spawn((TextSpan::new(name.key.clone()), font(size), Ink::Key));
+        line.spawn((TextSpan::new(name.after.clone()), font(size), ink));
+    });
+}
+
 /// A [`label`] in [`Ink::Body`].
 pub fn text(words: impl Into<String>, size: Font) -> impl Bundle {
     label(words, size, Ink::Body)
@@ -308,7 +342,7 @@ pub fn tooltip(node: Node) -> impl Bundle {
 }
 
 /// What's said, in a box by the pointer, of the part of the interface
-/// it's on.
+/// it's on; under its name, for a part that also has a [`Marked`] one.
 #[derive(Component, Clone, PartialEq, Debug)]
 #[require(Hovered, Pickable)]
 pub struct Hint(pub String);
@@ -320,6 +354,11 @@ const HINT_WIDTH: f32 = 320.0;
 #[derive(Component)]
 struct HintBox;
 
+/// The parts of the hint's text after the first: a name's key, then the
+/// rest.
+#[derive(Component)]
+struct HintSpan(usize);
+
 fn spawn_hint(mut commands: Commands) {
     let node = Node {
         position_type: PositionType::Absolute,
@@ -327,28 +366,33 @@ fn spawn_hint(mut commands: Commands) {
         max_width: px(HINT_WIDTH),
         ..default()
     };
+    let span = |n: usize, ink: Ink| (HintSpan(n), TextSpan::default(), font(Font::Small), ink);
     commands
         .spawn((HintBox, tooltip(node), GlobalZIndex(10)))
-        .with_child(label("", Font::Small, Ink::Body));
+        .with_child((
+            label("", Font::Small, Ink::Body),
+            children![span(0, Ink::Key), span(1, Ink::Body)],
+        ));
 }
 
 /// Shows the hint under the pointer beside it, on the side with more room.
 fn hint(
-    hints: Query<(&Hint, &Hovered, &InheritedVisibility)>,
+    hints: Query<(&Hint, Option<&Marked>, &Hovered, &InheritedVisibility)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     scale: Res<UiScale>,
     mut said: Single<(&mut Node, &Children), With<HintBox>>,
     mut texts: Query<&mut Text>,
+    mut spans: Query<(&HintSpan, &mut TextSpan)>,
 ) {
     let (node, children) = &mut *said;
-    let mut hovered = hints
-        .iter()
-        .filter(|(h, on, shown)| on.get() && shown.get() && !h.0.is_empty());
+    let mut hovered = hints.iter().filter(|(h, name, on, shown)| {
+        on.get() && shown.get() && !(h.0.is_empty() && name.is_none())
+    });
     let at = windows
         .single()
         .ok()
         .and_then(|w| Some((w.cursor_position()?, w.size())));
-    let (Some((hint, ..)), Some((cursor, window))) = (hovered.next(), at) else {
+    let (Some((hint, name, ..)), Some((cursor, window))) = (hovered.next(), at) else {
         if node.display != Display::None {
             node.display = Display::None;
         }
@@ -363,11 +407,24 @@ fn hint(
     };
     (node.left, node.right) = beside(cursor.x, window.x);
     (node.top, node.bottom) = beside(cursor.y, window.y);
+    let parts = match name {
+        Some(name) => [
+            name.before.clone(),
+            name.key.clone(),
+            format!("{}\n{}", name.after, hint.0),
+        ],
+        None => [hint.0.clone(), String::new(), String::new()],
+    };
     for child in children.iter() {
         if let Ok(mut text) = texts.get_mut(child)
-            && text.0 != hint.0
+            && text.0 != parts[0]
         {
-            text.0.clone_from(&hint.0);
+            text.0.clone_from(&parts[0]);
+        }
+    }
+    for (span, mut text) in &mut spans {
+        if text.0 != parts[span.0 + 1] {
+            text.0.clone_from(&parts[span.0 + 1]);
         }
     }
 }

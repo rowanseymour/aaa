@@ -1,11 +1,14 @@
 //! The menu Escape opens over a match, which holds the match still while
-//! it's up.
+//! it's up. Its options are those of the game's that there's something
+//! here to set with.
 
+use bevy::ecs::system::SystemParam;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::actions::Page;
 use crate::menu;
+use crate::supply::{Border, BorderLook};
 use crate::ui::{self, Font};
 use crate::{Focus, LoadingScreen, Screen, SelectionBox, console};
 
@@ -19,6 +22,10 @@ pub struct PauseMenu {
 
 #[derive(Component)]
 struct Overlay;
+
+/// The box the menu's buttons are in, or its options.
+#[derive(Component)]
+struct Column;
 
 pub struct PausePlugin;
 
@@ -81,14 +88,67 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
     let overlay = commands
         .spawn((Overlay, DespawnOnExit(Screen::Match), ui::scrim()))
         .id();
-    let column = commands.spawn((ChildOf(overlay), ui::dialog())).id();
-    commands.spawn((ui::disabled("Options", Font::Large), ChildOf(column)));
+    let column = commands
+        .spawn((Column, ChildOf(overlay), ui::dialog()))
+        .id();
+    fill_menu(commands, column);
+}
+
+fn fill_menu(commands: &mut Commands, column: Entity) {
+    commands
+        .spawn((ui::button("Options", Font::Large), ChildOf(column)))
+        .observe(options);
     commands
         .spawn((ui::button("Quit to Desktop", Font::Large), ChildOf(column)))
         .observe(menu::quit);
     commands
         .spawn((ui::button("Return to Game", Font::Large), ChildOf(column)))
         .observe(resume);
+}
+
+/// Shows the options in place of the menu's buttons.
+fn options(_: On<Activate>, mut options: Options) {
+    options.fill();
+}
+
+/// Shows or hides the supply border, and says which it now is.
+fn toggle_border(_: On<Activate>, mut options: Options) {
+    options.border.0 = !options.border.0;
+    options.fill();
+}
+
+/// What showing the options reads and changes.
+#[derive(SystemParam)]
+struct Options<'w, 's> {
+    commands: Commands<'w, 's>,
+    column: Single<'w, 's, Entity, With<Column>>,
+    border: ResMut<'w, Border>,
+    look: Res<'w, BorderLook>,
+}
+
+impl Options<'_, '_> {
+    /// Fills the menu's box with the options as they stand.
+    fn fill(&mut self) {
+        let column = *self.column;
+        let state = match self.border.0 {
+            true => "On",
+            false => "Off",
+        };
+        let border = format!("{}: {state}", self.look.option);
+        self.commands.entity(column).despawn_related::<Children>();
+        (self.commands).spawn((ui::text("Options", Font::Heading), ChildOf(column)));
+        self.commands
+            .spawn((ui::button(border, Font::Body), ChildOf(column)))
+            .observe(toggle_border);
+        self.commands
+            .spawn((ui::button("Back", Font::Large), ChildOf(column)))
+            .observe(back);
+    }
+}
+
+fn back(_: On<Activate>, mut commands: Commands, column: Single<Entity, With<Column>>) {
+    commands.entity(*column).despawn_related::<Children>();
+    fill_menu(&mut commands, *column);
 }
 
 fn close(

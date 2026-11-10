@@ -6,7 +6,8 @@
 //! opening a menu of what it commissions; [`crate::pane`] shows what it's
 //! been asked for, and one to set the rally point what it commissions moves
 //! on to. A building that packs, into a truck say, has Pack, dimmed while
-//! it can't.
+//! it can't. Each button answers to the keys the game binds what it does
+//! to, and its tooltip marks the letter.
 
 use std::collections::HashMap;
 
@@ -21,8 +22,9 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
+use crate::keys::Bindings;
 use crate::resource_bar::{Preview, Previewed};
-use crate::ui::{Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
+use crate::ui::{self, Click, Edge, Font, Ink, Marked, Shade, Surface, label, panel, tooltip};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 const COLUMNS: usize = 4;
@@ -58,6 +60,9 @@ const ORDERS: [(&str, Option<Give>); 8] = [
 /// The command whose button opens a building's menu of what it
 /// commissions.
 const COMMISSION: &str = "commission";
+/// The other command that opens such a menu, the only one of the two the
+/// game's hotkeys bind.
+const DEPLOY: &str = "recruit";
 /// The command that packs a building up, such as into a truck.
 const PACK: &str = "pack";
 /// The command that sets where what a building commissions moves on to.
@@ -263,6 +268,8 @@ struct Look {
 
 /// One of the things a building commissions.
 struct Recruit {
+    /// Its template, as the hotkeys name it.
+    id: String,
     look: Look,
     /// Its cost, production and upkeep, for the tooltip.
     economy: Vec<Row>,
@@ -326,7 +333,8 @@ pub struct Tooltip;
 /// such as what it costs, and why it can't be pressed.
 #[derive(Clone, PartialEq, Default, Debug)]
 struct Tip {
-    title: String,
+    /// The button's name, with the key that presses it marked.
+    title: Marked,
     help: Option<String>,
     table: Vec<Row>,
     why: Option<String>,
@@ -490,6 +498,7 @@ pub fn spawn(
                     .collect()
                 });
                 Recruit {
+                    id: id.to_string(),
                     look: Look {
                         name: listing.map_or_else(|| id.to_string(), |l| l.name.clone()),
                         help: None,
@@ -673,6 +682,7 @@ pub fn show(
     focus: Res<crate::Focus>,
     mut refusal: ResMut<Refusal>,
     mut preview: ResMut<Preview>,
+    bindings: Res<Bindings>,
     mut commands: Commands,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
@@ -690,6 +700,8 @@ pub fn show(
         true => Visibility::Hidden,
     });
     if nothing {
+        // Nor is anything left for a key to press.
+        shown.0 = [None; SLOTS];
         // What was under the cursor went with the selection.
         if preview.0.is_some() {
             preview.0 = None;
@@ -817,8 +829,13 @@ pub fn show(
                 (false, Some(why), _) => Some(why),
                 (false, None, _) => Some(look.disabled.clone().unwrap_or("Not yet".into())),
             };
+            let names = bound(entry, slot.0, *page, menu);
+            let key = names.iter().find_map(|action| bindings.key(action));
             hovered = Some(Tip {
-                title: look.name.clone(),
+                title: match key {
+                    Some(key) => key.mark(&look.name),
+                    None => Marked::plain(look.name.as_str()),
+                },
                 help: look.help.clone(),
                 table,
                 why,
@@ -837,7 +854,7 @@ pub fn show(
     }
     let prompt = |title: &str| {
         Some(Tip {
-            title: title.into(),
+            title: Marked::plain(title),
             ..default()
         })
     };
@@ -899,7 +916,7 @@ impl TipParts<'_, '_> {
         let mut tooltip = self.commands.entity(*entity);
         tooltip.despawn_children();
         tooltip.with_children(|parent| {
-            parent.spawn(label(tip.title.clone(), Font::HudTitle, Ink::Body));
+            ui::marked(parent, &tip.title, Font::HudTitle, Ink::Body);
             if let Some(help) = &tip.help {
                 parent.spawn(label(help.clone(), Font::Small, Ink::Help));
             }
@@ -992,83 +1009,135 @@ fn set_icon(
     }
 }
 
-/// A button pressed: gives its order, aims it, opens or works the
-/// commission menu, or cancels.
-#[allow(clippy::too_many_arguments)]
-fn press(
-    activate: On<Activate>,
-    slots: Query<&Slot>,
-    shown: Res<Shown>,
-    mut selected: ResMut<Selected>,
-    mut chosen: ResMut<SelectedBuilding>,
-    looks: Res<Looks>,
-    local: Res<Local>,
-    sim: Res<Sim>,
-    mut orders: ResMut<Orders>,
-    mut page: ResMut<Page>,
-    time: Res<Time>,
-    mut sounds: ResMut<crate::sound::Sounds>,
-    mut refusal: ResMut<Refusal>,
-) {
-    let Ok(slot) = slots.get(activate.entity) else {
-        return;
+/// What the game's hotkeys call what a button does, and the button
+/// itself by its slot, for [`Bindings`].
+fn bound(entry: Entry, slot: usize, page: Page, menu: &[Recruit]) -> Vec<String> {
+    let command = |ids: &str| format!("ActorCommand {ids}");
+    let mut names = match entry {
+        Entry::Order(i) => vec![command(ORDERS[i].0)],
+        Entry::Cancel if page == Page::Commission => vec!["CancelRecruit".into()],
+        Entry::Cancel => vec!["ActorCommandCancel".into()],
+        // The data binds a key only to the second of the two commands
+        // that open a menu of what a building makes.
+        Entry::Commission => vec![command(COMMISSION), command(DEPLOY)],
+        Entry::Recruit(i) => vec![format!("ActorDataSelectCommand {}", menu[i].id)],
+        Entry::Pack => vec![command(PACK)],
+        Entry::Rally => vec![command(RALLY)],
+        Entry::CommandAll => vec!["CommandAll".into()],
     };
-    let (Some(entry), Some(player)) = (shown.0[slot.0], local.0) else {
-        return;
-    };
-    match entry {
-        Entry::Order(i) => match ORDERS[i].1 {
-            Some(Give::Aim(aim)) => *page = Page::Aiming(aim),
-            Some(Give::Stop) => {
-                crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
-                for &regiment in &selected.0 {
-                    let _ = orders.give(&sim.0, player, aaa_sim::Command::Stop { regiment });
+    names.push(format!("ActionButtonsButton_{slot}"));
+    names
+}
+
+/// What pressing a button reads and changes.
+#[derive(SystemParam)]
+pub struct Presser<'w> {
+    shown: Res<'w, Shown>,
+    selected: ResMut<'w, Selected>,
+    chosen: ResMut<'w, SelectedBuilding>,
+    looks: Res<'w, Looks>,
+    local: Res<'w, Local>,
+    sim: Res<'w, Sim>,
+    orders: ResMut<'w, Orders>,
+    page: ResMut<'w, Page>,
+    time: Res<'w, Time>,
+    sounds: ResMut<'w, crate::sound::Sounds>,
+    refusal: ResMut<'w, Refusal>,
+}
+
+impl Presser<'_> {
+    /// Presses the button in `slot`: gives its order, aims it, opens or
+    /// works the commission menu, or cancels.
+    fn press(&mut self, slot: usize) {
+        let (Some(entry), Some(player)) = (self.shown.0[slot], self.local.0) else {
+            return;
+        };
+        let sim = &self.sim.0;
+        match entry {
+            Entry::Order(i) => match ORDERS[i].1 {
+                Some(Give::Aim(aim)) => *self.page = Page::Aiming(aim),
+                Some(Give::Stop) => {
+                    let selected = &self.selected.0;
+                    crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
+                    for &regiment in selected {
+                        let stop = aaa_sim::Command::Stop { regiment };
+                        let _ = self.orders.give(sim, player, stop);
+                    }
+                    *self.page = Page::Orders;
                 }
-                *page = Page::Orders;
+                Some(give @ (Give::Attach | Give::Detach)) => {
+                    for &regiment in &self.selected.0 {
+                        let _ = self.orders.give(sim, player, give.command(regiment));
+                    }
+                }
+                None => {}
+            },
+            Entry::Cancel => *self.page = Page::Orders,
+            Entry::Commission => *self.page = Page::Commission,
+            Entry::Rally => *self.page = Page::Rally,
+            Entry::CommandAll => {
+                let building = self.chosen.0.filter(|_| self.selected.0.is_empty());
+                let attached: Vec<usize> = shown_hq(sim, &self.selected.0, building)
+                    .map_or(Vec::new(), |hq| sim.attached(hq).collect());
+                // As the game does, even where that leaves nothing selected.
+                self.selected.0 = attached;
+                self.chosen.0 = None;
             }
-            Some(give @ (Give::Attach | Give::Detach)) => {
-                for &regiment in &selected.0 {
-                    let _ = orders.give(&sim.0, player, give.command(regiment));
+            Entry::Pack => {
+                if let Some(b) = self.chosen.0
+                    && let Err(e) =
+                        (self.orders).give(sim, player, aaa_sim::Command::Pack { building: b })
+                {
+                    info!("can't pack {}: {e:?}", sim.buildings[b].template);
                 }
             }
-            None => {}
-        },
-        Entry::Cancel => *page = Page::Orders,
-        Entry::Commission => *page = Page::Commission,
-        Entry::Rally => *page = Page::Rally,
-        Entry::CommandAll => {
-            let building = chosen.0.filter(|_| selected.0.is_empty());
-            let attached: Vec<usize> = shown_hq(&sim.0, &selected.0, building)
-                .map_or(Vec::new(), |hq| sim.0.attached(hq).collect());
-            // As the game does, even where that leaves nothing selected.
-            selected.0 = attached;
-            chosen.0 = None;
-        }
-        Entry::Pack => {
-            if let Some(b) = chosen.0
-                && let Err(e) = orders.give(&sim.0, player, aaa_sim::Command::Pack { building: b })
-            {
-                info!("can't pack {}: {e:?}", sim.0.buildings[b].template);
-            }
-        }
-        Entry::Recruit(i) => {
-            let Some(b) = chosen.0 else {
-                return;
-            };
-            let recruit = &looks.menu(&sim.0, Some(b))[i];
-            if let Some(regiment) = &recruit.regiment {
-                let command = aaa_sim::Command::Commission {
-                    building: b,
-                    commission: Box::new(Commission::new(regiment.clone(), recruit.seconds)),
+            Entry::Recruit(i) => {
+                let Some(b) = self.chosen.0 else {
+                    return;
                 };
-                let given = orders.give(&sim.0, player, command);
-                if let Err(e) = given {
-                    info!("can't commission {}: {e:?}", regiment.template);
-                    refusal.0 = Some((slot.0, e));
+                let Some(recruit) = self.looks.menu(sim, Some(b)).get(i) else {
+                    return;
+                };
+                if let Some(regiment) = &recruit.regiment {
+                    let command = aaa_sim::Command::Commission {
+                        building: b,
+                        commission: Box::new(Commission::new(regiment.clone(), recruit.seconds)),
+                    };
+                    let given = self.orders.give(sim, player, command);
+                    if let Err(e) = given {
+                        info!("can't commission {}: {e:?}", regiment.template);
+                        self.refusal.0 = Some((slot, e));
+                    }
+                    *self.page = commissioned(*self.page, given);
                 }
-                *page = commissioned(*page, given);
             }
         }
+    }
+}
+
+/// A button clicked.
+fn press(activate: On<Activate>, slots: Query<&Slot>, mut presser: Presser) {
+    if let Ok(slot) = slots.get(activate.entity) {
+        presser.press(slot.0);
+    }
+}
+
+/// Presses the button a key just pressed is bound to, if it's showing.
+pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut presser: Presser) {
+    if keys.get_just_pressed().next().is_none() {
+        return;
+    }
+    let building = presser.chosen.0.filter(|_| presser.selected.0.is_empty());
+    let menu = presser.looks.menu(&presser.sim.0, building);
+    let page = *presser.page;
+    let slot = (0..SLOTS).find(|&slot| {
+        let names = presser.shown.0[slot]
+            .filter(|e| !matches!(e, Entry::Recruit(i) if *i >= menu.len()))
+            .map_or(Vec::new(), |e| bound(e, slot, page, menu));
+        names.iter().any(|action| bindings.pressed(&keys, action))
+    });
+    if let Some(slot) = slot {
+        presser.press(slot);
     }
 }
 
@@ -1354,6 +1423,22 @@ mod tests {
         assert_eq!(grid[COMMAND_ALL], Some(Entry::Order(0)));
         let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true);
         assert!(!grid.contains(&Some(Entry::CommandAll)));
+    }
+
+    #[test]
+    fn buttons_go_by_the_names_the_hotkeys_bind() {
+        let names = |entry, page| bound(entry, 4, page, &[]);
+        assert_eq!(
+            names(Entry::Order(5), Page::Orders),
+            ["ActorCommand hq_attach", "ActionButtonsButton_4"]
+        );
+        assert_eq!(names(Entry::CommandAll, Page::Orders)[0], "CommandAll");
+        assert_eq!(
+            names(Entry::Rally, Page::Orders)[0],
+            "ActorCommand set_rally_point"
+        );
+        assert_eq!(names(Entry::Cancel, Page::Commission)[0], "CancelRecruit");
+        assert_eq!(names(Entry::Cancel, Page::Rally)[0], "ActorCommandCancel");
     }
 
     #[test]

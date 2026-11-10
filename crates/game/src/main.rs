@@ -16,13 +16,16 @@
 //! script commands. Units and buildings make their sounds as they're
 //! selected, ordered, move, fire and die, and show their [`effects`] as they
 //! fire, are hurt, die, and pack or unpack. Escape opens a menu that holds
-//! the match still while it's up. [`supply`] is drawn on the map.
+//! the match still while it's up. [`supply`] is drawn on the map. The game's
+//! own hotkeys work what they're bound to, by way of [`keys`], so the
+//! arrows, not letters, move the camera.
 
 mod actions;
 mod banners;
 mod console;
 mod effects;
 mod ghost;
+mod keys;
 mod lobby;
 mod menu;
 mod minimap;
@@ -546,6 +549,7 @@ fn main() -> ExitCode {
             (
                 setup,
                 setup_overlays,
+                keys::load,
                 banners::setup_banners,
                 minimap::spawn,
                 actions::spawn,
@@ -574,6 +578,7 @@ fn main() -> ExitCode {
                     supply::show_border,
                     supply::tint_buildings,
                     supply::show_cycle_button,
+                    supply::show_border_button,
                 ),
                 show_health.after(camera::Controls),
                 (
@@ -622,7 +627,9 @@ fn main() -> ExitCode {
                 )
                     .chain(),
                 choose_formation,
+                actions::hotkeys,
                 supply::cycle_detached,
+                supply::toggle_border,
             )
                 .run_if(in_state(Screen::Match))
                 .run_if(takes_input)
@@ -1065,6 +1072,11 @@ fn setup(
     let cam = match regiment.or_else(building).or_else(start) {
         Some([x, y]) => RtsCamera::new(world(x, y, map.ground.height_at(x, y))),
         None => RtsCamera::centred(&map.ground),
+    };
+    // The letters are the game's hotkeys.
+    let cam = RtsCamera {
+        letter_keys: false,
+        ..cam
     };
     camera::spawn(&mut commands, cam);
     commands.insert_resource(Viewed {

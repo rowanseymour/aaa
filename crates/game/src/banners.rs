@@ -6,7 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aaa_data::Id;
+use aaa_data::{GameData, Id};
 use aaa_map::Division;
 use aaa_render::camera::RtsCamera;
 use aaa_render::overlay::BannerImages;
@@ -29,31 +29,122 @@ const SIZE: f32 = 0.075;
 #[derive(Component)]
 pub struct Banner {
     regiment: usize,
+    plate: Entity,
     engaged: Entity,
     focus: Entity,
     out_of_supply: Entity,
     shortage: Entity,
+    frame: Entity,
     badge: Entity,
-    /// The HQ whose badge it shows.
-    wears: Option<u32>,
+    wears: Option<Worn>,
 }
+
+/// The HQ whose badge a banner shows, by its id, and the side that HQ
+/// picked it for: a banner is drawn again when either changes.
+pub type Worn = (u32, Option<u32>);
 
 /// Which of its nation's badges each HQ's division wears, by the HQ's id:
 /// what the map gives those it starts with, and for each raised since one
 /// picked from the list, or the first no other of its side's holds where
-/// that one's taken; none where there's none to have.
+/// that one's taken; none where there's none to have. One that changes
+/// side gives its up and picks again from its new side's.
 #[derive(Resource)]
-pub struct Badges(HashMap<u32, Option<usize>>);
+pub struct Badges(HashMap<u32, Held>);
+
+/// The badge an HQ holds.
+struct Held {
+    /// The side it was picked for, once the HQ's been seen.
+    side: Option<u32>,
+    badge: Option<usize>,
+    /// The nation whose badges it's one of, where that isn't the nation
+    /// of the HQ's template, as after it changes side.
+    nation: Option<String>,
+}
 
 impl Badges {
-    /// The division whose badge a regiment of `template` wears when it's
-    /// attached to, or is, the HQ with this id. Any of a nation's
-    /// templates finds its badges.
-    pub fn division(&self, template: &str, hq: u32) -> Option<Division> {
-        Some(Division {
-            template: template.to_string(),
-            badge: (*self.0.get(&hq)?)?,
-        })
+    /// Gives each of `hqs` that has no badge one, and each that's changed
+    /// side another, from its new side's nation where `nation` names one
+    /// for its owner. `count` says how many badges an HQ, by its id, has
+    /// to pick from: that nation's, or its own template's for none.
+    fn settle(
+        &mut self,
+        hqs: &[aaa_sim::Hq],
+        nation: impl Fn(u32) -> Option<String>,
+        count: impl Fn(u32, Option<&str>) -> usize,
+    ) {
+        for hq in hqs {
+            let held = self.0.get_mut(&hq.id);
+            let side = held.as_ref().and_then(|h| h.side);
+            let moved = side.is_some_and(|s| s != hq.owner);
+            if let Some(held) = held.filter(|_| !moved) {
+                held.side = Some(hq.owner);
+                continue;
+            }
+            // Its old side's is free again from here on.
+            self.0.remove(&hq.id);
+            let nation = nation(hq.owner).filter(|_| moved);
+            let count = count(hq.id, nation.as_deref());
+            let worn = |b: usize| {
+                let mut others = hqs.iter().filter(|h| h.owner == hq.owner);
+                others.any(|h| self.0.get(&h.id).is_some_and(|held| held.badge == Some(b)))
+            };
+            // Any of them, the same one every time for the same HQ.
+            let pick = (hq.id as usize).wrapping_mul(2_654_435_761) >> 8;
+            let pick = pick.checked_rem(count).filter(|&b| !worn(b));
+            // None where its nation has none, or every one is held. A
+            // lost HQ's is free again by no longer being among those that
+            // hold one.
+            let badge = pick.or_else(|| (0..count).find(|&b| !worn(b)));
+            let held = Held {
+                side: Some(hq.owner),
+                badge,
+                nation,
+            };
+            self.0.insert(hq.id, held);
+        }
+    }
+
+    /// The side the HQ with this id picked its badge for.
+    pub fn side(&self, hq: u32) -> Option<u32> {
+        self.0.get(&hq)?.side
+    }
+
+    /// The badge a regiment of `template` wears when it's attached to, or
+    /// is, the HQ with this id. Any of a nation's templates finds its
+    /// badges.
+    pub fn badge(
+        &self,
+        banners: &mut BannerImages,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        template: &str,
+        hq: u32,
+    ) -> Option<Handle<Image>> {
+        let held = self.0.get(&hq)?;
+        let badge = held.badge?;
+        match &held.nation {
+            Some(nation) => banners.nation_badge(game, images, nation, badge),
+            None => {
+                let template = template.to_string();
+                banners.badge(game, images, &Division { template, badge })
+            }
+        }
+    }
+
+    /// The frame round the banner of the HQ with this id, of `template`:
+    /// that of the nation its badge is from.
+    pub fn frame(
+        &self,
+        banners: &mut BannerImages,
+        game: &mut GameData,
+        images: &mut Assets<Image>,
+        template: &str,
+        hq: u32,
+    ) -> Option<Handle<Image>> {
+        match self.0.get(&hq).and_then(|held| held.nation.as_deref()) {
+            Some(nation) => banners.nation_frame(game, images, nation),
+            None => banners.frame(game, images, template),
+        }
     }
 }
 
@@ -92,7 +183,14 @@ pub fn setup_banners(
 ) {
     commands.insert_resource(BannerImages::load(&mut loaded.game, &mut images, formats.0));
     let things = &loaded.map.things;
-    let badge = |t: &tgck::map::Thing| Some((t.id, usize::try_from(t.hq_badge()?).ok()));
+    let badge = |t: &tgck::map::Thing| {
+        let held = Held {
+            side: None,
+            badge: usize::try_from(t.hq_badge()?).ok(),
+            nation: None,
+        };
+        Some((t.id, held))
+    };
     commands.insert_resource(Badges(things.iter().filter_map(badge).collect()));
     commands.insert_resource(Scenery(loaded.game.scenery()));
 }
@@ -128,6 +226,8 @@ fn show(on: bool) -> Visibility {
 pub struct HqBanner {
     building: usize,
     hq: u32,
+    /// The side it was made for, whose badge and frame it shows.
+    owner: u32,
     plate: Entity,
     focus: Entity,
     shortage: Entity,
@@ -162,15 +262,15 @@ pub fn add_hq_banners(
         let (Some(hq), Some(template)) = (hq, sim.0.hq_template(b)) else {
             continue;
         };
-        if flying.iter().any(|f| f.building == b && f.hq == hq) {
+        let owner = sim.0.buildings[b].owner;
+        let flies = |f: &HqBanner| f.building == b && f.hq == hq && f.owner == owner;
+        if flying.iter().any(flies) {
             continue;
         }
         let (banners, assets) = (&mut *images.0, &mut *images.1);
         let icon = banners.icon(&mut loaded.game, assets, template);
-        let frame = banners.frame(&mut loaded.game, assets, template);
-        let badge = badges
-            .division(template, hq)
-            .and_then(|d| banners.badge(&mut loaded.game, assets, &d));
+        let frame = badges.frame(banners, &mut loaded.game, assets, template, hq);
+        let badge = badges.badge(banners, &mut loaded.game, assets, template, hq);
         // Its template names none, and never will.
         if icon.is_none() {
             bare.insert(b);
@@ -204,6 +304,7 @@ pub fn add_hq_banners(
         root.insert(HqBanner {
             building: b,
             hq,
+            owner,
             plate,
             focus,
             shortage,
@@ -212,7 +313,8 @@ pub fn add_hq_banners(
 }
 
 /// Places each standing HQ's banner over it, in its owner's colour, and
-/// takes down those of HQs that are gone.
+/// takes down those of HQs that are gone or have changed side, which fly
+/// another.
 #[allow(clippy::too_many_arguments)]
 pub fn show_hq_banners(
     mut commands: Commands,
@@ -236,7 +338,8 @@ pub fn show_hq_banners(
     for (entity, banner, mut node, mut z, mut visibility) in &mut banners {
         let b = banner.building;
         let building = &sim.0.buildings[b];
-        if building.gone() || sim.0.hq_of(b) != Some(banner.hq) {
+        let stale = sim.0.hq_of(b) != Some(banner.hq) || building.owner != banner.owner;
+        if building.gone() || stale {
             commands.entity(entity).despawn();
             continue;
         }
@@ -326,19 +429,28 @@ pub fn add_banners(
         let shortage = hidden(&banners.shortage);
         // Over the frame's lower edge.
         let badge = hidden(&None);
-        root.add_child(engaged);
-        root.with_children(|banner| {
-            banner.spawn(layer(&banners.plate, Color::srgb(red, green, blue)));
-            banner.spawn(layer(&icon, Color::WHITE));
-            banner.spawn(layer(&frame, Color::WHITE));
-        });
-        root.add_children(&[out_of_supply, shortage, badge, focus]);
+        let plate = layer(&banners.plate, Color::srgb(red, green, blue));
+        let plate = root.commands().spawn(plate).id();
+        let icon = root.commands().spawn(layer(&icon, Color::WHITE)).id();
+        let frame = root.commands().spawn(layer(&frame, Color::WHITE)).id();
+        root.add_children(&[
+            engaged,
+            plate,
+            icon,
+            frame,
+            out_of_supply,
+            shortage,
+            badge,
+            focus,
+        ]);
         root.insert(Banner {
             regiment: r,
+            plate,
             engaged,
             focus,
             out_of_supply,
             shortage,
+            frame,
             badge,
             wears: None,
         });
@@ -399,6 +511,14 @@ pub fn show_banners(
         crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
         // Lower on the screen is nearer the camera.
         *z = ZIndex(p.y as i32);
+        // Its owner's colour, whoever that is now.
+        if let Ok((mut image, _)) = layers.get_mut(banner.plate) {
+            let [r, g, b] = (sim.0.sides.player(regiment.owner)).map_or([1.0; 3], |p| p.rgb);
+            let colour = Color::srgb(r, g, b);
+            if image.color != colour {
+                image.color = colour;
+            }
+        }
         if let Ok((_, mut v)) = layers.get_mut(banner.engaged) {
             v.set_if_neq(show(!regiment.engaged.is_empty()));
         }
@@ -420,8 +540,9 @@ pub fn show_banners(
     }
 }
 
-/// Gives each HQ raised since the map's a badge, and shows on each banner
-/// that of the HQ its regiment is attached to, or is.
+/// Gives each HQ raised since the map's a badge, and each that's changed
+/// side another, and shows on each banner that of the HQ its regiment is
+/// attached to, or is.
 pub fn badge_banners(
     mut loaded: ResMut<Loaded>,
     sim: Res<Sim>,
@@ -435,43 +556,46 @@ pub fn badge_banners(
         return;
     }
     let hqs = sim.0.hqs();
-    for hq in &hqs {
-        if badges.0.contains_key(&hq.id) {
-            continue;
-        }
-        // Its organization's template finds its nation's badges.
-        let packed = sim.0.regiments.iter().find(|r| r.id == hq.id);
-        let unpacked = || (0..sim.0.buildings.len()).find(|&b| sim.0.hq_of(b) == Some(hq.id));
+    // A side's nation, where it has badges to pick from.
+    let nation = |owner: u32| {
+        let nation = sim.0.sides.player(owner)?.nation.clone()?;
+        (images.0.nation_badges(&nation) > 0).then_some(nation)
+    };
+    // How many badges a nation has, or that of an HQ's own template.
+    let count = |hq: u32, nation: Option<&str>| {
+        let packed = sim.0.regiments.iter().find(|r| r.id == hq);
+        let unpacked = || (0..sim.0.buildings.len()).find(|&b| sim.0.hq_of(b) == Some(hq));
         let template = match packed {
             Some(r) => Some(r.template.as_str()),
             None => unpacked().and_then(|b| sim.0.hq_template(b)),
         };
-        let count = template.map_or(0, |t| images.0.badges(t));
-        let worn = |b: usize| {
-            let mut others = hqs.iter().filter(|h| h.owner == hq.owner);
-            others.any(|h| badges.0.get(&h.id) == Some(&Some(b)))
-        };
-        // Any of them, the same one every time for the same HQ.
-        let pick = (hq.id as usize).wrapping_mul(2_654_435_761) >> 8;
-        let pick = pick.checked_rem(count).filter(|&b| !worn(b));
-        // None where its nation has none, or every one is held. A lost
-        // HQ's is free again by no longer being among those that hold one.
-        let badge = pick.or_else(|| (0..count).find(|&b| !worn(b)));
-        badges.0.insert(hq.id, badge);
-    }
+        match nation {
+            Some(nation) => images.0.nation_badges(nation),
+            None => template.map_or(0, |t| images.0.badges(t)),
+        }
+    };
+    badges.settle(&hqs, nation, count);
     for mut banner in &mut banners {
-        let wears = wears(&sim.0, &hqs, banner.regiment);
+        let wears = wears(&sim.0, &hqs, banner.regiment).map(|hq| (hq, badges.side(hq)));
         if banner.wears == wears {
             continue;
         }
         banner.wears = wears;
+        let regiment = &sim.0.regiments[banner.regiment];
+        let template = &regiment.template;
+        let (banners, assets) = (&mut *images.0, &mut *images.1);
+        // An HQ's own frame goes with its badge.
+        if let (Some((hq, _)), Ok((mut image, _))) = (wears, layers.get_mut(banner.frame))
+            && hq == regiment.id
+        {
+            let frame = badges.frame(banners, &mut loaded.game, assets, template, hq);
+            image.image = frame.unwrap_or_default();
+        }
         let Ok((mut image, mut visibility)) = layers.get_mut(banner.badge) else {
             continue;
         };
-        let template = &sim.0.regiments[banner.regiment].template;
-        let badge = wears
-            .and_then(|hq| badges.division(template, hq))
-            .and_then(|d| (images.0).badge(&mut loaded.game, &mut images.1, &d));
+        let badge =
+            wears.and_then(|(hq, _)| badges.badge(banners, &mut loaded.game, assets, template, hq));
         *visibility = match badge.is_some() {
             true => Visibility::Inherited,
             false => Visibility::Hidden,
@@ -536,6 +660,58 @@ mod tests {
     }
 
     #[test]
+    fn hqs_that_change_side_pick_their_badges_again() {
+        let hq = |id: u32, owner: u32| aaa_sim::Hq {
+            id,
+            owner,
+            building: String::new(),
+            position: [0.0; 2],
+            places: 3,
+        };
+        // The map gives HQ 10 badge 2; side 2 is of a nation with 5.
+        let stored = Held {
+            side: None,
+            badge: Some(2),
+            nation: None,
+        };
+        let mut badges = Badges(HashMap::from([(10, stored)]));
+        let nation = |owner: u32| (owner == 2).then(|| "nation_b".to_string());
+        let count = |_: u32, nation: Option<&str>| match nation {
+            Some(_) => 5,
+            None => 20,
+        };
+        let held = |badges: &Badges, hq: u32| {
+            let held = &badges.0[&hq];
+            (held.side, held.badge, held.nation.clone())
+        };
+        // Seen on side 1, it keeps what the map gave it, and one raised
+        // beside it takes another of their own nation's.
+        badges.settle(&[hq(10, 1), hq(11, 1)], nation, count);
+        assert_eq!(held(&badges, 10), (Some(1), Some(2), None));
+        let (side, raised, of) = held(&badges, 11);
+        assert_eq!((side, of), (Some(1), None));
+        assert!(raised.is_some_and(|b| b < 20 && b != 2));
+        // Nothing changes while it stays.
+        badges.settle(&[hq(10, 1), hq(11, 1)], nation, count);
+        assert_eq!(held(&badges, 10), (Some(1), Some(2), None));
+        // Taken by side 2, it picks from that side's nation, clear of the
+        // one side 2's own HQ holds.
+        badges.settle(&[hq(12, 2)], nation, count);
+        let native = held(&badges, 12).1;
+        badges.settle(&[hq(10, 2), hq(11, 1), hq(12, 2)], nation, count);
+        let (side, taken, of) = held(&badges, 10);
+        assert_eq!((side, of.as_deref()), (Some(2), Some("nation_b")));
+        assert!(taken.is_some_and(|b| b < 5) && taken != native);
+        // Its old badge is free for side 1 again.
+        assert!(
+            !badges
+                .0
+                .values()
+                .any(|h| h.side == Some(1) && h.badge == Some(2))
+        );
+    }
+
+    #[test]
     fn cursor_picks_among_the_banners_it_is_on() {
         let mut world = World::new();
         let none = Entity::PLACEHOLDER;
@@ -548,16 +724,19 @@ mod tests {
         };
         let regiment = |regiment: usize| Banner {
             regiment,
+            plate: none,
             engaged: none,
             focus: none,
             out_of_supply: none,
             shortage: none,
+            frame: none,
             badge: none,
             wears: None,
         };
         let hq = |building: usize| HqBanner {
             building,
             hq: 0,
+            owner: 0,
             plate: none,
             focus: none,
             shortage: none,

@@ -867,6 +867,20 @@ pub struct UVars {
     /// What marks a figure or option that's no good, such as a shortfall.
     #[serde(rename = "UIColorOptionInvalid")]
     pub ui_color_option_invalid: Option<[f32; 3]>,
+    /// What marks the key for something in its name.
+    #[serde(rename = "UIColorHighlight")]
+    pub ui_color_highlight: Option<[f32; 3]>,
+    /// The id of the [`HotkeyConfiguration`] in use.
+    #[serde(rename = "HotkeyConfiguration")]
+    pub hotkey_configuration: Option<Id>,
+}
+
+/// A set of hotkeys players can choose.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HotkeyConfiguration {
+    pub ids: Option<Id>,
+    /// The archive path of the file binding its keys.
+    pub hotkey_file_location: Option<String>,
 }
 
 /// The settings for how the game looks.
@@ -880,6 +894,9 @@ pub struct AVars {
     pub view_zone_friendly_supply_color: Option<[f32; 3]>,
     #[serde(rename = "ViewZoneFriendlySupplyTexture")]
     pub view_zone_friendly_supply_texture: Option<String>,
+    /// The side, in world units, of the squares the terrain is drawn in.
+    #[serde(rename = "TerrainBlockSize")]
+    pub terrain_block_size: Option<f32>,
 }
 
 /// One of the resources sides earn and spend.
