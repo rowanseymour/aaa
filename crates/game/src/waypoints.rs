@@ -124,7 +124,7 @@ pub fn load(
             })
             .collect();
         let [x, y] = cursor.hotspot;
-        (frames.len() == cursor.frames.len()).then_some(Frames {
+        (!frames.is_empty() && frames.len() == cursor.frames.len()).then_some(Frames {
             images: frames,
             hotspot: (x, y),
             period: cursor.period,

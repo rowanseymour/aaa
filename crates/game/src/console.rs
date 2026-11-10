@@ -856,7 +856,19 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
         world.resource_mut::<SelectedBuilding>().0 = Some(b);
         return Ok(String::new());
     }
-    let picked = args
+    let mut ids: Vec<&str> = Vec::new();
+    for id in args {
+        if !ids.contains(id) {
+            ids.push(id);
+        }
+    }
+    if ids.len() > crate::pane::MAX_SELECTED {
+        return Err(format!(
+            "takes up to {} regiments",
+            crate::pane::MAX_SELECTED
+        ));
+    }
+    let picked = ids
         .iter()
         .map(|id| {
             let r = sim
