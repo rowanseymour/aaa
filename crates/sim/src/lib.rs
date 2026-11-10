@@ -5050,6 +5050,7 @@ mod tests {
             independent: team.is_none(),
             playable: team.is_some(),
             nation: None,
+            general: None,
             relations: stored(relations),
             team_relations: stored(team_relations),
             stockpile: 0.0,

@@ -111,6 +111,9 @@ struct Pending {
     /// The nation each side plays as, by player id, when launched from the
     /// lobby.
     nations: HashMap<u32, aaa_data::Nation>,
+    /// The general chosen for each side, by player id, when launched from
+    /// the lobby; one of its nation's at random where none is.
+    generals: HashMap<u32, aaa_data::Id>,
     /// Whether it was launched from the lobby, which failing to load it goes
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
@@ -157,6 +160,7 @@ struct Prepared {
     sim: World,
     raising: Recruits,
     person: Option<u32>,
+    leaders: Leaders,
 }
 
 #[derive(Resource)]
@@ -207,6 +211,22 @@ struct Drawn(Models);
 /// line.
 #[derive(Resource, Clone, Copy)]
 struct Side(Option<usize>);
+
+/// The general who leads each side, by player id; none for sides without a
+/// nation.
+#[derive(Resource, Default)]
+struct Leaders(HashMap<u32, aaa_data::General>);
+
+impl Leaders {
+    /// What a side's things call their owner: the person's own side is the
+    /// player, the computer's its general.
+    fn owner(&self, player: &aaa_map::Player, local: Option<u32>) -> String {
+        if local == Some(player.id) {
+            return "Player".into();
+        }
+        (self.0.get(&player.id)).map_or_else(|| player.name.clone(), |g| g.name.clone())
+    }
+}
 
 /// The player orders come from; none where the map has nobody to play.
 #[derive(Resource)]
@@ -669,6 +689,7 @@ fn main() -> ExitCode {
                 teams: None,
                 person: None,
                 nations: HashMap::new(),
+                generals: HashMap::new(),
                 from_menu: false,
             })
             .insert_state(Screen::Loading);
@@ -705,6 +726,7 @@ fn prepare(
         teams,
         person,
         nations: chosen,
+        generals,
         from_menu,
         ..
     } = pending;
@@ -724,6 +746,7 @@ fn prepare(
     for w in &map.warnings {
         warn!("{name}: {w}");
     }
+    let leaders = Leaders(lobby::generals(&map.players, &chosen, &generals));
     if let Some(teams) = &teams {
         map.arrange(teams);
     }
@@ -759,6 +782,7 @@ fn prepare(
         sim,
         raising,
         person,
+        leaders,
     })
 }
 
@@ -769,6 +793,7 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
         sim,
         raising,
         person,
+        leaders,
     } = prepared;
     let lineup = lobby::Lineup::new(&loaded.map.players, person);
     for &(id, control) in &lineup.0 {
@@ -777,10 +802,15 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
                 .team
                 .map_or("no team".into(), |t| format!("team {}", t + 1));
             let nation = p.nation.as_deref().unwrap_or("no nation");
-            info!("{} ({}, {team}, {nation}): {control:?}", p.name, p.color);
+            let general = leaders.0.get(&id).map_or("no general", |g| g.id.as_str());
+            info!(
+                "{} ({}, {team}, {nation}, {general}): {control:?}",
+                p.name, p.color
+            );
         }
     }
     world.insert_resource(Local(lineup.person()));
+    world.insert_resource(leaders);
     world.insert_resource(lineup);
     world.insert_resource(Sim(sim));
     world.insert_resource(Orders::default());
@@ -2274,6 +2304,41 @@ fn show_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn things_name_the_persons_side_the_player_and_the_computers_its_general() {
+        let player = |id: u32| aaa_map::Player {
+            id,
+            name: format!("kingdom_{id}"),
+            color: "blue".into(),
+            rgb: [1.0; 3],
+            team: None,
+            independent: false,
+            playable: true,
+            nation: None,
+            general: None,
+            relations: Vec::new(),
+            team_relations: Vec::new(),
+            stockpile: 0.0,
+        };
+        let general = |id: &str, name: &str| aaa_data::General {
+            id: id.into(),
+            name: name.into(),
+            short_name: id.into(),
+            operations: Vec::new(),
+            public: true,
+        };
+        let leaders = Leaders(HashMap::from([
+            (1, general("patton", "General Patton")),
+            (2, general("rommel", "General Rommel")),
+        ]));
+        assert_eq!(leaders.owner(&player(1), Some(1)), "Player");
+        assert_eq!(leaders.owner(&player(2), Some(1)), "General Rommel");
+        // Watching, every side is the computer's.
+        assert_eq!(leaders.owner(&player(1), None), "General Patton");
+        // A side with no nation has no general.
+        assert_eq!(leaders.owner(&player(3), Some(1)), "kingdom_3");
+    }
 
     #[test]
     fn the_nearest_unit_within_reach_is_pointed_at() {
