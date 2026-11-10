@@ -648,10 +648,14 @@ fn main() -> ExitCode {
     }
 }
 
-/// Whether neither the console nor the pause menu is up, so the match takes
-/// the keyboard and mouse.
-fn takes_input(console: Res<console::Console>, menu: Res<pause::PauseMenu>) -> bool {
-    console::closed(console) && pause::closed(menu)
+/// Whether none of the console, the pause menu and the loading screen is
+/// up, so the match takes the keyboard and mouse.
+fn takes_input(
+    console: Res<console::Console>,
+    menu: Res<pause::PauseMenu>,
+    loading: Query<(), With<LoadingScreen>>,
+) -> bool {
+    console::closed(console) && pause::closed(menu) && loading.is_empty()
 }
 
 /// Loads a map and sets up the sim and recruits for a match on it.
@@ -1512,7 +1516,9 @@ fn pointed(
 
 /// Finds what the cursor is over: the regiment whose banner it's on, else
 /// that of the nearest unit within reach of the ground it points at, else
-/// the building standing there.
+/// the building standing there; nothing while it's on the minimap or the
+/// interface's panels, which cover the map.
+#[allow(clippy::too_many_arguments)]
 fn focus(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
@@ -1522,12 +1528,18 @@ fn focus(
         &ZIndex,
         &Visibility,
     )>,
+    minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
+    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     scenery: Res<banners::Scenery>,
     mut focus: ResMut<Focus>,
 ) {
     const REACH: f32 = 2.0;
+    if !minimap::pointer_away(minimap) || actions::over_grid(&grid) {
+        focus.set_if_neq(Focus::Nothing);
+        return;
+    }
     if let Some(r) = banners::under_cursor(&banners) {
         focus.set_if_neq(Focus::Regiment(r));
         return;

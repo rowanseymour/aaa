@@ -562,7 +562,7 @@ pub fn steer(
     let over = over(&views);
     // Only a press that starts on the minimap drags across it.
     if buttons.just_pressed(MouseButton::Left) {
-        *dragging = over.is_some() && !crate::actions::aiming(page);
+        *dragging = on_disc(over).is_some() && !crate::actions::aiming(page);
     }
     if !buttons.pressed(MouseButton::Left) {
         *dragging = false;

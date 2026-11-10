@@ -657,6 +657,10 @@ pub fn show(
         true => Visibility::Hidden,
     });
     if nothing {
+        // What was under the cursor went with the selection.
+        if preview.0.is_some() {
+            preview.0 = None;
+        }
         return;
     }
     let menu = looks.menu(&sim.0, building);

@@ -119,6 +119,13 @@ impl OnThing {
             scale: Vec3::ONE,
         }
     }
+
+    /// Turns it as an effect placed by it facing `was` was turned, to
+    /// face `now`, so it goes on facing that way from its thing.
+    fn turned(mut self, was: Quat, now: Quat) -> OnThing {
+        self.turn = self.turn * was.inverse() * now;
+        self
+    }
 }
 
 impl Effects {
@@ -301,9 +308,10 @@ fn building_states(b: &aaa_sim::Building) -> Vec<&'static str> {
 }
 
 fn unit_states(u: &aaa_sim::Unit) -> Vec<&'static str> {
-    match u.alive() {
-        true => Vec::new(),
-        false => vec![DEAD],
+    // Not one that left the map by unpacking, which is no death.
+    match u.died {
+        None => Vec::new(),
+        Some(_) => vec![DEAD],
     }
 }
 
@@ -681,7 +689,8 @@ fn play(
             true => Quat::from_rotation_y(effects.random() * TAU),
             false => Quat::IDENTITY,
         };
-        transform.rotation = turn * transform.rotation;
+        let unturned = transform.rotation;
+        transform.rotation = turn * unturned;
         let mut models = assets.models();
         let Some(e) = drawn.0.spawn_effect(
             &mut commands,
@@ -707,11 +716,10 @@ fn play(
         if let Some(rate) = rate(&vfx, cue, length) {
             entity.insert(Rate(rate));
         }
-        if let Some((anchor, mut on)) = attach {
-            on.turn = transform.rotation;
+        if let Some((anchor, on)) = attach {
             entity.insert(Follow {
                 anchor,
-                on,
+                on: on.turned(unturned, transform.rotation),
                 gyroscope: vfx.gyroscope,
             });
         }
@@ -1123,6 +1131,30 @@ mod tests {
         assert!(t.translation.distance(Vec3::new(12.0, 2.0, -5.0)) < 1e-5);
         assert_eq!(t.scale, Vec3::ONE);
         assert_eq!(facing([0.0, -1.0, 0.0]), Vec3::Z);
+    }
+
+    #[test]
+    fn a_turned_effect_keeps_its_turn_from_a_thing_that_turns() {
+        let root = Transform::from_rotation(Quat::from_rotation_y(1.0));
+        let on = OnThing {
+            point: Transform::from_rotation(Quat::from_rotation_x(0.3)),
+            offset: Vec3::ZERO,
+            turn: Quat::from_rotation_z(0.2),
+        };
+        let was = on.place(&root).rotation;
+        let now = Quat::from_rotation_y(2.0) * was;
+        let on = on.turned(was, now);
+        let same = |a: Quat, b: Quat| {
+            [Vec3::X, Vec3::Y]
+                .iter()
+                .all(|&v| (a * v).distance(b * v) < 1e-5)
+        };
+        assert!(same(on.place(&root).rotation, now));
+        assert!(!same(was, now));
+        // Its thing turning turns it as far.
+        let further = Quat::from_rotation_y(0.5);
+        let root = Transform::from_rotation(further * root.rotation);
+        assert!(same(on.place(&root).rotation, further * now));
     }
 
     fn effects(objects: HashMap<Id, ObjectEffects>) -> Effects {
