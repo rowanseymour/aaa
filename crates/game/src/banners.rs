@@ -96,6 +96,176 @@ pub fn setup_banners(
     commands.insert_resource(Scenery(loaded.game.scenery()));
 }
 
+/// One of a banner's images, filling it.
+fn layer(image: &Option<Handle<Image>>, colour: Color) -> impl Bundle {
+    (
+        Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            ..default()
+        },
+        ImageNode {
+            image: image.clone().unwrap_or_default(),
+            color: colour,
+            ..default()
+        },
+        Pickable::IGNORE,
+    )
+}
+
+fn show(on: bool) -> Visibility {
+    match on {
+        true => Visibility::Inherited,
+        false => Visibility::Hidden,
+    }
+}
+
+/// The banner over an unpacked HQ, by the building's index into the sim's
+/// and the HQ's id.
+#[derive(Component)]
+pub struct HqBanner {
+    building: usize,
+    hq: u32,
+    plate: Entity,
+    focus: Entity,
+    shortage: Entity,
+}
+
+/// How high over the ground under an HQ its banner floats, clear of its
+/// roof.
+const HQ_HEIGHT: f32 = 6.0;
+
+/// Spawns a banner for each HQ building that has none yet, in its
+/// division's badge.
+pub fn add_hq_banners(
+    mut commands: Commands,
+    mut loaded: ResMut<Loaded>,
+    sim: Res<Sim>,
+    badges: Res<Badges>,
+    mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
+    flying: Query<&HqBanner>,
+    mut bare: bevy::prelude::Local<HashSet<usize>>,
+) {
+    if sim.is_added() {
+        bare.clear();
+    }
+    if !sim.is_changed() {
+        return;
+    }
+    for b in 0..sim.0.buildings.len() {
+        if bare.contains(&b) {
+            continue;
+        }
+        let hq = sim.0.hq_of(b).filter(|_| !sim.0.buildings[b].gone());
+        let (Some(hq), Some(template)) = (hq, sim.0.hq_template(b)) else {
+            continue;
+        };
+        if flying.iter().any(|f| f.building == b && f.hq == hq) {
+            continue;
+        }
+        let (banners, assets) = (&mut *images.0, &mut *images.1);
+        let icon = banners.icon(&mut loaded.game, assets, template);
+        let frame = banners.frame(&mut loaded.game, assets, template);
+        let badge = badges
+            .division(template, hq)
+            .and_then(|d| banners.badge(&mut loaded.game, assets, &d));
+        // Its template names none, and never will.
+        if icon.is_none() {
+            bare.insert(b);
+            continue;
+        }
+        let mut root = commands.spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            Visibility::Hidden,
+            Pickable::IGNORE,
+            DespawnOnExit(Screen::Match),
+        ));
+        let plate = root
+            .commands()
+            .spawn(layer(&banners.plate, Color::WHITE))
+            .id();
+        let shortage = (layer(&banners.shortage, Color::WHITE), Visibility::Hidden);
+        let shortage = root.commands().spawn(shortage).id();
+        let focus = (layer(&banners.focus, Color::WHITE), Visibility::Hidden);
+        let focus = root.commands().spawn(focus).id();
+        root.add_child(plate);
+        root.with_children(|banner| {
+            banner.spawn(layer(&icon, Color::WHITE));
+            banner.spawn(layer(&frame, Color::WHITE));
+            banner.spawn(layer(&badge, Color::WHITE));
+        });
+        root.add_children(&[shortage, focus]);
+        root.insert(HqBanner {
+            building: b,
+            hq,
+            plate,
+            focus,
+            shortage,
+        });
+    }
+}
+
+/// Places each standing HQ's banner over it, in its owner's colour, and
+/// takes down those of HQs that are gone.
+#[allow(clippy::too_many_arguments)]
+pub fn show_hq_banners(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    loaded: Res<Loaded>,
+    local: Res<Local>,
+    focus: Res<Focus>,
+    time: Res<Time<Real>>,
+    ui: Res<UiScale>,
+    cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
+    mut banners: Query<(Entity, &HqBanner, &mut Node, &mut ZIndex, &mut Visibility)>,
+    mut layers: Query<(&mut ImageNode, &mut Visibility), Without<HqBanner>>,
+) {
+    let Ok((camera, transform)) = cameras.single() else {
+        return;
+    };
+    let global = GlobalTransform::from(*transform);
+    let side = camera.logical_viewport_size().map_or(0.0, |s| s.y * SIZE);
+    // Whether each owner met so far can't pay its upkeep.
+    let mut short: HashMap<u32, bool> = HashMap::new();
+    for (entity, banner, mut node, mut z, mut visibility) in &mut banners {
+        let b = banner.building;
+        let building = &sim.0.buildings[b];
+        if building.gone() || sim.0.hq_of(b) != Some(banner.hq) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        let [x, y] = building.position;
+        let over = world(x, y, loaded.map.ground.height_at(x, y) + HQ_HEIGHT);
+        let Ok(p) = camera.world_to_viewport(&global, over) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        *visibility = Visibility::Inherited;
+        crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
+        *z = ZIndex(p.y as i32);
+        if let Ok((mut image, _)) = layers.get_mut(banner.plate) {
+            let [r, g, b] = (sim.0.sides.player(building.owner)).map_or([1.0; 3], |p| p.rgb);
+            image.color = Color::srgb(r, g, b);
+        }
+        if let Ok((_, mut v)) = layers.get_mut(banner.shortage) {
+            let owner = building.owner;
+            let short = *(short.entry(owner)).or_insert_with(|| sim.0.short(owner).is_some());
+            v.set_if_neq(show(short && time.elapsed_secs() % (2.0 * FLASH) < FLASH));
+        }
+        if let Ok((mut image, mut v)) = layers.get_mut(banner.focus) {
+            let focused = *focus == Focus::Building(b);
+            v.set_if_neq(show(focused));
+            if focused {
+                image.color = TINTS[tint(&sim.0, local.0, building.owner)];
+            }
+        }
+    }
+}
+
 /// Spawns a banner, hidden until [`show_banners`] places it, for each
 /// regiment that has none yet: those the map starts with and any raised
 /// since.
@@ -109,22 +279,6 @@ pub fn add_banners(
     mut images: ResMut<Assets<Image>>,
     mut have: bevy::prelude::Local<usize>,
 ) {
-    let layer = |image: &Option<Handle<Image>>, colour: Color| {
-        (
-            Node {
-                position_type: PositionType::Absolute,
-                width: percent(100),
-                height: percent(100),
-                ..default()
-            },
-            ImageNode {
-                image: image.clone().unwrap_or_default(),
-                color: colour,
-                ..default()
-            },
-            Pickable::IGNORE,
-        )
-    };
     // Regiments are only ever added, at the end, until another match.
     if sim.is_added() {
         *have = 0;
@@ -222,7 +376,11 @@ pub fn show_banners(
                 .filter(|u| u.alive())
         };
         let count = live().count();
-        let at = live().next().map(|first| {
+        // Unpacked, or on its way in or out, its building flies the banner.
+        let housed = regiment
+            .unpacked_into
+            .is_some_and(|b| sim.0.hq_of(b).is_some());
+        let at = live().next().filter(|_| !housed).map(|first| {
             let sum = live().fold(Vec2::ZERO, |sum, u| sum + Vec2::from(u.drawn_at(t)));
             let [x, y] = (sum / count as f32).to_array();
             let footing = drawn.0.footing(&first.template);
@@ -236,10 +394,6 @@ pub fn show_banners(
         crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
         // Lower on the screen is nearer the camera.
         *z = ZIndex(p.y as i32);
-        let show = |on: bool| match on {
-            true => Visibility::Inherited,
-            false => Visibility::Hidden,
-        };
         if let Ok((_, mut v)) = layers.get_mut(banner.engaged) {
             v.set_if_neq(show(!regiment.engaged.is_empty()));
         }

@@ -15,7 +15,8 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
-            .add_systems(Update, highlight)
+            .add_systems(Startup, spawn_hint)
+            .add_systems(Update, (highlight, hint))
             // Before layout, which a meter's fill width feeds.
             .add_systems(
                 PostUpdate,
@@ -304,6 +305,71 @@ pub fn tooltip(node: Node) -> impl Bundle {
         ),
         Pickable::IGNORE,
     )
+}
+
+/// What's said, in a box by the pointer, of the part of the interface
+/// it's on.
+#[derive(Component, Clone, PartialEq, Debug)]
+#[require(Hovered, Pickable)]
+pub struct Hint(pub String);
+
+/// The widest a hint is before its words wrap.
+const HINT_WIDTH: f32 = 320.0;
+
+/// The box [`Hint`]s are said in.
+#[derive(Component)]
+struct HintBox;
+
+fn spawn_hint(mut commands: Commands) {
+    let node = Node {
+        position_type: PositionType::Absolute,
+        display: Display::None,
+        max_width: px(HINT_WIDTH),
+        ..default()
+    };
+    commands
+        .spawn((HintBox, tooltip(node), GlobalZIndex(10)))
+        .with_child(label("", Font::Small, Ink::Body));
+}
+
+/// Shows the hint under the pointer beside it, on the side with more room.
+fn hint(
+    hints: Query<(&Hint, &Hovered, &InheritedVisibility)>,
+    windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
+    scale: Res<UiScale>,
+    mut said: Single<(&mut Node, &Children), With<HintBox>>,
+    mut texts: Query<&mut Text>,
+) {
+    let (node, children) = &mut *said;
+    let mut hovered = hints
+        .iter()
+        .filter(|(h, on, shown)| on.get() && shown.get() && !h.0.is_empty());
+    let at = windows
+        .single()
+        .ok()
+        .and_then(|w| Some((w.cursor_position()?, w.size())));
+    let (Some((hint, ..)), Some((cursor, window))) = (hovered.next(), at) else {
+        if node.display != Display::None {
+            node.display = Display::None;
+        }
+        return;
+    };
+    const GAP: f32 = 16.0;
+    node.display = Display::Flex;
+    // Each way, on the side of the pointer with more of the window.
+    let beside = |at: f32, across: f32| match at > across / 2.0 {
+        true => (Val::Auto, px((across - at + GAP) / scale.0)),
+        false => (px((at + GAP) / scale.0), Val::Auto),
+    };
+    (node.left, node.right) = beside(cursor.x, window.x);
+    (node.top, node.bottom) = beside(cursor.y, window.y);
+    for child in children.iter() {
+        if let Ok(mut text) = texts.get_mut(child)
+            && text.0 != hint.0
+        {
+            text.0.clone_from(&hint.0);
+        }
+    }
 }
 
 /// A solid box with a thin border, such as a card.

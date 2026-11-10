@@ -23,7 +23,7 @@ use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
 use crate::banners::{self, Badges};
-use crate::ui::{self, Font, Gauge, Ink, Meter, Shade, Surface, framed, label, meter};
+use crate::ui::{self, Font, Gauge, Hint, Ink, Meter, Shade, Surface, framed, label, meter};
 use crate::{Drawn, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint};
 
 /// How many regiments can be selected at once, as many as the pane has
@@ -50,6 +50,11 @@ fn at(left: f32, top: f32, width: f32, height: f32) -> Node {
         ..default()
     }
 }
+
+/// The strings' keys for what an HQ's empty place says under the pointer,
+/// and a relay's stockpile bar, given what's left and what it holds.
+const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
+const STOCKPILE: &str = "template_game_SupplyStockpileBar_ToolTip|ff";
 
 /// The pane, whose children show what [`Showing`] says.
 #[derive(Component)]
@@ -144,6 +149,11 @@ impl Looks {
             .get(&Id::from(template))
             .cloned()
             .unwrap_or_else(|| template.to_string())
+    }
+
+    /// What the game's strings have under `key`.
+    fn said(&self, key: &str) -> String {
+        self.strings.get(key).cloned().unwrap_or_default()
     }
 
     /// The game's name for an actor state, e.g. `mind_resting`.
@@ -444,6 +454,7 @@ impl Ui<'_> {
             let node = at(144.0 + col * 32.0, 44.0 + row * 37.0, 30.0, 35.0);
             let mut card = commands.spawn((framed(node), ChildOf(root)));
             let Some(r) = slot else {
+                card.insert(Hint(self.looks.said(EMPTY_SLOT)));
                 continue;
             };
             card.insert((Button, Pick(r))).observe(pick);
@@ -604,9 +615,11 @@ impl Ui<'_> {
         self.title(commands, root, self.looks.name(&template), building.owner);
         self.portrait(commands, root, &template, Fill::Building(b));
         if self.sim.supply_of(b).is_some_and(|s| s.relay) {
-            commands.entity(root).with_children(|pane| {
-                bar(pane, at(8.0, 176.0, 124.0, 3.0), Fill::Stockpile(b));
-            });
+            let fill = (Fill::Stockpile(b), Hint(String::new()));
+            let node = at(8.0, 176.0, 124.0, 3.0);
+            commands
+                .entity(root)
+                .with_child((meter(node, Gauge::Stockpile), fill));
         }
         self.slots(commands, root);
         let queue: Vec<String> = building
@@ -645,12 +658,23 @@ impl Ui<'_> {
 pub fn refresh(
     sim: Res<Sim>,
     looks: Res<Looks>,
-    mut bars: Query<(&Fill, &mut Meter)>,
+    mut bars: Query<(&Fill, &mut Meter, Option<&mut Hint>)>,
     mut pictures: Query<(&UnitPicture, &mut Shade)>,
     mut statuses: Query<(&Status, &mut Text)>,
 ) {
     let sim = &sim.0;
-    for (fill, mut meter) in &mut bars {
+    for (fill, mut meter, hint) in &mut bars {
+        if let (Fill::Stockpile(b), Some(mut hint)) = (*fill, hint) {
+            let max = sim.supply_of(b).map_or(0.0, |s| s.stockpile_max);
+            let left = sim.buildings[b].supply.stockpile;
+            let amounts = [format!("{left:.0}"), format!("{max:.0}")];
+            let words = amounts
+                .iter()
+                .fold(looks.said(STOCKPILE), |w, a| w.replacen("%.0f", a, 1));
+            if hint.0 != words {
+                hint.0 = words;
+            }
+        }
         let share = match *fill {
             Fill::Unit(u) => unit_health(sim, u),
             Fill::Regiment(r) => {
