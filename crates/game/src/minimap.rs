@@ -291,11 +291,13 @@ fn water_depth(ground: &Ground, x: f32, y: f32, height: f32) -> Option<f32> {
 }
 
 /// Redraws the markers and the camera's view over the ground.
+#[allow(clippy::too_many_arguments)]
 pub fn update(
     minimap: Res<Minimap>,
     sim: Res<Sim>,
     local: Res<crate::Local>,
     outline: Res<crate::supply::Outline>,
+    look: Res<crate::supply::BorderLook>,
     time: Res<Time<Real>>,
     cameras: Query<(&Camera, &RtsCamera)>,
     mut images: ResMut<Assets<Image>>,
@@ -320,7 +322,7 @@ pub fn update(
         }
     };
     // The supply border, but for where a zone just runs off the map.
-    let [r, g, b, _] = crate::OWN.to_srgba().to_u8_array();
+    let [r, g, b, _] = look.colour.to_srgba().to_u8_array();
     let on_map = |[x, y]: [f32; 2]| {
         let inside = tgck::map::CELL_SIZE / 2.0..=minimap.size - tgck::map::CELL_SIZE / 2.0;
         inside.contains(&x) && inside.contains(&y)

@@ -203,7 +203,7 @@ impl World {
     }
 
     /// What a building adds to its owner's economy: nothing once gone,
-    /// only its upkeep while disabled or unpacking, and the limits taken by
+    /// only its upkeep while disabled, and the limits taken by
     /// what it's commissioning. One that passes supply on and has none
     /// earns as what it packs into does, or nothing if it needs supply and
     /// doesn't pack.
@@ -220,7 +220,8 @@ impl World {
                 upkeep.set(consumed, upkeep.get(consumed) + taken.get(consumed));
             }
         }
-        let working = b.state == State::Standing && b.unpacking.is_none();
+        // Unpacking and packing aren't construction: it earns through both.
+        let working = b.state == State::Standing;
         let production = match self.packing.get(&b.template) {
             _ if !working => Amounts::default(),
             _ if !self.out_of_supply(building) => e.production,

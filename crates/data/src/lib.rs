@@ -675,6 +675,16 @@ pub struct AnimationAudio {
     pub looping: bool,
 }
 
+/// How the supply border is drawn.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SupplyBorder {
+    pub colour: [f32; 3],
+    /// How wide it is, in world units.
+    pub width: f32,
+    /// The archive path of the image drawn along it.
+    pub texture: Option<String>,
+}
+
 /// A visual effect the game shows by id.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Vfx {
@@ -1663,6 +1673,28 @@ impl GameData {
     /// clear for it to be put there, in world units.
     pub fn building_padding(&mut self) -> Option<f32> {
         self.svars().iter().find_map(|v| v.building_padding_meters)
+    }
+
+    /// How the supply border is drawn; green and thin where the settings
+    /// don't say.
+    pub fn supply_border(&mut self) -> SupplyBorder {
+        // Not in the load lists; the game's own settings take precedence
+        // over the engine's.
+        let files: Vec<(String, tgi::Parsed)> = ["AVars_AA.tgi", "AVars.tgi"]
+            .into_iter()
+            .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
+            .collect();
+        let files = scoped(&files);
+        let vars: Vec<defs::AVars> = files.iter().flat_map(|f| f.read("Vars")).collect();
+        SupplyBorder {
+            colour: (vars.iter())
+                .find_map(|v| v.view_zone_friendly_supply_color)
+                .unwrap_or([0.0, 1.0, 0.0]),
+            width: (vars.iter())
+                .find_map(|v| v.view_zone_friendly_supply_width)
+                .unwrap_or(0.15),
+            texture: (vars.iter()).find_map(|v| v.view_zone_friendly_supply_texture.clone()),
+        }
     }
 
     /// What colours a figure or option that's no good, such as a shortfall.

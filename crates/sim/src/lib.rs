@@ -990,7 +990,8 @@ impl World {
                 shot: None,
                 died: None,
                 unpacked: None,
-                awaited: false,
+                // One its regiment has lost comes back as a recruit's do.
+                awaited: m.lost.is_some(),
                 id: m.thing.id,
                 template: m.thing.template.clone(),
                 regiment: r,
@@ -1052,7 +1053,9 @@ impl World {
             hq: regiment.hq,
             // Until its first look, so it doesn't start out marked.
             in_supply: true,
-            replacing: vec![0.0; regiment.members.len()],
+            replacing: (regiment.members.iter())
+                .map(|m| m.lost.unwrap_or(0.0))
+                .collect(),
         });
         let ids = regiment.members.iter().map(|m| m.thing.id);
         self.next_id = ids
@@ -3175,6 +3178,7 @@ mod tests {
             trailer: None,
             fighter: None,
             health: 1.0,
+            lost: None,
         }
     }
 
@@ -6401,6 +6405,89 @@ mod tests {
         run(&mut w, 2.0);
         assert!(!w.regiments[1].in_supply);
         assert_eq!(w.units[a].health, 20.0);
+    }
+
+    #[test]
+    fn buildings_give_no_supply_but_earn_while_they_unpack() {
+        let mut w = division();
+        w.supplies
+            .insert(Id::from("depot"), supply(20.0, true, 30.0));
+        let hq = Command::Unpack {
+            regiment: 0,
+            at: [30.0, 40.0],
+            facing: NORTH,
+        };
+        w.apply(1, hq).unwrap();
+        while w.regiments[0].unpacked_into.is_none() {
+            w.tick();
+        }
+        let b = w.regiments[0].unpacked_into.unwrap();
+        run(&mut w, 1.0);
+        assert!(w.buildings[b].busy());
+        assert!(w.buildings[b].supply.zone.is_none());
+        // In the house's zone, at its own rate, not its truck's.
+        assert_eq!(w.building_ledger(b).production.get("money"), 25.0);
+        // Its zone comes the tick it's done, and goes with its stockpile
+        // the tick it starts to pack.
+        while w.buildings[b].busy() {
+            assert!(w.buildings[b].supply.zone.is_none());
+            w.tick();
+        }
+        w.tick();
+        assert!(w.buildings[b].supply.zone.is_some());
+        run(&mut w, 5.0);
+        assert!(w.buildings[b].supply.stockpile > 0.0);
+        w.buildings[b].packing = Some((w.ticks, w.ticks + 50));
+        w.tick();
+        assert!(w.buildings[b].supply.zone.is_none());
+        assert_eq!(w.buildings[b].supply.stockpile, 0.0);
+    }
+
+    #[test]
+    fn replacements_leave_a_building_by_its_deployment_point() {
+        let mut w = division();
+        // The house recruits its kind, 6 to its left, within its reach.
+        w.recruit_lists
+            .insert(Id::from("house"), vec![Id::from("company")]);
+        w.buildings[0].deploy = Some(DeployPoints {
+            creation: [0.0, 0.0],
+            deployment: [-6.0, 0.0],
+        });
+        let lost = w.regiments[1].units[2];
+        w.units[lost].die(0);
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        while !w.units[lost].alive() {
+            w.tick();
+        }
+        let b = &w.buildings[0];
+        let out = deploy_point(b.position, b.facing, [-6.0, 0.0]);
+        assert!(near(w.units[lost].position, b.position));
+        assert_eq!(w.units[lost].path.last(), Some(&out));
+        assert!(w.units[lost].path.len() > 1);
+    }
+
+    #[test]
+    fn buildings_engage_only_what_their_weapons_target() {
+        let mut w = division();
+        w.buildings[0].owner = 2;
+        w.buildings[0].noticed.push(Enemy::Regiment(1));
+        assert!(!w.engaged_by(1));
+        let member = w.regiments[1].units[0];
+        w.buildings[0].target = Some(Target::Unit(member));
+        assert!(w.engaged_by(1));
+    }
+
+    #[test]
+    fn regiments_a_map_has_short_of_members_fill_up_too() {
+        let mut w = division();
+        let mut c = raised_company(&mut w, 1);
+        c.renumber(80);
+        c.members[2].lost = Some(50.0);
+        c.place([24.0, 22.0], [0.0, 1.0]);
+        let r = w.add_regiment(&c);
+        let lost = w.regiments[r].units[2];
+        assert!(w.units[lost].awaited && !w.units[lost].alive());
+        assert_eq!(w.regiments[r].replacing, [0.0, 0.0, 50.0]);
     }
 
     #[test]

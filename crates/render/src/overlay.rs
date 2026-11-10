@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use aaa_data::{GameData, Id};
 use aaa_map::{Division, Ground, Shape, from_local};
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{CompressedImageFormats, ImageSampler};
+use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
@@ -200,6 +200,12 @@ impl BannerImages {
             return self.plain_frame.clone();
         };
         self.image(game, images, path)
+    }
+
+    /// How many badges the nation of an organization of `template` has.
+    pub fn badges(&self, template: &str) -> usize {
+        let badges = self.badge_paths.get(&Id::from(template));
+        badges.map_or(0, Vec::len)
     }
 
     /// The badge an organization in `division` wears below its banner's
@@ -422,19 +428,33 @@ pub fn border_paths(loops: &[Vec<[f32; 2]>]) -> Vec<Vec<[f32; 2]>> {
     .collect()
 }
 
-/// The lines of a border along `loops`, closed paths in map units with
-/// what they bound on their left, laid over the ground in world space: a
-/// solid line on each path and a thinner broken one just inside it.
-pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>]) -> Mesh {
-    // How far apart the lines' points are, near enough for them to bend
-    // with the ground.
+/// The image a border is drawn with, sampled over and over along it.
+pub fn border_image(
+    game: &mut GameData,
+    path: &str,
+    formats: CompressedImageFormats,
+) -> Option<Image> {
+    let mut image = textures::decode(&game.read(path)?, path, formats, true)?;
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    });
+    Some(image)
+}
+
+/// A border along `loops`, closed paths in map units with what they bound
+/// on their left: a strip `width` across laid over the ground in world
+/// space, each path down its middle. Its image runs along it, top to
+/// bottom once for every `width` of the way, its left edge outermost.
+pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
+    // How far apart the strip's points are along it, near enough for it
+    // to bend with the ground, and how many it has across.
     const STEP: f32 = 0.2;
-    // Each line's near and far edge in from the path, and how many steps
-    // it's drawn for and then left out for.
-    const LINES: [(f32, f32, usize, usize); 2] = [(0.0, 0.15, 1, 0), (0.23, 0.32, 3, 1)];
+    const ACROSS: u32 = 3;
     // How near the map's edge a path counts as running along it.
     const EDGE: f32 = CELL_SIZE / 2.0;
     let mut positions = Vec::new();
+    let mut uvs = Vec::new();
     let mut indices = Vec::new();
     for path in loops.iter().filter(|l| l.len() > 2) {
         let path: Vec<Vec2> = path.iter().map(|&p| Vec2::from(p)).collect();
@@ -444,29 +464,32 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>]) -> Mesh {
             let along = path[(i + 1) % n] - path[(i + n - 1) % n];
             along.perp().normalize_or_zero()
         };
-        let at = |i: usize, inset: f32| {
-            let Vec2 { x, y } = path[i] + inward(i) * inset;
-            world(x, y, ground.height_at(x, y) + LIFT).to_array()
-        };
         // Where a zone runs off the map there's no edge of it to mark.
         let on_map = |i: usize| {
             let inside = EDGE..=ground.size() - EDGE;
             inside.contains(&path[i].x) && inside.contains(&path[i].y)
         };
-        for (near, far, on, off) in LINES {
-            for i in (0..n).filter(|i| i % (on + off) < on) {
-                let j = (i + 1) % n;
-                if !on_map(i) || !on_map(j) {
-                    continue;
-                }
-                let first = positions.len() as u32;
-                positions.extend([at(i, near), at(i, far), at(j, far), at(j, near)]);
-                indices.extend([0, 1, 2, 0, 2, 3].map(|k| first + k));
+        // A whole number of times round, so the image meets itself.
+        let repeats = (n as f32 * STEP / width.max(STEP)).round().max(1.0);
+        let first = positions.len() as u32;
+        // The first point again at the end, with the image's last row.
+        for i in 0..=n {
+            for a in 0..ACROSS {
+                let u = a as f32 / (ACROSS - 1) as f32;
+                let Vec2 { x, y } = path[i % n] + inward(i % n) * (u - 0.5) * width;
+                positions.push(world(x, y, ground.height_at(x, y) + LIFT).to_array());
+                uvs.push([u, i as f32 / n as f32 * repeats]);
+            }
+        }
+        for i in (0..n).filter(|&i| on_map(i) && on_map((i + 1) % n)) {
+            for a in 0..ACROSS - 1 {
+                let near = first + i as u32 * ACROSS + a;
+                let far = near + ACROSS;
+                indices.extend([near, near + 1, far + 1, near, far + 1, far]);
             }
         }
     }
     let normals = vec![[0.0, 1.0, 0.0]; positions.len()];
-    let uvs = vec![[0.0, 0.0]; positions.len()];
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::RENDER_WORLD,
@@ -506,28 +529,39 @@ mod tests {
     }
 
     #[test]
-    fn borders_run_just_inside_their_paths_on_the_ground() {
+    fn borders_run_along_their_paths_on_the_ground() {
         let side = 17;
         let heights = (0..side * side).map(|i| (i % 5) as f32).collect();
         let ground = Ground::from_heights(heights);
         // Round a square, what it bounds on the left.
         let path = vec![[8.0, 8.0], [24.0, 8.0], [24.0, 24.0], [8.0, 24.0]];
-        let mesh = border(&ground, &[path]);
+        let mesh = border(&ground, &[path], 1.0);
         let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
             panic!("no positions");
         };
+        let Some(bevy::mesh::VertexAttributeValues::Float32x2(uvs)) =
+            mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("no uvs");
+        };
         assert!(!positions.is_empty());
-        for p in positions {
+        // Half its width either side of the path, the image's left edge
+        // outside what the path bounds.
+        for (p, [u, _]) in positions.iter().zip(uvs) {
             let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
             assert!((p[1] - ground.height_at(x, y) - LIFT).abs() < 1e-4);
-            assert!((7.99..24.01).contains(&x) && (7.99..24.01).contains(&y));
+            assert!((7.49..24.51).contains(&x) && (7.49..24.51).contains(&y));
+            // Along the middle of the near side, clear of the corners.
+            if (12.0..20.0).contains(&x) && y < 12.0 {
+                assert!(*u != 0.0 || y < 8.0, "{x}, {y}");
+                assert!(*u != 1.0 || y > 8.0, "{x}, {y}");
+            }
         }
-        assert!(
-            mesh.indices()
-                .is_some_and(|i| i.len() == positions.len() / 4 * 6)
-        );
+        // The image goes round a whole number of times.
+        let last = uvs.last().unwrap()[1];
+        assert!(last >= 1.0 && last.fract() == 0.0, "{last}");
     }
 
     #[test]

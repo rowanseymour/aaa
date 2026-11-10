@@ -16,7 +16,7 @@ use bevy::ui_widgets::{Activate, Button};
 use crate::actions::Blocks;
 use crate::effects::Effects;
 use crate::ui::Hint;
-use crate::{BuildingView, Loaded, Local, OWN, Screen, Selected, SelectedBuilding, Sim, minimap};
+use crate::{BuildingView, Loaded, Local, Screen, Selected, SelectedBuilding, Sim, minimap};
 
 /// The tint a building out of supply is drawn in.
 const OUT_OF_SUPPLY: &str = "out_of_supply_vfx";
@@ -36,6 +36,14 @@ impl Default for Border {
 #[derive(Resource, Default)]
 pub struct Outline(pub Vec<Vec<[f32; 2]>>);
 
+/// How the border looks, from the game's settings.
+#[derive(Resource)]
+pub struct BorderLook {
+    pub colour: Color,
+    width: f32,
+    material: Handle<StandardMaterial>,
+}
+
 /// The border as drawn, around the zones of these buildings, by index into
 /// the sim's.
 #[derive(Component)]
@@ -51,10 +59,9 @@ pub fn show_border(
     local: Res<Local>,
     loaded: Res<Loaded>,
     lines: Query<(Entity, &BorderLine)>,
+    look: Res<BorderLook>,
     mut outline: ResMut<Outline>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut material: bevy::prelude::Local<Option<Handle<StandardMaterial>>>,
 ) {
     let sim = &sim.0;
     let zone = |b: usize| sim.buildings[b].supply.zone.as_ref();
@@ -74,17 +81,14 @@ pub fn show_border(
         return;
     }
     let edges = aaa_map::outline(giving.iter().filter_map(|&b| zone(b)));
-    let mesh = overlay::border(&loaded.map.ground, &edges);
+    let mesh = overlay::border(&loaded.map.ground, &edges, look.width);
     outline.0 = overlay::border_paths(&edges);
-    let material = material
-        .get_or_insert_with(|| materials.add(overlay::mark_material(None, OWN)))
-        .clone();
     commands.spawn((
         BorderLine(giving),
         NotShadowCaster,
         Pickable::IGNORE,
         Mesh3d(meshes.add(mesh)),
-        MeshMaterial3d(material),
+        MeshMaterial3d(look.material.clone()),
         DespawnOnExit(Screen::Match),
     ));
 }
@@ -119,14 +123,27 @@ const CYCLE_ICON: &str = "UI/Game/Floaters/ButtonDetachedRegimentUnpressed.tga";
 const CYCLE_HELP: &str = "idle_buttons_IdleButton_tooltip_2";
 const CYCLE_SIZE: f32 = 42.0;
 
-/// Spawns the button that cycles through detached regiments.
+/// Loads how the border looks, and spawns the button that cycles through
+/// detached regiments.
 pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
     let game = &mut loaded.game;
+    let border = game.supply_border();
+    let [r, g, b] = border.colour;
+    let colour = Color::srgb(r, g, b);
+    let image = (border.texture.as_deref())
+        .and_then(|path| overlay::border_image(game, path, formats.0))
+        .map(|i| images.add(i));
+    commands.insert_resource(BorderLook {
+        colour,
+        width: border.width,
+        material: materials.add(overlay::mark_material(image, colour)),
+    });
     let icon = game
         .read(CYCLE_ICON)
         .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))

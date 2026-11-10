@@ -280,6 +280,9 @@ pub struct Member {
     pub fighter: Option<Fighter>,
     /// Its health as a fraction of its fighter's.
     pub health: f32,
+    /// For one its regiment has lost and has yet to replace: the health
+    /// its replacement has built up so far.
+    pub lost: Option<f32>,
 }
 
 /// What a member tows, dragged after the point it's coupled to.
@@ -337,6 +340,17 @@ pub fn regiments(
         Some(member)
     };
     let ranges = |template: &str| ranges.get(&Id::from(template)).copied().unwrap_or_default();
+    // Ids no thing on the map has, for the members regiments have lost.
+    let members = things
+        .iter()
+        .flat_map(|t| t.organization().map_or(&[][..], |o| &o.members[..]));
+    let highest = things
+        .iter()
+        .chain(members)
+        .map(|t| t.id)
+        .max()
+        .unwrap_or(0);
+    let mut spare = highest + 1..;
     things
         .iter()
         .filter_map(|t| {
@@ -347,14 +361,46 @@ pub fn regiments(
                 }
                 return Some(lone(placed(t)?, owner, facing(t), ranges(&t.template)));
             };
-            let members = organization
+            let standing = organization
                 .members
                 .iter()
                 .map(placed)
                 .collect::<Option<Vec<_>>>()?;
             let facing = facing(t);
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
-            let places = layout.map(|l| stored_places(l, organization, members.len()));
+            let count = standing.len().max(1) as f32;
+            let sum = standing.iter().fold([0.0, 0.0], |[x, y], m| {
+                [x + m.thing.position[0], y + m.thing.position[1]]
+            });
+            let among = match standing.is_empty() {
+                true => [t.position[0], t.position[1]],
+                false => [sum[0] / count, sum[1] / count],
+            };
+            // With the members it's lost, where the record says what they
+            // were, so that they can be replaced.
+            let mut lost = |p: &tgck::map::Position| {
+                let template = p.template.as_ref().filter(|t| !t.is_empty())?;
+                // Among those standing, so the regiment is where they are.
+                let [x, y] = among;
+                let thing = Thing {
+                    template: template.clone(),
+                    class: tgck::map::ACTOR,
+                    id: spare.next()?,
+                    name: String::new(),
+                    position: [x, y, 0.0],
+                    facing: [facing[0], facing[1], 0.0],
+                    flags: 0,
+                    scale: 1.0,
+                    variation: -1,
+                    seen_by: 0,
+                    detail: Detail::None,
+                };
+                let mut member = member(thing, bodies, fighters)?;
+                member.lost = Some(p.replenished.unwrap_or(0.0));
+                Some(member)
+            };
+            let (members, held) = with_lost(organization, standing, &mut lost);
+            let places = layout.map(|l| stored_places(l, organization, &held));
             let ranges = ranges(&t.template);
             let mut regiment = regiment(t.id, &t.template, owner, facing, members, places, ranges)?;
             regiment.hq = organization.hq.filter(|&id| id != 0);
@@ -395,6 +441,7 @@ fn member(
     };
     Some(Member {
         health,
+        lost: None,
         speed: body.speed?,
         acceleration: body.acceleration,
         turn_rate: body.turn_rate,
@@ -431,21 +478,41 @@ fn whole<'a>(layout: &'a Layout, slots: &[String]) -> Places<'a> {
     }
 }
 
-/// The places a map's organization records its `members` filling, and the
-/// formation it records; a regiment that has lost members still knows
-/// where the rest stand. Where the record doesn't fit the layout, as when
-/// the layout has changed since, it's taken as whole.
-fn stored_places<'a>(
-    layout: &'a Layout,
+/// A map's organization's members in the order of its positions: those
+/// `standing`, and for each position it records as empty the member
+/// `lost` makes of it, if it can. With them, which positions have a
+/// member; none where the record doesn't account for those standing.
+fn with_lost(
     o: &tgck::map::Organization,
-    members: usize,
-) -> Places<'a> {
+    standing: Vec<Member>,
+    lost: &mut dyn FnMut(&tgck::map::Position) -> Option<Member>,
+) -> (Vec<Member>, Vec<bool>) {
+    let filled = o.positions.iter().filter(|p| p.index >= 0).count();
+    if filled != standing.len() {
+        return (standing, Vec::new());
+    }
+    let mut standing = standing.into_iter();
+    let mut held = Vec::new();
+    let mut members = Vec::new();
+    for p in &o.positions {
+        let member = match p.index >= 0 {
+            true => standing.next(),
+            false => lost(p),
+        };
+        held.push(member.is_some());
+        members.extend(member);
+    }
+    (members, held)
+}
+
+/// The places a map's organization's members fill, `held` saying which of
+/// its positions has one, and the formation it records; a regiment that
+/// has lost members still knows where the rest stand. Where the record doesn't fit the layout, as when
+/// the layout has changed since, it's taken as whole.
+fn stored_places<'a>(layout: &'a Layout, o: &tgck::map::Organization, held: &[bool]) -> Places<'a> {
     let mut places = whole(layout, &o.slots);
-    let filled: Vec<bool> = o.positions.iter().map(|p| p.index >= 0).collect();
-    let fits =
-        filled.len() == places.filled.len() && filled.iter().filter(|&&f| f).count() == members;
-    if fits {
-        places.filled = filled;
+    if held.len() == places.filled.len() {
+        places.filled = held.to_vec();
     }
     if let Some(f) = usize::try_from(o.formation)
         .ok()
@@ -937,6 +1004,55 @@ mod tests {
         assert_eq!(r.formations[1].offsets, [[-1.0, 1.0], [0.0, 0.0]]);
         assert_eq!(r.formations[0].offsets, [[-1.0, 2.0], [0.0, 0.0]]);
         assert_eq!((r.primary, r.combat), (Some(1), Some(0)));
+    }
+
+    #[test]
+    fn regiments_keep_a_place_for_members_they_can_replace() {
+        use crate::fixtures::{organization, placed};
+        let members = vec![
+            placed(2, "rifle", 0, None, None),
+            placed(3, "captain", 0, None, None),
+        ];
+        let mut o = organization("line", members);
+        o.slots = vec!["rifle".into(), String::new(), "captain".into()];
+        let place = o.positions[0].clone();
+        // The front's second rifle is gone, a fifth of the way back; what
+        // stood in the empty slot isn't recorded.
+        let lost = tgck::map::Position {
+            index: -1,
+            template: Some("rifle".into()),
+            replenished: Some(20.0),
+            ..place.clone()
+        };
+        let empty = tgck::map::Position {
+            index: -1,
+            ..place.clone()
+        };
+        o.positions = vec![place.clone(), lost, empty, place];
+        let moves = Body {
+            speed: Some(3.0),
+            ..Body::default()
+        };
+        let all = regiments(
+            &[placed(1, "squad", 2, None, Some(o))],
+            &HashMap::from([
+                (Id::from("rifle"), moves.clone()),
+                (Id::from("captain"), moves),
+            ]),
+            &HashMap::new(),
+            &HashMap::from([(Id::from("line"), layout())]),
+            &HashMap::new(),
+        );
+        let [r] = &all[..] else {
+            panic!();
+        };
+        let lost: Vec<_> = r.members.iter().map(|m| m.lost).collect();
+        assert_eq!(lost, [None, Some(20.0), None]);
+        // Under an id nothing on the map has.
+        assert_eq!(r.members[1].thing.id, 4);
+        assert_eq!(r.members[1].thing.template, "rifle");
+        assert_eq!(r.formations[1].offsets.len(), 3);
+        assert_eq!(r.primary, Some(2));
     }
 
     #[test]
