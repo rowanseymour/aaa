@@ -52,7 +52,7 @@ impl Sounds {
     /// left to [`Sounds::load_objects`], for a match.
     pub fn new(game: &mut GameData, ready: &[&str]) -> Sounds {
         let audio = game.audio();
-        info!("{} audio", audio.len());
+        debug!("{} audio", audio.len());
         let read = ready
             .iter()
             .filter_map(|id| audio.get(&Id::from(*id)))
@@ -73,7 +73,7 @@ impl Sounds {
     /// Reads the audio object templates play.
     pub fn load_objects(&mut self, game: &mut GameData) {
         self.objects = game.object_audio();
-        info!("audio played by {} object templates", self.objects.len());
+        debug!("audio played by {} object templates", self.objects.len());
     }
 
     /// Queues the cues `owner`'s object of a template plays for an event,

@@ -1238,9 +1238,6 @@ fn spawn_views(
             regiment.owner,
             u,
         );
-        if regiment.units.first() == Some(&u) {
-            info!("{} {} raised", regiment.template, regiment.id);
-        }
     }
     viewed.units = sim.0.units.len();
     for b in viewed.buildings..sim.0.buildings.len() {
@@ -1933,7 +1930,7 @@ fn choose_formation(
             formation: f,
         };
         if orders.give(&sim.0, player, command).is_ok() {
-            info!("{} to formation {}", regiment.template, formation.id);
+            debug!("{} to formation {}", regiment.template, formation.id);
         }
     }
 }

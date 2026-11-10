@@ -1816,6 +1816,13 @@ impl World {
             regiment.renumber(self.take_ids(ids));
             regiment.place(from, heading);
             let r = self.add_regiment(&regiment);
+            log::debug!(
+                "{} {} put out by {} {}",
+                regiment.template,
+                regiment.id,
+                self.buildings[b].template,
+                self.buildings[b].id
+            );
             self.regiments[r].hq = self.hq_of(b);
             // Those that resupply come out as their leader alone, the
             // rest to follow.
@@ -1942,6 +1949,12 @@ impl World {
             let b = self.buildings.len();
             self.regiments[r].unpacked_into = Some(b);
             self.add_buildings(std::slice::from_ref(&building));
+            log::debug!(
+                "{} {} unpacking into {}",
+                self.regiments[r].template,
+                truck_id,
+                building.template
+            );
             self.buildings[b].unpacked_from = Some(r);
             let ticks = (unpacks.seconds / TICK).round() as u64;
             self.buildings[b].unpacking = Some((self.ticks, self.ticks + ticks));
@@ -1973,6 +1986,7 @@ impl World {
         let Some(packs) = self.packing.get(&building.template).cloned() else {
             return;
         };
+        log::debug!("{} {} packed up", building.template, building.id);
         let share = building.health / building.fighter.health;
         let at = building.position;
         let owner = building.owner;
@@ -2740,6 +2754,8 @@ impl World {
     /// Gives a building, and the rest of its city if it's one's centre, to
     /// `owner`.
     fn change_hands(&mut self, b: usize, owner: u32) {
+        let taken = &self.buildings[b];
+        log::debug!("{} {} taken by player {owner}", taken.template, taken.id);
         let ids = &self.buildings[b].members;
         let members: Vec<usize> = (0..self.buildings.len())
             .filter(|&i| i != b && ids.contains(&self.buildings[i].id))
