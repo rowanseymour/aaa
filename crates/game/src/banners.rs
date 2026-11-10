@@ -182,6 +182,7 @@ pub fn add_hq_banners(
             },
             Visibility::Hidden,
             Pickable::IGNORE,
+            RelativeCursorPosition::default(),
             DespawnOnExit(Screen::Match),
         ));
         let plate = root
@@ -246,7 +247,10 @@ pub fn show_hq_banners(
         };
         *visibility = Visibility::Inherited;
         crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
-        *z = ZIndex(p.y as i32);
+        // As near as a regiment's banner there, which flies lower, would be.
+        let low = over - Vec3::Y * (HQ_HEIGHT - HEIGHT);
+        let near = camera.world_to_viewport(&global, low).map_or(p.y, |p| p.y);
+        *z = ZIndex(near as i32);
         if let Ok((mut image, _)) = layers.get_mut(banner.plate) {
             let [r, g, b] = (sim.0.sides.player(building.owner)).map_or([1.0; 3], |p| p.rgb);
             image.color = Color::srgb(r, g, b);
@@ -462,16 +466,104 @@ pub fn badge_banners(
     }
 }
 
-/// The regiment whose banner the cursor is on, the nearest where they
-/// overlap.
+/// What [`under_cursor`] reads of a banner.
+pub type Pointed<B> = (
+    &'static B,
+    &'static RelativeCursorPosition,
+    &'static ZIndex,
+    &'static Visibility,
+);
+
+/// The regiment or HQ building whose banner the cursor is on: the nearest
+/// where they overlap, and a regiment's over an HQ's as near.
 pub fn under_cursor(
-    banners: &Query<(&Banner, &RelativeCursorPosition, &ZIndex, &Visibility)>,
-) -> Option<usize> {
-    banners
-        .iter()
-        .filter(|(_, cursor, _, visibility)| {
-            cursor.cursor_over && **visibility != Visibility::Hidden
-        })
-        .max_by_key(|(_, _, z, _)| z.0)
-        .map(|(banner, ..)| banner.regiment)
+    regiments: &Query<Pointed<Banner>>,
+    hqs: &Query<Pointed<HqBanner>>,
+) -> Option<Focus> {
+    let on = |cursor: &RelativeCursorPosition, visibility: &Visibility| {
+        cursor.cursor_over && *visibility != Visibility::Hidden
+    };
+    let hqs = (hqs.iter())
+        .filter(|(_, cursor, _, v)| on(cursor, v))
+        .map(|(banner, _, z, _)| (Focus::Building(banner.building), z.0));
+    let regiments = (regiments.iter())
+        .filter(|(_, cursor, _, v)| on(cursor, v))
+        .map(|(banner, _, z, _)| (Focus::Regiment(banner.regiment), z.0));
+    // Regiments come last, to win where they're as near.
+    nearest(hqs.chain(regiments))
+}
+
+/// The nearest drawn of what banners fly for, each given with how near, and
+/// the last of those as near.
+fn nearest(banners: impl Iterator<Item = (Focus, i32)>) -> Option<Focus> {
+    banners.max_by_key(|&(_, z)| z).map(|(focus, _)| focus)
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
+    use super::*;
+
+    #[test]
+    fn nearest_banner_wins() {
+        let (regiment, building) = (Focus::Regiment(3), Focus::Building(1));
+        assert_eq!(nearest([].into_iter()), None);
+        assert_eq!(nearest([(building, 9)].into_iter()), Some(building));
+        // Whichever kind is nearer, whatever order they come in.
+        let banners = [(building, 5), (regiment, 2)];
+        assert_eq!(nearest(banners.into_iter()), Some(building));
+        assert_eq!(nearest(banners.into_iter().rev()), Some(building));
+        let banners = [(building, 2), (regiment, 5)];
+        assert_eq!(nearest(banners.into_iter()), Some(regiment));
+        // As near as each other, the later wins.
+        let banners = [(building, 4), (regiment, 4)];
+        assert_eq!(nearest(banners.into_iter()), Some(regiment));
+    }
+
+    #[test]
+    fn cursor_picks_among_the_banners_it_is_on() {
+        let mut world = World::new();
+        let none = Entity::PLACEHOLDER;
+        let pointed = |over: bool, z: i32, visibility: Visibility| {
+            let cursor = RelativeCursorPosition {
+                cursor_over: over,
+                ..default()
+            };
+            (cursor, ZIndex(z), visibility)
+        };
+        let regiment = |regiment: usize| Banner {
+            regiment,
+            engaged: none,
+            focus: none,
+            out_of_supply: none,
+            shortage: none,
+            badge: none,
+            wears: None,
+        };
+        let hq = |building: usize| HqBanner {
+            building,
+            hq: 0,
+            plate: none,
+            focus: none,
+            shortage: none,
+        };
+        let picked = |world: &mut World| {
+            let pick = |regiments: Query<Pointed<Banner>>, hqs: Query<Pointed<HqBanner>>| {
+                under_cursor(&regiments, &hqs)
+            };
+            world.run_system_once(pick).unwrap()
+        };
+        // Those the cursor is off, or that are hidden, don't count.
+        world.spawn((regiment(3), pointed(false, 9, Visibility::Inherited)));
+        world.spawn((hq(4), pointed(true, 9, Visibility::Hidden)));
+        assert_eq!(picked(&mut world), None);
+        world.spawn((hq(1), pointed(true, 2, Visibility::Inherited)));
+        assert_eq!(picked(&mut world), Some(Focus::Building(1)));
+        // A regiment's wins over an HQ's as near, and a nearer HQ's over it.
+        world.spawn((regiment(7), pointed(true, 2, Visibility::Inherited)));
+        assert_eq!(picked(&mut world), Some(Focus::Regiment(7)));
+        world.spawn((hq(2), pointed(true, 5, Visibility::Inherited)));
+        assert_eq!(picked(&mut world), Some(Focus::Building(2)));
+    }
 }

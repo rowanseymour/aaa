@@ -1541,20 +1541,16 @@ fn pointed(
     pick_ground(ground, ray)
 }
 
-/// Finds what the cursor is over: the regiment whose banner it's on, else
-/// that of the nearest unit within reach of the ground it points at, else
-/// the building standing there; nothing while it's on the minimap or the
-/// interface's panels, which cover the map.
+/// Finds what the cursor is over: the regiment or HQ whose banner it's on,
+/// else the regiment of the nearest unit within reach of the ground it
+/// points at, else the building standing there; nothing while it's on the
+/// minimap or the interface's panels, which cover the map.
 #[allow(clippy::too_many_arguments)]
 fn focus(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
-    banners: Query<(
-        &banners::Banner,
-        &RelativeCursorPosition,
-        &ZIndex,
-        &Visibility,
-    )>,
+    banners: Query<banners::Pointed<banners::Banner>>,
+    hq_banners: Query<banners::Pointed<banners::HqBanner>>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
     grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
     loaded: Res<Loaded>,
@@ -1567,8 +1563,13 @@ fn focus(
         focus.set_if_neq(Focus::Nothing);
         return;
     }
-    if let Some(r) = banners::under_cursor(&banners) {
-        focus.set_if_neq(Focus::Regiment(r));
+    // An HQ's banner may outlast it by a frame.
+    let flying = |found: &Focus| match *found {
+        Focus::Building(b) => !sim.0.buildings[b].gone() && sim.0.hq_of(b).is_some(),
+        _ => true,
+    };
+    if let Some(found) = banners::under_cursor(&banners, &hq_banners).filter(flying) {
+        focus.set_if_neq(found);
         return;
     }
     let Some(point) = pointed(&windows, &cameras, &loaded.map.ground) else {
