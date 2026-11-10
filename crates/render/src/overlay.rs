@@ -11,6 +11,7 @@ use bevy::image::{CompressedImageFormats, ImageSampler};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
+use bevy::render::render_resource::TextureFormat;
 use nif::{Nif, Object};
 use tgck::map::CELL_SIZE;
 
@@ -129,6 +130,9 @@ pub struct BannerImages {
     /// The archive path of the frame round each organization template's
     /// nation's banners.
     frame_paths: HashMap<Id, String>,
+    /// The frame for a template of no nation: a nation's, which all share
+    /// a shape, with its colour taken out.
+    plain_frame: Option<Handle<Image>>,
     /// The archive paths of the division badges of each organization
     /// template's nation.
     badge_paths: HashMap<Id, Vec<String>>,
@@ -152,6 +156,11 @@ impl BannerImages {
         let focus = add("Effects/Selection/BannerFocusBase.tga");
         let out_of_supply = add("Organizations/Banners/Shared/BannerOutOfSupply.png");
         let shortage = add("Organizations/Banners/Shared/BannerBleeding.png");
+        let frame_paths = game.banner_frames();
+        let plain_frame = frame_paths.values().min().and_then(|path| {
+            let image = textures::decode(&game.read(path)?, path, formats, true)?;
+            Some(images.add(whitened(image)))
+        });
         BannerImages {
             plate,
             engaged,
@@ -159,7 +168,8 @@ impl BannerImages {
             out_of_supply,
             shortage,
             icon_paths: game.banner_icons(),
-            frame_paths: game.banner_frames(),
+            frame_paths,
+            plain_frame,
             badge_paths: game.division_badges(),
             loaded: HashMap::new(),
             formats,
@@ -186,7 +196,9 @@ impl BannerImages {
         images: &mut Assets<Image>,
         template: &str,
     ) -> Option<Handle<Image>> {
-        let path = self.frame_paths.get(&Id::from(template))?.clone();
+        let Some(path) = self.frame_paths.get(&Id::from(template)).cloned() else {
+            return self.plain_frame.clone();
+        };
         self.image(game, images, path)
     }
 
@@ -219,6 +231,24 @@ impl BannerImages {
             textures::decode(&game.read(&path)?, &path, formats, true).map(|i| images.add(i))
         })
     }
+}
+
+/// An image with every coloured texel turned white, black and see-through
+/// ones left be.
+fn whitened(mut image: Image) -> Image {
+    if let Some(data) = image.data.as_mut().filter(|_| {
+        matches!(
+            image.texture_descriptor.format,
+            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm
+        )
+    }) {
+        for texel in data.as_chunks_mut::<4>().0 {
+            if texel[3] > 0 && texel[..3] != [0, 0, 0] {
+                texel[..3].fill(255);
+            }
+        }
+    }
+    image
 }
 
 /// A flip book's frames, in the order the model holds them.
@@ -391,6 +421,8 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>]) -> Mesh {
     // Each line's near and far edge in from the path, and how many steps
     // it's drawn for and then left out for.
     const LINES: [(f32, f32, usize, usize); 2] = [(0.0, 0.15, 1, 0), (0.23, 0.32, 3, 1)];
+    // How near the map's edge a path counts as running along it.
+    const EDGE: f32 = CELL_SIZE / 2.0;
     let mut positions = Vec::new();
     let mut indices = Vec::new();
     for path in loops.iter().filter(|l| l.len() > 2) {
@@ -405,9 +437,17 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>]) -> Mesh {
             let Vec2 { x, y } = path[i] + inward(i) * inset;
             world(x, y, ground.height_at(x, y) + LIFT).to_array()
         };
+        // Where a zone runs off the map there's no edge of it to mark.
+        let on_map = |i: usize| {
+            let inside = EDGE..=ground.size() - EDGE;
+            inside.contains(&path[i].x) && inside.contains(&path[i].y)
+        };
         for (near, far, on, off) in LINES {
             for i in (0..n).filter(|i| i % (on + off) < on) {
                 let j = (i + 1) % n;
+                if !on_map(i) || !on_map(j) {
+                    continue;
+                }
                 let first = positions.len() as u32;
                 positions.extend([at(i, near), at(i, far), at(j, far), at(j, near)]);
                 indices.extend([0, 1, 2, 0, 2, 3].map(|k| first + k));

@@ -328,7 +328,16 @@ pub fn tell(
 ) {
     let (until, text) = &mut *message;
     let now = time.elapsed_secs();
-    for notice in std::mem::take(&mut sim.0.notices) {
+    // Taking them marks the sim changed, which what redraws on a change
+    // would then do every frame.
+    if sim.0.notices.is_empty() && text.0.is_empty() {
+        return;
+    }
+    let notices = match sim.0.notices.is_empty() {
+        true => Vec::new(),
+        false => std::mem::take(&mut sim.0.notices),
+    };
+    for notice in notices {
         let words = match notice {
             Notice::Short { player, percent } if Some(player) == local.0 => looks
                 .shortage

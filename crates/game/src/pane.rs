@@ -268,9 +268,8 @@ pub fn lay_out(
     mut pane: Single<(Entity, &mut Visibility), With<Pane>>,
 ) {
     let what = wanted(&sim.0, &selected.0, chosen.0);
-    let hqs = sim.0.hqs();
     let what = what.map(|w| {
-        let detail = detail(&sim.0, &hqs, &w);
+        let detail = detail(&sim.0, &sim.0.hqs(), &w);
         (w, detail)
     });
     if showing.0 == what {
@@ -732,8 +731,8 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     match () {
         _ if building.packing.is_some() => Some("structure_packing"),
         _ if building.unpacking.is_some() => Some("structure_unpacking"),
-        // Out of supply outweighs disabled, and recruiting both, though
-        // a queue doesn't move while either holds.
+        // Out of supply outweighs disabled, and a queue that either holds
+        // up isn't recruiting.
         _ if sim.out_of_supply(b) && building.standing() => Some("out_of_supply"),
         _ if building.state == State::Disabled => Some("disabled"),
         _ if !building.queue.is_empty() => Some("structure_recruiting"),
@@ -798,10 +797,16 @@ fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill) {
     parent.spawn((meter(node, gauge), fill));
 }
 
-/// A regiment's card clicked: selects it alone.
-fn pick(activate: On<Activate>, cards: Query<&Pick>, mut selected: ResMut<Selected>) {
+/// A regiment's card clicked: selects it alone, in place of any building.
+fn pick(
+    activate: On<Activate>,
+    cards: Query<&Pick>,
+    mut selected: ResMut<Selected>,
+    mut chosen: ResMut<SelectedBuilding>,
+) {
     if let Ok(card) = cards.get(activate.entity) {
         selected.0 = vec![card.0];
+        chosen.0 = None;
     }
 }
 

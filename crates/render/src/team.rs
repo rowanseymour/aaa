@@ -8,6 +8,8 @@ use bevy::prelude::*;
 use bevy::render::render_resource::AsBindGroup;
 use bevy::shader::ShaderRef;
 
+use crate::models::Animated;
+
 pub type TeamMaterial = ExtendedMaterial<StandardMaterial, Team>;
 
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
@@ -46,12 +48,13 @@ pub(crate) fn marked(nif: &nif::Nif, shape: &nif::SceneObject) -> bool {
 #[derive(Component, Clone, Copy, PartialEq, Debug)]
 pub struct Tint(pub [f32; 3]);
 
-/// On a mesh drawn tinted: the tint, and the material it's drawn in
-/// without it.
+/// On a mesh drawn tinted: the tint, the material it's drawn in without
+/// it, and the copy it's drawn in with it.
 #[derive(Component)]
-pub(crate) struct Tinted<M: Material>(Tint, Handle<M>);
+pub(crate) struct Tinted<M: Material>(Tint, Handle<M>, Handle<M>);
 
-/// The tinted copies made of each material, by its id and the tint's bits.
+/// The tinted copies made of each material, by its id and the tint's bits,
+/// kept while anything is tinted.
 #[derive(Resource)]
 pub(crate) struct TintedCopies<M: Material>(HashMap<(AssetId<M>, [u32; 3]), Handle<M>>);
 
@@ -79,18 +82,23 @@ impl Tintable for TeamMaterial {
 }
 
 /// Swaps the materials of meshes under a [`Tint`] for tinted copies, and
-/// back once it's gone.
-#[allow(clippy::too_many_arguments)]
+/// back once it's gone. Meshes whose materials are animated keep them, as
+/// a copy would stand still.
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 pub(crate) fn tint<M: Tintable>(
     mut commands: Commands,
     roots: Query<(Entity, &Tint)>,
     children: Query<&Children>,
-    plain: Query<&MeshMaterial3d<M>, Without<Tinted<M>>>,
-    drawn: Query<(Entity, &Tinted<M>)>,
+    plain: Query<&MeshMaterial3d<M>, (Without<Tinted<M>>, Without<Animated>)>,
+    drawn: Query<(Entity, &Tinted<M>, &MeshMaterial3d<M>)>,
     parents: Query<&ChildOf>,
     mut materials: ResMut<Assets<M>>,
     mut copies: ResMut<TintedCopies<M>>,
 ) {
+    if roots.is_empty() && drawn.is_empty() {
+        copies.0.clear();
+        return;
+    }
     for (root, &tint) in &roots {
         for e in children.iter_descendants(root) {
             let Ok(material) = plain.get(e) else {
@@ -108,12 +116,18 @@ pub(crate) fn tint<M: Tintable>(
                 Some(copy)
             });
             if let Some(copy) = copy {
-                let plain = Tinted(tint, material.0.clone());
-                commands.entity(e).insert((MeshMaterial3d(copy), plain));
+                let tinted = Tinted(tint, material.0.clone(), copy.clone());
+                commands.entity(e).insert((MeshMaterial3d(copy), tinted));
             }
         }
     }
-    for (e, Tinted(tint, plain)) in &drawn {
+    for (e, Tinted(tint, plain, copy), now) in &drawn {
+        // Given another material since, it keeps that one, to be tinted
+        // afresh if it's still to be.
+        if now.0 != *copy {
+            commands.entity(e).remove::<Tinted<M>>();
+            continue;
+        }
         let still = parents
             .iter_ancestors(e)
             .any(|a| roots.get(a).is_ok_and(|(_, t)| t == tint));

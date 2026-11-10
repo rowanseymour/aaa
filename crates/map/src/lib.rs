@@ -18,7 +18,7 @@ pub use pathing::{Domain, Obstacle, Pathing, Zone, outline};
 pub use tgck::map::Relation;
 pub use units::{
     Division, Formation, Member, Packs, Player, Recruits, Regiment, Team, Trailer, UNPACKED_FACING,
-    Unpacks, divisions, owner, relation,
+    Unpacks, owner, relation,
 };
 
 use std::collections::{HashMap, HashSet};

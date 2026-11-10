@@ -210,6 +210,8 @@ pub fn show_banners(
     let side = camera.logical_viewport_size().map_or(0.0, |s| s.y * SIZE);
     let t = fixed.overstep_fraction();
     let ground = &loaded.map.ground;
+    // Whether each owner met so far can't pay its upkeep.
+    let mut short: HashMap<u32, bool> = HashMap::new();
     for (banner, mut node, mut z, mut visibility) in &mut banners {
         let regiment = &sim.0.regiments[banner.regiment];
         let live = || {
@@ -245,7 +247,8 @@ pub fn show_banners(
             v.set_if_neq(show(sim.0.lacks_supply(banner.regiment)));
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.shortage) {
-            let short = sim.0.short(regiment.owner).is_some();
+            let owner = regiment.owner;
+            let short = *(short.entry(owner)).or_insert_with(|| sim.0.short(owner).is_some());
             v.set_if_neq(show(short && time.elapsed_secs() % (2.0 * FLASH) < FLASH));
         }
         if let Ok((mut image, mut v)) = layers.get_mut(banner.focus) {
@@ -268,6 +271,10 @@ pub fn badge_banners(
     mut banners: Query<&mut Banner>,
     mut layers: Query<(&mut ImageNode, &mut Visibility), Without<Banner>>,
 ) {
+    // Attachments and HQs change only as the sim does.
+    if !sim.is_changed() {
+        return;
+    }
     let hqs = sim.0.hqs();
     for hq in &hqs {
         if badges.0.contains_key(&hq.id) {
