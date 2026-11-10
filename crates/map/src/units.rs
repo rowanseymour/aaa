@@ -664,33 +664,41 @@ impl Recruits {
     fn unpacks(&self, template: &str) -> Option<Unpacks> {
         let d = self.deployments.get(&Id::from(template))?;
         let into = d.unpacks_into.as_ref()?;
-        let fighter = self.fighters.get(into)?.clone();
         let body = self.bodies.get(into)?;
         let seconds = self.deployments.get(into).map_or(7.0, |b| b.unpacking);
+        Some(Unpacks {
+            building: self.building(into)?,
+            room: body.shape.padded(self.padding),
+            offset: d.packed_offset,
+            seconds,
+        })
+    }
+
+    /// A building of `template` to put on the map during a match, if one
+    /// can stand: at the origin facing [`UNPACKED_FACING`], in full health
+    /// and owned by nobody.
+    pub fn building(&self, template: &Id) -> Option<Building> {
+        let fighter = self.fighters.get(template)?.clone();
+        let body = self.bodies.get(template)?;
         let obstacle = body.blocking.map(|shape| Obstacle {
             position: [0.0, 0.0],
             facing: UNPACKED_FACING,
             shape,
             soft: body.soft,
         });
-        Some(Unpacks {
-            building: Building {
-                id: 0,
-                template: into.as_str().to_string(),
-                owner: 0,
-                position: [0.0, 0.0],
-                facing: UNPACKED_FACING,
-                fighter,
-                health: 1.0,
-                zone: None,
-                members: Vec::new(),
-                obstacle,
-                deploy: self.deploy_points.get(into).copied(),
-                organization: None,
-            },
-            room: body.shape.padded(self.padding),
-            offset: d.packed_offset,
-            seconds,
+        Some(Building {
+            id: 0,
+            template: template.as_str().to_string(),
+            owner: 0,
+            position: [0.0, 0.0],
+            facing: UNPACKED_FACING,
+            fighter,
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle,
+            deploy: self.deploy_points.get(template).copied(),
+            organization: None,
         })
     }
 

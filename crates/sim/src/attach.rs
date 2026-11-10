@@ -194,11 +194,26 @@ impl World {
         }
     }
 
-    /// Detaches the regiment at `r` if its HQ isn't among `hqs` any more,
-    /// or has changed side.
+    /// Detaches the regiment at `r` if its HQ isn't among `hqs` any more.
+    /// It keeps one of another side, as it does on changing side itself.
     pub(crate) fn keep_attached(&mut self, r: usize, hqs: &[Hq]) {
         let regiment = &mut self.regiments[r];
-        let stands = |id: u32| hqs.iter().any(|h| h.id == id && h.owner == regiment.owner);
-        regiment.hq = regiment.hq.filter(|&id| stands(id));
+        regiment.hq = (regiment.hq).filter(|&id| hqs.iter().any(|h| h.id == id));
+    }
+
+    /// Detaches every regiment attached to the HQ `hq`.
+    pub(crate) fn detach_all(&mut self, hq: u32) {
+        for regiment in &mut self.regiments {
+            regiment.hq = regiment.hq.filter(|&id| id != hq);
+        }
+    }
+
+    /// Hands the regiment at `r` to `owner`. It keeps its place at its
+    /// HQ, though that's its old side's; a packed HQ loses its regiments.
+    pub fn change_side(&mut self, r: usize, owner: u32) {
+        if let Some(hq) = self.packed_hq(r) {
+            self.detach_all(hq);
+        }
+        self.regiments[r].owner = owner;
     }
 }

@@ -4,13 +4,37 @@
 
 use std::collections::BTreeMap;
 
-use aaa_map::{Id, Supply, Zone};
+use aaa_map::pathing::tile_at;
+use aaa_map::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Weapon, Zone};
 
-use crate::{Building, Enemy, Order, Relation, State, TICK, Target, World, deploy_point, distance};
+use crate::{
+    Building, Enemy, Order, Refused, Relation, State, TICK, Target, World, bounding_radius,
+    deploy_point, distance,
+};
 
 /// Ticks between looks at whether a building gives supply, each building
 /// on its own beat.
-const BEAT: u64 = (1.0 / TICK) as u64;
+pub(crate) const BEAT: u64 = (1.0 / TICK) as u64;
+
+/// A property something has for a time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Held {
+    pub property: Id,
+    /// The tick its time is up on. It's taken off at its holder's next
+    /// look after.
+    pub until: u64,
+}
+
+/// Something that has bombarded a regiment lately.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Bombarder {
+    /// The regiment or building that did.
+    pub by: Enemy,
+    /// The tick its last hit landed on.
+    pub tick: u64,
+    /// Ticks from then that it keeps the regiment out of supply.
+    pub length: u64,
+}
 
 /// Where a building stands with supply, as of its last look.
 #[derive(Debug, Clone, Default)]
@@ -25,6 +49,8 @@ pub struct Supplying {
     pub(crate) judged: bool,
     /// Whether it was unpacking or packing when last looked at.
     busy: bool,
+    /// The tile its zone was laid around, and how far.
+    laid: Option<((i32, i32), f32)>,
 }
 
 impl World {
@@ -48,6 +74,117 @@ impl World {
             let zone = b.supply.zone.as_ref();
             zone.is_some_and(|z| self.shares_supply(player, b.owner) && z.holds(at))
         })
+    }
+
+    /// How far the supply of the building at `b` reaches, if it gives any:
+    /// its own range and what its side's technologies and its properties
+    /// add to it.
+    pub fn supply_range(&self, b: usize) -> Option<f32> {
+        let building = &self.buildings[b];
+        let effects = self.effects(building.owner, &building.template, &building.properties);
+        Some(self.supply_of(b)?.range + effects.map(|e| e.range).sum::<f32>())
+    }
+
+    /// What bears on the supply of something of `owner`'s made from
+    /// `template`: its side's technologies that are on its kind, and the
+    /// properties it has for a time.
+    fn effects<'a>(
+        &'a self,
+        owner: u32,
+        template: &str,
+        held: &'a [Held],
+    ) -> impl Iterator<Item = &'a SupplyEffect> {
+        let kind = self.kinds.get(&Id::from(template));
+        let on = move |e: &&SupplyEffect| {
+            let has = |p| kind.is_some_and(|k| k.properties.contains(p));
+            e.requires.iter().all(has)
+        };
+        let technologies = self.technologies.get(&owner).into_iter().flatten();
+        let timed = held.iter().map(|h| &h.property);
+        let of = |p| self.supply_effects.get(p);
+        (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
+    }
+
+    /// Gives `player` a technology, for all it has and will have.
+    pub fn grant(&mut self, player: u32, technology: Id) {
+        let held = self.technologies.entry(player).or_default();
+        if !held.contains(&technology) {
+            held.push(technology);
+        }
+    }
+
+    /// Gives a regiment or building a property for `seconds` from now,
+    /// unless it still has it.
+    pub fn give(&mut self, to: Enemy, property: Id, seconds: f32) {
+        let until = self.ticks + (seconds / TICK).round() as u64;
+        let held = match to {
+            Enemy::Regiment(r) => &mut self.regiments[r].properties,
+            Enemy::Building(b) => &mut self.buildings[b].properties,
+        };
+        if !held.iter().any(|h| h.property == property) {
+            held.push(Held { property, until });
+        }
+    }
+
+    /// Carries out what the special operation `operation` does to supply
+    /// for `player`, aimed at `at`. What using one takes is left to
+    /// whoever asks.
+    pub fn operate(&mut self, player: u32, operation: &Id, at: [f32; 2]) -> Result<(), Refused> {
+        match self.operations.get(operation).cloned() {
+            Some(Operation::Enchant {
+                targets,
+                area,
+                max_targets,
+                property,
+                seconds,
+            }) => {
+                let organization = Id::from("organization");
+                let mut near: Vec<(f32, usize)> = (0..self.regiments.len())
+                    .filter(|&r| !self.destroyed(r))
+                    .filter_map(|r| {
+                        let regiment = &self.regiments[r];
+                        let kind = self.kinds.get(&Id::from(regiment.template.as_str()));
+                        let side = self.standing_flag(player, regiment.owner);
+                        let flags = kind.into_iter().flat_map(|k| &k.flags);
+                        let d = distance(at, self.leader_position(r));
+                        let reach = area + kind.map_or(0.0, |k| bounding_radius(k.soft));
+                        let fits = targets.allow(flags.chain([&organization, &side]));
+                        (d <= reach && fits).then_some((d, r))
+                    })
+                    .collect();
+                near.sort_by(|a, b| a.0.total_cmp(&b.0));
+                if max_targets > 0 {
+                    near.truncate(max_targets as usize);
+                }
+                // One that still has it gets nothing, but takes its place.
+                for (_, r) in near {
+                    self.give(Enemy::Regiment(r), property.clone(), seconds);
+                }
+            }
+            Some(Operation::Drop(template)) => {
+                let mut dropped = self.drops.get(&template).cloned().ok_or(Refused::Unable)?;
+                let spot = Obstacle {
+                    position: at,
+                    facing: dropped.facing,
+                    shape: Shape::Point,
+                    soft: Shape::Point,
+                };
+                if !self.pathing.on_map(&spot) {
+                    return Err(Refused::NoRoom);
+                }
+                dropped.id = self.take_ids(1);
+                dropped.owner = player;
+                dropped.position = at;
+                // In the air it's in nothing's way.
+                dropped.obstacle = None;
+                let b = self.buildings.len();
+                self.add_buildings(&[dropped]);
+                // Its zone waits for its own beat.
+                self.buildings[b].supply.judged = true;
+            }
+            None => return Err(Refused::Unable),
+        }
+        Ok(())
     }
 
     /// Whether `a`'s zones supply `b`'s regiments too.
@@ -79,7 +216,12 @@ impl World {
             self.buildings[b].supply.judged = true;
         }
         for b in all {
-            if (self.ticks + b as u64).is_multiple_of(BEAT) && !fresh.contains(&b) {
+            if !(self.ticks + b as u64).is_multiple_of(BEAT) {
+                continue;
+            }
+            let ticks = self.ticks;
+            self.buildings[b].properties.retain(|h| h.until > ticks);
+            if !fresh.contains(&b) {
                 self.judge(b, true);
             }
         }
@@ -87,9 +229,9 @@ impl World {
 
     /// Works out afresh whether the building at `b` gives supply, laying
     /// or lifting its zone to match, and on its beat filling or draining a
-    /// relay's stockpile. Returns whether its zone came or went.
+    /// relay's stockpile. Returns whether its zone came, went or changed.
     fn judge(&mut self, b: usize, beat: bool) -> bool {
-        let Some(supply) = self.supply_of(b) else {
+        let (Some(supply), Some(range)) = (self.supply_of(b), self.supply_range(b)) else {
             return false;
         };
         let building = &self.buildings[b];
@@ -106,7 +248,7 @@ impl World {
         };
         if supply.relay && beat && !busy {
             stockpile = match connected {
-                true => (stockpile + self.supply_recharge).min(supply.stockpile_max),
+                true => (stockpile + self.supply_rules.recharge).min(supply.stockpile_max),
                 false => stockpile - 1.0,
             }
             .max(0.0);
@@ -115,20 +257,24 @@ impl World {
         let gives = sided
             && !busy
             && building.state == State::Standing
-            && supply.range >= 0.0
+            && range >= 0.0
             && (connected || stockpile > 0.0)
             && building.zone.is_none_or(|city| self.held_firmly(b, city));
-        let had = building.supply.zone.is_some();
-        let laid = (gives && !had).then(|| self.pathing.zone(building.position, supply.range));
+        // Laid again when its range changes or it moves, as one dropped
+        // from the air does on its way down.
+        let around = gives.then(|| (tile_at(building.position), range));
+        let moved = around != building.supply.laid;
+        let laid = (gives && moved).then(|| self.pathing.zone(building.position, range));
         let s = &mut self.buildings[b].supply;
         s.connected = connected;
         s.stockpile = stockpile;
         s.busy = busy;
+        s.laid = around;
         match gives {
             true => s.zone = laid.or(s.zone.take()),
             false => s.zone = None,
         }
-        gives != had
+        moved
     }
 
     /// Whether a zone of another building of its side or an ally's covers
@@ -219,6 +365,74 @@ impl World {
             })
     }
 
+    /// Whether a shot `s` fires with `weapon` is bombardment. For what
+    /// picks its own shots the order decides, whatever the weapon; a
+    /// building defending itself doesn't, so there the weapon does.
+    pub(crate) fn bombards(&self, s: Target, weapon: &Weapon) -> bool {
+        match s {
+            Target::Unit(u) => self.regiments[self.units[u].regiment].bombarding,
+            Target::Building(b) => weapon.bombard && self.buildings[b].fighter.notice.is_some(),
+        }
+    }
+
+    /// Notes a bombardment's hit on the regiment at `r` by `from`, whose
+    /// weapon takes `recharge` seconds between shots.
+    pub(crate) fn shell(&mut self, r: usize, from: Target, recharge: f32) {
+        let by = self.enemy(from);
+        let (ticks, timeout) = (self.ticks, self.supply_rules.bombard_timeout);
+        let regiment = &mut self.regiments[r];
+        match regiment.bombarded.iter_mut().find(|b| b.by == by) {
+            Some(known) => known.tick = ticks,
+            None => {
+                // One that's bombarding is kept out until the weapon could
+                // have fired again too.
+                let seconds = match regiment.bombarding {
+                    true => timeout + recharge,
+                    false => timeout,
+                };
+                regiment.bombarded.push(Bombarder {
+                    by,
+                    tick: ticks,
+                    length: (seconds / TICK).round() as u64,
+                });
+            }
+        }
+    }
+
+    /// Drops what bombarded the regiment at `r` long enough ago, or is
+    /// gone.
+    fn forget_bombarders(&mut self, r: usize) {
+        let ticks = self.ticks;
+        let mut bombarded = std::mem::take(&mut self.regiments[r].bombarded);
+        bombarded.retain(|b| {
+            let gone = match b.by {
+                Enemy::Regiment(e) => self.destroyed(e),
+                Enemy::Building(e) => self.buildings[e].gone(),
+            };
+            ticks < b.tick + b.length && !gone
+        });
+        self.regiments[r].bombarded = bombarded;
+    }
+
+    /// What the rates the regiment at `r` resupplies at are multiplied by:
+    /// 1 and what its side's technologies and its properties add.
+    pub fn resupply_multiplier(&self, r: usize) -> f32 {
+        let regiment = &self.regiments[r];
+        let effects = self.effects(regiment.owner, &regiment.template, &regiment.properties);
+        let added: f32 = effects.map(|e| e.resupply).sum();
+        (1.0 + added).max(self.supply_rules.multiply_floor)
+    }
+
+    /// The morale a second being in supply adds to what the regiment at
+    /// `r` regains while it's doing something that lets it regain any.
+    /// Supply does nothing else to morale.
+    pub fn morale_bonus(&self, r: usize) -> f32 {
+        match self.regiments[r].in_supply {
+            true => self.supply_rules.morale_bonus,
+            false => 0.0,
+        }
+    }
+
     /// Looks at each regiment's supply on its beat: those in supply heal
     /// and fill their ranks, and those out of it wear away while their
     /// side can't pay its upkeep.
@@ -230,6 +444,9 @@ impl World {
             if !(self.ticks + r as u64).is_multiple_of(BEAT) {
                 continue;
             }
+            let ticks = self.ticks;
+            self.regiments[r].properties.retain(|h| h.until > ticks);
+            self.forget_bombarders(r);
             let regiment = &self.regiments[r];
             let used = self.logistics_of(&regiment.template);
             let Some(logistics) = used.filter(|l| l.supply_used && !self.destroyed(r)) else {
@@ -241,16 +458,25 @@ impl World {
             let regiment = &self.regiments[r];
             let owner = regiment.owner;
             let sided = self.sides.player(owner).is_some_and(|p| !p.independent);
+            let short = *shorts.entry(owner).or_insert_with(|| self.short(owner));
+            // Some properties stand in for an HQ, and for a zone while the
+            // side can pay its upkeep.
+            let flagged =
+                (self.effects(owner, &regiment.template, &regiment.properties)).any(|e| e.supplied);
             let in_supply = sided
                 && !self.engaged_by(r)
-                && (regiment.hq.is_some() || logistics.detached)
-                && self.supplied(owner, self.leader_position(r));
-            let resting =
-                regiment.engaged.is_empty() && !matches!(regiment.order, Order::Pursue(_));
+                && regiment.bombarded.is_empty()
+                && (regiment.hq.is_some() || logistics.detached || flagged)
+                && (flagged && short.is_none() || self.supplied(owner, self.leader_position(r)));
+            let resting = regiment.engaged.is_empty()
+                && !regiment.bombarding
+                && !matches!(regiment.order, Order::Pursue(_));
             self.regiments[r].in_supply = in_supply;
-            let short = *shorts.entry(owner).or_insert_with(|| self.short(owner));
             match (in_supply, short) {
-                (true, _) if resting => self.replenish(r, 1.0 - short.unwrap_or(0.0)),
+                (true, _) if resting => {
+                    let pace = (1.0 - short.unwrap_or(0.0)) * self.resupply_multiplier(r);
+                    self.replenish(r, pace);
+                }
                 (false, Some(_)) if sided => self.wear(r, logistics.shortfall_damage),
                 _ => {}
             }

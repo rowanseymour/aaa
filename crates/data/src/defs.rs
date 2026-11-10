@@ -350,6 +350,11 @@ pub struct Property {
     /// Comma separated, the flags it gives its objects for abilities'
     /// `targets` to match.
     pub enabled_target_flags: Option<String>,
+    /// Comma separated, the properties an object needs for a technology
+    /// to be on it.
+    pub required_properties: Option<String>,
+    /// Seconds it lasts, for one an ability gives.
+    pub duration: Option<f32>,
     #[serde(default)]
     pub modifier: Vec<Modifier>,
 }
@@ -360,6 +365,10 @@ pub struct Modifier {
     #[serde(rename = "type")]
     pub kind: Option<String>,
     pub damage_type: Option<Id>,
+    /// What an `ADD` or `MULTIPLY` one changes, e.g. `SUPPLY_RANGE`.
+    pub attribute: Option<String>,
+    /// What a `FLAG` one sets, e.g. `SUPPLIED`.
+    pub modifier_flag: Option<String>,
     pub amount: Option<f32>,
 }
 
@@ -429,6 +438,9 @@ pub struct Ability {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct AbilityDefinition {
+    pub ids: Option<Id>,
+    #[serde(default)]
+    pub flags: Vec<AbilityFlags>,
     /// E.g. `attack`.
     pub ability_type: Option<String>,
     pub range: Option<f32>,
@@ -471,6 +483,17 @@ pub struct Effect {
     pub kind: Option<String>,
     pub damage_type_ids: Option<Id>,
     pub amount: Option<f32>,
+    /// The property it gives what it lands on, for a time.
+    pub enchantment_property: Option<Property>,
+    /// The template of what it puts on the map.
+    pub object_ids: Option<Id>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AbilityFlags {
+    /// An order to bombard can use it.
+    #[serde(default)]
+    pub bombard: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -827,6 +850,15 @@ pub struct SVars {
     /// Seconds a connected relay's stockpile gains each second.
     #[serde(rename = "SupplyStockpileRechargeRate")]
     pub supply_stockpile_recharge_rate: Option<f32>,
+    /// Seconds a bombardment's hit keeps a regiment out of supply.
+    #[serde(rename = "BombardTargetTimeout")]
+    pub bombard_target_timeout: Option<f32>,
+    /// The least a multiplier that modifiers add up to comes to.
+    #[serde(rename = "ModifierAttributeClampMultiply")]
+    pub modifier_attribute_clamp_multiply: Option<f32>,
+    /// Morale a second a regiment regaining it gains more in supply.
+    #[serde(rename = "MoraleSupplyBonus")]
+    pub morale_supply_bonus: Option<f32>,
 }
 
 /// The interface's settings.

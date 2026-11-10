@@ -9,8 +9,9 @@ pub mod pathing;
 mod units;
 
 pub use aaa_data::{
-    Amounts, Damage, DeployPoints, Economy, EconomyRules, Fighter, Flight, FlightKind, Id,
-    Logistics, Requires, Shape, Supply, Targets, Turret, Weapon,
+    Amounts, Damage, DeployPoints, Economy, EconomyRules, Fighter, Flight, FlightKind, Id, Kind,
+    Logistics, Operation, Requires, Shape, Supply, SupplyEffect, SupplyRules, Targets, Turret,
+    Weapon,
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};

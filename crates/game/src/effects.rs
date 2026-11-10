@@ -1211,6 +1211,7 @@ mod tests {
                 speed: 50.0,
                 life: 0.0,
             }),
+            bombard: false,
         }
     }
 
