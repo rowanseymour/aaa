@@ -516,22 +516,44 @@ pub struct MenuButton;
 pub struct Chosen(pub bool);
 
 /// The interface audio a button plays as it's pressed, as the game's
-/// widget templates give each kind of widget.
+/// widget templates give each kind of widget, and whether a right press
+/// sounds it as well as a left.
 #[derive(Component)]
-pub struct Click(&'static str);
+pub struct Click {
+    audio: &'static str,
+    right: bool,
+}
 
 impl Click {
     /// The game's plain button press.
-    pub const PUSH: Click = Click(PUSH);
+    pub const PUSH: Click = Click {
+        audio: PUSH,
+        right: true,
+    };
     /// The game's press of a button that opens a list.
-    pub const OPEN: Click = Click(OPEN);
+    pub const OPEN: Click = Click {
+        audio: OPEN,
+        right: false,
+    };
+    /// The game's press of a button that stays on or off.
+    pub const TOGGLE: Click = Click {
+        audio: TOGGLE,
+        right: false,
+    };
+    /// The command panel's: toggle buttons that are pressed like push
+    /// buttons.
+    pub const COMMAND: Click = Click {
+        audio: TOGGLE,
+        right: true,
+    };
 }
 
 const PUSH: &str = "push_button";
 const OPEN: &str = "tiled_button";
+const TOGGLE: &str = "toggle_button";
 
 /// Every [`Click`], for [`Sounds`] to have ready.
-pub const CLICKS: [&str; 2] = [PUSH, OPEN];
+pub const CLICKS: [&str; 3] = [PUSH, OPEN, TOGGLE];
 
 /// A button laid out as `node`, that does something when
 /// [`Activate`](bevy::ui_widgets::Activate)d, given an observer.
@@ -596,11 +618,16 @@ fn click(
     mut sounds: ResMut<Sounds>,
     time: Res<Time>,
 ) {
-    if press.button != PointerButton::Primary {
+    let Ok(click) = buttons.get(press.entity) else {
         return;
-    }
-    if let Ok(Click(audio)) = buttons.get(press.entity) {
-        sounds.interface(&time, audio);
+    };
+    let sounds_it = match press.button {
+        PointerButton::Primary => true,
+        PointerButton::Secondary => click.right,
+        PointerButton::Middle => false,
+    };
+    if sounds_it {
+        sounds.interface(&time, click.audio);
     }
 }
 
