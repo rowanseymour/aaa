@@ -546,6 +546,10 @@ impl Click {
         audio: TOGGLE,
         right: true,
     };
+
+    pub fn play(&self, sounds: &mut Sounds, time: &Time) {
+        sounds.interface(time, self.audio);
+    }
 }
 
 const PUSH: &str = "push_button";
@@ -564,6 +568,12 @@ pub fn clickable(node: Node) -> impl Bundle {
 /// A [`clickable`] that opens a list to choose from.
 pub fn opener(node: Node) -> impl Bundle {
     sounding(node, Click::OPEN)
+}
+
+/// A [`clickable`] that's switched on or off, alone or as one of a group
+/// to choose from.
+pub fn switch(node: Node) -> impl Bundle {
+    sounding(node, Click::TOGGLE)
 }
 
 fn sounding(node: Node, click: Click) -> impl Bundle {
@@ -594,6 +604,11 @@ pub fn padded() -> Node {
 
 pub fn button(words: impl Into<String>, size: Font) -> impl Bundle {
     (clickable(padded()), children![text(words, size)])
+}
+
+/// A [`switch`] with words on it.
+pub fn toggle(words: impl Into<String>, size: Font) -> impl Bundle {
+    (switch(padded()), children![text(words, size)])
 }
 
 pub fn disabled(words: impl Into<String>, size: Font) -> impl Bundle {
@@ -627,7 +642,7 @@ fn click(
         PointerButton::Middle => false,
     };
     if sounds_it {
-        sounds.interface(&time, click.audio);
+        click.play(&mut sounds, &time);
     }
 }
 

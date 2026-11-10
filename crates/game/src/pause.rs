@@ -138,8 +138,7 @@ impl Options<'_, '_> {
         self.commands.entity(column).despawn_related::<Children>();
         (self.commands).spawn((ui::text("Options", Font::Heading), ChildOf(column)));
         self.commands
-            .spawn((ui::button(border, Font::Body), ChildOf(column)))
-            .insert(ui::Click::TOGGLE)
+            .spawn((ui::toggle(border, Font::Body), ChildOf(column)))
             .observe(toggle_border);
         self.commands
             .spawn((ui::button("Back", Font::Large), ChildOf(column)))

@@ -18,6 +18,7 @@ use bevy::ui_widgets::{Activate, Button};
 use crate::actions::Blocks;
 use crate::effects::Effects;
 use crate::keys::{self, Bindings};
+use crate::sound::Sounds;
 use crate::ui::{Click, Edge, Hint, Marked, Surface, Theme};
 use crate::{BuildingView, Loaded, Local, Screen, Selected, SelectedBuilding, Sim, minimap};
 
@@ -158,7 +159,12 @@ const CYCLE_SIZE: f32 = 42.0;
 /// The button at the minimap's corner that shows and hides the border:
 /// a ring in the border's colour, lit while it's shown.
 #[derive(Component)]
-pub struct BorderButton;
+pub struct BorderButton {
+    /// Whether it last showed the border as shown.
+    shown: bool,
+    /// Whether it was pressed since, which has sounded already.
+    pressed: bool,
+}
 
 /// The ring in the [`BorderButton`].
 #[derive(Component)]
@@ -179,7 +185,9 @@ pub fn spawn(
     mut materials: ResMut<Assets<StandardMaterial>>,
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
+    border: Res<Border>,
 ) {
+    let shown = border.0;
     let game = &mut loaded.game;
     let border = game.supply_border();
     let [r, g, b] = border.colour;
@@ -197,10 +205,12 @@ pub fn spawn(
     let what = said(BORDER_HELP, "Toggles the supply border off/on.");
     commands
         .spawn((
-            BorderButton,
+            BorderButton {
+                shown,
+                pressed: false,
+            },
             Blocks,
             Button,
-            Hovered::default(),
             Click::TOGGLE,
             RelativeCursorPosition::default(),
             match bindings.key(keys::SUPPLY_BORDER) {
@@ -239,9 +249,16 @@ pub fn spawn(
                 Pickable::IGNORE,
             )],
         ))
-        .observe(|_: On<Activate>, mut border: ResMut<Border>| {
-            border.0 = !border.0;
-        });
+        .observe(
+            |activate: On<Activate>,
+             mut border: ResMut<Border>,
+             mut buttons: Query<&mut BorderButton>| {
+                border.0 = !border.0;
+                if let Ok(mut button) = buttons.get_mut(activate.entity) {
+                    button.pressed = true;
+                }
+            },
+        );
     commands.insert_resource(BorderLook {
         colour,
         option: said(BORDER_OPTION, "Supply Border"),
@@ -334,20 +351,39 @@ pub fn toggle_border(
 }
 
 /// Lights the border's button while the border's shown, and greys its ring
-/// while it's hidden.
+/// while it's hidden. Shown by anything but a press of the button, such as
+/// its key, the button sounds as the game's toggle buttons do when set.
 pub fn show_border_button(
     border: Res<Border>,
     look: Res<BorderLook>,
     theme: Res<Theme>,
-    mut buttons: Query<(&Hovered, &mut Edge), With<BorderButton>>,
+    time: Res<Time>,
+    mut sounds: ResMut<Sounds>,
+    mut buttons: Query<(&mut BorderButton, Ref<Hovered>, &mut Edge)>,
     mut rings: Query<&mut BorderColor, With<BorderRing>>,
 ) {
-    for (hovered, mut edge) in &mut buttons {
-        edge.set_if_neq(match (border.0, hovered.get()) {
-            (_, true) => Edge::Hovered,
-            (true, false) => Edge::Lit,
-            (false, false) => Edge::Border,
-        });
+    // The look is inserted afresh with each match's button.
+    let restyle = border.is_changed() || theme.is_changed() || look.is_changed();
+    for (mut button, hovered, mut edge) in &mut buttons {
+        if button.shown != border.0 {
+            if border.0 && !button.pressed {
+                Click::TOGGLE.play(&mut sounds, &time);
+            }
+            button.shown = border.0;
+        }
+        if button.pressed {
+            button.pressed = false;
+        }
+        if restyle || hovered.is_changed() {
+            edge.set_if_neq(match (border.0, hovered.get()) {
+                (true, _) => Edge::Lit,
+                (false, true) => Edge::Hovered,
+                (false, false) => Edge::Border,
+            });
+        }
+    }
+    if !restyle {
+        return;
     }
     let ring = match border.0 {
         true => look.colour,
