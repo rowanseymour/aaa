@@ -440,7 +440,7 @@ pub fn update(
             _ if independent && building.zone.is_none() => continue,
             _ if independent => neutral,
             State::Disabled => [100; 3],
-            _ if own(building.owner) && !building.noticed.is_empty() => minimap.colours.under_siege,
+            _ if own(building.owner) && building.besieged.is_some() => minimap.colours.under_siege,
             _ if own(building.owner) && sim.0.out_of_supply(b) => minimap.colours.requires_supply,
             _ => colour(&minimap.colours.buildings, building.owner),
         };
@@ -455,7 +455,8 @@ pub fn update(
     let shown = |(u, unit): &(usize, &aaa_sim::Unit)| unit.alive() && fog.shows_unit(*u);
     for (_, unit) in sim.0.units.iter().enumerate().filter(shown) {
         let regiment = &sim.0.regiments[unit.regiment];
-        let rgb = match own(regiment.owner) && !regiment.engaged.is_empty() {
+        let fighting = !regiment.engaged.is_empty() || unit.besieged.is_some();
+        let rgb = match own(regiment.owner) && fighting {
             true => minimap.colours.under_siege,
             false => colour(&minimap.colours.units, regiment.owner),
         };
