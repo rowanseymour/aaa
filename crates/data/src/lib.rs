@@ -80,6 +80,12 @@ struct Definitions {
     generals: Vec<defs::General>,
 }
 
+/// The names a comma separated list holds, leaving out `NULL`.
+fn listed(list: Option<&str>) -> impl Iterator<Item = &str> {
+    let names = list.unwrap_or("").split(',').map(str::trim);
+    names.filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case("null"))
+}
+
 /// An object template as some `.tgi` file defines it.
 struct Template {
     /// The defining file's archive path.
@@ -556,14 +562,19 @@ pub struct Deployment {
     pub pack_health_min: f32,
 }
 
-/// The buildings a player needs standing to recruit a template.
-#[derive(Debug, Clone, PartialEq)]
+/// What recruiting a template needs: buildings its owner has standing, and
+/// properties the recruiter or its side has.
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct Requires {
     /// Each building, by every id it may go by on a map: its current one
     /// first, then any it was renamed from.
     pub structures: Vec<Vec<Id>>,
     /// Whether one of them is enough, rather than all.
     pub any: bool,
+    pub properties: Vec<Id>,
+    /// Whether missing a property leaves it out of a recruiter's menu,
+    /// rather than greying it there.
+    pub hide: bool,
 }
 
 /// Where what a building recruits appears and goes, from where it stands:
@@ -1446,23 +1457,29 @@ impl GameData {
         }
         self.by_template(|t| {
             let e = t.element_component.as_ref()?;
-            let structures: Vec<Vec<Id>> = e
-                .required_structures
-                .as_deref()?
-                .split(',')
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
+            let structures: Vec<Vec<Id>> = listed(e.required_structures.as_deref())
                 .map(|s| {
                     let id = renamed(&renames, &Id::from(s));
                     let olds = aliases.get(&id).cloned().unwrap_or_default();
                     std::iter::once(id).chain(olds).collect()
                 })
                 .collect();
-            (!structures.is_empty()).then_some(Requires {
+            let properties: Vec<Id> = listed(e.required_properties.as_deref())
+                .map(Id::from)
+                .collect();
+            (!structures.is_empty() || !properties.is_empty()).then_some(Requires {
                 structures,
                 any: e.required_structures_any,
+                properties,
+                hide: t.hide_if_missing_properties.unwrap_or(true),
             })
         })
+    }
+
+    /// The transport each template that's carried to where it's recruited
+    /// names, by template id.
+    pub fn transports(&mut self) -> HashMap<Id, Id> {
+        self.by_template(|t| (t.transport_actor.clone()).filter(|i| *i != Id::from("null")))
     }
 
     /// Each renamed object template's old id to its new one.

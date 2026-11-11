@@ -76,6 +76,12 @@ pub struct Thing {
     pub name: Option<String>,
     /// Whether a side numbers those it has, as "1st Infantry Regiment".
     pub numbered: Option<bool>,
+    /// On what's recruited, the transport that carries it to where it's
+    /// sent, which puts it in a recruiter's Deploy to Location menu.
+    pub transport_actor: Option<Id>,
+    /// On what's recruited, whether a recruiter's menu leaves it out,
+    /// rather than greying it, while its required properties are missing.
+    pub hide_if_missing_properties: Option<bool>,
     #[serde(default)]
     pub flags: Vec<Flags>,
     pub view: Option<View>,
@@ -308,6 +314,9 @@ pub struct ElementComponent {
     pub required_structures: Option<String>,
     #[serde(default)]
     pub required_structures_any: bool,
+    /// Comma separated, the properties its recruiter, or for a technology
+    /// its recruiter's side, needs to recruit it.
+    pub required_properties: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

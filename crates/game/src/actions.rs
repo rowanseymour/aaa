@@ -2,10 +2,11 @@
 //! selection can take, with the game's icons in the places its data gives
 //! them. Orders given at a place, such as Move, wait for a left click on the
 //! map or minimap, with a button to cancel; right click or Escape does too.
-//! A selected building that commissions, such as a Corps HQ, has a button
-//! opening a menu of what it commissions; [`crate::pane`] shows what it's
-//! been asked for, and one to set the rally point what it commissions moves
-//! on to. A building that packs, into a truck say, has Pack, dimmed while
+//! A selected building that recruits, such as a Corps HQ, has Deploy, opening
+//! a menu of what comes out of it, and Deploy to Location, of what a
+//! transport carries to where it's sent, each while that menu offers
+//! anything; [`crate::pane`] shows what it's been asked for, and a button
+//! sets the rally point what it recruits moves on to. A building that packs, into a truck say, has Pack, dimmed while
 //! it can't. Each button answers to the keys the game binds what it does
 //! to, and its tooltip marks the letter.
 
@@ -14,7 +15,7 @@ use std::collections::HashMap;
 use aaa_data::{GameData, Id};
 use aaa_map::Regiment;
 use aaa_render::textures;
-use aaa_sim::Commission;
+use aaa_sim::{Commission, Offer};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
@@ -57,12 +58,9 @@ const ORDERS: [(&str, Option<Give>); 8] = [
     ("unpack", Some(Give::Aim(Aim::Unpack))),
 ];
 
-/// The command whose button opens a building's menu of what it
-/// commissions.
-const COMMISSION: &str = "commission";
-/// The other command that opens such a menu, the only one of the two the
-/// game's hotkeys bind.
+/// The commands whose buttons open a recruiter's two menus.
 const DEPLOY: &str = "recruit";
+const DEPLOY_TO_LOCATION: &str = "recruit_location";
 /// The command that packs a building up, such as into a truck.
 const PACK: &str = "pack";
 /// The command that sets where what a building commissions moves on to.
@@ -142,8 +140,16 @@ pub enum Page {
     /// Waiting for a click on the map to set the selected building's
     /// rally point there.
     Rally,
-    /// What the selected building commissions.
-    Commission,
+    /// One of the selected building's menus of what it recruits.
+    Deploy(Menu),
+}
+
+/// Which of a recruiter's menus something it recruits is in: Deploy for
+/// what comes out of it, Deploy to Location for what names a transport.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Menu {
+    Deploy,
+    Location,
 }
 
 /// What a button is.
@@ -152,9 +158,8 @@ pub enum Entry {
     /// Index into [`ORDERS`].
     Order(usize),
     Cancel,
-    /// Opens the commission menu.
-    Commission,
-    /// Index into the selected building's menu.
+    Open(Menu),
+    /// Index into everything the selected building recruits.
     Recruit(usize),
     /// Packs the selected building up.
     Pack,
@@ -164,15 +169,23 @@ pub enum Entry {
     CommandAll,
 }
 
-/// The buttons a selected building has: where its commission and rally
-/// point buttons go and how much the menu behind the first holds, and
-/// where its Pack button goes, if it packs.
+/// The buttons a selected building has: where its menus' and rally point
+/// buttons go, which menu each thing it recruits is in and how it's
+/// offered, and where its Pack button goes, if it packs.
 #[derive(Clone, Copy, Debug)]
-struct BuildingButtons {
-    commission: Option<usize>,
-    menu: usize,
+struct BuildingButtons<'a> {
+    deploy: Option<usize>,
+    location: Option<usize>,
+    recruits: &'a [(Menu, Offer)],
     rally: Option<usize>,
     pack: Option<usize>,
+}
+
+impl BuildingButtons<'_> {
+    /// Whether `menu` has anything to show.
+    fn offers(&self, menu: Menu) -> bool {
+        (self.recruits.iter()).any(|&(m, offer)| m == menu && offer != Offer::Hidden)
+    }
 }
 
 /// Which of [`ORDERS`] the selection has: packed buildings move, stop and,
@@ -205,21 +218,29 @@ fn layout(
     let mut out = [None; SLOTS];
     match (page, building) {
         (Page::Orders, Some(b)) => {
-            if b.menu > 0 {
-                if let Some(s) = b.commission.filter(|&s| s < SLOTS) {
-                    out[s] = Some(Entry::Commission);
+            for (menu, slot) in [(Menu::Deploy, b.deploy), (Menu::Location, b.location)] {
+                if b.offers(menu)
+                    && let Some(s) = slot.filter(|&s| s < SLOTS && out[s].is_none())
+                {
+                    out[s] = Some(Entry::Open(menu));
                 }
-                if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
-                    out[s] = Some(Entry::Rally);
-                }
+            }
+            if (b.offers(Menu::Deploy) || b.offers(Menu::Location))
+                && let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none())
+            {
+                out[s] = Some(Entry::Rally);
             }
             if let Some(s) = b.pack.filter(|&s| s < SLOTS && out[s].is_none()) {
                 out[s] = Some(Entry::Pack);
             }
         }
-        (Page::Commission, Some(BuildingButtons { menu, .. })) => {
-            for (i, slot) in out.iter_mut().take(menu.min(MENU_CANCEL)).enumerate() {
-                *slot = Some(Entry::Recruit(i));
+        (Page::Deploy(menu), Some(b)) => {
+            // The other menu's take no place; hidden ones keep theirs empty.
+            let ours = (b.recruits.iter().enumerate()).filter(|(_, (m, _))| *m == menu);
+            for ((i, &(_, offer)), slot) in ours.zip(&mut out[..MENU_CANCEL]) {
+                if offer != Offer::Hidden {
+                    *slot = Some(Entry::Recruit(i));
+                }
             }
             out[MENU_CANCEL] = Some(Entry::Cancel);
         }
@@ -229,7 +250,7 @@ fn layout(
             }
             out[CANCEL] = Some(Entry::Cancel);
         }
-        (Page::Commission | Page::Rally, None) => {}
+        (Page::Deploy(_) | Page::Rally, None) => {}
         (Page::Orders, None) => {
             for (i, slot) in slots.iter().enumerate() {
                 if !offered[i] {
@@ -270,6 +291,7 @@ struct Look {
 struct Recruit {
     /// Its template, as the hotkeys name it.
     id: String,
+    menu: Menu,
     look: Look,
     /// Its cost, production and upkeep, for the tooltip.
     economy: Vec<Row>,
@@ -283,7 +305,8 @@ struct Recruit {
 pub struct Looks {
     /// Per [`ORDERS`], its slot and look.
     orders: Vec<(Option<usize>, Look)>,
-    commission: (Option<usize>, Look),
+    deploy: (Option<usize>, Look),
+    location: (Option<usize>, Look),
     rally: (Option<usize>, Look),
     pack: (Option<usize>, Look),
     cancel: Look,
@@ -423,7 +446,9 @@ pub fn spawn(
         }
     };
     let orders = ORDERS.iter().map(|(ids, _)| look_of(game, ids)).collect();
-    let commission = look_of(game, COMMISSION);
+    let deploy = look_of(game, DEPLOY);
+    let location = look_of(game, DEPLOY_TO_LOCATION);
+    let transports = game.transports();
     let rally = look_of(game, RALLY);
     let pack = look_of(game, PACK);
     let cancel = look_of(game, CANCEL_LOOK).1;
@@ -499,6 +524,10 @@ pub fn spawn(
                 });
                 Recruit {
                     id: id.to_string(),
+                    menu: match transports.contains_key(id) {
+                        true => Menu::Location,
+                        false => Menu::Deploy,
+                    },
                     look: Look {
                         name: listing.map_or_else(|| id.to_string(), |l| l.name.clone()),
                         help: None,
@@ -528,7 +557,8 @@ pub fn spawn(
     }
     commands.insert_resource(Looks {
         orders,
-        commission,
+        deploy,
+        location,
         rally,
         pack,
         cancel,
@@ -647,7 +677,7 @@ pub fn back_out(
     let gone = match *page {
         Page::Orders => false,
         Page::Aiming(_) => selected.0.is_empty(),
-        Page::Commission | Page::Rally => chosen.0.is_none(),
+        Page::Deploy(_) | Page::Rally => chosen.0.is_none(),
     };
     if gone || keys.just_pressed(KeyCode::Escape) {
         page.set_if_neq(Page::Orders);
@@ -710,14 +740,24 @@ pub fn show(
     }
     let hq = shown_hq(&sim.0, &selected.0, building);
     let menu = looks.menu(&sim.0, building);
+    let recruits: Vec<(Menu, Offer)> = (menu.iter())
+        .map(|r| {
+            let offer = match (building, &r.regiment) {
+                (Some(b), Some(regiment)) => sim.0.offer(b, regiment),
+                _ => Offer::Offered,
+            };
+            (r.menu, offer)
+        })
+        .collect();
     let order_slots: Vec<Option<usize>> = looks.orders.iter().map(|(s, _)| *s).collect();
     shown.0 = layout(
         *page,
         &order_slots,
         &offered(&sim.0, &selected.0),
         building.map(|b| BuildingButtons {
-            commission: looks.commission.0,
-            menu: menu.len(),
+            deploy: looks.deploy.0,
+            location: looks.location.0,
+            recruits: &recruits,
             rally: looks.rally.0,
             pack: looks
                 .pack
@@ -762,7 +802,8 @@ pub fn show(
                 (&looks.orders[i].1, ready, lit)
             }
             Entry::Cancel => (&looks.cancel, true, false),
-            Entry::Commission => (&looks.commission.1, true, false),
+            Entry::Open(Menu::Deploy) => (&looks.deploy.1, true, false),
+            Entry::Open(Menu::Location) => (&looks.location.1, true, false),
             Entry::Rally => (&looks.rally.1, true, *page == Page::Rally),
             Entry::CommandAll => (&looks.command_all, true, false),
             Entry::Pack => {
@@ -784,7 +825,8 @@ pub fn show(
                 if !lacking.is_empty() {
                     why = Some(format!("{}: {}", looks.requires, lacking.join(", ")));
                 }
-                let ready = r.regiment.is_some() && lacking.is_empty();
+                let offered = recruits[i].1 == Offer::Offered;
+                let ready = r.regiment.is_some() && lacking.is_empty() && offered;
                 (&r.look, ready, false)
             }
         };
@@ -1015,11 +1057,10 @@ fn bound(entry: Entry, slot: usize, page: Page, menu: &[Recruit]) -> Vec<String>
     let command = |ids: &str| format!("ActorCommand {ids}");
     let mut names = match entry {
         Entry::Order(i) => vec![command(ORDERS[i].0)],
-        Entry::Cancel if page == Page::Commission => vec!["CancelRecruit".into()],
+        Entry::Cancel if matches!(page, Page::Deploy(_)) => vec!["CancelRecruit".into()],
         Entry::Cancel => vec!["ActorCommandCancel".into()],
-        // The data binds a key only to the second of the two commands
-        // that open a menu of what a building makes.
-        Entry::Commission => vec![command(COMMISSION), command(DEPLOY)],
+        Entry::Open(Menu::Deploy) => vec![command(DEPLOY)],
+        Entry::Open(Menu::Location) => vec![command(DEPLOY_TO_LOCATION)],
         Entry::Recruit(i) => vec![format!("ActorDataSelectCommand {}", menu[i].id)],
         Entry::Pack => vec![command(PACK)],
         Entry::Rally => vec![command(RALLY)],
@@ -1073,7 +1114,7 @@ impl Presser<'_> {
                 None => {}
             },
             Entry::Cancel => *self.page = Page::Orders,
-            Entry::Commission => *self.page = Page::Commission,
+            Entry::Open(menu) => *self.page = Page::Deploy(menu),
             Entry::Rally => *self.page = Page::Rally,
             Entry::CommandAll => {
                 let building = self.chosen.0.filter(|_| self.selected.0.is_empty());
@@ -1106,7 +1147,11 @@ impl Presser<'_> {
                     let given = self.orders.give(sim, player, command);
                     if let Err(e) = given {
                         debug!("can't commission {}: {e:?}", regiment.template);
-                        self.refusal.0 = Some((slot, e));
+                        // As the game does, it says nothing for what's not
+                        // offered.
+                        if e != aaa_sim::Refused::NotOffered {
+                            self.refusal.0 = Some((slot, e));
+                        }
                     }
                     *self.page = commissioned(*self.page, given);
                 }
@@ -1185,6 +1230,7 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::Lacking => "Lacks a building it needs",
         aaa_sim::Refused::Unaffordable => "Not enough money",
         aaa_sim::Refused::Full => "HQ is full",
+        aaa_sim::Refused::NotOffered => "Not offered",
     }
 }
 
@@ -1437,7 +1483,14 @@ mod tests {
             names(Entry::Rally, Page::Orders)[0],
             "ActorCommand set_rally_point"
         );
-        assert_eq!(names(Entry::Cancel, Page::Commission)[0], "CancelRecruit");
+        assert_eq!(
+            names(Entry::Cancel, Page::Deploy(Menu::Location))[0],
+            "CancelRecruit"
+        );
+        assert_eq!(
+            names(Entry::Open(Menu::Location), Page::Orders)[0],
+            "ActorCommand recruit_location"
+        );
         assert_eq!(names(Entry::Cancel, Page::Rally)[0], "ActorCommandCancel");
     }
 
@@ -1451,28 +1504,28 @@ mod tests {
 
     #[test]
     fn commissioning_goes_back_to_the_buildings_buttons() {
-        assert_eq!(commissioned(Page::Commission, Ok(())), Page::Orders);
-        assert_eq!(
-            commissioned(Page::Commission, Err(aaa_sim::Refused::Unable)),
-            Page::Commission
-        );
+        let menu = Page::Deploy(Menu::Deploy);
+        assert_eq!(commissioned(menu, Ok(())), Page::Orders);
+        assert_eq!(commissioned(menu, Err(aaa_sim::Refused::Unable)), menu);
     }
 
     #[test]
     fn buildings_open_a_menu_of_what_they_commission() {
+        let corps = [(Menu::Deploy, Offer::Offered); 11];
         let hq = BuildingButtons {
-            commission: Some(0),
-            menu: 11,
+            deploy: Some(0),
+            location: Some(1),
+            recruits: &corps,
             rally: Some(5),
             pack: Some(9),
         };
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq), false);
-        assert_eq!(grid[0], Some(Entry::Commission));
+        assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[5], Some(Entry::Rally));
         assert_eq!(grid[9], Some(Entry::Pack));
         assert_eq!(grid.iter().flatten().count(), 3);
         let depot = BuildingButtons {
-            menu: 0,
+            recruits: &[],
             pack: None,
             ..hq
         };
@@ -1481,12 +1534,85 @@ mod tests {
                 .iter()
                 .all(Option::is_none)
         );
-        let menu = layout(Page::Commission, &GAME, &[true; 8], Some(hq), false);
+        let menu = layout(
+            Page::Deploy(Menu::Deploy),
+            &GAME,
+            &[true; 8],
+            Some(hq),
+            false,
+        );
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
         let rally = layout(Page::Rally, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(rally[5], Some(Entry::Rally));
         assert_eq!(rally[CANCEL], Some(Entry::Cancel));
         assert_eq!(rally.iter().flatten().count(), 2);
+    }
+
+    #[test]
+    fn what_a_transport_carries_has_a_menu_of_its_own() {
+        use Offer::{Greyed, Hidden, Offered};
+        // An Infantry HQ: its amphibious regiment, last, hidden.
+        let infantry = [
+            (Menu::Deploy, Offered),
+            (Menu::Deploy, Greyed),
+            (Menu::Location, Hidden),
+        ];
+        let hq = BuildingButtons {
+            deploy: Some(0),
+            location: Some(1),
+            recruits: &infantry,
+            rally: Some(5),
+            pack: None,
+        };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq), false);
+        assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
+        assert_eq!(grid[1], None);
+        let menu = layout(
+            Page::Deploy(Menu::Deploy),
+            &GAME,
+            &[true; 8],
+            Some(hq),
+            false,
+        );
+        assert_eq!(
+            menu[..3],
+            [Some(Entry::Recruit(0)), Some(Entry::Recruit(1)), None]
+        );
+        // A transported regiment and a truck: one in each menu, each at the
+        // front; a hidden one keeps its place.
+        let mixed = [
+            (Menu::Location, Offered),
+            (Menu::Deploy, Offered),
+            (Menu::Location, Hidden),
+            (Menu::Location, Greyed),
+        ];
+        let ship = BuildingButtons {
+            recruits: &mixed,
+            ..hq
+        };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(ship), false);
+        assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
+        assert_eq!(grid[1], Some(Entry::Open(Menu::Location)));
+        let deploy = layout(
+            Page::Deploy(Menu::Deploy),
+            &GAME,
+            &[true; 8],
+            Some(ship),
+            false,
+        );
+        assert_eq!(deploy[0], Some(Entry::Recruit(1)));
+        assert_eq!(deploy.iter().flatten().count(), 2);
+        let carried = layout(
+            Page::Deploy(Menu::Location),
+            &GAME,
+            &[true; 8],
+            Some(ship),
+            false,
+        );
+        assert_eq!(
+            carried[..3],
+            [Some(Entry::Recruit(0)), None, Some(Entry::Recruit(3))]
+        );
     }
 }
