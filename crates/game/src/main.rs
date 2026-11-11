@@ -797,6 +797,9 @@ fn prepare(
     sim.economy = game.economy_rules();
     sim.supplies = game.supplies();
     sim.supply_rules = game.supply_rules();
+    if let Some(seconds) = game.siege_seconds() {
+        sim.siege_seconds = seconds;
+    }
     sim.supply_effects = game.supply_effects();
     sim.kinds = game.kinds();
     sim.decays = game.decays();

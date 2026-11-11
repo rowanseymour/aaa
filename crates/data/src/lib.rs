@@ -1250,6 +1250,14 @@ impl GameData {
         }
     }
 
+    /// Seconds an enemy's damage keeps what it hurt under siege.
+    pub fn siege_seconds(&mut self) -> Option<f32> {
+        let svars = self.svars();
+        svars
+            .iter()
+            .find_map(|v| v.under_siege_recently_damaged_seconds)
+    }
+
     /// How far around them city centres hold sway, by template id, including
     /// the ids the game has since renamed.
     pub fn city_zones(&mut self) -> HashMap<Id, f32> {

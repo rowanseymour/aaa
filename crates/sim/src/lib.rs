@@ -127,6 +127,8 @@ pub struct World {
     pub supplies: HashMap<Id, aaa_map::Supply>,
     /// The settings supply runs by.
     pub supply_rules: aaa_map::SupplyRules,
+    /// Seconds an enemy's damage keeps what it hurt under siege.
+    pub siege_seconds: f32,
     /// What each property does to supply, for those that do anything to
     /// it, by its id.
     pub supply_effects: HashMap<Id, aaa_map::SupplyEffect>,
@@ -368,6 +370,8 @@ pub struct Unit {
     pub shot: Option<(u64, usize)>,
     /// The tick it died on.
     pub died: Option<u64>,
+    /// While it's under siege, the tick that may end on.
+    pub besieged: Option<u64>,
     /// The tick it left the map, having unpacked into a building.
     pub unpacked: Option<u64>,
     /// Whether it's yet to join its regiment, as a recruit's members are
@@ -451,6 +455,7 @@ impl Unit {
     fn die(&mut self, tick: u64) {
         self.health = 0.0;
         self.died = Some(tick);
+        self.besieged = None;
         self.halt();
         self.speed = 0.0;
         self.target = None;
@@ -659,8 +664,10 @@ pub struct Building {
     /// What it last fired on.
     pub target: Option<Target>,
     /// For one that defends itself, what it's noticed, which is all it
-    /// fires on.
+    /// fires on. Never forgotten, so not a sign of a fight.
     pub noticed: Vec<Enemy>,
+    /// While it's under siege, the tick that may end on.
+    pub besieged: Option<u64>,
     /// Where each of its fighter's turrets points.
     pub turrets: Vec<TurretAim>,
     /// The tick it last fired on, and the index of the weapon it fired.
@@ -1005,6 +1012,7 @@ impl World {
             economy: aaa_map::EconomyRules::default(),
             supplies: HashMap::new(),
             supply_rules: aaa_map::SupplyRules::default(),
+            siege_seconds: 7.0,
             supply_effects: HashMap::new(),
             kinds: HashMap::new(),
             technologies: BTreeMap::new(),
@@ -1060,6 +1068,7 @@ impl World {
                 target: None,
                 shot: None,
                 died: None,
+                besieged: None,
                 unpacked: None,
                 // One its regiment has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
@@ -1219,6 +1228,7 @@ impl World {
                 health,
                 target: None,
                 noticed: Vec::new(),
+                besieged: None,
                 shot: None,
                 state: match health > 0.0 {
                     true => State::Standing,
@@ -1882,6 +1892,7 @@ impl World {
         self.close_in();
         self.occupy();
         self.decay();
+        self.lift_sieges();
         self.supply();
         self.resupply();
         self.produce();
@@ -2812,11 +2823,17 @@ impl World {
     /// if it can be, else disabled.
     fn land(&mut self, hit: Hit) {
         let ticks = self.ticks;
+        let window = (self.siege_seconds / TICK).round() as u64;
         match hit.target {
             Target::Unit(u) => {
+                let owner = self.regiments[self.units[u].regiment].owner;
+                let enemy = self.sides.relation(hit.by, owner) == Relation::Enemy;
                 let unit = &mut self.units[u];
                 if !unit.alive() {
                     return;
+                }
+                if enemy && hit.amount > 0.0 {
+                    besiege(&mut unit.besieged, ticks + window);
                 }
                 unit.health -= hit.amount;
                 if unit.health <= 0.0 {
@@ -2830,6 +2847,17 @@ impl World {
                 // over earlier in the tick.
                 if !building.standing() || building.owner == hit.by {
                     return;
+                }
+                if self.sides.relation(hit.by, building.owner) == Relation::Enemy
+                    && hit.amount > 0.0
+                {
+                    // A bombarder holds it for as long as it keeps a
+                    // regiment out of supply, if that's longer.
+                    let held = hit
+                        .bombard
+                        .map_or(0.0, |recharge| self.supply_rules.bombard_timeout + recharge);
+                    let held = (held / TICK).round() as u64;
+                    besiege(&mut building.besieged, ticks + window.max(held));
                 }
                 building.health -= hit.amount;
                 if building.health <= 0.0 {
@@ -2846,6 +2874,9 @@ impl World {
         let building = &mut self.buildings[b];
         building.health = 0.0;
         building.target = None;
+        if building.fighter.destructible {
+            building.besieged = None;
+        }
         // Cities change hands by who holds them instead.
         let taker = by.filter(|_| building.fighter.capturable && building.zone.is_none());
         if let Some(by) = taker {
@@ -2883,6 +2914,24 @@ impl World {
                     self.fall(b, None);
                 }
             }
+        }
+    }
+
+    /// Ends sieges no enemy has kept up. Each thing looks once a second,
+    /// on its own second, so a siege outlasts its last hit by up to one.
+    fn lift_sieges(&mut self) {
+        let ticks = self.ticks;
+        let lifts = |besieged: &mut Option<u64>, offset: u64| {
+            let due = (ticks + offset).is_multiple_of(supply::BEAT);
+            if due && besieged.is_some_and(|until| until <= ticks) {
+                *besieged = None;
+            }
+        };
+        for building in &mut self.buildings {
+            lifts(&mut building.besieged, building.created);
+        }
+        for unit in &mut self.units {
+            lifts(&mut unit.besieged, unit.id as u64);
         }
     }
 
@@ -3293,6 +3342,11 @@ impl World {
         });
         winner.or((owner != 0).then_some(owner))
     }
+}
+
+/// Puts what's been hurt under siege until at least `until`.
+fn besiege(besieged: &mut Option<u64>, until: u64) {
+    *besieged = Some(besieged.map_or(until, |u| u.max(until)));
 }
 
 /// Damage a shot does to what it lands on, for the side that fired it.
@@ -4758,6 +4812,10 @@ mod tests {
         w.tick();
         assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
         assert_eq!(w.units[0].health, 90.0);
+        // Spotting and firing on an enemy isn't being under siege; being
+        // hit by one is.
+        assert!(w.buildings[0].besieged.is_none());
+        assert!(w.units[0].besieged.is_some());
         w.units[0].position = [10.0, 10.0];
         run(&mut w, 2.0);
         assert_eq!(w.units[0].health, 80.0);
@@ -5047,6 +5105,20 @@ mod tests {
         w.tick();
         assert_eq!(w.units[0].target, Some(Target::Building(0)));
         assert_eq!(w.buildings[0].health, 70.0);
+    }
+
+    #[test]
+    fn enemy_damage_keeps_a_building_under_siege_for_a_while() {
+        let mut w = siege(&[building(20, 2, [10.0, 24.0])]);
+        w.tick();
+        assert!(w.buildings[0].besieged.is_some());
+        // Out of range from then on.
+        w.units[0].position = [10.0, -20.0];
+        run(&mut w, 6.5);
+        assert!(w.buildings[0].besieged.is_some());
+        run(&mut w, 1.5);
+        assert_eq!(w.buildings[0].health, 70.0);
+        assert!(w.buildings[0].besieged.is_none());
     }
 
     #[test]

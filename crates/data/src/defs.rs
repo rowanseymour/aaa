@@ -890,6 +890,9 @@ pub struct SVars {
     /// Seconds a bombardment's hit keeps a regiment out of supply.
     #[serde(rename = "BombardTargetTimeout")]
     pub bombard_target_timeout: Option<f32>,
+    /// Seconds an enemy's damage keeps what it hurt under siege.
+    #[serde(rename = "UnderSiegeRecentlyDamagedSeconds")]
+    pub under_siege_recently_damaged_seconds: Option<f32>,
     /// The least a multiplier that modifiers add up to comes to.
     #[serde(rename = "ModifierAttributeClampMultiply")]
     pub modifier_attribute_clamp_multiply: Option<f32>,
