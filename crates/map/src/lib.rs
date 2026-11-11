@@ -25,7 +25,7 @@ pub use units::{
 use std::collections::{HashMap, HashSet};
 
 use aaa_data::{GameData, Nation};
-use tgck::map::{Sun, Terrain, Thing};
+use tgck::map::{Sun, Terrain, Thing, Triggers, Value};
 
 pub struct Map {
     /// The file name without its extension, e.g. `(2v2)Berlin`.
@@ -42,6 +42,9 @@ pub struct Map {
     pub buildings: Vec<Building>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
+    /// The scenery a building going up in play clears from under it, by
+    /// id, each with its blocking shape though it blocks nothing.
+    pub clearable: Vec<(u32, Obstacle)>,
     pub pathing: Pathing,
     /// The ids of the things among [`Map::things`] with no room where the
     /// map has them, for the ground under them or something stored before
@@ -83,9 +86,18 @@ impl Map {
             }
         }
         let world_version = map.world_version().map_err(err)?;
+        let mut warnings = Vec::new();
+        // Without the triggers there's no telling what they need kept, so
+        // nothing is cleared.
+        let named = match map.triggers() {
+            Ok(triggers) => Some(Named::new(&triggers)),
+            Err(e) => {
+                warnings.push(format!("triggers: {e}"));
+                None
+            }
+        };
         let recruits = Recruits::new(game);
         let bodies = &recruits.bodies;
-        let mut warnings = Vec::new();
         let defined = |t: &Thing| bodies.contains_key(&Id::from(t.template.as_str()));
         retain(&mut things, |t| {
             let keep = defined(t);
@@ -110,6 +122,9 @@ impl Map {
         warnings.extend(unplaced);
         let standing = without(&things, &crowded);
         let obstacles = obstacles(&standing, bodies);
+        let clearable = named
+            .map(|named| clearable(&standing, bodies, &named))
+            .unwrap_or_default();
         for (_, o) in &obstacles {
             pathing.block(o);
         }
@@ -151,6 +166,7 @@ impl Map {
             regiments,
             buildings,
             scenery,
+            clearable,
             players,
             teams,
             pathing,
@@ -377,16 +393,77 @@ fn obstacles(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>) -> Vec<(u32
         .filter_map(|(t, _)| {
             let body = bodies.get(&Id::from(t.template.as_str()))?;
             let shape = body.blocking.filter(|_| body.fixed)?;
-            let [x, y, _] = t.position;
-            let obstacle = Obstacle {
-                position: [x, y],
-                facing: units::facing(t),
-                shape,
-                soft: body.soft,
-            };
-            Some((t.id, obstacle))
+            Some((t.id, obstacle_of(t, shape, body.soft)))
         })
         .collect()
+}
+
+/// The things a map's triggers name, as they test or act on them.
+#[derive(Debug, Default)]
+struct Named {
+    ids: HashSet<u32>,
+    names: HashSet<String>,
+}
+
+impl Named {
+    fn new(triggers: &Triggers) -> Named {
+        let mut named = Named::default();
+        let elements = triggers
+            .triggers
+            .iter()
+            .flat_map(|t| t.events.iter().chain(&t.conditions).chain(&t.effects));
+        for p in elements.flat_map(|e| &e.parameters) {
+            // Any source about actors may point at one, by id or by name;
+            // keeping too much costs only scenery left standing.
+            if !p.source.contains("actor") {
+                continue;
+            }
+            match &p.value {
+                Value::Int(id) => {
+                    named.ids.insert(*id);
+                }
+                Value::String(name) if !name.is_empty() => {
+                    named.names.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        named
+    }
+
+    fn has(&self, thing: &Thing) -> bool {
+        self.ids.contains(&thing.id) || (!thing.name.is_empty() && self.names.contains(&thing.name))
+    }
+}
+
+/// The [`Map::clearable`] scenery among the objects standing on the map.
+fn clearable(
+    things: &[Thing],
+    bodies: &HashMap<Id, aaa_data::Body>,
+    named: &Named,
+) -> Vec<(u32, Obstacle)> {
+    let scenery = [tgck::map::SCENERY, tgck::map::REACTIVE_SCENERY];
+    buildings::standing(things)
+        .filter(|(t, _)| scenery.contains(&t.class) && !named.has(t))
+        .filter_map(|(t, _)| {
+            let body = bodies.get(&Id::from(t.template.as_str()))?;
+            if body.blocking.is_some() {
+                return None;
+            }
+            Some((t.id, obstacle_of(t, body.shape, body.soft)))
+        })
+        .collect()
+}
+
+/// `thing` as an obstacle of `shape`, where it stands and facing its way.
+fn obstacle_of(thing: &Thing, shape: Shape, soft: Shape) -> Obstacle {
+    let [x, y, _] = thing.position;
+    Obstacle {
+        position: [x, y],
+        facing: units::facing(thing),
+        shape,
+        soft,
+    }
 }
 
 /// The players and teams of [`Map::arrange`].
@@ -549,6 +626,85 @@ pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 
 mod tests {
     use super::*;
     use crate::fixtures::{organization, placed};
+
+    #[test]
+    fn scenery_is_clearable_unless_it_blocks_is_an_actor_or_a_trigger_names_it() {
+        use tgck::map::{Detail, Element, Parameter, Trigger};
+        let scenery = |id: u32, template: &str, name: &str| Thing {
+            class: tgck::map::SCENERY,
+            name: name.into(),
+            detail: Detail::None,
+            ..placed(id, template, 0, None, None)
+        };
+        let things = vec![
+            scenery(1, "tree", ""),
+            scenery(2, "rock", ""),
+            placed(3, "tree", 0, None, None),
+            scenery(4, "tree", ""),
+            scenery(5, "tree", "old_oak"),
+            Thing {
+                class: tgck::map::REACTIVE_SCENERY,
+                ..scenery(6, "tree", "")
+            },
+        ];
+        let trunk = Shape::Circle { radius: 0.2 };
+        let bodies = HashMap::from([
+            (
+                Id::from("tree"),
+                aaa_data::Body {
+                    shape: trunk,
+                    ..Default::default()
+                },
+            ),
+            (
+                Id::from("rock"),
+                aaa_data::Body {
+                    blocking: Some(trunk),
+                    fixed: true,
+                    ..Default::default()
+                },
+            ),
+        ]);
+        let parameter = |source: &str, value| Parameter {
+            kind: "ma_actor".into(),
+            source: source.into(),
+            set: true,
+            value,
+        };
+        let trigger = Trigger {
+            id: 1,
+            all_conditions: true,
+            active: true,
+            repeats: false,
+            activation_time: 0.0,
+            name: String::new(),
+            comment: String::new(),
+            next_element: 1,
+            events: Vec::new(),
+            conditions: vec![Element {
+                version: 1,
+                name: "actor_alive".into(),
+                id: 0,
+                parameters: vec![
+                    parameter("mi_actor_id", Value::Int(4)),
+                    parameter("mi_actor_named", Value::String("old_oak".into())),
+                ],
+            }],
+            effects: Vec::new(),
+        };
+        let triggers = Triggers {
+            version: 5,
+            next_id: 2,
+            triggers: vec![trigger],
+            variables: Vec::new(),
+            legacy: None,
+            unused_strings: None,
+        };
+        let cleared = clearable(&things, &bodies, &Named::new(&triggers));
+        let ids: Vec<u32> = cleared.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, [1, 6]);
+        assert_eq!(cleared[0].1.shape, trunk);
+    }
 
     /// Sides 1 and 2 on the map's first team, 3 and 4 on its second, and an
     /// independent 9 at war with 1 and neutral to the rest.
