@@ -112,6 +112,10 @@ impl Plugin for MapRenderPlugin {
     }
 }
 
+/// The ground's material, whose fog of war the game draws.
+#[derive(Resource, Clone)]
+pub struct GroundFog(pub Handle<GroundMaterial>);
+
 /// The map record an object was spawned from, on its root entity.
 #[derive(Component)]
 pub struct MapObject(pub Thing);
@@ -170,10 +174,12 @@ pub fn spawn_map(
         if pickable {
             mesh.asset_usage = RenderAssetUsages::default();
         }
+        let material = assets.ground_materials.add(material);
+        commands.insert_resource(GroundFog(material.clone()));
         commands.spawn((
             Name::new("ground"),
             Mesh3d(assets.meshes.add(mesh)),
-            MeshMaterial3d(assets.ground_materials.add(material)),
+            MeshMaterial3d(material),
             NotShadowCaster,
         ));
     }

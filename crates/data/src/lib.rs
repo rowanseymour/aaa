@@ -3,11 +3,13 @@
 
 pub mod defs;
 mod economy;
+mod fog;
 mod hotkeys;
 mod id;
 mod supply;
 
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
+pub use fog::{FogSetting, Sight};
 pub use hotkeys::Hotkey;
 pub use id::Id;
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};

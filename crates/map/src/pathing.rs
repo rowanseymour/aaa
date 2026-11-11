@@ -117,6 +117,11 @@ impl Obstacle {
         covered(self).contains(&tile)
     }
 
+    /// The tiles under its soft shape's box, some perhaps off the map.
+    pub fn footprint(&self) -> impl Iterator<Item = (i32, i32)> + use<> {
+        spanned(self.bounds(self.soft))
+    }
+
     /// The low and high corners of the box `shape` takes up standing as it
     /// does.
     pub(crate) fn bounds(&self, shape: Shape) -> ([f32; 2], [f32; 2]) {

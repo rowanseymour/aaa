@@ -540,6 +540,7 @@ fn launch(
         person: lobby.person,
         nations: nations(&brief.players, &lobby.nations, &all.0),
         generals: lobby.generals.clone(),
+        fog: None,
         from_menu: true,
     });
     next.set(Screen::Loading);

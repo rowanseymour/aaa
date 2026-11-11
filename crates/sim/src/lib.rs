@@ -7,6 +7,7 @@
 
 mod attach;
 pub mod economy;
+mod fog;
 pub mod path;
 mod supply;
 
@@ -22,6 +23,7 @@ use aaa_map::{
 pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
 pub use economy::{Balance, Change, Ledger, Limit, Notice, Treasury};
+pub use fog::{Fog, Seen};
 pub use supply::{Bombarder, Held, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
@@ -159,6 +161,10 @@ pub struct World {
     /// What sides have been told about their economies since these were
     /// last taken.
     pub notices: Vec<Notice>,
+    /// How far each template sees, by template.
+    pub sights: HashMap<Id, aaa_map::Sight>,
+    /// What each side sees of the map.
+    pub fog: Fog,
     /// Ticks played.
     pub ticks: u64,
     /// Projectiles on their way.
@@ -967,6 +973,8 @@ impl World {
         pathing: Pathing,
         regiments: &[aaa_map::Regiment],
     ) -> World {
+        // Nothing's hidden until the match sets its fog.
+        let fog = Fog::new(pathing.side, aaa_map::FogSetting::None);
         let mut world = World {
             sides,
             pathing,
@@ -1000,6 +1008,8 @@ impl World {
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),
             notices: Vec::new(),
+            sights: HashMap::new(),
+            fog,
         };
         for regiment in regiments {
             world.add_regiment(regiment);
@@ -1792,6 +1802,7 @@ impl World {
         self.rally();
         self.unpack();
         self.earn();
+        self.look();
         self.ticks += 1;
     }
 
@@ -7128,5 +7139,105 @@ mod tests {
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         w.change_hands(b, 2);
         assert_eq!(w.regiments[1].hq, None);
+    }
+
+    /// Players 1 and 2 at war, as `battle` has them, seeing `range` round
+    /// themselves and showing those fighting them `remote` round them.
+    fn sighted(fighters: Vec<Fighter>, range: f32, remote: f32, fog: aaa_map::FogSetting) -> World {
+        let mut w = battle(&[1, 2], fighters, at_war());
+        w.sights
+            .insert(Id::from("squad"), aaa_map::Sight { range, remote });
+        w.set_fog(fog);
+        w
+    }
+
+    fn put(w: &mut World, u: usize, at: [f32; 2]) {
+        w.units[u].position = at;
+        w.units[u].previous = at;
+    }
+
+    #[test]
+    fn sides_and_their_allies_see_round_their_things_and_remember_it() {
+        let mut w = sighted(
+            vec![soldier(vec![]), soldier(vec![])],
+            6.0,
+            3.0,
+            aaa_map::FogSetting::Full,
+        );
+        put(&mut w, 1, [70.0, 70.0]);
+        w.tick();
+        // Tile centres within 6.5 of the centre of the tile under it.
+        assert_eq!(w.seen(1, [10.0, 10.0]), Seen::Visible);
+        assert_eq!(w.seen(1, [10.0, 17.0]), Seen::Visible);
+        assert_eq!(w.seen(1, [10.0, 19.0]), Seen::Unexplored);
+        assert_eq!(w.seen(3, [10.0, 10.0]), Seen::Visible);
+        assert_eq!(w.seen(2, [10.0, 10.0]), Seen::Unexplored);
+        assert!(w.sees_unit(1, 0) && w.sees_unit(3, 0) && !w.sees_unit(2, 0));
+        assert!(!w.sees_unit(1, 1));
+
+        put(&mut w, 0, [40.0, 10.0]);
+        w.tick();
+        assert_eq!(w.seen(1, [10.0, 10.0]), Seen::Explored);
+        assert_eq!(w.seen(1, [40.0, 10.0]), Seen::Visible);
+        // Until the second comes near enough to be seen.
+        put(&mut w, 1, [44.0, 10.0]);
+        w.tick();
+        assert!(w.sees_unit(1, 1) && w.sees_unit(2, 0));
+    }
+
+    #[test]
+    fn the_setting_decides_what_starts_explored_or_is_never_hidden() {
+        let w = sighted(
+            vec![soldier(vec![]), soldier(vec![])],
+            6.0,
+            3.0,
+            aaa_map::FogSetting::Explored,
+        );
+        assert_eq!(w.seen(1, [10.0, 10.0]), Seen::Visible);
+        assert_eq!(w.seen(1, [70.0, 70.0]), Seen::Explored);
+        let w = sighted(
+            vec![soldier(vec![]), soldier(vec![])],
+            6.0,
+            3.0,
+            aaa_map::FogSetting::None,
+        );
+        assert_eq!(w.seen(2, [70.0, 70.0]), Seen::Visible);
+        assert!(w.sees_unit(2, 0));
+    }
+
+    #[test]
+    fn what_fights_a_side_is_shown_it_without_exploring() {
+        // Too short-sighted to see each other 10 apart, but firing on each
+        // other shows each to the other.
+        let mut w = sighted(
+            vec![
+                soldier(vec![rifle(12.0, 1.0)]),
+                soldier(vec![rifle(12.0, 1.0)]),
+            ],
+            2.0,
+            3.0,
+            aaa_map::FogSetting::Full,
+        );
+        assert!(!w.sees_unit(2, 0));
+        w.tick();
+        assert!(w.sees_unit(2, 0) && w.sees_unit(1, 1));
+        // Once they stop, it's as if never seen.
+        for u in &mut w.units {
+            u.fighter = None;
+            u.target = None;
+        }
+        w.regiments.iter_mut().for_each(|r| r.engaged.clear());
+        w.tick();
+        assert_eq!(w.seen(2, [10.0, 10.0]), Seen::Unexplored);
+    }
+
+    #[test]
+    fn units_stray_only_from_a_zone_of_control() {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        put(&mut w, 1, [60.0, 60.0]);
+        let from = w.units[0].position;
+        assert!(!w.strays(0, 1, from));
+        w.regiments[0].control_range = 10.0;
+        assert!(w.strays(0, 1, from) && !w.strays(0, 0, from));
     }
 }

@@ -22,6 +22,8 @@ struct Layers {
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var textures_sampler: sampler;
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var masks: texture_2d_array<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(104) var masks_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var fog: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var fog_sampler: sampler;
 
 fn terrain(kind: u32, ground: vec2<f32>) -> vec3<f32> {
     let uv = vec2(ground.x, -ground.y) / layers.repeats[kind].xy;
@@ -41,6 +43,11 @@ fn edge_light(world: vec2<f32>) -> f32 {
     }
     let d = min(min(world.x, world.y), min(size - world.x, size - world.y));
     return smoothstep(0.0, fade, d);
+}
+
+// How brightly the fog of war lets the ground show, from one texel a tile.
+fn fog_light(world: vec2<f32>) -> f32 {
+    return textureSample(fog, fog_sampler, world / layers.edge.x).r;
 }
 
 @fragment
@@ -64,7 +71,7 @@ fn fragment(
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
-    out.color = vec4(out.color.rgb * edge_light(ground), out.color.a);
+    out.color = vec4(out.color.rgb * edge_light(ground) * fog_light(ground), out.color.a);
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

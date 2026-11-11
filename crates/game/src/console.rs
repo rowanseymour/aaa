@@ -229,6 +229,11 @@ const VERBS: &[Verb] = &[
         "plays that much of the game at once, paused or not",
     ),
     verb(
+        "fog",
+        "",
+        "lifts the fog of war from the screen, or lays it again",
+    ),
+    verb(
         "gamespeed",
         "[speed]",
         "runs the game that many times as fast, 0.05 to 16; without, says how fast",
@@ -385,6 +390,11 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "detach" => attach(world, &args, false),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
+                "fog" => no_args(&args).map(|_| {
+                    let mut fog = world.resource_mut::<crate::fog::Fog>();
+                    fog.lifted = !fog.lifted;
+                    String::new()
+                }),
                 _ => unreachable!("{name} isn't handled"),
             }
         }
