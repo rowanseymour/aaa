@@ -29,6 +29,7 @@ mod ghost;
 mod keys;
 mod lobby;
 mod menu;
+mod messages;
 mod minimap;
 mod pane;
 mod pause;
@@ -610,6 +611,7 @@ fn main() -> ExitCode {
                 actions::spawn,
                 pane::spawn,
                 resource_bar::spawn,
+                messages::spawn,
                 supply::spawn,
                 waypoints::load,
                 console::start_scripts,
@@ -662,7 +664,7 @@ fn main() -> ExitCode {
                 (actions::back_out, actions::show).chain(),
                 (pane::lay_out, pane::refresh).chain(),
                 resource_bar::show.after(actions::show),
-                resource_bar::tell,
+                (messages::tell, messages::show).chain(),
                 (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain().after(carry_out),
@@ -688,6 +690,7 @@ fn main() -> ExitCode {
                 choose_formation,
                 actions::hotkeys,
                 supply::cycle_detached,
+                messages::cycle,
                 supply::toggle_border,
                 fog::cheat,
             )
@@ -807,6 +810,7 @@ fn prepare(
     sim.resupply_rates = game.resupply_rates();
     sim.recruit_lists = game.recruit_lists();
     sim.sights = game.sights();
+    sim.set_numbered(game.numbered());
     sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
     Ok(Prepared {
         loaded: Loaded { game, map },

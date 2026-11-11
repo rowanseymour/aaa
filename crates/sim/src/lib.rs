@@ -22,7 +22,7 @@ use aaa_map::{
 
 pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
-pub use economy::{Balance, Change, Ledger, Limit, Notice, Treasury};
+pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
 pub use fog::{Fog, Seen};
 pub use supply::{Bombarder, Held, Supplying};
 
@@ -171,6 +171,11 @@ pub struct World {
     /// Projectiles that landed in the last [`LANDINGS_KEPT`] ticks, oldest
     /// first, for what shows them to find.
     pub landings: Vec<Landing>,
+    /// The templates whose regiments are numbered, by template.
+    numbered: HashSet<Id>,
+    /// The last number each side has given a numbered template, by side
+    /// and template.
+    numbers: HashMap<(u32, String), u32>,
     /// An id no object has yet.
     next_id: u32,
     /// An id no commission has yet.
@@ -183,6 +188,9 @@ pub struct Regiment {
     /// Its object's id in the map.
     pub id: u32,
     pub template: String,
+    /// The number its name is given, for one of a numbered template: see
+    /// [`World::set_numbered`].
+    pub number: Option<u32>,
     /// The owning [`Player::id`], the only one it takes orders from.
     pub owner: u32,
     /// Indices into [`World::units`].
@@ -636,6 +644,9 @@ pub struct Building {
     /// Its object's id in the map.
     pub id: u32,
     pub template: String,
+    /// The number of the organization it stands in, as [`Regiment::number`],
+    /// for one of a numbered template.
+    pub number: Option<u32>,
     /// The owning [`Player::id`], which changes when it's captured.
     pub owner: u32,
     pub position: [f32; 2],
@@ -1009,6 +1020,8 @@ impl World {
             notices: Vec::new(),
             sights: HashMap::new(),
             fog,
+            numbered: HashSet::new(),
+            numbers: HashMap::new(),
         };
         for regiment in regiments {
             world.add_regiment(regiment);
@@ -1019,6 +1032,11 @@ impl World {
     /// Adds a regiment as the map has it, standing where its members do,
     /// returning its index.
     pub fn add_regiment(&mut self, regiment: &aaa_map::Regiment) -> usize {
+        self.push_regiment(regiment, true)
+    }
+
+    /// Adds a regiment, numbering it if `numbered`.
+    fn push_regiment(&mut self, regiment: &aaa_map::Regiment, numbered: bool) -> usize {
         let r = self.regiments.len();
         let first = self.units.len();
         for m in &regiment.members {
@@ -1077,9 +1095,14 @@ impl World {
             Some(p) => self.units[first + p].position,
             None => self.average(&units),
         };
+        let number = match numbered {
+            true => self.next_number(regiment.owner, &regiment.template),
+            false => None,
+        };
         self.regiments.push(Regiment {
             id: regiment.id,
             template: regiment.template.clone(),
+            number,
             owner: regiment.owner,
             units,
             speed: regiment
@@ -1120,6 +1143,47 @@ impl World {
         r
     }
 
+    /// Which templates' regiments are numbered, numbering those already
+    /// here in the order they were added: regiments, then the buildings
+    /// standing in an organization. Each side counts each template on its
+    /// own, from 1, and never gives a number twice.
+    pub fn set_numbered(&mut self, templates: HashSet<Id>) {
+        self.numbered = templates;
+        for r in 0..self.regiments.len() {
+            if self.regiments[r].number.is_none() {
+                let (owner, template) =
+                    (self.regiments[r].owner, self.regiments[r].template.clone());
+                self.regiments[r].number = self.next_number(owner, &template);
+            }
+        }
+        for b in 0..self.buildings.len() {
+            if self.buildings[b].number.is_none() {
+                self.buildings[b].number = self.building_number(b);
+            }
+        }
+    }
+
+    /// The next number `owner` gives a regiment of `template`, if it's
+    /// numbered and a side's.
+    fn next_number(&mut self, owner: u32, template: &str) -> Option<u32> {
+        if !self.numbered.contains(&Id::from(template)) || self.sides.player(owner).is_none() {
+            return None;
+        }
+        let n = self
+            .numbers
+            .entry((owner, template.to_string()))
+            .or_insert(0);
+        *n += 1;
+        Some(*n)
+    }
+
+    /// The next number for the organization the building at `b` stands in.
+    fn building_number(&mut self, b: usize) -> Option<u32> {
+        let building = &self.buildings[b];
+        let template = building.organization.as_ref()?.template.clone();
+        self.next_number(building.owner, &template)
+    }
+
     /// Takes `n` ids no object has, returning the first.
     pub fn take_ids(&mut self, n: u32) -> u32 {
         let first = self.next_id;
@@ -1130,11 +1194,17 @@ impl World {
     /// Adds buildings as the map has them, those out of health already
     /// disabled. Their ground is taken to be blocked already.
     pub fn add_buildings(&mut self, buildings: &[aaa_map::Building]) {
+        self.push_buildings(buildings, true);
+    }
+
+    /// Adds buildings, numbering them if `numbered`.
+    fn push_buildings(&mut self, buildings: &[aaa_map::Building], numbered: bool) {
         for b in buildings {
             let health = b.fighter.health * b.health;
             self.buildings.push(Building {
                 id: b.id,
                 template: b.template.clone(),
+                number: None,
                 owner: b.owner,
                 position: b.position,
                 facing: b.facing,
@@ -1172,6 +1242,10 @@ impl World {
                 created: self.ticks,
             });
             self.next_id = self.next_id.max(b.id + 1);
+            if numbered {
+                let at = self.buildings.len() - 1;
+                self.buildings[at].number = self.building_number(at);
+            }
         }
     }
 
@@ -1221,7 +1295,20 @@ impl World {
             let unit = &mut self.units[u];
             if unit.alive() {
                 unit.die(self.ticks);
+                self.lost_member(u);
             }
+        }
+    }
+
+    /// Tells of the regiment of the unit at `u`, just killed, if it has
+    /// none left.
+    fn lost_member(&mut self, u: usize) {
+        let r = self.units[u].regiment;
+        if self.destroyed(r) {
+            self.notices.push(Notice::Destroyed {
+                owner: self.regiments[r].owner,
+                what: Fallen::Regiment(r),
+            });
         }
     }
 
@@ -1843,6 +1930,11 @@ impl World {
                 self.buildings[b].id
             );
             self.regiments[r].hq = self.hq_of(b);
+            self.notices.push(Notice::PutOut {
+                player: owner,
+                building: b,
+                regiment: r,
+            });
             // Those that resupply come out as their leader alone, the
             // rest to follow.
             let used = self.logistics_of(&regiment.template);
@@ -1968,7 +2060,9 @@ impl World {
             }
             let b = self.buildings.len();
             self.regiments[r].unpacked_into = Some(b);
-            self.add_buildings(std::slice::from_ref(&building));
+            // It keeps the truck's number rather than taking one.
+            self.push_buildings(std::slice::from_ref(&building), false);
+            self.buildings[b].number = self.regiments[r].number;
             log::debug!(
                 "{} {} unpacking into {}",
                 self.regiments[r].template,
@@ -2059,7 +2153,10 @@ impl World {
                 }
                 truck.owner = owner;
                 truck.place(stand, packs.facing);
-                self.add_regiment(&truck)
+                // It keeps the building's number rather than taking one.
+                let r = self.push_regiment(&truck, false);
+                self.regiments[r].number = self.buildings[b].number;
+                r
             }
         };
         for u in self.regiments[r].units.clone() {
@@ -2724,6 +2821,7 @@ impl World {
                 unit.health -= hit.amount;
                 if unit.health <= 0.0 {
                     unit.die(ticks);
+                    self.lost_member(u);
                 }
             }
             Target::Building(b) => {
@@ -2758,6 +2856,10 @@ impl World {
             if let Some(o) = building.obstacle.take() {
                 self.pathing.unblock(&o);
             }
+            self.notices.push(Notice::Destroyed {
+                owner: building.owner,
+                what: Fallen::Building(b),
+            });
             self.drop_queue(b);
         } else {
             building.state = State::Disabled;
@@ -3787,6 +3889,11 @@ mod tests {
         w.destroy(0);
         assert!(w.destroyed(0));
         assert!(!w.commands(7, 0));
+        let lost = Notice::Destroyed {
+            owner: w.regiments[0].owner,
+            what: Fallen::Regiment(0),
+        };
+        assert_eq!(w.notices, [lost]);
     }
 
     fn rifle(range: f32, amount: f32) -> Weapon {
@@ -4983,6 +5090,11 @@ mod tests {
         assert_eq!(w.buildings[2].owner, 2);
         assert_eq!(w.units[0].target, None);
         assert_eq!(captures(&w), [lost(0, 2, 1), captured(0, 1)]);
+        let destroyed = Notice::Destroyed {
+            owner: 2,
+            what: Fallen::Building(1),
+        };
+        assert_eq!(w.notices.iter().filter(|&n| *n == destroyed).count(), 1);
     }
 
     /// What `w`'s sides have been told of buildings changing hands.
@@ -5418,6 +5530,12 @@ mod tests {
         run(&mut w, 1.0);
         assert_eq!(w.regiments.len(), 1);
         assert_eq!(w.buildings[0].queue.len(), 1);
+        let put_out = Notice::PutOut {
+            player: 1,
+            building: 0,
+            regiment: 0,
+        };
+        assert_eq!(w.notices.iter().filter(|&n| *n == put_out).count(), 1);
         let r = &w.regiments[0];
         assert_eq!(r.owner, 1);
         // New ids, the lone truck's its regiment's too.
@@ -5860,6 +5978,33 @@ mod tests {
     }
 
     #[test]
+    fn numbered_regiments_count_per_side_and_template_never_reusing_one() {
+        let mut w = headquarters();
+        let mut t = truck();
+        let mut add = |w: &mut World, owner, template: &str| {
+            (t.owner, t.template) = (owner, template.into());
+            let r = w.add_regiment(&t);
+            w.regiments[r].number
+        };
+        // Those already here are numbered once the templates are known.
+        add(&mut w, 1, "truck");
+        add(&mut w, 1, "truck");
+        assert_eq!(w.regiments[1].number, None);
+        w.set_numbered(HashSet::from([Id::from("truck"), Id::from("tank")]));
+        assert_eq!(
+            (w.regiments[0].number, w.regiments[1].number),
+            (Some(1), Some(2))
+        );
+        assert_eq!(add(&mut w, 2, "truck"), Some(1));
+        assert_eq!(add(&mut w, 1, "tank"), Some(1));
+        assert_eq!(add(&mut w, 1, "jeep"), None);
+        // Nobody's aren't numbered.
+        assert_eq!(add(&mut w, 0, "truck"), None);
+        w.destroy(1);
+        assert_eq!(add(&mut w, 1, "truck"), Some(3));
+    }
+
+    #[test]
     fn buildings_a_map_has_pack_into_their_place_there() {
         let mut w = headquarters();
         w.packing.insert("depot".into(), packs());
@@ -5879,7 +6024,12 @@ mod tests {
             members: Vec::new(),
             ..convoy()
         }));
+        w.set_numbered(HashSet::from([Id::from("hq_unpacked")]));
         w.add_buildings(&[within, depot(50, 60.0)]);
+        assert_eq!(
+            (w.buildings[1].number, w.buildings[2].number),
+            (Some(1), None)
+        );
         for b in [1, 2] {
             w.apply(1, Command::Pack { building: b }).unwrap();
         }
@@ -5892,6 +6042,8 @@ mod tests {
         // which keeps its own.
         let r = packed(1);
         assert_eq!((r.id, r.template.as_str(), r.owner), (40, "hq_unpacked", 1));
+        // It keeps the building's number rather than taking the next.
+        assert_eq!(r.number, Some(1));
         assert_eq!(w.units[r.units[0]].id, 41);
         assert!(near(w.units[r.units[0]].position, [30.0, 40.0]));
         assert!(r.unpacks.is_some());
@@ -5909,7 +6061,10 @@ mod tests {
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
+        w.set_numbered(HashSet::from([Id::from("truck")]));
+        w.add_regiment(&t);
         let r = w.add_regiment(&t);
+        assert_eq!(w.regiments[r].number, Some(2));
         w.apply(
             1,
             Command::Unpack {
@@ -5921,6 +6076,8 @@ mod tests {
         .unwrap();
         run(&mut w, 4.0);
         let depot = w.regiments[r].unpacked_into.unwrap();
+        // The building is the truck to the player, number and all.
+        assert_eq!(w.buildings[depot].number, Some(2));
         // Not while it's unpacking, nor someone else's, nor what packs to
         // nothing.
         assert_eq!(w.order_pack(1, depot), Err(Refused::Unable));
@@ -5944,8 +6101,9 @@ mod tests {
         // A lone truck's building stands in no organization, so packs into
         // a lone truck: the one it unpacked from, under its old id.
         assert_eq!(packed, r);
-        assert_eq!(w.regiments.len(), 1);
+        assert_eq!(w.regiments.len(), 2);
         assert_eq!(w.regiments[packed].template, "truck");
+        assert_eq!(w.regiments[packed].number, Some(2));
         let u = w.regiments[packed].units[0];
         assert_eq!(w.regiments[packed].owner, 1);
         assert!(near(w.units[u].position, [30.0, 40.0]));

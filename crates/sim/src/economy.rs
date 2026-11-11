@@ -132,6 +132,23 @@ pub enum Notice {
     /// It took a building, by index into [`World::buildings`]; for a city,
     /// its centre.
     Captured { player: u32, building: usize },
+    /// A building of its, by index into [`World::buildings`], has put out
+    /// the regiment at this index into [`World::regiments`].
+    PutOut {
+        player: u32,
+        building: usize,
+        regiment: usize,
+    },
+    /// Something of `owner`'s is destroyed, by whatever cause.
+    Destroyed { owner: u32, what: Fallen },
+}
+
+/// A regiment or building destroyed, by index into [`World::regiments`]
+/// or [`World::buildings`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fallen {
+    Regiment(usize),
+    Building(usize),
 }
 
 /// How much the shortage has to move by before the side is told again.

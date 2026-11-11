@@ -74,6 +74,8 @@ pub struct Thing {
     pub ids: Option<Id>,
     /// A `#` key into the localized strings.
     pub name: Option<String>,
+    /// Whether a side numbers those it has, as "1st Infantry Regiment".
+    pub numbered: Option<bool>,
     #[serde(default)]
     pub flags: Vec<Flags>,
     pub view: Option<View>,

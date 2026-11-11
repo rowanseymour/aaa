@@ -6,12 +6,14 @@ mod economy;
 mod fog;
 mod hotkeys;
 mod id;
+mod messages;
 mod supply;
 
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
 pub use fog::{FogSetting, Sight};
 pub use hotkeys::Hotkey;
 pub use id::Id;
+pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 
 use std::collections::{HashMap, HashSet};
@@ -1981,6 +1983,12 @@ impl GameData {
             }
         }
         out
+    }
+
+    /// The templates whose things each side numbers.
+    pub fn numbered(&mut self) -> HashSet<Id> {
+        let numbered = self.by_template(|t| t.numbered.filter(|&n| n));
+        numbered.into_keys().collect()
     }
 
     /// The game's text in its default language, by key.

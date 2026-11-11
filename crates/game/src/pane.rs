@@ -189,13 +189,6 @@ impl Looks {
         h
     }
 
-    fn name(&self, template: &str) -> String {
-        self.names
-            .get(&Id::from(template))
-            .cloned()
-            .unwrap_or_else(|| template.to_string())
-    }
-
     /// What the game's strings have under `key`.
     fn said(&self, key: &str) -> String {
         self.strings.get(key).cloned().unwrap_or_default()
@@ -390,19 +383,8 @@ impl Ui<'_> {
         self.looks.image(self.game, self.images, path)
     }
 
-    /// A regiment's name as the game gives it: numbered among its owner's
-    /// regiments of its kind, but for a lone unit such as a truck.
     fn regiment_name(&self, r: usize) -> String {
-        let regiment = &self.sim.regiments[r];
-        let name = self.looks.name(&regiment.template);
-        if lone(self.sim, r) {
-            return name;
-        }
-        let n = self.sim.regiments[..=r]
-            .iter()
-            .filter(|o| o.owner == regiment.owner && o.template == regiment.template)
-            .count();
-        format!("{} {name}", ordinal(n))
+        regiment_name(self.sim, &self.looks.names, &self.looks.strings, r)
     }
 
     /// The name and owner across the top.
@@ -686,7 +668,8 @@ impl Ui<'_> {
     fn building(&mut self, commands: &mut Commands, root: Entity, b: usize) {
         let building = &self.sim.buildings[b];
         let template = building.template.clone();
-        self.title(commands, root, self.looks.name(&template), building.owner);
+        let name = building_name(self.sim, &self.looks.names, &self.looks.strings, b);
+        self.title(commands, root, name, building.owner);
         self.portrait(commands, root, &template, Fill::Building(b));
         if self.sim.supply_of(b).is_some_and(|s| s.relay) {
             let fill = (Fill::Stockpile(b), Hint(String::new()));
@@ -848,7 +831,70 @@ fn unit_health(sim: &World, u: usize) -> f32 {
 }
 
 /// Whether a regiment is a single unit, such as a truck.
-fn lone(sim: &World, r: usize) -> bool {
+/// A regiment's name as the game gives it: its template's, numbered if
+/// it's one its side numbers. `names` are the templates' names, by
+/// template, and `strings` the game's text, for the numbering.
+pub(crate) fn regiment_name(
+    sim: &World,
+    names: &HashMap<Id, String>,
+    strings: &HashMap<String, String>,
+    r: usize,
+) -> String {
+    let regiment = &sim.regiments[r];
+    numbered(
+        strings,
+        regiment.number,
+        template_name(names, &regiment.template),
+    )
+}
+
+/// A building's name, as [`regiment_name`]: numbered as the organization
+/// it stands in is.
+pub(crate) fn building_name(
+    sim: &World,
+    names: &HashMap<Id, String>,
+    strings: &HashMap<String, String>,
+    b: usize,
+) -> String {
+    let building = &sim.buildings[b];
+    numbered(
+        strings,
+        building.number,
+        template_name(names, &building.template),
+    )
+}
+
+fn template_name(names: &HashMap<Id, String>, template: &str) -> String {
+    (names.get(&Id::from(template)).cloned()).unwrap_or_else(|| template.to_string())
+}
+
+/// `name` with `number` before it, as "1st Infantry Regiment", in the
+/// game's words for each ending where it has them.
+pub(crate) fn numbered(
+    strings: &HashMap<String, String>,
+    number: Option<u32>,
+    name: String,
+) -> String {
+    let Some(n) = number else {
+        return name;
+    };
+    let key = match (n % 100, n % 10) {
+        (11..=20, _) => "actor_name_numbered|ds",
+        (_, 1) => "actor_name_numbered_st|ds",
+        (_, 2) => "actor_name_numbered_nd|ds",
+        (_, 3) => "actor_name_numbered_rd|ds",
+        _ => "actor_name_numbered|ds",
+    };
+    match strings.get(key) {
+        Some(said) => said
+            .replacen("%d", &n.to_string(), 1)
+            .replacen("%s", &name, 1),
+        None => format!("{} {name}", ordinal(n)),
+    }
+}
+
+/// Whether a regiment is a unit on its own, such as a truck.
+pub(crate) fn lone(sim: &World, r: usize) -> bool {
     let regiment = &sim.regiments[r];
     matches!(&regiment.units[..], [u] if sim.units[*u].template == regiment.template)
 }
@@ -870,7 +916,7 @@ fn is_officer(template: &str) -> bool {
     template.to_ascii_lowercase().ends_with("_co")
 }
 
-fn ordinal(n: usize) -> String {
+fn ordinal(n: u32) -> String {
     let suffix = match (n % 10, n % 100) {
         (_, 11..=13) => "th",
         (1, _) => "st",
@@ -945,6 +991,24 @@ mod tests {
         assert_eq!(slot_at(5, 6)[1] + SLOT.y, SLOTS_AT.y + SLOTS_AREA.y);
         // A single row sits where the first of two would.
         assert_eq!(slot_at(2, 3), slot_at(2, 6));
+    }
+
+    #[test]
+    fn names_are_numbered_in_the_games_words() {
+        let strings = HashMap::from([
+            ("actor_name_numbered|ds".to_string(), "%dth %s".to_string()),
+            (
+                "actor_name_numbered_st|ds".to_string(),
+                "%dst %s".to_string(),
+            ),
+        ]);
+        let name = |n| numbered(&strings, n, "Regiment".into());
+        assert_eq!(name(None), "Regiment");
+        assert_eq!(name(Some(21)), "21st Regiment");
+        assert_eq!(name(Some(11)), "11th Regiment");
+        assert_eq!(name(Some(14)), "14th Regiment");
+        // Where the game has no words for the ending, English.
+        assert_eq!(name(Some(2)), "2nd Regiment");
     }
 
     #[test]

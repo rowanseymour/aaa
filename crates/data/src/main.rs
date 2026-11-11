@@ -11,7 +11,8 @@ usage:
   aaa-data coverage <game dir> <kind>   each key of one kind, e.g. Thing, with how often it is read
   aaa-data audio    <game dir> [filter] sounds, speech and music by id, with their files and any missing
   aaa-data cues     <game dir> [filter] the audio object templates play, by what sets it off
-  aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off";
+  aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off
+  aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,6 +30,7 @@ fn main() -> ExitCode {
         ["cues", dir, filter] => cues(dir, filter),
         ["effects", dir] => effects(dir, ""),
         ["effects", dir, filter] => effects(dir, filter),
+        ["messages", dir] => messages(dir),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -185,6 +187,32 @@ fn cues(dir: &str, filter: &str) -> Res {
 
 /// The effects of each object template whose id contains `filter`, ignoring
 /// case, with a `?` on effects that aren't defined and each effect's kind.
+fn messages(dir: &str) -> Res {
+    let mut game = GameData::open(dir.as_ref())?;
+    for k in game.message_kinds() {
+        let icon = k.icon.as_deref().unwrap_or("-");
+        let filter = k.filter.as_deref().unwrap_or("-");
+        outln!("{}\t{icon}\t{:?}\t{filter}", k.id, k.colour);
+    }
+    outln!();
+    let mut numbered: Vec<_> = game.numbered().into_iter().collect();
+    numbered.sort();
+    outln!("numbered: {}", numbered.len());
+    for id in numbered {
+        outln!("  {id}");
+    }
+    outln!();
+    let mut events: Vec<_> = game.game_events().into_values().collect();
+    events.sort_by(|a, b| a.id.cmp(&b.id));
+    for e in events {
+        let kind = e.kind.as_ref().map_or("-", |k| k.as_str());
+        let filters = [&e.filter, &e.message_filter].map(|f| f.as_deref().unwrap_or("-"));
+        let line = e.message.as_ref().map_or("-".into(), |m| format!("{m:?}"));
+        outln!("{}\t{kind}\t{}\t{}\t{line}", e.id, filters[0], filters[1]);
+    }
+    Ok(())
+}
+
 fn effects(dir: &str, filter: &str) -> Res {
     let filter = filter.to_ascii_lowercase();
     let mut game = GameData::open(dir.as_ref())?;
