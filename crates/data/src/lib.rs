@@ -780,8 +780,51 @@ pub struct Vfx {
     pub random_orientation: bool,
     /// Attached, it keeps its facing as what it's attached to turns.
     pub gyroscope: bool,
-    /// For one that tints what it's on, what it multiplies its colours by.
-    pub colour: Option<[f32; 3]>,
+    /// For one that tints what it's on, how.
+    pub tint: Option<VfxTint>,
+}
+
+/// How a [`Vfx`] tints what it's on, which pulses from untinted up to a
+/// strength and back down, each way at a steady pace.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct VfxTint {
+    /// What it multiplies colours by at full strength.
+    pub colour: [f32; 3],
+    /// The strength it rises to, where 1 is full.
+    pub max: f32,
+    /// Seconds it takes to rise from untinted to full; 0 to start at its
+    /// top.
+    pub rise: f32,
+    /// Seconds it takes to fall from full to untinted; 0 to stay at its
+    /// top.
+    pub fall: f32,
+    /// It rises again once it's fallen to untinted, rather than staying so.
+    pub repeating: bool,
+}
+
+impl VfxTint {
+    /// Its strength this many seconds after it started.
+    pub fn level(&self, secs: f32) -> f32 {
+        let (up, down) = (self.max * self.rise, self.max * self.fall);
+        let t = match self.repeating && down > 0.0 {
+            true => secs % (up + down),
+            false => secs,
+        };
+        if t < up {
+            t / self.rise
+        } else if down <= 0.0 {
+            self.max
+        } else if t < up + down {
+            self.max - (t - up) / self.fall
+        } else {
+            0.0
+        }
+    }
+
+    /// What it multiplies colours by at a strength.
+    pub fn colour(&self, level: f32) -> [f32; 3] {
+        self.colour.map(|c| 1.0 - (1.0 - c) * level)
+    }
 }
 
 /// A [`Vfx`] an object creates, or stops, when something happens.
@@ -2509,7 +2552,13 @@ fn vfx(v: defs::Vfx, model: Option<String>) -> Vfx {
         real_time: v.force_real_time.unwrap_or(false),
         random_orientation: v.flags.iter().rev().find_map(|f| f.random_orientation) == Some(true),
         gyroscope: v.gyroscope.unwrap_or(true),
-        colour: v.color,
+        tint: v.color.map(|colour| VfxTint {
+            colour,
+            max: v.tint_max.unwrap_or(1.0),
+            rise: v.enhance_duration.unwrap_or(0.0),
+            fall: v.fade_duration.unwrap_or(0.0),
+            repeating: v.repeating.unwrap_or(false),
+        }),
     }
 }
 
@@ -3702,9 +3751,52 @@ mod tests {
                 real_time: false,
                 random_orientation: true,
                 gyroscope: true,
-                colour: None,
+                tint: None,
             }
         );
+    }
+
+    #[test]
+    fn tints_rise_then_fall_and_repeat_if_they_do() {
+        let pulse = VfxTint {
+            colour: [0.5, 0.5, 0.5],
+            max: 1.0,
+            rise: 1.0,
+            fall: 0.8,
+            repeating: true,
+        };
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-5;
+        assert!(near(pulse.level(0.0), 0.0));
+        assert!(near(pulse.level(0.5), 0.5));
+        assert!(near(pulse.level(1.0), 1.0));
+        assert!(near(pulse.level(1.4), 0.5));
+        assert!(near(pulse.level(1.8 + 0.25), 0.25));
+        assert_eq!(pulse.colour(0.0), [1.0; 3]);
+        assert_eq!(pulse.colour(1.0), [0.5; 3]);
+        assert_eq!(pulse.colour(0.5), [0.75; 3]);
+
+        let once = VfxTint {
+            repeating: false,
+            ..pulse
+        };
+        assert!(near(once.level(1.4), 0.5));
+        assert_eq!(once.level(5.0), 0.0);
+
+        let held = VfxTint {
+            max: 0.3,
+            rise: 0.2,
+            fall: 0.0,
+            ..pulse
+        };
+        assert!(near(held.level(0.03), 0.15));
+        assert_eq!(held.level(10.0), 0.3);
+
+        let at_once = VfxTint {
+            rise: 0.0,
+            fall: 0.0,
+            ..pulse
+        };
+        assert_eq!(at_once.level(0.0), 1.0);
     }
 
     #[test]

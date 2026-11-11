@@ -961,6 +961,12 @@ pub struct Vfx {
     pub gyroscope: Option<bool>,
     /// What a tint multiplies its object's colours by.
     pub color: Option<[f32; 3]>,
+    pub tint_max: Option<f32>,
+    /// Seconds a tint takes to rise from none to full.
+    pub enhance_duration: Option<f32>,
+    /// Seconds a tint takes to fall from full to none.
+    pub fade_duration: Option<f32>,
+    pub repeating: Option<bool>,
     #[serde(default)]
     pub flags: Vec<VfxFlags>,
 }
