@@ -262,10 +262,13 @@ impl World {
     pub(crate) fn strays(&self, r: usize, u: usize, from: [f32; 2]) -> bool {
         let regiment = &self.regiments[r];
         let leader = regiment.leader.map(|p| regiment.units[p]);
-        if regiment.units.len() < 2 || leader == Some(u) || regiment.control_range <= 0.0 {
+        if regiment.units.len() < 2
+            || leader == Some(u)
+            || regiment.control(&self.guard_rules) <= 0.0
+        {
             return false;
         }
-        distance(self.units[u].position, from) > regiment.control_range
+        distance(self.units[u].position, from) > regiment.control(&self.guard_rules)
     }
 
     /// Lays each side's sight afresh from what its things see now.

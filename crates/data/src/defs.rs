@@ -909,6 +909,9 @@ pub struct SVars {
     /// Seconds a connected relay's stockpile gains each second.
     #[serde(rename = "SupplyStockpileRechargeRate")]
     pub supply_stockpile_recharge_rate: Option<f32>,
+    /// How much nearer the intruder a guard is already after counts.
+    #[serde(rename = "GuardOldTargetBias")]
+    pub guard_old_target_bias: Option<f32>,
     /// Seconds a bombardment's hit keeps a regiment out of supply.
     #[serde(rename = "BombardTargetTimeout")]
     pub bombard_target_timeout: Option<f32>,

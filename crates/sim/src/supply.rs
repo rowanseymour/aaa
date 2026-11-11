@@ -514,7 +514,8 @@ impl World {
         let places: Vec<usize> = (regiment.leader.into_iter())
             .chain((0..regiment.units.len()).filter(|&p| Some(p) != regiment.leader))
             .collect();
-        let zone = (self.pathing).zone(self.leader_position(r), regiment.control_range);
+        let zone =
+            (self.pathing).zone(self.leader_position(r), regiment.control(&self.guard_rules));
         let near = |&p: &usize| {
             Some(p) == regiment.leader || self.in_zone(&zone, Target::Unit(regiment.units[p]))
         };
@@ -548,7 +549,7 @@ impl World {
                 && !b.busy()
                 && self.shares_supply(regiment.owner, b.owner)
                 && list.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
-                && distance(at, b.position) < regiment.control_range
+                && distance(at, b.position) < regiment.control(&self.guard_rules)
         };
         let nearest = (self.buildings.iter().filter(recruits))
             .min_by(|a, b| distance(at, a.position).total_cmp(&distance(at, b.position)));
