@@ -1,17 +1,15 @@
 //! The resource bar in the top right corner: the player's money and what
-//! they net of each resource a minute, a second bar under it previewing
-//! what the order under the cursor would make of them, and under those what
-//! they're told about their economy.
+//! they net of each resource a minute, and a second bar under it previewing
+//! what the order under the cursor would make of them.
 
 use std::collections::HashMap;
 
-use aaa_map::{Id, Regiment};
+use aaa_map::Regiment;
 use aaa_render::textures;
-use aaa_sim::{Balance, Change, Notice, Pause};
+use aaa_sim::{Balance, Change};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
-use crate::actions::fill;
 use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};
 
@@ -29,8 +27,6 @@ const CELL: f32 = 96.0;
 const MONEY_CELL: f32 = 128.0;
 const HEIGHT: f32 = 22.0;
 const GAP: f32 = 4.0;
-/// How long a message stays up.
-const MESSAGE_SECONDS: f32 = 6.0;
 
 /// What the order under the cursor would change, set by the action grid.
 #[derive(Resource, Default)]
@@ -45,36 +41,6 @@ pub enum Previewed {
     Unpack(usize),
 }
 
-#[derive(Resource)]
-pub struct Looks {
-    shortage: String,
-    repaired: String,
-    /// What a queue held up for want of room under a limit says, given what
-    /// it's held up on.
-    unit_limit: String,
-    /// What a disabled building's held up queue says, given the building.
-    disabled: String,
-    /// What a held up queue says of a building supply doesn't reach, given
-    /// the building.
-    no_supply: String,
-    /// What a packed building that couldn't unpack says, given what it is.
-    cannot_unpack: String,
-    /// What's said of a regiment ordered to an HQ, given the HQ and the
-    /// regiment, and of one ordered away from it.
-    attaching: String,
-    detaching: String,
-    names: HashMap<Id, String>,
-}
-
-impl Looks {
-    fn name(&self, template: &str) -> String {
-        self.names
-            .get(&Id::from(template))
-            .cloned()
-            .unwrap_or_else(|| template.to_string())
-    }
-}
-
 /// One of the two bars: the player's economy now, or previewed.
 #[derive(Component)]
 pub struct Bar(bool);
@@ -83,10 +49,6 @@ pub struct Bar(bool);
 /// for each run of it.
 #[derive(Component)]
 pub struct Cell(bool, usize);
-
-/// The line saying what the player was last told, and until when.
-#[derive(Component)]
-pub struct Message(f32);
 
 /// The mark beside the bar while the player can't pay their upkeep.
 #[derive(Component)]
@@ -105,36 +67,6 @@ pub fn spawn(
     theme.short = game.invalid_colour().map(|[r, g, b]| Color::srgb(r, g, b));
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
-    commands.insert_resource(Looks {
-        shortage: said(
-            "game_events_kingdom_upkeep_shortage_game_message|*",
-            "Your production is %d%% short of your costs",
-        ),
-        repaired: said(
-            "game_events_kingdom_upkeep_repaired_game_message|*",
-            "You have repaired your upkeep",
-        ),
-        unit_limit: said(
-            "recruit_error_unit_limit|s",
-            "Insufficient unit limit to recruit %s",
-        ),
-        disabled: said(
-            "structure_error_queue_disabled|s",
-            "%s paused production queue - disabled",
-        ),
-        no_supply: said(
-            "structure_error_queue_no_supply|s",
-            "%s paused production queue - no supply",
-        ),
-        cannot_unpack: said("tai_error_unpack|s", "Cannot unpack %s"),
-        attaching: said("game_events_hq_attach_game_message|*", "%s: attaching %s"),
-        detaching: said("game_events_hq_detach_game_message|*", "%s: detaching %s"),
-        names: game
-            .listings()
-            .into_iter()
-            .map(|(id, l)| (id, l.name))
-            .collect(),
-    });
     commands.init_resource::<Preview>();
     let shortage = game
         .read(SHORTAGE_ICON)
@@ -235,11 +167,6 @@ pub fn spawn(
                 bar(row, false);
             });
             bar(root, true);
-            root.spawn((
-                Message(0.0),
-                label("", Font::HudTitle, Ink::Warn),
-                TextShadow::default(),
-            ));
         });
 }
 
@@ -360,84 +287,6 @@ fn cell_parts(kind: &str, stockpile: f32, balance: &Balance) -> Vec<(String, boo
             (")".into(), false),
         ],
         _ => vec![rate(net)],
-    }
-}
-
-/// Puts up what the player's told about their economy, and takes it down
-/// once it's been up a while.
-pub fn tell(
-    mut sim: ResMut<Sim>,
-    local: Res<Local>,
-    looks: Res<Looks>,
-    time: Res<Time>,
-    mut message: Single<(&mut Message, &mut Text)>,
-) {
-    let (until, text) = &mut *message;
-    let now = time.elapsed_secs();
-    // Taking them marks the sim changed, which what redraws on a change
-    // would then do every frame.
-    if sim.0.notices.is_empty() && text.0.is_empty() {
-        return;
-    }
-    let notices = match sim.0.notices.is_empty() {
-        true => Vec::new(),
-        false => std::mem::take(&mut sim.0.notices),
-    };
-    for notice in notices {
-        let words = match notice {
-            Notice::Short { player, percent } if Some(player) == local.0 => looks
-                .shortage
-                .replace("%d", &(percent as i64).to_string())
-                .replace("%%", "%"),
-            Notice::Repaired { player } if Some(player) == local.0 => looks.repaired.clone(),
-            Notice::Paused {
-                player,
-                building,
-                template,
-                why,
-            } if Some(player) == local.0 => match why {
-                Pause::Limit(_) => fill(&looks.unit_limit, &[&looks.name(&template)]),
-                Pause::Disabled | Pause::Supply => {
-                    let said = match why {
-                        Pause::Supply => &looks.no_supply,
-                        _ => &looks.disabled,
-                    };
-                    let b = &sim.0.buildings[building].template;
-                    fill(said, &[&looks.name(b)])
-                }
-            },
-            Notice::CannotUnpack { player, regiment } if Some(player) == local.0 => {
-                let truck = &sim.0.regiments[regiment].template;
-                fill(&looks.cannot_unpack, &[&looks.name(truck)])
-            }
-            Notice::Attached {
-                player,
-                hq,
-                regiment,
-            }
-            | Notice::Detached {
-                player,
-                hq,
-                regiment,
-            } if Some(player) == local.0 => {
-                let said = match notice {
-                    Notice::Attached { .. } => &looks.attaching,
-                    _ => &looks.detaching,
-                };
-                let hqs = sim.0.hqs();
-                let hq = hqs.iter().find(|h| h.id == hq);
-                let hq = hq.map(|h| looks.name(&h.building)).unwrap_or_default();
-                let joining = &sim.0.regiments[regiment].template;
-                fill(said, &[&hq, &looks.name(joining)])
-            }
-            _ => continue,
-        };
-        info!("{words}");
-        text.0 = words;
-        until.0 = now + MESSAGE_SECONDS;
-    }
-    if now > until.0 && !text.0.is_empty() {
-        text.0.clear();
     }
 }
 

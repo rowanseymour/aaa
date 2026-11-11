@@ -614,6 +614,7 @@ impl World {
             unit.health -= rate * health * share;
             if unit.health <= 0.0 {
                 unit.die(ticks);
+                self.lost_member(u);
             }
         }
     }
