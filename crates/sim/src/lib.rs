@@ -22,7 +22,7 @@ use aaa_map::{
 
 pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
-pub use economy::{Balance, Change, Ledger, Limit, Lost, Notice, Treasury};
+pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
 pub use fog::{Fog, Seen};
 pub use supply::{Bombarder, Held, Supplying};
 
@@ -158,8 +158,7 @@ pub struct World {
     pub holdings: Vec<(u32, String)>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
-    /// What sides have been told about their economies since these were
-    /// last taken.
+    /// What sides have been told since these were last taken.
     pub notices: Vec<Notice>,
     /// How far each template sees, by template.
     pub sights: HashMap<Id, aaa_map::Sight>,
@@ -1308,7 +1307,7 @@ impl World {
         if self.destroyed(r) {
             self.notices.push(Notice::Destroyed {
                 owner: self.regiments[r].owner,
-                what: Lost::Regiment(r),
+                what: Fallen::Regiment(r),
             });
         }
     }
@@ -2859,7 +2858,7 @@ impl World {
             }
             self.notices.push(Notice::Destroyed {
                 owner: building.owner,
-                what: Lost::Building(b),
+                what: Fallen::Building(b),
             });
             self.drop_queue(b);
         } else {
@@ -2892,9 +2891,12 @@ impl World {
     fn change_hands(&mut self, b: usize, owner: u32) {
         let taken = &self.buildings[b];
         log::debug!("{} {} taken by player {owner}", taken.template, taken.id);
-        self.notices.push(Notice::Captured {
+        // Each side's told only of what it sees, but a side always sees its
+        // own: the loser's told while it's still theirs, the taker once it
+        // is.
+        self.notices.push(Notice::Lost {
+            player: taken.owner,
             building: b,
-            from: taken.owner,
             by: owner,
         });
         let ids = &self.buildings[b].members;
@@ -2915,6 +2917,10 @@ impl World {
             // A relay has to connect on its new side.
             building.supply.judged = false;
         }
+        self.notices.push(Notice::Captured {
+            player: owner,
+            building: b,
+        });
     }
 
     /// What `s` fires `weapon` at: the best it can, armed enemies first,
@@ -3885,7 +3891,7 @@ mod tests {
         assert!(!w.commands(7, 0));
         let lost = Notice::Destroyed {
             owner: w.regiments[0].owner,
-            what: Lost::Regiment(0),
+            what: Fallen::Regiment(0),
         };
         assert_eq!(w.notices, [lost]);
     }
@@ -5083,20 +5089,32 @@ mod tests {
         assert_eq!(w.buildings[2].state, State::Disabled);
         assert_eq!(w.buildings[2].owner, 2);
         assert_eq!(w.units[0].target, None);
-        let told: Vec<&Notice> = (w.notices.iter())
-            .filter(|n| matches!(n, Notice::Captured { .. } | Notice::Destroyed { .. }))
-            .collect();
-        let captured = Notice::Captured {
-            building: 0,
-            from: 2,
-            by: 1,
-        };
+        assert_eq!(captures(&w), [lost(0, 2, 1), captured(0, 1)]);
         let destroyed = Notice::Destroyed {
             owner: 2,
-            what: Lost::Building(1),
+            what: Fallen::Building(1),
         };
-        assert_eq!(told.len(), 2);
-        assert!(told.contains(&&captured) && told.contains(&&destroyed));
+        assert_eq!(w.notices.iter().filter(|&n| *n == destroyed).count(), 1);
+    }
+
+    /// What `w`'s sides have been told of buildings changing hands.
+    fn captures(w: &World) -> Vec<Notice> {
+        let notices = w.notices.iter().cloned();
+        notices
+            .filter(|n| matches!(n, Notice::Lost { .. } | Notice::Captured { .. }))
+            .collect()
+    }
+
+    fn lost(building: usize, player: u32, by: u32) -> Notice {
+        Notice::Lost {
+            player,
+            building,
+            by,
+        }
+    }
+
+    fn captured(building: usize, player: u32) -> Notice {
+        Notice::Captured { player, building }
     }
 
     /// Player 2's city centred at 40,10 with a zone of 15 and a house of
@@ -5125,16 +5143,8 @@ mod tests {
         run(&mut w, 15.0);
         assert!(w.buildings.iter().all(|b| b.owner == 1));
         assert!(w.buildings[0].captured.is_some());
-        // Told once, of the centre, not of each member.
-        let captures: Vec<&Notice> = (w.notices.iter())
-            .filter(|n| matches!(n, Notice::Captured { .. }))
-            .collect();
-        let centre = Notice::Captured {
-            building: 0,
-            from: 2,
-            by: 1,
-        };
-        assert_eq!(captures, [&centre]);
+        // Told once, of the centre, not of the house that went with it.
+        assert_eq!(captures(&w), [lost(0, 2, 1), captured(0, 1)]);
         // Leaving doesn't give it back.
         w.apply(
             1,

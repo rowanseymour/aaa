@@ -9,7 +9,7 @@ use aaa_data::{GameEvent, Id, InterfaceVars};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::textures;
-use aaa_sim::{Lost, Notice, Pause, Relation, Seen, World};
+use aaa_sim::{Fallen, Notice, Pause, Relation, Seen, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -399,6 +399,9 @@ pub fn tell(
     let notices = std::mem::take(&mut sim.0.notices);
     let now = time.elapsed_secs();
     for notice in notices {
+        if let Some(sound) = sound(&notice, local.0) {
+            sounds.interface(&time, sound);
+        }
         let posted = match told(&sim.0, local.0, &leaders, &log.look, notice) {
             Some(Told::Event(event, with, place)) => {
                 let with: Vec<&str> = with.iter().map(String::as_str).collect();
@@ -412,6 +415,16 @@ pub fn tell(
         if let Some(sound) = sound {
             sounds.interface(&time, &sound);
         }
+    }
+}
+
+/// The sound `local`, the player here, hears for a notice: none for one
+/// told to anyone else.
+fn sound(notice: &Notice, local: Option<u32>) -> Option<&'static str> {
+    match *notice {
+        Notice::Lost { player, .. } if Some(player) == local => Some("actor_captured_by_enemy_sfx"),
+        Notice::Captured { player, .. } if Some(player) == local => Some("actor_captured_sfx"),
+        _ => None,
     }
 }
 
@@ -516,27 +529,34 @@ fn told(
             let name = look.regiment(sim, regiment);
             Told::Event(event, vec![name], at(About::Regiment(regiment)))
         }
-        Notice::Captured { building, from, by } if ours(from) || ours(by) => {
-            let name = look.building(sim, building);
-            let place = Place::of(sim, About::Building(building));
-            if !sees(local?, &place) {
-                return None;
-            }
-            match ours(by) {
-                true => Told::Event("actor_captured", vec![name], Some(place)),
-                false => Told::Event("actor_captured_by_enemy", vec![name, side(by)], Some(place)),
-            }
+        // A side always sees its own, so is always told: the loser while
+        // it's still theirs, the taker once it is.
+        Notice::Lost {
+            player,
+            building,
+            by,
+        } if ours(player) => {
+            let with = vec![look.building(sim, building), side(by)];
+            Told::Event(
+                "actor_captured_by_enemy",
+                with,
+                at(About::Building(building)),
+            )
+        }
+        Notice::Captured { player, building } if ours(player) => {
+            let with = vec![look.building(sim, building)];
+            Told::Event("actor_captured", with, at(About::Building(building)))
         }
         // Its owner is told it's lost, and its enemies who see it go that
         // it's destroyed, whoever did it. What's nobody's tells no one.
         Notice::Destroyed { owner, what } if sim.sides.player(owner).is_some() => {
             let (name, about, event) = match what {
-                Lost::Regiment(r) => (
+                Fallen::Regiment(r) => (
                     look.regiment(sim, r),
                     About::Regiment(r),
                     "mobile_actor_lost",
                 ),
-                Lost::Building(b) => (
+                Fallen::Building(b) => (
                     look.building(sim, b),
                     About::Building(b),
                     "static_actor_lost",
@@ -765,6 +785,29 @@ mod tests {
 
     fn place(at: [f32; 2]) -> Option<Place> {
         Some(Place { about: None, at })
+    }
+
+    #[test]
+    fn only_the_player_here_hears_buildings_change_hands() {
+        let lost = |player, by| Notice::Lost {
+            player,
+            building: 0,
+            by,
+        };
+        let captured = |player| Notice::Captured {
+            player,
+            building: 0,
+        };
+        assert_eq!(
+            sound(&lost(1, 2), Some(1)),
+            Some("actor_captured_by_enemy_sfx")
+        );
+        assert_eq!(sound(&captured(1), Some(1)), Some("actor_captured_sfx"));
+        // One AI taking from another.
+        assert_eq!(sound(&lost(2, 3), Some(1)), None);
+        assert_eq!(sound(&captured(3), Some(1)), None);
+        assert_eq!(sound(&captured(1), None), None);
+        assert_eq!(sound(&Notice::Repaired { player: 1 }, Some(1)), None);
     }
 
     #[test]
