@@ -76,6 +76,9 @@ pub struct Thing {
     pub name: Option<String>,
     /// Whether a side numbers those it has, as "1st Infantry Regiment".
     pub numbered: Option<bool>,
+    /// Whether a recruiter hides it, rather than greys it, while the
+    /// properties it needs are missing.
+    pub hide_if_missing_properties: Option<bool>,
     #[serde(default)]
     pub flags: Vec<Flags>,
     pub view: Option<View>,
@@ -308,6 +311,9 @@ pub struct ElementComponent {
     pub required_structures: Option<String>,
     #[serde(default)]
     pub required_structures_any: bool,
+    /// Comma separated properties the recruiter, or for a technology its
+    /// side, needs to recruit it.
+    pub required_properties: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -360,6 +366,15 @@ pub struct PropertyRef {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Property {
     pub ids: Option<Id>,
+    /// A `#` key into the localized strings.
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// Whether a side can hold it, rather than only the objects that carry
+    /// it.
+    #[serde(default)]
+    pub is_technology: bool,
+    /// Its research button's icon, relative to the defining file.
+    pub action_button_icon: Option<String>,
     /// Comma separated, the flags it gives its objects for abilities'
     /// `targets` to match.
     pub enabled_target_flags: Option<String>,

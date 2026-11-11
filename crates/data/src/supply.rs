@@ -76,7 +76,7 @@ pub enum Operation {
 }
 
 /// The ids a comma separated list names.
-fn listed(list: Option<&str>) -> Vec<Id> {
+pub(crate) fn listed(list: Option<&str>) -> Vec<Id> {
     let ids = list.unwrap_or("").split(',').map(str::trim);
     ids.filter(|id| !id.is_empty() && !id.eq_ignore_ascii_case("null"))
         .map(Id::from)

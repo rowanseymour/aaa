@@ -170,7 +170,8 @@ pub enum Entry {
 #[derive(Clone, Copy, Debug)]
 struct BuildingButtons {
     commission: Option<usize>,
-    menu: usize,
+    /// A bit for each entry of the menu that shows, by its place in it.
+    menu: u32,
     rally: Option<usize>,
     pack: Option<usize>,
 }
@@ -205,21 +206,24 @@ fn layout(
     let mut out = [None; SLOTS];
     match (page, building) {
         (Page::Orders, Some(b)) => {
-            if b.menu > 0 {
-                if let Some(s) = b.commission.filter(|&s| s < SLOTS) {
-                    out[s] = Some(Entry::Commission);
-                }
-                if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
-                    out[s] = Some(Entry::Rally);
-                }
+            if b.menu != 0
+                && let Some(s) = b.commission.filter(|&s| s < SLOTS)
+            {
+                out[s] = Some(Entry::Commission);
+            }
+            if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
+                out[s] = Some(Entry::Rally);
             }
             if let Some(s) = b.pack.filter(|&s| s < SLOTS && out[s].is_none()) {
                 out[s] = Some(Entry::Pack);
             }
         }
         (Page::Commission, Some(BuildingButtons { menu, .. })) => {
-            for (i, slot) in out.iter_mut().take(menu.min(MENU_CANCEL)).enumerate() {
-                *slot = Some(Entry::Recruit(i));
+            // One left out keeps its slot, empty.
+            for (i, slot) in out.iter_mut().take(MENU_CANCEL).enumerate() {
+                if menu & (1 << i) != 0 {
+                    *slot = Some(Entry::Recruit(i));
+                }
             }
             out[MENU_CANCEL] = Some(Entry::Cancel);
         }
@@ -296,7 +300,7 @@ pub struct Looks {
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
-    /// What each template is called, for saying which buildings a
+    /// What each template and technology is called, for saying what a
     /// commission needs.
     names: HashMap<Id, String>,
 }
@@ -536,7 +540,9 @@ pub fn spawn(
         requires,
         affording,
         menus,
-        names: listings.into_iter().map(|(id, l)| (id, l.name)).collect(),
+        names: (listings.into_iter().map(|(id, l)| (id, l.name)))
+            .chain(game.technologies().into_iter().map(|(id, t)| (id, t.name)))
+            .collect(),
     });
     commands.init_resource::<Shown>();
     commands.init_resource::<Refusal>();
@@ -717,8 +723,10 @@ pub fn show(
         &offered(&sim.0, &selected.0),
         building.map(|b| BuildingButtons {
             commission: looks.commission.0,
-            menu: menu.len(),
-            rally: looks.rally.0,
+            menu: shows(&sim.0, local.0, b, menu),
+            // Where what it raises goes matters whether or not any of it
+            // can be raised now.
+            rally: looks.rally.0.filter(|_| !menu.is_empty()),
             pack: looks
                 .pack
                 .0
@@ -772,13 +780,13 @@ pub fn show(
             Entry::Recruit(i) => {
                 let r = &menu[i];
                 table.extend(r.economy.iter().cloned());
-                let lacking: Vec<&str> = match (&r.regiment, local.0) {
-                    (Some(regiment), Some(player)) => sim
-                        .0
-                        .lacks(player, regiment)
-                        .into_iter()
-                        .map(|id| looks.names.get(id).map_or(id.as_str(), String::as_str))
-                        .collect(),
+                let lacking: Vec<String> = match (&r.regiment, local.0, building) {
+                    (Some(regiment), Some(player), Some(b)) => {
+                        let lacking = sim.0.lacks(player, b, regiment);
+                        (lacking.properties.iter().chain(&lacking.structures))
+                            .map(|id| looks.names.get(id).map_or(id.to_string(), Clone::clone))
+                            .collect()
+                    }
                     _ => Vec::new(),
                 };
                 if !lacking.is_empty() {
@@ -1141,6 +1149,19 @@ pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut pre
     }
 }
 
+/// The entries of the building's menu that show for `player`, as
+/// [`BuildingButtons::menu`]: all but those it lacks properties for that
+/// leave them out.
+fn shows(sim: &aaa_sim::World, player: Option<u32>, building: usize, menu: &[Recruit]) -> u32 {
+    let shows = |r: &Recruit| match (&r.regiment, player) {
+        (Some(regiment), Some(player)) => !sim.lacks(player, building, regiment).hidden,
+        _ => true,
+    };
+    (menu.iter().take(MENU_CANCEL).enumerate())
+        .filter(|(_, r)| shows(r))
+        .fold(0, |bits, (i, _)| bits | 1 << i)
+}
+
 /// The HQ the selection is, by its id: the selected building, or the one
 /// selected regiment, packed.
 fn shown_hq(sim: &aaa_sim::World, selected: &[usize], building: Option<usize>) -> Option<u32> {
@@ -1182,7 +1203,7 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::NotYours => "Not yours",
         aaa_sim::Refused::Unable => "Can't now",
         aaa_sim::Refused::NoRoom => "No room",
-        aaa_sim::Refused::Lacking => "Lacks a building it needs",
+        aaa_sim::Refused::Lacking => "Lacks a building or technology it needs",
         aaa_sim::Refused::Unaffordable => "Not enough money",
         aaa_sim::Refused::Full => "HQ is full",
     }
@@ -1462,7 +1483,7 @@ mod tests {
     fn buildings_open_a_menu_of_what_they_commission() {
         let hq = BuildingButtons {
             commission: Some(0),
-            menu: 11,
+            menu: (1 << 11) - 1,
             rally: Some(5),
             pack: Some(9),
         };
@@ -1473,6 +1494,7 @@ mod tests {
         assert_eq!(grid.iter().flatten().count(), 3);
         let depot = BuildingButtons {
             menu: 0,
+            rally: None,
             pack: None,
             ..hq
         };
@@ -1483,6 +1505,18 @@ mod tests {
         );
         let menu = layout(Page::Commission, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
+        // An entry left out leaves a gap; the rest keep their slots.
+        let hidden = BuildingButtons { menu: 0b101, ..hq };
+        let menu = layout(Page::Commission, &GAME, &[true; 8], Some(hidden), false);
+        assert_eq!(
+            menu[..3],
+            [Some(Entry::Recruit(0)), None, Some(Entry::Recruit(2))]
+        );
+        assert_eq!(menu.iter().flatten().count(), 3);
+        let none = BuildingButtons { menu: 0, ..hidden };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(none), false);
+        assert_eq!(grid[0], None);
+        assert_eq!(grid[5], Some(Entry::Rally));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
         let rally = layout(Page::Rally, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(rally[5], Some(Entry::Rally));
