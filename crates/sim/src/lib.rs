@@ -158,8 +158,7 @@ pub struct World {
     pub holdings: Vec<(u32, String)>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
-    /// What sides have been told about their economies since these were
-    /// last taken.
+    /// What sides have been told since these were last taken.
     pub notices: Vec<Notice>,
     /// How far each template sees, by template.
     pub sights: HashMap<Id, aaa_map::Sight>,
@@ -2790,16 +2789,14 @@ impl World {
     fn change_hands(&mut self, b: usize, owner: u32) {
         let taken = &self.buildings[b];
         log::debug!("{} {} taken by player {owner}", taken.template, taken.id);
-        // Each side's told only if it sees the building: the loser while
-        // it's still theirs, the taker once it's theirs.
-        let loser = taken.owner;
-        if self.sees_building(loser, b) {
-            self.notices.push(Notice::Lost {
-                player: loser,
-                building: b,
-                by: owner,
-            });
-        }
+        // Each side's told only of what it sees, but a side always sees its
+        // own: the loser's told while it's still theirs, the taker once it
+        // is.
+        self.notices.push(Notice::Lost {
+            player: taken.owner,
+            building: b,
+            by: owner,
+        });
         let ids = &self.buildings[b].members;
         let members: Vec<usize> = (0..self.buildings.len())
             .filter(|&i| i != b && ids.contains(&self.buildings[i].id))
@@ -2818,12 +2815,10 @@ impl World {
             // A relay has to connect on its new side.
             building.supply.judged = false;
         }
-        if self.sees_building(owner, b) {
-            self.notices.push(Notice::Captured {
-                player: owner,
-                building: b,
-            });
-        }
+        self.notices.push(Notice::Captured {
+            player: owner,
+            building: b,
+        });
     }
 
     /// What `s` fires `weapon` at: the best it can, armed enemies first,
