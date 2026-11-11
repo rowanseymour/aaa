@@ -247,11 +247,15 @@ struct SelectedBuilding(Option<usize>);
 struct Raising(Recruits);
 
 /// How many of the sim's units and buildings are drawn, so those it adds
-/// mid-match get drawn too.
+/// mid-match get drawn too, and how much of the scenery it has cleared is
+/// gone from view.
 #[derive(Resource, Default)]
 struct Viewed {
     units: usize,
     buildings: usize,
+    cleared: usize,
+    /// The map's objects by id, for clearing scenery without searching.
+    objects: HashMap<u32, Entity>,
 }
 
 /// What the cursor is over.
@@ -605,6 +609,7 @@ fn main() -> ExitCode {
                 )
                     .chain(),
                 drop_lost_building,
+                clear_scenery,
                 selection_sounds,
                 show_focus,
                 (
@@ -1125,6 +1130,8 @@ fn setup(
     commands.insert_resource(Viewed {
         units: sim.0.units.len(),
         buildings: sim.0.buildings.len(),
+        cleared: sim.0.cleared.len(),
+        objects: HashMap::new(),
     });
     commands.insert_resource(Drawn(models));
     commands.insert_resource(effects::Effects::new(game, map));
@@ -1301,6 +1308,25 @@ fn spawn_views(
         ));
     }
     viewed.buildings = sim.0.buildings.len();
+}
+
+/// Takes away the scenery the sim has cleared from under new buildings.
+fn clear_scenery(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    mut viewed: ResMut<Viewed>,
+    added: Query<(Entity, &MapObject), Added<MapObject>>,
+) {
+    let viewed = &mut *viewed;
+    for (e, object) in &added {
+        viewed.objects.insert(object.0.id, e);
+    }
+    for id in &sim.0.cleared[viewed.cleared..] {
+        if let Some(e) = viewed.objects.remove(id) {
+            commands.entity(e).despawn();
+        }
+    }
+    viewed.cleared = sim.0.cleared.len();
 }
 
 /// Plays a building's packing or unpacking model in its place while it

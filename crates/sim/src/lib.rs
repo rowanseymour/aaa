@@ -112,6 +112,12 @@ pub struct World {
     pub buildings: Vec<Building>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
+    /// The scenery still standing that a building going up clears away,
+    /// as [`aaa_map::Map::clearable`] has it.
+    pub clearable: Vec<(u32, Obstacle)>,
+    /// The ids of the scenery buildings have cleared away, in the order
+    /// they went.
+    pub cleared: Vec<u32>,
     /// Each template's own cost, production and upkeep, by template.
     pub economies: HashMap<Id, aaa_map::Economy>,
     pub economy: aaa_map::EconomyRules,
@@ -926,6 +932,7 @@ impl World {
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
         world.add_buildings(&map.buildings);
         world.scenery = map.scenery.clone();
+        world.clearable = map.clearable.clone();
         let regiments = map.regiments.iter().map(|r| r.id);
         let taken: HashSet<u32> = regiments
             .chain(map.buildings.iter().map(|b| b.id))
@@ -967,6 +974,8 @@ impl World {
             units: Vec::new(),
             buildings: Vec::new(),
             scenery: Vec::new(),
+            clearable: Vec::new(),
+            cleared: Vec::new(),
             ticks: 0,
             next_id: 1,
             next_commission: 0,
@@ -1945,6 +1954,7 @@ impl World {
                 o.position = at;
                 o.facing = facing;
                 self.pathing.block(o);
+                self.clear_under(o);
             }
             let b = self.buildings.len();
             self.regiments[r].unpacked_into = Some(b);
@@ -1973,6 +1983,19 @@ impl World {
                 self.pack_up(b);
             }
         }
+    }
+
+    /// Takes away for good the scenery whose shape overlaps `footprint`, a
+    /// building's as it goes up.
+    fn clear_under(&mut self, footprint: &Obstacle) {
+        let cleared = &mut self.cleared;
+        self.clearable.retain(|(id, shape)| {
+            let under = shape.overlaps(footprint);
+            if under {
+                cleared.push(*id);
+            }
+            !under
+        });
     }
 
     /// Takes a building that's done packing off the map, putting out what
@@ -5557,6 +5580,40 @@ mod tests {
         assert!(!w.pathing.passable(15, 20, Domain::Land));
         run(&mut w, 7.0);
         assert!(w.buildings[1].unpacking.is_none());
+    }
+
+    #[test]
+    fn unpacking_clears_the_scenery_under_the_building() {
+        let mut w = headquarters();
+        let tree = |at: [f32; 2]| Obstacle {
+            position: at,
+            facing: NORTH,
+            shape: Shape::Circle { radius: 0.2 },
+            soft: Shape::Circle { radius: 0.5 },
+        };
+        // The depot will cover 26 to 34 across: one tree stands within it,
+        // one reaches into its edge, one is just clear of it though within
+        // the room it needs, and one is further off.
+        w.clearable = vec![
+            (50, tree([31.0, 41.0])),
+            (51, tree([34.1, 40.0])),
+            (52, tree([34.3, 40.0])),
+            (53, tree([40.0, 40.0])),
+        ];
+        let mut t = truck();
+        t.owner = 1;
+        t.renumber(9);
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        // The trees don't stand in its way.
+        w.order_unpack(1, r, [30.0, 40.0], NORTH).unwrap();
+        run(&mut w, 2.0);
+        assert!(w.cleared.is_empty());
+        run(&mut w, 2.0);
+        assert_eq!(w.buildings.len(), 2);
+        assert_eq!(w.cleared, [50, 51]);
+        let ids: Vec<u32> = w.clearable.iter().map(|(id, _)| *id).collect();
+        assert_eq!(ids, [52, 53]);
     }
 
     #[test]
