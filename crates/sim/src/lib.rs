@@ -9,6 +9,7 @@ mod attach;
 pub mod economy;
 mod fog;
 pub mod path;
+mod research;
 mod supply;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
@@ -24,6 +25,7 @@ pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
 pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
 pub use fog::{Fog, Seen};
+pub use research::Lacking;
 pub use supply::{Bombarder, Held, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
@@ -776,24 +778,13 @@ pub enum Refused {
     Unable,
     /// What it would put down doesn't fit there.
     NoRoom,
-    /// Its owner lacks buildings that what it would raise needs.
+    /// Its owner lacks buildings or technologies that what it would raise
+    /// needs.
     Lacking,
     /// Its owner hasn't the money for it.
     Unaffordable,
     /// The HQ that would raise it has no place left for it.
     Full,
-    /// Its recruiter doesn't offer it, for want of a property.
-    NotOffered,
-}
-
-/// How a recruiter's menu has something it recruits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Offer {
-    Offered,
-    /// Shown, but can't be pressed.
-    Greyed,
-    /// Left out, its place in the menu kept empty.
-    Hidden,
 }
 
 impl From<NotYours> for Refused {
@@ -1505,10 +1496,7 @@ impl World {
         if b.deploy.is_none() || b.busy() {
             return Err(Refused::Unable);
         }
-        if self.missing_properties(building, regiment) {
-            return Err(Refused::NotOffered);
-        }
-        if !self.lacks(player, regiment).is_empty() {
+        if !self.lacks(player, building, regiment).is_empty() {
             return Err(Refused::Lacking);
         }
         // What an HQ raises it takes on, queued or out.
@@ -1521,98 +1509,6 @@ impl World {
             return Err(Refused::Unaffordable);
         }
         Ok(())
-    }
-
-    /// How the building at `building` offers `regiment`, member by member:
-    /// greyed or hidden if any member is, the later member deciding where
-    /// they differ. A member missing a property is hidden or greyed as its
-    /// template says, and one whose owner lacks a building it needs greyed.
-    pub fn offer(&self, building: usize, regiment: &aaa_map::Regiment) -> Offer {
-        let owner = self.buildings[building].owner;
-        let mut out = Offer::Offered;
-        for m in &regiment.members {
-            let Some(r) = self.requires.get(&Id::from(m.thing.template.as_str())) else {
-                continue;
-            };
-            let missing = r
-                .properties
-                .iter()
-                .any(|p| !self.recruiter_has(building, p));
-            if missing {
-                out = if r.hide { Offer::Hidden } else { Offer::Greyed };
-            } else if !self.missing_structures(owner, r).is_empty() {
-                out = Offer::Greyed;
-            }
-        }
-        out
-    }
-
-    /// Whether any member of `regiment` needs a property the building at
-    /// `building` and its side haven't.
-    fn missing_properties(&self, building: usize, regiment: &aaa_map::Regiment) -> bool {
-        regiment.members.iter().any(|m| {
-            self.requires
-                .get(&Id::from(m.thing.template.as_str()))
-                .is_some_and(|r| {
-                    r.properties
-                        .iter()
-                        .any(|p| !self.recruiter_has(building, p))
-                })
-        })
-    }
-
-    /// Whether the building at `building` has `property` itself, or its side
-    /// has it as a technology.
-    fn recruiter_has(&self, building: usize, property: &Id) -> bool {
-        let b = &self.buildings[building];
-        let kind = self.kinds.get(&Id::from(b.template.as_str()));
-        kind.is_some_and(|k| k.properties.contains(property))
-            || b.properties.iter().any(|h| h.property == *property)
-            || (self.technologies.get(&b.owner)).is_some_and(|t| t.contains(property))
-    }
-
-    /// The buildings `player` would need to commission `regiment` but
-    /// hasn't standing, by their current ids.
-    pub fn lacks(&self, player: u32, regiment: &aaa_map::Regiment) -> Vec<&Id> {
-        let mut out: Vec<&Id> = Vec::new();
-        for m in &regiment.members {
-            let Some(r) = self.requires.get(&Id::from(m.thing.template.as_str())) else {
-                continue;
-            };
-            for id in self.missing_structures(player, r) {
-                if !out.contains(&id) {
-                    out.push(id);
-                }
-            }
-        }
-        out
-    }
-
-    /// The buildings of `r` that `player` hasn't standing, none where one
-    /// of them is enough and it has one.
-    fn missing_structures<'a>(&self, player: u32, r: &'a Requires) -> Vec<&'a Id> {
-        // Only buildings done unpacking count, and only the player's own,
-        // not its allies'.
-        let has = |ids: &[Id]| {
-            self.buildings.iter().any(|b| {
-                b.owner == player
-                    && b.standing()
-                    && !b.busy()
-                    && ids
-                        .iter()
-                        .any(|id| id.as_str().eq_ignore_ascii_case(&b.template))
-            })
-        };
-        let missing: Vec<&Id> = r
-            .structures
-            .iter()
-            .filter(|ids| !has(ids))
-            .map(|ids| &ids[0])
-            .collect();
-        if r.any && missing.len() < r.structures.len() {
-            return Vec::new();
-        }
-        missing
     }
 
     fn may_rally(&self, player: u32, building: usize) -> Result<(), Refused> {
@@ -5712,7 +5608,8 @@ mod tests {
             commission: Box::new(Commission::new(truck(), 1.0)),
         };
         let lacks = |w: &World| -> Vec<String> {
-            w.lacks(1, &truck())
+            w.lacks(1, 0, &truck())
+                .structures
                 .iter()
                 .map(|id| id.to_string())
                 .collect()
@@ -5736,67 +5633,51 @@ mod tests {
     }
 
     #[test]
-    fn recruiters_offer_what_their_properties_and_technologies_allow() {
+    fn technologies_grey_or_hide_what_needs_them() {
         let mut w = headquarters();
+        w.buildings[0].template = "hq".into();
         let needs = |properties: &[&str], hide: bool| Requires {
             properties: properties.iter().map(|&p| Id::from(p)).collect(),
             hide,
             ..Requires::default()
         };
-        w.requires
-            .insert(Id::from("truck"), needs(&["harbour"], true));
-        let commission = || Command::Commission {
+        // A second member, which decides where the two differ.
+        let mut regiment = truck();
+        let mut rifleman = regiment.members[0].clone();
+        rifleman.thing.template = "rifleman".into();
+        regiment.members.push(rifleman);
+        let commission = |regiment: &aaa_map::Regiment| Command::Commission {
             building: 0,
-            commission: Box::new(Commission::new(truck(), 1.0)),
+            commission: Box::new(Commission::new(regiment.clone(), 1.0)),
         };
-        assert_eq!(w.offer(0, &truck()), Offer::Hidden);
-        assert_eq!(w.check(1, &commission()), Err(Refused::NotOffered));
-        w.requires.get_mut(&Id::from("truck")).unwrap().hide = false;
-        assert_eq!(w.offer(0, &truck()), Offer::Greyed);
-        // The recruiter's own property does, and so does its side's
-        // technology, but not another side's.
+        w.requires
+            .insert(Id::from("truck"), needs(&["tech_heavy"], false));
+        w.requires
+            .insert(Id::from("rifleman"), needs(&["boat"], true));
+        let lacking = w.lacks(1, 0, &regiment);
+        assert_eq!(
+            lacking.properties,
+            [Id::from("tech_heavy"), Id::from("boat")]
+        );
+        assert!(lacking.hidden);
+        assert_eq!(w.apply(1, commission(&regiment)), Err(Refused::Lacking));
+        // What the recruiter carries itself counts only for it.
         w.kinds.insert(
-            Id::from(w.buildings[0].template.as_str()),
+            Id::from("hq"),
             aaa_map::Kind {
-                properties: vec![Id::from("harbour")],
+                properties: vec![Id::from("boat")],
                 ..aaa_map::Kind::default()
             },
         );
-        assert_eq!(w.offer(0, &truck()), Offer::Offered);
-        w.check(1, &commission()).unwrap();
-        w.kinds.clear();
-        w.grant(2, Id::from("harbour"));
-        assert_eq!(w.offer(0, &truck()), Offer::Greyed);
-        w.grant(1, Id::from("harbour"));
-        assert_eq!(w.offer(0, &truck()), Offer::Offered);
-    }
-
-    #[test]
-    fn a_regiments_later_member_decides_how_it_is_offered() {
-        let mut w = headquarters();
-        let mut regiment = truck();
-        let mut second = regiment.members[0].clone();
-        second.thing.template = "boat".into();
-        regiment.members.push(second);
-        let ids = |ids: &[&str]| ids.iter().map(|&id| Id::from(id)).collect();
-        w.requires.insert(
-            Id::from("truck"),
-            Requires {
-                properties: ids(&["harbour"]),
-                hide: true,
-                ..Requires::default()
-            },
-        );
-        w.requires.insert(
-            Id::from("boat"),
-            Requires {
-                structures: vec![ids(&["pool"])],
-                ..Requires::default()
-            },
-        );
-        assert_eq!(w.offer(0, &regiment), Offer::Greyed);
-        regiment.members.swap(0, 1);
-        assert_eq!(w.offer(0, &regiment), Offer::Hidden);
+        let lacking = w.lacks(1, 0, &regiment);
+        assert_eq!(lacking.properties, [Id::from("tech_heavy")]);
+        assert!(!lacking.hidden);
+        // A technology counts once the side holds it, and only for that side.
+        w.grant(2, Id::from("tech_heavy"));
+        assert!(!w.lacks(1, 0, &regiment).is_empty());
+        w.grant(1, Id::from("tech_heavy"));
+        assert!(w.lacks(1, 0, &regiment).is_empty());
+        w.apply(1, commission(&regiment)).unwrap();
     }
 
     #[test]

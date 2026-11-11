@@ -79,8 +79,8 @@ pub struct Thing {
     /// On what's recruited, the transport that carries it to where it's
     /// sent, which puts it in a recruiter's Deploy to Location menu.
     pub transport_actor: Option<Id>,
-    /// On what's recruited, whether a recruiter's menu leaves it out,
-    /// rather than greying it, while its required properties are missing.
+    /// Whether a recruiter hides it, rather than greys it, while the
+    /// properties it needs are missing.
     pub hide_if_missing_properties: Option<bool>,
     #[serde(default)]
     pub flags: Vec<Flags>,
@@ -314,8 +314,8 @@ pub struct ElementComponent {
     pub required_structures: Option<String>,
     #[serde(default)]
     pub required_structures_any: bool,
-    /// Comma separated, the properties its recruiter, or for a technology
-    /// its recruiter's side, needs to recruit it.
+    /// Comma separated properties the recruiter, or for a technology its
+    /// side, needs to recruit it.
     pub required_properties: Option<String>,
 }
 
@@ -369,6 +369,15 @@ pub struct PropertyRef {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Property {
     pub ids: Option<Id>,
+    /// A `#` key into the localized strings.
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// Whether a side can hold it, rather than only the objects that carry
+    /// it.
+    #[serde(default)]
+    pub is_technology: bool,
+    /// Its research button's icon, relative to the defining file.
+    pub action_button_icon: Option<String>,
     /// Comma separated, the flags it gives its objects for abilities'
     /// `targets` to match.
     pub enabled_target_flags: Option<String>,

@@ -15,7 +15,7 @@ use std::collections::HashMap;
 use aaa_data::{GameData, Id};
 use aaa_map::Regiment;
 use aaa_render::textures;
-use aaa_sim::{Commission, Offer};
+use aaa_sim::{Commission, Lacking};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
@@ -152,6 +152,28 @@ pub enum Menu {
     Location,
 }
 
+/// How a recruiter's menu shows one of its entries.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Offer {
+    Offered,
+    /// Shown, but not pressable.
+    Greyed,
+    /// Left out, its slot kept empty.
+    Hidden,
+}
+
+impl From<&Lacking> for Offer {
+    fn from(lacking: &Lacking) -> Offer {
+        if lacking.hidden {
+            Offer::Hidden
+        } else if lacking.is_empty() {
+            Offer::Offered
+        } else {
+            Offer::Greyed
+        }
+    }
+}
+
 /// What a button is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Entry {
@@ -225,9 +247,7 @@ fn layout(
                     out[s] = Some(Entry::Open(menu));
                 }
             }
-            if (b.offers(Menu::Deploy) || b.offers(Menu::Location))
-                && let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none())
-            {
+            if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
                 out[s] = Some(Entry::Rally);
             }
             if let Some(s) = b.pack.filter(|&s| s < SLOTS && out[s].is_none()) {
@@ -319,7 +339,7 @@ pub struct Looks {
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
-    /// What each template is called, for saying which buildings a
+    /// What each template and technology is called, for saying what a
     /// commission needs.
     names: HashMap<Id, String>,
 }
@@ -566,7 +586,9 @@ pub fn spawn(
         requires,
         affording,
         menus,
-        names: listings.into_iter().map(|(id, l)| (id, l.name)).collect(),
+        names: (listings.into_iter().map(|(id, l)| (id, l.name)))
+            .chain(game.technologies().into_iter().map(|(id, t)| (id, t.name)))
+            .collect(),
     });
     commands.init_resource::<Shown>();
     commands.init_resource::<Refusal>();
@@ -742,8 +764,10 @@ pub fn show(
     let menu = looks.menu(&sim.0, building);
     let recruits: Vec<(Menu, Offer)> = (menu.iter())
         .map(|r| {
-            let offer = match (building, &r.regiment) {
-                (Some(b), Some(regiment)) => sim.0.offer(b, regiment),
+            let offer = match (building, &r.regiment, local.0) {
+                (Some(b), Some(regiment), Some(player)) => {
+                    Offer::from(&sim.0.lacks(player, b, regiment))
+                }
                 _ => Offer::Offered,
             };
             (r.menu, offer)
@@ -758,7 +782,9 @@ pub fn show(
             deploy: looks.deploy.0,
             location: looks.location.0,
             recruits: &recruits,
-            rally: looks.rally.0,
+            // Where what it raises goes matters whether or not any of it
+            // can be raised now.
+            rally: looks.rally.0.filter(|_| !menu.is_empty()),
             pack: looks
                 .pack
                 .0
@@ -813,13 +839,13 @@ pub fn show(
             Entry::Recruit(i) => {
                 let r = &menu[i];
                 table.extend(r.economy.iter().cloned());
-                let lacking: Vec<&str> = match (&r.regiment, local.0) {
-                    (Some(regiment), Some(player)) => sim
-                        .0
-                        .lacks(player, regiment)
-                        .into_iter()
-                        .map(|id| looks.names.get(id).map_or(id.as_str(), String::as_str))
-                        .collect(),
+                let lacking: Vec<String> = match (&r.regiment, local.0, building) {
+                    (Some(regiment), Some(player), Some(b)) => {
+                        let lacking = sim.0.lacks(player, b, regiment);
+                        (lacking.properties.iter().chain(&lacking.structures))
+                            .map(|id| looks.names.get(id).map_or(id.to_string(), Clone::clone))
+                            .collect()
+                    }
                     _ => Vec::new(),
                 };
                 if !lacking.is_empty() {
@@ -1149,7 +1175,7 @@ impl Presser<'_> {
                         debug!("can't commission {}: {e:?}", regiment.template);
                         // As the game does, it says nothing for what's not
                         // offered.
-                        if e != aaa_sim::Refused::NotOffered {
+                        if e != aaa_sim::Refused::Lacking {
                             self.refusal.0 = Some((slot, e));
                         }
                     }
@@ -1227,10 +1253,9 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::NotYours => "Not yours",
         aaa_sim::Refused::Unable => "Can't now",
         aaa_sim::Refused::NoRoom => "No room",
-        aaa_sim::Refused::Lacking => "Lacks a building it needs",
+        aaa_sim::Refused::Lacking => "Lacks a building or technology it needs",
         aaa_sim::Refused::Unaffordable => "Not enough money",
         aaa_sim::Refused::Full => "HQ is full",
-        aaa_sim::Refused::NotOffered => "Not offered",
     }
 }
 
@@ -1526,6 +1551,7 @@ mod tests {
         assert_eq!(grid.iter().flatten().count(), 3);
         let depot = BuildingButtons {
             recruits: &[],
+            rally: None,
             pack: None,
             ..hq
         };
@@ -1568,6 +1594,15 @@ mod tests {
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], None);
+        // With everything hidden it still has its rally point.
+        let hidden = [(Menu::Deploy, Hidden); 2];
+        let none = BuildingButtons {
+            recruits: &hidden,
+            ..hq
+        };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(none), false);
+        assert_eq!(grid[..2], [None, None]);
+        assert_eq!(grid[5], Some(Entry::Rally));
         let menu = layout(
             Page::Deploy(Menu::Deploy),
             &GAME,

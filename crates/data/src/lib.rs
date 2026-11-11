@@ -72,18 +72,14 @@ struct Definitions {
     /// in the data, and only the first definition is kept.
     things: Vec<Template>,
     properties: HashMap<Id, defs::Property>,
+    /// The archive path of the file defining each of `properties`.
+    property_files: HashMap<Id, String>,
     /// The abilities defined on their own, such as special operations,
     /// in the order they load, the first kept of those defined twice.
     abilities: Vec<(Id, defs::AbilityDefinition)>,
     /// The generals, in the order they load, the first kept of those
     /// defined twice.
     generals: Vec<defs::General>,
-}
-
-/// The names a comma separated list holds, leaving out `NULL`.
-fn listed(list: Option<&str>) -> impl Iterator<Item = &str> {
-    let names = list.unwrap_or("").split(',').map(str::trim);
-    names.filter(|n| !n.is_empty() && !n.eq_ignore_ascii_case("null"))
 }
 
 /// An object template as some `.tgi` file defines it.
@@ -101,6 +97,7 @@ impl Definitions {
         let mut ids = HashSet::new();
         let mut things = Vec::new();
         let mut properties = HashMap::new();
+        let mut property_files = HashMap::new();
         let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
         let mut generals: Vec<defs::General> = Vec::new();
         for Scoped {
@@ -130,6 +127,7 @@ impl Definitions {
                     && let Ok(p) = templates.deserialize::<defs::Property>(block)
                     && let Some(id) = p.ids.clone()
                 {
+                    property_files.insert(id.clone(), file.to_string());
                     properties.insert(id, p);
                 } else if kind.eq_ignore_ascii_case("AbilityDefinition")
                     && let Ok(a) = templates.deserialize::<defs::AbilityDefinition>(block)
@@ -149,6 +147,7 @@ impl Definitions {
         Definitions {
             things,
             properties,
+            property_files,
             abilities,
             generals,
         }
@@ -562,8 +561,8 @@ pub struct Deployment {
     pub pack_health_min: f32,
 }
 
-/// What recruiting a template needs: buildings its owner has standing, and
-/// properties the recruiter or its side has.
+/// What recruiting a template needs: buildings the player has standing,
+/// and properties the recruiter or its side has.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Requires {
     /// Each building, by every id it may go by on a map: its current one
@@ -571,10 +570,21 @@ pub struct Requires {
     pub structures: Vec<Vec<Id>>,
     /// Whether one of them is enough, rather than all.
     pub any: bool,
+    /// Every one of them, the recruiter's own or, for a technology, its
+    /// side's.
     pub properties: Vec<Id>,
-    /// Whether missing a property leaves it out of a recruiter's menu,
-    /// rather than greying it there.
+    /// Whether a recruiter missing one of `properties` leaves it out of
+    /// its menu, rather than greying it.
     pub hide: bool,
+}
+
+/// A property a side can hold, as its research button shows it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Technology {
+    pub name: String,
+    pub description: Option<String>,
+    /// Archive path of its button's icon.
+    pub icon: Option<String>,
 }
 
 /// Where what a building recruits appears and goes, from where it stands:
@@ -1457,16 +1467,15 @@ impl GameData {
         }
         self.by_template(|t| {
             let e = t.element_component.as_ref()?;
-            let structures: Vec<Vec<Id>> = listed(e.required_structures.as_deref())
+            let structures: Vec<Vec<Id>> = supply::listed(e.required_structures.as_deref())
+                .into_iter()
                 .map(|s| {
-                    let id = renamed(&renames, &Id::from(s));
+                    let id = renamed(&renames, &s);
                     let olds = aliases.get(&id).cloned().unwrap_or_default();
                     std::iter::once(id).chain(olds).collect()
                 })
                 .collect();
-            let properties: Vec<Id> = listed(e.required_properties.as_deref())
-                .map(Id::from)
-                .collect();
+            let properties = supply::listed(e.required_properties.as_deref());
             (!structures.is_empty() || !properties.is_empty()).then_some(Requires {
                 structures,
                 any: e.required_structures_any,
@@ -1474,6 +1483,31 @@ impl GameData {
                 hide: t.hide_if_missing_properties.unwrap_or(true),
             })
         })
+    }
+
+    /// The properties a side can hold, by id.
+    pub fn technologies(&mut self) -> HashMap<Id, Technology> {
+        let strings = self.strings();
+        let definitions = self.definitions();
+        (definitions.properties.iter())
+            .filter(|(_, p)| p.is_technology)
+            .map(|(id, p)| {
+                let file = definitions
+                    .property_files
+                    .get(id)
+                    .map_or("", String::as_str);
+                let icon = (p.action_button_icon.as_deref())
+                    .and_then(|i| i.split_whitespace().next())
+                    .filter(|i| !i.eq_ignore_ascii_case("null"))
+                    .map(|i| beside(file, i));
+                let technology = Technology {
+                    name: localized(&strings, p.name.as_deref()).unwrap_or_else(|| id.to_string()),
+                    description: localized(&strings, p.description.as_deref()),
+                    icon,
+                };
+                (id.clone(), technology)
+            })
+            .collect()
     }
 
     /// The transport each template that's carried to where it's recruited
