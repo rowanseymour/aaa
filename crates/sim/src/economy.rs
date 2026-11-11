@@ -122,6 +122,16 @@ pub enum Notice {
         hq: u32,
         regiment: usize,
     },
+    /// A building of its, by index into [`World::buildings`], was taken by
+    /// player `by`; for a city, its centre.
+    Lost {
+        player: u32,
+        building: usize,
+        by: u32,
+    },
+    /// It took a building, by index into [`World::buildings`]; for a city,
+    /// its centre.
+    Captured { player: u32, building: usize },
 }
 
 /// How much the shortage has to move by before the side is told again.

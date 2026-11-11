@@ -12,6 +12,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use crate::actions::fill;
+use crate::sound::Sounds;
 use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};
 
@@ -364,12 +365,13 @@ fn cell_parts(kind: &str, stockpile: f32, balance: &Balance) -> Vec<(String, boo
 }
 
 /// Puts up what the player's told about their economy, and takes it down
-/// once it's been up a while.
+/// once it's been up a while; sounds what's told with a sound.
 pub fn tell(
     mut sim: ResMut<Sim>,
     local: Res<Local>,
     looks: Res<Looks>,
     time: Res<Time>,
+    mut sounds: ResMut<Sounds>,
     mut message: Single<(&mut Message, &mut Text)>,
 ) {
     let (until, text) = &mut *message;
@@ -384,6 +386,18 @@ pub fn tell(
         false => std::mem::take(&mut sim.0.notices),
     };
     for notice in notices {
+        let sound = match notice {
+            Notice::Lost { player, .. } if Some(player) == local.0 => {
+                Some("actor_captured_by_enemy_sfx")
+            }
+            Notice::Captured { player, .. } if Some(player) == local.0 => {
+                Some("actor_captured_sfx")
+            }
+            _ => None,
+        };
+        if let Some(sound) = sound {
+            sounds.interface(&time, sound);
+        }
         let words = match notice {
             Notice::Short { player, percent } if Some(player) == local.0 => looks
                 .shortage
