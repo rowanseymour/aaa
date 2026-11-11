@@ -76,6 +76,9 @@ pub struct Thing {
     pub name: Option<String>,
     /// Whether a side numbers those it has, as "1st Infantry Regiment".
     pub numbered: Option<bool>,
+    /// On what's recruited, the transport that carries it to where it's
+    /// sent, which puts it in a recruiter's Deploy to Location menu.
+    pub transport_actor: Option<Id>,
     /// Whether a recruiter hides it, rather than greys it, while the
     /// properties it needs are missing.
     pub hide_if_missing_properties: Option<bool>,
@@ -851,6 +854,10 @@ pub struct ActorCommand {
     /// Which of the action buttons it takes, numbered across then down;
     /// negative for none.
     pub preferred_position: Option<i32>,
+    /// Whether, its button taken, it takes the last free one rather than
+    /// the first.
+    #[serde(default)]
+    pub high_importance: bool,
     /// The cursor shown while the order waits for a place or target.
     pub cursor_ids: Option<Id>,
     /// The [`Vfx`] marking where the order was given.
