@@ -1,7 +1,8 @@
 //! The resource bar in the top right corner: the player's money and what
 //! they net of each resource a minute, a second bar under it previewing
 //! what the order under the cursor would make of them, and under those what
-//! they're told about their economy.
+//! they're told about their economy. It sounds what else they're told, such
+//! as a building taken.
 
 use std::collections::HashMap;
 
@@ -12,6 +13,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
 use crate::actions::fill;
+use crate::sound::Sounds;
 use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};
 
@@ -364,12 +366,13 @@ fn cell_parts(kind: &str, stockpile: f32, balance: &Balance) -> Vec<(String, boo
 }
 
 /// Puts up what the player's told about their economy, and takes it down
-/// once it's been up a while.
+/// once it's been up a while, and sounds what's told with a sound.
 pub fn tell(
     mut sim: ResMut<Sim>,
     local: Res<Local>,
     looks: Res<Looks>,
     time: Res<Time>,
+    mut sounds: ResMut<Sounds>,
     mut message: Single<(&mut Message, &mut Text)>,
 ) {
     let (until, text) = &mut *message;
@@ -384,6 +387,9 @@ pub fn tell(
         false => std::mem::take(&mut sim.0.notices),
     };
     for notice in notices {
+        if let Some(sound) = sound(&notice, local.0) {
+            sounds.interface(&time, sound);
+        }
         let words = match notice {
             Notice::Short { player, percent } if Some(player) == local.0 => looks
                 .shortage
@@ -441,10 +447,43 @@ pub fn tell(
     }
 }
 
+/// The sound `local`, the player here, hears for a notice: none for one
+/// told to anyone else.
+fn sound(notice: &Notice, local: Option<u32>) -> Option<&'static str> {
+    match *notice {
+        Notice::Lost { player, .. } if Some(player) == local => Some("actor_captured_by_enemy_sfx"),
+        Notice::Captured { player, .. } if Some(player) == local => Some("actor_captured_sfx"),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use aaa_sim::{Ledger, economy::EconomyRules};
+
+    #[test]
+    fn only_the_player_here_hears_buildings_change_hands() {
+        let lost = |player, by| Notice::Lost {
+            player,
+            building: 0,
+            by,
+        };
+        let captured = |player| Notice::Captured {
+            player,
+            building: 0,
+        };
+        assert_eq!(
+            sound(&lost(1, 2), Some(1)),
+            Some("actor_captured_by_enemy_sfx")
+        );
+        assert_eq!(sound(&captured(1), Some(1)), Some("actor_captured_sfx"));
+        // One AI taking from another.
+        assert_eq!(sound(&lost(2, 3), Some(1)), None);
+        assert_eq!(sound(&captured(3), Some(1)), None);
+        assert_eq!(sound(&captured(1), None), None);
+        assert_eq!(sound(&Notice::Repaired { player: 1 }, Some(1)), None);
+    }
 
     #[test]
     fn cells_show_rates_and_limits_as_the_game_does() {

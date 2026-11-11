@@ -158,8 +158,7 @@ pub struct World {
     pub holdings: Vec<(u32, String)>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
-    /// What sides have been told about their economies since these were
-    /// last taken.
+    /// What sides have been told since these were last taken.
     pub notices: Vec<Notice>,
     /// How far each template sees, by template.
     pub sights: HashMap<Id, aaa_map::Sight>,
@@ -2790,6 +2789,14 @@ impl World {
     fn change_hands(&mut self, b: usize, owner: u32) {
         let taken = &self.buildings[b];
         log::debug!("{} {} taken by player {owner}", taken.template, taken.id);
+        // Each side's told only of what it sees, but a side always sees its
+        // own: the loser's told while it's still theirs, the taker once it
+        // is.
+        self.notices.push(Notice::Lost {
+            player: taken.owner,
+            building: b,
+            by: owner,
+        });
         let ids = &self.buildings[b].members;
         let members: Vec<usize> = (0..self.buildings.len())
             .filter(|&i| i != b && ids.contains(&self.buildings[i].id))
@@ -2808,6 +2815,10 @@ impl World {
             // A relay has to connect on its new side.
             building.supply.judged = false;
         }
+        self.notices.push(Notice::Captured {
+            player: owner,
+            building: b,
+        });
     }
 
     /// What `s` fires `weapon` at: the best it can, armed enemies first,
@@ -4971,6 +4982,27 @@ mod tests {
         assert_eq!(w.buildings[2].state, State::Disabled);
         assert_eq!(w.buildings[2].owner, 2);
         assert_eq!(w.units[0].target, None);
+        assert_eq!(captures(&w), [lost(0, 2, 1), captured(0, 1)]);
+    }
+
+    /// What `w`'s sides have been told of buildings changing hands.
+    fn captures(w: &World) -> Vec<Notice> {
+        let notices = w.notices.iter().cloned();
+        notices
+            .filter(|n| matches!(n, Notice::Lost { .. } | Notice::Captured { .. }))
+            .collect()
+    }
+
+    fn lost(building: usize, player: u32, by: u32) -> Notice {
+        Notice::Lost {
+            player,
+            building,
+            by,
+        }
+    }
+
+    fn captured(building: usize, player: u32) -> Notice {
+        Notice::Captured { player, building }
     }
 
     /// Player 2's city centred at 40,10 with a zone of 15 and a house of
@@ -4999,6 +5031,8 @@ mod tests {
         run(&mut w, 15.0);
         assert!(w.buildings.iter().all(|b| b.owner == 1));
         assert!(w.buildings[0].captured.is_some());
+        // Told once, of the centre, not of the house that went with it.
+        assert_eq!(captures(&w), [lost(0, 2, 1), captured(0, 1)]);
         // Leaving doesn't give it back.
         w.apply(
             1,
