@@ -25,6 +25,19 @@ It's a work in progress, playable in parts.
 - Make the game easier to mod, starting with a map editor and documented
   [file formats](docs/formats).
 
+## Status
+
+Matches play on the original maps against an idle opponent. You can't win or lose yet.
+
+| | |
+|---|---|
+| Data files, maps and models | ✅ Read in full |
+| Drawing the game | ✅ Ground, units, animations, effects, the game's own interface |
+| Movement and combat | 🟡 Regiments move, fight and take buildings and cities |
+| Economy and supply | 🟡 Income, upkeep, supply and HQs; nothing to build or buy yet |
+| Map editor | 🟡 Views maps; no editing yet |
+| AI, multiplayer, saves, campaigns | ⬜ Not started |
+
 ## Running
 
 You need Rust, and on Linux the system packages listed in the
