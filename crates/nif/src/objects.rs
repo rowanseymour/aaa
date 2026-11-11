@@ -182,6 +182,7 @@ pub enum Object {
     Material(Material),
     Alpha(Alpha),
     Stencil(Stencil),
+    ZBuffer(ZBuffer),
     VertexColor(VertexColor),
     ExtraData(ExtraData),
     Controller(Controller),
@@ -248,6 +249,7 @@ object_types!(
     Material(Material),
     Alpha(Alpha),
     Stencil(Stencil),
+    ZBuffer(ZBuffer),
     VertexColor(VertexColor),
     ExtraData(ExtraData),
     Keyframes(Keyframes),
@@ -410,6 +412,25 @@ impl Alpha {
     /// its alpha, and so on through the usual blend factors.
     pub fn source(&self) -> u16 {
         (self.flags >> 1) & 0xf
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ZBuffer {
+    pub flags: u16,
+    /// The comparison a pixel's depth has to pass.
+    pub function: u32,
+}
+
+impl ZBuffer {
+    /// Whether what's nearer hides the shape.
+    pub fn test(&self) -> bool {
+        self.flags & 1 != 0
+    }
+    /// Whether the shape hides what's farther and drawn after it, which it
+    /// only does if it tests.
+    pub fn write(&self) -> bool {
+        self.flags & 3 == 3
     }
 }
 
@@ -1446,8 +1467,10 @@ impl Object {
             }
             "NiZBufferProperty" => {
                 named(r)?;
-                r.skip(2 + 4)?;
-                other()
+                Object::ZBuffer(ZBuffer {
+                    flags: r.u16()?,
+                    function: r.u32()?,
+                })
             }
             "NiVertexColorProperty" => {
                 named(r)?;

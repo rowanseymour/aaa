@@ -115,6 +115,9 @@ fn dump(file: &str) -> io::Result<ExitCode> {
             Object::Material(m) => format!("material diffuse {:?} alpha {}", m.diffuse, m.alpha),
             Object::Alpha(a) => format!("alpha flags {:#06x} threshold {}", a.flags, a.threshold),
             Object::Stencil(s) => format!("stencil draw mode {}", s.draw_mode),
+            Object::ZBuffer(z) => {
+                format!("z-buffer flags {:#06x} function {}", z.flags, z.function)
+            }
             Object::VertexColor(v) => {
                 format!(
                     "vertex colour mode {} lighting {}",

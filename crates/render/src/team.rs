@@ -68,6 +68,12 @@ impl Tintable for TeamMaterial {
     }
 }
 
+impl Tintable for crate::solid::SolidMaterial {
+    fn colour(&mut self) -> &mut Color {
+        &mut self.base.base_color
+    }
+}
+
 /// A copy of a material with its colour multiplied by a tint.
 fn tinted<M: Tintable>(plain: &M, Tint([r, g, b]): Tint) -> M {
     let mut copy = plain.clone();

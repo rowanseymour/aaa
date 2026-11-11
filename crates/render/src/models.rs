@@ -24,6 +24,7 @@ use crate::MapObject;
 use crate::glow::{Glow, GlowMaterial, Source};
 use crate::particles::{self, Look, System};
 use crate::rig::{Nodes, Rig};
+use crate::solid::{Solid, SolidMaterial};
 use crate::team::{self, Team, TeamMaterial};
 use crate::terrain::world;
 use crate::textures;
@@ -78,8 +79,12 @@ fn placed(thing: &Thing, view: &View) -> Transform {
 /// Draws one of a model's meshes in `material` instead of what it was
 /// drawn in, as a placement preview's are.
 pub fn repaint(mesh: &mut EntityCommands, material: Handle<StandardMaterial>) {
-    mesh.remove::<(MeshMaterial3d<TeamMaterial>, MeshMaterial3d<GlowMaterial>)>()
-        .insert(MeshMaterial3d(material));
+    mesh.remove::<(
+        MeshMaterial3d<TeamMaterial>,
+        MeshMaterial3d<GlowMaterial>,
+        MeshMaterial3d<SolidMaterial>,
+    )>()
+    .insert(MeshMaterial3d(material));
 }
 
 /// One mesh of a model, in Bevy axes, ready to instance.
@@ -96,12 +101,13 @@ pub(crate) struct Part {
 }
 
 /// A part's material: most are standard, those that add to what's behind
-/// them need their own.
+/// them, or blend with it while writing depth, need their own.
 #[derive(Clone)]
 pub(crate) enum PartMaterial {
     Standard(Handle<StandardMaterial>),
     Glow(Handle<GlowMaterial>),
     Team(Handle<TeamMaterial>),
+    Solid(Handle<SolidMaterial>),
 }
 
 impl PartMaterial {
@@ -110,6 +116,7 @@ impl PartMaterial {
             PartMaterial::Standard(m) => entity.insert(MeshMaterial3d(m.clone())),
             PartMaterial::Glow(m) => entity.insert(MeshMaterial3d(m.clone())),
             PartMaterial::Team(m) => entity.insert(MeshMaterial3d(m.clone())),
+            PartMaterial::Solid(m) => entity.insert(MeshMaterial3d(m.clone())),
         };
     }
 
@@ -119,6 +126,7 @@ impl PartMaterial {
             assets.materials,
             assets.glow_materials,
             assets.team_materials,
+            assets.solid_materials,
         )
     }
 
@@ -128,6 +136,7 @@ impl PartMaterial {
         materials: &mut Assets<StandardMaterial>,
         glow_materials: &mut Assets<GlowMaterial>,
         team_materials: &mut Assets<TeamMaterial>,
+        solid_materials: &mut Assets<SolidMaterial>,
     ) -> Self {
         fn copy<M: Asset + Clone>(store: &mut Assets<M>, h: &Handle<M>) -> Handle<M> {
             store.get(h).cloned().map_or(h.clone(), |m| store.add(m))
@@ -136,6 +145,7 @@ impl PartMaterial {
             PartMaterial::Standard(h) => PartMaterial::Standard(copy(materials, h)),
             PartMaterial::Glow(h) => PartMaterial::Glow(copy(glow_materials, h)),
             PartMaterial::Team(h) => PartMaterial::Team(copy(team_materials, h)),
+            PartMaterial::Solid(h) => PartMaterial::Solid(copy(solid_materials, h)),
         }
     }
 }
@@ -320,6 +330,7 @@ impl Animated {
         materials: &mut Assets<StandardMaterial>,
         glow_materials: &mut Assets<GlowMaterial>,
         team_materials: &mut Assets<TeamMaterial>,
+        solid_materials: &mut Assets<SolidMaterial>,
     ) -> Option<Transform> {
         let t = self.time;
         let moved = (!self.animation.motion.is_empty()).then(|| self.animation.transform(t));
@@ -340,6 +351,7 @@ impl Animated {
             PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
             PartMaterial::Glow(h) => glow_materials.get_mut(h).map(|m| &mut m.into_inner().base),
             PartMaterial::Team(h) => team_materials.get_mut(h).map(|m| &mut m.into_inner().base),
+            PartMaterial::Solid(h) => solid_materials.get_mut(h).map(|m| &mut m.into_inner().base),
         };
         if let Some(m) = base {
             if let Some(alpha) = alpha {
@@ -359,10 +371,16 @@ pub fn animate(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut glow_materials: ResMut<Assets<GlowMaterial>>,
     mut team_materials: ResMut<Assets<TeamMaterial>>,
+    mut solid_materials: ResMut<Assets<SolidMaterial>>,
 ) {
     for (mut a, mut transform) in &mut parts {
         a.time += time.delta_secs() * a.rate;
-        let moved = a.pose(&mut materials, &mut glow_materials, &mut team_materials);
+        let moved = a.pose(
+            &mut materials,
+            &mut glow_materials,
+            &mut team_materials,
+            &mut solid_materials,
+        );
         if let Some(moved) = moved {
             *transform = moved;
         }
@@ -1156,6 +1174,10 @@ impl Models {
             reflectance: 0.2,
             ..default()
         };
+        // A shape with nothing to say of depth tests and writes it.
+        let writes_depth = nif
+            .property::<nif::ZBuffer>(props)
+            .is_none_or(|z| z.write());
         let source = alpha.filter(|_| alpha_mode == AlphaMode::Add);
         let material = match (source.and_then(|a| Source::of(a.source())), material) {
             (Some(source), Some(m)) => {
@@ -1167,6 +1189,12 @@ impl Models {
                         ..standard
                     },
                     extension: Glow::new(m.ambient, m.diffuse, source),
+                }))
+            }
+            _ if alpha_mode == AlphaMode::Blend && writes_depth => {
+                PartMaterial::Solid(assets.solid_materials.add(SolidMaterial {
+                    base: standard,
+                    extension: Solid::default(),
                 }))
             }
             _ => PartMaterial::Standard(assets.materials.add(standard)),
@@ -1548,6 +1576,7 @@ pub struct ModelAssets<'a> {
     pub materials: &'a mut Assets<StandardMaterial>,
     pub glow_materials: &'a mut Assets<GlowMaterial>,
     pub team_materials: &'a mut Assets<TeamMaterial>,
+    pub solid_materials: &'a mut Assets<SolidMaterial>,
     pub images: &'a mut Assets<Image>,
     pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
 }
