@@ -29,7 +29,7 @@ It's a work in progress, playable in parts.
 
 Matches play on the original maps against an idle opponent. You can't win or lose yet.
 
-| | |
+| Feature | Status |
 |---|---|
 | Data files, maps and models | ✅ Read in full |
 | Drawing the game | ✅ Ground, units, animations, effects, the game's own interface |
