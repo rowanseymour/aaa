@@ -516,22 +516,48 @@ pub struct MenuButton;
 pub struct Chosen(pub bool);
 
 /// The interface audio a button plays as it's pressed, as the game's
-/// widget templates give each kind of widget.
+/// widget templates give each kind of widget, and whether a right press
+/// sounds it as well as a left.
 #[derive(Component)]
-pub struct Click(&'static str);
+pub struct Click {
+    audio: &'static str,
+    right: bool,
+}
 
 impl Click {
     /// The game's plain button press.
-    pub const PUSH: Click = Click(PUSH);
+    pub const PUSH: Click = Click {
+        audio: PUSH,
+        right: true,
+    };
     /// The game's press of a button that opens a list.
-    pub const OPEN: Click = Click(OPEN);
+    pub const OPEN: Click = Click {
+        audio: OPEN,
+        right: false,
+    };
+    /// The game's press of a button that stays on or off.
+    pub const TOGGLE: Click = Click {
+        audio: TOGGLE,
+        right: false,
+    };
+    /// The command panel's: toggle buttons that are pressed like push
+    /// buttons.
+    pub const COMMAND: Click = Click {
+        audio: TOGGLE,
+        right: true,
+    };
+
+    pub fn play(&self, sounds: &mut Sounds, time: &Time) {
+        sounds.interface(time, self.audio);
+    }
 }
 
 const PUSH: &str = "push_button";
 const OPEN: &str = "tiled_button";
+const TOGGLE: &str = "toggle_button";
 
 /// Every [`Click`], for [`Sounds`] to have ready.
-pub const CLICKS: [&str; 2] = [PUSH, OPEN];
+pub const CLICKS: [&str; 3] = [PUSH, OPEN, TOGGLE];
 
 /// A button laid out as `node`, that does something when
 /// [`Activate`](bevy::ui_widgets::Activate)d, given an observer.
@@ -542,6 +568,12 @@ pub fn clickable(node: Node) -> impl Bundle {
 /// A [`clickable`] that opens a list to choose from.
 pub fn opener(node: Node) -> impl Bundle {
     sounding(node, Click::OPEN)
+}
+
+/// A [`clickable`] that's switched on or off, alone or as one of a group
+/// to choose from.
+pub fn switch(node: Node) -> impl Bundle {
+    sounding(node, Click::TOGGLE)
 }
 
 fn sounding(node: Node, click: Click) -> impl Bundle {
@@ -574,6 +606,11 @@ pub fn button(words: impl Into<String>, size: Font) -> impl Bundle {
     (clickable(padded()), children![text(words, size)])
 }
 
+/// A [`switch`] with words on it.
+pub fn toggle(words: impl Into<String>, size: Font) -> impl Bundle {
+    (switch(padded()), children![text(words, size)])
+}
+
 pub fn disabled(words: impl Into<String>, size: Font) -> impl Bundle {
     (inert(padded()), children![label(words, size, Ink::Muted)])
 }
@@ -596,11 +633,16 @@ fn click(
     mut sounds: ResMut<Sounds>,
     time: Res<Time>,
 ) {
-    if press.button != PointerButton::Primary {
+    let Ok(click) = buttons.get(press.entity) else {
         return;
-    }
-    if let Ok(Click(audio)) = buttons.get(press.entity) {
-        sounds.interface(&time, audio);
+    };
+    let sounds_it = match press.button {
+        PointerButton::Primary => true,
+        PointerButton::Secondary => click.right,
+        PointerButton::Middle => false,
+    };
+    if sounds_it {
+        click.play(&mut sounds, &time);
     }
 }
 

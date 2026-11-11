@@ -15,7 +15,7 @@ use crate::menu::go;
 use crate::presets::Preset;
 use crate::ui::{
     Chosen, Font, Ink, Surface, button, clickable, dropdown, inert, label, opener, padded, panel,
-    text,
+    switch, text, toggle,
 };
 use crate::{Data, Pending, Screen, Side};
 
@@ -428,7 +428,7 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
         let label = Brief::load(&mut data.0, &name)
             .map_or_else(|_| aaa_data::map_title(&name).to_string(), |b| b.name);
         commands
-            .spawn((ChildOf(list), button(label, Font::Body), MapChoice(name)))
+            .spawn((ChildOf(list), toggle(label, Font::Body), MapChoice(name)))
             .observe(choose_map);
     }
     commands
@@ -648,7 +648,7 @@ fn show_slots(
             match player.playable {
                 true => commands.spawn((
                     ChildOf(row),
-                    clickable(cell(140.0)),
+                    switch(cell(140.0)),
                     SideChoice(Some(id)),
                     children![text(who, Font::Body)],
                 )),
@@ -708,7 +708,7 @@ fn show_slots(
     commands
         .spawn((
             ChildOf(slots),
-            clickable(watch),
+            switch(watch),
             SideChoice(None),
             children![text(label, Font::Body)],
         ))

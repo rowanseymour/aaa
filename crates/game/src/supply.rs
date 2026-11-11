@@ -10,6 +10,7 @@ use aaa_render::{Tint, overlay, textures};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::NotShadowCaster;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
@@ -17,7 +18,8 @@ use bevy::ui_widgets::{Activate, Button};
 use crate::actions::Blocks;
 use crate::effects::Effects;
 use crate::keys::{self, Bindings};
-use crate::ui::{Hint, Marked};
+use crate::sound::Sounds;
+use crate::ui::{Click, Edge, Hint, Marked, Surface, Theme};
 use crate::{BuildingView, Loaded, Local, Screen, Selected, SelectedBuilding, Sim, minimap};
 
 /// The tint a building out of supply is drawn in.
@@ -154,16 +156,22 @@ const CYCLE_ICON: &str = "UI/Game/Floaters/ButtonDetachedRegimentUnpressed.tga";
 const CYCLE_HELP: &str = "idle_buttons_IdleButton_tooltip_2";
 const CYCLE_SIZE: f32 = 42.0;
 
-/// The button at the minimap's corner that shows and hides the border,
-/// drawn pressed while it's shown.
+/// The button at the minimap's corner that shows and hides the border:
+/// a ring in the border's colour, lit while it's shown.
 #[derive(Component)]
 pub struct BorderButton {
-    shown: Option<Handle<Image>>,
-    hidden: Option<Handle<Image>>,
+    /// Whether it last showed the border as shown.
+    shown: bool,
+    /// Whether it was pressed since, which has sounded already.
+    pressed: bool,
 }
 
-const BORDER_SHOWN: &str = "UI/Game/ControlPanel/ButtonSupplyBorderPressedUnfocused.tga";
-const BORDER_HIDDEN: &str = "UI/Game/ControlPanel/ButtonSupplyBorderUnpressed.tga";
+/// The ring in the [`BorderButton`].
+#[derive(Component)]
+pub struct BorderRing;
+
+const BORDER_SIZE: f32 = 34.0;
+const RING_SIZE: f32 = 18.0;
 const BORDER_NAME: &str = "control_panel_ButtonSupplyBorder_ToolTip";
 const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
 const BORDER_OPTION: &str = "options_dialog_Child_text_15";
@@ -177,7 +185,9 @@ pub fn spawn(
     mut materials: ResMut<Assets<StandardMaterial>>,
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
+    border: Res<Border>,
 ) {
+    let shown = border.0;
     let game = &mut loaded.game;
     let border = game.supply_border();
     let [r, g, b] = border.colour;
@@ -186,44 +196,69 @@ pub fn spawn(
         .and_then(|path| overlay::border_image(game, path, formats.0))
         .map(|i| images.add(i));
     let material = materials.add(overlay::mark_material(image, colour));
-    let mut icon = |path: &str| {
-        let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
-        Some(images.add(image))
-    };
-    let (shown, hidden) = (icon(BORDER_SHOWN), icon(BORDER_HIDDEN));
-    let icon = icon(CYCLE_ICON);
+    let icon = (game.read(CYCLE_ICON))
+        .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
+        .map(|i| images.add(i));
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     let name = said(BORDER_NAME, "Toggle Supply Border");
     let what = said(BORDER_HELP, "Toggles the supply border off/on.");
     commands
         .spawn((
-            BorderButton { shown, hidden },
+            BorderButton {
+                shown,
+                pressed: false,
+            },
             Blocks,
             Button,
+            Click::TOGGLE,
             RelativeCursorPosition::default(),
             match bindings.key(keys::SUPPLY_BORDER) {
                 Some(key) => key.mark(&name),
                 None => Marked::plain(name),
             },
             Hint(what),
-            ImageNode::default(),
             // In the corner the minimap's disc leaves of its square, where
             // the game's control panel has it.
             Node {
                 position_type: PositionType::Absolute,
                 left: px(crate::MARGIN),
-                bottom: px(crate::MARGIN + minimap::DISC - CYCLE_SIZE),
-                width: px(CYCLE_SIZE),
-                height: px(CYCLE_SIZE),
+                bottom: px(crate::MARGIN + minimap::DISC - BORDER_SIZE),
+                width: px(BORDER_SIZE),
+                height: px(BORDER_SIZE),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::MAX,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 ..default()
             },
+            Surface::Hud,
+            Edge::Border,
             GlobalZIndex(2),
             DespawnOnExit(Screen::Match),
+            children![(
+                BorderRing,
+                Node {
+                    width: px(RING_SIZE),
+                    height: px(RING_SIZE),
+                    border: UiRect::all(px(3)),
+                    border_radius: BorderRadius::MAX,
+                    ..default()
+                },
+                BorderColor::all(colour),
+                Pickable::IGNORE,
+            )],
         ))
-        .observe(|_: On<Activate>, mut border: ResMut<Border>| {
-            border.0 = !border.0;
-        });
+        .observe(
+            |activate: On<Activate>,
+             mut border: ResMut<Border>,
+             mut buttons: Query<&mut BorderButton>| {
+                border.0 = !border.0;
+                if let Ok(mut button) = buttons.get_mut(activate.entity) {
+                    button.pressed = true;
+                }
+            },
+        );
     commands.insert_resource(BorderLook {
         colour,
         option: said(BORDER_OPTION, "Supply Border"),
@@ -315,20 +350,47 @@ pub fn toggle_border(
     }
 }
 
-/// Draws the border's button pressed while the border's shown.
+/// Lights the border's button while the border's shown, and greys its ring
+/// while it's hidden. Shown by anything but a press of the button, such as
+/// its key, the button sounds as the game's toggle buttons do when set.
 pub fn show_border_button(
     border: Res<Border>,
-    mut buttons: Query<(&BorderButton, &mut ImageNode)>,
+    look: Res<BorderLook>,
+    theme: Res<Theme>,
+    time: Res<Time>,
+    mut sounds: ResMut<Sounds>,
+    mut buttons: Query<(&mut BorderButton, Ref<Hovered>, &mut Edge)>,
+    mut rings: Query<&mut BorderColor, With<BorderRing>>,
 ) {
-    for (button, mut image) in &mut buttons {
-        let want = match border.0 {
-            true => &button.shown,
-            false => &button.hidden,
-        };
-        let want = want.clone().unwrap_or_default();
-        if image.image != want {
-            image.image = want;
+    // The look is inserted afresh with each match's button.
+    let restyle = border.is_changed() || theme.is_changed() || look.is_changed();
+    for (mut button, hovered, mut edge) in &mut buttons {
+        if button.shown != border.0 {
+            if border.0 && !button.pressed {
+                Click::TOGGLE.play(&mut sounds, &time);
+            }
+            button.shown = border.0;
         }
+        if button.pressed {
+            button.pressed = false;
+        }
+        if restyle || hovered.is_changed() {
+            edge.set_if_neq(match (border.0, hovered.get()) {
+                (true, _) => Edge::Lit,
+                (false, true) => Edge::Hovered,
+                (false, false) => Edge::Border,
+            });
+        }
+    }
+    if !restyle {
+        return;
+    }
+    let ring = match border.0 {
+        true => look.colour,
+        false => theme.edge(Edge::Border),
+    };
+    for mut colour in &mut rings {
+        colour.set_if_neq(BorderColor::all(ring));
     }
 }
 

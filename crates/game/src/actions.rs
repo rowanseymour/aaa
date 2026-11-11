@@ -595,7 +595,7 @@ pub fn spawn(
                         Button,
                         Hovered::default(),
                         Pickable::default(),
-                        Click::PUSH,
+                        Click::COMMAND,
                         Node {
                             border: UiRect::all(px(2)),
                             ..default()
@@ -792,7 +792,7 @@ pub fn show(
         // Only a press that can do something sounds like it.
         match (ready, clicks) {
             (true, false) => {
-                commands.entity(id).insert(Click::PUSH);
+                commands.entity(id).insert(Click::COMMAND);
             }
             (false, true) => {
                 commands.entity(id).remove::<Click>();
