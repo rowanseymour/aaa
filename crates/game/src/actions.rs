@@ -2,13 +2,14 @@
 //! selection can take, with the game's icons in the places its data gives
 //! them. Orders given at a place, such as Move, wait for a left click on the
 //! map or minimap, with a button to cancel; right click or Escape does too.
-//! A selected building that recruits, such as a Corps HQ, has Deploy, opening
-//! a menu of what comes out of it, and Deploy to Location, of what a
-//! transport carries to where it's sent, each while that menu offers
+//! A selected building that recruits, such as a Corps HQ, has Deploy,
+//! opening a menu of what comes out of it, and Deploy to Location, of what
+//! a transport carries to where it's sent, each while that menu offers
 //! anything; [`crate::pane`] shows what it's been asked for, and a button
-//! sets the rally point what it recruits moves on to. A building that packs, into a truck say, has Pack, dimmed while
-//! it can't. Each button answers to the keys the game binds what it does
-//! to, and its tooltip marks the letter.
+//! sets the rally point what it recruits moves on to. A building that
+//! packs, into a truck say, has Pack, dimmed while it can't. Each button
+//! answers to the keys the game binds what it does to, and its tooltip
+//! marks the letter.
 
 use std::collections::HashMap;
 
@@ -191,16 +192,42 @@ pub enum Entry {
     CommandAll,
 }
 
+/// Where a command's button goes: its slot and, that taken, which end of
+/// the grid it takes a free one from.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Place {
+    slot: usize,
+    /// Whether it takes the last free slot, rather than the first.
+    high: bool,
+}
+
+/// Puts `entry` at `place` or, that slot taken, in the first free one, or
+/// the last for one of high importance. A slot off the grid has no button.
+fn put(out: &mut [Option<Entry>; SLOTS], place: Option<Place>, entry: Entry) {
+    let Some(Place { slot, high }) = place.filter(|p| p.slot < SLOTS) else {
+        return;
+    };
+    let free = |s: &usize| out[*s].is_none();
+    let slot = match (free(&slot), high) {
+        (true, _) => Some(slot),
+        (false, false) => (0..SLOTS).find(free),
+        (false, true) => (0..SLOTS).rev().find(free),
+    };
+    if let Some(s) = slot {
+        out[s] = Some(entry);
+    }
+}
+
 /// The buttons a selected building has: where its menus' and rally point
 /// buttons go, which menu each thing it recruits is in and how it's
 /// offered, and where its Pack button goes, if it packs.
 #[derive(Clone, Copy, Debug)]
 struct BuildingButtons<'a> {
-    deploy: Option<usize>,
-    location: Option<usize>,
+    deploy: Option<Place>,
+    location: Option<Place>,
     recruits: &'a [(Menu, Offer)],
-    rally: Option<usize>,
-    pack: Option<usize>,
+    rally: Option<Place>,
+    pack: Option<Place>,
 }
 
 impl BuildingButtons<'_> {
@@ -232,7 +259,7 @@ fn offered(sim: &aaa_sim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
 /// whether the selection has it, or a selected building's buttons.
 fn layout(
     page: Page,
-    slots: &[Option<usize>],
+    slots: &[Option<Place>],
     offered: &[bool],
     building: Option<BuildingButtons>,
     hq: bool,
@@ -240,19 +267,13 @@ fn layout(
     let mut out = [None; SLOTS];
     match (page, building) {
         (Page::Orders, Some(b)) => {
-            for (menu, slot) in [(Menu::Deploy, b.deploy), (Menu::Location, b.location)] {
-                if b.offers(menu)
-                    && let Some(s) = slot.filter(|&s| s < SLOTS && out[s].is_none())
-                {
-                    out[s] = Some(Entry::Open(menu));
+            for (menu, place) in [(Menu::Deploy, b.deploy), (Menu::Location, b.location)] {
+                if b.offers(menu) {
+                    put(&mut out, place, Entry::Open(menu));
                 }
             }
-            if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
-                out[s] = Some(Entry::Rally);
-            }
-            if let Some(s) = b.pack.filter(|&s| s < SLOTS && out[s].is_none()) {
-                out[s] = Some(Entry::Pack);
-            }
+            put(&mut out, b.rally, Entry::Rally);
+            put(&mut out, b.pack, Entry::Pack);
         }
         (Page::Deploy(menu), Some(b)) => {
             // The other menu's take no place; hidden ones keep theirs empty.
@@ -265,26 +286,27 @@ fn layout(
             out[MENU_CANCEL] = Some(Entry::Cancel);
         }
         (Page::Rally, Some(b)) => {
-            if let Some(s) = b.rally.filter(|&s| s < SLOTS && s != CANCEL) {
+            if let Some(s) = b
+                .rally
+                .map(|p| p.slot)
+                .filter(|&s| s < SLOTS && s != CANCEL)
+            {
                 out[s] = Some(Entry::Rally);
             }
             out[CANCEL] = Some(Entry::Cancel);
         }
         (Page::Deploy(_) | Page::Rally, None) => {}
         (Page::Orders, None) => {
-            for (i, slot) in slots.iter().enumerate() {
-                if !offered[i] {
-                    continue;
-                }
-                if let Some(s) = slot.filter(|&s| s < SLOTS && out[s].is_none()) {
-                    out[s] = Some(Entry::Order(i));
+            for (i, &place) in slots.iter().enumerate() {
+                if offered[i] {
+                    put(&mut out, place, Entry::Order(i));
                 }
             }
         }
         (Page::Aiming(aim), _) => {
             let aimed = ORDERS.iter().position(|(_, g)| *g == Some(Give::Aim(aim)));
             if let Some(i) = aimed
-                && let Some(s) = slots[i].filter(|&s| s < SLOTS)
+                && let Some(s) = slots[i].map(|p| p.slot).filter(|&s| s < SLOTS)
             {
                 out[s] = Some(Entry::Order(i));
             }
@@ -323,12 +345,12 @@ struct Recruit {
 /// The icons and names of the buttons, loaded with the match.
 #[derive(Resource)]
 pub struct Looks {
-    /// Per [`ORDERS`], its slot and look.
-    orders: Vec<(Option<usize>, Look)>,
-    deploy: (Option<usize>, Look),
-    location: (Option<usize>, Look),
-    rally: (Option<usize>, Look),
-    pack: (Option<usize>, Look),
+    /// Per [`ORDERS`], its place and look.
+    orders: Vec<(Option<Place>, Look)>,
+    deploy: (Option<Place>, Look),
+    location: (Option<Place>, Look),
+    rally: (Option<Place>, Look),
+    pack: (Option<Place>, Look),
     cancel: Look,
     command_all: Look,
     /// The tooltip's heading for what a recruit needs.
@@ -444,7 +466,10 @@ pub fn spawn(
         .collect();
     let mut look_of = |game: &mut GameData, ids: &str| match commands_by_id.get(&Id::from(ids)) {
         Some(c) => (
-            c.slot,
+            c.slot.map(|slot| Place {
+                slot,
+                high: c.high_importance,
+            }),
             Look {
                 name: c.name.clone(),
                 help: c.tooltip.clone(),
@@ -695,11 +720,15 @@ pub fn back_out(
     selected: Res<Selected>,
     chosen: Res<SelectedBuilding>,
     mut page: ResMut<Page>,
+    mut was: bevy::ecs::system::Local<Option<usize>>,
 ) {
+    // A menu is the building's it was opened on.
+    let switched = std::mem::replace(&mut *was, chosen.0) != chosen.0;
     let gone = match *page {
         Page::Orders => false,
         Page::Aiming(_) => selected.0.is_empty(),
-        Page::Deploy(_) | Page::Rally => chosen.0.is_none(),
+        Page::Deploy(_) => chosen.0.is_none() || switched,
+        Page::Rally => chosen.0.is_none(),
     };
     if gone || keys.just_pressed(KeyCode::Escape) {
         page.set_if_neq(Page::Orders);
@@ -762,18 +791,16 @@ pub fn show(
     }
     let hq = shown_hq(&sim.0, &selected.0, building);
     let menu = looks.menu(&sim.0, building);
-    let recruits: Vec<(Menu, Offer)> = (menu.iter())
-        .map(|r| {
-            let offer = match (building, &r.regiment, local.0) {
-                (Some(b), Some(regiment), Some(player)) => {
-                    Offer::from(&sim.0.lacks(player, b, regiment))
-                }
-                _ => Offer::Offered,
-            };
-            (r.menu, offer)
+    let lacks: Vec<Lacking> = (menu.iter())
+        .map(|r| match (building, &r.regiment, local.0) {
+            (Some(b), Some(regiment), Some(player)) => sim.0.lacks(player, b, regiment),
+            _ => Lacking::default(),
         })
         .collect();
-    let order_slots: Vec<Option<usize>> = looks.orders.iter().map(|(s, _)| *s).collect();
+    let recruits: Vec<(Menu, Offer)> = (menu.iter().zip(&lacks))
+        .map(|(r, lacking)| (r.menu, Offer::from(lacking)))
+        .collect();
+    let order_slots: Vec<Option<Place>> = looks.orders.iter().map(|(s, _)| *s).collect();
     shown.0 = layout(
         *page,
         &order_slots,
@@ -839,20 +866,14 @@ pub fn show(
             Entry::Recruit(i) => {
                 let r = &menu[i];
                 table.extend(r.economy.iter().cloned());
-                let lacking: Vec<String> = match (&r.regiment, local.0, building) {
-                    (Some(regiment), Some(player), Some(b)) => {
-                        let lacking = sim.0.lacks(player, b, regiment);
-                        (lacking.properties.iter().chain(&lacking.structures))
-                            .map(|id| looks.names.get(id).map_or(id.to_string(), Clone::clone))
-                            .collect()
-                    }
-                    _ => Vec::new(),
-                };
+                let lacking: Vec<String> = (lacks[i].properties.iter())
+                    .chain(&lacks[i].structures)
+                    .map(|id| looks.names.get(id).map_or(id.to_string(), Clone::clone))
+                    .collect();
                 if !lacking.is_empty() {
                     why = Some(format!("{}: {}", looks.requires, lacking.join(", ")));
                 }
-                let offered = recruits[i].1 == Offer::Offered;
-                let ready = r.regiment.is_some() && lacking.is_empty() && offered;
+                let ready = r.regiment.is_some() && lacking.is_empty();
                 (&r.look, ready, false)
             }
         };
@@ -1441,17 +1462,16 @@ pub fn aim(
 mod tests {
     use super::*;
 
+    const fn at(slot: usize) -> Option<Place> {
+        Some(Place { slot, high: false })
+    }
+
+    const fn high(slot: usize) -> Option<Place> {
+        Some(Place { slot, high: true })
+    }
+
     /// The slots the game's data gives [`ORDERS`].
-    const GAME: [Option<usize>; 8] = [
-        Some(0),
-        Some(1),
-        Some(2),
-        Some(3),
-        Some(6),
-        Some(10),
-        Some(11),
-        Some(9),
-    ];
+    const GAME: [Option<Place>; 8] = [at(0), at(1), at(2), at(3), at(6), at(10), at(11), at(9)];
 
     #[test]
     fn attacks_strike_only_enemies() {
@@ -1489,7 +1509,7 @@ mod tests {
         assert_eq!(grid.iter().flatten().count(), 4);
         // Not over an order, nor while one's aimed.
         let mut slots = GAME;
-        slots[0] = Some(COMMAND_ALL);
+        slots[0] = at(COMMAND_ALL);
         let grid = layout(Page::Orders, &slots, &truck, None, true);
         assert_eq!(grid[COMMAND_ALL], Some(Entry::Order(0)));
         let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true);
@@ -1538,11 +1558,11 @@ mod tests {
     fn buildings_open_a_menu_of_what_they_commission() {
         let corps = [(Menu::Deploy, Offer::Offered); 11];
         let hq = BuildingButtons {
-            deploy: Some(0),
-            location: Some(1),
+            deploy: at(0),
+            location: high(1),
             recruits: &corps,
-            rally: Some(5),
-            pack: Some(9),
+            rally: at(5),
+            pack: at(9),
         };
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
@@ -1585,10 +1605,10 @@ mod tests {
             (Menu::Location, Hidden),
         ];
         let hq = BuildingButtons {
-            deploy: Some(0),
-            location: Some(1),
+            deploy: at(0),
+            location: high(1),
             recruits: &infantry,
-            rally: Some(5),
+            rally: at(5),
             pack: None,
         };
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(hq), false);
@@ -1629,6 +1649,17 @@ mod tests {
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(ship), false);
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], Some(Entry::Open(Menu::Location)));
+        // Its slot taken, a button takes the first free one, or the last for
+        // one of high importance.
+        let crowded = BuildingButtons {
+            location: high(0),
+            rally: at(0),
+            ..ship
+        };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(crowded), false);
+        assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
+        assert_eq!(grid[11], Some(Entry::Open(Menu::Location)));
+        assert_eq!(grid[1], Some(Entry::Rally));
         let deploy = layout(
             Page::Deploy(Menu::Deploy),
             &GAME,

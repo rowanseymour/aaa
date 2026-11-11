@@ -608,6 +608,9 @@ pub struct Command {
     pub icon: Option<String>,
     /// Which button it takes, numbered across then down.
     pub slot: Option<usize>,
+    /// Whether, that button taken, it takes the last free one rather than
+    /// the first.
+    pub high_importance: bool,
     /// The [`CursorLook`] shown while it waits for a place or target.
     pub cursor: Option<Id>,
     /// The effect marking where it was given, from [`GameData::vfx_models`].
@@ -1932,6 +1935,7 @@ impl GameData {
                         .filter(|t| !t.is_empty()),
                     icon: c.icon.as_deref().and_then(ui_path),
                     slot: c.preferred_position.and_then(|p| usize::try_from(p).ok()),
+                    high_importance: c.high_importance,
                     cursor: not_null(c.cursor_ids),
                     marker: c.command_vfx_ids_location,
                     group_offset: c.apply_group_offset.unwrap_or(true),
