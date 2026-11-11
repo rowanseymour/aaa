@@ -197,6 +197,11 @@ const VERBS: &[Verb] = &[
         "sends a regiment, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy regiment, by its id",
     ),
     verb(
+        "guard",
+        "regiment (x y | other)",
+        "posts a regiment, by its id, at x y or beside another regiment, by its id, to come back to after every fight",
+    ),
+    verb(
         "select",
         "[id ...]",
         "selects the player's regiments, or one of its buildings, by their ids; without any, says what's selected",
@@ -382,6 +387,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "playerkingdom" => player_kingdom(world, &args),
                 "move" => order(world, &args, Aim::Move),
                 "attack" => order(world, &args, Aim::Attack),
+                "guard" => order(world, &args, Aim::Guard),
                 "select" => select(world, &args),
                 "commission" => commission(world, &args),
                 "unpack" => unpack(world, &args),
@@ -791,12 +797,15 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
 
 /// Gives a regiment an order at a place, marked as if clicked there.
 fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
-    if let (Aim::Attack, [id, enemy]) = (aim, args) {
-        return pursue(world, id, enemy);
+    match (aim, args) {
+        (Aim::Attack, [id, enemy]) => return after(world, id, enemy, aim),
+        (Aim::Guard, [id, other]) => return after(world, id, other, aim),
+        _ => {}
     }
     let [id, x, y] = args else {
         return Err(usage(match aim {
             Aim::Attack => "attack",
+            Aim::Guard => "guard",
             _ => "move",
         }));
     };
@@ -813,6 +822,7 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
         Aim::Move => aaa_sim::Command::Move { regiment, to },
         Aim::Attack => aaa_sim::Command::Attack { regiment, to },
         Aim::Run => aaa_sim::Command::Run { regiment, to },
+        Aim::Guard => aaa_sim::Command::Guard { regiment, to },
         Aim::Unpack => aaa_sim::Command::Unpack {
             regiment,
             at: to,
@@ -831,8 +841,9 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     Ok(String::new())
 }
 
-/// Sends a regiment after an enemy regiment, both by their ids.
-fn pursue(world: &mut World, id: &str, enemy: &str) -> Reply {
+/// Sends a regiment after an enemy regiment, or to guard another, both by
+/// their ids.
+fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let sim = &world.resource::<Sim>().0;
     let find = |id: &str| {
         sim.regiments
@@ -843,14 +854,20 @@ fn pursue(world: &mut World, id: &str, enemy: &str) -> Reply {
     let (r, e) = (find(id)?, find(enemy)?);
     let there = sim.centre(e);
     let owner = sim.regiments[r].owner;
-    let command = aaa_sim::Command::Pursue {
-        regiment: r,
-        enemy: e,
+    let command = match aim {
+        Aim::Guard => aaa_sim::Command::GuardThing {
+            regiment: r,
+            thing: aaa_sim::Enemy::Regiment(e),
+        },
+        _ => aaa_sim::Command::Pursue {
+            regiment: r,
+            enemy: e,
+        },
     };
     give(world, owner, command).map_err(|e| format!("refused: {e:?}"))?;
     world.write_message(Sent {
         to: None,
-        aim: Aim::Attack,
+        aim,
         regiments: vec![(r, there)],
     });
     Ok(String::new())

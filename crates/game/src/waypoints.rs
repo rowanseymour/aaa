@@ -85,6 +85,7 @@ fn command(aim: Aim) -> &'static str {
         Aim::Move => "move",
         Aim::Attack => "kill",
         Aim::Run => "retreat",
+        Aim::Guard => "guard",
         Aim::Unpack => "unpack",
     }
 }

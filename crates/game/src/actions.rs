@@ -53,7 +53,7 @@ const ORDERS: [(&str, Option<Give>); 8] = [
     ("kill", Some(Give::Aim(Aim::Attack))),
     ("retreat", Some(Give::Aim(Aim::Run))),
     ("stop", Some(Give::Stop)),
-    ("guard", None),
+    ("guard", Some(Give::Aim(Aim::Guard))),
     ("hq_attach", Some(Give::Attach)),
     ("hq_detach", Some(Give::Detach)),
     ("unpack", Some(Give::Aim(Aim::Unpack))),
@@ -124,11 +124,12 @@ pub enum Aim {
     Move,
     Attack,
     Run,
+    Guard,
     Unpack,
 }
 
 impl Aim {
-    pub const ALL: [Aim; 4] = [Aim::Move, Aim::Attack, Aim::Run, Aim::Unpack];
+    pub const ALL: [Aim; 5] = [Aim::Move, Aim::Attack, Aim::Run, Aim::Guard, Aim::Unpack];
 }
 
 /// What the grid is showing.
@@ -958,6 +959,7 @@ pub fn show(
             prompt("Can't attack a friend")
         }
         (None, Page::Aiming(Aim::Attack)) => prompt("Left click an enemy or where to attack"),
+        (None, Page::Aiming(Aim::Guard)) => prompt("Left click what or where to guard"),
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
         (None, _) => None,
@@ -1319,9 +1321,28 @@ fn struck(focus: crate::Focus, toward: Option<aaa_sim::Relation>) -> Struck {
     }
 }
 
+/// What a guard aimed at `focus` is posted beside: a regiment or building
+/// that's no enemy's, and not one of the `selected` giving the guard, which
+/// guard where they are instead.
+fn guard_at(
+    sim: &aaa_sim::World,
+    player: u32,
+    selected: &[usize],
+    focus: crate::Focus,
+) -> Option<aaa_sim::Enemy> {
+    let (thing, owner) = match focus {
+        crate::Focus::Nothing => return None,
+        crate::Focus::Regiment(r) if selected.contains(&r) => return None,
+        crate::Focus::Regiment(r) => (aaa_sim::Enemy::Regiment(r), sim.regiments[r].owner),
+        crate::Focus::Building(b) => (aaa_sim::Enemy::Building(b), sim.buildings[b].owner),
+    };
+    (sim.sides.relation(player, owner) != aaa_sim::Relation::Enemy).then_some(thing)
+}
+
 /// While an order is aimed, a left click on the map or minimap gives it
 /// there and a right click calls it off. Attacking an enemy regiment, or
-/// its mark on the minimap, sends the selected after it instead. Attacking
+/// its mark on the minimap, sends the selected after it instead, and
+/// guarding a friend posts them beside it. Attacking
 /// a friend, or unpacking somewhere the building wouldn't fit, waits for
 /// another click. A rally point is set for the selected building.
 #[allow(clippy::too_many_arguments)]
@@ -1420,6 +1441,26 @@ pub fn aim(
             }
         }
     }
+    if aim == Aim::Guard
+        && let Some(thing) = guard_at(&sim.0, player, &selected.0, focus)
+    {
+        let guard = |regiment| aaa_sim::Command::GuardThing { regiment, thing };
+        let regiments: Vec<(usize, [f32; 2])> = (selected.0.iter())
+            .filter(|&&r| orders.give(&sim.0, player, guard(r)).is_ok())
+            .map(|&r| (r, point))
+            .collect();
+        if regiments.is_empty() {
+            return;
+        }
+        crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+        sent.write(crate::waypoints::Sent {
+            to: None,
+            aim,
+            regiments,
+        });
+        *page = Page::Orders;
+        return;
+    }
     let regiments = match aim {
         Aim::Unpack => {
             let &[r] = &selected.0[..] else {
@@ -1437,7 +1478,7 @@ pub fn aim(
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             vec![(r, at)]
         }
-        Aim::Move | Aim::Attack | Aim::Run => {
+        Aim::Move | Aim::Attack | Aim::Run | Aim::Guard => {
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             crate::send(
                 &sim.0,

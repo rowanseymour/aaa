@@ -4,6 +4,7 @@
 pub mod defs;
 mod economy;
 mod fog;
+mod guard;
 mod hotkeys;
 mod id;
 mod messages;
@@ -11,6 +12,7 @@ mod supply;
 
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
 pub use fog::{FogSetting, Sight};
+pub use guard::GuardRules;
 pub use hotkeys::Hotkey;
 pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};

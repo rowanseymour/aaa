@@ -10,8 +10,8 @@ mod units;
 
 pub use aaa_data::{
     Amounts, Damage, DeployPoints, Economy, EconomyRules, Fighter, Flight, FlightKind, FogSetting,
-    Id, Kind, Logistics, Operation, Requires, Shape, Sight, Supply, SupplyEffect, SupplyRules,
-    Targets, Turret, Weapon,
+    GuardRules, Id, Kind, Logistics, Operation, Requires, Shape, Sight, Supply, SupplyEffect,
+    SupplyRules, Targets, Turret, Weapon,
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};

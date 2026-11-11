@@ -797,6 +797,7 @@ fn prepare(
     sim.economy = game.economy_rules();
     sim.supplies = game.supplies();
     sim.supply_rules = game.supply_rules();
+    sim.guard_rules = game.guard_rules();
     if let Some(seconds) = game.siege_seconds() {
         sim.siege_seconds = seconds;
     }
@@ -2007,6 +2008,7 @@ fn send(
             actions::Aim::Move => aaa_sim::Command::Move { regiment, to },
             actions::Aim::Attack => aaa_sim::Command::Attack { regiment, to },
             actions::Aim::Run => aaa_sim::Command::Run { regiment, to },
+            actions::Aim::Guard => aaa_sim::Command::Guard { regiment, to },
             actions::Aim::Unpack => aaa_sim::Command::Unpack {
                 regiment,
                 at: to,
