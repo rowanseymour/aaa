@@ -417,6 +417,7 @@ impl Plugin for EffectsPlugin {
                 .after(crate::show_packing)
                 .after(crate::show_units)
                 .after(crate::show_buildings)
+                .after(crate::fog::hide_buildings)
                 .run_if(in_state(Screen::Match))
                 .run_if(resource_exists::<Effects>),
         );
@@ -578,6 +579,7 @@ fn play(
     things: Query<(&Transform, &MapObject)>,
     playing: Query<(Entity, &Effect)>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
+    fog: Res<crate::fog::Fog>,
 ) {
     let now = time.elapsed_secs_f64();
     if effects.queued.iter().all(|(due, _)| *due > now) {
@@ -688,6 +690,10 @@ fn play(
         let lasts = lifetime(&vfx, cue, length);
         let discard = lasts.is_some() && !vfx.never_discard;
         if discard && !on_screen(camera, transform.translation) {
+            continue;
+        }
+        let fogged = fog.at(map_point(transform.translation)) != aaa_sim::Seen::Visible;
+        if lasts.is_some() && fogged {
             continue;
         }
         let turn = match vfx.random_orientation {

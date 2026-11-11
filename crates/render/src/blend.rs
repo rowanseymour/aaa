@@ -42,6 +42,11 @@ pub struct Blend {
     #[texture(103, dimension = "2d_array")]
     #[sampler(104)]
     pub masks: Handle<Image>,
+    /// How brightly each tile shows through the fog of war, one texel a
+    /// tile, row-major from the south-west corner.
+    #[texture(105)]
+    #[sampler(106)]
+    pub fog: Handle<Image>,
 }
 
 #[derive(ShaderType, Debug, Clone)]
@@ -145,6 +150,30 @@ pub fn empty_masks() -> Image {
         TextureFormat::R8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     )
+}
+
+/// A fog of `side` texels a side, blended between tiles, from how brightly
+/// each tile shows, row-major from the south-west corner: 255 for as it
+/// is.
+pub fn fog_image(side: usize, light: Vec<u8>) -> Image {
+    let side = side.max(1) as u32;
+    let mut image = Image::new(
+        Extent3d {
+            width: side,
+            height: side,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        light,
+        TextureFormat::R8Unorm,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::ClampToEdge,
+        address_mode_v: ImageAddressMode::ClampToEdge,
+        ..ImageSamplerDescriptor::linear()
+    });
+    image
 }
 
 /// Neighbour pattern of a mask name like `12345`.

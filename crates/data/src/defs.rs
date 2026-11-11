@@ -96,6 +96,7 @@ pub struct Thing {
     pub hq_component: Option<HqComponent>,
     pub denizen_component: Option<DenizenComponent>,
     pub element_component: Option<ElementComponent>,
+    pub detection_component: Option<DetectionComponent>,
     pub placement: Option<Placement>,
     /// On entering and leaving the states named by each command's
     /// `actor_state`.
@@ -310,6 +311,16 @@ pub struct ElementComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct DenizenComponent {
     pub deployment_info: Option<DeploymentInfo>,
+    pub guard_range: Option<f32>,
+    pub guard_operational_range: Option<f32>,
+}
+
+/// How far a thing sees, in world units.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DetectionComponent {
+    pub detection_range: Option<f32>,
+    /// How far round it its enemies see while they fight it.
+    pub remote_detection_range: Option<f32>,
 }
 
 /// Where what an object recruits appears, from its root node: x across its
@@ -558,6 +569,9 @@ pub struct Flags {
     pub tile_locked: Option<bool>,
     /// Nothing gets in its way.
     pub ethereal: Option<bool>,
+    /// Every side has it explored from the start, when the match's fog
+    /// starts explored.
+    pub revealed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -880,6 +894,9 @@ pub struct SVars {
     /// Morale a second a regiment regaining it gains more in supply.
     #[serde(rename = "MoraleSupplyBonus")]
     pub morale_supply_bonus: Option<f32>,
+    /// 0, 1 or 2 for no fog, explored or full; the world rule overrides it.
+    #[serde(rename = "FogOfWar")]
+    pub fog_of_war: Option<u8>,
 }
 
 /// The interface's settings.

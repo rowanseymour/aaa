@@ -220,6 +220,7 @@ pub fn build(
             },
             textures: images.add(textures),
             masks: images.add(masks),
+            fog: images.add(blend::fog_image(side, vec![255; side * side])),
         },
     };
     Built {

@@ -24,6 +24,7 @@ mod actions;
 mod banners;
 mod console;
 mod effects;
+mod fog;
 mod ghost;
 mod keys;
 mod lobby;
@@ -78,6 +79,8 @@ options:
   --shot-after <seconds>    with --screenshot, play that long into the match first
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it
+  --fog <setting>           none, explored or full: how much of the map the fog
+                            of war hides, rather than the game's default
   --log <filter>            what to log, as for RUST_LOG, e.g. \"debug\" or
                             \"aaa_game=debug\"; RUST_LOG still applies on top";
 
@@ -114,6 +117,9 @@ struct Pending {
     /// The general chosen for each side, by player id, when launched from
     /// the lobby; one of its nation's at random where none is.
     generals: HashMap<u32, aaa_data::Id>,
+    /// How much of the map the fog of war hides, if not as the game's
+    /// world rule has it.
+    fog: Option<aaa_map::FogSetting>,
     /// Whether it was launched from the lobby, which failing to load it goes
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
@@ -358,6 +364,7 @@ fn spawn_unit_view(
 fn show_trailers(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
+    fog: Res<fog::Fog>,
     fixed: Res<Time<Fixed>>,
     mut views: Query<(&TrailerView, &mut Transform, &mut Visibility)>,
 ) {
@@ -368,7 +375,10 @@ fn show_trailers(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         };
-        visibility.set_if_neq(Visibility::Inherited);
+        visibility.set_if_neq(match fog.shows_unit(view.unit) {
+            true => Visibility::Inherited,
+            false => Visibility::Hidden,
+        });
         (transform.translation, transform.rotation) = pose(
             &loaded.map.ground,
             trailer.drawn_at(t),
@@ -432,6 +442,7 @@ struct Options {
     screenshot: Option<String>,
     shot_after: f64,
     ui_scale: f32,
+    fog: Option<aaa_map::FogSetting>,
     log: Option<String>,
 }
 
@@ -458,6 +469,10 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
         None => 1.0,
     };
+    let fog = match take_option(args, "--fog")? {
+        Some(f) => Some(aaa_map::FogSetting::named(&f)?),
+        None => None,
+    };
     let log = take_option(args, "--log")?;
     Some(Options {
         side,
@@ -466,6 +481,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         screenshot,
         shot_after,
         ui_scale,
+        fog,
         log,
     })
 }
@@ -479,6 +495,7 @@ fn main() -> ExitCode {
         screenshot,
         shot_after,
         ui_scale,
+        fog,
         log,
     }) = options(&mut args)
     else {
@@ -585,6 +602,7 @@ fn main() -> ExitCode {
             OnEnter(Screen::Match),
             (
                 setup,
+                fog::setup,
                 setup_overlays,
                 keys::load,
                 banners::setup_banners,
@@ -604,8 +622,11 @@ fn main() -> ExitCode {
             Update,
             (
                 (
+                    fog::look,
+                    (fog::shade_ground, fog::hide_scenery),
                     spawn_views,
                     (show_units, show_trailers, show_buildings, show_packing),
+                    fog::hide_buildings,
                 )
                     .chain(),
                 drop_lost_building,
@@ -637,7 +658,7 @@ fn main() -> ExitCode {
                     .before(camera::Controls)
                     .before(actions::aim)
                     .run_if(takes_input),
-                minimap::update.after(camera::Controls),
+                minimap::update.after(camera::Controls).after(fog::look),
                 (actions::back_out, actions::show).chain(),
                 (pane::lay_out, pane::refresh).chain(),
                 resource_bar::show.after(actions::show),
@@ -668,6 +689,7 @@ fn main() -> ExitCode {
                 actions::hotkeys,
                 supply::cycle_detached,
                 supply::toggle_border,
+                fog::cheat,
             )
                 .run_if(in_state(Screen::Match))
                 .run_if(takes_input)
@@ -695,6 +717,7 @@ fn main() -> ExitCode {
                 person: None,
                 nations: HashMap::new(),
                 generals: HashMap::new(),
+                fog,
                 from_menu: false,
             })
             .insert_state(Screen::Loading);
@@ -733,6 +756,7 @@ fn prepare(
         nations: chosen,
         generals,
         from_menu,
+        fog,
         ..
     } = pending;
     // Given on the command line, each side plays as the nation its map
@@ -782,6 +806,8 @@ fn prepare(
     sim.logistics = game.logistics();
     sim.resupply_rates = game.resupply_rates();
     sim.recruit_lists = game.recruit_lists();
+    sim.sights = game.sights();
+    sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
     Ok(Prepared {
         loaded: Loaded { game, map },
         sim,
@@ -1338,8 +1364,12 @@ fn show_packing(
     mut drawn: ResMut<Drawn>,
     mut assets: MapAssets,
     mut views: Query<(&mut BuildingView, &MapObject, &mut Visibility)>,
+    fog: Res<fog::Fog>,
 ) {
     for (mut view, object, mut visibility) in &mut views {
+        if fog.building(view.building) != fog::Look::Shown {
+            continue;
+        }
         let building = &sim.0.buildings[view.building];
         let wanted = match (building.unpacking, building.packing) {
             (Some((start, _)), _) => Some((start, true)),
@@ -1396,6 +1426,7 @@ fn drop_lost_building(sim: Res<Sim>, local: Res<Local>, mut chosen: ResMut<Selec
 fn show_units(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
+    fog: Res<fog::Fog>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
@@ -1414,10 +1445,15 @@ fn show_units(
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
+        // Neither seen nor heard in the fog.
+        let seen = fog.shows_unit(view.unit);
         // A truck that packed back up from its building is seen again, as
         // is a member that's arrived or been replaced.
         if unit.alive() {
-            visibility.set_if_neq(Visibility::Inherited);
+            visibility.set_if_neq(match seen {
+                true => Visibility::Inherited,
+                false => Visibility::Hidden,
+            });
             if view.dead {
                 view.dead = false;
                 if let Some(p) = playing.as_mut() {
@@ -1427,15 +1463,17 @@ fn show_units(
         }
         if !unit.alive() && !view.dead {
             view.dead = true;
-            sounds.cue(
-                &time,
-                &unit.template,
-                |a| &a.destroyed,
-                unit.position,
-                owner,
-            );
+            if seen {
+                sounds.cue(
+                    &time,
+                    &unit.template,
+                    |a| &a.destroyed,
+                    unit.position,
+                    owner,
+                );
+            }
             let dies = playing.as_mut().is_some_and(|p| p.die(unit.id as usize));
-            if !dies {
+            if !dies || !seen {
                 *visibility = Visibility::Hidden;
             }
         }
@@ -1444,7 +1482,7 @@ fn show_units(
             let weapon = unit
                 .shot
                 .and_then(|(_, w)| unit.fighter.as_ref()?.weapons.get(w));
-            if let (Some(w), Some(target)) = (weapon, unit.target) {
+            if let (Some(w), Some(target), true) = (weapon, unit.target, seen) {
                 let to = target_position(&sim.0, target);
                 sounds.shot(&time, &w.sounds, unit.position, to, owner);
             }
@@ -1468,7 +1506,9 @@ fn show_units(
                 true => |a| &a.start_moving,
                 false => |a| &a.stop_moving,
             };
-            sounds.cue(&time, &unit.template, event, unit.position, owner);
+            if seen {
+                sounds.cue(&time, &unit.template, event, unit.position, owner);
+            }
         }
         if let Some(mut playing) = playing.filter(|_| unit.alive()) {
             let speed = sim.0.regiments[unit.regiment].speed;
@@ -1481,6 +1521,7 @@ fn show_units(
 /// ground.
 fn show_buildings(
     sim: Res<Sim>,
+    fog: Res<fog::Fog>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
@@ -1494,11 +1535,19 @@ fn show_buildings(
     const SINK_TIME: f32 = 3.0;
     const SINK_DEPTH: f32 = 12.0;
     for (mut view, mut transform, mut visibility, playing) in &mut views {
+        // Left as last seen until seen again.
+        if fog.building(view.building) != fog::Look::Shown {
+            continue;
+        }
         let building = &sim.0.buildings[view.building];
-        if let (State::Destroyed(_), false) = (building.state, view.destroyed) {
+        if let (State::Destroyed(fell), false) = (building.state, view.destroyed) {
             view.destroyed = true;
-            let (at, owner) = (building.position, building.owner);
-            sounds.cue(&time, &building.template, |a| &a.destroyed, at, owner);
+            // Not for one that fell out of sight, first seen fallen now.
+            let since = (sim.0.ticks - fell) as f32 * TICK;
+            if since < SINK_TIME {
+                let (at, owner) = (building.position, building.owner);
+                sounds.cue(&time, &building.template, |a| &a.destroyed, at, owner);
+            }
         }
         if let State::Destroyed(fell) = building.state {
             let since = (sim.0.ticks - fell) as f32 + fixed.overstep_fraction();
@@ -1644,6 +1693,7 @@ fn focus(
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     scenery: Res<banners::Scenery>,
+    fog: Res<fog::Fog>,
     mut focus: ResMut<Focus>,
 ) {
     const REACH: f32 = 2.0;
@@ -1664,10 +1714,18 @@ fn focus(
         focus.set_if_neq(Focus::Nothing);
         return;
     };
-    let unit = nearest_regiment(&sim.0, point, REACH, |r| !scenery.has(&sim.0, r));
+    let unit = nearest(
+        (sim.0.units.iter().enumerate())
+            .filter(|&(u, unit)| unit.alive() && fog.shows_unit(u))
+            .filter(|(_, unit)| !scenery.has(&sim.0, unit.regiment))
+            .map(|(_, unit)| (unit.regiment, unit.position)),
+        point,
+        REACH,
+    );
     let building = || {
-        sim.0.buildings.iter().position(|b| {
+        sim.0.buildings.iter().enumerate().position(|(i, b)| {
             !b.gone()
+                && fog.building(i) == fog::Look::Shown
                 && b.obstacle
                     .as_ref()
                     .is_some_and(|o| o.distance(point) == 0.0)

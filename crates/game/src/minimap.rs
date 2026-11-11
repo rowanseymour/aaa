@@ -41,8 +41,15 @@ const ICON_TEXEL: f32 = 0.0058;
 #[derive(Resource)]
 pub struct Minimap {
     image: Handle<Image>,
-    /// The ground alone, which each frame's markers are drawn over.
+    /// The ground alone.
     base: Vec<u8>,
+    /// The ground under the fog of war, which each frame's markers are
+    /// drawn over.
+    fogged: Vec<u8>,
+    /// Where each pixel on the map takes its fog from.
+    samples: Vec<Sample>,
+    /// The fog `fogged` was drawn under.
+    fog: Vec<aaa_sim::Seen>,
     /// The map's width, in world units.
     size: f32,
     /// The icons buildings are marked with, by template id.
@@ -189,6 +196,9 @@ pub fn spawn(
     let image = images.add(image);
     commands.insert_resource(Minimap {
         image: image.clone(),
+        fogged: base.clone(),
+        samples: samples(map.ground.size()),
+        fog: Vec::new(),
         base,
         size: map.ground.size(),
         icons,
@@ -281,6 +291,71 @@ fn draw_ground(map: &Map, colours: &[[f32; 3]]) -> Vec<u8> {
     pixels
 }
 
+/// A pixel on the map and the tiles its fog blends between: those whose
+/// centres are to its south-west and beyond, and how far it lies across
+/// and up from the first's centre to the others'.
+struct Sample {
+    pixel: usize,
+    tile: (i32, i32),
+    across: f32,
+    up: f32,
+}
+
+fn samples(size: f32) -> Vec<Sample> {
+    let tile = tgck::map::CELL_SIZE;
+    let mut samples = Vec::new();
+    for row in 0..PIXELS {
+        for col in 0..PIXELS {
+            let centre = (Vec2::new(col as f32, row as f32) + 0.5) / PIXELS as f32;
+            let [x, y] = from_image(size, centre);
+            if !(0.0..size).contains(&x) || !(0.0..size).contains(&y) {
+                continue;
+            }
+            let (fx, fy) = (x / tile - 0.5, y / tile - 0.5);
+            let (x0, y0) = (fx.floor(), fy.floor());
+            samples.push(Sample {
+                pixel: (row * PIXELS + col) * 4,
+                tile: (x0 as i32, y0 as i32),
+                across: fx - x0,
+                up: fy - y0,
+            });
+        }
+    }
+    samples
+}
+
+/// Darkens the ground into `fogged` as the fog of war darkens it, blended
+/// between tiles, once the fog has changed.
+fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
+    let (tiles, side) = fog.tiles();
+    if minimap.fog == tiles {
+        return;
+    }
+    minimap.fog = tiles.to_vec();
+    minimap.fogged.copy_from_slice(&minimap.base);
+    if tiles.is_empty() {
+        return;
+    }
+    let light: Vec<f32> = tiles.iter().map(|&s| crate::fog::brightness(s)).collect();
+    let n = side as i32;
+    let off_map = crate::fog::brightness(aaa_sim::Seen::Unexplored);
+    let at = |x: i32, y: i32| match (0..n).contains(&x) && (0..n).contains(&y) {
+        true => light[y as usize * side + x as usize],
+        false => off_map,
+    };
+    for s in &minimap.samples {
+        let (x, y) = s.tile;
+        let south = at(x, y) * (1.0 - s.across) + at(x + 1, y) * s.across;
+        let north = at(x, y + 1) * (1.0 - s.across) + at(x + 1, y + 1) * s.across;
+        let l = south * (1.0 - s.up) + north * s.up;
+        if l < 1.0 {
+            for c in &mut minimap.fogged[s.pixel..s.pixel + 3] {
+                *c = (*c as f32 * l) as u8;
+            }
+        }
+    }
+}
+
 /// How far below the water's surface the ground is, where there is water.
 fn water_depth(ground: &Ground, x: f32, y: f32, height: f32) -> Option<f32> {
     let cell = ground.size() / (ground.side - 1) as f32;
@@ -293,7 +368,8 @@ fn water_depth(ground: &Ground, x: f32, y: f32, height: f32) -> Option<f32> {
 /// Redraws the markers and the camera's view over the ground.
 #[allow(clippy::too_many_arguments)]
 pub fn update(
-    minimap: Res<Minimap>,
+    mut minimap: ResMut<Minimap>,
+    fog: Res<crate::fog::Fog>,
     sim: Res<Sim>,
     local: Res<crate::Local>,
     outline: Res<crate::supply::Outline>,
@@ -302,13 +378,16 @@ pub fn update(
     cameras: Query<(&Camera, &RtsCamera)>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    if fog.fresh() {
+        fog_ground(&mut minimap, &fog);
+    }
     let Some(mut image) = images.get_mut(&minimap.image) else {
         return;
     };
     let Some(pixels) = image.data.as_mut() else {
         return;
     };
-    pixels.copy_from_slice(&minimap.base);
+    pixels.copy_from_slice(&minimap.fogged);
     let mut canvas = Canvas(pixels);
     let to_px = |p: [f32; 2]| to_image(minimap.size, p) * PIXELS as f32;
     // With nobody to play, there's no one to stand toward, so each side
@@ -341,7 +420,13 @@ pub fn update(
     let neutral = minimap.colours.buildings[Colours::of(Relation::Neutral)];
     let mut icons = Vec::new();
     for (b, building) in sim.0.buildings.iter().enumerate() {
-        if building.gone() {
+        // Marked as last seen, gone or not.
+        let shown = match fog.building(b) {
+            crate::fog::Look::Shown => !building.gone(),
+            crate::fog::Look::Remembered => true,
+            crate::fog::Look::Hidden => false,
+        };
+        if !shown {
             continue;
         }
         // Like the game, leave out the independents' houses and sheds,
@@ -367,7 +452,8 @@ pub fn update(
         canvas.square(to_px(building.position), 4.0, [0; 3]);
         canvas.square(to_px(building.position), 3.0, rgb);
     }
-    for unit in sim.0.units.iter().filter(|u| u.alive()) {
+    let shown = |(u, unit): &(usize, &aaa_sim::Unit)| unit.alive() && fog.shows_unit(*u);
+    for (_, unit) in sim.0.units.iter().enumerate().filter(shown) {
         let regiment = &sim.0.regiments[unit.regiment];
         let rgb = match own(regiment.owner) && !regiment.engaged.is_empty() {
             true => minimap.colours.under_siege,

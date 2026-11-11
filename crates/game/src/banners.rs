@@ -327,6 +327,7 @@ pub fn show_hq_banners(
     cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
     mut banners: Query<(Entity, &HqBanner, &mut Node, &mut ZIndex, &mut Visibility)>,
     mut layers: Query<(&mut ImageNode, &mut Visibility), Without<HqBanner>>,
+    fog: Res<crate::fog::Fog>,
 ) {
     let Ok((camera, transform)) = cameras.single() else {
         return;
@@ -345,7 +346,12 @@ pub fn show_hq_banners(
         }
         let [x, y] = building.position;
         let over = world(x, y, loaded.map.ground.height_at(x, y) + HQ_HEIGHT);
-        let Ok(p) = camera.world_to_viewport(&global, over) else {
+        let seen = fog.building(b) == crate::fog::Look::Shown;
+        let Some(p) = camera
+            .world_to_viewport(&global, over)
+            .ok()
+            .filter(|_| seen)
+        else {
             *visibility = Visibility::Hidden;
             continue;
         };
@@ -472,6 +478,7 @@ pub fn show_banners(
     cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
     mut banners: Query<(&Banner, &mut Node, &mut ZIndex, &mut Visibility)>,
     mut layers: Query<(&mut ImageNode, &mut Visibility), Without<Banner>>,
+    fog: Res<crate::fog::Fog>,
 ) {
     let Ok((camera, transform)) = cameras.single() else {
         return;
@@ -503,6 +510,8 @@ pub fn show_banners(
             let footing = drawn.0.footing(&first.template);
             world(x, y, ground.stand_at(footing, x, y) + HEIGHT)
         });
+        let seen = fog.shows_regiment(&sim.0, banner.regiment);
+        let at = at.filter(|_| seen);
         let Some(p) = at.and_then(|p| camera.world_to_viewport(&global, p).ok()) else {
             *visibility = Visibility::Hidden;
             continue;
