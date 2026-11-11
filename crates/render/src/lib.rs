@@ -11,6 +11,7 @@ pub mod overlay;
 mod particles;
 mod rig;
 pub mod shot;
+mod solid;
 mod team;
 pub mod terrain;
 pub mod textures;
@@ -32,6 +33,7 @@ use tgck::map::Sun;
 use blend::GroundMaterial;
 use glow::GlowMaterial;
 use models::{ModelAssets, Models};
+use solid::SolidMaterial;
 use team::TeamMaterial;
 pub use team::Tint;
 use tgck::map::Thing;
@@ -84,6 +86,7 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<WaterMaterial>::default())
             .add_plugins(MaterialPlugin::<GlowMaterial>::default())
             .add_plugins(MaterialPlugin::<TeamMaterial>::default())
+            .add_plugins(MaterialPlugin::<SolidMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .insert_resource(MeshPicking(self.pickable))
@@ -104,7 +107,11 @@ impl Plugin for MapRenderPlugin {
                     models::pace,
                     (models::animate, rig::play).after(models::pace),
                     camera::update.in_set(camera::Controls),
-                    (team::tint::<StandardMaterial>, team::tint::<TeamMaterial>),
+                    (
+                        team::tint::<StandardMaterial>,
+                        team::tint::<TeamMaterial>,
+                        team::tint::<SolidMaterial>,
+                    ),
                 ),
             );
     }
@@ -125,6 +132,7 @@ pub struct MapAssets<'w> {
     materials: ResMut<'w, Assets<StandardMaterial>>,
     glow_materials: ResMut<'w, Assets<GlowMaterial>>,
     team_materials: ResMut<'w, Assets<TeamMaterial>>,
+    solid_materials: ResMut<'w, Assets<SolidMaterial>>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
     water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
@@ -142,6 +150,7 @@ impl MapAssets<'_> {
             materials: &mut self.materials,
             glow_materials: &mut self.glow_materials,
             team_materials: &mut self.team_materials,
+            solid_materials: &mut self.solid_materials,
             images: &mut self.images,
             skins: &mut self.skins,
         }

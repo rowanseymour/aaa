@@ -21,6 +21,7 @@ use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif, Objec
 
 use crate::glow::GlowMaterial;
 use crate::models::{Animated, Part, bevy_transform, controllers};
+use crate::solid::SolidMaterial;
 use crate::team::TeamMaterial;
 use crate::terrain::world;
 
@@ -734,6 +735,7 @@ pub fn place_copies(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut glow_materials: ResMut<Assets<GlowMaterial>>,
     mut team_materials: ResMut<Assets<TeamMaterial>>,
+    mut solid_materials: ResMut<Assets<SolidMaterial>>,
 ) {
     for (mut particles, home) in &mut systems {
         let particles = &mut *particles;
@@ -791,15 +793,21 @@ pub fn place_copies(
                         &mut materials,
                         &mut glow_materials,
                         &mut team_materials,
+                        &mut solid_materials,
                     ),
                     false => part.material.clone(),
                 };
                 let animated = part.animation.as_ref().map(|animation| {
                     Animated::at_rate(animation.clone(), state.time, rate, material.clone())
                 });
-                let posed = animated
-                    .as_ref()
-                    .and_then(|a| a.pose(&mut materials, &mut glow_materials, &mut team_materials));
+                let posed = animated.as_ref().and_then(|a| {
+                    a.pose(
+                        &mut materials,
+                        &mut glow_materials,
+                        &mut team_materials,
+                        &mut solid_materials,
+                    )
+                });
                 let t = posed.unwrap_or_default();
                 let mut child =
                     commands.spawn((Mesh3d(part.mesh.clone()), t, global * t, ChildOf(copy)));
