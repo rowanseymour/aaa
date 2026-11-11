@@ -42,7 +42,6 @@ impl World {
             recruiter.is_some_and(|b| {
                 let kind = self.kinds.get(&Id::from(b.template.as_str()));
                 kind.is_some_and(|k| k.properties.contains(p))
-                    || b.properties.iter().any(|h| h.property == *p)
             })
         };
         // Only buildings done unpacking count, and only the player's own,

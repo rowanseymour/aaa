@@ -206,13 +206,13 @@ fn layout(
     let mut out = [None; SLOTS];
     match (page, building) {
         (Page::Orders, Some(b)) => {
-            if b.menu != 0 {
-                if let Some(s) = b.commission.filter(|&s| s < SLOTS) {
-                    out[s] = Some(Entry::Commission);
-                }
-                if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
-                    out[s] = Some(Entry::Rally);
-                }
+            if b.menu != 0
+                && let Some(s) = b.commission.filter(|&s| s < SLOTS)
+            {
+                out[s] = Some(Entry::Commission);
+            }
+            if let Some(s) = b.rally.filter(|&s| s < SLOTS && out[s].is_none()) {
+                out[s] = Some(Entry::Rally);
             }
             if let Some(s) = b.pack.filter(|&s| s < SLOTS && out[s].is_none()) {
                 out[s] = Some(Entry::Pack);
@@ -724,7 +724,9 @@ pub fn show(
         building.map(|b| BuildingButtons {
             commission: looks.commission.0,
             menu: shows(&sim.0, local.0, b, menu),
-            rally: looks.rally.0,
+            // Where what it raises goes matters whether or not any of it
+            // can be raised now.
+            rally: looks.rally.0.filter(|_| !menu.is_empty()),
             pack: looks
                 .pack
                 .0
@@ -1201,7 +1203,7 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::NotYours => "Not yours",
         aaa_sim::Refused::Unable => "Can't now",
         aaa_sim::Refused::NoRoom => "No room",
-        aaa_sim::Refused::Lacking => "Lacks a building it needs",
+        aaa_sim::Refused::Lacking => "Lacks a building or technology it needs",
         aaa_sim::Refused::Unaffordable => "Not enough money",
         aaa_sim::Refused::Full => "HQ is full",
     }
@@ -1492,6 +1494,7 @@ mod tests {
         assert_eq!(grid.iter().flatten().count(), 3);
         let depot = BuildingButtons {
             menu: 0,
+            rally: None,
             pack: None,
             ..hq
         };
@@ -1513,6 +1516,7 @@ mod tests {
         let none = BuildingButtons { menu: 0, ..hidden };
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(none), false);
         assert_eq!(grid[0], None);
+        assert_eq!(grid[5], Some(Entry::Rally));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
         let rally = layout(Page::Rally, &GAME, &[true; 8], Some(hq), false);
         assert_eq!(rally[5], Some(Entry::Rally));

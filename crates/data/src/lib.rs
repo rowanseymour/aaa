@@ -1467,14 +1467,7 @@ impl GameData {
         }
         self.by_template(|t| {
             let e = t.element_component.as_ref()?;
-            let listed = |list: Option<&str>| -> Vec<Id> {
-                (list.unwrap_or("").split(','))
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("null"))
-                    .map(Id::from)
-                    .collect()
-            };
-            let structures: Vec<Vec<Id>> = listed(e.required_structures.as_deref())
+            let structures: Vec<Vec<Id>> = supply::listed(e.required_structures.as_deref())
                 .into_iter()
                 .map(|s| {
                     let id = renamed(&renames, &s);
@@ -1482,7 +1475,7 @@ impl GameData {
                     std::iter::once(id).chain(olds).collect()
                 })
                 .collect();
-            let properties = listed(e.required_properties.as_deref());
+            let properties = supply::listed(e.required_properties.as_deref());
             (!structures.is_empty() || !properties.is_empty()).then_some(Requires {
                 structures,
                 any: e.required_structures_any,
@@ -1503,11 +1496,10 @@ impl GameData {
                     .property_files
                     .get(id)
                     .map_or("", String::as_str);
-                let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
                 let icon = (p.action_button_icon.as_deref())
                     .and_then(|i| i.split_whitespace().next())
                     .filter(|i| !i.eq_ignore_ascii_case("null"))
-                    .map(|i| format!("{dir}/{}", i.trim_start_matches('/')));
+                    .map(|i| beside(file, i));
                 let technology = Technology {
                     name: localized(&strings, p.name.as_deref()).unwrap_or_else(|| id.to_string()),
                     description: localized(&strings, p.description.as_deref()),
