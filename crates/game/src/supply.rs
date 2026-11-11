@@ -126,24 +126,48 @@ pub fn show_border(
     ));
 }
 
-/// Tints the buildings that are out of supply, for as long as they are.
+/// On a building out of supply: when it went out, in seconds of the wall
+/// clock, which its tint's pulse runs on.
+#[derive(Component)]
+pub struct OutOfSupply(f64);
+
+/// The steps a tint's strength moves in, so that a pulsing one recolours
+/// its materials a few times a second rather than every frame.
+const TINT_STEPS: f32 = 16.0;
+
+/// Tints the buildings that are out of supply, pulsing for as long as they
+/// are and plain again at once when they're not.
 pub fn tint_buildings(
     mut commands: Commands,
     sim: Res<Sim>,
     effects: Option<Res<Effects>>,
-    views: Query<(Entity, &BuildingView, Has<Tint>)>,
+    time: Res<Time<Real>>,
+    views: Query<(Entity, &BuildingView, Option<&OutOfSupply>, Option<&Tint>)>,
 ) {
-    let Some(colour) = effects.and_then(|e| e.tint(OUT_OF_SUPPLY)) else {
+    let Some(pulse) = effects.and_then(|e| e.tint(OUT_OF_SUPPLY)) else {
         return;
     };
-    for (entity, view, tinted) in &views {
+    let now = time.elapsed_secs_f64();
+    for (entity, view, since, tint) in &views {
         let b = view.building;
         let out = sim.0.out_of_supply(b) && !sim.0.buildings[b].gone();
-        match (out, tinted) {
-            (true, false) => commands.entity(entity).insert(Tint(colour)),
-            (false, true) => commands.entity(entity).remove::<Tint>(),
-            _ => continue,
+        let since = match (out, since) {
+            (true, Some(&OutOfSupply(since))) => since,
+            (true, None) => {
+                commands.entity(entity).insert(OutOfSupply(now));
+                now
+            }
+            (false, Some(_)) => {
+                commands.entity(entity).remove::<(OutOfSupply, Tint)>();
+                continue;
+            }
+            (false, None) => continue,
         };
+        let level = (pulse.level((now - since) as f32) * TINT_STEPS).round() / TINT_STEPS;
+        let colour = Tint(pulse.colour(level));
+        if tint != Some(&colour) {
+            commands.entity(entity).insert(colour);
+        }
     }
 }
 

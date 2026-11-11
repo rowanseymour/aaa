@@ -8,7 +8,9 @@
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 
-use aaa_data::{GameData, HealthCue, HealthTrigger, Id, ObjectEffects, Shape, Vfx, VfxCue, Weapon};
+use aaa_data::{
+    GameData, HealthCue, HealthTrigger, Id, ObjectEffects, Shape, Vfx, VfxCue, VfxTint, Weapon,
+};
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
 use aaa_render::models::{Footprint, Models, Rate};
@@ -129,9 +131,9 @@ impl OnThing {
 }
 
 impl Effects {
-    /// What the tint with this id multiplies its object's colours by.
-    pub fn tint(&self, ids: &str) -> Option<[f32; 3]> {
-        self.vfx.get(&Id::from(ids))?.colour
+    /// How the tint with this id changes its object's colours.
+    pub fn tint(&self, ids: &str) -> Option<VfxTint> {
+        self.vfx.get(&Id::from(ids))?.tint
     }
 
     pub fn new(game: &mut GameData, map: &Map) -> Effects {
@@ -1108,7 +1110,7 @@ mod tests {
             real_time: false,
             random_orientation: false,
             gyroscope: true,
-            colour: None,
+            tint: None,
         }
     }
 
