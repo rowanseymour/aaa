@@ -1090,11 +1090,7 @@ pub fn show(
                 },
             });
         }
-        border.set_if_neq(match (lit, hover.get() && ready) {
-            (true, _) => Edge::Lit,
-            (false, true) => Edge::Hovered,
-            (false, false) => Edge::Clear,
-        });
+        border.set_if_neq(Edge::lit(lit, hover.get() && ready, Edge::Clear));
         let shade = match ready {
             true => Shade::Full,
             false => Shade::Dimmed,

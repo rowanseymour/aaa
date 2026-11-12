@@ -26,6 +26,8 @@ use aaa_sim::{Relation, State};
 /// Width of the disc on screen, in logical pixels, which the diamond's
 /// corners touch.
 pub const DISC: f32 = 236.0;
+/// Width of the round buttons in the corners the disc leaves of its square.
+pub const CORNER_BUTTON: f32 = 34.0;
 /// Pixels across the minimap's image, enough for a sharp diamond on a
 /// high-density screen.
 const PIXELS: usize = 512;

@@ -1,20 +1,22 @@
 //! The technology display: a window listing the technologies the player's
-//! side holds, opened by a tab beside the minimap or its key. The match
+//! side holds, opened by a button beside the minimap or its key. The match
 //! holds still while it's up, unless it was already.
 
 use std::collections::HashMap;
 
 use aaa_data::{Id, PropertyLook};
 use aaa_render::textures;
+use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button, ScrollArea};
 
 use crate::actions::Blocks;
 use crate::keys::Bindings;
-use crate::ui::{self, Click, Font, Hint, Ink, Marked, Surface, label, panel};
+use crate::ui::{self, Click, Edge, Font, Hint, Ink, Marked, Surface, Theme, label, panel};
 use crate::{Loaded, Local, Screen, Sim, minimap};
 
 /// What the keys that open, close and close every display panel are
@@ -23,9 +25,10 @@ pub const OPEN: &str = "ButtonTechnology";
 const CLOSE: &str = "TechnologyDisplayClose";
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
 
-const TAB: &str = "UI/Game/ControlPanel/SidePanelTabTechnologyUnselected.tga";
-const TAB_HELD: &str = "UI/Game/ControlPanel/SidePanelTabTechnologySelected.tga";
-const TAB_SIZE: Vec2 = Vec2::new(40.0, 52.0);
+const GEAR_SIZE: f32 = 22.0;
+/// The gear's texels across, more than it's drawn at so it stays crisp
+/// once the interface is scaled up.
+const GEAR_TEXELS: u32 = 64;
 const NAME: &str = "control_panel_ButtonTechnology_ToolTip";
 const HELP: &str = "control_panel_ButtonTechnology_tooltip_2";
 const TITLE: &str = "technology_display_Child_text";
@@ -54,9 +57,7 @@ pub struct TechDisplay {
 struct Looks {
     lines: HashMap<Id, Line>,
     formats: bevy::image::CompressedImageFormats,
-    tab: Option<Handle<Image>>,
-    tab_held: Option<Handle<Image>>,
-    /// The tab's name, to mark its key in.
+    /// The button's name, to mark its key in.
     name: String,
 }
 
@@ -68,8 +69,14 @@ struct Line {
     hint: String,
 }
 
+/// The button at the minimap's corner that opens the window: a gear in a
+/// ring like the supply border's button, lit while the window's up.
 #[derive(Component)]
-struct Tab;
+struct TechButton;
+
+/// The gear in the [`TechButton`].
+#[derive(Component)]
+struct Gear;
 
 #[derive(Component)]
 struct TechWindow;
@@ -85,7 +92,7 @@ impl Plugin for TechnologyPlugin {
             .add_systems(OnEnter(Screen::Match), spawn)
             .add_systems(
                 Update,
-                (keys, press_tab, refresh)
+                (keys, refresh)
                     .chain()
                     .after(crate::pause::Toggle)
                     .run_if(in_state(Screen::Match))
@@ -95,7 +102,11 @@ impl Plugin for TechnologyPlugin {
             )
             .add_systems(
                 Update,
-                mark_tab
+                light_button.after(keys).run_if(in_state(Screen::Match)),
+            )
+            .add_systems(
+                Update,
+                mark_button
                     .run_if(resource_exists_and_changed::<Bindings>)
                     .run_if(resource_exists::<Looks>)
                     .run_if(in_state(Screen::Match)),
@@ -115,6 +126,7 @@ pub fn closed(display: Option<Res<TechDisplay>>) -> bool {
 
 fn spawn(
     mut commands: Commands,
+    mut gear_image: bevy::prelude::Local<Option<Handle<Image>>>,
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
@@ -123,11 +135,7 @@ fn spawn(
     let game = &mut loaded.game;
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
-    let mut image = |path: &str| {
-        let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
-        Some(images.add(image))
-    };
-    let (tab, tab_held) = (image(TAB), image(TAB_HELD));
+    let gear = (gear_image.get_or_insert_with(|| images.add(gear(GEAR_TEXELS)))).clone();
     let looks: HashMap<Id, PropertyLook> = game.property_looks();
     let lines = (game.technologies().into_iter())
         .filter_map(|(id, t)| {
@@ -152,26 +160,41 @@ fn spawn(
     commands.insert_resource(TechDisplay::default());
     commands
         .spawn((
-            Tab,
+            TechButton,
             Blocks,
             Button,
             Click::PUSH,
             RelativeCursorPosition::default(),
             bindings.marked(OPEN, &name),
             Hint(said(HELP, "Displays a list of all your technologies.")),
-            ImageNode::new(tab.clone().unwrap_or_default()),
             // At the minimap square's other top corner from the supply
             // border's button.
             Node {
                 position_type: PositionType::Absolute,
-                left: px(crate::MARGIN + minimap::DISC - TAB_SIZE.x),
-                bottom: px(crate::MARGIN + minimap::DISC - TAB_SIZE.y),
-                width: px(TAB_SIZE.x),
-                height: px(TAB_SIZE.y),
+                left: px(crate::MARGIN + minimap::DISC - minimap::CORNER_BUTTON),
+                bottom: px(crate::MARGIN + minimap::DISC - minimap::CORNER_BUTTON),
+                width: px(minimap::CORNER_BUTTON),
+                height: px(minimap::CORNER_BUTTON),
+                border: UiRect::all(px(1)),
+                border_radius: BorderRadius::MAX,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
                 ..default()
             },
+            Surface::Hud,
+            Edge::Border,
             GlobalZIndex(2),
             DespawnOnExit(Screen::Match),
+            children![(
+                Gear,
+                ImageNode::new(gear),
+                Node {
+                    width: px(GEAR_SIZE),
+                    height: px(GEAR_SIZE),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            )],
         ))
         .observe(|_: On<Activate>, mut toggling: Toggling| toggling.toggle());
     let at = |v: f32, of: f32| percent(100.0 * v / of);
@@ -229,16 +252,18 @@ fn spawn(
     commands.insert_resource(Looks {
         lines,
         formats: formats.0,
-        tab,
-        tab_held,
         name,
     });
 }
 
-/// Marks the tab's key afresh once the hotkeys change.
-fn mark_tab(bindings: Res<Bindings>, looks: Res<Looks>, mut tabs: Query<&mut Marked, With<Tab>>) {
-    for mut tab in &mut tabs {
-        tab.set_if_neq(bindings.marked(OPEN, &looks.name));
+/// Marks the button's key afresh once the hotkeys change.
+fn mark_button(
+    bindings: Res<Bindings>,
+    looks: Res<Looks>,
+    mut buttons: Query<&mut Marked, With<TechButton>>,
+) {
+    for mut button in &mut buttons {
+        button.set_if_neq(bindings.marked(OPEN, &looks.name));
     }
 }
 
@@ -302,22 +327,91 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut toggling: 
     }
 }
 
-/// Shows the tab held down while it's pressed.
-fn press_tab(
-    looks: Res<Looks>,
-    mut tabs: Query<(Has<bevy::ui::Pressed>, &mut ImageNode), With<Tab>>,
+/// What [`light_button`] reads and sets on the button.
+type ButtonLook = (
+    Ref<'static, Hovered>,
+    Has<bevy::ui::Pressed>,
+    &'static mut Edge,
+    &'static mut Surface,
+);
+
+/// Lights the button while the window's up, its edge while it's hovered,
+/// and its face while it's held down.
+fn light_button(
+    display: Option<Res<TechDisplay>>,
+    theme: Res<Theme>,
+    mut buttons: Query<ButtonLook, With<TechButton>>,
+    mut gears: Query<&mut ImageNode, With<Gear>>,
 ) {
-    for (pressed, mut image) in &mut tabs {
-        let want = match pressed {
-            true => &looks.tab_held,
-            false => &looks.tab,
-        };
-        if let Some(want) = want
-            && image.image != *want
-        {
-            image.image = want.clone();
+    let Some(display) = display else { return };
+    let restyle = display.is_changed() || theme.is_changed();
+    for (hovered, pressed, mut edge, mut surface) in &mut buttons {
+        if restyle || hovered.is_changed() {
+            edge.set_if_neq(Edge::lit(display.open, hovered.get(), Edge::Border));
+        }
+        surface.set_if_neq(match pressed {
+            true => Surface::Hovered,
+            false => Surface::Hud,
+        });
+    }
+    if !restyle {
+        return;
+    }
+    let colour = match display.open {
+        true => theme.edge(Edge::Lit),
+        false => theme.ink(Ink::Help),
+    };
+    for mut gear in &mut gears {
+        if gear.color != colour {
+            gear.color = colour;
         }
     }
+}
+
+/// A white gear `texels` across on a clear ground, to be tinted.
+fn gear(texels: u32) -> Image {
+    const TEETH: f32 = 8.0;
+    const OUTER: f32 = 1.0;
+    const ROOT: f32 = 0.7;
+    const HOLE: f32 = 0.32;
+    // Each texel's coverage from a grid of samples across it.
+    const SAMPLES: u32 = 4;
+    let half = texels as f32 / 2.0;
+    let inside = |x: f32, y: f32| {
+        let (x, y) = ((x - half) / half, (y - half) / half);
+        let d = (x * x + y * y).sqrt();
+        let turn = (y.atan2(x) / std::f32::consts::TAU * TEETH).rem_euclid(1.0);
+        let rim = match (0.25..0.75).contains(&turn) {
+            true => OUTER,
+            false => ROOT,
+        };
+        d > HOLE && d < rim
+    };
+    let mut data = Vec::with_capacity((texels * texels * 4) as usize);
+    for v in 0..texels {
+        for u in 0..texels {
+            let mut hits = 0;
+            for j in 0..SAMPLES {
+                for i in 0..SAMPLES {
+                    let at = |t: u32, s: u32| t as f32 + (s as f32 + 0.5) / SAMPLES as f32;
+                    hits += inside(at(u, i), at(v, j)) as u32;
+                }
+            }
+            let alpha = (255 * hits / (SAMPLES * SAMPLES)) as u8;
+            data.extend_from_slice(&[255, 255, 255, alpha]);
+        }
+    }
+    Image::new(
+        Extent3d {
+            width: texels,
+            height: texels,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
 }
 
 /// Brings the open window's list up to date: at once on opening, then once
