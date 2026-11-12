@@ -27,6 +27,7 @@ const CELL: f32 = 96.0;
 const MONEY_CELL: f32 = 128.0;
 const HEIGHT: f32 = 22.0;
 const GAP: f32 = 4.0;
+const FIGURE_DROP: f32 = 2.0;
 
 /// What the order under the cursor would change, set by the action grid.
 #[derive(Resource, Default)]
@@ -125,7 +126,17 @@ pub fn spawn(
                             },
                         ));
                     }
-                    cell.spawn((Cell(preview, i), label("", Font::Hud, Ink::Body)));
+                    cell.spawn((
+                        Cell(preview, i),
+                        label("", Font::Hud, Ink::Body),
+                        // The face's line keeps room below for descenders,
+                        // which figures never use, so centring the line
+                        // leaves them high; this centres the figures.
+                        Node {
+                            top: px(FIGURE_DROP),
+                            ..default()
+                        },
+                    ));
                 });
             }
         });

@@ -7,6 +7,7 @@
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::text::{Font as Face, FontSource};
 use bevy::ui_widgets::Button;
 
 use crate::sound::Sounds;
@@ -16,7 +17,7 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
-            .add_systems(Startup, spawn_hint)
+            .add_systems(Startup, (faces, spawn_hint))
             .add_systems(Update, (highlight, hint))
             // Before layout, which a meter's fill width feeds.
             .add_systems(
@@ -251,14 +252,44 @@ impl Font {
             Font::HudTitle => 15.0,
             Font::Body => 16.0,
             Font::Heading => 18.0,
-            Font::Large => 20.0,
-            Font::Title => 22.0,
+            Font::Large => 24.0,
+            Font::Title => 26.0,
+        }
+    }
+
+    /// The face it's set in. The menus take the logo's lettering: its
+    /// stencil where it's big enough to keep its letters whole, and the same
+    /// family's plain cut, drawn for small sizes, elsewhere. The interface
+    /// over the map keeps Bevy's own face, whose even figures suit counts.
+    fn source(self) -> FontSource {
+        match self {
+            Font::Heading | Font::Large | Font::Title => FontSource::family(STENCIL),
+            Font::Body => FontSource::family(PLAIN),
+            Font::Small | Font::Hud | Font::HudTitle => FontSource::default(),
         }
     }
 }
 
+const STENCIL: &str = "Big Shoulders Stencil Display";
+const PLAIN: &str = "Big Shoulders Text";
+
+/// The faces, kept so they stay loaded.
+#[derive(Resource)]
+#[allow(dead_code)]
+struct Faces(Vec<Handle<Face>>);
+
+fn faces(mut commands: Commands, mut fonts: ResMut<Assets<Face>>) {
+    let faces = [
+        &include_bytes!("../fonts/BigShouldersStencilDisplay-800.ttf")[..],
+        &include_bytes!("../fonts/BigShouldersText-600.ttf")[..],
+    ];
+    let faces = faces.map(|f| fonts.add(Face::from_bytes(f.to_vec())));
+    commands.insert_resource(Faces(faces.into()));
+}
+
 pub fn font(font: Font) -> TextFont {
     TextFont {
+        font: font.source(),
         font_size: FontSize::Px(font.px()),
         ..default()
     }
