@@ -20,10 +20,6 @@ pub struct PauseMenu {
 #[derive(Component)]
 struct Overlay;
 
-/// The box the menu's buttons are in, or its options.
-#[derive(Component)]
-struct Column;
-
 pub struct PausePlugin;
 
 impl Plugin for PausePlugin {
@@ -85,13 +81,7 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
     let overlay = commands
         .spawn((Overlay, DespawnOnExit(Screen::Match), ui::scrim()))
         .id();
-    let column = commands
-        .spawn((Column, ChildOf(overlay), ui::dialog()))
-        .id();
-    fill_menu(commands, column);
-}
-
-fn fill_menu(commands: &mut Commands, column: Entity) {
+    let column = commands.spawn((ChildOf(overlay), ui::dialog())).id();
     commands
         .spawn((ui::button("Options", Font::Large), ChildOf(column)))
         .observe(options);
@@ -103,20 +93,10 @@ fn fill_menu(commands: &mut Commands, column: Entity) {
         .observe(resume);
 }
 
-/// Shows the options in place of the menu's buttons.
-fn options(_: On<Activate>, mut commands: Commands, column: Single<Entity, With<Column>>) {
-    let column = *column;
-    commands.entity(column).despawn_related::<Children>();
-    commands.spawn((ui::text("Options", Font::Heading), ChildOf(column)));
-    crate::options::rows(&mut commands, column);
-    commands
-        .spawn((ui::button("Back", Font::Large), ChildOf(column)))
-        .observe(back);
-}
-
-fn back(_: On<Activate>, mut commands: Commands, column: Single<Entity, With<Column>>) {
-    commands.entity(*column).despawn_related::<Children>();
-    fill_menu(&mut commands, *column);
+/// Shows the options over the menu, to go with it when it closes.
+fn options(_: On<Activate>, mut commands: Commands, overlay: Single<Entity, With<Overlay>>) {
+    let page = crate::options::page(&mut commands);
+    commands.entity(page).insert(ChildOf(*overlay));
 }
 
 fn close(

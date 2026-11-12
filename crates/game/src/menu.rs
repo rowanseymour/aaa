@@ -26,7 +26,7 @@ pub fn go(to: Screen) -> impl Fn(On<Activate>, ResMut<NextState<Screen>>) {
 }
 
 /// The column of buttons down the right of the menus, as the game has it.
-pub fn column(commands: &mut Commands, screen: Screen) -> Entity {
+fn column(commands: &mut Commands, screen: Screen) -> Entity {
     commands.spawn((Camera2d, DespawnOnExit(screen)));
     let root = commands
         .spawn((
@@ -58,7 +58,7 @@ pub fn column(commands: &mut Commands, screen: Screen) -> Entity {
 }
 
 /// Pushes the buttons after it to the bottom of a [`column`].
-pub fn spacer() -> impl Bundle {
+fn spacer() -> impl Bundle {
     Node {
         flex_grow: 1.0,
         ..default()
