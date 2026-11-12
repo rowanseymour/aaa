@@ -13,8 +13,8 @@ use bevy::ui_widgets::{Activate, ScrollArea};
 use crate::menu::go;
 use crate::presets::Preset;
 use crate::ui::{
-    Chosen, Dropdown, Font, Ink, Surface, button, clickable, dropdown, inert, label, opener,
-    padded, panel, switch, text, toggle,
+    Card, Chosen, Dropdown, Font, Ink, Surface, button, card, clickable, dropdown, inert, label,
+    opener, padded, panel, switch, text,
 };
 use crate::{Data, Pending, Screen, Side};
 
@@ -427,7 +427,12 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
         let label = Brief::load(&mut data.0, &name)
             .map_or_else(|_| aaa_data::map_title(&name).to_string(), |b| b.name);
         commands
-            .spawn((ChildOf(list), toggle(label, Font::Body), MapChoice(name)))
+            .spawn((
+                ChildOf(list),
+                switch(padded()),
+                children![text(label, Font::Body)],
+                MapChoice(name),
+            ))
             .observe(choose_map);
     }
     commands
@@ -708,7 +713,8 @@ fn show_slots(
     commands
         .spawn((
             ChildOf(slots),
-            switch(watch),
+            switch(card(watch)),
+            Card,
             SideChoice(None),
             children![text(label, Font::Body)],
         ))

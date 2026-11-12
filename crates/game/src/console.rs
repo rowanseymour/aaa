@@ -265,8 +265,8 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "uitint",
-        "[r g b]",
-        "shades the interface's backgrounds and borders from a colour, each part 0 to 1; without, says it",
+        "[r g b [r g b]]",
+        "shades the interface's backgrounds, borders and text from a dark colour toward a light one, each part 0 to 1; without, says them",
     ),
     verb(
         "resolution",
@@ -537,14 +537,21 @@ fn ui_tint(world: &mut World, args: &[&str]) -> Reply {
     match args {
         [] => {
             let [r, g, b, _] = theme.tint.to_srgba().to_f32_array();
-            Ok(format!("{r} {g} {b}"))
+            let [lr, lg, lb, _] = theme.light.to_srgba().to_f32_array();
+            Ok(format!("{r} {g} {b} {lr} {lg} {lb}"))
         }
-        [r, g, b] => {
-            let [r, g, b] = [number(r)?, number(g)?, number(b)?];
-            if ![r, g, b].iter().all(|c| (0.0..=1.0).contains(c)) {
+        [_, _, _] | [_, _, _, _, _, _] => {
+            let parts = args
+                .iter()
+                .map(|a| number(a))
+                .collect::<Result<Vec<_>, _>>()?;
+            if !parts.iter().all(|c| (0.0..=1.0).contains(c)) {
                 return Err("takes each part from 0 to 1".into());
             }
-            theme.tint = Color::srgb(r, g, b);
+            theme.tint = Color::srgb(parts[0], parts[1], parts[2]);
+            if let [_, _, _, r, g, b] = parts[..] {
+                theme.light = Color::srgb(r, g, b);
+            }
             Ok(String::new())
         }
         _ => Err(usage("uitint")),
