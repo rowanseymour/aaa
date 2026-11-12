@@ -5,6 +5,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aaa_data::{Audio, AudioWho, Cue, GameData, Id, ObjectAudio};
 use aaa_render::camera::RtsCamera;
@@ -47,6 +48,14 @@ struct Playing {
     started: f64,
 }
 
+/// Where the random picks start: somewhere new each launch, as the game's
+/// are once everything else drawing on its numbers has had its turn.
+fn seed() -> u64 {
+    let now = SystemTime::now().duration_since(UNIX_EPOCH);
+    // Never zero, which xorshift stays at.
+    now.map_or(0, |d| d.as_nanos() as u64) | 1 << 63
+}
+
 impl Sounds {
     /// With the files of the `ready` audio read ahead. Objects' audio is
     /// left to [`Sounds::load_objects`], for a match.
@@ -66,7 +75,7 @@ impl Sounds {
             read,
             next: HashMap::new(),
             queued: Vec::new(),
-            rng: 0x2545_f491_4f6c_dd1d,
+            rng: seed(),
         }
     }
 
