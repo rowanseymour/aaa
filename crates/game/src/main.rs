@@ -804,6 +804,7 @@ fn prepare(
     }
     sim.supply_effects = game.supply_effects();
     sim.kinds = game.kinds();
+    sim.terrain_rules = game.terrain_rules();
     sim.decays = game.decays();
     sim.operations = game.operations();
     let dropped = sim.operations.values().filter_map(|o| match o {

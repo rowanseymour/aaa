@@ -8,15 +8,19 @@ mod guard;
 mod hotkeys;
 mod id;
 mod messages;
+mod properties;
 mod supply;
+mod terrain;
 
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
 pub use fog::{FogSetting, Sight};
-pub use guard::GuardRules;
+pub use guard::{GUARDING, GuardRules};
 pub use hotkeys::Hotkey;
 pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
+pub use properties::PropertyLook;
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
+pub use terrain::{TerrainEffect, TerrainRules};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -82,6 +86,8 @@ struct Definitions {
     /// The generals, in the order they load, the first kept of those
     /// defined twice.
     generals: Vec<defs::General>,
+    /// The game's words for ranges of figures, in the order they load.
+    descriptions: Vec<defs::Description>,
 }
 
 /// An object template as some `.tgi` file defines it.
@@ -102,6 +108,7 @@ impl Definitions {
         let mut property_files = HashMap::new();
         let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
         let mut generals: Vec<defs::General> = Vec::new();
+        let mut descriptions: Vec<defs::Description> = Vec::new();
         for Scoped {
             file,
             root,
@@ -143,6 +150,10 @@ impl Definitions {
                     && !generals.iter().any(|known| known.ids.as_ref() == Some(id))
                 {
                     generals.push(g);
+                } else if kind.eq_ignore_ascii_case("Description")
+                    && let Ok(d) = templates.deserialize::<defs::Description>(block)
+                {
+                    descriptions.push(d);
                 }
             }
         }
@@ -152,6 +163,7 @@ impl Definitions {
             property_files,
             abilities,
             generals,
+            descriptions,
         }
     }
 }
@@ -664,6 +676,9 @@ pub struct Variation {
     pub kind: TerrainKind,
     /// What effects take it for, e.g. `dirt`, `snow` or `water`.
     pub group: Option<Id>,
+    /// The properties it gives those standing on it, as its terrain
+    /// lists them.
+    pub properties: Vec<Id>,
 }
 
 /// What a terrain is, which decides how the ground stands on it.
@@ -1178,6 +1193,9 @@ impl GameData {
                 };
                 let water = terrain.ids.as_ref().and_then(|id| water.get(id));
                 let kind = terrain_kind(&terrain);
+                let properties: Vec<Id> = (terrain.property.iter())
+                    .filter_map(|r| r.property_ids.clone())
+                    .collect();
                 let animation =
                     terrain
                         .anim_textures_path_prefix
@@ -1211,6 +1229,7 @@ impl GameData {
                             naval: terrain.water,
                             kind,
                             group: not_null(terrain.terrain_group.clone()),
+                            properties: properties.clone(),
                         },
                     );
                 }
@@ -1509,10 +1528,7 @@ impl GameData {
                     .property_files
                     .get(id)
                     .map_or("", String::as_str);
-                let icon = (p.action_button_icon.as_deref())
-                    .and_then(|i| i.split_whitespace().next())
-                    .filter(|i| !i.eq_ignore_ascii_case("null"))
-                    .map(|i| beside(file, i));
+                let icon = icon_beside(file, p.action_button_icon.as_deref());
                 let technology = Technology {
                     name: localized(&strings, p.name.as_deref()).unwrap_or_else(|| id.to_string()),
                     description: localized(&strings, p.description.as_deref()),
@@ -3238,6 +3254,12 @@ fn not_null(id: Option<Id>) -> Option<Id> {
 }
 
 /// A path a file gives relative to its own folder, unless it starts with `/`.
+/// The archive path of an icon a block in `file` names, if it names one.
+fn icon_beside(file: &str, icon: Option<&str>) -> Option<String> {
+    let icon = icon?.split_whitespace().next()?;
+    (!icon.eq_ignore_ascii_case("null")).then(|| beside(file, icon))
+}
+
 fn beside(file: &str, path: &str) -> String {
     match path.strip_prefix('/') {
         Some(abs) => abs.to_string(),
