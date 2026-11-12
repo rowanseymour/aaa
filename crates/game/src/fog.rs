@@ -191,20 +191,20 @@ pub fn hide_buildings(fog: Res<Fog>, mut views: Query<(&BuildingView, &mut Visib
     }
 }
 
+/// Which map objects are the map's own scenery: those the sim has no
+/// thing for.
+pub type IsScenery = (
+    Without<UnitView>,
+    Without<BuildingView>,
+    Without<crate::TrailerView>,
+    // Placeholders stay hidden as they were spawned.
+    Without<aaa_render::objects::Marker>,
+);
+
 /// Hides the map's own scenery on ground never seen.
-#[allow(clippy::type_complexity)]
 pub fn hide_scenery(
     fog: Res<Fog>,
-    mut things: Query<
-        (&aaa_render::MapObject, &mut Visibility),
-        (
-            Without<UnitView>,
-            Without<BuildingView>,
-            Without<crate::TrailerView>,
-            // Placeholders stay hidden as they were spawned.
-            Without<aaa_render::objects::Marker>,
-        ),
-    >,
+    mut things: Query<(&aaa_render::MapObject, &mut Visibility), IsScenery>,
 ) {
     if !fog.fresh() {
         return;

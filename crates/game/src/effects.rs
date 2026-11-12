@@ -43,6 +43,8 @@ pub struct Effects {
     /// The effects detail setting, from 0 for none to 1 for all, which
     /// effects that aren't critical play by.
     detail: f32,
+    /// The map's sun is dark enough that effects for the night show.
+    night: bool,
     rng: u64,
 }
 
@@ -67,7 +69,20 @@ enum Source {
     /// The projectile of a shot fired by this, which has reached its
     /// target.
     Projectile(Target),
+    /// A piece of the map's scenery, by its view.
+    Scenery(Entity),
 }
+
+/// Something an effect plays on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Subject {
+    Thing(Target),
+    Scenery(Entity),
+}
+
+/// Scenery whose effects for being created are queued.
+#[derive(Component)]
+struct Scenery;
 
 /// What a view's thing was last seen doing, to notice the events of.
 #[derive(Component)]
@@ -83,7 +98,7 @@ struct Seen {
 struct Effect {
     vfx: Id,
     /// Whose command created it, for a stop command to find it by.
-    by: Option<Target>,
+    by: Option<Subject>,
     /// When it ends, unless it lasts until stopped.
     ends: Option<f64>,
     /// It goes once its spot is off screen.
@@ -150,11 +165,13 @@ impl Effects {
                 variations.get(&Id::from(name))?.group.clone()
             })
             .collect();
+        let night = game.night(map.sun.diffuse);
         debug!(
-            "{} effects shown by {} object templates, at {} named points",
+            "{} effects shown by {} object templates, at {} named points, by {}",
             vfx.len(),
             objects.len(),
-            bones.len()
+            bones.len(),
+            if night { "night" } else { "day" }
         );
         Effects {
             vfx,
@@ -167,6 +184,7 @@ impl Effects {
             landed: None,
             aim: game.aim_heights().straight,
             detail: 1.0,
+            night,
             rng: 0x9e37_79b9_7f4a_7c15,
         }
     }
@@ -224,6 +242,14 @@ impl Effects {
         }
         let per_target = weapon.effects.per_target.clone();
         self.queue(when, &per_target, Source::Thing(landing.from), target);
+    }
+
+    /// Queues the commands a thing of `template` has for being created.
+    fn create(&mut self, source: Source, template: &str, at: When) {
+        if let Some(o) = self.objects.get(&Id::from(template)) {
+            let created = o.created.clone();
+            self.queue(at, &created, source, None);
+        }
     }
 
     /// Queues the commands of what `me`, of `template`, did since it was
@@ -427,7 +453,8 @@ impl Plugin for EffectsPlugin {
 }
 
 /// Queues the effect commands of what units and buildings did since last
-/// seen.
+/// seen, and of scenery for being there.
+#[allow(clippy::too_many_arguments)]
 fn notice(
     mut commands: Commands,
     sim: Res<Sim>,
@@ -436,6 +463,7 @@ fn notice(
     mut sounds: ResMut<crate::sound::Sounds>,
     mut units: Query<(Entity, &UnitView, Option<&mut Seen>)>,
     mut buildings: Query<(Entity, &BuildingView, Option<&mut Seen>), Without<UnitView>>,
+    scenery: Query<(Entity, &MapObject), NewScenery>,
 ) {
     let sim = &sim.0;
     let at = When {
@@ -500,7 +528,14 @@ fn notice(
             at,
         );
     }
+    for (e, object) in &scenery {
+        effects.create(Source::Scenery(e), &object.0.template, at);
+        commands.entity(e).insert(Scenery);
+    }
 }
+
+/// The map's own scenery not yet seen.
+type NewScenery = (Without<Scenery>, crate::fog::IsScenery);
 
 /// Whose a target is.
 fn owner(sim: &World, t: Target) -> u32 {
@@ -540,6 +575,7 @@ fn see(
                 health: now.health,
                 states: Vec::new(),
             };
+            effects.create(Source::Thing(me), template, at);
             effects.witness(me, template, &mut seen, now, at);
             commands.entity(e).insert(seen);
         }
@@ -578,7 +614,7 @@ fn play(
     mut assets: MapAssets,
     units: Query<(Entity, &UnitView, Option<&Footprint>)>,
     buildings: Query<(Entity, &BuildingView, Option<&Footprint>)>,
-    things: Query<(&Transform, &MapObject)>,
+    things: Query<(&Transform, &MapObject, Option<&Footprint>)>,
     playing: Query<(Entity, &Effect)>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog: Res<crate::fog::Fog>,
@@ -611,9 +647,26 @@ fn play(
             (anchor, e, packing, rect(footprint)),
         );
     }
-    let placed = |t: Target, tick: u64| {
+    let placed = |s: Subject, tick: u64| {
+        let t = match s {
+            Subject::Thing(t) => t,
+            Subject::Scenery(e) => {
+                let (transform, object, footprint) = things.get(e).ok()?;
+                let [x, y, _] = object.0.facing;
+                return Some(Placed {
+                    anchor: e,
+                    root: *transform,
+                    thing: &object.0,
+                    packing: None,
+                    facing: Vec2::new(x, y).try_normalize().unwrap_or(Vec2::NEG_Y),
+                    footprint: rect(footprint),
+                    living: true,
+                    fighter: None,
+                });
+            }
+        };
         let &(anchor, root, packing, footprint) = views.get(&t)?;
-        let (transform, object) = things.get(root).ok()?;
+        let (transform, object, _) = things.get(root).ok()?;
         let (facing, living) = match t {
             Target::Unit(u) => {
                 let u = &sim.units[u];
@@ -641,8 +694,9 @@ fn play(
     for (_, p) in due {
         let cue = &p.cue;
         let (by, fired_by) = match p.source {
-            Source::Thing(t) => (Some(t), t),
-            Source::Projectile(t) => (None, t),
+            Source::Thing(t) => (Some(Subject::Thing(t)), Some(t)),
+            Source::Projectile(t) => (None, Some(t)),
+            Source::Scenery(e) => (Some(Subject::Scenery(e)), None),
         };
         if cue.stop {
             for (e, effect) in &playing {
@@ -658,8 +712,11 @@ fn play(
         let Some(path) = vfx.model.as_deref().filter(|_| vfx.category == "VFXMODEL") else {
             continue;
         };
+        if vfx.night_only && !effects.night {
+            continue;
+        }
         if !cue.targets.required.is_empty() || !cue.targets.excluded.is_empty() {
-            let Some(t) = p.target else {
+            let (Some(fired_by), Some(t)) = (fired_by, p.target) else {
                 continue;
             };
             if !sim.matches(fired_by, &cue.targets, t) {
@@ -790,7 +847,7 @@ fn hit_height(ratio: f32, attacker: Option<[f32; 2]>, target: [f32; 2]) -> f32 {
 
 /// What placing an effect needs to know.
 struct Place<'a, 'b> {
-    placed: &'b dyn Fn(Target) -> Option<Placed<'a>>,
+    placed: &'b dyn Fn(Subject) -> Option<Placed<'a>>,
     ground: &'b Ground,
     bones: &'b HashMap<Id, String>,
     /// How far up an attacker a hit lands.
@@ -824,8 +881,9 @@ impl Place<'_, '_> {
             t
         };
         let (attacker, own) = match *source {
-            Source::Thing(t) => (Some(t), Some(t)),
-            Source::Projectile(t) => (Some(t), None),
+            Source::Thing(t) => (Some(Subject::Thing(t)), Some(Subject::Thing(t))),
+            Source::Projectile(t) => (Some(Subject::Thing(t)), None),
+            Source::Scenery(e) => (None, Some(Subject::Scenery(e))),
         };
         match at {
             "MAP_CENTER" => {
@@ -839,7 +897,7 @@ impl Place<'_, '_> {
             _ => {}
         }
         let subject = match at {
-            "TARGET_THING" | "TARGET_GROUND" | "TARGET_HIT_POSITION" => (*target)?,
+            "TARGET_THING" | "TARGET_GROUND" | "TARGET_HIT_POSITION" => Subject::Thing((*target)?),
             "SOURCE_ABILITY_POSITION" => attacker?,
             _ => own?,
         };
@@ -962,16 +1020,34 @@ fn facing([x, y, z]: [f32; 3]) -> Vec3 {
 fn follow(
     mut commands: Commands,
     time: Res<Time>,
-    mut effects: Query<(Entity, &Effect, Option<&Follow>, &mut Transform)>,
+    mut effects: Query<(
+        Entity,
+        &Effect,
+        Option<&Follow>,
+        &mut Transform,
+        &mut Visibility,
+    )>,
     anchors: Query<(&Transform, &Visibility, Has<BuildingView>), Without<Effect>>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
 ) {
     let now = time.elapsed_secs_f64();
     let camera = cameras.iter().find(|(c, _)| c.is_active);
-    for (e, effect, follow, mut transform) in &mut effects {
+    for (e, effect, follow, mut transform, mut visibility) in &mut effects {
         if effect.ends.is_some_and(|t| t <= now) {
             commands.entity(e).despawn();
             continue;
+        }
+        // Scenery's effects go when it's cleared, and are hidden with it
+        // on ground never seen.
+        if let Some(Subject::Scenery(s)) = effect.by {
+            let Ok((_, shown, _)) = anchors.get(s) else {
+                commands.entity(e).despawn();
+                continue;
+            };
+            visibility.set_if_neq(match shown {
+                Visibility::Hidden => Visibility::Hidden,
+                _ => Visibility::Inherited,
+            });
         }
         if let Some(f) = follow {
             // A building's hidden once it's gone, though its view stays.
@@ -1183,6 +1259,7 @@ mod tests {
             landed: None,
             aim: 0.65,
             detail: 1.0,
+            night: false,
             rng: 1,
         }
     }
@@ -1338,6 +1415,22 @@ mod tests {
             .map(|(_, p)| p.cue.vfx.as_str())
             .collect();
         assert_eq!(queued, ["dust", "collapse"]);
+    }
+
+    #[test]
+    fn being_created_plays_a_templates_effects_for_it() {
+        let wreck = ObjectEffects {
+            created: vec![cue("smoke")],
+            ..ObjectEffects::default()
+        };
+        let mut effects = effects(HashMap::from([(Id::from("wreck"), wreck)]));
+        let scenery = Source::Scenery(Entity::PLACEHOLDER);
+        effects.create(scenery, "wreck", at(0));
+        effects.create(scenery, "rock", at(0));
+        let queued: Vec<(&str, Source)> = (effects.queued.iter())
+            .map(|(_, p)| (p.cue.vfx.as_str(), p.source))
+            .collect();
+        assert_eq!(queued, [("smoke", scenery)]);
     }
 
     #[test]

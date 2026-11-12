@@ -1276,6 +1276,14 @@ impl GameData {
         }
     }
 
+    /// Whether it's night under a sun of this diffuse colour; never, if the
+    /// settings don't say how dark night is.
+    pub fn night(&mut self, [r, g, b]: [f32; 3]) -> bool {
+        let svars = self.svars();
+        let threshold = svars.iter().find_map(|v| v.sun_night_threshold);
+        threshold.is_some_and(|t| r + g + b < t)
+    }
+
     /// Seconds an enemy's damage keeps what it hurt under siege.
     pub fn siege_seconds(&mut self) -> Option<f32> {
         let svars = self.svars();
@@ -3453,6 +3461,15 @@ mod tests {
         let block = parsed.root.blocks_of("SVars").next().unwrap();
         let svars: defs::SVars = templates.deserialize(block).unwrap();
         assert_eq!(svars.building_padding_meters, Some(3.0));
+    }
+
+    #[test]
+    fn settings_read_how_dark_night_is() {
+        let parsed = tgi::parse("[SVars]\n{\n\tSunNightThreshold = 1.6\n}\n");
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("SVars").next().unwrap();
+        let svars: defs::SVars = templates.deserialize(block).unwrap();
+        assert_eq!(svars.sun_night_threshold, Some(1.6));
     }
 
     #[test]

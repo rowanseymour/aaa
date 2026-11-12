@@ -915,6 +915,10 @@ pub struct SVars {
     /// Seconds a bombardment's hit keeps a regiment out of supply.
     #[serde(rename = "BombardTargetTimeout")]
     pub bombard_target_timeout: Option<f32>,
+    /// It's night while the sun's diffuse red, green and blue sum to less
+    /// than this.
+    #[serde(rename = "SunNightThreshold")]
+    pub sun_night_threshold: Option<f32>,
     /// Seconds an enemy's damage keeps what it hurt under siege.
     #[serde(rename = "UnderSiegeRecentlyDamagedSeconds")]
     pub under_siege_recently_damaged_seconds: Option<f32>,
