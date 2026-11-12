@@ -960,17 +960,13 @@ pub fn show(
     let tip = match (hovered, *page) {
         (Some(tip), _) => Some(tip),
         (None, Page::Aiming(Aim::Unpack)) => prompt("Left click where to unpack"),
-        (None, Page::Aiming(Aim::Attack))
-            if local.0.is_some_and(|p| {
-                matches!(
-                    attack_at(&sim.0, p, *focus),
-                    Struck::Friend(_) | Struck::Neutral(_)
-                )
-            }) =>
-        {
-            prompt("Can't attack a friend")
+        (None, Page::Aiming(Aim::Attack)) => {
+            prompt(match local.0.map(|p| attack_at(&sim.0, p, *focus)) {
+                Some(Struck::Friend(_)) => "Can't attack a friend",
+                Some(Struck::Neutral(_)) => "Can't attack a neutral",
+                _ => "Left click an enemy or where to attack",
+            })
         }
-        (None, Page::Aiming(Aim::Attack)) => prompt("Left click an enemy or where to attack"),
         (None, Page::Aiming(Aim::Guard)) => prompt("Left click what or where to guard"),
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
@@ -1458,6 +1454,13 @@ pub fn aim(
             Struck::Ground => {}
             Struck::Enemy(e) => {
                 let (pursuing, rest) = crate::pursue(&sim.0, &mut orders, player, &selected.0, e);
+                // An enemy none of them can attack is no target either.
+                if pursuing.is_empty() {
+                    let about = About::Regiment(e);
+                    refused.write(Refused { about, by: None });
+                    *page = Page::Orders;
+                    return;
+                }
                 // Those with nothing to fire go there as they would anywhere.
                 let regiments = crate::send(
                     &sim.0,
@@ -1468,9 +1471,6 @@ pub fn aim(
                     (aim, looks.together(aim)),
                     loaded.map.ground.size(),
                 );
-                if pursuing.is_empty() && regiments.is_empty() {
-                    return;
-                }
                 crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
                 sent.write(crate::waypoints::Sent {
                     to: None,
