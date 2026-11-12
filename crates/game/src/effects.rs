@@ -139,6 +139,15 @@ struct Fading {
     settled: bool,
 }
 
+/// Seconds a picture laid on the ground takes to show, given its own time
+/// to: none for one whose effect starts the moment the match does.
+fn fade_in(own: f32, tick: u64, delay: f32) -> f32 {
+    match tick == 0 && delay <= 0.0 {
+        true => 0.0,
+        false => own,
+    }
+}
+
 /// How much of a picture laid on the ground shows `age` seconds after it
 /// was made: it comes in over `fade`'s first time, and once `life` is up
 /// goes over its second, from however far it had come.
@@ -838,6 +847,11 @@ fn play(
             let Some(decal) = vfx.decal.as_ref().filter(|_| !(moves && attach.is_some())) else {
                 continue;
             };
+            // One made as the match begins is there in full at once.
+            let decal = &Decal {
+                fade: [fade_in(decal.fade[0], p.tick, cue.delay), decal.fade[1]],
+                ..decal.clone()
+            };
             let at = map_point(transform.translation);
             let facing = map_point(transform.rotation * Vec3::NEG_Z);
             let shown = opacity(decal.fade, 0.0, lasts);
@@ -1368,6 +1382,10 @@ mod tests {
         // With no time to go in, it's gone when its time's up.
         assert_eq!(opacity([0.0, 0.0], 3.0, Some(2.0)), 0.0);
         assert_eq!(opacity([0.0, 0.0], 3.0, None), 1.0);
+        // Only what starts with the match skips coming in.
+        assert_eq!(fade_in(10.0, 0, 0.0), 0.0);
+        assert_eq!(fade_in(10.0, 0, 0.5), 10.0);
+        assert_eq!(fade_in(10.0, 3, 0.0), 10.0);
     }
 
     #[test]
