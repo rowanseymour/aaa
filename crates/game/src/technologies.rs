@@ -17,7 +17,7 @@ use bevy::ui_widgets::{Activate, Button, ScrollArea};
 use crate::actions::Blocks;
 use crate::keys::Bindings;
 use crate::ui::{self, Click, Edge, Font, Hint, Ink, Marked, Surface, Theme, label, panel};
-use crate::{Loaded, Local, Screen, Sim, minimap, supply};
+use crate::{Loaded, Local, Screen, Sim, minimap};
 
 /// What the keys that open, close and close every display panel are
 /// bound to.
@@ -25,7 +25,6 @@ pub const OPEN: &str = "ButtonTechnology";
 const CLOSE: &str = "TechnologyDisplayClose";
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
 
-const TAB_SIZE: f32 = supply::BORDER_SIZE;
 const GEAR_SIZE: f32 = 22.0;
 /// The gear's texels across, more than it's drawn at so it stays crisp
 /// once the interface is scaled up.
@@ -58,7 +57,7 @@ pub struct TechDisplay {
 struct Looks {
     lines: HashMap<Id, Line>,
     formats: bevy::image::CompressedImageFormats,
-    /// The tab's name, to mark its key in.
+    /// The button's name, to mark its key in.
     name: String,
 }
 
@@ -73,9 +72,9 @@ struct Line {
 /// The button at the minimap's corner that opens the window: a gear in a
 /// ring like the supply border's button, lit while the window's up.
 #[derive(Component)]
-struct Tab;
+struct TechButton;
 
-/// The gear in the [`Tab`].
+/// The gear in the [`TechButton`].
 #[derive(Component)]
 struct Gear;
 
@@ -101,10 +100,13 @@ impl Plugin for TechnologyPlugin {
                     .run_if(crate::pause::closed)
                     .run_if(loaded),
             )
-            .add_systems(Update, light_tab.run_if(in_state(Screen::Match)))
             .add_systems(
                 Update,
-                mark_tab
+                light_button.after(keys).run_if(in_state(Screen::Match)),
+            )
+            .add_systems(
+                Update,
+                mark_button
                     .run_if(resource_exists_and_changed::<Bindings>)
                     .run_if(resource_exists::<Looks>)
                     .run_if(in_state(Screen::Match)),
@@ -124,6 +126,7 @@ pub fn closed(display: Option<Res<TechDisplay>>) -> bool {
 
 fn spawn(
     mut commands: Commands,
+    mut gear_image: bevy::prelude::Local<Option<Handle<Image>>>,
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
@@ -132,7 +135,7 @@ fn spawn(
     let game = &mut loaded.game;
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
-    let gear = images.add(gear(GEAR_TEXELS));
+    let gear = (gear_image.get_or_insert_with(|| images.add(gear(GEAR_TEXELS)))).clone();
     let looks: HashMap<Id, PropertyLook> = game.property_looks();
     let lines = (game.technologies().into_iter())
         .filter_map(|(id, t)| {
@@ -157,7 +160,7 @@ fn spawn(
     commands.insert_resource(TechDisplay::default());
     commands
         .spawn((
-            Tab,
+            TechButton,
             Blocks,
             Button,
             Click::PUSH,
@@ -168,10 +171,10 @@ fn spawn(
             // border's button.
             Node {
                 position_type: PositionType::Absolute,
-                left: px(crate::MARGIN + minimap::DISC - TAB_SIZE),
-                bottom: px(crate::MARGIN + minimap::DISC - TAB_SIZE),
-                width: px(TAB_SIZE),
-                height: px(TAB_SIZE),
+                left: px(crate::MARGIN + minimap::DISC - minimap::CORNER_BUTTON),
+                bottom: px(crate::MARGIN + minimap::DISC - minimap::CORNER_BUTTON),
+                width: px(minimap::CORNER_BUTTON),
+                height: px(minimap::CORNER_BUTTON),
                 border: UiRect::all(px(1)),
                 border_radius: BorderRadius::MAX,
                 justify_content: JustifyContent::Center,
@@ -253,10 +256,14 @@ fn spawn(
     });
 }
 
-/// Marks the tab's key afresh once the hotkeys change.
-fn mark_tab(bindings: Res<Bindings>, looks: Res<Looks>, mut tabs: Query<&mut Marked, With<Tab>>) {
-    for mut tab in &mut tabs {
-        tab.set_if_neq(bindings.marked(OPEN, &looks.name));
+/// Marks the button's key afresh once the hotkeys change.
+fn mark_button(
+    bindings: Res<Bindings>,
+    looks: Res<Looks>,
+    mut buttons: Query<&mut Marked, With<TechButton>>,
+) {
+    for mut button in &mut buttons {
+        button.set_if_neq(bindings.marked(OPEN, &looks.name));
     }
 }
 
@@ -320,23 +327,32 @@ fn keys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut toggling: 
     }
 }
 
-/// Lights the tab while the window's up, and its edge while it's hovered.
-fn light_tab(
+/// What [`light_button`] reads and sets on the button.
+type ButtonLook = (
+    Ref<'static, Hovered>,
+    Has<bevy::ui::Pressed>,
+    &'static mut Edge,
+    &'static mut Surface,
+);
+
+/// Lights the button while the window's up, its edge while it's hovered,
+/// and its face while it's held down.
+fn light_button(
     display: Option<Res<TechDisplay>>,
     theme: Res<Theme>,
-    mut tabs: Query<(Ref<Hovered>, &mut Edge), With<Tab>>,
+    mut buttons: Query<ButtonLook, With<TechButton>>,
     mut gears: Query<&mut ImageNode, With<Gear>>,
 ) {
     let Some(display) = display else { return };
     let restyle = display.is_changed() || theme.is_changed();
-    for (hovered, mut edge) in &mut tabs {
+    for (hovered, pressed, mut edge, mut surface) in &mut buttons {
         if restyle || hovered.is_changed() {
-            edge.set_if_neq(match (display.open, hovered.get()) {
-                (true, _) => Edge::Lit,
-                (false, true) => Edge::Hovered,
-                (false, false) => Edge::Border,
-            });
+            edge.set_if_neq(Edge::lit(display.open, hovered.get(), Edge::Border));
         }
+        surface.set_if_neq(match pressed {
+            true => Surface::Hovered,
+            false => Surface::Hud,
+        });
     }
     if !restyle {
         return;

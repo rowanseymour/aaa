@@ -192,6 +192,18 @@ pub enum Edge {
     Lit,
 }
 
+impl Edge {
+    /// Frames a button that switches something on: lit while it's on, else
+    /// hovered while it's under the pointer, else `idle`.
+    pub fn lit(on: bool, hovered: bool, idle: Edge) -> Edge {
+        match (on, hovered) {
+            (true, _) => Edge::Lit,
+            (false, true) => Edge::Hovered,
+            (false, false) => idle,
+        }
+    }
+}
+
 /// How brightly a picture is drawn.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Debug)]
 #[require(ImageNode)]

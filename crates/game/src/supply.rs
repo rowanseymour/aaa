@@ -194,7 +194,6 @@ pub struct BorderButton {
 #[derive(Component)]
 pub struct BorderRing;
 
-pub const BORDER_SIZE: f32 = 34.0;
 const RING_SIZE: f32 = 18.0;
 const BORDER_NAME: &str = "control_panel_ButtonSupplyBorder_ToolTip";
 const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
@@ -243,9 +242,9 @@ pub fn spawn(
             Node {
                 position_type: PositionType::Absolute,
                 left: px(crate::MARGIN),
-                bottom: px(crate::MARGIN + minimap::DISC - BORDER_SIZE),
-                width: px(BORDER_SIZE),
-                height: px(BORDER_SIZE),
+                bottom: px(crate::MARGIN + minimap::DISC - minimap::CORNER_BUTTON),
+                width: px(minimap::CORNER_BUTTON),
+                height: px(minimap::CORNER_BUTTON),
                 border: UiRect::all(px(1)),
                 border_radius: BorderRadius::MAX,
                 justify_content: JustifyContent::Center,
@@ -407,11 +406,7 @@ pub fn show_border_button(
             button.pressed = false;
         }
         if restyle || hovered.is_changed() {
-            edge.set_if_neq(match (border.0, hovered.get()) {
-                (true, _) => Edge::Lit,
-                (false, true) => Edge::Hovered,
-                (false, false) => Edge::Border,
-            });
+            edge.set_if_neq(Edge::lit(border.0, hovered.get(), Edge::Border));
         }
     }
     if !restyle {
