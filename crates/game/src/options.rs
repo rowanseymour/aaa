@@ -4,10 +4,20 @@
 use std::collections::HashMap;
 
 use aaa_data::{GameData, HotkeyConfiguration, Id};
+use aaa_render::camera::RtsCamera;
+use bevy::anti_alias::fxaa::Fxaa;
+use bevy::anti_alias::smaa::Smaa;
+use bevy::ecs::observer::IntoEntityObserver;
+use bevy::ecs::system::NonSendMarker;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
-use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow, WindowMode};
+use bevy::window::{
+    Monitor, MonitorSelection, OnMonitor, PrimaryMonitor, PrimaryWindow, RawHandleWrapper,
+    VideoModeSelection, WindowMode, WindowResized,
+};
+use bevy::winit::WINIT_WINDOWS;
+use raw_window_handle::RawDisplayHandle;
 
 use crate::Screen;
 use crate::supply::Border;
@@ -38,6 +48,10 @@ pub struct Options {
     border_label: String,
     /// What the game calls the choice of the window's size.
     resolution_label: String,
+    /// What the choices of [`Display`] and [`AntiAliasing`] are called,
+    /// which the game has no words for.
+    display_label: String,
+    anti_aliasing_label: String,
     /// What the game calls each tab, by [`Tab`], and the groups of options
     /// in them.
     game_tab: String,
@@ -73,6 +87,8 @@ impl Options {
             hotkeys_label: said(HOTKEYS, "Hotkeys"),
             border_label: said(BORDER, "Supply Border"),
             resolution_label: said(RESOLUTION, "Resolution"),
+            display_label: "Display".into(),
+            anti_aliasing_label: "Anti-aliasing".into(),
             game_tab: said(GAME_TAB, "Gameplay Options"),
             video_tab: said(VIDEO_TAB, "Video Options"),
             game_title: said(GAME, "Game"),
@@ -95,7 +111,9 @@ enum Open {
     #[default]
     Nothing,
     Hotkeys,
+    Display,
     Resolution,
+    AntiAliasing,
 }
 
 /// The options shown: those of the game, or of how it's drawn.
@@ -125,6 +143,133 @@ struct Hotkeys;
 /// A button choosing a set of hotkeys, by its id.
 #[derive(Component)]
 struct HotkeysChoice(Id);
+
+/// A choice from a fixed list, shown by name.
+trait Listed: Copy + PartialEq + Send + Sync + 'static {
+    const ALL: &'static [Self];
+    /// The list it's chosen from.
+    const LIST: Open;
+    fn name(self) -> &'static str;
+}
+
+/// A button choosing a [`Listed`].
+#[derive(Component)]
+struct Pick<T: Listed>(T);
+
+/// Spawns the list to choose a `T` from in `holder`, saying `current`.
+fn listed<T: Listed, M>(
+    commands: &mut Commands,
+    holder: Entity,
+    open: Open,
+    current: Option<T>,
+    choices: impl Iterator<Item = T>,
+    choose: impl IntoEntityObserver<M> + Copy,
+) {
+    commands.entity(holder).despawn_children();
+    let list = Dropdown {
+        row: holder,
+        width: px(LIST_WIDTH),
+        label: current.map_or("", T::name).into(),
+        open: open == T::LIST,
+    };
+    let choices = choices.map(|c| ((Pick(c), InList), c.name().to_string()));
+    list.spawn(
+        commands,
+        (Opener(T::LIST), InList),
+        open_list,
+        choices,
+        choose,
+    );
+}
+
+/// How the window takes the screen.
+#[derive(PartialEq, Clone, Copy, Debug)]
+enum Display {
+    /// With a frame, at the size chosen.
+    Windowed,
+    /// Without a frame, covering the screen at the size the screen is
+    /// already: switching to or from other windows is quick, as nothing
+    /// changes the screen's own mode.
+    Borderless,
+    /// Taking the screen for itself, in the screen's mode.
+    Fullscreen,
+}
+
+impl Listed for Display {
+    const ALL: &'static [Self] = &[Display::Windowed, Display::Borderless, Display::Fullscreen];
+    const LIST: Open = Open::Display;
+
+    fn name(self) -> &'static str {
+        match self {
+            Display::Windowed => "Windowed",
+            Display::Borderless => "Borderless",
+            Display::Fullscreen => "Fullscreen",
+        }
+    }
+}
+
+impl Display {
+    fn of(mode: WindowMode) -> Self {
+        match mode {
+            WindowMode::Windowed => Display::Windowed,
+            WindowMode::BorderlessFullscreen(_) => Display::Borderless,
+            WindowMode::Fullscreen(..) => Display::Fullscreen,
+        }
+    }
+
+    fn mode(self) -> WindowMode {
+        match self {
+            Display::Windowed => WindowMode::Windowed,
+            Display::Borderless => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
+            Display::Fullscreen => {
+                WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Current)
+            }
+        }
+    }
+}
+
+/// How the edges of the map's 3D scene are smoothed.
+#[derive(Resource, Default, PartialEq, Clone, Copy, Debug)]
+enum AntiAliasing {
+    Off,
+    /// Four samples to each pixel: the one count every GPU wgpu runs on
+    /// takes.
+    #[default]
+    Msaa,
+    Fxaa,
+    Smaa,
+}
+
+impl Listed for AntiAliasing {
+    const ALL: &'static [Self] = &[
+        AntiAliasing::Off,
+        AntiAliasing::Msaa,
+        AntiAliasing::Fxaa,
+        AntiAliasing::Smaa,
+    ];
+    const LIST: Open = Open::AntiAliasing;
+
+    fn name(self) -> &'static str {
+        match self {
+            AntiAliasing::Off => "Off",
+            AntiAliasing::Msaa => "MSAA",
+            AntiAliasing::Fxaa => "FXAA",
+            AntiAliasing::Smaa => "SMAA",
+        }
+    }
+}
+
+/// Where the choice of [`AntiAliasing`] goes.
+#[derive(Component)]
+struct AntiAliasingHolder;
+
+/// Where the choice of [`Display`] goes.
+#[derive(Component)]
+struct DisplayHolder;
+
+/// The window's size before it last took the whole screen, to go back to.
+#[derive(Resource, Default)]
+struct WindowedSize(Option<Vec2>);
 
 /// Where the choice of the window's size goes.
 #[derive(Component)]
@@ -166,14 +311,20 @@ impl Plugin for OptionsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Open>()
             .init_resource::<Tab>()
+            .init_resource::<AntiAliasing>()
+            .init_resource::<WindowedSize>()
             .add_systems(OnEnter(Screen::Options), screen)
+            .add_systems(PreUpdate, follow_window)
+            .add_systems(PostUpdate, anti_alias)
             .add_systems(
                 Update,
                 (
                     close_list,
                     show_body,
                     show_hotkeys,
+                    show_display,
                     show_resolution,
+                    show_anti_aliasing,
                     mark_chosen,
                     show_border,
                 )
@@ -345,7 +496,10 @@ fn show_body(
         }
         Tab::Video => {
             let basic = section(&mut commands, body, &options.basic_title);
+            choice(&mut commands, basic, &options.display_label, DisplayHolder);
             choice(&mut commands, basic, &options.resolution_label, Resolution);
+            let aa = &options.anti_aliasing_label;
+            choice(&mut commands, basic, aa, AntiAliasingHolder);
         }
     }
 }
@@ -401,6 +555,96 @@ fn choose_hotkeys(
     }
 }
 
+/// Shows how the window takes the screen, and the other ways while
+/// picking.
+fn show_display(
+    mut commands: Commands,
+    open: Res<Open>,
+    holder: Single<(Entity, Ref<DisplayHolder>)>,
+    window: Query<(&Window, Option<&RawHandleWrapper>), With<PrimaryWindow>>,
+    mut shown: Local<Option<Display>>,
+) {
+    let (holder, added) = *holder;
+    let window = window.single().ok();
+    let display = window.map(|(w, _)| Display::of(w.mode));
+    if *shown == display && !open.is_changed() && !added.is_added() {
+        return;
+    }
+    *shown = display;
+    // Wayland has no exclusive fullscreen: asked for, it does nothing.
+    let wayland = window
+        .and_then(|(_, h)| h)
+        .is_some_and(|h| matches!(h.get_display_handle(), RawDisplayHandle::Wayland(_)));
+    let choices = Display::ALL.iter().copied();
+    let choices = choices.filter(|d| !(wayland && *d == Display::Fullscreen));
+    listed(
+        &mut commands,
+        holder,
+        *open,
+        display,
+        choices,
+        choose_display,
+    );
+}
+
+fn choose_display(
+    activate: On<Activate>,
+    choices: Query<&Pick<Display>>,
+    mut window: Query<&mut Window, With<PrimaryWindow>>,
+    mut windowed: ResMut<WindowedSize>,
+    mut open: ResMut<Open>,
+) {
+    let Ok(choice) = choices.get(activate.entity) else {
+        return;
+    };
+    if let Ok(mut window) = window.single_mut() {
+        // Taking the whole screen resizes the window to it, which not every
+        // platform undoes on leaving.
+        match (Display::of(window.mode), choice.0) {
+            (Display::Windowed, Display::Windowed) => {}
+            (Display::Windowed, _) => windowed.0 = Some(window.size()),
+            (_, Display::Windowed) => {
+                if let Some(size) = windowed.0 {
+                    window.resolution.set(size.x, size.y);
+                }
+            }
+            _ => {}
+        }
+        window.mode = choice.0.mode();
+    }
+    *open = Open::Nothing;
+}
+
+/// Keeps the window's mode to what it is when the platform changes it, as
+/// on leaving fullscreen by the system's own shortcut, so the options say
+/// what it is and choosing the mode it had again isn't taken as no change.
+fn follow_window(
+    mut resized: MessageReader<WindowResized>,
+    mut window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
+    _winit: NonSendMarker,
+) {
+    let Ok((entity, mut window)) = window.single_mut() else {
+        return;
+    };
+    if !resized.read().any(|r| r.window == entity) {
+        return;
+    }
+    let full =
+        WINIT_WINDOWS.with_borrow(|w| w.get_window(entity).map(|w| w.fullscreen().is_some()));
+    let Some(full) = full else {
+        return;
+    };
+    let windowed = Display::of(window.mode) == Display::Windowed;
+    if full == windowed {
+        let now = if full {
+            Display::Borderless
+        } else {
+            Display::Windowed
+        };
+        window.mode = now.mode();
+    }
+}
+
 /// A window's size as the options show it, e.g. `1280x720`.
 fn size_of(window: &Window) -> UVec2 {
     window.size().round().as_uvec2()
@@ -412,12 +656,14 @@ fn show_resolution(
     mut commands: Commands,
     open: Res<Open>,
     holder: Single<(Entity, Ref<Resolution>)>,
-    window: Query<&Window, With<PrimaryWindow>>,
-    monitor: Query<&Monitor, With<PrimaryMonitor>>,
+    window: Query<(&Window, Option<&OnMonitor>), With<PrimaryWindow>>,
+    monitors: Query<&Monitor>,
+    primary: Query<&Monitor, With<PrimaryMonitor>>,
     mut shown: Local<Option<UVec2>>,
 ) {
     let (holder, added) = *holder;
-    let size = window.single().ok().map(size_of);
+    let window = window.single().ok();
+    let size = window.map(|(w, _)| size_of(w));
     if *shown == size && !open.is_changed() && !added.is_added() {
         return;
     }
@@ -429,7 +675,11 @@ fn show_resolution(
         label: size.map_or(String::new(), |s| format!("{}x{}", s.x, s.y)),
         open: *open == Open::Resolution,
     };
-    let room = monitor.single().ok().map(|m| {
+    // The screen the window's on, which the other modes take too.
+    let on = window
+        .and_then(|(_, on)| on)
+        .and_then(|on| monitors.get(on.0).ok());
+    let room = on.or(primary.single().ok()).map(|m| {
         let size = UVec2::new(m.physical_width, m.physical_height).as_dvec2();
         (size / m.scale_factor).as_uvec2()
     });
@@ -465,28 +715,99 @@ fn choose_resolution(
     *open = Open::Nothing;
 }
 
+/// Shows the anti-aliasing in use, and the others while picking.
+fn show_anti_aliasing(
+    mut commands: Commands,
+    chosen: Res<AntiAliasing>,
+    open: Res<Open>,
+    holder: Single<(Entity, Ref<AntiAliasingHolder>)>,
+) {
+    let (holder, added) = *holder;
+    if !chosen.is_changed() && !open.is_changed() && !added.is_added() {
+        return;
+    }
+    let choices = AntiAliasing::ALL.iter().copied();
+    let current = Some(*chosen);
+    listed(
+        &mut commands,
+        holder,
+        *open,
+        current,
+        choices,
+        choose_anti_aliasing,
+    );
+}
+
+fn choose_anti_aliasing(
+    activate: On<Activate>,
+    choices: Query<&Pick<AntiAliasing>>,
+    mut chosen: ResMut<AntiAliasing>,
+    mut open: ResMut<Open>,
+) {
+    if let Ok(choice) = choices.get(activate.entity) {
+        chosen.set_if_neq(choice.0);
+        *open = Open::Nothing;
+    }
+}
+
+/// Gives the map's camera the anti-aliasing chosen, as it's chosen and as
+/// each match spawns its own. The post-process kinds go without MSAA,
+/// which they'd only add their cost to.
+fn anti_alias(
+    mut commands: Commands,
+    chosen: Res<AntiAliasing>,
+    cameras: Query<(Entity, Ref<RtsCamera>)>,
+) {
+    for (camera, added) in &cameras {
+        if !chosen.is_changed() && !added.is_added() {
+            continue;
+        }
+        let mut camera = commands.entity(camera);
+        camera.remove::<(Fxaa, Smaa)>();
+        match *chosen {
+            AntiAliasing::Off => camera.insert(Msaa::Off),
+            AntiAliasing::Msaa => camera.insert(Msaa::Sample4),
+            AntiAliasing::Fxaa => camera.insert((Msaa::Off, Fxaa::default())),
+            AntiAliasing::Smaa => camera.insert((Msaa::Off, Smaa::default())),
+        };
+    }
+}
+
 /// A button and what it chooses.
 type Choice<'a> = (
     &'a mut Chosen,
     Option<&'a TabButton>,
     Option<&'a HotkeysChoice>,
+    Option<&'a Pick<Display>>,
     Option<&'a ResolutionChoice>,
+    Option<&'a Pick<AntiAliasing>>,
 );
 
 /// The buttons the options choose with.
-type Choosing = Or<(With<TabButton>, With<HotkeysChoice>, With<ResolutionChoice>)>;
+type Choosing = Or<(
+    With<TabButton>,
+    With<HotkeysChoice>,
+    With<Pick<Display>>,
+    With<ResolutionChoice>,
+    With<Pick<AntiAliasing>>,
+)>;
 
 fn mark_chosen(
     options: Res<Options>,
     tab: Res<Tab>,
+    anti_aliasing: Res<AntiAliasing>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut buttons: Query<Choice, Choosing>,
 ) {
-    let size = window.single().ok().map(size_of);
-    for (mut chosen, shown, hotkeys, resolution) in &mut buttons {
+    let window = window.single().ok();
+    let size = window.map(size_of);
+    let display = window.map(|w| Display::of(w.mode));
+    for (mut chosen, shown, hotkeys, mode, resolution, aa) in &mut buttons {
         let now = shown.is_some_and(|t| t.0 == *tab)
             || hotkeys.is_some_and(|h| options.hotkeys.as_ref() == Some(&h.0))
-            || resolution.is_some_and(|r| size == Some(r.0));
+            || mode.is_some_and(|m| display == Some(m.0))
+            || resolution.is_some_and(|r| size == Some(r.0))
+            || aa.is_some_and(|a| *anti_aliasing == a.0);
         chosen.set_if_neq(Chosen(now));
     }
 }
@@ -552,7 +873,8 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, OptionsPlugin))
             .insert_state(Screen::Options)
             .insert_resource(options(Some("classic")))
-            .init_resource::<Border>();
+            .init_resource::<Border>()
+            .add_message::<WindowResized>();
         app.update();
         app
     }
@@ -604,6 +926,81 @@ mod tests {
         let window = world.query::<&Window>().single(world).unwrap();
         assert_eq!(window.size(), Vec2::new(1600.0, 900.0));
         assert_eq!(*world.resource::<Open>(), Open::Nothing);
+    }
+
+    #[test]
+    fn a_display_chosen_sets_the_window_mode_and_a_resolution_unsets_it() {
+        let mut app = app();
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
+        activate::<Opener>(&mut app, |o| o.0 == Open::Display);
+        activate::<Pick<Display>>(&mut app, |d| d.0 == Display::Borderless);
+        let mode = |app: &mut App| {
+            let world = app.world_mut();
+            Display::of(world.query::<&Window>().single(world).unwrap().mode)
+        };
+        assert_eq!(mode(&mut app), Display::Borderless);
+        activate::<Opener>(&mut app, |o| o.0 == Open::Resolution);
+        activate::<ResolutionChoice>(&mut app, |r| r.0 == UVec2::new(1600, 900));
+        assert_eq!(mode(&mut app), Display::Windowed);
+    }
+
+    #[test]
+    fn each_display_is_the_mode_it_sets() {
+        for &display in Display::ALL {
+            assert_eq!(Display::of(display.mode()), display);
+        }
+    }
+
+    #[test]
+    fn the_display_and_anti_aliasing_chosen_are_marked() {
+        let mut app = app();
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
+        activate::<Opener>(&mut app, |o| o.0 == Open::Display);
+        activate::<Pick<Display>>(&mut app, |d| d.0 == Display::Fullscreen);
+        activate::<Opener>(&mut app, |o| o.0 == Open::Display);
+        app.update();
+        assert_eq!(marked::<Display>(&mut app), vec![Display::Fullscreen]);
+        activate::<Opener>(&mut app, |o| o.0 == Open::AntiAliasing);
+        activate::<Pick<AntiAliasing>>(&mut app, |a| a.0 == AntiAliasing::Fxaa);
+        activate::<Opener>(&mut app, |o| o.0 == Open::AntiAliasing);
+        app.update();
+        assert_eq!(marked::<AntiAliasing>(&mut app), vec![AntiAliasing::Fxaa]);
+    }
+
+    fn marked<T: Listed>(app: &mut App) -> Vec<T> {
+        let world = app.world_mut();
+        let mut picks = world.query::<(&Pick<T>, &Chosen)>();
+        picks
+            .iter(world)
+            .filter(|(_, c)| c.0)
+            .map(|(p, _)| p.0)
+            .collect()
+    }
+
+    #[test]
+    fn anti_aliasing_chosen_reaches_cameras_now_and_later() {
+        let mut app = app();
+        let camera = || (Camera3d::default(), RtsCamera::new(Vec3::ZERO));
+        let first = app.world_mut().spawn(camera()).id();
+        app.update();
+        assert_eq!(app.world().get::<Msaa>(first), Some(&Msaa::Sample4));
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
+        activate::<Opener>(&mut app, |o| o.0 == Open::AntiAliasing);
+        activate::<Pick<AntiAliasing>>(&mut app, |a| a.0 == AntiAliasing::Smaa);
+        let world = app.world();
+        assert_eq!(world.get::<Msaa>(first), Some(&Msaa::Off));
+        assert!(world.get::<Smaa>(first).is_some());
+        activate::<Opener>(&mut app, |o| o.0 == Open::AntiAliasing);
+        activate::<Pick<AntiAliasing>>(&mut app, |a| a.0 == AntiAliasing::Fxaa);
+        let later = app.world_mut().spawn(camera()).id();
+        app.update();
+        for camera in [first, later] {
+            let world = app.world();
+            assert!(world.get::<Smaa>(camera).is_none());
+            assert!(world.get::<Fxaa>(camera).is_some());
+        }
     }
 
     #[test]
