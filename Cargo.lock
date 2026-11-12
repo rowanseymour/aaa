@@ -32,6 +32,7 @@ dependencies = [
  "aaa-render",
  "aaa-sim",
  "bevy",
+ "raw-window-handle",
  "tgck",
 ]
 
