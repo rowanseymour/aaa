@@ -240,8 +240,8 @@ impl BuildingButtons<'_> {
 }
 
 /// Which of [`ORDERS`] the selection has: packed buildings move, stop and,
-/// one at a time, unpack; organizations of them can also retreat and
-/// guard; anything else has the rest.
+/// guard and, one at a time, unpack; organizations of them can also
+/// retreat; anything else has the rest.
 fn offered(sim: &aaa_sim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
     let packed = |&r: &usize| sim.regiments[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
@@ -252,7 +252,7 @@ fn offered(sim: &aaa_sim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
     ORDERS.map(|(ids, _)| match ids {
         "unpack" => all_packed && selected.len() == 1,
         "kill" | "hq_attach" | "hq_detach" => !all_packed,
-        "retreat" | "guard" => !all_packed || !lone,
+        "retreat" => !all_packed || !lone,
         _ => true,
     })
 }
