@@ -1338,8 +1338,7 @@ fn spawn_views(
         );
     }
     viewed.units = sim.0.units.len();
-    for b in viewed.buildings..sim.0.buildings.len() {
-        let building = &sim.0.buildings[b];
+    for (b, building) in sim.0.buildings.iter().enumerate().skip(viewed.buildings) {
         let thing = thing_at(
             &map.ground,
             drawn.0.footing(&building.template),
