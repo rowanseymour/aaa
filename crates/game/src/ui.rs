@@ -4,6 +4,7 @@
 //! whole interface, even while it's up. [`Shade`] and [`Meter`] do the same
 //! for pictures and bars.
 
+use bevy::asset::uuid_handle;
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -263,28 +264,42 @@ impl Font {
     /// over the map keeps Bevy's own face, whose even figures suit counts.
     fn source(self) -> FontSource {
         match self {
-            Font::Heading | Font::Large | Font::Title => FontSource::family(STENCIL),
-            Font::Body => FontSource::family(PLAIN),
+            Font::Heading | Font::Large | Font::Title => FontSource::Handle(STENCIL),
+            Font::Body => FontSource::Handle(PLAIN),
             Font::Small | Font::Hud | Font::HudTitle => FontSource::default(),
+        }
+    }
+
+    /// How far below its place to draw a line of this size so that its
+    /// figures, rather than the line, sit centred where it's centred: Bevy's
+    /// face keeps room below the line for descenders, which figures never
+    /// use. Measured on the figures; the menus' faces need none.
+    pub fn drop(self) -> f32 {
+        match self {
+            Font::Small | Font::Hud | Font::HudTitle => (self.px() / 7.0).round(),
+            Font::Body | Font::Heading | Font::Large | Font::Title => 0.0,
         }
     }
 }
 
-const STENCIL: &str = "Big Shoulders Stencil Display";
-const PLAIN: &str = "Big Shoulders Text";
+const STENCIL: Handle<Face> = uuid_handle!("8ce28202-5c4b-41aa-b4eb-656a8714c917");
+const PLAIN: Handle<Face> = uuid_handle!("f5c773eb-4ca7-4c04-80e4-2f691862ea4e");
 
-/// The faces, kept so they stay loaded.
-#[derive(Resource)]
-#[allow(dead_code)]
-struct Faces(Vec<Handle<Face>>);
-
-fn faces(mut commands: Commands, mut fonts: ResMut<Assets<Face>>) {
+fn faces(mut fonts: ResMut<Assets<Face>>) {
     let faces = [
-        &include_bytes!("../fonts/BigShouldersStencilDisplay-800.ttf")[..],
-        &include_bytes!("../fonts/BigShouldersText-600.ttf")[..],
+        (
+            STENCIL,
+            &include_bytes!("../fonts/BigShouldersStencilDisplay-800.ttf")[..],
+        ),
+        (
+            PLAIN,
+            &include_bytes!("../fonts/BigShouldersText-600.ttf")[..],
+        ),
     ];
-    let faces = faces.map(|f| fonts.add(Face::from_bytes(f.to_vec())));
-    commands.insert_resource(Faces(faces.into()));
+    for (handle, bytes) in faces {
+        // Never fails for a fixed handle.
+        let _ = fonts.insert(handle.id(), Face::from_bytes(bytes.to_vec()));
+    }
 }
 
 pub fn font(font: Font) -> TextFont {
