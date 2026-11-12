@@ -10,7 +10,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
-use bevy::ui_widgets::{Activate, Button};
+use bevy::ui_widgets::{Activate, Button, ScrollArea};
 
 use crate::actions::Blocks;
 use crate::keys::Bindings;
@@ -148,7 +148,7 @@ fn spawn(
             Some((id, line))
         })
         .collect();
-    let name = said(NAME, "TechDisplay Technologies");
+    let name = said(NAME, "Display Technologies");
     commands.insert_resource(TechDisplay::default());
     commands
         .spawn((
@@ -157,7 +157,7 @@ fn spawn(
             Button,
             Click::PUSH,
             RelativeCursorPosition::default(),
-            marked(&bindings, &name),
+            bindings.marked(OPEN, &name),
             Hint(said(HELP, "Displays a list of all your technologies.")),
             ImageNode::new(tab.clone().unwrap_or_default()),
             // At the minimap square's other top corner from the supply
@@ -208,6 +208,7 @@ fn spawn(
             ));
             window.spawn((
                 List,
+                ScrollArea,
                 Node {
                     flex_direction: FlexDirection::Column,
                     flex_grow: 1.0,
@@ -234,18 +235,10 @@ fn spawn(
     });
 }
 
-/// The tab's name with its key marked.
-fn marked(bindings: &Bindings, name: &str) -> Marked {
-    match bindings.key(OPEN) {
-        Some(key) => key.mark(name),
-        None => Marked::plain(name),
-    }
-}
-
 /// Marks the tab's key afresh once the hotkeys change.
 fn mark_tab(bindings: Res<Bindings>, looks: Res<Looks>, mut tabs: Query<&mut Marked, With<Tab>>) {
     for mut tab in &mut tabs {
-        tab.set_if_neq(marked(&bindings, &looks.name));
+        tab.set_if_neq(bindings.marked(OPEN, &looks.name));
     }
 }
 
@@ -286,6 +279,14 @@ impl Toggling<'_, '_> {
             self.time.unpause();
         }
         self.window.display = bevy::ui::Display::None;
+    }
+}
+
+impl TechDisplay {
+    /// Keeps the match paused when the window closes, as a pause asked for
+    /// while it's up should.
+    pub fn keep_paused(&mut self) {
+        self.paused_it = false;
     }
 }
 
@@ -474,6 +475,15 @@ mod tests {
         let mut app = app();
         app.world_mut().resource_mut::<Time<Virtual>>().pause();
         press(&mut app, KeyCode::F2);
+        press(&mut app, KeyCode::F2);
+        assert!(!open(&app) && paused(&app));
+    }
+
+    #[test]
+    fn closing_it_leaves_a_match_paused_while_it_was_up() {
+        let mut app = app();
+        press(&mut app, KeyCode::F2);
+        app.world_mut().resource_mut::<TechDisplay>().keep_paused();
         press(&mut app, KeyCode::F2);
         assert!(!open(&app) && paused(&app));
     }
