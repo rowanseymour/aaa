@@ -1,4 +1,4 @@
-![Matches in aaa-game and a map in aaa-editor](docs/banner.jpg)
+![aaa](docs/banner.jpg)
 
 # aaa
 
@@ -28,6 +28,8 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 ## Status
 
 Matches play on the original maps against an idle opponent. You can't win or lose yet.
+
+![Matches in aaa-game and a map in aaa-editor](docs/screenshots.jpg)
 
 | Feature | Status |
 |---|---|
