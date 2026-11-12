@@ -6,6 +6,7 @@ use bevy::ui_widgets::Activate;
 
 use crate::actions::Page;
 use crate::menu;
+use crate::options::Options;
 use crate::ui::{self, Font};
 use crate::{Focus, LoadingScreen, Screen, SelectionBox, console};
 
@@ -19,10 +20,6 @@ pub struct PauseMenu {
 
 #[derive(Component)]
 struct Overlay;
-
-/// The box the menu's buttons are in, or its options.
-#[derive(Component)]
-struct Column;
 
 pub struct PausePlugin;
 
@@ -85,13 +82,7 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
     let overlay = commands
         .spawn((Overlay, DespawnOnExit(Screen::Match), ui::scrim()))
         .id();
-    let column = commands
-        .spawn((Column, ChildOf(overlay), ui::dialog()))
-        .id();
-    fill_menu(commands, column);
-}
-
-fn fill_menu(commands: &mut Commands, column: Entity) {
+    let column = commands.spawn((ChildOf(overlay), ui::dialog())).id();
     commands
         .spawn((ui::button("Options", Font::Large), ChildOf(column)))
         .observe(options);
@@ -103,20 +94,15 @@ fn fill_menu(commands: &mut Commands, column: Entity) {
         .observe(resume);
 }
 
-/// Shows the options in place of the menu's buttons.
-fn options(_: On<Activate>, mut commands: Commands, column: Single<Entity, With<Column>>) {
-    let column = *column;
-    commands.entity(column).despawn_related::<Children>();
-    commands.spawn((ui::text("Options", Font::Heading), ChildOf(column)));
-    crate::options::rows(&mut commands, column);
-    commands
-        .spawn((ui::button("Back", Font::Large), ChildOf(column)))
-        .observe(back);
-}
-
-fn back(_: On<Activate>, mut commands: Commands, column: Single<Entity, With<Column>>) {
-    commands.entity(*column).despawn_related::<Children>();
-    fill_menu(&mut commands, *column);
+/// Shows the options over the menu, to go with it when it closes.
+fn options(
+    _: On<Activate>,
+    mut commands: Commands,
+    options: Res<Options>,
+    overlay: Single<Entity, With<Overlay>>,
+) {
+    let page = crate::options::page(&mut commands, &options);
+    commands.entity(page).insert(ChildOf(*overlay));
 }
 
 fn close(
@@ -144,6 +130,8 @@ fn resume(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use bevy::state::app::StatesPlugin;
 
     use super::*;
@@ -155,9 +143,26 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<console::Console>()
             .init_resource::<Page>()
-            .init_resource::<Focus>();
+            .init_resource::<Focus>()
+            .insert_resource(Options::of(Vec::new(), None, &HashMap::new()));
         app.update();
         app
+    }
+
+    /// Presses the button that says `words`.
+    fn press(app: &mut App, words: &str) {
+        let world = app.world_mut();
+        let mut labels = world.query::<(&Text, &ChildOf)>();
+        let found = labels.iter(world).find(|(text, _)| text.0 == words);
+        let entity = found.expect("no such button").1.parent();
+        world.trigger(Activate { entity });
+        app.update();
+    }
+
+    fn pages(app: &mut App) -> usize {
+        let world = app.world_mut();
+        let mut pages = world.query::<&crate::options::Page>();
+        pages.iter(world).count()
     }
 
     fn escape(app: &mut App) {
@@ -201,5 +206,26 @@ mod tests {
         app.insert_resource(Page::Rally);
         escape(&mut app);
         assert!(!open(&app));
+    }
+
+    #[test]
+    fn the_options_go_over_the_menu_and_leave_it_up() {
+        let mut app = app();
+        escape(&mut app);
+        press(&mut app, "Options");
+        assert_eq!(pages(&mut app), 1);
+        press(&mut app, "Ok");
+        assert_eq!(pages(&mut app), 0);
+        assert!(open(&app));
+    }
+
+    #[test]
+    fn escape_closes_the_options_with_the_menu() {
+        let mut app = app();
+        escape(&mut app);
+        press(&mut app, "Options");
+        escape(&mut app);
+        assert_eq!(pages(&mut app), 0);
+        assert!(!open(&app) && !paused(&app));
     }
 }

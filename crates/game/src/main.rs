@@ -546,7 +546,11 @@ fn main() -> ExitCode {
     };
 
     let mut app = App::new();
-    let window = shot::window("aaa-game".into(), screenshot.is_some());
+    let mut window = shot::window("aaa-game".into(), screenshot.is_some());
+    // Its size is chosen in the options.
+    if let Some(window) = &mut window.primary_window {
+        window.resizable = false;
+    }
     app.add_plugins(DefaultPlugins.set(window).set(log));
     if let Some(s) = screenshot {
         app.add_plugins(s);

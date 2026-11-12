@@ -369,7 +369,7 @@ fn spawn_hint(mut commands: Commands) {
     };
     let span = |n: usize, ink: Ink| (HintSpan(n), TextSpan::default(), font(Font::Small), ink);
     commands
-        .spawn((HintBox, tooltip(node), GlobalZIndex(10)))
+        .spawn((HintBox, tooltip(node), GlobalZIndex(layer::HINT)))
         .with_child((
             label("", Font::Small, Ink::Body),
             children![span(0, Ink::Key), span(1, Ink::Body)],
@@ -478,6 +478,20 @@ pub fn dropdown() -> impl Bundle {
     )
 }
 
+/// Where what's drawn over the rest of the interface stacks, lowest first.
+pub mod layer {
+    /// A [`scrim`](super::scrim) and the dialog on it.
+    pub const DIALOG: i32 = 10;
+    /// A page over the whole screen, such as the options.
+    pub const PAGE: i32 = 15;
+    /// An open [`Dropdown`](super::Dropdown)'s list.
+    pub const LIST: i32 = 20;
+    /// The box that says what the cursor is over.
+    pub const HINT: i32 = 30;
+    /// The console.
+    pub const CONSOLE: i32 = 100;
+}
+
 /// Dims the whole screen under a [`dialog`] on top of it.
 pub fn scrim() -> impl Bundle {
     (
@@ -490,7 +504,7 @@ pub fn scrim() -> impl Bundle {
             ..default()
         },
         Surface::Scrim,
-        GlobalZIndex(10),
+        GlobalZIndex(layer::DIALOG),
     )
 }
 
@@ -656,7 +670,7 @@ impl Dropdown {
             return;
         }
         let list = commands
-            .spawn((ChildOf(holder), dropdown(), GlobalZIndex(20)))
+            .spawn((ChildOf(holder), dropdown(), GlobalZIndex(layer::LIST)))
             .id();
         for (choice, name) in choices {
             commands
