@@ -257,6 +257,14 @@ impl Bindings {
         let bound = self.0.iter().find(|(_, a, _)| a == action);
         bound.map(|(.., name)| name)
     }
+
+    /// `name` with the key that gives `action` marked in it, if one does.
+    pub fn marked(&self, action: &str, name: &str) -> Marked {
+        match self.key(action) {
+            Some(key) => key.mark(name),
+            None => Marked::plain(name),
+        }
+    }
 }
 
 /// Reads the hotkeys chosen in the options, and how the game marks them.

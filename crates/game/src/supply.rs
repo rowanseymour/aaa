@@ -236,7 +236,7 @@ pub fn spawn(
             Button,
             Click::TOGGLE,
             RelativeCursorPosition::default(),
-            marked(&bindings, &name),
+            bindings.marked(keys::SUPPLY_BORDER, &name),
             Hint(what),
             // In the corner the minimap's disc leaves of its square, where
             // the game's control panel has it.
@@ -313,13 +313,6 @@ pub fn spawn(
 }
 
 /// The border button's name with its key marked.
-fn marked(bindings: &Bindings, name: &str) -> Marked {
-    match bindings.key(keys::SUPPLY_BORDER) {
-        Some(key) => key.mark(name),
-        None => Marked::plain(name),
-    }
-}
-
 /// Marks the border button's key afresh once the hotkeys change.
 pub fn mark_border(
     bindings: Res<Bindings>,
@@ -327,7 +320,7 @@ pub fn mark_border(
     mut buttons: Query<&mut Marked, With<BorderButton>>,
 ) {
     for mut button in &mut buttons {
-        button.set_if_neq(marked(&bindings, &look.name));
+        button.set_if_neq(bindings.marked(keys::SUPPLY_BORDER, &look.name));
     }
 }
 

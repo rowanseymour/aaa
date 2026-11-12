@@ -39,6 +39,7 @@ mod remote;
 mod resource_bar;
 mod sound;
 mod supply;
+mod technologies;
 mod ui;
 mod waypoints;
 
@@ -131,7 +132,7 @@ struct Pending {
 
 /// The loading screen, which stays over the match while it's set up.
 #[derive(Component)]
-struct LoadingScreen;
+pub(crate) struct LoadingScreen;
 
 /// What the loading screen says it's doing.
 #[derive(Component)]
@@ -605,6 +606,7 @@ fn main() -> ExitCode {
             options::OptionsPlugin,
             lobby::LobbyPlugin,
             pause::PausePlugin,
+            technologies::TechnologyPlugin,
         ))
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
@@ -759,9 +761,13 @@ fn main() -> ExitCode {
 fn takes_input(
     console: Res<console::Console>,
     menu: Res<pause::PauseMenu>,
+    display: Res<technologies::TechDisplay>,
     loading: Query<(), With<LoadingScreen>>,
 ) -> bool {
-    console::closed(console) && pause::closed(menu) && loading.is_empty()
+    console::closed(console)
+        && pause::closed(menu)
+        && technologies::closed(Some(display))
+        && loading.is_empty()
 }
 
 /// Loads a map and sets up the sim and recruits for a match on it.
@@ -1332,8 +1338,7 @@ fn spawn_views(
         );
     }
     viewed.units = sim.0.units.len();
-    for b in viewed.buildings..sim.0.buildings.len() {
-        let building = &sim.0.buildings[b];
+    for (b, building) in sim.0.buildings.iter().enumerate().skip(viewed.buildings) {
         let thing = thing_at(
             &map.ground,
             drawn.0.footing(&building.template),
