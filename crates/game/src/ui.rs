@@ -32,6 +32,8 @@ impl Plugin for UiPlugin {
 pub struct Theme {
     /// What every surface is shaded from.
     pub tint: Color,
+    /// What surfaces are lit toward, and the colour of plain text.
+    pub light: Color,
     /// What stands out from the surfaces: a chosen button, a frame to read
     /// inside.
     pub accent: Color,
@@ -46,8 +48,10 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
+        // A dark olive and a cream, to go with the logo.
         Theme {
-            tint: Color::BLACK,
+            tint: Color::srgb_u8(0x0f, 0x14, 0x0c),
+            light: Color::srgb_u8(0xdc, 0xd9, 0xc6),
             accent: Color::srgb(0.75, 0.6, 0.3),
             lit: crate::OWN,
             short: None,
@@ -59,7 +63,7 @@ impl Default for Theme {
 impl Theme {
     pub fn surface(&self, surface: Surface) -> Color {
         let see_through = |alpha: f32| self.tint.with_alpha(alpha);
-        let lit = |by: f32| mix(self.tint, Color::WHITE, by);
+        let lit = |by: f32| mix(self.tint, self.light, by);
         match surface {
             Surface::Solid => self.tint,
             Surface::Hud => see_through(0.85),
@@ -67,19 +71,19 @@ impl Theme {
             Surface::Slot => see_through(0.6),
             Surface::Scrim => see_through(0.4),
             Surface::Panel => lit(0.07),
-            Surface::Track => lit(0.12),
-            Surface::Button => lit(0.15),
+            Surface::Track => lit(0.1),
+            Surface::Button => lit(0.12),
             Surface::Hovered => lit(0.3),
             Surface::Chosen => mix(self.tint, self.accent, 1.0 / 3.0),
-            Surface::Inert => lit(0.15).with_alpha(0.5),
+            Surface::Inert => lit(0.12).with_alpha(0.5),
         }
     }
 
     pub fn ink(&self, ink: Ink) -> Color {
         match ink {
-            Ink::Body => Color::WHITE,
-            Ink::Help => Color::srgb(0.8, 0.8, 0.8),
-            Ink::Muted => Color::srgb(0.45, 0.45, 0.45),
+            Ink::Body => self.light,
+            Ink::Help => mix(self.tint, self.light, 0.8),
+            Ink::Muted => mix(self.tint, self.light, 0.45),
             Ink::Warn => Color::srgb(1.0, 0.75, 0.3),
             Ink::Short => self.short.unwrap_or_else(|| self.ink(Ink::Warn)),
             Ink::Key => self.key.unwrap_or(Color::srgb(1.0, 1.0, 0.0)),
@@ -88,10 +92,11 @@ impl Theme {
 
     pub fn edge(&self, edge: Edge) -> Color {
         match edge {
-            Edge::Border => mix(self.tint, Color::WHITE, 0.45),
+            Edge::Border => mix(self.tint, self.light, 0.45),
+            Edge::Card => mix(self.tint, self.light, 0.25),
             Edge::Accent => self.accent,
             Edge::Clear => Color::NONE,
-            Edge::Hovered => Color::WHITE,
+            Edge::Hovered => self.light,
             Edge::Lit => self.lit,
         }
     }
@@ -172,6 +177,9 @@ pub enum Ink {
 pub enum Edge {
     /// Frames a box, such as a card.
     Border,
+    /// Frames a [`Card`] button, idle: fainter than a [`Edge::Border`], as
+    /// it sits in a panel rather than over the map.
+    Card,
     /// Frames what's there to be read.
     Accent,
     /// Leaves room for a frame, but draws none.
@@ -617,17 +625,42 @@ pub fn padded() -> Node {
     }
 }
 
+/// A button that stands alone, framed and rounded like a card, rather than
+/// one of a list or table's cells; its frame lights as it's hovered or
+/// chosen.
+#[derive(Component, Default)]
+#[require(Edge = Edge::Card)]
+pub struct Card;
+
+/// The shape of a [`Card`] laid out as `node`.
+pub fn card(node: Node) -> Node {
+    Node {
+        border: UiRect::all(px(1)),
+        border_radius: BorderRadius::all(px(8)),
+        ..node
+    }
+}
+
 pub fn button(words: impl Into<String>, size: Font) -> impl Bundle {
-    (clickable(padded()), children![text(words, size)])
+    (
+        clickable(card(padded())),
+        Card,
+        children![text(words, size)],
+    )
 }
 
 /// A [`switch`] with words on it.
 pub fn toggle(words: impl Into<String>, size: Font) -> impl Bundle {
-    (switch(padded()), children![text(words, size)])
+    (switch(card(padded())), Card, children![text(words, size)])
 }
 
+/// Laid out like a [`button`], but for something not there yet.
 pub fn disabled(words: impl Into<String>, size: Font) -> impl Bundle {
-    (inert(padded()), children![label(words, size, Ink::Muted)])
+    (
+        inert(card(padded())),
+        Card,
+        children![label(words, size, Ink::Muted)],
+    )
 }
 
 /// A button in a row saying what's chosen, over the list of choices while
@@ -685,13 +718,27 @@ impl Dropdown {
     }
 }
 
-fn highlight(mut buttons: Query<(&Hovered, &Chosen, &mut Surface), With<MenuButton>>) {
-    for (hovered, chosen, mut surface) in &mut buttons {
-        surface.set_if_neq(match (hovered.get(), chosen.0) {
-            (true, _) => Surface::Hovered,
-            (false, true) => Surface::Chosen,
-            (false, false) => Surface::Button,
-        });
+type Lighting<'a> = (
+    &'a Hovered,
+    &'a Chosen,
+    &'a mut Surface,
+    Option<&'a mut Edge>,
+    Has<Card>,
+);
+
+/// Lights buttons, and the frames of [`Card`]s only, leaving any other
+/// button's frame to whatever sets it.
+fn highlight(mut buttons: Query<Lighting, With<MenuButton>>) {
+    for (hovered, chosen, mut surface, edge, card) in &mut buttons {
+        let (fill, frame) = match (hovered.get(), chosen.0) {
+            (true, _) => (Surface::Hovered, Edge::Hovered),
+            (false, true) => (Surface::Chosen, Edge::Accent),
+            (false, false) => (Surface::Button, Edge::Card),
+        };
+        surface.set_if_neq(fill);
+        if let (Some(mut edge), true) = (edge, card) {
+            edge.set_if_neq(frame);
+        }
     }
 }
 
@@ -777,12 +824,56 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_black_tint_keeps_the_greys() {
-        let theme = Theme::default();
+    fn black_and_white_give_greys() {
+        let theme = Theme {
+            tint: Color::BLACK,
+            light: Color::WHITE,
+            ..default()
+        };
         let grey = |s| theme.surface(s).to_srgba();
         assert!((grey(Surface::Panel).red - 0.07).abs() < 1e-5);
         assert!((grey(Surface::Hovered).green - 0.3).abs() < 1e-5);
         assert_eq!(grey(Surface::Hud).alpha, 0.85);
+    }
+
+    #[test]
+    fn the_default_panel_is_the_logos_olive() {
+        let [r, g, b, _] = Theme::default()
+            .surface(Surface::Panel)
+            .to_srgba()
+            .to_u8_array();
+        // The logo's ground, 0x1d2219, give or take rounding.
+        assert!(r.abs_diff(0x1d) <= 1 && g.abs_diff(0x22) <= 1 && b.abs_diff(0x19) <= 1);
+    }
+
+    fn lit(hovered: bool, chosen: bool, card: bool) -> Edge {
+        let mut app = App::new();
+        app.add_systems(Update, highlight);
+        let mut button = app.world_mut().spawn((
+            MenuButton,
+            Hovered(hovered),
+            Chosen(chosen),
+            Surface::Button,
+            Edge::Lit,
+        ));
+        if card {
+            button.insert(Card);
+        }
+        let button = button.id();
+        app.update();
+        *app.world().get::<Edge>(button).unwrap()
+    }
+
+    #[test]
+    fn a_cards_frame_lights_with_it() {
+        assert_eq!(lit(true, false, true), Edge::Hovered);
+        assert_eq!(lit(false, true, true), Edge::Accent);
+        assert_eq!(lit(false, false, true), Edge::Card);
+    }
+
+    #[test]
+    fn other_buttons_keep_their_own_frames() {
+        assert_eq!(lit(true, false, false), Edge::Lit);
     }
 
     #[test]

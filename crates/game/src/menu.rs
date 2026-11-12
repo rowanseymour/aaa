@@ -1,5 +1,7 @@
 //! The menus before a match: the main menu and the kinds of new game.
 
+use aaa_render::textures;
+use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
@@ -65,8 +67,33 @@ fn spacer() -> impl Bundle {
     }
 }
 
-fn main_menu(mut commands: Commands) {
+/// Our own emblem, crowning the main menu's column where the game has its
+/// logo.
+const LOGO: &[u8] = include_bytes!("../../../docs/logo/logo.png");
+
+fn main_menu(
+    mut commands: Commands,
+    mut images: ResMut<Assets<Image>>,
+    formats: Res<CompressedImageFormatSupport>,
+    // Decoded once and kept, for each return to the menu.
+    mut logo: Local<Option<Option<Handle<Image>>>>,
+) {
     let column = column(&mut commands, Screen::MainMenu);
+    let logo = logo.get_or_insert_with(|| {
+        textures::decode(LOGO, "logo.png", formats.0, true).map(|i| images.add(i))
+    });
+    if let Some(logo) = logo {
+        commands.spawn((
+            ImageNode::new(logo.clone()),
+            Node {
+                width: percent(100),
+                aspect_ratio: Some(1.0),
+                margin: UiRect::bottom(px(12)),
+                ..default()
+            },
+            ChildOf(column),
+        ));
+    }
     commands
         .spawn((button("New Game", Font::Large), ChildOf(column)))
         .observe(go(Screen::NewGame));

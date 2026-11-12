@@ -22,7 +22,8 @@ use raw_window_handle::RawDisplayHandle;
 use crate::Screen;
 use crate::supply::Border;
 use crate::ui::{
-    Chosen, Dropdown, Font, Ink, Surface, clickable, label, layer, padded, switch, text, toggle,
+    Card, Chosen, Dropdown, Font, Ink, Surface, card, clickable, label, layer, padded, switch,
+    text, toggle,
 };
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
@@ -400,7 +401,8 @@ pub fn page(commands: &mut Commands, options: &Options) -> Entity {
     commands
         .spawn((
             ChildOf(footer),
-            clickable(ok),
+            clickable(card(ok)),
+            Card,
             children![text(&options.ok, Font::Large)],
         ))
         .observe(leave);
@@ -489,7 +491,8 @@ fn show_body(
                 .spawn((
                     BorderToggle,
                     ChildOf(extras),
-                    switch(width),
+                    switch(card(width)),
+                    Card,
                     children![text("", Font::Body)],
                 ))
                 .observe(|_: On<Activate>, mut border: ResMut<Border>| border.0 = !border.0);
