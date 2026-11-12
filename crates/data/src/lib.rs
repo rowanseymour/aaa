@@ -2671,8 +2671,10 @@ fn vfx(v: defs::Vfx, model: Option<String>, texture: Option<String>) -> Vfx {
             .iter()
             .position(|l| l.eq_ignore_ascii_case(kind))
     };
-    // One sized by what it's attached to isn't a picture of its own size.
-    let own_size = v.attached_scale.unwrap_or(0.0) == 0.0;
+    // One sized or shaped by what it's attached to isn't a picture of its
+    // own size.
+    let shaped = v.oval_shape == Some(true) || v.attached_shape == Some(true);
+    let own_size = v.attached_scale.unwrap_or(0.0) == 0.0 && !shaped;
     let decal = texture
         .filter(|_| category.starts_with("VFXPROJECTEDTEXTURE") && own_size)
         .map(|texture| Decal {
@@ -3936,7 +3938,9 @@ mod tests {
              [Thing Inherit=VFXScorchMark]\n{\n\tIDS = scorch\n\ttexture = Scorch.dds\n\
              \ttexture_size = 7\n\tduration = 15\n\tdecal_fade_time = 0, 5\n}\n\
              [Thing Inherit=VFXProjectedTexture]\n{\n\tIDS = ring\n\ttexture = Ring.dds\n\
-             \tattached_scale = 1.5\n}\n",
+             \tattached_scale = 1.5\n}\n\
+             [Thing Inherit=VFXProjectedTexture]\n{\n\tIDS = oval\n\ttexture = Oval.dds\n\
+             \ttexture_size = 2\n\tflag oval_shape = true\n}\n",
         );
         let templates = tgi::Templates::new([&parsed.root]);
         let mut blocks = parsed.root.blocks_of("Thing");
@@ -3959,8 +3963,9 @@ mod tests {
                 layer: 1,
             })
         );
-        // One sized by what it's attached to isn't.
+        // One sized or shaped by what it's attached to isn't.
         assert_eq!(read("Effects/Ring.dds").decal, None);
+        assert_eq!(read("Effects/Oval.dds").decal, None);
     }
 
     #[test]

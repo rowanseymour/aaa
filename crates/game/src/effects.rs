@@ -15,7 +15,7 @@ use aaa_data::{
 };
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
-use aaa_render::decals::decal_colour;
+use aaa_render::decals::{DecalCache, decal_colour};
 use aaa_render::models::{Footprint, Models, Rate};
 use aaa_render::terrain::{map_point, world};
 use aaa_render::{MapAssets, MapObject};
@@ -31,8 +31,8 @@ pub struct Effects {
     objects: HashMap<Id, ObjectEffects>,
     /// The node names of the model points commands name, by id.
     bones: HashMap<Id, String>,
-    /// The pictures laid on the ground so far, by archive path.
-    pictures: HashMap<String, Option<Handle<Image>>>,
+    /// What the pictures laid on the ground so far are drawn with.
+    decals: DecalCache,
     /// Each map tile's terrain group, row-major, `side` tiles a row.
     groups: Vec<Option<Id>>,
     side: usize,
@@ -112,10 +112,21 @@ struct Effect {
     discard: bool,
 }
 
-/// A picture laid on the ground for something that stays put, which goes
-/// when that does.
+/// An effect that stays where it was put for something that stays put,
+/// which goes when that does and is hidden while it is.
 #[derive(Component)]
 struct Tied(Entity);
+
+/// An effect a command stopped that's still to go as it does.
+#[derive(Component)]
+struct Stopped;
+
+/// What an effect that stays where it's put goes with: the building that
+/// made it, by its view, for one that lasts until stopped; else what it's
+/// attached to.
+fn tie(view: Option<Entity>, attached: Option<Entity>, permanent: bool) -> Option<Entity> {
+    view.filter(|_| permanent).or(attached)
+}
 
 /// A picture laid on the ground that takes time to show or to go.
 #[derive(Component)]
@@ -124,6 +135,8 @@ struct Fading {
     made: f64,
     /// Seconds it lasts before it starts to go, for one that does.
     life: Option<f32>,
+    /// It's shown in full and stays so, with nothing left to change.
+    settled: bool,
 }
 
 /// How much of a picture laid on the ground shows `age` seconds after it
@@ -213,7 +226,7 @@ impl Effects {
             vfx,
             objects,
             bones,
-            pictures: HashMap::new(),
+            decals: DecalCache::default(),
             groups,
             side: terrain.side,
             queued: Vec::new(),
@@ -661,7 +674,7 @@ fn play(
     units: Query<(Entity, &UnitView, Option<&Footprint>)>,
     buildings: Query<(Entity, &BuildingView, Option<&Footprint>)>,
     things: Query<(&Transform, &MapObject, Option<&Footprint>)>,
-    playing: Query<(Entity, &Effect)>,
+    playing: Query<(Entity, &Effect, Has<Fading>)>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog: Res<crate::fog::Fog>,
 ) {
@@ -745,9 +758,13 @@ fn play(
             Source::Scenery(e) => (Some(Subject::Scenery(e)), None),
         };
         if cue.stop {
-            for (e, effect) in &playing {
+            for (e, effect, fades) in &playing {
                 if effect.by == by && by.is_some() && effect.vfx == cue.vfx {
-                    commands.entity(e).despawn();
+                    // One that fades goes in its own time.
+                    match fades {
+                        true => drop(commands.entity(e).insert(Stopped)),
+                        false => commands.entity(e).despawn(),
+                    }
                 }
             }
             continue;
@@ -808,6 +825,13 @@ fn play(
         };
         let unturned = transform.rotation;
         transform.rotation = turn * unturned;
+        // The building that made it, if that's still there.
+        let view = match by {
+            Some(Subject::Thing(t @ Target::Building(b))) if !sim.buildings[b].gone() => {
+                views.get(&t).map(|v| v.1)
+            }
+            _ => None,
+        };
         let Some(path) = path else {
             // A picture stays where it's laid, so not one on what moves.
             let moves = matches!(by, Some(Subject::Thing(Target::Unit(_))));
@@ -817,8 +841,8 @@ fn play(
             let at = map_point(transform.translation);
             let facing = map_point(transform.rotation * Vec3::NEG_Z);
             let shown = opacity(decal.fade, 0.0, lasts);
-            let pictures = &mut effects.pictures;
-            let laid = assets.decal(game, pictures, &map.ground, decal, at, facing, shown);
+            let cache = &mut effects.decals;
+            let laid = assets.decal(game, cache, &map.ground, decal, at, facing, shown);
             let Some(laid) = laid else {
                 continue;
             };
@@ -838,14 +862,11 @@ fn play(
                     decal: decal.clone(),
                     made: now,
                     life: lasts,
+                    settled: false,
                 });
             }
-            // One a building laid goes with it, attached or not.
-            let view = match by {
-                Some(Subject::Thing(t @ Target::Building(_))) => views.get(&t).map(|v| v.1),
-                _ => None,
-            };
-            if let Some(anchor) = view.or(attach.map(|(anchor, _)| anchor)) {
+            let attached = attach.map(|(anchor, _)| anchor);
+            if let Some(anchor) = tie(view, attached, lasts.is_none()) {
                 entity.insert(Tied(anchor));
             }
             continue;
@@ -874,6 +895,11 @@ fn play(
         ));
         if let Some(rate) = rate(&vfx, cue, length) {
             entity.insert(Rate(rate));
+        }
+        if attach.is_none()
+            && let Some(anchor) = tie(view, None, lasts.is_none())
+        {
+            entity.insert(Tied(anchor));
         }
         if let Some((anchor, on)) = attach {
             entity.insert(Follow {
@@ -1107,9 +1133,11 @@ fn facing([x, y, z]: [f32; 3]) -> Vec3 {
 /// What [`follow`] reads and moves of an effect.
 type Playing<'a> = (
     Entity,
-    &'a Effect,
+    &'a mut Effect,
     Option<&'a Follow>,
     Option<&'a Tied>,
+    Option<&'a mut Fading>,
+    Has<Stopped>,
     &'a mut Transform,
     &'a mut Visibility,
 );
@@ -1119,8 +1147,9 @@ type Playing<'a> = (
 fn follow(
     mut commands: Commands,
     time: Res<Time>,
+    sim: Res<Sim>,
     mut effects: Query<Playing>,
-    anchors: Query<(&Transform, &Visibility, Has<BuildingView>), Without<Effect>>,
+    anchors: Query<(&Transform, &Visibility, Option<&BuildingView>), Without<Effect>>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
 ) {
     let now = time.elapsed_secs_f64();
@@ -1128,12 +1157,39 @@ fn follow(
     // A building's hidden once it's gone, though its view stays.
     let there = |anchor: Entity| {
         (anchors.get(anchor).ok())
-            .filter(|(_, v, building)| !(*building && **v == Visibility::Hidden))
+            .filter(|(_, v, building)| !(building.is_some() && **v == Visibility::Hidden))
     };
-    for (e, effect, follow, tied, mut transform, mut visibility) in &mut effects {
+    // Fog hides a building that's still there, so that's asked of the sim.
+    let stays = |anchor: Entity| {
+        (anchors.get(anchor).ok())
+            .filter(|(_, _, b)| b.is_none_or(|v| !sim.0.buildings[v.building].gone()))
+    };
+    for (e, mut effect, follow, tied, fading, stopped, mut transform, mut visibility) in
+        &mut effects
+    {
         if effect.ends.is_some_and(|t| t <= now) {
             commands.entity(e).despawn();
             continue;
+        }
+        let orphaned = tied.is_some_and(|t| stays(t.0).is_none());
+        if stopped || orphaned {
+            // A picture with a time to go in goes over it, from however
+            // much of it shows.
+            match fading.filter(|f| f.decal.fade[1] > 0.0) {
+                Some(mut f) => {
+                    (f.life, f.settled) = (Some((now - f.made) as f32), false);
+                    effect.ends = Some(now + f64::from(f.decal.fade[1]));
+                    commands.entity(e).remove::<(Tied, Stopped)>();
+                }
+                None => commands.entity(e).despawn(),
+            }
+            continue;
+        }
+        if let Some((_, shown, _)) = tied.and_then(|t| stays(t.0)) {
+            visibility.set_if_neq(match shown {
+                Visibility::Hidden => Visibility::Hidden,
+                _ => Visibility::Inherited,
+            });
         }
         // Scenery's effects go when it's cleared, and are hidden with it
         // on ground never seen.
@@ -1146,10 +1202,6 @@ fn follow(
                 Visibility::Hidden => Visibility::Hidden,
                 _ => Visibility::Inherited,
             });
-        }
-        if tied.is_some_and(|t| there(t.0).is_none()) {
-            commands.entity(e).despawn();
-            continue;
         }
         if let Some(f) = follow {
             let Some((root, _, _)) = there(f.anchor) else {
@@ -1172,12 +1224,19 @@ fn follow(
 /// Shows pictures laid on the ground as far as they've come in or gone.
 fn fade(
     time: Res<Time>,
-    laid: Query<(&Fading, &MeshMaterial3d<StandardMaterial>)>,
+    mut laid: Query<(&mut Fading, &MeshMaterial3d<StandardMaterial>)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let now = time.elapsed_secs_f64();
-    for (fading, material) in &laid {
-        let shown = opacity(fading.decal.fade, (now - fading.made) as f32, fading.life);
+    for (mut fading, material) in &mut laid {
+        if fading.settled {
+            continue;
+        }
+        let age = (now - fading.made) as f32;
+        let shown = opacity(fading.decal.fade, age, fading.life);
+        if fading.life.is_none() && age >= fading.decal.fade[0] {
+            fading.settled = true;
+        }
         let colour = decal_colour(&fading.decal, shown);
         if materials
             .get(&material.0)
@@ -1277,6 +1336,21 @@ mod tests {
         assert!(detail_allows(false, 0.6, 0.5));
         assert!(!detail_allows(false, 0.6, 0.7));
         assert!(detail_allows(true, 0.0, 0.7));
+    }
+
+    #[test]
+    fn effects_that_last_go_with_the_building_that_made_them() {
+        let mut world = bevy::ecs::world::World::new();
+        let (view, model) = (world.spawn_empty().id(), world.spawn_empty().id());
+        // One that lasts goes with its building, attached to it or not.
+        assert_eq!(tie(Some(view), None, true), Some(view));
+        assert_eq!(tie(Some(view), Some(model), true), Some(view));
+        // One with its own time is left to it, unless it's attached.
+        assert_eq!(tie(Some(view), None, false), None);
+        assert_eq!(tie(Some(view), Some(model), false), Some(model));
+        // With no building still there, only what it's attached to.
+        assert_eq!(tie(None, Some(model), true), Some(model));
+        assert_eq!(tie(None, None, true), None);
     }
 
     #[test]
@@ -1387,7 +1461,7 @@ mod tests {
             vfx: HashMap::new(),
             objects,
             bones: HashMap::new(),
-            pictures: HashMap::new(),
+            decals: DecalCache::default(),
             groups: Vec::new(),
             side: 0,
             queued: Vec::new(),

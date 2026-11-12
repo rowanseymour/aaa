@@ -1055,6 +1055,11 @@ pub struct Vfx {
     pub decal_fade_time: Option<[f32; 2]>,
     /// One laid on the ground is turned a random way.
     pub random_orientation: Option<bool>,
+    /// One laid on the ground is stretched to an oval round what it's
+    /// attached to.
+    pub oval_shape: Option<bool>,
+    /// One laid on the ground takes the shape of what it's attached to.
+    pub attached_shape: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
