@@ -4,6 +4,7 @@
 //! whole interface, even while it's up. [`Shade`] and [`Meter`] do the same
 //! for pictures and bars.
 
+use bevy::ecs::observer::IntoEntityObserver;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::Button;
@@ -613,6 +614,61 @@ pub fn toggle(words: impl Into<String>, size: Font) -> impl Bundle {
 
 pub fn disabled(words: impl Into<String>, size: Font) -> impl Bundle {
     (inert(padded()), children![label(words, size, Ink::Muted)])
+}
+
+/// A button in a row saying what's chosen, over the list of choices while
+/// it's open, which is drawn over everything else.
+pub struct Dropdown {
+    pub row: Entity,
+    pub width: Val,
+    pub label: String,
+    pub open: bool,
+}
+
+impl Dropdown {
+    pub fn spawn<B: Bundle, C: Bundle, M1, M2>(
+        self,
+        commands: &mut Commands,
+        opener_marker: B,
+        on_open: impl IntoEntityObserver<M1>,
+        choices: impl Iterator<Item = (C, String)>,
+        on_choose: impl IntoEntityObserver<M2> + Copy,
+    ) {
+        let cell = Node {
+            width: percent(100),
+            justify_content: JustifyContent::Start,
+            ..padded()
+        };
+        let holder = Node {
+            width: self.width,
+            ..default()
+        };
+        let holder = commands.spawn((ChildOf(self.row), holder)).id();
+        commands
+            .spawn((
+                ChildOf(holder),
+                opener(cell.clone()),
+                opener_marker,
+                children![text(self.label, Font::Body)],
+            ))
+            .observe(on_open);
+        if !self.open {
+            return;
+        }
+        let list = commands
+            .spawn((ChildOf(holder), dropdown(), GlobalZIndex(20)))
+            .id();
+        for (choice, name) in choices {
+            commands
+                .spawn((
+                    ChildOf(list),
+                    clickable(cell.clone()),
+                    choice,
+                    children![text(name, Font::Body)],
+                ))
+                .observe(on_choose);
+        }
+    }
 }
 
 fn highlight(mut buttons: Query<(&Hovered, &Chosen, &mut Surface), With<MenuButton>>) {

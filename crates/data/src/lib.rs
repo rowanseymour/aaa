@@ -15,7 +15,7 @@ mod terrain;
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
 pub use fog::{FogSetting, Sight};
 pub use guard::{GUARDING, GuardRules};
-pub use hotkeys::Hotkey;
+pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use properties::PropertyLook;

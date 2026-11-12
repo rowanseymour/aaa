@@ -971,6 +971,8 @@ pub struct UVars {
 #[derive(Debug, Clone, Deserialize)]
 pub struct HotkeyConfiguration {
     pub ids: Option<Id>,
+    /// What the options call it, or the key of the string that does.
+    pub name: Option<String>,
     /// The archive path of the file binding its keys.
     pub hotkey_file_location: Option<String>,
 }

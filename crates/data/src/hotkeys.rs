@@ -2,7 +2,9 @@
 //! what it's for and, for most, the command it gives, e.g.
 //! `map c game|action|verify "ActorCommand hq_attach"`.
 
-use crate::{GameData, defs, scoped};
+use std::collections::HashMap;
+
+use crate::{GameData, Id, defs, localized, scoped};
 
 /// The file listing the hotkey files every configuration shares.
 const SHARED: &str = "Localization/Hotkeys/start.txt";
@@ -52,17 +54,27 @@ fn line(line: &str) -> Option<Hotkey> {
     })
 }
 
+/// A set of hotkeys players can choose.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HotkeyConfiguration {
+    pub id: Id,
+    /// What the options call it.
+    pub name: String,
+    /// The archive path of the file binding its keys.
+    pub file: Option<String>,
+}
+
 impl GameData {
-    /// The hotkeys of the game's default configuration: those every
-    /// configuration shares, then its own.
-    pub fn hotkeys(&mut self) -> Vec<Hotkey> {
+    /// The hotkeys every configuration shares, then those of the one
+    /// given.
+    pub fn hotkeys(&mut self, configuration: Option<&HotkeyConfiguration>) -> Vec<Hotkey> {
         let shared = self.text(SHARED).unwrap_or_default();
         let mut files: Vec<String> = shared
             .lines()
             .filter_map(|l| l.trim().strip_prefix("exechere"))
             .map(|name| name.trim().to_string())
             .collect();
-        files.extend(self.hotkey_configuration());
+        files.extend(configuration.and_then(|c| c.file.clone()));
         files
             .iter()
             .filter_map(|name| self.text(name))
@@ -75,19 +87,35 @@ impl GameData {
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
 
-    /// The hotkey file of the configuration the interface's settings name.
-    fn hotkey_configuration(&mut self) -> Option<String> {
-        let chosen = self.interface_setting(|v| v.hotkey_configuration)?;
-        let read = |game: &mut GameData, name: &str| -> Vec<(String, tgi::Parsed)> {
-            let parsed = game.read(name).map(|b| tgi::parse_bytes(&b));
-            parsed.map(|p| (name.to_string(), p)).into_iter().collect()
-        };
-        let configurations = read(self, CONFIGURATIONS);
-        scoped(&configurations)
+    /// The configurations players choose between, in the order the
+    /// options list them, named from the game's `strings`.
+    pub fn hotkey_configurations(
+        &mut self,
+        strings: &HashMap<String, String>,
+    ) -> Vec<HotkeyConfiguration> {
+        let parsed = self.read(CONFIGURATIONS).map(|b| tgi::parse_bytes(&b));
+        let files: Vec<(String, tgi::Parsed)> = parsed
+            .map(|p| (CONFIGURATIONS.to_string(), p))
+            .into_iter()
+            .collect();
+        scoped(&files)
             .iter()
             .flat_map(|f| f.read::<defs::HotkeyConfiguration>("HotkeyConfigurationData"))
-            .find(|c| c.ids.as_ref() == Some(&chosen))?
-            .hotkey_file_location
+            .filter_map(|c| {
+                let id = c.ids?;
+                let name = localized(strings, c.name.as_deref());
+                Some(HotkeyConfiguration {
+                    name: name.unwrap_or_else(|| id.to_string()),
+                    id,
+                    file: c.hotkey_file_location,
+                })
+            })
+            .collect()
+    }
+
+    /// The id of the configuration in use until the player chooses one.
+    pub fn default_hotkey_configuration(&mut self) -> Option<Id> {
+        self.interface_setting(|v| v.hotkey_configuration)
     }
 }
 

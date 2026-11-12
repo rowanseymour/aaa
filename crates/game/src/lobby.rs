@@ -7,15 +7,14 @@ use std::hash::{BuildHasher, RandomState};
 
 use aaa_data::{General, Id, Nation};
 use aaa_map::{Brief, Player};
-use bevy::ecs::observer::IntoEntityObserver;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
 
 use crate::menu::go;
 use crate::presets::Preset;
 use crate::ui::{
-    Chosen, Font, Ink, Surface, button, clickable, dropdown, inert, label, opener, padded, panel,
-    switch, text, toggle,
+    Chosen, Dropdown, Font, Ink, Surface, button, clickable, dropdown, inert, label, opener,
+    padded, panel, switch, text, toggle,
 };
 use crate::{Data, Pending, Screen, Side};
 
@@ -738,7 +737,7 @@ fn nation_list(
     let open = lobby.open == Open::Nations(player);
     let list = Dropdown {
         row,
-        width: 200.0,
+        width: px(200),
         label,
         open,
     };
@@ -770,7 +769,7 @@ fn general_list(
     let open = lobby.open == Open::Generals(player);
     let list = Dropdown {
         row,
-        width: 160.0,
+        width: px(160),
         label,
         open,
     };
@@ -781,57 +780,6 @@ fn general_list(
         choices,
         choose_general,
     );
-}
-
-/// A button in a lobby row saying what's chosen, over the list of choices
-/// while it's open.
-struct Dropdown {
-    row: Entity,
-    width: f32,
-    label: String,
-    open: bool,
-}
-
-impl Dropdown {
-    fn spawn<B: Bundle, C: Bundle, M1, M2>(
-        self,
-        commands: &mut Commands,
-        opener_marker: B,
-        on_open: impl IntoEntityObserver<M1>,
-        choices: impl Iterator<Item = (C, String)>,
-        on_choose: impl IntoEntityObserver<M2> + Copy,
-    ) {
-        let cell = Node {
-            width: px(self.width),
-            justify_content: JustifyContent::Start,
-            ..padded()
-        };
-        let holder = commands.spawn((ChildOf(self.row), Node::default())).id();
-        commands
-            .spawn((
-                ChildOf(holder),
-                opener(cell.clone()),
-                opener_marker,
-                children![text(self.label, Font::Body)],
-            ))
-            .observe(on_open);
-        if !self.open {
-            return;
-        }
-        let list = commands
-            .spawn((ChildOf(holder), dropdown(), GlobalZIndex(2)))
-            .id();
-        for (choice, name) in choices {
-            commands
-                .spawn((
-                    ChildOf(list),
-                    clickable(cell.clone()),
-                    choice,
-                    children![text(name, Font::Body)],
-                ))
-                .observe(on_choose);
-        }
-    }
 }
 
 /// Describes the chosen map: its name, size and sides.

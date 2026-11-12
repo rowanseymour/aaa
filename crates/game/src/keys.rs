@@ -195,6 +195,11 @@ fn key(name: &str) -> Option<KeyCode> {
         "plus" => KeyCode::Equal,
         "backslash" => KeyCode::Backslash,
         "grave" => KeyCode::Backquote,
+        "semicolon" => KeyCode::Semicolon,
+        "comma" => KeyCode::Comma,
+        "period" => KeyCode::Period,
+        "slash" => KeyCode::Slash,
+        "quote" => KeyCode::Quote,
         "[" => KeyCode::BracketLeft,
         "]" => KeyCode::BracketRight,
         _ => return None,
@@ -254,15 +259,17 @@ impl Bindings {
     }
 }
 
-/// Reads the game's hotkeys, and how it marks them.
+/// Reads the hotkeys chosen in the options, and how the game marks them.
 pub fn load(
     mut commands: Commands,
     mut loaded: ResMut<crate::Loaded>,
     mut theme: ResMut<crate::ui::Theme>,
+    options: Res<crate::options::Options>,
 ) {
     let game = &mut loaded.game;
     theme.key = (game.highlight_colour()).map(|[r, g, b]| Color::srgb(r, g, b));
-    commands.insert_resource(Bindings::new(&game.hotkeys(), &game.strings()));
+    let hotkeys = game.hotkeys(options.hotkeys());
+    commands.insert_resource(Bindings::new(&hotkeys, &game.strings()));
 }
 
 #[cfg(test)]
@@ -289,6 +296,7 @@ mod tests {
         assert_eq!(chord("f5"), Some((false, false, false, KeyCode::F5)));
         assert_eq!(chord("delete").map(|c| c.3), Some(KeyCode::Delete));
         assert_eq!(chord("shift-minus").map(|c| c.3), Some(KeyCode::Minus));
+        assert_eq!(chord("semicolon").map(|c| c.3), Some(KeyCode::Semicolon));
         assert_eq!(chord("mousewheel"), None);
         assert_eq!(chord("+left"), None);
         assert_eq!(chord("numpad-minus"), None);

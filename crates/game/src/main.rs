@@ -31,6 +31,7 @@ mod lobby;
 mod menu;
 mod messages;
 mod minimap;
+mod options;
 mod pane;
 mod pause;
 mod presets;
@@ -89,6 +90,7 @@ options:
 enum Screen {
     MainMenu,
     NewGame,
+    Options,
     Lobby,
     Loading,
     Match,
@@ -595,6 +597,7 @@ fn main() -> ExitCode {
         .add_plugins((
             ui::UiPlugin,
             menu::MenuPlugin,
+            options::OptionsPlugin,
             lobby::LobbyPlugin,
             pause::PausePlugin,
         ))
@@ -619,6 +622,15 @@ fn main() -> ExitCode {
                 ready,
             )
                 .chain(),
+        )
+        .add_systems(
+            Update,
+            (
+                keys::load.run_if(resource_changed::<options::Options>),
+                supply::mark_border.run_if(resource_exists_and_changed::<keys::Bindings>),
+            )
+                .chain()
+                .run_if(in_state(Screen::Match)),
         )
         .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
         .add_systems(
@@ -709,6 +721,7 @@ fn main() -> ExitCode {
         app.insert_resource(remote);
     }
     app.insert_resource(lobby::Nations(game.nations()))
+        .insert_resource(options::Options::new(&mut game))
         .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
         .insert_resource(Data(game));
     match map {
