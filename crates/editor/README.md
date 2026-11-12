@@ -12,7 +12,7 @@ cargo run --release -p aaa-editor -- "/path/to/Axis and Allies 2004" "(2v2)Berli
 A map can be named by file name without extension or by its full archive path
 (`Maps/Campaign/allies10_berlin.RMP`). Run it without arguments for the options,
 such as rendering a screenshot from a chosen camera position, which is how
-[`docs/banner.sh`](../../docs/banner.sh) makes part of the README banner.
+[`docs/screenshots.sh`](../../docs/screenshots.sh) makes part of the README screenshots.
 
 The window's help line lists the controls.
 

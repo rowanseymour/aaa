@@ -1,9 +1,9 @@
 #!/bin/sh
-# Rebuilds docs/banner.jpg as a 2x2 grid of screenshots: three from the game,
+# Rebuilds docs/screenshots.jpg as a 2x2 grid of screenshots: three from the game,
 # each set up by a script of console commands, and one from the editor with a
 # window open on an object.
 #
-#   docs/banner.sh "/path/to/Axis and Allies 2004"
+#   docs/screenshots.sh "/path/to/Axis and Allies 2004"
 #
 # Needs ImageMagick 7 (`magick`).
 
@@ -82,5 +82,5 @@ magick -size $((2 * W + GAP))x$((2 * H + GAP)) xc:white \
     "$work/top-right.png" -geometry +$((W + GAP))+0 -composite \
     "$work/bottom-left.png" -geometry +0+$((H + GAP)) -composite \
     "$work/bottom-right.png" -geometry +$((W + GAP))+$((H + GAP)) -composite \
-    -strip -quality 85 "$root/docs/banner.jpg"
-echo "wrote docs/banner.jpg"
+    -strip -quality 85 "$root/docs/screenshots.jpg"
+echo "wrote docs/screenshots.jpg"
