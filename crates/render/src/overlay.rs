@@ -377,6 +377,18 @@ pub fn mark_transform(
 /// in world space: across a building's footprint the ground bends too much
 /// for one plane to lie on it without floating somewhere.
 pub fn draped_square(ground: &Ground, position: [f32; 2], facing: [f32; 2], size: Vec2) -> Mesh {
+    draped_square_about(ground, position, facing, size, Vec3::ZERO)
+}
+
+/// [`draped_square`] with its points given from `origin`, for something
+/// placed there.
+pub fn draped_square_about(
+    ground: &Ground,
+    position: [f32; 2],
+    facing: [f32; 2],
+    size: Vec2,
+    origin: Vec3,
+) -> Mesh {
     let facing = Vec2::from(facing)
         .try_normalize()
         .unwrap_or(Vec2::NEG_Y)
@@ -392,7 +404,8 @@ pub fn draped_square(ground: &Ground, position: [f32; 2], facing: [f32; 2], size
             // The image's top is ahead.
             let local = [(u - 0.5) * size.x, (0.5 - v) * size.y];
             let [x, y] = from_local(position, facing, local);
-            positions.push(world(x, y, ground.height_at(x, y) + LIFT).to_array());
+            let point = world(x, y, ground.height_at(x, y) + LIFT) - origin;
+            positions.push(point.to_array());
             uvs.push([u, v]);
         }
     }

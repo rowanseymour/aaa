@@ -3,16 +3,19 @@
 //! they fire, explosions where shells land, and smoke, fire and debris as
 //! they're hurt. Which of an object's effect commands an event runs, where
 //! the effect goes and how long it lasts are the data's; this notices the
-//! events in the sim and plays the effects drawn by a model.
+//! events in the sim and plays the effects drawn by a model and those that
+//! are pictures laid on the ground.
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
 
 use aaa_data::{
-    GameData, HealthCue, HealthTrigger, Id, ObjectEffects, Shape, Vfx, VfxCue, VfxTint, Weapon,
+    Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, Shape, Vfx, VfxCue, VfxTint,
+    Weapon,
 };
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
+use aaa_render::decals::{DecalCache, decal_colour};
 use aaa_render::models::{Footprint, Models, Rate};
 use aaa_render::terrain::{map_point, world};
 use aaa_render::{MapAssets, MapObject};
@@ -28,6 +31,8 @@ pub struct Effects {
     objects: HashMap<Id, ObjectEffects>,
     /// The node names of the model points commands name, by id.
     bones: HashMap<Id, String>,
+    /// What the pictures laid on the ground so far are drawn with.
+    decals: DecalCache,
     /// Each map tile's terrain group, row-major, `side` tiles a row.
     groups: Vec<Option<Id>>,
     side: usize,
@@ -91,6 +96,8 @@ struct Seen {
     /// A share of its maximum.
     health: f32,
     states: Vec<&'static str>,
+    /// As a building, it's been seen finished.
+    finished: bool,
 }
 
 /// One of the effects playing.
@@ -103,6 +110,57 @@ struct Effect {
     ends: Option<f64>,
     /// It goes once its spot is off screen.
     discard: bool,
+}
+
+/// An effect that stays where it was put for something that stays put,
+/// which goes when that does and is hidden while it is.
+#[derive(Component)]
+struct Tied(Entity);
+
+/// An effect a command stopped that's still to go as it does.
+#[derive(Component)]
+struct Stopped;
+
+/// What an effect that stays where it's put goes with: the building that
+/// made it, by its view, for one that lasts until stopped; else what it's
+/// attached to.
+fn tie(view: Option<Entity>, attached: Option<Entity>, permanent: bool) -> Option<Entity> {
+    view.filter(|_| permanent).or(attached)
+}
+
+/// A picture laid on the ground that takes time to show or to go.
+#[derive(Component)]
+struct Fading {
+    decal: Decal,
+    made: f64,
+    /// Seconds it lasts before it starts to go, for one that does.
+    life: Option<f32>,
+    /// It's shown in full and stays so, with nothing left to change.
+    settled: bool,
+}
+
+/// Seconds a picture laid on the ground takes to show, given its own time
+/// to: none for one whose effect starts the moment the match does.
+fn fade_in(own: f32, tick: u64, delay: f32) -> f32 {
+    match tick == 0 && delay <= 0.0 {
+        true => 0.0,
+        false => own,
+    }
+}
+
+/// How much of a picture laid on the ground shows `age` seconds after it
+/// was made: it comes in over `fade`'s first time, and once `life` is up
+/// goes over its second, from however far it had come.
+fn opacity([rise, fall]: [f32; 2], age: f32, life: Option<f32>) -> f32 {
+    let risen = |age: f32| match rise > 0.0 {
+        true => (age / rise).clamp(0.0, 1.0),
+        false => 1.0,
+    };
+    match life.filter(|l| age > *l) {
+        Some(life) if fall > 0.0 => risen(life) * (1.0 - (age - life) / fall).max(0.0),
+        Some(_) => 0.0,
+        None => risen(age),
+    }
 }
 
 /// An attached effect's place on what it's attached to.
@@ -177,6 +235,7 @@ impl Effects {
             vfx,
             objects,
             bones,
+            decals: DecalCache::default(),
             groups,
             side: terrain.side,
             queued: Vec::new(),
@@ -273,6 +332,9 @@ impl Effects {
                 let cues = crossed(&o.health, seen.health, now.health);
                 self.queue(at, &cues, Source::Thing(me), None);
             }
+            if now.finished && !seen.finished {
+                self.queue(at, &o.constructed, Source::Thing(me), None);
+            }
         }
         if now.shot != seen.shot
             && let (Some((_, w)), Some(weapon)) = (now.shot, now.weapon)
@@ -302,6 +364,7 @@ impl Effects {
         seen.shot = now.shot;
         seen.health = now.health;
         seen.states = now.states;
+        seen.finished |= now.finished;
     }
 }
 
@@ -321,6 +384,8 @@ struct Now<'a> {
     shot: Option<(u64, usize)>,
     weapon: Option<&'a Weapon>,
     target: Option<Target>,
+    /// It's a building that's done going up and is still there.
+    finished: bool,
 }
 
 const DEAD: &str = "dead";
@@ -440,7 +505,7 @@ impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (notice, play, follow)
+            (notice, play, follow, fade)
                 .chain()
                 .after(crate::show_packing)
                 .after(crate::show_units)
@@ -494,6 +559,7 @@ fn notice(
             shot: unit.shot,
             weapon: unit.shot.and_then(|(_, w)| fighter?.weapons.get(w)),
             target: unit.target,
+            finished: false,
         };
         let me = Target::Unit(view.unit);
         see(
@@ -515,6 +581,7 @@ fn notice(
             shot: b.shot,
             weapon: b.shot.and_then(|(_, w)| b.fighter.weapons.get(w)),
             target: b.target,
+            finished: b.unpacking.is_none() && !b.gone(),
         };
         let me = Target::Building(view.building);
         see(
@@ -574,6 +641,7 @@ fn see(
                 shot: now.shot,
                 health: now.health,
                 states: Vec::new(),
+                finished: false,
             };
             effects.create(Source::Thing(me), template, at);
             effects.witness(me, template, &mut seen, now, at);
@@ -615,7 +683,7 @@ fn play(
     units: Query<(Entity, &UnitView, Option<&Footprint>)>,
     buildings: Query<(Entity, &BuildingView, Option<&Footprint>)>,
     things: Query<(&Transform, &MapObject, Option<&Footprint>)>,
-    playing: Query<(Entity, &Effect)>,
+    playing: Query<(Entity, &Effect, Has<Fading>)>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
     fog: Res<crate::fog::Fog>,
 ) {
@@ -699,9 +767,13 @@ fn play(
             Source::Scenery(e) => (Some(Subject::Scenery(e)), None),
         };
         if cue.stop {
-            for (e, effect) in &playing {
+            for (e, effect, fades) in &playing {
                 if effect.by == by && by.is_some() && effect.vfx == cue.vfx {
-                    commands.entity(e).despawn();
+                    // One that fades goes in its own time.
+                    match fades {
+                        true => drop(commands.entity(e).insert(Stopped)),
+                        false => commands.entity(e).despawn(),
+                    }
                 }
             }
             continue;
@@ -709,9 +781,10 @@ fn play(
         let Some(vfx) = effects.vfx.get(&cue.vfx).cloned() else {
             continue;
         };
-        let Some(path) = vfx.model.as_deref().filter(|_| vfx.category == "VFXMODEL") else {
+        let path = vfx.model.as_deref().filter(|_| vfx.category == "VFXMODEL");
+        if path.is_none() && vfx.decal.is_none() {
             continue;
-        };
+        }
         if vfx.night_only && !effects.night {
             continue;
         }
@@ -745,7 +818,7 @@ fn play(
         if !detail_allows(vfx.critical, effects.detail, roll) {
             continue;
         }
-        let length = drawn.0.effect_timing(game, path).map(|t| t.length);
+        let length = path.and_then(|p| drawn.0.effect_timing(game, p).map(|t| t.length));
         let lasts = lifetime(&vfx, cue, length);
         let discard = lasts.is_some() && !vfx.never_discard;
         if discard && !on_screen(camera, transform.translation) {
@@ -761,6 +834,57 @@ fn play(
         };
         let unturned = transform.rotation;
         transform.rotation = turn * unturned;
+        // The building that made it, if that's still there.
+        let view = match by {
+            Some(Subject::Thing(t @ Target::Building(b))) if !sim.buildings[b].gone() => {
+                views.get(&t).map(|v| v.1)
+            }
+            _ => None,
+        };
+        let Some(path) = path else {
+            // A picture stays where it's laid, so not one on what moves.
+            let moves = matches!(by, Some(Subject::Thing(Target::Unit(_))));
+            let Some(decal) = vfx.decal.as_ref().filter(|_| !(moves && attach.is_some())) else {
+                continue;
+            };
+            // One made as the match begins is there in full at once.
+            let decal = &Decal {
+                fade: [fade_in(decal.fade[0], p.tick, cue.delay), decal.fade[1]],
+                ..decal.clone()
+            };
+            let at = map_point(transform.translation);
+            let facing = map_point(transform.rotation * Vec3::NEG_Z);
+            let shown = opacity(decal.fade, 0.0, lasts);
+            let cache = &mut effects.decals;
+            let laid = assets.decal(game, cache, &map.ground, decal, at, facing, shown);
+            let Some(laid) = laid else {
+                continue;
+            };
+            debug!("{}: {} at {at:?}", cue.vfx, decal.texture);
+            let mut entity = commands.spawn((
+                laid,
+                Effect {
+                    vfx: cue.vfx.clone(),
+                    by,
+                    ends: lasts.map(|s| now + f64::from(s + decal.fade[1])),
+                    discard: false,
+                },
+                DespawnOnExit(Screen::Match),
+            ));
+            if decal.fade != [0.0; 2] {
+                entity.insert(Fading {
+                    decal: decal.clone(),
+                    made: now,
+                    life: lasts,
+                    settled: false,
+                });
+            }
+            let attached = attach.map(|(anchor, _)| anchor);
+            if let Some(anchor) = tie(view, attached, lasts.is_none()) {
+                entity.insert(Tied(anchor));
+            }
+            continue;
+        };
         let mut models = assets.models();
         let Some(e) = drawn.0.spawn_effect(
             &mut commands,
@@ -785,6 +909,11 @@ fn play(
         ));
         if let Some(rate) = rate(&vfx, cue, length) {
             entity.insert(Rate(rate));
+        }
+        if attach.is_none()
+            && let Some(anchor) = tie(view, None, lasts.is_none())
+        {
+            entity.insert(Tied(anchor));
         }
         if let Some((anchor, on)) = attach {
             entity.insert(Follow {
@@ -1015,27 +1144,66 @@ fn facing([x, y, z]: [f32; 3]) -> Vec3 {
     world(x, y, z).try_normalize().unwrap_or(Vec3::Z)
 }
 
+/// What [`follow`] reads and moves of an effect.
+type Playing<'a> = (
+    Entity,
+    &'a mut Effect,
+    Option<&'a Follow>,
+    Option<&'a Tied>,
+    Option<&'a mut Fading>,
+    Has<Stopped>,
+    &'a mut Transform,
+    &'a mut Visibility,
+);
+
 /// Moves attached effects with what they're on, and ends those whose time
 /// is up, whose thing has gone, or that went off screen.
 fn follow(
     mut commands: Commands,
     time: Res<Time>,
-    mut effects: Query<(
-        Entity,
-        &Effect,
-        Option<&Follow>,
-        &mut Transform,
-        &mut Visibility,
-    )>,
-    anchors: Query<(&Transform, &Visibility, Has<BuildingView>), Without<Effect>>,
+    sim: Res<Sim>,
+    mut effects: Query<Playing>,
+    anchors: Query<(&Transform, &Visibility, Option<&BuildingView>), Without<Effect>>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
 ) {
     let now = time.elapsed_secs_f64();
     let camera = cameras.iter().find(|(c, _)| c.is_active);
-    for (e, effect, follow, mut transform, mut visibility) in &mut effects {
+    // A building's hidden once it's gone, though its view stays.
+    let there = |anchor: Entity| {
+        (anchors.get(anchor).ok())
+            .filter(|(_, v, building)| !(building.is_some() && **v == Visibility::Hidden))
+    };
+    // Fog hides a building that's still there, so that's asked of the sim.
+    let stays = |anchor: Entity| {
+        (anchors.get(anchor).ok())
+            .filter(|(_, _, b)| b.is_none_or(|v| !sim.0.buildings[v.building].gone()))
+    };
+    for (e, mut effect, follow, tied, fading, stopped, mut transform, mut visibility) in
+        &mut effects
+    {
         if effect.ends.is_some_and(|t| t <= now) {
             commands.entity(e).despawn();
             continue;
+        }
+        let orphaned = tied.is_some_and(|t| stays(t.0).is_none());
+        if stopped || orphaned {
+            // A picture with a time to go in goes over it, from however
+            // much of it shows.
+            match fading.filter(|f| f.decal.fade[1] > 0.0) {
+                Some(mut f) => {
+                    (f.life, f.settled) = (Some((now - f.made) as f32), false);
+                    effect.ends = Some(now + f64::from(f.decal.fade[1]));
+                    commands.entity(e).remove::<(Tied, Stopped)>();
+                }
+                None => commands.entity(e).despawn(),
+            }
+            continue;
+        }
+        if let Some((_, shown, _)) = tied.and_then(|t| stays(t.0)) {
+            visibility.set_if_neq(match shown {
+                Visibility::Hidden => Visibility::Hidden,
+                _ => Visibility::Inherited,
+            });
         }
         // Scenery's effects go when it's cleared, and are hidden with it
         // on ground never seen.
@@ -1050,12 +1218,7 @@ fn follow(
             });
         }
         if let Some(f) = follow {
-            // A building's hidden once it's gone, though its view stays.
-            let anchor = anchors
-                .get(f.anchor)
-                .ok()
-                .filter(|(_, v, building)| !(*building && **v == Visibility::Hidden));
-            let Some((root, _, _)) = anchor else {
+            let Some((root, _, _)) = there(f.anchor) else {
                 commands.entity(e).despawn();
                 continue;
             };
@@ -1068,6 +1231,33 @@ fn follow(
         if effect.discard && !on_screen(camera, transform.translation) {
             trace!("{}: off screen", effect.vfx);
             commands.entity(e).despawn();
+        }
+    }
+}
+
+/// Shows pictures laid on the ground as far as they've come in or gone.
+fn fade(
+    time: Res<Time>,
+    mut laid: Query<(&mut Fading, &MeshMaterial3d<StandardMaterial>)>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let now = time.elapsed_secs_f64();
+    for (mut fading, material) in &mut laid {
+        if fading.settled {
+            continue;
+        }
+        let age = (now - fading.made) as f32;
+        let shown = opacity(fading.decal.fade, age, fading.life);
+        if fading.life.is_none() && age >= fading.decal.fade[0] {
+            fading.settled = true;
+        }
+        let colour = decal_colour(&fading.decal, shown);
+        if materials
+            .get(&material.0)
+            .is_some_and(|m| m.base_color != colour)
+            && let Some(mut m) = materials.get_mut(&material.0)
+        {
+            m.base_color = colour;
         }
     }
 }
@@ -1163,6 +1353,42 @@ mod tests {
     }
 
     #[test]
+    fn effects_that_last_go_with_the_building_that_made_them() {
+        let mut world = bevy::ecs::world::World::new();
+        let (view, model) = (world.spawn_empty().id(), world.spawn_empty().id());
+        // One that lasts goes with its building, attached to it or not.
+        assert_eq!(tie(Some(view), None, true), Some(view));
+        assert_eq!(tie(Some(view), Some(model), true), Some(view));
+        // One with its own time is left to it, unless it's attached.
+        assert_eq!(tie(Some(view), None, false), None);
+        assert_eq!(tie(Some(view), Some(model), false), Some(model));
+        // With no building still there, only what it's attached to.
+        assert_eq!(tie(None, Some(model), true), Some(model));
+        assert_eq!(tie(None, None, true), None);
+    }
+
+    #[test]
+    fn pictures_on_the_ground_come_in_and_go_over_their_fade_times() {
+        // In over 10 seconds, staying for good.
+        assert_eq!(opacity([10.0, 1.0], 0.0, None), 0.0);
+        assert_eq!(opacity([10.0, 1.0], 5.0, None), 0.5);
+        assert_eq!(opacity([10.0, 1.0], 60.0, None), 1.0);
+        // There at once for 15 seconds, then gone over 5 more.
+        assert_eq!(opacity([0.0, 5.0], 15.0, Some(15.0)), 1.0);
+        assert_eq!(opacity([0.0, 5.0], 17.5, Some(15.0)), 0.5);
+        assert_eq!(opacity([0.0, 5.0], 21.0, Some(15.0)), 0.0);
+        // Ended half way in, it goes from there.
+        assert_eq!(opacity([10.0, 4.0], 6.0, Some(5.0)), 0.375);
+        // With no time to go in, it's gone when its time's up.
+        assert_eq!(opacity([0.0, 0.0], 3.0, Some(2.0)), 0.0);
+        assert_eq!(opacity([0.0, 0.0], 3.0, None), 1.0);
+        // Only what starts with the match skips coming in.
+        assert_eq!(fade_in(10.0, 0, 0.0), 0.0);
+        assert_eq!(fade_in(10.0, 0, 0.5), 10.0);
+        assert_eq!(fade_in(10.0, 3, 0.0), 10.0);
+    }
+
+    #[test]
     fn terrain_filters_match_their_group() {
         let snow = Id::from("snow");
         assert!(terrain_allows(None, None));
@@ -1187,6 +1413,7 @@ mod tests {
             random_orientation: false,
             gyroscope: true,
             tint: None,
+            decal: None,
         }
     }
 
@@ -1252,6 +1479,7 @@ mod tests {
             vfx: HashMap::new(),
             objects,
             bones: HashMap::new(),
+            decals: DecalCache::default(),
             groups: Vec::new(),
             side: 0,
             queued: Vec::new(),
@@ -1320,6 +1548,7 @@ mod tests {
             shot: None,
             health: 1.0,
             states: Vec::new(),
+            finished: false,
         };
         let shooting = |weapon: &Weapon, effects: &mut Effects, seen: &mut Seen, tick| {
             let now = Now {
@@ -1328,6 +1557,7 @@ mod tests {
                 shot: Some((tick, 0)),
                 weapon: Some(weapon),
                 target: Some(Target::Unit(1)),
+                finished: false,
             };
             effects.witness(me, "tank", seen, now, at(tick));
         };
@@ -1382,9 +1612,10 @@ mod tests {
     }
 
     #[test]
-    fn entering_a_state_plays_its_effects_once() {
+    fn entering_a_state_or_being_finished_plays_its_effects_once() {
         let depot = ObjectEffects {
             entered: vec![(Id::from("structure_unpacking"), cue("dust"))],
+            constructed: vec![cue("lights")],
             destroyed: vec![cue("collapse")],
             ..ObjectEffects::default()
         };
@@ -1393,16 +1624,19 @@ mod tests {
             shot: None,
             health: 1.0,
             states: Vec::new(),
+            finished: false,
         };
         let me = Target::Building(0);
         let states = [
             vec!["structure_unpacking"],
             vec!["structure_unpacking"],
             vec![],
+            vec![],
             vec![DEAD],
         ];
         for states in states {
             let now = Now {
+                finished: states.is_empty(),
                 states,
                 health: 1.0,
                 shot: None,
@@ -1414,7 +1648,7 @@ mod tests {
         let queued: Vec<&str> = (effects.queued.iter())
             .map(|(_, p)| p.cue.vfx.as_str())
             .collect();
-        assert_eq!(queued, ["dust", "collapse"]);
+        assert_eq!(queued, ["dust", "lights", "collapse"]);
     }
 
     #[test]
