@@ -44,8 +44,8 @@ pub struct Outline(pub Vec<Vec<[f32; 2]>>);
 #[derive(Resource)]
 pub struct BorderLook {
     pub colour: Color,
-    /// What the options call the choice to show it.
-    pub option: String,
+    /// What the button that shows and hides it is called.
+    name: String,
     width: f32,
     /// The side of the squares the map is cut into, in world units.
     block: f32,
@@ -198,7 +198,6 @@ const BORDER_SIZE: f32 = 34.0;
 const RING_SIZE: f32 = 18.0;
 const BORDER_NAME: &str = "control_panel_ButtonSupplyBorder_ToolTip";
 const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
-const BORDER_OPTION: &str = "options_dialog_Child_text_15";
 
 /// Loads how the border looks, and spawns the buttons that show and hide
 /// it and that cycle through detached regiments.
@@ -237,10 +236,7 @@ pub fn spawn(
             Button,
             Click::TOGGLE,
             RelativeCursorPosition::default(),
-            match bindings.key(keys::SUPPLY_BORDER) {
-                Some(key) => key.mark(&name),
-                None => Marked::plain(name),
-            },
+            marked(&bindings, &name),
             Hint(what),
             // In the corner the minimap's disc leaves of its square, where
             // the game's control panel has it.
@@ -285,7 +281,7 @@ pub fn spawn(
         );
     commands.insert_resource(BorderLook {
         colour,
-        option: said(BORDER_OPTION, "Supply Border"),
+        name,
         width: border.width,
         block: border.block,
         material,
@@ -314,6 +310,25 @@ pub fn spawn(
         .observe(|_: On<Activate>, mut cycle: CycleParts| {
             cycle.step();
         });
+}
+
+/// The border button's name with its key marked.
+fn marked(bindings: &Bindings, name: &str) -> Marked {
+    match bindings.key(keys::SUPPLY_BORDER) {
+        Some(key) => key.mark(name),
+        None => Marked::plain(name),
+    }
+}
+
+/// Marks the border button's key afresh once the hotkeys change.
+pub fn mark_border(
+    bindings: Res<Bindings>,
+    look: Res<BorderLook>,
+    mut buttons: Query<&mut Marked, With<BorderButton>>,
+) {
+    for mut button in &mut buttons {
+        button.set_if_neq(marked(&bindings, &look.name));
+    }
 }
 
 /// What stepping through the detached regiments reads and changes.
