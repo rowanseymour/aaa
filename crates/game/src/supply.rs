@@ -194,7 +194,7 @@ pub struct BorderButton {
 #[derive(Component)]
 pub struct BorderRing;
 
-const BORDER_SIZE: f32 = 34.0;
+pub const BORDER_SIZE: f32 = 34.0;
 const RING_SIZE: f32 = 18.0;
 const BORDER_NAME: &str = "control_panel_ButtonSupplyBorder_ToolTip";
 const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
