@@ -21,6 +21,11 @@ pub struct PauseMenu {
 #[derive(Component)]
 struct Overlay;
 
+/// Opening and closing the menu on Escape, which what else Escape closes
+/// goes after, so as not to have the same press open the menu.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Toggle;
+
 pub struct PausePlugin;
 
 impl Plugin for PausePlugin {
@@ -30,9 +35,11 @@ impl Plugin for PausePlugin {
             .add_systems(
                 Update,
                 toggle
+                    .in_set(Toggle)
                     .before(crate::actions::back_out)
                     .run_if(in_state(Screen::Match))
-                    .run_if(console::closed),
+                    .run_if(console::closed)
+                    .run_if(crate::technologies::closed),
             );
     }
 }
