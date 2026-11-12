@@ -590,6 +590,7 @@ fn main() -> ExitCode {
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
+        .add_message::<messages::Failed>()
         .init_resource::<Selected>()
         .init_resource::<SelectedBuilding>()
         .init_resource::<Focus>()
@@ -832,6 +833,7 @@ fn prepare(
     sim.logistics = game.logistics();
     sim.resupply_rates = game.resupply_rates();
     sim.recruit_lists = game.recruit_lists();
+    sim.research_lists = game.research_lists();
     sim.sights = game.sights();
     sim.set_numbered(game.numbered());
     sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
@@ -2432,6 +2434,8 @@ mod tests {
             relations: Vec::new(),
             team_relations: Vec::new(),
             stockpile: 0.0,
+            technologies: Vec::new(),
+            barred: Vec::new(),
         };
         let general = |id: &str, name: &str| aaa_data::General {
             id: id.into(),

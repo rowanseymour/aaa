@@ -211,6 +211,11 @@ const VERBS: &[Verb] = &[
         "template",
         "asks the selected building to commission a template it lists",
     ),
+    verb(
+        "research",
+        "technology",
+        "asks the selected building to research a technology it lists",
+    ),
     verb("pack", "", "packs up the selected building"),
     verb(
         "attach",
@@ -390,6 +395,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "guard" => order(world, &args, Aim::Guard),
                 "select" => select(world, &args),
                 "commission" => commission(world, &args),
+                "research" => research(world, &args),
                 "unpack" => unpack(world, &args),
                 "pack" => pack(world, &args),
                 "attach" => attach(world, &args, true),
@@ -962,6 +968,30 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
+fn research(world: &mut World, args: &[&str]) -> Reply {
+    let [technology] = args else {
+        return Err(usage("research"));
+    };
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let b = world
+        .resource::<SelectedBuilding>()
+        .0
+        .ok_or("no building selected")?;
+    let sim = &world.resource::<Sim>().0;
+    let listed = (sim.research_list(b).iter())
+        .find(|r| r.technology.as_str().eq_ignore_ascii_case(technology));
+    let Some(item) = listed else {
+        let template = &sim.buildings[b].template;
+        return Err(format!("{template} doesn't research {technology}"));
+    };
+    let command = aaa_sim::Command::Research {
+        building: b,
+        technology: item.technology.clone(),
+    };
+    give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
+    Ok(String::new())
+}
+
 fn pack(world: &mut World, args: &[&str]) -> Reply {
     no_args(args)?;
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
@@ -1088,6 +1118,13 @@ fn completions(world: &mut World, before: &str) -> Vec<String> {
                 .list(template)
                 .iter()
                 .map(|t| t.to_string())
+                .collect()
+        }
+        [verb] if verb.eq_ignore_ascii_case("research") && in_match => {
+            let sim = &world.resource::<Sim>().0;
+            let building = world.resource::<SelectedBuilding>().0;
+            (building.map_or(&[][..], |b| sim.research_list(b)).iter())
+                .map(|r| r.technology.to_string())
                 .collect()
         }
         [verb] if verb.to_ascii_lowercase().ends_with("kingdom") && in_match => {

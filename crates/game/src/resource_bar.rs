@@ -36,6 +36,7 @@ pub struct Preview(pub Option<Previewed>);
 pub enum Previewed {
     /// Commissioning this regiment.
     Commission(Box<Regiment>),
+    Research(aaa_map::Research),
     /// The packed building at this index into the sim's regiments
     /// unpacking.
     Unpack(usize),
@@ -204,6 +205,7 @@ pub fn show(
     let previewed = preview.0.as_ref().and_then(|p| {
         let change = match p {
             Previewed::Commission(r) => Change::Commission(r),
+            Previewed::Research(r) => Change::Research(r),
             Previewed::Unpack(r) if *r < sim.regiments.len() => Change::Unpack(*r),
             Previewed::Unpack(_) => return None,
         };

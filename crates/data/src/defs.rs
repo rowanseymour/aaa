@@ -100,6 +100,7 @@ pub struct Thing {
     pub organization_component: Option<OrganizationComponent>,
     pub projectile_component: Option<ProjectileComponent>,
     pub recruit_component: Option<RecruitComponent>,
+    pub research_component: Option<ResearchComponent>,
     pub mobile_deployment_component: Option<MobileDeploymentComponent>,
     pub economy_component: Option<EconomyComponent>,
     pub supply_component: Option<SupplyComponent>,
@@ -239,6 +240,31 @@ pub struct RecruitComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct RecruitActor {
     pub actor_ids: Option<Id>,
+}
+
+/// The technologies an object can research.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResearchComponent {
+    #[serde(default)]
+    pub research_item: Vec<ResearchItem>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ResearchItem {
+    pub property_ids: Option<Id>,
+    /// Who gets the property: `GLOBAL`, `LOCAL` or `SUPPORT`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
+    pub research_time: Option<f32>,
+    pub research_cost: Option<Resources>,
+    /// Comma separated templates of the buildings its owner needs.
+    pub required_structures: Option<String>,
+    #[serde(default)]
+    pub required_structures_any: bool,
+    /// Comma separated properties the researcher or its side needs.
+    pub required_properties: Option<String>,
+    #[serde(default)]
+    pub required_properties_any: bool,
 }
 
 /// Packing a building into a vehicle and unpacking it again.

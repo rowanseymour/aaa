@@ -191,6 +191,9 @@ pub struct Looks {
     strings: HashMap<String, String>,
     /// How each property that has an icon shows, by id.
     properties: HashMap<Id, PropertyLook>,
+    /// Each technology's research button icon, by id, for what's being
+    /// researched.
+    technologies: HashMap<Id, String>,
     images: HashMap<String, Option<Handle<Image>>>,
     formats: bevy::image::CompressedImageFormats,
 }
@@ -240,6 +243,9 @@ pub fn spawn(
             .collect(),
         strings: game.strings(),
         properties: game.property_looks(),
+        technologies: (game.technologies().into_iter())
+            .filter_map(|(id, t)| Some((id, t.icon?)))
+            .collect(),
         images: HashMap::new(),
         formats: formats.0,
     });
@@ -279,7 +285,7 @@ fn wanted(sim: &World, selected: &[usize], chosen: Option<usize>) -> Option<What
     match (selected, chosen) {
         ([], Some(b)) => {
             let queue = sim.buildings[b].queue.iter();
-            let templates = queue.map(|c| c.regiment.template.clone()).collect();
+            let templates = queue.map(|c| c.template().to_string()).collect();
             Some(What::Building(b, templates))
         }
         ([], None) => None,
@@ -482,9 +488,11 @@ struct Ui<'a> {
 }
 
 impl Ui<'_> {
+    /// The picture of a template, or of a technology being researched.
     fn picture(&mut self, template: &str) -> Option<Handle<Image>> {
-        let path = self.drawn.0.icon(template);
-        self.looks.image(self.game, self.images, path)
+        let path = (self.drawn.0.icon(template).map(str::to_string))
+            .or_else(|| self.looks.technologies.get(&Id::from(template)).cloned());
+        self.looks.image(self.game, self.images, path.as_deref())
     }
 
     fn regiment_name(&self, r: usize) -> String {
@@ -646,7 +654,7 @@ impl Ui<'_> {
                 }
                 (Place::Queued(n), Some(b)) => {
                     let queue = &self.sim.buildings[b].queue;
-                    let template = queue.get(n).map(|c| c.regiment.template.clone());
+                    let template = queue.get(n).map(|c| c.template().to_string());
                     let picture = template.and_then(|t| self.picture(&t));
                     card.insert((Button, Queued(n))).observe(cancel);
                     card.with_children(|card| {
@@ -819,7 +827,7 @@ impl Ui<'_> {
         // An HQ's places show what it's been asked for.
         let queue: Vec<String> = (building.queue.iter())
             .filter(|_| self.detail.slots.is_empty())
-            .map(|c| c.regiment.template.clone())
+            .map(|c| c.template().to_string())
             .collect();
         // Commissions are trucks, which show their building's button.
         let pictures: Vec<_> = queue.iter().map(|t| self.picture(t)).collect();
@@ -948,14 +956,19 @@ fn regiment_state(sim: &World, r: usize) -> Option<&'static str> {
 /// at rest.
 fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     let building = &sim.buildings[b];
+    // A queue outweighs being out of supply, which outweighs disabled,
+    // even while either holds the queue up.
+    let queue = match building.queue.front().map(|c| &c.work) {
+        Some(aaa_sim::Work::Research(_)) => Some("structure_researching"),
+        Some(aaa_sim::Work::Raise(_)) => Some("structure_recruiting"),
+        None => None,
+    };
     match () {
         _ if building.packing.is_some() => Some("structure_packing"),
         _ if building.unpacking.is_some() => Some("structure_unpacking"),
-        // Out of supply outweighs disabled, and a queue that either holds
-        // up isn't recruiting.
+        _ if queue.is_some() => queue,
         _ if sim.out_of_supply(b) && building.standing() => Some("out_of_supply"),
         _ if building.state == State::Disabled => Some("disabled"),
-        _ if !building.queue.is_empty() => Some("structure_recruiting"),
         _ => None,
     }
 }

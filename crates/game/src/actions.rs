@@ -6,7 +6,8 @@
 //! opening a menu of what comes out of it, and Deploy to Location, of what
 //! a transport carries to where it's sent, each while that menu offers
 //! anything; [`crate::pane`] shows what it's been asked for, and a button
-//! sets the rally point what it recruits moves on to. A building that
+//! sets the rally point what it recruits moves on to. One that researches
+//! has Research, opening a menu of the technologies it lists. A building that
 //! packs, into a truck say, has Pack, dimmed while it can't. Each button
 //! answers to the keys the game binds what it does to, and its tooltip
 //! marks the letter.
@@ -16,7 +17,7 @@ use std::collections::HashMap;
 use aaa_data::{GameData, Id};
 use aaa_map::Regiment;
 use aaa_render::textures;
-use aaa_sim::{Commission, Lacking};
+use aaa_sim::{Commission, Lacking, Researchable};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
@@ -25,7 +26,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::keys::Bindings;
-use crate::messages::{About, Refused};
+use crate::messages::{About, Failed, Refused};
 use crate::resource_bar::{Preview, Previewed};
 use crate::ui::{self, Click, Edge, Font, Ink, Marked, Shade, Surface, label, panel, tooltip};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
@@ -63,6 +64,8 @@ const ORDERS: [(&str, Option<Give>); 8] = [
 /// The commands whose buttons open a recruiter's two menus.
 const DEPLOY: &str = "recruit";
 const DEPLOY_TO_LOCATION: &str = "recruit_location";
+/// The command whose button opens a building's research menu.
+const RESEARCH: &str = "research";
 /// The command that packs a building up, such as into a truck.
 const PACK: &str = "pack";
 /// The command that sets where what a building commissions moves on to.
@@ -143,16 +146,18 @@ pub enum Page {
     /// Waiting for a click on the map to set the selected building's
     /// rally point there.
     Rally,
-    /// One of the selected building's menus of what it recruits.
-    Deploy(Menu),
+    /// One of the selected building's menus of what it recruits or
+    /// researches.
+    Menu(Menu),
 }
 
-/// Which of a recruiter's menus something it recruits is in: Deploy for
-/// what comes out of it, Deploy to Location for what names a transport.
+/// Which of a building's menus something is in: Deploy for what comes out
+/// of it, Deploy to Location for what names a transport, and Research.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Menu {
     Deploy,
     Location,
+    Research,
 }
 
 /// How a recruiter's menu shows one of its entries.
@@ -186,6 +191,8 @@ pub enum Entry {
     Open(Menu),
     /// Index into everything the selected building recruits.
     Recruit(usize),
+    /// Index into what the selected building researches.
+    Research(usize),
     /// Packs the selected building up.
     Pack,
     /// Waits for a place to set the selected building's rally point.
@@ -228,6 +235,9 @@ struct BuildingButtons<'a> {
     deploy: Option<Place>,
     location: Option<Place>,
     recruits: &'a [(Menu, Offer)],
+    research: Option<Place>,
+    /// How it offers each technology it lists, in its menu's order.
+    researches: &'a [Researchable],
     rally: Option<Place>,
     pack: Option<Place>,
 }
@@ -274,10 +284,26 @@ fn layout(
                     put(&mut out, place, Entry::Open(menu));
                 }
             }
+            // Even once there's nothing left to research.
+            if !b.researches.is_empty() {
+                put(&mut out, b.research, Entry::Open(Menu::Research));
+            }
             put(&mut out, b.rally, Entry::Rally);
             put(&mut out, b.pack, Entry::Pack);
         }
-        (Page::Deploy(menu), Some(b)) => {
+        (Page::Menu(Menu::Research), Some(b)) => {
+            // What's done or under way keeps its slot empty; what's hidden
+            // gives its slot up.
+            let shown =
+                (b.researches.iter().enumerate()).filter(|(_, r)| **r != Researchable::Hidden);
+            for ((i, r), slot) in shown.zip(&mut out[..MENU_CANCEL]) {
+                if *r != Researchable::Taken {
+                    *slot = Some(Entry::Research(i));
+                }
+            }
+            out[MENU_CANCEL] = Some(Entry::Cancel);
+        }
+        (Page::Menu(menu), Some(b)) => {
             // The other menu's take no place; hidden ones keep theirs empty.
             let ours = (b.recruits.iter().enumerate()).filter(|(_, (m, _))| *m == menu);
             for ((i, &(_, offer)), slot) in ours.zip(&mut out[..MENU_CANCEL]) {
@@ -297,7 +323,7 @@ fn layout(
             }
             out[CANCEL] = Some(Entry::Cancel);
         }
-        (Page::Deploy(_) | Page::Rally, None) => {}
+        (Page::Menu(_) | Page::Rally, None) => {}
         (Page::Orders, None) => {
             for (i, &place) in slots.iter().enumerate() {
                 if offered[i] {
@@ -344,6 +370,16 @@ struct Recruit {
     seconds: f32,
 }
 
+/// One of the technologies a building researches, as its button shows.
+struct Topic {
+    look: Look,
+    /// Its cost, for the tooltip.
+    economy: Vec<Row>,
+    /// What the tooltip says under its cost: what the technology does,
+    /// then its description.
+    notes: Vec<String>,
+}
+
 /// The icons and names of the buttons, loaded with the match.
 #[derive(Resource)]
 pub struct Looks {
@@ -351,6 +387,7 @@ pub struct Looks {
     orders: Vec<(Option<Place>, Look)>,
     deploy: (Option<Place>, Look),
     location: (Option<Place>, Look),
+    research: (Option<Place>, Look),
     rally: (Option<Place>, Look),
     pack: (Option<Place>, Look),
     cancel: Look,
@@ -360,9 +397,18 @@ pub struct Looks {
     /// What a recruit the player can't afford says, given its name and
     /// cost.
     affording: String,
+    /// The same for research.
+    research_affording: String,
+    /// What research refused for anything else says, given its name.
+    research_refused: String,
+    /// What a technology that wants buildings says, given its name and
+    /// theirs.
+    research_requires: String,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
+    /// What each building template researches, in its buttons' order.
+    researches: HashMap<Id, Vec<Topic>>,
     /// What each template and technology is called, for saying what a
     /// commission needs.
     names: HashMap<Id, String>,
@@ -373,6 +419,17 @@ impl Looks {
     fn menu(&self, sim: &aaa_sim::World, building: Option<usize>) -> &[Recruit] {
         building
             .and_then(|b| self.menus.get(&sim.buildings[b].template))
+            .map_or(&[], Vec::as_slice)
+    }
+
+    /// The research menu of the selected building, as its research list
+    /// has it.
+    fn topics(&self, sim: &aaa_sim::World, building: Option<usize>) -> &[Topic] {
+        building
+            .and_then(|b| {
+                self.researches
+                    .get(&Id::from(sim.buildings[b].template.as_str()))
+            })
             .map_or(&[], Vec::as_slice)
     }
 }
@@ -404,6 +461,8 @@ struct Tip {
     title: Marked,
     help: Option<String>,
     table: Vec<Row>,
+    /// Lines under the table.
+    notes: Vec<String>,
     why: Option<String>,
 }
 
@@ -503,6 +562,7 @@ pub fn spawn(
     let orders = ORDERS.iter().map(|(ids, _)| look_of(game, ids)).collect();
     let deploy = look_of(game, DEPLOY);
     let location = look_of(game, DEPLOY_TO_LOCATION);
+    let research = look_of(game, RESEARCH);
     let transports = game.transports();
     let rally = look_of(game, RALLY);
     let pack = look_of(game, PACK);
@@ -510,6 +570,7 @@ pub fn spawn(
     let strings = game.strings();
     let title = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     let cost = title("ui_tooltip_item_title_cost", "Cost");
+    let cost_title = cost.clone();
     let production = title("ui_tooltip_item_title_production", "Production");
     let upkeep = title("ui_tooltip_item_title_upkeep", "Upkeep");
     let requires = title("ui_tooltip_item_title_requires", "Requires");
@@ -523,6 +584,12 @@ pub fn spawn(
         "recruit_error_affording|ss",
         "Insufficient funds for %s. Requires %s.",
     );
+    let research_affording = title(
+        "research_error_affording|ss",
+        "Insufficient funds for %s. Requires %s.",
+    );
+    let research_requires = title("research_error_missing_requirements|ss", "%s required: %s");
+    let research_refused = title("research_error_generic|s", "Could not research %s");
     let glyphs: HashMap<&str, Handle<Image>> = GLYPHS
         .iter()
         .filter_map(|&(kind, name)| Some((kind, image(game, &format!("{GLYPH_DIR}/{name}.png"))?)))
@@ -538,6 +605,44 @@ pub fn spawn(
             })
             .collect()
     };
+    let technologies = game.technologies();
+    let researches = (sim.0.research_lists.iter())
+        .map(|(template, list)| {
+            let topics = list.iter().map(|item| {
+                let id = &item.technology;
+                let technology = technologies.get(id);
+                let cost: Vec<aaa_data::Amount> = (item.cost.nonzero())
+                    .map(|(kind, amount)| aaa_data::Amount {
+                        kind,
+                        resource: aaa_data::resource_name(&strings, kind),
+                        amount,
+                    })
+                    .collect();
+                Topic {
+                    look: Look {
+                        name: technology.map_or_else(|| id.to_string(), |t| t.name.clone()),
+                        help: None,
+                        disabled: None,
+                        icon: (technology.and_then(|t| t.icon.as_deref()))
+                            .and_then(|p| image(game, p)),
+                    },
+                    economy: match cost.is_empty() {
+                        true => Vec::new(),
+                        false => vec![Row {
+                            label: cost_title.clone(),
+                            amounts: quantities(&cost, false),
+                        }],
+                    },
+                    notes: technology.map_or_else(Vec::new, |t| {
+                        (t.lines.iter().cloned())
+                            .chain(t.description.clone())
+                            .collect()
+                    }),
+                }
+            });
+            (template.clone(), topics.collect())
+        })
+        .collect();
     let listings = game.listings();
     // Buildings unpacked during the match need menus too: those of the
     // map's trucks, and of what any menu commissions.
@@ -614,15 +719,20 @@ pub fn spawn(
         orders,
         deploy,
         location,
+        research,
         rally,
         pack,
         cancel,
         command_all,
         requires,
         affording,
+        research_affording,
+        research_refused,
+        research_requires,
         menus,
+        researches,
         names: (listings.into_iter().map(|(id, l)| (id, l.name)))
-            .chain(game.technologies().into_iter().map(|(id, t)| (id, t.name)))
+            .chain(technologies.into_iter().map(|(id, t)| (id, t.name)))
             .collect(),
     });
     commands.init_resource::<Shown>();
@@ -737,7 +847,7 @@ pub fn back_out(
     let gone = match *page {
         Page::Orders => false,
         Page::Aiming(_) => selected.0.is_empty(),
-        Page::Deploy(_) => chosen.0.is_none() || switched,
+        Page::Menu(_) => chosen.0.is_none() || switched,
         Page::Rally => chosen.0.is_none(),
     };
     if gone || keys.just_pressed(KeyCode::Escape) {
@@ -810,6 +920,15 @@ pub fn show(
     let recruits: Vec<(Menu, Offer)> = (menu.iter().zip(&lacks))
         .map(|(r, lacking)| (r.menu, Offer::from(lacking)))
         .collect();
+    let topics = looks.topics(&sim.0, building);
+    let list = building.map_or(&[][..], |b| sim.0.research_list(b));
+    // Only what has a look, should the two ever differ.
+    let list = &list[..list.len().min(topics.len())];
+    let mut researches: Vec<Researchable> = match (building, local.0) {
+        (Some(b), Some(player)) => sim.0.researchables(player, b),
+        _ => vec![Researchable::Hidden; list.len()],
+    };
+    researches.truncate(list.len());
     let order_slots: Vec<Option<Place>> = looks.orders.iter().map(|(s, _)| *s).collect();
     shown.0 = layout(
         *page,
@@ -819,6 +938,8 @@ pub fn show(
             deploy: looks.deploy.0,
             location: looks.location.0,
             recruits: &recruits,
+            research: looks.research.0,
+            researches: &researches,
             // Where what it raises goes matters whether or not any of it
             // can be raised now.
             rally: looks.rally.0.filter(|_| !menu.is_empty()),
@@ -851,6 +972,9 @@ pub fn show(
         // Why it can't be pressed, when that's down to the player.
         let mut why = None;
         let mut table = Vec::new();
+        let mut notes = Vec::new();
+        // A greyed technology's tooltip says only what it wants.
+        let mut only = None;
         let (look, ready, lit) = match entry {
             Entry::Order(i) => {
                 let ready = match (ORDERS[i].1, local.0) {
@@ -867,6 +991,21 @@ pub fn show(
             Entry::Cancel => (&looks.cancel, true, false),
             Entry::Open(Menu::Deploy) => (&looks.deploy.1, true, false),
             Entry::Open(Menu::Location) => (&looks.location.1, true, false),
+            Entry::Open(Menu::Research) => (&looks.research.1, true, false),
+            Entry::Research(i) => {
+                let topic = &topics[i];
+                table.extend(topic.economy.iter().cloned());
+                notes.extend(topic.notes.iter().cloned());
+                if let Researchable::Lacking(missing) = &researches[i] {
+                    let names: Vec<String> = (missing.iter())
+                        .map(|id| looks.names.get(id).map_or(id.to_string(), Clone::clone))
+                        .collect();
+                    let with = [topic.look.name.as_str(), &names.join(", ")];
+                    only = Some(fill(&looks.research_requires, &with));
+                }
+                let ready = researches[i] == Researchable::Ready;
+                (&topic.look, ready, false)
+            }
             Entry::Rally => (&looks.rally.1, true, *page == Page::Rally),
             Entry::CommandAll => (&looks.command_all, true, false),
             Entry::Pack => {
@@ -906,6 +1045,9 @@ pub fn show(
                         .clone()
                         .map(|r| Previewed::Commission(Box::new(r)));
                 }
+                Entry::Research(i) => {
+                    previewed = list.get(i).cloned().map(Previewed::Research);
+                }
                 Entry::Order(i) if ORDERS[i].1 == Some(Give::Aim(Aim::Unpack)) => {
                     previewed = unpacking.map(Previewed::Unpack);
                 }
@@ -913,31 +1055,39 @@ pub fn show(
             }
             let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
             let unaffordable = match (entry, refused) {
-                (Entry::Recruit(i), Some(aaa_sim::Refused::Unaffordable)) => {
-                    menu[i].regiment.as_ref()
-                }
+                (Entry::Recruit(i), Some(aaa_sim::Refused::Unaffordable)) => menu[i]
+                    .regiment
+                    .as_ref()
+                    .map(|r| (&looks.affording, sim.0.cost(r))),
                 _ => None,
             };
             let why = match (ready, why, refused) {
-                (_, _, Some(_)) if unaffordable.is_some() => unaffordable.map(|r| {
-                    let cost = sim.0.cost(r).ceil().to_string();
-                    fill(&looks.affording, &[&look.name, &cost])
+                (_, _, Some(_)) if unaffordable.is_some() => unaffordable.map(|(said, cost)| {
+                    let cost = cost.ceil().to_string();
+                    fill(said, &[&look.name, &cost])
                 }),
                 (_, _, Some(refused)) => Some(refused_why(refused).to_string()),
                 (true, _, _) => None,
                 (false, Some(why), _) => Some(why),
                 (false, None, _) => Some(look.disabled.clone().unwrap_or("Not yet".into())),
             };
-            let names = bound(entry, slot.0, *page, menu);
+            let names = bound(entry, slot.0, *page, menu, list);
             let key = names.iter().find_map(|action| bindings.key(action));
-            hovered = Some(Tip {
-                title: match key {
-                    Some(key) => key.mark(&look.name),
-                    None => Marked::plain(look.name.as_str()),
+            hovered = Some(match only.take() {
+                Some(only) => Tip {
+                    title: Marked::plain(only.as_str()),
+                    ..default()
                 },
-                help: look.help.clone(),
-                table,
-                why,
+                None => Tip {
+                    title: match key {
+                        Some(key) => key.mark(&look.name),
+                        None => Marked::plain(look.name.as_str()),
+                    },
+                    help: look.help.clone(),
+                    table,
+                    notes,
+                    why,
+                },
             });
         }
         border.set_if_neq(match (lit, hover.get() && ready) {
@@ -979,6 +1129,7 @@ pub fn show(
         (Some(Previewed::Commission(a)), Some(Previewed::Commission(b))) => {
             a.template != b.template
         }
+        (Some(Previewed::Research(a)), Some(Previewed::Research(b))) => a != b,
         _ => true,
     };
     if changed {
@@ -1045,6 +1196,9 @@ impl TipParts<'_, '_> {
                         }
                     });
             }
+            for note in &tip.notes {
+                parent.spawn(label(note.clone(), Font::Small, Ink::Help));
+            }
             if let Some(why) = &tip.why {
                 parent.spawn(label(why.clone(), Font::Small, Ink::Warn));
             }
@@ -1110,15 +1264,29 @@ fn set_icon(
 
 /// What the game's hotkeys call what a button does, and the button
 /// itself by its slot, for [`Bindings`].
-fn bound(entry: Entry, slot: usize, page: Page, menu: &[Recruit]) -> Vec<String> {
+fn bound(
+    entry: Entry,
+    slot: usize,
+    page: Page,
+    menu: &[Recruit],
+    researches: &[aaa_map::Research],
+) -> Vec<String> {
     let command = |ids: &str| format!("ActorCommand {ids}");
     let mut names = match entry {
         Entry::Order(i) => vec![command(ORDERS[i].0)],
-        Entry::Cancel if matches!(page, Page::Deploy(_)) => vec!["CancelRecruit".into()],
+        Entry::Cancel if matches!(page, Page::Menu(_)) => vec!["CancelRecruit".into()],
         Entry::Cancel => vec!["ActorCommandCancel".into()],
         Entry::Open(Menu::Deploy) => vec![command(DEPLOY)],
         Entry::Open(Menu::Location) => vec![command(DEPLOY_TO_LOCATION)],
+        Entry::Open(Menu::Research) => vec![command(RESEARCH)],
         Entry::Recruit(i) => vec![format!("ActorDataSelectCommand {}", menu[i].id)],
+        Entry::Research(i) => {
+            let technology = researches.get(i).map(|r| r.technology.as_str());
+            vec![format!(
+                "PropertyDataSelectCommand {}",
+                technology.unwrap_or("")
+            )]
+        }
         Entry::Pack => vec![command(PACK)],
         Entry::Rally => vec![command(RALLY)],
         Entry::CommandAll => vec!["CommandAll".into()],
@@ -1141,6 +1309,7 @@ pub struct Presser<'w> {
     time: Res<'w, Time>,
     sounds: ResMut<'w, crate::sound::Sounds>,
     refusal: ResMut<'w, Refusal>,
+    failed: MessageWriter<'w, Failed>,
 }
 
 impl Presser<'_> {
@@ -1171,7 +1340,7 @@ impl Presser<'_> {
                 None => {}
             },
             Entry::Cancel => *self.page = Page::Orders,
-            Entry::Open(menu) => *self.page = Page::Deploy(menu),
+            Entry::Open(menu) => *self.page = Page::Menu(menu),
             Entry::Rally => *self.page = Page::Rally,
             Entry::CommandAll => {
                 let building = self.chosen.0.filter(|_| self.selected.0.is_empty());
@@ -1213,7 +1382,48 @@ impl Presser<'_> {
                     *self.page = commissioned(*self.page, given);
                 }
             }
+            Entry::Research(i) => {
+                let Some(b) = self.chosen.0 else {
+                    return;
+                };
+                let Some(item) = sim.research_list(b).get(i) else {
+                    return;
+                };
+                let command = aaa_sim::Command::Research {
+                    building: b,
+                    technology: item.technology.clone(),
+                };
+                let given = self.orders.give(sim, player, command);
+                if let Err(e) = given {
+                    debug!("can't research {}: {e:?}", item.technology);
+                    self.refuse_research(b, i, e);
+                }
+                *self.page = commissioned(*self.page, given);
+            }
         }
+    }
+}
+
+impl Presser<'_> {
+    /// Tells the player the selected building at `building` won't research
+    /// the `i`th item it lists, and why.
+    fn refuse_research(&mut self, building: usize, i: usize, refused: aaa_sim::Refused) {
+        let sim = &self.sim.0;
+        let Some(item) = sim.research_list(building).get(i) else {
+            return;
+        };
+        let looks = &self.looks;
+        let name = (looks.topics(sim, Some(building)).get(i))
+            .map_or(item.technology.as_str(), |t| t.look.name.as_str());
+        let text = match refused {
+            aaa_sim::Refused::Unaffordable => {
+                let cost = sim.research_cost(item).ceil().to_string();
+                fill(&looks.research_affording, &[name, &cost])
+            }
+            _ => fill(&looks.research_refused, &[name]),
+        };
+        let about = About::Building(building);
+        self.failed.write(Failed { text, about });
     }
 }
 
@@ -1231,15 +1441,31 @@ pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut pre
     }
     let building = presser.chosen.0.filter(|_| presser.selected.0.is_empty());
     let menu = presser.looks.menu(&presser.sim.0, building);
+    let list = building.map_or(&[][..], |b| presser.sim.0.research_list(b));
     let page = *presser.page;
     let slot = (0..SLOTS).find(|&slot| {
         let names = presser.shown.0[slot]
             .filter(|e| !matches!(e, Entry::Recruit(i) if *i >= menu.len()))
-            .map_or(Vec::new(), |e| bound(e, slot, page, menu));
+            .filter(|e| !matches!(e, Entry::Research(i) if *i >= list.len()))
+            .map_or(Vec::new(), |e| bound(e, slot, page, menu, list));
         names.iter().any(|action| bindings.pressed(&keys, action))
     });
     if let Some(slot) = slot {
         presser.press(slot);
+        return;
+    }
+    // The key of what's done or under way, its slot left empty, is refused.
+    let (Page::Menu(Menu::Research), Some(b), Some(player)) = (page, building, presser.local.0)
+    else {
+        return;
+    };
+    let sim = &presser.sim.0;
+    let taken = (sim.research_list(b).iter().enumerate()).find(|(_, item)| {
+        let action = format!("PropertyDataSelectCommand {}", item.technology);
+        bindings.pressed(&keys, &action) && sim.researchable(player, b, item) == Researchable::Taken
+    });
+    if let Some((i, _)) = taken {
+        presser.refuse_research(b, i, aaa_sim::Refused::Unable);
     }
 }
 
@@ -1627,7 +1853,7 @@ mod tests {
 
     #[test]
     fn buttons_go_by_the_names_the_hotkeys_bind() {
-        let names = |entry, page| bound(entry, 4, page, &[]);
+        let names = |entry, page| bound(entry, 4, page, &[], &[]);
         assert_eq!(
             names(Entry::Order(5), Page::Orders),
             ["ActorCommand hq_attach", "ActionButtonsButton_4"]
@@ -1638,7 +1864,7 @@ mod tests {
             "ActorCommand set_rally_point"
         );
         assert_eq!(
-            names(Entry::Cancel, Page::Deploy(Menu::Location))[0],
+            names(Entry::Cancel, Page::Menu(Menu::Location))[0],
             "CancelRecruit"
         );
         assert_eq!(
@@ -1646,6 +1872,10 @@ mod tests {
             "ActorCommand recruit_location"
         );
         assert_eq!(names(Entry::Cancel, Page::Rally)[0], "ActorCommandCancel");
+        assert_eq!(
+            names(Entry::Open(Menu::Research), Page::Orders)[0],
+            "ActorCommand research"
+        );
     }
 
     #[test]
@@ -1658,7 +1888,7 @@ mod tests {
 
     #[test]
     fn commissioning_goes_back_to_the_buildings_buttons() {
-        let menu = Page::Deploy(Menu::Deploy);
+        let menu = Page::Menu(Menu::Deploy);
         assert_eq!(commissioned(menu, Ok(())), Page::Orders);
         assert_eq!(commissioned(menu, Err(aaa_sim::Refused::Unable)), menu);
     }
@@ -1670,6 +1900,8 @@ mod tests {
             deploy: at(0),
             location: high(1),
             recruits: &corps,
+            research: None,
+            researches: &[],
             rally: at(5),
             pack: at(9),
         };
@@ -1689,13 +1921,7 @@ mod tests {
                 .iter()
                 .all(Option::is_none)
         );
-        let menu = layout(
-            Page::Deploy(Menu::Deploy),
-            &GAME,
-            &[true; 8],
-            Some(hq),
-            false,
-        );
+        let menu = layout(Page::Menu(Menu::Deploy), &GAME, &[true; 8], Some(hq), false);
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
         let rally = layout(Page::Rally, &GAME, &[true; 8], Some(hq), false);
@@ -1717,6 +1943,8 @@ mod tests {
             deploy: at(0),
             location: high(1),
             recruits: &infantry,
+            research: None,
+            researches: &[],
             rally: at(5),
             pack: None,
         };
@@ -1732,13 +1960,7 @@ mod tests {
         let grid = layout(Page::Orders, &GAME, &[true; 8], Some(none), false);
         assert_eq!(grid[..2], [None, None]);
         assert_eq!(grid[5], Some(Entry::Rally));
-        let menu = layout(
-            Page::Deploy(Menu::Deploy),
-            &GAME,
-            &[true; 8],
-            Some(hq),
-            false,
-        );
+        let menu = layout(Page::Menu(Menu::Deploy), &GAME, &[true; 8], Some(hq), false);
         assert_eq!(
             menu[..3],
             [Some(Entry::Recruit(0)), Some(Entry::Recruit(1)), None]
@@ -1770,7 +1992,7 @@ mod tests {
         assert_eq!(grid[11], Some(Entry::Open(Menu::Location)));
         assert_eq!(grid[1], Some(Entry::Rally));
         let deploy = layout(
-            Page::Deploy(Menu::Deploy),
+            Page::Menu(Menu::Deploy),
             &GAME,
             &[true; 8],
             Some(ship),
@@ -1779,7 +2001,7 @@ mod tests {
         assert_eq!(deploy[0], Some(Entry::Recruit(1)));
         assert_eq!(deploy.iter().flatten().count(), 2);
         let carried = layout(
-            Page::Deploy(Menu::Location),
+            Page::Menu(Menu::Location),
             &GAME,
             &[true; 8],
             Some(ship),
@@ -1789,5 +2011,53 @@ mod tests {
             carried[..3],
             [Some(Entry::Recruit(0)), None, Some(Entry::Recruit(3))]
         );
+    }
+
+    #[test]
+    fn research_menus_keep_slots_for_whats_done_and_close_up_whats_hidden() {
+        use Researchable::{Hidden, Lacking, Ready, Taken};
+        let researches = [
+            Taken,
+            Hidden,
+            Ready,
+            Lacking(vec![Id::from("depot")]),
+            Ready,
+        ];
+        let pool = BuildingButtons {
+            deploy: None,
+            location: None,
+            recruits: &[],
+            research: at(6),
+            researches: &researches,
+            rally: None,
+            pack: None,
+        };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(pool), false);
+        assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
+        assert_eq!(grid.iter().flatten().count(), 1);
+        let menu = layout(
+            Page::Menu(Menu::Research),
+            &GAME,
+            &[true; 8],
+            Some(pool),
+            false,
+        );
+        assert_eq!(
+            menu[..4],
+            [
+                None,
+                Some(Entry::Research(2)),
+                Some(Entry::Research(3)),
+                Some(Entry::Research(4))
+            ]
+        );
+        assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
+        // The button stays once everything's researched.
+        let done = BuildingButtons {
+            researches: &[Taken, Taken],
+            ..pool
+        };
+        let grid = layout(Page::Orders, &GAME, &[true; 8], Some(done), false);
+        assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
     }
 }

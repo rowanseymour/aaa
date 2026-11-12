@@ -113,8 +113,12 @@ impl World {
         (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
     }
 
-    /// Gives `player` a technology, for all it has and will have.
+    /// Gives `player` a technology, for all it has and will have, unless
+    /// the map bars it.
     pub fn grant(&mut self, player: u32, technology: Id) {
+        if self.barred(player, &technology) {
+            return;
+        }
         let held = self.technologies.entry(player).or_default();
         if !held.contains(&technology) {
             held.push(technology);

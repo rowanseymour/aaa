@@ -854,6 +854,8 @@ mod tests {
             relations: vec![Relation::Neutral; 4],
             team_relations: Vec::new(),
             stockpile: 0.0,
+            technologies: Vec::new(),
+            barred: Vec::new(),
         }
     }
 

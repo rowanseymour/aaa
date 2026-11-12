@@ -8,7 +8,7 @@ use aaa_map::Id;
 
 pub use aaa_map::{Amounts, Economy, EconomyRules};
 
-use crate::{Pause, State, TICK, World};
+use crate::{Commission, Pause, State, TICK, World};
 
 /// What a side, or one thing of it, earns and takes to keep, per minute.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -139,6 +139,15 @@ pub enum Notice {
         building: usize,
         regiment: usize,
     },
+    /// A building of its, by index into [`World::buildings`], has finished
+    /// researching `technology`.
+    Researched {
+        player: u32,
+        building: usize,
+        technology: Id,
+    },
+    /// It holds a technology it didn't.
+    Gained { player: u32, technology: Id },
     /// Something of `owner`'s is destroyed, by whatever cause.
     Destroyed { owner: u32, what: Fallen },
 }
@@ -158,6 +167,7 @@ const SHORTAGE_STEP: f32 = 5.0;
 pub enum Change<'a> {
     /// Commissioning a regiment as it's raised.
     Commission(&'a aaa_map::Regiment),
+    Research(&'a aaa_map::Research),
     /// A packed building, by index into [`World::regiments`], unpacking.
     Unpack(usize),
 }
@@ -241,8 +251,13 @@ impl World {
         }
         let e = self.economy_of(&b.template);
         let mut upkeep = e.upkeep;
-        for c in b.queue.iter().filter(|c| c.held) {
-            let taken = self.commission_ledger(&c.regiment).upkeep;
+        for r in b
+            .queue
+            .iter()
+            .filter(|c| c.held)
+            .filter_map(Commission::regiment)
+        {
+            let taken = self.commission_ledger(r).upkeep;
             for &(consumed, _) in &self.economy.limits {
                 upkeep.set(consumed, upkeep.get(consumed) + taken.get(consumed));
             }
@@ -265,18 +280,23 @@ impl World {
     /// the limits. Tells the owner when a queue first stops for a reason.
     pub(crate) fn held_up(&mut self, building: usize) -> bool {
         let b = &self.buildings[building];
-        if b.gone() || b.busy() || b.deploy.is_none() {
+        if b.gone() || b.busy() {
             return true;
         }
         let Some(first) = b.queue.front() else {
             return true;
         };
+        // A regiment needs somewhere to come out.
+        if first.regiment().is_some() && b.deploy.is_none() {
+            return true;
+        }
         let why = match b.state {
             State::Standing if self.out_of_supply(building) => Some(Pause::Supply),
             State::Standing if first.held => None,
             State::Standing => {
                 let balance = self.balance(b.owner);
-                let needs = self.commission_ledger(&first.regiment).upkeep;
+                let needs = first.regiment().map(|r| self.commission_ledger(r).upkeep);
+                let needs = needs.unwrap_or_default();
                 let full = balance.limits.iter().find(|l| {
                     needs.get(l.consumed) > 0.0 && l.used + needs.get(l.consumed) > l.provided
                 });
@@ -284,7 +304,7 @@ impl World {
             }
             _ => Some(Pause::Disabled),
         };
-        let (player, template) = (b.owner, first.regiment.template.clone());
+        let (player, template) = (b.owner, first.template().to_string());
         let b = &mut self.buildings[building];
         let told = b.paused;
         b.paused = why;
@@ -363,6 +383,11 @@ impl World {
             .sum()
     }
 
+    /// What researching `item` costs, in the one resource stockpiled.
+    pub fn research_cost(&self, item: &aaa_map::Research) -> f32 {
+        item.cost.get(money(&self.economy))
+    }
+
     /// What `player`'s stockpile and balance would be after `change`.
     pub fn preview(&self, player: u32, change: Change) -> (f32, Balance) {
         let mut ledger = self.ledger(player);
@@ -372,6 +397,7 @@ impl World {
                 stockpile -= self.cost(regiment);
                 ledger += self.commission_ledger(regiment);
             }
+            Change::Research(item) => stockpile -= self.research_cost(item),
             Change::Unpack(r) => {
                 ledger = ledger.without(self.regiment_ledger(r));
                 if let Some(u) = &self.regiments[r].unpacks {

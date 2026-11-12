@@ -9,6 +9,7 @@ mod hotkeys;
 mod id;
 mod messages;
 mod properties;
+mod research;
 mod supply;
 mod terrain;
 
@@ -19,6 +20,7 @@ pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use properties::PropertyLook;
+pub use research::{Grant, Research};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{TerrainEffect, TerrainRules};
 
@@ -599,6 +601,9 @@ pub struct Technology {
     pub description: Option<String>,
     /// Archive path of its button's icon.
     pub icon: Option<String>,
+    /// What it says under its name: who it's for, then a line for each
+    /// thing it does that the game has words for.
+    pub lines: Vec<String>,
 }
 
 /// Where what a building recruits appears and goes, from where it stands:
@@ -1513,24 +1518,12 @@ impl GameData {
     /// What buildings recruiting each template needs, by template id, for
     /// those that need any.
     pub fn requirements(&mut self) -> HashMap<Id, Requires> {
-        // Maps may still place a building under any id it once had.
-        let renames = self.thing_renames();
-        let mut aliases: HashMap<Id, Vec<Id>> = HashMap::new();
-        for (old, new) in &renames {
-            aliases.entry(new.clone()).or_default().push(old.clone());
-        }
-        for olds in aliases.values_mut() {
-            olds.sort_unstable();
-        }
+        let aliases = self.structure_aliases();
         self.by_template(|t| {
             let e = t.element_component.as_ref()?;
             let structures: Vec<Vec<Id>> = supply::listed(e.required_structures.as_deref())
-                .into_iter()
-                .map(|s| {
-                    let id = renamed(&renames, &s);
-                    let olds = aliases.get(&id).cloned().unwrap_or_default();
-                    std::iter::once(id).chain(olds).collect()
-                })
+                .iter()
+                .map(&aliases)
                 .collect();
             let properties = supply::listed(e.required_properties.as_deref());
             (!structures.is_empty() || !properties.is_empty()).then_some(Requires {
@@ -1545,6 +1538,7 @@ impl GameData {
     /// The properties a side can hold, by id.
     pub fn technologies(&mut self) -> HashMap<Id, Technology> {
         let strings = self.strings();
+        let mut lines = self.property_lines(&strings);
         let definitions = self.definitions();
         (definitions.properties.iter())
             .filter(|(_, p)| p.is_technology)
@@ -1558,6 +1552,7 @@ impl GameData {
                     name: localized(&strings, p.name.as_deref()).unwrap_or_else(|| id.to_string()),
                     description: localized(&strings, p.description.as_deref()),
                     icon,
+                    lines: lines.remove(id).unwrap_or_default(),
                 };
                 (id.clone(), technology)
             })
@@ -1568,6 +1563,25 @@ impl GameData {
     /// names, by template id.
     pub fn transports(&mut self) -> HashMap<Id, Id> {
         self.by_template(|t| (t.transport_actor.clone()).filter(|i| *i != Id::from("null")))
+    }
+
+    /// Every id a building a requirement names may go by on a map, as maps
+    /// may still place one under any id it once had: its current one
+    /// first, then those it was renamed from.
+    fn structure_aliases(&mut self) -> impl Fn(&Id) -> Vec<Id> + use<> {
+        let renames = self.thing_renames();
+        let mut aliases: HashMap<Id, Vec<Id>> = HashMap::new();
+        for (old, new) in &renames {
+            aliases.entry(new.clone()).or_default().push(old.clone());
+        }
+        for olds in aliases.values_mut() {
+            olds.sort_unstable();
+        }
+        move |s: &Id| {
+            let id = renamed(&renames, s);
+            let olds = aliases.get(&id).cloned().unwrap_or_default();
+            std::iter::once(id).chain(olds).collect()
+        }
     }
 
     /// Each renamed object template's old id to its new one.
@@ -3223,13 +3237,19 @@ fn amounts<'a>(
         .filter(|&(_, amount)| amount != 0.0)
         .map(|(field, amount)| Amount {
             kind: field,
-            resource: strings
-                .get(&format!("resources_{field}_name"))
-                .cloned()
-                .unwrap_or_else(|| field.to_string()),
+            resource: resource_name(strings, field),
             amount,
         })
         .collect()
+}
+
+/// What the game calls a resource, by its field name in the data, such as
+/// Money for `money`.
+pub fn resource_name(strings: &HashMap<String, String>, field: &str) -> String {
+    strings
+        .get(&format!("resources_{field}_name"))
+        .cloned()
+        .unwrap_or_else(|| field.to_string())
 }
 
 /// An organization template's members when whole: each slot's, once for
