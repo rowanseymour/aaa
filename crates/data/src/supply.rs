@@ -83,11 +83,13 @@ pub(crate) fn listed(list: Option<&str>) -> Vec<Id> {
         .collect()
 }
 
+/// Whether a modifier's field names `what`.
+pub(crate) fn is(name: &Option<String>, what: &str) -> bool {
+    name.as_deref()
+        .is_some_and(|n| n.eq_ignore_ascii_case(what))
+}
+
 fn effect(p: &defs::Property) -> Option<SupplyEffect> {
-    let is = |name: &Option<String>, what: &str| {
-        name.as_deref()
-            .is_some_and(|n| n.eq_ignore_ascii_case(what))
-    };
     let mut out = SupplyEffect {
         requires: listed(p.required_properties.as_deref()),
         ..SupplyEffect::default()

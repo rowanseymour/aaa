@@ -3,7 +3,7 @@
 use crate::{GameData, Id};
 
 /// The property a regiment resting at the post it guards has.
-const GUARDING: &str = "actor_state_guarding";
+pub const GUARDING: &str = "actor_state_guarding";
 
 /// The settings regiments keep guard by.
 #[derive(Debug, Clone, Copy, PartialEq)]

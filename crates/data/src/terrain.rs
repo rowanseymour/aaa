@@ -1,8 +1,8 @@
 //! What terrain does to those standing on it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::supply::listed;
+use crate::supply::{is, listed};
 use crate::{GameData, Id, defs};
 
 /// What a property a terrain gives does.
@@ -24,10 +24,12 @@ pub struct TerrainEffect {
 pub struct TerrainRules {
     /// The lowest a terrain's speed limit comes to.
     pub slowest: f32,
-    /// What each property a terrain gives does, by its id.
+    /// What each shared property does when a terrain gives it, by its id.
     pub effects: HashMap<Id, TerrainEffect>,
     /// The properties whose holders no terrain's speed limit holds back.
     pub unlimited: Vec<Id>,
+    /// The templates with such a property, shared or their own.
+    pub free: HashSet<Id>,
 }
 
 impl Default for TerrainRules {
@@ -36,13 +38,13 @@ impl Default for TerrainRules {
             slowest: 0.5,
             effects: HashMap::new(),
             unlimited: Vec::new(),
+            free: HashSet::new(),
         }
     }
 }
 
-fn is(name: &Option<String>, what: &str) -> bool {
-    name.as_deref()
-        .is_some_and(|n| n.eq_ignore_ascii_case(what))
+fn trailblazing(p: &defs::Property) -> bool {
+    (p.modifier.iter()).any(|m| is(&m.modifier_flag, "TRAILBLAZING"))
 }
 
 fn effect(p: &defs::Property) -> TerrainEffect {
@@ -68,23 +70,27 @@ fn effect(p: &defs::Property) -> TerrainEffect {
 impl GameData {
     pub fn terrain_rules(&mut self) -> TerrainRules {
         let slowest = (self.svars().iter()).find_map(|v| v.terrain_minimum_move_speed);
-        let variations = self.terrain_variations();
         let definitions = self.definitions();
-        let given = variations.values().flat_map(|v| &v.properties);
-        let effects = given
-            .filter_map(|id| Some((id.clone(), effect(definitions.properties.get(id)?))))
-            .collect();
-        let trailblazing =
-            |p: &&defs::Property| (p.modifier.iter()).any(|m| is(&m.modifier_flag, "TRAILBLAZING"));
+        let shared = definitions.properties.iter();
+        let effects = shared.map(|(id, p)| (id.clone(), effect(p))).collect();
         let mut unlimited: Vec<Id> = (definitions.properties.values())
-            .filter(trailblazing)
+            .filter(|p| trailblazing(p))
             .filter_map(|p| p.ids.clone())
             .collect();
         unlimited.sort();
+        let free = self.by_template(|t| {
+            let c = t.properties_component.as_ref()?;
+            let refs = c.property.iter().filter_map(|r| r.property_ids.as_ref());
+            let shared = refs.filter_map(|p| definitions.properties.get(p));
+            (shared.chain(&c.intrinsic_property))
+                .any(trailblazing)
+                .then_some(())
+        });
         TerrainRules {
             slowest: slowest.unwrap_or(TerrainRules::default().slowest),
             effects,
             unlimited,
+            free: free.into_keys().collect(),
         }
     }
 }

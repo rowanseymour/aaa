@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use crate::supply::listed;
-use crate::{GameData, Id, beside, defs, localized};
+use crate::supply::{is, listed};
+use crate::{GameData, Id, defs, icon_beside, localized};
 
 /// The folder of icons drawn for a wide screen, which a `%s` in an icon's
 /// path stands for.
@@ -42,11 +42,6 @@ fn filled(format: &str, with: &str) -> String {
     };
     // The glyph for a damage type has no letter of ours.
     said.replace("%lc", "").replace("%%", "%")
-}
-
-fn is(name: &Option<String>, what: &str) -> bool {
-    name.as_deref()
-        .is_some_and(|n| n.eq_ignore_ascii_case(what))
 }
 
 /// What the game says a modifier does, where it has words for it.
@@ -89,20 +84,15 @@ fn line(strings: &HashMap<String, String>, paces: &[Pace], m: &defs::Modifier) -
 impl GameData {
     /// The game's words for speeds, in the order it lists them.
     fn paces(&mut self, strings: &HashMap<String, String>) -> Vec<Pace> {
-        let Some(bytes) = self.read("Game/descriptions.tgi") else {
-            return Vec::new();
-        };
-        let parsed = tgi::parse_bytes(&bytes);
-        let speeds = parsed.root.blocks_of("Description").filter(|b| {
-            b.value("category")
-                .is_some_and(|c| c.eq_ignore_ascii_case("SPEED"))
-        });
+        let definitions = self.definitions();
+        let speeds = (definitions.descriptions.iter()).filter(|d| is(&d.category, "SPEED"));
         speeds
-            .filter_map(|b| {
-                let mut ends = b.value("range")?.split(',').map(|e| e.trim().parse());
-                let range = [ends.next()?.ok()?, ends.next()?.ok()?];
-                let word = localized(strings, b.value("description"))?;
-                Some(Pace { range, word })
+            .filter_map(|d| {
+                let word = localized(strings, d.description.as_deref())?;
+                Some(Pace {
+                    range: d.range?,
+                    word,
+                })
             })
             .collect()
     }
@@ -123,11 +113,7 @@ impl GameData {
                 .property_files
                 .get(id)
                 .map_or("", String::as_str);
-            let path = (p.icon.as_deref())
-                .and_then(|i| i.split_whitespace().next())
-                .filter(|i| !i.eq_ignore_ascii_case("null"))
-                .map(|i| beside(file, i));
-            let Some(path) = path else {
+            let Some(path) = icon_beside(file, p.icon.as_deref()) else {
                 continue;
             };
             let places = [path.replace("%s", WIDE), path.replace("%s/", "")];

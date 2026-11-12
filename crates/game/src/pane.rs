@@ -18,7 +18,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{GameData, Id, PropertyLook};
+use aaa_data::{GUARDING, GameData, Id, PropertyLook};
 use aaa_render::overlay::BannerImages;
 use aaa_render::textures;
 use aaa_sim::{Order, State, World};
@@ -105,8 +105,10 @@ const PROPERTY_PITCH: f32 = 26.0;
 /// As many as there are places for.
 const MAX_PROPERTIES: usize = 7;
 
-/// The property a regiment resting at the post it guards has.
-const GUARDING: &str = "actor_state_guarding";
+/// What holds the properties' icons, so that they change without the
+/// rest of the pane being laid out again under the pointer.
+#[derive(Component)]
+pub struct PropertyRow;
 
 /// The pane, whose children show what [`Showing`] says.
 #[derive(Component)]
@@ -327,6 +329,12 @@ fn held(sim: &World, looks: &HashMap<Id, PropertyLook>, r: usize, shown: &[Id]) 
             now.push(p);
         }
     }
+    ordered(now, shown)
+}
+
+/// The properties held `now` as their icons show: those already `shown`
+/// as they stand there, then the rest, as many as there are places for.
+fn ordered(now: Vec<Id>, shown: &[Id]) -> Vec<Id> {
     let kept = shown.iter().filter(|p| now.contains(p)).cloned();
     let mut out: Vec<Id> = kept.collect();
     out.extend(now.into_iter().filter(|p| !shown.contains(p)));
@@ -393,6 +401,7 @@ pub fn lay_out(
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
     mut pane: Single<(Entity, &mut Visibility), With<Pane>>,
+    row: Query<Entity, With<PropertyRow>>,
 ) {
     let what = wanted(&sim.0, &selected.0, chosen.0);
     let what = what.map(|w| {
@@ -409,12 +418,28 @@ pub fn lay_out(
     if showing.0 == what && !local.is_changed() {
         return;
     }
+    // Only the icons, where nothing else has changed.
+    let rest_stands = match (&showing.0, &what) {
+        (Some((a, was)), Some((b, now))) => {
+            a == b && was.slots == now.slots && was.banners == now.banners
+        }
+        _ => false,
+    };
+    let row = row
+        .single()
+        .ok()
+        .filter(|_| rest_stands && !local.is_changed());
     let (root, visibility) = &mut *pane;
-    commands.entity(*root).despawn_related::<Children>();
-    visibility.set_if_neq(match what {
-        Some(_) => Visibility::Inherited,
-        None => Visibility::Hidden,
-    });
+    match row {
+        Some(row) => drop(commands.entity(row).despawn_related::<Children>()),
+        None => {
+            commands.entity(*root).despawn_related::<Children>();
+            visibility.set_if_neq(match what {
+                Some(_) => Visibility::Inherited,
+                None => Visibility::Hidden,
+            });
+        }
+    }
     showing.0 = what.clone();
     let Some((what, detail)) = what else {
         return;
@@ -432,6 +457,9 @@ pub fn lay_out(
         images: &mut images,
     };
     let root = *root;
+    if let Some(row) = row {
+        return ui.icons(&mut commands, row);
+    }
     match what {
         What::Regiment(r) => ui.regiment(&mut commands, root, r),
         What::Regiments(rs) => ui.regiments(&mut commands, root, &rs),
@@ -491,8 +519,21 @@ impl Ui<'_> {
         });
     }
 
-    /// An icon beside the title for each property that shows.
+    /// The row of icons for the properties that show.
     fn properties(&mut self, commands: &mut Commands, root: Entity) {
+        let node = Node {
+            position_type: PositionType::Absolute,
+            width: percent(100),
+            height: percent(100),
+            ..default()
+        };
+        let row = commands.spawn((PropertyRow, node, Pickable::IGNORE)).id();
+        commands.entity(root).add_child(row);
+        self.icons(commands, row);
+    }
+
+    /// An icon in the pane's corner for each property that shows.
+    fn icons(&mut self, commands: &mut Commands, row: Entity) {
         for (i, id) in self.detail.properties.iter().enumerate() {
             let Some(look) = self.looks.properties.get(id).cloned() else {
                 continue;
@@ -502,7 +543,7 @@ impl Ui<'_> {
             let after = (self.detail.properties.len() - 1 - i) as f32;
             let left = WIDTH - PROPERTIES_IN.x - PROPERTY - after * PROPERTY_PITCH;
             let node = at(left, PROPERTIES_IN.y, PROPERTY, PROPERTY);
-            commands.entity(root).with_child((
+            commands.entity(row).with_child((
                 node,
                 picture_node(icon),
                 Hint(said.collect::<Vec<_>>().join("\n")),
@@ -1076,6 +1117,21 @@ fn cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn property_icons_keep_their_order_and_the_newest_go_without_a_place() {
+        let ids = |of: &[&str]| -> Vec<Id> { of.iter().map(|&p| Id::from(p)).collect() };
+        // What's shown stays as it stands, what's gone leaves, the rest follow.
+        let now = ids(&["forest", "guarding", "supplied"]);
+        let shown = ids(&["guarding", "city", "forest"]);
+        assert_eq!(
+            ordered(now, &shown),
+            ids(&["guarding", "forest", "supplied"])
+        );
+        let many = ids(&["a", "b", "c", "d", "e", "f", "g", "h"]);
+        assert_eq!(ordered(many.clone(), &[]), many[..MAX_PROPERTIES]);
+        assert_eq!(ordered(many.clone(), &many[7..]).first(), many.last());
+    }
 
     #[test]
     fn an_hqs_places_spread_over_their_area() {

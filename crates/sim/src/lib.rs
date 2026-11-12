@@ -266,6 +266,8 @@ pub struct Regiment {
     pub terrain: u16,
     /// The properties that terrain gives it.
     pub terrain_properties: Vec<Id>,
+    /// `template`, as what's kept by template has it.
+    template_id: Id,
 }
 
 /// A regiment's order to keep a post: it comes back to it after every
@@ -441,6 +443,8 @@ pub struct Unit {
     /// The terrain it's on, as [`aaa_map::Grounds::kind`] takes it: its
     /// regiment's, or its own tile's while it straggles.
     pub terrain: u16,
+    /// `template`, as what's kept by template has it.
+    template_id: Id,
 }
 
 /// What a unit tows, dragged after the point it's coupled to so that it
@@ -1150,6 +1154,7 @@ impl World {
                 // One its regiment has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
                 terrain: 0,
+                template_id: Id::from(m.thing.template.as_str()),
                 id: m.thing.id,
                 template: m.thing.template.clone(),
                 regiment: r,
@@ -1225,6 +1230,7 @@ impl World {
             guard: None,
             terrain: 0,
             terrain_properties: Vec::new(),
+            template_id: Id::from(regiment.template.as_str()),
         });
         let ids = regiment.members.iter().map(|m| m.thing.id);
         self.next_id = ids
@@ -8117,7 +8123,27 @@ mod tests {
         (w.grounds, w.terrain_rules.slowest) = (aaa_map::Grounds::uniform(20, mountain), 0.5);
         run(&mut w, 0.2);
         assert!(w.units.iter().all(|u| u.speed == 0.5));
-        w.kinds.insert(Id::from("squad"), kind(&["trailblazing"]));
+        // Unless its regiment has, for a time, a property free of limits,
+        w.regiments[0].properties.push(Held {
+            property: Id::from("trailblazing"),
+            until: u64::MAX,
+        });
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 2.0));
+        w.regiments[0].properties.clear();
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 0.5));
+        // its side a technology that is, on those it's for,
+        w.technologies.insert(7, vec![Id::from("trailblazing")]);
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 0.5));
+        let anyone = TerrainEffect::default();
+        (w.terrain_rules.effects).insert(Id::from("trailblazing"), anyone);
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 2.0));
+        w.technologies.clear();
+        // or its template is.
+        w.terrain_rules.free.insert(Id::from("squad"));
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 2.0));
     }
@@ -8147,6 +8173,15 @@ mod tests {
             w.regiments[0].terrain_properties,
             [Id::from("forest_infantry")]
         );
+        // Which follows who's left in it.
+        w.kinds.insert(Id::from("soldier"), kind(&["vehicle"]));
+        w.stand();
+        assert_eq!(
+            w.regiments[0].terrain_properties,
+            [Id::from("forest_vehicles")]
+        );
+        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        w.stand();
         // Unpacked, it keeps what it had wherever that leaves it.
         w.regiments[0].unpacked_into = Some(0);
         w.grounds = aaa_map::Grounds::uniform(20, aaa_map::GroundKind::default());

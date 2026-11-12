@@ -368,6 +368,17 @@ pub struct PropertyRef {
     pub property_ids: Option<Id>,
 }
 
+/// The game's word for a range of some figure, such as a speed.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Description {
+    /// What the figure is, e.g. `SPEED`.
+    pub category: Option<String>,
+    /// A `#` key into the localized strings.
+    pub description: Option<String>,
+    /// The least it's the word for, and the least it isn't.
+    pub range: Option<[f32; 2]>,
+}
+
 /// A property objects can have, shared at the top level or an object's own.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Property {
