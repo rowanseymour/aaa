@@ -25,6 +25,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::keys::Bindings;
+use crate::messages::{About, Refused};
 use crate::resource_bar::{Preview, Previewed};
 use crate::ui::{self, Click, Edge, Font, Ink, Marked, Shade, Surface, label, panel, tooltip};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
@@ -437,6 +438,14 @@ impl Quantity {
 /// under it.
 #[derive(Component)]
 pub struct Blocks;
+
+impl Looks {
+    /// The name of the order that aims `aim`.
+    pub fn order(&self, aim: Aim) -> &str {
+        let i = ORDERS.iter().position(|(_, g)| *g == Some(Give::Aim(aim)));
+        i.map_or("", |i| self.orders[i].1.name.as_str())
+    }
+}
 
 /// What each slot holds now.
 #[derive(Resource, Default)]
@@ -951,14 +960,13 @@ pub fn show(
     let tip = match (hovered, *page) {
         (Some(tip), _) => Some(tip),
         (None, Page::Aiming(Aim::Unpack)) => prompt("Left click where to unpack"),
-        (None, Page::Aiming(Aim::Attack))
-            if local
-                .0
-                .is_some_and(|p| attack_at(&sim.0, p, *focus) == Struck::Friend) =>
-        {
-            prompt("Can't attack a friend")
+        (None, Page::Aiming(Aim::Attack)) => {
+            prompt(match local.0.map(|p| attack_at(&sim.0, p, *focus)) {
+                Some(Struck::Friend(_)) => "Can't attack a friend",
+                Some(Struck::Neutral(_)) => "Can't attack a neutral",
+                _ => "Left click an enemy or where to attack",
+            })
         }
-        (None, Page::Aiming(Aim::Attack)) => prompt("Left click an enemy or where to attack"),
         (None, Page::Aiming(Aim::Guard)) => prompt("Left click what or where to guard"),
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
@@ -1291,12 +1299,15 @@ fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
 }
 
 /// What an attack aimed at `focus` would strike.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq)]
 enum Struck {
     /// The enemy regiment, to go after.
     Enemy(usize),
-    /// A regiment or building that's no enemy's, so nothing to attack.
-    Friend,
+    /// The player's own regiment or building, or an ally's, which Attack
+    /// refuses.
+    Friend(About),
+    /// A regiment or building that's nobody's enemy, so can't be attacked.
+    Neutral(About),
     /// The ground, or an enemy building on it, to attack-move to.
     Ground,
 }
@@ -1317,8 +1328,25 @@ fn struck(focus: crate::Focus, toward: Option<aaa_sim::Relation>) -> Struck {
         (crate::Focus::Nothing, _) => Struck::Ground,
         (crate::Focus::Regiment(e), Some(aaa_sim::Relation::Enemy)) => Struck::Enemy(e),
         (crate::Focus::Building(_), Some(aaa_sim::Relation::Enemy)) => Struck::Ground,
-        _ => Struck::Friend,
+        (crate::Focus::Regiment(r), Some(aaa_sim::Relation::Neutral)) => {
+            Struck::Neutral(About::Regiment(r))
+        }
+        (crate::Focus::Building(b), Some(aaa_sim::Relation::Neutral)) => {
+            Struck::Neutral(About::Building(b))
+        }
+        (crate::Focus::Regiment(r), _) => Struck::Friend(About::Regiment(r)),
+        (crate::Focus::Building(b), _) => Struck::Friend(About::Building(b)),
     }
+}
+
+/// The enemy's regiment or building at `focus`, which Guard refuses.
+fn enemy_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Option<About> {
+    let (about, owner) = match focus {
+        crate::Focus::Nothing => return None,
+        crate::Focus::Regiment(r) => (About::Regiment(r), sim.regiments[r].owner),
+        crate::Focus::Building(b) => (About::Building(b), sim.buildings[b].owner),
+    };
+    (sim.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(about)
 }
 
 /// What a guard aimed at `focus` is posted beside: a regiment or building
@@ -1342,9 +1370,10 @@ fn guard_at(
 /// While an order is aimed, a left click on the map or minimap gives it
 /// there and a right click calls it off. Attacking an enemy regiment, or
 /// its mark on the minimap, sends the selected after it instead, and
-/// guarding a friend posts them beside it. Attacking
-/// a friend, or unpacking somewhere the building wouldn't fit, waits for
-/// another click. A rally point is set for the selected building.
+/// guarding a friend posts them beside it. A click on something the order
+/// refuses tells the player so and calls the order off. Unpacking somewhere
+/// the building wouldn't fit waits for another click. A rally point is set
+/// for the selected building.
 #[allow(clippy::too_many_arguments)]
 pub fn aim(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -1362,6 +1391,7 @@ pub fn aim(
     time: Res<Time>,
     mut sounds: ResMut<crate::sound::Sounds>,
     mut sent: MessageWriter<crate::waypoints::Sent>,
+    mut refused: MessageWriter<Refused>,
 ) {
     if !matches!(*page, Page::Aiming(_) | Page::Rally) {
         return;
@@ -1408,10 +1438,29 @@ pub fn aim(
     };
     if aim == Aim::Attack {
         match attack_at(&sim.0, player, focus) {
-            Struck::Friend => return,
+            Struck::Friend(about) => {
+                refused.write(Refused {
+                    about,
+                    by: Some(aim),
+                });
+                *page = Page::Orders;
+                return;
+            }
+            Struck::Neutral(about) => {
+                refused.write(Refused { about, by: None });
+                *page = Page::Orders;
+                return;
+            }
             Struck::Ground => {}
             Struck::Enemy(e) => {
                 let (pursuing, rest) = crate::pursue(&sim.0, &mut orders, player, &selected.0, e);
+                // An enemy none of them can attack is no target either.
+                if pursuing.is_empty() {
+                    let about = About::Regiment(e);
+                    refused.write(Refused { about, by: None });
+                    *page = Page::Orders;
+                    return;
+                }
                 // Those with nothing to fire go there as they would anywhere.
                 let regiments = crate::send(
                     &sim.0,
@@ -1422,9 +1471,6 @@ pub fn aim(
                     (aim, looks.together(aim)),
                     loaded.map.ground.size(),
                 );
-                if pursuing.is_empty() && regiments.is_empty() {
-                    return;
-                }
                 crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
                 sent.write(crate::waypoints::Sent {
                     to: None,
@@ -1440,6 +1486,19 @@ pub fn aim(
                 return;
             }
         }
+    }
+    // Enemy marks are all a minimap click picks out, to attack; guarding
+    // there guards the place.
+    if aim == Aim::Guard
+        && matches!(at, crate::Pointing::Ground(_))
+        && let Some(about) = enemy_at(&sim.0, player, focus)
+    {
+        refused.write(Refused {
+            about,
+            by: Some(aim),
+        });
+        *page = Page::Orders;
+        return;
     }
     if aim == Aim::Guard
         && let Some(thing) = guard_at(&sim.0, player, &selected.0, focus)
@@ -1519,10 +1578,19 @@ mod tests {
         use crate::Focus::{Building, Nothing, Regiment};
         use aaa_sim::Relation::{Ally, Enemy, Itself, Neutral};
         assert_eq!(struck(Regiment(3), Some(Enemy)), Struck::Enemy(3));
-        for friend in [Itself, Ally, Neutral] {
-            assert_eq!(struck(Regiment(3), Some(friend)), Struck::Friend);
-            assert_eq!(struck(Building(3), Some(friend)), Struck::Friend);
+        for friend in [Itself, Ally] {
+            let refused = |about| Struck::Friend(about);
+            assert_eq!(
+                struck(Regiment(3), Some(friend)),
+                refused(About::Regiment(3))
+            );
+            assert_eq!(
+                struck(Building(3), Some(friend)),
+                refused(About::Building(3))
+            );
         }
+        let neutral = Struck::Neutral(About::Regiment(3));
+        assert_eq!(struck(Regiment(3), Some(Neutral)), neutral);
         assert_eq!(struck(Building(3), Some(Enemy)), Struck::Ground);
         assert_eq!(struck(Nothing, None), Struck::Ground);
     }

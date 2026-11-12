@@ -583,6 +583,7 @@ fn main() -> ExitCode {
         .configure_sets(Update, camera::Controls.run_if(takes_input))
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<waypoints::Sent>()
+        .add_message::<messages::Refused>()
         .init_resource::<Selected>()
         .init_resource::<SelectedBuilding>()
         .init_resource::<Focus>()
@@ -664,7 +665,7 @@ fn main() -> ExitCode {
                 (actions::back_out, actions::show).chain(),
                 (pane::lay_out, pane::refresh).chain(),
                 resource_bar::show.after(actions::show),
-                (messages::tell, messages::show).chain(),
+                (messages::tell, messages::refuse, messages::show).chain(),
                 (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain().after(carry_out),

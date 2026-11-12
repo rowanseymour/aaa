@@ -15,7 +15,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 
-use crate::actions::fill;
+use crate::actions::{self, Aim, fill};
 use crate::keys::Bindings;
 use crate::sound::Sounds;
 use crate::ui::{Font, Hint, font};
@@ -217,6 +217,28 @@ impl MessageLog {
         true
     }
 
+    /// Posts a line of `kind`, heard as its kind sounds.
+    fn say(
+        &mut self,
+        kind: &str,
+        text: String,
+        place: Option<Place>,
+        time: &Time,
+        to: &mut Sounds,
+    ) {
+        if self.post(kind, text, place, time.elapsed_secs()) {
+            self.sound(time, to);
+        }
+    }
+
+    /// Plays the sound of the kind of line just posted.
+    fn sound(&self, time: &Time, to: &mut Sounds) {
+        let kind = self.lines.back().and_then(|l| self.look.kinds.get(&l.kind));
+        if let Some(sound) = kind.and_then(|k| k.sound.as_deref()) {
+            to.interface(time, sound);
+        }
+    }
+
     /// Posts the line of the game event `event`, its placeholders filled
     /// with `with` in turn, unless the event's filters or its kind's drop
     /// it.
@@ -381,6 +403,49 @@ pub fn spawn(
     ));
 }
 
+/// A click that aimed an order at something it can't be given on: `by`
+/// the order that refuses such a thing, or none where none of the selected
+/// can attack it.
+#[derive(Message)]
+pub struct Refused {
+    pub about: About,
+    pub by: Option<Aim>,
+}
+
+/// Tells the player of each order just [`Refused`].
+pub fn refuse(
+    mut refused: MessageReader<Refused>,
+    sim: Res<Sim>,
+    looks: Res<actions::Looks>,
+    time: Res<Time>,
+    mut log: ResMut<MessageLog>,
+    mut sounds: ResMut<Sounds>,
+) {
+    for Refused { about, by } in refused.read() {
+        let name = match *about {
+            About::Regiment(r) => log.look.regiment(&sim.0, r),
+            About::Building(b) => log.look.building(&sim.0, b),
+        };
+        let text = match by {
+            Some(aim) => {
+                let said = log.look.said(
+                    "ui_error_command_target_actor|ss",
+                    "%s is an invalid target for %s",
+                );
+                fill(&said, &[&name, looks.order(*aim)])
+            }
+            None => {
+                let said = log
+                    .look
+                    .said("kill_error_invalid_target|s", "Invalid target: %s");
+                fill(&said, &[&name])
+            }
+        };
+        let place = Some(Place::of(&sim.0, *about));
+        log.say("GENERIC_ERROR", text, place, &time, &mut sounds);
+    }
+}
+
 /// Posts a line for each thing the sim has told the player since last
 /// time.
 pub fn tell(
@@ -410,10 +475,8 @@ pub fn tell(
             Some(Told::Line(kind, text, place)) => log.post(kind, text, place, now),
             None => false,
         };
-        let line = log.lines.back().filter(|_| posted);
-        let sound = line.and_then(|l| log.look.kinds.get(&l.kind)?.sound.clone());
-        if let Some(sound) = sound {
-            sounds.interface(&time, &sound);
+        if posted {
+            log.sound(&time, &mut sounds);
         }
     }
 }
