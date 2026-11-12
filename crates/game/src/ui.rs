@@ -4,9 +4,11 @@
 //! whole interface, even while it's up. [`Shade`] and [`Meter`] do the same
 //! for pictures and bars.
 
+use bevy::asset::uuid_handle;
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
+use bevy::text::{Font as Face, FontSource};
 use bevy::ui_widgets::Button;
 
 use crate::sound::Sounds;
@@ -16,7 +18,7 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
-            .add_systems(Startup, spawn_hint)
+            .add_systems(Startup, (faces, spawn_hint))
             .add_systems(Update, (highlight, hint))
             // Before layout, which a meter's fill width feeds.
             .add_systems(
@@ -251,14 +253,58 @@ impl Font {
             Font::HudTitle => 15.0,
             Font::Body => 16.0,
             Font::Heading => 18.0,
-            Font::Large => 20.0,
-            Font::Title => 22.0,
+            Font::Large => 24.0,
+            Font::Title => 26.0,
         }
+    }
+
+    /// The face it's set in. The menus take the logo's lettering: its
+    /// stencil where it's big enough to keep its letters whole, and the same
+    /// family's plain cut, drawn for small sizes, elsewhere. The interface
+    /// over the map keeps Bevy's own face, whose even figures suit counts.
+    fn source(self) -> FontSource {
+        match self {
+            Font::Heading | Font::Large | Font::Title => FontSource::Handle(STENCIL),
+            Font::Body => FontSource::Handle(PLAIN),
+            Font::Small | Font::Hud | Font::HudTitle => FontSource::default(),
+        }
+    }
+
+    /// How far below its place to draw a line of this size so that its
+    /// figures, rather than the line, sit centred where it's centred: Bevy's
+    /// face keeps room below the line for descenders, which figures never
+    /// use. Measured on the figures; the menus' faces need none.
+    pub fn drop(self) -> f32 {
+        match self {
+            Font::Small | Font::Hud | Font::HudTitle => (self.px() / 7.0).round(),
+            Font::Body | Font::Heading | Font::Large | Font::Title => 0.0,
+        }
+    }
+}
+
+const STENCIL: Handle<Face> = uuid_handle!("8ce28202-5c4b-41aa-b4eb-656a8714c917");
+const PLAIN: Handle<Face> = uuid_handle!("f5c773eb-4ca7-4c04-80e4-2f691862ea4e");
+
+fn faces(mut fonts: ResMut<Assets<Face>>) {
+    let faces = [
+        (
+            STENCIL,
+            &include_bytes!("../fonts/BigShouldersStencilDisplay-800.ttf")[..],
+        ),
+        (
+            PLAIN,
+            &include_bytes!("../fonts/BigShouldersText-600.ttf")[..],
+        ),
+    ];
+    for (handle, bytes) in faces {
+        // Never fails for a fixed handle.
+        let _ = fonts.insert(handle.id(), Face::from_bytes(bytes.to_vec()));
     }
 }
 
 pub fn font(font: Font) -> TextFont {
     TextFont {
+        font: font.source(),
         font_size: FontSize::Px(font.px()),
         ..default()
     }
