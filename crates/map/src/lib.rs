@@ -11,8 +11,8 @@ mod units;
 
 pub use aaa_data::{
     Amounts, Damage, DeployPoints, Economy, EconomyRules, Fighter, Flight, FlightKind, FogSetting,
-    GuardRules, Id, Kind, Logistics, Operation, Requires, Shape, Sight, Supply, SupplyEffect,
-    SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
+    Grant, GuardRules, Id, Kind, Logistics, Operation, Requires, Research, Shape, Sight, Supply,
+    SupplyEffect, SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
@@ -609,6 +609,7 @@ fn read_sides<R: std::io::Read + std::io::Seek>(
     Ok(units::sides(
         &map.kingdoms()?,
         &map.teams()?,
+        &map.restriction_groups()?,
         &game.kingdom_colors(),
         default,
     ))
@@ -729,6 +730,8 @@ mod tests {
             relations: vec![Enemy; 5],
             team_relations: vec![Enemy; 2],
             stockpile: 0.0,
+            technologies: Vec::new(),
+            barred: Vec::new(),
         };
         let mut players = vec![side(1, 0), side(2, 0), side(3, 1), side(4, 1)];
         players.push(Player {

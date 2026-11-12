@@ -97,8 +97,9 @@ impl GameData {
             .collect()
     }
 
-    /// How each shared property that has an icon shows, by id.
-    pub fn property_looks(&mut self) -> HashMap<Id, PropertyLook> {
+    /// What each shared property says under its name, by id: who it's
+    /// for, then a line for each thing it does that the game has words for.
+    pub fn property_lines(&mut self) -> HashMap<Id, Vec<String>> {
         let strings = self.strings();
         let paces = self.paces(&strings);
         let definitions = self.definitions();
@@ -107,6 +108,26 @@ impl GameData {
             .get("ui_tooltip_item_title_required_properties")
             .cloned()
             .unwrap_or_default();
+        (definitions.properties.iter())
+            .map(|(id, p)| {
+                let needed: Vec<String> = listed(p.required_properties.as_deref())
+                    .iter()
+                    .filter_map(|r| definitions.properties.get(r))
+                    .map(name)
+                    .filter(|n| !n.is_empty())
+                    .collect();
+                let who = (!needed.is_empty()).then(|| format!("{affects} {}", needed.join(", ")));
+                let does = p.modifier.iter().filter_map(|m| line(&strings, &paces, m));
+                (id.clone(), who.into_iter().chain(does).collect())
+            })
+            .collect()
+    }
+
+    /// How each shared property that has an icon shows, by id.
+    pub fn property_looks(&mut self) -> HashMap<Id, PropertyLook> {
+        let strings = self.strings();
+        let mut lines = self.property_lines();
+        let definitions = self.definitions();
         let mut out = HashMap::new();
         for (id, p) in &definitions.properties {
             let file = definitions
@@ -120,20 +141,12 @@ impl GameData {
             let Some(icon) = places.into_iter().find(|p| self.exists(p)) else {
                 continue;
             };
-            let needed: Vec<String> = listed(p.required_properties.as_deref())
-                .iter()
-                .filter_map(|r| definitions.properties.get(r))
-                .map(name)
-                .filter(|n| !n.is_empty())
-                .collect();
-            let who = (!needed.is_empty()).then(|| format!("{affects} {}", needed.join(", ")));
-            let does = p.modifier.iter().filter_map(|m| line(&strings, &paces, m));
             out.insert(
                 id.clone(),
                 PropertyLook {
-                    name: name(p),
+                    name: localized(&strings, p.name.as_deref()).unwrap_or_default(),
                     icon,
-                    lines: who.into_iter().chain(does).collect(),
+                    lines: lines.remove(id).unwrap_or_default(),
                 },
             );
         }

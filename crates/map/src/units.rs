@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use aaa_data::{
     Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges, Shape,
 };
-use tgck::map::{Detail, Kingdoms, Relation, Team as StoredTeam, Thing};
+use tgck::map::{Detail, Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
 
 use crate::buildings::Building;
 use crate::pathing::Obstacle;
@@ -40,6 +40,11 @@ pub struct Player {
     pub team_relations: Vec<Relation>,
     /// The money it starts with.
     pub stockpile: f32,
+    /// The technologies it starts with.
+    pub technologies: Vec<Id>,
+    /// The technologies and templates the map bars it from, through its
+    /// team's restriction group or its own.
+    pub barred: Vec<Id>,
 }
 
 /// Players that share victory.
@@ -83,9 +88,19 @@ pub fn relation(players: &[Player], teams: &[Team], from: u32, to: u32) -> Relat
 pub fn sides(
     kingdoms: &Kingdoms,
     teams: &[Option<StoredTeam>],
+    groups: &RestrictionGroups,
     colors: &HashMap<Id, [f32; 3]>,
     default_stockpile: f32,
 ) -> (Vec<Player>, Vec<Team>) {
+    // Only what a group selects bars anything; its other lists are what it
+    // leaves alone.
+    let barring = |name: &str| -> Vec<Id> {
+        (groups.groups.iter())
+            .filter(|g| !name.is_empty() && g.name.eq_ignore_ascii_case(name))
+            .flat_map(|g| g.required_actors.iter().chain(&g.required_technologies))
+            .map(|id| Id::from(id.as_str()))
+            .collect()
+    };
     let money = |stockpiles: &[(String, f32)]| {
         stockpiles
             .iter()
@@ -126,6 +141,16 @@ pub fn sides(
                 true => default_stockpile,
                 false => money(&k.resources),
             } + k.bonus_stockpile.as_deref().map_or(0.0, money),
+            technologies: (k.start_technologies.iter().flatten())
+                .map(|t| Id::from(t.as_str()))
+                .collect(),
+            barred: {
+                let team = teams.iter().find(|t| t.head.id == k.team && k.team != 0);
+                let team = team.and_then(|t| t.restriction_group.as_deref());
+                let mut barred = barring(team.unwrap_or(""));
+                barred.extend(barring(&k.restriction_group));
+                barred
+            },
         })
         .collect();
     let teams = teams

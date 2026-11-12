@@ -383,6 +383,7 @@ pub fn spawn(
         strings,
         names: (game.listings().into_iter())
             .map(|(id, l)| (id, l.name))
+            .chain(game.technologies().into_iter().map(|(id, t)| (id, t.name)))
             .collect(),
     };
     commands.insert_resource(MessageLog::new(look));
@@ -412,9 +413,18 @@ pub struct Refused {
     pub by: Option<Aim>,
 }
 
-/// Tells the player of each order just [`Refused`].
+/// An order the sim refused, as the player's told.
+#[derive(Message)]
+pub struct Failed {
+    pub text: String,
+    /// What it was given to, where the message points.
+    pub about: About,
+}
+
+/// Tells the player of each order just [`Refused`] or [`Failed`].
 pub fn refuse(
     mut refused: MessageReader<Refused>,
+    mut failed: MessageReader<Failed>,
     sim: Res<Sim>,
     looks: Res<actions::Looks>,
     time: Res<Time>,
@@ -443,6 +453,10 @@ pub fn refuse(
         };
         let place = Some(Place::of(&sim.0, *about));
         log.say("GENERIC_ERROR", text, place, &time, &mut sounds);
+    }
+    for Failed { text, about } in failed.read() {
+        let place = Some(Place::of(&sim.0, *about));
+        log.say("GENERIC_ERROR", text.clone(), place, &time, &mut sounds);
     }
 }
 
@@ -592,6 +606,19 @@ fn told(
             let name = look.regiment(sim, regiment);
             Told::Event(event, vec![name], at(About::Regiment(regiment)))
         }
+        Notice::Researched {
+            player,
+            building,
+            technology,
+        } if ours(player) => {
+            let with = vec![look.name(technology.as_str())];
+            Told::Event("research_complete", with, at(About::Building(building)))
+        }
+        Notice::Gained { player, technology } if ours(player) => Told::Event(
+            "technology_gained",
+            vec![look.name(technology.as_str())],
+            None,
+        ),
         // A side always sees its own, so is always told: the loser while
         // it's still theirs, the taker once it is.
         Notice::Lost {

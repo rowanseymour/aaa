@@ -26,7 +26,7 @@ pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
 pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
 pub use fog::{Fog, Seen};
-pub use research::Lacking;
+pub use research::{Lacking, Researchable};
 pub use supply::{Bombarder, Held, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
@@ -165,6 +165,9 @@ pub struct World {
     /// The regiment templates each building template recruits, which are
     /// those that can attach to it as an HQ.
     pub recruit_lists: HashMap<Id, Vec<Id>>,
+    /// What each template that researches lists, in its menu's order, by
+    /// template id.
+    pub research_lists: HashMap<Id, Vec<aaa_map::Research>>,
     /// What sides own that's neither a regiment nor a building but may
     /// still add to their economy, such as where they start: each owner
     /// and template.
@@ -793,33 +796,62 @@ pub enum State {
     Packed(u64, usize),
 }
 
-/// Something a building has been asked to commission.
+/// Something a building has been asked to commission or research.
 #[derive(Debug, Clone)]
 pub struct Commission {
-    /// What it raises, standing anywhere: it's placed and given ids once
-    /// it's done.
-    pub regiment: aaa_map::Regiment,
+    pub work: Work,
     /// Ticks it takes.
     pub ticks: u64,
     /// The money taken for it, given back if it's called off.
     pub paid: f32,
     /// Whether it's taken its share of its owner's limits, which it does
-    /// on reaching the front of the queue once there's room.
+    /// on reaching the front of the queue once there's room. Research
+    /// takes none, so it's held from the start.
     pub held: bool,
     /// Set once a building takes it on, to call it off by: unlike its
     /// place in the queue, it stays the same while orders are on their way.
     pub id: u32,
 }
 
+/// What a building's queue works on.
+#[derive(Debug, Clone)]
+pub enum Work {
+    /// A regiment, standing anywhere: it's placed and given ids once it's
+    /// done.
+    Raise(Box<aaa_map::Regiment>),
+    Research(aaa_map::Research),
+}
+
 impl Commission {
-    /// A commission taking `seconds`, at least a tick.
+    /// A commission raising `regiment` in `seconds`, at least a tick.
     pub fn new(regiment: aaa_map::Regiment, seconds: f32) -> Self {
+        Commission::of(Work::Raise(Box::new(regiment)), seconds)
+    }
+
+    fn of(work: Work, seconds: f32) -> Self {
         Commission {
-            regiment,
+            held: matches!(work, Work::Research(_)),
+            work,
             ticks: ((seconds / TICK).round() as u64).max(1),
             paid: 0.0,
-            held: false,
             id: 0,
+        }
+    }
+
+    /// The regiment it raises, if it raises one.
+    pub fn regiment(&self) -> Option<&aaa_map::Regiment> {
+        match &self.work {
+            Work::Raise(r) => Some(r),
+            Work::Research(_) => None,
+        }
+    }
+
+    /// What it's for: the template it raises or the technology it
+    /// researches.
+    pub fn template(&self) -> &str {
+        match &self.work {
+            Work::Raise(r) => &r.template,
+            Work::Research(r) => r.technology.as_str(),
         }
     }
 }
@@ -912,6 +944,10 @@ pub enum Command {
         building: usize,
         commission: Box<Commission>,
     },
+    /// Asks a building to research `technology`, one of those it lists,
+    /// once it's done with what it was asked for before. Refused for one
+    /// it doesn't offer, as [`World::researchable`] has it.
+    Research { building: usize, technology: Id },
     /// Calls off the commission with the [`Commission::id`] `commission`
     /// that a building was asked for, starting the next over if it was
     /// under way. Refused once it's gone.
@@ -1045,6 +1081,9 @@ impl World {
             .filter_map(|t| Some((aaa_map::owner(t)?, t.template.clone())))
             .collect();
         for p in &map.players {
+            for t in &p.technologies {
+                world.grant(p.id, t.clone());
+            }
             world.treasuries.insert(
                 p.id,
                 Treasury {
@@ -1103,6 +1142,7 @@ impl World {
             logistics: HashMap::new(),
             resupply_rates: HashMap::new(),
             recruit_lists: HashMap::new(),
+            research_lists: HashMap::new(),
             rng: 0x9e37_79b9_7f4a_7c15,
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),
@@ -1438,7 +1478,14 @@ impl World {
             Command::Commission {
                 building,
                 ref commission,
-            } => self.may_commission(player, building, &commission.regiment),
+            } => match &commission.work {
+                Work::Raise(regiment) => self.may_commission(player, building, regiment),
+                Work::Research(_) => Err(Refused::Unable),
+            },
+            Command::Research {
+                building,
+                ref technology,
+            } => self.may_research(player, building, technology).map(drop),
             Command::CancelCommission {
                 building,
                 commission,
@@ -1477,6 +1524,10 @@ impl World {
                 building,
                 commission,
             } => self.commission(player, building, *commission)?,
+            Command::Research {
+                building,
+                technology,
+            } => self.research(player, building, &technology)?,
             Command::CancelCommission {
                 building,
                 commission,
@@ -1888,14 +1939,32 @@ impl World {
         building: usize,
         mut commission: Commission,
     ) -> Result<(), Refused> {
-        self.may_commission(player, building, &commission.regiment)?;
-        commission.paid = self.cost(&commission.regiment);
+        let Work::Raise(regiment) = &commission.work else {
+            return Err(Refused::Unable);
+        };
+        self.may_commission(player, building, regiment)?;
+        commission.paid = self.cost(regiment);
         commission.held = false;
         let left = self.stockpile(player) - commission.paid;
         self.set_stockpile(player, left);
+        self.enqueue(building, commission);
+        Ok(())
+    }
+
+    fn enqueue(&mut self, building: usize, mut commission: Commission) {
         commission.id = self.next_commission;
         self.next_commission += 1;
         self.buildings[building].queue.push_back(commission);
+    }
+
+    fn research(&mut self, player: u32, building: usize, technology: &Id) -> Result<(), Refused> {
+        let item = self.may_research(player, building, technology)?.clone();
+        let paid = self.research_cost(&item);
+        let mut commission = Commission::of(Work::Research(item.clone()), item.seconds);
+        commission.paid = paid;
+        let left = self.stockpile(player) - commission.paid;
+        self.set_stockpile(player, left);
+        self.enqueue(building, commission);
         Ok(())
     }
 
@@ -2098,7 +2167,7 @@ impl World {
                 continue;
             }
             let building = &mut self.buildings[b];
-            let (Some(first), Some(deploy)) = (building.queue.front(), building.deploy) else {
+            let Some(first) = building.queue.front() else {
                 continue;
             };
             building.progress += 1;
@@ -2109,12 +2178,22 @@ impl World {
             let Some(done) = building.queue.pop_front() else {
                 continue;
             };
+            let mut regiment = match done.work {
+                Work::Raise(regiment) => *regiment,
+                Work::Research(item) => {
+                    self.researched(b, &item);
+                    continue;
+                }
+            };
+            let building = &self.buildings[b];
+            let Some(deploy) = building.deploy else {
+                continue;
+            };
             let (position, facing, owner) = (building.position, building.facing, building.owner);
             let rally = building.rally;
             let from = deploy_point(position, facing, deploy.creation);
             let to = deploy_point(position, facing, deploy.deployment);
             let heading = normalised([to[0] - from[0], to[1] - from[1]]).unwrap_or(facing);
-            let mut regiment = done.regiment;
             regiment.owner = owner;
             let ids = regiment.members.len() as u32 + u32::from(!regiment.lone());
             regiment.renumber(self.take_ids(ids));
@@ -5815,6 +5894,8 @@ mod tests {
             relations: stored(relations),
             team_relations: stored(team_relations),
             stockpile: 0.0,
+            technologies: Vec::new(),
+            barred: Vec::new(),
         }
     }
 
@@ -8203,5 +8284,216 @@ mod tests {
         assert!((hit(&[effect("forest_vehicles")]) - 14.4).abs() < 1e-5);
         let both = [effect("forest_infantry"), effect("forest_vehicles")];
         assert!((hit(&both) - 5.6).abs() < 1e-5);
+    }
+
+    /// The economy's HQ listing two technologies for its side, 60 and 100
+    /// money, the second needing the first and a depot.
+    fn laboratory() -> World {
+        let mut w = economy();
+        let item = |technology: &str, money| aaa_map::Research {
+            technology: Id::from(technology),
+            grant: aaa_map::Grant::Side,
+            seconds: 1.0,
+            cost: amounts(&[("money", money)]),
+            structures: Vec::new(),
+            structures_any: false,
+            properties: Vec::new(),
+            properties_any: false,
+        };
+        let mut tiger = item("tech_tiger", 100.0);
+        tiger.properties = vec![Id::from("tech_heavy")];
+        tiger.structures = vec![vec![Id::from("depot")]];
+        (w.research_lists).insert(Id::from("house"), vec![item("tech_heavy", 60.0), tiger]);
+        w
+    }
+
+    fn research(technology: &str) -> Command {
+        Command::Research {
+            building: 0,
+            technology: Id::from(technology),
+        }
+    }
+
+    #[test]
+    fn research_is_paid_for_up_front_and_gives_the_side_its_technology() {
+        let mut w = laboratory();
+        let (heavy, tiger) = (w.research_lists[&Id::from("house")][0].clone(), {
+            w.research_lists[&Id::from("house")][1].clone()
+        });
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Ready);
+        // What needs a technology the side hasn't is left out.
+        assert_eq!(w.researchable(1, 0, &tiger), Researchable::Hidden);
+        assert_eq!(w.apply(1, research("tech_tiger")), Err(Refused::Lacking));
+        assert_eq!(w.apply(1, research("tech_none")), Err(Refused::Unable));
+        // Only an enemy's building would research for them.
+        assert_eq!(w.apply(2, research("tech_heavy")), Err(Refused::NotYours));
+        w.apply(1, research("tech_heavy")).unwrap();
+        assert_eq!(w.stockpile(1), 440.0);
+        // Once under way, it's not offered again.
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Taken);
+        assert_eq!(w.apply(1, research("tech_heavy")), Err(Refused::Unable));
+        for _ in 0..10 {
+            assert!(!w.holds(1, &Id::from("tech_heavy")));
+            w.tick();
+        }
+        assert!(w.holds(1, &Id::from("tech_heavy")));
+        let told: Vec<&Notice> = (w.notices.iter())
+            .filter(|n| matches!(n, Notice::Researched { .. } | Notice::Gained { .. }))
+            .collect();
+        assert!(matches!(
+            told[..],
+            [
+                Notice::Researched {
+                    player: 1,
+                    building: 0,
+                    ..
+                },
+                Notice::Gained { player: 1, .. }
+            ]
+        ));
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Taken);
+        // A building it needs only greys it.
+        assert_eq!(
+            w.researchable(1, 0, &tiger),
+            Researchable::Lacking(vec![Id::from("depot")])
+        );
+        assert_eq!(w.apply(1, research("tech_tiger")), Err(Refused::Lacking));
+    }
+
+    #[test]
+    fn research_waits_its_turn_in_the_queue_and_is_refunded_if_called_off() {
+        let mut w = laboratory();
+        w.apply(
+            1,
+            Command::Commission {
+                building: 0,
+                commission: Box::new(Commission::new(truck(), 1.0)),
+            },
+        )
+        .unwrap();
+        w.apply(1, research("tech_heavy")).unwrap();
+        assert_eq!(w.stockpile(1), 190.0);
+        assert_eq!(w.buildings[0].queue[1].template(), "tech_heavy");
+        let researching = w.buildings[0].queue[1].id;
+        w.apply(
+            1,
+            Command::CancelCommission {
+                building: 0,
+                commission: researching,
+            },
+        )
+        .unwrap();
+        assert_eq!(w.stockpile(1), 250.0);
+        // Too little money left for it then.
+        w.set_stockpile(1, 50.0);
+        assert_eq!(
+            w.apply(1, research("tech_heavy")),
+            Err(Refused::Unaffordable)
+        );
+        // It waits behind the truck, which waits for room under a limit,
+        // and gets on once that's called off.
+        w.set_stockpile(1, 60.0);
+        w.apply(1, research("tech_heavy")).unwrap();
+        for _ in 0..30 {
+            w.tick();
+        }
+        assert!(!w.holds(1, &Id::from("tech_heavy")));
+        let truck = w.buildings[0].queue[0].id;
+        let cancel = Command::CancelCommission {
+            building: 0,
+            commission: truck,
+        };
+        w.apply(1, cancel).unwrap();
+        for _ in 0..10 {
+            w.tick();
+        }
+        assert!(w.holds(1, &Id::from("tech_heavy")));
+    }
+
+    #[test]
+    fn research_needs_no_deploy_point_and_a_building_can_keep_its_own() {
+        let mut w = laboratory();
+        w.buildings[0].deploy = None;
+        let list = w.research_lists.get_mut(&Id::from("house")).unwrap();
+        list[0].grant = aaa_map::Grant::Building;
+        w.apply(1, research("tech_heavy")).unwrap();
+        for _ in 0..10 {
+            w.tick();
+        }
+        // The building has it, which is enough for what needs it there, but
+        // the side doesn't.
+        assert!(!w.holds(1, &Id::from("tech_heavy")));
+        let tiger = w.research_lists[&Id::from("house")][1].clone();
+        assert!(matches!(
+            w.researchable(1, 0, &tiger),
+            Researchable::Lacking(_)
+        ));
+        assert!(
+            w.notices
+                .iter()
+                .any(|n| matches!(n, Notice::Researched { .. }))
+        );
+        assert!(!w.notices.iter().any(|n| matches!(n, Notice::Gained { .. })));
+    }
+
+    #[test]
+    fn a_side_researches_a_technology_in_one_building_at_a_time() {
+        let mut w = laboratory();
+        let mut second = building(6, 1, [5.0, 5.0]);
+        second.deploy = w.buildings[0].deploy;
+        w.add_buildings(&[second]);
+        w.apply(1, research("tech_heavy")).unwrap();
+        let heavy = w.research_lists[&Id::from("house")][0].clone();
+        assert_eq!(w.researchable(1, 1, &heavy), Researchable::Taken);
+        // The enemy researches its own.
+        assert_eq!(w.researchable(2, 1, &heavy), Researchable::Ready);
+    }
+
+    #[test]
+    fn research_for_a_settlement_goes_nowhere_and_can_be_had_again() {
+        let mut w = laboratory();
+        let list = w.research_lists.get_mut(&Id::from("house")).unwrap();
+        list[0].grant = aaa_map::Grant::Settlement;
+        let heavy = list[0].clone();
+        w.apply(1, research("tech_heavy")).unwrap();
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Taken);
+        for _ in 0..10 {
+            w.tick();
+        }
+        assert!(
+            w.notices
+                .iter()
+                .any(|n| matches!(n, Notice::Researched { .. }))
+        );
+        assert!(!w.holds(1, &Id::from("tech_heavy")));
+        assert!(w.buildings[0].properties.is_empty());
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Ready);
+        let before = w.stockpile(1);
+        w.apply(1, research("tech_heavy")).unwrap();
+        assert_eq!(w.stockpile(1), before - 60.0);
+    }
+
+    #[test]
+    fn the_map_bars_sides_from_technologies_and_recruits() {
+        let mut w = laboratory();
+        let side = w.sides.players.iter_mut().find(|p| p.id == 1).unwrap();
+        side.barred = vec![Id::from("TECH_HEAVY"), Id::from("truck")];
+        // A barred technology is left out of the menu and never gained.
+        let heavy = w.research_lists[&Id::from("house")][0].clone();
+        assert_eq!(w.researchable(1, 0, &heavy), Researchable::Hidden);
+        assert_eq!(w.apply(1, research("tech_heavy")), Err(Refused::Lacking));
+        w.grant(1, Id::from("tech_heavy"));
+        assert!(!w.holds(1, &Id::from("tech_heavy")));
+        // Nor is a barred recruit offered.
+        let lacking = w.lacks(1, 0, &truck());
+        assert!(lacking.barred && lacking.hidden && !lacking.is_empty());
+        let order = Command::Commission {
+            building: 0,
+            commission: Box::new(Commission::new(truck(), 1.0)),
+        };
+        assert_eq!(w.apply(1, order), Err(Refused::Lacking));
+        // Only for the side barred.
+        w.grant(2, Id::from("tech_heavy"));
+        assert!(w.holds(2, &Id::from("tech_heavy")));
     }
 }
