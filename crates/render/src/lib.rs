@@ -3,6 +3,7 @@
 
 pub mod blend;
 pub mod camera;
+pub mod decals;
 mod glow;
 pub mod log;
 pub mod models;

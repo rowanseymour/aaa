@@ -1040,6 +1040,21 @@ pub struct Vfx {
     pub repeating: Option<bool>,
     #[serde(default)]
     pub flags: Vec<VfxFlags>,
+    /// The picture one laid on the ground shows, relative to its file's
+    /// folder.
+    pub texture: Option<String>,
+    /// World units across that picture is.
+    pub texture_size: Option<f32>,
+    /// One laid on the ground is lit as the ground is.
+    pub respect_lighting: Option<bool>,
+    /// It's added to what's under it rather than laid over it.
+    pub additive: Option<bool>,
+    /// Which others laid on the ground it's drawn over, e.g. `scorch`.
+    pub decal_type: Option<String>,
+    /// Seconds one laid on the ground takes to show, and to go.
+    pub decal_fade_time: Option<[f32; 2]>,
+    /// One laid on the ground is turned a random way.
+    pub random_orientation: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

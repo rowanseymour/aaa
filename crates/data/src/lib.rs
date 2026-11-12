@@ -827,7 +827,32 @@ pub struct Vfx {
     pub gyroscope: bool,
     /// For one that tints what it's on, how.
     pub tint: Option<VfxTint>,
+    /// For a picture laid on the ground, how.
+    pub decal: Option<Decal>,
 }
+
+/// How a [`Vfx`] that's a picture laid on the ground shows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Decal {
+    /// Archive path of the picture.
+    pub texture: String,
+    /// World units across it is, square.
+    pub size: f32,
+    /// What its colours are multiplied by.
+    pub colour: [f32; 3],
+    /// It's lit as the ground is, rather than looking the same day and
+    /// night.
+    pub lit: bool,
+    /// It's added to the ground rather than laid over it.
+    pub additive: bool,
+    /// Seconds it takes to show once made, and to go once its time's up.
+    pub fade: [f32; 2],
+    /// Those of a higher layer are drawn over those of a lower.
+    pub layer: u8,
+}
+
+/// The kinds of picture laid on the ground, the lowest first.
+const DECAL_LAYERS: [&str; 6] = ["terrain", "scorch", "track", "generic", "ui", "shadow"];
 
 /// How a [`Vfx`] tints what it's on, which pulses from untinted up to a
 /// strength and back down, each way at a steady pace.
@@ -2036,7 +2061,10 @@ impl GameData {
                     .as_deref()
                     .map(|m| beside(file, m))
                     .filter(|m| self.exists(m));
-                out.insert(ids, vfx(v, model));
+                let texture = (v.texture.as_deref())
+                    .map(|t| beside(file, t.trim()))
+                    .filter(|t| self.exists(t));
+                out.insert(ids, vfx(v, model, texture));
             }
         }
         out
@@ -2636,9 +2664,31 @@ fn object_audio(thing: &defs::Thing) -> ObjectAudio {
     }
 }
 
-fn vfx(v: defs::Vfx, model: Option<String>) -> Vfx {
+fn vfx(v: defs::Vfx, model: Option<String>, texture: Option<String>) -> Vfx {
+    let category = v.category.unwrap_or_default().to_ascii_uppercase();
+    let layer = |kind: &str| {
+        DECAL_LAYERS
+            .iter()
+            .position(|l| l.eq_ignore_ascii_case(kind))
+    };
+    // One sized by what it's attached to isn't a picture of its own size.
+    let own_size = v.attached_scale.unwrap_or(0.0) == 0.0;
+    let decal = texture
+        .filter(|_| category.starts_with("VFXPROJECTEDTEXTURE") && own_size)
+        .map(|texture| Decal {
+            texture,
+            size: v.texture_size.unwrap_or(0.0),
+            colour: v.color.unwrap_or([1.0; 3]),
+            lit: v.respect_lighting.unwrap_or(false),
+            additive: v.additive.unwrap_or(false),
+            fade: v.decal_fade_time.unwrap_or([0.0; 2]),
+            layer: (v.decal_type.as_deref().and_then(layer)).unwrap_or(3) as u8,
+        })
+        .filter(|d| d.size > 0.0);
+    let flagged = v.flags.iter().rev().find_map(|f| f.random_orientation);
     Vfx {
-        category: v.category.unwrap_or_default().to_ascii_uppercase(),
+        category,
+        decal,
         model,
         texture_dirs: texture_dirs(&v.texture_search_path),
         permanent: v.permanent.unwrap_or(false),
@@ -2649,7 +2699,7 @@ fn vfx(v: defs::Vfx, model: Option<String>) -> Vfx {
         night_only: v.nightonly.unwrap_or(false),
         constant_screen_size: v.constant_screen_size.unwrap_or(false),
         real_time: v.force_real_time.unwrap_or(false),
-        random_orientation: v.flags.iter().rev().find_map(|f| f.random_orientation) == Some(true),
+        random_orientation: flagged.or(v.random_orientation) == Some(true),
         gyroscope: v.gyroscope.unwrap_or(true),
         tint: v.color.map(|colour| VfxTint {
             colour,
@@ -3848,6 +3898,7 @@ mod tests {
         let v = vfx(
             templates.deserialize(block).unwrap(),
             Some("Effects/Boom.NIF".to_string()),
+            None,
         );
         assert_eq!(
             v,
@@ -3866,8 +3917,50 @@ mod tests {
                 random_orientation: true,
                 gyroscope: true,
                 tint: None,
+                decal: None,
             }
         );
+    }
+
+    #[test]
+    fn projected_textures_of_their_own_size_are_decals() {
+        let parsed = tgi::parse(
+            "[Template VFX]\n{\n\tcategory = VFX\n\tflag permanent\n\tfloat attached_scale = 0\n}\n\
+             [Template VFXProjectedTexture inherit=VFX]\n{\n\tcategory = VFXPROJECTEDTEXTURE\n\
+             \tpermanent = true\n\tstring texture\n\tfloat texture_size\n\
+             \tpoint3 color = 1,1,1\n\tflag respect_lighting = false\n\
+             \tstring decal_type = generic\n\tpoint2 decal_fade_time = 0, 0\n\
+             \tflag random_orientation = false\n}\n\
+             [Template VFXScorchMark inherit=VFXProjectedTexture]\n{\n\tpermanent = false\n\
+             \tdecal_type = scorch\n\trandom_orientation = true\n}\n\
+             [Thing Inherit=VFXScorchMark]\n{\n\tIDS = scorch\n\ttexture = Scorch.dds\n\
+             \ttexture_size = 7\n\tduration = 15\n\tdecal_fade_time = 0, 5\n}\n\
+             [Thing Inherit=VFXProjectedTexture]\n{\n\tIDS = ring\n\ttexture = Ring.dds\n\
+             \tattached_scale = 1.5\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let mut blocks = parsed.root.blocks_of("Thing");
+        let mut read = |texture: &str| {
+            let v = templates.deserialize(blocks.next().unwrap()).unwrap();
+            vfx(v, None, Some(texture.to_string()))
+        };
+        let scorch = read("Effects/Scorch.dds");
+        assert!(scorch.random_orientation && !scorch.permanent);
+        assert_eq!(scorch.duration, Some(15.0));
+        assert_eq!(
+            scorch.decal,
+            Some(Decal {
+                texture: "Effects/Scorch.dds".to_string(),
+                size: 7.0,
+                colour: [1.0; 3],
+                lit: false,
+                additive: false,
+                fade: [0.0, 5.0],
+                layer: 1,
+            })
+        );
+        // One sized by what it's attached to isn't.
+        assert_eq!(read("Effects/Ring.dds").decal, None);
     }
 
     #[test]
