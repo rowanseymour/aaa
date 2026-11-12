@@ -286,6 +286,10 @@ impl World {
         let Some(first) = b.queue.front() else {
             return true;
         };
+        // A regiment needs somewhere to come out.
+        if first.regiment().is_some() && b.deploy.is_none() {
+            return true;
+        }
         let why = match b.state {
             State::Standing if self.out_of_supply(building) => Some(Pause::Supply),
             State::Standing if first.held => None,

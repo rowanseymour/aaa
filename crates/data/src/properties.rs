@@ -99,11 +99,13 @@ impl GameData {
 
     /// What each shared property says under its name, by id: who it's
     /// for, then a line for each thing it does that the game has words for.
-    pub fn property_lines(&mut self) -> HashMap<Id, Vec<String>> {
-        let strings = self.strings();
-        let paces = self.paces(&strings);
+    pub(crate) fn property_lines(
+        &mut self,
+        strings: &HashMap<String, String>,
+    ) -> HashMap<Id, Vec<String>> {
+        let paces = self.paces(strings);
         let definitions = self.definitions();
-        let name = |p: &defs::Property| localized(&strings, p.name.as_deref()).unwrap_or_default();
+        let name = |p: &defs::Property| localized(strings, p.name.as_deref()).unwrap_or_default();
         let affects = strings
             .get("ui_tooltip_item_title_required_properties")
             .cloned()
@@ -117,7 +119,7 @@ impl GameData {
                     .filter(|n| !n.is_empty())
                     .collect();
                 let who = (!needed.is_empty()).then(|| format!("{affects} {}", needed.join(", ")));
-                let does = p.modifier.iter().filter_map(|m| line(&strings, &paces, m));
+                let does = p.modifier.iter().filter_map(|m| line(strings, &paces, m));
                 (id.clone(), who.into_iter().chain(does).collect())
             })
             .collect()
@@ -126,7 +128,7 @@ impl GameData {
     /// How each shared property that has an icon shows, by id.
     pub fn property_looks(&mut self) -> HashMap<Id, PropertyLook> {
         let strings = self.strings();
-        let mut lines = self.property_lines();
+        let mut lines = self.property_lines(&strings);
         let definitions = self.definitions();
         let mut out = HashMap::new();
         for (id, p) in &definitions.properties {

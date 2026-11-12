@@ -1959,8 +1959,8 @@ impl World {
 
     fn research(&mut self, player: u32, building: usize, technology: &Id) -> Result<(), Refused> {
         let item = self.may_research(player, building, technology)?.clone();
-        let paid = self.research_cost(&item);
-        let mut commission = Commission::of(Work::Research(item.clone()), item.seconds);
+        let (paid, seconds) = (self.research_cost(&item), item.seconds);
+        let mut commission = Commission::of(Work::Research(item), seconds);
         commission.paid = paid;
         let left = self.stockpile(player) - commission.paid;
         self.set_stockpile(player, left);

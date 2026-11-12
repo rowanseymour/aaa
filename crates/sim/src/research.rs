@@ -140,8 +140,39 @@ impl World {
             .map_or(&[], Vec::as_slice)
     }
 
+    /// The technologies under way in any of `player`'s buildings.
+    fn researching(&self, player: u32) -> Vec<&Id> {
+        (self.buildings.iter().filter(|b| b.owner == player))
+            .flat_map(|b| &b.queue)
+            .filter_map(|c| match &c.work {
+                crate::Work::Research(r) => Some(&r.technology),
+                crate::Work::Raise(_) => None,
+            })
+            .collect()
+    }
+
     /// How the building at `building` offers `item` to `player`.
     pub fn researchable(&self, player: u32, building: usize, item: &Research) -> Researchable {
+        self.offer(player, building, item, &self.researching(player))
+    }
+
+    /// How the building at `building` offers each item it lists to
+    /// `player`, in its menu's order.
+    pub fn researchables(&self, player: u32, building: usize) -> Vec<Researchable> {
+        let researching = self.researching(player);
+        (self.research_list(building).iter())
+            .map(|item| self.offer(player, building, item, &researching))
+            .collect()
+    }
+
+    /// [`World::researchable`], given what's under way on the side.
+    fn offer(
+        &self,
+        player: u32,
+        building: usize,
+        item: &Research,
+        researching: &[&Id],
+    ) -> Researchable {
         let Some(b) = self.buildings.get(building) else {
             return Researchable::Hidden;
         };
@@ -151,10 +182,7 @@ impl World {
                 .any(|c| matches!(&c.work, crate::Work::Research(r) if r.technology == *tech))
         };
         let taken = match item.grant {
-            Grant::Side => {
-                self.holds(player, tech)
-                    || (self.buildings.iter()).any(|o| o.owner == player && queued(o))
-            }
+            Grant::Side => self.holds(player, tech) || researching.contains(&tech),
             Grant::Building => self.carries(building, tech) || queued(b),
             // Nothing keeps it, so it's never done.
             Grant::Settlement => queued(b),
@@ -220,7 +248,10 @@ impl World {
         match item.grant {
             Grant::Side if !self.holds(player, &technology) => {
                 self.grant(player, technology.clone());
-                self.notices.push(Notice::Gained { player, technology });
+                // A barred one isn't granted.
+                if self.holds(player, &technology) {
+                    self.notices.push(Notice::Gained { player, technology });
+                }
             }
             Grant::Side => {}
             Grant::Building => self.buildings[building].properties.push(held),

@@ -614,7 +614,7 @@ pub fn spawn(
                 let cost: Vec<aaa_data::Amount> = (item.cost.nonzero())
                     .map(|(kind, amount)| aaa_data::Amount {
                         kind,
-                        resource: title(&format!("resources_{kind}_name"), kind),
+                        resource: aaa_data::resource_name(&strings, kind),
                         amount,
                     })
                     .collect();
@@ -922,12 +922,13 @@ pub fn show(
         .collect();
     let topics = looks.topics(&sim.0, building);
     let list = building.map_or(&[][..], |b| sim.0.research_list(b));
-    let researches: Vec<Researchable> = (list.iter())
-        .map(|item| match (building, local.0) {
-            (Some(b), Some(player)) => sim.0.researchable(player, b, item),
-            _ => Researchable::Hidden,
-        })
-        .collect();
+    // Only what has a look, should the two ever differ.
+    let list = &list[..list.len().min(topics.len())];
+    let mut researches: Vec<Researchable> = match (building, local.0) {
+        (Some(b), Some(player)) => sim.0.researchables(player, b),
+        _ => vec![Researchable::Hidden; list.len()],
+    };
+    researches.truncate(list.len());
     let order_slots: Vec<Option<Place>> = looks.orders.iter().map(|(s, _)| *s).collect();
     shown.0 = layout(
         *page,
@@ -1395,22 +1396,34 @@ impl Presser<'_> {
                 let given = self.orders.give(sim, player, command);
                 if let Err(e) = given {
                     debug!("can't research {}: {e:?}", item.technology);
-                    let looks = &self.looks;
-                    let name = (looks.topics(sim, Some(b)).get(i))
-                        .map_or(item.technology.as_str(), |t| t.look.name.as_str());
-                    let text = match e {
-                        aaa_sim::Refused::Unaffordable => {
-                            let cost = sim.research_cost(item).ceil().to_string();
-                            fill(&looks.research_affording, &[name, &cost])
-                        }
-                        _ => fill(&looks.research_refused, &[name]),
-                    };
-                    let about = About::Building(b);
-                    self.failed.write(Failed { text, about });
+                    self.refuse_research(b, i, e);
                 }
                 *self.page = commissioned(*self.page, given);
             }
         }
+    }
+}
+
+impl Presser<'_> {
+    /// Tells the player the selected building at `building` won't research
+    /// the `i`th item it lists, and why.
+    fn refuse_research(&mut self, building: usize, i: usize, refused: aaa_sim::Refused) {
+        let sim = &self.sim.0;
+        let Some(item) = sim.research_list(building).get(i) else {
+            return;
+        };
+        let looks = &self.looks;
+        let name = (looks.topics(sim, Some(building)).get(i))
+            .map_or(item.technology.as_str(), |t| t.look.name.as_str());
+        let text = match refused {
+            aaa_sim::Refused::Unaffordable => {
+                let cost = sim.research_cost(item).ceil().to_string();
+                fill(&looks.research_affording, &[name, &cost])
+            }
+            _ => fill(&looks.research_refused, &[name]),
+        };
+        let about = About::Building(building);
+        self.failed.write(Failed { text, about });
     }
 }
 
@@ -1439,6 +1452,20 @@ pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut pre
     });
     if let Some(slot) = slot {
         presser.press(slot);
+        return;
+    }
+    // The key of what's done or under way, its slot left empty, is refused.
+    let (Page::Menu(Menu::Research), Some(b), Some(player)) = (page, building, presser.local.0)
+    else {
+        return;
+    };
+    let sim = &presser.sim.0;
+    let taken = (sim.research_list(b).iter().enumerate()).find(|(_, item)| {
+        let action = format!("PropertyDataSelectCommand {}", item.technology);
+        bindings.pressed(&keys, &action) && sim.researchable(player, b, item) == Researchable::Taken
+    });
+    if let Some((i, _)) = taken {
+        presser.refuse_research(b, i, aaa_sim::Refused::Unable);
     }
 }
 
