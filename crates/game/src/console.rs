@@ -1263,7 +1263,7 @@ fn spawn(mut commands: Commands) {
                 ..default()
             },
         ),
-        GlobalZIndex(100),
+        GlobalZIndex(crate::ui::layer::CONSOLE),
         children![(PanelText, label("", Font::Hud, Ink::Help))],
     ));
 }

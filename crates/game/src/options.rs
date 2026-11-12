@@ -7,17 +7,23 @@ use aaa_data::{GameData, HotkeyConfiguration, Id};
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
-use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow};
+use bevy::window::{Monitor, PrimaryMonitor, PrimaryWindow, WindowMode};
 
 use crate::Screen;
 use crate::supply::Border;
 use crate::ui::{
-    Chosen, Dropdown, Font, Ink, Surface, clickable, label, padded, switch, text, toggle,
+    Chosen, Dropdown, Font, Ink, Surface, clickable, label, layer, padded, switch, text, toggle,
 };
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
 const BORDER: &str = "options_dialog_Child_text_15";
 const RESOLUTION: &str = "options_dialog_Child_text_18";
+const GAME_TAB: &str = "options_dialog_ShowGameplayButton_Tooltip";
+const VIDEO_TAB: &str = "options_dialog_ShowVideoButton_Tooltip";
+const GAME: &str = "options_dialog_GamePlayPage_GameTitle_Label_Text";
+const EXTRAS: &str = "options_dialog_GamePlayPage_MapTitle_Label_Text";
+const BASIC: &str = "options_dialog_VideoPage_BasicTitle_Label_Text";
+const OK: &str = "options_dialog_OptionsButtonOK_Client_View_text";
 
 /// What the player has chosen, and what there is to choose from.
 #[derive(Resource)]
@@ -32,6 +38,15 @@ pub struct Options {
     border_label: String,
     /// What the game calls the choice of the window's size.
     resolution_label: String,
+    /// What the game calls each tab, by [`Tab`], and the groups of options
+    /// in them.
+    game_tab: String,
+    video_tab: String,
+    game_title: String,
+    extras_title: String,
+    basic_title: String,
+    /// What the game's button to leave the options says.
+    ok: String,
 }
 
 impl Options {
@@ -45,7 +60,7 @@ impl Options {
 
     /// With `named` the set of hotkeys in use, or the first where there's
     /// no such set.
-    fn of(
+    pub fn of(
         configurations: Vec<HotkeyConfiguration>,
         named: Option<Id>,
         strings: &HashMap<String, String>,
@@ -58,6 +73,12 @@ impl Options {
             hotkeys_label: said(HOTKEYS, "Hotkeys"),
             border_label: said(BORDER, "Supply Border"),
             resolution_label: said(RESOLUTION, "Resolution"),
+            game_tab: said(GAME_TAB, "Gameplay Options"),
+            video_tab: said(VIDEO_TAB, "Video Options"),
+            game_title: said(GAME, "Game"),
+            extras_title: said(EXTRAS, "Auxiliaries"),
+            basic_title: said(BASIC, "Basic"),
+            ok: said(OK, "Ok"),
         }
     }
 
@@ -85,18 +106,9 @@ enum Tab {
     Video,
 }
 
-impl Tab {
-    fn name(self) -> &'static str {
-        match self {
-            Tab::Game => "Game",
-            Tab::Video => "Video",
-        }
-    }
-}
-
 /// The options, over the whole screen.
 #[derive(Component)]
-struct Page;
+pub struct Page;
 
 /// A button showing a [`Tab`]'s options.
 #[derive(Component)]
@@ -134,7 +146,8 @@ struct InList;
 #[derive(Component)]
 struct BorderToggle;
 
-/// The sizes offered for the window, of those the screen has room for.
+/// The sizes offered for the window, of those the screen has room for
+/// with its frame.
 const RESOLUTIONS: [(u32, u32); 9] = [
     (1024, 768),
     (1280, 720),
@@ -164,20 +177,21 @@ impl Plugin for OptionsPlugin {
                     mark_chosen,
                     show_border,
                 )
-                    .chain(),
+                    .chain()
+                    .run_if(any_with_component::<Page>),
             );
     }
 }
 
-fn screen(mut commands: Commands) {
+fn screen(mut commands: Commands, options: Res<Options>) {
     commands.spawn((Camera2d, DespawnOnExit(Screen::Options)));
-    let page = page(&mut commands);
+    let page = page(&mut commands, &options);
     commands.entity(page).insert(DespawnOnExit(Screen::Options));
 }
 
 /// Spawns the options over the whole screen, on top of whatever's there,
 /// until their button to leave them is pressed.
-pub fn page(commands: &mut Commands) -> Entity {
+pub fn page(commands: &mut Commands, options: &Options) -> Entity {
     commands.insert_resource(Open::Nothing);
     commands.insert_resource(Tab::Game);
     let page = Node {
@@ -187,7 +201,7 @@ pub fn page(commands: &mut Commands) -> Entity {
         ..default()
     };
     let page = commands
-        .spawn((Page, page, Surface::Panel, GlobalZIndex(15)))
+        .spawn((Page, page, Surface::Panel, GlobalZIndex(layer::PAGE)))
         .id();
     let column = Node {
         flex_direction: FlexDirection::Column,
@@ -196,18 +210,17 @@ pub fn page(commands: &mut Commands) -> Entity {
         ..default()
     };
     let tabs = Node {
-        width: px(240),
+        width: px(300),
         ..column.clone()
     };
     let tabs = commands.spawn((ChildOf(page), tabs)).id();
     commands.spawn((text("Options", Font::Title), ChildOf(tabs)));
-    for tab in [Tab::Game, Tab::Video] {
+    for (tab, name) in [
+        (Tab::Game, &options.game_tab),
+        (Tab::Video, &options.video_tab),
+    ] {
         commands
-            .spawn((
-                TabButton(tab),
-                toggle(tab.name(), Font::Large),
-                ChildOf(tabs),
-            ))
+            .spawn((TabButton(tab), toggle(name, Font::Large), ChildOf(tabs)))
             .observe(move |_: On<Activate>, mut shown: ResMut<Tab>| {
                 shown.set_if_neq(tab);
             });
@@ -237,7 +250,7 @@ pub fn page(commands: &mut Commands) -> Entity {
         .spawn((
             ChildOf(footer),
             clickable(ok),
-            children![text("Ok", Font::Large)],
+            children![text(&options.ok, Font::Large)],
         ))
         .observe(leave);
     page
@@ -258,6 +271,12 @@ fn leave(
     }
 }
 
+/// How wide the names of options are, the gap after them, and the lists
+/// of choices.
+const NAME_WIDTH: f32 = 160.0;
+const NAME_GAP: f32 = 12.0;
+const LIST_WIDTH: f32 = 240.0;
+
 /// A group of options under a `title`, for a [`Body`].
 fn section(commands: &mut Commands, body: Entity, title: &str) -> Entity {
     let section = Node {
@@ -275,12 +294,12 @@ fn section(commands: &mut Commands, body: Entity, title: &str) -> Entity {
 fn choice(commands: &mut Commands, section: Entity, name: &str, holder: impl Bundle) {
     let row = Node {
         align_items: AlignItems::Center,
-        column_gap: px(12),
+        column_gap: px(NAME_GAP),
         ..default()
     };
     let name = (
         Node {
-            width: px(160),
+            width: px(NAME_WIDTH),
             ..default()
         },
         children![label(name, Font::Body, Ink::Muted)],
@@ -307,11 +326,11 @@ fn show_body(
     commands.insert_resource(Open::Nothing);
     match *tab {
         Tab::Game => {
-            let game = section(&mut commands, body, "Game");
+            let game = section(&mut commands, body, &options.game_title);
             choice(&mut commands, game, &options.hotkeys_label, Hotkeys);
-            let extras = section(&mut commands, body, "Auxiliaries");
+            let extras = section(&mut commands, body, &options.extras_title);
             let width = Node {
-                width: px(412),
+                width: px(NAME_WIDTH + NAME_GAP + LIST_WIDTH),
                 justify_content: JustifyContent::Start,
                 ..padded()
             };
@@ -325,7 +344,7 @@ fn show_body(
                 .observe(|_: On<Activate>, mut border: ResMut<Border>| border.0 = !border.0);
         }
         Tab::Video => {
-            let basic = section(&mut commands, body, "Basic");
+            let basic = section(&mut commands, body, &options.basic_title);
             choice(&mut commands, basic, &options.resolution_label, Resolution);
         }
     }
@@ -340,9 +359,6 @@ fn open_list(activate: On<Activate>, openers: Query<&Opener>, mut open: ResMut<O
         };
     }
 }
-
-/// How wide the lists of choices are.
-const LIST_WIDTH: f32 = 240.0;
 
 /// Shows the hotkeys in use, and the others to choose from while picking.
 fn show_hotkeys(
@@ -391,7 +407,7 @@ fn size_of(window: &Window) -> UVec2 {
 }
 
 /// Shows the window's size, and the others to choose from while picking:
-/// those the screen it's on has room for.
+/// those smaller than the screen, which leaves room for its frame.
 fn show_resolution(
     mut commands: Commands,
     open: Res<Open>,
@@ -418,7 +434,7 @@ fn show_resolution(
         (size / m.scale_factor).as_uvec2()
     });
     let sizes = RESOLUTIONS.iter().map(|&(w, h)| UVec2::new(w, h));
-    let sizes = sizes.filter(|s| room.is_none_or(|room| s.cmple(room).all()));
+    let sizes = sizes.filter(|s| room.is_none_or(|room| s.cmplt(room).all()));
     let choices = sizes.map(|s| ((ResolutionChoice(s), InList), format!("{}x{}", s.x, s.y)));
     list.spawn(
         &mut commands,
@@ -439,6 +455,10 @@ fn choose_resolution(
         return;
     };
     if let Ok(mut window) = window.single_mut() {
+        // Neither a maximised window nor one that fills the screen takes a
+        // size.
+        window.mode = WindowMode::Windowed;
+        window.set_maximized(false);
         let size = choice.0.as_vec2();
         window.resolution.set(size.x, size.y);
     }
@@ -453,11 +473,14 @@ type Choice<'a> = (
     Option<&'a ResolutionChoice>,
 );
 
+/// The buttons the options choose with.
+type Choosing = Or<(With<TabButton>, With<HotkeysChoice>, With<ResolutionChoice>)>;
+
 fn mark_chosen(
     options: Res<Options>,
     tab: Res<Tab>,
     window: Query<&Window, With<PrimaryWindow>>,
-    mut buttons: Query<Choice>,
+    mut buttons: Query<Choice, Choosing>,
 ) {
     let size = window.single().ok().map(size_of);
     for (mut chosen, shown, hotkeys, resolution) in &mut buttons {
