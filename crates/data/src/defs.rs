@@ -28,6 +28,9 @@ pub struct Terrain {
     /// Path of a water terrain's animation frames, numbered by a `%04d`.
     pub anim_textures_path_prefix: Option<String>,
     pub anim_fps: Option<f32>,
+    /// The shared [`Property`]s it gives those standing on it.
+    #[serde(default)]
+    pub property: Vec<PropertyRef>,
     #[serde(default)]
     pub variation: Vec<Variation>,
 }
@@ -376,6 +379,9 @@ pub struct Property {
     /// it.
     #[serde(default)]
     pub is_technology: bool,
+    /// The icon it shows by beside what holds it, relative to the defining
+    /// file; `%s` stands for the folder for the screen's size.
+    pub icon: Option<String>,
     /// Its research button's icon, relative to the defining file.
     pub action_button_icon: Option<String>,
     /// Comma separated, the flags it gives its objects for abilities'
@@ -912,6 +918,9 @@ pub struct SVars {
     /// How much nearer the intruder a guard is already after counts.
     #[serde(rename = "GuardOldTargetBias")]
     pub guard_old_target_bias: Option<f32>,
+    /// The lowest a terrain's speed limit comes to.
+    #[serde(rename = "TerrainMinimumMoveSpeed")]
+    pub terrain_minimum_move_speed: Option<f32>,
     /// Seconds a bombardment's hit keeps a regiment out of supply.
     #[serde(rename = "BombardTargetTimeout")]
     pub bombard_target_timeout: Option<f32>,

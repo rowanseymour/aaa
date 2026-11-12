@@ -11,14 +11,15 @@ mod fog;
 pub mod path;
 mod research;
 mod supply;
+mod terrain;
 
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::{FRAC_PI_4, PI, TAU};
 
 use aaa_map::pathing::{CELL_SIZE, tile_at};
 use aaa_map::{
-    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Shape, Turret,
-    Unpacks, Weapon, Zone,
+    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Shape,
+    TerrainEffect, Turret, Unpacks, Weapon, Zone,
 };
 
 pub use aaa_map::{Player, Relation, Team};
@@ -110,6 +111,9 @@ const POST_DRIFT: f32 = 1.0;
 pub struct World {
     pub sides: Sides,
     pub pathing: Pathing,
+    /// The terrain under each tile, for what it does to those on it.
+    pub grounds: aaa_map::Grounds,
+    pub terrain_rules: aaa_map::TerrainRules,
     /// What each building template packs into, for those that can.
     pub packing: HashMap<String, Packs>,
     /// The buildings a player needs to commission a regiment with a member
@@ -258,6 +262,10 @@ pub struct Regiment {
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
     pub guard: Option<Guard>,
+    /// The terrain it's on, as [`aaa_map::Grounds::kind`] takes it.
+    pub terrain: u16,
+    /// The properties that terrain gives it.
+    pub terrain_properties: Vec<Id>,
 }
 
 /// A regiment's order to keep a post: it comes back to it after every
@@ -430,6 +438,9 @@ pub struct Unit {
     /// Whether it's yet to join its regiment, as a recruit's members are
     /// until supply brings them.
     pub awaited: bool,
+    /// The terrain it's on, as [`aaa_map::Grounds::kind`] takes it: its
+    /// regiment's, or its own tile's while it straggles.
+    pub terrain: u16,
 }
 
 /// What a unit tows, dragged after the point it's coupled to so that it
@@ -1016,6 +1027,7 @@ impl World {
         };
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
         world.add_buildings(&map.buildings);
+        world.grounds = map.grounds.clone();
         world.scenery = map.scenery.clone();
         world.clearable = map.clearable.clone();
         let regiments = map.regiments.iter().map(|r| r.id);
@@ -1057,6 +1069,8 @@ impl World {
         let mut world = World {
             sides,
             pathing,
+            grounds: aaa_map::Grounds::default(),
+            terrain_rules: aaa_map::TerrainRules::default(),
             regiments: Vec::new(),
             units: Vec::new(),
             buildings: Vec::new(),
@@ -1135,6 +1149,7 @@ impl World {
                 unpacked: None,
                 // One its regiment has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
+                terrain: 0,
                 id: m.thing.id,
                 template: m.thing.template.clone(),
                 regiment: r,
@@ -1208,6 +1223,8 @@ impl World {
             bombarded: Vec::new(),
             properties: Vec::new(),
             guard: None,
+            terrain: 0,
+            terrain_properties: Vec::new(),
         });
         let ids = regiment.members.iter().map(|m| m.thing.id);
         self.next_id = ids
@@ -2048,6 +2065,7 @@ impl World {
     /// Plays one [`TICK`].
     pub fn tick(&mut self) {
         self.travel();
+        self.stand();
         self.notice();
         let fired_on = self.fight();
         self.engage(&fired_on);
@@ -2873,9 +2891,10 @@ impl World {
     /// until it's tried enough; once done it faces as it was told to.
     fn travel(&mut self) {
         for u in 0..self.units.len() {
+            let limit = self.speed_limit(u).unwrap_or(f32::INFINITY);
             let unit = &mut self.units[u];
             unit.previous = unit.position;
-            unit.drive(self.regiments[unit.regiment].speed);
+            unit.drive(self.regiments[unit.regiment].speed.min(limit));
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {
                     true => EXACT_REACH,
@@ -3554,7 +3573,7 @@ impl World {
             if let Some(f) = self.fighter(t) {
                 hits.push(Hit {
                     target: t,
-                    amount: damage(weapon, f, 1.0),
+                    amount: damage(weapon, f, &self.terrain_effects(t), 1.0),
                     from,
                     by,
                     bombard,
@@ -3571,7 +3590,12 @@ impl World {
             if d > weapon.area || target == from || !self.fits(by, &weapon.targets, target) {
                 continue;
             }
-            reached.push((middle, target, damage(weapon, f, falloff(weapon, d))));
+            let ground = self.terrain_effects(target);
+            reached.push((
+                middle,
+                target,
+                damage(weapon, f, &ground, falloff(weapon, d)),
+            ));
         }
         // Those nearest by their middles, where there's a most it hits.
         if weapon.max_targets > 0 {
@@ -3687,14 +3711,20 @@ fn falloff(weapon: &Weapon, d: f32) -> f32 {
 
 /// Health a shot of `weapon` takes from `target`, its damage scaled by
 /// `scale`: defence comes off first, then resistance takes its share, and
-/// every hit does at least 1.
-fn damage(weapon: &Weapon, target: &Fighter, scale: f32) -> f32 {
+/// every hit does at least 1. `ground` is what the terrain properties the
+/// target holds add to both.
+fn damage(weapon: &Weapon, target: &Fighter, ground: &[&TerrainEffect], scale: f32) -> f32 {
+    let defense = target.defense + ground.iter().map(|e| e.defense).sum::<f32>();
     weapon
         .damage
         .iter()
         .map(|d| {
-            let resist = target.resists.get(&d.kind).copied().unwrap_or(0.0);
-            ((d.amount * scale - target.defense.max(0.0)) * (1.0 - resist)).max(1.0)
+            let grounds = ground.iter().flat_map(|e| &e.resists);
+            let resist = target.resists.get(&d.kind).copied().unwrap_or(0.0)
+                + (grounds.filter(|(kind, _)| *kind == d.kind))
+                    .map(|(_, amount)| amount)
+                    .sum::<f32>();
+            ((d.amount * scale - defense.max(0.0)) * (1.0 - resist)).max(1.0)
         })
         .sum()
 }
@@ -5151,9 +5181,9 @@ mod tests {
         tank.defense = 6.0;
         tank.resists = [(Id::from("gunfire"), 0.6)].into();
         // (12 - 6) * 0.4
-        assert!((damage(&rifle(12.0, 12.0), &tank, 1.0) - 2.4).abs() < 1e-5);
-        assert_eq!(damage(&rifle(12.0, 5.0), &tank, 1.0), 1.0);
-        assert!((damage(&rifle(12.0, 50.0), &tank, 0.5) - 7.6).abs() < 1e-5);
+        assert!((damage(&rifle(12.0, 12.0), &tank, &[], 1.0) - 2.4).abs() < 1e-5);
+        assert_eq!(damage(&rifle(12.0, 5.0), &tank, &[], 1.0), 1.0);
+        assert!((damage(&rifle(12.0, 50.0), &tank, &[], 0.5) - 7.6).abs() < 1e-5);
     }
 
     #[test]
@@ -8025,5 +8055,118 @@ mod tests {
         assert!(!w.strays(0, 1, from));
         w.regiments[0].control_range = 10.0;
         assert!(w.strays(0, 1, from) && !w.strays(0, 0, from));
+    }
+
+    /// Forest, whose first property is for infantry and whose second for
+    /// vehicles, and the rules those properties work by.
+    fn forest() -> (aaa_map::GroundKind, aaa_map::TerrainRules) {
+        let forest = aaa_map::GroundKind {
+            properties: vec![Id::from("forest_infantry"), Id::from("forest_vehicles")],
+            mountain: false,
+        };
+        let infantry = TerrainEffect {
+            requires: vec![Id::from("infantry")],
+            defense: 4.0,
+            resists: vec![(Id::from("gunfire"), 0.5)],
+            speed_limit: Some(1.5),
+        };
+        let vehicles = TerrainEffect {
+            requires: vec![Id::from("mobile"), Id::from("vehicle")],
+            defense: 0.0,
+            resists: vec![(Id::from("gunfire"), -0.2)],
+            speed_limit: Some(1.0),
+        };
+        let rules = aaa_map::TerrainRules {
+            effects: HashMap::from([
+                (Id::from("forest_infantry"), infantry),
+                (Id::from("forest_vehicles"), vehicles),
+            ]),
+            unlimited: vec![Id::from("trailblazing")],
+            ..aaa_map::TerrainRules::default()
+        };
+        (forest, rules)
+    }
+
+    fn kind(properties: &[&str]) -> aaa_map::Kind {
+        aaa_map::Kind {
+            properties: properties.iter().map(|&p| Id::from(p)).collect(),
+            ..aaa_map::Kind::default()
+        }
+    }
+
+    #[test]
+    fn terrain_holds_everyone_on_it_to_its_last_propertys_speed_limit() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        let (forest, rules) = forest();
+        (w.grounds, w.terrain_rules) = (aaa_map::Grounds::uniform(20, forest), rules);
+        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        let to = [10.0, 30.0];
+        w.apply(7, Command::Move { regiment: 0, to }).unwrap();
+        run(&mut w, 1.0);
+        // The vehicles' limit, though they're infantry.
+        assert!(w.units.iter().all(|u| u.speed == 1.0));
+        // Never below the lowest there is.
+        w.terrain_rules.slowest = 1.25;
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 1.25));
+        // A mountain's is the lowest there is.
+        let mountain = aaa_map::GroundKind {
+            properties: Vec::new(),
+            mountain: true,
+        };
+        (w.grounds, w.terrain_rules.slowest) = (aaa_map::Grounds::uniform(20, mountain), 0.5);
+        run(&mut w, 0.2);
+        assert!(w.units.iter().all(|u| u.speed == 0.5));
+        w.kinds.insert(Id::from("squad"), kind(&["trailblazing"]));
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 2.0));
+    }
+
+    #[test]
+    fn members_share_their_regiments_terrain_unless_they_straggle() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        let (forest, rules) = forest();
+        w.terrain_rules = rules;
+        w.grounds = aaa_map::Grounds::uniform(20, aaa_map::GroundKind::default());
+        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        // Under the first only, who with no control range is on his own.
+        w.grounds.set(tile_at(w.units[0].position), forest.clone());
+        w.stand();
+        let held = |w: &World, u| w.terrain_effects(Target::Unit(u)).len();
+        assert_eq!((held(&w, 0), held(&w, 1)), (1, 0));
+        assert!(w.regiments[0].terrain_properties.is_empty());
+        assert_eq!((w.speed_limit(0), w.speed_limit(1)), (Some(1.0), None));
+        w.regiments[0].control_range = 10.0;
+        w.stand();
+        assert_eq!((held(&w, 0), w.speed_limit(0)), (0, None));
+        // Under the regiment, which gains only what a member can.
+        w.grounds.set(tile_at(w.leader_position(0)), forest);
+        w.stand();
+        assert_eq!((held(&w, 0), held(&w, 1)), (1, 1));
+        assert_eq!(
+            w.regiments[0].terrain_properties,
+            [Id::from("forest_infantry")]
+        );
+        // Unpacked, it keeps what it had wherever that leaves it.
+        w.regiments[0].unpacked_into = Some(0);
+        w.grounds = aaa_map::Grounds::uniform(20, aaa_map::GroundKind::default());
+        w.stand();
+        assert_eq!(
+            w.regiments[0].terrain_properties,
+            [Id::from("forest_infantry")]
+        );
+    }
+
+    #[test]
+    fn terrain_properties_add_to_defence_and_resistance() {
+        let (_, rules) = forest();
+        let effect = |id: &str| &rules.effects[&Id::from(id)];
+        let hit =
+            |ground: &[&TerrainEffect]| damage(&rifle(12.0, 12.0), &soldier(vec![]), ground, 1.0);
+        assert_eq!(hit(&[]), 12.0);
+        assert!((hit(&[effect("forest_infantry")]) - 4.0).abs() < 1e-5);
+        assert!((hit(&[effect("forest_vehicles")]) - 14.4).abs() < 1e-5);
+        let both = [effect("forest_infantry"), effect("forest_vehicles")];
+        assert!((hit(&both) - 5.6).abs() < 1e-5);
     }
 }

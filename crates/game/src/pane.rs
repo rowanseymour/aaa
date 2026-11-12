@@ -11,10 +11,14 @@
 //!   commission, the first with its progress; clicking one calls it off.
 //! - An HQ, packed or not: a place for each regiment it takes, with the
 //!   regiment attached there or the one it's been asked for.
+//!
+//! Beside the title of a regiment, or of the building one unpacked into,
+//! is an icon for each property it holds that has one, saying under the
+//! pointer what it does.
 
 use std::collections::HashMap;
 
-use aaa_data::{GameData, Id};
+use aaa_data::{GameData, Id, PropertyLook};
 use aaa_render::overlay::BannerImages;
 use aaa_render::textures;
 use aaa_sim::{Order, State, World};
@@ -91,6 +95,19 @@ fn slot_at(i: usize, count: usize) -> [f32; 2] {
 const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
 const STOCKPILE: &str = "template_game_SupplyStockpileBar_ToolTip|ff";
 
+/// The icons for what's selected's properties run along the top into the
+/// pane's right corner, clear of the longest name: how far the last is
+/// from the right edge and the row from the top, how big each is and how
+/// far it is to the next.
+const PROPERTIES_IN: Vec2 = Vec2::new(8.0, 6.0);
+const PROPERTY: f32 = 24.0;
+const PROPERTY_PITCH: f32 = 26.0;
+/// As many as there are places for.
+const MAX_PROPERTIES: usize = 7;
+
+/// The property a regiment resting at the post it guards has.
+const GUARDING: &str = "actor_state_guarding";
+
 /// The pane, whose children show what [`Showing`] says.
 #[derive(Component)]
 pub struct Pane;
@@ -107,6 +124,8 @@ struct Detail {
     /// For each regiment whose banner shows, the badge it wears and
     /// whether it's out of supply.
     banners: Vec<(usize, Option<banners::Worn>, bool)>,
+    /// The properties whose icons show, those held longest first.
+    properties: Vec<Id>,
 }
 
 /// What's in one of an HQ's places.
@@ -168,6 +187,8 @@ pub struct Looks {
     /// Templates' names, by id.
     names: HashMap<Id, String>,
     strings: HashMap<String, String>,
+    /// How each property that has an icon shows, by id.
+    properties: HashMap<Id, PropertyLook>,
     images: HashMap<String, Option<Handle<Image>>>,
     formats: bevy::image::CompressedImageFormats,
 }
@@ -216,6 +237,7 @@ pub fn spawn(
             .map(|(id, l)| (id, l.name))
             .collect(),
         strings: game.strings(),
+        properties: game.property_looks(),
         images: HashMap::new(),
         formats: formats.0,
     });
@@ -277,7 +299,49 @@ fn shown_hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], what: &What) -> Option<&'a 
     hqs.iter().find(|h| h.id == id)
 }
 
-fn detail(sim: &World, hqs: &[aaa_sim::Hq], badges: &Badges, what: &What) -> Detail {
+/// The regiment whose properties show: the one selected alone, or the one
+/// that unpacked into the building.
+fn holder(sim: &World, what: &What) -> Option<usize> {
+    match what {
+        What::Regiment(r) => Some(*r),
+        What::Regiments(_) => None,
+        What::Building(b, _) => (sim.regiments.iter()).position(|r| r.unpacked_into == Some(*b)),
+    }
+}
+
+/// The properties a regiment holds that have an icon: its template's own,
+/// then its terrain's, its stance's and those it has for a time. Those in
+/// `shown` come first, as they stand there, so that icons keep the order
+/// their properties came in while their regiment stays selected.
+fn held(sim: &World, looks: &HashMap<Id, PropertyLook>, r: usize, shown: &[Id]) -> Vec<Id> {
+    let regiment = &sim.regiments[r];
+    let kind = sim.kinds.get(&Id::from(regiment.template.as_str()));
+    let own = kind.into_iter().flat_map(|k| &k.properties).cloned();
+    let terrain = regiment.terrain_properties.iter().cloned();
+    let guarding =
+        (regiment.unpacked_into.is_none() && regiment.guarding()).then(|| Id::from(GUARDING));
+    let timed = regiment.properties.iter().map(|h| h.property.clone());
+    let mut now: Vec<Id> = Vec::new();
+    for p in own.chain(terrain).chain(guarding).chain(timed) {
+        if looks.contains_key(&p) && !now.contains(&p) {
+            now.push(p);
+        }
+    }
+    let kept = shown.iter().filter(|p| now.contains(p)).cloned();
+    let mut out: Vec<Id> = kept.collect();
+    out.extend(now.into_iter().filter(|p| !shown.contains(p)));
+    out.truncate(MAX_PROPERTIES);
+    out
+}
+
+fn detail(
+    sim: &World,
+    hqs: &[aaa_sim::Hq],
+    badges: &Badges,
+    looks: &Looks,
+    what: &What,
+    shown: &[Id],
+) -> Detail {
     let queued = match what {
         What::Building(_, queue) => queue.len(),
         _ => 0,
@@ -303,7 +367,13 @@ fn detail(sim: &World, hqs: &[aaa_sim::Hq], badges: &Badges, what: &What) -> Det
     let flying = own.iter().copied().chain(attached);
     let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
     let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
-    Detail { slots, banners }
+    let properties =
+        holder(sim, what).map_or(Vec::new(), |r| held(sim, &looks.properties, r, shown));
+    Detail {
+        slots,
+        banners,
+        properties,
+    }
 }
 
 /// Lays the pane out afresh when what it should show changes.
@@ -326,7 +396,13 @@ pub fn lay_out(
 ) {
     let what = wanted(&sim.0, &selected.0, chosen.0);
     let what = what.map(|w| {
-        let detail = detail(&sim.0, &sim.0.hqs(), &badges, &w);
+        let shown = match &showing.0 {
+            Some((was, detail)) if holder(&sim.0, was) == holder(&sim.0, &w) => {
+                detail.properties.as_slice()
+            }
+            _ => &[],
+        };
+        let detail = detail(&sim.0, &sim.0.hqs(), &badges, &looks, &w, shown);
         (w, detail)
     });
     // Who plays decides what owners are called.
@@ -413,6 +489,25 @@ impl Ui<'_> {
             pane.spawn((framed(at(8.0, 44.0, 124.0, 124.0)), picture_node(picture)));
             bar(pane, at(8.0, 171.0, 124.0, 4.0), fill);
         });
+    }
+
+    /// An icon beside the title for each property that shows.
+    fn properties(&mut self, commands: &mut Commands, root: Entity) {
+        for (i, id) in self.detail.properties.iter().enumerate() {
+            let Some(look) = self.looks.properties.get(id).cloned() else {
+                continue;
+            };
+            let icon = self.looks.image(self.game, self.images, Some(&look.icon));
+            let said = std::iter::once(look.name).chain(look.lines);
+            let after = (self.detail.properties.len() - 1 - i) as f32;
+            let left = WIDTH - PROPERTIES_IN.x - PROPERTY - after * PROPERTY_PITCH;
+            let node = at(left, PROPERTIES_IN.y, PROPERTY, PROPERTY);
+            commands.entity(root).with_child((
+                node,
+                picture_node(icon),
+                Hint(said.collect::<Vec<_>>().join("\n")),
+            ));
+        }
     }
 
     /// The line along the bottom saying what it's doing.
@@ -612,6 +707,7 @@ impl Ui<'_> {
             });
         }
         self.slots(commands, root, None);
+        self.properties(commands, root);
         self.status(commands, root, Status::Regiment(r));
     }
 
@@ -707,6 +803,7 @@ impl Ui<'_> {
                 bar(pane, at(240.0, 110.0, 64.0, 4.0), Fill::Progress(b));
             }
         });
+        self.properties(commands, root);
         self.status(commands, root, Status::Building(b));
     }
 }

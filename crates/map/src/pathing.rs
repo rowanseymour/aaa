@@ -818,6 +818,7 @@ mod tests {
             naval: false,
             kind: aaa_data::TerrainKind::Land,
             group: None,
+            properties: Vec::new(),
         };
         let variations = HashMap::from([(Id::from("grass"), grass)]);
         let p = Pathing::new(&terrain, &variations, []);

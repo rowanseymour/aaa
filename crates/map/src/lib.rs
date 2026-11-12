@@ -5,16 +5,18 @@ mod buildings;
 #[cfg(test)]
 mod fixtures;
 mod ground;
+mod grounds;
 pub mod pathing;
 mod units;
 
 pub use aaa_data::{
     Amounts, Damage, DeployPoints, Economy, EconomyRules, Fighter, Flight, FlightKind, FogSetting,
     GuardRules, Id, Kind, Logistics, Operation, Requires, Shape, Sight, Supply, SupplyEffect,
-    SupplyRules, Targets, Turret, Weapon,
+    SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
+pub use grounds::{GroundKind, Grounds};
 pub use pathing::{Domain, Obstacle, Outline, Pathing, Zone};
 pub use tgck::map::Relation;
 pub use units::{
@@ -46,6 +48,8 @@ pub struct Map {
     /// id, each with its blocking shape though it blocks nothing.
     pub clearable: Vec<(u32, Obstacle)>,
     pub pathing: Pathing,
+    /// The terrain under each tile, for what it does to those on it.
+    pub grounds: Grounds,
     /// The ids of the things among [`Map::things`] with no room where the
     /// map has them, for the ground under them or something stored before
     /// them, which the game leaves out and the editor keeps. An
@@ -113,6 +117,7 @@ impl Map {
             }
         }
         let mut pathing = Pathing::new(&terrain, &variations, []);
+        let grounds = Grounds::new(&terrain, &variations);
         let Placed {
             off_map,
             crowded,
@@ -170,6 +175,7 @@ impl Map {
             players,
             teams,
             pathing,
+            grounds,
             terrain,
             things,
             world_version,

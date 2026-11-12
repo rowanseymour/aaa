@@ -8,7 +8,9 @@ mod guard;
 mod hotkeys;
 mod id;
 mod messages;
+mod properties;
 mod supply;
+mod terrain;
 
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
 pub use fog::{FogSetting, Sight};
@@ -16,7 +18,9 @@ pub use guard::GuardRules;
 pub use hotkeys::Hotkey;
 pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
+pub use properties::PropertyLook;
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
+pub use terrain::{TerrainEffect, TerrainRules};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
@@ -664,6 +668,9 @@ pub struct Variation {
     pub kind: TerrainKind,
     /// What effects take it for, e.g. `dirt`, `snow` or `water`.
     pub group: Option<Id>,
+    /// The properties it gives those standing on it, as its terrain
+    /// lists them.
+    pub properties: Vec<Id>,
 }
 
 /// What a terrain is, which decides how the ground stands on it.
@@ -1178,6 +1185,9 @@ impl GameData {
                 };
                 let water = terrain.ids.as_ref().and_then(|id| water.get(id));
                 let kind = terrain_kind(&terrain);
+                let properties: Vec<Id> = (terrain.property.iter())
+                    .filter_map(|r| r.property_ids.clone())
+                    .collect();
                 let animation =
                     terrain
                         .anim_textures_path_prefix
@@ -1211,6 +1221,7 @@ impl GameData {
                             naval: terrain.water,
                             kind,
                             group: not_null(terrain.terrain_group.clone()),
+                            properties: properties.clone(),
                         },
                     );
                 }
