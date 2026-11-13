@@ -12,7 +12,7 @@ use crate::{Drawn, Loaded, Local, Pointer, Pointing, Screen, Selected, Sim, thin
 
 /// The preview shown: its root, what it is, where, and whether it fits.
 #[derive(Resource, Default)]
-pub struct Ghost(Option<(Entity, String, [f32; 2], bool)>);
+pub struct Ghost(Option<(Entity, aaa_data::Id, [f32; 2], bool)>);
 
 /// On a preview that doesn't fit, for [`redden`] to paint.
 #[derive(Component)]
@@ -66,18 +66,18 @@ pub fn show(
                 && let Ok(mut t) = transforms.get_mut(*e)
             {
                 *placed = at;
-                let footing = drawn.0.footing(&unpacks.building.template);
+                let footing = drawn.0.footing(unpacks.building.template.as_str());
                 t.translation = world(x, y, ground.stand_at(footing, [x, y]));
             }
         }
         None => {
             let b = &unpacks.building;
-            let footing = drawn.0.footing(&b.template);
+            let footing = drawn.0.footing(b.template.as_str());
             let thing = thing_at(
                 ground,
                 footing,
                 b.id,
-                &b.template,
+                b.template.as_str(),
                 at,
                 actions::UNPACK_FACING,
             );

@@ -253,7 +253,7 @@ impl BannerImages {
         images: &mut Assets<Image>,
         division: &Division,
     ) -> Option<Handle<Image>> {
-        let nation = self.nation_of(&division.template)?;
+        let nation = self.nation_of(division.template.as_str())?;
         let count = self.nation_badges(&nation);
         let badge = division.badge.checked_rem(count)?;
         self.nation_badge(game, images, &nation, badge)

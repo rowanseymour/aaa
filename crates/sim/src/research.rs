@@ -107,14 +107,12 @@ impl World {
     /// later one decides.
     pub fn lacks(&self, player: u32, building: usize, regiment: &aaa_map::Regiment) -> Lacking {
         let mut out = Lacking::default();
-        let templates = std::iter::once(regiment.template.as_str())
-            .chain(regiment.members.iter().map(|m| m.template.as_str()));
-        out.barred = templates
-            .into_iter()
-            .any(|t| self.barred(player, &Id::from(t)));
+        let members = regiment.members.iter().map(|m| &m.template);
+        let mut templates = std::iter::once(&regiment.template).chain(members);
+        out.barred = templates.any(|t| self.barred(player, t));
         out.hidden = out.barred;
         for m in &regiment.members {
-            let Some(r) = self.rules.requires.get(&Id::from(m.template.as_str())) else {
+            let Some(r) = self.rules.requires.get(&m.template) else {
                 continue;
             };
             let structures = self.missing(player, &r.structures, r.any);
@@ -371,7 +369,7 @@ mod tests {
         .unwrap();
         w.apply(1, research("tech_heavy")).unwrap();
         assert_eq!(w.stockpile(1), 190.0);
-        assert_eq!(w.buildings[0].queue[1].template(), "tech_heavy");
+        assert_eq!(w.buildings[0].queue[1].template().as_str(), "tech_heavy");
         let researching = w.buildings[0].queue[1].id;
         w.apply(
             1,

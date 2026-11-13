@@ -875,9 +875,9 @@ fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let there = sim.centre(e);
     let owner = sim.regiments[r].owner;
     let command = match aim {
-        Aim::Guard => aaa_sim::Command::GuardThing {
+        Aim::Guard => aaa_sim::Command::GuardPiece {
             regiment: r,
-            thing: aaa_sim::Piece::Regiment(e),
+            piece: aaa_sim::Piece::Regiment(e),
         },
         _ => aaa_sim::Command::Pursue {
             regiment: r,
