@@ -240,9 +240,8 @@ impl Regiment {
         self.facing = facing;
         let offsets = &self.formations[self.formation].offsets;
         for (m, &offset) in self.members.iter_mut().zip(offsets) {
-            let [x, y] = crate::from_local(position, facing, offset);
-            m.thing.position = [x, y, 0.0];
-            m.thing.facing = [facing[0], facing[1], 0.0];
+            m.position = crate::from_local(position, facing, offset);
+            m.facing = facing;
         }
     }
 
@@ -252,13 +251,13 @@ impl Regiment {
         self.id = id;
         let lone = self.lone();
         for (m, id) in self.members.iter_mut().zip(id + u32::from(!lone)..) {
-            m.thing.id = id;
+            m.id = id;
         }
     }
 
     /// Whether it's a single unit rather than an organization of them.
     pub fn lone(&self) -> bool {
-        matches!(&self.members[..], [m] if m.thing.template == self.template)
+        matches!(&self.members[..], [m] if m.template == self.template)
     }
 }
 
@@ -300,8 +299,14 @@ pub const UNPACKED_FACING: [f32; 2] = [0.0, -1.0];
 
 #[derive(Debug, Clone)]
 pub struct Member {
-    /// Where it stands and which way it faces.
-    pub thing: Thing,
+    /// Its object's id, as in [`Map::things`](crate::Map::things) for one
+    /// the map places.
+    pub id: u32,
+    pub template: String,
+    pub position: [f32; 2],
+    /// The way it faces, as the map stores it: a map may not keep it to
+    /// unit length.
+    pub facing: [f32; 2],
     /// Top speed in world units a second.
     pub speed: f32,
     /// The ground it takes up, which those of things it's on are tested
@@ -369,7 +374,7 @@ pub fn regiments(
         .filter_map(Thing::towed)
         .collect();
     let placed = |m: &Thing| {
-        let mut member = member(m.clone(), bodies, fighters)?;
+        let mut member = member(m, bodies, fighters)?;
         let towed = m.towed().and_then(|id| by_id.get(&id));
         if let (Some(trailer), Some(towed)) = (&mut member.trailer, towed) {
             let [x, y, _] = towed.position;
@@ -408,7 +413,7 @@ pub fn regiments(
             let layout = layouts.get(&Id::from(organization.layout.as_str()));
             let count = standing.len().max(1) as f32;
             let sum = standing.iter().fold([0.0, 0.0], |[x, y], m| {
-                [x + m.thing.position[0], y + m.thing.position[1]]
+                [x + m.position[0], y + m.position[1]]
             });
             let among = match standing.is_empty() {
                 true => [t.position[0], t.position[1]],
@@ -419,21 +424,8 @@ pub fn regiments(
             let mut lost = |p: &tgck::map::Position| {
                 let template = p.template.as_ref().filter(|t| !t.is_empty())?;
                 // Among those standing, so the regiment is where they are.
-                let [x, y] = among;
-                let thing = Thing {
-                    template: template.clone(),
-                    class: tgck::map::ACTOR,
-                    id: spare.next()?,
-                    name: String::new(),
-                    position: [x, y, 0.0],
-                    facing: [facing[0], facing[1], 0.0],
-                    flags: 0,
-                    scale: 1.0,
-                    variation: -1,
-                    seen_by: 0,
-                    detail: Detail::None,
-                };
-                let mut member = member(thing, bodies, fighters)?;
+                let mut member =
+                    raw_member(spare.next()?, template, among, facing, bodies, fighters)?;
                 member.lost = Some(p.replenished.unwrap_or(0.0));
                 Some(member)
             };
@@ -459,12 +451,37 @@ pub struct Division {
 
 /// A member standing as `thing` has it, if its template can move.
 fn member(
-    thing: Thing,
+    thing: &Thing,
     bodies: &HashMap<Id, Body>,
     fighters: &HashMap<Id, Fighter>,
 ) -> Option<Member> {
-    let template = Id::from(thing.template.as_str());
-    let body = bodies.get(&template)?;
+    let [x, y, _] = thing.position;
+    let mut member = raw_member(
+        thing.id,
+        &thing.template,
+        [x, y],
+        facing(thing),
+        bodies,
+        fighters,
+    )?;
+    if let Detail::Actor(actor) = &thing.detail {
+        member.health = actor.body().map_or(1.0, |b| b.health);
+    }
+    Some(member)
+}
+
+/// A member of `template` in full health standing at `position`, if its
+/// template can move.
+fn raw_member(
+    id: u32,
+    template: &str,
+    position: [f32; 2],
+    facing: [f32; 2],
+    bodies: &HashMap<Id, Body>,
+    fighters: &HashMap<Id, Fighter>,
+) -> Option<Member> {
+    let key = Id::from(template);
+    let body = bodies.get(&key)?;
     let trailer = body.trailer.as_ref().and_then(|t| {
         Some(Trailer {
             template: t.as_str().to_string(),
@@ -473,20 +490,19 @@ fn member(
             placed: None,
         })
     });
-    let health = match &thing.detail {
-        Detail::Actor(actor) => actor.body().map_or(1.0, |b| b.health),
-        _ => 1.0,
-    };
     Some(Member {
-        health,
+        id,
+        template: template.to_string(),
+        position,
+        facing,
+        health: 1.0,
         lost: None,
         speed: body.speed?,
         acceleration: body.acceleration,
         turn_rate: body.turn_rate,
         shape: body.blocking,
         trailer,
-        fighter: fighters.get(&template).cloned(),
-        thing,
+        fighter: fighters.get(&key).cloned(),
     })
 }
 
@@ -599,8 +615,9 @@ fn regiment(
     })
 }
 
-/// What raising regiments from their templates takes: what each template is
-/// made of, and what its members are.
+/// What placing a map's objects and raising regiments from their templates
+/// takes: what each template is made of, and what its members are. Reading
+/// it parses the game data's templates, so one serves a whole match.
 pub struct Recruits {
     organizations: HashMap<Id, Organization>,
     pub(crate) bodies: HashMap<Id, Body>,
@@ -609,7 +626,7 @@ pub struct Recruits {
     pub(crate) ranges: HashMap<Id, Ranges>,
     lists: HashMap<Id, Vec<Id>>,
     deployments: HashMap<Id, Deployment>,
-    deploy_points: HashMap<Id, DeployPoints>,
+    pub(crate) deploy_points: HashMap<Id, DeployPoints>,
     recruit_times: HashMap<Id, f32>,
     /// The packed building each building packs into.
     packs_into: HashMap<Id, Id>,
@@ -693,7 +710,7 @@ impl Recruits {
     /// unpacks into.
     pub(crate) fn give_unpacks(&self, regiment: &mut Regiment) {
         if let [m] = &regiment.members[..] {
-            regiment.unpacks = self.unpacks(&m.thing.template);
+            regiment.unpacks = self.unpacks(&m.template);
         }
     }
 
@@ -788,24 +805,10 @@ impl Recruits {
             let n = start.slots.get(i).map_or(1, Vec::len);
             std::iter::repeat_n(e, n)
         });
-        let [fx, fy] = facing;
         let members = elements
             .zip(id + 1..)
             .map(|(element, id)| {
-                let thing = Thing {
-                    template: element.clone(),
-                    class: tgck::map::ACTOR,
-                    id,
-                    name: String::new(),
-                    position: [position[0], position[1], 0.0],
-                    facing: [fx, fy, 0.0],
-                    flags: 0,
-                    scale: 1.0,
-                    variation: -1,
-                    seen_by: 0,
-                    detail: Detail::None,
-                };
-                member(thing, &self.bodies, &self.fighters)
+                raw_member(id, element, position, facing, &self.bodies, &self.fighters)
                     .ok_or_else(|| format!("{element}, in {template}, can't move"))
             })
             .collect::<Result<Vec<_>, _>>()?;
@@ -835,21 +838,7 @@ impl Recruits {
         position: [f32; 2],
         facing: [f32; 2],
     ) -> Result<Regiment, String> {
-        let [fx, fy] = facing;
-        let thing = Thing {
-            template: template.to_string(),
-            class: tgck::map::ACTOR,
-            id,
-            name: String::new(),
-            position: [position[0], position[1], 0.0],
-            facing: [fx, fy, 0.0],
-            flags: 0,
-            scale: 1.0,
-            variation: -1,
-            seen_by: 0,
-            detail: Detail::None,
-        };
-        let member = member(thing, &self.bodies, &self.fighters)
+        let member = raw_member(id, template, position, facing, &self.bodies, &self.fighters)
             .ok_or_else(|| format!("{template} isn't a regiment or a unit that can move"))?;
         Ok(Regiment {
             unpacks: self.unpacks(template),
@@ -899,8 +888,8 @@ fn one_place(ranges: Ranges) -> Regiment {
 
 fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regiment {
     Regiment {
-        id: member.thing.id,
-        template: member.thing.template.clone(),
+        id: member.id,
+        template: member.template.clone(),
         owner,
         facing,
         members: vec![member],
@@ -949,17 +938,14 @@ fn arrange(places: &Places, members: usize) -> Option<(Vec<Formation>, usize, Op
 fn as_placed(members: &[Member], facing: [f32; 2]) -> Formation {
     let n = members.len() as f32;
     let (cx, cy) = members.iter().fold((0.0, 0.0), |(x, y), m| {
-        (x + m.thing.position[0] / n, y + m.thing.position[1] / n)
+        (x + m.position[0] / n, y + m.position[1] / n)
     });
     Formation {
         id: String::new(),
         aggressive: false,
         offsets: members
             .iter()
-            .map(|m| {
-                let [x, y, _] = m.thing.position;
-                crate::to_local([cx, cy], facing, [x, y])
-            })
+            .map(|m| crate::to_local([cx, cy], facing, m.position))
             .collect(),
     }
 }
@@ -1095,8 +1081,8 @@ mod tests {
         let lost: Vec<_> = r.members.iter().map(|m| m.lost).collect();
         assert_eq!(lost, [None, Some(20.0), None]);
         // Under an id nothing on the map has.
-        assert_eq!(r.members[1].thing.id, 4);
-        assert_eq!(r.members[1].thing.template, "rifle");
+        assert_eq!(r.members[1].id, 4);
+        assert_eq!(r.members[1].template, "rifle");
         assert_eq!(r.formations[1].offsets.len(), 3);
         assert_eq!(r.primary, Some(2));
     }
@@ -1151,22 +1137,22 @@ mod tests {
         let placed: Vec<_> = r
             .members
             .iter()
-            .map(|m| (m.thing.id, m.thing.template.as_str(), m.thing.position))
+            .map(|m| (m.id, m.template.as_str(), m.position))
             .collect();
         assert_eq!(
             placed,
             [
-                (11, "rifle", [51.0, 51.0, 0.0]),
-                (12, "rifle", [51.0, 49.0, 0.0]),
-                (13, "captain", [50.0, 50.0, 0.0]),
+                (11, "rifle", [51.0, 51.0]),
+                (12, "rifle", [51.0, 49.0]),
+                (13, "captain", [50.0, 50.0]),
             ]
         );
         let lone = recruits
             .raise("rifle", 20, 2, [5.0, 6.0], [1.0, 0.0])
             .unwrap();
         assert!(lone.lone());
-        assert_eq!(lone.members[0].thing.id, 20);
-        assert_eq!(lone.members[0].thing.position, [5.0, 6.0, 0.0]);
+        assert_eq!(lone.members[0].id, 20);
+        assert_eq!(lone.members[0].position, [5.0, 6.0]);
         assert!(lone.unpacks.is_none());
         assert!(
             recruits
@@ -1270,7 +1256,7 @@ mod tests {
             Some([2.0, 6.0])
         );
         truck.renumber(40);
-        assert_eq!((truck.id, truck.members[0].thing.id), (40, 40));
+        assert_eq!((truck.id, truck.members[0].id), (40, 40));
         let mut recruits = recruits;
         recruits
             .packs_into

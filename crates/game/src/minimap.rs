@@ -211,7 +211,7 @@ pub fn spawn(
         icons,
         colours: palette,
     });
-    let backdrop = images.add(crate::displays::silhouette(BACKDROP_TEXELS, backdrop_shape));
+    let backdrop = images.add(silhouette(BACKDROP_TEXELS, backdrop_shape));
     commands.spawn((
         Node {
             position_type: PositionType::Absolute,
@@ -271,6 +271,41 @@ pub fn tint(theme: Res<crate::ui::Theme>, mut backdrops: Query<&mut ImageNode, W
             backdrop.color = colour;
         }
     }
+}
+
+/// A white shape on a clear ground, `texels` across, to be tinted: where
+/// `inside` holds of the square from -1 to 1 each way, y down.
+fn silhouette(texels: u32, inside: impl Fn(f32, f32) -> bool) -> Image {
+    // Each texel's coverage from a grid of samples across it.
+    const SAMPLES: u32 = 4;
+    let half = texels as f32 / 2.0;
+    let mut data = Vec::with_capacity((texels * texels * 4) as usize);
+    for v in 0..texels {
+        for u in 0..texels {
+            let mut hits = 0;
+            for j in 0..SAMPLES {
+                for i in 0..SAMPLES {
+                    let at = |t: u32, s: u32| {
+                        (t as f32 + (s as f32 + 0.5) / SAMPLES as f32 - half) / half
+                    };
+                    hits += inside(at(u, i), at(v, j)) as u32;
+                }
+            }
+            let alpha = (255 * hits / (SAMPLES * SAMPLES)) as u8;
+            data.extend_from_slice(&[255, 255, 255, alpha]);
+        }
+    }
+    Image::new(
+        Extent3d {
+            width: texels,
+            height: texels,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        data,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    )
 }
 
 fn decode_icon(

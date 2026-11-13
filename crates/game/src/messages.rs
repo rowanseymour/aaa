@@ -24,7 +24,6 @@ use crate::{Leaders, Loaded, Local, Screen, Sim};
 
 /// The key that steps the camera back through the lines.
 pub const CYCLE: &str = "CycleMessageLog";
-
 /// The log's width, before it wraps a line.
 const WIDTH: f32 = 564.0;
 const ICON: Vec2 = Vec2::new(16.0, 17.0);
@@ -349,6 +348,7 @@ type Parts<'a> = (
 #[derive(Component)]
 struct LookAt(u64);
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -357,6 +357,7 @@ pub fn spawn(
     local: Res<Local>,
     leaders: Res<Leaders>,
     bindings: Res<Bindings>,
+    mut icons: ResMut<displays::Icons>,
 ) {
     let corner = crate::special_ops::corner(&local, &leaders);
     let game = &mut loaded.game;
@@ -385,7 +386,7 @@ pub fn spawn(
         &bindings,
         Panel::MessageLog,
         Rim::BottomRight,
-        images.add(displays::glyph(list_shape)),
+        icons.get(displays::icon!("message-log"), &mut images, formats.0),
         said(
             "control_panel_ButtonMessageLog_ToolTip",
             "Display Message Log",
@@ -748,21 +749,6 @@ pub fn show(
             }
         }
     }
-}
-
-/// Whether a point of the glyph's square is on a list: three lines, each
-/// behind a dot, as the log's lines are behind their icons.
-fn list_shape(x: f32, y: f32) -> bool {
-    const ROWS: [f32; 3] = [-0.55, 0.0, 0.55];
-    const DOT: f32 = 0.16;
-    const BAR: f32 = 0.1;
-    ROWS.iter().any(|&row| {
-        let dy = y - row;
-        let dot = (x + 0.7).hypot(dy) < DOT;
-        let bar = (-0.35..0.85).contains(&x) && dy.abs() < BAR;
-        let ends = [-0.35, 0.85].iter().any(|&end| (x - end).hypot(dy) < BAR);
-        dot || bar || ends
-    })
 }
 
 /// The lines the Message Log window shows, by the serials of its oldest

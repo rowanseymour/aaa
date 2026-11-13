@@ -48,12 +48,13 @@ mod technologies;
 mod ui;
 mod waypoints;
 
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 
 use aaa_data::{Footing, GameData};
-use aaa_map::{Ground, Map, Member, Recruits, Shape};
+use aaa_map::{Ground, Map, Recruits, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::models::{Footprint, ModelAssets, Models, pose};
@@ -330,8 +331,8 @@ struct TrailerView {
     footing: Footing,
 }
 
-/// Spawns the model of the sim's `unit`, placed from `member`, and of any
-/// `trailer` it tows; false if the unit has none.
+/// Spawns the model of the sim's `unit`, placed as `thing`, moving at up to
+/// `speed`, and of any `trailer` it tows; false if the unit has none.
 #[allow(clippy::too_many_arguments)]
 fn spawn_unit_view(
     commands: &mut Commands,
@@ -339,12 +340,12 @@ fn spawn_unit_view(
     game: &mut GameData,
     assets: &mut ModelAssets,
     ground: &Ground,
-    member: &Member,
+    thing: &Thing,
+    speed: f32,
     trailer: Option<&aaa_sim::Trailer>,
     owner: u32,
     unit: usize,
 ) -> bool {
-    let thing = &member.thing;
     if let Some(t) = trailer {
         let footing = models.footing(&t.template);
         let towed = thing_at(ground, footing, thing.id, &t.template, t.position, t.facing);
@@ -357,7 +358,7 @@ fn spawn_unit_view(
             });
         }
     }
-    let Some(e) = models.spawn_unit(commands, game, assets, thing, owner, member.speed) else {
+    let Some(e) = models.spawn_unit(commands, game, assets, thing, owner, speed) else {
         return false;
     };
     commands.entity(e).insert(UnitView {
@@ -821,7 +822,8 @@ fn prepare(
             |b| lobby::nations(&b.players, &HashMap::new(), nations),
         ),
     };
-    let mut map = match Map::load_as(&mut game, &name, &chosen) {
+    let raising = Recruits::new(&mut game);
+    let mut map = match Map::load_as(&mut game, &raising, &name, &chosen) {
         Ok(map) => map,
         Err(e) => return Err((Box::new(game), e)),
     };
@@ -840,7 +842,6 @@ fn prepare(
         warn!("{}: no such side to play", map.title);
     }
     let mut sim = World::new(&map);
-    let raising = Recruits::new(&mut game);
     sim.packing = raising.packings();
     sim.requires = game.requirements();
     sim.economies = game.economies();
@@ -1141,11 +1142,30 @@ fn setup(
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
         leave_out.contains(&t.id)
     });
+    // Units are drawn as the map stores them, with its variations and
+    // scales; members a regiment has lost aren't stored, so stand on the
+    // ground.
+    let stored: HashMap<u32, &Thing> = map.standing().map(|t| (t.id, t)).collect();
     let members = map.regiments.iter().flat_map(|r| &r.members);
     let mut missing = 0;
     for (i, m) in members.enumerate() {
-        debug_assert_eq!(sim.0.units[i].id, m.thing.id);
+        debug_assert_eq!(sim.0.units[i].id, m.id);
         let owner = sim.0.regiments[sim.0.units[i].regiment].owner;
+        let thing = match stored.get(&m.id) {
+            Some(&t) => Cow::Borrowed(t),
+            None => {
+                let footing = models.footing(&m.template);
+                let at = thing_at(
+                    &map.ground,
+                    footing,
+                    m.id,
+                    &m.template,
+                    m.position,
+                    m.facing,
+                );
+                Cow::Owned(at)
+            }
+        };
         let mut model_assets = assets.models();
         if !spawn_unit_view(
             &mut commands,
@@ -1153,7 +1173,8 @@ fn setup(
             game,
             &mut model_assets,
             &map.ground,
-            m,
+            &thing,
+            m.speed,
             sim.0.units[i].trailer.as_ref(),
             owner,
             i,
@@ -1342,24 +1363,14 @@ fn spawn_views(
     for u in viewed.units..sim.0.units.len() {
         let unit = &sim.0.units[u];
         let regiment = &sim.0.regiments[unit.regiment];
-        let member = Member {
-            thing: thing_at(
-                &map.ground,
-                drawn.0.footing(&unit.template),
-                unit.id,
-                &unit.template,
-                unit.position,
-                unit.facing,
-            ),
-            speed: regiment.speed,
-            shape: unit.shape,
-            acceleration: 0.0,
-            turn_rate: 0.0,
-            trailer: None,
-            fighter: unit.fighter.clone(),
-            health: 1.0,
-            lost: None,
-        };
+        let thing = thing_at(
+            &map.ground,
+            drawn.0.footing(&unit.template),
+            unit.id,
+            &unit.template,
+            unit.position,
+            unit.facing,
+        );
         let mut models = assets.models();
         spawn_unit_view(
             &mut commands,
@@ -1367,7 +1378,8 @@ fn spawn_views(
             game,
             &mut models,
             &map.ground,
-            &member,
+            &thing,
+            regiment.speed,
             unit.trailer.as_ref(),
             regiment.owner,
             u,
