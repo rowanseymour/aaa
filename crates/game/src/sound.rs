@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aaa_data::{Audio, AudioWho, Cue, GameData, Id, ObjectAudio};
+use aaa_data::{Audio, AudioCategory, AudioWho, Cue, GameData, Id, ObjectAudio};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::map_point;
 use aaa_sim::Relation;
@@ -40,6 +40,54 @@ struct Request {
     owner: Option<u32>,
 }
 
+/// How loud each kind of audio plays, as the options set it.
+#[derive(Resource, Clone, Copy, PartialEq, Debug)]
+pub struct Volumes(pub aaa_data::Volumes);
+
+/// One of the [`Volumes`] the options set.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Channel {
+    Main,
+    Fx,
+    Speech,
+    Music,
+}
+
+impl Channel {
+    pub const ALL: [Channel; 4] = [Channel::Main, Channel::Fx, Channel::Speech, Channel::Music];
+}
+
+impl Volumes {
+    pub fn get(&self, channel: Channel) -> f32 {
+        let mut copy = *self;
+        *copy.level_mut(channel)
+    }
+
+    pub fn set(&mut self, channel: Channel, to: f32) {
+        *self.level_mut(channel) = to.clamp(0.0, 1.0);
+    }
+
+    fn level_mut(&mut self, channel: Channel) -> &mut f32 {
+        let v = &mut self.0;
+        match channel {
+            Channel::Main => &mut v.main,
+            Channel::Fx => &mut v.fx,
+            Channel::Speech => &mut v.speech,
+            Channel::Music => &mut v.music,
+        }
+    }
+
+    /// How loud audio of a category plays, all its volumes taken together.
+    pub fn of(&self, category: AudioCategory) -> f32 {
+        let channel = match category {
+            AudioCategory::Sound => Channel::Fx,
+            AudioCategory::Speech => Channel::Speech,
+            AudioCategory::Music => Channel::Music,
+        };
+        self.0.main * self.get(channel)
+    }
+}
+
 /// A play of audio that ducks the music while it lasts.
 #[derive(Component)]
 pub struct Fades;
@@ -50,6 +98,10 @@ struct Playing {
     audio: Id,
     /// When it started, to know which of an audio's plays is oldest.
     started: f64,
+    category: AudioCategory,
+    /// How loud it plays before the [`Volumes`], which can change while it
+    /// does.
+    loudness: f32,
 }
 
 /// Where the random picks start: somewhere new each launch, as the game's
@@ -77,6 +129,23 @@ impl Sounds {
             objects: HashMap::new(),
             sources: HashMap::new(),
             read,
+            next: HashMap::new(),
+            queued: Vec::new(),
+            rng: seed(),
+        }
+    }
+
+    /// With `audio` and the files given read ahead, and nothing else.
+    #[cfg(test)]
+    pub fn of(audio: HashMap<Id, Audio>, read: &[&str]) -> Sounds {
+        Sounds {
+            audio,
+            objects: HashMap::new(),
+            sources: HashMap::new(),
+            read: read
+                .iter()
+                .map(|p| (p.to_string(), Arc::from(&[][..])))
+                .collect(),
             next: HashMap::new(),
             queued: Vec::new(),
             rng: seed(),
@@ -246,7 +315,7 @@ pub struct SoundPlugin;
 
 impl Plugin for SoundPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Update, play);
+        app.add_systems(Update, (play, follow_volumes));
     }
 }
 
@@ -262,6 +331,7 @@ fn play(
     mut assets: ResMut<Assets<AudioSource>>,
     sim: Option<Res<Sim>>,
     local: Option<Res<Local>>,
+    volumes: Res<Volumes>,
     time: Res<Time>,
     cameras: Query<&RtsCamera>,
     playing: Query<(Entity, &Playing)>,
@@ -303,7 +373,9 @@ fn play(
             let distance = Vec2::from(at).distance(Vec2::from(listener));
             volume *= gain(distance, audio.falloff, audio.range);
         }
-        if volume <= 0.0 {
+        // Nothing heard isn't played, so not read or decoded either.
+        let heard = volume * volumes.of(audio.category);
+        if heard <= 0.0 {
             continue;
         }
         let plays = counts.entry(request.audio.clone()).or_default();
@@ -334,11 +406,13 @@ fn play(
             .spawn((
                 AudioPlayer::new(source),
                 PlaybackSettings::DESPAWN
-                    .with_volume(Volume::Linear(volume))
+                    .with_volume(Volume::Linear(heard))
                     .with_speed(speed),
                 Playing {
                     audio: request.audio.clone(),
                     started: now,
+                    category: audio.category,
+                    loudness: volume,
                 },
             ))
             .id();
@@ -349,9 +423,71 @@ fn play(
     }
 }
 
+/// Keeps what's playing as loud as the [`Volumes`] say, as they change.
+fn follow_volumes(volumes: Res<Volumes>, mut playing: Query<(&Playing, &mut AudioSink)>) {
+    if !volumes.is_changed() {
+        return;
+    }
+    for (p, mut sink) in &mut playing {
+        sink.set_volume(Volume::Linear(p.loudness * volumes.of(p.category)));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_category_plays_at_its_volume_under_the_main() {
+        let mut volumes = Volumes(aaa_data::Volumes {
+            main: 0.5,
+            fx: 0.8,
+            speech: 1.0,
+            music: 0.2,
+        });
+        assert_eq!(volumes.of(AudioCategory::Sound), 0.4);
+        assert_eq!(volumes.of(AudioCategory::Speech), 0.5);
+        assert_eq!(volumes.of(AudioCategory::Music), 0.1);
+        volumes.set(Channel::Main, 2.0);
+        assert_eq!(volumes.get(Channel::Main), 1.0);
+    }
+
+    /// An interface click, played from `click.wav`.
+    fn click() -> Audio {
+        let mut audio = crate::music::tests::silent();
+        audio.category = AudioCategory::Sound;
+        audio.files = vec!["click.wav".into()];
+        audio.volume = 1.0;
+        audio
+    }
+
+    /// Plays a click with the FX volume at `fx`, and says how many plays
+    /// started and whether its file was read.
+    fn click_at(fx: f32) -> (usize, bool) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, SoundPlugin))
+            .init_resource::<Assets<AudioSource>>()
+            .insert_resource(Volumes(aaa_data::Volumes {
+                main: 1.0,
+                fx,
+                speech: 1.0,
+                music: 1.0,
+            }));
+        let audio = HashMap::from([(Id::from("click"), click())]);
+        let mut sounds = Sounds::of(audio, &["click.wav"]);
+        sounds.interface(app.world().resource::<Time>(), "click");
+        app.insert_resource(sounds).update();
+        let world = app.world_mut();
+        let plays = world.query::<&AudioPlayer>().iter(world).count();
+        let read = !world.resource::<Sounds>().read.contains_key("click.wav");
+        (plays, read)
+    }
+
+    #[test]
+    fn audio_turned_all_the_way_down_isnt_read_or_played() {
+        assert_eq!(click_at(0.5), (1, true));
+        assert_eq!(click_at(0.0), (0, false));
+    }
 
     #[test]
     fn audio_fades_to_silence_at_its_range() {

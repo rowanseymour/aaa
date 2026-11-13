@@ -11,7 +11,7 @@ use bevy::ecs::observer::IntoEntityObserver;
 use bevy::ecs::system::NonSendMarker;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui_widgets::Activate;
+use bevy::ui_widgets::{Activate, SliderValue, ValueChange};
 use bevy::window::{
     Monitor, MonitorSelection, OnMonitor, PrimaryMonitor, PrimaryWindow, RawHandleWrapper,
     VideoModeSelection, WindowMode, WindowResized,
@@ -19,18 +19,28 @@ use bevy::window::{
 use bevy::winit::WINIT_WINDOWS;
 use raw_window_handle::RawDisplayHandle;
 
-use crate::Screen;
+use crate::sound::{Channel, Volumes};
 use crate::supply::Border;
 use crate::ui::{
-    Card, Chosen, Dropdown, Font, Ink, Surface, card, clickable, label, layer, padded, switch,
+    Card, Chosen, Dropdown, Font, Ink, Surface, button, card, label, layer, padded, slider, switch,
     text, toggle,
 };
+use crate::{Screen, menu};
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
 const BORDER: &str = "options_dialog_Child_text_15";
 const RESOLUTION: &str = "options_dialog_Child_text_18";
 const GAME_TAB: &str = "options_dialog_ShowGameplayButton_Tooltip";
 const VIDEO_TAB: &str = "options_dialog_ShowVideoButton_Tooltip";
+const AUDIO_TAB: &str = "options_dialog_ShowAudioButton_Tooltip";
+const VOLUME: &str = "options_dialog_AudioPage_VolumeTitle_Label_Text";
+/// What the game calls each of the [`Volumes`], by [`Channel::ALL`].
+const VOLUMES: [(&str, &str); 4] = [
+    ("options_dialog_Child_text_27", "Main Volume"),
+    ("options_dialog_Child_text_28", "FX Volume"),
+    ("options_dialog_Child_text_29", "Speech Volume"),
+    ("options_dialog_Child_text_30", "Music Volume"),
+];
 const GAME: &str = "options_dialog_GamePlayPage_GameTitle_Label_Text";
 const EXTRAS: &str = "options_dialog_GamePlayPage_MapTitle_Label_Text";
 const BASIC: &str = "options_dialog_VideoPage_BasicTitle_Label_Text";
@@ -57,9 +67,13 @@ pub struct Options {
     /// in them.
     game_tab: String,
     video_tab: String,
+    audio_tab: String,
     game_title: String,
     extras_title: String,
     basic_title: String,
+    volume_title: String,
+    /// What the game calls each of the [`Volumes`], by [`Channel::ALL`].
+    volume_labels: [String; 4],
     /// What the game's button to leave the options says.
     ok: String,
 }
@@ -82,6 +96,12 @@ impl Options {
     ) -> Self {
         let known = named.filter(|id| configurations.iter().any(|c| c.id == *id));
         let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+        // The game calls each tab "... Options", which the page's title
+        // already says.
+        let tab = |key: &str, or: &str| {
+            let said = said(key, or);
+            said.strip_suffix(" Options").unwrap_or(&said).to_string()
+        };
         Options {
             hotkeys: known.or_else(|| configurations.first().map(|c| c.id.clone())),
             configurations,
@@ -90,11 +110,14 @@ impl Options {
             resolution_label: said(RESOLUTION, "Resolution"),
             display_label: "Display".into(),
             anti_aliasing_label: "Anti-aliasing".into(),
-            game_tab: said(GAME_TAB, "Gameplay Options"),
-            video_tab: said(VIDEO_TAB, "Video Options"),
+            game_tab: tab(GAME_TAB, "Gameplay"),
+            video_tab: tab(VIDEO_TAB, "Video"),
+            audio_tab: tab(AUDIO_TAB, "Audio"),
             game_title: said(GAME, "Game"),
             extras_title: said(EXTRAS, "Auxiliaries"),
             basic_title: said(BASIC, "Basic"),
+            volume_title: said(VOLUME, "Volume"),
+            volume_labels: VOLUMES.map(|(key, or)| said(key, or)),
             ok: said(OK, "Ok"),
         }
     }
@@ -117,12 +140,14 @@ enum Open {
     AntiAliasing,
 }
 
-/// The options shown: those of the game, or of how it's drawn.
-#[derive(Resource, Default, PartialEq, Clone, Copy)]
+/// The options shown: those of the game, of how it's drawn, or of how it
+/// sounds.
+#[derive(Resource, Default, PartialEq, Clone, Copy, Debug)]
 enum Tab {
     #[default]
     Game,
     Video,
+    Audio,
 }
 
 /// The options, over the whole screen.
@@ -288,6 +313,14 @@ struct Opener(Open);
 #[derive(Component)]
 struct InList;
 
+/// A slider setting one of the [`Volumes`].
+#[derive(Component)]
+struct VolumeSlider(Channel);
+
+/// Says what one of the [`Volumes`] is at, as a percentage.
+#[derive(Component)]
+struct VolumeLevel(Channel);
+
 /// The button that shows or hides the supply border.
 #[derive(Component)]
 struct BorderToggle;
@@ -315,6 +348,7 @@ impl Plugin for OptionsPlugin {
             .init_resource::<AntiAliasing>()
             .init_resource::<WindowedSize>()
             .add_systems(OnEnter(Screen::Options), screen)
+            .add_observer(set_volume)
             .add_systems(PreUpdate, follow_window)
             .add_systems(PostUpdate, anti_alias)
             .add_systems(
@@ -328,6 +362,7 @@ impl Plugin for OptionsPlugin {
                     show_anti_aliasing,
                     mark_chosen,
                     show_border,
+                    show_volumes,
                 )
                     .chain()
                     .run_if(any_with_component::<Page>),
@@ -353,58 +388,39 @@ pub fn page(commands: &mut Commands, options: &Options) -> Entity {
         ..default()
     };
     let page = commands
-        .spawn((Page, page, Surface::Panel, GlobalZIndex(layer::PAGE)))
+        .spawn((Page, page, Surface::Solid, GlobalZIndex(layer::PAGE)))
         .id();
-    let column = Node {
-        flex_direction: FlexDirection::Column,
-        padding: UiRect::all(px(32)),
-        row_gap: px(12),
-        ..default()
-    };
-    let tabs = Node {
-        width: px(300),
-        ..column.clone()
-    };
-    let tabs = commands.spawn((ChildOf(page), tabs)).id();
-    commands.spawn((text("Options", Font::Title), ChildOf(tabs)));
-    for (tab, name) in [
-        (Tab::Game, &options.game_tab),
-        (Tab::Video, &options.video_tab),
-    ] {
-        commands
-            .spawn((TabButton(tab), toggle(name, Font::Large), ChildOf(tabs)))
-            .observe(move |_: On<Activate>, mut shown: ResMut<Tab>| {
-                shown.set_if_neq(tab);
-            });
-    }
     let main = Node {
         flex_grow: 1.0,
-        ..column.clone()
+        flex_direction: FlexDirection::Column,
+        padding: UiRect::all(px(32)),
+        row_gap: px(24),
+        ..default()
     };
     let main = commands.spawn((ChildOf(page), main)).id();
+    commands.spawn((text("Options", Font::Title), ChildOf(main)));
     let body = Node {
-        flex_grow: 1.0,
         flex_direction: FlexDirection::Column,
         row_gap: px(24),
         ..default()
     };
     commands.spawn((Body, ChildOf(main), body));
-    let footer = Node {
-        justify_content: JustifyContent::End,
-        ..default()
-    };
-    let footer = commands.spawn((ChildOf(main), footer)).id();
-    let ok = Node {
-        width: px(160),
-        ..padded()
-    };
+    // The tabs down the right, as the menus have their buttons.
+    let side = commands.spawn((ChildOf(page), menu::side())).id();
+    for (tab, name) in [
+        (Tab::Game, &options.game_tab),
+        (Tab::Video, &options.video_tab),
+        (Tab::Audio, &options.audio_tab),
+    ] {
+        commands
+            .spawn((TabButton(tab), toggle(name, Font::Large), ChildOf(side)))
+            .observe(move |_: On<Activate>, mut shown: ResMut<Tab>| {
+                shown.set_if_neq(tab);
+            });
+    }
+    commands.spawn((menu::spacer(), ChildOf(side)));
     commands
-        .spawn((
-            ChildOf(footer),
-            clickable(card(ok)),
-            Card,
-            children![text(&options.ok, Font::Large)],
-        ))
+        .spawn((button(&options.ok, Font::Large), ChildOf(side)))
         .observe(leave);
     page
 }
@@ -468,6 +484,7 @@ fn choice(commands: &mut Commands, section: Entity, name: &str, holder: impl Bun
 fn show_body(
     mut commands: Commands,
     options: Res<Options>,
+    volumes: Res<Volumes>,
     tab: Res<Tab>,
     body: Single<(Entity, Ref<Body>)>,
 ) {
@@ -503,6 +520,56 @@ fn show_body(
             choice(&mut commands, basic, &options.resolution_label, Resolution);
             let aa = &options.anti_aliasing_label;
             choice(&mut commands, basic, aa, AntiAliasingHolder);
+        }
+        Tab::Audio => {
+            let volume = section(&mut commands, body, &options.volume_title);
+            for (channel, name) in Channel::ALL.into_iter().zip(&options.volume_labels) {
+                let row = Node {
+                    width: px(LIST_WIDTH),
+                    align_items: AlignItems::Center,
+                    column_gap: px(NAME_GAP),
+                    ..default()
+                };
+                let level = Node {
+                    width: px(SLIDER_WIDTH),
+                    ..default()
+                };
+                let holder = children![(
+                    row,
+                    children![
+                        (VolumeSlider(channel), slider(level, volumes.get(channel))),
+                        (VolumeLevel(channel), text("", Font::Body)),
+                    ],
+                )];
+                choice(&mut commands, volume, name, holder);
+            }
+        }
+    }
+}
+
+/// How wide a volume's slider is, leaving room in its row for its level.
+const SLIDER_WIDTH: f32 = 180.0;
+
+/// Sets the volume a slider's moved to.
+fn set_volume(
+    change: On<ValueChange<f32>>,
+    mut commands: Commands,
+    sliders: Query<&VolumeSlider>,
+    mut volumes: ResMut<Volumes>,
+) {
+    if let Ok(VolumeSlider(channel)) = sliders.get(change.source) {
+        volumes.set(*channel, change.value);
+        commands
+            .entity(change.source)
+            .insert(SliderValue(volumes.get(*channel)));
+    }
+}
+
+/// Says what each volume is at.
+fn show_volumes(volumes: Res<Volumes>, mut levels: Query<(&mut Text, Ref<VolumeLevel>)>) {
+    for (mut text, level) in &mut levels {
+        if volumes.is_changed() || level.is_added() {
+            text.0 = format!("{:.0}%", volumes.get(level.0) * 100.0);
         }
     }
 }
@@ -878,6 +945,12 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, OptionsPlugin))
             .insert_state(Screen::Options)
             .insert_resource(options(Some("classic")))
+            .insert_resource(Volumes(aaa_data::Volumes {
+                main: 0.8,
+                fx: 0.8,
+                speech: 0.95,
+                music: 0.7,
+            }))
             .init_resource::<Border>()
             .add_message::<WindowResized>();
         app.update();
@@ -1006,6 +1079,33 @@ mod tests {
             assert!(world.get::<Smaa>(camera).is_none());
             assert!(world.get::<Fxaa>(camera).is_some());
         }
+    }
+
+    #[test]
+    fn a_volume_slider_moved_sets_its_volume_and_says_it() {
+        let mut app = app();
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Audio);
+        let world = app.world_mut();
+        let mut sliders = world.query::<(Entity, &VolumeSlider, &SliderValue)>();
+        let found = sliders.iter(world).find(|(_, s, _)| s.0 == Channel::Music);
+        let (source, _, value) = found.expect("no music slider");
+        assert_eq!(value.0, 0.7);
+        world.trigger(ValueChange {
+            source,
+            value: 0.25f32,
+            is_final: true,
+        });
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(world.resource::<Volumes>().get(Channel::Music), 0.25);
+        assert_eq!(world.get::<SliderValue>(source), Some(&SliderValue(0.25)));
+        let mut levels = world.query::<(&VolumeLevel, &Text)>();
+        let said: Vec<_> = levels
+            .iter(world)
+            .map(|(l, t)| (l.0, t.0.clone()))
+            .collect();
+        assert!(said.contains(&(Channel::Music, "25%".into())));
+        assert!(said.contains(&(Channel::Speech, "95%".into())));
     }
 
     #[test]

@@ -743,6 +743,7 @@ fn main() -> ExitCode {
         .insert_resource(options::Options::new(&mut game))
         .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
         .insert_resource(music::Music::new(&mut game))
+        .insert_resource(sound::Volumes(game.volumes()))
         .insert_resource(Data(game));
     match map {
         Some(name) => {

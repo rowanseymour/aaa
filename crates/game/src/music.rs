@@ -5,11 +5,11 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Audio, GameData, Id, MusicSettings};
+use aaa_data::{Audio, AudioCategory, GameData, Id, MusicSettings};
 use bevy::audio::Volume;
 use bevy::prelude::*;
 
-use crate::sound::{Fades, Sounds};
+use crate::sound::{Fades, Sounds, Volumes};
 use crate::{Data, Loaded, Local, Screen, Sim, lobby};
 
 /// How many files music and speech can stream at once; music on its way
@@ -89,16 +89,16 @@ impl Music {
         };
     }
 
-    /// How loud music at fade level `fade` plays, at `volume` of its own.
-    fn loudness(&self, volume: f32, fade: f32) -> f32 {
-        let s = &self.settings;
-        s.main_volume * s.music_volume * volume * fade * self.duck
+    /// How loud music at fade level `fade` plays, at `volume` of its own,
+    /// with the options' music at `options`.
+    fn loudness(&self, options: f32, volume: f32, fade: f32) -> f32 {
+        options * volume * fade * self.duck
     }
 
     /// How loud music on its way out plays `now`; none once it's silent.
-    fn leaving_loudness(&self, l: &Leaving, now: f64) -> Option<f32> {
+    fn leaving_loudness(&self, options: f32, l: &Leaving, now: f64) -> Option<f32> {
         let level = l.from - (now - l.since) as f32 / l.out;
-        (level > 0.0).then(|| self.loudness(l.volume, level))
+        (level > 0.0).then(|| self.loudness(options, l.volume, level))
     }
 
     /// A file of the current music's, read ahead or else from `game`.
@@ -245,6 +245,7 @@ fn play(
     mut loaded: Option<ResMut<Loaded>>,
     mut data: Option<ResMut<Data>>,
     mut assets: ResMut<Assets<AudioSource>>,
+    volumes: Res<Volumes>,
     time: Res<Time<Real>>,
     faders: Query<(), With<Fades>>,
     mut sinks: Query<&mut AudioSink>,
@@ -255,6 +256,10 @@ fn play(
         (None, Some(data)) => Some(&mut data.0),
         (None, None) => None,
     };
+    let options = volumes.of(AudioCategory::Music);
+    // Turned all the way down, music isn't decoded: what's leaving stops,
+    // and the current file waits, paused, to go on from where it was.
+    let silent = options <= 0.0;
 
     let ducking = !faders.is_empty();
     if ducking {
@@ -288,10 +293,10 @@ fn play(
     // Fading out.
     let mut leaving = std::mem::take(&mut music.leaving);
     leaving.retain(|l| {
-        let loudness = music.leaving_loudness(l, now);
+        let loudness = music.leaving_loudness(options, l, now);
         let sink = sinks.get_mut(l.playing);
         let ended = sink.as_ref().is_ok_and(|s| s.empty());
-        let Some(loudness) = loudness.filter(|_| !ended) else {
+        let Some(loudness) = loudness.filter(|_| !ended && !silent) else {
             commands.entity(l.playing).try_despawn();
             return false;
         };
@@ -310,14 +315,21 @@ fn play(
         return;
     };
     let fade = fade_in((now - current.started) as f32, current.audio.fade[0]);
-    let loudness = music.loudness(current.audio.volume, fade);
+    let loudness = music.loudness(options, current.audio.volume, fade);
     if let Some((e, set_going)) = current.playing {
         match sinks.get_mut(e) {
             Ok(sink) if sink.empty() => {
                 commands.entity(e).despawn();
                 current.playing = None;
             }
-            Ok(mut sink) => sink.set_volume(Volume::Linear(loudness)),
+            Ok(mut sink) => {
+                sink.set_volume(Volume::Linear(loudness));
+                match (silent, sink.is_paused()) {
+                    (true, false) => sink.pause(),
+                    (false, true) => sink.play(),
+                    _ => {}
+                }
+            }
             Err(_) if now - set_going > START_TIMEOUT => {
                 warn!("music {}: a file didn't start playing", current.id);
                 commands.entity(e).try_despawn();
@@ -327,7 +339,13 @@ fn play(
             Err(_) => {}
         }
     }
+    // Music waiting for the volume to come up fades in once it does,
+    // rather than from when it was asked for.
+    if silent && current.playing.is_none() {
+        current.started = now;
+    }
     if current.playing.is_none()
+        && !silent
         && let Some(file) = next(&mut current, || sounds.random())
         && let Some(source) = music.source(game, &mut assets, &file)
     {
@@ -380,7 +398,9 @@ fn leave(commands: &mut Commands, music: &mut Music, old: Current, now: f64) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::Arc;
+
     use super::*;
 
     fn settings() -> MusicSettings {
@@ -388,8 +408,6 @@ mod tests {
             silent: Id::from("music_silent"),
             observer: None,
             menu: None,
-            main_volume: 0.8,
-            music_volume: 0.7,
             duck_volume: 0.5,
             duck_time: 1.0,
             recover_after: 2.0,
@@ -425,7 +443,7 @@ mod tests {
         assert_eq!(duck(1.0, false, None, &s, 0.5), 1.0);
     }
 
-    fn silent() -> Audio {
+    pub(crate) fn silent() -> Audio {
         Audio {
             category: aaa_data::AudioCategory::Music,
             leadin: Vec::new(),
@@ -484,6 +502,71 @@ mod tests {
         assert_eq!(next(&mut current, || 1.0).as_deref(), Some("b"));
     }
 
+    /// Music asked for long ago with a five-second fade-in, of one file
+    /// read ahead, playing with the music volume at `music`.
+    fn app(music: f32) -> App {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<Assets<AudioSource>>()
+            .insert_resource(Sounds::of(HashMap::new(), &[]))
+            .insert_resource(Volumes(aaa_data::Volumes {
+                main: 1.0,
+                fx: 1.0,
+                speech: 1.0,
+                music,
+            }))
+            .add_systems(Update, play);
+        let mut audio = silent();
+        audio.files = vec!["theme.mp3".into()];
+        audio.volume = 1.0;
+        audio.fade = [5.0, 0.0];
+        let source = app
+            .world_mut()
+            .resource_mut::<Assets<AudioSource>>()
+            .add(AudioSource {
+                bytes: Arc::from(&[][..]),
+            });
+        let mut music = Music::with(settings());
+        music.ahead.insert("theme.mp3".into(), source);
+        music.current = Some(Current {
+            id: Id::from("theme"),
+            audio,
+            started: -100.0,
+            playing: None,
+            led_in: true,
+        });
+        app.insert_resource(music);
+        app
+    }
+
+    fn players(app: &mut App) -> Vec<f32> {
+        let world = app.world_mut();
+        let mut players = world.query_filtered::<&PlaybackSettings, With<AudioPlayer>>();
+        players.iter(world).map(|p| p.volume.to_linear()).collect()
+    }
+
+    #[test]
+    fn music_turned_down_waits_and_fades_in_once_turned_up() {
+        let mut app = app(0.0);
+        app.update();
+        assert!(players(&mut app).is_empty());
+        app.world_mut().resource_mut::<Volumes>().0.music = 1.0;
+        app.update();
+        // Started now, not when it was asked for: at the start of its fade.
+        let started = players(&mut app);
+        assert_eq!(started.len(), 1);
+        assert!(started[0] < 0.1, "{started:?}");
+    }
+
+    #[test]
+    fn music_turned_up_plays_at_once() {
+        let mut app = app(1.0);
+        app.update();
+        let started = players(&mut app);
+        assert_eq!(started.len(), 1);
+        assert!(started[0] > 0.9, "{started:?}");
+    }
+
     #[test]
     fn fades_out_at_its_own_volume() {
         let music = Music::with(settings());
@@ -494,9 +577,10 @@ mod tests {
             since: 10.0,
             out: 2.0,
         };
-        let full = 0.8 * 0.7 * 1.33;
-        assert!((music.leaving_loudness(&leaving, 10.0).unwrap() - full).abs() < 1e-6);
-        assert!((music.leaving_loudness(&leaving, 11.0).unwrap() - full / 2.0).abs() < 1e-6);
-        assert_eq!(music.leaving_loudness(&leaving, 12.0), None);
+        let full = 0.56 * 1.33;
+        let at = |now| music.leaving_loudness(0.56, &leaving, now);
+        assert!((at(10.0).unwrap() - full).abs() < 1e-6);
+        assert!((at(11.0).unwrap() - full / 2.0).abs() < 1e-6);
+        assert_eq!(at(12.0), None);
     }
 }

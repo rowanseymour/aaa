@@ -46,26 +46,27 @@ fn column(commands: &mut Commands, screen: Screen) -> Entity {
             },
         ))
         .id();
-    commands
-        .spawn((
-            ChildOf(root),
-            backed(
-                Surface::Panel,
-                Node {
-                    width: px(320),
-                    height: percent(100),
-                    flex_direction: FlexDirection::Column,
-                    padding: UiRect::all(px(32)),
-                    row_gap: px(12),
-                    ..default()
-                },
-            ),
-        ))
-        .id()
+    commands.spawn((ChildOf(root), side())).id()
+}
+
+/// A [`column`]'s panel, for other pages to have one like it.
+pub fn side() -> impl Bundle {
+    backed(
+        Surface::Panel,
+        Node {
+            width: px(320),
+            height: percent(100),
+            flex_shrink: 0.0,
+            flex_direction: FlexDirection::Column,
+            padding: UiRect::all(px(32)),
+            row_gap: px(12),
+            ..default()
+        },
+    )
 }
 
 /// Pushes the buttons after it to the bottom of a [`column`].
-fn spacer() -> impl Bundle {
+pub fn spacer() -> impl Bundle {
     Node {
         flex_grow: 1.0,
         ..default()
