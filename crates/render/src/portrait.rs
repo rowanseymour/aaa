@@ -26,6 +26,11 @@ const LAYER: usize = 1;
 /// misses the layer shows over one.
 const AT: Vec3 = Vec3::new(0.0, -5000.0, 0.0);
 
+/// How strong the stage's ambient light is, as a colour's brightness:
+/// what most models' materials reflect of it, the rest glowing to make up
+/// their own share.
+const AMBIENT: f32 = 0.5;
+
 /// The name of the camera a face's model holds.
 const CAMERA: &str = "PortraitCamera";
 
@@ -60,6 +65,8 @@ pub struct Stage {
     /// A fitted model's picture, [`FIT_ASPECT`] times as wide as high.
     fitted: Handle<Image>,
     camera: Entity,
+    /// What shines on the sitter, from the first to sit.
+    light: Option<Entity>,
     /// Who's on it, and the root of their model.
     sitter: Option<(Sitter, Entity)>,
     /// How many have sat, so that no two fidget alike.
@@ -103,10 +110,9 @@ impl Stage {
                 Tonemapping::None,
                 DebandDither::Disabled,
                 RenderLayers::layer(LAYER),
-                // Full white light all round shows textures as they're
-                // painted: see [`crate::color_lights`].
+                // White light all round: see [`crate::color_lights`].
                 AmbientLight {
-                    color: Color::WHITE,
+                    color: Color::srgb(AMBIENT, AMBIENT, AMBIENT),
                     brightness: 1.0 / Exposure::default().exposure(),
                     ..default()
                 },
@@ -116,6 +122,7 @@ impl Stage {
             face,
             fitted,
             camera,
+            light: None,
             sitter: None,
             sat: 0,
             cameras: HashMap::new(),
@@ -142,9 +149,11 @@ impl Stage {
         self.sitter.as_ref().map(|(sitter, _)| sitter)
     }
 
-    /// The root of the model of whoever's on it.
-    pub fn root(&self) -> Option<Entity> {
-        self.sitter.as_ref().map(|(_, root)| *root)
+    /// What it has spawned besides its camera: the model of whoever's on
+    /// it and its light.
+    pub fn spawned(&self) -> impl Iterator<Item = Entity> {
+        let root = self.sitter.as_ref().map(|(_, root)| *root);
+        root.into_iter().chain(self.light)
     }
 
     /// Takes whoever's on it off.
@@ -213,9 +222,11 @@ impl Models {
     }
 
     /// Puts `sitter` on the stage in place of whoever was there, a face
-    /// that's `greeting` playing first what it plays on being selected;
-    /// false if it has no model that can be drawn, which leaves the stage
-    /// empty.
+    /// that's `greeting` playing first what it plays on being selected.
+    /// The first to sit is lit from `sun`, the way the map's sun shines,
+    /// and so are all after. False if it has no model that can be drawn,
+    /// which leaves the stage empty.
+    #[allow(clippy::too_many_arguments)]
     pub fn sit(
         &mut self,
         commands: &mut Commands,
@@ -224,15 +235,29 @@ impl Models {
         stage: &mut Stage,
         sitter: &Sitter,
         greeting: bool,
+        sun: Dir3,
     ) -> bool {
         stage.clear(commands);
         stage.sat = stage.sat.wrapping_add(1);
+        stage.light.get_or_insert_with(|| {
+            let unit = 1.0 / Exposure::default().exposure();
+            let light = DirectionalLight {
+                illuminance: std::f32::consts::PI * unit,
+                ..default()
+            };
+            let shining = Transform::default().looking_to(sun, Vec3::Y);
+            let layer = RenderLayers::layer(LAYER);
+            commands.spawn((light, shining, layer)).id()
+        });
+        let level = Color::srgb(AMBIENT, AMBIENT, AMBIENT).to_linear().red;
+        self.ambient = Some(level);
         let placed = match sitter {
             Sitter::Face(id) => self.sit_face(commands, game, assets, stage, id, greeting),
             Sitter::Model { template, owner } => {
                 self.sit_model(commands, game, assets, stage, template, *owner)
             }
         };
+        self.ambient = None;
         let Some((root, seen)) = placed else {
             return false;
         };

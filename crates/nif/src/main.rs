@@ -112,7 +112,10 @@ fn dump(file: &str) -> io::Result<ExitCode> {
             }
             Object::SourceTexture(t) => format!("texture {:?} pixels {:?}", t.file, t.pixels),
             Object::Pixels(p) => format!("pixels format {} levels {:?}", p.format, p.mipmaps),
-            Object::Material(m) => format!("material diffuse {:?} alpha {}", m.diffuse, m.alpha),
+            Object::Material(m) => format!(
+                "material ambient {:?} diffuse {:?} emissive {:?} alpha {}",
+                m.ambient, m.diffuse, m.emissive, m.alpha
+            ),
             Object::Alpha(a) => format!("alpha flags {:#06x} threshold {}", a.flags, a.threshold),
             Object::Stencil(s) => format!("stencil draw mode {}", s.draw_mode),
             Object::ZBuffer(z) => {

@@ -1073,6 +1073,7 @@ pub fn portray(
     mut stage: ResMut<Stage>,
     mut asked: bevy::ecs::system::Local<Option<(Sitter, Alone)>>,
     mut boxes: Query<(&mut ImageNode, &mut Node), With<PortraitBox>>,
+    suns: Query<&Transform, With<DirectionalLight>>,
 ) {
     let mode = showing.0.as_ref().map(|(mode, _)| mode);
     let wanted = mode.and_then(|mode| {
@@ -1093,9 +1094,20 @@ pub fn portray(
                 let (models, game) = (&mut drawn.0, &mut loaded.game);
                 let assets = &mut assets.models();
                 let greeting = alone.is_some();
-                models.sit(&mut commands, game, assets, &mut stage, sitter, greeting);
-                if let Some(root) = stage.root() {
-                    commands.entity(root).insert(DespawnOnExit(Screen::Match));
+                let sun = suns.iter().next().map_or(Dir3::NEG_Y, |sun| sun.forward());
+                models.sit(
+                    &mut commands,
+                    game,
+                    assets,
+                    &mut stage,
+                    sitter,
+                    greeting,
+                    sun,
+                );
+                for spawned in stage.spawned() {
+                    commands
+                        .entity(spawned)
+                        .insert(DespawnOnExit(Screen::Match));
                 }
             }
             None => stage.clear(&mut commands),
@@ -1114,6 +1126,8 @@ pub fn portray(
     for (mut shown, mut node) in &mut boxes {
         if shown.image != portrait {
             shown.image = portrait.clone();
+            // A face's picture fills its box whatever shape that is.
+            shown.image_mode = bevy::ui::widget::NodeImageMode::Stretch;
             node.top = px(top * SCALE);
             node.height = px(height * SCALE);
         }

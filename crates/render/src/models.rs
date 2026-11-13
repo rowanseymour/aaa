@@ -98,6 +98,9 @@ pub(crate) struct Part {
     pub blended: bool,
     /// Its owner's colour shows where its texture is see-through.
     team: bool,
+    /// How much ambient light its material reflects, and how much of the
+    /// light that falls on it, where it has a material to say.
+    reflects: Option<([f32; 3], [f32; 3])>,
 }
 
 /// A part's material: most are standard, those that add to what's behind
@@ -447,6 +450,10 @@ pub struct Models {
     timings: HashMap<String, Option<EffectTiming>>,
     /// Whether meshes stay readable off the GPU, for mesh picking.
     pickable: bool,
+    /// Set while what's spawned is lit by ambient light of this strength,
+    /// of which each material reflects its own share: on the map, where
+    /// it isn't, all reflect alike.
+    pub(crate) ambient: Option<f32>,
 }
 
 /// How an effect's model plays.
@@ -503,6 +510,7 @@ impl Models {
             extents: HashMap::new(),
             timings: HashMap::new(),
             pickable,
+            ambient: None,
         }
     }
 
@@ -949,9 +957,13 @@ impl Models {
         colour: Option<[f32; 3]>,
     ) -> PartMaterial {
         let material = self.paint(assets, part, colour);
-        match part.animation.as_ref().is_some_and(|a| a.paints()) {
+        let material = match part.animation.as_ref().is_some_and(|a| a.paints()) {
             true => material.copy(assets),
             false => material,
+        };
+        match self.ambient {
+            Some(light) => reflecting(material, part, light, assets),
+            None => material,
         }
     }
 
@@ -1182,6 +1194,7 @@ impl Models {
         let writes_depth = nif
             .property::<nif::ZBuffer>(props)
             .is_none_or(|z| z.write());
+        let reflects = material.map(|m| (m.ambient, m.diffuse));
         let source = alpha.filter(|_| alpha_mode == AlphaMode::Add);
         let material = match (source.and_then(|a| Source::of(a.source())), material) {
             (Some(source), Some(m)) => {
@@ -1209,6 +1222,7 @@ impl Models {
             animation: None,
             blended: matches!(alpha_mode, AlphaMode::Blend | AlphaMode::Add),
             team: false,
+            reflects,
         })
     }
 
@@ -1447,6 +1461,41 @@ impl Models {
             Some(assets.images.add(image))
         })
     }
+}
+
+/// A part's material as it shows under ambient light of strength `light`,
+/// reflecting its own share of that rather than as much as it does of
+/// light that falls on it: a copy that glows with the difference, where
+/// there is one.
+fn reflecting(
+    material: PartMaterial,
+    part: &Part,
+    light: f32,
+    assets: &mut ModelAssets,
+) -> PartMaterial {
+    let Some((ambient, diffuse)) = part.reflects else {
+        return material;
+    };
+    let linear = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b).to_linear().to_vec3();
+    let more = (linear(ambient) - linear(diffuse) * light).max(Vec3::ZERO);
+    if more.max_element() < 1e-3 {
+        return material;
+    }
+    let glow = |base: &mut StandardMaterial| {
+        base.emissive = LinearRgba::rgb(more.x, more.y, more.z);
+        base.emissive_texture = base.base_color_texture.clone();
+    };
+    let copy = material.copy(assets);
+    match &copy {
+        PartMaterial::Standard(h) => assets.materials.get_mut(h).map(|mut m| glow(&mut m)),
+        PartMaterial::Team(h) => (assets.team_materials.get_mut(h)).map(|mut m| glow(&mut m.base)),
+        PartMaterial::Solid(h) => {
+            (assets.solid_materials.get_mut(h)).map(|mut m| glow(&mut m.base))
+        }
+        // These reflect their own share of it wherever they're drawn.
+        PartMaterial::Glow(_) => return material,
+    };
+    copy
 }
 
 /// What tells the model at `path` as loaded for `view` from the same one
