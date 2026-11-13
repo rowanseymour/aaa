@@ -1,7 +1,7 @@
-//! Reading each object type. Each layout lists the fields present in version 10.1.0.0; `[old: ...]` marks how
-//! 10.0.1.0 and 4.2.2.0 differ, `[4.2.2.0: ...]` how 4.2.2.0 differs
-//! further. Types read only so they can be stepped over become
-//! [`Object::Other`].
+//! Reading each object type. Each layout lists the fields present in
+//! version 10.1.0.0; `[old: ...]` marks how 10.0.1.0 and 4.2.2.0 differ,
+//! `[4.2.2.0: ...]` how 4.2.2.0 differs further. Types read only so they
+//! can be stepped over become [`Object::Other`].
 //!
 //! ```text
 //! named      string name, refs extra data [4.2.2.0: ref to the first of a

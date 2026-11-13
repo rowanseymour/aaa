@@ -725,7 +725,7 @@ pub fn write_things(things: &[Thing]) -> Result<(Vec<u8>, Vec<u8>)> {
     data.u32(THINGS_VERSION);
     for thing in things {
         let start = data.0.len();
-        thing.write_listed(&mut data)?;
+        thing.write(&mut data, ReadAs::Listed)?;
         index.u32((data.0.len() - start) as u32);
     }
     Ok((index.0, data.0))
@@ -842,19 +842,19 @@ impl Thing {
         })
     }
 
-    /// Writes a record of a thing list, or an organization's member, whose
-    /// class says what its detail is read as.
-    fn write_listed(&self, w: &mut Writer) -> Result<()> {
-        if !self.detail.fits(self.class) {
+    /// Writes the record, refusing one that wouldn't read back as it is:
+    /// whatever reads it decides from the class what the detail is.
+    fn write(&self, w: &mut Writer, read_as: ReadAs) -> Result<()> {
+        let fits = match read_as {
+            ReadAs::Listed => self.detail.fits(self.class),
+            ReadAs::Actor(class) => self.class == class && matches!(self.detail, Detail::Actor(_)),
+        };
+        if !fits {
             return Err(Error::Unwritable(format!(
-                "thing {} of class {} with another class's detail",
+                "thing {} of class {} with a detail it isn't read with",
                 self.id, self.class
             )));
         }
-        self.write(w)
-    }
-
-    fn write(&self, w: &mut Writer) -> Result<()> {
         Head {
             template: self.template.clone(),
             class: self.class,
@@ -981,18 +981,37 @@ impl Detail {
         Ok(())
     }
 
-    /// Whether it's the detail a thing of `class` is read with, so what's
-    /// written reads back the same.
-    fn fits(&self, class: u32) -> bool {
+    /// The class a decoded detail is read for; `None` for [`Detail::Raw`].
+    fn class(&self) -> Option<u32> {
         match self {
-            Detail::Actor(_) => class == ACTOR,
-            Detail::Area(_) => class == AREA,
-            Detail::Camera(_) => class == CAMERA,
-            Detail::ReactiveScenery(_) => class == REACTIVE_SCENERY,
-            Detail::None => class == SCENERY,
-            Detail::Raw(_) => !matches!(class, ACTOR | AREA | CAMERA | SCENERY | REACTIVE_SCENERY),
+            Detail::Actor(_) => Some(ACTOR),
+            Detail::Area(_) => Some(AREA),
+            Detail::Camera(_) => Some(CAMERA),
+            Detail::ReactiveScenery(_) => Some(REACTIVE_SCENERY),
+            Detail::None => Some(SCENERY),
+            Detail::Raw(_) => None,
         }
     }
+
+    /// Whether it's the detail a listed thing of `class` is read with, so
+    /// what's written reads back the same.
+    fn fits(&self, class: u32) -> bool {
+        self.class()
+            .map_or(!DECODED_CLASSES.contains(&class), |c| c == class)
+    }
+}
+
+/// The classes [`Detail::parse`] decodes a detail for.
+const DECODED_CLASSES: [u32; 5] = [ACTOR, AREA, CAMERA, SCENERY, REACTIVE_SCENERY];
+
+/// What reads a thing's record back, which decides what its detail must be.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum ReadAs {
+    /// A thing list's record, whose class picks its detail.
+    Listed,
+    /// An actor of the one class its place holds, such as an
+    /// organization's member.
+    Actor(u32),
 }
 
 #[cfg(test)]
@@ -1227,6 +1246,15 @@ mod tests {
             t[i].class = class;
             assert!(matches!(write_things(&t), Err(Error::Unwritable(_))));
         }
+    }
+
+    #[test]
+    fn decoded_classes_are_those_parse_decodes() {
+        for class in 0..32 {
+            let raw = matches!(Detail::parse(class, &[], 28), Ok(Detail::Raw(_)));
+            assert_eq!(DECODED_CLASSES.contains(&class), !raw, "class {class}");
+        }
+        assert!(Detail::None.fits(SCENERY) && !Detail::Raw(Vec::new()).fits(SCENERY));
     }
 
     /// An actor that is an organization of one member, `depth` deep.

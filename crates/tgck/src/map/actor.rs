@@ -1696,7 +1696,7 @@ mod tests {
             seen_by: 0,
             detail: Detail::Actor(actor(1 | 1 << 3, vec![body(), mover()])),
         }
-        .write(&mut w)
+        .write(&mut w, super::super::ReadAs::Actor(super::super::ACTOR))
         .unwrap();
         w.0
     }
@@ -1771,5 +1771,22 @@ mod tests {
         let mut missing = org.clone();
         missing.members.pop();
         assert!(missing.write(&mut Writer::default()).is_err());
+
+        // Members read back only as actors of the actor class.
+        let area = Detail::Area(super::super::Area {
+            version: 2,
+            id: None,
+            name: String::new(),
+            shape: 1,
+            radius: 1.0,
+            bounds: [0.0; 4],
+            inside: Vec::new(),
+        });
+        for (class, detail) in [(super::super::AREA, area), (99, Detail::Raw(Vec::new()))] {
+            let mut wrong = org.clone();
+            (wrong.members[0].class, wrong.members[0].detail) = (class, detail);
+            let err = wrong.write(&mut Writer::default());
+            assert!(matches!(err, Err(Error::Unwritable(_))), "{err:?}");
+        }
     }
 }

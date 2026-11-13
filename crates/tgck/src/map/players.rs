@@ -4,7 +4,7 @@
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::header::{bool, check_version, optional, optional_plain};
-use super::{Actor, Detail, Head, Property, Thing, expect};
+use super::{Actor, Detail, Head, Property, ReadAs, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
 /// The game's world state as a map saves it.
@@ -566,7 +566,7 @@ impl Kingdom {
                 "kingdom {index}'s fields don't suit its version {v}"
             )));
         }
-        self.thing.write(w)?;
+        self.thing.write(w, ReadAs::Actor(KINGDOM))?;
         match (&self.updatable, world_version >= UPDATABLE_WORLD_VERSION) {
             (Some(id), true) => {
                 w.u32(1);
@@ -1186,5 +1186,13 @@ pub(super) mod tests {
             kingdoms.to_bytes(21).is_err(),
             "updatable ids need world 22"
         );
+
+        // A kingdom reads back only as an actor of its own class.
+        let mut wrong = kingdoms.clone();
+        wrong.kingdoms[0].as_mut().unwrap().thing.detail = Detail::None;
+        assert!(matches!(wrong.to_bytes(28), Err(Error::Unwritable(_))));
+        let mut wrong = kingdoms.clone();
+        wrong.kingdoms[0].as_mut().unwrap().thing.class = super::super::ACTOR;
+        assert!(matches!(wrong.to_bytes(28), Err(Error::Unwritable(_))));
     }
 }

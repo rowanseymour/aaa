@@ -6,7 +6,7 @@
 
 use super::actor::{Updatable, version};
 use super::header::{optional, optional_plain};
-use super::{Thing, expect};
+use super::{ACTOR, ReadAs, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
 /// A herd or regiment.
@@ -240,7 +240,7 @@ impl Organization {
         for p in &self.positions {
             w.i32(p.index);
             if p.index >= 0 {
-                members.next().unwrap().write_listed(w)?;
+                members.next().unwrap().write(w, ReadAs::Actor(ACTOR))?;
             }
         }
         for p in &self.positions {
