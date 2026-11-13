@@ -4,8 +4,9 @@
 use std::collections::HashMap;
 
 use crate::properties::{Pace, fill, line, number};
+use crate::strings::localized;
 use crate::supply::is;
-use crate::{GameData, Id, defs, localized, scoped};
+use crate::{GameData, Id, defs, scoped};
 
 /// A special operation as its button and tooltip show it.
 #[derive(Debug, Clone, PartialEq)]

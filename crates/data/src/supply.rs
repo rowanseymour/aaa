@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 
-use crate::{GameData, Id, Shape, Targets, defs, soft_shape};
+use crate::combat::soft_shape;
+use crate::{GameData, Id, Shape, Targets, defs};
 
 /// The settings supply runs by.
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::ops::{Add, AddAssign, Sub, SubAssign};
+use std::sync::Arc;
 
 use crate::{GameData, Id, defs, scoped};
 
@@ -275,7 +276,10 @@ impl GameData {
 
     /// The tuning settings, the game's own (`SVars_AA.tgi`), which take
     /// precedence, before the engine's.
-    pub(crate) fn svars(&mut self) -> Vec<defs::SVars> {
+    pub(crate) fn svars(&mut self) -> Arc<[defs::SVars]> {
+        if let Some(kept) = &self.kept.svars {
+            return kept.clone();
+        }
         let files = self.parse_tgis(|n| n == "game/svars_aa.tgi" || n == "game/svars.tgi");
         let files = scoped(&files);
         let mut out: Vec<(bool, defs::SVars)> = files
@@ -286,7 +290,9 @@ impl GameData {
             })
             .collect();
         out.sort_by_key(|(own, _)| !own);
-        out.into_iter().map(|(_, s)| s).collect()
+        let read: Arc<[defs::SVars]> = out.into_iter().map(|(_, s)| s).collect();
+        self.kept.svars = Some(read.clone());
+        read
     }
 }
 

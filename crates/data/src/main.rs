@@ -15,7 +15,31 @@ usage:
   aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post
   aaa-data generals <game dir>          each nation's generals and their special operations as tooltips show them";
 
+/// Prints the library's warnings, such as data blocks that don't read.
+struct Stderr;
+
+impl log::Log for Stderr {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Warn
+    }
+
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!(
+                "aaa-data: {}: {}",
+                record.level().as_str().to_lowercase(),
+                record.args()
+            );
+        }
+    }
+
+    fn flush(&self) {}
+}
+
 fn main() -> ExitCode {
+    if log::set_logger(&Stderr).is_ok() {
+        log::set_max_level(log::LevelFilter::Warn);
+    }
     let args: Vec<String> = std::env::args().skip(1).collect();
     let result = match args
         .iter()
