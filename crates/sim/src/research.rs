@@ -280,7 +280,7 @@ mod tests {
 
     use aaa_map::Id;
 
-    use crate::{Command, Commission, Notice, Refused, Researchable, World};
+    use crate::{Command, Notice, Refused, Researchable, World};
 
     /// The economy's HQ listing two technologies for its side, 60 and 100
     /// money, the second needing the first and a depot.
@@ -359,14 +359,7 @@ mod tests {
     #[test]
     fn research_waits_its_turn_in_the_queue_and_is_refunded_if_called_off() {
         let mut w = laboratory();
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 1.0)),
-            },
-        )
-        .unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
         w.apply(1, research("tech_heavy")).unwrap();
         assert_eq!(w.stockpile(1), 190.0);
         assert_eq!(w.buildings[0].queue[1].template().as_str(), "tech_heavy");
@@ -483,10 +476,7 @@ mod tests {
         // Nor is a barred recruit offered.
         let lacking = w.lacks(1, 0, &truck());
         assert!(lacking.barred && lacking.hidden && !lacking.is_empty());
-        let order = Command::Commission {
-            building: 0,
-            commission: Box::new(Commission::new(truck(), 1.0)),
-        };
+        let order = commission(0, "truck");
         assert_eq!(w.apply(1, order), Err(Refused::Lacking));
         // Only for the side barred.
         w.grant(2, Id::from("tech_heavy"));

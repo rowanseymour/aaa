@@ -894,6 +894,15 @@ fn prepare(
         aaa_map::Operation::Enchant { .. } => None,
     });
     let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
+    let recruit_lists = game.recruit_lists();
+    let recruited: HashSet<&aaa_map::Id> = recruit_lists.values().flatten().collect();
+    let raisable = (recruited.into_iter())
+        .filter_map(|t| {
+            let raised = raising.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]);
+            let raised = raised.map_err(|e| debug!("can't commission {t}: {e}"));
+            Some((t.clone(), raised.ok()?))
+        })
+        .collect();
     let experience = game.experience_rules();
     let mut rules = aaa_sim::Rules {
         terrain_rules: game.terrain_rules(),
@@ -913,7 +922,9 @@ fn prepare(
         decays: game.decays(),
         logistics: game.logistics(),
         resupply_rates: game.resupply_rates(),
-        recruit_lists: game.recruit_lists(),
+        recruit_lists,
+        raisable,
+        recruit_times: game.recruit_times(),
         research_lists: game.research_lists(),
         experience_per_second: experience.per_second,
         sights: game.sights(),

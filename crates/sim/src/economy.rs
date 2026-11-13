@@ -375,7 +375,7 @@ mod tests {
 
     use aaa_map::Id;
 
-    use crate::{Change, Command, Commission, Limit, Notice, Pause, Refused, State, World};
+    use crate::{Change, Command, Limit, Notice, Pause, Refused, State, World};
 
     #[test]
     fn sides_earn_what_they_own_produces_less_its_upkeep() {
@@ -474,15 +474,8 @@ mod tests {
     #[test]
     fn commissions_are_paid_for_up_front_and_refunded_if_called_off() {
         let mut w = economy();
-        let order = |w: &mut World| {
-            w.apply(
-                1,
-                Command::Commission {
-                    building: 0,
-                    commission: Box::new(Commission::new(truck(), 10.0)),
-                },
-            )
-        };
+        w.rules.recruit_times.insert(Id::from("truck"), 10.0);
+        let order = |w: &mut World| w.apply(1, commission(0, "truck"));
         order(&mut w).unwrap();
         order(&mut w).unwrap();
         assert_eq!(w.stockpile(1), 0.0);
@@ -536,13 +529,8 @@ mod tests {
     fn commissions_wait_at_the_front_of_the_queue_for_room_under_limits() {
         let mut w = economy();
         let company = raised_company(&mut w, 1);
-        // An order can't say it has its share of the limits already.
-        let mut commission = Commission::new(company, 1.0);
-        commission.held = true;
-        let order = Command::Commission {
-            building: 0,
-            commission: Box::new(commission),
-        };
+        recruits(&mut w, "house", company, 1.0);
+        let order = commission(0, "company");
         // Accepted and paid for though there's no room.
         w.apply(1, order).unwrap();
         for _ in 0..20 {
@@ -582,10 +570,7 @@ mod tests {
     #[test]
     fn disabled_buildings_hold_their_queues() {
         let mut w = economy();
-        let order = Command::Commission {
-            building: 0,
-            commission: Box::new(Commission::new(truck(), 1.0)),
-        };
+        let order = commission(0, "truck");
         w.apply(1, order).unwrap();
         w.tick();
         w.buildings[0].state = State::Disabled;
@@ -606,10 +591,8 @@ mod tests {
     #[test]
     fn queues_are_refunded_to_their_owner_when_their_building_changes_hands() {
         let mut w = economy();
-        let order = Command::Commission {
-            building: 0,
-            commission: Box::new(Commission::new(truck(), 10.0)),
-        };
+        w.rules.recruit_times.insert(Id::from("truck"), 10.0);
+        let order = commission(0, "truck");
         w.apply(1, order).unwrap();
         assert_eq!(w.stockpile(1), 250.0);
         w.change_hands(0, 2);

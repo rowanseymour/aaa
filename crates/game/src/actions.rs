@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use aaa_data::{GameData, Id};
 use aaa_map::Regiment;
 use aaa_render::textures;
-use aaa_sim::{Commission, Lacking, Researchable};
+use aaa_sim::{Lacking, Researchable};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
@@ -386,7 +386,6 @@ struct Recruit {
     economy: Vec<Row>,
     /// What it raises; `None` for what can't be raised yet, shown dimmed.
     regiment: Option<Regiment>,
-    seconds: f32,
 }
 
 /// One of the technologies a building researches, as its button shows.
@@ -682,11 +681,7 @@ pub fn spawn(
             .iter()
             .map(|id| {
                 let listing = listings.get(id);
-                let regiment = raising
-                    .0
-                    .raise(id.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])
-                    .map_err(|e| debug!("can't commission {id}: {e}"))
-                    .ok();
+                let regiment = sim.0.rules().raisable.get(id).cloned();
                 let economy = listing.map_or_else(Vec::new, |l| {
                     [
                         (&cost, &l.cost, false),
@@ -717,7 +712,6 @@ pub fn spawn(
                     },
                     economy,
                     regiment,
-                    seconds: raising.0.recruit_time(id.as_str()),
                 }
             })
             .collect();
@@ -1411,14 +1405,15 @@ impl Presser<'_, '_> {
                 let Some(recruit) = self.looks.menu(sim, Some(b)).get(i) else {
                     return;
                 };
-                if let Some(regiment) = &recruit.regiment {
+                if recruit.regiment.is_some() {
+                    let template = aaa_map::Id::from(recruit.id.as_str());
                     let command = aaa_sim::Command::Commission {
                         building: b,
-                        commission: Box::new(Commission::new(regiment.clone(), recruit.seconds)),
+                        template: template.clone(),
                     };
                     let given = self.orders.give(sim, player, command);
                     if let Err(e) = given {
-                        debug!("can't commission {}: {e:?}", regiment.template);
+                        debug!("can't commission {template}: {e:?}");
                         // As the game does, it says nothing for what's not
                         // offered.
                         if e != aaa_sim::Refused::Lacking {

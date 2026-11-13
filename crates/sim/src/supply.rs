@@ -598,8 +598,8 @@ mod tests {
     use aaa_map::{DeployPoints, Domain, Id, Pathing, Shape, Weapon};
 
     use crate::{
-        Command, Commission, Ledger, Notice, Pause, Piece, Refused, Regiment, Relation, State,
-        Supplying, Target, World, deploy_point,
+        Command, Ledger, Notice, Pause, Piece, Refused, Regiment, Relation, State, Supplying,
+        Target, World, deploy_point,
     };
 
     /// Player 1's Corps HQ at 20,20 and two depots east of it, the first
@@ -763,10 +763,8 @@ mod tests {
         };
         w.rules.economies.insert(Id::from("start_loc"), room);
         w.holdings.push((1, "start_loc".into()));
-        let order = Command::Commission {
-            building: 1,
-            commission: Box::new(Commission::new(truck(), 1.0)),
-        };
+        recruits(&mut w, "depot", truck(), 1.0);
+        let order = commission(1, "truck");
         w.apply(1, order).unwrap();
         run(&mut w, 3.0);
         // The truck's 12, not the depot's 25, on top of the HQ's 25; its
@@ -994,17 +992,15 @@ mod tests {
             m.template = "soldier".into();
             m.fighter = Some(soldier(Vec::new()));
         }
-        let order = |c: &aaa_map::Regiment| Command::Commission {
-            building: b,
-            commission: Box::new(Commission::new(c.clone(), 1.0)),
-        };
+        recruits(&mut w, "depot", company.clone(), 1.0);
+        let order = || commission(b, "company");
         // One place is the detached company's to take; the other's held
         // from the order on.
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
-        w.apply(1, order(&company)).unwrap();
-        assert_eq!(w.check(1, &order(&company)), Err(Refused::Full));
+        w.apply(1, order()).unwrap();
+        assert_eq!(w.check(1, &order()), Err(Refused::Full));
         let paid = w.stockpile(1);
-        assert_eq!(w.apply(1, order(&company)), Err(Refused::Full));
+        assert_eq!(w.apply(1, order()), Err(Refused::Full));
         assert_eq!(w.stockpile(1), paid);
         run(&mut w, 1.5);
         let r = w.regiments.len() - 1;

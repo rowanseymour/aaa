@@ -37,11 +37,8 @@ impl World {
             Command::Pack { building } => self.may_pack(player, building).map(drop),
             Command::Commission {
                 building,
-                ref commission,
-            } => match &commission.work {
-                Work::Raise(regiment) => self.may_commission(player, building, regiment),
-                Work::Research(_) => Err(Refused::Unable),
-            },
+                ref template,
+            } => self.may_commission(player, building, template).map(drop),
             Command::Research {
                 building,
                 ref technology,
@@ -82,10 +79,9 @@ impl World {
                 formation,
             } => self.set_formation(player, regiment, formation)?,
             Command::Pack { building } => self.order_pack(player, building)?,
-            Command::Commission {
-                building,
-                commission,
-            } => self.commission(player, building, *commission)?,
+            Command::Commission { building, template } => {
+                self.commission(player, building, &template)?
+            }
             Command::Research {
                 building,
                 technology,
@@ -221,16 +217,22 @@ impl World {
         Ok((packs.seconds / TICK).round() as u64)
     }
 
+    /// The regiment of `template` the building would raise.
     fn may_commission(
         &self,
         player: u32,
         building: usize,
-        regiment: &aaa_map::Regiment,
-    ) -> Result<(), Refused> {
+        template: &Id,
+    ) -> Result<&aaa_map::Regiment, Refused> {
         let b = self.standing_for(player, building)?;
         if b.deploy.is_none() || b.busy() {
             return Err(Refused::Unable);
         }
+        let listed =
+            (self.rules.recruit_lists.get(&b.template)).is_some_and(|l| l.contains(template));
+        let regiment = (self.rules.raisable.get(template))
+            .filter(|_| listed)
+            .ok_or(Refused::Unable)?;
         if !self.lacks(player, building, regiment).is_empty() {
             return Err(Refused::Lacking);
         }
@@ -243,7 +245,7 @@ impl World {
         if self.cost(regiment) > self.stockpile(player) {
             return Err(Refused::Unaffordable);
         }
-        Ok(())
+        Ok(regiment)
     }
 
     fn may_rally(&self, player: u32, building: usize) -> Result<(), Refused> {
@@ -406,14 +408,14 @@ impl World {
         &mut self,
         player: u32,
         building: usize,
-        mut commission: Commission,
+        template: &Id,
     ) -> Result<(), Refused> {
-        let Work::Raise(regiment) = &commission.work else {
-            return Err(Refused::Unable);
-        };
-        self.may_commission(player, building, regiment)?;
-        commission.paid = self.cost(regiment);
-        commission.held = false;
+        let regiment = self.may_commission(player, building, template)?;
+        let paid = self.cost(regiment);
+        let seconds = self.rules.recruit_times.get(template).copied();
+        let work = Work::Raise(Box::new(regiment.clone()));
+        let mut commission = Commission::of(work, seconds.unwrap_or(0.0));
+        commission.paid = paid;
         let left = self.stockpile(player) - commission.paid;
         self.set_stockpile(player, left);
         self.enqueue(building, commission);
@@ -467,7 +469,7 @@ mod tests {
 
     use aaa_map::{Domain, Pathing};
 
-    use crate::{Command, Commission, NotYours, Notice, Piece, Refused};
+    use crate::{Command, NotYours, Notice, Piece, Refused};
 
     #[test]
     fn a_new_order_forgets_what_the_regiment_was_told_before() {
@@ -578,7 +580,6 @@ mod tests {
     #[test]
     fn commands_are_refused_as_checked_without_being_carried_out() {
         let mut w = headquarters();
-        let truck = Commission::new(truck(), 1.0);
         let refused = [
             (
                 2,
@@ -600,15 +601,14 @@ mod tests {
             // What isn't there is refused, not a panic.
             (1, Command::Stop { regiment: 9 }, Refused::NotYours),
             (1, Command::Pack { building: 9 }, Refused::NotYours),
+            // Only what the building recruits.
+            (1, commission(0, "company"), Refused::Unable),
         ];
         for (player, command, why) in refused {
             assert_eq!(w.check(player, &command), Err(why), "{command:?}");
             assert_eq!(w.apply(player, command.clone()), Err(why), "{command:?}");
         }
-        let command = Command::Commission {
-            building: 0,
-            commission: Box::new(truck),
-        };
+        let command = commission(0, "truck");
         assert_eq!(w.check(1, &command), Ok(()));
         // Checking alone changes nothing.
         assert!(w.buildings[0].queue.is_empty());

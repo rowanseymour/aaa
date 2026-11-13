@@ -52,6 +52,12 @@ pub struct Rules {
     /// The regiment templates each building template recruits, which are
     /// those that can attach to it as an HQ.
     pub recruit_lists: HashMap<Id, Vec<Id>>,
+    /// What those regiment templates raise, by template, each standing
+    /// anywhere and owned by nobody.
+    pub raisable: HashMap<Id, aaa_map::Regiment>,
+    /// Seconds commissioning a regiment of each template takes, by
+    /// template.
+    pub recruit_times: HashMap<Id, f32>,
     /// What each template that researches lists, in its menu's order, by
     /// template id.
     pub research_lists: HashMap<Id, Vec<aaa_map::Research>>,
@@ -86,6 +92,8 @@ impl Default for Rules {
             logistics: HashMap::new(),
             resupply_rates: HashMap::new(),
             recruit_lists: HashMap::new(),
+            raisable: HashMap::new(),
+            recruit_times: HashMap::new(),
             research_lists: HashMap::new(),
             experience_per_second: 0.0,
             sights: HashMap::new(),
