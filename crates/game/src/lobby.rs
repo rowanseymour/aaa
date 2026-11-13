@@ -906,6 +906,7 @@ mod tests {
             name: id.to_uppercase(),
             placeholders: HashMap::new(),
             generals: Vec::new(),
+            music: None,
         };
         let all = [nation("nation_usa"), nation("nation_ger")];
         let mut players = players();
@@ -934,6 +935,7 @@ mod tests {
             name: id.into(),
             placeholders: HashMap::new(),
             generals: generals.iter().map(|g| general(g)).collect(),
+            music: None,
         };
         let usa = nation("nation_usa", &["patton", "patton_tutorial", "nimitz"]);
         let nations = HashMap::from([

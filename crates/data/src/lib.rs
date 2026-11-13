@@ -44,6 +44,8 @@ pub struct Nation {
     pub placeholders: HashMap<Id, Id>,
     /// Those who may lead its sides.
     pub generals: Vec<General>,
+    /// The music its player hears in a match.
+    pub music: Option<Id>,
 }
 
 /// A general who leads a side.
@@ -785,6 +787,27 @@ pub struct NationBanners {
     /// The archive paths of the badges a nation's divisions wear, in the
     /// order HQs number them.
     pub badges: HashMap<Id, Vec<String>>,
+}
+
+/// What music plays when, and how loud, beyond what each music entry says.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MusicSettings {
+    /// The music that plays nothing, for stopping music.
+    pub silent: Id,
+    /// The match music of someone watching rather than playing.
+    pub observer: Option<Id>,
+    /// What the main menu asks for.
+    pub menu: Option<Id>,
+    /// The options' Main and Music volume, as they start.
+    pub main_volume: f32,
+    pub music_volume: f32,
+    /// What music falls to while audio that fades it plays, as a fraction
+    /// of its level.
+    pub duck_volume: f32,
+    /// Seconds music takes to fall or recover.
+    pub duck_time: f32,
+    /// Seconds after the last audio that fades it that music recovers.
+    pub recover_after: f32,
 }
 
 /// How the supply border is drawn.
@@ -1884,6 +1907,9 @@ impl GameData {
                     generals: (n.factions.as_deref().unwrap_or("").split(','))
                         .filter_map(|id| generals.get(&Id::from(id.trim())).cloned())
                         .collect(),
+                    music: n
+                        .game_music
+                        .filter(|m| !m.as_str().eq_ignore_ascii_case("null")),
                 })
             })
             .collect();
@@ -1930,17 +1956,22 @@ impl GameData {
         self.svars().iter().find_map(|v| v.building_padding_meters)
     }
 
-    /// How the supply border is drawn; green and thin where the settings
-    /// don't say.
-    pub fn supply_border(&mut self) -> SupplyBorder {
-        // Not in the load lists; the game's own settings take precedence
-        // over the engine's.
+    /// The game's settings for how it looks and sounds, the game's own
+    /// before the engine's.
+    fn avars(&mut self) -> Vec<defs::AVars> {
+        // Not in the load lists.
         let files: Vec<(String, tgi::Parsed)> = ["AVars_AA.tgi", "AVars.tgi"]
             .into_iter()
             .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
             .collect();
         let files = scoped(&files);
-        let vars: Vec<defs::AVars> = files.iter().flat_map(|f| f.read("Vars")).collect();
+        files.iter().flat_map(|f| f.read("Vars")).collect()
+    }
+
+    /// How the supply border is drawn; green and thin where the settings
+    /// don't say.
+    pub fn supply_border(&mut self) -> SupplyBorder {
+        let vars = self.avars();
         SupplyBorder {
             colour: (vars.iter())
                 .find_map(|v| v.view_zone_friendly_supply_color)
@@ -1952,6 +1983,37 @@ impl GameData {
             block: (vars.iter())
                 .find_map(|v| v.terrain_block_size)
                 .unwrap_or(8.0),
+        }
+    }
+
+    /// What music plays when, and how loud.
+    pub fn music_settings(&mut self) -> MusicSettings {
+        let vars = self.avars();
+        let uvars = self.uvars();
+        let var =
+            |of: fn(&defs::AVars) -> Option<f32>, or: f32| vars.iter().find_map(of).unwrap_or(or);
+        let id = |of: fn(&defs::AVars) -> Option<Id>| vars.iter().find_map(of);
+        let menu = (self.read("UI/Menus/main.tgi")).and_then(|b| {
+            let parsed = tgi::parse_bytes(&b);
+            let block = parsed.root.blocks_of("MainMenuInterface").next()?;
+            tgi::from_block::<defs::Interface>(block)
+                .ok()?
+                .interface_music
+        });
+        MusicSettings {
+            silent: id(|v| v.audio_music_silent.clone())
+                .unwrap_or_else(|| Id::from("music_silent")),
+            observer: id(|v| v.observer_game_music.clone()),
+            menu,
+            main_volume: (uvars.iter())
+                .find_map(|v| v.audio_main_volume)
+                .unwrap_or(0.8),
+            music_volume: (uvars.iter())
+                .find_map(|v| v.audio_music_volume)
+                .unwrap_or(0.7),
+            duck_volume: var(|v| v.audio_fade_volume, 0.5),
+            duck_time: var(|v| v.audio_fade_time, 1.0),
+            recover_after: var(|v| v.audio_recover_from_fade_time, 2.0),
         }
     }
 
@@ -1967,17 +2029,18 @@ impl GameData {
 
     /// One of the interface's settings.
     fn interface_setting<T>(&mut self, of: impl Fn(defs::UVars) -> Option<T>) -> Option<T> {
-        // Not in the load lists; the game's own settings take precedence
-        // over the engine's.
+        self.uvars().into_iter().find_map(of)
+    }
+
+    /// The interface's settings, the game's own before the engine's.
+    fn uvars(&mut self) -> Vec<defs::UVars> {
+        // Not in the load lists.
         let files: Vec<(String, tgi::Parsed)> = ["UVars_AA.tgi", "UVars.tgi"]
             .into_iter()
             .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
             .collect();
         let files = scoped(&files);
-        files
-            .iter()
-            .flat_map(|f| f.read::<defs::UVars>("Vars"))
-            .find_map(of)
+        files.iter().flat_map(|f| f.read("Vars")).collect()
     }
 
     /// The orders the player can give, in the order the files list them.
@@ -2173,14 +2236,25 @@ impl GameData {
             .collect()
     }
 
-    /// Every sound, speech and music, by id.
+    /// Every sound, speech and music, by id. Streamed audio, music and
+    /// speech, plays a stand-in, if the settings name one, for each file the
+    /// archives don't have.
     pub fn audio(&mut self) -> HashMap<Id, Audio> {
+        let stand_in = (self.avars().into_iter())
+            .find_map(|v| v.default_audio_streaming_resource)
+            .and_then(|p| self.path(&p.replace('\\', "/")));
         let files = self.parse_tgis(|n| n.starts_with("audio/") || n.starts_with("templates/"));
         let files = scoped(&files);
         files
             .iter()
             .flat_map(|f| f.read::<defs::Audio>("Audio"))
-            .filter_map(|a| Some((a.ids.clone()?, audio(&a, |p| self.path(p))?)))
+            .filter_map(|a| {
+                let streamed = (a.category.as_deref()).is_some_and(|c| {
+                    c.eq_ignore_ascii_case("MUSIC") || c.eq_ignore_ascii_case("SPEECH")
+                });
+                let stand_in = stand_in.as_deref().filter(|_| streamed);
+                Some((a.ids.clone()?, audio(&a, |p| self.path(p), stand_in)?))
+            })
             .collect()
     }
 
@@ -2855,7 +2929,12 @@ fn cue(f: &defs::Fxc) -> Option<Cue> {
 
 /// An audio definition with its files found by `find`, which gives an
 /// archive path as the archives spell it.
-fn audio(a: &defs::Audio, find: impl Fn(&str) -> Option<String>) -> Option<Audio> {
+/// Each file the archives don't have plays `stand_in`, where there's one.
+fn audio(
+    a: &defs::Audio,
+    find: impl Fn(&str) -> Option<String>,
+    stand_in: Option<&str>,
+) -> Option<Audio> {
     let category = match a.category.as_deref()?.to_ascii_uppercase().as_str() {
         "SOUND" => AudioCategory::Sound,
         "SPEECH" => AudioCategory::Speech,
@@ -2868,7 +2947,10 @@ fn audio(a: &defs::Audio, find: impl Fn(&str) -> Option<String>) -> Option<Audio
         for file in audio_files(list.as_deref()) {
             match find(&audio_path(file)) {
                 Some(p) => found.push(p),
-                None => missing.push(file.to_string()),
+                None => {
+                    missing.push(file.to_string());
+                    found.extend(stand_in.map(str::to_string));
+                }
             }
         }
         found
@@ -3700,11 +3782,18 @@ mod tests {
                 .find(|a| a.eq_ignore_ascii_case(p))
                 .map(|a| a.to_string())
         };
+        let first = parsed.root.blocks_of("Audio").next().unwrap();
+        let stood_in = audio(&templates.deserialize(first).unwrap(), find, Some("x.wav")).unwrap();
+        assert_eq!(stood_in.files.len(), archive.len() + 1);
+        assert!(stood_in.files.iter().any(|f| f == "x.wav"));
+        assert_eq!(stood_in.missing, ["Sounds/gone.wav"]);
+
         let mut blocks = parsed.root.blocks_of("Audio");
         let mut next = || {
             audio(
                 &templates.deserialize(blocks.next().unwrap()).unwrap(),
                 find,
+                None,
             )
         };
 
