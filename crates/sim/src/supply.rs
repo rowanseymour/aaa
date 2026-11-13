@@ -64,7 +64,7 @@ impl World {
     /// How the building at `b` gives supply, if it does.
     pub fn supply_of(&self, b: usize) -> Option<Supply> {
         let template = self.buildings[b].template.as_str();
-        self.supplies.get(&Id::from(template)).copied()
+        self.rules.supplies.get(&Id::from(template)).copied()
     }
 
     /// Whether a building that passes supply on has none to pass: nothing
@@ -101,14 +101,14 @@ impl World {
         template: &str,
         held: &'a [Held],
     ) -> impl Iterator<Item = &'a SupplyEffect> {
-        let kind = self.kinds.get(&Id::from(template));
+        let kind = self.rules.kinds.get(&Id::from(template));
         let on = move |e: &&SupplyEffect| {
             let has = |p| kind.is_some_and(|k| k.properties.contains(p));
             e.requires.iter().all(has)
         };
         let technologies = self.technologies.get(&owner).into_iter().flatten();
         let timed = held.iter().map(|h| &h.property);
-        let of = |p| self.supply_effects.get(p);
+        let of = |p| self.rules.supply_effects.get(p);
         (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
     }
 
@@ -141,7 +141,7 @@ impl World {
     /// for `player`, aimed at `at`. What using one takes is left to
     /// whoever asks.
     pub fn operate(&mut self, player: u32, operation: &Id, at: [f32; 2]) -> Result<(), Refused> {
-        match self.operations.get(operation).cloned() {
+        match self.rules.operations.get(operation).cloned() {
             Some(Operation::Enchant {
                 targets,
                 area,
@@ -154,7 +154,7 @@ impl World {
                     .filter(|&r| !self.destroyed(r))
                     .filter_map(|r| {
                         let regiment = &self.regiments[r];
-                        let kind = self.kinds.get(&Id::from(regiment.template.as_str()));
+                        let kind = self.rules.kinds.get(&Id::from(regiment.template.as_str()));
                         let side = self.standing_flag(player, regiment.owner);
                         let flags = kind.into_iter().flat_map(|k| &k.flags);
                         let d = distance(at, self.leader_position(r));
@@ -173,7 +173,12 @@ impl World {
                 }
             }
             Some(Operation::Drop(template)) => {
-                let mut dropped = self.drops.get(&template).cloned().ok_or(Refused::Unable)?;
+                let mut dropped = self
+                    .rules
+                    .drops
+                    .get(&template)
+                    .cloned()
+                    .ok_or(Refused::Unable)?;
                 let spot = Obstacle {
                     position: at,
                     facing: dropped.facing,
@@ -259,7 +264,7 @@ impl World {
         };
         if supply.relay && beat && !busy {
             stockpile = match connected {
-                true => (stockpile + self.supply_rules.recharge).min(supply.stockpile_max),
+                true => (stockpile + self.rules.supply_rules.recharge).min(supply.stockpile_max),
                 false => stockpile - 1.0,
             }
             .max(0.0);
@@ -390,7 +395,7 @@ impl World {
     /// weapon takes `recharge` seconds between shots.
     pub(crate) fn shell(&mut self, r: usize, from: Target, recharge: f32) {
         let by = self.enemy(from);
-        let (ticks, timeout) = (self.ticks, self.supply_rules.bombard_timeout);
+        let (ticks, timeout) = (self.ticks, self.rules.supply_rules.bombard_timeout);
         let regiment = &mut self.regiments[r];
         match regiment.bombarded.iter_mut().find(|b| b.by == by) {
             Some(known) => known.tick = ticks,
@@ -431,7 +436,7 @@ impl World {
         let regiment = &self.regiments[r];
         let effects = self.effects(regiment.owner, &regiment.template, &regiment.properties);
         let added: f32 = effects.map(|e| e.resupply).sum();
-        (1.0 + added).max(self.supply_rules.multiply_floor)
+        (1.0 + added).max(self.rules.supply_rules.multiply_floor)
     }
 
     /// The morale a second being in supply adds to what the regiment at
@@ -439,7 +444,7 @@ impl World {
     /// Supply does nothing else to morale.
     pub fn morale_bonus(&self, r: usize) -> f32 {
         match self.regiments[r].in_supply {
-            true => self.supply_rules.morale_bonus,
+            true => self.rules.supply_rules.morale_bonus,
             false => 0.0,
         }
     }
@@ -501,7 +506,10 @@ impl World {
         let regiment = &self.regiments[r];
         let rate = |u: usize| {
             let unit = &self.units[u];
-            let rate = self.resupply_rates.get(&Id::from(unit.template.as_str()));
+            let rate = self
+                .rules
+                .resupply_rates
+                .get(&Id::from(unit.template.as_str()));
             let health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
             (rate.copied().unwrap_or(0.0) * pace.max(0.0), health)
         };
@@ -517,8 +525,10 @@ impl World {
         let places: Vec<usize> = (regiment.leader.into_iter())
             .chain((0..regiment.units.len()).filter(|&p| Some(p) != regiment.leader))
             .collect();
-        let zone =
-            (self.pathing).zone(self.leader_position(r), regiment.control(&self.guard_rules));
+        let zone = (self.pathing).zone(
+            self.leader_position(r),
+            regiment.control(&self.rules.guard_rules),
+        );
         let near = |&p: &usize| {
             Some(p) == regiment.leader || self.in_zone(&zone, Target::Unit(regiment.units[p]))
         };
@@ -547,12 +557,12 @@ impl World {
         let offsets = &regiment.formations[regiment.current_formation()].offsets;
         let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
         let recruits = |b: &&Building| {
-            let list = self.recruit_lists.get(&Id::from(b.template.as_str()));
+            let list = self.rules.recruit_lists.get(&Id::from(b.template.as_str()));
             b.standing()
                 && !b.busy()
                 && self.shares_supply(regiment.owner, b.owner)
                 && list.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
-                && distance(at, b.position) < regiment.control(&self.guard_rules)
+                && distance(at, b.position) < regiment.control(&self.rules.guard_rules)
         };
         let nearest = (self.buildings.iter().filter(recruits))
             .min_by(|a, b| distance(at, a.position).total_cmp(&distance(at, b.position)));
@@ -621,5 +631,713 @@ impl World {
                 self.lost_member(u);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::testing::*;
+
+    use aaa_map::{DeployPoints, Domain, Id, Pathing, Shape, Weapon};
+
+    use crate::{
+        Command, Commission, Enemy, Ledger, Notice, Pause, Refused, Regiment, Relation, State,
+        Supplying, Target, World, deploy_point,
+    };
+
+    /// Player 1's Corps HQ at 20,20 and two depots east of it, the first
+    /// in the HQ's zone and the second only in the first's, each reaching
+    /// 20 and the depots stocking up to 3 seconds.
+    fn chain() -> World {
+        let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+        let mut corps = building(5, 1, [20.0, 20.0]);
+        corps.template = "corps".into();
+        let depot = |id, x| {
+            let mut depot = building(id, 1, [x, 20.0]);
+            depot.template = "depot".into();
+            depot
+        };
+        w.add_buildings(&[depot(7, 50.0), depot(6, 34.0), corps]);
+        w.rules
+            .supplies
+            .insert(Id::from("corps"), supply(20.0, false, 0.0));
+        w.rules
+            .supplies
+            .insert(Id::from("depot"), supply(20.0, true, 3.0));
+        w
+    }
+
+    /// [`division`] with a second company at 26,28 (regiment 2), both
+    /// infantry, and an operation that resupplies the nearest infantry
+    /// regiment within 15 for 10 seconds.
+    fn resupplied() -> (World, Id) {
+        let mut w = division();
+        let mut c = raised_company(&mut w, 1);
+        c.renumber(80);
+        c.place([26.0, 28.0], [0.0, 1.0]);
+        w.add_regiment(&c);
+        let kind = aaa_map::Kind {
+            properties: Vec::new(),
+            flags: vec![Id::from("org_infantry")],
+            soft: Shape::Circle { radius: 1.0 },
+        };
+        w.rules.kinds.insert(Id::from("company"), kind);
+        w.rules
+            .supply_effects
+            .insert(Id::from("resupplied"), effect(0.0, 0.25, true, &[]));
+        let operation = aaa_map::Operation::Enchant {
+            targets: aaa_map::Targets {
+                required: ["FRIEND", "ORGANIZATION", "ORG_INFANTRY"]
+                    .map(Id::from)
+                    .to_vec(),
+                excluded: Vec::new(),
+            },
+            area: 15.0,
+            max_targets: 1,
+            property: Id::from("resupplied"),
+            seconds: 10.0,
+        };
+        w.rules.operations.insert(Id::from("resupply"), operation);
+        (w, Id::from("resupply"))
+    }
+
+    #[test]
+    fn relays_pass_supply_on_down_a_chain_from_a_source() {
+        let mut w = chain();
+        // At once, though the far depot comes first.
+        w.tick();
+        assert!(w.buildings.iter().all(|b| b.supply.zone.is_some()));
+        assert!(w.buildings[0].supply.connected && w.buildings[1].supply.connected);
+        assert!(w.supplied(1, [64.0, 20.0]));
+        assert!(!w.supplied(1, [20.0, 64.0]));
+        // Allies share it, enemies don't.
+        assert_eq!(w.sides.relation(1, 3), Relation::Ally);
+        assert!(w.supplied(3, [64.0, 20.0]));
+        assert!(!w.supplied(2, [64.0, 20.0]));
+    }
+
+    #[test]
+    fn relays_cut_off_live_on_their_stockpiles_but_pass_nothing_on() {
+        let mut w = chain();
+        run(&mut w, 5.0);
+        assert_eq!(w.buildings[0].supply.stockpile, 3.0);
+        w.buildings[2].state = State::Disabled;
+        run(&mut w, 1.5);
+        assert!(w.buildings[2].supply.zone.is_none());
+        // Both still supply what's around them, the far one cut off
+        // though the near one's zone still covers it.
+        for b in 0..2 {
+            let s = &w.buildings[b].supply;
+            assert!(!s.connected && s.zone.is_some() && s.stockpile > 0.0);
+            assert!(!w.out_of_supply(b));
+        }
+        run(&mut w, 3.0);
+        for b in 0..2 {
+            assert!(w.out_of_supply(b) && w.buildings[b].supply.zone.is_none());
+        }
+        assert!(!w.supplied(1, [64.0, 20.0]));
+        w.buildings[2].state = State::Standing;
+        run(&mut w, 3.0);
+        assert!(w.buildings.iter().all(|b| b.supply.zone.is_some()));
+        assert!(!w.out_of_supply(0));
+    }
+
+    #[test]
+    fn relays_dont_keep_each_other_going() {
+        let mut w = chain();
+        w.buildings.pop();
+        run(&mut w, 2.0);
+        assert!(w.out_of_supply(0) && w.out_of_supply(1));
+        assert!(!w.supplied(1, [34.0, 20.0]));
+    }
+
+    #[test]
+    fn captured_relays_connect_on_their_new_side() {
+        let mut w = chain();
+        w.tick();
+        w.change_hands(1, 2);
+        w.tick();
+        // Player 2 has no source, and player 1's far depot has lost its
+        // link by its next look.
+        assert!(w.out_of_supply(1));
+        run(&mut w, 1.0);
+        assert!(!w.buildings[0].supply.connected);
+        assert!(!w.supplied(2, [34.0, 20.0]));
+    }
+
+    #[test]
+    fn cities_supply_only_while_their_side_outweighs_its_enemies_there() {
+        let mut centre = city()[0].clone();
+        centre.template = "centre".into();
+        let mut w = siege(&[centre]);
+        w.rules
+            .supplies
+            .insert(Id::from("centre"), supply(20.0, false, 0.0));
+        // Nobody's there.
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].supply.zone.is_none());
+        let to = |w: &mut World, x| {
+            let to = [x, 10.0];
+            w.apply(1, Command::Move { regiment: 0, to }).unwrap();
+            run(w, 15.0);
+        };
+        to(&mut w, 30.0);
+        assert_eq!(w.buildings[0].owner, 1);
+        assert!(w.supplied(1, [40.0, 20.0]));
+        to(&mut w, 10.0);
+        assert!(!w.supplied(1, [40.0, 20.0]));
+    }
+
+    #[test]
+    fn relays_out_of_supply_earn_as_packed_and_hold_their_queues() {
+        let mut w = economy();
+        w.rules.packing.insert("depot".into(), packs());
+        let mut depot = truck().unpacks.unwrap().building;
+        (depot.id, depot.owner, depot.position) = (41, 1, [50.0, 50.0]);
+        depot.obstacle.as_mut().unwrap().position = depot.position;
+        depot.deploy = w.buildings[0].deploy;
+        w.add_buildings(&[depot]);
+        w.rules
+            .supplies
+            .insert(Id::from("depot"), supply(20.0, true, 2.0));
+        let room = aaa_map::Economy {
+            production: amounts(&[("building_limit_provided", 20.0)]),
+            ..Default::default()
+        };
+        w.rules.economies.insert(Id::from("start_loc"), room);
+        w.holdings.push((1, "start_loc".into()));
+        let order = Command::Commission {
+            building: 1,
+            commission: Box::new(Commission::new(truck(), 1.0)),
+        };
+        w.apply(1, order).unwrap();
+        run(&mut w, 3.0);
+        // The truck's 12, not the depot's 25, on top of the HQ's 25; its
+        // upkeep is the same.
+        assert_eq!(w.building_ledger(1).production.get("money"), 12.0);
+        assert_eq!(w.balance(1).limits[1].used, 2.0);
+        assert_eq!(w.buildings[1].paused, Some(Pause::Supply));
+        assert_eq!(w.buildings[1].progress, 0);
+        let told = |n: &&Notice| {
+            let why = Pause::Supply;
+            matches!(n, Notice::Paused { building: 1, why: w, .. } if *w == why)
+        };
+        assert_eq!(w.notices.iter().filter(told).count(), 1);
+        // The HQ's zone reaching it puts it back to work.
+        w.rules
+            .supplies
+            .insert(Id::from("house"), supply(60.0, false, 0.0));
+        w.buildings[0].supply = Supplying::default();
+        run(&mut w, 3.0);
+        assert_eq!(w.building_ledger(1).production.get("money"), 25.0);
+        assert!(w.buildings[1].queue.is_empty());
+        // What can't pack earns in full without supply unless it needs it.
+        w.rules.packing.clear();
+        w.rules.supplies.remove(&Id::from("house"));
+        run(&mut w, 4.0);
+        assert!(w.out_of_supply(1));
+        assert_eq!(w.building_ledger(1).production.get("money"), 25.0);
+        w.rules
+            .economies
+            .get_mut(&Id::from("depot"))
+            .unwrap()
+            .supply_required = true;
+        assert_eq!(w.building_ledger(1).production.get("money"), 0.0);
+    }
+
+    #[test]
+    fn regiments_in_supply_heal_and_fill_their_ranks_one_at_a_time() {
+        let mut w = division();
+        let [a, b, c] = w.regiments[1].units[..] else {
+            panic!("three members");
+        };
+        w.units[a].health = 20.0;
+        w.units[b].health = 20.0;
+        w.units[c].die(0);
+        // Detached, so out of supply though it's in the HQ's zone.
+        run(&mut w, 2.0);
+        assert!(!w.regiments[1].in_supply);
+        assert_eq!(w.units[a].health, 20.0);
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        // Half its health a second: the leader first, then the next.
+        run(&mut w, 1.0);
+        assert!(w.regiments[1].in_supply);
+        assert_eq!((w.units[a].health, w.units[b].health), (70.0, 20.0));
+        run(&mut w, 1.0);
+        assert_eq!((w.units[a].health, w.units[b].health), (100.0, 20.0));
+        run(&mut w, 2.0);
+        assert_eq!(w.units[b].health, 100.0);
+        assert!(!w.units[c].alive());
+        // Then the one lost, back in its place once built up in full.
+        run(&mut w, 1.0);
+        assert_eq!(w.regiments[1].replacing[2], 50.0);
+        run(&mut w, 1.0);
+        assert!(w.units[c].alive());
+        assert_eq!(w.units[c].health, 100.0);
+        assert_eq!(w.regiments[1].replacing[2], 0.0);
+        let place = w.regiments[1].formations[0].offsets[2];
+        let place = aaa_map::from_local(w.regiments[1].position, [0.0, 1.0], place);
+        run(&mut w, 2.0);
+        assert!(near(w.units[c].position, place));
+        // Outside every zone it gets nothing.
+        w.units[a].health = 20.0;
+        for u in [a, b, c] {
+            w.units[u].position = [70.0, 70.0];
+        }
+        run(&mut w, 2.0);
+        assert!(!w.regiments[1].in_supply);
+        assert_eq!(w.units[a].health, 20.0);
+    }
+
+    #[test]
+    fn buildings_give_no_supply_but_earn_while_they_unpack() {
+        let mut w = division();
+        w.rules
+            .supplies
+            .insert(Id::from("depot"), supply(20.0, true, 30.0));
+        let hq = Command::Unpack {
+            regiment: 0,
+            at: [30.0, 40.0],
+            facing: NORTH,
+        };
+        w.apply(1, hq).unwrap();
+        while w.regiments[0].unpacked_into.is_none() {
+            w.tick();
+        }
+        let b = w.regiments[0].unpacked_into.unwrap();
+        run(&mut w, 1.0);
+        assert!(w.buildings[b].busy());
+        assert!(w.buildings[b].supply.zone.is_none());
+        // In the house's zone, at its own rate, not its truck's.
+        assert_eq!(w.building_ledger(b).production.get("money"), 25.0);
+        // Its zone comes the tick it's done, and goes with its stockpile
+        // the tick it starts to pack.
+        while w.buildings[b].busy() {
+            assert!(w.buildings[b].supply.zone.is_none());
+            w.tick();
+        }
+        w.tick();
+        assert!(w.buildings[b].supply.zone.is_some());
+        run(&mut w, 5.0);
+        assert!(w.buildings[b].supply.stockpile > 0.0);
+        w.buildings[b].packing = Some((w.ticks, w.ticks + 50));
+        w.tick();
+        assert!(w.buildings[b].supply.zone.is_none());
+        assert_eq!(w.buildings[b].supply.stockpile, 0.0);
+    }
+
+    #[test]
+    fn replacements_leave_a_building_by_its_deployment_point() {
+        let mut w = division();
+        // The house recruits its kind, 6 to its left, within its reach.
+        w.rules
+            .recruit_lists
+            .insert(Id::from("house"), vec![Id::from("company")]);
+        w.buildings[0].deploy = Some(DeployPoints {
+            creation: [0.0, 0.0],
+            deployment: [-6.0, 0.0],
+        });
+        let lost = w.regiments[1].units[2];
+        w.units[lost].die(0);
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        while !w.units[lost].alive() {
+            w.tick();
+        }
+        let b = &w.buildings[0];
+        let out = deploy_point(b.position, b.facing, [-6.0, 0.0]);
+        assert!(near(w.units[lost].position, b.position));
+        assert_eq!(w.units[lost].path.last(), Some(&out));
+        assert!(w.units[lost].path.len() > 1);
+    }
+
+    #[test]
+    fn buildings_engage_only_what_their_weapons_target() {
+        let mut w = division();
+        w.buildings[0].owner = 2;
+        w.buildings[0].noticed.push(Enemy::Regiment(1));
+        assert!(!w.engaged_by(1));
+        let member = w.regiments[1].units[0];
+        w.buildings[0].target = Some(Target::Unit(member));
+        assert!(w.engaged_by(1));
+    }
+
+    #[test]
+    fn regiments_a_map_has_short_of_members_fill_up_too() {
+        let mut w = division();
+        let mut c = raised_company(&mut w, 1);
+        c.renumber(80);
+        c.members[2].lost = Some(50.0);
+        c.place([24.0, 22.0], [0.0, 1.0]);
+        let r = w.add_regiment(&c);
+        let lost = w.regiments[r].units[2];
+        assert!(w.units[lost].awaited && !w.units[lost].alive());
+        assert_eq!(w.regiments[r].replacing, [0.0, 0.0, 50.0]);
+    }
+
+    #[test]
+    fn regiments_keep_up_every_place_whoever_is_lost() {
+        let mut w = division();
+        let before = w.regiment_ledger(1);
+        let last = w.regiments[1].units[2];
+        w.units[last].die(0);
+        assert_eq!(w.regiment_ledger(1), before);
+        w.destroy(1);
+        assert_eq!(w.regiment_ledger(1), Ledger::default());
+    }
+
+    #[test]
+    fn regiments_out_of_supply_wear_away_while_their_side_is_short() {
+        let mut w = division();
+        // Costs it can't meet, and no money.
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[("money", 500.0)]);
+        w.set_stockpile(1, 0.0);
+        run(&mut w, 3.0);
+        assert!(w.short(1).is_some());
+        let a = w.regiments[1].units[0];
+        let lost = 100.0 - w.units[a].health;
+        // Two or three looks, each of 0.75 to 1.75 of a hundredth.
+        assert!((1.5..=5.25).contains(&lost), "{lost}");
+        // The HQ's truck, which uses no supply, is untouched.
+        let truck = w.regiments[0].units[0];
+        assert_eq!(w.units[truck].health, 100.0);
+        // In supply it's spared, and resupplies the slower for the
+        // shortage.
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.units[a].health = 10.0;
+        run(&mut w, 1.0);
+        let gained = w.units[a].health - 10.0;
+        assert!(gained > 0.0 && gained < 50.0, "{gained}");
+        // It kills in the end.
+        w.apply(1, Command::Detach { regiment: 1 }).unwrap();
+        run(&mut w, 200.0);
+        assert!(w.destroyed(1));
+    }
+
+    #[test]
+    fn hqs_raise_what_they_have_places_for_as_leaders_alone() {
+        let mut w = division();
+        let hq = Command::Unpack {
+            regiment: 0,
+            at: [30.0, 40.0],
+            facing: NORTH,
+        };
+        w.apply(1, hq).unwrap();
+        run(&mut w, 30.0);
+        let b = w.regiments[0].unpacked_into.expect("unpacked");
+        assert!(!w.buildings[b].busy());
+        assert_eq!(w.hq_of(b), Some(50));
+        w.buildings[b].deploy = w.buildings[0].deploy;
+        let mut company = raised_company(&mut w, 1);
+        company.primary = Some(1);
+        for m in &mut company.members {
+            m.template = "soldier".into();
+            m.fighter = Some(soldier(Vec::new()));
+        }
+        let order = |c: &aaa_map::Regiment| Command::Commission {
+            building: b,
+            commission: Box::new(Commission::new(c.clone(), 1.0)),
+        };
+        // One place is the detached company's to take; the other's held
+        // from the order on.
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.apply(1, order(&company)).unwrap();
+        assert_eq!(w.check(1, &order(&company)), Err(Refused::Full));
+        let paid = w.stockpile(1);
+        assert_eq!(w.apply(1, order(&company)), Err(Refused::Full));
+        assert_eq!(w.stockpile(1), paid);
+        run(&mut w, 1.5);
+        let r = w.regiments.len() - 1;
+        assert_eq!(w.regiments[r].hq, Some(50));
+        let alive: Vec<bool> = (w.regiments[r].units.iter())
+            .map(|&u| w.units[u].alive())
+            .collect();
+        assert_eq!(alive, [false, true, false]);
+        // It costs its whole upkeep from the start, and fills up in supply.
+        assert_eq!(w.regiment_ledger(r), w.regiment_ledger(1));
+        run(&mut w, 6.0);
+        assert!(w.regiments[r].units.iter().all(|&u| w.units[u].alive()));
+    }
+
+    #[test]
+    fn bombardment_keeps_regiments_out_of_supply_a_while() {
+        let mut w = supplied_division();
+        w.add_buildings(&[building(30, 2, [60.0, 60.0])]);
+        let gun = Target::Building(1);
+        // A second from the hit, then until its next look.
+        w.shell(1, gun, 4.0);
+        run(&mut w, 1.0);
+        assert!(!w.regiments[1].in_supply);
+        run(&mut w, 1.0);
+        assert!(w.regiments[1].in_supply && w.regiments[1].bombarded.is_empty());
+        // One that's bombarding waits out the weapon's recharge too, from
+        // each hit, and doesn't resupply meanwhile.
+        let a = w.regiments[1].units[0];
+        w.units[a].health = 10.0;
+        w.regiments[1].bombarding = true;
+        w.shell(1, gun, 4.0);
+        run(&mut w, 3.0);
+        w.regiments[1].bombarding = false;
+        w.shell(1, gun, 4.0);
+        assert_eq!(w.regiments[1].bombarded[0].length, 50);
+        run(&mut w, 4.0);
+        assert!(!w.regiments[1].in_supply);
+        run(&mut w, 2.0);
+        assert!(w.regiments[1].in_supply);
+        assert_eq!(w.units[a].health, 60.0);
+        // What bombarded it is forgotten once it's gone.
+        w.shell(1, gun, 4.0);
+        w.buildings[1].state = State::Destroyed(w.ticks);
+        run(&mut w, 1.0);
+        assert!(w.regiments[1].in_supply);
+    }
+
+    #[test]
+    fn only_bombardment_hits_count_and_they_draw_no_fire() {
+        let shelled = |bombard: bool| {
+            let mut w = supplied_division();
+            let mut gun = building(30, 2, [40.0, 14.0]);
+            gun.fighter.notice = Some(30.0);
+            gun.fighter.weapons = vec![Weapon {
+                bombard,
+                ..rifle(30.0, 10.0)
+            }];
+            w.add_buildings(&[gun]);
+            w.regiments[1].operational_range = 34.0;
+            w.tick();
+            let hurt = |u: &&usize| w.units[**u].health == 90.0;
+            assert_eq!(w.regiments[1].units.iter().filter(hurt).count(), 1);
+            (
+                w.regiments[1].bombarded.clone(),
+                w.regiments[1].engaged.clone(),
+            )
+        };
+        let (bombarded, engaged) = shelled(true);
+        assert_eq!(bombarded.len(), 1);
+        assert_eq!(bombarded[0].by, Enemy::Building(1));
+        assert!(engaged.is_empty());
+        let (bombarded, engaged) = shelled(false);
+        assert!(bombarded.is_empty());
+        assert_eq!(engaged, [Enemy::Building(1)]);
+        // A building that picks its own shots makes ordinary hits, and a
+        // regiment ordered to bombard does so with whatever it fires.
+        let mut w = supplied_division();
+        let mut gun = building(30, 2, [40.0, 14.0]);
+        gun.fighter.weapons = vec![Weapon {
+            bombard: true,
+            ..rifle(30.0, 10.0)
+        }];
+        w.add_buildings(&[gun]);
+        w.tick();
+        assert!(w.regiments[1].bombarded.is_empty());
+        let mut w = battle(&[1, 2], vec![soldier(vec![rifle(12.0, 30.0)]); 2], at_war());
+        w.regiments[0].bombarding = true;
+        w.tick();
+        assert_eq!(w.regiments[1].bombarded[0].by, Enemy::Regiment(0));
+        assert!(w.regiments[0].bombarded.is_empty());
+    }
+
+    #[test]
+    fn technologies_and_properties_change_supply_ranges() {
+        let mut w = supplied_division();
+        w.rules
+            .supply_effects
+            .insert(Id::from("logistics"), effect(5.0, 0.0, false, &[]));
+        w.rules
+            .supply_effects
+            .insert(Id::from("sabotage"), effect(-100.0, 0.0, false, &[]));
+        // 30 reaches 14 tiles straight out and 35 reaches 17.
+        let far = [20.0 + 2.0 * 16.0, 20.0];
+        assert_eq!(w.supply_range(0), Some(30.0));
+        assert!(!w.supplied(1, far));
+        w.grant(1, Id::from("logistics"));
+        w.grant(2, Id::from("sabotage"));
+        run(&mut w, 1.0);
+        assert_eq!(w.supply_range(0), Some(35.0));
+        assert!(w.supplied(1, far));
+        // Below nothing it gives none, for as long as that lasts.
+        w.give(Enemy::Building(0), Id::from("sabotage"), 3.0);
+        run(&mut w, 1.0);
+        assert_eq!(w.supply_range(0), Some(-65.0));
+        assert!(w.buildings[0].supply.zone.is_none());
+        run(&mut w, 1.0);
+        assert!(!w.regiments[1].in_supply);
+        run(&mut w, 2.0);
+        assert!(w.supplied(1, far) && w.buildings[0].properties.is_empty());
+    }
+
+    #[test]
+    fn technologies_and_properties_change_how_fast_regiments_resupply() {
+        let mut w = supplied_division();
+        w.rules.supply_effects.insert(
+            Id::from("foraging"),
+            effect(0.0, 0.25, false, &["org_unit"]),
+        );
+        w.rules
+            .supply_effects
+            .insert(Id::from("rations"), effect(0.0, 0.25, false, &[]));
+        w.rules
+            .supply_effects
+            .insert(Id::from("famine"), effect(0.0, -3.0, false, &[]));
+        // Only on those with the properties a technology needs.
+        w.grant(1, Id::from("foraging"));
+        assert_eq!(w.resupply_multiplier(1), 1.0);
+        let kind = aaa_map::Kind {
+            properties: vec![Id::from("org_unit")],
+            ..Default::default()
+        };
+        w.rules.kinds.insert(Id::from("company"), kind);
+        assert_eq!(w.resupply_multiplier(1), 1.25);
+        // They add up, on the half its health a second it gets back.
+        w.give(Enemy::Regiment(1), Id::from("rations"), 1.0);
+        assert_eq!(w.resupply_multiplier(1), 1.5);
+        let a = w.regiments[1].units[0];
+        w.units[a].health = 10.0;
+        run(&mut w, 1.0);
+        assert_eq!(w.units[a].health, 85.0);
+        // A property goes at its holder's first look after its time's up.
+        assert_eq!(w.resupply_multiplier(1), 1.5);
+        run(&mut w, 1.0);
+        assert_eq!(w.resupply_multiplier(1), 1.25);
+        // But never to less than the least a multiplier can be.
+        w.give(Enemy::Regiment(1), Id::from("famine"), 5.0);
+        assert_eq!(w.resupply_multiplier(1), 0.05);
+    }
+
+    #[test]
+    fn resupply_operations_work_on_the_nearest_friends_of_their_class() {
+        let (mut w, resupply) = resupplied();
+        let given = |w: &World| -> Vec<bool> {
+            let has = |r: &Regiment| !r.properties.is_empty();
+            w.regiments.iter().map(has).collect()
+        };
+        assert_eq!(
+            w.operate(1, &Id::from("retreat"), [26.0, 21.0]),
+            Err(Refused::Unable)
+        );
+        // Not on what's out of reach, to the edge of its soft shape, nor
+        // for an enemy.
+        w.operate(1, &resupply, [26.0, 44.5]).unwrap();
+        w.operate(2, &resupply, [26.0, 21.0]).unwrap();
+        assert_eq!(given(&w), [false, false, false]);
+        // The HQ's truck is nearest but no infantry, and it only works on
+        // so many. An ally's works as one's own.
+        w.operate(3, &resupply, [26.0, 44.0]).unwrap();
+        assert_eq!(given(&w), [false, false, true]);
+        // One that still has it gets no more of it, but takes a place.
+        run(&mut w, 1.0);
+        let held = w.regiments[2].properties.clone();
+        w.operate(1, &resupply, [29.0, 28.0]).unwrap();
+        assert_eq!(given(&w), [false, false, true]);
+        assert_eq!(w.regiments[2].properties, held);
+        w.operate(1, &resupply, [26.0, 21.0]).unwrap();
+        assert_eq!(given(&w), [false, true, true]);
+    }
+
+    #[test]
+    fn resupply_operations_stand_in_for_an_hq_and_a_zone_for_a_while() {
+        let (mut w, resupply) = resupplied();
+        let a = w.regiments[1].units[0];
+        w.units[a].health = 10.0;
+        run(&mut w, 1.0);
+        assert!(!w.regiments[1].in_supply);
+        // Detached, it resupplies, and a quarter faster.
+        w.operate(1, &resupply, [26.0, 21.0]).unwrap();
+        run(&mut w, 1.0);
+        assert!(w.regiments[1].in_supply && w.regiments[1].hq.is_none());
+        assert_eq!(w.units[a].health, 72.5);
+        // Outside every zone too, unless its side can't pay its upkeep.
+        for u in w.regiments[1].units.clone() {
+            w.units[u].position = [70.0, 70.0];
+        }
+        run(&mut w, 1.0);
+        assert!(w.regiments[1].in_supply);
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[("money", 500.0)]);
+        w.set_stockpile(1, 0.0);
+        run(&mut w, 2.0);
+        assert!(w.short(1).is_some() && !w.regiments[1].in_supply);
+        // Once it's run out the regiment's as it was.
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[]);
+        for u in w.regiments[1].units.clone() {
+            w.units[u].position = [26.0, 20.0];
+        }
+        run(&mut w, 2.0);
+        assert!(w.regiments[1].in_supply);
+        run(&mut w, 5.0);
+        assert!(!w.regiments[1].in_supply && w.regiments[1].properties.is_empty());
+    }
+
+    #[test]
+    fn supply_drops_supply_their_side_until_they_decay() {
+        let mut w = supplied_division();
+        let mut provisions = building(0, 0, [0.0, 0.0]);
+        provisions.template = "provisions".into();
+        provisions.fighter.destructible = true;
+        w.rules.drops.insert(Id::from("provisions"), provisions);
+        w.rules
+            .supplies
+            .insert(Id::from("provisions"), supply(10.0, false, 0.0));
+        w.rules.decays.insert(Id::from("provisions"), 10.0);
+        let drop = Id::from("drop");
+        let dropped = aaa_map::Operation::Drop(Id::from("provisions"));
+        w.rules.operations.insert(drop.clone(), dropped);
+        w.rules.operations.insert(
+            Id::from("airlift"),
+            aaa_map::Operation::Drop(Id::from("tank")),
+        );
+        assert_eq!(
+            w.operate(1, &Id::from("airlift"), [64.0, 64.0]),
+            Err(Refused::Unable)
+        );
+        assert_eq!(w.operate(1, &drop, [64.0, 90.0]), Err(Refused::NoRoom));
+        // A source of its side's and its allies' from its first look.
+        w.operate(1, &drop, [64.0, 64.0]).unwrap();
+        let b = w.buildings.len() - 1;
+        assert_eq!(w.buildings[b].owner, 1);
+        assert!(w.buildings[b].supply.zone.is_none());
+        run(&mut w, 1.0);
+        assert!(w.supplied(1, [64.0, 64.0]) && w.supplied(3, [64.0, 64.0]));
+        assert!(!w.supplied(2, [64.0, 64.0]));
+        for u in w.regiments[1].units.clone() {
+            w.units[u].position = [62.0, 64.0];
+        }
+        run(&mut w, 1.0);
+        assert!(w.regiments[1].in_supply);
+        // Its zone follows it, as it does on the way down.
+        assert!(!w.supplied(1, [44.0, 64.0]));
+        w.buildings[b].position = [50.0, 64.0];
+        run(&mut w, 1.0);
+        assert!(w.supplied(1, [44.0, 64.0]) && !w.supplied(1, [64.0, 64.0]));
+        // It loses 10 of its 100 a second from when it was dropped, then
+        // goes, and its zone with it.
+        run(&mut w, 7.0);
+        assert_eq!(w.buildings[b].health, 10.0);
+        w.tick();
+        assert!(matches!(w.buildings[b].state, State::Destroyed(_)));
+        run(&mut w, 1.0);
+        assert!(!w.supplied(1, [44.0, 64.0]));
+    }
+
+    #[test]
+    fn regiments_in_supply_regain_more_morale() {
+        let mut w = division();
+        run(&mut w, 1.0);
+        assert_eq!(w.morale_bonus(1), 0.0);
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        run(&mut w, 1.0);
+        assert_eq!(w.morale_bonus(1), w.rules.supply_rules.morale_bonus);
+        assert!(w.morale_bonus(1) > 0.0);
     }
 }

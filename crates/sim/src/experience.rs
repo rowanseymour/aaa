@@ -36,7 +36,7 @@ impl World {
 
     /// Credits every side with a general a tick's steady gain.
     pub(crate) fn gain_experience(&mut self) {
-        let gain = self.experience_per_second * TICK;
+        let gain = self.rules.experience_per_second * TICK;
         for commander in self.commanders.values_mut() {
             commander.set(commander.experience + gain);
         }
@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn sides_with_a_general_gain_experience_up_to_its_ceiling() {
         let mut w = world();
-        w.experience_per_second = 1.0;
+        w.rules.experience_per_second = 1.0;
         w.lead(1, 200.0, Some(5000.0));
         w.lead(2, 4999.5, Some(5000.0));
         w.lead(3, 9000.0, None);
