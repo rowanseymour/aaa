@@ -70,11 +70,11 @@ impl Look {
     }
 
     fn regiment(&self, sim: &World, r: usize) -> String {
-        crate::pane::regiment_name(sim, &self.names, &self.strings, r)
+        crate::object_display::regiment_name(sim, &self.names, &self.strings, r)
     }
 
     fn building(&self, sim: &World, b: usize) -> String {
-        crate::pane::building_name(sim, &self.names, &self.strings, b)
+        crate::object_display::building_name(sim, &self.names, &self.strings, b)
     }
 
     /// An HQ's name: its building's, numbered as its organization is,
@@ -90,7 +90,7 @@ impl Look {
             .iter()
             .find(|r| r.id == hq.id)
             .and_then(|r| r.number);
-        crate::pane::numbered(&self.strings, number, self.name(&hq.building))
+        crate::object_display::numbered(&self.strings, number, self.name(&hq.building))
     }
 
     /// The text under `key`, or `or` where the strings lack it.
@@ -631,7 +631,7 @@ fn told(
         } if ours(player) => {
             // A regiment is commissioned, a unit on its own such as a truck
             // recruited.
-            let event = match crate::pane::lone(sim, regiment) {
+            let event = match crate::object_display::lone(sim, regiment) {
                 true => "company_recruited",
                 false => "company_commissioned",
             };

@@ -5,7 +5,7 @@
 //! banner to select its regiment, Shift+click to add a regiment to the
 //! selection or take it out, or drag a box over several, with Shift to add
 //! them, up to six at once. Click one of your buildings to select it
-//! instead; the [`pane`] along the bottom shows what's selected. The selection
+//! instead; the [`object_display`] along the bottom shows what's selected. The selection
 //! passes from a truck to the building it unpacks into, and back as the
 //! building packs up. Right-click the ground to send the selection there, keeping its
 //! regiments' places relative to each other and stopping to fight enemies on
@@ -34,9 +34,9 @@ mod menu;
 mod messages;
 mod minimap;
 mod music;
+mod object_display;
 mod objectives;
 mod options;
-mod pane;
 mod pause;
 mod presets;
 mod remote;
@@ -635,7 +635,7 @@ fn main() -> ExitCode {
                 banners::setup_banners,
                 minimap::spawn,
                 actions::spawn,
-                pane::spawn,
+                object_display::spawn,
                 resource_bar::spawn,
                 messages::spawn,
                 supply::spawn,
@@ -698,7 +698,7 @@ fn main() -> ExitCode {
                 minimap::update.after(camera::Controls).after(fog::look),
                 minimap::tint,
                 (actions::back_out, actions::show).chain(),
-                (pane::lay_out, pane::refresh).chain(),
+                (object_display::lay_out, object_display::refresh).chain(),
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
@@ -1866,7 +1866,9 @@ fn select(
                     Some(i) if adding => {
                         selected.0.remove(i);
                     }
-                    None if adding && selected.0.len() < pane::MAX_SELECTED => selected.0.push(r),
+                    None if adding && selected.0.len() < object_display::MAX_SELECTED => {
+                        selected.0.push(r)
+                    }
                     None if adding => {}
                     _ => selected.0 = vec![r],
                 }
@@ -1904,7 +1906,7 @@ fn select(
         chosen.0 = None;
     }
     for r in 0..sim.0.regiments.len() {
-        if selected.0.len() >= pane::MAX_SELECTED {
+        if selected.0.len() >= object_display::MAX_SELECTED {
             break;
         }
         if sim.0.commands(player, r)
@@ -2143,7 +2145,7 @@ fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
 /// What [`UiScaleSetting`] may be: smaller for a small window, bigger to
 /// suit a large one.
 const UI_SCALES: std::ops::RangeInclusive<f32> = 0.5..=2.0;
-/// Between the screen's edges and the minimap, selection pane and action
+/// Between the screen's edges and the minimap, object display and action
 /// grid along its bottom, in logical pixels.
 const MARGIN: f32 = 12.0;
 
@@ -2155,8 +2157,8 @@ struct UiScaleSetting(f32);
 /// How much of the window's height the bottom of the screen may take.
 const UI_HEIGHT_SHARE: f32 = 1.0 / 3.0;
 
-/// Sets [`UiScale`] from [`UiScaleSetting`], shrunk until the selection
-/// pane, centred, clears the minimap and action grid either side of it, and
+/// Sets [`UiScale`] from [`UiScaleSetting`], shrunk until the object
+/// display, centred, clears the minimap and action grid either side of it, and
 /// they take no more than [`UI_HEIGHT_SHARE`] of the window's height.
 fn fit_ui(
     setting: Res<UiScaleSetting>,
@@ -2173,8 +2175,10 @@ fn fit_ui(
         return;
     }
     let side = MARGIN + minimap::DISC.max(actions::SIZE.x) + MARGIN;
-    let wide = size.x / (2.0 * side + pane::SIZE.x);
-    let tallest = minimap::DISC.max(actions::SIZE.y).max(pane::SIZE.y);
+    let wide = size.x / (2.0 * side + object_display::SIZE.x);
+    let tallest = minimap::DISC
+        .max(actions::SIZE.y)
+        .max(object_display::SIZE.y);
     let tall = size.y * UI_HEIGHT_SHARE / (MARGIN + tallest);
     let wanted = setting.0.min(wide).min(tall).max(*UI_SCALES.start());
     if scale.0 != wanted {

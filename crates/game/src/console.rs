@@ -931,10 +931,10 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
             ids.push(id);
         }
     }
-    if ids.len() > crate::pane::MAX_SELECTED {
+    if ids.len() > crate::object_display::MAX_SELECTED {
         return Err(format!(
             "takes up to {} regiments",
-            crate::pane::MAX_SELECTED
+            crate::object_display::MAX_SELECTED
         ));
     }
     let picked = ids

@@ -5,7 +5,7 @@
 //! A selected building that recruits, such as a Corps HQ, has Deploy,
 //! opening a menu of what comes out of it, and Deploy to Location, of what
 //! a transport carries to where it's sent, each while that menu offers
-//! anything; [`crate::pane`] shows what it's been asked for, and a button
+//! anything; [`crate::object_display`] shows what it's been asked for, and a button
 //! sets the rally point what it recruits moves on to. One that researches
 //! has Research, opening a menu of the technologies it lists. A building that
 //! packs, into a truck say, has Pack, dimmed while it can't. Each button
@@ -778,7 +778,7 @@ pub fn spawn(
             DespawnOnExit(Screen::Match),
         ))
         .with_children(|root| {
-            // As wide as the grid, which the pane is kept clear of, and as
+            // As wide as the grid, which the object display is kept clear of, and as
             // tall as its text wraps to, growing upwards.
             root.spawn((
                 Tooltip,
