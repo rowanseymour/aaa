@@ -450,3 +450,253 @@ impl World {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+
+    use crate::testing::*;
+
+    use aaa_map::Id;
+
+    use crate::{Change, Command, Commission, Limit, Notice, Pause, Refused, State, World};
+
+    #[test]
+    fn sides_earn_what_they_own_produces_less_its_upkeep() {
+        let mut w = economy();
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        w.add_regiment(&t);
+        let r = company(&mut w, 1);
+        company(&mut w, 2);
+        let balance = w.balance(1);
+        assert_eq!(balance.net.get("money"), 37.0);
+        // The company keeps up its own 10 and its three soldiers' 2 each.
+        assert_eq!(balance.net.get("ammo"), 25.0 - 16.0);
+        assert_eq!(balance.net.get("oil"), 12.0);
+        assert_eq!(
+            balance.limits,
+            [
+                Limit {
+                    consumed: "unit_limit_consumed",
+                    used: 1.0,
+                    provided: 6.0
+                },
+                Limit {
+                    consumed: "building_limit_consumed",
+                    used: 2.0,
+                    provided: 0.0
+                },
+            ]
+        );
+        // A lost member's place costs as before, until the regiment's gone.
+        w.units[w.regiments[r].units[0]].die(0);
+        assert_eq!(w.balance(1).net.get("ammo"), 9.0);
+        w.destroy(r);
+        assert_eq!(w.balance(1).net.get("ammo"), 25.0);
+        // A disabled building earns nothing but is still kept up.
+        w.buildings[0].state = State::Disabled;
+        let ledger = w.ledger(1);
+        assert_eq!(ledger.production.get("money"), 12.0);
+        assert_eq!(ledger.upkeep.get("building_limit_consumed"), 2.0);
+    }
+
+    #[test]
+    fn shortfalls_are_bought_with_money() {
+        let mut w = economy();
+        for _ in 0..4 {
+            company(&mut w, 1);
+        }
+        // 64 ammo kept up against 20 made, so 44 bought at 2 each.
+        let balance = w.balance(1);
+        assert_eq!(balance.net.get("ammo"), -44.0);
+        assert_eq!(balance.net.get("money"), 25.0 - 88.0);
+        assert_eq!((balance.income, balance.costs), (25.0, 88.0));
+        // Limits provided are capped.
+        w.economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .production
+            .set("unit_limit_provided", 30.0);
+        assert_eq!(w.balance(1).limits[0].provided, 20.0);
+    }
+
+    #[test]
+    fn stockpiles_fill_with_what_sides_net_and_tell_them_when_short() {
+        let mut w = economy();
+        run(&mut w, 60.0);
+        assert!((w.stockpile(1) - 525.0).abs() < 0.01);
+        w.set_stockpile(1, 1.0);
+        for _ in 0..4 {
+            company(&mut w, 1);
+        }
+        // Netting -63 a minute, 1 lasts under a second.
+        run(&mut w, 1.0);
+        assert_eq!(w.stockpile(1), 0.0);
+        let percent = (88.0 - 25.0) / 88.0 * 100.0;
+        assert_eq!(w.notices, [Notice::Short { player: 1, percent }]);
+        // Told again only once it moves on by more than 5 points.
+        let earn = |w: &mut World, money| {
+            let house = w.economies.get_mut(&Id::from("house")).unwrap();
+            house.production.set("money", money);
+            run(w, 1.0);
+        };
+        earn(&mut w, 27.0);
+        assert_eq!(w.notices.len(), 1);
+        earn(&mut w, 15.0);
+        assert_eq!(w.notices.len(), 2);
+        w.set_stockpile(1, 99999.0);
+        run(&mut w, 1.0);
+        assert_eq!(w.notices[2], Notice::Repaired { player: 1 });
+        // Never more than the most a stockpile holds.
+        w.set_stockpile(1, 200000.0);
+        assert_eq!(w.stockpile(1), 99999.0);
+    }
+
+    #[test]
+    fn commissions_are_paid_for_up_front_and_refunded_if_called_off() {
+        let mut w = economy();
+        let order = |w: &mut World| {
+            w.apply(
+                1,
+                Command::Commission {
+                    building: 0,
+                    commission: Box::new(Commission::new(truck(), 10.0)),
+                },
+            )
+        };
+        order(&mut w).unwrap();
+        order(&mut w).unwrap();
+        assert_eq!(w.stockpile(1), 0.0);
+        assert_eq!(order(&mut w), Err(Refused::Unaffordable));
+        let second = w.buildings[0].queue[1].id;
+        w.apply(
+            1,
+            Command::CancelCommission {
+                building: 0,
+                commission: second,
+            },
+        )
+        .unwrap();
+        assert_eq!(w.stockpile(1), 250.0);
+    }
+
+    #[test]
+    fn previews_show_the_economy_after_an_order() {
+        let mut w = economy();
+        let (stockpile, balance) = w.preview(1, Change::Commission(&truck()));
+        assert_eq!(stockpile, 250.0);
+        assert_eq!(balance.net.get("money"), 37.0);
+        assert_eq!(balance.limits[0].provided, 6.0);
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let r = w.add_regiment(&t);
+        // Unpacking swaps the truck's production for the depot's.
+        let (stockpile, balance) = w.preview(1, Change::Unpack(r));
+        assert_eq!(stockpile, 500.0);
+        assert_eq!(balance.net.get("money"), 50.0);
+        assert_eq!(balance.limits[1].used, 2.0);
+    }
+
+    #[test]
+    fn start_locations_give_their_side_room_to_build() {
+        let mut w = economy();
+        w.economies.insert(
+            Id::from("start_loc"),
+            aaa_map::Economy {
+                production: amounts(&[("building_limit_provided", 20.0)]),
+                ..Default::default()
+            },
+        );
+        w.holdings.push((1, "start_loc".into()));
+        let building = w.balance(1).limits[1];
+        assert_eq!((building.used, building.provided), (1.0, 20.0));
+    }
+
+    #[test]
+    fn commissions_wait_at_the_front_of_the_queue_for_room_under_limits() {
+        let mut w = economy();
+        let company = raised_company(&mut w, 1);
+        // An order can't say it has its share of the limits already.
+        let mut commission = Commission::new(company, 1.0);
+        commission.held = true;
+        let order = Command::Commission {
+            building: 0,
+            commission: Box::new(commission),
+        };
+        // Accepted and paid for though there's no room.
+        w.apply(1, order).unwrap();
+        for _ in 0..20 {
+            w.tick();
+        }
+        assert_eq!(w.buildings[0].progress, 0);
+        assert_eq!(
+            w.buildings[0].paused,
+            Some(Pause::Limit("unit_limit_consumed"))
+        );
+        let paused = |w: &World| {
+            w.notices
+                .iter()
+                .filter(|n| matches!(n, Notice::Paused { player: 1, .. }))
+                .count()
+        };
+        assert_eq!(paused(&w), 1, "told once");
+        // Room once a truck provides it, taken while it's raised.
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        w.add_regiment(&t);
+        w.tick();
+        assert_eq!(w.buildings[0].paused, None);
+        assert_eq!(w.balance(1).limits[0].used, 1.0);
+        for _ in 0..10 {
+            w.tick();
+        }
+        assert!(w.buildings[0].queue.is_empty());
+        assert_eq!(
+            w.balance(1).limits[0].used,
+            1.0,
+            "the raised company holds it"
+        );
+    }
+
+    #[test]
+    fn disabled_buildings_hold_their_queues() {
+        let mut w = economy();
+        let order = Command::Commission {
+            building: 0,
+            commission: Box::new(Commission::new(truck(), 1.0)),
+        };
+        w.apply(1, order).unwrap();
+        w.tick();
+        w.buildings[0].state = State::Disabled;
+        for _ in 0..20 {
+            w.tick();
+        }
+        assert_eq!(w.buildings[0].queue.len(), 1);
+        assert_eq!(w.buildings[0].paused, Some(Pause::Disabled));
+        assert!(w.notices.iter().any(|n| matches!(
+            n,
+            Notice::Paused {
+                why: Pause::Disabled,
+                ..
+            }
+        )));
+    }
+
+    #[test]
+    fn queues_are_refunded_to_their_owner_when_their_building_changes_hands() {
+        let mut w = economy();
+        let order = Command::Commission {
+            building: 0,
+            commission: Box::new(Commission::new(truck(), 10.0)),
+        };
+        w.apply(1, order).unwrap();
+        assert_eq!(w.stockpile(1), 250.0);
+        w.change_hands(0, 2);
+        assert!(w.buildings[0].queue.is_empty());
+        assert_eq!(w.stockpile(1), 500.0);
+        assert_eq!(w.stockpile(2), 0.0);
+    }
+}
