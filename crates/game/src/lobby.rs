@@ -830,28 +830,23 @@ fn show_slots(
                 )),
             }
             .observe(choose_side);
-            let shown = (player.nation.as_deref()).or(lobby.nations.get(&id).map(Id::as_str));
-            let flag = flags.of(shown);
-            let mut space = commands.spawn((ChildOf(row), flag_space()));
-            if let Some(flag) = flag {
-                space.insert(ImageNode::new(flag));
-            }
-            let nation = match &player.nation {
-                Some(fixed) => {
-                    commands.spawn((
-                        ChildOf(row),
-                        inert(cell(200.0)),
-                        children![label(name_of(&all.0, fixed), Font::Body, Ink::Muted)],
-                    ));
-                    Some(fixed.as_str())
-                }
-                None => {
-                    let chosen = lobby.nations.get(&id);
-                    let label = chosen.map_or("Random".into(), |n| name_of(&all.0, n.as_str()));
-                    nation_list(&mut commands, row, &lobby, id, label, &all.0);
-                    chosen.map(Id::as_str)
-                }
+            // The game shows a side's nation by its flag alone, naming it
+            // only in the list to choose from.
+            let nation = (player.nation.as_deref()).or(lobby.nations.get(&id).map(Id::as_str));
+            let flag = Shown {
+                icon: flags.of(nation),
+                words: String::new(),
+                hint: Some(nation.map_or("Random".into(), |n| name_of(&all.0, n))),
             };
+            match &player.nation {
+                Some(_) => {
+                    let fixed = commands
+                        .spawn((ChildOf(row), inert(cell(NATION_WIDTH))))
+                        .id();
+                    flag.spawn(&mut commands, fixed);
+                }
+                None => nation_list(&mut commands, row, &lobby, id, flag, &all.0),
+            }
             // A random nation's general is random too.
             let nation = nation.and_then(|n| all.0.iter().find(|a| a.id.as_str() == n));
             let fixed = player.general.as_deref().map(Id::from);
@@ -896,14 +891,8 @@ fn show_slots(
         .observe(choose_side);
 }
 
-/// The space for a nation's flag, the size of the game's images of them.
-fn flag_space() -> Node {
-    Node {
-        width: px(36),
-        height: px(19),
-        ..default()
-    }
-}
+/// How wide a side's nation is shown: its flag, padded.
+const NATION_WIDTH: f32 = 60.0;
 
 /// What a nation is called, by id.
 fn name_of(nations: &[Nation], id: &str) -> String {
@@ -918,7 +907,7 @@ fn nation_list(
     row: Entity,
     lobby: &Lobby,
     player: u32,
-    label: String,
+    label: Shown,
     nations: &[Nation],
 ) {
     let choices = nations.iter().map(|n| (Some(n.id.clone()), n.name.clone()));
@@ -927,8 +916,8 @@ fn nation_list(
     let open = lobby.open == Open::Nations(player);
     let list = Dropdown {
         row,
-        width: px(200),
-        label: label.into(),
+        width: px(NATION_WIDTH),
+        label,
         open,
     };
     list.spawn(

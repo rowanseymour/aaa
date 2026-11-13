@@ -534,7 +534,9 @@ pub fn dropdown() -> impl Bundle {
         Node {
             position_type: PositionType::Absolute,
             top: percent(100),
-            width: percent(100),
+            // As wide as its opener, or its longest choice where that's
+            // wider.
+            min_width: percent(100),
             flex_direction: FlexDirection::Column,
             border: UiRect::all(px(1)),
             ..default()
@@ -752,7 +754,7 @@ impl From<&str> for Shown {
 }
 
 impl Shown {
-    fn spawn(self, commands: &mut Commands, cell: Entity) {
+    pub fn spawn(self, commands: &mut Commands, cell: Entity) {
         if let Some(hint) = self.hint {
             commands.entity(cell).insert(Hint(hint));
         }
@@ -762,15 +764,19 @@ impl Shown {
                 false => 6.0,
             };
             let size = Node {
-                width: px(17),
-                height: px(17),
                 margin: UiRect::right(px(gap)),
                 ..default()
             };
             commands.spawn((ChildOf(cell), size, ImageNode::new(icon)));
         }
         if !self.words.is_empty() {
-            commands.spawn((ChildOf(cell), text(self.words, Font::Body)));
+            // Unwrapped, so a list as wide as its longest choice is as tall
+            // as its choices.
+            let words = (
+                text(self.words, Font::Body),
+                TextLayout::new(Justify::Left, LineBreak::NoWrap),
+            );
+            commands.spawn((ChildOf(cell), words));
         }
     }
 }
