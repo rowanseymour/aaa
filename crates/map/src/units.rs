@@ -8,7 +8,7 @@ use aaa_data::{
 use tgck::map::{Detail, Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
 
 use crate::buildings::Building;
-use crate::pathing::Obstacle;
+use crate::obstacle::Obstacle;
 
 /// A side: a player, human or AI, or an independent power such as
 /// neutral civilians.
@@ -88,7 +88,7 @@ pub fn relation(players: &[Player], teams: &[Team], from: u32, to: u32) -> Relat
 
 /// The players and teams, with their relations by index rather than by
 /// their positions in the stored sections, which can have gaps.
-pub fn sides(
+pub(crate) fn players_and_teams(
     kingdoms: &Kingdoms,
     teams: &[Option<StoredTeam>],
     groups: &RestrictionGroups,
@@ -358,7 +358,7 @@ pub struct Formation {
 /// The owned organizations whose members can all move, and the owned units
 /// that move on their own, such as trucks and ships, each a regiment of its
 /// own.
-pub fn regiments(
+pub(crate) fn regiments(
     things: &[Thing],
     bodies: &HashMap<Id, Body>,
     fighters: &HashMap<Id, Fighter>,
@@ -693,12 +693,12 @@ impl Recruits {
             let (Some(_), Some(deployment)) = (&raised.unpacks, self.deployments.get(truck)) else {
                 continue;
             };
-            let packing = self.deployments.get(building);
+            let packing = self.deployment(building);
             let packs = Packs {
                 offset: deployment.packed_offset,
                 facing: deployment.packed_facing,
-                seconds: packing.map_or(7.0, |b| b.packing),
-                health_min: packing.map_or(0.5, |b| b.pack_health_min),
+                seconds: packing.packing,
+                health_min: packing.pack_health_min,
                 truck: raised,
             };
             out.insert(building.as_str().to_string(), packs);
@@ -714,13 +714,20 @@ impl Recruits {
         }
     }
 
+    /// How `template` packs and unpacks, as the game data has it or by
+    /// default.
+    fn deployment(&self, template: &Id) -> &Deployment {
+        static DEFAULT: Deployment = Deployment::DEFAULT;
+        self.deployments.get(template).unwrap_or(&DEFAULT)
+    }
+
     /// What a packed building of `template` unpacks into, if it does and
     /// the building can stand.
     fn unpacks(&self, template: &str) -> Option<Unpacks> {
         let d = self.deployments.get(&Id::from(template))?;
         let into = d.unpacks_into.as_ref()?;
         let body = self.bodies.get(into)?;
-        let seconds = self.deployments.get(into).map_or(7.0, |b| b.unpacking);
+        let seconds = self.deployment(into).unpacking;
         Some(Unpacks {
             building: self.building(into)?,
             room: body.shape.padded(self.padding),
@@ -848,8 +855,6 @@ impl Recruits {
     }
 }
 
-/// A unit that's no organization's member as a regiment of its own, which
-/// shares its id and template.
 /// The organization `t`, owned by `owner`, without its members, for a
 /// building standing in it to put a truck in when it packs: the truck
 /// stands where it's put.
@@ -887,6 +892,8 @@ fn one_place(ranges: Ranges) -> Regiment {
     }
 }
 
+/// A unit that's no organization's member as a regiment of its own, which
+/// shares its id and template.
 fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regiment {
     Regiment {
         id: member.id,

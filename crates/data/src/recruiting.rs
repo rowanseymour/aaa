@@ -49,6 +49,24 @@ pub struct Deployment {
     pub pack_health_min: f32,
 }
 
+impl Deployment {
+    /// What a template's deployment leaves out, or one without a deployment.
+    pub const DEFAULT: Deployment = Deployment {
+        unpacks_into: None,
+        packed_offset: [0.0, 0.0],
+        packed_facing: [0.0, -1.0],
+        packing: 7.0,
+        unpacking: 7.0,
+        pack_health_min: 0.5,
+    };
+}
+
+impl Default for Deployment {
+    fn default() -> Self {
+        Deployment::DEFAULT
+    }
+}
+
 /// What recruiting a template needs: buildings the player has standing,
 /// and properties the recruiter or its side has.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -101,16 +119,17 @@ impl GameData {
     pub fn deployments(&mut self) -> HashMap<Id, Deployment> {
         self.by_template(|t| {
             let m = t.mobile_deployment_component.as_ref()?;
+            let d = Deployment::DEFAULT;
             Some(Deployment {
                 unpacks_into: m
                     .unpack_to_actor_ids
                     .clone()
                     .filter(|i| *i != Id::from("null")),
-                packed_offset: m.packed_position_offset.unwrap_or([0.0, 0.0]),
-                packed_facing: m.packed_orientation.unwrap_or([0.0, -1.0]),
-                packing: m.packing_length.unwrap_or(7.0),
-                unpacking: m.unpacking_length.unwrap_or(7.0),
-                pack_health_min: m.pack_health_min.unwrap_or(0.5),
+                packed_offset: m.packed_position_offset.unwrap_or(d.packed_offset),
+                packed_facing: m.packed_orientation.unwrap_or(d.packed_facing),
+                packing: m.packing_length.unwrap_or(d.packing),
+                unpacking: m.unpacking_length.unwrap_or(d.unpacking),
+                pack_health_min: m.pack_health_min.unwrap_or(d.pack_health_min),
             })
         })
     }

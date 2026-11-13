@@ -425,14 +425,6 @@ enum Placed {
     NoModel,
 }
 
-/// Whether `thing` is an organization with one of `buildings` among its
-/// members, as an unpacked Division HQ is.
-pub fn holds_building(thing: &Thing, buildings: &HashSet<u32>) -> bool {
-    thing
-        .organization()
-        .is_some_and(|o| o.members.iter().any(|m| buildings.contains(&m.id)))
-}
-
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
     views: HashMap<Id, Option<View>>,
@@ -571,22 +563,22 @@ impl Models {
     /// Spawns every object whose template has a readable model and returns
     /// the rest, each with whether it should have had one: false for
     /// templates that name no model, such as sound emitters, and for
-    /// organizations drawn as their members, such as herds and those holding
-    /// one of `buildings`.
+    /// organizations drawn as their members, such as herds and those in
+    /// `holding`: ones a building stands in, by id.
     pub fn spawn<'a>(
         &mut self,
         commands: &mut Commands,
         game: &mut GameData,
         assets: &mut ModelAssets,
         things: impl IntoIterator<Item = &'a Thing>,
-        buildings: &HashSet<u32>,
+        holding: &HashSet<u32>,
     ) -> Vec<(&'a Thing, bool)> {
         let mut rest = Vec::new();
         let (mut drawn, mut modelless) = (0, 0);
         for t in things {
-            let placed = self.place(commands, game, assets, t, None, buildings);
+            let placed = self.place(commands, game, assets, t, None, holding);
             match placed {
-                Placed::Drawn if self.by_members(t, buildings) => rest.push((t, false)),
+                Placed::Drawn if self.by_members(t, holding) => rest.push((t, false)),
                 Placed::Drawn => {}
                 Placed::Missing => rest.push((t, true)),
                 Placed::NoModel => {
@@ -721,14 +713,14 @@ impl Models {
     }
 
     /// Whether `thing` is an organization drawn as its members: one whose
-    /// template names no model, such as a herd, or one holding one of
-    /// `buildings`, whose own model is the truck it packs into.
-    fn by_members(&self, thing: &Thing, buildings: &HashSet<u32>) -> bool {
+    /// template names no model, such as a herd, or one in `holding`, whose
+    /// own model is the truck it packs into.
+    fn by_members(&self, thing: &Thing, holding: &HashSet<u32>) -> bool {
         let invisible = matches!(
             self.views.get(&Id::from(thing.template.as_str())),
             Some(None)
         );
-        invisible || holds_building(thing, buildings)
+        invisible || holding.contains(&thing.id)
     }
 
     /// Spawns one object, or, for an organization drawn as its members, the
@@ -741,16 +733,16 @@ impl Models {
         assets: &mut ModelAssets,
         thing: &Thing,
         within: Option<u32>,
-        buildings: &HashSet<u32>,
+        holding: &HashSet<u32>,
     ) -> Placed {
         let owner = owner(thing).or(within);
-        if self.by_members(thing, buildings) {
+        if self.by_members(thing, holding) {
             // One member drawn shows the organization, as an HQ's crates
             // can lack a model its building has.
             let members = thing.organization().map_or(&[][..], |o| &o.members);
             return members
                 .iter()
-                .map(|m| self.place(commands, game, assets, m, owner, buildings))
+                .map(|m| self.place(commands, game, assets, m, owner, holding))
                 .min()
                 .unwrap_or(Placed::NoModel);
         }

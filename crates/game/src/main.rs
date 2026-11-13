@@ -1122,22 +1122,12 @@ fn setup(
     if let Some(window) = &mut window {
         window.title = format!("{} - aaa-game", map.title);
     }
-    let ids = map.regiments.iter().map(|r| r.id);
-    // The sim's units draw the trailers they tow.
-    let members = map.regiments.iter().flat_map(|r| &r.members);
-    let trailers = members.filter_map(|m| Some(m.trailer.as_ref()?.placed?.0));
-    let building_ids: HashSet<u32> = map.buildings.iter().map(|b| b.id).collect();
-    // An unpacked Division HQ's building is drawn below, and what else the
-    // HQ holds would be left standing when it packs.
-    let holding_buildings = map
-        .things
-        .iter()
-        .filter(|t| aaa_render::models::holds_building(t, &building_ids));
-    let leave_out: HashSet<u32> = ids
-        .chain(map.crowded.iter().copied())
-        .chain(trailers)
-        .chain(building_ids.iter().copied())
-        .chain(holding_buildings.map(|t| t.id))
+    // The sim's units and buildings are drawn below, trailers with what
+    // tows them; what else a Division HQ holds would be left standing when
+    // it packs.
+    let leave_out: HashSet<u32> = (map.roles())
+        .filter(|(_, role)| *role != aaa_map::Role::Other)
+        .map(|(t, _)| t.id)
         .collect();
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
         leave_out.contains(&t.id)
@@ -1187,20 +1177,10 @@ fn setup(
         sim.0.regiments.len(),
         sim.0.units.len()
     );
-    let members = map
-        .things
-        .iter()
-        .flat_map(|t| t.organization())
-        .flat_map(|o| &o.members);
-    let things = map.things.iter().chain(members);
-    let things: std::collections::HashMap<u32, _> = things
-        .filter(|t| building_ids.contains(&t.id))
-        .map(|t| (t.id, t))
-        .collect();
     let mut missing = 0;
     for (i, b) in map.buildings.iter().enumerate() {
         debug_assert_eq!(sim.0.buildings[i].id, b.id);
-        let thing = things[&b.id];
+        let thing = stored[&b.id];
         match models.spawn_object(&mut commands, game, &mut assets.models(), thing) {
             Some(e) => {
                 let [x, y, z] = thing.position;

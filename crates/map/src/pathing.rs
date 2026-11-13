@@ -4,12 +4,14 @@
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::HashMap;
 
 use aaa_data::{Id, Shape, Variation};
 use tgck::map::Terrain;
 
 pub use tgck::map::CELL_SIZE;
+
+use crate::obstacle::Obstacle;
 
 /// What a mover travels on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -21,123 +23,9 @@ pub enum Domain {
 const LAND: u8 = 1;
 const NAVAL: u8 = 2;
 
-/// An object that keeps movers off the ground under it.
-#[derive(Debug, Clone)]
-pub struct Obstacle {
-    /// In world units.
-    pub position: [f32; 2],
-    /// The direction its model's -y axis points, a unit vector.
-    pub facing: [f32; 2],
-    /// Its blocking shape.
-    pub shape: Shape,
-    /// Its soft shape, which bounds the tiles it blocks.
-    pub soft: Shape,
-}
-
 /// How far short of a box's high edges the tiles it spans stop, so that an
 /// edge lying on a tile's edge doesn't take in the tile beyond.
 const EDGE: f32 = 0.0001;
-
-/// Whether shapes that only touch are apart or together.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Contact {
-    Separates,
-    Joins,
-}
-
-impl Obstacle {
-    /// How far a point is from the shape's edge; 0 within it.
-    pub fn distance(&self, [x, y]: [f32; 2]) -> f32 {
-        // The shape's y axis runs along the facing.
-        let [across, along] = crate::to_local(self.position, self.facing, [x, y]);
-        match self.shape {
-            Shape::Point => libm::hypotf(across, along),
-            Shape::Circle { radius } => (libm::hypotf(across, along) - radius).max(0.0),
-            Shape::Rect { width, height } => {
-                let across = across.abs() - width / 2.0;
-                let along = along.abs() - height / 2.0;
-                libm::hypotf(across.max(0.0), along.max(0.0))
-            }
-        }
-    }
-
-    /// Whether it and `other` share any ground; touching isn't enough.
-    pub fn overlaps(&self, other: &Obstacle) -> bool {
-        match (self.shape, other.shape) {
-            (Shape::Rect { .. }, Shape::Rect { .. }) => !self.apart(other, Contact::Separates),
-            (Shape::Rect { .. }, _) => other.overlaps(self),
-            (Shape::Circle { radius }, _) => other.distance(self.position) < radius,
-            (Shape::Point, _) => other.distance(self.position) == 0.0,
-        }
-    }
-
-    /// Like [`overlaps`](Self::overlaps), except that two rectangles only
-    /// touching meet.
-    pub fn meets(&self, other: &Obstacle) -> bool {
-        match (self.shape, other.shape) {
-            (Shape::Rect { .. }, Shape::Rect { .. }) => !self.apart(other, Contact::Joins),
-            _ => self.overlaps(other),
-        }
-    }
-
-    /// Whether an axis of either rectangle keeps the other clear of it.
-    fn apart(&self, other: &Obstacle, contact: Contact) -> bool {
-        self.separated_from(other, contact) || other.separated_from(self, contact)
-    }
-
-    /// Whether one of this rectangle's axes keeps `other`'s corners clear
-    /// of it.
-    fn separated_from(&self, other: &Obstacle, contact: Contact) -> bool {
-        let (Shape::Rect { width, height }, Some(corners)) = (self.shape, other.corners()) else {
-            return false;
-        };
-        let local = corners.map(|c| crate::to_local(self.position, self.facing, c));
-        let beyond = |c: f32, edge: f32| c > edge || (contact == Contact::Separates && c == edge);
-        let clear = |axis: usize, half: f32| {
-            local.iter().all(|c| beyond(c[axis], half))
-                || local.iter().all(|c| beyond(-half, c[axis]))
-        };
-        clear(0, width / 2.0) || clear(1, height / 2.0)
-    }
-
-    /// A rectangle's corners in world units.
-    fn corners(&self) -> Option<[[f32; 2]; 4]> {
-        let Shape::Rect { width, height } = self.shape else {
-            return None;
-        };
-        let (w, h) = (width / 2.0, height / 2.0);
-        Some(
-            [[-w, -h], [w, -h], [w, h], [-w, h]]
-                .map(|c| crate::from_local(self.position, self.facing, c)),
-        )
-    }
-
-    /// Whether it keeps movers off a tile.
-    pub fn covers(&self, tile: (i32, i32)) -> bool {
-        covered(self).contains(&tile)
-    }
-
-    /// The tiles under its soft shape's box, some perhaps off the map.
-    pub fn footprint(&self) -> impl Iterator<Item = (i32, i32)> + use<> {
-        spanned(self.bounds(self.soft))
-    }
-
-    /// The low and high corners of the box `shape` takes up standing as it
-    /// does.
-    pub(crate) fn bounds(&self, shape: Shape) -> ([f32; 2], [f32; 2]) {
-        let [x, y] = self.position;
-        let (half_x, half_y) = match shape {
-            Shape::Point => (0.0, 0.0),
-            Shape::Circle { radius } => (radius, radius),
-            Shape::Rect { width, height } => {
-                let [fx, fy] = self.facing;
-                let (w, h) = (width / 2.0, height / 2.0);
-                (w * fy.abs() + h * fx.abs(), w * fx.abs() + h * fy.abs())
-            }
-        };
-        ([x - half_x, y - half_y], [x + half_x, y + half_y])
-    }
-}
 
 /// The tiles from the one under a box's low corner to the one just short
 /// of its high corner, which may be off the map.
@@ -161,6 +49,21 @@ pub struct Zone {
 }
 
 impl Zone {
+    /// A zone of just these tiles, each within 16 of the origin.
+    #[cfg(test)]
+    pub(crate) fn of(tiles: &[(i32, i32)]) -> Zone {
+        let side = 16;
+        let mut zone = Zone {
+            low: (0, 0),
+            side,
+            tiles: vec![false; side * side],
+        };
+        for &(x, y) in tiles {
+            zone.tiles[y as usize * side + x as usize] = true;
+        }
+        zone
+    }
+
     pub fn has(&self, (x, y): (i32, i32)) -> bool {
         let (dx, dy) = (x - self.low.0, y - self.low.1);
         let side = self.side as i32;
@@ -175,7 +78,7 @@ impl Zone {
         self.has(tile_at(at))
     }
 
-    fn tiles(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
+    pub(crate) fn tiles(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
         let at = |i: usize| ((i % self.side) as i32, (i / self.side) as i32);
         let held = self.tiles.iter().enumerate().filter(|(_, held)| **held);
         held.map(move |(i, _)| (self.low.0 + at(i).0, self.low.1 + at(i).1))
@@ -186,147 +89,6 @@ impl Zone {
     pub fn meets(&self, o: &Obstacle) -> bool {
         spanned(o.bounds(o.soft)).any(|tile| self.has(tile))
     }
-}
-
-/// The edges of the ground zones cover between them, as closed loops of
-/// tile corners with that ground on their left: one around each patch and
-/// one around each hole in it, patches that touch only at a corner apart.
-/// It's kept from one change of the zones to the next, as where a loop
-/// starts follows from what changed.
-#[derive(Debug, Clone, Default)]
-pub struct Outline {
-    covered: HashSet<(i32, i32)>,
-    /// Each loop's corners, in tiles, from its start.
-    loops: Vec<Vec<(i32, i32)>>,
-}
-
-impl Outline {
-    /// Traces the outline of the ground `zones` cover now. `block` is how
-    /// many tiles a side the squares the game cuts the map into are: a
-    /// loop through a square where the cover changed starts where it
-    /// comes into the first such square, and any other where it did
-    /// before.
-    pub fn retrace<'a>(&mut self, zones: impl IntoIterator<Item = &'a Zone>, block: i32) {
-        let block = block.max(1);
-        let covered: HashSet<(i32, i32)> = zones.into_iter().flat_map(Zone::tiles).collect();
-        // A square answers for the tiles just beyond its far sides too.
-        let changed: HashSet<(i32, i32)> = (covered.symmetric_difference(&self.covered))
-            .flat_map(|&(x, y)| [(x, y), (x - 1, y), (x, y - 1), (x - 1, y - 1)])
-            .map(|(x, y)| (x.div_euclid(block), y.div_euclid(block)))
-            .collect();
-        // By its first side, as loops can share a corner.
-        let first = |l: &Vec<(i32, i32)>| Some([*l.first()?, *l.get(1)?]);
-        let starts: HashSet<[(i32, i32); 2]> = self.loops.iter().filter_map(first).collect();
-        self.loops = trace(&covered)
-            .into_iter()
-            .map(|mut corners| {
-                let start = start(&corners, block, &changed, &starts);
-                corners.rotate_left(start);
-                corners
-            })
-            .collect();
-        self.covered = covered;
-    }
-
-    /// The loops, as world points a tile's side apart.
-    pub fn loops(&self) -> Vec<Vec<[f32; 2]>> {
-        let point = |&(x, y): &(i32, i32)| [x as f32 * CELL_SIZE, y as f32 * CELL_SIZE];
-        (self.loops.iter())
-            .map(|l| l.iter().map(point).collect())
-            .collect()
-    }
-}
-
-/// The loops round `covered`, each from wherever it was come upon.
-fn trace(covered: &HashSet<(i32, i32)>) -> Vec<Vec<(i32, i32)>> {
-    // Each side with open ground beyond it, from one corner to the next
-    // going round the tile.
-    let mut sides: BTreeMap<(i32, i32), Vec<(i32, i32)>> = BTreeMap::new();
-    for &(x, y) in covered {
-        let corners = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)];
-        let beyond = [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)];
-        for (i, tile) in beyond.iter().enumerate() {
-            if !covered.contains(tile) {
-                let to = corners[(i + 1) % 4];
-                sides.entry(corners[i]).or_default().push(to);
-            }
-        }
-    }
-    let mut loops = Vec::new();
-    while let Some((&start, _)) = sides.iter().next() {
-        let mut corners = Vec::new();
-        let (mut at, mut from) = (start, None);
-        // As many sides come to a corner as leave it, so this ends up
-        // back where it began.
-        while let Some(leaving) = sides.get_mut(&at) {
-            // Where two leave, tiles touch at the corner alone, and the
-            // way round the one it's on turns left.
-            let left = from.map(|(fx, fy): (i32, i32)| (at.0 - (at.1 - fy), at.1 + (at.0 - fx)));
-            let turn = leaving.iter().position(|&to| Some(to) == left);
-            if at == start && from.is_some() && turn.is_none() {
-                break;
-            }
-            let to = leaving.swap_remove(turn.unwrap_or(leaving.len() - 1));
-            if leaving.is_empty() {
-                sides.remove(&at);
-            }
-            corners.push(at);
-            (from, at) = (Some(at), to);
-        }
-        loops.push(corners);
-    }
-    loops
-}
-
-/// Where in a loop's corners it starts.
-fn start(
-    corners: &[(i32, i32)],
-    block: i32,
-    changed: &HashSet<(i32, i32)>,
-    starts: &HashSet<[(i32, i32); 2]>,
-) -> usize {
-    let n = corners.len();
-    // Each side's tile, the lower of the two it's between, with that
-    // tile's far side along y before its far side along x; and the
-    // square that tile is in, a row of squares at a time.
-    let side = |i: usize| {
-        let ((ax, ay), (bx, by)) = (corners[i], corners[(i + 1) % n]);
-        match ay == by {
-            true => (ax.min(bx), ay - 1, 0),
-            false => (ax - 1, ay.min(by), 1),
-        }
-    };
-    let square = |i: usize| {
-        let (x, y, _) = side(i);
-        (y.div_euclid(block), x.div_euclid(block))
-    };
-    let redrawn = |i: &usize| {
-        let (y, x) = square(*i);
-        changed.contains(&(x, y))
-    };
-    let first = match (0..n).filter(redrawn).map(square).min() {
-        Some(first) => first,
-        // Untouched, it keeps its start, if it had one.
-        None => match (0..n).find(|&i| starts.contains(&[corners[i], corners[(i + 1) % n]])) {
-            Some(kept) => return kept,
-            None => (0..n).map(square).min().unwrap_or_default(),
-        },
-    };
-    let within = |i: usize| square(i) == first;
-    let earliest = |sides: &mut dyn Iterator<Item = usize>| sides.min_by_key(|&i| side(i));
-    // The stretches of it in that square, by where each comes in.
-    let entries: Vec<usize> = (0..n)
-        .filter(|&i| within(i) && !within((i + n - 1) % n))
-        .collect();
-    if entries.is_empty() {
-        // All of it is: from the far end of its earliest side.
-        return earliest(&mut (0..n)).map_or(0, |i| (i + 1) % n);
-    }
-    let stretch = |&entry: &usize| {
-        let mut sides = (0..n).map(|k| (entry + k) % n).take_while(|&i| within(i));
-        earliest(&mut sides).map(side)
-    };
-    entries.into_iter().min_by_key(stretch).unwrap_or(0)
 }
 
 #[derive(Clone)]
@@ -343,11 +105,7 @@ pub struct Pathing {
 impl Pathing {
     /// Tiles whose terrain isn't among `variations` count as water or land
     /// by [`undefined_is_water`].
-    pub fn new(
-        terrain: &Terrain,
-        variations: &HashMap<Id, Variation>,
-        obstacles: impl IntoIterator<Item = Obstacle>,
-    ) -> Self {
+    pub fn new(terrain: &Terrain, variations: &HashMap<Id, Variation>) -> Self {
         let by_index: Vec<Option<u8>> = terrain
             .names
             .iter()
@@ -364,15 +122,11 @@ impl Pathing {
                 defined.unwrap_or(if undefined_is_water(t) { NAVAL } else { LAND })
             })
             .collect();
-        let mut pathing = Pathing {
+        Pathing {
             side: terrain.side,
             blockers: vec![0; tiles.len()],
             tiles,
-        };
-        for o in obstacles {
-            pathing.block(&o);
         }
-        pathing
     }
 
     /// A map of one kind of tile, for tests and tools.
@@ -536,7 +290,7 @@ impl Pathing {
 /// ones whose centres lie within a quarter of a tile of its blocking shape.
 /// So a blocking shape reaching no further than that from its middle blocks
 /// none, and one reaching beyond its soft shape's box blocks nothing there.
-fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
+pub(crate) fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
     const MARGIN: f32 = CELL_SIZE / 4.0;
     if reach(o.shape) <= MARGIN {
         return Vec::new();
@@ -618,105 +372,6 @@ mod tests {
         assert!(zone.has((26, 26)) && !zone.has((27, 27)));
         assert!(zone.has((28, 22)) && !zone.has((28, 23)));
         assert!(zone.holds([40.5, 25.9]) && !zone.holds([40.5, 23.9]));
-    }
-
-    fn outlined(zones: &[&Zone]) -> Vec<Vec<[f32; 2]>> {
-        let mut outline = Outline::default();
-        outline.retrace(zones.iter().copied(), 4);
-        outline.loops()
-    }
-
-    #[test]
-    fn zones_that_touch_share_one_outline() {
-        let p = Pathing::uniform(40, Domain::Land);
-        let (a, b) = (p.zone([21.0, 41.0], 6.0), p.zone([31.0, 41.0], 6.0));
-        let far = p.zone([61.0, 61.0], 6.0);
-        let alone = outlined(&[&a]);
-        assert_eq!(alone.len(), 1);
-        // Each point is a tile's corner on the zone's edge: some of the
-        // tiles round it are in the zone and some aren't.
-        for &[x, y] in &alone[0] {
-            let near = |dx: f32, dy: f32| a.holds([x + dx, y + dy]);
-            let round = [
-                near(0.5, 0.5),
-                near(-0.5, 0.5),
-                near(0.5, -0.5),
-                near(-0.5, -0.5),
-            ];
-            assert!(round.contains(&true) && round.contains(&false), "{x}, {y}");
-        }
-        // Each step is a tile's side, with what it bounds on its left.
-        let path = &alone[0];
-        for i in 0..path.len() {
-            let [x, y] = path[i];
-            let [nx, ny] = path[(i + 1) % path.len()];
-            let (dx, dy) = (nx - x, ny - y);
-            assert_eq!(dx.abs() + dy.abs(), CELL_SIZE, "{x}, {y}");
-            let (mx, my) = ((x + nx) / 2.0, (y + ny) / 2.0);
-            let across = 0.6 / CELL_SIZE;
-            assert!(a.holds([mx - dy * across, my + dx * across]), "{x}, {y}");
-            assert!(!a.holds([mx + dy * across, my - dx * across]), "{x}, {y}");
-        }
-        let joined = outlined(&[&a, &b]);
-        assert_eq!(joined.len(), 1);
-        assert!(joined[0].len() > alone[0].len());
-        assert!(joined[0].len() < 2 * alone[0].len());
-        assert_eq!(outlined(&[&a, &b, &far]).len(), 2);
-        assert!(outlined(&[]).is_empty());
-    }
-
-    /// A zone of just these tiles.
-    fn patch(tiles: &[(i32, i32)]) -> Zone {
-        let side = 16;
-        let mut zone = Zone {
-            low: (0, 0),
-            side,
-            tiles: vec![false; side * side],
-        };
-        for &(x, y) in tiles {
-            zone.tiles[y as usize * side + x as usize] = true;
-        }
-        zone
-    }
-
-    fn block(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
-        (from.1..to.1)
-            .flat_map(|y| (from.0..to.0).map(move |x| (x, y)))
-            .collect()
-    }
-
-    #[test]
-    fn tiles_touching_at_a_corner_are_outlined_apart() {
-        let mut outline = Outline::default();
-        outline.retrace([&patch(&[(1, 1), (2, 2)])], 4);
-        let mut loops = outline.loops.clone();
-        loops.sort();
-        assert_eq!(loops.len(), 2);
-        assert!(loops.iter().all(|l| l.len() == 4));
-    }
-
-    #[test]
-    fn loops_start_where_they_come_into_the_first_square_that_changed() {
-        let mut outline = Outline::default();
-        // Wholly inside one square: from the far end of its earliest
-        // side, the far side along x of the tile beside its first.
-        outline.retrace([&patch(&[(1, 1), (2, 1)])], 4);
-        assert_eq!(outline.loops[0][..2], [(1, 1), (2, 1)]);
-        // Across squares, appearing on its own: where it comes into the
-        // lowest square of the lowest row that holds any of its sides,
-        // here along its far edge.
-        let wide = patch(&block((2, 5), (10, 7)));
-        outline.retrace([&wide], 4);
-        assert_eq!(outline.loops.len(), 1);
-        assert_eq!(outline.loops[0][..2], [(4, 7), (3, 7)]);
-        // Growing at its far end moves the start to the first square
-        // touched there; one that hasn't changed keeps its start.
-        let before = outline.loops.clone();
-        outline.retrace([&wide], 4);
-        assert_eq!(outline.loops, before);
-        let longer = patch(&block((2, 5), (13, 7)));
-        outline.retrace([&longer], 4);
-        assert_eq!(outline.loops[0][0], (8, 5));
     }
 
     #[test]
@@ -821,7 +476,7 @@ mod tests {
             properties: Vec::new(),
         };
         let variations = HashMap::from([(Id::from("grass"), grass)]);
-        let p = Pathing::new(&terrain, &variations, []);
+        let p = Pathing::new(&terrain, &variations);
         let at = |x, y| {
             (
                 p.passable(x, y, Domain::Land),
@@ -1009,31 +664,6 @@ mod tests {
         assert!(!p.passable(5, 5, Domain::Land));
         p.unblock(&b);
         assert!(p.passable(5, 5, Domain::Land));
-    }
-
-    #[test]
-    fn overlaps() {
-        let at = |position, facing, shape| Obstacle {
-            position,
-            facing,
-            shape,
-            soft: shape,
-        };
-        let square = Shape::Rect {
-            width: 2.0,
-            height: 2.0,
-        };
-        let a = at([0.0, 0.0], [0.0, 1.0], square);
-        let circle = |x| at([x, 0.0], [0.0, 1.0], Shape::Circle { radius: 1.0 });
-        assert!(a.overlaps(&circle(1.9)) && circle(1.9).overlaps(&a));
-        assert!(!a.overlaps(&circle(2.0)));
-        // A square turned 45° reaches √2 from its middle along the axes.
-        let turned = |x| at([x, 0.0], [0.70710677, 0.70710677], square);
-        assert!(a.overlaps(&turned(2.3)) && turned(2.3).overlaps(&a));
-        assert!(!a.overlaps(&turned(2.5)));
-        let point = |x| at([x, 0.0], [0.0, 1.0], Shape::Point);
-        assert!(point(0.5).overlaps(&a) && a.overlaps(&point(0.5)));
-        assert!(!point(1.5).overlaps(&a));
     }
 
     #[test]
