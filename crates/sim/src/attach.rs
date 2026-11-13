@@ -21,7 +21,7 @@ pub struct Hq {
 
 impl World {
     pub(crate) fn logistics_of(&self, template: &str) -> Option<Logistics> {
-        self.logistics.get(&Id::from(template)).copied()
+        self.rules.logistics.get(&Id::from(template)).copied()
     }
 
     fn places(&self, template: &str) -> Option<u32> {
@@ -69,7 +69,7 @@ impl World {
     fn truck_survives(&self, r: usize) -> bool {
         let unpacks = self.regiments[r].unpacks.as_ref();
         let trucks = unpacks
-            .and_then(|u| self.packing.get(&u.building.template))
+            .and_then(|u| self.rules.packing.get(&u.building.template))
             .map(|p| &p.truck.members);
         let truck = |u: usize| {
             trucks.is_none_or(|t| t.iter().any(|m| m.template == self.units[u].template))
@@ -156,7 +156,10 @@ impl World {
     /// aside: its own side's, and one whose building recruits its kind.
     fn suits(&self, hq: &Hq, r: usize) -> bool {
         let regiment = &self.regiments[r];
-        let recruits = self.recruit_lists.get(&Id::from(hq.building.as_str()));
+        let recruits = self
+            .rules
+            .recruit_lists
+            .get(&Id::from(hq.building.as_str()));
         hq.owner == regiment.owner
             && recruits.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
     }
@@ -220,5 +223,153 @@ impl World {
             self.detach_all(hq);
         }
         self.regiments[r].owner = owner;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::testing::*;
+
+    use aaa_map::Id;
+
+    use crate::{Command, Notice, Refused};
+
+    #[test]
+    fn regiments_attach_to_hqs_that_recruit_their_kind_and_have_room() {
+        let mut w = division();
+        assert_eq!(w.hqs().len(), 1);
+        assert_eq!(w.hqs()[0].id, 50);
+        // Packed, it's its regiment, and the company is the one detached.
+        assert_eq!((w.packed_hq(0), w.packed_hq(1)), (Some(50), None));
+        assert_eq!((w.detached(1), w.detached(2)), (vec![1], vec![]));
+        assert!(w.attachable(1) && !w.attachable(2));
+        // The HQ itself is in no supply and attaches to nothing.
+        assert_eq!(
+            w.check(1, &Command::Attach { regiment: 0 }),
+            Err(Refused::Unable)
+        );
+        assert_eq!(
+            w.check(1, &Command::Detach { regiment: 1 }),
+            Err(Refused::Unable)
+        );
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        assert_eq!(w.regiments[1].hq, Some(50));
+        assert_eq!(w.attached(50).collect::<Vec<_>>(), [1]);
+        // No other HQ to step on to.
+        assert_eq!(
+            w.check(1, &Command::Attach { regiment: 1 }),
+            Err(Refused::Unable)
+        );
+        // A second one, nearer: a detached regiment takes the nearest, an
+        // attached one the next round.
+        let mut t = truck();
+        (t.id, t.owner) = (70, 1);
+        t.members[0].id = 70;
+        t.place([26.0, 24.0], [0.0, 1.0]);
+        w.add_regiment(&t);
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        assert_eq!(w.regiments[1].hq, Some(70));
+        assert!(w.detached(1).is_empty());
+        w.notices.clear();
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        assert_eq!(w.regiments[1].hq, Some(50));
+        // The player's told of each, a move as leaving then joining.
+        let (player, regiment) = (1, 1);
+        let left = |hq| Notice::Detached {
+            player,
+            hq,
+            regiment,
+        };
+        let joined = |hq| Notice::Attached {
+            player,
+            hq,
+            regiment,
+        };
+        assert_eq!(w.notices, [left(70), joined(50)]);
+        w.apply(1, Command::Detach { regiment: 1 }).unwrap();
+        assert_eq!(w.notices[2..], [left(50)]);
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        assert_eq!(w.regiments[1].hq, Some(70));
+        // Not an enemy's, nor one that doesn't recruit its kind.
+        w.regiments[1].hq = None;
+        w.regiments[0].owner = 2;
+        w.rules.recruit_lists.clear();
+        assert_eq!(w.attaches_to(1), None);
+    }
+
+    #[test]
+    fn regiments_no_hq_recruits_are_detached_too() {
+        let mut w = division();
+        // Agents, which nothing recruits, and a truck outside any
+        // organization.
+        w.rules
+            .logistics
+            .insert(Id::from("agents"), logistics(None));
+        let mut agents = raised_company(&mut w, 1);
+        agents.renumber(80);
+        agents.template = "agents".into();
+        agents.place([20.0, 20.0], [0.0, 1.0]);
+        w.add_regiment(&agents);
+        let mut lorry = truck();
+        (lorry.id, lorry.owner, lorry.template) = (90, 1, "lorry".into());
+        lorry.members[0].id = 90;
+        lorry.place([22.0, 30.0], [0.0, 1.0]);
+        w.add_regiment(&lorry);
+        assert_eq!(w.detached(1), [1, 2]);
+        // Only the company is one an HQ could take.
+        assert!(w.attachable(1));
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        assert_eq!(w.detached(1), [2]);
+        assert!(!w.attachable(1));
+    }
+
+    #[test]
+    fn regiments_lose_their_hq_when_its_destroyed() {
+        let mut w = division();
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        run(&mut w, 1.0);
+        assert!(w.regiments[1].in_supply);
+        w.destroy(0);
+        run(&mut w, 1.0);
+        assert_eq!(w.regiments[1].hq, None);
+        assert!(!w.regiments[1].in_supply);
+    }
+
+    #[test]
+    fn regiments_that_change_side_keep_their_place_at_their_hq() {
+        let mut w = supplied_division();
+        let hq = w.hqs().remove(0);
+        // With an ally, its old side's zones are still its own.
+        w.change_side(1, 3);
+        run(&mut w, 1.0);
+        assert_eq!(w.regiments[1].hq, Some(50));
+        assert!(w.regiments[1].in_supply);
+        assert_eq!(w.free_places(&hq), 1);
+        // With an enemy it's still attached, but needs that side's zones.
+        w.change_side(1, 2);
+        run(&mut w, 1.0);
+        assert_eq!(w.regiments[1].hq, Some(50));
+        assert!(!w.regiments[1].in_supply);
+        assert_eq!(w.free_places(&hq), 1);
+        // An HQ that changes side loses its regiments at once.
+        w.change_side(0, 3);
+        assert_eq!(w.regiments[1].hq, None);
+    }
+
+    #[test]
+    fn captured_hqs_lose_their_regiments_at_once() {
+        let mut w = division();
+        let hq = Command::Unpack {
+            regiment: 0,
+            at: [30.0, 40.0],
+            facing: NORTH,
+        };
+        w.apply(1, hq).unwrap();
+        run(&mut w, 30.0);
+        let b = w.regiments[0].unpacked_into.expect("unpacked");
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.change_hands(b, 2);
+        assert_eq!(w.regiments[1].hq, None);
     }
 }
