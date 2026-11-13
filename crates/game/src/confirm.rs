@@ -39,7 +39,7 @@ impl Default for Words {
 
 /// The scrim a question is asked on, which goes when it's answered.
 #[derive(Component)]
-struct Question;
+pub(crate) struct Question;
 
 pub struct ConfirmPlugin;
 

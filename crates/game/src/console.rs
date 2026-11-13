@@ -217,6 +217,8 @@ const VERBS: &[Verb] = &[
         "asks the selected building to research a technology it lists",
     ),
     verb("pack", "", "packs up the selected building"),
+    verb("sell", "", "sells the selected building"),
+    verb("disband", "regiment", "disbands a regiment, by its id"),
     verb(
         "attach",
         "regiment",
@@ -397,7 +399,13 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "commission" => commission(world, &args),
                 "research" => research(world, &args),
                 "unpack" => unpack(world, &args),
-                "pack" => pack(world, &args),
+                "pack" => {
+                    building_order(world, &args, |building| aaa_sim::Command::Pack { building })
+                }
+                "sell" => {
+                    building_order(world, &args, |building| aaa_sim::Command::Sell { building })
+                }
+                "disband" => disband(world, &args),
                 "attach" => attach(world, &args, true),
                 "detach" => attach(world, &args, false),
                 "destroyselected" => destroy_selected(world, &args),
@@ -827,11 +835,7 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     };
     let point = place(&world.resource::<Loaded>().map.ground, x, y)?;
     let sim = &world.resource::<Sim>().0;
-    let r = sim
-        .regiments
-        .iter()
-        .position(|r| r.id.to_string() == *id)
-        .ok_or_else(|| format!("no regiment {id}"))?;
+    let r = regiment_by_id(sim, id)?;
     let owner = sim.regiments[r].owner;
     let (regiment, to) = (r, point);
     let command = match aim {
@@ -936,11 +940,7 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
     let picked = ids
         .iter()
         .map(|id| {
-            let r = sim
-                .regiments
-                .iter()
-                .position(|r| r.id.to_string() == *id)
-                .ok_or_else(|| format!("no regiment {id}"))?;
+            let r = regiment_by_id(sim, id)?;
             match sim.commands(player, r) && !scenery.has(sim, r) {
                 true => Ok(r),
                 false => Err(format!("regiment {id} isn't the player's to select")),
@@ -957,10 +957,7 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         return Err(usage("commission"));
     };
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
-    let b = world
-        .resource::<SelectedBuilding>()
-        .0
-        .ok_or("no building selected")?;
+    let b = selected_building(world)?;
     let raising = &world.resource::<Raising>().0;
     let hq = &world.resource::<Sim>().0.buildings[b].template;
     let listed = raising
@@ -983,10 +980,7 @@ fn research(world: &mut World, args: &[&str]) -> Reply {
         return Err(usage("research"));
     };
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
-    let b = world
-        .resource::<SelectedBuilding>()
-        .0
-        .ok_or("no building selected")?;
+    let b = selected_building(world)?;
     let sim = &world.resource::<Sim>().0;
     let listed = (sim.research_list(b).iter())
         .find(|r| r.technology.as_str().eq_ignore_ascii_case(technology));
@@ -1002,14 +996,23 @@ fn research(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
-fn pack(world: &mut World, args: &[&str]) -> Reply {
+/// Gives the selected building the order `order` makes for it.
+fn building_order(world: &mut World, args: &[&str], order: fn(usize) -> aaa_sim::Command) -> Reply {
     no_args(args)?;
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
-    let b = world
-        .resource::<SelectedBuilding>()
-        .0
-        .ok_or("no building selected")?;
-    give(world, player, aaa_sim::Command::Pack { building: b })
+    let b = selected_building(world)?;
+    give(world, player, order(b)).map_err(|e| format!("refused: {e:?}"))?;
+    Ok(String::new())
+}
+
+fn disband(world: &mut World, args: &[&str]) -> Reply {
+    let [id] = args else {
+        return Err(usage("disband"));
+    };
+    let sim = &world.resource::<Sim>().0;
+    let regiment = regiment_by_id(sim, id)?;
+    let owner = sim.regiments[regiment].owner;
+    give(world, owner, aaa_sim::Command::Disband { regiment })
         .map_err(|e| format!("refused: {e:?}"))?;
     Ok(String::new())
 }
@@ -1019,9 +1022,7 @@ fn attach(world: &mut World, args: &[&str], attach: bool) -> Reply {
         return Err(usage(if attach { "attach" } else { "detach" }));
     };
     let sim = &world.resource::<Sim>().0;
-    let regiment = (sim.regiments.iter())
-        .position(|r| r.id.to_string() == *id)
-        .ok_or_else(|| format!("no regiment {id}"))?;
+    let regiment = regiment_by_id(sim, id)?;
     let owner = sim.regiments[regiment].owner;
     let command = match attach {
         true => aaa_sim::Command::Attach { regiment },
@@ -1061,6 +1062,17 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
 }
 
 /// Queues `command` from `player` for the next tick, as a click would.
+/// The regiment with object id `id`, by index.
+fn regiment_by_id(sim: &aaa_sim::World, id: &str) -> Result<usize, String> {
+    (sim.regiments.iter())
+        .position(|r| r.id.to_string() == id)
+        .ok_or_else(|| format!("no regiment {id}"))
+}
+
+fn selected_building(world: &World) -> Result<usize, String> {
+    (world.resource::<SelectedBuilding>().0).ok_or_else(|| "no building selected".into())
+}
+
 fn give(world: &mut World, player: u32, command: aaa_sim::Command) -> Result<(), aaa_sim::Refused> {
     world.resource_scope(|world, mut orders: Mut<Orders>| {
         orders.give(&world.resource::<Sim>().0, player, command)

@@ -512,7 +512,7 @@ impl World {
         };
         let lost = |&p: &usize| {
             let unit = &self.units[regiment.units[p]];
-            !unit.alive() && unit.unpacked.is_none() && rate(regiment.units[p]).0 > 0.0
+            !unit.alive() && unit.left.is_none() && rate(regiment.units[p]).0 > 0.0
         };
         // The leader's place comes before the rest, in their order.
         let places: Vec<usize> = (regiment.leader.into_iter())
