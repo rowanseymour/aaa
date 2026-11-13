@@ -18,8 +18,9 @@
 //!   it alone.
 //! - Settlement, for a city.
 //!
-//! Beside the title of a regiment, or of the building one unpacked into,
-//! is an icon for each property it holds that has one. What the pointer's
+//! Beside the title of a regiment or a building is an icon for each
+//! property it holds that has one, a building one unpacked into showing
+//! the regiment's. What the pointer's
 //! on says what it is in a box above the display: a part that stands for
 //! a thing, such as a unit's card, says of that thing what [`Says`] has.
 //!
@@ -36,7 +37,7 @@ use aaa_render::MapAssets;
 use aaa_render::overlay::BannerImages;
 use aaa_render::portrait::{Sitter, Stage};
 use aaa_render::textures;
-use aaa_sim::{Ledger, Order, Pause, Relation, State, World};
+use aaa_sim::{Ledger, Order, Pause, Piece, Relation, State, World};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -273,8 +274,12 @@ pub struct Looks {
     /// Each resource's glyph, by the resource's field name in the data.
     glyphs: HashMap<&'static str, Handle<Image>>,
     strings: Arc<aaa_data::Strings>,
-    /// How each property that has an icon shows, by id.
-    properties: Arc<HashMap<Id, PropertyLook>>,
+    /// How each property that has an icon shows, by id: the shared ones,
+    /// and under ids of their own those of `formations`.
+    properties: HashMap<Id, PropertyLook>,
+    /// The properties a regiment in each formation holds, by the
+    /// formation's id.
+    formations: HashMap<Id, Vec<Id>>,
     /// Each technology's research button icon, by id, for what's being
     /// researched.
     technologies: HashMap<Id, String>,
@@ -341,12 +346,23 @@ pub fn spawn(
         .map(|(id, t)| (id.clone(), t.name.clone())))
     .chain((listings.iter()).map(|(id, l)| (id.clone(), l.name.clone())));
     let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
+    let mut properties: HashMap<Id, PropertyLook> = (*game.property_looks()).clone();
+    let mut formations = HashMap::new();
+    for (formation, look) in game.formation_looks().iter() {
+        let held = look.properties.iter().enumerate().map(|(n, look)| {
+            let id = formation_property(formation, n);
+            properties.insert(id.clone(), look.clone());
+            id
+        });
+        formations.insert(formation.clone(), held.collect());
+    }
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
         names: names.collect(),
         glyphs,
         strings: game.strings(),
-        properties: game.property_looks(),
+        properties,
+        formations,
         technologies: (technologies.iter())
             .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
             .collect(),
@@ -445,30 +461,61 @@ fn shown_hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], mode: &Mode) -> Option<&'a 
     }
 }
 
-/// The regiment whose properties show: the one selected alone, or the one
-/// that unpacked into the building.
-fn holder(sim: &World, mode: &Mode) -> Option<usize> {
-    match mode.actor()? {
-        Actor::Regiment(r) => Some(*r),
-        Actor::Building(b, _) => (sim.regiments.iter()).position(|r| r.unpacked_into == Some(*b)),
-    }
+/// The id that stands for the `n`th property of a formation, which the
+/// data gives none: one no property of the data's own can have.
+fn formation_property(formation: &Id, n: usize) -> Id {
+    Id::from(format!("{formation}/{n}"))
 }
 
-/// The properties a regiment holds that have an icon: its template's own,
-/// then its terrain's, its stance's and those it has for a time. Those in
-/// `shown` come first, as they stand there, so that icons keep the order
-/// their properties came in while their regiment stays selected.
-fn held(sim: &World, looks: &HashMap<Id, PropertyLook>, r: usize, shown: &[Id]) -> Vec<Id> {
-    let regiment = &sim.regiments[r];
-    let kind = sim.rules().kinds.get(&regiment.template);
-    let own = kind.into_iter().flat_map(|k| &k.properties).cloned();
-    let terrain = regiment.terrain_properties.iter().cloned();
-    let guarding =
-        (regiment.unpacked_into.is_none() && regiment.guarding()).then(|| Id::from(GUARDING));
-    let timed = regiment.properties.iter().map(|h| h.property.clone());
+/// Whose properties show: the regiment selected alone, the one that
+/// unpacked into the building, or else the building itself.
+fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
+    Some(match *mode.actor()? {
+        Actor::Regiment(r) => Piece::Regiment(r),
+        Actor::Building(b, _) => {
+            let unpacked = (sim.regiments.iter()).position(|r| r.unpacked_into == Some(b));
+            unpacked.map_or(Piece::Building(b), Piece::Regiment)
+        }
+    })
+}
+
+/// The properties a regiment or building holds that have an icon: its
+/// template's own, then for a regiment its formation's, its terrain's
+/// and its stance's, then those it has for a time. Those in `shown` come
+/// first, as they stand there, so that icons keep the order their
+/// properties came in while their holder stays selected.
+fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
+    let own = |template: &Id| {
+        let kind = sim.rules().kinds.get(template);
+        kind.into_iter().flat_map(|k| &k.properties).cloned()
+    };
+    let all: Vec<Id> = match holder {
+        Piece::Regiment(r) => {
+            let regiment = &sim.regiments[r];
+            // One that's unpacked stands in no formation, and guards nothing.
+            let afield = regiment.unpacked_into.is_none();
+            let formation = regiment.formations.get(regiment.current_formation());
+            let formation = formation
+                .filter(|_| afield)
+                .and_then(|f| looks.formations.get(&Id::from(f.id.as_str())));
+            let guarding = (afield && regiment.guarding()).then(|| Id::from(GUARDING));
+            let timed = regiment.properties.iter().map(|h| h.property.clone());
+            own(&regiment.template)
+                .chain(formation.into_iter().flatten().cloned())
+                .chain(regiment.terrain_properties.iter().cloned())
+                .chain(guarding)
+                .chain(timed)
+                .collect()
+        }
+        Piece::Building(b) => {
+            let building = &sim.buildings[b];
+            let timed = building.properties.iter().map(|h| h.property.clone());
+            own(&building.template).chain(timed).collect()
+        }
+    };
     let mut now: Vec<Id> = Vec::new();
-    for p in own.chain(terrain).chain(guarding).chain(timed) {
-        if looks.contains_key(&p) && !now.contains(&p) {
+    for p in all {
+        if looks.properties.contains_key(&p) && !now.contains(&p) {
             now.push(p);
         }
     }
@@ -520,8 +567,7 @@ fn detail(
     let flying = own.iter().copied().chain(attached);
     let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
     let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
-    let properties =
-        holder(sim, mode).map_or(Vec::new(), |r| held(sim, &looks.properties, r, shown));
+    let properties = holder(sim, mode).map_or(Vec::new(), |of| held(sim, looks, of, shown));
     Detail {
         slots,
         banners,
@@ -1809,6 +1855,16 @@ mod tests {
         );
         assert_eq!(line(residue), ["ammo +12"]);
         assert!(line(Ledger::default()).is_empty());
+    }
+
+    #[test]
+    fn a_formations_properties_have_ids_of_their_own() {
+        let column = Id::from("regiment_column");
+        assert_ne!(formation_property(&column, 0), column);
+        assert_ne!(
+            formation_property(&column, 0),
+            formation_property(&column, 1)
+        );
     }
 
     #[test]

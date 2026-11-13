@@ -47,6 +47,9 @@ pub struct FormationLook {
     pub name: String,
     /// Archive path of its icon.
     pub icon: Option<String>,
+    /// How the properties an organization in it holds show beside the
+    /// organization, those that have an icon.
+    pub properties: Vec<crate::PropertyLook>,
 }
 
 /// How the supply border is drawn.
@@ -186,8 +189,13 @@ impl GameData {
     }
 
     /// How each formation shows on its button, by formation id.
-    pub fn formation_looks(&self) -> HashMap<Id, FormationLook> {
+    pub fn formation_looks(&self) -> Arc<HashMap<Id, FormationLook>> {
+        self.kept("formation_looks", || self.read_formation_looks())
+    }
+
+    fn read_formation_looks(&self) -> HashMap<Id, FormationLook> {
         let strings = self.strings();
+        let paces = self.paces(&strings);
         let files = self.parse_tgis(|n| n.starts_with("organizations/"));
         let files = scoped(&files);
         let mut out = HashMap::new();
@@ -206,7 +214,15 @@ impl GameData {
                 });
                 let icon = icon.filter(|i| self.exists(i));
                 let name = localized(&strings, f.name.as_deref()).unwrap_or(ids.to_string());
-                out.insert(ids, FormationLook { name, icon });
+                let held = scope.deserialize::<defs::FormationProperties>(block);
+                let held = held.map_or_else(Vec::new, |h| h.property);
+                let look = |p| self.property_look(&strings, &paces, scope.file, p);
+                let look = FormationLook {
+                    name,
+                    icon,
+                    properties: held.iter().filter_map(look).collect(),
+                };
+                out.insert(ids, look);
             }
         }
         out

@@ -132,24 +132,51 @@ impl GameData {
     pub(crate) fn property_lines(&self, strings: &crate::Strings) -> HashMap<Id, Vec<String>> {
         let paces = self.paces(strings);
         let definitions = self.definitions();
+        (definitions.properties.iter())
+            .map(|(id, p)| (id.clone(), self.tells(strings, &paces, &definitions, p)))
+            .collect()
+    }
+
+    /// What a property says under its name: who it's for, then a line
+    /// for each thing it does that the game has words for.
+    fn tells(
+        &self,
+        strings: &crate::Strings,
+        paces: &[Pace],
+        definitions: &crate::Definitions,
+        p: &defs::Property,
+    ) -> Vec<String> {
         let name = |p: &defs::Property| localized(strings, p.name.as_deref()).unwrap_or_default();
         let affects = strings
             .get("ui_tooltip_item_title_required_properties")
             .cloned()
             .unwrap_or_default();
-        (definitions.properties.iter())
-            .map(|(id, p)| {
-                let needed: Vec<String> = listed(p.required_properties.as_deref())
-                    .iter()
-                    .filter_map(|r| definitions.properties.get(r))
-                    .map(name)
-                    .filter(|n| !n.is_empty())
-                    .collect();
-                let who = (!needed.is_empty()).then(|| format!("{affects} {}", needed.join(", ")));
-                let does = p.modifier.iter().filter_map(|m| line(strings, &paces, m));
-                (id.clone(), who.into_iter().chain(does).collect())
-            })
-            .collect()
+        let needed: Vec<String> = listed(p.required_properties.as_deref())
+            .iter()
+            .filter_map(|r| definitions.properties.get(r))
+            .map(name)
+            .filter(|n| !n.is_empty())
+            .collect();
+        let who = (!needed.is_empty()).then(|| format!("{affects} {}", needed.join(", ")));
+        let does = p.modifier.iter().filter_map(|m| line(strings, paces, m));
+        who.into_iter().chain(does).collect()
+    }
+
+    /// How a property defined in `file` shows, if it has an icon: one
+    /// defined where it's held, such as a formation's, rather than shared.
+    pub(crate) fn property_look(
+        &self,
+        strings: &crate::Strings,
+        paces: &[Pace],
+        file: &str,
+        p: &defs::Property,
+    ) -> Option<PropertyLook> {
+        let icon = self.wide_icon(&icon_beside(file, p.icon.as_deref())?)?;
+        Some(PropertyLook {
+            name: localized(strings, p.name.as_deref()).unwrap_or_default(),
+            icon,
+            lines: self.tells(strings, paces, &self.definitions(), p),
+        })
     }
 
     /// How each shared property that has an icon shows, by id.
