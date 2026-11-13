@@ -18,8 +18,8 @@
 //! - Settlement, for a city.
 //!
 //! Beside the title of a regiment, or of the building one unpacked into,
-//! is an icon for each property it holds that has one, saying under the
-//! pointer what it does.
+//! is an icon for each property it holds that has one. What the pointer's
+//! on says what it is in a box above the display.
 
 use std::collections::HashMap;
 
@@ -279,21 +279,20 @@ pub fn spawn(
         formats: formats.0,
     });
     commands.insert_resource(Showing::default());
-    commands
+    // Above the display and as wide, growing upwards as its words wrap.
+    let said = commands
         .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0),
-                right: px(0),
-                bottom: px(crate::MARGIN),
-                justify_content: JustifyContent::Center,
+            ui::hint_box(Node {
+                width: px(SIZE.x),
                 ..default()
-            },
-            Pickable::IGNORE,
-            DespawnOnExit(Screen::Match),
+            }),
+            GlobalZIndex(1),
         ))
-        .with_child((
+        .id();
+    let display = commands
+        .spawn((
             ObjectDisplay,
+            ui::Docks(said),
             Blocks,
             RelativeCursorPosition::default(),
             ui::panel(
@@ -306,7 +305,24 @@ pub fn spawn(
             ),
             Visibility::Hidden,
             GlobalZIndex(1),
-        ));
+        ))
+        .id();
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(0),
+                right: px(0),
+                bottom: px(crate::MARGIN),
+                flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Center,
+                row_gap: px(crate::actions::PAD),
+                ..default()
+            },
+            Pickable::IGNORE,
+            DespawnOnExit(Screen::Match),
+        ))
+        .add_children(&[said, display]);
 }
 
 /// The mode the selection calls for the display to show in.
