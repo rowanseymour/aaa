@@ -133,13 +133,9 @@ impl Definitions {
         let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
         let mut generals: Vec<defs::General> = Vec::new();
         let mut descriptions: Vec<defs::Description> = Vec::new();
-        for Scoped {
-            file,
-            root,
-            templates,
-        } in scoped(files)
-        {
-            for block in root.blocks() {
+        for scope in scoped(files) {
+            let file = scope.file;
+            for block in scope.root.blocks() {
                 let kind = block.kind().unwrap_or("");
                 if kind.eq_ignore_ascii_case("Thing") {
                     let Some(id) = block.value("ids").map(Id::from) else {
@@ -148,7 +144,7 @@ impl Definitions {
                     if ids.contains(&id) {
                         break;
                     }
-                    if let Ok(thing) = templates.deserialize(block) {
+                    if let Some(thing) = scope.deserialize(block) {
                         ids.insert(id.clone());
                         things.push(Template {
                             file: file.to_string(),
@@ -157,25 +153,25 @@ impl Definitions {
                         });
                     }
                 } else if kind.eq_ignore_ascii_case("Property")
-                    && let Ok(p) = templates.deserialize::<defs::Property>(block)
+                    && let Some(p) = scope.deserialize::<defs::Property>(block)
                     && let Some(id) = p.ids.clone()
                 {
                     property_files.insert(id.clone(), file.to_string());
                     properties.insert(id, p);
                 } else if kind.eq_ignore_ascii_case("AbilityDefinition")
-                    && let Ok(a) = templates.deserialize::<defs::AbilityDefinition>(block)
+                    && let Some(a) = scope.deserialize::<defs::AbilityDefinition>(block)
                     && let Some(id) = a.ids.clone()
                     && !abilities.iter().any(|(known, _)| *known == id)
                 {
                     abilities.push((id, a));
                 } else if kind.eq_ignore_ascii_case("Faction")
-                    && let Ok(g) = templates.deserialize::<defs::General>(block)
+                    && let Some(g) = scope.deserialize::<defs::General>(block)
                     && let Some(id) = &g.ids
                     && !generals.iter().any(|known| known.ids.as_ref() == Some(id))
                 {
                     generals.push(g);
                 } else if kind.eq_ignore_ascii_case("Description")
-                    && let Ok(d) = templates.deserialize::<defs::Description>(block)
+                    && let Some(d) = scope.deserialize::<defs::Description>(block)
                 {
                     descriptions.push(d);
                 }
@@ -205,8 +201,24 @@ impl Scoped<'_> {
         &'s self,
         kind: &'s str,
     ) -> impl Iterator<Item = T> + 's {
-        (self.root.blocks_of(kind)).filter_map(|b| self.templates.deserialize(b).ok())
+        (self.root.blocks_of(kind)).filter_map(|b| self.deserialize(b))
     }
+
+    /// One of its blocks as `T`, resolved against its templates.
+    fn deserialize<T: serde::de::DeserializeOwned>(&self, block: &tgi::Block) -> Option<T> {
+        logged(self.file, block, self.templates.deserialize(block))
+    }
+}
+
+/// What a block read as, or `None` with a warning: a block that doesn't
+/// read is left out, as the game leaves it out, but is most likely a type
+/// here that doesn't match the data.
+fn logged<T>(file: &str, block: &tgi::Block, read: Result<T, tgi::de::Error>) -> Option<T> {
+    read.map_err(|e| {
+        let kind = block.kind().unwrap_or("");
+        log::warn!("{file}: {kind} block at line {}: {e}", block.line);
+    })
+    .ok()
 }
 
 /// The files, in the order they load, that don't fail to, with the
@@ -1270,18 +1282,14 @@ impl GameData {
         let files = scoped(&files);
         let water = water_colors(&files);
         let mut out = HashMap::new();
-        for Scoped {
-            file,
-            root,
-            templates,
-        } in &files
-        {
+        for scope in &files {
+            let (file, root) = (scope.file, scope.root);
             if !file.to_ascii_lowercase().starts_with("terrain/") {
                 continue;
             }
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             for block in root.blocks_of("Terrain") {
-                let Ok(terrain) = templates.deserialize::<defs::Terrain>(block) else {
+                let Some(terrain) = scope.deserialize::<defs::Terrain>(block) else {
                     continue;
                 };
                 let water = terrain.ids.as_ref().and_then(|id| water.get(id));
@@ -2076,9 +2084,12 @@ impl GameData {
         let menu = (self.read("UI/Menus/main.tgi")).and_then(|b| {
             let parsed = tgi::parse_bytes(&b);
             let block = parsed.root.blocks_of("MainMenuInterface").next()?;
-            tgi::from_block::<defs::Interface>(block)
-                .ok()?
-                .interface_music
+            logged(
+                "UI/Menus/main.tgi",
+                block,
+                tgi::from_block::<defs::Interface>(block),
+            )?
+            .interface_music
         });
         MusicSettings {
             silent: id(|v| v.audio_music_silent.clone())
@@ -2174,14 +2185,10 @@ impl GameData {
         let files = self.parse_tgis(|n| n.starts_with("cursors/"));
         let files = scoped(&files);
         let mut out = HashMap::new();
-        for Scoped {
-            file,
-            root,
-            templates,
-        } in &files
-        {
+        for scope in &files {
+            let (file, root) = (scope.file, scope.root);
             for block in root.blocks_of("Cursor") {
-                let Ok(c) = templates.deserialize::<defs::Cursor>(block) else {
+                let Some(c) = scope.deserialize::<defs::Cursor>(block) else {
                     continue;
                 };
                 let (Some(ids), Some(pattern)) = (c.ids, c.frame_filename) else {
@@ -2211,16 +2218,12 @@ impl GameData {
         let files = self.parse_tgis(|_| true);
         let files = scoped(&files);
         let mut out = HashMap::new();
-        for Scoped {
-            file,
-            root,
-            templates,
-        } in &files
-        {
+        for scope in &files {
+            let (file, root) = (scope.file, scope.root);
             // Ground decals are declared as things of a VFX category.
             let blocks = root.blocks_of("VFX").chain(root.blocks_of("Thing"));
             for block in blocks {
-                let Ok(v) = templates.deserialize::<defs::Vfx>(block) else {
+                let Some(v) = scope.deserialize::<defs::Vfx>(block) else {
                     continue;
                 };
                 let is_vfx = v
@@ -2250,15 +2253,11 @@ impl GameData {
         let files = self.parse_tgis(|n| n.starts_with("organizations/"));
         let files = scoped(&files);
         let mut out = HashMap::new();
-        for Scoped {
-            file,
-            root,
-            templates,
-        } in &files
-        {
+        for scope in &files {
+            let (file, root) = (scope.file, scope.root);
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             for block in root.blocks_of("Formation") {
-                let Ok(f) = templates.deserialize::<defs::Formation>(block) else {
+                let Some(f) = scope.deserialize::<defs::Formation>(block) else {
                     continue;
                 };
                 let Some(ids) = f.ids else {
@@ -2377,7 +2376,7 @@ impl GameData {
             .and_then(|b| {
                 let parsed = tgi::parse_bytes(&b);
                 let set = parsed.root.blocks_of("TransitionSet").next()?;
-                let set: defs::TransitionSet = tgi::from_block(set).ok()?;
+                let set: defs::TransitionSet = logged(DIR, set, tgi::from_block(set))?;
                 set.path_prefix.map(|p| format!("{DIR}{p}"))
             })
         else {
@@ -2783,7 +2782,7 @@ fn add_renames<T: Clone>(entries: &mut HashMap<Id, T>, translate: &str, node: &s
 fn renames(translate: &str, node: &str) -> HashMap<Id, Id> {
     let mut out = HashMap::new();
     for t in tgi::parse(translate).root.blocks_of("Translate") {
-        let Ok(t) = tgi::from_block::<defs::Translate>(t) else {
+        let Some(t) = logged("translate.tgi", t, tgi::from_block::<defs::Translate>(t)) else {
             continue;
         };
         if !t.node.is_some_and(|n| n.trim().eq_ignore_ascii_case(node)) {
@@ -3582,6 +3581,22 @@ mod tests {
             Some("UI/Game/ActionButtons/IconMove.png")
         );
         assert_eq!(ui_path("NULL"), None);
+    }
+
+    #[test]
+    fn blocks_that_dont_read_are_left_out() {
+        let files = [(
+            "terrain/t.tgi".to_string(),
+            tgi::parse(
+                "[Terrain]\n{\n\tbase_priority = high\n}\n[Terrain]\n{\n\tbase_priority = 2\n}\n",
+            ),
+        )];
+        let files = scoped(&files);
+        let read: Vec<defs::Terrain> = files[0].read("Terrain").collect();
+        assert_eq!(
+            read.iter().map(|t| t.base_priority).collect::<Vec<_>>(),
+            [2]
+        );
     }
 
     #[test]
