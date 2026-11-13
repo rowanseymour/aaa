@@ -735,9 +735,11 @@ fn main() -> ExitCode {
     if let Some(remote) = remote {
         app.insert_resource(remote);
     }
+    let strings = game.strings();
     app.insert_resource(lobby::Nations(game.nations()))
         .insert_resource(lobby::Handicaps::new(game.handicaps()))
-        .insert_resource(confirm::Words::of(&game.strings()))
+        .insert_resource(lobby::Leaving::of(&strings))
+        .insert_resource(confirm::Words::of(&strings))
         .insert_resource(options::Options::new(&mut game))
         .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
         .insert_resource(music::Music::new(&mut game))
