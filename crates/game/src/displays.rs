@@ -20,7 +20,7 @@ use crate::{Screen, minimap};
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
 
 /// A glyph's size on its button.
-const GLYPH_SIZE: f32 = 22.0;
+pub const GLYPH_SIZE: f32 = 22.0;
 
 /// The layout the windows' places and sizes are given on.
 const LAYOUT: Vec2 = Vec2::new(1024.0, 768.0);

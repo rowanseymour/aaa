@@ -16,7 +16,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
-use crate::displays::Rim;
+use crate::displays::{self, Rim};
 use crate::effects::Effects;
 use crate::keys::{self, Bindings};
 use crate::sound::Sounds;
@@ -195,12 +195,12 @@ pub struct BorderButton {
 #[derive(Component)]
 pub struct BorderRing;
 
-const RING_SIZE: f32 = 18.0;
 const BORDER_NAME: &str = "control_panel_ButtonSupplyBorder_ToolTip";
 const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
 
 /// Loads how the border looks, and spawns the buttons that show and hide
 /// it and that cycle through detached regiments.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -209,6 +209,7 @@ pub fn spawn(
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
     border: Res<Border>,
+    mut icons: ResMut<displays::Icons>,
 ) {
     let shown = border.0;
     let game = &mut loaded.game;
@@ -222,6 +223,7 @@ pub fn spawn(
     let icon = (game.read(CYCLE_ICON))
         .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
         .map(|i| images.add(i));
+    let ring = icons.get(displays::icon!("ring"), &mut images, formats.0);
     let strings = game.strings();
     let said = crate::ui::said(&strings);
     let name = said(BORDER_NAME, "Toggle Supply Border");
@@ -247,14 +249,12 @@ pub fn spawn(
             DespawnOnExit(Screen::Match),
             children![(
                 BorderRing,
+                ImageNode::new(ring).with_color(colour),
                 Node {
-                    width: px(RING_SIZE),
-                    height: px(RING_SIZE),
-                    border: UiRect::all(px(3)),
-                    border_radius: BorderRadius::MAX,
+                    width: px(displays::GLYPH_SIZE),
+                    height: px(displays::GLYPH_SIZE),
                     ..default()
                 },
-                BorderColor::all(colour),
                 Pickable::IGNORE,
             )],
         ))
@@ -381,7 +381,7 @@ pub fn show_border_button(
     time: Res<Time>,
     mut sounds: ResMut<Sounds>,
     mut buttons: Query<(&mut BorderButton, Ref<Hovered>, &mut Edge)>,
-    mut rings: Query<&mut BorderColor, With<BorderRing>>,
+    mut rings: Query<&mut ImageNode, With<BorderRing>>,
 ) {
     // The look is inserted afresh with each match's button.
     let restyle = border.is_changed() || theme.is_changed() || look.is_changed();
@@ -406,8 +406,10 @@ pub fn show_border_button(
         true => look.colour,
         false => theme.edge(Edge::Border),
     };
-    for mut colour in &mut rings {
-        colour.set_if_neq(BorderColor::all(ring));
+    for mut image in &mut rings {
+        if image.color != ring {
+            image.color = ring;
+        }
     }
 }
 
