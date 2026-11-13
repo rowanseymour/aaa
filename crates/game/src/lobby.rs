@@ -16,7 +16,7 @@ use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Surface, button, card, clickable, dropdown, inert, label,
     opener, padded, panel, switch, text,
 };
-use crate::{Data, Pending, Screen, Side};
+use crate::{Data, Pending, Screen, Side, confirm};
 
 /// Who plays a side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -439,8 +439,20 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
         .spawn((ChildOf(right), button("Launch", Font::Large)))
         .observe(launch);
     commands
-        .spawn((ChildOf(right), button("Back", Font::Large)))
-        .observe(go(Screen::NewGame));
+        .spawn((ChildOf(right), button("Exit", Font::Large)))
+        .observe(ask_exit);
+}
+
+/// Asks whether to leave the lobby, and goes back to the new game menu if so.
+fn ask_exit(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) {
+    let question = words.leave_lobby.clone();
+    confirm::confirm(
+        &mut commands,
+        &words,
+        Screen::Lobby,
+        question,
+        go(Screen::NewGame),
+    );
 }
 
 fn choose_map(
