@@ -31,6 +31,7 @@ mod lobby;
 mod menu;
 mod messages;
 mod minimap;
+mod music;
 mod options;
 mod pane;
 mod pause;
@@ -587,6 +588,7 @@ fn main() -> ExitCode {
     app.add_plugins(render)
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
+        .add_plugins(music::MusicPlugin)
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
@@ -734,6 +736,7 @@ fn main() -> ExitCode {
     app.insert_resource(lobby::Nations(game.nations()))
         .insert_resource(options::Options::new(&mut game))
         .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
+        .insert_resource(music::Music::new(&mut game))
         .insert_resource(Data(game));
     match map {
         Some(name) => {

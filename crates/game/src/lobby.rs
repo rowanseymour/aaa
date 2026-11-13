@@ -1128,6 +1128,7 @@ mod tests {
             placeholders: HashMap::new(),
             generals: Vec::new(),
             flag: None,
+            music: None,
         };
         let all = [nation("nation_usa"), nation("nation_ger")];
         let mut players = players();
@@ -1157,6 +1158,7 @@ mod tests {
             placeholders: HashMap::new(),
             generals: generals.iter().map(|g| general(g)).collect(),
             flag: None,
+            music: None,
         };
         let usa = nation("nation_usa", &["patton", "patton_tutorial", "nimitz"]);
         let nations = HashMap::from([

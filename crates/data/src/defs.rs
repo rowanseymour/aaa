@@ -825,6 +825,8 @@ pub struct Nation {
     pub factions: Option<String>,
     /// The lobby's image of its flag.
     pub flag_icon: Option<String>,
+    /// The music its player hears in a match.
+    pub game_music: Option<Id>,
 }
 
 /// A bonus or penalty the lobby can give a side the computer plays.
@@ -1005,6 +1007,11 @@ pub struct UVars {
     /// The id of the [`HotkeyConfiguration`] in use.
     #[serde(rename = "HotkeyConfiguration")]
     pub hotkey_configuration: Option<Id>,
+    /// The options' Main and Music volume, as they start.
+    #[serde(rename = "AudioMainVolume")]
+    pub audio_main_volume: Option<f32>,
+    #[serde(rename = "AudioMusicVolume")]
+    pub audio_music_volume: Option<f32>,
 }
 
 /// A set of hotkeys players can choose.
@@ -1031,6 +1038,30 @@ pub struct AVars {
     /// The side, in world units, of the squares the terrain is drawn in.
     #[serde(rename = "TerrainBlockSize")]
     pub terrain_block_size: Option<f32>,
+    /// What streamed audio plays in place of a file the archives don't have.
+    #[serde(rename = "DefaultAudioStreamingResource")]
+    pub default_audio_streaming_resource: Option<String>,
+    /// The music that plays nothing, for stopping music.
+    #[serde(rename = "AudioMusicSilent")]
+    pub audio_music_silent: Option<Id>,
+    /// What other audio falls to while audio that fades it plays, over how
+    /// many seconds, and how long after the last such it starts to recover.
+    #[serde(rename = "AudioFadeVolume")]
+    pub audio_fade_volume: Option<f32>,
+    #[serde(rename = "AudioFadeTime")]
+    pub audio_fade_time: Option<f32>,
+    #[serde(rename = "AudioRecoverFromFadeTime")]
+    pub audio_recover_from_fade_time: Option<f32>,
+    /// The match music of someone watching rather than playing.
+    #[serde(rename = "ObserverGameMusic")]
+    pub observer_game_music: Option<Id>,
+}
+
+/// A screen of the interface.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Interface {
+    /// The music it asks for when shown; none leaves what's playing.
+    pub interface_music: Option<Id>,
 }
 
 /// One of the resources sides earn and spend.
