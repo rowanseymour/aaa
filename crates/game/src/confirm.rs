@@ -11,13 +11,12 @@ use bevy::ui_widgets::Activate;
 use crate::Screen;
 use crate::ui::{self, Font, layer};
 
-/// What the dialog's buttons say, and the game's questions.
+/// What the dialog's buttons say, and the game's question.
 #[derive(Resource)]
 pub struct Words {
     ok: String,
     cancel: String,
-    pub quit: String,
-    /// The game's question before what can't be undone in a match.
+    /// The game's question before what can't be undone.
     pub sure: String,
 }
 
@@ -27,9 +26,6 @@ impl Words {
         Words {
             ok: said("button_ok", "Ok"),
             cancel: said("button_cancel", "Cancel"),
-            // The strings' own quit question leaves the game's name to be
-            // filled in, which only the quit button's label gives.
-            quit: format!("{}?", said("game_menu_ButtonQuit_Client_View_text", "Quit")),
             sure: said("important_command_confirm", "Are you sure?"),
         }
     }
