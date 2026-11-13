@@ -101,6 +101,20 @@ pub(crate) const GLYPHS: [(&str, &str); 7] = [
     ("building_limit_provided", "building"),
 ];
 
+/// Each resource's glyph, by the resource's field name in the data.
+pub(crate) fn glyphs(
+    game: &GameData,
+    images: &mut Assets<Image>,
+    formats: bevy::image::CompressedImageFormats,
+) -> HashMap<&'static str, Handle<Image>> {
+    let glyph = |&(kind, name): &(&'static str, &str)| {
+        let path = format!("{GLYPH_DIR}/{name}.png");
+        let image = textures::decode(&game.read(&path)?, &path, formats, true)?;
+        Some((kind, images.add(image)))
+    };
+    GLYPHS.iter().filter_map(glyph).collect()
+}
+
 /// What an order does once its button is pressed.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Give {
@@ -541,6 +555,7 @@ pub fn spawn(
     formats: Res<CompressedImageFormatSupport>,
 ) {
     let game = &loaded.game;
+    let glyphs = glyphs(game, &mut images, formats.0);
     let mut image = |game: &GameData, path: &str| {
         let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
         Some(images.add(image))
@@ -608,10 +623,6 @@ pub fn spawn(
     );
     let research_requires = title("research_error_missing_requirements|ss", "%s required: %s");
     let research_refused = title("research_error_generic|s", "Could not research %s");
-    let glyphs: HashMap<&str, Handle<Image>> = GLYPHS
-        .iter()
-        .filter_map(|&(kind, name)| Some((kind, image(game, &format!("{GLYPH_DIR}/{name}.png"))?)))
-        .collect();
     let quantities = |amounts: &[aaa_data::Amount], earned: bool| -> Vec<Quantity> {
         amounts
             .iter()

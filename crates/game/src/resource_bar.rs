@@ -2,8 +2,6 @@
 //! they net of each resource a minute, and a second bar under it previewing
 //! what the order under the cursor would make of them.
 
-use std::collections::HashMap;
-
 use aaa_map::Regiment;
 use aaa_render::textures;
 use aaa_sim::{Balance, Change};
@@ -77,14 +75,7 @@ pub fn spawn(
         "game_interface_UpkeepShortageIcon_ToolTip",
         "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
     );
-    let glyphs: HashMap<&str, Handle<Image>> = crate::actions::GLYPHS
-        .iter()
-        .filter_map(|&(kind, name)| {
-            let path = format!("{}/{name}.png", crate::actions::GLYPH_DIR);
-            let image = textures::decode(&game.read(&path)?, &path, formats.0, true)?;
-            Some((kind, images.add(image)))
-        })
-        .collect();
+    let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
         root.spawn((
             Bar(preview),

@@ -1,7 +1,8 @@
 //! The object display along the bottom, between the minimap and the action
 //! buttons, describing what's selected, laid out as the game's own but
 //! without its chrome. Its title names it and its owner, and a line along
-//! the bottom says what it's doing. It shows in one of the game's four
+//! the bottom says what it earns and takes to keep, and what it's doing.
+//! It shows in one of the game's four
 //! [`Mode`]s:
 //!
 //! - Simple actor, for a building or a unit on its own: its portrait over
@@ -19,7 +20,8 @@
 //!
 //! Beside the title of a regiment, or of the building one unpacked into,
 //! is an icon for each property it holds that has one. What the pointer's
-//! on says what it is in a box above the display.
+//! on says what it is in a box above the display: a part that stands for
+//! a thing, such as a unit's card, says of that thing what [`Says`] has.
 //!
 //! The portrait of one thing is drawn from a model: the face its template
 //! names, a regiment's being its commanding officer's, its owner's general
@@ -34,8 +36,9 @@ use aaa_render::MapAssets;
 use aaa_render::overlay::BannerImages;
 use aaa_render::portrait::{Sitter, Stage};
 use aaa_render::textures;
-use aaa_sim::{Order, State, World};
+use aaa_sim::{Ledger, Order, Pause, Relation, State, World};
 use bevy::image::CompressedImageFormatSupport;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
@@ -116,10 +119,8 @@ fn slot_at(i: usize, count: usize) -> [f32; 2] {
     (SLOTS_AT + place * step).to_array()
 }
 
-/// The strings' keys for what an HQ's empty place says under the pointer,
-/// and a relay's stockpile bar, given what's left and what it holds.
+/// The strings' key for what an HQ's empty place says under the pointer.
 const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
-const STOCKPILE: &str = "template_game_SupplyStockpileBar_ToolTip|ff";
 
 /// The icons for what's selected's properties run along the top into the
 /// display's right corner, clear of the longest name: how far the last is
@@ -204,7 +205,7 @@ enum Actor {
 pub enum Fill {
     /// A unit's health.
     Unit(usize),
-    /// A regiment's units' health together.
+    /// A regiment's units' health, evened out over them.
     Regiment(usize),
     Building(usize),
     /// How far along a building's first commission is.
@@ -213,8 +214,34 @@ pub enum Fill {
     Stockpile(usize),
 }
 
+/// Whose tooltip a part of the display gives under the pointer.
+#[derive(Component, Clone, Copy)]
+pub enum Says {
+    Unit(usize),
+    Building(usize),
+    Regiment(usize),
+    /// What a building is commissioning, by place in its queue, and
+    /// whether it shows in an HQ's place, where one that waits still says
+    /// how far along it is.
+    Queued {
+        building: usize,
+        place: usize,
+        held: bool,
+    },
+}
+
+/// What makes a part of the display give `of`'s tooltip.
+fn says(of: Says) -> impl Bundle {
+    (of, Hint(String::new()))
+}
+
+/// The line saying what a regiment or building counts for in its side's
+/// economy, with what it says now: see [`economy`].
+#[derive(Component, Default)]
+pub struct EconomyLine(Vec<(&'static str, String)>);
+
 /// The line saying what a regiment or building is doing.
-#[derive(Component)]
+#[derive(Component, Clone, Copy)]
 pub enum Status {
     Regiment(usize),
     Building(usize),
@@ -241,8 +268,10 @@ pub struct Queued(usize);
 /// What the display is drawn with, loaded with the match.
 #[derive(Resource)]
 pub struct Looks {
-    /// Templates' names, by id.
+    /// Templates' and technologies' names, by id.
     names: HashMap<Id, String>,
+    /// Each resource's glyph, by the resource's field name in the data.
+    glyphs: HashMap<&'static str, Handle<Image>>,
     strings: Arc<aaa_data::Strings>,
     /// How each property that has an icon shows, by id.
     properties: Arc<HashMap<Id, PropertyLook>>,
@@ -306,14 +335,19 @@ pub fn spawn(
         let slot = layouts.get(&o.layout).and_then(|l| l.primary);
         (id.clone(), slot.and_then(|s| o.slots.get(s)?.clone()))
     });
+    let (technologies, listings) = (game.technologies(), game.listings());
+    let names = (technologies
+        .iter()
+        .map(|(id, t)| (id.clone(), t.name.clone())))
+    .chain((listings.iter()).map(|(id, l)| (id.clone(), l.name.clone())));
+    let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
-        names: (game.listings().iter())
-            .map(|(id, l)| (id.clone(), l.name.clone()))
-            .collect(),
+        names: names.collect(),
+        glyphs,
         strings: game.strings(),
         properties: game.property_looks(),
-        technologies: (game.technologies().iter())
+        technologies: (technologies.iter())
             .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
             .collect(),
         images: HashMap::new(),
@@ -616,8 +650,15 @@ impl Ui<'_> {
                 label(name, Font::HudTitle, Ink::Body),
             ));
             if let Some(p) = player {
+                // The owner's own colour, whoever's looking, as the lobby marks it.
+                let [red, green, blue] = p.rgb;
                 display.spawn((
-                    at(8.0, 21.0, 300.0, 14.0),
+                    at(9.0, 22.0, 3.0, 11.0),
+                    BackgroundColor(Color::srgb(red, green, blue)),
+                    Pickable::IGNORE,
+                ));
+                display.spawn((
+                    at(18.0, 21.0, 290.0, 14.0),
                     ui::coloured(self.leaders.owner(p, self.local), Font::Hud, colour),
                 ));
             }
@@ -625,8 +666,16 @@ impl Ui<'_> {
     }
 
     /// The portrait's box, holding `template`'s picture until [`portray`]
-    /// has a portrait to show there, over a bar filled as `fill` says.
-    fn portrait(&mut self, commands: &mut Commands, root: Entity, template: &str, fill: Fill) {
+    /// has a portrait to show there, over a bar filled as `fill` says, both
+    /// giving `of`'s tooltip.
+    fn portrait(
+        &mut self,
+        commands: &mut Commands,
+        root: Entity,
+        template: &str,
+        fill: Fill,
+        of: Says,
+    ) {
         let picture = self.picture(template);
         let [left, top, width, height] = PORTRAIT_BOX;
         let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
@@ -635,17 +684,13 @@ impl Ui<'_> {
             let inside = || at(left + in_left, top + in_top, PORTRAIT.x, PORTRAIT.y);
             // What shows round a portrait that doesn't fill its box.
             display.spawn((inside(), BackgroundColor(Color::BLACK), Pickable::IGNORE));
-            display.spawn((
-                inside(),
-                picture_node(picture),
-                PortraitBox,
-                Pickable::IGNORE,
-            ));
+            display.spawn((inside(), picture_node(picture), PortraitBox, says(of)));
             let bar_top = top + height - in_bottom + 1.0;
             bar(
                 display,
                 at(left + in_left, bar_top, PORTRAIT.x, in_bottom - 3.0),
                 fill,
+                Some(of),
             );
         });
     }
@@ -682,21 +727,39 @@ impl Ui<'_> {
         }
     }
 
-    /// The line along the bottom saying what it's doing.
+    /// The line along the bottom saying what it counts for in its side's
+    /// economy, and what it's doing.
     fn status(&self, commands: &mut Commands, root: Entity, status: Status) {
         commands.entity(root).with_children(|display| {
             display
                 .spawn((at(144.0, 158.0, 286.0, 18.0), Surface::Track))
-                .with_child((
-                    Node {
-                        position_type: PositionType::Absolute,
-                        right: px(6),
-                        top: px(2),
-                        ..default()
-                    },
-                    label("", Font::Hud, Ink::Body),
-                    status,
-                ));
+                .with_children(|line| {
+                    // Filled in by [`refresh`], as what it counts for changes.
+                    line.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(4),
+                            top: px(0),
+                            bottom: px(0),
+                            align_items: AlignItems::Center,
+                            column_gap: px(6),
+                            ..default()
+                        },
+                        EconomyLine::default(),
+                        status,
+                        Pickable::IGNORE,
+                    ));
+                    line.spawn((
+                        Node {
+                            position_type: PositionType::Absolute,
+                            right: px(6),
+                            top: px(2),
+                            ..default()
+                        },
+                        label("", Font::Hud, Ink::Body),
+                        status,
+                    ));
+                });
         });
     }
 
@@ -769,25 +832,31 @@ impl Ui<'_> {
             let inside = at(left, top, side, side);
             match (place, building) {
                 (Place::Regiment(r), _) => {
-                    card.insert((Button, Pick(r))).observe(pick);
+                    card.insert((Button, Pick(r), says(Says::Regiment(r))));
+                    card.observe(pick);
                     card.with_children(|card| {
                         self.banner(card, inside, r);
                         let [left, top, width, height] = SLOT_HEALTH;
-                        bar(card, at(left, top, width, height), Fill::Regiment(r));
+                        bar(card, at(left, top, width, height), Fill::Regiment(r), None);
                     });
                 }
                 (Place::Queued(n), Some(b)) => {
                     let queue = &self.sim.buildings[b].queue;
                     let template = queue.get(n).map(|c| c.template().to_string());
                     let picture = template.and_then(|t| self.picture(&t));
-                    card.insert((Button, Queued(n))).observe(cancel);
+                    let of = Says::Queued {
+                        building: b,
+                        place: n,
+                        held: true,
+                    };
+                    card.insert((Button, Queued(n), says(of))).observe(cancel);
                     card.with_children(|card| {
                         card.spawn((inside, picture_node(picture), Pickable::IGNORE));
                         let [left, top, width, height] = SLOT_PROGRESS;
                         let node = at(left, top, width, height);
                         // Only the first is under way.
                         match n {
-                            0 => bar(card, node, Fill::Progress(b)),
+                            0 => bar(card, node, Fill::Progress(b), None),
                             _ => drop(card.spawn(meter(node, Gauge::Progress))),
                         }
                     });
@@ -830,27 +899,28 @@ impl Ui<'_> {
         }
     }
 
-    /// A regiment's name and owner, and its leader's portrait over its
-    /// health.
+    /// A regiment's name and owner, and its captain's portrait over the
+    /// captain's health.
     fn heading(&mut self, commands: &mut Commands, root: Entity, r: usize) {
         let regiment = &self.sim.regiments[r];
         self.title(commands, root, self.regiment_name(r), regiment.owner);
-        let leader = leader(self.sim, r);
-        let template = self.sim.units[leader].template.clone();
-        self.portrait(commands, root, template.as_str(), Fill::Regiment(r));
+        let captain = captain(self.sim, self.looks, r);
+        let template = self.sim.units[captain].template.clone();
+        let (fill, of) = (Fill::Unit(captain), Says::Unit(captain));
+        self.portrait(commands, root, template.as_str(), fill, of);
     }
 
     fn regiment(&mut self, commands: &mut Commands, root: Entity, r: usize) {
         self.heading(commands, root, r);
-        let leader = leader(self.sim, r);
+        let captain = captain(self.sim, self.looks, r);
         // An HQ shows its places where a regiment shows its units.
         let is_hq = !self.detail.slots.is_empty();
         if !lone(self.sim, r) && !is_hq {
             // Cards across, wrapping, as the game's has them,
             // for all but an officer, who has the portrait.
-            let officer = is_officer(self.sim.units[leader].template.as_str());
+            let officer = is_officer(self.sim.units[captain].template.as_str());
             let mut units = self.sim.regiments[r].units.clone();
-            units.retain(|&u| !(officer && u == leader));
+            units.retain(|&u| !(officer && u == captain));
             let pictures: Vec<_> = units
                 .iter()
                 .map(|&u| self.picture(self.sim.units[u].template.as_str()))
@@ -869,13 +939,14 @@ impl Ui<'_> {
                     ))
                     .with_children(|cards| {
                         for (&u, picture) in units.iter().zip(pictures) {
+                            let card = framed(Node {
+                                width: px(42.0 * SCALE),
+                                height: px(47.0 * SCALE),
+                                flex_direction: FlexDirection::Column,
+                                ..default()
+                            });
                             cards
-                                .spawn(framed(Node {
-                                    width: px(42.0 * SCALE),
-                                    height: px(47.0 * SCALE),
-                                    flex_direction: FlexDirection::Column,
-                                    ..default()
-                                }))
+                                .spawn((card, says(Says::Unit(u))))
                                 .with_children(|card| {
                                     card.spawn((
                                         Node {
@@ -895,6 +966,7 @@ impl Ui<'_> {
                                             ..default()
                                         },
                                         Fill::Unit(u),
+                                        None,
                                     );
                                 });
                         }
@@ -904,7 +976,7 @@ impl Ui<'_> {
         if !lone(self.sim, r) {
             commands.entity(root).with_children(|display| {
                 display
-                    .spawn(framed(at(366.0, 44.0, 63.0, 77.0)))
+                    .spawn((framed(at(366.0, 44.0, 63.0, 77.0)), says(Says::Regiment(r))))
                     .with_children(|card| {
                         self.banner(
                             card,
@@ -940,10 +1012,17 @@ impl Ui<'_> {
             let left = 8.0 + i as f32 * (CARD + 4.0);
             let icon = self.picture(self.sim.regiments[r].template.as_str());
             let units = self.sim.regiments[r].units.clone();
+            let captain = captain(self.sim, self.looks, r);
+            // A thing on its own answers for itself.
+            let of = match lone(self.sim, r) {
+                true => Says::Unit(captain),
+                false => Says::Regiment(r),
+            };
             let mut card = commands.spawn((
                 framed(at(left, 40.0, CARD, 138.0)),
                 Button,
                 Pick(r),
+                says(of),
                 ChildOf(root),
             ));
             card.observe(pick);
@@ -960,13 +1039,14 @@ impl Ui<'_> {
                     },
                     r,
                 );
-                bar(card, at(2.0, 50.0, CARD - 6.0, 5.0), Fill::Regiment(r));
-                // Two columns of the units' health.
+                // The wide bar is the captain's, then one for each unit.
+                let wide = at(2.0, 50.0, CARD - 6.0, 5.0);
+                bar(card, wide, Fill::Unit(captain), Some(Says::Unit(captain)));
                 let half = (CARD - 8.0) / 2.0;
                 for (n, &u) in units.iter().enumerate() {
                     let (col, row) = ((n % 2) as f32, (n / 2) as f32);
                     let node = at(2.0 + col * (half + 2.0), 58.0 + row * 5.0, half, 3.0);
-                    bar(card, node, Fill::Unit(u));
+                    bar(card, node, Fill::Unit(u), Some(Says::Unit(u)));
                 }
                 card.spawn((
                     at(13.0, 106.0, 40.0, 28.0),
@@ -984,13 +1064,13 @@ impl Ui<'_> {
         let template = building.template.clone();
         let name = building_name(self.sim, &self.looks.names, &self.looks.strings, b);
         self.title(commands, root, name, building.owner);
-        self.portrait(commands, root, template.as_str(), Fill::Building(b));
+        let of = Says::Building(b);
+        self.portrait(commands, root, template.as_str(), Fill::Building(b), of);
         if self.sim.supply_of(b).is_some_and(|s| s.relay) {
-            let fill = (Fill::Stockpile(b), Hint(String::new()));
             let node = at(PORTRAIT_BOX[0], 176.0, PORTRAIT_BOX[2], 3.0);
-            commands
-                .entity(root)
-                .with_child((meter(node, Gauge::Stockpile), fill));
+            commands.entity(root).with_children(|display| {
+                bar(display, node, Fill::Stockpile(b), Some(of));
+            });
         }
     }
 
@@ -1014,12 +1094,22 @@ impl Ui<'_> {
                         )
                     }
                 };
-                display
-                    .spawn((framed(node), picture_node(picture), Button, Queued(i)))
-                    .observe(cancel);
+                let of = Says::Queued {
+                    building: b,
+                    place: i,
+                    held: false,
+                };
+                let card = (framed(node), picture_node(picture), Button, Queued(i));
+                display.spawn((card, says(of))).observe(cancel);
             }
             if !queue.is_empty() {
-                bar(display, at(240.0, 110.0, 64.0, 4.0), Fill::Progress(b));
+                let of = Says::Queued {
+                    building: b,
+                    place: 0,
+                    held: false,
+                };
+                let node = at(240.0, 110.0, 64.0, 4.0);
+                bar(display, node, Fill::Progress(b), Some(of));
             }
         });
     }
@@ -1150,61 +1240,77 @@ pub fn portray(
     }
 }
 
-/// Keeps the display's bars, pictures and status up to date.
+/// Keeps the display's bars, pictures, tooltips and status up to date.
+#[allow(clippy::too_many_arguments)]
 pub fn refresh(
     sim: Res<Sim>,
     looks: Res<Looks>,
-    mut bars: Query<(&Fill, &mut Meter, Option<&mut Hint>)>,
+    drawn: Res<Drawn>,
+    leaders: Res<Leaders>,
+    local: Res<Local>,
+    mut bars: Query<(&Fill, &mut Meter)>,
+    mut tips: Query<(&Says, &mut Hint, &Hovered)>,
     mut pictures: Query<(&UnitPicture, &mut Shade)>,
     mut statuses: Query<(&Status, &mut Text)>,
+    mut lines: Query<(Entity, &Status, &mut EconomyLine)>,
+    mut commands: Commands,
 ) {
     let sim = &sim.0;
-    for (fill, mut meter, hint) in &mut bars {
-        if let (Fill::Stockpile(b), Some(mut hint)) = (*fill, hint) {
-            let max = sim.supply_of(b).map_or(0.0, |s| s.stockpile_max);
-            let left = sim.buildings[b].supply.stockpile;
-            let amounts = [format!("{left:.0}"), format!("{max:.0}")];
-            let words = amounts
-                .iter()
-                .fold(looks.said(STOCKPILE), |w, a| w.replacen("%.0f", a, 1));
-            if hint.0 != words {
-                hint.0 = words;
-            }
-        }
-        let share = match *fill {
-            Fill::Unit(u) => unit_health(sim, u),
-            Fill::Regiment(r) => {
-                let units = &sim.regiments[r].units;
-                let (have, full) = units.iter().fold((0.0, 0.0), |(h, f), &u| {
-                    let max = sim.units[u].fighter.as_ref().map_or(0.0, |f| f.health);
-                    let now = if sim.units[u].alive() {
-                        sim.units[u].health
-                    } else {
-                        0.0
-                    };
-                    (h + now, f + max)
-                });
-                if full > 0.0 { have / full } else { 1.0 }
-            }
-            Fill::Building(b) => {
-                let b = &sim.buildings[b];
-                b.health / b.fighter.health
-            }
-            Fill::Stockpile(b) => {
-                let max = sim.supply_of(b).map_or(0.0, |s| s.stockpile_max);
-                let left = sim.buildings[b].supply.stockpile;
-                if max > 0.0 { left / max } else { 0.0 }
-            }
-            Fill::Progress(b) => {
-                let b = &sim.buildings[b];
-                b.queue
-                    .front()
-                    .map_or(0.0, |c| b.progress as f32 / c.ticks as f32)
-            }
+    for (fill, mut meter) in &mut bars {
+        let (now, full) = measure(sim, *fill);
+        let share = match (*fill, full > 0.0) {
+            (_, true) => now / full,
+            // What has no health to lose shows whole.
+            (Fill::Unit(_) | Fill::Regiment(_) | Fill::Building(_), false) => 1.0,
+            (Fill::Progress(_) | Fill::Stockpile(_), false) => 0.0,
         };
         if meter.share != share {
             meter.share = share;
         }
+    }
+    let teller = Teller {
+        sim,
+        looks: &looks,
+        drawn: &drawn,
+        leaders: &leaders,
+        local: local.0,
+    };
+    // Only what the pointer's on has anyone to tell.
+    for (says, mut hint, _) in tips.iter_mut().filter(|(.., on)| on.get()) {
+        let words = teller.tip(*says).join("\n");
+        if hint.0 != words {
+            hint.0 = words;
+        }
+    }
+    for (row, status, mut line) in &mut lines {
+        let now = counted(sim, local.0, *status).map_or_else(Vec::new, |l| economy(&l));
+        if line.0 == now {
+            continue;
+        }
+        commands.entity(row).despawn_related::<Children>();
+        commands.entity(row).with_children(|row| {
+            for (kind, figure) in &now {
+                let item = Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(1),
+                    ..default()
+                };
+                row.spawn((item, Pickable::IGNORE)).with_children(|item| {
+                    if let Some(glyph) = looks.glyphs.get(kind) {
+                        item.spawn((
+                            ImageNode::new(glyph.clone()),
+                            Node {
+                                width: px(14),
+                                height: px(14),
+                                ..default()
+                            },
+                        ));
+                    }
+                    item.spawn(label(figure.clone(), Font::Hud, Ink::Body));
+                });
+            }
+        });
+        line.0 = now;
     }
     for (picture, mut shade) in &mut pictures {
         shade.set_if_neq(match sim.units[picture.0].alive() {
@@ -1266,16 +1372,213 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     }
 }
 
-fn unit_health(sim: &World, u: usize) -> f32 {
-    let unit = &sim.units[u];
-    match (&unit.fighter, unit.alive()) {
-        (_, false) => 0.0,
-        (Some(f), true) => unit.health / f.health,
-        (None, true) => 1.0,
+/// How much a bar has of how much it could: health, a commission's
+/// progress out of 100, or supply. Nothing of nothing for what has no
+/// such measure.
+fn measure(sim: &World, fill: Fill) -> (f32, f32) {
+    let unit = |u: usize| {
+        let unit = &sim.units[u];
+        let full = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+        match unit.alive() {
+            true => (unit.health, full),
+            false => (0.0, full),
+        }
+    };
+    match fill {
+        Fill::Unit(u) => unit(u),
+        Fill::Regiment(r) => {
+            let units = sim.regiments[r].units.iter().map(|&u| unit(u));
+            let shares: Vec<f32> = units
+                .filter(|&(_, full)| full > 0.0)
+                .map(|(now, full)| now / full)
+                .collect();
+            match shares.len() {
+                0 => (0.0, 0.0),
+                n => (shares.iter().sum::<f32>() / n as f32, 1.0),
+            }
+        }
+        Fill::Building(b) => {
+            let b = &sim.buildings[b];
+            (b.health, b.fighter.health)
+        }
+        Fill::Progress(b) => {
+            let b = &sim.buildings[b];
+            b.queue.front().map_or((0.0, 0.0), |c| {
+                (100.0 * b.progress as f32 / c.ticks as f32, 100.0)
+            })
+        }
+        Fill::Stockpile(b) => {
+            let max = sim.supply_of(b).map_or(0.0, |s| s.stockpile_max);
+            (sim.buildings[b].supply.stockpile, max)
+        }
     }
 }
 
-/// Whether a regiment is a single unit, such as a truck.
+/// What the tooltips of the display's things read.
+struct Teller<'a> {
+    sim: &'a World,
+    looks: &'a Looks,
+    drawn: &'a Drawn,
+    leaders: &'a Leaders,
+    local: Option<u32>,
+}
+
+impl Teller<'_> {
+    /// The lines of a thing's tooltip: its template's name, then what
+    /// applies to it of its health, its stockpile and its general. A
+    /// regiment has no health of its own to give.
+    fn tip(&self, says: Says) -> Vec<String> {
+        let (sim, looks) = (self.sim, self.looks);
+        let name = |template: &Id| template_name(&looks.names, template.as_str());
+        let row = |key: &str, value: String| self.row(key, value);
+        let of = |(now, full): (f32, f32)| format!("{now:.0}/{full:.0}");
+        match says {
+            Says::Unit(u) => {
+                let unit = &sim.units[u];
+                let mut lines = vec![name(&unit.template)];
+                if unit.fighter.is_some() {
+                    let health = of(measure(sim, Fill::Unit(u)));
+                    lines.push(row("ui_tooltip_item_title_health", health));
+                }
+                // One that's dead says only what its template would.
+                if unit.alive() {
+                    let owner = sim.regiments[unit.regiment].owner;
+                    lines.extend(self.general(&unit.template, owner));
+                }
+                lines
+            }
+            Says::Building(b) => {
+                let building = &sim.buildings[b];
+                let health = of(measure(sim, Fill::Building(b)));
+                let mut lines = vec![
+                    name(&building.template),
+                    row("ui_tooltip_item_title_health", health),
+                ];
+                if sim.supply_of(b).is_some_and(|s| s.relay) {
+                    let stockpile = of(measure(sim, Fill::Stockpile(b)));
+                    lines.push(row("ui_tooltip_item_title_supply_stockpile", stockpile));
+                }
+                lines.extend(self.general(&building.template, building.owner));
+                lines
+            }
+            Says::Regiment(r) => vec![name(&sim.regiments[r].template)],
+            Says::Queued {
+                building: b,
+                place,
+                held,
+            } => {
+                let building = &sim.buildings[b];
+                let Some(commission) = building.queue.get(place) else {
+                    return Vec::new();
+                };
+                let mut lines = vec![name(commission.template())];
+                // Only the first is under way.
+                let (now, _) = match place {
+                    0 => measure(sim, Fill::Progress(b)),
+                    _ => (0.0, 100.0),
+                };
+                if place == 0 || held {
+                    let done = format!("{}%", now as u32);
+                    lines.push(row("ui_tooltip_item_title_production_percentage", done));
+                }
+                if let (0, Some(pause)) = (place, building.paused) {
+                    let why = match pause {
+                        Pause::Limit(_) => "ui_tooltip_queue_paused_unit_limit",
+                        Pause::Disabled => "ui_tooltip_queue_paused_disabled",
+                        Pause::Supply => "ui_tooltip_queue_paused_oos",
+                    };
+                    lines.push(String::new());
+                    lines.push(row("ui_tooltip_item_title_queue_paused", looks.said(why)));
+                }
+                lines.push(looks.said("ui_tooltip_production_queue_item_cancel"));
+                lines
+            }
+        }
+    }
+
+    /// What a template that shows its owner's general says of them: who,
+    /// and to their own side and its allies, their experience.
+    fn general(&self, template: &Id, owner: u32) -> Vec<String> {
+        let general = (self.drawn.0.shows_faction_portrait(template.as_str()))
+            .then(|| self.leaders.0.get(&owner))
+            .flatten();
+        let Some(general) = general else {
+            return Vec::new();
+        };
+        let mut lines = vec![self.row("ui_tooltip_item_general", general.name.clone())];
+        if let (true, Some(experience)) = (
+            ours(self.sim, self.local, owner),
+            self.sim.experience(owner),
+        ) {
+            lines.push(self.row("ui_tooltip_item_experience", format!("{experience:.0}")));
+        }
+        lines
+    }
+
+    /// A line of a tooltip: the game's words for what it tells, then that.
+    fn row(&self, key: &str, value: String) -> String {
+        format!("{} {value}", self.looks.said(key))
+    }
+}
+
+/// Whether `owner` is the player's own side or an ally of it.
+fn ours(sim: &World, local: Option<u32>, owner: u32) -> bool {
+    local.is_some_and(|p| {
+        matches!(
+            sim.sides.relation(p, owner),
+            Relation::Itself | Relation::Ally
+        )
+    })
+}
+
+/// What the thing a status line is of counts for in its side's economy
+/// now, which only the player's own side's and its allies' say.
+fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
+    let (owner, ledger) = match status {
+        Status::Building(b) => (sim.buildings[b].owner, sim.building_ledger(b)),
+        Status::Regiment(r) => {
+            let regiment = &sim.regiments[r];
+            let ledger = match regiment.unpacked_into {
+                Some(b) => sim.building_ledger(b),
+                None => sim.regiment_ledger(r),
+            };
+            (regiment.owner, ledger)
+        }
+    };
+    ours(sim, local, owner).then_some(ledger)
+}
+
+/// What a thing counts for in its side's economy, as the display's line
+/// has it, each with its resource's field name in the data: of each
+/// resource what it earns less what it takes to keep, signed, but for
+/// the limits it takes up, which are bare. Nothing for what comes to
+/// nothing.
+fn economy(ledger: &Ledger) -> Vec<(&'static str, String)> {
+    // As the game orders them: a limit made room in before one taken up.
+    const ORDER: [&str; 7] = [
+        "money",
+        "ammo",
+        "oil",
+        "unit_limit_provided",
+        "unit_limit_consumed",
+        "building_limit_provided",
+        "building_limit_consumed",
+    ];
+    let entries = ORDER.into_iter().filter_map(|kind| {
+        let net = ledger.production.get(kind) - ledger.upkeep.get(kind);
+        // To few enough figures that sums' rounding doesn't show.
+        let (net, figure) = match kind.ends_with("_consumed") {
+            true => (net.abs().round(), format!("{}", net.abs().round())),
+            false => {
+                let net = (net * 1000.0).round() / 1000.0;
+                (net, format!("{net:+}"))
+            }
+        };
+        (net != 0.0).then_some((kind, figure))
+    });
+    entries.collect()
+}
+
 /// A regiment's name as the game gives it: its template's, numbered if
 /// it's one its side numbers. `names` are the templates' names, by
 /// template, and `strings` the game's text, for the numbering.
@@ -1340,8 +1643,19 @@ pub(crate) fn lone(sim: &World, r: usize) -> bool {
     matches!(&regiment.units[..], [u] if sim.units[*u].template == regiment.template)
 }
 
-/// The unit whose portrait stands for the regiment: its commanding
-/// officer's, else its first.
+/// A regiment's captain, whose portrait stands for it: the unit in its
+/// primary slot, else its leader.
+fn captain(sim: &World, looks: &Looks, r: usize) -> usize {
+    let regiment = &sim.regiments[r];
+    let primary = (looks.primaries.get(&regiment.template)).and_then(|p| p.as_ref());
+    let unit = primary.and_then(|template| {
+        let is = |&&u: &&usize| sim.units[u].template == *template;
+        regiment.units.iter().find(is).copied()
+    });
+    unit.unwrap_or_else(|| leader(sim, r))
+}
+
+/// A regiment's commanding officer, else its first unit.
 fn leader(sim: &World, r: usize) -> usize {
     let units = &sim.regiments[r].units;
     let officer = units
@@ -1372,14 +1686,19 @@ fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
     ImageNode::new(picture.unwrap_or_default())
 }
 
-/// A bar in `node`, filled as `fill` says.
-fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill) {
+/// A bar in `node`, filled as `fill` says, giving `of`'s tooltip where
+/// it has one of its own rather than leaving that to what it's on.
+fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill, of: Option<Says>) {
     let gauge = match fill {
         Fill::Progress(_) => Gauge::Progress,
         Fill::Stockpile(_) => Gauge::Stockpile,
         _ => Gauge::Health,
     };
-    parent.spawn((meter(node, gauge), fill));
+    let mut bar = parent.spawn((meter(node, gauge), fill));
+    if let Some(of) = of {
+        // A meter takes no pointer of its own, which a tooltip needs.
+        bar.insert((says(of), Pickable::default()));
+    }
 }
 
 /// A regiment's card clicked: selects it alone, in place of any building.
@@ -1433,6 +1752,63 @@ mod tests {
         let many = ids(&["a", "b", "c", "d", "e", "f", "g", "h"]);
         assert_eq!(ordered(many.clone(), &[]), many[..MAX_PROPERTIES]);
         assert_eq!(ordered(many.clone(), &many[7..]).first(), many.last());
+    }
+
+    #[test]
+    fn the_economy_line_signs_all_but_the_limits_taken_up() {
+        let ledger = |earned: &[(&str, f32)], kept: &[(&str, f32)]| {
+            let mut ledger = Ledger::default();
+            earned
+                .iter()
+                .for_each(|&(k, a)| ledger.production.set(k, a));
+            kept.iter().for_each(|&(k, a)| ledger.upkeep.set(k, a));
+            ledger
+        };
+        let line = |ledger: Ledger| -> Vec<String> {
+            let line = economy(&ledger).into_iter();
+            line.map(|(kind, figure)| format!("{kind} {figure}"))
+                .collect()
+        };
+        // An HQ's truck: what it earns, the regiments it makes room for,
+        // and the building it counts as.
+        let truck = ledger(
+            &[("money", 12.0), ("ammo", 5.0), ("unit_limit_provided", 6.0)],
+            &[("building_limit_consumed", 1.0)],
+        );
+        assert_eq!(
+            line(truck),
+            [
+                "money +12",
+                "ammo +5",
+                "unit_limit_provided +6",
+                "building_limit_consumed 1"
+            ]
+        );
+        // A regiment: what it takes to keep, and the one it counts as.
+        let tanks = ledger(
+            &[("ammo", 2.5)],
+            &[("ammo", 22.5), ("oil", 20.0), ("unit_limit_consumed", 1.0)],
+        );
+        assert_eq!(
+            line(tanks),
+            ["ammo -20", "oil -20", "unit_limit_consumed 1"]
+        );
+        // One that both makes room and takes it up says each.
+        let both = ledger(
+            &[("unit_limit_provided", 3.0)],
+            &[("unit_limit_consumed", 1.0)],
+        );
+        assert_eq!(
+            line(both),
+            ["unit_limit_provided +3", "unit_limit_consumed 1"]
+        );
+        // What sums leave over doesn't show, nor a limit barely taken up.
+        let residue = ledger(
+            &[("money", 0.1 + 0.2), ("ammo", 12.000001)],
+            &[("money", 0.3), ("unit_limit_consumed", 0.4)],
+        );
+        assert_eq!(line(residue), ["ammo +12"]);
+        assert!(line(Ledger::default()).is_empty());
     }
 
     #[test]

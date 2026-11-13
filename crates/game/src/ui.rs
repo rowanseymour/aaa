@@ -487,9 +487,14 @@ fn hint(
     mut texts: Query<(&mut Text, &Children)>,
     mut spans: Query<(&HintSpan, &mut TextSpan)>,
 ) {
-    let hovered = hints.iter().find(|(_, h, name, on, shown)| {
-        on.get() && shown.get() && !(h.0.is_empty() && name.is_none())
-    });
+    // A part counts as hovered with everything it's in, so of those with
+    // something to say, the innermost.
+    let hovered = hints
+        .iter()
+        .filter(|(_, h, name, on, shown)| {
+            on.get() && shown.get() && !(h.0.is_empty() && name.is_none())
+        })
+        .max_by_key(|(entity, ..)| parents.iter_ancestors(*entity).count());
     let dock = hovered.and_then(|(entity, ..)| {
         let mut panes = parents.iter_ancestors(entity);
         panes.find_map(|pane| Some(docks.get(pane).ok()?.0))
