@@ -1112,8 +1112,10 @@ pub enum Target {
 /// [`World::holdings`] from each placed object's role, owner and template.
 /// Regiments and buildings count in their own right, and what the map
 /// left out for lack of room counts for nothing.
-fn holdings<'a>(things: impl Iterator<Item = (Role, Option<u32>, &'a str)>) -> Vec<(u32, String)> {
-    things
+fn holdings<'a>(
+    things: impl IntoIterator<Item = (Role, Option<u32>, &'a str)>,
+) -> Vec<(u32, String)> {
+    (things.into_iter())
         .filter(|(role, ..)| !matches!(role, Role::Crowded | Role::Regiment | Role::Building))
         .filter_map(|(_, owner, template)| Some((owner?, template.to_owned())))
         .collect()
@@ -7316,16 +7318,13 @@ mod tests {
             },
         );
         let before = w.balance(1);
-        w.holdings = holdings(
-            [
-                (Role::Crowded, Some(1), "start_loc"),
-                (Role::Other, None, "start_loc"),
-            ]
-            .into_iter(),
-        );
+        w.holdings = holdings([
+            (Role::Crowded, Some(1), "start_loc"),
+            (Role::Other, None, "start_loc"),
+        ]);
         assert!(w.holdings.is_empty());
         assert_eq!(w.balance(1), before);
-        w.holdings = holdings([(Role::Other, Some(1), "start_loc")].into_iter());
+        w.holdings = holdings([(Role::Other, Some(1), "start_loc")]);
         assert_ne!(w.balance(1), before);
     }
 
