@@ -9,7 +9,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 
-use crate::displays::{self, Contents, Corner, Displays, Panel, Window};
+use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
 use crate::keys::Bindings;
 use crate::ui::{Font, Hint, Ink, Marked, label};
 use crate::{Loaded, Local, Screen, Sim};
@@ -95,7 +95,7 @@ fn spawn(
         &mut commands,
         &bindings,
         Panel::Technologies,
-        Corner::TopRight,
+        Rim::TopRight,
         gear,
         said(NAME, "Display Technologies"),
         said(HELP, "Displays a list of all your technologies."),

@@ -695,6 +695,7 @@ fn main() -> ExitCode {
                     .before(actions::aim)
                     .run_if(takes_input),
                 minimap::update.after(camera::Controls).after(fog::look),
+                minimap::tint,
                 (actions::back_out, actions::show).chain(),
                 (pane::lay_out, pane::refresh).chain(),
                 resource_bar::show.after(actions::show),

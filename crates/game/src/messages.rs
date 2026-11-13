@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::{self, Aim, fill};
-use crate::displays::{self, Contents, Corner, Displays, Panel, Window};
+use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
 use crate::keys::Bindings;
 use crate::sound::Sounds;
 use crate::ui::{Font, Hint, font};
@@ -384,7 +384,7 @@ pub fn spawn(
         &mut commands,
         &bindings,
         Panel::MessageLog,
-        Corner::BottomRight,
+        Rim::BottomRight,
         images.add(displays::glyph(list_shape)),
         said(
             "control_panel_ButtonMessageLog_ToolTip",

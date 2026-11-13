@@ -8,7 +8,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
 
-use crate::displays::{self, Corner, Displays, Panel, Window};
+use crate::displays::{self, Displays, Panel, Rim, Window};
 use crate::keys::Bindings;
 use crate::ui::{Font, Ink, coloured, label};
 use crate::{Loaded, Local, Screen, Sim};
@@ -82,7 +82,7 @@ fn spawn(
         &mut commands,
         &bindings,
         Panel::Objectives,
-        Corner::BottomLeft,
+        Rim::BottomLeft,
         images.add(displays::glyph(flag_shape)),
         said(
             "control_panel_ButtonObjectives_ToolTip",
