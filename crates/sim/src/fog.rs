@@ -292,10 +292,7 @@ impl World {
             let regiment = &self.regiments[r];
             let owner = regiment.owner;
             let at = self.leader_position(r);
-            let present = |u: &&usize| {
-                let unit = &self.units[**u];
-                unit.alive() && unit.unpacked.is_none() && !unit.awaited
-            };
+            let present = |u: &&usize| self.units[**u].alive();
             if !regiment.units.iter().any(|u| present(&u)) {
                 continue;
             }

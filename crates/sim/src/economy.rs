@@ -150,6 +150,13 @@ pub enum Notice {
     Gained { player: u32, technology: Id },
     /// Something of `owner`'s is destroyed, by whatever cause.
     Destroyed { owner: u32, what: Fallen },
+    /// A building of its, by index into [`World::buildings`], has been
+    /// sold, or destroyed when it could have been, for `paid` money.
+    Sold {
+        player: u32,
+        building: usize,
+        paid: f32,
+    },
 }
 
 /// A regiment or building destroyed, by index into [`World::regiments`]
@@ -173,7 +180,7 @@ pub enum Change<'a> {
 }
 
 /// The resource stockpiled and spent, which makes up shortfalls.
-fn money(rules: &EconomyRules) -> &'static str {
+pub(crate) fn money(rules: &EconomyRules) -> &'static str {
     rules.stockpiled.first().copied().unwrap_or("money")
 }
 
@@ -189,7 +196,7 @@ impl World {
     }
 
     /// A template's own economy, none for one that has none.
-    fn economy_of(&self, template: &str) -> Economy {
+    pub(crate) fn economy_of(&self, template: &str) -> Economy {
         self.economies
             .get(&Id::from(template))
             .copied()
@@ -205,7 +212,8 @@ impl World {
         if self.destroyed(regiment) {
             return Ledger::default();
         }
-        let kept = (r.units.iter()).filter(|&&u| self.units[u].unpacked.is_none());
+        let kept = (r.units.iter())
+            .filter(|&&u| !matches!(self.units[u].left, Some(crate::Left::Unpacked(_))));
         let templates = kept.map(|&u| &self.units[u].template).collect();
         let mut ledger = self.organization_ledger(&r.template, templates);
         let earning = self

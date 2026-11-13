@@ -1,7 +1,7 @@
 //! What sides earn and spend: the resources, each template's own cost,
 //! production and upkeep, and the settings that bound them.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::Arc;
 
@@ -144,6 +144,10 @@ pub struct EconomyRules {
     /// What a stockpile starts at for sides that take the default, on maps
     /// that don't set it.
     pub stockpile_default: f32,
+    /// The share of its own template's cost a building sells for.
+    pub sell_factor: f32,
+    /// Whether a building under siege can be sold.
+    pub sell_under_siege: bool,
 }
 
 impl Default for EconomyRules {
@@ -155,6 +159,8 @@ impl Default for EconomyRules {
             limited_max: f32::INFINITY,
             stockpile_max: f32::INFINITY,
             stockpile_default: 0.0,
+            sell_factor: 0.0,
+            sell_under_siege: true,
         }
     }
 }
@@ -173,6 +179,15 @@ impl GameData {
                 supply_required: e.supply_required.unwrap_or(false),
             })
         })
+    }
+
+    /// The templates whose things their owner can sell.
+    pub fn sellable(&mut self) -> HashSet<Id> {
+        let sellable = self.by_template(|t| {
+            let c = t.construction_component.as_ref()?;
+            c.can_sell.unwrap_or(true).then_some(())
+        });
+        sellable.into_keys().collect()
     }
 
     /// Each template's [`Supply`], for those that give it, by template id.
@@ -257,6 +272,12 @@ impl GameData {
         }
         if let Some(v) = first(|s| s.economy_stockpile_resource_max) {
             rules.stockpile_max = v;
+        }
+        if let Some(v) = first(|s| s.sell_factor) {
+            rules.sell_factor = v;
+        }
+        if let Some(v) = svars.iter().find_map(|s| s.allow_sell_under_siege) {
+            rules.sell_under_siege = v;
         }
         // The match's setting stands in for the tuning one.
         let rule = files

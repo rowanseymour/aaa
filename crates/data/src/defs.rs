@@ -109,6 +109,7 @@ pub struct Thing {
     pub denizen_component: Option<DenizenComponent>,
     pub element_component: Option<ElementComponent>,
     pub detection_component: Option<DetectionComponent>,
+    pub construction_component: Option<ConstructionComponent>,
     pub placement: Option<Placement>,
     /// On entering and leaving the states named by each command's
     /// `actor_state`.
@@ -222,6 +223,12 @@ pub struct OrganizationComponent {
     /// The share of their health its members lose a second out of supply
     /// while their side can't pay its upkeep.
     pub shortfall_damage_rate: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ConstructionComponent {
+    /// Whether its owner can sell it.
+    pub can_sell: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -994,6 +1001,12 @@ pub struct SVars {
     /// The most a stockpile holds.
     #[serde(rename = "EconomyStockpileResourceMax")]
     pub economy_stockpile_resource_max: Option<f32>,
+    /// The share of its cost a building sells for.
+    #[serde(rename = "SellFactor")]
+    pub sell_factor: Option<f32>,
+    /// Whether a building under siege can be sold.
+    #[serde(rename = "AllowSellUnderSiege")]
+    pub allow_sell_under_siege: Option<bool>,
     /// What stockpiles start at on new and random maps.
     #[serde(rename = "ResourceStockpileDefault")]
     pub resource_stockpile_default: Option<f32>,

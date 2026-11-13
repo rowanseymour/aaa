@@ -845,6 +845,7 @@ fn prepare(
     sim.packing = raising.packings();
     sim.requires = game.requirements();
     sim.economies = game.economies();
+    sim.sellable = game.sellable();
     sim.economy = game.economy_rules();
     sim.supplies = game.supplies();
     sim.supply_rules = game.supply_rules();
@@ -1463,7 +1464,7 @@ fn show_packing(
         {
             commands.entity(e).despawn();
         }
-        let gone = matches!(building.state, State::Packed(..));
+        let gone = matches!(building.state, State::Packed(..) | State::Sold(_));
         if let (Some((start, unpacking)), None) = (wanted, view.packing) {
             let into = (sim.0.ticks - start) as f32 * TICK;
             let mut models = assets.models();
@@ -1523,7 +1524,7 @@ fn show_units(
     for (mut view, mut transform, mut visibility, mut playing) in &mut views {
         let unit = &sim.0.units[view.unit];
         let owner = sim.0.regiments[unit.regiment].owner;
-        if unit.unpacked.is_some() || unit.awaited {
+        if unit.left.is_some() || unit.awaited {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }
