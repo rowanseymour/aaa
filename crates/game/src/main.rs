@@ -22,6 +22,7 @@
 
 mod actions;
 mod banners;
+mod confirm;
 mod console;
 mod effects;
 mod fog;
@@ -603,6 +604,7 @@ fn main() -> ExitCode {
         .insert_resource(Side(side))
         .add_plugins((
             ui::UiPlugin,
+            confirm::ConfirmPlugin,
             menu::MenuPlugin,
             options::OptionsPlugin,
             lobby::LobbyPlugin,
@@ -729,6 +731,7 @@ fn main() -> ExitCode {
         app.insert_resource(remote);
     }
     app.insert_resource(lobby::Nations(game.nations()))
+        .insert_resource(confirm::Words::of(&game.strings()))
         .insert_resource(options::Options::new(&mut game))
         .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
         .insert_resource(Data(game));

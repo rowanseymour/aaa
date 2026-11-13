@@ -87,7 +87,11 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
     time.pause();
 
     let overlay = commands
-        .spawn((Overlay, DespawnOnExit(Screen::Match), ui::scrim()))
+        .spawn((
+            Overlay,
+            DespawnOnExit(Screen::Match),
+            ui::scrim(ui::layer::DIALOG),
+        ))
         .id();
     let column = commands.spawn((ChildOf(overlay), ui::dialog())).id();
     commands
@@ -95,7 +99,7 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
         .observe(options);
     commands
         .spawn((ui::button("Quit to Desktop", Font::Large), ChildOf(column)))
-        .observe(menu::quit);
+        .observe(menu::ask_quit);
     commands
         .spawn((ui::button("Return to Game", Font::Large), ChildOf(column)))
         .observe(resume);

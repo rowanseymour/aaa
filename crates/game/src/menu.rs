@@ -5,8 +5,8 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
-use crate::Screen;
 use crate::ui::{Font, Surface, backed, button, disabled};
+use crate::{Screen, confirm};
 
 pub struct MenuPlugin;
 
@@ -17,8 +17,12 @@ impl Plugin for MenuPlugin {
     }
 }
 
-/// An observer that exits the game.
-pub fn quit(_: On<Activate>, mut exit: MessageWriter<AppExit>) {
+/// An observer that asks whether to exit the game, and does if so.
+pub fn ask_quit(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) {
+    confirm::confirm(&mut commands, &words, words.quit.clone(), quit);
+}
+
+fn quit(_: On<Activate>, mut exit: MessageWriter<AppExit>) {
     exit.write(AppExit::Success);
 }
 
@@ -103,7 +107,7 @@ fn main_menu(
     commands.spawn((spacer(), ChildOf(column)));
     commands
         .spawn((button("Exit", Font::Large), ChildOf(column)))
-        .observe(quit);
+        .observe(ask_quit);
 }
 
 fn new_game(mut commands: Commands) {
