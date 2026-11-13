@@ -246,8 +246,10 @@ fn spawn(
                     justify_content: JustifyContent::Center,
                     ..default()
                 })
-                .with_child(ui::button("Close", Font::Hud))
-                .observe(|_: On<Activate>, mut toggling: Toggling| toggling.close());
+                .with_children(|row| {
+                    row.spawn(ui::button("Close", Font::Hud))
+                        .observe(|_: On<Activate>, mut toggling: Toggling| toggling.close());
+                });
         });
     commands.insert_resource(Looks {
         lines,
