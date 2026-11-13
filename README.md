@@ -27,7 +27,12 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 
 Matches play on the original maps against an idle opponent. You can't win or lose yet.
 
-![Matches in aaa-game and a map in aaa-editor](docs/screenshots.jpg)
+<p>
+<a href="docs/screenshots/normandy.jpg"><img src="docs/screenshots/normandy.jpg" width="49%" alt="A match on the Normandy map"></a>
+<a href="docs/screenshots/stalingrad.jpg"><img src="docs/screenshots/stalingrad.jpg" width="49%" alt="A match on the Stalingrad map"></a>
+<a href="docs/screenshots/el-alamein.jpg"><img src="docs/screenshots/el-alamein.jpg" width="49%" alt="Tanks fighting on the El Alamein map"></a>
+<a href="docs/screenshots/berlin-editor.jpg"><img src="docs/screenshots/berlin-editor.jpg" width="49%" alt="The Berlin map in aaa-editor, with a window open on an object"></a>
+</p>
 
 | Feature | Status |
 |---|---|

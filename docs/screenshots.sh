@@ -1,19 +1,21 @@
 #!/bin/sh
-# Rebuilds docs/screenshots.jpg as a 2x2 grid of screenshots: three from the game,
+# Rebuilds the README's screenshots in docs/screenshots/: three from the game,
 # each set up by a script of console commands, and one from the editor with a
-# window open on an object.
+# window open on an object. Name some to rebuild only those.
 #
-#   docs/screenshots.sh "/path/to/Axis and Allies 2004"
+#   docs/screenshots.sh "/path/to/Axis and Allies 2004" [name...]
 #
 # Needs ImageMagick 7 (`magick`).
 
 set -eu
 
-if [ $# -ne 1 ]; then
-    echo "usage: $0 <game dir>" >&2
+if [ $# -lt 1 ]; then
+    echo "usage: $0 <game dir> [name...]" >&2
     exit 2
 fi
 game=$1
+shift
+only=" $* "
 root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -21,12 +23,20 @@ trap 'rm -rf "$work"' EXIT
 cargo build --release -p aaa-game -p aaa-editor --manifest-path "$root/Cargo.toml"
 bin=$root/target/release
 
-GAP=8
+out=$root/docs/screenshots
+mkdir -p "$out"
+
 W=1000
 H=562
 
+wanted() {
+    [ "$only" = "  " ] || case $only in *" $1 "*) true ;; *) false ;; esac
+}
+
 fit() {
-    magick "$work/$1-raw.png" -resize "${W}x$H^" -gravity center -extent "${W}x$H" "$work/$1.png"
+    magick "$work/$1-raw.png" -resize "${W}x$H^" -gravity center -extent "${W}x$H" \
+        -strip -quality 85 "$out/$1.jpg"
+    echo "wrote docs/screenshots/$1.jpg"
 }
 
 # game <name> <map> [seconds], with the script on stdin. Regiment ids are the
@@ -35,17 +45,19 @@ fit() {
 # long before the shot.
 game() {
     cat >"$work/$1.txt"
+    wanted "$1" || return 0
     "$bin/aaa-game" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" --screenshot "$work/$1-raw.png"
     fit "$1"
 }
 
 # editor <name> <map> <camera> <ids to inspect>
 editor() {
+    wanted "$1" || return 0
     "$bin/aaa-editor" "$game" "$2" --camera "$3" --inspect "$4" --screenshot "$work/$1-raw.png"
     fit "$1"
 }
 
-game top-right allies03_stalingrad <<'EOF'
+game stalingrad allies03_stalingrad <<'EOF'
 select 2551
 destroyselected
 advance 1
@@ -56,14 +68,14 @@ lookat 30 423
 zoom 0.55
 EOF
 
-game top-left allies06_normandy <<'EOF'
+game normandy allies06_normandy <<'EOF'
 select 68870 68880
 lookat 336 230
 zoom 0.6
 advance 3
 EOF
 
-game bottom-left allies01_el_alamein 2.65 <<'EOF'
+game el-alamein allies01_el_alamein 2.65 <<'EOF'
 create regiment_gbr_tank_heavy 340 300
 create regiment_gbr_tank_medium 348 294
 placementkingdom kingdom_1
@@ -75,12 +87,4 @@ lookat 342 289
 zoom 0.6
 EOF
 
-editor bottom-right '(2v2)Berlin' 0.235,0.26,70,0.785,0.75 12193
-
-magick -size $((2 * W + GAP))x$((2 * H + GAP)) xc:white \
-    "$work/top-left.png" -geometry +0+0 -composite \
-    "$work/top-right.png" -geometry +$((W + GAP))+0 -composite \
-    "$work/bottom-left.png" -geometry +0+$((H + GAP)) -composite \
-    "$work/bottom-right.png" -geometry +$((W + GAP))+$((H + GAP)) -composite \
-    -strip -quality 85 "$root/docs/screenshots.jpg"
-echo "wrote docs/screenshots.jpg"
+editor berlin-editor '(2v2)Berlin' 0.235,0.26,70,0.785,0.75 12193
