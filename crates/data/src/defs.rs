@@ -513,6 +513,11 @@ pub struct Ability {
 #[derive(Debug, Clone, Deserialize)]
 pub struct AbilityDefinition {
     pub ids: Option<Id>,
+    /// `#` keys into the localized strings.
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// From the archive root, `%s` standing for the screen width's folder.
+    pub icon: Option<String>,
     #[serde(default)]
     pub flags: Vec<AbilityFlags>,
     /// E.g. `attack`.
@@ -526,6 +531,9 @@ pub struct AbilityDefinition {
     /// Radius of the area it hits, 0 for only its target.
     #[serde(default)]
     pub area: f32,
+    /// Radius of the area a volley of it spreads over.
+    #[serde(default)]
+    pub volley_area: f32,
     /// The most an area hit lands on, 0 for all it reaches.
     pub max_targets: Option<u32>,
     /// Within this distance of the centre an area hit does full damage.
@@ -561,6 +569,12 @@ pub struct Effect {
     pub enchantment_property: Option<Property>,
     /// The template of what it puts on the map.
     pub object_ids: Option<Id>,
+    /// `HEAL` or `REPAIR`, for a heal.
+    pub heal_type: Option<String>,
+    /// What it lands on, past the ability's own `targets`.
+    pub targets: Option<String>,
+    #[serde(default)]
+    pub hide_from_tooltip: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -850,12 +864,24 @@ pub struct General {
     pub public: Option<bool>,
     #[serde(default)]
     pub ability: Vec<GeneralAbility>,
+    /// The most experience their side can hold; negative for no ceiling.
+    pub experience_max: Option<f32>,
 }
 
 /// A special operation a general gives their side.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GeneralAbility {
     pub ability_ids: Option<Id>,
+    /// The side's experience using it takes.
+    pub cost_faction_experience: Option<f32>,
+}
+
+/// A kind of thing an effect's `targets` can name, e.g. `building`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ThingCategory {
+    pub ids: Option<Id>,
+    /// A `#` key into the localized strings.
+    pub name: Option<String>,
 }
 
 /// A template of the nation's that a map's placeholder stands for, such as
@@ -948,6 +974,9 @@ pub struct Glyph {
 /// The game's tuning settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SVars {
+    /// The experience a side with a general gains each second.
+    #[serde(rename = "ExperienceFactionGainPeriodic")]
+    pub experience_faction_gain_periodic: Option<f32>,
     #[serde(rename = "BuildingPaddingMeters")]
     pub building_padding_meters: Option<f32>,
     /// Whether a side's objectives are kept in order of their text.

@@ -354,8 +354,11 @@ pub fn spawn(
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
+    local: Res<Local>,
+    leaders: Res<Leaders>,
     bindings: Res<Bindings>,
 ) {
+    let corner = crate::special_ops::corner(&local, &leaders);
     let game = &mut loaded.game;
     let kinds = game
         .message_kinds()
@@ -419,8 +422,8 @@ pub fn spawn(
         LogBox,
         Node {
             position_type: PositionType::Absolute,
-            top: px(crate::MARGIN),
-            left: px(crate::MARGIN),
+            top: px(corner.y),
+            left: px(corner.x),
             width: px(WIDTH),
             flex_direction: FlexDirection::Column,
             row_gap: px(LINE_GAP),
