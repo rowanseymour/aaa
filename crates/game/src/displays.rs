@@ -2,7 +2,9 @@
 //! button on the minimap's rim or by its key, one at a time. The match
 //! holds still while one's up, unless it was already.
 
+use aaa_render::textures;
 use bevy::asset::RenderAssetUsages;
+use bevy::image::CompressedImageFormats;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
@@ -17,10 +19,8 @@ use crate::{Screen, minimap};
 /// What the key that closes whichever panel is up is bound to.
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
 
-/// A glyph's size on its button, and its texels across, more than it's
-/// drawn at so it stays crisp once the interface is scaled up.
+/// A glyph's size on its button.
 const GLYPH_SIZE: f32 = 22.0;
-const GLYPH_TEXELS: u32 = 64;
 
 /// The layout the windows' places and sizes are given on.
 const LAYOUT: Vec2 = Vec2::new(1024.0, 768.0);
@@ -415,13 +415,19 @@ fn light_buttons(
     }
 }
 
-/// A white glyph on a clear ground, to be tinted: where `inside` holds of
-/// the square from -1 to 1 each way, y down.
-pub fn glyph(inside: impl Fn(f32, f32) -> bool) -> Image {
-    silhouette(GLYPH_TEXELS, inside)
+/// A button's glyph from one of the icons in `assets/icons`, which are
+/// white on clear for the button to tint.
+pub fn icon(
+    png: &[u8],
+    images: &mut Assets<Image>,
+    formats: CompressedImageFormats,
+) -> Handle<Image> {
+    let image = textures::decode(png, "icon.png", formats, true);
+    image.map(|i| images.add(i)).unwrap_or_default()
 }
 
-/// A [`glyph`] of any number of texels across.
+/// A white shape on a clear ground, `texels` across, to be tinted: where
+/// `inside` holds of the square from -1 to 1 each way, y down.
 pub fn silhouette(texels: u32, inside: impl Fn(f32, f32) -> bool) -> Image {
     // Each texel's coverage from a grid of samples across it.
     const SAMPLES: u32 = 4;

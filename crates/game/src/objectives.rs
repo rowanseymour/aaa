@@ -13,6 +13,8 @@ use crate::keys::Bindings;
 use crate::ui::{Font, Ink, coloured, label};
 use crate::{Loaded, Local, Screen, Sim};
 
+const BUTTON_ICON: &[u8] = include_bytes!("../../../assets/icons/flag.png");
+
 const BOX: f32 = 20.0;
 /// Between a line's box and its text, and between lines.
 const BOX_GAP: f32 = 3.0;
@@ -83,7 +85,7 @@ fn spawn(
         &bindings,
         Panel::Objectives,
         Rim::BottomLeft,
-        images.add(displays::glyph(flag_shape)),
+        displays::icon(BUTTON_ICON, &mut images, formats.0),
         said(
             "control_panel_ButtonObjectives_ToolTip",
             "Display Objectives",
@@ -144,15 +146,6 @@ fn spawn(
         lists,
     });
     commands.insert_resource(Shown::default());
-}
-
-/// Whether a point of the glyph's square is on a flag: a pole, and a
-/// pennant forked at its tip.
-fn flag_shape(x: f32, y: f32) -> bool {
-    let pole = (-0.65..-0.45).contains(&x) && (-0.9..0.9).contains(&y);
-    let fork = 0.75 - 0.35 * (1.0 - (y + 0.45).abs() / 0.4);
-    let pennant = x >= -0.45 && x < fork && (-0.85..-0.05).contains(&y);
-    pole || pennant
 }
 
 /// What the window lists for a side holding `held`: those, or the line a

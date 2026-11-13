@@ -17,6 +17,7 @@ use crate::{Loaded, Local, Screen, Sim};
 const NAME: &str = "control_panel_ButtonTechnology_ToolTip";
 const HELP: &str = "control_panel_ButtonTechnology_tooltip_2";
 const TITLE: &str = "technology_display_Child_text";
+const BUTTON_ICON: &[u8] = include_bytes!("../../../assets/icons/gear.png");
 
 /// A line is at least this tall, and its icon this wide.
 const LINE: f32 = 20.0;
@@ -61,7 +62,6 @@ impl Plugin for TechnologyPlugin {
 
 fn spawn(
     mut commands: Commands,
-    mut gear: bevy::prelude::Local<Option<Handle<Image>>>,
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
@@ -70,7 +70,6 @@ fn spawn(
     let game = &mut loaded.game;
     let strings = game.strings();
     let said = crate::ui::said(&strings);
-    let gear = (gear.get_or_insert_with(|| images.add(displays::glyph(gear_shape)))).clone();
     let looks: HashMap<Id, PropertyLook> = game.property_looks();
     let lines = (game.technologies().into_iter())
         .filter_map(|(id, t)| {
@@ -96,7 +95,7 @@ fn spawn(
         &bindings,
         Panel::Technologies,
         Rim::TopRight,
-        gear,
+        displays::icon(BUTTON_ICON, &mut images, formats.0),
         said(NAME, "Display Technologies"),
         said(HELP, "Displays a list of all your technologies."),
     );
@@ -115,22 +114,6 @@ fn spawn(
         lines,
         formats: formats.0,
     });
-}
-
-/// Whether a point of the glyph's square is on a gear: eight teeth round a
-/// hole.
-fn gear_shape(x: f32, y: f32) -> bool {
-    const TEETH: f32 = 8.0;
-    const OUTER: f32 = 1.0;
-    const ROOT: f32 = 0.7;
-    const HOLE: f32 = 0.32;
-    let d = (x * x + y * y).sqrt();
-    let turn = (y.atan2(x) / std::f32::consts::TAU * TEETH).rem_euclid(1.0);
-    let rim = match (0.25..0.75).contains(&turn) {
-        true => OUTER,
-        false => ROOT,
-    };
-    d > HOLE && d < rim
 }
 
 /// Brings the open window's list up to date: at once on opening, then once
