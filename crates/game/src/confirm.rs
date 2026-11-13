@@ -18,8 +18,6 @@ pub struct Words {
     cancel: String,
     /// The game's question before what can't be undone.
     pub sure: String,
-    /// The game's question before leaving the lobby.
-    pub leave_lobby: String,
 }
 
 impl Words {
@@ -29,7 +27,6 @@ impl Words {
             ok: said("button_ok", "Ok"),
             cancel: said("button_cancel", "Cancel"),
             sure: said("important_command_confirm", "Are you sure?"),
-            leave_lobby: said("ui_staging_confirm_exit", "Exit Staging?"),
         }
     }
 }

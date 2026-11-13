@@ -73,6 +73,17 @@ pub fn default_person(players: &[Player], asked: Side) -> Option<u32> {
     side.map(|p| p.id)
 }
 
+/// The game's question before leaving the lobby.
+#[derive(Resource)]
+pub struct Leaving(String);
+
+impl Leaving {
+    pub fn of(strings: &HashMap<String, String>) -> Self {
+        let question = strings.get("ui_staging_confirm_exit");
+        Leaving(question.map_or("Exit Staging?", String::as_str).to_string())
+    }
+}
+
 /// The nations sides can play as.
 #[derive(Resource)]
 pub struct Nations(pub Vec<Nation>);
@@ -444,8 +455,13 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
 }
 
 /// Asks whether to leave the lobby, and goes back to the new game menu if so.
-fn ask_exit(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) {
-    let question = words.leave_lobby.clone();
+fn ask_exit(
+    _: On<Activate>,
+    mut commands: Commands,
+    words: Res<confirm::Words>,
+    leaving: Res<Leaving>,
+) {
+    let question = leaving.0.clone();
     confirm::confirm(
         &mut commands,
         &words,
@@ -857,6 +873,61 @@ fn mark_chosen(lobby: Res<Lobby>, mut buttons: Query<Choice>) {
 mod tests {
     use super::*;
     use aaa_map::Relation;
+    use bevy::state::app::StatesPlugin;
+
+    /// A lobby with only its Exit button, which `answer` is pressed on
+    /// once its question is up.
+    fn exit_answering(answer: &str) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin, confirm::ConfirmPlugin))
+            .insert_state(Screen::Lobby)
+            .insert_resource(confirm::Words::default())
+            .insert_resource(Leaving::of(&HashMap::new()))
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::console::Console>();
+        app.world_mut()
+            .spawn(button("Exit", Font::Large))
+            .observe(ask_exit);
+        app.update();
+        press(&mut app, "Exit");
+        let world = app.world_mut();
+        let mut texts = world.query::<&Text>();
+        assert!(texts.iter(world).any(|t| t.0 == "Exit Staging?"));
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Lobby
+        );
+        press(&mut app, answer);
+        app.update();
+        app
+    }
+
+    fn press(app: &mut App, words: &str) {
+        let world = app.world_mut();
+        let mut labels = world.query::<(&Text, &ChildOf)>();
+        let found = labels.iter(world).find(|(text, _)| text.0 == words);
+        let entity = found.expect("no such button").1.parent();
+        world.trigger(Activate { entity });
+        app.update();
+    }
+
+    #[test]
+    fn exit_asks_first_and_ok_leaves() {
+        let app = exit_answering("Ok");
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::NewGame
+        );
+    }
+
+    #[test]
+    fn exit_cancelled_stays() {
+        let app = exit_answering("Cancel");
+        assert_eq!(
+            *app.world().resource::<State<Screen>>().get(),
+            Screen::Lobby
+        );
+    }
 
     fn player(id: u32, independent: bool, playable: bool) -> Player {
         Player {
