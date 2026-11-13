@@ -301,11 +301,11 @@ fn faces(mut fonts: ResMut<Assets<Face>>) {
     let faces = [
         (
             STENCIL,
-            &include_bytes!("../fonts/BigShouldersStencilDisplay-800.ttf")[..],
+            &include_bytes!("../../../assets/fonts/BigShouldersStencilDisplay-800.ttf")[..],
         ),
         (
             PLAIN,
-            &include_bytes!("../fonts/BigShouldersText-600.ttf")[..],
+            &include_bytes!("../../../assets/fonts/BigShouldersText-600.ttf")[..],
         ),
     ];
     for (handle, bytes) in faces {
