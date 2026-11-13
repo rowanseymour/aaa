@@ -110,6 +110,24 @@ impl Unit {
         self.goal = None;
     }
 
+    /// Stands it at `at` facing `facing` as if just made: still, with
+    /// nowhere to go, nothing fired on and its weapons ready.
+    pub(crate) fn stand_at(&mut self, at: [f32; 2], facing: [f32; 2]) {
+        self.position = at;
+        self.previous = at;
+        self.facing = facing;
+        self.end_facing = facing;
+        self.halt();
+        self.speed = 0.0;
+        self.closing = false;
+        self.target = None;
+        self.shot = None;
+        self.reloads.fill(0.0);
+        if let Some(t) = &mut self.trailer {
+            t.behind(at, facing);
+        }
+    }
+
     /// The middle of the tightest circle it can turn to its left, for a
     /// positive `side`, or its right.
     fn turning_circle(&self, side: f32) -> [f32; 2] {

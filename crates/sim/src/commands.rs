@@ -292,12 +292,8 @@ impl World {
     ) -> Result<(), Refused> {
         self.may_pursue(player, regiment, enemy)?;
         let r = &mut self.regiments[regiment];
-        r.order = Order::Pursue(enemy);
-        r.guard = None;
-        r.unpack_at = None;
-        r.rally = None;
+        r.take_order(Order::Pursue(enemy));
         r.engaged.clear();
-        r.resume = None;
         self.chase(regiment, enemy, true);
         Ok(())
     }
@@ -312,11 +308,8 @@ impl World {
     ) -> Result<(), NotYours> {
         self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
-        r.order = order;
-        r.guard = None;
+        r.take_order(order);
         r.unpack_at = unpack_at;
-        r.unpack_again = None;
-        r.rally = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
@@ -334,12 +327,8 @@ impl World {
     ) -> Result<(), NotYours> {
         self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
-        r.order = Order::Run;
-        r.guard = None;
-        r.unpack_at = None;
-        r.rally = None;
+        r.take_order(Order::Run);
         r.engaged.clear();
-        r.resume = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         self.send(regiment, target, facing);
@@ -350,11 +339,7 @@ impl World {
         self.may_command(player, regiment)?;
         let here = self.centre(regiment);
         let r = &mut self.regiments[regiment];
-        r.order = Order::Move;
-        r.guard = None;
-        r.resume = None;
-        r.unpack_at = None;
-        r.rally = None;
+        r.take_order(Order::Move);
         if r.engaged.is_empty() {
             let facing = r.facing;
             self.send(regiment, here, facing);

@@ -22,10 +22,7 @@ impl World {
     ) {
         let r = &mut self.regiments[regiment];
         let facing = facing.unwrap_or(r.facing);
-        r.order = Order::Move;
-        r.unpack_at = None;
-        r.unpack_again = None;
-        r.rally = None;
+        r.take_order(Order::Move);
         r.guard = Some(Guard {
             of,
             post,
@@ -34,10 +31,7 @@ impl World {
             unreachable: None,
         });
         match r.engaged.is_empty() {
-            true => {
-                r.resume = None;
-                self.go_to_post(regiment);
-            }
+            true => self.go_to_post(regiment),
             // Where it's headed once done, as for a move.
             false => r.resume = Some((post, facing)),
         }

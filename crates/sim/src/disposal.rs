@@ -4,7 +4,7 @@
 use aaa_map::Id;
 
 use crate::economy::{Fallen, money};
-use crate::{Left, Notice, Refused, State, World};
+use crate::{Left, Notice, Order, Refused, State, World};
 
 impl World {
     /// Whether a regiment is a lone unit rather than an organization, as a
@@ -69,9 +69,8 @@ impl World {
             }
         }
         let r = &mut self.regiments[regiment];
+        r.take_order(Order::Move);
         r.engaged.clear();
-        r.guard = None;
-        r.resume = None;
         if !self.lone(regiment) {
             let owner = self.regiments[regiment].owner;
             let what = Fallen::Regiment(regiment);
@@ -84,17 +83,23 @@ impl World {
     pub(crate) fn sell(&mut self, building: usize) {
         let hq = self.hq_of(building);
         self.pay_sale(building);
+        self.remove(building, State::Sold(self.ticks));
+        if let Some(hq) = hq {
+            self.detach_all(hq);
+        }
+    }
+
+    /// Takes a building off the map, leaving it as `state`: its ground
+    /// free again, with nothing queued, aimed at or besieging it.
+    pub(crate) fn remove(&mut self, building: usize, state: State) {
         let b = &mut self.buildings[building];
-        b.state = State::Sold(self.ticks);
+        b.state = state;
         b.besieged = None;
         b.target = None;
         if let Some(o) = b.obstacle.take() {
             self.pathing.unblock(&o);
         }
         self.drop_queue(building);
-        if let Some(hq) = hq {
-            self.detach_all(hq);
-        }
     }
 
     /// Gives a building's owner what it sells for, and tells them.

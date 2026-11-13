@@ -262,6 +262,17 @@ enum Step {
 }
 
 impl Regiment {
+    /// Takes up `order` in place of whatever it was told before, which
+    /// it forgets. What it's engaged with it stays engaged with.
+    pub(crate) fn take_order(&mut self, order: Order) {
+        self.order = order;
+        self.guard = None;
+        self.resume = None;
+        self.unpack_at = None;
+        self.unpack_again = None;
+        self.rally = None;
+    }
+
     /// Whether it's resting at the post it guards, which has it stand in
     /// its combat formation, aggressive, with a longer control range.
     pub fn guarding(&self) -> bool {

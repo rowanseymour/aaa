@@ -583,16 +583,7 @@ impl World {
         unit.died = None;
         unit.awaited = false;
         unit.health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
-        unit.position = stand;
-        unit.previous = stand;
-        unit.facing = facing;
-        unit.speed = 0.0;
-        unit.closing = false;
-        unit.target = None;
-        unit.reloads.fill(0.0);
-        if let Some(t) = &mut unit.trailer {
-            t.behind(stand, facing);
-        }
+        unit.stand_at(stand, facing);
         match points {
             Some((creation, deployment)) => {
                 // Straight out to the deployment point, then by a way

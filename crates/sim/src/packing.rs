@@ -171,12 +171,13 @@ impl World {
         let share = building.health / building.fighter.health;
         let at = building.position;
         let owner = building.owner;
-        if let Some(o) = building.obstacle.clone() {
-            self.pathing.unblock(&o);
-        }
         let (id, organization) = (building.id, building.organization.clone());
         let from = building.unpacked_from;
         let stand = [at[0] + packs.offset[0], at[1] + packs.offset[1]];
+        // Gone before its truck is out, which stands on ground it blocked:
+        // into the truck that unpacked here, or the regiment made next.
+        let into = from.unwrap_or(self.regiments.len());
+        self.remove(b, State::Packed(self.ticks, into));
         // A truck that unpacked here comes back, in its organization, to
         // whoever holds the building now.
         let r = match from {
@@ -221,7 +222,6 @@ impl World {
                 unit.health = f.health * share;
             }
         }
-        self.buildings[b].state = State::Packed(self.ticks, r);
     }
 
     /// Puts the members of a regiment that unpacked back on the map, in
@@ -230,11 +230,8 @@ impl World {
     fn return_truck(&mut self, regiment: usize, position: [f32; 2], facing: [f32; 2]) {
         let r = &mut self.regiments[regiment];
         r.unpacked_into = None;
-        r.unpack_at = None;
-        r.rally = None;
-        r.order = Order::Move;
+        r.take_order(Order::Move);
         r.engaged.clear();
-        r.resume = None;
         r.position = position;
         r.facing = facing;
         let offsets = &r.formations[r.current_formation()].offsets;
@@ -244,20 +241,7 @@ impl World {
                 continue;
             }
             unit.left = None;
-            let at = aaa_map::from_local(position, facing, offset);
-            unit.position = at;
-            unit.previous = at;
-            unit.facing = facing;
-            unit.end_facing = facing;
-            unit.halt();
-            unit.speed = 0.0;
-            unit.closing = false;
-            unit.target = None;
-            unit.shot = None;
-            unit.reloads.fill(0.0);
-            if let Some(t) = &mut unit.trailer {
-                t.behind(at, facing);
-            }
+            unit.stand_at(aaa_map::from_local(position, facing, offset), facing);
         }
     }
 }

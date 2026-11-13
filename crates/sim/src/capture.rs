@@ -20,15 +20,10 @@ impl World {
             building.health = CAPTURE_HEALTH * building.fighter.health;
             self.change_hands(b, by);
         } else if building.fighter.destructible {
-            building.state = State::Destroyed(ticks);
-            if let Some(o) = building.obstacle.take() {
-                self.pathing.unblock(&o);
-            }
-            self.notices.push(Notice::Destroyed {
-                owner: building.owner,
-                what: Fallen::Building(b),
-            });
-            self.drop_queue(b);
+            let owner = building.owner;
+            self.remove(b, State::Destroyed(ticks));
+            let what = Fallen::Building(b);
+            self.notices.push(Notice::Destroyed { owner, what });
             // What could have been sold pays its owner as if it had been.
             if self.sells(b) {
                 self.pay_sale(b);
