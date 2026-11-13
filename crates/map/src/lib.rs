@@ -612,7 +612,20 @@ fn read_sides<R: std::io::Read + std::io::Seek>(
         &map.restriction_groups()?,
         &game.kingdom_colors(),
         default,
+        &handicaps(&map.header()?.parameters.kingdoms),
     ))
+}
+
+/// The handicap the map gives each player that has one, by its kingdom's
+/// name.
+fn handicaps(setups: &[tgck::map::KingdomSetup]) -> HashMap<String, Id> {
+    (setups.iter())
+        .filter_map(|k| {
+            let h = k.handicap.trim();
+            (!h.is_empty() && !h.eq_ignore_ascii_case("null"))
+                .then(|| (k.name.clone(), Id::from(h)))
+        })
+        .collect()
 }
 
 /// The point `right` and `ahead` of `origin` when facing `facing`, a unit
@@ -731,6 +744,7 @@ mod tests {
             team_relations: vec![Enemy; 2],
             stockpile: 0.0,
             technologies: Vec::new(),
+            handicap: None,
             barred: Vec::new(),
         };
         let mut players = vec![side(1, 0), side(2, 0), side(3, 1), side(4, 1)];

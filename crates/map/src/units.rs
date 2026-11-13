@@ -42,6 +42,9 @@ pub struct Player {
     pub stockpile: f32,
     /// The technologies it starts with.
     pub technologies: Vec<Id>,
+    /// The handicap the map gives it, e.g. `handicap_hard`, which the
+    /// lobby's choice replaces.
+    pub handicap: Option<Id>,
     /// The technologies and templates the map bars it from, through its
     /// team's restriction group or its own.
     pub barred: Vec<Id>,
@@ -91,6 +94,7 @@ pub fn sides(
     groups: &RestrictionGroups,
     colors: &HashMap<Id, [f32; 3]>,
     default_stockpile: f32,
+    handicaps: &HashMap<String, Id>,
 ) -> (Vec<Player>, Vec<Team>) {
     // Only what a group selects bars anything; its other lists are what it
     // leaves alone.
@@ -144,6 +148,7 @@ pub fn sides(
             technologies: (k.start_technologies.iter().flatten())
                 .map(|t| Id::from(t.as_str()))
                 .collect(),
+            handicap: handicaps.get(&k.name).cloned(),
             barred: {
                 let team = teams.iter().find(|t| t.head.id == k.team && k.team != 0);
                 let team = team.and_then(|t| t.restriction_group.as_deref());

@@ -44,8 +44,26 @@ pub struct Nation {
     pub placeholders: HashMap<Id, Id>,
     /// Those who may lead its sides.
     pub generals: Vec<General>,
+    /// The archive path of the flag the lobby shows for it.
+    pub flag: Option<String>,
     /// The music its player hears in a match.
     pub music: Option<Id>,
+}
+
+/// A bonus or penalty the lobby can give a side the computer plays.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handicap {
+    /// E.g. `handicap_easy`.
+    pub id: Id,
+    /// What its name draws in place of words, by the glyph's image name,
+    /// e.g. `Rank1`.
+    pub glyph: Option<String>,
+    /// What it's called, where that's words rather than a glyph.
+    pub name: Option<String>,
+    /// E.g. `EASY: Gives a military and economic penalty to the AI.`
+    pub description: String,
+    /// The technology the side starts with, if any.
+    pub property: Option<Id>,
 }
 
 /// A general who leads a side.
@@ -1862,6 +1880,7 @@ impl GameData {
                 "vfx" => coverage.read::<defs::Vfx>(block, t).map(drop),
                 "cursor" => coverage.read::<defs::Cursor>(block, t).map(drop),
                 "glyph" => coverage.read::<defs::Glyph>(block, t).map(drop),
+                "handicap" => coverage.read::<defs::Handicap>(block, t).map(drop),
                 "svars" => coverage.read::<defs::SVars>(block, t).map(drop),
                 "resource" => coverage.read::<defs::Resource>(block, t).map(drop),
                 // A string table, read whole.
@@ -1907,6 +1926,7 @@ impl GameData {
                     generals: (n.factions.as_deref().unwrap_or("").split(','))
                         .filter_map(|id| generals.get(&Id::from(id.trim())).cloned())
                         .collect(),
+                    flag: n.flag_icon.as_deref().and_then(ui_path),
                     music: n
                         .game_music
                         .filter(|m| !m.as_str().eq_ignore_ascii_case("null")),
@@ -1915,6 +1935,45 @@ impl GameData {
             .collect();
         nations.sort_by(|a, b| a.name.cmp(&b.name));
         nations
+    }
+
+    /// The handicaps the lobby offers, in the order the game lists them.
+    pub fn handicaps(&mut self) -> Vec<Handicap> {
+        let glyphs = self.glyphs();
+        let strings = self.strings_with(&glyphs);
+        let glyphs: HashMap<char, String> = (glyphs.into_iter())
+            .filter_map(|g| Some((char::from_u32(g.index?)?, g.display_name?)))
+            .collect();
+        let files = self.parse_tgis(|n| n.starts_with("game/handicaps"));
+        let handicaps: Vec<Handicap> = (scoped(&files).iter())
+            .flat_map(|f| f.read::<defs::Handicap>("Handicap"))
+            .filter_map(|h| {
+                let id = h.ids?;
+                let name = localized(&strings, h.name.as_deref()).unwrap_or_default();
+                let description = localized(&strings, h.description.as_deref()).unwrap_or_default();
+                let glyph = only_char(&name).and_then(|g| glyphs.get(&g).cloned());
+                Some(Handicap {
+                    name: Some(name).filter(|n| glyph.is_none() && !n.trim().is_empty()),
+                    glyph,
+                    description,
+                    property: (h.property_ids.as_deref().map(str::trim))
+                        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("null"))
+                        .map(Id::from),
+                    id,
+                })
+            })
+            .collect();
+        handicaps
+    }
+
+    /// The archive path of the flag the lobby shows for a side whose nation
+    /// is left to chance: the one a nation has where it names none.
+    pub fn random_flag(&mut self) -> Option<String> {
+        let files = self.parse_tgis(|n| n.starts_with("templates/"));
+        let nation = (files.iter())
+            .flat_map(|(_, p)| p.root.blocks_of("Template"))
+            .find(|t| t.name().is_some_and(|n| n.eq_ignore_ascii_case("Nation")))?;
+        nation.value("flag_icon").and_then(ui_path)
     }
 
     /// The generals who may lead a side, by id.
@@ -2188,6 +2247,14 @@ impl GameData {
     /// The game's text in its default language, by key.
     pub fn strings(&mut self) -> HashMap<String, String> {
         let glyphs = self.glyphs();
+        self.strings_with(&glyphs)
+    }
+
+    /// [`GameData::strings`], with the [`GameData::glyphs`] already read.
+    fn strings_with(&mut self, glyphs: &[defs::Glyph]) -> HashMap<String, String> {
+        let glyphs: HashMap<Id, char> = (glyphs.iter())
+            .filter_map(|g| Some((g.ids.clone()?, char::from_u32(g.index?)?)))
+            .collect();
         let files = self.parse_tgis(|n| n.starts_with("localization/strings_"));
         let mut out = HashMap::new();
         let blocks = files.iter().flat_map(|(_, p)| p.root.blocks_of("Text"));
@@ -2200,13 +2267,12 @@ impl GameData {
 
     /// The characters quoted text names by id, such as `n` for a newline
     /// or `ch_gem` for one the font draws as an icon.
-    fn glyphs(&mut self) -> HashMap<Id, char> {
+    fn glyphs(&mut self) -> Vec<defs::Glyph> {
         let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
         let files = scoped(&files);
         files
             .iter()
             .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
-            .filter_map(|g| Some((g.ids?, char::from_u32(g.index?)?)))
             .collect()
     }
 
@@ -3438,6 +3504,12 @@ fn frames(pattern: &str, exists: impl Fn(&str) -> bool) -> Vec<String> {
     (first..).map(frame).take_while(|f| exists(f)).collect()
 }
 
+/// The one character `text` is, as a name that's just a glyph is.
+fn only_char(text: &str) -> Option<char> {
+    let mut chars = text.trim().chars();
+    chars.next().filter(|_| chars.next().is_none())
+}
+
 /// The archive path of an interface image, whose `%s` folder, for a
 /// screen size, is empty for the default images.
 fn ui_path(path: &str) -> Option<String> {
@@ -3472,6 +3544,12 @@ mod tests {
             Some("UI/Game/ActionButtons/IconMove.png")
         );
         assert_eq!(ui_path("NULL"), None);
+    }
+
+    #[test]
+    fn handicap_names_that_are_one_glyph_show_its_image() {
+        assert_eq!(only_char("\u{86}"), Some('\u{86}'));
+        assert_eq!(only_char("Easy"), None);
     }
 
     #[test]

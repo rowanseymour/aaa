@@ -5,16 +5,19 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, RandomState};
 
-use aaa_data::{General, Id, Nation};
+use aaa_data::{General, Handicap, Id, Nation};
 use aaa_map::{Brief, Player};
+use aaa_render::textures;
+use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
 
+use crate::actions::GLYPH_DIR;
 use crate::menu::go;
 use crate::presets::Preset;
 use crate::ui::{
-    Card, Chosen, Dropdown, Font, Ink, Surface, button, card, clickable, dropdown, inert, label,
-    opener, padded, panel, switch, text,
+    Card, Chosen, Dropdown, Font, Ink, Shown, Surface, button, card, clickable, dropdown, inert,
+    label, opener, padded, panel, switch, text,
 };
 use crate::{Data, Pending, Screen, Side};
 
@@ -76,6 +79,96 @@ pub fn default_person(players: &[Player], asked: Side) -> Option<u32> {
 /// The nations sides can play as.
 #[derive(Resource)]
 pub struct Nations(pub Vec<Nation>);
+
+/// The flags the lobby shows for the nations, by id, and for a nation left
+/// to chance.
+#[derive(Resource)]
+struct Flags {
+    nations: HashMap<Id, Handle<Image>>,
+    random: Option<Handle<Image>>,
+}
+
+impl Flags {
+    fn of(&self, nation: Option<&str>) -> Option<Handle<Image>> {
+        match nation {
+            Some(n) => self.nations.get(&Id::from(n)).cloned(),
+            None => self.random.clone(),
+        }
+    }
+}
+
+/// The handicaps the lobby offers the computer's sides, with their icons
+/// by id once the lobby has been shown.
+#[derive(Resource)]
+pub struct Handicaps {
+    pub all: Vec<Handicap>,
+    icons: HashMap<Id, Handle<Image>>,
+}
+
+impl Handicaps {
+    pub fn new(all: Vec<Handicap>) -> Handicaps {
+        Handicaps {
+            all,
+            icons: HashMap::new(),
+        }
+    }
+
+    fn find(&self, id: &Id) -> Option<&Handicap> {
+        self.all.iter().find(|h| h.id == *id)
+    }
+
+    /// The one a side has: the one `chosen` for it, else the map's, else
+    /// the one that changes nothing, as having none doesn't either.
+    fn of(&self, chosen: Option<&Id>, map: Option<&Id>) -> Option<&Handicap> {
+        (chosen.or(map).and_then(|id| self.find(id)))
+            .or_else(|| self.all.iter().find(|h| h.property.is_none()))
+            .or(self.all.first())
+    }
+
+    fn shown(&self, handicap: &Handicap) -> Shown {
+        let icon = self.icons.get(&handicap.id).cloned();
+        let words = match (&icon, &handicap.name) {
+            (Some(_), _) => String::new(),
+            (None, Some(name)) => name.clone(),
+            (None, None) => handicap.id.to_string(),
+        };
+        Shown {
+            icon,
+            words,
+            hint: Some(handicap.description.clone()).filter(|d| !d.is_empty()),
+        }
+    }
+}
+
+/// The technology each side starts with from its handicap, by player id:
+/// the one `chosen` for it, else the one the map gives it.
+pub fn handicap_technologies(
+    players: &[Player],
+    chosen: &HashMap<u32, Id>,
+    all: &[Handicap],
+) -> HashMap<u32, Id> {
+    aaa_map::sides(players)
+        .filter_map(|p| {
+            let id = chosen.get(&p.id).or(p.handicap.as_ref())?;
+            let handicap = all.iter().find(|h| h.id == *id)?;
+            Some((p.id, handicap.property.clone()?))
+        })
+        .collect()
+}
+
+/// The handicaps chosen for the sides the computer plays, by player id; the
+/// lobby offers none for the person's.
+fn computer_handicaps(
+    players: &[Player],
+    person: Option<u32>,
+    chosen: &HashMap<u32, Id>,
+) -> HashMap<u32, Id> {
+    let lineup = Lineup::new(players, person);
+    (lineup.0.into_iter())
+        .filter(|&(_, control)| control == Control::Computer)
+        .filter_map(|(p, _)| Some((p, chosen.get(&p)?.clone())))
+        .collect()
+}
 
 /// The nation each side plays as, by player id: the one the map fixes, else
 /// the one `chosen`, else one at random.
@@ -140,6 +233,8 @@ enum Open {
     Nations(u32),
     /// The generals for this player's side.
     Generals(u32),
+    /// The handicaps for this player's side.
+    Handicaps(u32),
 }
 
 /// What the lobby has chosen.
@@ -157,6 +252,9 @@ pub struct Lobby {
     /// The general chosen for each side, by player id; one at random where
     /// none is.
     generals: HashMap<u32, Id>,
+    /// The handicap chosen for each side the computer plays, by player id;
+    /// the default where none is.
+    handicaps: HashMap<u32, Id>,
     open: Open,
 }
 
@@ -177,6 +275,7 @@ impl Lobby {
             person,
             nations: HashMap::new(),
             generals: HashMap::new(),
+            handicaps: HashMap::new(),
             open: Open::Nothing,
         };
         lobby.keep_person_playing();
@@ -265,6 +364,14 @@ struct GeneralsOf(u32);
 #[derive(Component)]
 struct GeneralChoice(u32, Option<Id>);
 
+/// The button that opens a side's handicaps, by player id.
+#[derive(Component)]
+struct HandicapsOf(u32);
+
+/// One of the handicaps in a side's list, by player id.
+#[derive(Component)]
+struct HandicapChoice(u32, Id);
+
 /// One of the presets in their list.
 #[derive(Component)]
 struct PresetChoice(Preset);
@@ -285,15 +392,51 @@ pub struct LobbyPlugin;
 
 impl Plugin for LobbyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Lobby), (enter, spawn).chain())
-            .add_systems(
-                Update,
-                (show_presets, show_slots, show_about, mark_chosen)
-                    .chain()
-                    .run_if(in_state(Screen::Lobby))
-                    .run_if(resource_exists_and_changed::<Lobby>),
-            );
+        app.add_systems(
+            OnEnter(Screen::Lobby),
+            (load_pictures, enter, spawn).chain(),
+        )
+        .add_systems(
+            Update,
+            (show_presets, show_slots, show_about, mark_chosen)
+                .chain()
+                .run_if(in_state(Screen::Lobby))
+                .run_if(resource_exists_and_changed::<Lobby>),
+        );
     }
+}
+
+/// Decodes the flags and handicap icons on the first visit; later ones
+/// keep them.
+fn load_pictures(
+    mut commands: Commands,
+    mut data: ResMut<Data>,
+    all: Res<Nations>,
+    flags: Option<Res<Flags>>,
+    mut handicaps: ResMut<Handicaps>,
+    formats: Res<CompressedImageFormatSupport>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if flags.is_some() {
+        return;
+    }
+    let random = data.0.random_flag();
+    let mut load = |path: &str| {
+        let bytes = data.0.read(path)?;
+        textures::decode(&bytes, path, formats.0, true).map(|i| images.add(i))
+    };
+    let nations = (all.0.iter())
+        .filter_map(|n| Some((n.id.clone(), load(n.flag.as_deref()?)?)))
+        .collect();
+    let random = random.and_then(|p| load(&p));
+    let icons = (handicaps.all.iter())
+        .filter_map(|h| {
+            let glyph = h.glyph.as_deref()?;
+            Some((h.id.clone(), load(&format!("{GLYPH_DIR}/{glyph}.png"))?))
+        })
+        .collect();
+    handicaps.icons = icons;
+    commands.insert_resource(Flags { nations, random });
 }
 
 /// Picks the first of the scenarios, unless the lobby has been here before.
@@ -515,6 +658,26 @@ fn choose_general(
     }
 }
 
+fn open_handicaps(activate: On<Activate>, sides: Query<&HandicapsOf>, mut lobby: ResMut<Lobby>) {
+    if let Ok(HandicapsOf(player)) = sides.get(activate.entity) {
+        lobby.open = match lobby.open {
+            Open::Handicaps(p) if p == *player => Open::Nothing,
+            _ => Open::Handicaps(*player),
+        };
+    }
+}
+
+fn choose_handicap(
+    activate: On<Activate>,
+    choices: Query<&HandicapChoice>,
+    mut lobby: ResMut<Lobby>,
+) {
+    if let Ok(HandicapChoice(player, handicap)) = choices.get(activate.entity) {
+        lobby.handicaps.insert(*player, handicap.clone());
+        lobby.open = Open::Nothing;
+    }
+}
+
 fn choose_preset(activate: On<Activate>, choices: Query<&PresetChoice>, mut lobby: ResMut<Lobby>) {
     if let Ok(PresetChoice(preset)) = choices.get(activate.entity) {
         lobby.preset = *preset;
@@ -544,6 +707,7 @@ fn launch(
         person: lobby.person,
         nations: nations(&brief.players, &lobby.nations, &all.0),
         generals: lobby.generals.clone(),
+        handicaps: computer_handicaps(&brief.players, lobby.person, &lobby.handicaps),
         fog: None,
         from_menu: true,
     });
@@ -601,6 +765,8 @@ fn show_slots(
     mut commands: Commands,
     lobby: Res<Lobby>,
     all: Res<Nations>,
+    flags: Res<Flags>,
+    handicaps: Res<Handicaps>,
     slots: Single<Entity, With<Slots>>,
 ) {
     let slots = *slots;
@@ -664,22 +830,23 @@ fn show_slots(
                 )),
             }
             .observe(choose_side);
-            let nation = match &player.nation {
-                Some(fixed) => {
-                    commands.spawn((
-                        ChildOf(row),
-                        inert(cell(200.0)),
-                        children![label(name_of(&all.0, fixed), Font::Body, Ink::Muted)],
-                    ));
-                    Some(fixed.as_str())
-                }
-                None => {
-                    let chosen = lobby.nations.get(&id);
-                    let label = chosen.map_or("Random".into(), |n| name_of(&all.0, n.as_str()));
-                    nation_list(&mut commands, row, &lobby, id, label, &all.0);
-                    chosen.map(Id::as_str)
-                }
+            // The game shows a side's nation by its flag alone, naming it
+            // only in the list to choose from.
+            let nation = (player.nation.as_deref()).or(lobby.nations.get(&id).map(Id::as_str));
+            let flag = Shown {
+                icon: flags.of(nation),
+                words: String::new(),
+                hint: Some(nation.map_or("Random".into(), |n| name_of(&all.0, n))),
             };
+            match &player.nation {
+                Some(_) => {
+                    let fixed = commands
+                        .spawn((ChildOf(row), inert(cell(NATION_WIDTH))))
+                        .id();
+                    flag.spawn(&mut commands, fixed);
+                }
+                None => nation_list(&mut commands, row, &lobby, id, flag, &all.0),
+            }
             // A random nation's general is random too.
             let nation = nation.and_then(|n| all.0.iter().find(|a| a.id.as_str() == n));
             let fixed = player.general.as_deref().map(Id::from);
@@ -698,6 +865,9 @@ fn show_slots(
                         children![label(name, Font::Body, Ink::Muted)],
                     ));
                 }
+            }
+            if lobby.person != Some(id) {
+                handicap_list(&mut commands, row, &lobby, player, &handicaps);
             }
         }
     }
@@ -721,6 +891,9 @@ fn show_slots(
         .observe(choose_side);
 }
 
+/// How wide a side's nation is shown: its flag, padded.
+const NATION_WIDTH: f32 = 60.0;
+
 /// What a nation is called, by id.
 fn name_of(nations: &[Nation], id: &str) -> String {
     let nation = nations.iter().find(|n| n.id.as_str() == id);
@@ -734,7 +907,7 @@ fn nation_list(
     row: Entity,
     lobby: &Lobby,
     player: u32,
-    label: String,
+    label: Shown,
     nations: &[Nation],
 ) {
     let choices = nations.iter().map(|n| (Some(n.id.clone()), n.name.clone()));
@@ -743,7 +916,7 @@ fn nation_list(
     let open = lobby.open == Open::Nations(player);
     let list = Dropdown {
         row,
-        width: px(200),
+        width: px(NATION_WIDTH),
         label,
         open,
     };
@@ -753,6 +926,37 @@ fn nation_list(
         open_nations,
         choices,
         choose_nation,
+    );
+}
+
+/// The handicap of a side the computer plays in `row`, and the list to
+/// choose another from while it's open.
+fn handicap_list(
+    commands: &mut Commands,
+    row: Entity,
+    lobby: &Lobby,
+    player: &Player,
+    handicaps: &Handicaps,
+) {
+    let id = player.id;
+    let had = handicaps.of(lobby.handicaps.get(&id), player.handicap.as_ref());
+    let Some(had) = had else {
+        return;
+    };
+    let choices =
+        (handicaps.all.iter()).map(|h| (HandicapChoice(id, h.id.clone()), handicaps.shown(h)));
+    let list = Dropdown {
+        row,
+        width: px(64),
+        label: handicaps.shown(had),
+        open: lobby.open == Open::Handicaps(id),
+    };
+    list.spawn(
+        commands,
+        HandicapsOf(id),
+        open_handicaps,
+        choices,
+        choose_handicap,
     );
 }
 
@@ -776,7 +980,7 @@ fn general_list(
     let list = Dropdown {
         row,
         width: px(160),
-        label,
+        label: label.into(),
         open,
     };
     list.spawn(
@@ -861,6 +1065,7 @@ mod tests {
             team_relations: Vec::new(),
             stockpile: 0.0,
             technologies: Vec::new(),
+            handicap: None,
             barred: Vec::new(),
         }
     }
@@ -889,6 +1094,39 @@ mod tests {
     }
 
     #[test]
+    fn sides_start_with_the_chosen_handicap_else_the_maps() {
+        let handicap = |id: &str, property: Option<&str>| Handicap {
+            id: Id::from(id),
+            glyph: None,
+            name: None,
+            description: String::new(),
+            property: property.map(Id::from),
+        };
+        let handicaps = Handicaps::new(vec![
+            handicap("easy", Some("penalty")),
+            handicap("medium", None),
+            handicap("hard", Some("bonus")),
+        ]);
+        let (easy, hard) = (Id::from("easy"), Id::from("hard"));
+        let shown = |chosen, map| handicaps.of(chosen, map).map(|h| h.id.as_str());
+        assert_eq!(shown(None, None), Some("medium"));
+        assert_eq!(shown(None, Some(&easy)), Some("easy"));
+        assert_eq!(shown(Some(&hard), Some(&easy)), Some("hard"));
+
+        let mut players = players();
+        players[1].handicap = Some(hard.clone());
+        players[3].handicap = Some(easy.clone());
+        let chosen = HashMap::from([(10, hard.clone()), (12, easy.clone())]);
+        // The lobby offers the person's side none.
+        let chosen = computer_handicaps(&players, Some(12), &chosen);
+        assert_eq!(chosen, HashMap::from([(10, hard.clone())]));
+        let given = handicap_technologies(&players, &chosen, &handicaps.all);
+        // The independent player gets none, even from the map.
+        let bonus_and_penalty = [(10, Id::from("bonus")), (13, Id::from("penalty"))];
+        assert_eq!(given, HashMap::from(bonus_and_penalty));
+    }
+
+    #[test]
     fn seating_moves_the_person() {
         use Control::*;
         let mut lineup = Lineup::new(&players(), Some(12));
@@ -906,6 +1144,7 @@ mod tests {
             name: id.to_uppercase(),
             placeholders: HashMap::new(),
             generals: Vec::new(),
+            flag: None,
             music: None,
         };
         let all = [nation("nation_usa"), nation("nation_ger")];
@@ -935,6 +1174,7 @@ mod tests {
             name: id.into(),
             placeholders: HashMap::new(),
             generals: generals.iter().map(|g| general(g)).collect(),
+            flag: None,
             music: None,
         };
         let usa = nation("nation_usa", &["patton", "patton_tutorial", "nimitz"]);
