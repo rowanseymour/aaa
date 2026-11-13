@@ -422,7 +422,6 @@ impl World {
     /// side can't pay its upkeep.
     pub(crate) fn resupply(&mut self) {
         // Worked out once for all those looked at this tick.
-        let mut hqs = None;
         let mut shorts: BTreeMap<u32, Option<f32>> = BTreeMap::new();
         for r in 0..self.regiments.len() {
             if !(self.ticks + r as u64).is_multiple_of(BEAT) {
@@ -437,8 +436,6 @@ impl World {
                 self.regiments[r].in_supply = false;
                 continue;
             };
-            let hqs = hqs.get_or_insert_with(|| self.hqs());
-            self.keep_attached(r, hqs);
             let regiment = &self.regiments[r];
             let owner = regiment.owner;
             let sided = self.sides.player(owner).is_some_and(|p| !p.independent);

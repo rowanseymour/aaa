@@ -29,6 +29,7 @@ impl World {
         };
         let mut world = World::build(sides, map.pathing.clone(), rules, &map.regiments);
         world.add_buildings(&map.buildings);
+        world.detach_from_missing();
         world.tile_terrains = map.tile_terrains.clone();
         world.scenery = map.scenery.clone();
         world.clearable = map.clearable.clone();

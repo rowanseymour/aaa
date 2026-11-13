@@ -844,9 +844,12 @@ impl World {
     }
 
     /// Tells of the regiment of the unit at `u`, just killed, if it has
-    /// none left.
+    /// none left. A packed HQ whose truck is gone loses its regiments.
     fn lost_member(&mut self, u: usize) {
         let r = self.units[u].regiment;
+        if let Some(hq) = self.truckless_hq(r) {
+            self.detach_all(hq);
+        }
         if self.destroyed(r) {
             self.notices.push(Notice::Destroyed {
                 owner: self.regiments[r].owner,
