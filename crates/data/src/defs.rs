@@ -993,9 +993,11 @@ pub struct UVars {
     /// The id of the [`HotkeyConfiguration`] in use.
     #[serde(rename = "HotkeyConfiguration")]
     pub hotkey_configuration: Option<Id>,
-    /// The options' Main and Music volume, as they start.
+    /// The options' volumes, as they start.
     #[serde(rename = "AudioMainVolume")]
     pub audio_main_volume: Option<f32>,
+    #[serde(rename = "AudioSpeechVolume")]
+    pub audio_speech_volume: Option<f32>,
     #[serde(rename = "AudioMusicVolume")]
     pub audio_music_volume: Option<f32>,
 }

@@ -9,7 +9,9 @@ use bevy::ecs::observer::IntoEntityObserver;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::text::{Font as Face, FontSource};
-use bevy::ui_widgets::Button;
+use bevy::ui_widgets::{
+    Button, Slider, SliderRange, SliderStep, SliderThumb, SliderValue, TrackClick,
+};
 
 use crate::sound::Sounds;
 
@@ -20,10 +22,12 @@ impl Plugin for UiPlugin {
         app.init_resource::<Theme>()
             .add_systems(Startup, (faces, spawn_hint))
             .add_systems(Update, (highlight, hint))
-            // Before layout, which a meter's fill width feeds.
+            // Before layout, which a meter's fill width and a slider's
+            // thumb feed, so that what's spawned in Update is drawn right
+            // from its first frame.
             .add_systems(
                 PostUpdate,
-                (paint, ink, edge, shade, fill).before(bevy::ui::UiSystems::Prepare),
+                (paint, ink, edge, shade, fill, place_thumbs).before(bevy::ui::UiSystems::Prepare),
             )
             .add_observer(click);
     }
@@ -525,6 +529,80 @@ pub fn meter(node: Node, gauge: Gauge) -> impl Bundle {
             Pickable::IGNORE,
         )],
     )
+}
+
+/// How wide a [`slider`]'s thumb is.
+const THUMB: f32 = 12.0;
+
+/// A bar to drag along, laid out as `node`, choosing a share from 0 to 1
+/// that starts at `value`. What it chooses is told by
+/// [`ValueChange`](bevy::ui_widgets::ValueChange), and only shown once
+/// it's put back as its [`SliderValue`].
+pub fn slider(node: Node, value: f32) -> impl Bundle {
+    let fill = |node: Node| Node {
+        position_type: PositionType::Absolute,
+        left: px(0),
+        ..node
+    };
+    (
+        Slider {
+            track_click: TrackClick::Snap,
+            ..default()
+        },
+        SliderValue(value),
+        SliderRange::new(0.0, 1.0),
+        SliderStep(0.01),
+        Node {
+            height: px(20),
+            align_items: AlignItems::Center,
+            ..node
+        },
+        children![
+            (
+                fill(Node {
+                    right: px(0),
+                    height: px(4),
+                    border_radius: BorderRadius::all(px(2)),
+                    ..default()
+                }),
+                Surface::Track,
+            ),
+            // The thumb travels the width less its own.
+            (
+                fill(Node {
+                    right: px(THUMB),
+                    height: percent(100),
+                    ..default()
+                }),
+                children![(
+                    SliderThumb,
+                    fill(Node {
+                        width: px(THUMB),
+                        height: percent(100),
+                        border_radius: BorderRadius::all(px(3)),
+                        ..default()
+                    }),
+                    Surface::Chosen,
+                )],
+            ),
+        ],
+    )
+}
+
+/// Puts each slider's thumb where its value is.
+fn place_thumbs(
+    sliders: Query<(Entity, &SliderValue, &SliderRange), Changed<SliderValue>>,
+    children: Query<&Children>,
+    mut thumbs: Query<&mut Node, With<SliderThumb>>,
+) {
+    for (slider, value, range) in &sliders {
+        let at = percent(range.thumb_position(value.0) * 100.0);
+        for e in children.iter_descendants(slider) {
+            if let Ok(mut thumb) = thumbs.get_mut(e) {
+                thumb.left = at;
+            }
+        }
+    }
 }
 
 /// A list that drops below what opens it, over what's there, as wide as

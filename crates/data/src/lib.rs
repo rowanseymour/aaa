@@ -798,9 +798,6 @@ pub struct MusicSettings {
     pub observer: Option<Id>,
     /// What the main menu asks for.
     pub menu: Option<Id>,
-    /// The options' Main and Music volume, as they start.
-    pub main_volume: f32,
-    pub music_volume: f32,
     /// What music falls to while audio that fades it plays, as a fraction
     /// of its level.
     pub duck_volume: f32,
@@ -808,6 +805,20 @@ pub struct MusicSettings {
     pub duck_time: f32,
     /// Seconds after the last audio that fades it that music recovers.
     pub recover_after: f32,
+}
+
+/// Where the options' FX volume starts, which the data doesn't set: where
+/// the game's own options show it.
+const FX_VOLUME: f32 = 0.8;
+
+/// How loud the options have audio play, each from 0 for silent to 1 for
+/// full.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Volumes {
+    pub main: f32,
+    pub fx: f32,
+    pub speech: f32,
+    pub music: f32,
 }
 
 /// How the supply border is drawn.
@@ -1989,7 +2000,6 @@ impl GameData {
     /// What music plays when, and how loud.
     pub fn music_settings(&mut self) -> MusicSettings {
         let vars = self.avars();
-        let uvars = self.uvars();
         let var =
             |of: fn(&defs::AVars) -> Option<f32>, or: f32| vars.iter().find_map(of).unwrap_or(or);
         let id = |of: fn(&defs::AVars) -> Option<Id>| vars.iter().find_map(of);
@@ -2005,15 +2015,22 @@ impl GameData {
                 .unwrap_or_else(|| Id::from("music_silent")),
             observer: id(|v| v.observer_game_music.clone()),
             menu,
-            main_volume: (uvars.iter())
-                .find_map(|v| v.audio_main_volume)
-                .unwrap_or(0.8),
-            music_volume: (uvars.iter())
-                .find_map(|v| v.audio_music_volume)
-                .unwrap_or(0.7),
             duck_volume: var(|v| v.audio_fade_volume, 0.5),
             duck_time: var(|v| v.audio_fade_time, 1.0),
             recover_after: var(|v| v.audio_recover_from_fade_time, 2.0),
+        }
+    }
+
+    /// The options' volumes, as they start.
+    pub fn volumes(&mut self) -> Volumes {
+        let uvars = self.uvars();
+        let var =
+            |of: fn(&defs::UVars) -> Option<f32>, or: f32| uvars.iter().find_map(of).unwrap_or(or);
+        Volumes {
+            main: var(|v| v.audio_main_volume, 0.8),
+            fx: FX_VOLUME,
+            speech: var(|v| v.audio_speech_volume, 0.95),
+            music: var(|v| v.audio_music_volume, 0.7),
         }
     }
 
