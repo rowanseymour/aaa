@@ -21,7 +21,7 @@ use std::f32::consts::{FRAC_PI_4, PI, TAU};
 use aaa_map::pathing::{CELL_SIZE, tile_at};
 use aaa_map::{
     DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Role, Shape,
-    TerrainEffect, Turret, Unpacks, Weapon, Zone,
+    TerrainEffect, TerrainIndex, Turret, Unpacks, Weapon, Zone,
 };
 
 pub use aaa_map::{Player, Relation, Team};
@@ -116,7 +116,7 @@ pub struct World {
     pub sides: Sides,
     pub pathing: Pathing,
     /// The terrain under each tile, for what it does to those on it.
-    pub grounds: aaa_map::Grounds,
+    pub tile_terrains: aaa_map::TileTerrains,
     pub terrain_rules: aaa_map::TerrainRules,
     /// What each building template packs into, for those that can.
     pub packing: HashMap<String, Packs>,
@@ -280,8 +280,8 @@ pub struct Regiment {
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
     pub guard: Option<Guard>,
-    /// The terrain it's on, as [`aaa_map::Grounds::kind`] takes it.
-    pub terrain: u16,
+    /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it.
+    pub terrain: TerrainIndex,
     /// The properties that terrain gives it.
     pub terrain_properties: Vec<Id>,
     /// `template`, as what's kept by template has it.
@@ -458,9 +458,9 @@ pub struct Unit {
     /// Whether it's yet to join its regiment, as a recruit's members are
     /// until supply brings them.
     pub awaited: bool,
-    /// The terrain it's on, as [`aaa_map::Grounds::kind`] takes it: its
+    /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it: its
     /// regiment's, or its own tile's while it straggles.
-    pub terrain: u16,
+    pub terrain: TerrainIndex,
     /// `template`, as what's kept by template has it.
     template_id: Id,
 }
@@ -1091,7 +1091,7 @@ impl World {
         };
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
         world.add_buildings(&map.buildings);
-        world.grounds = map.grounds.clone();
+        world.tile_terrains = map.tile_terrains.clone();
         world.scenery = map.scenery.clone();
         world.clearable = map.clearable.clone();
         world.holdings = map
@@ -1131,7 +1131,7 @@ impl World {
         let mut world = World {
             sides,
             pathing,
-            grounds: aaa_map::Grounds::default(),
+            tile_terrains: aaa_map::TileTerrains::default(),
             terrain_rules: aaa_map::TerrainRules::default(),
             regiments: Vec::new(),
             units: Vec::new(),
@@ -1217,7 +1217,7 @@ impl World {
                 unpacked: None,
                 // One its regiment has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
-                terrain: 0,
+                terrain: TerrainIndex::default(),
                 template_id: Id::from(m.template.as_str()),
                 id: m.id,
                 template: m.template.clone(),
@@ -1292,7 +1292,7 @@ impl World {
             bombarded: Vec::new(),
             properties: Vec::new(),
             guard: None,
-            terrain: 0,
+            terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),
             template_id: Id::from(regiment.template.as_str()),
         });
@@ -8315,8 +8315,8 @@ mod tests {
 
     /// Forest, whose first property is for infantry and whose second for
     /// vehicles, and the rules those properties work by.
-    fn forest() -> (aaa_map::GroundKind, aaa_map::TerrainRules) {
-        let forest = aaa_map::GroundKind {
+    fn forest() -> (aaa_map::TileTerrain, aaa_map::TerrainRules) {
+        let forest = aaa_map::TileTerrain {
             properties: vec![Id::from("forest_infantry"), Id::from("forest_vehicles")],
             mountain: false,
         };
@@ -8354,7 +8354,7 @@ mod tests {
     fn terrain_holds_everyone_on_it_to_its_last_propertys_speed_limit() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         let (forest, rules) = forest();
-        (w.grounds, w.terrain_rules) = (aaa_map::Grounds::uniform(20, forest), rules);
+        (w.tile_terrains, w.terrain_rules) = (aaa_map::TileTerrains::uniform(20, forest), rules);
         w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
         let to = [10.0, 30.0];
         w.apply(7, Command::Move { regiment: 0, to }).unwrap();
@@ -8366,11 +8366,12 @@ mod tests {
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 1.25));
         // A mountain's is the lowest there is.
-        let mountain = aaa_map::GroundKind {
+        let mountain = aaa_map::TileTerrain {
             properties: Vec::new(),
             mountain: true,
         };
-        (w.grounds, w.terrain_rules.slowest) = (aaa_map::Grounds::uniform(20, mountain), 0.5);
+        (w.tile_terrains, w.terrain_rules.slowest) =
+            (aaa_map::TileTerrains::uniform(20, mountain), 0.5);
         run(&mut w, 0.2);
         assert!(w.units.iter().all(|u| u.speed == 0.5));
         // Unless its regiment has, for a time, a property free of limits,
@@ -8403,10 +8404,11 @@ mod tests {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         let (forest, rules) = forest();
         w.terrain_rules = rules;
-        w.grounds = aaa_map::Grounds::uniform(20, aaa_map::GroundKind::default());
+        w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
         w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
         // Under the first only, who with no control range is on his own.
-        w.grounds.set(tile_at(w.units[0].position), forest.clone());
+        w.tile_terrains
+            .set(tile_at(w.units[0].position), forest.clone());
         w.stand();
         let held = |w: &World, u| w.terrain_effects(Target::Unit(u)).len();
         assert_eq!((held(&w, 0), held(&w, 1)), (1, 0));
@@ -8416,7 +8418,7 @@ mod tests {
         w.stand();
         assert_eq!((held(&w, 0), w.speed_limit(0)), (0, None));
         // Under the regiment, which gains only what a member can.
-        w.grounds.set(tile_at(w.leader_position(0)), forest);
+        w.tile_terrains.set(tile_at(w.leader_position(0)), forest);
         w.stand();
         assert_eq!((held(&w, 0), held(&w, 1)), (1, 1));
         assert_eq!(
@@ -8434,7 +8436,7 @@ mod tests {
         w.stand();
         // Unpacked, it keeps what it had wherever that leaves it.
         w.regiments[0].unpacked_into = Some(0);
-        w.grounds = aaa_map::Grounds::uniform(20, aaa_map::GroundKind::default());
+        w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
         w.stand();
         assert_eq!(
             w.regiments[0].terrain_properties,
