@@ -4,6 +4,7 @@
 //! border, as the options do. Another over the minimap, or its key, steps
 //! through the player's regiments that have no HQ.
 
+use aaa_map::Tile;
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::{Tint, overlay, textures};
@@ -63,7 +64,7 @@ pub struct BorderLine;
 /// follows from how the zones came to be.
 #[derive(Default)]
 pub struct Traced {
-    giving: Vec<(usize, (i32, i32), f32)>,
+    giving: Vec<(usize, Tile, f32)>,
     outline: aaa_map::Outline,
 }
 
@@ -91,7 +92,7 @@ pub fn show_border(
         let (around, reach) = sim.buildings[b].supply.laid()?;
         Some((b, around, reach))
     };
-    let giving: Vec<(usize, (i32, i32), f32)> = match local.0 {
+    let giving: Vec<(usize, Tile, f32)> = match local.0 {
         Some(player) => (0..sim.buildings.len())
             .filter(|&b| sim.shares_supply(player, sim.buildings[b].owner))
             .filter_map(laid)
@@ -344,7 +345,7 @@ impl CycleParts<'_, '_> {
         self.chosen.0 = None;
         let [x, y] = self.sim.0.leader_position(r);
         for mut camera in &mut self.cameras {
-            camera.focus = world(x, y, self.loaded.map.ground.height_at(x, y));
+            camera.focus = world(x, y, self.loaded.map.ground.height_at([x, y]));
         }
     }
 }

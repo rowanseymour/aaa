@@ -3,6 +3,7 @@
 use std::collections::{BTreeMap, HashSet};
 
 use crate::pathing::{CELL_SIZE, Zone};
+use crate::tile::Tile;
 
 /// The edges of the ground zones cover between them, as closed loops of
 /// tile corners with that ground on their left: one around each patch and
@@ -11,7 +12,7 @@ use crate::pathing::{CELL_SIZE, Zone};
 /// starts follows from what changed.
 #[derive(Debug, Clone, Default)]
 pub struct Outline {
-    covered: HashSet<(i32, i32)>,
+    covered: HashSet<Tile>,
     /// Each loop's corners, in tiles, from its start.
     loops: Vec<Vec<(i32, i32)>>,
 }
@@ -24,11 +25,11 @@ impl Outline {
     /// before.
     pub fn retrace<'a>(&mut self, zones: impl IntoIterator<Item = &'a Zone>, block: i32) {
         let block = block.max(1);
-        let covered: HashSet<(i32, i32)> = zones.into_iter().flat_map(Zone::tiles).collect();
+        let covered: HashSet<Tile> = zones.into_iter().flat_map(Zone::tiles).collect();
         // A square answers for the tiles just beyond its far sides too.
         let changed: HashSet<(i32, i32)> = (covered.symmetric_difference(&self.covered))
-            .flat_map(|&(x, y)| [(x, y), (x - 1, y), (x, y - 1), (x - 1, y - 1)])
-            .map(|(x, y)| (x.div_euclid(block), y.div_euclid(block)))
+            .flat_map(|&t| [t, t.offset(-1, 0), t.offset(0, -1), t.offset(-1, -1)])
+            .map(|t| (t.x.div_euclid(block), t.y.div_euclid(block)))
             .collect();
         // By its first side, as loops can share a corner.
         let first = |l: &Vec<(i32, i32)>| Some([*l.first()?, *l.get(1)?]);
@@ -54,15 +55,16 @@ impl Outline {
 }
 
 /// The loops round `covered`, each from wherever it was come upon.
-fn trace(covered: &HashSet<(i32, i32)>) -> Vec<Vec<(i32, i32)>> {
+fn trace(covered: &HashSet<Tile>) -> Vec<Vec<(i32, i32)>> {
     // Each side with open ground beyond it, from one corner to the next
     // going round the tile.
     let mut sides: BTreeMap<(i32, i32), Vec<(i32, i32)>> = BTreeMap::new();
-    for &(x, y) in covered {
+    for &tile in covered {
+        let Tile { x, y } = tile;
         let corners = [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)];
-        let beyond = [(x, y - 1), (x + 1, y), (x, y + 1), (x - 1, y)];
-        for (i, tile) in beyond.iter().enumerate() {
-            if !covered.contains(tile) {
+        let beyond = [(0, -1), (1, 0), (0, 1), (-1, 0)].map(|(dx, dy)| tile.offset(dx, dy));
+        for (i, next) in beyond.iter().enumerate() {
+            if !covered.contains(next) {
                 let to = corners[(i + 1) % 4];
                 sides.entry(corners[i]).or_default().push(to);
             }
@@ -195,20 +197,16 @@ mod tests {
         assert!(outlined(&[]).is_empty());
     }
 
-    fn patch(tiles: &[(i32, i32)]) -> Zone {
-        Zone::of(tiles)
-    }
-
-    fn block(from: (i32, i32), to: (i32, i32)) -> Vec<(i32, i32)> {
-        (from.1..to.1)
-            .flat_map(|y| (from.0..to.0).map(move |x| (x, y)))
+    fn block(from: Tile, to: Tile) -> Vec<Tile> {
+        (from.y..to.y)
+            .flat_map(|y| (from.x..to.x).map(move |x| Tile::new(x, y)))
             .collect()
     }
 
     #[test]
     fn tiles_touching_at_a_corner_are_outlined_apart() {
         let mut outline = Outline::default();
-        outline.retrace([&patch(&[(1, 1), (2, 2)])], 4);
+        outline.retrace([&Zone::of(&[Tile::new(1, 1), Tile::new(2, 2)])], 4);
         let mut loops = outline.loops.clone();
         loops.sort();
         assert_eq!(loops.len(), 2);
@@ -220,12 +218,12 @@ mod tests {
         let mut outline = Outline::default();
         // Wholly inside one square: from the far end of its earliest
         // side, the far side along x of the tile beside its first.
-        outline.retrace([&patch(&[(1, 1), (2, 1)])], 4);
+        outline.retrace([&Zone::of(&[Tile::new(1, 1), Tile::new(2, 1)])], 4);
         assert_eq!(outline.loops[0][..2], [(1, 1), (2, 1)]);
         // Across squares, appearing on its own: where it comes into the
         // lowest square of the lowest row that holds any of its sides,
         // here along its far edge.
-        let wide = patch(&block((2, 5), (10, 7)));
+        let wide = Zone::of(&block(Tile::new(2, 5), Tile::new(10, 7)));
         outline.retrace([&wide], 4);
         assert_eq!(outline.loops.len(), 1);
         assert_eq!(outline.loops[0][..2], [(4, 7), (3, 7)]);
@@ -234,7 +232,7 @@ mod tests {
         let before = outline.loops.clone();
         outline.retrace([&wide], 4);
         assert_eq!(outline.loops, before);
-        let longer = patch(&block((2, 5), (13, 7)));
+        let longer = Zone::of(&block(Tile::new(2, 5), Tile::new(13, 7)));
         outline.retrace([&longer], 4);
         assert_eq!(outline.loops[0][0], (8, 5));
     }

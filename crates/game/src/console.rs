@@ -638,7 +638,7 @@ fn look_at(world: &mut World, args: &[&str]) -> Reply {
         }
         [x, y] => {
             let [x, y] = place(ground, x, y)?;
-            cam.focus = point(x, y, ground.height_at(x, y));
+            cam.focus = point(x, y, ground.height_at([x, y]));
             Ok(String::new())
         }
         _ => Err(usage("lookat")),
@@ -659,7 +659,7 @@ fn camera(world: &mut World, args: &[&str]) -> Reply {
             let (near, far) = cam.distances();
             cam.distance = (number(height)? / cam.pitch.sin()).clamp(near, far);
         }
-        cam.focus = point(x, y, ground.height_at(x, y));
+        cam.focus = point(x, y, ground.height_at([x, y]));
         Ok(String::new())
     })
 }

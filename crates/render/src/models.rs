@@ -42,7 +42,7 @@ pub fn pose(
     let [x, y] = position;
     let [fx, fy] = facing;
     let Some(footprint) = conform else {
-        let translation = world(x, y, ground.stand_at(footing, x, y));
+        let translation = world(x, y, ground.stand_at(footing, [x, y]));
         return (translation, Quat::from_rotation_y(fy.atan2(fx) + FRAC_PI_2));
     };
     // Objects never turned face their model's -y.

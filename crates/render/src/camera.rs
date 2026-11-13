@@ -69,7 +69,7 @@ impl RtsCamera {
     /// The game's view of the middle of a map.
     pub fn centred(ground: &Ground) -> Self {
         let half = ground.size() / 2.0;
-        RtsCamera::new(world(half, half, ground.height_at(half, half)))
+        RtsCamera::new(world(half, half, ground.height_at([half, half])))
     }
 
     /// Back to the game's own view, still looking where it is.

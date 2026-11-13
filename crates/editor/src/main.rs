@@ -264,7 +264,7 @@ fn setup(
     if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
         let (x, y) = (x * size, y * size);
         cam = RtsCamera {
-            focus: terrain::world(x, y, ground.height_at(x, y)),
+            focus: terrain::world(x, y, ground.height_at([x, y])),
             distance,
             yaw,
             pitch,

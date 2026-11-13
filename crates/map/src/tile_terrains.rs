@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use aaa_data::{Id, TerrainKind, Variation};
 use tgck::map::Terrain;
 
-use crate::pathing::tile_at;
+use crate::tile::Tile;
 
 /// A terrain, as far as it bears on those standing on it.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -74,27 +74,22 @@ impl TileTerrains {
     }
 
     /// Makes one tile's terrain `terrain`.
-    pub fn set(&mut self, (x, y): (i32, i32), terrain: TileTerrain) {
+    pub fn set(&mut self, tile: Tile, terrain: TileTerrain) {
         let found = self.terrains.iter().position(|t| *t == terrain);
         let i = found.unwrap_or_else(|| {
             self.terrains.push(terrain);
             self.terrains.len() - 1
         });
         let i = u16::try_from(i).expect("no more terrains than a u16 counts");
-        if let Some(t) = self.index(x, y) {
+        if let Some(t) = tile.index(self.side) {
             self.tiles[t] = TerrainIndex(i);
         }
     }
 
-    fn index(&self, x: i32, y: i32) -> Option<usize> {
-        let side = self.side as i32;
-        ((0..side).contains(&x) && (0..side).contains(&y)).then(|| (y * side + x) as usize)
-    }
-
     /// The terrain of the tile a world position lies in.
     pub fn at(&self, position: [f32; 2]) -> TerrainIndex {
-        let (x, y) = tile_at(position);
-        self.index(x, y)
+        Tile::at(position)
+            .index(self.side)
             .map_or_else(TerrainIndex::default, |i| self.tiles[i])
     }
 
@@ -109,7 +104,6 @@ impl TileTerrains {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pathing::tile_centre;
 
     #[test]
     fn tiles_have_their_own_terrain_and_none_off_the_map() {
@@ -118,21 +112,27 @@ mod tests {
             mountain: false,
         };
         let mut terrains = TileTerrains::uniform(4, TileTerrain::default());
-        terrains.set((2, 1), forest.clone());
-        assert_eq!(*terrains.get(terrains.at(tile_centre(2, 1))), forest);
+        terrains.set(Tile::new(2, 1), forest.clone());
+        assert_eq!(*terrains.get(terrains.at(Tile::new(2, 1).centre())), forest);
         assert_eq!(
-            *terrains.get(terrains.at(tile_centre(1, 1))),
+            *terrains.get(terrains.at(Tile::new(1, 1).centre())),
             TileTerrain::default()
         );
-        assert_eq!(terrains.at(tile_centre(4, 1)), TerrainIndex::default());
-        assert_eq!(terrains.at(tile_centre(-1, 0)), TerrainIndex::default());
+        assert_eq!(
+            terrains.at(Tile::new(4, 1).centre()),
+            TerrainIndex::default()
+        );
+        assert_eq!(
+            terrains.at(Tile::new(-1, 0).centre()),
+            TerrainIndex::default()
+        );
         // One of another map's terrains these don't have is none: forest is
         // a third terrain there, where these have two.
         let other = TileTerrains::uniform(4, forest.clone());
         let mut more = TileTerrains::uniform(4, TileTerrain::default());
-        more.set((1, 0), forest);
+        more.set(Tile::new(1, 0), forest);
         assert_eq!(
-            *other.get(more.at(tile_centre(1, 0))),
+            *other.get(more.at(Tile::new(1, 0).centre())),
             TileTerrain::default()
         );
     }

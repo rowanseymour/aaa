@@ -1217,7 +1217,7 @@ fn setup(
         start.map(|t| [t.position[0], t.position[1]])
     };
     let cam = match regiment.or_else(building).or_else(start) {
-        Some([x, y]) => RtsCamera::new(world(x, y, map.ground.height_at(x, y))),
+        Some([x, y]) => RtsCamera::new(world(x, y, map.ground.height_at([x, y]))),
         None => RtsCamera::centred(&map.ground),
     };
     // The letters are the game's hotkeys.
@@ -1319,7 +1319,7 @@ fn thing_at(
         class: tgck::map::ACTOR,
         id,
         name: String::new(),
-        position: [x, y, ground.stand_at(footing, x, y)],
+        position: [x, y, ground.stand_at(footing, [x, y])],
         facing: [fx, fy, 0.0],
         flags: 0,
         scale: 1.0,
@@ -1894,7 +1894,7 @@ fn select(
     let inside = |u: usize| {
         let unit = &sim.0.units[u];
         let [x, y] = unit.position;
-        let z = ground.stand_at(drawn.0.footing(&unit.template), x, y);
+        let z = ground.stand_at(drawn.0.footing(&unit.template), [x, y]);
         camera
             .world_to_viewport(transform, world(x, y, z))
             .is_ok_and(|p| rect.contains(p))
@@ -2115,7 +2115,7 @@ fn choose_formation(
 fn pick_ground(ground: &Ground, ray: Ray3d) -> Option<[f32; 2]> {
     let above = |p: Vec3| {
         let [x, y] = map_point(p);
-        p.y - ground.height_at(x, y)
+        p.y - ground.height_at([x, y])
     };
     let step = 0.5;
     let mut t = 0.0;
@@ -2366,7 +2366,7 @@ fn show_health(
             // At the edge of its footprint nearest the camera, so the bar
             // clears the model.
             let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
-            let at = world(x, y, ground.stand_at(view.footing, x, y)) + toward * reach;
+            let at = world(x, y, ground.stand_at(view.footing, [x, y])) + toward * reach;
             let image = images.health_bar(unit.health / fighter.health);
             shown.push((at, HEALTH_BAR, image, 0.0));
         }

@@ -404,7 +404,7 @@ pub fn draped_square_about(
             // The image's top is ahead.
             let local = [(u - 0.5) * size.x, (0.5 - v) * size.y];
             let [x, y] = from_local(position, facing, local);
-            let point = world(x, y, ground.height_at(x, y) + LIFT) - origin;
+            let point = world(x, y, ground.height_at([x, y]) + LIFT) - origin;
             positions.push(point.to_array());
             uvs.push([u, v]);
         }
@@ -556,7 +556,7 @@ pub fn border(ground: &Ground, loops: &[Vec<[f32; 2]>], width: f32) -> Mesh {
             for a in 0..ACROSS {
                 let u = a as f32 / (ACROSS - 1) as f32;
                 let Vec2 { x, y } = path[i % n] + inward(i % n) * (u - 0.5) * width;
-                positions.push(world(x, y, ground.height_at(x, y) + LIFT).to_array());
+                positions.push(world(x, y, ground.height_at([x, y]) + LIFT).to_array());
                 uvs.push([u, i as f32 / n as f32 * repeats]);
             }
         }
@@ -599,7 +599,7 @@ mod tests {
         };
         for p in positions {
             let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
-            assert!((p[1] - ground.height_at(x, y) - LIFT).abs() < 1e-4);
+            assert!((p[1] - ground.height_at([x, y]) - LIFT).abs() < 1e-4);
         }
         // Its corners are at the size asked for, around the position.
         let xs = positions.iter().map(|p| p[0]);
@@ -725,7 +725,7 @@ mod tests {
         // outside what the path bounds.
         for (p, [u, _]) in positions.iter().zip(uvs) {
             let [x, y] = crate::terrain::map_point(Vec3::from_array(*p));
-            assert!((p[1] - ground.height_at(x, y) - LIFT).abs() < 1e-4);
+            assert!((p[1] - ground.height_at([x, y]) - LIFT).abs() < 1e-4);
             assert!((7.49..56.51).contains(&x) && (7.49..56.51).contains(&y));
             // Along the middle of the near side, clear of the corners.
             if (24.0..40.0).contains(&x) && y < 12.0 {

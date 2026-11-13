@@ -12,6 +12,7 @@ use tgck::map::Terrain;
 pub use tgck::map::CELL_SIZE;
 
 use crate::obstacle::Obstacle;
+use crate::tile::Tile;
 
 /// What a mover travels on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -29,11 +30,11 @@ const EDGE: f32 = 0.0001;
 
 /// The tiles from the one under a box's low corner to the one just short
 /// of its high corner, which may be off the map.
-pub(crate) fn spanned((lo, hi): ([f32; 2], [f32; 2])) -> impl Iterator<Item = (i32, i32)> {
-    let (x0, y0) = tile_at(lo);
-    let (x1, y1) = tile_at([hi[0] - EDGE, hi[1] - EDGE]);
-    let (x1, y1) = (x1.max(x0), y1.max(y0));
-    (y0..=y1).flat_map(move |y| (x0..=x1).map(move |x| (x, y)))
+pub(crate) fn spanned((lo, hi): ([f32; 2], [f32; 2])) -> impl Iterator<Item = Tile> {
+    let low = Tile::at(lo);
+    let high = Tile::at([hi[0] - EDGE, hi[1] - EDGE]);
+    let (x1, y1) = (high.x.max(low.x), high.y.max(low.y));
+    (low.y..=y1).flat_map(move |y| (low.x..=x1).map(move |x| Tile::new(x, y)))
 }
 
 /// What a diagonal step between tiles costs, in steps straight across.
@@ -43,7 +44,7 @@ const DIAGONAL: f32 = std::f32::consts::SQRT_2;
 #[derive(Debug, Clone, PartialEq)]
 pub struct Zone {
     /// The tile its box of tiles starts at, and how many it is a side.
-    low: (i32, i32),
+    low: Tile,
     side: usize,
     tiles: Vec<bool>,
 }
@@ -51,37 +52,33 @@ pub struct Zone {
 impl Zone {
     /// A zone of just these tiles, each within 16 of the origin.
     #[cfg(test)]
-    pub(crate) fn of(tiles: &[(i32, i32)]) -> Zone {
+    pub(crate) fn of(tiles: &[Tile]) -> Zone {
         let side = 16;
         let mut zone = Zone {
-            low: (0, 0),
+            low: Tile::new(0, 0),
             side,
             tiles: vec![false; side * side],
         };
-        for &(x, y) in tiles {
-            zone.tiles[y as usize * side + x as usize] = true;
+        for t in tiles {
+            zone.tiles[t.index(side).expect("a tile within 16 of the origin")] = true;
         }
         zone
     }
 
-    pub fn has(&self, (x, y): (i32, i32)) -> bool {
-        let (dx, dy) = (x - self.low.0, y - self.low.1);
-        let side = self.side as i32;
-        (0..side).contains(&dx)
-            && (0..side).contains(&dy)
-            && self.tiles[dy as usize * self.side + dx as usize]
+    pub fn has(&self, tile: Tile) -> bool {
+        let within = tile.offset(-self.low.x, -self.low.y);
+        within.index(self.side).is_some_and(|i| self.tiles[i])
     }
 
     /// Whether what stands at `at` with no ground of its own is in it: by
     /// the tile under it.
     pub fn holds(&self, at: [f32; 2]) -> bool {
-        self.has(tile_at(at))
+        self.has(Tile::at(at))
     }
 
-    pub(crate) fn tiles(&self) -> impl Iterator<Item = (i32, i32)> + '_ {
-        let at = |i: usize| ((i % self.side) as i32, (i / self.side) as i32);
+    pub(crate) fn tiles(&self) -> impl Iterator<Item = Tile> + '_ {
         let held = self.tiles.iter().enumerate().filter(|(_, held)| **held);
-        held.map(move |(i, _)| (self.low.0 + at(i).0, self.low.1 + at(i).1))
+        held.map(move |(i, _)| Tile::of_index(i, self.side).offset(self.low.x, self.low.y))
     }
 
     /// Whether something that blocks tiles is in it: by any tile under its
@@ -139,28 +136,28 @@ impl Pathing {
     }
 
     /// Whether a mover on `domain` can enter the tile; off the map it can't.
-    pub fn passable(&self, x: i32, y: i32, domain: Domain) -> bool {
-        self.index(x, y)
+    pub fn passable(&self, tile: Tile, domain: Domain) -> bool {
+        tile.index(self.side)
             .is_some_and(|i| self.blockers[i] == 0 && self.tiles[i] & bits(domain) != 0)
     }
 
     /// Whether the tile's terrain is `domain`'s, whatever stands on it.
-    fn crossable(&self, x: i32, y: i32, domain: Domain) -> bool {
-        self.index(x, y)
+    fn crossable(&self, tile: Tile, domain: Domain) -> bool {
+        tile.index(self.side)
             .is_some_and(|i| self.tiles[i] & bits(domain) != 0)
     }
 
     /// Keeps movers off one tile.
-    pub fn set_blocked(&mut self, x: i32, y: i32) {
-        if let Some(i) = self.index(x, y) {
+    pub fn set_blocked(&mut self, tile: Tile) {
+        if let Some(i) = tile.index(self.side) {
             self.blockers[i] += 1;
         }
     }
 
     /// Gives back the tiles an obstacle that's gone covered.
     pub fn unblock(&mut self, o: &Obstacle) {
-        for (x, y) in covered(o) {
-            if let Some(i) = self.index(x, y) {
+        for tile in covered(o) {
+            if let Some(i) = tile.index(self.side) {
                 self.blockers[i] = self.blockers[i].saturating_sub(1);
             }
         }
@@ -176,11 +173,6 @@ impl Pathing {
         p
     }
 
-    fn index(&self, x: i32, y: i32) -> Option<usize> {
-        let side = self.side as i32;
-        ((0..side).contains(&x) && (0..side).contains(&y)).then(|| (y * side + x) as usize)
-    }
-
     /// Whether `o`'s shape lies wholly on the map.
     pub fn on_map(&self, o: &Obstacle) -> bool {
         let size = self.side as f32 * CELL_SIZE;
@@ -194,14 +186,13 @@ impl Pathing {
     /// box a rectangle takes in the tiles it only touches, a circle doesn't.
     pub fn ground_for(&self, o: &Obstacle, domain: Domain) -> bool {
         if reach(o.shape) < EDGE {
-            let (x, y) = tile_at(o.position);
-            return self.crossable(x, y, domain);
+            return self.crossable(Tile::at(o.position), domain);
         }
         // A rectangle square to the map meets every tile in its box.
         let square_to_map = matches!(o.shape, Shape::Rect { .. }) && o.facing.contains(&0.0);
         spanned(o.bounds(o.shape))
-            .filter(|&(x, y)| square_to_map || o.meets(&tile_square(x, y)))
-            .all(|(x, y)| self.crossable(x, y, domain))
+            .filter(|&tile| square_to_map || o.meets(&tile_square(tile)))
+            .all(|tile| self.crossable(tile, domain))
     }
 
     /// Whether something blocking that takes up `o`'s shape could stand
@@ -227,36 +218,37 @@ impl Pathing {
     /// land, and off it otherwise, whatever stands on the tiles; a centre
     /// nothing can stand on has no zone.
     pub fn zone(&self, centre: [f32; 2], radius: f32) -> Zone {
-        let (cx, cy) = tile_at(centre);
+        let centre = Tile::at(centre);
         let reach = (radius / CELL_SIZE).ceil().max(0.0) as i32;
         let side = (2 * reach + 1) as usize;
         let mut zone = Zone {
-            low: (cx - reach, cy - reach),
+            low: centre.offset(-reach, -reach),
             side,
             tiles: vec![false; side * side],
         };
-        let Some(start) = self.index(cx, cy).filter(|&i| self.tiles[i] != 0) else {
+        let Some(start) = centre.index(self.side).filter(|&i| self.tiles[i] != 0) else {
             return zone;
         };
         let land = self.tiles[start] & LAND != 0;
-        let slot =
-            |x: i32, y: i32| ((y - (cy - reach)) as usize) * side + (x - (cx - reach)) as usize;
+        let low = zone.low;
+        let slot = |t: Tile| ((t.y - low.y) as usize) * side + (t.x - low.x) as usize;
         let mut cost = vec![f32::INFINITY; side * side];
-        cost[slot(cx, cy)] = 0.0;
+        cost[slot(centre)] = 0.0;
         // Nearest first: costs are never negative, so their bits sort as
         // they do.
-        let mut open = BinaryHeap::from([Reverse((0, cx, cy))]);
-        while let Some(Reverse((bits, x, y))) = open.pop() {
-            let so_far = cost[slot(x, y)];
+        let mut open = BinaryHeap::from([Reverse((0, centre))]);
+        while let Some(Reverse((bits, tile))) = open.pop() {
+            let so_far = cost[slot(tile)];
             if so_far.to_bits() < bits {
                 continue;
             }
             for dy in -1..=1 {
                 for dx in -1..=1 {
-                    let (nx, ny) = (x + dx, y + dy);
-                    let inside = (nx - cx).abs() <= reach && (ny - cy).abs() <= reach;
-                    let same = self.index(nx, ny).is_some()
-                        && self.crossable(nx, ny, Domain::Land) == land;
+                    let next = tile.offset(dx, dy);
+                    let inside =
+                        (next.x - centre.x).abs() <= reach && (next.y - centre.y).abs() <= reach;
+                    let same = next.index(self.side).is_some()
+                        && self.crossable(next, Domain::Land) == land;
                     if (dx, dy) == (0, 0) || !inside || !same {
                         continue;
                     }
@@ -264,10 +256,10 @@ impl Pathing {
                         true => CELL_SIZE * DIAGONAL,
                         false => CELL_SIZE,
                     };
-                    let next = so_far + step;
-                    if next < radius && next < cost[slot(nx, ny)] {
-                        cost[slot(nx, ny)] = next;
-                        open.push(Reverse((next.to_bits(), nx, ny)));
+                    let next_cost = so_far + step;
+                    if next_cost < radius && next_cost < cost[slot(next)] {
+                        cost[slot(next)] = next_cost;
+                        open.push(Reverse((next_cost.to_bits(), next)));
                     }
                 }
             }
@@ -280,8 +272,8 @@ impl Pathing {
 
     /// Keeps movers off the tiles an obstacle covers.
     pub fn block(&mut self, o: &Obstacle) {
-        for (x, y) in covered(o) {
-            self.set_blocked(x, y);
+        for tile in covered(o) {
+            self.set_blocked(tile);
         }
     }
 }
@@ -290,7 +282,7 @@ impl Pathing {
 /// ones whose centres lie within a quarter of a tile of its blocking shape.
 /// So a blocking shape reaching no further than that from its middle blocks
 /// none, and one reaching beyond its soft shape's box blocks nothing there.
-pub(crate) fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
+pub(crate) fn covered(o: &Obstacle) -> Vec<Tile> {
     const MARGIN: f32 = CELL_SIZE / 4.0;
     if reach(o.shape) <= MARGIN {
         return Vec::new();
@@ -303,7 +295,7 @@ pub(crate) fn covered(o: &Obstacle) -> Vec<(i32, i32)> {
         Shape::Rect { .. } => o.distance(centre) < MARGIN,
     };
     spanned(o.bounds(o.soft))
-        .filter(|&(x, y)| covers(tile_centre(x, y)))
+        .filter(|tile| covers(tile.centre()))
         .collect()
 }
 
@@ -317,13 +309,13 @@ fn reach(shape: Shape) -> f32 {
 }
 
 /// A tile's square, to test what overlaps it.
-fn tile_square(x: i32, y: i32) -> Obstacle {
+fn tile_square(tile: Tile) -> Obstacle {
     let side = Shape::Rect {
         width: CELL_SIZE,
         height: CELL_SIZE,
     };
     Obstacle {
-        position: tile_centre(x, y),
+        position: tile.centre(),
         facing: [0.0, 1.0],
         shape: side,
         soft: side,
@@ -345,19 +337,6 @@ fn bits(domain: Domain) -> u8 {
     }
 }
 
-/// The tile a world position lies in.
-pub fn tile_at([x, y]: [f32; 2]) -> (i32, i32) {
-    (
-        (x / CELL_SIZE).floor() as i32,
-        (y / CELL_SIZE).floor() as i32,
-    )
-}
-
-/// The centre of a tile in world units.
-pub fn tile_centre(x: i32, y: i32) -> [f32; 2] {
-    [(x as f32 + 0.5) * CELL_SIZE, (y as f32 + 0.5) * CELL_SIZE]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -368,9 +347,9 @@ mod tests {
         // 8 tiles straight out and 6 along a diagonal, for 18 on 2-unit
         // tiles.
         let zone = p.zone([41.0, 41.0], 18.0);
-        assert!(zone.has((28, 20)) && !zone.has((29, 20)));
-        assert!(zone.has((26, 26)) && !zone.has((27, 27)));
-        assert!(zone.has((28, 22)) && !zone.has((28, 23)));
+        assert!(zone.has(Tile::new(28, 20)) && !zone.has(Tile::new(29, 20)));
+        assert!(zone.has(Tile::new(26, 26)) && !zone.has(Tile::new(27, 27)));
+        assert!(zone.has(Tile::new(28, 22)) && !zone.has(Tile::new(28, 23)));
         assert!(zone.holds([40.5, 25.9]) && !zone.holds([40.5, 23.9]));
     }
 
@@ -379,24 +358,28 @@ mod tests {
         let mut p = Pathing::uniform(40, Domain::Land);
         // Water down column 22 but for a ford at row 30.
         for y in (0..40).filter(|&y| y != 30) {
-            let i = p.index(22, y).unwrap();
+            let i = Tile::new(22, y).index(p.side).unwrap();
             p.tiles[i] = NAVAL;
         }
-        p.set_blocked(21, 20);
+        p.set_blocked(Tile::new(21, 20));
         let zone = p.zone([41.0, 41.0], 18.0);
-        assert!(zone.has((21, 20)));
-        assert!(!zone.has((22, 20)) && !zone.has((23, 20)));
+        assert!(zone.has(Tile::new(21, 20)));
+        assert!(!zone.has(Tile::new(22, 20)) && !zone.has(Tile::new(23, 20)));
         // Round by the ford is too far for most of the far bank.
-        assert!(!zone.has((23, 29)));
+        assert!(!zone.has(Tile::new(23, 29)));
         let wide = p.zone([41.0, 41.0], 40.0);
-        assert!(wide.has((23, 29)) && !wide.has((22, 20)));
+        assert!(wide.has(Tile::new(23, 29)) && !wide.has(Tile::new(22, 20)));
         // From the water it's the water alone.
         let wet = p.zone([45.0, 41.0], 18.0);
-        assert!(wet.has((22, 15)) && !wet.has((21, 20)) && !wet.has((22, 30)));
+        assert!(
+            wet.has(Tile::new(22, 15))
+                && !wet.has(Tile::new(21, 20))
+                && !wet.has(Tile::new(22, 30))
+        );
         // And nothing from ground nothing stands on.
-        let i = p.index(5, 5).unwrap();
+        let i = Tile::new(5, 5).index(p.side).unwrap();
         p.tiles[i] = 0;
-        assert!(!p.zone([11.0, 11.0], 18.0).has((5, 5)));
+        assert!(!p.zone([11.0, 11.0], 18.0).has(Tile::new(5, 5)));
     }
 
     #[test]
@@ -418,11 +401,11 @@ mod tests {
         assert!(zone.meets(&house(59.0)));
     }
 
-    fn blocked(shape: Shape, facing: [f32; 2]) -> Vec<(i32, i32)> {
+    fn blocked(shape: Shape, facing: [f32; 2]) -> Vec<Tile> {
         blocked_within(shape, Shape::Circle { radius: 5.0 }, facing)
     }
 
-    fn blocked_within(shape: Shape, soft: Shape, facing: [f32; 2]) -> Vec<(i32, i32)> {
+    fn blocked_within(shape: Shape, soft: Shape, facing: [f32; 2]) -> Vec<Tile> {
         let mut p = Pathing::uniform(10, Domain::Land);
         p.block(&Obstacle {
             position: [11.0, 11.0],
@@ -433,8 +416,8 @@ mod tests {
         let mut out = Vec::new();
         for y in 0..10 {
             for x in 0..10 {
-                if !p.passable(x, y, Domain::Land) {
-                    out.push((x, y));
+                if !p.passable(Tile::new(x, y), Domain::Land) {
+                    out.push(Tile::new(x, y));
                 }
             }
         }
@@ -479,8 +462,8 @@ mod tests {
         let p = Pathing::new(&terrain, &variations);
         let at = |x, y| {
             (
-                p.passable(x, y, Domain::Land),
-                p.passable(x, y, Domain::Naval),
+                p.passable(Tile::new(x, y), Domain::Land),
+                p.passable(Tile::new(x, y), Domain::Naval),
             )
         };
         assert_eq!(at(0, 0), (true, false));
@@ -495,7 +478,7 @@ mod tests {
         assert_eq!(blocked(Shape::Point, [0.0, -1.0]), []);
         assert_eq!(
             blocked(Shape::Circle { radius: 0.6 }, [0.0, -1.0]),
-            [(5, 5)]
+            [Tile::new(5, 5)]
         );
     }
 
@@ -505,11 +488,17 @@ mod tests {
         // quarter tile out.
         assert_eq!(
             blocked(Shape::Circle { radius: 1.4 }, [0.0, -1.0]),
-            [(5, 5)]
+            [Tile::new(5, 5)]
         );
         assert_eq!(
             blocked(Shape::Circle { radius: 1.6 }, [0.0, -1.0]),
-            [(5, 4), (4, 5), (5, 5), (6, 5), (5, 6)]
+            [
+                Tile::new(5, 4),
+                Tile::new(4, 5),
+                Tile::new(5, 5),
+                Tile::new(6, 5),
+                Tile::new(5, 6)
+            ]
         );
         let rect = Shape::Rect {
             width: 7.2,
@@ -517,7 +506,13 @@ mod tests {
         };
         assert_eq!(
             blocked(rect, [0.0, -1.0]),
-            [(3, 5), (4, 5), (5, 5), (6, 5), (7, 5)]
+            [
+                Tile::new(3, 5),
+                Tile::new(4, 5),
+                Tile::new(5, 5),
+                Tile::new(6, 5),
+                Tile::new(7, 5)
+            ]
         );
     }
 
@@ -528,8 +523,14 @@ mod tests {
             width: 6.0,
             height: 1.0,
         };
-        assert_eq!(blocked(rect, [0.0, -1.0]), [(4, 5), (5, 5), (6, 5)]);
-        assert_eq!(blocked(rect, [1.0, 0.0]), [(5, 4), (5, 5), (5, 6)]);
+        assert_eq!(
+            blocked(rect, [0.0, -1.0]),
+            [Tile::new(4, 5), Tile::new(5, 5), Tile::new(6, 5)]
+        );
+        assert_eq!(
+            blocked(rect, [1.0, 0.0]),
+            [Tile::new(5, 4), Tile::new(5, 5), Tile::new(5, 6)]
+        );
     }
 
     #[test]
@@ -537,14 +538,14 @@ mod tests {
         let wide = Shape::Circle { radius: 1.6 };
         // A box edge on a tile's edge doesn't take in the tile beyond.
         let soft = Shape::Circle { radius: 1.0 };
-        assert_eq!(blocked_within(wide, soft, [0.0, -1.0]), [(5, 5)]);
+        assert_eq!(blocked_within(wide, soft, [0.0, -1.0]), [Tile::new(5, 5)]);
         // A rectangle's box turns with it.
         let soft = Shape::Rect {
             width: 4.0,
             height: 2.0,
         };
         let turned = blocked_within(wide, soft, [1.0, 0.0]);
-        assert_eq!(turned, [(5, 4), (5, 5), (5, 6)]);
+        assert_eq!(turned, [Tile::new(5, 4), Tile::new(5, 5), Tile::new(5, 6)]);
     }
 
     #[test]
@@ -568,7 +569,7 @@ mod tests {
         // A blocked tile is no matter, only overlapping what blocks it.
         let hut = at([3.0, 5.0], Shape::Circle { radius: 1.0 });
         p.block(&hut);
-        assert!(!p.passable(1, 2, Domain::Land));
+        assert!(!p.passable(Tile::new(1, 2), Domain::Land));
         assert!(p.room_for(&at([2.5, 3.5], small), Domain::Land, [&hut]));
         assert!(!p.room_for(&at([3.0, 4.5], small), Domain::Land, [&hut]));
     }
@@ -581,10 +582,10 @@ mod tests {
             shape,
             soft: shape,
         };
-        let water = |tiles: &[(usize, usize)]| {
+        let water = |tiles: &[Tile]| {
             let mut p = Pathing::uniform(10, Domain::Land);
-            for &(x, y) in tiles {
-                p.tiles[y * 10 + x] = NAVAL;
+            for t in tiles {
+                p.tiles[t.index(10).unwrap()] = NAVAL;
             }
             p
         };
@@ -597,15 +598,15 @@ mod tests {
                 height: 2.0,
             },
         );
-        let corners = [(3, 3), (6, 3), (3, 6), (6, 6)];
+        let corners = [(3, 3), (6, 3), (3, 6), (6, 6)].map(|(x, y)| Tile::new(x, y));
         assert!(water(&corners).room_for(&turned, Domain::Land, []));
         // One of its corners just reaches into (5, 3).
-        assert!(!water(&[(5, 3)]).room_for(&turned, Domain::Land, []));
+        assert!(!water(&[Tile::new(5, 3)]).room_for(&turned, Domain::Land, []));
         // A circle of radius 2.5 likewise misses its box's corners, but not
         // the tiles beside them.
         let circle = at([0.0, -1.0], Shape::Circle { radius: 2.5 });
         assert!(water(&corners).room_for(&circle, Domain::Land, []));
-        assert!(!water(&[(4, 3)]).room_for(&circle, Domain::Land, []));
+        assert!(!water(&[Tile::new(4, 3)]).room_for(&circle, Domain::Land, []));
     }
 
     #[test]
@@ -616,17 +617,17 @@ mod tests {
             shape,
             soft: shape,
         };
-        let water = |tiles: &[(usize, usize)]| {
+        let water = |tiles: &[Tile]| {
             let mut p = Pathing::uniform(10, Domain::Land);
-            for &(x, y) in tiles {
-                p.tiles[y * 10 + x] = NAVAL;
+            for t in tiles {
+                p.tiles[t.index(10).unwrap()] = NAVAL;
             }
             p
         };
         // A circle just reaching a tile's corner (10, 8) leaves it out.
         let circle = at([13.0, 12.0], [0.0, -1.0], Shape::Circle { radius: 5.0 });
-        assert!(water(&[(4, 3)]).room_for(&circle, Domain::Land, []));
-        assert!(!water(&[(4, 4)]).room_for(&circle, Domain::Land, []));
+        assert!(water(&[Tile::new(4, 3)]).room_for(&circle, Domain::Land, []));
+        assert!(!water(&[Tile::new(4, 4)]).room_for(&circle, Domain::Land, []));
         // A turned rectangle whose edge runs through that corner takes the
         // tile in, though it only touches it.
         let side = Shape::Rect {
@@ -635,16 +636,16 @@ mod tests {
         };
         let turned = at([11.5, 10.0], [0.6, 0.8], side);
         assert!(water(&[]).room_for(&turned, Domain::Land, []));
-        assert!(!water(&[(4, 3)]).room_for(&turned, Domain::Land, []));
+        assert!(!water(&[Tile::new(4, 3)]).room_for(&turned, Domain::Land, []));
         // It misses (7, 3) in its box's corner.
-        assert!(water(&[(7, 3)]).room_for(&turned, Domain::Land, []));
+        assert!(water(&[Tile::new(7, 3)]).room_for(&turned, Domain::Land, []));
         // A point, or a shape hardly bigger, on a tile corner has only the
         // tile with the larger x and y.
-        let others = [(1, 1), (1, 2), (2, 1)];
+        let others = [(1, 1), (1, 2), (2, 1)].map(|(x, y)| Tile::new(x, y));
         for shape in [Shape::Point, Shape::Circle { radius: 0.00005 }] {
             let o = at([4.0, 4.0], [0.0, -1.0], shape);
             assert!(water(&others).ground_for(&o, Domain::Land));
-            assert!(!water(&[(2, 2)]).ground_for(&o, Domain::Land));
+            assert!(!water(&[Tile::new(2, 2)]).ground_for(&o, Domain::Land));
         }
     }
 
@@ -661,18 +662,18 @@ mod tests {
         p.block(&a);
         p.block(&b);
         p.unblock(&a);
-        assert!(!p.passable(5, 5, Domain::Land));
+        assert!(!p.passable(Tile::new(5, 5), Domain::Land));
         p.unblock(&b);
-        assert!(p.passable(5, 5, Domain::Land));
+        assert!(p.passable(Tile::new(5, 5), Domain::Land));
     }
 
     #[test]
     fn domains() {
         let mut p = Pathing::uniform(2, Domain::Naval);
-        assert!(p.passable(0, 0, Domain::Naval));
-        assert!(!p.passable(0, 0, Domain::Land));
-        assert!(!p.passable(2, 0, Domain::Naval));
-        p.set_blocked(0, 0);
-        assert!(!p.passable(0, 0, Domain::Naval));
+        assert!(p.passable(Tile::new(0, 0), Domain::Naval));
+        assert!(!p.passable(Tile::new(0, 0), Domain::Land));
+        assert!(!p.passable(Tile::new(2, 0), Domain::Naval));
+        p.set_blocked(Tile::new(0, 0));
+        assert!(!p.passable(Tile::new(0, 0), Domain::Naval));
     }
 }

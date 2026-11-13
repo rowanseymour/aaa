@@ -109,7 +109,7 @@ impl Ground {
         ground.heights = (0..side * side)
             .map(|i| {
                 let (x, y) = ((i % side) as f32, (i / side) as f32);
-                ground.height_at(x * CELL_SIZE, y * CELL_SIZE)
+                ground.height_at([x * CELL_SIZE, y * CELL_SIZE])
             })
             .collect();
         Ok(ground)
@@ -147,36 +147,36 @@ impl Ground {
     }
 
     /// Ground height at a world position.
-    pub fn height_at(&self, wx: f32, wy: f32) -> f32 {
+    pub fn height_at(&self, at: [f32; 2]) -> f32 {
         let tiles = self.side - 1;
         let tile = |w: f32| ((w / CELL_SIZE).floor().max(0.0) as usize).min(tiles - 1);
-        let relief = self.relief[tile(wy) * tiles + tile(wx)];
-        let base = self.sample(&self.base, wx, wy);
-        relief.map_or(base, |r| base + self.sample(&self.mountain, wx, wy) + r)
+        let relief = self.relief[tile(at[1]) * tiles + tile(at[0])];
+        let base = self.sample(&self.base, at);
+        relief.map_or(base, |r| base + self.sample(&self.mountain, at) + r)
     }
 
     /// The height a floating thing keeps at a world position: on the water,
     /// which lies half a unit under the height map, where that's above the
     /// ground.
-    pub fn float_at(&self, wx: f32, wy: f32) -> f32 {
-        let surface = self.sample(&self.base, wx, wy) - WATERLINE;
-        self.height_at(wx, wy).max(surface)
+    pub fn float_at(&self, at: [f32; 2]) -> f32 {
+        let surface = self.sample(&self.base, at) - WATERLINE;
+        self.height_at(at).max(surface)
     }
 
     /// The height a thing of `footing` stands at at a world position.
     /// Flying things have a height of their own; without one they're on the
     /// ground.
-    pub fn stand_at(&self, footing: Footing, wx: f32, wy: f32) -> f32 {
+    pub fn stand_at(&self, footing: Footing, at: [f32; 2]) -> f32 {
         match footing {
-            Footing::Water => self.float_at(wx, wy),
-            Footing::Ground | Footing::Air => self.height_at(wx, wy),
+            Footing::Water => self.float_at(at),
+            Footing::Ground | Footing::Air => self.height_at(at),
         }
     }
 
     /// A height map's height at a world position: bilinear within a cell,
     /// but the mean of the two vertices either side of it on a grid line,
     /// and held at the edge beyond the map.
-    fn sample(&self, grid: &[f32], wx: f32, wy: f32) -> f32 {
+    fn sample(&self, grid: &[f32], [wx, wy]: [f32; 2]) -> f32 {
         let last = self.side - 1;
         let at = |x: f32, y: f32| {
             let index = |v: f32| (v.max(0.0) as usize).min(last);
@@ -229,7 +229,7 @@ impl Ground {
         let [fx, fy] = facing;
         let ground = |right: f32, ahead: f32| {
             let [x, y] = crate::from_local(position, facing, [right, ahead]);
-            [x, y, self.height_at(x, y)]
+            [x, y, self.height_at([x, y])]
         };
         let (half_w, half_h) = match footprint {
             Shape::Point => (0.0, 0.0),
@@ -442,14 +442,14 @@ mod tests {
         )
         .unwrap();
         // The mountain's own tile, 5 in row-major order, is raised 1.95.
-        assert!((ground.height_at(3.0, 3.0) - 7.95).abs() < 1e-5);
+        assert!((ground.height_at([3.0, 3.0]) - 7.95).abs() < 1e-5);
         // Beside it, and beside the sea, the mountain map counts alone.
-        assert_eq!(ground.height_at(5.0, 5.0), 6.0);
-        assert_eq!(ground.height_at(5.0, 1.0), 6.0);
+        assert_eq!(ground.height_at([5.0, 5.0]), 6.0);
+        assert_eq!(ground.height_at([5.0, 1.0]), 6.0);
         // As it does on the sea itself.
-        assert_eq!(ground.height_at(7.0, 1.0), 6.0);
+        assert_eq!(ground.height_at([7.0, 1.0]), 6.0);
         // Away from both it doesn't.
-        assert_eq!(ground.height_at(7.0, 7.0), 1.0);
+        assert_eq!(ground.height_at([7.0, 7.0]), 1.0);
         // Vertices take their ground from the tile they're the corner of
         // nearest the origin.
         assert!((ground.at(1, 1) - 7.95).abs() < 1e-5);
@@ -469,15 +469,15 @@ mod tests {
         };
         let sea = ground(-5.0);
         // On the sea and the shore beside it, the bed is under the water.
-        assert_eq!(sea.height_at(7.0, 1.0), -4.0);
-        assert_eq!(sea.float_at(7.0, 1.0), 0.5);
-        assert_eq!(sea.float_at(5.0, 1.0), 0.5);
-        assert_eq!(sea.stand_at(Footing::Water, 7.0, 1.0), 0.5);
-        assert_eq!(sea.stand_at(Footing::Ground, 7.0, 1.0), -4.0);
-        assert_eq!(sea.stand_at(Footing::Air, 7.0, 1.0), -4.0);
+        assert_eq!(sea.height_at([7.0, 1.0]), -4.0);
+        assert_eq!(sea.float_at([7.0, 1.0]), 0.5);
+        assert_eq!(sea.float_at([5.0, 1.0]), 0.5);
+        assert_eq!(sea.stand_at(Footing::Water, [7.0, 1.0]), 0.5);
+        assert_eq!(sea.stand_at(Footing::Ground, [7.0, 1.0]), -4.0);
+        assert_eq!(sea.stand_at(Footing::Air, [7.0, 1.0]), -4.0);
         // Away from water, and where the bed rises above it, on the ground.
-        assert_eq!(sea.float_at(7.0, 7.0), 1.0);
-        assert_eq!(ground(5.0).float_at(7.0, 1.0), 6.0);
+        assert_eq!(sea.float_at([7.0, 7.0]), 1.0);
+        assert_eq!(ground(5.0).float_at([7.0, 1.0]), 6.0);
     }
 
     #[test]
@@ -490,14 +490,14 @@ mod tests {
     fn grid_lines_take_the_mean_of_the_vertices_either_side() {
         // The height of each vertex is its column.
         let ground = ground(|x, _| x / CELL_SIZE);
-        assert!((ground.height_at(2.5, 3.0) - 1.25).abs() < 1e-5);
+        assert!((ground.height_at([2.5, 3.0]) - 1.25).abs() < 1e-5);
         // On a row the mean of the vertices either side, wherever along it.
-        assert_eq!(ground.height_at(2.5, 2.0), 1.5);
-        assert_eq!(ground.height_at(2.0, 3.0), 1.0);
-        assert_eq!(ground.height_at(4.0, 4.0), 2.0);
+        assert_eq!(ground.height_at([2.5, 2.0]), 1.5);
+        assert_eq!(ground.height_at([2.0, 3.0]), 1.0);
+        assert_eq!(ground.height_at([4.0, 4.0]), 2.0);
         // Beyond the map, held at the edge.
-        assert_eq!(ground.height_at(100.0, 3.0), 8.0);
-        assert_eq!(ground.height_at(-5.0, 3.0), 0.0);
+        assert_eq!(ground.height_at([100.0, 3.0]), 8.0);
+        assert_eq!(ground.height_at([-5.0, 3.0]), 0.0);
     }
 
     #[test]

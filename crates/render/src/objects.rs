@@ -88,7 +88,7 @@ pub fn spawn(
         let mut transform = Transform::from_translation(world(
             x,
             y,
-            ground.stand_at(footing(&thing.template), x, y) + lift,
+            ground.stand_at(footing(&thing.template), [x, y]) + lift,
         ));
         let [fx, fy, _] = thing.facing;
         if fx != 0.0 || fy != 0.0 {

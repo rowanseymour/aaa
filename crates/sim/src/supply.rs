@@ -4,8 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use aaa_map::pathing::tile_at;
-use aaa_map::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Weapon, Zone};
+use aaa_map::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
 
 use crate::{
     Building, Enemy, Order, Refused, Relation, State, TICK, Target, World, bounding_radius,
@@ -50,13 +49,13 @@ pub struct Supplying {
     /// Whether it was unpacking or packing when last looked at.
     busy: bool,
     /// The tile its zone was laid around, and how far.
-    laid: Option<((i32, i32), f32)>,
+    laid: Option<(Tile, f32)>,
 }
 
 impl Supplying {
     /// The tile its zone is laid around and how far it reaches, which
     /// between them say what ground it covers.
-    pub fn laid(&self) -> Option<((i32, i32), f32)> {
+    pub fn laid(&self) -> Option<(Tile, f32)> {
         self.laid.filter(|_| self.zone.is_some())
     }
 }
@@ -274,7 +273,7 @@ impl World {
             && building.zone.is_none_or(|city| self.held_firmly(b, city));
         // Laid again when its range changes or it moves, as one dropped
         // from the air does on its way down.
-        let around = gives.then(|| (tile_at(building.position), range));
+        let around = gives.then(|| (Tile::at(building.position), range));
         let moved = around != building.supply.laid;
         let laid = (gives && moved).then(|| self.pathing.zone(building.position, range));
         let s = &mut self.buildings[b].supply;

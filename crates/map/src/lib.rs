@@ -8,6 +8,7 @@ mod ground;
 mod obstacle;
 mod outline;
 pub mod pathing;
+mod tile;
 mod tile_terrains;
 mod units;
 
@@ -22,6 +23,7 @@ pub use obstacle::Obstacle;
 pub use outline::Outline;
 pub use pathing::{Domain, Pathing, Zone};
 pub use tgck::map::Relation;
+pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
 pub use units::{
     Division, Formation, Member, Packs, Player, Recruits, Regiment, Team, Trailer, UNPACKED_FACING,
@@ -373,14 +375,14 @@ fn placed(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>, pathing: &Path
         Crowded,
     }
     let mut out = Placed::default();
-    type Near = HashMap<(i32, i32), Vec<usize>>;
+    type Near = HashMap<Tile, Vec<usize>>;
     let mut fixed: Vec<Obstacle> = Vec::new();
     // The static blocking things by the tiles their boxes span, to test
     // only those nearby.
     let mut near: Near = HashMap::new();
     // The tiles the group being placed has added to `near`, to take back
     // if the group goes.
-    let mut added: Vec<(i32, i32)> = Vec::new();
+    let mut added: Vec<Tile> = Vec::new();
     let place = |t: &Thing, fixed: &mut Vec<Obstacle>, near: &mut Near, added: &mut Vec<_>| {
         let Some(body) = bodies.get(&Id::from(t.template.as_str())) else {
             return Fit::Room;
@@ -402,7 +404,7 @@ fn placed(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>, pathing: &Path
             true => Domain::Naval,
             false => Domain::Land,
         };
-        let tiles: Vec<(i32, i32)> = pathing::spanned(o.bounds(o.shape)).collect();
+        let tiles: Vec<Tile> = pathing::spanned(o.bounds(o.shape)).collect();
         let mut others: Vec<usize> = (tiles.iter())
             .flat_map(|tile| near.get(tile).into_iter().flatten().copied())
             .collect();
@@ -1205,8 +1207,8 @@ mod tests {
         }
         take_buildings(&mut buildings, &mut pathing, |b| b.owner == 3);
         assert_eq!(buildings.iter().map(|b| b.id).collect::<Vec<_>>(), [1]);
-        assert!(!pathing.passable(2, 4, Domain::Land));
-        assert!(pathing.passable(6, 4, Domain::Land));
+        assert!(!pathing.passable(Tile::new(2, 4), Domain::Land));
+        assert!(pathing.passable(Tile::new(6, 4), Domain::Land));
     }
 
     #[test]
