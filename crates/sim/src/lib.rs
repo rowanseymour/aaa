@@ -28,7 +28,7 @@ mod terrain;
 #[cfg(test)]
 mod testing;
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::f32::consts::{PI, TAU};
 
 use aaa_map::{
@@ -111,8 +111,8 @@ pub const PURSUIT_DRIFT: f32 = 0.14646;
 pub struct World {
     pub sides: Sides,
     pub pathing: Pathing,
-    /// What the match is played by.
-    pub rules: Rules,
+    /// What the match is played by: see [`World::rules`].
+    pub(crate) rules: Rules,
     /// The terrain under each tile, for what it does to those on it.
     pub tile_terrains: aaa_map::TileTerrains,
     pub regiments: Vec<Regiment>,
@@ -152,8 +152,6 @@ pub struct World {
     /// Projectiles that landed in the last [`LANDINGS_KEPT`] ticks, oldest
     /// first, for what shows them to find.
     pub landings: Vec<Landing>,
-    /// The templates whose regiments are numbered, by template.
-    numbered: HashSet<Id>,
     /// The last number each side has given a numbered template, by side
     /// and template.
     numbers: HashMap<(u32, String), u32>,
@@ -170,7 +168,7 @@ pub struct Regiment {
     pub id: u32,
     pub template: String,
     /// The number its name is given, for one of a numbered template: see
-    /// [`World::set_numbered`].
+    /// [`Rules::numbered`].
     pub number: Option<u32>,
     /// The owning [`Player::id`], the only one it takes orders from.
     pub owner: u32,

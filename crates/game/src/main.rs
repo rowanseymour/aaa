@@ -870,13 +870,13 @@ fn prepare(
         research_lists: game.research_lists(),
         experience_per_second: experience.per_second,
         sights: game.sights(),
+        numbered: game.numbered(),
         ..Default::default()
     };
     if let Some(seconds) = game.siege_seconds() {
         rules.siege_seconds = seconds;
     }
     let mut sim = World::new(&map, rules);
-    sim.set_numbered(game.numbered());
     sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
     for (&player, general) in &leaders.0 {
         sim.lead(player, experience.starting, general.experience_max);

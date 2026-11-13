@@ -558,7 +558,7 @@ mod tests {
             members: Vec::new(),
             ..convoy()
         }));
-        w.set_numbered(HashSet::from([Id::from("hq_unpacked")]));
+        w.rules.numbered = HashSet::from([Id::from("hq_unpacked")]);
         w.add_buildings(&[within, depot(50, 60.0)]);
         assert_eq!(
             (w.buildings[1].number, w.buildings[2].number),
@@ -595,7 +595,7 @@ mod tests {
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
-        w.set_numbered(HashSet::from([Id::from("truck")]));
+        w.rules.numbered = HashSet::from([Id::from("truck")]);
         w.add_regiment(&t);
         let r = w.add_regiment(&t);
         assert_eq!(w.regiments[r].number, Some(2));

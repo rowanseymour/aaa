@@ -627,7 +627,7 @@ pub fn spawn(
             .collect()
     };
     let technologies = game.technologies();
-    let researches = (sim.0.rules.research_lists.iter())
+    let researches = (sim.0.rules().research_lists.iter())
         .map(|(template, list)| {
             let topics = list.iter().map(|item| {
                 let id = &item.technology;
@@ -970,7 +970,7 @@ pub fn show(
             rally: looks.rally.0.filter(|_| !menu.is_empty()),
             pack: looks.pack.0.filter(|_| {
                 sim.0
-                    .rules
+                    .rules()
                     .packing
                     .contains_key(&sim.0.buildings[b].template)
             }),
@@ -1594,7 +1594,7 @@ fn sell_command(building: usize) -> aaa_sim::Command {
 fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
     let b = &sim.buildings[building];
     let floor = sim
-        .rules
+        .rules()
         .packing
         .get(&b.template)
         .map_or(1.0, |p| p.health_min);

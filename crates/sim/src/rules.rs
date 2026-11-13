@@ -59,6 +59,9 @@ pub struct Rules {
     pub experience_per_second: f32,
     /// How far each template sees, by template.
     pub sights: HashMap<Id, aaa_map::Sight>,
+    /// The templates whose regiments are numbered, as are the buildings
+    /// standing in their organizations.
+    pub numbered: HashSet<Id>,
 }
 
 impl Default for Rules {
@@ -86,6 +89,7 @@ impl Default for Rules {
             research_lists: HashMap::new(),
             experience_per_second: 0.0,
             sights: HashMap::new(),
+            numbered: HashSet::new(),
         }
     }
 }

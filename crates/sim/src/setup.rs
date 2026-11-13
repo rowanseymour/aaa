@@ -1,6 +1,6 @@
 //! Setting a match up from its map, and adding to it as it's played.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, HashMap, VecDeque};
 
 use aaa_map::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
 
@@ -27,8 +27,7 @@ impl World {
             players: map.players.clone(),
             teams: map.teams.clone(),
         };
-        let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
-        world.rules = rules;
+        let mut world = World::build(sides, map.pathing.clone(), rules, &map.regiments);
         world.add_buildings(&map.buildings);
         world.tile_terrains = map.tile_terrains.clone();
         world.scenery = map.scenery.clone();
@@ -59,9 +58,24 @@ impl World {
         world
     }
 
+    /// A world of `regiments` played by the default [`Rules`].
     pub fn from_regiments(
         sides: Sides,
         pathing: Pathing,
+        regiments: &[aaa_map::Regiment],
+    ) -> World {
+        World::build(sides, pathing, Rules::default(), regiments)
+    }
+
+    /// What the match is played by, fixed once it's begun.
+    pub fn rules(&self) -> &Rules {
+        &self.rules
+    }
+
+    fn build(
+        sides: Sides,
+        pathing: Pathing,
+        rules: Rules,
         regiments: &[aaa_map::Regiment],
     ) -> World {
         // Nothing's hidden until the match sets its fog.
@@ -69,7 +83,7 @@ impl World {
         let mut world = World {
             sides,
             pathing,
-            rules: Rules::default(),
+            rules,
             tile_terrains: aaa_map::TileTerrains::default(),
             regiments: Vec::new(),
             units: Vec::new(),
@@ -91,7 +105,6 @@ impl World {
             commanders: BTreeMap::new(),
             notices: Vec::new(),
             fog,
-            numbered: HashSet::new(),
             numbers: HashMap::new(),
         };
         for regiment in regiments {
@@ -221,30 +234,11 @@ impl World {
         r
     }
 
-    /// Which templates' regiments are numbered, numbering those already
-    /// here in the order they were added: regiments, then the buildings
-    /// standing in an organization. Each side counts each template on its
-    /// own, from 1, and never gives a number twice.
-    pub fn set_numbered(&mut self, templates: HashSet<Id>) {
-        self.numbered = templates;
-        for r in 0..self.regiments.len() {
-            if self.regiments[r].number.is_none() {
-                let (owner, template) =
-                    (self.regiments[r].owner, self.regiments[r].template.clone());
-                self.regiments[r].number = self.next_number(owner, &template);
-            }
-        }
-        for b in 0..self.buildings.len() {
-            if self.buildings[b].number.is_none() {
-                self.buildings[b].number = self.building_number(b);
-            }
-        }
-    }
-
     /// The next number `owner` gives a regiment of `template`, if it's
     /// numbered and a side's.
     fn next_number(&mut self, owner: u32, template: &str) -> Option<u32> {
-        if !self.numbered.contains(&Id::from(template)) || self.sides.player(owner).is_none() {
+        if !self.rules.numbered.contains(&Id::from(template)) || self.sides.player(owner).is_none()
+        {
             return None;
         }
         let n = self
@@ -336,6 +330,8 @@ mod tests {
     use super::*;
     use crate::testing::*;
 
+    use std::collections::HashSet;
+
     #[test]
     fn what_a_map_leaves_out_for_lack_of_room_adds_nothing() {
         let mut w = economy();
@@ -360,21 +356,15 @@ mod tests {
     #[test]
     fn numbered_regiments_count_per_side_and_template_never_reusing_one() {
         let mut w = headquarters();
+        w.rules.numbered = HashSet::from([Id::from("truck"), Id::from("tank")]);
         let mut t = truck();
         let mut add = |w: &mut World, owner, template: &str| {
             (t.owner, t.template) = (owner, template.into());
             let r = w.add_regiment(&t);
             w.regiments[r].number
         };
-        // Those already here are numbered once the templates are known.
-        add(&mut w, 1, "truck");
-        add(&mut w, 1, "truck");
-        assert_eq!(w.regiments[1].number, None);
-        w.set_numbered(HashSet::from([Id::from("truck"), Id::from("tank")]));
-        assert_eq!(
-            (w.regiments[0].number, w.regiments[1].number),
-            (Some(1), Some(2))
-        );
+        assert_eq!(add(&mut w, 1, "truck"), Some(1));
+        assert_eq!(add(&mut w, 1, "truck"), Some(2));
         assert_eq!(add(&mut w, 2, "truck"), Some(1));
         assert_eq!(add(&mut w, 1, "tank"), Some(1));
         assert_eq!(add(&mut w, 1, "jeep"), None);
