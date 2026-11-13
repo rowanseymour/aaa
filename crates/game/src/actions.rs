@@ -35,10 +35,10 @@ const COLUMNS: usize = 4;
 const ROWS: usize = 3;
 const SLOTS: usize = COLUMNS * ROWS;
 /// A button's side, in logical pixels; the icons are drawn 42 across.
-const BUTTON: f32 = 56.0;
-const GAP: f32 = 4.0;
+pub(crate) const BUTTON: f32 = 56.0;
+pub(crate) const GAP: f32 = 4.0;
 /// Black margin between the buttons and the panel's rounded edge.
-const PAD: f32 = 8.0;
+pub(crate) const PAD: f32 = 8.0;
 /// The grid's size, in logical pixels.
 pub const SIZE: Vec2 = Vec2::new(span(COLUMNS), span(ROWS));
 

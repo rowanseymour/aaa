@@ -9,24 +9,29 @@ use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
-use crate::actions::{Blocks, GLYPH_DIR};
+use bevy::picking::hover::Hovered;
+
+use crate::actions::{self, BUTTON, Blocks, GAP, GLYPH_DIR, PAD};
 use crate::keys::Bindings;
-use crate::ui::{Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel};
+use crate::ui::{
+    self, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel, tooltip,
+};
 use crate::{Leaders, Loaded, Local, Screen, Sim};
 
-/// A button's size, and its icon's within it, on the game's layout.
-const BUTTON: Vec2 = Vec2::new(42.0, 44.0);
-const ICON: Vec2 = Vec2::new(36.0, 31.0);
+/// An icon's size within its button, which is the action palette's, and
+/// the bar under it.
+const ICON: Vec2 = Vec2::new(46.0, 40.0);
 const BAR: f32 = 3.0;
-const GAP: f32 = 4.0;
 const ROW: f32 = 22.0;
+/// The tray of buttons, padded as the action palette is.
+const TRAY: f32 = BUTTON + 2.0 * PAD;
 const MEDAL: f32 = 16.0;
 const MEDAL_GLYPH: &str = "FactionExperience";
 
 /// How far right of the left edge, and down from the top, the panel
 /// leaves clear for what shares the corner with it.
 const CLEAR: Vec2 = Vec2::new(
-    crate::MARGIN + BUTTON.x + 2.0 * GAP,
+    crate::MARGIN + TRAY + 2.0 * GAP,
     crate::MARGIN + ROW + 2.0 * GAP,
 );
 
@@ -55,7 +60,7 @@ impl Plugin for SpecialOpsPlugin {
             })
             .add_systems(
                 Update,
-                refresh
+                (refresh, tips)
                     .run_if(in_state(Screen::Match))
                     .run_if(resource_exists::<Panel>),
             );
@@ -92,6 +97,8 @@ struct ExperienceBox;
 #[derive(Component)]
 struct OperationButton {
     cost: f32,
+    /// Its tooltip, beside the tray while the pointer's on the button.
+    tip: Entity,
 }
 
 #[derive(Component)]
@@ -146,7 +153,8 @@ fn spawn(
             let op = operations.get(&o.id)?;
             let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
             let name = bindings.marked(&action(n), &op.name);
-            Some((o.cost, icon, name, Hint(tip(op, o.cost, &cost, &area))))
+            let figures = figures(op, o.cost, &cost, &area);
+            Some((o.cost, icon, name, op.clone(), figures))
         })
         .collect();
     commands
@@ -156,6 +164,7 @@ fn spawn(
                 top: px(crate::MARGIN),
                 left: px(crate::MARGIN),
                 flex_direction: FlexDirection::Column,
+                align_items: AlignItems::Start,
                 row_gap: px(GAP),
                 ..default()
             },
@@ -196,55 +205,73 @@ fn spawn(
                     }
                     row.spawn((ExperienceText, label("", Font::Hud, Ink::Body)));
                 });
-            for (cost, icon, name, hint) in buttons {
-                corner
-                    .spawn((
-                        OperationButton { cost },
-                        Blocks,
-                        name,
-                        hint,
-                        panel(
-                            Surface::Slot,
-                            Node {
-                                width: px(BUTTON.x),
-                                height: px(BUTTON.y),
-                                border: UiRect::all(px(1)),
-                                flex_direction: FlexDirection::Column,
-                                align_items: AlignItems::Center,
-                                justify_content: JustifyContent::SpaceEvenly,
-                                ..default()
-                            },
-                        ),
-                        Edge::Border,
-                    ))
-                    .with_children(|button| {
-                        let size = Node {
-                            width: px(ICON.x),
-                            height: px(ICON.y),
-                            ..default()
-                        };
-                        match icon {
-                            Some(icon) => {
-                                button.spawn((
-                                    OperationIcon,
-                                    ImageNode::new(icon),
-                                    Shade::Dimmed,
-                                    size,
-                                    Pickable::IGNORE,
-                                ));
-                            }
-                            None => {
-                                button.spawn((size, Pickable::IGNORE));
-                            }
-                        }
-                        let bar = Node {
-                            width: px(ICON.x),
-                            height: px(BAR),
-                            ..default()
-                        };
-                        button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
-                    });
+            if buttons.is_empty() {
+                return;
             }
+            corner
+                .spawn((
+                    Blocks,
+                    panel(
+                        Surface::Hud,
+                        Node {
+                            width: px(TRAY),
+                            padding: UiRect::all(px(PAD)),
+                            flex_direction: FlexDirection::Column,
+                            row_gap: px(GAP),
+                            ..default()
+                        },
+                    ),
+                ))
+                .with_children(|tray| {
+                    for (cost, icon, name, op, figures) in buttons {
+                        let tip = pane(tray, &name, &op, &figures);
+                        tray.spawn((
+                            OperationButton { cost, tip },
+                            Hovered::default(),
+                            Pickable::default(),
+                            panel(
+                                Surface::Slot,
+                                Node {
+                                    width: px(BUTTON),
+                                    height: px(BUTTON),
+                                    border: UiRect::all(px(2)),
+                                    flex_direction: FlexDirection::Column,
+                                    align_items: AlignItems::Center,
+                                    justify_content: JustifyContent::SpaceEvenly,
+                                    ..default()
+                                },
+                            ),
+                            Edge::Border,
+                        ))
+                        .with_children(|button| {
+                            let size = Node {
+                                width: px(ICON.x),
+                                height: px(ICON.y),
+                                ..default()
+                            };
+                            match icon {
+                                Some(icon) => {
+                                    button.spawn((
+                                        OperationIcon,
+                                        ImageNode::new(icon),
+                                        Shade::Dimmed,
+                                        size,
+                                        Pickable::IGNORE,
+                                    ));
+                                }
+                                None => {
+                                    button.spawn((size, Pickable::IGNORE));
+                                }
+                            }
+                            let bar = Node {
+                                width: px(ICON.x),
+                                height: px(BAR),
+                                ..default()
+                            };
+                            button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
+                        });
+                    }
+                });
         });
     commands.insert_resource(Panel {
         player,
@@ -255,28 +282,99 @@ fn spawn(
     });
 }
 
-/// An operation's tooltip under its name: what its effects do, what it
-/// costs and the size of its area, then its description.
-fn tip(op: &SpecialOperation, cost: f32, cost_word: &str, area_word: &str) -> String {
-    let effects: Vec<String> = (op.effects.iter())
-        .map(|l| match l.indented {
-            true => format!("    {}", l.text),
-            false => l.text.clone(),
-        })
-        .collect();
-    let mut figures = Vec::new();
+/// The Cost and Area rows of an operation's tooltip, where they apply.
+fn figures(
+    op: &SpecialOperation,
+    cost: f32,
+    cost_word: &str,
+    area_word: &str,
+) -> Vec<(String, String)> {
+    let mut rows = Vec::new();
     if cost > 0.0 {
-        figures.push(format!("{cost_word}  {}", cost.round()));
+        rows.push((cost_word.to_string(), cost.round().to_string()));
     }
     if let Some(area) = &op.area {
-        figures.push(format!("{area_word}  {area}"));
+        rows.push((area_word.to_string(), area.clone()));
     }
-    let parts = [effects.join("\n"), figures.join("\n")];
-    let parts = parts.into_iter().chain(op.description.clone());
-    parts
-        .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n\n")
+    rows
+}
+
+/// Spawns an operation's tooltip, hidden until its button is hovered: its
+/// name, what its effects do, its Cost and Area, then its description. It
+/// sits a little way right of the tray, level with its top, as the action
+/// palette's sits above the palette.
+fn pane(
+    tray: &mut ChildSpawnerCommands,
+    name: &Marked,
+    op: &SpecialOperation,
+    figures: &[(String, String)],
+) -> Entity {
+    let node = Node {
+        display: Display::None,
+        position_type: PositionType::Absolute,
+        left: percent(100),
+        top: px(0),
+        margin: UiRect::left(px(PAD)),
+        width: px(actions::SIZE.x),
+        ..default()
+    };
+    tray.spawn(tooltip(node))
+        .with_children(|tip| {
+            ui::marked(tip, name, Font::HudTitle, Ink::Body);
+            if !op.effects.is_empty() {
+                tip.spawn(Node {
+                    flex_direction: FlexDirection::Column,
+                    row_gap: px(2),
+                    ..default()
+                })
+                .with_children(|lines| {
+                    for line in &op.effects {
+                        let indent = if line.indented { 2.0 * PAD } else { 0.0 };
+                        lines.spawn((
+                            label(line.text.clone(), Font::Small, Ink::Body),
+                            Node {
+                                margin: UiRect::left(px(indent)),
+                                ..default()
+                            },
+                        ));
+                    }
+                });
+            }
+            if !figures.is_empty() {
+                tip.spawn(Node {
+                    display: Display::Grid,
+                    grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
+                    column_gap: px(PAD * 2.0),
+                    row_gap: px(2),
+                    ..default()
+                })
+                .with_children(|table| {
+                    for (word, value) in figures {
+                        table.spawn(label(word.clone(), Font::Small, Ink::Help));
+                        table.spawn(label(value.clone(), Font::Small, Ink::Body));
+                    }
+                });
+            }
+            if let Some(description) = &op.description {
+                tip.spawn(label(description.clone(), Font::Small, Ink::Help));
+            }
+        })
+        .id()
+}
+
+/// Shows the tooltip of the operation under the pointer, and only that.
+fn tips(buttons: Query<(&OperationButton, &Hovered)>, mut nodes: Query<&mut Node>) {
+    for (button, hovered) in &buttons {
+        let display = match hovered.get() {
+            true => Display::Flex,
+            false => Display::None,
+        };
+        if let Ok(mut node) = nodes.get_mut(button.tip)
+            && node.display != display
+        {
+            node.display = display;
+        }
+    }
 }
 
 /// "474/5000": the experience rounded, and the ceiling when there is one.
@@ -340,14 +438,6 @@ fn refresh(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_data::EffectLine;
-
-    fn line(text: &str, indented: bool) -> EffectLine {
-        EffectLine {
-            text: text.into(),
-            indented,
-        }
-    }
 
     #[test]
     fn buttons_light_once_experience_reaches_their_cost_however_it_shows() {
@@ -374,7 +464,10 @@ mod tests {
             .spawn((meter(Node::default(), Gauge::Recharge), RechargeBar))
             .id();
         app.world_mut()
-            .spawn(OperationButton { cost: 200.0 })
+            .spawn(OperationButton {
+                cost: 200.0,
+                tip: Entity::PLACEHOLDER,
+            })
             .add_children(&[icon, bar]);
         app.update();
         // Shown as 200, but short of it.
@@ -395,29 +488,54 @@ mod tests {
     }
 
     #[test]
-    fn tooltips_put_effects_then_figures_then_the_description() {
+    fn tooltips_give_cost_and_area_where_they_apply() {
         let op = SpecialOperation {
             name: "Armored Resupply".into(),
-            description: Some("Provides supply to target armor regiments.".into()),
+            description: None,
             icon: None,
             recharge: 300.0,
             area: Some("Large".into()),
-            effects: vec![
-                line("Resupply for 30 Seconds", false),
-                line("Supplied", true),
-            ],
-        };
-        assert_eq!(
-            tip(&op, 300.0, "Cost", "Area"),
-            "Resupply for 30 Seconds\n    Supplied\n\nCost  300\nArea  Large\n\n\
-             Provides supply to target armor regiments."
-        );
-        let free = SpecialOperation {
-            area: None,
             effects: Vec::new(),
-            description: None,
-            ..op
         };
-        assert_eq!(tip(&free, 0.0, "Cost", "Area"), "");
+        let row = |a: &str, b: &str| (a.to_string(), b.to_string());
+        assert_eq!(
+            figures(&op, 300.0, "Cost", "Area"),
+            [row("Cost", "300"), row("Area", "Large")]
+        );
+        let free = SpecialOperation { area: None, ..op };
+        assert!(figures(&free, 0.0, "Cost", "Area").is_empty());
+    }
+
+    #[test]
+    fn only_the_hovered_operation_shows_its_tooltip() {
+        let mut app = App::new();
+        app.add_systems(Update, tips);
+        let hidden = || Node {
+            display: Display::None,
+            ..default()
+        };
+        let tips: Vec<Entity> = (0..2)
+            .map(|_| app.world_mut().spawn(hidden()).id())
+            .collect();
+        let on = Hovered(true);
+        app.world_mut().spawn((
+            OperationButton {
+                cost: 0.0,
+                tip: tips[0],
+            },
+            on,
+        ));
+        let off = Hovered(false);
+        app.world_mut().spawn((
+            OperationButton {
+                cost: 0.0,
+                tip: tips[1],
+            },
+            off,
+        ));
+        app.update();
+        let shown = |e: Entity| app.world().get::<Node>(e).map(|n| n.display);
+        assert_eq!(shown(tips[0]), Some(Display::Flex));
+        assert_eq!(shown(tips[1]), Some(Display::None));
     }
 }
