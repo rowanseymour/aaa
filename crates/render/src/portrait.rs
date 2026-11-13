@@ -297,7 +297,9 @@ impl Models {
     ) -> Option<(Entity, Seen)> {
         let portrait = self.portraits.get(id)?.clone();
         let path = portrait.view.models.first()?.clone();
-        let seen = cached(&mut stage.cameras, &path, || camera(game, &path))?;
+        let seen = cached(&mut stage.cameras, &path, || {
+            camera(game, self.subfolder.as_deref(), &path)
+        })?;
         let key = format!("{path}#face");
         let model = match self.models.get(&key) {
             Some(model) => model.clone(),
@@ -360,7 +362,9 @@ impl Models {
     ) -> Option<(Entity, Seen)> {
         let view = self.views.get(&Id::from(template))?.clone()?;
         let path = view.models.first()?.clone();
-        let extent = cached(&mut stage.extents, &path, || extent_of(game, &path))?;
+        let extent = cached(&mut stage.extents, &path, || {
+            extent_of(game, self.subfolder.as_deref(), &path)
+        })?;
         let model = self.model(game, assets, &path, &view, None)?;
         let root = commands
             .spawn((
@@ -379,8 +383,8 @@ impl Models {
 
 /// How the camera the model at `path` holds sees it; `None` if it holds
 /// none.
-fn camera(game: &GameData, path: &str) -> Option<Seen> {
-    let nif = Nif::parse(&game.read(path)?).ok()?;
+fn camera(game: &GameData, subfolder: Option<&str>, path: &str) -> Option<Seen> {
+    let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
     let found = nif.objects.iter().enumerate().find_map(|(i, o)| match o {
         nif::Object::Camera(c) if c.av.name.eq_ignore_ascii_case(CAMERA) => Some((i, c)),
         _ => None,
@@ -397,8 +401,8 @@ fn camera(game: &GameData, path: &str) -> Option<Seen> {
 }
 
 /// How big the model at `path` is, as modelled.
-fn extent_of(game: &GameData, path: &str) -> Option<Extent> {
-    let nif = Nif::parse(&game.read(path)?).ok()?;
+fn extent_of(game: &GameData, subfolder: Option<&str>, path: &str) -> Option<Extent> {
+    let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
     let mut points = Vec::new();
     for placed in nif.shapes() {
         let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {

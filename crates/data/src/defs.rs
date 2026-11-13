@@ -51,6 +51,10 @@ pub struct Variation {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct Biome {
+    pub ids: Option<Id>,
+    /// The folder, beside a model or texture, that holds this biome's own
+    /// version of it.
+    pub texture_subfolder_name: Option<String>,
     #[serde(default)]
     pub water_info: Vec<WaterInfo>,
 }
