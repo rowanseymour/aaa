@@ -14,10 +14,10 @@ use crate::{
 /// left out for lack of room counts for nothing.
 pub(crate) fn holdings<'a>(
     things: impl IntoIterator<Item = (Role, Option<u32>, &'a str)>,
-) -> Vec<(u32, String)> {
+) -> Vec<(u32, Id)> {
     (things.into_iter())
         .filter(|(role, ..)| !matches!(role, Role::Crowded | Role::Regiment | Role::Building))
-        .filter_map(|(_, owner, template)| Some((owner?, template.to_owned())))
+        .filter_map(|(_, owner, template)| Some((owner?, Id::from(template))))
         .collect()
 }
 
@@ -149,9 +149,8 @@ impl World {
                 // One its regiment has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
                 terrain: TerrainIndex::default(),
-                template_id: Id::from(m.template.as_str()),
                 id: m.id,
-                template: m.template.clone(),
+                template: Id::from(m.template.as_str()),
                 regiment: r,
                 domain,
                 position: [x, y],
@@ -182,13 +181,14 @@ impl World {
             Some(p) => self.units[first + p].position,
             None => self.average(&units),
         };
+        let template = Id::from(regiment.template.as_str());
         let number = match numbered {
-            true => self.next_number(regiment.owner, &regiment.template),
+            true => self.next_number(regiment.owner, &template),
             false => None,
         };
         self.regiments.push(Regiment {
             id: regiment.id,
-            template: regiment.template.clone(),
+            template,
             number,
             owner: regiment.owner,
             units,
@@ -225,7 +225,6 @@ impl World {
             guard: None,
             terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),
-            template_id: Id::from(regiment.template.as_str()),
         });
         let ids = regiment.members.iter().map(|m| m.id);
         self.next_id = ids
@@ -236,15 +235,11 @@ impl World {
 
     /// The next number `owner` gives a regiment of `template`, if it's
     /// numbered and a side's.
-    fn next_number(&mut self, owner: u32, template: &str) -> Option<u32> {
-        if !self.rules.numbered.contains(&Id::from(template)) || self.sides.player(owner).is_none()
-        {
+    fn next_number(&mut self, owner: u32, template: &Id) -> Option<u32> {
+        if !self.rules.numbered.contains(template) || self.sides.player(owner).is_none() {
             return None;
         }
-        let n = self
-            .numbers
-            .entry((owner, template.to_string()))
-            .or_insert(0);
+        let n = self.numbers.entry((owner, template.clone())).or_insert(0);
         *n += 1;
         Some(*n)
     }
@@ -252,7 +247,7 @@ impl World {
     /// The next number for the organization the building at `b` stands in.
     fn building_number(&mut self, b: usize) -> Option<u32> {
         let building = &self.buildings[b];
-        let template = building.organization.as_ref()?.template.clone();
+        let template = Id::from(building.organization.as_ref()?.template.as_str());
         self.next_number(building.owner, &template)
     }
 
@@ -275,7 +270,7 @@ impl World {
             let health = b.fighter.health * b.health;
             self.buildings.push(Building {
                 id: b.id,
-                template: b.template.clone(),
+                template: Id::from(b.template.as_str()),
                 number: None,
                 owner: b.owner,
                 position: b.position,

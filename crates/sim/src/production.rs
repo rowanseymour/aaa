@@ -1,7 +1,5 @@
 //! Buildings' queues: putting out what they commission and sending it on.
 
-use aaa_map::Id;
-
 use crate::{Commission, Notice, Work, World, deploy_point, normalised};
 
 impl World {
@@ -84,17 +82,13 @@ impl World {
             });
             // Those that resupply come out as their leader alone, the
             // rest to follow.
-            let used = self.logistics_of(&regiment.template);
+            let used = self.logistics_of(&self.regiments[r].template);
             if used.is_some_and(|l| l.supply_used) {
                 let leader = self.regiments[r].leader.unwrap_or(0);
                 for (p, u) in self.regiments[r].units.clone().into_iter().enumerate() {
                     // Only those resupply can bring.
-                    let template = Id::from(self.units[u].template.as_str());
-                    let comes = self
-                        .rules
-                        .resupply_rates
-                        .get(&template)
-                        .is_some_and(|&r| r > 0.0);
+                    let rate = self.rules.resupply_rates.get(&self.units[u].template);
+                    let comes = rate.is_some_and(|&r| r > 0.0);
                     self.units[u].awaited = p != leader && comes;
                 }
             }

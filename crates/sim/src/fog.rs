@@ -242,8 +242,8 @@ impl World {
             .unwrap_or(Seen::Unexplored)
     }
 
-    fn sight_of(&self, template: &str) -> Option<&aaa_map::Sight> {
-        self.rules.sights.get(&Id::from(template))
+    fn sight_of(&self, template: &Id) -> Option<&aaa_map::Sight> {
+        self.rules.sights.get(template)
     }
 
     /// Whether the unit at `u` has left the zone of control of its

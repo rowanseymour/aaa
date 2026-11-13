@@ -111,7 +111,7 @@ pub(crate) fn money(rules: &EconomyRules) -> &'static str {
 impl World {
     /// What a side's holdings add to its economy: their own production and
     /// upkeep.
-    fn holding_ledger(&self, template: &str) -> Ledger {
+    fn holding_ledger(&self, template: &Id) -> Ledger {
         let e = self.economy_of(template);
         Ledger {
             production: e.production,
@@ -120,12 +120,8 @@ impl World {
     }
 
     /// A template's own economy, none for one that has none.
-    pub(crate) fn economy_of(&self, template: &str) -> Economy {
-        self.rules
-            .economies
-            .get(&Id::from(template))
-            .copied()
-            .unwrap_or_default()
+    pub(crate) fn economy_of(&self, template: &Id) -> Economy {
+        (self.rules.economies.get(template).copied()).unwrap_or_default()
     }
 
     /// What a regiment adds to its owner's economy: its members'
@@ -150,16 +146,21 @@ impl World {
 
     /// What a regiment would add to its owner's economy once raised.
     fn commission_ledger(&self, regiment: &aaa_map::Regiment) -> Ledger {
-        let members = regiment.members.iter().map(|m| &m.template);
-        self.organization_ledger(&regiment.template, members.collect())
+        let members = regiment
+            .members
+            .iter()
+            .map(|m| Id::from(m.template.as_str()));
+        let members: Vec<Id> = members.collect();
+        let template = Id::from(regiment.template.as_str());
+        self.organization_ledger(&template, members.iter().collect())
     }
 
-    fn organization_ledger(&self, template: &str, members: Vec<&String>) -> Ledger {
+    fn organization_ledger(&self, template: &Id, members: Vec<&Id>) -> Ledger {
         if members.is_empty() {
             return Ledger::default();
         }
         // A lone unit is its own regiment, and counts once.
-        let lone = matches!(&members[..], [m] if m.as_str() == template);
+        let lone = matches!(&members[..], [m] if *m == template);
         let mut ledger = Ledger::default();
         if !lone {
             ledger.upkeep = self.economy_of(template).upkeep;
@@ -312,7 +313,7 @@ impl World {
         }
         templates
             .into_iter()
-            .map(|t| self.economy_of(t).cost.get(money))
+            .map(|t| self.economy_of(&Id::from(t)).cost.get(money))
             .sum()
     }
 
@@ -334,7 +335,7 @@ impl World {
             Change::Unpack(r) => {
                 ledger = ledger.without(self.regiment_ledger(r));
                 if let Some(u) = &self.regiments[r].unpacks {
-                    let e = self.economy_of(&u.building.template);
+                    let e = self.economy_of(&Id::from(u.building.template.as_str()));
                     ledger += Ledger {
                         production: e.production,
                         upkeep: e.upkeep,

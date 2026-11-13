@@ -11,7 +11,7 @@ use aaa_map::{Id, Packs, Requires};
 pub struct Rules {
     pub terrain_rules: aaa_map::TerrainRules,
     /// What each building template packs into, for those that can.
-    pub packing: HashMap<String, Packs>,
+    pub packing: HashMap<Id, Packs>,
     /// The buildings a player needs to commission a regiment with a member
     /// of each template, by template.
     pub requires: HashMap<Id, Requires>,

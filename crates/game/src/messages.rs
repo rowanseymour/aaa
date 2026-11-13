@@ -91,7 +91,7 @@ impl Look {
             .iter()
             .find(|r| r.id == hq.id)
             .and_then(|r| r.number);
-        crate::object_display::numbered(&self.strings, number, self.name(&hq.building))
+        crate::object_display::numbered(&self.strings, number, self.name(hq.building.as_str()))
     }
 
     /// The text under `key`, or `or` where the strings lack it.
@@ -604,7 +604,10 @@ fn told(
         }
         Notice::CannotUnpack { player, regiment } if ours(player) => {
             let said = look.said("tai_error_unpack|s", "Cannot unpack %s");
-            let text = fill(&said, &[&look.name(&sim.regiments[regiment].template)]);
+            let text = fill(
+                &said,
+                &[&look.name(sim.regiments[regiment].template.as_str())],
+            );
             Told::Line("GENERIC_ERROR", text, at(About::Regiment(regiment)))
         }
         Notice::Attached {

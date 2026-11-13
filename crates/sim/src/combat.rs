@@ -362,7 +362,7 @@ impl World {
         for b in 0..self.buildings.len() {
             let building = &self.buildings[b];
             let age = self.ticks - building.created;
-            let rate = self.rules.decays.get(&Id::from(building.template.as_str()));
+            let rate = self.rules.decays.get(&building.template);
             let Some(&rate) = rate.filter(|_| building.standing()) else {
                 continue;
             };

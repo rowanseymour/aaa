@@ -382,10 +382,17 @@ fn spawn_unit_view(
     unit: usize,
 ) -> bool {
     if let Some(t) = trailer {
-        let footing = models.footing(&t.template);
-        let towed = thing_at(ground, footing, thing.id, &t.template, t.position, t.facing);
+        let footing = models.footing(t.template.as_str());
+        let towed = thing_at(
+            ground,
+            footing,
+            thing.id,
+            t.template.as_str(),
+            t.position,
+            t.facing,
+        );
         if let Some(e) = models.spawn_building(commands, game, assets, &towed, owner) {
-            let conform = models.conform(&t.template);
+            let conform = models.conform(t.template.as_str());
             commands.entity(e).insert(TrailerView {
                 unit,
                 conform,
@@ -1338,7 +1345,7 @@ fn selection_sounds(
         let at = sim.0.centre(r);
         sounds.reply(
             &time,
-            &regiment.template,
+            regiment.template.as_str(),
             |a| &a.selected,
             at,
             regiment.owner,
@@ -1431,9 +1438,9 @@ fn spawn_views(
         let regiment = &sim.0.regiments[unit.regiment];
         let thing = thing_at(
             &map.ground,
-            drawn.0.footing(&unit.template),
+            drawn.0.footing(unit.template.as_str()),
             unit.id,
-            &unit.template,
+            unit.template.as_str(),
             unit.position,
             unit.facing,
         );
@@ -1455,9 +1462,9 @@ fn spawn_views(
     for (b, building) in sim.0.buildings.iter().enumerate().skip(viewed.buildings) {
         let thing = thing_at(
             &map.ground,
-            drawn.0.footing(&building.template),
+            drawn.0.footing(building.template.as_str()),
             building.id,
-            &building.template,
+            building.template.as_str(),
             building.position,
             building.facing,
         );
@@ -1614,7 +1621,7 @@ fn show_units(
             if seen {
                 sounds.cue(
                     &time,
-                    &unit.template,
+                    unit.template.as_str(),
                     |a| &a.destroyed,
                     unit.position,
                     owner,
@@ -1655,7 +1662,7 @@ fn show_units(
                 false => |a| &a.stop_moving,
             };
             if seen {
-                sounds.cue(&time, &unit.template, event, unit.position, owner);
+                sounds.cue(&time, unit.template.as_str(), event, unit.position, owner);
             }
         }
         if let Some(mut playing) = playing.filter(|_| unit.alive()) {
@@ -1694,7 +1701,13 @@ fn show_buildings(
             let since = (sim.0.ticks - fell) as f32 * TICK;
             if since < SINK_TIME {
                 let (at, owner) = (building.position, building.owner);
-                sounds.cue(&time, &building.template, |a| &a.destroyed, at, owner);
+                sounds.cue(
+                    &time,
+                    building.template.as_str(),
+                    |a| &a.destroyed,
+                    at,
+                    owner,
+                );
             }
         }
         if let State::Destroyed(fell) = building.state {
@@ -1981,7 +1994,7 @@ fn select(
     let inside = |u: usize| {
         let unit = &sim.0.units[u];
         let [x, y] = unit.position;
-        let z = ground.stand_at(drawn.0.footing(&unit.template), [x, y]);
+        let z = ground.stand_at(drawn.0.footing(unit.template.as_str()), [x, y]);
         camera
             .world_to_viewport(transform, world(x, y, z))
             .is_ok_and(|p| rect.contains(p))
@@ -2113,7 +2126,13 @@ fn acknowledge(
 ) {
     if let Some(&first) = regiments.first() {
         let template = &sim.regiments[first].template;
-        sounds.reply(time, template, |a| &a.commanded, sim.centre(first), player);
+        sounds.reply(
+            time,
+            template.as_str(),
+            |a| &a.commanded,
+            sim.centre(first),
+            player,
+        );
     }
 }
 

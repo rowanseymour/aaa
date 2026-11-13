@@ -620,7 +620,7 @@ mod tests {
         // a lone truck: the one it unpacked from, under its old id.
         assert_eq!(packed, r);
         assert_eq!(w.regiments.len(), 2);
-        assert_eq!(w.regiments[packed].template, "truck");
+        assert_eq!(w.regiments[packed].template.as_str(), "truck");
         assert_eq!(w.regiments[packed].number, Some(2));
         let u = w.regiments[packed].units[0];
         assert_eq!(w.regiments[packed].owner, 1);

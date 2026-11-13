@@ -137,7 +137,7 @@ pub struct World {
     /// What sides own that's neither a regiment nor a building but may
     /// still add to their economy, such as where they start: each owner
     /// and template.
-    pub holdings: Vec<(u32, String)>,
+    pub holdings: Vec<(u32, Id)>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
     /// The experience of each side with a general, by player id.
@@ -158,7 +158,7 @@ pub struct World {
     pub landings: Vec<Landing>,
     /// The last number each side has given a numbered template, by side
     /// and template.
-    numbers: HashMap<(u32, String), u32>,
+    numbers: HashMap<(u32, Id), u32>,
     /// An id no object has yet.
     next_id: u32,
     /// An id no commission has yet.
@@ -170,7 +170,7 @@ pub struct World {
 pub struct Regiment {
     /// Its object's id in the map.
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// The number its name is given, for one of a numbered template: see
     /// [`Rules::numbered`].
     pub number: Option<u32>,
@@ -236,8 +236,6 @@ pub struct Regiment {
     pub terrain: TerrainIndex,
     /// The properties that terrain gives it.
     pub terrain_properties: Vec<Id>,
-    /// `template`, as what's kept by template has it.
-    template_id: Id,
 }
 
 /// A regiment's order to keep a post: it comes back to it after every
@@ -363,7 +361,7 @@ struct Leg {
 pub struct Unit {
     /// Its object's id in the map.
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// Index into [`World::regiments`].
     pub regiment: usize,
     pub domain: Domain,
@@ -424,8 +422,6 @@ pub struct Unit {
     /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it: its
     /// regiment's, or its own tile's while it straggles.
     pub terrain: TerrainIndex,
-    /// `template`, as what's kept by template has it.
-    template_id: Id,
 }
 
 /// How a unit left the map without dying, and the tick it did.
@@ -441,7 +437,7 @@ pub enum Left {
 /// What a unit tows, dragged after the point it's coupled to so that it
 /// trails round corners.
 pub struct Trailer {
-    pub template: String,
+    pub template: Id,
     pub position: [f32; 2],
     /// Where it was a tick ago, as [`Unit::previous`].
     pub previous: [f32; 2],
@@ -459,7 +455,7 @@ pub struct Trailer {
 pub struct Building {
     /// Its object's id in the map.
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// The number of the organization it stands in, as [`Regiment::number`],
     /// for one of a numbered template.
     pub number: Option<u32>,

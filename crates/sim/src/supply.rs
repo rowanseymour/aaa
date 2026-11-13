@@ -54,8 +54,10 @@ impl Supplying {
 impl World {
     /// How the building at `b` gives supply, if it does.
     pub fn supply_of(&self, b: usize) -> Option<Supply> {
-        let template = self.buildings[b].template.as_str();
-        self.rules.supplies.get(&Id::from(template)).copied()
+        self.rules
+            .supplies
+            .get(&self.buildings[b].template)
+            .copied()
     }
 
     /// Whether a building that passes supply on has none to pass: nothing
@@ -89,10 +91,10 @@ impl World {
     fn effects<'a>(
         &'a self,
         owner: u32,
-        template: &str,
+        template: &Id,
         held: &'a [Held],
     ) -> impl Iterator<Item = &'a SupplyEffect> {
-        let kind = self.rules.kinds.get(&Id::from(template));
+        let kind = self.rules.kinds.get(template);
         let on = move |e: &&SupplyEffect| {
             let has = |p| kind.is_some_and(|k| k.properties.contains(p));
             e.requires.iter().all(has)
@@ -120,7 +122,7 @@ impl World {
                     .filter(|&r| !self.destroyed(r))
                     .filter_map(|r| {
                         let regiment = &self.regiments[r];
-                        let kind = self.rules.kinds.get(&Id::from(regiment.template.as_str()));
+                        let kind = self.rules.kinds.get(&regiment.template);
                         let side = self.standing_flag(player, regiment.owner);
                         let flags = kind.into_iter().flat_map(|k| &k.flags);
                         let d = distance(at, self.leader_position(r));
@@ -472,10 +474,7 @@ impl World {
         let regiment = &self.regiments[r];
         let rate = |u: usize| {
             let unit = &self.units[u];
-            let rate = self
-                .rules
-                .resupply_rates
-                .get(&Id::from(unit.template.as_str()));
+            let rate = self.rules.resupply_rates.get(&unit.template);
             let health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
             (rate.copied().unwrap_or(0.0) * pace.max(0.0), health)
         };
@@ -523,11 +522,11 @@ impl World {
         let offsets = &regiment.formations[regiment.current_formation()].offsets;
         let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
         let recruits = |b: &&Building| {
-            let list = self.rules.recruit_lists.get(&Id::from(b.template.as_str()));
+            let list = self.rules.recruit_lists.get(&b.template);
             b.standing()
                 && !b.busy()
                 && self.shares_supply(regiment.owner, b.owner)
-                && list.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
+                && list.is_some_and(|l| l.contains(&regiment.template))
                 && distance(at, b.position) < regiment.control(&self.rules.guard_rules)
         };
         let nearest = (self.buildings.iter().filter(recruits))

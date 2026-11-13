@@ -569,7 +569,7 @@ fn notice(
             e,
             seen,
             me,
-            &unit.template,
+            unit.template.as_str(),
             now,
             at,
         );
@@ -591,7 +591,7 @@ fn notice(
             e,
             seen,
             me,
-            &b.template,
+            b.template.as_str(),
             now,
             at,
         );

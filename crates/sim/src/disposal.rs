@@ -1,8 +1,6 @@
 //! Getting rid of what a side owns: disbanding regiments and trucks, and
 //! selling buildings.
 
-use aaa_map::Id;
-
 use crate::economy::money;
 use crate::{Fallen, Left, Notice, Order, Refused, State, World};
 
@@ -40,7 +38,7 @@ impl World {
     /// Whether a building's template is one that can be sold.
     pub fn sells(&self, building: usize) -> bool {
         let template = &self.buildings[building].template;
-        self.rules.sellable.contains(&Id::from(template.as_str()))
+        self.rules.sellable.contains(template)
     }
 
     /// The money a building sells for: a share of its own template's cost,

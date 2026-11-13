@@ -685,7 +685,7 @@ impl Recruits {
 
     /// What each building template packs into, by template, for those
     /// some packed building unpacks into and that can be raised.
-    pub fn packings(&self) -> HashMap<String, Packs> {
+    pub fn packings(&self) -> HashMap<Id, Packs> {
         let mut out = HashMap::new();
         for (building, truck) in &self.packs_into {
             let Ok(raised) = self.raise(truck.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]) else {
@@ -702,7 +702,7 @@ impl Recruits {
                 health_min: packing.pack_health_min,
                 truck: raised,
             };
-            out.insert(building.as_str().to_string(), packs);
+            out.insert(building.clone(), packs);
         }
         out
     }
@@ -1271,7 +1271,7 @@ mod tests {
             .packs_into
             .insert(Id::from("depot"), Id::from("truck"));
         let packings = recruits.packings();
-        let packs = &packings["depot"];
+        let packs = &packings[&Id::from("depot")];
         assert_eq!(packs.truck.template, "truck");
         assert_eq!((packs.seconds, packs.facing), (8.0, [1.0, 0.0]));
 
@@ -1287,7 +1287,10 @@ mod tests {
         recruits
             .lists
             .insert(Id::from("battleship"), vec![Id::from("a_boat")]);
-        assert_eq!(recruits.packings()["depot"].truck.template, "truck");
+        assert_eq!(
+            recruits.packings()[&Id::from("depot")].truck.template,
+            "truck"
+        );
 
         // A truck the map starts with unpacks too.
         let truck = crate::fixtures::placed(5, "truck", 2, None, None);

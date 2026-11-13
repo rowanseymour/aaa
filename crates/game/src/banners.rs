@@ -408,8 +408,8 @@ pub fn add_banners(
             .sides
             .player(regiment.owner)
             .map_or([1.0; 3], |p| p.rgb);
-        let icon = banners.icon(&loaded.game, &mut images, &regiment.template);
-        let frame = banners.frame(&loaded.game, &mut images, &regiment.template);
+        let icon = banners.icon(&loaded.game, &mut images, regiment.template.as_str());
+        let frame = banners.frame(&loaded.game, &mut images, regiment.template.as_str());
         // Only organization templates name a banner icon, so a unit outside
         // one, such as a supply truck, flies no banner.
         if icon.is_none() {
@@ -507,7 +507,7 @@ pub fn show_banners(
         let at = live().next().filter(|_| !housed).map(|first| {
             let sum = live().fold(Vec2::ZERO, |sum, u| sum + Vec2::from(u.drawn_at(t)));
             let [x, y] = (sum / count as f32).to_array();
-            let footing = drawn.0.footing(&first.template);
+            let footing = drawn.0.footing(first.template.as_str());
             world(x, y, ground.stand_at(footing, [x, y]) + HEIGHT)
         });
         let seen = fog.shows_regiment(&sim.0, banner.regiment);
@@ -597,14 +597,14 @@ pub fn badge_banners(
         if let (Some((hq, _)), Ok((mut image, _))) = (wears, layers.get_mut(banner.frame))
             && hq == regiment.id
         {
-            let frame = badges.frame(banners, &loaded.game, assets, template, hq);
+            let frame = badges.frame(banners, &loaded.game, assets, template.as_str(), hq);
             image.image = frame.unwrap_or_default();
         }
         let Ok((mut image, mut visibility)) = layers.get_mut(banner.badge) else {
             continue;
         };
-        let badge =
-            wears.and_then(|(hq, _)| badges.badge(banners, &loaded.game, assets, template, hq));
+        let badge = wears
+            .and_then(|(hq, _)| badges.badge(banners, &loaded.game, assets, template.as_str(), hq));
         *visibility = match badge.is_some() {
             true => Visibility::Inherited,
             false => Visibility::Hidden,
@@ -673,7 +673,7 @@ mod tests {
         let hq = |id: u32, owner: u32| aaa_sim::Hq {
             id,
             owner,
-            building: String::new(),
+            building: Id::from(""),
             position: [0.0; 2],
             places: 3,
         };

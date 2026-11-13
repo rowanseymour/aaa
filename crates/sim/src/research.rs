@@ -74,7 +74,7 @@ impl World {
     /// template's, or one it's been given.
     fn carries(&self, building: usize, property: &Id) -> bool {
         self.buildings.get(building).is_some_and(|b| {
-            let kind = self.rules.kinds.get(&Id::from(b.template.as_str()));
+            let kind = self.rules.kinds.get(&b.template);
             kind.is_some_and(|k| k.properties.contains(property))
                 || b.properties.iter().any(|h| h.property == *property)
         })
@@ -83,14 +83,9 @@ impl World {
     /// Whether `player` has a building of one of `ids` standing: done
     /// unpacking, and its own rather than an ally's.
     fn stands(&self, player: u32, ids: &[Id]) -> bool {
-        self.buildings.iter().any(|b| {
-            b.owner == player
-                && b.standing()
-                && !b.busy()
-                && ids
-                    .iter()
-                    .any(|id| id.as_str().eq_ignore_ascii_case(&b.template))
-        })
+        self.buildings
+            .iter()
+            .any(|b| b.owner == player && b.standing() && !b.busy() && ids.contains(&b.template))
     }
 
     /// Of `structures`, each building by every id it goes by, the first id
@@ -148,11 +143,7 @@ impl World {
     /// order.
     pub fn research_list(&self, building: usize) -> &[Research] {
         (self.buildings.get(building))
-            .and_then(|b| {
-                self.rules
-                    .research_lists
-                    .get(&Id::from(b.template.as_str()))
-            })
+            .and_then(|b| self.rules.research_lists.get(&b.template))
             .map_or(&[], Vec::as_slice)
     }
 
