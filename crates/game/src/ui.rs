@@ -262,6 +262,8 @@ pub enum Font {
     Body,
     /// What heads a part of a menu.
     Heading,
+    /// A question a dialog asks.
+    Question,
     /// The menus' main buttons.
     Large,
     /// What heads a whole screen.
@@ -276,6 +278,7 @@ impl Font {
             Font::HudTitle => 15.0,
             Font::Body => 16.0,
             Font::Heading => 18.0,
+            Font::Question => 20.0,
             Font::Large => 24.0,
             Font::Title => 26.0,
         }
@@ -288,7 +291,7 @@ impl Font {
     fn source(self) -> FontSource {
         match self {
             Font::Heading | Font::Large | Font::Title => FontSource::Handle(STENCIL),
-            Font::Body => FontSource::Handle(PLAIN),
+            Font::Body | Font::Question => FontSource::Handle(PLAIN),
             Font::Small | Font::Hud | Font::HudTitle => FontSource::default(),
         }
     }
@@ -300,7 +303,7 @@ impl Font {
     pub fn drop(self) -> f32 {
         match self {
             Font::Small | Font::Hud | Font::HudTitle => (self.px() / 7.0).round(),
-            Font::Body | Font::Heading | Font::Large | Font::Title => 0.0,
+            Font::Body | Font::Heading | Font::Question | Font::Large | Font::Title => 0.0,
         }
     }
 }
