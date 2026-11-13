@@ -1014,6 +1014,12 @@ pub struct UVars {
     pub audio_speech_volume: Option<f32>,
     #[serde(rename = "AudioMusicVolume")]
     pub audio_music_volume: Option<f32>,
+    /// Whether the options' Unit Acknowledgement and Chat Notification
+    /// start on.
+    #[serde(rename = "UnitAcknowledgement")]
+    pub unit_acknowledgement: Option<bool>,
+    #[serde(rename = "UIEventFilterChatSound")]
+    pub chat_sound: Option<bool>,
 }
 
 /// A set of hotkeys players can choose.

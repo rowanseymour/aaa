@@ -1235,7 +1235,7 @@ fn selection_sounds(
     if let Some(&r) = selected.0.iter().find(|r| !before.contains(r)) {
         let regiment = &sim.0.regiments[r];
         let at = sim.0.centre(r);
-        sounds.cue(
+        sounds.reply(
             &time,
             &regiment.template,
             |a| &a.selected,
@@ -2021,7 +2021,7 @@ fn acknowledge(
 ) {
     if let Some(&first) = regiments.first() {
         let template = &sim.regiments[first].template;
-        sounds.cue(time, template, |a| &a.commanded, sim.centre(first), player);
+        sounds.reply(time, template, |a| &a.commanded, sim.centre(first), player);
     }
 }
 

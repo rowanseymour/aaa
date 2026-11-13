@@ -839,6 +839,15 @@ pub struct Volumes {
     pub music: f32,
 }
 
+/// Which of the sounds the options can switch off are on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SoundSwitches {
+    /// Units' spoken replies to being selected or given an order.
+    pub replies: bool,
+    /// The sound that greets a chat message in a match.
+    pub chat: bool,
+}
+
 /// How the supply border is drawn.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SupplyBorder {
@@ -2090,6 +2099,16 @@ impl GameData {
             fx: FX_VOLUME,
             speech: var(|v| v.audio_speech_volume, 0.95),
             music: var(|v| v.audio_music_volume, 0.7),
+        }
+    }
+
+    /// The options' sound switches, as they start.
+    pub fn sound_switches(&mut self) -> SoundSwitches {
+        let uvars = self.uvars();
+        let on = |of: fn(&defs::UVars) -> Option<bool>| uvars.iter().find_map(of).unwrap_or(true);
+        SoundSwitches {
+            replies: on(|v| v.unit_acknowledgement),
+            chat: on(|v| v.chat_sound),
         }
     }
 

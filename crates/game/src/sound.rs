@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aaa_data::{Audio, AudioCategory, AudioWho, Cue, GameData, Id, ObjectAudio};
+use aaa_data::{Audio, AudioCategory, AudioWho, Cue, GameData, Id, ObjectAudio, SoundSwitches};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::map_point;
 use aaa_sim::Relation;
@@ -30,6 +30,8 @@ pub struct Sounds {
     /// Cues waiting to play, with when.
     queued: Vec<(f64, Request)>,
     rng: u64,
+    /// Which sounds the options have on.
+    pub switches: SoundSwitches,
 }
 
 struct Request {
@@ -132,6 +134,7 @@ impl Sounds {
             next: HashMap::new(),
             queued: Vec::new(),
             rng: seed(),
+            switches: game.sound_switches(),
         }
     }
 
@@ -149,6 +152,10 @@ impl Sounds {
             next: HashMap::new(),
             queued: Vec::new(),
             rng: seed(),
+            switches: SoundSwitches {
+                replies: true,
+                chat: true,
+            },
         }
     }
 
@@ -173,6 +180,21 @@ impl Sounds {
             None => return,
         };
         self.play(time, &cues, |_| at, owner);
+    }
+
+    /// Queues `owner`'s object's reply to being selected or ordered, unless
+    /// the options have replies off.
+    pub fn reply(
+        &mut self,
+        time: &Time,
+        template: &str,
+        event: fn(&ObjectAudio) -> &Vec<Cue>,
+        at: [f32; 2],
+        owner: u32,
+    ) {
+        if self.switches.replies {
+            self.cue(time, template, event, at, owner);
+        }
     }
 
     /// Queues the cues of `owner`'s projectile of a template landing at
@@ -487,6 +509,30 @@ mod tests {
     fn audio_turned_all_the_way_down_isnt_read_or_played() {
         assert_eq!(click_at(0.5), (1, true));
         assert_eq!(click_at(0.0), (0, false));
+    }
+
+    #[test]
+    fn replies_are_queued_only_while_switched_on() {
+        let reply = Cue {
+            audio: Id::from("select"),
+            at: "SELF".into(),
+            delay: 0.0,
+            looping: false,
+            every: 1,
+        };
+        let audio = ObjectAudio {
+            selected: vec![reply],
+            ..ObjectAudio::default()
+        };
+        let mut sounds = Sounds::of(HashMap::new(), &[]);
+        sounds.objects.insert(Id::from("infantry"), audio);
+        let time = Time::<()>::default();
+        sounds.switches.replies = false;
+        sounds.reply(&time, "infantry", |a| &a.selected, [0.0; 2], 1);
+        assert!(sounds.queued.is_empty());
+        sounds.switches.replies = true;
+        sounds.reply(&time, "infantry", |a| &a.selected, [0.0; 2], 1);
+        assert_eq!(sounds.queued.len(), 1);
     }
 
     #[test]
