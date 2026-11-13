@@ -26,8 +26,13 @@ use aaa_sim::{Relation, State};
 /// Width of the disc on screen, in logical pixels, which the diamond's
 /// corners touch.
 pub const DISC: f32 = 236.0;
-/// Width of the round buttons in the corners the disc leaves of its square.
+/// Width of the round buttons on the disc's rim.
 pub const CORNER_BUTTON: f32 = 34.0;
+/// How far the buttons' centres are from the disc's, across and up: on the
+/// rim, midway between the diamond's corners.
+pub const BOLT: f32 = DISC / 2.0 * std::f32::consts::FRAC_1_SQRT_2;
+/// Texels across the backdrop the disc and its buttons share.
+const BACKDROP_TEXELS: u32 = 512;
 /// Pixels across the minimap's image, enough for a sharp diamond on a
 /// high-density screen.
 const PIXELS: usize = 512;
@@ -206,32 +211,66 @@ pub fn spawn(
         icons,
         colours: palette,
     });
+    let backdrop = images.add(crate::displays::silhouette(BACKDROP_TEXELS, backdrop_shape));
     commands.spawn((
-        crate::ui::backed(
-            crate::ui::Surface::Hud,
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(crate::MARGIN),
-                bottom: px(crate::MARGIN),
-                width: px(DISC),
-                height: px(DISC),
-                border_radius: BorderRadius::MAX,
-                ..default()
-            },
-        ),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(crate::MARGIN),
+            bottom: px(crate::MARGIN),
+            width: px(DISC),
+            height: px(DISC),
+            border_radius: BorderRadius::MAX,
+            ..default()
+        },
         // Over the banners, which stack by where they are on screen.
         GlobalZIndex(1),
-        children![(
-            MinimapView,
-            RelativeCursorPosition::default(),
-            ImageNode::new(image),
-            Node {
-                width: percent(100),
-                height: percent(100),
-                ..default()
-            },
-        )],
+        children![
+            (
+                Backdrop,
+                ImageNode::new(backdrop),
+                Node {
+                    position_type: PositionType::Absolute,
+                    width: percent(100),
+                    height: percent(100),
+                    ..default()
+                },
+                Pickable::IGNORE,
+            ),
+            (
+                MinimapView,
+                RelativeCursorPosition::default(),
+                ImageNode::new(image),
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    ..default()
+                },
+            ),
+        ],
     ));
+}
+
+/// The disc's backdrop, drawn as one with the buttons on its rim so where
+/// they overlap is no darker.
+#[derive(Component)]
+pub struct Backdrop;
+
+/// Whether a point of the disc's square is on the disc or one of the
+/// buttons on its rim.
+fn backdrop_shape(x: f32, y: f32) -> bool {
+    let (bolt, radius) = (BOLT / (DISC / 2.0), CORNER_BUTTON / DISC);
+    let (bx, by) = (x.abs() - bolt, y.abs() - bolt);
+    x * x + y * y <= 1.0 || bx * bx + by * by <= radius * radius
+}
+
+/// Fills the backdrop with the colour the interface over the map has.
+pub fn tint(theme: Res<crate::ui::Theme>, mut backdrops: Query<&mut ImageNode, With<Backdrop>>) {
+    let colour = theme.surface(crate::ui::Surface::Hud);
+    for mut backdrop in &mut backdrops {
+        if backdrop.color != colour {
+            backdrop.color = colour;
+        }
+    }
 }
 
 fn decode_icon(

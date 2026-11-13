@@ -1,6 +1,5 @@
 //! The display panels: windows over the match, each opened by a round
-//! button at a corner of the minimap's square or by its key, one at a
-//! time. The match holds still while one's up, unless it was already.
+//! button on the minimap's rim or by its key, one at a time. The match holds still while one's up, unless it was already.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::picking::hover::Hovered;
@@ -68,7 +67,8 @@ pub fn closed(displays: Option<Res<Displays>>) -> bool {
     displays.is_none_or(|d| d.open.is_none())
 }
 
-/// The corners of the minimap's square, which its disc leaves room in.
+/// The places on the minimap's rim its round buttons sit, between the
+/// diamond's corners.
 #[derive(Clone, Copy)]
 pub enum Corner {
     TopLeft,
@@ -80,8 +80,9 @@ pub enum Corner {
 impl Corner {
     /// Where a round button sits in it.
     pub fn node(self) -> Node {
-        let near = px(crate::MARGIN);
-        let far = px(crate::MARGIN + minimap::DISC - minimap::CORNER_BUTTON);
+        let centre = crate::MARGIN + minimap::DISC / 2.0 - minimap::CORNER_BUTTON / 2.0;
+        let near = px(centre - minimap::BOLT);
+        let far = px(centre + minimap::BOLT);
         let (left, bottom) = match self {
             Corner::TopLeft => (near, far),
             Corner::TopRight => (far, far),
@@ -195,7 +196,7 @@ pub fn spawn_button(
             Hint(help),
             PanelButton { panel, name },
             corner.node(),
-            Surface::Hud,
+            Surface::Clear,
             Edge::Border,
             GlobalZIndex(2),
             DespawnOnExit(Screen::Match),
@@ -394,7 +395,7 @@ fn light_buttons(
         }
         surface.set_if_neq(match pressed {
             true => Surface::Hovered,
-            false => Surface::Hud,
+            false => Surface::Clear,
         });
         if !restyle {
             continue;
@@ -416,9 +417,13 @@ fn light_buttons(
 /// A white glyph on a clear ground, to be tinted: where `inside` holds of
 /// the square from -1 to 1 each way, y down.
 pub fn glyph(inside: impl Fn(f32, f32) -> bool) -> Image {
+    silhouette(GLYPH_TEXELS, inside)
+}
+
+/// A [`glyph`] of any number of texels across.
+pub fn silhouette(texels: u32, inside: impl Fn(f32, f32) -> bool) -> Image {
     // Each texel's coverage from a grid of samples across it.
     const SAMPLES: u32 = 4;
-    let texels = GLYPH_TEXELS;
     let half = texels as f32 / 2.0;
     let mut data = Vec::with_capacity((texels * texels * 4) as usize);
     for v in 0..texels {

@@ -82,6 +82,7 @@ impl Theme {
             Surface::Hovered => lit(0.3),
             Surface::Chosen => mix(self.tint, self.accent, 1.0 / 3.0),
             Surface::Inert => lit(0.12).with_alpha(0.5),
+            Surface::Clear => Color::NONE,
         }
     }
 
@@ -159,6 +160,9 @@ pub enum Surface {
     Chosen,
     /// Laid out like a button, but for something not there yet.
     Inert,
+    /// Nothing, over a backdrop drawn with what's around it so the two
+    /// don't darken each other.
+    Clear,
 }
 
 /// What a run of text is for.
