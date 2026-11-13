@@ -3,7 +3,7 @@
 
 use std::f32::consts::FRAC_PI_4;
 
-use aaa_map::{Id, Obstacle, Tile};
+use aaa_map::{Obstacle, Tile};
 
 use crate::{
     ARRIVAL_REACH, EXACT_REACH, LOOK, Leg, NotYours, TICK, Trailer, Unit, World, normalised, path,
@@ -38,7 +38,7 @@ impl Trailer {
             }
         };
         Trailer {
-            template: Id::from(trailer.template.as_str()),
+            template: trailer.template.clone(),
             position,
             previous: position,
             facing,

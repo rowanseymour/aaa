@@ -42,7 +42,7 @@ impl World {
                 out.push(Hq {
                     id: regiment.id,
                     owner: regiment.owner,
-                    building: Id::from(building.as_str()),
+                    building: building.clone(),
                     position: self.centre(r),
                     places,
                 });
@@ -69,15 +69,10 @@ impl World {
     fn truck_survives(&self, r: usize) -> bool {
         let unpacks = self.regiments[r].unpacks.as_ref();
         let trucks = unpacks
-            .and_then(|u| {
-                self.rules
-                    .packing
-                    .get(&Id::from(u.building.template.as_str()))
-            })
+            .and_then(|u| self.rules.packing.get(&u.building.template))
             .map(|p| &p.truck.members);
         let truck = |u: usize| {
-            let template = self.units[u].template.as_str();
-            trucks.is_none_or(|t| t.iter().any(|m| m.template.eq_ignore_ascii_case(template)))
+            trucks.is_none_or(|t| t.iter().any(|m| m.template == self.units[u].template))
         };
         self.survivors(r).any(truck)
     }
@@ -89,7 +84,7 @@ impl World {
         let building = &self.buildings[b];
         match (&building.organization, building.unpacked_from) {
             (Some(o), _) => {
-                let places = self.places(&Id::from(o.template.as_str()))?;
+                let places = self.places(&o.template)?;
                 Some((o.id, places, o.template.as_str()))
             }
             (None, Some(r)) => {

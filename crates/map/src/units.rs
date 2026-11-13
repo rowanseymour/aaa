@@ -209,7 +209,7 @@ pub fn owner(thing: &Thing) -> Option<u32> {
 pub struct Regiment {
     /// Its object's id, as in [`Map::things`](crate::Map::things).
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// The owning [`Player::id`].
     pub owner: u32,
     /// The way it faces, a unit vector.
@@ -303,7 +303,7 @@ pub struct Member {
     /// Its object's id, as in [`Map::things`](crate::Map::things) for one
     /// the map places.
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     pub position: [f32; 2],
     /// The way it faces, as the map stores it: a map may not keep it to
     /// unit length.
@@ -332,7 +332,7 @@ pub struct Member {
 /// What a member tows, dragged after the point it's coupled to.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trailer {
-    pub template: String,
+    pub template: Id,
     /// Where it's coupled to the member, from the member: x to its right
     /// and y ahead.
     pub hitch: [f32; 2],
@@ -445,7 +445,7 @@ pub(crate) fn regiments(
 #[derive(Debug, Clone, PartialEq)]
 pub struct Division {
     /// The HQ's template, whose nation the badge is from.
-    pub template: String,
+    pub template: Id,
     /// Which of that nation's badges its regiments wear.
     pub badge: usize,
 }
@@ -485,7 +485,7 @@ fn raw_member(
     let body = bodies.get(&key)?;
     let trailer = body.trailer.as_ref().and_then(|t| {
         Some(Trailer {
-            template: t.as_str().to_string(),
+            template: t.clone(),
             hitch: body.hitch.unwrap_or_default(),
             coupling: bodies.get(t)?.hitch.unwrap_or_default(),
             placed: None,
@@ -493,7 +493,6 @@ fn raw_member(
     });
     Some(Member {
         id,
-        template: template.to_string(),
         position,
         facing,
         health: 1.0,
@@ -504,6 +503,7 @@ fn raw_member(
         shape: body.blocking,
         trailer,
         fighter: fighters.get(&key).cloned(),
+        template: key,
     })
 }
 
@@ -601,7 +601,7 @@ fn regiment(
     };
     Some(Regiment {
         id,
-        template: template.to_string(),
+        template: Id::from(template),
         owner,
         facing,
         members,
@@ -724,8 +724,8 @@ impl Recruits {
 
     /// What a packed building of `template` unpacks into, if it does and
     /// the building can stand.
-    fn unpacks(&self, template: &str) -> Option<Unpacks> {
-        let d = self.deployments.get(&Id::from(template))?;
+    fn unpacks(&self, template: &Id) -> Option<Unpacks> {
+        let d = self.deployments.get(template)?;
         let into = d.unpacks_into.as_ref()?;
         let body = self.bodies.get(into)?;
         let seconds = self.deployment(into).unpacking;
@@ -751,7 +751,7 @@ impl Recruits {
         });
         Some(Building {
             id: 0,
-            template: template.as_str().to_string(),
+            template: template.clone(),
             owner: 0,
             position: [0.0, 0.0],
             facing: UNPACKED_FACING,
@@ -850,7 +850,7 @@ impl Recruits {
         let member = raw_member(id, template, position, facing, &self.bodies, &self.fighters)
             .ok_or_else(|| format!("{template} isn't a regiment or a unit that can move"))?;
         Ok(Regiment {
-            unpacks: self.unpacks(template),
+            unpacks: self.unpacks(&member.template),
             ..lone(member, owner, facing, self.ranges(template))
         })
     }
@@ -862,7 +862,7 @@ impl Recruits {
 pub(crate) fn emptied(t: &Thing, owner: u32, ranges: Ranges) -> Regiment {
     Regiment {
         id: t.id,
-        template: t.template.clone(),
+        template: Id::from(t.template.as_str()),
         owner,
         facing: facing(t),
         members: Vec::new(),
@@ -874,7 +874,7 @@ pub(crate) fn emptied(t: &Thing, owner: u32, ranges: Ranges) -> Regiment {
 fn one_place(ranges: Ranges) -> Regiment {
     Regiment {
         id: 0,
-        template: String::new(),
+        template: Id::from(""),
         owner: 0,
         hq: None,
         facing: [0.0, -1.0],
@@ -1091,7 +1091,7 @@ mod tests {
         assert_eq!(lost, [None, Some(20.0), None]);
         // Under an id nothing on the map has.
         assert_eq!(r.members[1].id, 4);
-        assert_eq!(r.members[1].template, "rifle");
+        assert_eq!(r.members[1].template.as_str(), "rifle");
         assert_eq!(r.formations[1].offsets.len(), 3);
         assert_eq!(r.primary, Some(2));
     }
@@ -1249,7 +1249,7 @@ mod tests {
             .raise("truck", 1, 2, [0.0, 0.0], [0.0, 1.0])
             .unwrap();
         let unpacks = truck.unpacks.as_ref().unwrap();
-        assert_eq!(unpacks.building.template, "depot");
+        assert_eq!(unpacks.building.template.as_str(), "depot");
         assert_eq!(unpacks.seconds, 9.0);
         assert!(unpacks.building.obstacle.is_some());
         assert_eq!(
@@ -1272,7 +1272,7 @@ mod tests {
             .insert(Id::from("depot"), Id::from("truck"));
         let packings = recruits.packings();
         let packs = &packings[&Id::from("depot")];
-        assert_eq!(packs.truck.template, "truck");
+        assert_eq!(packs.truck.template.as_str(), "truck");
         assert_eq!((packs.seconds, packs.facing), (8.0, [1.0, 0.0]));
 
         // The truck the data gives, though another, listed by a building as
@@ -1288,7 +1288,10 @@ mod tests {
             .lists
             .insert(Id::from("battleship"), vec![Id::from("a_boat")]);
         assert_eq!(
-            recruits.packings()[&Id::from("depot")].truck.template,
+            recruits.packings()[&Id::from("depot")]
+                .truck
+                .template
+                .as_str(),
             "truck"
         );
 

@@ -671,7 +671,7 @@ pub fn spawn(
         sim.0
             .regiments
             .iter()
-            .filter_map(|r| Some(r.unpacks.as_ref()?.building.template.clone())),
+            .filter_map(|r| Some(r.unpacks.as_ref()?.building.template.to_string())),
     );
     while let Some(template) = templates.pop() {
         if menus.contains_key(&template) {
@@ -729,7 +729,7 @@ pub fn spawn(
                     .as_ref()?
                     .building
                     .template
-                    .clone(),
+                    .to_string(),
             )
         }));
         menus.insert(template, menu);

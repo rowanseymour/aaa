@@ -150,7 +150,7 @@ impl World {
                 awaited: m.lost.is_some(),
                 terrain: TerrainIndex::default(),
                 id: m.id,
-                template: Id::from(m.template.as_str()),
+                template: m.template.clone(),
                 regiment: r,
                 domain,
                 position: [x, y],
@@ -181,7 +181,7 @@ impl World {
             Some(p) => self.units[first + p].position,
             None => self.average(&units),
         };
-        let template = Id::from(regiment.template.as_str());
+        let template = regiment.template.clone();
         let number = match numbered {
             true => self.next_number(regiment.owner, &template),
             false => None,
@@ -247,7 +247,7 @@ impl World {
     /// The next number for the organization the building at `b` stands in.
     fn building_number(&mut self, b: usize) -> Option<u32> {
         let building = &self.buildings[b];
-        let template = Id::from(building.organization.as_ref()?.template.as_str());
+        let template = building.organization.as_ref()?.template.clone();
         self.next_number(building.owner, &template)
     }
 
@@ -270,7 +270,7 @@ impl World {
             let health = b.fighter.health * b.health;
             self.buildings.push(Building {
                 id: b.id,
-                template: Id::from(b.template.as_str()),
+                template: b.template.clone(),
                 number: None,
                 owner: b.owner,
                 position: b.position,

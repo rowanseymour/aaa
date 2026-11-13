@@ -593,10 +593,10 @@ impl Commission {
 
     /// What it's for: the template it raises or the technology it
     /// researches.
-    pub fn template(&self) -> &str {
+    pub fn template(&self) -> &Id {
         match &self.work {
             Work::Raise(r) => &r.template,
-            Work::Research(r) => r.technology.as_str(),
+            Work::Research(r) => &r.technology,
         }
     }
 }

@@ -14,7 +14,7 @@ use crate::units::{Regiment, emptied, facing, owner};
 pub struct Building {
     /// Its object's id, as in [`Map::things`](crate::Map::things).
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// The owning [`Player::id`](crate::Player::id).
     pub owner: u32,
     pub position: [f32; 2],
@@ -67,7 +67,7 @@ pub(crate) fn buildings(
             let [x, y, _] = t.position;
             Some(Building {
                 id: t.id,
-                template: t.template.clone(),
+                template: Id::from(t.template.as_str()),
                 owner,
                 position: [x, y],
                 facing: facing(t),
