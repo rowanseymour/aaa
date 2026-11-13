@@ -85,7 +85,7 @@ pub fn confirm<M>(
             ),
         ))
         .id();
-    commands.spawn((ui::text(question, Font::Large), ChildOf(dialog)));
+    commands.spawn((ui::text(question, Font::Question), ChildOf(dialog)));
     let row = commands
         .spawn((
             ChildOf(dialog),

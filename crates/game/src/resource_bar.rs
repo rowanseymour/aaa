@@ -125,14 +125,7 @@ pub fn spawn(
                             },
                         ));
                     }
-                    cell.spawn((
-                        Cell(preview, i),
-                        label("", Font::Hud, Ink::Body),
-                        Node {
-                            top: px(Font::Hud.drop()),
-                            ..default()
-                        },
-                    ));
+                    cell.spawn((Cell(preview, i), label("", Font::Hud, Ink::Body)));
                 });
             }
         });
