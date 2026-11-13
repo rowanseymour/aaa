@@ -2,8 +2,6 @@
 //! what it's for and, for most, the command it gives, e.g.
 //! `map c game|action|verify "ActorCommand hq_attach"`.
 
-use std::collections::HashMap;
-
 use crate::strings::localized;
 use crate::{GameData, Id, defs, scoped};
 
@@ -90,10 +88,7 @@ impl GameData {
 
     /// The configurations players choose between, in the order the
     /// options list them, named from the game's `strings`.
-    pub fn hotkey_configurations(
-        &self,
-        strings: &HashMap<String, String>,
-    ) -> Vec<HotkeyConfiguration> {
+    pub fn hotkey_configurations(&self, strings: &crate::Strings) -> Vec<HotkeyConfiguration> {
         let files = self.parse_named([CONFIGURATIONS]);
         scoped(&files)
             .iter()

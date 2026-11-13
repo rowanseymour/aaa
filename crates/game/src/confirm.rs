@@ -1,8 +1,6 @@
 //! A question asked over everything else and answered Ok or Cancel, as the
 //! game asks before doing what can't be undone, such as quitting.
 
-use std::collections::HashMap;
-
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::input::InputSystems;
 use bevy::prelude::*;
@@ -21,7 +19,7 @@ pub struct Words {
 }
 
 impl Words {
-    pub fn of(strings: &HashMap<String, String>) -> Self {
+    pub fn of(strings: &aaa_data::Strings) -> Self {
         let said = crate::ui::said(strings);
         Words {
             ok: said("button_ok", "Ok"),
@@ -33,7 +31,7 @@ impl Words {
 
 impl Default for Words {
     fn default() -> Self {
-        Words::of(&HashMap::new())
+        Words::of(&aaa_data::Strings::default())
     }
 }
 

@@ -59,7 +59,7 @@ struct Look {
     kinds: HashMap<Id, Kind>,
     events: HashMap<Id, GameEvent>,
     vars: InterfaceVars,
-    strings: Arc<HashMap<String, String>>,
+    strings: Arc<aaa_data::Strings>,
     names: HashMap<Id, String>,
     /// What an icon that looks somewhere says.
     to_location: String,

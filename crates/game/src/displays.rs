@@ -463,7 +463,6 @@ impl Icons {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use aaa_data::Hotkey;
     use bevy::state::app::StatesPlugin;
@@ -496,7 +495,7 @@ mod tests {
             .init_resource::<crate::actions::Page>()
             .init_resource::<crate::Focus>()
             .init_resource::<Displays>()
-            .insert_resource(Bindings::new(&hotkeys, &HashMap::new()))
+            .insert_resource(Bindings::new(&hotkeys, &aaa_data::Strings::default()))
             .add_systems(Update, keys.after(pause::Toggle).run_if(pause::closed));
         for panel in [Panel::Technologies, Panel::MessageLog] {
             app.world_mut().spawn((PanelWindow(panel), Node::default()));

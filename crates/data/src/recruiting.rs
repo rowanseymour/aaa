@@ -319,7 +319,7 @@ impl GameData {
 /// The resources given, totalled, with their localized names; those the
 /// strings don't name keep their field name.
 fn amounts<'a>(
-    strings: &HashMap<String, String>,
+    strings: &crate::Strings,
     of: impl Iterator<Item = &'a defs::Resources>,
 ) -> Vec<Amount> {
     let mut totals: Vec<(&str, f32)> = Vec::new();
@@ -416,7 +416,7 @@ mod tests {
         let earned = |id: &str| -> Vec<(&str, f32)> {
             let t = by_id[&Id::from(id)];
             let members = members(t, &by_id, &HashMap::new());
-            amounts(&HashMap::new(), production(t, &members))
+            amounts(&crate::Strings::default(), production(t, &members))
                 .into_iter()
                 .map(|a| (a.kind, a.amount))
                 .collect()
@@ -453,7 +453,7 @@ mod tests {
         let regiment = by_id[&Id::from("regiment")];
         let kept = |layouts: &HashMap<Id, Layout>| -> Vec<(&str, f32)> {
             let members = members(regiment, &by_id, layouts);
-            amounts(&HashMap::new(), upkeep(regiment, &members))
+            amounts(&crate::Strings::default(), upkeep(regiment, &members))
                 .into_iter()
                 .map(|a| (a.kind, a.amount))
                 .collect()

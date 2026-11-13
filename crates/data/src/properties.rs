@@ -72,16 +72,8 @@ pub(crate) fn fill(format: &str, with: &[&str]) -> String {
 }
 
 /// What the game says a modifier does, where it has words for it.
-pub(crate) fn line(
-    strings: &HashMap<String, String>,
-    paces: &[Pace],
-    m: &defs::Modifier,
-) -> Option<String> {
-    let said = |key: String| {
-        strings
-            .get(&key)
-            .or_else(|| strings.get(&key.to_lowercase()))
-    };
+pub(crate) fn line(strings: &crate::Strings, paces: &[Pace], m: &defs::Modifier) -> Option<String> {
+    let said = |key: String| strings.get(&key);
     let amount = m.amount.unwrap_or(0.0);
     let attribute = m.attribute.as_deref().unwrap_or("").to_ascii_lowercase();
     if is(&m.kind, "ADD") && attribute == "terrain_speed_cap" {
@@ -121,7 +113,7 @@ impl GameData {
     }
 
     /// The game's words for speeds, in the order it lists them.
-    pub(crate) fn paces(&self, strings: &HashMap<String, String>) -> Vec<Pace> {
+    pub(crate) fn paces(&self, strings: &crate::Strings) -> Vec<Pace> {
         let definitions = self.definitions();
         let speeds = (definitions.descriptions.iter()).filter(|d| is(&d.category, "SPEED"));
         speeds
@@ -137,10 +129,7 @@ impl GameData {
 
     /// What each shared property says under its name, by id: who it's
     /// for, then a line for each thing it does that the game has words for.
-    pub(crate) fn property_lines(
-        &self,
-        strings: &HashMap<String, String>,
-    ) -> HashMap<Id, Vec<String>> {
+    pub(crate) fn property_lines(&self, strings: &crate::Strings) -> HashMap<Id, Vec<String>> {
         let paces = self.paces(strings);
         let definitions = self.definitions();
         let name = |p: &defs::Property| localized(strings, p.name.as_deref()).unwrap_or_default();
@@ -213,7 +202,7 @@ mod tests {
 
     #[test]
     fn modifiers_say_what_they_do_in_the_games_words() {
-        let strings: HashMap<String, String> = [
+        let strings: crate::Strings = [
             ("modifier_desc_add_terrain_speed_cap|s", "Speed limit is %s"),
             ("modifier_desc_add_dv|f", "%+g to Defense Value"),
             (

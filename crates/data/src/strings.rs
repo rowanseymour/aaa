@@ -6,13 +6,31 @@ use std::sync::Arc;
 
 use crate::{GameData, Id, defs, scoped};
 
+/// The game's text by key, whose case doesn't matter, as it doesn't to the
+/// data that names one.
+#[derive(Clone, Debug, Default)]
+pub struct Strings(HashMap<String, String>);
+
+impl Strings {
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.0.get(&key.to_ascii_lowercase())
+    }
+}
+
+impl FromIterator<(String, String)> for Strings {
+    fn from_iter<I: IntoIterator<Item = (String, String)>>(pairs: I) -> Self {
+        let pairs = pairs.into_iter();
+        Self(pairs.map(|(k, v)| (k.to_ascii_lowercase(), v)).collect())
+    }
+}
+
 impl GameData {
     /// The game's text in its default language, by key.
-    pub fn strings(&self) -> Arc<HashMap<String, String>> {
+    pub fn strings(&self) -> Arc<Strings> {
         self.kept("strings", || self.read_strings())
     }
 
-    fn read_strings(&self) -> HashMap<String, String> {
+    fn read_strings(&self) -> Strings {
         let glyphs = self.glyphs();
         let glyphs: HashMap<Id, char> = (glyphs.iter())
             .filter_map(|g| Some((g.ids.clone()?, char::from_u32(g.index?)?)))
@@ -24,7 +42,7 @@ impl GameData {
             // A key defined again keeps its first text.
             out.entry(key).or_insert_with(|| unescape(&text, &glyphs));
         }
-        out
+        Strings(out)
     }
 
     /// The characters quoted text names by id, such as `n` for a newline
@@ -92,17 +110,17 @@ fn unescape(text: &str, glyphs: &HashMap<Id, char>) -> String {
 }
 
 /// The text a `#` key names, or a name written out as is.
-pub(crate) fn localized(strings: &HashMap<String, String>, name: Option<&str>) -> Option<String> {
+pub(crate) fn localized(strings: &Strings, name: Option<&str>) -> Option<String> {
     let name = name?;
     match name.strip_prefix('#') {
-        Some(key) => strings.get(&key.to_ascii_lowercase()).cloned(),
+        Some(key) => strings.get(key).cloned(),
         None => Some(name.to_string()),
     }
 }
 
 /// What the game calls a resource, by its field name in the data, such as
 /// Money for `money`.
-pub fn resource_name(strings: &HashMap<String, String>, field: &str) -> String {
+pub fn resource_name(strings: &Strings, field: &str) -> String {
     strings
         .get(&format!("resources_{field}_name"))
         .cloned()
@@ -121,7 +139,7 @@ mod tests {
              \tcount|d = \"%d left\"\n}\n",
         );
         let block = parsed.root.blocks_of("Text").next().unwrap();
-        let strings: HashMap<String, String> = text_strings(block).collect();
+        let strings: Strings = text_strings(block).collect();
         assert_eq!(
             localized(&strings, Some("#Move_name")).as_deref(),
             Some("Move")
@@ -129,6 +147,7 @@ mod tests {
         assert_eq!(localized(&strings, Some("Plain")).as_deref(), Some("Plain"));
         // A key's format is part of it, and the block's name isn't a string.
         assert_eq!(strings.get("count|d").map(String::as_str), Some("%d left"));
+        assert_eq!(strings.get("Count|D").map(String::as_str), Some("%d left"));
         assert_eq!(strings.get("count"), None);
         assert_eq!(strings.get("name"), None);
         assert_eq!(

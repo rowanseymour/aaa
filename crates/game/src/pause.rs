@@ -147,7 +147,6 @@ fn resume(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
 
     use bevy::state::app::StatesPlugin;
 
@@ -167,7 +166,7 @@ mod tests {
         .init_resource::<console::Console>()
         .init_resource::<Page>()
         .init_resource::<Focus>()
-        .insert_resource(Options::of(Vec::new(), None, &HashMap::new()));
+        .insert_resource(Options::of(Vec::new(), None, &aaa_data::Strings::default()));
         app.update();
         app
     }

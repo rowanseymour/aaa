@@ -162,7 +162,7 @@ enum Stage {
 struct StageWords([String; 4]);
 
 impl StageWords {
-    fn of(strings: &HashMap<String, String>) -> Self {
+    fn of(strings: &aaa_data::Strings) -> Self {
         let said = ui::said(strings);
         StageWords([
             said("app_status_loading_data", "Loading Data"),

@@ -81,7 +81,7 @@ pub fn default_person(players: &[Player], asked: Side) -> Option<u32> {
 pub struct Leaving(String);
 
 impl Leaving {
-    pub fn of(strings: &HashMap<String, String>) -> Self {
+    pub fn of(strings: &aaa_data::Strings) -> Self {
         let question = strings.get("ui_staging_confirm_exit");
         Leaving(question.map_or("Exit Staging?", String::as_str).to_string())
     }
@@ -1081,7 +1081,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, confirm::ConfirmPlugin))
             .insert_state(Screen::Lobby)
             .insert_resource(confirm::Words::default())
-            .insert_resource(Leaving::of(&HashMap::new()))
+            .insert_resource(Leaving::of(&aaa_data::Strings::default()))
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::console::Console>();
         app.world_mut()

@@ -340,9 +340,7 @@ fn words(words: impl Into<String>, size: Font) -> impl Bundle {
 
 /// Looks up the game's text by key, falling back to the given words where
 /// its strings lack that key.
-pub fn said(
-    strings: &std::collections::HashMap<String, String>,
-) -> impl Fn(&str, &str) -> String + Copy + '_ {
+pub fn said(strings: &aaa_data::Strings) -> impl Fn(&str, &str) -> String + Copy + '_ {
     |key, or| strings.get(key).map_or(or, String::as_str).to_string()
 }
 
@@ -427,90 +425,135 @@ pub fn tooltip(node: Node) -> impl Bundle {
     )
 }
 
-/// What's said, in a box by the pointer, of the part of the interface
-/// it's on; under its name, for a part that also has a [`Marked`] one.
+/// What's said of the part of the interface the pointer's on; under its
+/// name, for a part that also has a [`Marked`] one. It's said in the box
+/// its pane [`Docks`] hints in, or else in one by the pointer.
 #[derive(Component, Clone, PartialEq, Debug)]
 #[require(Hovered, Pickable)]
 pub struct Hint(pub String);
 
-/// The widest a hint is before its words wrap.
+/// On a pane, the [`hint_box`] that the [`Hint`]s inside it are said in.
+#[derive(Component)]
+pub struct Docks(pub Entity);
+
+/// The widest a hint by the pointer is before its words wrap.
 const HINT_WIDTH: f32 = 320.0;
 
-/// The box [`Hint`]s are said in.
+/// A box [`Hint`]s are said in.
 #[derive(Component)]
 struct HintBox;
+
+/// The box for the hints of what no pane docks.
+#[derive(Component)]
+struct ByPointer;
 
 /// The parts of the hint's text after the first: a name's key, then the
 /// rest.
 #[derive(Component)]
 struct HintSpan(usize);
 
+/// A box, laid out as `node`, that shows while a [`Hint`] is said in it.
+pub fn hint_box(node: Node) -> impl Bundle {
+    let node = Node {
+        display: Display::None,
+        ..node
+    };
+    let span = |n: usize, ink: Ink| (HintSpan(n), TextSpan::default(), font(Font::Small), ink);
+    (
+        HintBox,
+        tooltip(node),
+        children![(
+            label("", Font::Small, Ink::Body),
+            children![span(0, Ink::Key), span(1, Ink::Body)],
+        )],
+    )
+}
+
 fn spawn_hint(mut commands: Commands) {
     let node = Node {
         position_type: PositionType::Absolute,
-        display: Display::None,
         max_width: px(HINT_WIDTH),
         ..default()
     };
-    let span = |n: usize, ink: Ink| (HintSpan(n), TextSpan::default(), font(Font::Small), ink);
-    commands
-        .spawn((HintBox, tooltip(node), GlobalZIndex(layer::HINT)))
-        .with_child((
-            label("", Font::Small, Ink::Body),
-            children![span(0, Ink::Key), span(1, Ink::Body)],
-        ));
+    commands.spawn((ByPointer, hint_box(node), GlobalZIndex(layer::HINT)));
 }
 
-/// Shows the hint under the pointer beside it, on the side with more room.
+/// Shows the hint under the pointer: in its pane's box, or beside the
+/// pointer, on the side with more room.
+#[allow(clippy::too_many_arguments)]
 fn hint(
-    hints: Query<(&Hint, Option<&Marked>, &Hovered, &InheritedVisibility)>,
+    hints: Query<(
+        Entity,
+        &Hint,
+        Option<&Marked>,
+        &Hovered,
+        &InheritedVisibility,
+    )>,
+    parents: Query<&ChildOf>,
+    docks: Query<&Docks>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     scale: Res<UiScale>,
-    mut said: Single<(&mut Node, &Children), With<HintBox>>,
-    mut texts: Query<&mut Text>,
+    mut boxes: Query<(Entity, &mut Node, &Children, Has<ByPointer>), With<HintBox>>,
+    mut texts: Query<(&mut Text, &Children)>,
     mut spans: Query<(&HintSpan, &mut TextSpan)>,
 ) {
-    let (node, children) = &mut *said;
-    let mut hovered = hints.iter().filter(|(h, name, on, shown)| {
+    let hovered = hints.iter().find(|(_, h, name, on, shown)| {
         on.get() && shown.get() && !(h.0.is_empty() && name.is_none())
+    });
+    let dock = hovered.and_then(|(entity, ..)| {
+        let mut panes = parents.iter_ancestors(entity);
+        panes.find_map(|pane| Some(docks.get(pane).ok()?.0))
     });
     let at = windows
         .single()
         .ok()
         .and_then(|w| Some((w.cursor_position()?, w.size())));
-    let (Some((hint, name, ..)), Some((cursor, window))) = (hovered.next(), at) else {
-        if node.display != Display::None {
-            node.display = Display::None;
+    for (entity, mut node, children, by_pointer) in &mut boxes {
+        let here = match dock {
+            Some(dock) => dock == entity,
+            None => by_pointer && at.is_some(),
+        };
+        let (Some((_, hint, name, ..)), true) = (hovered, here) else {
+            if node.display != Display::None {
+                node.display = Display::None;
+            }
+            continue;
+        };
+        if node.display != Display::Flex {
+            node.display = Display::Flex;
         }
-        return;
-    };
-    const GAP: f32 = 16.0;
-    node.display = Display::Flex;
-    // Each way, on the side of the pointer with more of the window.
-    let beside = |at: f32, across: f32| match at > across / 2.0 {
-        true => (Val::Auto, px((across - at + GAP) / scale.0)),
-        false => (px((at + GAP) / scale.0), Val::Auto),
-    };
-    (node.left, node.right) = beside(cursor.x, window.x);
-    (node.top, node.bottom) = beside(cursor.y, window.y);
-    let parts = match name {
-        Some(name) => [
-            name.before.clone(),
-            name.key.clone(),
-            format!("{}\n{}", name.after, hint.0),
-        ],
-        None => [hint.0.clone(), String::new(), String::new()],
-    };
-    for child in children.iter() {
-        if let Ok(mut text) = texts.get_mut(child)
-            && text.0 != parts[0]
-        {
-            text.0.clone_from(&parts[0]);
+        if let (true, Some((cursor, window))) = (by_pointer, at) {
+            const GAP: f32 = 16.0;
+            // Each way, on the side of the pointer with more of the window.
+            let beside = |at: f32, across: f32| match at > across / 2.0 {
+                true => (Val::Auto, px((across - at + GAP) / scale.0)),
+                false => (px((at + GAP) / scale.0), Val::Auto),
+            };
+            (node.left, node.right) = beside(cursor.x, window.x);
+            (node.top, node.bottom) = beside(cursor.y, window.y);
         }
-    }
-    for (span, mut text) in &mut spans {
-        if text.0 != parts[span.0 + 1] {
-            text.0.clone_from(&parts[span.0 + 1]);
+        let parts = match name {
+            Some(name) => [
+                name.before.clone(),
+                name.key.clone(),
+                format!("{}\n{}", name.after, hint.0),
+            ],
+            None => [hint.0.clone(), String::new(), String::new()],
+        };
+        for child in children.iter() {
+            let Ok((mut text, parts_after)) = texts.get_mut(child) else {
+                continue;
+            };
+            if text.0 != parts[0] {
+                text.0.clone_from(&parts[0]);
+            }
+            for part in parts_after.iter() {
+                if let Ok((span, mut text)) = spans.get_mut(part)
+                    && text.0 != parts[span.0 + 1]
+                {
+                    text.0.clone_from(&parts[span.0 + 1]);
+                }
+            }
         }
     }
 }
@@ -1045,6 +1088,33 @@ mod tests {
             .to_u8_array();
         // The logo's ground, 0x1d2219, give or take rounding.
         assert!(r.abs_diff(0x1d) <= 1 && g.abs_diff(0x22) <= 1 && b.abs_diff(0x19) <= 1);
+    }
+
+    #[test]
+    fn a_hint_is_said_in_the_box_its_pane_docks() {
+        let mut app = App::new();
+        app.init_resource::<UiScale>()
+            .add_systems(Startup, spawn_hint)
+            .add_systems(Update, hint);
+        let world = app.world_mut();
+        let docked = world.spawn(hint_box(Node::default())).id();
+        let other = world.spawn(hint_box(Node::default())).id();
+        let pane = world.spawn(Docks(docked)).id();
+        world.spawn(Docks(other));
+        let on = (Hint("Entrenched".into()), Hovered(true));
+        world.spawn((on, InheritedVisibility::VISIBLE, ChildOf(pane)));
+        app.update();
+        let world = app.world_mut();
+        let by_pointer = world
+            .query_filtered::<Entity, With<ByPointer>>()
+            .single(world)
+            .unwrap();
+        let shown = |e: Entity| world.get::<Node>(e).map(|n| n.display);
+        assert_eq!(shown(docked), Some(Display::Flex));
+        assert_eq!(shown(other), Some(Display::None));
+        assert_eq!(shown(by_pointer), Some(Display::None));
+        let text = world.get::<Children>(docked).unwrap()[0];
+        assert_eq!(world.get::<Text>(text).unwrap().0, "Entrenched");
     }
 
     fn lit(hovered: bool, chosen: bool, card: bool) -> Edge {
