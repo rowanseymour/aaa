@@ -863,7 +863,7 @@ pub struct Viewer<'w, 's> {
 impl Viewer<'_, '_> {
     fn look_at(&mut self, place: Place) {
         let [x, y] = place.now(&self.sim.0, self.local.0);
-        let height = self.loaded.map.ground.height_at(x, y);
+        let height = self.loaded.map.ground.height_at([x, y]);
         for mut camera in &mut self.cameras {
             camera.focus = world(x, y, height);
         }

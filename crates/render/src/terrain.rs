@@ -339,7 +339,7 @@ fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor], 
             positions.push(world(wx, wy, surface).to_array());
             let ([r, g, b], a) = at_depth(colors, surface - ground.at(cx, cy));
             let [r, g, b, a] = Color::srgba(r, g, b, a).to_linear().to_f32_array();
-            let lit = edge_light(ground.size(), fade, wx, wy);
+            let lit = edge_light(ground.size(), fade, [wx, wy]);
             vertex_colors.push([r * lit, g * lit, b * lit, a + (1.0 - a) * (1.0 - lit)]);
         }
     }
@@ -350,9 +350,9 @@ fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor], 
         .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, vertex_colors)
 }
 
-/// How lit the point (x, y) is, from 1 down to 0 at the edge of a map of
+/// How lit a world position is, from 1 down to 0 at the edge of a map of
 /// `size` over the last `fade` of it; matches `edge_light` in the shader.
-fn edge_light(size: f32, fade: f32, x: f32, y: f32) -> f32 {
+fn edge_light(size: f32, fade: f32, [x, y]: [f32; 2]) -> f32 {
     if fade <= 0.0 {
         return 1.0;
     }

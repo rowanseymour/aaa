@@ -19,10 +19,10 @@ mod terrain;
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::{FRAC_PI_4, PI, TAU};
 
-use aaa_map::pathing::{CELL_SIZE, tile_at};
+use aaa_map::pathing::CELL_SIZE;
 use aaa_map::{
     DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Role, Shape,
-    TerrainEffect, TerrainIndex, Turret, Unpacks, Weapon, Zone,
+    TerrainEffect, TerrainIndex, Tile, Turret, Unpacks, Weapon, Zone,
 };
 
 pub use aaa_map::{Player, Relation, Team};
@@ -1098,7 +1098,7 @@ fn wrap(angle: f32) -> f32 {
 }
 
 /// The tile something stands on and whose side it's on.
-type Footing = ((i32, i32), u32);
+type Footing = (Tile, u32);
 
 /// Something a weapon can fire on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -1222,10 +1222,10 @@ impl World {
         for m in &regiment.members {
             let [x, y] = m.position;
             let facing = normalised(m.facing).unwrap_or([0.0, -1.0]);
-            let (tx, ty) = tile_at([x, y]);
+            let tile = Tile::at([x, y]);
             // Units start on what they travel on.
-            let domain = match self.pathing.passable(tx, ty, Domain::Land)
-                || !self.pathing.passable(tx, ty, Domain::Naval)
+            let domain = match self.pathing.passable(tile, Domain::Land)
+                || !self.pathing.passable(tile, Domain::Naval)
             {
                 true => Domain::Land,
                 false => Domain::Naval,
@@ -2175,7 +2175,7 @@ impl World {
     /// those blocking its tile, which reach further than their shapes do.
     fn way(&self, u: usize, to: [f32; 2]) -> Vec<[f32; 2]> {
         let unit = &self.units[u];
-        let tile = tile_at(unit.position);
+        let tile = Tile::at(unit.position);
         let body = unit.shape.map(|shape| Obstacle {
             position: unit.position,
             facing: unit.facing,
@@ -3531,7 +3531,7 @@ impl World {
             let inside: Vec<(Target, Footing)> = self
                 .targets()
                 .filter(|&t| self.in_zone(&zone, t))
-                .map(|t| (t, (tile_at(self.position(t)), self.owner(t))))
+                .map(|t| (t, (Tile::at(self.position(t)), self.owner(t))))
                 .collect();
             let seen: Vec<Enemy> = (inside.iter())
                 .filter(|(t, at)| building.inside.get(t) != Some(at))
@@ -4270,7 +4270,7 @@ mod tests {
     fn members_go_back_to_their_places_after_being_kept_from_them() {
         let mut pathing = Pathing::uniform(20, Domain::Land);
         // The right-hand man's place at 11,20 is blocked.
-        pathing.set_blocked(5, 10);
+        pathing.set_blocked(Tile::new(5, 10));
         let mut w = world(pathing);
         w.apply(
             7,
@@ -4316,7 +4316,7 @@ mod tests {
     fn units_go_around_what_blocks_them() {
         let mut pathing = Pathing::uniform(20, Domain::Land);
         for x in 0..15 {
-            pathing.set_blocked(x, 8);
+            pathing.set_blocked(Tile::new(x, 8));
         }
         let mut w = world(pathing.clone());
         w.apply(
@@ -4330,8 +4330,8 @@ mod tests {
         for _ in 0..400 {
             w.tick();
             for u in &w.units {
-                let (x, y) = tile_at(u.position);
-                assert!(pathing.passable(x, y, Domain::Land), "{:?}", u.position);
+                let tile = Tile::at(u.position);
+                assert!(pathing.passable(tile, Domain::Land), "{:?}", u.position);
             }
         }
         assert!(near(w.units[0].position, [9.0, 30.0]));
@@ -4930,7 +4930,7 @@ mod tests {
         let mut w = escort();
         run(&mut w, 5.0);
         for x in 0..40 {
-            w.pathing.set_blocked(x, 12);
+            w.pathing.set_blocked(Tile::new(x, 12));
         }
         w.regiments[2].engaged.push(Enemy::Regiment(1));
         w.tick();
@@ -5165,7 +5165,7 @@ mod tests {
         let mut w = skirmish();
         w.units[1].fighter = Some(soldier(Vec::new()));
         for x in 0..40 {
-            w.pathing.set_blocked(x, 10);
+            w.pathing.set_blocked(Tile::new(x, 10));
         }
         w.apply(
             1,
@@ -5947,7 +5947,7 @@ mod tests {
         pillbox.fighter.destructible = true;
         let house = building(22, 2, [0.0, 10.0]);
         let mut w = siege(&[bunker, pillbox, house]);
-        assert!(!w.pathing.passable(10, 5, Domain::Land));
+        assert!(!w.pathing.passable(Tile::new(10, 5), Domain::Land));
         run(&mut w, 30.0);
         // Its new owner's rifle leaves it be at the share it's left with.
         let b = &w.buildings[0];
@@ -5955,7 +5955,7 @@ mod tests {
         assert!((b.health - 30.0).abs() < 1e-3);
         assert!(b.captured.is_some());
         assert!(matches!(w.buildings[1].state, State::Destroyed(_)));
-        assert!(w.pathing.passable(10, 5, Domain::Land));
+        assert!(w.pathing.passable(Tile::new(10, 5), Domain::Land));
         assert_eq!(w.buildings[2].state, State::Disabled);
         assert_eq!(w.buildings[2].owner, 2);
         assert_eq!(w.units[0].target, None);
@@ -6662,7 +6662,7 @@ mod tests {
         assert_eq!(depot.position, [30.0, 40.0]);
         let (from, to) = depot.unpacking.unwrap();
         assert_eq!(to - from, 70);
-        assert!(!w.pathing.passable(15, 20, Domain::Land));
+        assert!(!w.pathing.passable(Tile::new(15, 20), Domain::Land));
         run(&mut w, 7.0);
         assert!(w.buildings[1].unpacking.is_none());
     }
@@ -6805,8 +6805,8 @@ mod tests {
         let depot = &w.buildings[1];
         assert_eq!(depot.facing, [1.0, 0.0]);
         assert_eq!(depot.obstacle.as_ref().unwrap().facing, [1.0, 0.0]);
-        assert!(!w.pathing.passable(12, 35, Domain::Land));
-        assert!(w.pathing.passable(15, 32, Domain::Land));
+        assert!(!w.pathing.passable(Tile::new(12, 35), Domain::Land));
+        assert!(w.pathing.passable(Tile::new(15, 32), Domain::Land));
     }
 
     #[test]
@@ -7013,13 +7013,13 @@ mod tests {
         w.apply(1, Command::Pack { building: depot }).unwrap();
         run(&mut w, 6.9);
         assert!(w.buildings[depot].standing());
-        assert!(!w.pathing.passable(15, 20, Domain::Land));
+        assert!(!w.pathing.passable(Tile::new(15, 20), Domain::Land));
         run(&mut w, 0.2);
         let State::Packed(_, packed) = w.buildings[depot].state else {
             panic!("not packed: {:?}", w.buildings[depot].state);
         };
         assert!(w.buildings[depot].gone());
-        assert!(w.pathing.passable(15, 20, Domain::Land));
+        assert!(w.pathing.passable(Tile::new(15, 20), Domain::Land));
         // A lone truck's building stands in no organization, so packs into
         // a lone truck: the one it unpacked from, under its old id.
         assert_eq!(packed, r);
@@ -8450,7 +8450,7 @@ mod tests {
         w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
         // Under the first only, who with no control range is on his own.
         w.tile_terrains
-            .set(tile_at(w.units[0].position), forest.clone());
+            .set(Tile::at(w.units[0].position), forest.clone());
         w.stand();
         let held = |w: &World, u| w.terrain_effects(Target::Unit(u)).len();
         assert_eq!((held(&w, 0), held(&w, 1)), (1, 0));
@@ -8460,7 +8460,7 @@ mod tests {
         w.stand();
         assert_eq!((held(&w, 0), w.speed_limit(0)), (0, None));
         // Under the regiment, which gains only what a member can.
-        w.tile_terrains.set(tile_at(w.leader_position(0)), forest);
+        w.tile_terrains.set(Tile::at(w.leader_position(0)), forest);
         w.stand();
         assert_eq!((held(&w, 0), held(&w, 1)), (1, 1));
         assert_eq!(
@@ -8802,7 +8802,7 @@ mod tests {
         assert_eq!(w.stockpile(1), 500.0 + 151.0);
         assert_eq!(w.buildings[0].state, State::Sold(w.ticks));
         assert!(w.buildings[0].queue.is_empty());
-        assert!(w.pathing.passable(20, 20, Domain::Land));
+        assert!(w.pathing.passable(Tile::new(20, 20), Domain::Land));
         let sold = Notice::Sold {
             player: 1,
             building: 0,

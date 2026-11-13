@@ -3,8 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use aaa_map::pathing::tile_at;
-use aaa_map::{FogSetting, Id, Relation};
+use aaa_map::{FogSetting, Id, Relation, Tile};
 
 use crate::{Enemy, Target, World, distance};
 
@@ -78,13 +77,6 @@ impl Fog {
         }
     }
 
-    /// The row-major index of a tile, if it's on the map.
-    fn index(&self, (x, y): (i32, i32)) -> Option<usize> {
-        let side = self.side as i32;
-        ((0..side).contains(&x) && (0..side).contains(&y))
-            .then(|| y as usize * self.side + x as usize)
-    }
-
     fn side_mut(&mut self, player: u32) -> &mut SideFog {
         let tiles = self.side * self.side;
         let explored = self.setting == FogSetting::Explored;
@@ -98,17 +90,17 @@ impl Fog {
     fn stamp(&mut self, player: u32, at: [f32; 2], radius: f32, remote: bool) {
         const TILE: f32 = aaa_map::pathing::CELL_SIZE;
         let reach = padded(radius) / TILE;
-        let (cx, cy) = tile_at(at);
+        let centre = Tile::at(at);
         let n = reach.floor() as i32;
         let side = self.side as i32;
         let fog = self.side_mut(player);
         for dy in -n..=n {
-            let y = cy + dy;
+            let y = centre.y + dy;
             if !(0..side).contains(&y) {
                 continue;
             }
             let across = (reach * reach - (dy * dy) as f32).max(0.0).sqrt().floor() as i32;
-            for x in (cx - across).max(0)..=(cx + across).min(side - 1) {
+            for x in (centre.x - across).max(0)..=(centre.x + across).min(side - 1) {
                 let i = y as usize * side as usize + x as usize;
                 match remote {
                     true => fog.remote[i] = true,
@@ -165,10 +157,8 @@ impl World {
 
     /// How the tile under `at` stands for the sides `allies`, sharing sight.
     fn seen_with(&self, allies: &[u32], at: [f32; 2]) -> Seen {
-        match self.fog.index(tile_at(at)) {
-            Some(i) => self.fog.seen_by(allies, i),
-            None => Seen::Unexplored,
-        }
+        let index = Tile::at(at).index(self.fog.side);
+        index.map_or(Seen::Unexplored, |i| self.fog.seen_by(allies, i))
     }
 
     /// How every tile stands for `player`, row-major from the south-west
@@ -242,11 +232,11 @@ impl World {
     pub fn building_seen(&self, player: u32, b: usize) -> Seen {
         let building = &self.buildings[b];
         let allies = self.sharing_sight(player);
-        let tiles: Vec<(i32, i32)> = match &building.obstacle {
+        let tiles: Vec<Tile> = match &building.obstacle {
             Some(o) => o.footprint().collect(),
-            None => vec![tile_at(building.position)],
+            None => vec![Tile::at(building.position)],
         };
-        let seen = tiles.into_iter().filter_map(|t| self.fog.index(t));
+        let seen = tiles.into_iter().filter_map(|t| t.index(self.fog.side));
         seen.map(|i| self.fog.seen_by(&allies, i))
             .max()
             .unwrap_or(Seen::Unexplored)

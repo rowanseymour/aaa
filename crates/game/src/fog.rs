@@ -66,12 +66,8 @@ impl Fog {
         if self.tiles.is_empty() {
             return Seen::Visible;
         }
-        let (x, y) = aaa_map::pathing::tile_at(at);
-        let side = self.side as i32;
-        match (0..side).contains(&x) && (0..side).contains(&y) {
-            true => self.tiles[y as usize * self.side + x as usize],
-            false => Seen::Unexplored,
-        }
+        let index = aaa_map::Tile::at(at).index(self.side);
+        index.map_or(Seen::Unexplored, |i| self.tiles[i])
     }
 
     pub fn shows_unit(&self, u: usize) -> bool {

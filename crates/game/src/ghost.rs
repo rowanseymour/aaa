@@ -67,7 +67,7 @@ pub fn show(
             {
                 *placed = at;
                 let footing = drawn.0.footing(&unpacks.building.template);
-                t.translation = world(x, y, ground.stand_at(footing, x, y));
+                t.translation = world(x, y, ground.stand_at(footing, [x, y]));
             }
         }
         None => {

@@ -210,7 +210,7 @@ pub fn mark(
         };
         for (at, regiments) in places(s, marking.each) {
             let [x, y] = at;
-            let at = world(x, y, loaded.map.ground.height_at(x, y));
+            let at = world(x, y, loaded.map.ground.height_at([x, y]));
             let mut models = assets.models();
             let spawned = drawn.0.spawn_effect(
                 &mut commands,
@@ -269,7 +269,7 @@ pub fn rally(
         return;
     };
     let [x, y] = at;
-    let at = world(x, y, loaded.map.ground.height_at(x, y));
+    let at = world(x, y, loaded.map.ground.height_at([x, y]));
     let mut models = assets.models();
     let spawned = drawn.0.spawn_effect(
         &mut commands,

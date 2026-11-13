@@ -345,7 +345,7 @@ pub fn show_hq_banners(
             continue;
         }
         let [x, y] = building.position;
-        let over = world(x, y, loaded.map.ground.height_at(x, y) + HQ_HEIGHT);
+        let over = world(x, y, loaded.map.ground.height_at([x, y]) + HQ_HEIGHT);
         let seen = fog.building(b) == crate::fog::Look::Shown;
         let Some(p) = camera
             .world_to_viewport(&global, over)
@@ -508,7 +508,7 @@ pub fn show_banners(
             let sum = live().fold(Vec2::ZERO, |sum, u| sum + Vec2::from(u.drawn_at(t)));
             let [x, y] = (sum / count as f32).to_array();
             let footing = drawn.0.footing(&first.template);
-            world(x, y, ground.stand_at(footing, x, y) + HEIGHT)
+            world(x, y, ground.stand_at(footing, [x, y]) + HEIGHT)
         });
         let seen = fog.shows_regiment(&sim.0, banner.regiment);
         let at = at.filter(|_| seen);

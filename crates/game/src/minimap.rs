@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use aaa_data::{GameData, Id};
-use aaa_map::{Ground, Map};
+use aaa_map::{Ground, Map, Tile};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::{map_point, world};
 use aaa_render::textures;
@@ -340,8 +340,8 @@ fn draw_ground(map: &Map, colours: &[[f32; 3]]) -> Vec<u8> {
             if !(0.0..size).contains(&x) || !(0.0..size).contains(&y) {
                 continue;
             }
-            let height = ground.height_at(x, y);
-            let depth = water_depth(ground, x, y, height);
+            let height = ground.height_at([x, y]);
+            let depth = water_depth(ground, [x, y], height);
             let rgb = match depth {
                 Some(d) => {
                     let t = (d / DEEP_AT).clamp(0.0, 1.0);
@@ -354,7 +354,7 @@ fn draw_ground(map: &Map, colours: &[[f32; 3]]) -> Vec<u8> {
                     // Brighter where the ground rises towards the bottom
                     // corner, so it faces the top one.
                     let d = tile;
-                    let rise = ground.height_at(x + d, y - d) - ground.height_at(x - d, y + d);
+                    let rise = ground.height_at([x + d, y - d]) - ground.height_at([x - d, y + d]);
                     let shade = (1.0 + rise / d * 0.4).clamp(0.6, 1.4);
                     c.map(|c| c * shade)
                 }
@@ -372,7 +372,7 @@ fn draw_ground(map: &Map, colours: &[[f32; 3]]) -> Vec<u8> {
 /// and up from the first's centre to the others'.
 struct Sample {
     pixel: usize,
-    tile: (i32, i32),
+    tile: Tile,
     across: f32,
     up: f32,
 }
@@ -391,7 +391,7 @@ fn samples(size: f32) -> Vec<Sample> {
             let (x0, y0) = (fx.floor(), fy.floor());
             samples.push(Sample {
                 pixel: (row * PIXELS + col) * 4,
-                tile: (x0 as i32, y0 as i32),
+                tile: Tile::new(x0 as i32, y0 as i32),
                 across: fx - x0,
                 up: fy - y0,
             });
@@ -413,16 +413,12 @@ fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
         return;
     }
     let light: Vec<f32> = tiles.iter().map(|&s| crate::fog::brightness(s)).collect();
-    let n = side as i32;
     let off_map = crate::fog::brightness(aaa_sim::Seen::Unexplored);
-    let at = |x: i32, y: i32| match (0..n).contains(&x) && (0..n).contains(&y) {
-        true => light[y as usize * side + x as usize],
-        false => off_map,
-    };
+    let at = |t: Tile| t.index(side).map_or(off_map, |i| light[i]);
     for s in &minimap.samples {
-        let (x, y) = s.tile;
-        let south = at(x, y) * (1.0 - s.across) + at(x + 1, y) * s.across;
-        let north = at(x, y + 1) * (1.0 - s.across) + at(x + 1, y + 1) * s.across;
+        let t = s.tile;
+        let south = at(t) * (1.0 - s.across) + at(t.offset(1, 0)) * s.across;
+        let north = at(t.offset(0, 1)) * (1.0 - s.across) + at(t.offset(1, 1)) * s.across;
         let l = south * (1.0 - s.up) + north * s.up;
         if l < 1.0 {
             for c in &mut minimap.fogged[s.pixel..s.pixel + 3] {
@@ -433,7 +429,7 @@ fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
 }
 
 /// How far below the water's surface the ground is, where there is water.
-fn water_depth(ground: &Ground, x: f32, y: f32, height: f32) -> Option<f32> {
+fn water_depth(ground: &Ground, [x, y]: [f32; 2], height: f32) -> Option<f32> {
     let cell = ground.size() / (ground.side - 1) as f32;
     let (vx, vy) = ((x / cell).round() as usize, (y / cell).round() as usize);
     let i = vy.min(ground.side - 1) * ground.side + vx.min(ground.side - 1);
@@ -773,7 +769,7 @@ pub fn steer(
         return;
     };
     for mut cam in &mut cameras {
-        cam.focus = world(x, y, loaded.map.ground.height_at(x, y));
+        cam.focus = world(x, y, loaded.map.ground.height_at([x, y]));
     }
 }
 

@@ -1004,7 +1004,7 @@ impl Place<'_, '_> {
         let offset = world(cue.translation[0], cue.translation[1], cue.translation[2]);
         let turn = Quat::from_rotation_arc(Vec3::Z, facing(cue.orientation));
         let on_ground = |[x, y]: [f32; 2]| {
-            let mut t = Transform::from_translation(world(x, y, self.ground.height_at(x, y)));
+            let mut t = Transform::from_translation(world(x, y, self.ground.height_at([x, y])));
             t.translation += offset;
             t.rotation = turn;
             t

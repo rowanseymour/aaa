@@ -4,6 +4,7 @@
 use aaa_data::Shape;
 
 use crate::pathing::{covered, spanned};
+use crate::tile::Tile;
 
 /// An object that keeps movers off the ground under it.
 #[derive(Debug, Clone)]
@@ -93,12 +94,12 @@ impl Obstacle {
     }
 
     /// Whether it keeps movers off a tile.
-    pub fn covers(&self, tile: (i32, i32)) -> bool {
+    pub fn covers(&self, tile: Tile) -> bool {
         covered(self).contains(&tile)
     }
 
     /// The tiles under its soft shape's box, some perhaps off the map.
-    pub fn footprint(&self) -> impl Iterator<Item = (i32, i32)> + use<> {
+    pub fn footprint(&self) -> impl Iterator<Item = Tile> + use<> {
         spanned(self.bounds(self.soft))
     }
 

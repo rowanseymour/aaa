@@ -96,7 +96,7 @@ impl MapAssets<'_> {
         };
         let [x, y] = position;
         let lift = LAYER_LIFT * f32::from(decal.layer);
-        let origin = world(x, y, ground.height_at(x, y) + lift);
+        let origin = world(x, y, ground.height_at([x, y]) + lift);
         let size = Vec2::splat(decal.size);
         let mesh =
             overlay::draped_square_about(ground, position, facing, size, origin - lift * Vec3::Y);
