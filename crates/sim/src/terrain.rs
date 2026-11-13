@@ -1,7 +1,7 @@
 //! What the terrain things stand on does to them: the properties it gives
 //! them and the speed it holds them to.
 
-use aaa_map::{Id, TerrainEffect, Zone};
+use aaa_map::{Id, TerrainEffect, TerrainIndex, Zone};
 
 use crate::{Target, World};
 
@@ -21,7 +21,7 @@ impl World {
                 continue;
             }
             let at = self.leader_position(r);
-            let under = self.grounds.at(at);
+            let under = self.tile_terrains.at(at);
             // Again every time: who's left to qualify changes too.
             let gained = self.gained(r, under);
             let regiment = &mut self.regiments[r];
@@ -37,7 +37,7 @@ impl World {
                     continue;
                 }
                 let position = self.units[u].position;
-                let own = self.grounds.at(position);
+                let own = self.tile_terrains.at(position);
                 let with = own == under || Some(p) == regiment.leader || {
                     let reach = regiment.control(&self.guard_rules);
                     let zone = zone.get_or_insert_with(|| self.pathing.zone(at, reach));
@@ -50,8 +50,8 @@ impl World {
 
     /// The properties a regiment gains from terrain: those any member
     /// left, or the regiment itself, has what they need.
-    fn gained(&self, r: usize, terrain: u16) -> Vec<Id> {
-        let listed = &self.grounds.kind(terrain).properties;
+    fn gained(&self, r: usize, terrain: TerrainIndex) -> Vec<Id> {
+        let listed = &self.tile_terrains.get(terrain).properties;
         if listed.is_empty() {
             return Vec::new();
         }
@@ -86,7 +86,7 @@ impl World {
         let unit = &self.units[u];
         let mut held: Vec<&Id> = Vec::new();
         for terrain in [self.regiments[unit.regiment].terrain, unit.terrain] {
-            for p in &self.grounds.kind(terrain).properties {
+            for p in &self.tile_terrains.get(terrain).properties {
                 if !held.contains(&p) && self.gains(&unit.template_id, p) {
                     held.push(p);
                 }
@@ -104,9 +104,9 @@ impl World {
     pub(crate) fn speed_limit(&self, u: usize) -> Option<f32> {
         let unit = &self.units[u];
         let rules = &self.terrain_rules;
-        let ground = self.grounds.kind(unit.terrain);
-        let limits = ground.properties.iter().rev();
-        let limit = match ground.mountain {
+        let terrain = self.tile_terrains.get(unit.terrain);
+        let limits = terrain.properties.iter().rev();
+        let limit = match terrain.mountain {
             true => rules.slowest,
             false => limits
                 .filter_map(|p| rules.effects.get(p)?.speed_limit)

@@ -5,10 +5,10 @@ mod buildings;
 #[cfg(test)]
 mod fixtures;
 mod ground;
-mod grounds;
 mod obstacle;
 mod outline;
 pub mod pathing;
+mod tile_terrains;
 mod units;
 
 pub use aaa_data::{
@@ -18,11 +18,11 @@ pub use aaa_data::{
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
-pub use grounds::{GroundKind, Grounds};
 pub use obstacle::Obstacle;
 pub use outline::Outline;
 pub use pathing::{Domain, Pathing, Zone};
 pub use tgck::map::Relation;
+pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
 pub use units::{
     Division, Formation, Member, Packs, Player, Recruits, Regiment, Team, Trailer, UNPACKED_FACING,
     Unpacks, owner, relation,
@@ -53,7 +53,7 @@ pub struct Map {
     pub clearable: Vec<(u32, Obstacle)>,
     pub pathing: Pathing,
     /// The terrain under each tile, for what it does to those on it.
-    pub grounds: Grounds,
+    pub tile_terrains: TileTerrains,
     /// The ids of the things among [`Map::things`] with no room where the
     /// map has them, for the ground under them or something stored before
     /// them, which the game leaves out and the editor keeps. An
@@ -122,7 +122,7 @@ impl Map {
             }
         }
         let mut pathing = Pathing::new(&terrain, &variations);
-        let grounds = Grounds::new(&terrain, &variations);
+        let tile_terrains = TileTerrains::new(&terrain, &variations);
         let Placed {
             off_map,
             crowded,
@@ -180,7 +180,7 @@ impl Map {
             players,
             teams,
             pathing,
-            grounds,
+            tile_terrains,
             terrain,
             things,
             world_version,
