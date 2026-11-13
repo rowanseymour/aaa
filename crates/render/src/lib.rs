@@ -10,6 +10,7 @@ pub mod models;
 pub mod objects;
 pub mod overlay;
 mod particles;
+pub mod portrait;
 mod rig;
 pub mod shot;
 mod solid;
@@ -94,6 +95,8 @@ impl Plugin for MapRenderPlugin {
             .add_systems(
                 PostUpdate,
                 (
+                    portrait::layer
+                        .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
                     rig::carry_skins.after(bevy::transform::TransformSystems::Propagate),
                     particles::play.after(bevy::transform::TransformSystems::Propagate),
                     particles::place_copies
@@ -107,6 +110,7 @@ impl Plugin for MapRenderPlugin {
                 (
                     models::pace,
                     (models::animate, rig::play).after(models::pace),
+                    portrait::fidget.before(rig::play),
                     camera::update.in_set(camera::Controls),
                     (
                         team::tint::<StandardMaterial>,

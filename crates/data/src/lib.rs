@@ -53,7 +53,7 @@ pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
 };
-pub use views::{Animation, Footing, View};
+pub use views::{Animation, Footing, Portrait, View};
 
 use std::collections::{HashMap, HashSet};
 use std::fs::File;

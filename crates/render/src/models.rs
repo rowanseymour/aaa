@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use aaa_data::{Footing, GameData, Id, Shape, View};
+use aaa_data::{Footing, GameData, Id, Portrait, Shape, View};
 use aaa_map::{Ground, Player, owner};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
@@ -152,8 +152,8 @@ impl PartMaterial {
 
 /// A loaded model.
 #[derive(Clone)]
-struct Model {
-    meshes: Meshes,
+pub(crate) struct Model {
+    pub(crate) meshes: Meshes,
     particles: Vec<Arc<System>>,
     /// Its selection box's width and length, in model units.
     selection: Option<Vec2>,
@@ -162,7 +162,7 @@ struct Model {
 /// A model's meshes placed in the model, or a rig of its nodes for one that
 /// plays a `.kf` animation.
 #[derive(Clone)]
-enum Meshes {
+pub(crate) enum Meshes {
     Parts(Vec<Part>),
     Rig(Arc<Rig>),
 }
@@ -427,14 +427,16 @@ enum Placed {
 
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
-    views: HashMap<Id, Option<View>>,
+    pub(crate) views: HashMap<Id, Option<View>>,
+    /// The faces the object display shows, by id.
+    pub(crate) portraits: HashMap<Id, Portrait>,
     /// By path, and for rigs the animation's path too.
-    models: HashMap<String, Option<Model>>,
+    pub(crate) models: HashMap<String, Option<Model>>,
     textures: HashMap<String, Option<Handle<Image>>>,
     /// Bevy's texture formats this GPU can sample compressed.
     formats: CompressedImageFormats,
     /// Each player's colour, by id.
-    colours: HashMap<u32, [f32; 3]>,
+    pub(crate) colours: HashMap<u32, [f32; 3]>,
     /// Team-coloured copies of materials, by the material and the colour's
     /// bits.
     painted: HashMap<(AssetId<StandardMaterial>, [u32; 3]), Handle<TeamMaterial>>,
@@ -491,6 +493,7 @@ impl Models {
     ) -> Self {
         Models {
             views: game.views(),
+            portraits: game.portraits(),
             models: HashMap::new(),
             textures: HashMap::new(),
             formats,
@@ -815,6 +818,9 @@ impl Models {
             unpacking: None,
             packing: None,
             icon: None,
+            portrait: None,
+            faction_portrait: false,
+            ground_reach: None,
         };
         let model = self.own_animation(game, assets, path, view)?;
         let root = commands
@@ -865,7 +871,7 @@ impl Models {
                 particles,
                 selection: None,
             }),
-            None => self.load(game, assets, path, &view, None, None),
+            None => self.load(game, assets, path, &view, None, None, once),
         };
         self.models.insert(key, model.clone());
         model
@@ -874,7 +880,7 @@ impl Models {
     /// Spawns a model's meshes and particle systems under `root`, painted
     /// in `colour` where they take their owner's, animations `offset`
     /// seconds in.
-    fn spawn_meshes(
+    pub(crate) fn spawn_meshes(
         &mut self,
         commands: &mut Commands,
         assets: &mut ModelAssets,
@@ -981,7 +987,7 @@ impl Models {
         PartMaterial::Team(painted)
     }
 
-    fn model(
+    pub(crate) fn model(
         &mut self,
         game: &mut GameData,
         assets: &mut ModelAssets,
@@ -991,20 +997,23 @@ impl Models {
     ) -> Option<Model> {
         let idle = idle(view);
         let mut key = path.to_string();
-        let once = view.animations.iter().filter(|a| once(a));
-        for a in idle.into_iter().chain(moving).chain(once) {
+        let played = view.animations.iter().filter(|a| once(a));
+        for a in idle.into_iter().chain(moving).chain(played) {
             key += &format!("#{}", a.kf);
         }
         key += &lookup_key(path, view);
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
-        let model = self.load(game, assets, path, view, idle, moving);
+        let model = self.load(game, assets, path, view, idle, moving, once);
         self.models.insert(key, model.clone());
         model
     }
 
-    fn load(
+    /// A model, as a rig if it has an `idle` animation to play, which can
+    /// then also play once each of its view's animations that `once` picks.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load(
         &mut self,
         game: &mut GameData,
         assets: &mut ModelAssets,
@@ -1012,6 +1021,7 @@ impl Models {
         view: &View,
         idle: Option<&aaa_data::Animation>,
         moving: Option<&aaa_data::Animation>,
+        once: fn(&aaa_data::Animation) -> bool,
     ) -> Option<Model> {
         let nif = Nif::parse(&game.read(path)?)
             .map_err(|e| warn!("{path}: {e}"))
@@ -1021,7 +1031,8 @@ impl Models {
         }
         let selection = selection_box(&nif);
         let particles = self.particles(game, assets, &nif, path, view);
-        if let Some(rig) = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving)) {
+        let rig = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving, once));
+        if let Some(rig) = rig {
             return Some(Model {
                 meshes: Meshes::Rig(Arc::new(rig)),
                 particles,
@@ -1049,6 +1060,7 @@ impl Models {
         view: &View,
         idle: &aaa_data::Animation,
         moving: Option<&aaa_data::Animation>,
+        once: fn(&aaa_data::Animation) -> bool,
     ) -> Option<Rig> {
         let mut kf = |a: &aaa_data::Animation| {
             Nif::parse(&game.read(&a.kf)?)
@@ -1592,7 +1604,7 @@ fn once(a: &aaa_data::Animation) -> bool {
 
 /// The idle animation a view's models play: the one named `idle`, else the
 /// first of its kind.
-fn idle(view: &View) -> Option<&aaa_data::Animation> {
+pub(crate) fn idle(view: &View) -> Option<&aaa_data::Animation> {
     let mut idles = view.animations.iter().filter(|a| a.kind == "IDLE");
     idles
         .clone()
@@ -1944,6 +1956,9 @@ mod tests {
             unpacking: None,
             packing: None,
             icon: None,
+            portrait: None,
+            faction_portrait: false,
+            ground_reach: None,
         };
         let (unit, regiment) = (view(&["Shared/SharedTextures"]), view(&[]));
         assert_ne!(

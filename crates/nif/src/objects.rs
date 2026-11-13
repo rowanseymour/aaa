@@ -7,6 +7,7 @@ use crate::{Ref, Transform};
 pub enum Object {
     Node(Node),
     Shape(Shape),
+    Camera(Camera),
     Geometry(Geometry),
     Texturing(Texturing),
     SourceTexture(SourceTexture),
@@ -46,6 +47,7 @@ impl Object {
         match self {
             Object::Node(n) => Some(&n.av),
             Object::Shape(s) => Some(&s.av),
+            Object::Camera(c) => Some(&c.av),
             Object::ParticleSystem(p) => Some(&p.shape.av),
             Object::OldParticles(p) => Some(&p.shape.av),
             _ => None,
@@ -74,6 +76,7 @@ macro_rules! object_types {
 object_types!(
     Node(Node),
     Shape(Shape),
+    Camera(Camera),
     Geometry(Geometry),
     Texturing(Texturing),
     SourceTexture(SourceTexture),
@@ -140,6 +143,24 @@ pub struct Node {
     pub children: Vec<Ref>,
     /// Set for nodes that turn to face the camera.
     pub billboard: Option<u16>,
+}
+
+/// A view of the model its maker placed in it. It looks along its own +x
+/// with its +y up, through a window one unit ahead of it whose edges are
+/// at `left`, `right`, `top` and `bottom` across and up from its middle.
+#[derive(Debug, Clone)]
+pub struct Camera {
+    pub av: SceneObject,
+    pub left: f32,
+    pub right: f32,
+    pub top: f32,
+    pub bottom: f32,
+    /// How far ahead what it sees begins and ends.
+    pub near: f32,
+    pub far: f32,
+    /// Whether the window is the same size at any distance, rather than
+    /// widening with it.
+    pub orthographic: bool,
 }
 
 #[derive(Debug, Clone)]

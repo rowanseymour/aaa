@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::{GameData, Id, defs, scoped, strings::localized, ui_path};
+use crate::{GameData, Id, defs, not_null, scoped, strings::localized, ui_path};
 
 /// A nation a side can play as.
 #[derive(Debug, Clone)]
@@ -56,6 +56,9 @@ pub struct General {
     /// Whether the lobby offers them, as it doesn't those only scenarios
     /// use.
     pub public: bool,
+    /// The [`crate::Portrait`] the object display shows for their side's
+    /// HQs, by id.
+    pub portrait: Option<Id>,
 }
 
 /// A special operation as a general gives it.
@@ -213,6 +216,7 @@ impl GameData {
                         .collect(),
                     experience_max: g.experience_max.filter(|m| *m >= 0.0),
                     public: g.public != Some(false),
+                    portrait: not_null(g.portrait_ids.clone()),
                     id: id.clone(),
                 };
                 Some((id, general))

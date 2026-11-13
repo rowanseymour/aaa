@@ -698,7 +698,11 @@ fn main() -> ExitCode {
                 minimap::update.after(camera::Controls).after(fog::look),
                 minimap::tint,
                 (actions::back_out, actions::show).chain(),
-                (object_display::lay_out, object_display::refresh).chain(),
+                (
+                    object_display::lay_out,
+                    (object_display::refresh, object_display::portray),
+                )
+                    .chain(),
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
@@ -2481,6 +2485,7 @@ mod tests {
             operations: Vec::new(),
             experience_max: None,
             public: true,
+            portrait: None,
         };
         let leaders = Leaders(HashMap::from([
             (1, general("patton", "General Patton")),

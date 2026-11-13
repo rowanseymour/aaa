@@ -303,6 +303,19 @@ fn dump(file: &str) -> io::Result<ExitCode> {
                 "old modifier {:?} next {:?} controller {:?}",
                 m.kind, m.next, m.controller
             ),
+            Object::Camera(c) => format!(
+                "camera {:?} at {:?} turned {:?} window [{}, {}, {}, {}] from {} to {}{}",
+                c.av.name,
+                c.av.transform.translation,
+                c.av.transform.rotation,
+                c.left,
+                c.right,
+                c.top,
+                c.bottom,
+                c.near,
+                c.far,
+                if c.orthographic { " orthographic" } else { "" }
+            ),
             Object::Other(kind) => kind.clone(),
         };
         outln!("{i:4} {line}");
