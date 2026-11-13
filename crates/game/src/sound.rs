@@ -40,6 +40,10 @@ struct Request {
     owner: Option<u32>,
 }
 
+/// A play of audio that ducks the music while it lasts.
+#[derive(Component)]
+pub struct Fades;
+
 /// One play of an [`Audio`].
 #[derive(Component)]
 struct Playing {
@@ -149,8 +153,13 @@ impl Sounds {
         self.queued.push((time.elapsed_secs_f64(), request));
     }
 
+    /// The audio of an id.
+    pub fn audio(&self, id: &Id) -> Option<&Audio> {
+        self.audio.get(id)
+    }
+
     /// A number in `0..1`.
-    fn random(&mut self) -> f32 {
+    pub fn random(&mut self) -> f32 {
         // xorshift64
         self.rng ^= self.rng << 13;
         self.rng ^= self.rng >> 7;
@@ -184,7 +193,8 @@ impl Sounds {
         Some(files[i].clone())
     }
 
-    fn source(
+    /// A file to play, read from `game` the first time it's needed.
+    pub fn source(
         &mut self,
         game: Option<&mut GameData>,
         assets: &mut Assets<AudioSource>,
@@ -333,6 +343,9 @@ fn play(
                 },
             ))
             .id();
+        if audio.control.cause_fade {
+            commands.entity(e).insert(Fades);
+        }
         plays.push((now, e));
     }
 }
