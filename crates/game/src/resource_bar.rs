@@ -59,12 +59,12 @@ const SHORTAGE_ICON: &str = "UI/Game/ControlPanel/BleedIcon.png";
 
 pub fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     mut theme: ResMut<Theme>,
 ) {
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     theme.short = game.invalid_colour().map(|[r, g, b]| Color::srgb(r, g, b));
     let strings = game.strings();
     let said = crate::ui::said(&strings);

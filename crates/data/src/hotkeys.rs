@@ -68,7 +68,7 @@ pub struct HotkeyConfiguration {
 impl GameData {
     /// The hotkeys every configuration shares, then those of the one
     /// given.
-    pub fn hotkeys(&mut self, configuration: Option<&HotkeyConfiguration>) -> Vec<Hotkey> {
+    pub fn hotkeys(&self, configuration: Option<&HotkeyConfiguration>) -> Vec<Hotkey> {
         let shared = self.text(SHARED).unwrap_or_default();
         let mut files: Vec<String> = shared
             .lines()
@@ -83,7 +83,7 @@ impl GameData {
             .collect()
     }
 
-    fn text(&mut self, name: &str) -> Option<String> {
+    fn text(&self, name: &str) -> Option<String> {
         let bytes = self.read(name)?;
         Some(String::from_utf8_lossy(&bytes).into_owned())
     }
@@ -91,14 +91,10 @@ impl GameData {
     /// The configurations players choose between, in the order the
     /// options list them, named from the game's `strings`.
     pub fn hotkey_configurations(
-        &mut self,
+        &self,
         strings: &HashMap<String, String>,
     ) -> Vec<HotkeyConfiguration> {
-        let parsed = self.read(CONFIGURATIONS).map(|b| tgi::parse_bytes(&b));
-        let files: Vec<(String, tgi::Parsed)> = parsed
-            .map(|p| (CONFIGURATIONS.to_string(), p))
-            .into_iter()
-            .collect();
+        let files = self.parse_named([CONFIGURATIONS]);
         scoped(&files)
             .iter()
             .flat_map(|f| f.read::<defs::HotkeyConfiguration>("HotkeyConfigurationData"))
@@ -115,7 +111,7 @@ impl GameData {
     }
 
     /// The id of the configuration in use until the player chooses one.
-    pub fn default_hotkey_configuration(&mut self) -> Option<Id> {
+    pub fn default_hotkey_configuration(&self) -> Option<Id> {
         self.interface_setting(|v| v.hotkey_configuration)
     }
 }

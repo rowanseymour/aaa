@@ -165,7 +165,7 @@ impl MapAssets<'_> {
 pub fn spawn_map(
     commands: &mut Commands,
     assets: &mut MapAssets,
-    game: &mut GameData,
+    game: &GameData,
     map: &Map,
     markers: bool,
     leave_out: impl Fn(&Thing) -> bool,

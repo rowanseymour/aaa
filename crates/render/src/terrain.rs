@@ -81,7 +81,7 @@ struct Kind {
 }
 
 pub fn build(
-    game: &mut GameData,
+    game: &GameData,
     ground: &Ground,
     terrain: &Terrain,
     images: &mut Assets<Image>,
@@ -409,7 +409,7 @@ fn quads(
 }
 
 /// Every frame of a water animation, as array layers.
-fn load_frames(game: &mut GameData, animation: &TextureAnimation) -> Vec<Image> {
+fn load_frames(game: &GameData, animation: &TextureAnimation) -> Vec<Image> {
     let mut frames = Vec::new();
     loop {
         let name = animation.frame(frames.len());

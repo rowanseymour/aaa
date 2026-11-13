@@ -537,14 +537,14 @@ pub struct Refusal(Option<(usize, aaa_sim::Refused)>);
 
 pub fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     raising: Res<Raising>,
     sim: Res<Sim>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
-    let game = &mut loaded.game;
-    let mut image = |game: &mut GameData, path: &str| {
+    let game = &loaded.game;
+    let mut image = |game: &GameData, path: &str| {
         let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
         Some(images.add(image))
     };
@@ -553,7 +553,7 @@ pub fn spawn(
         .into_iter()
         .map(|c| (c.ids.clone(), c))
         .collect();
-    let mut look_of = |game: &mut GameData, ids: &str| match commands_by_id.get(&Id::from(ids)) {
+    let mut look_of = |game: &GameData, ids: &str| match commands_by_id.get(&Id::from(ids)) {
         Some(c) => (
             c.slot.map(|slot| Place {
                 slot,
@@ -753,8 +753,8 @@ pub fn spawn(
         research_requires,
         menus,
         researches,
-        names: (listings.into_iter().map(|(id, l)| (id, l.name)))
-            .chain(technologies.into_iter().map(|(id, t)| (id, t.name)))
+        names: (listings.iter().map(|(id, l)| (id.clone(), l.name.clone())))
+            .chain((technologies.iter()).map(|(id, t)| (id.clone(), t.name.clone())))
             .collect(),
     });
     commands.init_resource::<Shown>();

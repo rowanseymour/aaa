@@ -30,7 +30,7 @@ pub fn show(
     selected: Res<Selected>,
     local: Res<Local>,
     sim: Res<Sim>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut drawn: ResMut<Drawn>,
     mut assets: MapAssets,
     mut ghost: ResMut<Ghost>,
@@ -82,7 +82,7 @@ pub fn show(
                 actions::UNPACK_FACING,
             );
             let owner = local.0.unwrap_or(0);
-            let Loaded { game, .. } = &mut *loaded;
+            let Loaded { game, .. } = &*loaded;
             let mut models = assets.models();
             let Some(e) = drawn
                 .0

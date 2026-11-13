@@ -108,7 +108,7 @@ impl Fog {
 }
 
 /// Starts the fog for a match.
-pub fn setup(mut commands: Commands, mut loaded: ResMut<Loaded>, sim: Res<Sim>) {
+pub fn setup(mut commands: Commands, loaded: Res<Loaded>, sim: Res<Sim>) {
     let revealed = loaded.game.revealed();
     let mut fog = Fog {
         revealed,

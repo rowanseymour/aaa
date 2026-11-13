@@ -1,6 +1,7 @@
 //! What terrain does to those standing on it.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use crate::supply::{is, listed};
 use crate::{GameData, Id, Scoped, add_renames, defs, logged, not_null, scoped};
@@ -68,7 +69,7 @@ fn effect(p: &defs::Property) -> TerrainEffect {
 }
 
 impl GameData {
-    pub fn terrain_rules(&mut self) -> TerrainRules {
+    pub fn terrain_rules(&self) -> TerrainRules {
         let slowest = (self.svars().iter()).find_map(|v| v.terrain_minimum_move_speed);
         let definitions = self.definitions();
         let shared = definitions.properties.iter();
@@ -162,7 +163,11 @@ pub struct DepthColor {
 impl GameData {
     /// Reads every terrain definition and indexes the variations by IDS,
     /// which is how maps refer to them.
-    pub fn terrain_variations(&mut self) -> HashMap<Id, Variation> {
+    pub fn terrain_variations(&self) -> Arc<HashMap<Id, Variation>> {
+        self.kept("terrain_variations", || self.read_terrain_variations())
+    }
+
+    fn read_terrain_variations(&self) -> HashMap<Id, Variation> {
         let files = self.parse_tgis(|n| n.starts_with("terrain/") || n.starts_with("templates/"));
         let files = scoped(&files);
         let water = water_colors(&files);
@@ -226,11 +231,10 @@ impl GameData {
 
     /// The transition masks of the first transition set, keyed by the
     /// digits in their file names.
-    pub fn transition_masks(&mut self) -> Vec<(String, Vec<u8>)> {
+    pub fn transition_masks(&self) -> Vec<(String, Vec<u8>)> {
         const DIR: &str = "Terrain/Transitions/";
         let file = format!("{DIR}transition_sets.tgi");
-        let Some(prefix) = self.read(&file).and_then(|b| {
-            let parsed = tgi::parse_bytes(&b);
+        let Some(prefix) = self.parsed(&file).and_then(|parsed| {
             let set = parsed.root.blocks_of("TransitionSet").next()?;
             let set: defs::TransitionSet = logged(&file, set, tgi::from_block(set))?;
             set.path_prefix.map(|p| format!("{DIR}{p}"))

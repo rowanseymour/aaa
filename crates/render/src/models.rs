@@ -484,7 +484,7 @@ impl EffectTiming {
 
 impl Models {
     pub fn new(
-        game: &mut GameData,
+        game: &GameData,
         formats: CompressedImageFormats,
         players: &[Player],
         pickable: bool,
@@ -520,7 +520,7 @@ impl Models {
 
     /// Where the node named `name`, exactly, is in the model at `path`,
     /// from its origin in its own units; `None` if it has no such node.
-    pub fn point(&mut self, game: &mut GameData, path: &str, name: &str) -> Option<Transform> {
+    pub fn point(&mut self, game: &GameData, path: &str, name: &str) -> Option<Transform> {
         let points = self.points.entry(path.to_string()).or_insert_with(|| {
             game.read(path)
                 .and_then(|b| Nif::parse(&b).ok())
@@ -532,7 +532,7 @@ impl Models {
 
     /// The heights of the lowest and highest of the meshes of the model at
     /// `path`, as modelled, in its own units.
-    pub fn extent(&mut self, game: &mut GameData, path: &str) -> Option<[f32; 2]> {
+    pub fn extent(&mut self, game: &GameData, path: &str) -> Option<[f32; 2]> {
         *self.extents.entry(path.to_string()).or_insert_with(|| {
             let nif = Nif::parse(&game.read(path)?).ok()?;
             let mut out: Option<[f32; 2]> = None;
@@ -553,7 +553,7 @@ impl Models {
 
     /// How the effect model at `path` plays; `None` if it can't be read or
     /// doesn't animate.
-    pub fn effect_timing(&mut self, game: &mut GameData, path: &str) -> Option<EffectTiming> {
+    pub fn effect_timing(&mut self, game: &GameData, path: &str) -> Option<EffectTiming> {
         *self.timings.entry(path.to_string()).or_insert_with(|| {
             let nif = Nif::parse(&game.read(path)?).ok()?;
             EffectTiming::of(&nif)
@@ -568,7 +568,7 @@ impl Models {
     pub fn spawn<'a>(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         things: impl IntoIterator<Item = &'a Thing>,
         holding: &HashSet<u32>,
@@ -631,7 +631,7 @@ impl Models {
     pub fn spawn_unit(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
         owner: u32,
@@ -650,7 +650,7 @@ impl Models {
     pub fn spawn_object(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
     ) -> Option<Entity> {
@@ -666,7 +666,7 @@ impl Models {
     pub fn spawn_building(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
         owner: u32,
@@ -685,7 +685,7 @@ impl Models {
     pub fn spawn_packing(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
         owner: u32,
@@ -729,7 +729,7 @@ impl Models {
     fn place(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
         within: Option<u32>,
@@ -762,7 +762,7 @@ impl Models {
     fn spawn_model(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
         owner: Option<u32>,
@@ -798,7 +798,7 @@ impl Models {
     pub fn spawn_effect(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         path: &str,
         texture_dirs: &[String],
@@ -832,7 +832,7 @@ impl Models {
     /// they're animated, its textures found as `view` finds them.
     fn own_animation(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         path: &str,
         view: View,
@@ -983,7 +983,7 @@ impl Models {
 
     fn model(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
@@ -1006,7 +1006,7 @@ impl Models {
 
     fn load(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
@@ -1042,7 +1042,7 @@ impl Models {
     #[allow(clippy::too_many_arguments)]
     fn rig(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1050,7 +1050,7 @@ impl Models {
         idle: &aaa_data::Animation,
         moving: Option<&aaa_data::Animation>,
     ) -> Option<Rig> {
-        let mut kf = |a: &aaa_data::Animation| {
+        let kf = |a: &aaa_data::Animation| {
             Nif::parse(&game.read(&a.kf)?)
                 .map_err(|e| warn!("{}: {e}", a.kf))
                 .ok()
@@ -1086,7 +1086,7 @@ impl Models {
     /// [`Nodes::shapes`].
     fn rig_meshes(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1122,7 +1122,7 @@ impl Models {
     #[allow(clippy::too_many_arguments)]
     fn part(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1203,7 +1203,7 @@ impl Models {
     /// A model's particle systems that can be drawn.
     fn particles(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1237,7 +1237,7 @@ impl Models {
     /// one set for each in its modifier's list; empty for other systems.
     fn mesh_copies(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1270,7 +1270,7 @@ impl Models {
     #[allow(clippy::too_many_arguments)]
     fn scene_parts(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1316,7 +1316,7 @@ impl Models {
     /// property says.
     fn particle_look(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1379,7 +1379,7 @@ impl Models {
     /// The base texture `props` give a shape, from a file or embedded.
     fn base_texture(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         nif: &Nif,
         path: &str,
@@ -1400,7 +1400,7 @@ impl Models {
 
     fn texture(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         file: &str,
         view: &View,

@@ -70,13 +70,13 @@ pub(crate) fn sight(t: &defs::Thing) -> Option<Sight> {
 
 impl GameData {
     /// Each template's [`Sight`], for those that see, by template id.
-    pub fn sights(&mut self) -> HashMap<Id, Sight> {
+    pub fn sights(&self) -> HashMap<Id, Sight> {
         self.by_template(sight)
     }
 
     /// The templates whose things every side has explored from the start
     /// when the whole map starts explored.
-    pub fn revealed(&mut self) -> HashSet<Id> {
+    pub fn revealed(&self) -> HashSet<Id> {
         let revealed = |t: &defs::Thing| t.flags.iter().rev().find_map(|f| f.revealed);
         (self.by_template(|t| revealed(t).filter(|&r| r)))
             .into_keys()
@@ -85,7 +85,7 @@ impl GameData {
 
     /// The match's fog setting: the world rule's default, the game's own
     /// before the engine's, else the tuning value.
-    pub fn fog_setting(&mut self) -> FogSetting {
+    pub fn fog_setting(&self) -> FogSetting {
         let files =
             self.parse_tgis(|n| n == "game/world_rules_aa.tgi" || n == "game/world_rules.tgi");
         let mut files = scoped(&files);

@@ -65,18 +65,18 @@ pub struct SupplyBorder {
 impl GameData {
     /// The archive path of the image on each organization template's
     /// banner, by template id.
-    pub fn banner_icons(&mut self) -> HashMap<Id, String> {
+    pub fn banner_icons(&self) -> HashMap<Id, String> {
         self.by_template(|t| ui_path(t.view.as_ref()?.banner_icon.as_deref()?))
     }
 
     /// The archive path of the image marking each template's objects on
     /// the minimap, by template id.
-    pub fn minimap_icons(&mut self) -> HashMap<Id, String> {
+    pub fn minimap_icons(&self) -> HashMap<Id, String> {
         self.by_template(|t| ui_path(t.view.as_ref()?.minimap_icon.as_deref()?))
     }
 
     /// The minimap's colours.
-    pub fn minimap(&mut self) -> Option<defs::Minimap> {
+    pub fn minimap(&self) -> Option<defs::Minimap> {
         let files = self.parse_tgis(|n| n == "minimap/minimap.tgi");
         let files = scoped(&files);
         files.iter().find_map(|f| f.read("Minimap").next())
@@ -84,7 +84,7 @@ impl GameData {
 
     /// How the supply border is drawn; green and thin where the settings
     /// don't say.
-    pub fn supply_border(&mut self) -> SupplyBorder {
+    pub fn supply_border(&self) -> SupplyBorder {
         let vars = self.avars();
         SupplyBorder {
             colour: (vars.iter())
@@ -101,41 +101,32 @@ impl GameData {
     }
 
     /// What colours a figure or option that's no good, such as a shortfall.
-    pub fn invalid_colour(&mut self) -> Option<[f32; 3]> {
+    pub fn invalid_colour(&self) -> Option<[f32; 3]> {
         self.interface_setting(|v| v.ui_color_option_invalid)
     }
 
     /// What colours the key for something where its name is shown.
-    pub fn highlight_colour(&mut self) -> Option<[f32; 3]> {
+    pub fn highlight_colour(&self) -> Option<[f32; 3]> {
         self.interface_setting(|v| v.ui_color_highlight)
     }
 
     /// One of the interface's settings.
-    pub(crate) fn interface_setting<T>(
-        &mut self,
-        of: impl Fn(defs::UVars) -> Option<T>,
-    ) -> Option<T> {
+    pub(crate) fn interface_setting<T>(&self, of: impl Fn(defs::UVars) -> Option<T>) -> Option<T> {
         self.uvars().iter().cloned().find_map(of)
     }
 
     /// The interface's settings, the game's own before the engine's.
-    pub(crate) fn uvars(&mut self) -> Arc<[defs::UVars]> {
-        if let Some(kept) = &self.kept.uvars {
-            return kept.clone();
-        }
-        // Not in the load lists.
-        let files: Vec<(String, tgi::Parsed)> = ["UVars_AA.tgi", "UVars.tgi"]
-            .into_iter()
-            .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
-            .collect();
-        let files = scoped(&files);
-        let read: Arc<[defs::UVars]> = files.iter().flat_map(|f| f.read("Vars")).collect();
-        self.kept.uvars = Some(read.clone());
-        read
+    pub(crate) fn uvars(&self) -> Arc<Vec<defs::UVars>> {
+        self.kept("uvars", || {
+            // Not in the load lists.
+            let files = self.parse_named(["UVars_AA.tgi", "UVars.tgi"]);
+            let files = scoped(&files);
+            files.iter().flat_map(|f| f.read("Vars")).collect()
+        })
     }
 
     /// The orders the player can give, in the order the files list them.
-    pub fn commands(&mut self) -> Vec<Command> {
+    pub fn commands(&self) -> Vec<Command> {
         let strings = self.strings();
         let files = self.parse_tgis(|n| {
             n.starts_with("game/actor_commands") || n.starts_with("game/actorcommands/")
@@ -164,7 +155,7 @@ impl GameData {
     }
 
     /// The mouse cursors whose frames are all there, by id.
-    pub fn cursors(&mut self) -> HashMap<Id, CursorLook> {
+    pub fn cursors(&self) -> HashMap<Id, CursorLook> {
         let files = self.parse_tgis(|n| n.starts_with("cursors/"));
         let files = scoped(&files);
         let mut out = HashMap::new();
@@ -195,7 +186,7 @@ impl GameData {
     }
 
     /// How each formation shows on its button, by formation id.
-    pub fn formation_looks(&mut self) -> HashMap<Id, FormationLook> {
+    pub fn formation_looks(&self) -> HashMap<Id, FormationLook> {
         let strings = self.strings();
         let files = self.parse_tgis(|n| n.starts_with("organizations/"));
         let files = scoped(&files);

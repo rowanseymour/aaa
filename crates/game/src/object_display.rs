@@ -22,6 +22,7 @@
 //! pointer what it does.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use aaa_data::{GUARDING, GameData, Id, PropertyLook};
 use aaa_render::overlay::BannerImages;
@@ -217,9 +218,9 @@ pub struct Queued(usize);
 pub struct Looks {
     /// Templates' names, by id.
     names: HashMap<Id, String>,
-    strings: HashMap<String, String>,
+    strings: Arc<HashMap<String, String>>,
     /// How each property that has an icon shows, by id.
-    properties: HashMap<Id, PropertyLook>,
+    properties: Arc<HashMap<Id, PropertyLook>>,
     /// Each technology's research button icon, by id, for what's being
     /// researched.
     technologies: HashMap<Id, String>,
@@ -230,7 +231,7 @@ pub struct Looks {
 impl Looks {
     fn image(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         path: Option<&str>,
     ) -> Option<Handle<Image>> {
@@ -260,20 +261,18 @@ impl Looks {
 
 pub fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     commands.insert_resource(Looks {
-        names: game
-            .listings()
-            .into_iter()
-            .map(|(id, l)| (id, l.name))
+        names: (game.listings().iter())
+            .map(|(id, l)| (id.clone(), l.name.clone()))
             .collect(),
         strings: game.strings(),
         properties: game.property_looks(),
-        technologies: (game.technologies().into_iter())
-            .filter_map(|(id, t)| Some((id, t.icon?)))
+        technologies: (game.technologies().iter())
+            .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
             .collect(),
         images: HashMap::new(),
         formats: formats.0,
@@ -450,7 +449,7 @@ pub fn lay_out(
     drawn: Res<Drawn>,
     badges: Res<Badges>,
     mut showing: ResMut<Showing>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut looks: ResMut<Looks>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
@@ -506,7 +505,7 @@ pub fn lay_out(
         drawn: &drawn,
         badges: &badges,
         detail: &detail,
-        game: &mut loaded.game,
+        game: &loaded.game,
         looks: &mut looks,
         banners: &mut banners,
         images: &mut images,
@@ -531,7 +530,7 @@ struct Ui<'a> {
     drawn: &'a Drawn,
     badges: &'a Badges,
     detail: &'a Detail,
-    game: &'a mut GameData,
+    game: &'a GameData,
     looks: &'a mut Looks,
     banners: &'a mut BannerImages,
     images: &'a mut Assets<Image>,

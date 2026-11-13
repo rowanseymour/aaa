@@ -54,7 +54,7 @@ pub struct SpecialOpsPlugin;
 
 impl Plugin for SpecialOpsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Match), spawn)
+        app.add_systems(OnEnter(Screen::Match), spawn.after(crate::keys::load))
             .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
                 commands.remove_resource::<Panel>();
             })
@@ -110,7 +110,7 @@ struct RechargeBar;
 
 fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     local: Res<Local>,
@@ -123,11 +123,11 @@ fn spawn(
     let Some(general) = leaders.0.get(&player) else {
         return;
     };
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     let mut cache: HashMap<String, Option<Handle<Image>>> = HashMap::new();
-    let mut image = |game: &mut aaa_data::GameData, path: &str| {
+    let mut image = |game: &aaa_data::GameData, path: &str| {
         (cache.entry(path.to_string()))
             .or_insert_with(|| {
                 let decoded = textures::decode(&game.read(path)?, path, formats.0, true)?;
