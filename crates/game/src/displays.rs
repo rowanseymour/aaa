@@ -196,6 +196,11 @@ pub fn spawn_button(
             RelativeCursorPosition::default(),
             bindings.marked(panel.keys().0, &name),
             Hint(help),
+            ui::called(match panel {
+                Panel::Objectives => "panel.objectives",
+                Panel::Technologies => "panel.technologies",
+                Panel::MessageLog => "panel.messages",
+            }),
             PanelButton { panel, name },
             rim.node(),
             Surface::Clear,
@@ -275,7 +280,7 @@ pub fn spawn_window(commands: &mut Commands, window: Window) -> Entity {
                     ..default()
                 })
                 .with_children(|row| {
-                    row.spawn(ui::button("Close", Font::Hud))
+                    row.spawn((ui::button("Close", Font::Hud), ui::called("panel.close")))
                         .observe(|_: On<Activate>, mut toggling: Toggling| toggling.close());
                 });
         });

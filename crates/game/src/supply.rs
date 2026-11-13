@@ -241,6 +241,7 @@ pub fn spawn(
             RelativeCursorPosition::default(),
             bindings.marked(keys::SUPPLY_BORDER, &name),
             Hint(what),
+            crate::ui::called("supply.border"),
             // Top left on the minimap's rim, about where the game's control
             // panel has it.
             Rim::TopLeft.node(),
@@ -282,6 +283,7 @@ pub fn spawn(
             CycleDetached,
             Blocks,
             Button,
+            crate::ui::called("supply.detached"),
             RelativeCursorPosition::default(),
             Hint(help.unwrap_or_else(|| "Cycles through all detached regiments.".into())),
             ImageNode::new(icon.unwrap_or_default()),

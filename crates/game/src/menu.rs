@@ -5,7 +5,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
-use crate::ui::{Font, Surface, backed, button, disabled};
+use crate::ui::{Font, Surface, backed, button, called, disabled};
 use crate::{Screen, confirm};
 
 pub struct MenuPlugin;
@@ -101,14 +101,26 @@ fn main_menu(
         ));
     }
     commands
-        .spawn((button("New Game", Font::Large), ChildOf(column)))
+        .spawn((
+            button("New Game", Font::Large),
+            called("menu.new-game"),
+            ChildOf(column),
+        ))
         .observe(go(Screen::NewGame));
     commands
-        .spawn((button("Options", Font::Large), ChildOf(column)))
+        .spawn((
+            button("Options", Font::Large),
+            called("menu.options"),
+            ChildOf(column),
+        ))
         .observe(go(Screen::Options));
     commands.spawn((spacer(), ChildOf(column)));
     commands
-        .spawn((button("Exit", Font::Large), ChildOf(column)))
+        .spawn((
+            button("Exit", Font::Large),
+            called("menu.exit"),
+            ChildOf(column),
+        ))
         .observe(ask_quit);
 }
 
@@ -116,10 +128,18 @@ fn new_game(mut commands: Commands) {
     let column = column(&mut commands, Screen::NewGame);
     commands.spawn((disabled("Campaign", Font::Large), ChildOf(column)));
     commands
-        .spawn((button("Custom", Font::Large), ChildOf(column)))
+        .spawn((
+            button("Custom", Font::Large),
+            called("menu.custom"),
+            ChildOf(column),
+        ))
         .observe(go(Screen::Lobby));
     commands.spawn((spacer(), ChildOf(column)));
     commands
-        .spawn((button("Back", Font::Large), ChildOf(column)))
+        .spawn((
+            button("Back", Font::Large),
+            called("menu.back"),
+            ChildOf(column),
+        ))
         .observe(go(Screen::MainMenu));
 }

@@ -4,17 +4,22 @@
 //! "quotes" around a word that has spaces; `#` or `//` makes the rest of a
 //! line a comment. `help` lists the verbs. [`crate::remote`] takes lines
 //! from a socket too.
+//!
+//! Commands run in turn, each once the one before has finished: a
+//! screenshot is on disk, and the screen a click or a key leads to is up.
 
 use std::collections::VecDeque;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::mpsc::SyncSender;
 
 use aaa_render::camera::RtsCamera;
+use aaa_render::shot::Taken;
 use aaa_render::terrain::{map_point, world as point};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
+use bevy::time::Real;
 use bevy::window::PrimaryWindow;
 
 use crate::actions::Aim;
@@ -30,12 +35,19 @@ const SCROLLBACK: usize = 200;
 const SHOWN: usize = 16;
 /// How deep scripts may run scripts, so one that runs itself stops.
 const MAX_DEPTH: usize = 8;
+/// Frames a click or a key is given to change the screen, and what it
+/// changes to to be laid out.
+const SETTLE_FRAMES: u32 = 3;
+/// Seconds a screenshot is waited for, a window that isn't being drawn
+/// never giving one.
+const SHOT_WAIT: f64 = 60.0;
 
 pub struct ConsolePlugin;
 
 impl Plugin for ConsolePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Console>()
+            .add_observer(shot_taken)
             .add_systems(Startup, spawn)
             // Not while the pause menu is up, whose pause the console could undo.
             .add_systems(
@@ -51,6 +63,11 @@ pub fn closed(console: Res<Console>) -> bool {
     !console.open
 }
 
+/// Whether the console has run everything it was given.
+pub fn idle(console: Res<Console>) -> bool {
+    console.queued.is_empty() && console.scripts.is_empty() && !console.waiting()
+}
+
 #[derive(Resource, Default)]
 pub struct Console {
     open: bool,
@@ -61,13 +78,22 @@ pub struct Console {
     history: Vec<String>,
     /// Where in `history` the arrow keys are; `None` for a fresh line.
     recall: Option<usize>,
-    /// Lines to run, with where they came from.
-    queued: VecDeque<(String, Source)>,
-    /// What the line running says, for answering a client with.
+    /// What's left to run, in order.
+    queued: VecDeque<Step>,
+    /// What a client's line has said so far, for answering it with.
     capture: Option<String>,
-    /// Where the answer to the line running goes, if it came from a client.
-    answer: Option<SyncSender<String>>,
-    /// Scripts held until a match starts, since most commands need one.
+    /// Screenshots asked for and not yet saved, which the next command
+    /// waits for.
+    shots: usize,
+    /// When, on the clock that never pauses, the last was asked for.
+    shot_asked: f64,
+    /// Frames the next command waits for the screen to settle.
+    settling: u32,
+    /// Keys `press` holds down, to let go of.
+    held: Vec<KeyCode>,
+    /// When, on the clock that never pauses, `wait` is over.
+    until: Option<f64>,
+    /// Scripts held until a match starts, or the first menu is up.
     scripts: Vec<String>,
     /// Tab was pressed and the input wants completing.
     complete: bool,
@@ -76,7 +102,7 @@ pub struct Console {
 }
 
 impl Console {
-    /// Runs a script once a match has started.
+    /// Runs a script once [`start_scripts`] says to.
     pub fn exec_on_start(&mut self, path: &str) {
         self.scripts.push(path.to_string());
     }
@@ -96,19 +122,29 @@ impl Console {
     }
 }
 
-/// Where a line to run came from.
-enum Source {
-    Typed,
-    Script,
-    Client(SyncSender<String>),
+impl Console {
+    /// Whether the command that last ran is still at work.
+    fn waiting(&self) -> bool {
+        self.shots > 0 || self.settling > 0 || self.until.is_some()
+    }
 }
 
-/// Queues the held scripts; added to the match's start.
+/// Something to run.
+enum Step {
+    /// A line as typed or sent, with where its answer goes if a client's.
+    Line(String, Option<SyncSender<String>>),
+    /// A command's words, and how deep in scripts it is.
+    Command(Vec<String>, usize),
+    /// Answers a client, its line's commands having finished.
+    Answer(SyncSender<String>),
+}
+
+/// Queues the held scripts; added to where they start.
 pub fn start_scripts(mut console: ResMut<Console>) {
     for path in std::mem::take(&mut console.scripts) {
         console
             .queued
-            .push_back((format!("exec \"{path}\""), Source::Script));
+            .push_back(Step::Command(vec!["exec".into(), path], 0));
     }
 }
 
@@ -140,6 +176,26 @@ const VERBS: &[Verb] = &[
         "screenshot",
         "file.png",
         "saves what the window shows to a file, answering once it's written",
+    ),
+    verb(
+        "ui",
+        "",
+        "lists the ids of the buttons on screen that can be pressed, and which are chosen",
+    ),
+    verb(
+        "click",
+        "button",
+        "presses a button, by its id; ui lists them",
+    ),
+    verb(
+        "press",
+        "key",
+        "presses a key as a hotkey file writes it, e.g. esc, f1 or ctrl-s",
+    ),
+    verb(
+        "wait",
+        "seconds",
+        "lets that long go by before the next command",
     ),
     verb(
         "lookat",
@@ -330,17 +386,14 @@ fn commands(line: &str) -> Vec<Vec<String>> {
     out
 }
 
-/// Runs a line, saying what it answers.
-fn run_line(world: &mut World, line: &str, depth: usize) {
-    for words in commands(line) {
-        let reply = execute(world, &words, depth);
-        let text = match reply {
-            Ok(t) => t,
-            Err(e) => format!("{}: {e}", words[0].to_ascii_lowercase()),
-        };
-        if !text.is_empty() {
-            world.resource_mut::<Console>().say(&text);
-        }
+/// Runs a command, saying what it answers.
+fn run_command(world: &mut World, words: &[String], depth: usize) {
+    let text = match execute(world, words, depth) {
+        Ok(t) => t,
+        Err(e) => format!("{}: {e}", words[0].to_ascii_lowercase()),
+    };
+    if !text.is_empty() {
+        world.resource_mut::<Console>().say(&text);
     }
 }
 
@@ -360,6 +413,10 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
             Ok(String::new())
         }
         "screenshot" => screenshot(world, &args),
+        "ui" => no_args(&args).map(|_| ui(world)),
+        "click" => click(world, &args),
+        "press" => press(world, &args),
+        "wait" => wait(world, &args),
         "gamespeed" => game_speed(world, &args),
         "gamepause" => game_pause(world, &args),
         "toggleshowzonesupply" => no_args(&args).map(|_| {
@@ -467,8 +524,10 @@ fn exec(world: &mut World, args: &[&str], depth: usize) -> Reply {
         ));
     }
     let script = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
-    for line in script.lines() {
-        run_line(world, line, depth + 1);
+    // Ahead of whatever follows the exec.
+    let mut console = world.resource_mut::<Console>();
+    for words in script.lines().flat_map(commands).rev() {
+        console.queued.push_front(Step::Command(words, depth + 1));
     }
     Ok(String::new())
 }
@@ -477,32 +536,76 @@ fn screenshot(world: &mut World, args: &[&str]) -> Reply {
     let [path] = args else {
         return Err(usage("screenshot"));
     };
-    let windows = world
-        .query_filtered::<(), With<PrimaryWindow>>()
-        .iter(world)
-        .count();
-    if windows == 0 {
-        return Err("no window to save; --screenshot saves a windowless run's".into());
-    }
     let path = std::path::PathBuf::from(path);
-    // A client's answer waits for the file, with what the line said so far.
+    // A windowless run draws to an image, which is saved once it's settled.
+    if !aaa_render::shot::take(world, path.clone()) {
+        world.spawn(Screenshot::primary_window()).observe(
+            move |captured: On<ScreenshotCaptured>, mut commands: Commands| {
+                let saved = aaa_render::shot::save(&captured.image, &path)
+                    .map(|_| path.clone())
+                    .map_err(|e| format!("{}: {e}", path.display()));
+                commands.trigger(Taken(saved));
+            },
+        );
+    }
+    let now = world.resource::<Time<Real>>().elapsed_secs_f64();
     let mut console = world.resource_mut::<Console>();
-    let mut waiting = console
-        .answer
-        .take()
-        .map(|answer| (answer, console.capture.take().unwrap_or_default()));
-    world.spawn(Screenshot::primary_window()).observe(
-        move |captured: On<ScreenshotCaptured>, mut console: ResMut<Console>| {
-            let said = match aaa_render::shot::save(&captured.image, &path) {
-                Ok(()) => format!("saved {}", path.display()),
-                Err(e) => format!("screenshot: {}: {e}", path.display()),
-            };
-            console.say(&said);
-            if let Some((answer, before)) = waiting.take() {
-                let _ = answer.send(before + &said + "\n");
-            }
-        },
-    );
+    console.shots += 1;
+    console.shot_asked = now;
+    Ok(String::new())
+}
+
+/// Says how a screenshot went, and lets the next command run.
+fn shot_taken(taken: On<Taken>, mut console: ResMut<Console>) {
+    let said = match &taken.0 {
+        Ok(path) => format!("saved {}", path.display()),
+        Err(e) => format!("screenshot: {e}"),
+    };
+    console.say(&said);
+    console.shots = console.shots.saturating_sub(1);
+}
+
+fn ui(world: &mut World) -> String {
+    let (buttons, unnamed) = crate::drive::buttons(world);
+    let line = |b: &crate::drive::Seen| match b.chosen {
+        true => format!("{}  # chosen", b.id),
+        false => b.id.clone(),
+    };
+    let mut lines: Vec<String> = buttons.iter().map(line).collect();
+    if unnamed > 0 {
+        lines.push(format!("# and {unnamed} with no id"));
+    }
+    lines.join("\n")
+}
+
+fn click(world: &mut World, args: &[&str]) -> Reply {
+    let [id] = args else {
+        return Err(usage("click"));
+    };
+    crate::drive::click(world, id)?;
+    world.resource_mut::<Console>().settling = SETTLE_FRAMES;
+    Ok(String::new())
+}
+
+fn press(world: &mut World, args: &[&str]) -> Reply {
+    let [chord] = args else {
+        return Err(usage("press"));
+    };
+    let held = crate::drive::press(world, chord)?;
+    let mut console = world.resource_mut::<Console>();
+    console.held = held;
+    console.settling = SETTLE_FRAMES;
+    Ok(String::new())
+}
+
+fn wait(world: &mut World, args: &[&str]) -> Reply {
+    let [seconds] = args else {
+        return Err(usage("wait"));
+    };
+    let seconds = number(seconds).ok().filter(|s| (0.0..=600.0).contains(s));
+    let seconds = seconds.ok_or("takes 0 to 600 seconds")?;
+    let now = world.resource::<Time<Real>>().elapsed_secs_f64();
+    world.resource_mut::<Console>().until = Some(now + f64::from(seconds));
     Ok(String::new())
 }
 
@@ -1227,7 +1330,7 @@ fn keys(mut presses: MessageReader<KeyboardInput>, mut console: ResMut<Console>)
                 if console.history.last() != Some(&line) {
                     console.history.push(line.clone());
                 }
-                console.queued.push_back((line, Source::Typed));
+                console.queued.push_back(Step::Line(line, None));
             }
             KeyCode::ArrowUp => {
                 let back = match console.recall {
@@ -1276,24 +1379,54 @@ pub(crate) fn run(world: &mut World) {
         let asked = remote.take();
         let mut console = world.resource_mut::<Console>();
         for (line, answer) in asked {
-            console.queued.push_back((line, Source::Client(answer)));
+            console.queued.push_back(Step::Line(line, Some(answer)));
         }
     }
-    while let Some((line, source)) = world.resource_mut::<Console>().queued.pop_front() {
+    // A frame after they went down, so they were seen held together.
+    let held = std::mem::take(&mut world.resource_mut::<Console>().held);
+    crate::drive::release(world, &held);
+    let now = world.resource::<Time<Real>>().elapsed_secs_f64();
+    let loading = world
+        .get_resource::<State<Screen>>()
+        .is_some_and(|s| *s.get() == Screen::Loading);
+    let mut console = world.resource_mut::<Console>();
+    if console.until.is_some_and(|until| now >= until) {
+        console.until = None;
+    }
+    if console.shots > 0 && now - console.shot_asked > SHOT_WAIT {
+        console.shots = 0;
+        console.say("screenshot: no frame came to save");
+    }
+    // Nor while a map loads, when what most commands are about isn't there,
+    // nor until the match's interface is laid out.
+    if loading {
+        console.settling = SETTLE_FRAMES;
+        return;
+    }
+    if console.settling > 0 {
+        console.settling -= 1;
+        return;
+    }
+    while !world.resource::<Console>().waiting() {
         let mut console = world.resource_mut::<Console>();
-        if !matches!(source, Source::Script) {
-            console.say(&format!("] {line}"));
-        }
-        if let Source::Client(answer) = source {
-            console.capture = Some(String::new());
-            console.answer = Some(answer);
-        }
-        run_line(world, &line, 0);
-        let mut console = world.resource_mut::<Console>();
-        let said = console.capture.take().unwrap_or_default();
-        // Unless a command took it, to answer once its work is done.
-        if let Some(answer) = console.answer.take() {
-            let _ = answer.send(said);
+        let Some(step) = console.queued.pop_front() else {
+            break;
+        };
+        match step {
+            Step::Line(line, answer) => {
+                console.say(&format!("] {line}"));
+                if let Some(answer) = answer {
+                    console.capture = Some(String::new());
+                    console.queued.push_front(Step::Answer(answer));
+                }
+                for words in commands(&line).into_iter().rev() {
+                    console.queued.push_front(Step::Command(words, 0));
+                }
+            }
+            Step::Command(words, depth) => run_command(world, &words, depth),
+            Step::Answer(answer) => {
+                let _ = answer.send(console.capture.take().unwrap_or_default());
+            }
         }
     }
 }
@@ -1304,7 +1437,9 @@ struct Panel;
 #[derive(Component)]
 struct PanelText;
 
-fn spawn(mut commands: Commands) {
+fn spawn(mut commands: Commands, mut console: ResMut<Console>) {
+    // The first screen isn't laid out yet.
+    console.settling = SETTLE_FRAMES;
     commands.spawn((
         Panel,
         backed(
@@ -1353,7 +1488,107 @@ fn show(
 
 #[cfg(test)]
 mod tests {
+    use std::sync::mpsc::sync_channel;
+    use std::time::Duration;
+
     use super::*;
+
+    /// A world the console can run in, and what it has said since.
+    fn console() -> World {
+        let mut world = World::new();
+        world.init_resource::<Console>();
+        world.init_resource::<Time<Real>>();
+        world.init_resource::<Messages<KeyboardInput>>();
+        world.add_observer(shot_taken);
+        world
+    }
+
+    fn enter(world: &mut World, line: &str) {
+        let mut console = world.resource_mut::<Console>();
+        console.queued.push_back(Step::Line(line.into(), None));
+    }
+
+    fn said(world: &World) -> Vec<&str> {
+        let lines = world.resource::<Console>().lines.iter();
+        lines
+            .map(String::as_str)
+            .filter(|l| !l.starts_with(']'))
+            .collect()
+    }
+
+    fn pass(world: &mut World, seconds: f64) {
+        let mut time = world.resource_mut::<Time<Real>>();
+        time.advance_by(Duration::from_secs_f64(seconds));
+    }
+
+    #[test]
+    fn a_script_runs_before_what_follows_its_exec() {
+        let script = std::env::temp_dir().join(format!("console-{}.txt", std::process::id()));
+        std::fs::write(&script, "echo b; echo c\necho d\n").unwrap();
+        let mut world = console();
+        enter(
+            &mut world,
+            &format!("echo a; exec \"{}\"; echo e", script.display()),
+        );
+        run(&mut world);
+        std::fs::remove_file(&script).unwrap();
+        assert_eq!(said(&world), ["a", "b", "c", "d", "e"]);
+    }
+
+    #[test]
+    fn a_key_is_let_go_and_the_screen_settles_before_the_next_command() {
+        let mut world = console();
+        enter(&mut world, "press esc; echo after");
+        run(&mut world);
+        assert!(said(&world).is_empty());
+        for _ in 0..SETTLE_FRAMES {
+            run(&mut world);
+        }
+        assert!(said(&world).is_empty(), "still settling");
+        run(&mut world);
+        assert_eq!(said(&world), ["after"]);
+        let mut keys = world.resource_mut::<Messages<KeyboardInput>>();
+        let keys = keys.drain();
+        let states: Vec<ButtonState> = keys.map(|k| k.state).collect();
+        assert_eq!(states, [ButtonState::Pressed, ButtonState::Released]);
+    }
+
+    #[test]
+    fn wait_holds_the_next_command() {
+        let mut world = console();
+        enter(&mut world, "wait 2; echo after");
+        run(&mut world);
+        pass(&mut world, 1.0);
+        run(&mut world);
+        assert!(said(&world).is_empty());
+        pass(&mut world, 1.5);
+        run(&mut world);
+        assert_eq!(said(&world), ["after"]);
+    }
+
+    #[test]
+    fn a_client_is_answered_once_its_screenshot_is_saved() {
+        let mut world = console();
+        let (tx, rx) = sync_channel(1);
+        let line = Step::Line("screenshot a.png; echo after".into(), Some(tx));
+        world.resource_mut::<Console>().queued.push_back(line);
+        run(&mut world);
+        run(&mut world);
+        assert!(rx.try_recv().is_err(), "the file isn't written yet");
+        world.trigger(Taken(Ok("a.png".into())));
+        run(&mut world);
+        assert_eq!(rx.try_recv().unwrap(), "saved a.png\nafter\n");
+    }
+
+    #[test]
+    fn a_screenshot_that_never_comes_is_given_up_on() {
+        let mut world = console();
+        enter(&mut world, "screenshot a.png; echo after");
+        run(&mut world);
+        pass(&mut world, SHOT_WAIT + 1.0);
+        run(&mut world);
+        assert_eq!(said(&world), ["screenshot: no frame came to save", "after"]);
+    }
 
     fn words(line: &str) -> Vec<Vec<&str>> {
         let c = commands(line);
