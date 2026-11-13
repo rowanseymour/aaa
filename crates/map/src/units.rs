@@ -1,6 +1,7 @@
 //! The sides in a map and the regiments they start with.
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use aaa_data::{
     Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges, Shape,
@@ -621,8 +622,8 @@ fn regiment(
 pub struct Recruits {
     organizations: HashMap<Id, Organization>,
     pub(crate) bodies: HashMap<Id, Body>,
-    pub(crate) fighters: HashMap<Id, Fighter>,
-    pub(crate) layouts: HashMap<Id, Layout>,
+    pub(crate) fighters: Arc<HashMap<Id, Fighter>>,
+    pub(crate) layouts: Arc<HashMap<Id, Layout>>,
     pub(crate) ranges: HashMap<Id, Ranges>,
     lists: HashMap<Id, Vec<Id>>,
     deployments: HashMap<Id, Deployment>,
@@ -638,7 +639,7 @@ pub struct Recruits {
 const BUILDING_PADDING: f32 = 2.0;
 
 impl Recruits {
-    pub fn new(game: &mut GameData) -> Recruits {
+    pub fn new(game: &GameData) -> Recruits {
         Recruits {
             organizations: game.organizations(),
             bodies: game.bodies(),
@@ -1126,8 +1127,8 @@ mod tests {
                 (Id::from("rifle"), body.clone()),
                 (Id::from("captain"), body),
             ]),
-            fighters: HashMap::new(),
-            layouts: HashMap::from([(Id::from("line"), layout())]),
+            fighters: Arc::default(),
+            layouts: Arc::new(HashMap::from([(Id::from("line"), layout())])),
             ranges: HashMap::new(),
             lists: HashMap::new(),
             deployments: HashMap::new(),
@@ -1199,14 +1200,14 @@ mod tests {
                     },
                 ),
             ]),
-            fighters: HashMap::from([(
+            fighters: Arc::new(HashMap::from([(
                 Id::from("depot"),
                 Fighter {
                     health: 750.0,
                     ..Fighter::default()
                 },
-            )]),
-            layouts: HashMap::new(),
+            )])),
+            layouts: Arc::default(),
             ranges: HashMap::new(),
             lists: HashMap::new(),
             deployments: HashMap::from([

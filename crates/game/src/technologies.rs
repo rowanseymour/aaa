@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Id, PropertyLook};
+use aaa_data::Id;
 use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
@@ -48,45 +48,46 @@ pub struct TechnologyPlugin;
 
 impl Plugin for TechnologyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Match), spawn).add_systems(
-            Update,
-            refresh
-                .after(displays::Keys)
-                .run_if(in_state(Screen::Match))
-                .run_if(resource_exists::<Looks>),
-        );
+        app.add_systems(OnEnter(Screen::Match), spawn.after(crate::keys::load))
+            .add_systems(
+                Update,
+                refresh
+                    .after(displays::Keys)
+                    .run_if(in_state(Screen::Match))
+                    .run_if(resource_exists::<Looks>),
+            );
     }
 }
 
 fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
     mut icons: ResMut<displays::Icons>,
 ) {
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     let strings = game.strings();
     let said = crate::ui::said(&strings);
-    let looks: HashMap<Id, PropertyLook> = game.property_looks();
-    let lines = (game.technologies().into_iter())
+    let looks = game.property_looks();
+    let lines = (game.technologies().iter())
         .filter_map(|(id, t)| {
-            let look = looks.get(&id)?;
+            let look = looks.get(id)?;
             let mut hint = look.lines.join("\n");
-            if let Some(d) = t.description {
+            if let Some(d) = &t.description {
                 hint = match hint.is_empty() {
-                    true => d,
+                    true => d.clone(),
                     false => format!("{hint}\n\n{d}"),
                 };
             }
             let line = Line {
-                name: t.name,
+                name: t.name.clone(),
                 icon: look.icon.clone(),
                 image: None,
                 hint,
             };
-            Some((id, line))
+            Some((id.clone(), line))
         })
         .collect();
     displays::spawn_button(
@@ -123,7 +124,7 @@ fn refresh(
     displays: Res<Displays>,
     mut shown: ResMut<Shown>,
     mut looks: ResMut<Looks>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     real: Res<Time<Real>>,
     sim: Res<Sim>,

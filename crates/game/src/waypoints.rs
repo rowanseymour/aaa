@@ -92,21 +92,19 @@ fn command(aim: Aim) -> &'static str {
 
 pub fn load(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     let by_id: HashMap<Id, aaa_data::Command> = game
         .commands()
         .into_iter()
         .map(|c| (c.ids.clone(), c))
         .collect();
     let cursors = game.cursors();
-    let vfx = game.vfx();
-    let models: HashMap<Id, String> = vfx
-        .into_iter()
-        .filter_map(|(id, v)| Some((id, v.model?)))
+    let models: HashMap<Id, String> = (game.vfx().iter())
+        .filter_map(|(id, v)| Some((id.clone(), v.model.clone()?)))
         .collect();
     let mut looks = Looks {
         rally: models.get(&Id::from(RALLY_MARKER)).cloned(),
@@ -198,7 +196,7 @@ pub fn mark(
     mut earlier: Query<&mut Waypoint>,
     looks: Res<Looks>,
     mut drawn: ResMut<Drawn>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut assets: MapAssets,
 ) {
     for s in sent.read() {
@@ -214,7 +212,7 @@ pub fn mark(
             let mut models = assets.models();
             let spawned = drawn.0.spawn_effect(
                 &mut commands,
-                &mut loaded.game,
+                &loaded.game,
                 &mut models,
                 &marking.model,
                 &[],
@@ -254,7 +252,7 @@ pub fn rally(
     looks: Res<Looks>,
     markers: Query<(Entity, &RallyMarker)>,
     mut drawn: ResMut<Drawn>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut assets: MapAssets,
 ) {
     let wanted = chosen.0.and_then(|b| Some((b, sim.0.buildings[b].rally?)));
@@ -273,7 +271,7 @@ pub fn rally(
     let mut models = assets.models();
     let spawned = drawn.0.spawn_effect(
         &mut commands,
-        &mut loaded.game,
+        &loaded.game,
         &mut models,
         model,
         &[],

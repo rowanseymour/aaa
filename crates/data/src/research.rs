@@ -36,7 +36,7 @@ pub struct Research {
 impl GameData {
     /// What each template that researches lists, in its menu's order, by
     /// template id.
-    pub fn research_lists(&mut self) -> HashMap<Id, Vec<Research>> {
+    pub fn research_lists(&self) -> HashMap<Id, Vec<Research>> {
         let aliases = self.structure_aliases();
         self.by_template(|t| {
             let items = &t.research_component.as_ref()?.research_item;

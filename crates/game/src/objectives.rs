@@ -41,25 +41,26 @@ pub struct ObjectivesPlugin;
 
 impl Plugin for ObjectivesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Match), spawn).add_systems(
-            Update,
-            refresh
-                .after(displays::Keys)
-                .run_if(in_state(Screen::Match))
-                .run_if(resource_exists::<Look>),
-        );
+        app.add_systems(OnEnter(Screen::Match), spawn.after(crate::keys::load))
+            .add_systems(
+                Update,
+                refresh
+                    .after(displays::Keys)
+                    .run_if(in_state(Screen::Match))
+                    .run_if(resource_exists::<Look>),
+            );
     }
 }
 
 fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
     mut icons: ResMut<displays::Icons>,
 ) {
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     let strings = game.strings();
     let said = crate::ui::said(&strings);
     let looks = game.objective_looks();

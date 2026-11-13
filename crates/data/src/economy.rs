@@ -168,7 +168,7 @@ impl Default for EconomyRules {
 impl GameData {
     /// Each template's own [`Economy`], for those that have one, by
     /// template id.
-    pub fn economies(&mut self) -> HashMap<Id, Economy> {
+    pub fn economies(&self) -> HashMap<Id, Economy> {
         self.by_template(|t| {
             let e = t.economy_component.as_ref()?;
             let of = |r: Option<&defs::Resources>| r.map(Amounts::from).unwrap_or_default();
@@ -182,7 +182,7 @@ impl GameData {
     }
 
     /// The templates whose things their owner can sell.
-    pub fn sellable(&mut self) -> HashSet<Id> {
+    pub fn sellable(&self) -> HashSet<Id> {
         let sellable = self.by_template(|t| {
             let c = t.construction_component.as_ref()?;
             c.can_sell.unwrap_or(true).then_some(())
@@ -191,7 +191,7 @@ impl GameData {
     }
 
     /// Each template's [`Supply`], for those that give it, by template id.
-    pub fn supplies(&mut self) -> HashMap<Id, Supply> {
+    pub fn supplies(&self) -> HashMap<Id, Supply> {
         self.by_template(|t| {
             let s = t.supply_component.as_ref()?;
             Some(Supply {
@@ -203,7 +203,7 @@ impl GameData {
     }
 
     /// Each organization template's [`Logistics`], by template id.
-    pub fn logistics(&mut self) -> HashMap<Id, Logistics> {
+    pub fn logistics(&self) -> HashMap<Id, Logistics> {
         self.by_template(|t| {
             let o = t.organization_component.as_ref()?;
             Some(Logistics {
@@ -220,7 +220,7 @@ impl GameData {
 
     /// The share of its health each template gets back a second in
     /// supply, for those that get any, by template id.
-    pub fn resupply_rates(&mut self) -> HashMap<Id, f32> {
+    pub fn resupply_rates(&self) -> HashMap<Id, f32> {
         self.by_template(|t| {
             t.element_component
                 .as_ref()?
@@ -230,7 +230,7 @@ impl GameData {
     }
 
     /// The resources' and the tuning settings' bounds on economies.
-    pub fn economy_rules(&mut self) -> EconomyRules {
+    pub fn economy_rules(&self) -> EconomyRules {
         let files = self.parse_tgis(|n| {
             n == "game/resources.tgi"
                 || n == "game/world_rules_aa.tgi"
@@ -297,10 +297,11 @@ impl GameData {
 
     /// The tuning settings, the game's own (`SVars_AA.tgi`), which take
     /// precedence, before the engine's.
-    pub(crate) fn svars(&mut self) -> Arc<[defs::SVars]> {
-        if let Some(kept) = &self.kept.svars {
-            return kept.clone();
-        }
+    pub(crate) fn svars(&self) -> Arc<Vec<defs::SVars>> {
+        self.kept("svars", || self.read_svars())
+    }
+
+    fn read_svars(&self) -> Vec<defs::SVars> {
         let files = self.parse_tgis(|n| n == "game/svars_aa.tgi" || n == "game/svars.tgi");
         let files = scoped(&files);
         let mut out: Vec<(bool, defs::SVars)> = files
@@ -311,9 +312,7 @@ impl GameData {
             })
             .collect();
         out.sort_by_key(|(own, _)| !own);
-        let read: Arc<[defs::SVars]> = out.into_iter().map(|(_, s)| s).collect();
-        self.kept.svars = Some(read.clone());
-        read
+        out.into_iter().map(|(_, s)| s).collect()
     }
 }
 

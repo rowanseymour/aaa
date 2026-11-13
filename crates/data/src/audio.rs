@@ -195,29 +195,22 @@ pub struct AudioWho {
 impl GameData {
     /// The game's settings for how it looks and sounds, the game's own
     /// before the engine's.
-    pub(crate) fn avars(&mut self) -> Arc<[defs::AVars]> {
-        if let Some(kept) = &self.kept.avars {
-            return kept.clone();
-        }
-        // Not in the load lists.
-        let files: Vec<(String, tgi::Parsed)> = ["AVars_AA.tgi", "AVars.tgi"]
-            .into_iter()
-            .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
-            .collect();
-        let files = scoped(&files);
-        let read: Arc<[defs::AVars]> = files.iter().flat_map(|f| f.read("Vars")).collect();
-        self.kept.avars = Some(read.clone());
-        read
+    pub(crate) fn avars(&self) -> Arc<Vec<defs::AVars>> {
+        self.kept("avars", || {
+            // Not in the load lists.
+            let files = self.parse_named(["AVars_AA.tgi", "AVars.tgi"]);
+            let files = scoped(&files);
+            files.iter().flat_map(|f| f.read("Vars")).collect()
+        })
     }
 
     /// What music plays when, and how loud.
-    pub fn music_settings(&mut self) -> MusicSettings {
+    pub fn music_settings(&self) -> MusicSettings {
         let vars = self.avars();
         let var =
             |of: fn(&defs::AVars) -> Option<f32>, or: f32| vars.iter().find_map(of).unwrap_or(or);
         let id = |of: fn(&defs::AVars) -> Option<Id>| vars.iter().find_map(of);
-        let menu = (self.read("UI/Menus/main.tgi")).and_then(|b| {
-            let parsed = tgi::parse_bytes(&b);
+        let menu = (self.parsed("UI/Menus/main.tgi")).and_then(|parsed| {
             let block = parsed.root.blocks_of("MainMenuInterface").next()?;
             logged(
                 "UI/Menus/main.tgi",
@@ -238,7 +231,7 @@ impl GameData {
     }
 
     /// The options' volumes, as they start.
-    pub fn volumes(&mut self) -> Volumes {
+    pub fn volumes(&self) -> Volumes {
         let uvars = self.uvars();
         let var =
             |of: fn(&defs::UVars) -> Option<f32>, or: f32| uvars.iter().find_map(of).unwrap_or(or);
@@ -251,7 +244,7 @@ impl GameData {
     }
 
     /// The options' sound switches, as they start.
-    pub fn sound_switches(&mut self) -> SoundSwitches {
+    pub fn sound_switches(&self) -> SoundSwitches {
         let uvars = self.uvars();
         let on = |of: fn(&defs::UVars) -> Option<bool>| uvars.iter().find_map(of).unwrap_or(true);
         SoundSwitches {
@@ -261,7 +254,7 @@ impl GameData {
     }
 
     /// The audio of each object template that plays any, by template id.
-    pub fn object_audio(&mut self) -> HashMap<Id, ObjectAudio> {
+    pub fn object_audio(&self) -> HashMap<Id, ObjectAudio> {
         let mut out = self.by_template(|t| Some(object_audio(t)));
         out.retain(|_, a| !a.is_empty());
         out
@@ -270,7 +263,11 @@ impl GameData {
     /// Every sound, speech and music, by id. Streamed audio, music and
     /// speech, plays a stand-in, if the settings name one, for each file the
     /// archives don't have.
-    pub fn audio(&mut self) -> HashMap<Id, Audio> {
+    pub fn audio(&self) -> Arc<HashMap<Id, Audio>> {
+        self.kept("audio", || self.read_audio())
+    }
+
+    fn read_audio(&self) -> HashMap<Id, Audio> {
         let stand_in = (self.avars().iter())
             .find_map(|v| v.default_audio_streaming_resource.clone())
             .and_then(|p| self.path(&p.replace('\\', "/")));

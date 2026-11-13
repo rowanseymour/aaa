@@ -64,7 +64,7 @@ struct Leaving {
 struct MatchMusicDue;
 
 impl Music {
-    pub fn new(game: &mut GameData) -> Music {
+    pub fn new(game: &GameData) -> Music {
         Music::with(game.music_settings())
     }
 
@@ -104,7 +104,7 @@ impl Music {
     /// A file of the current music's, read ahead or else from `game`.
     fn source(
         &self,
-        game: Option<&mut GameData>,
+        game: Option<&GameData>,
         assets: &mut Assets<AudioSource>,
         path: &str,
     ) -> Option<Handle<AudioSource>> {
@@ -212,16 +212,16 @@ fn ask_for_match(
 /// Reads the current music's files while the game data is still at hand.
 fn read_ahead(
     mut music: ResMut<Music>,
-    mut loaded: Option<ResMut<Loaded>>,
-    mut data: Option<ResMut<Data>>,
+    loaded: Option<Res<Loaded>>,
+    data: Option<Res<Data>>,
     mut assets: ResMut<Assets<AudioSource>>,
 ) {
     let Some(current) = &music.current else {
         return;
     };
-    let game = match (&mut loaded, &mut data) {
-        (Some(loaded), _) => &mut loaded.game,
-        (None, Some(data)) => &mut data.0,
+    let game = match (&loaded, &data) {
+        (Some(loaded), _) => &loaded.game,
+        (None, Some(data)) => &data.0,
         (None, None) => return,
     };
     let files: Vec<String> = (current.audio.leadin.iter().chain(&current.audio.files))
@@ -229,7 +229,7 @@ fn read_ahead(
         .cloned()
         .collect();
     for file in files {
-        if let Some(source) = music.source(Some(&mut *game), &mut assets, &file) {
+        if let Some(source) = music.source(Some(game), &mut assets, &file) {
             music.ahead.insert(file, source);
         }
     }
@@ -242,8 +242,8 @@ fn play(
     mut commands: Commands,
     mut music: ResMut<Music>,
     mut sounds: ResMut<Sounds>,
-    mut loaded: Option<ResMut<Loaded>>,
-    mut data: Option<ResMut<Data>>,
+    loaded: Option<Res<Loaded>>,
+    data: Option<Res<Data>>,
     mut assets: ResMut<Assets<AudioSource>>,
     volumes: Res<Volumes>,
     time: Res<Time<Real>>,
@@ -251,9 +251,9 @@ fn play(
     mut sinks: Query<&mut AudioSink>,
 ) {
     let now = time.elapsed_secs_f64();
-    let game = match (&mut loaded, &mut data) {
-        (Some(loaded), _) => Some(&mut loaded.game),
-        (None, Some(data)) => Some(&mut data.0),
+    let game = match (&loaded, &data) {
+        (Some(loaded), _) => Some(&*loaded.game),
+        (None, Some(data)) => Some(&*data.0),
         (None, None) => None,
     };
     let options = volumes.of(AudioCategory::Music);
@@ -508,7 +508,7 @@ pub(crate) mod tests {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .init_resource::<Assets<AudioSource>>()
-            .insert_resource(Sounds::of(HashMap::new(), &[]))
+            .insert_resource(Sounds::of(Default::default(), &[]))
             .insert_resource(Volumes(aaa_data::Volumes {
                 main: 1.0,
                 fx: 1.0,

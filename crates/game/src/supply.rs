@@ -204,7 +204,7 @@ const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     formats: Res<CompressedImageFormatSupport>,
@@ -213,7 +213,7 @@ pub fn spawn(
     mut icons: ResMut<displays::Icons>,
 ) {
     let shown = border.0;
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     let border = game.supply_border();
     let [r, g, b] = border.colour;
     let colour = Color::srgb(r, g, b);

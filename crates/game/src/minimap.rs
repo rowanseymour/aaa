@@ -88,7 +88,7 @@ struct Colours {
 }
 
 impl Colours {
-    fn load(game: &mut GameData) -> Self {
+    fn load(game: &GameData) -> Self {
         let rgb = |[r, g, b]: [f32; 3]| {
             let [r, g, b, _] = Color::srgb(r, g, b).to_srgba().to_u8_array();
             [r, g, b]
@@ -160,11 +160,11 @@ fn from_image(size: f32, p: Vec2) -> [f32; 2] {
 
 pub fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
-    let Loaded { game, map } = &mut *loaded;
+    let Loaded { game, map } = &*loaded;
     let palette = Colours::load(game);
     let mut by_path: HashMap<String, Option<Icon>> = HashMap::new();
     let mut icons = HashMap::new();
@@ -309,7 +309,7 @@ fn silhouette(texels: u32, inside: impl Fn(f32, f32) -> bool) -> Image {
 }
 
 fn decode_icon(
-    game: &mut GameData,
+    game: &GameData,
     path: &str,
     formats: bevy::image::CompressedImageFormats,
 ) -> Option<Icon> {
