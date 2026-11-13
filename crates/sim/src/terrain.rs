@@ -39,7 +39,7 @@ impl World {
                 let position = self.units[u].position;
                 let own = self.tile_terrains.at(position);
                 let with = own == under || Some(p) == regiment.leader || {
-                    let reach = regiment.control(&self.guard_rules);
+                    let reach = regiment.control(&self.rules.guard_rules);
                     let zone = zone.get_or_insert_with(|| self.pathing.zone(at, reach));
                     zone.holds(position)
                 };
@@ -66,10 +66,10 @@ impl World {
     /// Whether things of a template that can move have what a terrain's
     /// property needs.
     fn gains(&self, template: &Id, property: &Id) -> bool {
-        let Some(effect) = self.terrain_rules.effects.get(property) else {
+        let Some(effect) = self.rules.terrain_rules.effects.get(property) else {
             return false;
         };
-        let kind = self.kinds.get(template);
+        let kind = self.rules.kinds.get(template);
         let has = |p: &Id| {
             p.as_str().eq_ignore_ascii_case(MOBILE)
                 || kind.is_some_and(|k| k.properties.contains(p))
@@ -92,7 +92,7 @@ impl World {
                 }
             }
         }
-        let effects = &self.terrain_rules.effects;
+        let effects = &self.rules.terrain_rules.effects;
         held.into_iter().filter_map(|p| effects.get(p)).collect()
     }
 
@@ -103,7 +103,7 @@ impl World {
     /// for a time or by a technology on it, a property that frees it.
     pub(crate) fn speed_limit(&self, u: usize) -> Option<f32> {
         let unit = &self.units[u];
-        let rules = &self.terrain_rules;
+        let rules = &self.rules.terrain_rules;
         let terrain = self.tile_terrains.get(unit.terrain);
         let limits = terrain.properties.iter().rev();
         let limit = match terrain.mountain {
@@ -168,15 +168,18 @@ mod tests {
     fn terrain_holds_everyone_on_it_to_its_last_propertys_speed_limit() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         let (forest, rules) = forest();
-        (w.tile_terrains, w.terrain_rules) = (aaa_map::TileTerrains::uniform(20, forest), rules);
-        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        (w.tile_terrains, w.rules.terrain_rules) =
+            (aaa_map::TileTerrains::uniform(20, forest), rules);
+        w.rules
+            .kinds
+            .insert(Id::from("soldier"), kind(&["infantry"]));
         let to = [10.0, 30.0];
         w.apply(7, Command::Move { regiment: 0, to }).unwrap();
         run(&mut w, 1.0);
         // The vehicles' limit, though they're infantry.
         assert!(w.units.iter().all(|u| u.speed == 1.0));
         // Never below the lowest there is.
-        w.terrain_rules.slowest = 1.25;
+        w.rules.terrain_rules.slowest = 1.25;
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 1.25));
         // A mountain's is the lowest there is.
@@ -184,7 +187,7 @@ mod tests {
             properties: Vec::new(),
             mountain: true,
         };
-        (w.tile_terrains, w.terrain_rules.slowest) =
+        (w.tile_terrains, w.rules.terrain_rules.slowest) =
             (aaa_map::TileTerrains::uniform(20, mountain), 0.5);
         run(&mut w, 0.2);
         assert!(w.units.iter().all(|u| u.speed == 0.5));
@@ -203,12 +206,12 @@ mod tests {
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 0.5));
         let anyone = TerrainEffect::default();
-        (w.terrain_rules.effects).insert(Id::from("trailblazing"), anyone);
+        (w.rules.terrain_rules.effects).insert(Id::from("trailblazing"), anyone);
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 2.0));
         w.technologies.clear();
         // or its template is.
-        w.terrain_rules.free.insert(Id::from("squad"));
+        w.rules.terrain_rules.free.insert(Id::from("squad"));
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 2.0));
     }
@@ -217,9 +220,11 @@ mod tests {
     fn members_share_their_regiments_terrain_unless_they_straggle() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         let (forest, rules) = forest();
-        w.terrain_rules = rules;
+        w.rules.terrain_rules = rules;
         w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
-        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        w.rules
+            .kinds
+            .insert(Id::from("soldier"), kind(&["infantry"]));
         // Under the first only, who with no control range is on his own.
         w.tile_terrains
             .set(Tile::at(w.units[0].position), forest.clone());
@@ -240,13 +245,17 @@ mod tests {
             [Id::from("forest_infantry")]
         );
         // Which follows who's left in it.
-        w.kinds.insert(Id::from("soldier"), kind(&["vehicle"]));
+        w.rules
+            .kinds
+            .insert(Id::from("soldier"), kind(&["vehicle"]));
         w.stand();
         assert_eq!(
             w.regiments[0].terrain_properties,
             [Id::from("forest_vehicles")]
         );
-        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        w.rules
+            .kinds
+            .insert(Id::from("soldier"), kind(&["infantry"]));
         w.stand();
         // Unpacked, it keeps what it had wherever that leaves it.
         w.regiments[0].unpacked_into = Some(0);

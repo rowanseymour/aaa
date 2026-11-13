@@ -841,38 +841,43 @@ fn prepare(
     if !from_menu && side.0.is_some() && person.is_none() {
         warn!("{}: no such side to play", map.title);
     }
-    let mut sim = World::new(&map);
-    sim.packing = raising.packings();
-    sim.requires = game.requirements();
-    sim.economies = game.economies();
-    sim.sellable = game.sellable();
-    sim.economy = game.economy_rules();
-    sim.supplies = game.supplies();
-    sim.supply_rules = game.supply_rules();
-    sim.guard_rules = game.guard_rules();
-    if let Some(seconds) = game.siege_seconds() {
-        sim.siege_seconds = seconds;
-    }
-    sim.supply_effects = game.supply_effects();
-    sim.kinds = game.kinds();
-    sim.terrain_rules = game.terrain_rules();
-    sim.decays = game.decays();
-    sim.operations = game.operations();
-    sim.sort_objectives = game.sort_objectives();
-    let dropped = sim.operations.values().filter_map(|o| match o {
+    let operations = game.operations();
+    let dropped = operations.values().filter_map(|o| match o {
         aaa_map::Operation::Drop(template) => Some(template.clone()),
         aaa_map::Operation::Enchant { .. } => None,
     });
-    sim.drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
-    sim.logistics = game.logistics();
-    sim.resupply_rates = game.resupply_rates();
-    sim.recruit_lists = game.recruit_lists();
-    sim.research_lists = game.research_lists();
-    sim.sights = game.sights();
+    let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
+    let experience = game.experience_rules();
+    let mut rules = aaa_sim::Rules {
+        terrain_rules: game.terrain_rules(),
+        packing: raising.packings(),
+        requires: game.requirements(),
+        economies: game.economies(),
+        sellable: game.sellable(),
+        economy: game.economy_rules(),
+        supplies: game.supplies(),
+        supply_rules: game.supply_rules(),
+        guard_rules: game.guard_rules(),
+        supply_effects: game.supply_effects(),
+        kinds: game.kinds(),
+        sort_objectives: game.sort_objectives(),
+        operations,
+        drops,
+        decays: game.decays(),
+        logistics: game.logistics(),
+        resupply_rates: game.resupply_rates(),
+        recruit_lists: game.recruit_lists(),
+        research_lists: game.research_lists(),
+        experience_per_second: experience.per_second,
+        sights: game.sights(),
+        ..Default::default()
+    };
+    if let Some(seconds) = game.siege_seconds() {
+        rules.siege_seconds = seconds;
+    }
+    let mut sim = World::new(&map, rules);
     sim.set_numbered(game.numbered());
     sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
-    let experience = game.experience_rules();
-    sim.experience_per_second = experience.per_second;
     for (&player, general) in &leaders.0 {
         sim.lead(player, experience.starting, general.experience_max);
     }

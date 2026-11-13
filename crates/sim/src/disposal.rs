@@ -30,7 +30,7 @@ impl World {
     /// Whether `player` may sell `building` now.
     pub fn may_sell(&self, player: u32, building: usize) -> Result<(), Refused> {
         let b = self.standing_for(player, building)?;
-        let besieged = b.besieged.is_some() && !self.economy.sell_under_siege;
+        let besieged = b.besieged.is_some() && !self.rules.economy.sell_under_siege;
         if !self.sells(building) || b.busy() || besieged {
             return Err(Refused::Unable);
         }
@@ -40,14 +40,14 @@ impl World {
     /// Whether a building's template is one that can be sold.
     pub fn sells(&self, building: usize) -> bool {
         let template = &self.buildings[building].template;
-        self.sellable.contains(&Id::from(template.as_str()))
+        self.rules.sellable.contains(&Id::from(template.as_str()))
     }
 
     /// The money a building sells for: a share of its own template's cost,
     /// whatever was paid for it, to the nearest whole amount.
     pub fn sale_value(&self, building: usize) -> f32 {
         let cost = self.economy_of(&self.buildings[building].template).cost;
-        (cost.get(money(&self.economy)) * self.economy.sell_factor).round()
+        (cost.get(money(&self.rules.economy)) * self.rules.economy.sell_factor).round()
     }
 
     /// Takes a regiment's members off the map at once, without their dying.
@@ -123,10 +123,10 @@ mod tests {
     /// of 301 money and 40 ammo.
     fn market() -> World {
         let mut w = economy();
-        w.economies.get_mut(&Id::from("house")).unwrap().cost =
+        w.rules.economies.get_mut(&Id::from("house")).unwrap().cost =
             amounts(&[("money", 301.0), ("ammo", 40.0)]);
-        w.sellable.insert(Id::from("house"));
-        w.economy.sell_factor = 0.5;
+        w.rules.sellable.insert(Id::from("house"));
+        w.rules.economy.sell_factor = 0.5;
         w
     }
 
@@ -227,22 +227,22 @@ mod tests {
         let sell = Command::Sell { building: 0 };
         w.buildings[0].besieged = Some(w.ticks + 10);
         assert_eq!(w.check(1, &sell), Ok(()));
-        w.economy.sell_under_siege = false;
+        w.rules.economy.sell_under_siege = false;
         assert_eq!(w.check(1, &sell), Err(Refused::Unable));
         w.buildings[0].besieged = None;
         w.buildings[0].packing = Some((0, 10));
         assert_eq!(w.check(1, &sell), Err(Refused::Unable));
         w.buildings[0].packing = None;
-        w.sellable.clear();
+        w.rules.sellable.clear();
         assert_eq!(w.check(1, &sell), Err(Refused::Unable));
     }
 
     #[test]
     fn selling_an_hq_detaches_its_regiments_and_takes_its_regiment_too() {
         let mut w = division();
-        w.economies.get_mut(&Id::from("depot")).unwrap().cost = amounts(&[("money", 100.0)]);
-        w.sellable.insert(Id::from("depot"));
-        w.economy.sell_factor = 0.5;
+        w.rules.economies.get_mut(&Id::from("depot")).unwrap().cost = amounts(&[("money", 100.0)]);
+        w.rules.sellable.insert(Id::from("depot"));
+        w.rules.economy.sell_factor = 0.5;
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         let unpack = Command::Unpack {
             regiment: 0,
@@ -279,7 +279,7 @@ mod tests {
         let mut w = market();
         w.buildings[0].fighter.destructible = true;
         // However it stands, as only its template counts.
-        w.economy.sell_under_siege = false;
+        w.rules.economy.sell_under_siege = false;
         w.buildings[0].besieged = Some(w.ticks + 10);
         w.notices.clear();
         w.fall(0, None);

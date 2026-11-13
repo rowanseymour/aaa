@@ -627,7 +627,7 @@ pub fn spawn(
             .collect()
     };
     let technologies = game.technologies();
-    let researches = (sim.0.research_lists.iter())
+    let researches = (sim.0.rules.research_lists.iter())
         .map(|(template, list)| {
             let topics = list.iter().map(|item| {
                 let id = &item.technology;
@@ -968,10 +968,12 @@ pub fn show(
             // Where what it raises goes matters whether or not any of it
             // can be raised now.
             rally: looks.rally.0.filter(|_| !menu.is_empty()),
-            pack: looks
-                .pack
-                .0
-                .filter(|_| sim.0.packing.contains_key(&sim.0.buildings[b].template)),
+            pack: looks.pack.0.filter(|_| {
+                sim.0
+                    .rules
+                    .packing
+                    .contains_key(&sim.0.buildings[b].template)
+            }),
             sell: looks.sell.0.filter(|_| {
                 local
                     .0
@@ -1591,7 +1593,11 @@ fn sell_command(building: usize) -> aaa_sim::Command {
 /// nor when it's too hurt.
 fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
     let b = &sim.buildings[building];
-    let floor = sim.packing.get(&b.template).map_or(1.0, |p| p.health_min);
+    let floor = sim
+        .rules
+        .packing
+        .get(&b.template)
+        .map_or(1.0, |p| p.health_min);
     !b.busy() && b.health > floor * b.fighter.health
 }
 

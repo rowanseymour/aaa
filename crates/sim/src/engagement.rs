@@ -218,7 +218,7 @@ impl World {
         if self.destroyed(r) {
             return;
         }
-        let reach = PURSUIT_REACH * self.regiments[r].control(&self.guard_rules);
+        let reach = PURSUIT_REACH * self.regiments[r].control(&self.rules.guard_rules);
         let zone = self.control_zone(r);
         let in_control = (self.survivors(e)).any(|u| self.in_zone(&zone, Target::Unit(u)));
         if in_control && within(self.centre(r), self.centre(e), reach) {
@@ -280,7 +280,7 @@ impl World {
 
     /// The tiles within a regiment's control range of where it stands.
     fn control_zone(&self, r: usize) -> Zone {
-        let reach = self.regiments[r].control(&self.guard_rules);
+        let reach = self.regiments[r].control(&self.rules.guard_rules);
         self.pathing.zone(self.centre(r), reach)
     }
 

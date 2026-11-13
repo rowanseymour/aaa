@@ -21,6 +21,7 @@ mod packing;
 pub mod path;
 mod production;
 mod research;
+mod rules;
 mod setup;
 mod supply;
 mod terrain;
@@ -31,8 +32,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::f32::consts::{PI, TAU};
 
 use aaa_map::{
-    DeployPoints, Domain, Fighter, Id, Obstacle, Packs, Pathing, Requires, Shape, TerrainIndex,
-    Tile, Turret, Unpacks, Weapon,
+    DeployPoints, Domain, Fighter, Id, Obstacle, Pathing, Shape, TerrainIndex, Tile, Turret,
+    Unpacks, Weapon,
 };
 
 pub use aaa_map::{Player, Relation, Team};
@@ -43,6 +44,7 @@ pub use fog::{Fog, Seen};
 pub use objectives::{Objective, Objectives, Standing};
 pub use packing::unpack_site;
 pub use research::{Lacking, Researchable};
+pub use rules::Rules;
 pub use supply::{Bombarder, Held, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
@@ -109,14 +111,10 @@ pub const PURSUIT_DRIFT: f32 = 0.14646;
 pub struct World {
     pub sides: Sides,
     pub pathing: Pathing,
+    /// What the match is played by.
+    pub rules: Rules,
     /// The terrain under each tile, for what it does to those on it.
     pub tile_terrains: aaa_map::TileTerrains,
-    pub terrain_rules: aaa_map::TerrainRules,
-    /// What each building template packs into, for those that can.
-    pub packing: HashMap<String, Packs>,
-    /// The buildings a player needs to commission a regiment with a member
-    /// of each template, by template.
-    pub requires: HashMap<Id, Requires>,
     pub regiments: Vec<Regiment>,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
@@ -128,50 +126,10 @@ pub struct World {
     /// The ids of the scenery buildings have cleared away, in the order
     /// they went.
     pub cleared: Vec<u32>,
-    /// Each template's own cost, production and upkeep, by template.
-    pub economies: HashMap<Id, aaa_map::Economy>,
-    /// The building templates whose buildings their owner can sell.
-    pub sellable: HashSet<Id>,
-    pub economy: aaa_map::EconomyRules,
-    /// How each template gives supply, for those that do, by template.
-    pub supplies: HashMap<Id, aaa_map::Supply>,
-    /// The settings supply runs by.
-    pub supply_rules: aaa_map::SupplyRules,
-    pub guard_rules: aaa_map::GuardRules,
-    /// Seconds an enemy's damage keeps what it hurt under siege.
-    pub siege_seconds: f32,
-    /// What each property does to supply, for those that do anything to
-    /// it, by its id.
-    pub supply_effects: HashMap<Id, aaa_map::SupplyEffect>,
-    /// What each template's things are, by template, for the technologies
-    /// and operations that work only on some.
-    pub kinds: HashMap<Id, aaa_map::Kind>,
     /// The technologies each side has, by player id.
     pub technologies: BTreeMap<u32, Vec<Id>>,
     /// The objectives each side holds, by player id.
     pub objectives: BTreeMap<u32, Objectives>,
-    /// Whether those are kept in order of their text.
-    pub sort_objectives: bool,
-    /// The special operations that bear on supply, by id.
-    pub operations: HashMap<Id, aaa_map::Operation>,
-    /// What those operations drop, by template, each standing anywhere and
-    /// owned by nobody.
-    pub drops: HashMap<Id, aaa_map::Building>,
-    /// The health each template's buildings lose a second from when
-    /// they're put on the map, by template.
-    pub decays: HashMap<Id, f32>,
-    /// How each organization template stands with supply, by template.
-    /// Regiments of those without it are never in or out of supply.
-    pub logistics: HashMap<Id, aaa_map::Logistics>,
-    /// The share of its health each template gets back a second in
-    /// supply, by template.
-    pub resupply_rates: HashMap<Id, f32>,
-    /// The regiment templates each building template recruits, which are
-    /// those that can attach to it as an HQ.
-    pub recruit_lists: HashMap<Id, Vec<Id>>,
-    /// What each template that researches lists, in its menu's order, by
-    /// template id.
-    pub research_lists: HashMap<Id, Vec<aaa_map::Research>>,
     /// What sides own that's neither a regiment nor a building but may
     /// still add to their economy, such as where they start: each owner
     /// and template.
@@ -180,12 +138,8 @@ pub struct World {
     pub treasuries: BTreeMap<u32, Treasury>,
     /// The experience of each side with a general, by player id.
     pub commanders: BTreeMap<u32, Commander>,
-    /// The experience every side with a general gains a second.
-    pub experience_per_second: f32,
     /// What sides have been told since these were last taken.
     pub notices: Vec<Notice>,
-    /// How far each template sees, by template.
-    pub sights: HashMap<Id, aaa_map::Sight>,
     /// What each side sees of the map.
     pub fog: Fog,
     /// Ticks played.

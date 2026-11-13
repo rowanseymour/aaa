@@ -369,7 +369,7 @@ fn holder(sim: &World, mode: &Mode) -> Option<usize> {
 /// their properties came in while their regiment stays selected.
 fn held(sim: &World, looks: &HashMap<Id, PropertyLook>, r: usize, shown: &[Id]) -> Vec<Id> {
     let regiment = &sim.regiments[r];
-    let kind = sim.kinds.get(&Id::from(regiment.template.as_str()));
+    let kind = sim.rules.kinds.get(&Id::from(regiment.template.as_str()));
     let own = kind.into_iter().flat_map(|k| &k.properties).cloned();
     let terrain = regiment.terrain_properties.iter().cloned();
     let guarding =

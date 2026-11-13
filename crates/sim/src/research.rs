@@ -62,7 +62,7 @@ impl World {
     /// template's, or one it's been given.
     fn carries(&self, building: usize, property: &Id) -> bool {
         self.buildings.get(building).is_some_and(|b| {
-            let kind = self.kinds.get(&Id::from(b.template.as_str()));
+            let kind = self.rules.kinds.get(&Id::from(b.template.as_str()));
             kind.is_some_and(|k| k.properties.contains(property))
                 || b.properties.iter().any(|h| h.property == *property)
         })
@@ -107,7 +107,7 @@ impl World {
             .any(|t| self.barred(player, &Id::from(t)));
         out.hidden = out.barred;
         for m in &regiment.members {
-            let Some(r) = self.requires.get(&Id::from(m.template.as_str())) else {
+            let Some(r) = self.rules.requires.get(&Id::from(m.template.as_str())) else {
                 continue;
             };
             let structures = self.missing(player, &r.structures, r.any);
@@ -136,7 +136,11 @@ impl World {
     /// order.
     pub fn research_list(&self, building: usize) -> &[Research] {
         (self.buildings.get(building))
-            .and_then(|b| self.research_lists.get(&Id::from(b.template.as_str())))
+            .and_then(|b| {
+                self.rules
+                    .research_lists
+                    .get(&Id::from(b.template.as_str()))
+            })
             .map_or(&[], Vec::as_slice)
     }
 
@@ -294,7 +298,7 @@ mod tests {
         let mut tiger = item("tech_tiger", 100.0);
         tiger.properties = vec![Id::from("tech_heavy")];
         tiger.structures = vec![vec![Id::from("depot")]];
-        (w.research_lists).insert(Id::from("house"), vec![item("tech_heavy", 60.0), tiger]);
+        (w.rules.research_lists).insert(Id::from("house"), vec![item("tech_heavy", 60.0), tiger]);
         w
     }
 
@@ -308,8 +312,8 @@ mod tests {
     #[test]
     fn research_is_paid_for_up_front_and_gives_the_side_its_technology() {
         let mut w = laboratory();
-        let (heavy, tiger) = (w.research_lists[&Id::from("house")][0].clone(), {
-            w.research_lists[&Id::from("house")][1].clone()
+        let (heavy, tiger) = (w.rules.research_lists[&Id::from("house")][0].clone(), {
+            w.rules.research_lists[&Id::from("house")][1].clone()
         });
         assert_eq!(w.researchable(1, 0, &heavy), Researchable::Ready);
         // What needs a technology the side hasn't is left out.
@@ -405,7 +409,7 @@ mod tests {
     fn research_needs_no_deploy_point_and_a_building_can_keep_its_own() {
         let mut w = laboratory();
         w.buildings[0].deploy = None;
-        let list = w.research_lists.get_mut(&Id::from("house")).unwrap();
+        let list = w.rules.research_lists.get_mut(&Id::from("house")).unwrap();
         list[0].grant = aaa_map::Grant::Building;
         w.apply(1, research("tech_heavy")).unwrap();
         for _ in 0..10 {
@@ -414,7 +418,7 @@ mod tests {
         // The building has it, which is enough for what needs it there, but
         // the side doesn't.
         assert!(!w.holds(1, &Id::from("tech_heavy")));
-        let tiger = w.research_lists[&Id::from("house")][1].clone();
+        let tiger = w.rules.research_lists[&Id::from("house")][1].clone();
         assert!(matches!(
             w.researchable(1, 0, &tiger),
             Researchable::Lacking(_)
@@ -434,7 +438,7 @@ mod tests {
         second.deploy = w.buildings[0].deploy;
         w.add_buildings(&[second]);
         w.apply(1, research("tech_heavy")).unwrap();
-        let heavy = w.research_lists[&Id::from("house")][0].clone();
+        let heavy = w.rules.research_lists[&Id::from("house")][0].clone();
         assert_eq!(w.researchable(1, 1, &heavy), Researchable::Taken);
         // The enemy researches its own.
         assert_eq!(w.researchable(2, 1, &heavy), Researchable::Ready);
@@ -443,7 +447,7 @@ mod tests {
     #[test]
     fn research_for_a_settlement_goes_nowhere_and_can_be_had_again() {
         let mut w = laboratory();
-        let list = w.research_lists.get_mut(&Id::from("house")).unwrap();
+        let list = w.rules.research_lists.get_mut(&Id::from("house")).unwrap();
         list[0].grant = aaa_map::Grant::Settlement;
         let heavy = list[0].clone();
         w.apply(1, research("tech_heavy")).unwrap();
@@ -470,7 +474,7 @@ mod tests {
         let side = w.sides.players.iter_mut().find(|p| p.id == 1).unwrap();
         side.barred = vec![Id::from("TECH_HEAVY"), Id::from("truck")];
         // A barred technology is left out of the menu and never gained.
-        let heavy = w.research_lists[&Id::from("house")][0].clone();
+        let heavy = w.rules.research_lists[&Id::from("house")][0].clone();
         assert_eq!(w.researchable(1, 0, &heavy), Researchable::Hidden);
         assert_eq!(w.apply(1, research("tech_heavy")), Err(Refused::Lacking));
         w.grant(1, Id::from("tech_heavy"));

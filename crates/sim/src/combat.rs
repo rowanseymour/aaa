@@ -311,7 +311,7 @@ impl World {
     /// if it can be, else disabled.
     fn land(&mut self, hit: Hit) {
         let ticks = self.ticks;
-        let window = (self.siege_seconds / TICK).round() as u64;
+        let window = (self.rules.siege_seconds / TICK).round() as u64;
         match hit.target {
             Target::Unit(u) => {
                 let owner = self.regiments[self.units[u].regiment].owner;
@@ -341,9 +341,9 @@ impl World {
                 {
                     // A bombarder holds it for as long as it keeps a
                     // regiment out of supply, if that's longer.
-                    let held = hit
-                        .bombard
-                        .map_or(0.0, |recharge| self.supply_rules.bombard_timeout + recharge);
+                    let held = hit.bombard.map_or(0.0, |recharge| {
+                        self.rules.supply_rules.bombard_timeout + recharge
+                    });
                     let held = (held / TICK).round() as u64;
                     besiege(&mut building.besieged, ticks + window.max(held));
                 }
@@ -362,7 +362,7 @@ impl World {
         for b in 0..self.buildings.len() {
             let building = &self.buildings[b];
             let age = self.ticks - building.created;
-            let rate = self.decays.get(&Id::from(building.template.as_str()));
+            let rate = self.rules.decays.get(&Id::from(building.template.as_str()));
             let Some(&rate) = rate.filter(|_| building.standing()) else {
                 continue;
             };

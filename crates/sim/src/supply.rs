@@ -64,7 +64,7 @@ impl World {
     /// How the building at `b` gives supply, if it does.
     pub fn supply_of(&self, b: usize) -> Option<Supply> {
         let template = self.buildings[b].template.as_str();
-        self.supplies.get(&Id::from(template)).copied()
+        self.rules.supplies.get(&Id::from(template)).copied()
     }
 
     /// Whether a building that passes supply on has none to pass: nothing
@@ -101,14 +101,14 @@ impl World {
         template: &str,
         held: &'a [Held],
     ) -> impl Iterator<Item = &'a SupplyEffect> {
-        let kind = self.kinds.get(&Id::from(template));
+        let kind = self.rules.kinds.get(&Id::from(template));
         let on = move |e: &&SupplyEffect| {
             let has = |p| kind.is_some_and(|k| k.properties.contains(p));
             e.requires.iter().all(has)
         };
         let technologies = self.technologies.get(&owner).into_iter().flatten();
         let timed = held.iter().map(|h| &h.property);
-        let of = |p| self.supply_effects.get(p);
+        let of = |p| self.rules.supply_effects.get(p);
         (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
     }
 
@@ -141,7 +141,7 @@ impl World {
     /// for `player`, aimed at `at`. What using one takes is left to
     /// whoever asks.
     pub fn operate(&mut self, player: u32, operation: &Id, at: [f32; 2]) -> Result<(), Refused> {
-        match self.operations.get(operation).cloned() {
+        match self.rules.operations.get(operation).cloned() {
             Some(Operation::Enchant {
                 targets,
                 area,
@@ -154,7 +154,7 @@ impl World {
                     .filter(|&r| !self.destroyed(r))
                     .filter_map(|r| {
                         let regiment = &self.regiments[r];
-                        let kind = self.kinds.get(&Id::from(regiment.template.as_str()));
+                        let kind = self.rules.kinds.get(&Id::from(regiment.template.as_str()));
                         let side = self.standing_flag(player, regiment.owner);
                         let flags = kind.into_iter().flat_map(|k| &k.flags);
                         let d = distance(at, self.leader_position(r));
@@ -173,7 +173,12 @@ impl World {
                 }
             }
             Some(Operation::Drop(template)) => {
-                let mut dropped = self.drops.get(&template).cloned().ok_or(Refused::Unable)?;
+                let mut dropped = self
+                    .rules
+                    .drops
+                    .get(&template)
+                    .cloned()
+                    .ok_or(Refused::Unable)?;
                 let spot = Obstacle {
                     position: at,
                     facing: dropped.facing,
@@ -259,7 +264,7 @@ impl World {
         };
         if supply.relay && beat && !busy {
             stockpile = match connected {
-                true => (stockpile + self.supply_rules.recharge).min(supply.stockpile_max),
+                true => (stockpile + self.rules.supply_rules.recharge).min(supply.stockpile_max),
                 false => stockpile - 1.0,
             }
             .max(0.0);
@@ -390,7 +395,7 @@ impl World {
     /// weapon takes `recharge` seconds between shots.
     pub(crate) fn shell(&mut self, r: usize, from: Target, recharge: f32) {
         let by = self.enemy(from);
-        let (ticks, timeout) = (self.ticks, self.supply_rules.bombard_timeout);
+        let (ticks, timeout) = (self.ticks, self.rules.supply_rules.bombard_timeout);
         let regiment = &mut self.regiments[r];
         match regiment.bombarded.iter_mut().find(|b| b.by == by) {
             Some(known) => known.tick = ticks,
@@ -431,7 +436,7 @@ impl World {
         let regiment = &self.regiments[r];
         let effects = self.effects(regiment.owner, &regiment.template, &regiment.properties);
         let added: f32 = effects.map(|e| e.resupply).sum();
-        (1.0 + added).max(self.supply_rules.multiply_floor)
+        (1.0 + added).max(self.rules.supply_rules.multiply_floor)
     }
 
     /// The morale a second being in supply adds to what the regiment at
@@ -439,7 +444,7 @@ impl World {
     /// Supply does nothing else to morale.
     pub fn morale_bonus(&self, r: usize) -> f32 {
         match self.regiments[r].in_supply {
-            true => self.supply_rules.morale_bonus,
+            true => self.rules.supply_rules.morale_bonus,
             false => 0.0,
         }
     }
@@ -501,7 +506,10 @@ impl World {
         let regiment = &self.regiments[r];
         let rate = |u: usize| {
             let unit = &self.units[u];
-            let rate = self.resupply_rates.get(&Id::from(unit.template.as_str()));
+            let rate = self
+                .rules
+                .resupply_rates
+                .get(&Id::from(unit.template.as_str()));
             let health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
             (rate.copied().unwrap_or(0.0) * pace.max(0.0), health)
         };
@@ -517,8 +525,10 @@ impl World {
         let places: Vec<usize> = (regiment.leader.into_iter())
             .chain((0..regiment.units.len()).filter(|&p| Some(p) != regiment.leader))
             .collect();
-        let zone =
-            (self.pathing).zone(self.leader_position(r), regiment.control(&self.guard_rules));
+        let zone = (self.pathing).zone(
+            self.leader_position(r),
+            regiment.control(&self.rules.guard_rules),
+        );
         let near = |&p: &usize| {
             Some(p) == regiment.leader || self.in_zone(&zone, Target::Unit(regiment.units[p]))
         };
@@ -547,12 +557,12 @@ impl World {
         let offsets = &regiment.formations[regiment.current_formation()].offsets;
         let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
         let recruits = |b: &&Building| {
-            let list = self.recruit_lists.get(&Id::from(b.template.as_str()));
+            let list = self.rules.recruit_lists.get(&Id::from(b.template.as_str()));
             b.standing()
                 && !b.busy()
                 && self.shares_supply(regiment.owner, b.owner)
                 && list.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
-                && distance(at, b.position) < regiment.control(&self.guard_rules)
+                && distance(at, b.position) < regiment.control(&self.rules.guard_rules)
         };
         let nearest = (self.buildings.iter().filter(recruits))
             .min_by(|a, b| distance(at, a.position).total_cmp(&distance(at, b.position)));
@@ -649,9 +659,11 @@ mod tests {
             depot
         };
         w.add_buildings(&[depot(7, 50.0), depot(6, 34.0), corps]);
-        w.supplies
+        w.rules
+            .supplies
             .insert(Id::from("corps"), supply(20.0, false, 0.0));
-        w.supplies
+        w.rules
+            .supplies
             .insert(Id::from("depot"), supply(20.0, true, 3.0));
         w
     }
@@ -670,8 +682,9 @@ mod tests {
             flags: vec![Id::from("org_infantry")],
             soft: Shape::Circle { radius: 1.0 },
         };
-        w.kinds.insert(Id::from("company"), kind);
-        w.supply_effects
+        w.rules.kinds.insert(Id::from("company"), kind);
+        w.rules
+            .supply_effects
             .insert(Id::from("resupplied"), effect(0.0, 0.25, true, &[]));
         let operation = aaa_map::Operation::Enchant {
             targets: aaa_map::Targets {
@@ -685,7 +698,7 @@ mod tests {
             property: Id::from("resupplied"),
             seconds: 10.0,
         };
-        w.operations.insert(Id::from("resupply"), operation);
+        w.rules.operations.insert(Id::from("resupply"), operation);
         (w, Id::from("resupply"))
     }
 
@@ -758,7 +771,8 @@ mod tests {
         let mut centre = city()[0].clone();
         centre.template = "centre".into();
         let mut w = siege(&[centre]);
-        w.supplies
+        w.rules
+            .supplies
             .insert(Id::from("centre"), supply(20.0, false, 0.0));
         // Nobody's there.
         run(&mut w, 1.0);
@@ -778,19 +792,20 @@ mod tests {
     #[test]
     fn relays_out_of_supply_earn_as_packed_and_hold_their_queues() {
         let mut w = economy();
-        w.packing.insert("depot".into(), packs());
+        w.rules.packing.insert("depot".into(), packs());
         let mut depot = truck().unpacks.unwrap().building;
         (depot.id, depot.owner, depot.position) = (41, 1, [50.0, 50.0]);
         depot.obstacle.as_mut().unwrap().position = depot.position;
         depot.deploy = w.buildings[0].deploy;
         w.add_buildings(&[depot]);
-        w.supplies
+        w.rules
+            .supplies
             .insert(Id::from("depot"), supply(20.0, true, 2.0));
         let room = aaa_map::Economy {
             production: amounts(&[("building_limit_provided", 20.0)]),
             ..Default::default()
         };
-        w.economies.insert(Id::from("start_loc"), room);
+        w.rules.economies.insert(Id::from("start_loc"), room);
         w.holdings.push((1, "start_loc".into()));
         let order = Command::Commission {
             building: 1,
@@ -810,19 +825,21 @@ mod tests {
         };
         assert_eq!(w.notices.iter().filter(told).count(), 1);
         // The HQ's zone reaching it puts it back to work.
-        w.supplies
+        w.rules
+            .supplies
             .insert(Id::from("house"), supply(60.0, false, 0.0));
         w.buildings[0].supply = Supplying::default();
         run(&mut w, 3.0);
         assert_eq!(w.building_ledger(1).production.get("money"), 25.0);
         assert!(w.buildings[1].queue.is_empty());
         // What can't pack earns in full without supply unless it needs it.
-        w.packing.clear();
-        w.supplies.remove(&Id::from("house"));
+        w.rules.packing.clear();
+        w.rules.supplies.remove(&Id::from("house"));
         run(&mut w, 4.0);
         assert!(w.out_of_supply(1));
         assert_eq!(w.building_ledger(1).production.get("money"), 25.0);
-        w.economies
+        w.rules
+            .economies
             .get_mut(&Id::from("depot"))
             .unwrap()
             .supply_required = true;
@@ -876,7 +893,8 @@ mod tests {
     #[test]
     fn buildings_give_no_supply_but_earn_while_they_unpack() {
         let mut w = division();
-        w.supplies
+        w.rules
+            .supplies
             .insert(Id::from("depot"), supply(20.0, true, 30.0));
         let hq = Command::Unpack {
             regiment: 0,
@@ -913,7 +931,8 @@ mod tests {
     fn replacements_leave_a_building_by_its_deployment_point() {
         let mut w = division();
         // The house recruits its kind, 6 to its left, within its reach.
-        w.recruit_lists
+        w.rules
+            .recruit_lists
             .insert(Id::from("house"), vec![Id::from("company")]);
         w.buildings[0].deploy = Some(DeployPoints {
             creation: [0.0, 0.0],
@@ -971,7 +990,11 @@ mod tests {
     fn regiments_out_of_supply_wear_away_while_their_side_is_short() {
         let mut w = division();
         // Costs it can't meet, and no money.
-        w.economies.get_mut(&Id::from("house")).unwrap().upkeep = amounts(&[("money", 500.0)]);
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[("money", 500.0)]);
         w.set_stockpile(1, 0.0);
         run(&mut w, 3.0);
         assert!(w.short(1).is_some());
@@ -1121,9 +1144,11 @@ mod tests {
     #[test]
     fn technologies_and_properties_change_supply_ranges() {
         let mut w = supplied_division();
-        w.supply_effects
+        w.rules
+            .supply_effects
             .insert(Id::from("logistics"), effect(5.0, 0.0, false, &[]));
-        w.supply_effects
+        w.rules
+            .supply_effects
             .insert(Id::from("sabotage"), effect(-100.0, 0.0, false, &[]));
         // 30 reaches 14 tiles straight out and 35 reaches 17.
         let far = [20.0 + 2.0 * 16.0, 20.0];
@@ -1148,13 +1173,15 @@ mod tests {
     #[test]
     fn technologies_and_properties_change_how_fast_regiments_resupply() {
         let mut w = supplied_division();
-        w.supply_effects.insert(
+        w.rules.supply_effects.insert(
             Id::from("foraging"),
             effect(0.0, 0.25, false, &["org_unit"]),
         );
-        w.supply_effects
+        w.rules
+            .supply_effects
             .insert(Id::from("rations"), effect(0.0, 0.25, false, &[]));
-        w.supply_effects
+        w.rules
+            .supply_effects
             .insert(Id::from("famine"), effect(0.0, -3.0, false, &[]));
         // Only on those with the properties a technology needs.
         w.grant(1, Id::from("foraging"));
@@ -1163,7 +1190,7 @@ mod tests {
             properties: vec![Id::from("org_unit")],
             ..Default::default()
         };
-        w.kinds.insert(Id::from("company"), kind);
+        w.rules.kinds.insert(Id::from("company"), kind);
         assert_eq!(w.resupply_multiplier(1), 1.25);
         // They add up, on the half its health a second it gets back.
         w.give(Enemy::Regiment(1), Id::from("rations"), 1.0);
@@ -1229,12 +1256,20 @@ mod tests {
         }
         run(&mut w, 1.0);
         assert!(w.regiments[1].in_supply);
-        w.economies.get_mut(&Id::from("house")).unwrap().upkeep = amounts(&[("money", 500.0)]);
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[("money", 500.0)]);
         w.set_stockpile(1, 0.0);
         run(&mut w, 2.0);
         assert!(w.short(1).is_some() && !w.regiments[1].in_supply);
         // Once it's run out the regiment's as it was.
-        w.economies.get_mut(&Id::from("house")).unwrap().upkeep = amounts(&[]);
+        w.rules
+            .economies
+            .get_mut(&Id::from("house"))
+            .unwrap()
+            .upkeep = amounts(&[]);
         for u in w.regiments[1].units.clone() {
             w.units[u].position = [26.0, 20.0];
         }
@@ -1250,14 +1285,15 @@ mod tests {
         let mut provisions = building(0, 0, [0.0, 0.0]);
         provisions.template = "provisions".into();
         provisions.fighter.destructible = true;
-        w.drops.insert(Id::from("provisions"), provisions);
-        w.supplies
+        w.rules.drops.insert(Id::from("provisions"), provisions);
+        w.rules
+            .supplies
             .insert(Id::from("provisions"), supply(10.0, false, 0.0));
-        w.decays.insert(Id::from("provisions"), 10.0);
+        w.rules.decays.insert(Id::from("provisions"), 10.0);
         let drop = Id::from("drop");
         let dropped = aaa_map::Operation::Drop(Id::from("provisions"));
-        w.operations.insert(drop.clone(), dropped);
-        w.operations.insert(
+        w.rules.operations.insert(drop.clone(), dropped);
+        w.rules.operations.insert(
             Id::from("airlift"),
             aaa_map::Operation::Drop(Id::from("tank")),
         );
@@ -1301,7 +1337,7 @@ mod tests {
         assert_eq!(w.morale_bonus(1), 0.0);
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         run(&mut w, 1.0);
-        assert_eq!(w.morale_bonus(1), w.supply_rules.morale_bonus);
+        assert_eq!(w.morale_bonus(1), w.rules.supply_rules.morale_bonus);
         assert!(w.morale_bonus(1) > 0.0);
     }
 }

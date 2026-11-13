@@ -243,7 +243,7 @@ impl World {
     }
 
     fn sight_of(&self, template: &str) -> Option<&aaa_map::Sight> {
-        self.sights.get(&Id::from(template))
+        self.rules.sights.get(&Id::from(template))
     }
 
     /// Whether the unit at `u` has left the zone of control of its
@@ -254,11 +254,11 @@ impl World {
         let leader = regiment.leader.map(|p| regiment.units[p]);
         if regiment.units.len() < 2
             || leader == Some(u)
-            || regiment.control(&self.guard_rules) <= 0.0
+            || regiment.control(&self.rules.guard_rules) <= 0.0
         {
             return false;
         }
-        distance(self.units[u].position, from) > regiment.control(&self.guard_rules)
+        distance(self.units[u].position, from) > regiment.control(&self.rules.guard_rules)
     }
 
     /// Lays each side's sight afresh from what its things see now.
@@ -391,7 +391,8 @@ mod tests {
     /// themselves and showing those fighting them `remote` round them.
     fn sighted(fighters: Vec<Fighter>, range: f32, remote: f32, fog: aaa_map::FogSetting) -> World {
         let mut w = battle(&[1, 2], fighters, at_war());
-        w.sights
+        w.rules
+            .sights
             .insert(Id::from("squad"), aaa_map::Sight { range, remote });
         w.set_fog(fog);
         w

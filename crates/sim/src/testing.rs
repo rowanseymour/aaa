@@ -412,7 +412,7 @@ pub(crate) fn economy() -> World {
         upkeep: amounts(upkeep),
         ..Default::default()
     };
-    w.economies.insert(
+    w.rules.economies.insert(
         Id::from("house"),
         economy(
             &[],
@@ -420,7 +420,7 @@ pub(crate) fn economy() -> World {
             &[("building_limit_consumed", 1.0)],
         ),
     );
-    w.economies.insert(
+    w.rules.economies.insert(
         Id::from("truck"),
         economy(
             &[("money", 250.0)],
@@ -433,7 +433,7 @@ pub(crate) fn economy() -> World {
             &[("building_limit_consumed", 1.0)],
         ),
     );
-    w.economies.insert(
+    w.rules.economies.insert(
         Id::from("depot"),
         economy(
             &[],
@@ -446,7 +446,7 @@ pub(crate) fn economy() -> World {
             &[("building_limit_consumed", 1.0)],
         ),
     );
-    w.economy = aaa_map::EconomyRules {
+    w.rules.economy = aaa_map::EconomyRules {
         purchase_cost: amounts(&[("ammo", 2.0), ("oil", 3.0)]),
         limits: vec![
             ("unit_limit_consumed", "unit_limit_provided"),
@@ -482,11 +482,12 @@ pub(crate) fn raised_company(w: &mut World, owner: u32) -> aaa_map::Regiment {
         upkeep: amounts(upkeep),
         ..Default::default()
     };
-    w.economies.insert(
+    w.rules.economies.insert(
         Id::from("company"),
         economy(&[("ammo", 10.0), ("unit_limit_consumed", 1.0)]),
     );
-    w.economies
+    w.rules
+        .economies
         .insert(Id::from("soldier"), economy(&[("ammo", 2.0)]));
     regiment
 }
@@ -513,12 +514,18 @@ pub(crate) fn logistics(attachments: Option<u32>) -> aaa_map::Logistics {
 /// and a company of three at 26,20 (regiment 1), detached.
 pub(crate) fn division() -> World {
     let mut w = economy();
-    w.supplies
+    w.rules
+        .supplies
         .insert(Id::from("house"), supply(30.0, false, 0.0));
-    w.logistics.insert(Id::from("truck"), logistics(Some(2)));
-    w.logistics.insert(Id::from("company"), logistics(None));
-    w.resupply_rates.insert(Id::from("soldier"), 0.5);
-    w.recruit_lists
+    w.rules
+        .logistics
+        .insert(Id::from("truck"), logistics(Some(2)));
+    w.rules
+        .logistics
+        .insert(Id::from("company"), logistics(None));
+    w.rules.resupply_rates.insert(Id::from("soldier"), 0.5);
+    w.rules
+        .recruit_lists
         .insert(Id::from("depot"), vec![Id::from("company")]);
     let mut t = truck();
     (t.id, t.owner) = (50, 1);

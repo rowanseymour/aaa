@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use aaa_map::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
 
 use crate::{
-    Building, Fog, Order, Regiment, Sides, State, Supplying, Trailer, Treasury, TurretAim, Unit,
-    World, normalised, wrap,
+    Building, Fog, Order, Regiment, Rules, Sides, State, Supplying, Trailer, Treasury, TurretAim,
+    Unit, World, normalised, wrap,
 };
 
 /// [`World::holdings`] from each placed object's role, owner and template.
@@ -22,12 +22,13 @@ pub(crate) fn holdings<'a>(
 }
 
 impl World {
-    pub fn new(map: &Map) -> World {
+    pub fn new(map: &Map, rules: Rules) -> World {
         let sides = Sides {
             players: map.players.clone(),
             teams: map.teams.clone(),
         };
         let mut world = World::from_regiments(sides, map.pathing.clone(), &map.regiments);
+        world.rules = rules;
         world.add_buildings(&map.buildings);
         world.tile_terrains = map.tile_terrains.clone();
         world.scenery = map.scenery.clone();
@@ -68,8 +69,8 @@ impl World {
         let mut world = World {
             sides,
             pathing,
+            rules: Rules::default(),
             tile_terrains: aaa_map::TileTerrains::default(),
-            terrain_rules: aaa_map::TerrainRules::default(),
             regiments: Vec::new(),
             units: Vec::new(),
             buildings: Vec::new(),
@@ -82,34 +83,13 @@ impl World {
             next_commission: 0,
             flying: Vec::new(),
             landings: Vec::new(),
-            packing: HashMap::new(),
-            requires: HashMap::new(),
-            economies: HashMap::new(),
-            sellable: HashSet::new(),
-            economy: aaa_map::EconomyRules::default(),
-            supplies: HashMap::new(),
-            supply_rules: aaa_map::SupplyRules::default(),
-            guard_rules: aaa_map::GuardRules::default(),
-            siege_seconds: 7.0,
-            supply_effects: HashMap::new(),
-            kinds: HashMap::new(),
             technologies: BTreeMap::new(),
             objectives: BTreeMap::new(),
-            sort_objectives: true,
-            operations: HashMap::new(),
-            drops: HashMap::new(),
-            decays: HashMap::new(),
-            logistics: HashMap::new(),
-            resupply_rates: HashMap::new(),
-            recruit_lists: HashMap::new(),
-            research_lists: HashMap::new(),
             rng: 0x9e37_79b9_7f4a_7c15,
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),
             commanders: BTreeMap::new(),
-            experience_per_second: 0.0,
             notices: Vec::new(),
-            sights: HashMap::new(),
             fog,
             numbered: HashSet::new(),
             numbers: HashMap::new(),
@@ -359,7 +339,7 @@ mod tests {
     #[test]
     fn what_a_map_leaves_out_for_lack_of_room_adds_nothing() {
         let mut w = economy();
-        w.economies.insert(
+        w.rules.economies.insert(
             Id::from("start_loc"),
             aaa_map::Economy {
                 production: amounts(&[("building_limit_provided", 20.0)]),

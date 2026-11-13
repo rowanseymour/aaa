@@ -21,7 +21,7 @@ pub struct Hq {
 
 impl World {
     pub(crate) fn logistics_of(&self, template: &str) -> Option<Logistics> {
-        self.logistics.get(&Id::from(template)).copied()
+        self.rules.logistics.get(&Id::from(template)).copied()
     }
 
     fn places(&self, template: &str) -> Option<u32> {
@@ -69,7 +69,7 @@ impl World {
     fn truck_survives(&self, r: usize) -> bool {
         let unpacks = self.regiments[r].unpacks.as_ref();
         let trucks = unpacks
-            .and_then(|u| self.packing.get(&u.building.template))
+            .and_then(|u| self.rules.packing.get(&u.building.template))
             .map(|p| &p.truck.members);
         let truck = |u: usize| {
             trucks.is_none_or(|t| t.iter().any(|m| m.template == self.units[u].template))
@@ -156,7 +156,10 @@ impl World {
     /// aside: its own side's, and one whose building recruits its kind.
     fn suits(&self, hq: &Hq, r: usize) -> bool {
         let regiment = &self.regiments[r];
-        let recruits = self.recruit_lists.get(&Id::from(hq.building.as_str()));
+        let recruits = self
+            .rules
+            .recruit_lists
+            .get(&Id::from(hq.building.as_str()));
         hq.owner == regiment.owner
             && recruits.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
     }
@@ -291,7 +294,7 @@ mod tests {
         // Not an enemy's, nor one that doesn't recruit its kind.
         w.regiments[1].hq = None;
         w.regiments[0].owner = 2;
-        w.recruit_lists.clear();
+        w.rules.recruit_lists.clear();
         assert_eq!(w.attaches_to(1), None);
     }
 
@@ -300,7 +303,9 @@ mod tests {
         let mut w = division();
         // Agents, which nothing recruits, and a truck outside any
         // organization.
-        w.logistics.insert(Id::from("agents"), logistics(None));
+        w.rules
+            .logistics
+            .insert(Id::from("agents"), logistics(None));
         let mut agents = raised_company(&mut w, 1);
         agents.renumber(80);
         agents.template = "agents".into();

@@ -213,7 +213,7 @@ impl World {
         let here = self.centre(r);
         let far = |e: usize| {
             let bias = if after == Some(e) {
-                self.guard_rules.bias
+                self.rules.guard_rules.bias
             } else {
                 0.0
             };
@@ -279,7 +279,7 @@ mod tests {
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [10.0, 12.0]));
         assert!(w.regiments[0].guarding());
-        assert_eq!(w.regiments[0].control(&w.guard_rules), 18.0 * 1.25);
+        assert_eq!(w.regiments[0].control(&w.rules.guard_rules), 18.0 * 1.25);
         // The same order again changes nothing; another ends it.
         w.apply(1, guard).unwrap();
         assert!(w.regiments[0].guarding());
