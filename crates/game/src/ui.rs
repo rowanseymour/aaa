@@ -284,26 +284,13 @@ impl Font {
         }
     }
 
-    /// The face it's set in. The menus take the logo's lettering: its
-    /// stencil where it's big enough to keep its letters whole, and the same
-    /// family's plain cut, drawn for small sizes, elsewhere. The interface
-    /// over the map keeps Bevy's own face, whose even figures suit counts.
+    /// The face it's set in: the logo's lettering, its stencil where it's
+    /// big enough to keep its letters whole, and the same family's plain cut,
+    /// drawn for small sizes, elsewhere.
     fn source(self) -> FontSource {
         match self {
             Font::Heading | Font::Large | Font::Title => FontSource::Handle(STENCIL),
-            Font::Body | Font::Question => FontSource::Handle(PLAIN),
-            Font::Small | Font::Hud | Font::HudTitle => FontSource::default(),
-        }
-    }
-
-    /// How far below its place to draw a line of this size so that its
-    /// figures, rather than the line, sit centred where it's centred: Bevy's
-    /// face keeps room below the line for descenders, which figures never
-    /// use. Measured on the figures; the menus' faces need none.
-    pub fn drop(self) -> f32 {
-        match self {
-            Font::Small | Font::Hud | Font::HudTitle => (self.px() / 7.0).round(),
-            Font::Body | Font::Heading | Font::Question | Font::Large | Font::Title => 0.0,
+            _ => FontSource::Handle(PLAIN),
         }
     }
 }
