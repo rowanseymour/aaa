@@ -122,3 +122,118 @@ impl World {
         (!free).then_some(limit.max(rules.slowest))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::combat::damage;
+    use crate::testing::*;
+    use crate::*;
+
+    #[test]
+    fn terrain_holds_everyone_on_it_to_its_last_propertys_speed_limit() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        let (forest, rules) = forest();
+        (w.tile_terrains, w.terrain_rules) = (aaa_map::TileTerrains::uniform(20, forest), rules);
+        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        let to = [10.0, 30.0];
+        w.apply(7, Command::Move { regiment: 0, to }).unwrap();
+        run(&mut w, 1.0);
+        // The vehicles' limit, though they're infantry.
+        assert!(w.units.iter().all(|u| u.speed == 1.0));
+        // Never below the lowest there is.
+        w.terrain_rules.slowest = 1.25;
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 1.25));
+        // A mountain's is the lowest there is.
+        let mountain = aaa_map::TileTerrain {
+            properties: Vec::new(),
+            mountain: true,
+        };
+        (w.tile_terrains, w.terrain_rules.slowest) =
+            (aaa_map::TileTerrains::uniform(20, mountain), 0.5);
+        run(&mut w, 0.2);
+        assert!(w.units.iter().all(|u| u.speed == 0.5));
+        // Unless its regiment has, for a time, a property free of limits,
+        w.regiments[0].properties.push(Held {
+            property: Id::from("trailblazing"),
+            until: u64::MAX,
+        });
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 2.0));
+        w.regiments[0].properties.clear();
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 0.5));
+        // its side a technology that is, on those it's for,
+        w.technologies.insert(7, vec![Id::from("trailblazing")]);
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 0.5));
+        let anyone = TerrainEffect::default();
+        (w.terrain_rules.effects).insert(Id::from("trailblazing"), anyone);
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 2.0));
+        w.technologies.clear();
+        // or its template is.
+        w.terrain_rules.free.insert(Id::from("squad"));
+        w.tick();
+        assert!(w.units.iter().all(|u| u.speed == 2.0));
+    }
+
+    #[test]
+    fn members_share_their_regiments_terrain_unless_they_straggle() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        let (forest, rules) = forest();
+        w.terrain_rules = rules;
+        w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
+        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        // Under the first only, who with no control range is on his own.
+        w.tile_terrains
+            .set(Tile::at(w.units[0].position), forest.clone());
+        w.stand();
+        let held = |w: &World, u| w.terrain_effects(Target::Unit(u)).len();
+        assert_eq!((held(&w, 0), held(&w, 1)), (1, 0));
+        assert!(w.regiments[0].terrain_properties.is_empty());
+        assert_eq!((w.speed_limit(0), w.speed_limit(1)), (Some(1.0), None));
+        w.regiments[0].control_range = 10.0;
+        w.stand();
+        assert_eq!((held(&w, 0), w.speed_limit(0)), (0, None));
+        // Under the regiment, which gains only what a member can.
+        w.tile_terrains.set(Tile::at(w.leader_position(0)), forest);
+        w.stand();
+        assert_eq!((held(&w, 0), held(&w, 1)), (1, 1));
+        assert_eq!(
+            w.regiments[0].terrain_properties,
+            [Id::from("forest_infantry")]
+        );
+        // Which follows who's left in it.
+        w.kinds.insert(Id::from("soldier"), kind(&["vehicle"]));
+        w.stand();
+        assert_eq!(
+            w.regiments[0].terrain_properties,
+            [Id::from("forest_vehicles")]
+        );
+        w.kinds.insert(Id::from("soldier"), kind(&["infantry"]));
+        w.stand();
+        // Unpacked, it keeps what it had wherever that leaves it.
+        w.regiments[0].unpacked_into = Some(0);
+        w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
+        w.stand();
+        assert_eq!(
+            w.regiments[0].terrain_properties,
+            [Id::from("forest_infantry")]
+        );
+    }
+
+    #[test]
+    fn terrain_properties_add_to_defence_and_resistance() {
+        let (_, rules) = forest();
+        let effect = |id: &str| &rules.effects[&Id::from(id)];
+        let hit =
+            |ground: &[&TerrainEffect]| damage(&rifle(12.0, 12.0), &soldier(vec![]), ground, 1.0);
+        assert_eq!(hit(&[]), 12.0);
+        assert!((hit(&[effect("forest_infantry")]) - 4.0).abs() < 1e-5);
+        assert!((hit(&[effect("forest_vehicles")]) - 14.4).abs() < 1e-5);
+        let both = [effect("forest_infantry"), effect("forest_vehicles")];
+        assert!((hit(&both) - 5.6).abs() < 1e-5);
+    }
+}
