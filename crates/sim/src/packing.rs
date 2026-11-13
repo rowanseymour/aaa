@@ -171,13 +171,13 @@ impl World {
         let share = building.health / building.fighter.health;
         let at = building.position;
         let owner = building.owner;
+        // Its ground is free for its truck, but its outline stays its own.
+        if let Some(o) = building.obstacle.clone() {
+            self.pathing.unblock(&o);
+        }
         let (id, organization) = (building.id, building.organization.clone());
         let from = building.unpacked_from;
         let stand = [at[0] + packs.offset[0], at[1] + packs.offset[1]];
-        // Gone before its truck is out, which stands on ground it blocked:
-        // into the truck that unpacked here, or the regiment made next.
-        let into = from.unwrap_or(self.regiments.len());
-        self.remove(b, State::Packed(self.ticks, into));
         // A truck that unpacked here comes back, in its organization, to
         // whoever holds the building now.
         let r = match from {
@@ -222,6 +222,7 @@ impl World {
                 unit.health = f.health * share;
             }
         }
+        self.buildings[b].state = State::Packed(self.ticks, r);
     }
 
     /// Puts the members of a regiment that unpacked back on the map, in

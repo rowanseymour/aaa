@@ -115,7 +115,7 @@ pub fn setup(mut commands: Commands, loaded: Res<Loaded>, sim: Res<Sim>) {
         ..default()
     };
     fog.known = (sim.0.buildings.iter())
-        .map(|b| fog.revealed.contains(&Id::from(b.template.as_str())))
+        .map(|b| fog.revealed.contains(&b.template))
         .collect();
     commands.insert_resource(fog);
 }

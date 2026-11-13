@@ -470,6 +470,32 @@ mod tests {
     use crate::{ARRIVAL_REACH, Command, Sides, Unit, World, within};
 
     #[test]
+    fn units_stood_somewhere_afresh_keep_nothing_of_what_they_were_doing() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.apply(
+            7,
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+        )
+        .unwrap();
+        run(&mut w, 1.0);
+        let u = &mut w.units[0];
+        u.target = Some(crate::Target::Unit(1));
+        u.shot = Some((3, 0));
+        u.closing = true;
+        u.stand_at([4.0, 6.0], [1.0, 0.0]);
+        assert!(!u.moving() && u.speed == 0.0 && !u.closing);
+        assert_eq!((u.position, u.previous), ([4.0, 6.0], [4.0, 6.0]));
+        assert_eq!((u.target, u.shot), (None, None));
+        // It stays there, facing as it was stood.
+        run(&mut w, 1.0);
+        assert_eq!(w.units[0].position, [4.0, 6.0]);
+        assert_eq!(w.units[0].facing, [1.0, 0.0]);
+    }
+
+    #[test]
     fn regiments_move_at_their_slowest_members_speed() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         w.apply(

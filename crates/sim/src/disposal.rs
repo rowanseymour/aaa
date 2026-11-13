@@ -2,7 +2,7 @@
 //! selling buildings.
 
 use crate::economy::money;
-use crate::{Fallen, Left, Notice, Order, Refused, State, World};
+use crate::{Fallen, Left, Notice, Refused, State, World};
 
 impl World {
     /// Whether a regiment is a lone unit rather than an organization, as a
@@ -67,8 +67,9 @@ impl World {
             }
         }
         let r = &mut self.regiments[regiment];
-        r.take_order(Order::Move);
         r.engaged.clear();
+        r.guard = None;
+        r.resume = None;
         if !self.lone(regiment) {
             let owner = self.regiments[regiment].owner;
             let what = Fallen::Regiment(regiment);
@@ -87,8 +88,8 @@ impl World {
         }
     }
 
-    /// Takes a building off the map, leaving it as `state`: its ground
-    /// free again, with nothing queued, aimed at or besieging it.
+    /// Takes a building off the map for good, leaving it as `state`: its
+    /// ground free again, with nothing queued, aimed at or besieging it.
     pub(crate) fn remove(&mut self, building: usize, state: State) {
         let b = &mut self.buildings[building];
         b.state = state;

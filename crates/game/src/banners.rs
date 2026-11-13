@@ -169,8 +169,7 @@ impl Scenery {
     /// Whether the regiment at this index into the sim's regiments is
     /// scenery.
     pub fn has(&self, sim: &aaa_sim::World, regiment: usize) -> bool {
-        self.0
-            .contains(&Id::from(sim.regiments[regiment].template.as_str()))
+        self.0.contains(&sim.regiments[regiment].template)
     }
 }
 

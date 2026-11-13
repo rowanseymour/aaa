@@ -517,7 +517,7 @@ pub fn update(
             _ => colour(&minimap.colours.buildings, building.owner),
         };
         // Drawn last, over the units.
-        if let Some(icon) = minimap.icons.get(&Id::from(building.template.as_str())) {
+        if let Some(icon) = minimap.icons.get(&building.template) {
             icons.push((icon, building.position, rgb));
             continue;
         }

@@ -426,7 +426,7 @@ fn holder(sim: &World, mode: &Mode) -> Option<usize> {
 /// their properties came in while their regiment stays selected.
 fn held(sim: &World, looks: &HashMap<Id, PropertyLook>, r: usize, shown: &[Id]) -> Vec<Id> {
     let regiment = &sim.regiments[r];
-    let kind = sim.rules().kinds.get(&Id::from(regiment.template.as_str()));
+    let kind = sim.rules().kinds.get(&regiment.template);
     let own = kind.into_iter().flat_map(|k| &k.properties).cloned();
     let terrain = regiment.terrain_properties.iter().cloned();
     let guarding =
@@ -1040,7 +1040,7 @@ fn portrayed<'a>(sim: &'a World, looks: &'a Looks, mode: &Mode) -> Option<(&'a s
             let template = match regiment.unpacked_into {
                 Some(b) => sim.buildings[b].template.as_str(),
                 // A unit on its own is no organization.
-                None => match looks.primaries.get(&Id::from(regiment.template.as_str())) {
+                None => match looks.primaries.get(&regiment.template) {
                     Some(primary) => primary.as_ref()?.as_str(),
                     None => regiment.template.as_str(),
                 },

@@ -446,10 +446,7 @@ impl Looks {
     /// has it.
     fn topics(&self, sim: &aaa_sim::World, building: Option<usize>) -> &[Topic] {
         building
-            .and_then(|b| {
-                self.researches
-                    .get(&Id::from(sim.buildings[b].template.as_str()))
-            })
+            .and_then(|b| self.researches.get(&sim.buildings[b].template))
             .map_or(&[], Vec::as_slice)
     }
 }

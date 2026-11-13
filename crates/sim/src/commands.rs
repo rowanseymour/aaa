@@ -470,6 +470,52 @@ mod tests {
     use crate::{Command, Commission, Fallen, NotYours, Notice, Refused};
 
     #[test]
+    fn a_new_order_forgets_what_the_regiment_was_told_before() {
+        let orders = [
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+            Command::Run {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+            Command::Stop { regiment: 0 },
+            Command::Guard {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+        ];
+        for order in orders {
+            let mut w = world(Pathing::uniform(20, Domain::Land));
+            w.apply(
+                7,
+                Command::Guard {
+                    regiment: 0,
+                    to: [5.0, 5.0],
+                },
+            )
+            .unwrap();
+            let r = &mut w.regiments[0];
+            r.rally = Some([1.0, 1.0]);
+            r.unpack_at = Some(([2.0, 2.0], [0.0, 1.0]));
+            r.unpack_again = Some(99);
+            r.resume = Some(([3.0, 3.0], [0.0, 1.0]));
+            w.apply(7, order.clone()).unwrap();
+            let r = &w.regiments[0];
+            let guarding = matches!(order, Command::Guard { .. });
+            assert_eq!(r.guard.is_some(), guarding, "{order:?}");
+            assert!(!r.guard.is_some_and(|g| g.post == [5.0, 5.0]), "{order:?}");
+            assert_eq!(
+                (r.rally, r.unpack_at, r.unpack_again),
+                (None, None, None),
+                "{order:?}"
+            );
+            assert_eq!(r.resume, None, "{order:?}");
+        }
+    }
+
+    #[test]
     fn regiments_only_take_orders_from_their_owner() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         assert_eq!(w.order_move(8, 0, [10.0, 20.0]), Err(NotYours));
