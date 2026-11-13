@@ -1,16 +1,21 @@
-//! The pane along the bottom, between the minimap and the action buttons,
-//! describing what's selected, laid out as the game's own but without its
-//! chrome. Its title names it and its owner, and a line along the bottom
-//! says what it's doing.
+//! The object display along the bottom, between the minimap and the action
+//! buttons, describing what's selected, laid out as the game's own but
+//! without its chrome. Its title names it and its owner, and a line along
+//! the bottom says what it's doing. It shows in one of the game's four
+//! [`Mode`]s:
 //!
-//! - One regiment: its officer's portrait over the regiment's health, a
-//!   card per other unit with the unit's health, and its banner.
-//! - Several: a card each, up to [`MAX_SELECTED`], with the banner, the
-//!   regiment's health and each unit's; clicking one selects it alone.
-//! - A building: its picture over its health, and what it's been asked to
-//!   commission, the first with its progress; clicking one calls it off.
-//! - An HQ, packed or not: a place for each regiment it takes, with the
-//!   regiment attached there or the one it's been asked for.
+//! - Simple actor, for a building or a unit on its own: its picture over
+//!   its health, and what a building's been asked to commission, the first
+//!   with its progress; clicking one calls it off.
+//! - Company, for a regiment: its officer's portrait over the regiment's
+//!   health, a card per other unit with the unit's health, and its banner.
+//!   An HQ, packed or not, has instead of the cards a place for each
+//!   regiment it takes, with the regiment attached there or the one it's
+//!   been asked for.
+//! - Group, for several: a card each, up to [`MAX_SELECTED`], with the
+//!   banner, the regiment's health and each unit's; clicking one selects
+//!   it alone.
+//! - Settlement, for a city.
 //!
 //! Beside the title of a regiment, or of the building one unpacked into,
 //! is an icon for each property it holds that has one, saying under the
@@ -34,15 +39,15 @@ use crate::{
     Drawn, Leaders, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint,
 };
 
-/// How many regiments can be selected at once, as many as the pane has
-/// cards for.
+/// How many regiments can be selected at once, as many as the group
+/// display has cards for.
 pub const MAX_SELECTED: usize = 6;
 
 /// Our pixels to one of the game's interface units, in which its layout is
-/// given, chosen so the pane stands as tall as the action buttons beside it.
+/// given, chosen so the display stands as tall as the action buttons beside it.
 const SCALE: f32 = crate::actions::SIZE.y / HEIGHT;
 const WIDTH: f32 = 495.0;
-/// The pane's size, in logical pixels.
+/// The display's size, in logical pixels.
 pub const SIZE: Vec2 = Vec2::new(WIDTH * SCALE, HEIGHT * SCALE);
 const HEIGHT: f32 = 183.0;
 
@@ -64,8 +69,8 @@ fn at(left: f32, top: f32, width: f32, height: f32) -> Node {
 const SLOTS_AT: Vec2 = Vec2::new(144.0, 44.0);
 const SLOTS_AREA: Vec2 = Vec2::new(148.0, 101.0);
 const SLOT: Vec2 = Vec2::new(42.0, 50.0);
-/// How many places go across before the next row, and how many the pane
-/// has room for.
+/// How many places go across before the next row, and how many the
+/// display has room for.
 const SLOTS_ACROSS: usize = 3;
 const MAX_SLOTS: usize = 6;
 /// Within a place, where its regiment's banner goes and how big it is,
@@ -96,7 +101,7 @@ const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrg
 const STOCKPILE: &str = "template_game_SupplyStockpileBar_ToolTip|ff";
 
 /// The icons for what's selected's properties run along the top into the
-/// pane's right corner, clear of the longest name: how far the last is
+/// display's right corner, clear of the longest name: how far the last is
 /// from the right edge and the row from the top, how big each is and how
 /// far it is to the next.
 const PROPERTIES_IN: Vec2 = Vec2::new(8.0, 6.0);
@@ -106,19 +111,19 @@ const PROPERTY_PITCH: f32 = 26.0;
 const MAX_PROPERTIES: usize = 7;
 
 /// What holds the properties' icons, so that they change without the
-/// rest of the pane being laid out again under the pointer.
+/// rest of the display being laid out again under the pointer.
 #[derive(Component)]
 pub struct PropertyRow;
 
-/// The pane, whose children show what [`Showing`] says.
+/// The object display, whose children show what [`Showing`] says.
 #[derive(Component)]
-pub struct Pane;
+pub struct ObjectDisplay;
 
-/// What the pane shows now.
+/// What the display shows now.
 #[derive(Resource, Default)]
-pub struct Showing(Option<(What, Detail)>);
+pub struct Showing(Option<(Mode, Detail)>);
 
-/// What of the pane's layout can change while it shows the same thing.
+/// What of the display's layout can change while it shows the same thing.
 #[derive(Clone, PartialEq, Debug, Default)]
 struct Detail {
     /// For an HQ, what's in each of its places.
@@ -140,11 +145,35 @@ enum Place {
     Queued(usize),
 }
 
-/// What the pane can show; a change in it lays the pane out afresh.
+/// Which of the game's displays shows, and what of; a change in it lays
+/// the display out afresh.
 #[derive(Clone, PartialEq, Debug)]
-enum What {
+enum Mode {
+    /// A building's, or that of a unit on its own, such as a truck.
+    SimpleActor(Actor),
+    /// A regiment's, or an HQ's, packed or not.
+    Company(Actor),
+    /// A city's.
+    #[allow(dead_code)]
+    Settlement,
+    /// That of several regiments.
+    Group(Vec<usize>),
+}
+
+impl Mode {
+    /// The one thing it shows, if it shows one.
+    fn actor(&self) -> Option<&Actor> {
+        match self {
+            Mode::SimpleActor(actor) | Mode::Company(actor) => Some(actor),
+            Mode::Settlement | Mode::Group(_) => None,
+        }
+    }
+}
+
+/// What a display of one thing shows.
+#[derive(Clone, PartialEq, Debug)]
+enum Actor {
     Regiment(usize),
-    Regiments(Vec<usize>),
     /// With the templates of what it's commissioning.
     Building(usize, Vec<String>),
 }
@@ -183,7 +212,7 @@ pub struct Pick(usize);
 #[derive(Component)]
 pub struct Queued(usize);
 
-/// What the pane is drawn with, loaded with the match.
+/// What the display is drawn with, loaded with the match.
 #[derive(Resource)]
 pub struct Looks {
     /// Templates' names, by id.
@@ -264,7 +293,7 @@ pub fn spawn(
             DespawnOnExit(Screen::Match),
         ))
         .with_child((
-            Pane,
+            ObjectDisplay,
             Blocks,
             RelativeCursorPosition::default(),
             ui::panel(
@@ -280,40 +309,57 @@ pub fn spawn(
         ));
 }
 
-/// What the selection calls for the pane to show.
-fn wanted(sim: &World, selected: &[usize], chosen: Option<usize>) -> Option<What> {
-    match (selected, chosen) {
+/// The mode the selection calls for the display to show in.
+fn wanted(
+    sim: &World,
+    hqs: &[aaa_sim::Hq],
+    selected: &[usize],
+    chosen: Option<usize>,
+) -> Option<Mode> {
+    let actor = match (selected, chosen) {
         ([], Some(b)) => {
             let queue = sim.buildings[b].queue.iter();
-            let templates = queue.map(|c| c.template().to_string()).collect();
-            Some(What::Building(b, templates))
+            Actor::Building(b, queue.map(|c| c.template().to_string()).collect())
         }
-        ([], None) => None,
-        ([r], _) => Some(What::Regiment(*r)),
-        (rs, _) => Some(What::Regiments(
-            rs.iter().take(MAX_SELECTED).copied().collect(),
-        )),
-    }
+        ([], None) => return None,
+        ([r], _) => Actor::Regiment(*r),
+        (rs, _) => {
+            return Some(Mode::Group(rs.iter().take(MAX_SELECTED).copied().collect()));
+        }
+    };
+    let company = match actor {
+        Actor::Regiment(r) => !lone(sim, r) || hq(sim, hqs, &actor).is_some(),
+        Actor::Building(..) => hq(sim, hqs, &actor).is_some(),
+    };
+    Some(match company {
+        true => Mode::Company(actor),
+        false => Mode::SimpleActor(actor),
+    })
 }
 
-/// The HQ the pane shows, if it shows one: a Division HQ's building, or
-/// its truck.
-fn shown_hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], what: &What) -> Option<&'a aaa_sim::Hq> {
-    let id = match *what {
-        What::Building(b, _) => sim.hq_of(b)?,
-        What::Regiment(r) => sim.regiments[r].id,
-        What::Regiments(_) => return None,
+/// The HQ `actor` is, if it's one: a Division HQ's building, or its truck.
+fn hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], actor: &Actor) -> Option<&'a aaa_sim::Hq> {
+    let id = match *actor {
+        Actor::Building(b, _) => sim.hq_of(b)?,
+        Actor::Regiment(r) => sim.regiments[r].id,
     };
     hqs.iter().find(|h| h.id == id)
 }
 
+/// The HQ the display shows, if it shows one.
+fn shown_hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], mode: &Mode) -> Option<&'a aaa_sim::Hq> {
+    match mode {
+        Mode::Company(actor) => hq(sim, hqs, actor),
+        _ => None,
+    }
+}
+
 /// The regiment whose properties show: the one selected alone, or the one
 /// that unpacked into the building.
-fn holder(sim: &World, what: &What) -> Option<usize> {
-    match what {
-        What::Regiment(r) => Some(*r),
-        What::Regiments(_) => None,
-        What::Building(b, _) => (sim.regiments.iter()).position(|r| r.unpacked_into == Some(*b)),
+fn holder(sim: &World, mode: &Mode) -> Option<usize> {
+    match mode.actor()? {
+        Actor::Regiment(r) => Some(*r),
+        Actor::Building(b, _) => (sim.regiments.iter()).position(|r| r.unpacked_into == Some(*b)),
     }
 }
 
@@ -353,14 +399,14 @@ fn detail(
     hqs: &[aaa_sim::Hq],
     badges: &Badges,
     looks: &Looks,
-    what: &What,
+    mode: &Mode,
     shown: &[Id],
 ) -> Detail {
-    let queued = match what {
-        What::Building(_, queue) => queue.len(),
+    let queued = match mode.actor() {
+        Some(Actor::Building(_, queue)) => queue.len(),
         _ => 0,
     };
-    let slots: Vec<Place> = shown_hq(sim, hqs, what).map_or(Vec::new(), |hq| {
+    let slots: Vec<Place> = shown_hq(sim, hqs, mode).map_or(Vec::new(), |hq| {
         let attached = sim.attached(hq.id).map(Place::Regiment);
         let places = (hq.places as usize).min(MAX_SLOTS);
         attached
@@ -369,10 +415,12 @@ fn detail(
             .take(places)
             .collect()
     });
-    let own: &[usize] = match what {
-        What::Regiment(r) => std::slice::from_ref(r),
-        What::Regiments(rs) => rs,
-        What::Building(..) => &[],
+    let own: &[usize] = match mode {
+        Mode::Group(rs) => rs,
+        _ => match mode.actor() {
+            Some(Actor::Regiment(r)) => std::slice::from_ref(r),
+            _ => &[],
+        },
     };
     let attached = slots.iter().filter_map(|place| match place {
         Place::Regiment(r) => Some(*r),
@@ -382,7 +430,7 @@ fn detail(
     let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
     let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
     let properties =
-        holder(sim, what).map_or(Vec::new(), |r| held(sim, &looks.properties, r, shown));
+        holder(sim, mode).map_or(Vec::new(), |r| held(sim, &looks.properties, r, shown));
     Detail {
         slots,
         banners,
@@ -390,7 +438,7 @@ fn detail(
     }
 }
 
-/// Lays the pane out afresh when what it should show changes.
+/// Lays the display out afresh when what it should show changes.
 #[allow(clippy::too_many_arguments)]
 pub fn lay_out(
     mut commands: Commands,
@@ -406,26 +454,27 @@ pub fn lay_out(
     mut looks: ResMut<Looks>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
-    mut pane: Single<(Entity, &mut Visibility), With<Pane>>,
+    mut display: Single<(Entity, &mut Visibility), With<ObjectDisplay>>,
     row: Query<Entity, With<PropertyRow>>,
 ) {
-    let what = wanted(&sim.0, &selected.0, chosen.0);
-    let what = what.map(|w| {
+    let hqs = sim.0.hqs();
+    let mode = wanted(&sim.0, &hqs, &selected.0, chosen.0);
+    let mode = mode.map(|m| {
         let shown = match &showing.0 {
-            Some((was, detail)) if holder(&sim.0, was) == holder(&sim.0, &w) => {
+            Some((was, detail)) if holder(&sim.0, was) == holder(&sim.0, &m) => {
                 detail.properties.as_slice()
             }
             _ => &[],
         };
-        let detail = detail(&sim.0, &sim.0.hqs(), &badges, &looks, &w, shown);
-        (w, detail)
+        let detail = detail(&sim.0, &hqs, &badges, &looks, &m, shown);
+        (m, detail)
     });
     // Who plays decides what owners are called.
-    if showing.0 == what && !local.is_changed() {
+    if showing.0 == mode && !local.is_changed() {
         return;
     }
     // Only the icons, where nothing else has changed.
-    let rest_stands = match (&showing.0, &what) {
+    let rest_stands = match (&showing.0, &mode) {
         (Some((a, was)), Some((b, now))) => {
             a == b && was.slots == now.slots && was.banners == now.banners
         }
@@ -435,19 +484,19 @@ pub fn lay_out(
         .single()
         .ok()
         .filter(|_| rest_stands && !local.is_changed());
-    let (root, visibility) = &mut *pane;
+    let (root, visibility) = &mut *display;
     match row {
         Some(row) => drop(commands.entity(row).despawn_related::<Children>()),
         None => {
             commands.entity(*root).despawn_related::<Children>();
-            visibility.set_if_neq(match what {
+            visibility.set_if_neq(match mode {
                 Some(_) => Visibility::Inherited,
                 None => Visibility::Hidden,
             });
         }
     }
-    showing.0 = what.clone();
-    let Some((what, detail)) = what else {
+    showing.0 = mode.clone();
+    let Some((mode, detail)) = mode else {
         return;
     };
     let mut ui = Ui {
@@ -466,14 +515,15 @@ pub fn lay_out(
     if let Some(row) = row {
         return ui.icons(&mut commands, row);
     }
-    match what {
-        What::Regiment(r) => ui.regiment(&mut commands, root, r),
-        What::Regiments(rs) => ui.regiments(&mut commands, root, &rs),
-        What::Building(b, _) => ui.building(&mut commands, root, b),
+    match mode {
+        Mode::SimpleActor(actor) => ui.simple_actor(&mut commands, root, &actor),
+        Mode::Company(actor) => ui.company(&mut commands, root, &actor),
+        Mode::Settlement => {}
+        Mode::Group(rs) => ui.group(&mut commands, root, &rs),
     }
 }
 
-/// What laying the pane out reads.
+/// What laying the display out reads.
 struct Ui<'a> {
     sim: &'a World,
     local: Option<u32>,
@@ -503,13 +553,13 @@ impl Ui<'_> {
     fn title(&self, commands: &mut Commands, root: Entity, name: String, owner: u32) {
         let player = self.sim.sides.player(owner);
         let colour = TINTS[tint(self.sim, self.local, owner)];
-        commands.entity(root).with_children(|pane| {
-            pane.spawn((
+        commands.entity(root).with_children(|display| {
+            display.spawn((
                 at(8.0, 5.0, 300.0, 14.0),
                 label(name, Font::HudTitle, Ink::Body),
             ));
             if let Some(p) = player {
-                pane.spawn((
+                display.spawn((
                     at(8.0, 21.0, 300.0, 14.0),
                     ui::coloured(self.leaders.owner(p, self.local), Font::Hud, colour),
                 ));
@@ -521,9 +571,9 @@ impl Ui<'_> {
     #[allow(clippy::too_many_arguments)]
     fn portrait(&mut self, commands: &mut Commands, root: Entity, template: &str, fill: Fill) {
         let picture = self.picture(template);
-        commands.entity(root).with_children(|pane| {
-            pane.spawn((framed(at(8.0, 44.0, 124.0, 124.0)), picture_node(picture)));
-            bar(pane, at(8.0, 171.0, 124.0, 4.0), fill);
+        commands.entity(root).with_children(|display| {
+            display.spawn((framed(at(8.0, 44.0, 124.0, 124.0)), picture_node(picture)));
+            bar(display, at(8.0, 171.0, 124.0, 4.0), fill);
         });
     }
 
@@ -540,7 +590,7 @@ impl Ui<'_> {
         self.icons(commands, row);
     }
 
-    /// An icon in the pane's corner for each property that shows.
+    /// An icon in the display's corner for each property that shows.
     fn icons(&mut self, commands: &mut Commands, row: Entity) {
         for (i, id) in self.detail.properties.iter().enumerate() {
             let Some(look) = self.looks.properties.get(id).cloned() else {
@@ -561,8 +611,9 @@ impl Ui<'_> {
 
     /// The line along the bottom saying what it's doing.
     fn status(&self, commands: &mut Commands, root: Entity, status: Status) {
-        commands.entity(root).with_children(|pane| {
-            pane.spawn((at(144.0, 158.0, 286.0, 18.0), Surface::Track))
+        commands.entity(root).with_children(|display| {
+            display
+                .spawn((at(144.0, 158.0, 286.0, 18.0), Surface::Track))
                 .with_child((
                     Node {
                         position_type: PositionType::Absolute,
@@ -673,16 +724,56 @@ impl Ui<'_> {
         }
     }
 
-    fn regiment(&mut self, commands: &mut Commands, root: Entity, r: usize) {
+    /// The simple actor display: a building with what it's commissioning,
+    /// or a unit on its own.
+    fn simple_actor(&mut self, commands: &mut Commands, root: Entity, actor: &Actor) {
+        match *actor {
+            Actor::Regiment(r) => {
+                self.heading(commands, root, r);
+                self.properties(commands, root);
+                self.status(commands, root, Status::Regiment(r));
+            }
+            Actor::Building(b, _) => {
+                self.structure(commands, root, b);
+                self.queue(commands, root, b);
+                self.properties(commands, root);
+                self.status(commands, root, Status::Building(b));
+            }
+        }
+    }
+
+    /// The company display: a regiment with its units, or an HQ with its
+    /// places.
+    fn company(&mut self, commands: &mut Commands, root: Entity, actor: &Actor) {
+        match *actor {
+            Actor::Regiment(r) => self.regiment(commands, root, r),
+            Actor::Building(b, _) => {
+                self.structure(commands, root, b);
+                // Its places show what it's been asked for.
+                self.slots(commands, root, Some(b));
+                self.properties(commands, root);
+                self.status(commands, root, Status::Building(b));
+            }
+        }
+    }
+
+    /// A regiment's name and owner, and its leader's portrait over its
+    /// health.
+    fn heading(&mut self, commands: &mut Commands, root: Entity, r: usize) {
         let regiment = &self.sim.regiments[r];
         self.title(commands, root, self.regiment_name(r), regiment.owner);
         let leader = leader(self.sim, r);
         let template = self.sim.units[leader].template.clone();
         self.portrait(commands, root, &template, Fill::Regiment(r));
+    }
+
+    fn regiment(&mut self, commands: &mut Commands, root: Entity, r: usize) {
+        self.heading(commands, root, r);
+        let leader = leader(self.sim, r);
         // An HQ shows its places where a regiment shows its units.
         let is_hq = !self.detail.slots.is_empty();
         if !lone(self.sim, r) && !is_hq {
-            // Cards across, wrapping, as the game's company display has them,
+            // Cards across, wrapping, as the game's has them,
             // for all but an officer, who has the portrait.
             let officer = is_officer(&self.sim.units[leader].template);
             let mut units = self.sim.regiments[r].units.clone();
@@ -691,54 +782,56 @@ impl Ui<'_> {
                 .iter()
                 .map(|&u| self.picture(&self.sim.units[u].template.clone()))
                 .collect();
-            commands.entity(root).with_children(|pane| {
-                pane.spawn((
-                    Node {
-                        flex_wrap: FlexWrap::Wrap,
-                        column_gap: px(2.0 * SCALE),
-                        row_gap: px(2.0 * SCALE),
-                        align_content: AlignContent::FlexStart,
-                        ..at(144.0, 44.0, 210.0, 110.0)
-                    },
-                    Pickable::IGNORE,
-                ))
-                .with_children(|cards| {
-                    for (&u, picture) in units.iter().zip(pictures) {
-                        cards
-                            .spawn(framed(Node {
-                                width: px(42.0 * SCALE),
-                                height: px(47.0 * SCALE),
-                                flex_direction: FlexDirection::Column,
-                                ..default()
-                            }))
-                            .with_children(|card| {
-                                card.spawn((
-                                    Node {
-                                        width: percent(100),
-                                        flex_grow: 1.0,
-                                        ..default()
-                                    },
-                                    picture_node(picture),
-                                    UnitPicture(u),
-                                    Shade::Full,
-                                ));
-                                bar(
-                                    card,
-                                    Node {
-                                        width: percent(100),
-                                        height: px(4.0 * SCALE),
-                                        ..default()
-                                    },
-                                    Fill::Unit(u),
-                                );
-                            });
-                    }
-                });
+            commands.entity(root).with_children(|display| {
+                display
+                    .spawn((
+                        Node {
+                            flex_wrap: FlexWrap::Wrap,
+                            column_gap: px(2.0 * SCALE),
+                            row_gap: px(2.0 * SCALE),
+                            align_content: AlignContent::FlexStart,
+                            ..at(144.0, 44.0, 210.0, 110.0)
+                        },
+                        Pickable::IGNORE,
+                    ))
+                    .with_children(|cards| {
+                        for (&u, picture) in units.iter().zip(pictures) {
+                            cards
+                                .spawn(framed(Node {
+                                    width: px(42.0 * SCALE),
+                                    height: px(47.0 * SCALE),
+                                    flex_direction: FlexDirection::Column,
+                                    ..default()
+                                }))
+                                .with_children(|card| {
+                                    card.spawn((
+                                        Node {
+                                            width: percent(100),
+                                            flex_grow: 1.0,
+                                            ..default()
+                                        },
+                                        picture_node(picture),
+                                        UnitPicture(u),
+                                        Shade::Full,
+                                    ));
+                                    bar(
+                                        card,
+                                        Node {
+                                            width: percent(100),
+                                            height: px(4.0 * SCALE),
+                                            ..default()
+                                        },
+                                        Fill::Unit(u),
+                                    );
+                                });
+                        }
+                    });
             });
         }
         if !lone(self.sim, r) {
-            commands.entity(root).with_children(|pane| {
-                pane.spawn(framed(at(366.0, 44.0, 63.0, 77.0)))
+            commands.entity(root).with_children(|display| {
+                display
+                    .spawn(framed(at(366.0, 44.0, 63.0, 77.0)))
                     .with_children(|card| {
                         self.banner(
                             card,
@@ -760,7 +853,8 @@ impl Ui<'_> {
         self.status(commands, root, Status::Regiment(r));
     }
 
-    fn regiments(&mut self, commands: &mut Commands, root: Entity, rs: &[usize]) {
+    /// The group display: a card per regiment.
+    fn group(&mut self, commands: &mut Commands, root: Entity, rs: &[usize]) {
         let first = rs[0];
         self.title(
             commands,
@@ -810,7 +904,9 @@ impl Ui<'_> {
         }
     }
 
-    fn building(&mut self, commands: &mut Commands, root: Entity, b: usize) {
+    /// A building's name and owner, and its picture over its health and,
+    /// for a relay, its stockpile.
+    fn structure(&mut self, commands: &mut Commands, root: Entity, b: usize) {
         let building = &self.sim.buildings[b];
         let template = building.template.clone();
         let name = building_name(self.sim, &self.looks.names, &self.looks.strings, b);
@@ -823,15 +919,15 @@ impl Ui<'_> {
                 .entity(root)
                 .with_child((meter(node, Gauge::Stockpile), fill));
         }
-        self.slots(commands, root, Some(b));
-        // An HQ's places show what it's been asked for.
-        let queue: Vec<String> = (building.queue.iter())
-            .filter(|_| self.detail.slots.is_empty())
-            .map(|c| c.template().to_string())
-            .collect();
+    }
+
+    /// What a building is commissioning, the first with its progress.
+    fn queue(&mut self, commands: &mut Commands, root: Entity, b: usize) {
+        let queue = self.sim.buildings[b].queue.iter();
+        let queue: Vec<String> = queue.map(|c| c.template().to_string()).collect();
         // Commissions are trucks, which show their building's button.
         let pictures: Vec<_> = queue.iter().map(|t| self.picture(t)).collect();
-        commands.entity(root).with_children(|pane| {
+        commands.entity(root).with_children(|display| {
             for (i, picture) in pictures.into_iter().enumerate().take(6) {
                 let node = match i {
                     0 => at(240.0, 44.0, 64.0, 64.0),
@@ -845,19 +941,18 @@ impl Ui<'_> {
                         )
                     }
                 };
-                pane.spawn((framed(node), picture_node(picture), Button, Queued(i)))
+                display
+                    .spawn((framed(node), picture_node(picture), Button, Queued(i)))
                     .observe(cancel);
             }
             if !queue.is_empty() {
-                bar(pane, at(240.0, 110.0, 64.0, 4.0), Fill::Progress(b));
+                bar(display, at(240.0, 110.0, 64.0, 4.0), Fill::Progress(b));
             }
         });
-        self.properties(commands, root);
-        self.status(commands, root, Status::Building(b));
     }
 }
 
-/// Keeps the pane's bars, pictures and status up to date.
+/// Keeps the display's bars, pictures and status up to date.
 pub fn refresh(
     sim: Res<Sim>,
     looks: Res<Looks>,
