@@ -75,7 +75,7 @@ pub fn spacer() -> impl Bundle {
 
 /// Our own emblem, crowning the main menu's column where the game has its
 /// logo.
-const LOGO: &[u8] = include_bytes!("../../../docs/logo/logo.png");
+const LOGO: &[u8] = include_bytes!("../../../assets/logo/logo.png");
 
 fn main_menu(
     mut commands: Commands,
