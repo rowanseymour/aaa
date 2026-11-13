@@ -60,9 +60,10 @@ pub struct Map {
 }
 
 impl Map {
-    /// Loads the map at an archive path, as [`GameData::find_map`] gives it.
-    pub fn load(game: &mut GameData, name: &str) -> Result<Map, String> {
-        Map::load_as(game, name, &HashMap::new())
+    /// Loads the map at an archive path, as [`GameData::find_map`] gives it,
+    /// with `recruits` from the same game data.
+    pub fn load(game: &mut GameData, recruits: &Recruits, name: &str) -> Result<Map, String> {
+        Map::load_as(game, recruits, name, &HashMap::new())
     }
 
     /// [`Map::load`]s a map with sides playing as `nations`, by player id,
@@ -70,6 +71,7 @@ impl Map {
     /// with, such as its Corps HQ.
     pub fn load_as(
         game: &mut GameData,
+        recruits: &Recruits,
         name: &str,
         nations: &HashMap<u32, Nation>,
     ) -> Result<Map, String> {
@@ -100,7 +102,6 @@ impl Map {
                 None
             }
         };
-        let recruits = Recruits::new(game);
         let bodies = &recruits.bodies;
         let defined = |t: &Thing| bodies.contains_key(&Id::from(t.template.as_str()));
         retain(&mut things, |t| {
@@ -146,7 +147,7 @@ impl Map {
             fighters,
             &game.city_zones(),
             &obstacles.iter().cloned().collect(),
-            &game.deploy_points(),
+            &recruits.deploy_points,
             &recruits.ranges,
         );
         let ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
@@ -187,6 +188,15 @@ impl Map {
 }
 
 impl Map {
+    /// The objects standing on the map, organizations' members among them:
+    /// those of [`Map::things`] that aren't [`Map::crowded`], whose ids
+    /// those of regiments' lost members may repeat.
+    pub fn standing(&self) -> impl Iterator<Item = &Thing> {
+        buildings::standing(&self.things)
+            .map(|(t, _)| t)
+            .filter(|t| !self.crowded.contains(&t.id))
+    }
+
     /// Regroups the map's sides into `teams`, each a list of player ids, for
     /// a match: sides on a team are allies, at war with the other teams, and
     /// sides on none leave the match with everything they own. Independent

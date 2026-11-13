@@ -1185,8 +1185,8 @@ impl World {
         let r = self.regiments.len();
         let first = self.units.len();
         for m in &regiment.members {
-            let [x, y, _] = m.thing.position;
-            let facing = normalised([m.thing.facing[0], m.thing.facing[1]]).unwrap_or([0.0, -1.0]);
+            let [x, y] = m.position;
+            let facing = normalised(m.facing).unwrap_or([0.0, -1.0]);
             let (tx, ty) = tile_at([x, y]);
             // Units start on what they travel on.
             let domain = match self.pathing.passable(tx, ty, Domain::Land)
@@ -1210,9 +1210,9 @@ impl World {
                 // One its regiment has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
                 terrain: 0,
-                template_id: Id::from(m.thing.template.as_str()),
-                id: m.thing.id,
-                template: m.thing.template.clone(),
+                template_id: Id::from(m.template.as_str()),
+                id: m.id,
+                template: m.template.clone(),
                 regiment: r,
                 domain,
                 position: [x, y],
@@ -1288,7 +1288,7 @@ impl World {
             terrain_properties: Vec::new(),
             template_id: Id::from(regiment.template.as_str()),
         });
-        let ids = regiment.members.iter().map(|m| m.thing.id);
+        let ids = regiment.members.iter().map(|m| m.id);
         self.next_id = ids
             .chain([regiment.id])
             .fold(self.next_id, |n, id| n.max(id + 1));
@@ -2435,7 +2435,7 @@ impl World {
                     false => {
                         let first = self.take_ids(truck.members.len() as u32);
                         for (m, id) in truck.members.iter_mut().zip(first..) {
-                            m.thing.id = id;
+                            m.id = id;
                         }
                         truck.id = id;
                     }
@@ -3919,23 +3919,13 @@ mod tests {
 
     use super::*;
     use aaa_map::{Obstacle, Shape, SupplyEffect};
-    use tgck::map::{Detail, Thing};
 
     fn member(id: u32, position: [f32; 2], speed: f32) -> aaa_map::Member {
         aaa_map::Member {
-            thing: Thing {
-                template: "soldier".into(),
-                class: tgck::map::ACTOR,
-                id,
-                name: String::new(),
-                position: [position[0], position[1], 0.0],
-                facing: [0.0, 1.0, 0.0],
-                flags: 0,
-                scale: 1.0,
-                variation: -1,
-                seen_by: 0,
-                detail: Detail::Raw(Vec::new()),
-            },
+            id,
+            template: "soldier".into(),
+            position,
+            facing: [0.0, 1.0],
             speed,
             shape: None,
             acceleration: 0.0,
@@ -6151,7 +6141,7 @@ mod tests {
             height: 8.0,
         };
         let mut m = member(0, [0.0, 0.0], 3.0);
-        m.thing.template = "truck".into();
+        m.template = "truck".into();
         m.fighter = Some(soldier(Vec::new()));
         aaa_map::Regiment {
             hq: None,
@@ -6287,7 +6277,7 @@ mod tests {
         // A second member, which decides where the two differ.
         let mut regiment = truck();
         let mut rifleman = regiment.members[0].clone();
-        rifleman.thing.template = "rifleman".into();
+        rifleman.template = "rifleman".into();
         regiment.members.push(rifleman);
         let commission = |regiment: &aaa_map::Regiment| Command::Commission {
             building: 0,
@@ -7380,7 +7370,7 @@ mod tests {
             .insert(Id::from("depot"), vec![Id::from("company")]);
         let mut t = truck();
         (t.id, t.owner) = (50, 1);
-        t.members[0].thing.id = 50;
+        t.members[0].id = 50;
         t.place([30.0, 30.0], [0.0, 1.0]);
         w.add_regiment(&t);
         let mut c = raised_company(&mut w, 1);
@@ -7428,7 +7418,7 @@ mod tests {
         // attached one the next round.
         let mut t = truck();
         (t.id, t.owner) = (70, 1);
-        t.members[0].thing.id = 70;
+        t.members[0].id = 70;
         t.place([26.0, 24.0], [0.0, 1.0]);
         w.add_regiment(&t);
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
@@ -7474,7 +7464,7 @@ mod tests {
         w.add_regiment(&agents);
         let mut lorry = truck();
         (lorry.id, lorry.owner, lorry.template) = (90, 1, "lorry".into());
-        lorry.members[0].thing.id = 90;
+        lorry.members[0].id = 90;
         lorry.place([22.0, 30.0], [0.0, 1.0]);
         w.add_regiment(&lorry);
         assert_eq!(w.detached(1), [1, 2]);
@@ -7680,7 +7670,7 @@ mod tests {
         let mut company = raised_company(&mut w, 1);
         company.primary = Some(1);
         for m in &mut company.members {
-            m.thing.template = "soldier".into();
+            m.template = "soldier".into();
             m.fighter = Some(soldier(Vec::new()));
         }
         let order = |c: &aaa_map::Regiment| Command::Commission {

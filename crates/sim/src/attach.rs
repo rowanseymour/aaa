@@ -72,7 +72,7 @@ impl World {
             .and_then(|u| self.packing.get(&u.building.template))
             .map(|p| &p.truck.members);
         let truck = |u: usize| {
-            trucks.is_none_or(|t| t.iter().any(|m| m.thing.template == self.units[u].template))
+            trucks.is_none_or(|t| t.iter().any(|m| m.template == self.units[u].template))
         };
         self.survivors(r).any(truck)
     }
