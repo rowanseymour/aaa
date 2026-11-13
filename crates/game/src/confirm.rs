@@ -8,6 +8,7 @@ use bevy::input::InputSystems;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
+use crate::Screen;
 use crate::ui::{self, Font, layer};
 
 /// What the dialog's buttons say, and the questions more than one place
@@ -47,24 +48,30 @@ pub struct ConfirmPlugin;
 impl Plugin for ConfirmPlugin {
     fn build(&self, app: &mut App) {
         // Ahead of everything else that reads Escape, so the press that
-        // cancels a question doesn't also close what it was asked over.
-        app.init_resource::<Words>()
-            .add_systems(PreUpdate, cancel.after(InputSystems));
+        // cancels a question doesn't also close what it was asked over; but
+        // not under the console, whose Escape it is.
+        app.add_systems(
+            PreUpdate,
+            cancel.after(InputSystems).run_if(crate::console::closed),
+        );
     }
 }
 
-/// Asks `question`, running `ok` if it's answered Ok; either answer, or
-/// Escape, takes the question down. Returns the question's root, for the
-/// caller to tie to a screen.
+/// Asks `question` on `screen`, running `ok` if it's answered Ok; either
+/// answer, Escape, or leaving the screen takes the question down.
 pub fn confirm<M>(
     commands: &mut Commands,
     words: &Words,
+    screen: Screen,
     question: impl Into<String>,
     ok: impl IntoEntityObserver<M>,
-) -> Entity {
-    let root = commands.spawn((Question, ui::scrim(layer::QUESTION))).id();
+) {
+    let root = commands
+        .spawn((Question, DespawnOnExit(screen), ui::scrim(layer::QUESTION)))
+        .id();
+    // Already gone if Escape or the other answer took it down this frame.
     let dismiss = move |_: On<Activate>, mut commands: Commands| {
-        commands.entity(root).despawn();
+        commands.entity(root).try_despawn();
     };
     let dialog = commands
         .spawn((
@@ -100,7 +107,6 @@ pub fn confirm<M>(
     commands
         .spawn((answer(words.cancel.clone()), ChildOf(row)))
         .observe(dismiss);
-    root
 }
 
 /// A [`ui::button`] sharing its row equally with the other answer.
@@ -110,11 +116,7 @@ fn answer(words: String) -> impl Bundle {
         flex_basis: px(0),
         ..ui::padded()
     };
-    (
-        ui::clickable(ui::card(node)),
-        ui::Card,
-        children![ui::text(words, Font::Large)],
-    )
+    ui::shaped_button(words, Font::Large, node)
 }
 
 /// Takes the questions down on Escape, as Cancel would.
@@ -127,7 +129,9 @@ fn cancel(
         return;
     }
     keys.clear_just_pressed(KeyCode::Escape);
-    questions.iter().for_each(|q| commands.entity(q).despawn());
+    questions
+        .iter()
+        .for_each(|q| commands.entity(q).try_despawn());
 }
 
 #[cfg(test)]
@@ -141,6 +145,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, ConfirmPlugin))
             .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<crate::console::Console>()
             .init_resource::<Answered>();
         app.update();
         let world = app.world_mut();
@@ -149,6 +154,7 @@ mod tests {
         confirm(
             &mut commands,
             &words,
+            Screen::MainMenu,
             "Sure?",
             |_: On<Activate>, mut a: ResMut<Answered>| {
                 a.0 = true;

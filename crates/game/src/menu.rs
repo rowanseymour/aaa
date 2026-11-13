@@ -18,8 +18,14 @@ impl Plugin for MenuPlugin {
 }
 
 /// An observer that asks whether to exit the game, and does if so.
-pub fn ask_quit(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) {
-    confirm::confirm(&mut commands, &words, words.quit.clone(), quit);
+pub fn ask_quit(
+    _: On<Activate>,
+    mut commands: Commands,
+    words: Res<confirm::Words>,
+    screen: Res<State<Screen>>,
+) {
+    let question = words.quit.clone();
+    confirm::confirm(&mut commands, &words, *screen.get(), question, quit);
 }
 
 fn quit(_: On<Activate>, mut exit: MessageWriter<AppExit>) {

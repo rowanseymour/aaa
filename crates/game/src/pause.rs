@@ -149,13 +149,19 @@ mod tests {
 
     fn app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, PausePlugin))
-            .insert_state(Screen::Match)
-            .init_resource::<ButtonInput<KeyCode>>()
-            .init_resource::<console::Console>()
-            .init_resource::<Page>()
-            .init_resource::<Focus>()
-            .insert_resource(Options::of(Vec::new(), None, &HashMap::new()));
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            PausePlugin,
+            crate::confirm::ConfirmPlugin,
+        ))
+        .insert_state(Screen::Match)
+        .insert_resource(crate::confirm::Words::default())
+        .init_resource::<ButtonInput<KeyCode>>()
+        .init_resource::<console::Console>()
+        .init_resource::<Page>()
+        .init_resource::<Focus>()
+        .insert_resource(Options::of(Vec::new(), None, &HashMap::new()));
         app.update();
         app
     }
@@ -228,6 +234,24 @@ mod tests {
         press(&mut app, "Ok");
         assert_eq!(pages(&mut app), 0);
         assert!(open(&app));
+    }
+
+    fn asking(app: &mut App) -> bool {
+        let world = app.world_mut();
+        let mut root = world.query::<&GlobalZIndex>();
+        root.iter(world).any(|z| z.0 == ui::layer::QUESTION)
+    }
+
+    #[test]
+    fn quitting_asks_first_and_escape_cancels_only_the_question() {
+        let mut app = app();
+        escape(&mut app);
+        press(&mut app, "Quit to Desktop");
+        assert!(asking(&mut app));
+        assert!(app.world_mut().resource::<Messages<AppExit>>().is_empty());
+        escape(&mut app);
+        assert!(!asking(&mut app));
+        assert!(open(&app) && paused(&app));
     }
 
     #[test]

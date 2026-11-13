@@ -703,11 +703,12 @@ pub fn card(node: Node) -> Node {
 }
 
 pub fn button(words: impl Into<String>, size: Font) -> impl Bundle {
-    (
-        clickable(card(padded())),
-        Card,
-        children![text(words, size)],
-    )
+    shaped_button(words, size, padded())
+}
+
+/// A [`button`] laid out as `node`, which should keep [`padded`]'s padding.
+pub fn shaped_button(words: impl Into<String>, size: Font, node: Node) -> impl Bundle {
+    (clickable(card(node)), Card, children![text(words, size)])
 }
 
 /// A [`switch`] with words on it.
