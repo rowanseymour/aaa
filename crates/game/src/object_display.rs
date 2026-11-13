@@ -1471,7 +1471,7 @@ impl Teller<'_> {
                 let Some(commission) = building.queue.get(place) else {
                     return Vec::new();
                 };
-                let mut lines = vec![name(&Id::from(commission.template()))];
+                let mut lines = vec![name(commission.template())];
                 // Only the first is under way.
                 let (now, _) = match place {
                     0 => measure(sim, Fill::Progress(b)),
