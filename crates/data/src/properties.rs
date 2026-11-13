@@ -23,30 +23,59 @@ pub struct PropertyLook {
 }
 
 /// A range of speeds and the game's word for them.
-struct Pace {
+pub(crate) struct Pace {
     range: [f32; 2],
     word: String,
 }
 
-/// A number as C's `%+g` writes it, as far as the game's amounts go.
-fn signed(amount: f32) -> String {
-    let rounded = (amount * 1000.0).round() / 1000.0;
-    format!("{rounded:+}")
+/// An amount rounded to the places the game's amounts go to.
+fn rounded(amount: f32) -> f32 {
+    (amount * 1000.0).round() / 1000.0
 }
 
-/// A format string of the game's with its one number or word filled in.
-fn filled(format: &str, with: &str) -> String {
-    let placeholder = ["%+g", "%g", "%s"].into_iter().find(|p| format.contains(p));
-    let said = match placeholder {
-        Some(p) => format.replacen(p, with, 1),
-        None => format.to_string(),
-    };
+/// A number as C's `%+g` writes it, as far as the game's amounts go.
+fn signed(amount: f32) -> String {
+    format!("{:+}", rounded(amount))
+}
+
+/// A number as C's `%g` writes it, as far as the game's amounts go: 900,
+/// 0.5.
+pub(crate) fn number(amount: f32) -> String {
+    format!("{}", rounded(amount))
+}
+
+/// A format string of the game's with its numbers and words filled in, in
+/// order.
+pub(crate) fn fill(format: &str, with: &[&str]) -> String {
+    const PLACEHOLDERS: [&str; 5] = ["%+g", "%g", "%s", "%d", "%.2d"];
     // The glyph for a damage type has no letter of ours.
-    said.replace("%lc", "").replace("%%", "%")
+    let format = format.replace("%lc", "");
+    let mut out = String::new();
+    let mut rest = format.as_str();
+    let mut with = with.iter();
+    loop {
+        let next = (PLACEHOLDERS.iter())
+            .filter_map(|p| Some((rest.find(p)?, p.len())))
+            .min();
+        match (next, with.next()) {
+            (Some((at, len)), Some(w)) => {
+                out.push_str(&rest[..at]);
+                out.push_str(w);
+                rest = &rest[at + len..];
+            }
+            _ => break,
+        }
+    }
+    out.push_str(rest);
+    out.replace("%%", "%")
 }
 
 /// What the game says a modifier does, where it has words for it.
-fn line(strings: &HashMap<String, String>, paces: &[Pace], m: &defs::Modifier) -> Option<String> {
+pub(crate) fn line(
+    strings: &HashMap<String, String>,
+    paces: &[Pace],
+    m: &defs::Modifier,
+) -> Option<String> {
     let said = |key: String| {
         strings
             .get(&key)
@@ -60,15 +89,15 @@ fn line(strings: &HashMap<String, String>, paces: &[Pace], m: &defs::Modifier) -
             .iter()
             .find(|p| (p.range[0]..p.range[1]).contains(&amount))?;
         let format = said("modifier_desc_add_terrain_speed_cap|s".into())?;
-        return Some(filled(format, &pace.word));
+        return Some(fill(format, &[&pace.word]));
     }
     if is(&m.kind, "ADD") {
         let format = said(format!("modifier_desc_add_{attribute}|f"))?;
-        return Some(filled(format, &signed(amount)));
+        return Some(fill(format, &[&signed(amount)]));
     }
     if is(&m.kind, "MULTIPLY") {
         let format = said(format!("modifier_desc_multiply_{attribute}|f"))?;
-        return Some(filled(format, &signed(amount * 100.0)));
+        return Some(fill(format, &[&signed(amount * 100.0)]));
     }
     if is(&m.kind, "RESIST_DAMAGE") {
         let way = match amount < 0.0 {
@@ -76,15 +105,22 @@ fn line(strings: &HashMap<String, String>, paces: &[Pace], m: &defs::Modifier) -
             false => "positive",
         };
         let format = said(format!("modifier_desc_resist_damage_{way}|cf"))?;
-        return Some(filled(format, &signed(amount.abs() * 100.0)));
+        return Some(fill(format, &[&signed(amount.abs() * 100.0)]));
     }
     let flag = m.modifier_flag.as_deref()?.to_ascii_lowercase();
     said(format!("modifier_desc_flag_{flag}")).cloned()
 }
 
 impl GameData {
+    /// Where the archives have the icon at `path`: drawn for a wide screen
+    /// where its `%s` asks for one and that's drawn, else the shared one.
+    pub(crate) fn wide_icon(&self, path: &str) -> Option<String> {
+        let places = [path.replace("%s", WIDE), path.replace("%s/", "")];
+        places.into_iter().find(|p| self.exists(p))
+    }
+
     /// The game's words for speeds, in the order it lists them.
-    fn paces(&mut self, strings: &HashMap<String, String>) -> Vec<Pace> {
+    pub(crate) fn paces(&mut self, strings: &HashMap<String, String>) -> Vec<Pace> {
         let definitions = self.definitions();
         let speeds = (definitions.descriptions.iter()).filter(|d| is(&d.category, "SPEED"));
         speeds
@@ -140,8 +176,7 @@ impl GameData {
             let Some(path) = icon_beside(file, p.icon.as_deref()) else {
                 continue;
             };
-            let places = [path.replace("%s", WIDE), path.replace("%s/", "")];
-            let Some(icon) = places.into_iter().find(|p| self.exists(p)) else {
+            let Some(icon) = self.wide_icon(&path) else {
                 continue;
             };
             out.insert(

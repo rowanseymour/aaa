@@ -12,7 +12,8 @@ usage:
   aaa-data audio    <game dir> [filter] sounds, speech and music by id, with their files and any missing
   aaa-data cues     <game dir> [filter] the audio object templates play, by what sets it off
   aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off
-  aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post";
+  aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post
+  aaa-data generals <game dir>          each nation's generals and their special operations as tooltips show them";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -31,6 +32,7 @@ fn main() -> ExitCode {
         ["effects", dir] => effects(dir, ""),
         ["effects", dir, filter] => effects(dir, filter),
         ["messages", dir] => messages(dir),
+        ["generals", dir] => generals(dir),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -187,6 +189,45 @@ fn cues(dir: &str, filter: &str) -> Res {
 
 /// The effects of each object template whose id contains `filter`, ignoring
 /// case, with a `?` on effects that aren't defined and each effect's kind.
+fn generals(dir: &str) -> Res {
+    let mut game = GameData::open(dir.as_ref())?;
+    let rules = game.experience_rules();
+    outln!(
+        "starting {}, +{} a second",
+        rules.starting,
+        rules.per_second
+    );
+    let operations = game.special_operations();
+    for nation in game.nations() {
+        for g in &nation.generals {
+            let max = g
+                .experience_max
+                .map_or("none".to_string(), |m| m.to_string());
+            outln!("{} {} (max {max}, public {})", nation.id, g.name, g.public);
+            for o in &g.operations {
+                let Some(op) = operations.get(&o.id) else {
+                    outln!("  {} (cost {}): no definition", o.id, o.cost);
+                    continue;
+                };
+                let area = op.area.as_deref().unwrap_or("-");
+                let icon = op.icon.as_deref().unwrap_or("-");
+                outln!(
+                    "  {} [{}] cost {}, recharge {}, area {area}, {icon}",
+                    op.name,
+                    o.id,
+                    o.cost,
+                    op.recharge
+                );
+                for l in &op.effects {
+                    outln!("    {}{}", if l.indented { "  " } else { "" }, l.text);
+                }
+                outln!("    {}", op.description.as_deref().unwrap_or("-"));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn messages(dir: &str) -> Res {
     let mut game = GameData::open(dir.as_ref())?;
     for k in game.message_kinds() {
