@@ -799,21 +799,18 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
         .ok_or("no placement kingdom; set one with placementkingdom")?;
     // Facing the way the camera looks, so it's seen from behind.
     let facing = [-yaw.sin(), yaw.cos()];
-    let id = world.resource_mut::<Sim>().0.take_ids(0);
     let regiment = world
         .resource::<Raising>()
         .0
-        .raise(template, id, owner, position, facing)?;
+        .raise(template, 0, owner, position, facing)?;
     let sim = &mut world.resource_mut::<Sim>().0;
-    // A lone unit is its own regiment, so takes one id.
-    let ids = regiment.members.len() as u32 + u32::from(!regiment.lone());
-    sim.take_ids(ids);
-    sim.add_regiment(&regiment);
+    let r = sim.add_new_regiment(regiment);
+    let regiment = &sim.regiments[r];
     Ok(format!(
         "{} {} of {} units at {:.1} {:.1}",
         regiment.template,
         regiment.id,
-        regiment.members.len(),
+        regiment.units.len(),
         position[0],
         position[1]
     ))
@@ -965,11 +962,9 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         .iter()
         .find(|t| t.as_str().eq_ignore_ascii_case(template));
     let template = listed.ok_or_else(|| format!("{hq} doesn't commission {template}"))?;
-    let regiment = raising.raise(template.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])?;
-    let seconds = raising.recruit_time(template.as_str());
     let command = aaa_sim::Command::Commission {
         building: b,
-        commission: Box::new(aaa_sim::Commission::new(regiment, seconds)),
+        template: template.clone(),
     };
     give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
     Ok(String::new())

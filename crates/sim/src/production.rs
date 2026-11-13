@@ -63,14 +63,12 @@ impl World {
             let to = deploy_point(position, facing, deploy.deployment);
             let heading = normalised([to[0] - from[0], to[1] - from[1]]).unwrap_or(facing);
             regiment.owner = owner;
-            let ids = regiment.members.len() as u32 + u32::from(!regiment.lone());
-            regiment.renumber(self.take_ids(ids));
             regiment.place(from, heading);
-            let r = self.add_regiment(&regiment);
+            let r = self.add_new_regiment(regiment);
             log::debug!(
                 "{} {} put out by {} {}",
-                regiment.template,
-                regiment.id,
+                self.regiments[r].template,
+                self.regiments[r].id,
                 self.buildings[b].template,
                 self.buildings[b].id
             );
@@ -138,31 +136,18 @@ mod tests {
 
     use aaa_map::{Id, Requires};
 
-    use crate::{Command, Commission, Notice, Refused, State, World};
+    use crate::{Command, Notice, Refused, State, World};
 
     #[test]
     fn commissions_come_out_of_their_building_in_turn() {
         let mut w = headquarters();
+        w.rules.recruit_times.insert(Id::from("truck"), 10.0);
         assert_eq!(
-            w.commission(2, 0, Commission::new(truck(), 10.0)),
+            w.commission(2, 0, &Id::from("truck")),
             Err(Refused::NotYours)
         );
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 10.0)),
-            },
-        )
-        .unwrap();
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 10.0)),
-            },
-        )
-        .unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
         run(&mut w, 9.0);
         assert!(w.regiments.is_empty());
         run(&mut w, 1.0);
@@ -204,10 +189,7 @@ mod tests {
                 ..Requires::default()
             },
         );
-        let commission = || Command::Commission {
-            building: 0,
-            commission: Box::new(Commission::new(truck(), 1.0)),
-        };
+        let commission = || commission(0, "truck");
         let lacks = |w: &World| -> Vec<String> {
             w.lacks(1, 0, &truck())
                 .structures
@@ -247,10 +229,8 @@ mod tests {
         let mut rifleman = regiment.members[0].clone();
         rifleman.template = "rifleman".into();
         regiment.members.push(rifleman);
-        let commission = |regiment: &aaa_map::Regiment| Command::Commission {
-            building: 0,
-            commission: Box::new(Commission::new(regiment.clone(), 1.0)),
-        };
+        recruits(&mut w, "hq", regiment.clone(), 1.0);
+        let commission = || commission(0, "truck");
         w.rules
             .requires
             .insert(Id::from("truck"), needs(&["tech_heavy"], false));
@@ -263,7 +243,7 @@ mod tests {
             [Id::from("tech_heavy"), Id::from("boat")]
         );
         assert!(lacking.hidden);
-        assert_eq!(w.apply(1, commission(&regiment)), Err(Refused::Lacking));
+        assert_eq!(w.apply(1, commission()), Err(Refused::Lacking));
         // What the recruiter carries itself counts only for it.
         w.rules.kinds.insert(
             Id::from("hq"),
@@ -280,7 +260,7 @@ mod tests {
         assert!(!w.lacks(1, 0, &regiment).is_empty());
         w.grant(1, Id::from("tech_heavy"));
         assert!(w.lacks(1, 0, &regiment).is_empty());
-        w.apply(1, commission(&regiment)).unwrap();
+        w.apply(1, commission()).unwrap();
     }
 
     #[test]
@@ -294,14 +274,7 @@ mod tests {
             w.pathing.block(b.obstacle.as_ref().unwrap());
         }
         w.add_buildings(&[depot, house]);
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 1.0)),
-            },
-        )
-        .unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
         run(&mut w, 4.0);
         assert!(near(w.units[0].position, [26.0, 20.0]));
         w.apply(
@@ -334,14 +307,7 @@ mod tests {
             },
         )
         .unwrap();
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 1.0)),
-            },
-        )
-        .unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
         run(&mut w, 1.0);
         // Out to its deployment point first, then on to the rally point.
         assert_eq!(w.destination(0), [26.0, 20.0]);
@@ -351,14 +317,7 @@ mod tests {
         assert!(near(w.units[0].position, [26.0, 30.0]));
         assert!(w.regiments[0].rally.is_none());
         // An order on the way calls it off.
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 1.0)),
-            },
-        )
-        .unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
         run(&mut w, 2.0);
         w.apply(1, Command::Stop { regiment: 1 }).unwrap();
         run(&mut w, 8.0);
@@ -372,14 +331,7 @@ mod tests {
             },
         )
         .unwrap();
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 1.0)),
-            },
-        )
-        .unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
         run(&mut w, 10.0);
         assert!(near(w.units[2].position, [26.0, 20.0]));
         let mut house = siege(&[building(9, 1, [10.0, 30.0])]);

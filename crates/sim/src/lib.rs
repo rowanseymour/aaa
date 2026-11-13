@@ -568,11 +568,6 @@ pub enum Work {
 }
 
 impl Commission {
-    /// A commission raising `regiment` in `seconds`, at least a tick.
-    pub fn new(regiment: aaa_map::Regiment, seconds: f32) -> Self {
-        Commission::of(Work::Raise(Box::new(regiment)), seconds)
-    }
-
     fn of(work: Work, seconds: f32) -> Self {
         Commission {
             held: matches!(work, Work::Research(_)),
@@ -683,12 +678,10 @@ pub enum Command {
     /// truck, dropping whatever it was asked to commission. Refused while
     /// it's unpacking or packing, or too hurt to pack.
     Pack { building: usize },
-    /// Asks a building to commission something once it's done with what
-    /// it was asked for before.
-    Commission {
-        building: usize,
-        commission: Box<Commission>,
-    },
+    /// Asks a building to commission a regiment of `template` once it's
+    /// done with what it was asked for before. Refused for one it doesn't
+    /// recruit.
+    Commission { building: usize, template: Id },
     /// Asks a building to research `technology`, one of those it lists,
     /// once it's done with what it was asked for before. Refused for one
     /// it doesn't offer, as [`World::researchable`] has it.

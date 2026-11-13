@@ -120,6 +120,15 @@ impl World {
         self.push_regiment(regiment, true)
     }
 
+    /// Adds a regiment raised during the match, giving it and its members
+    /// ids no object has, returning its index.
+    pub fn add_new_regiment(&mut self, mut regiment: aaa_map::Regiment) -> usize {
+        // A lone unit is its own regiment, so takes one id.
+        let ids = regiment.members.len() as u32 + u32::from(!regiment.lone());
+        regiment.renumber(self.take_ids(ids));
+        self.add_regiment(&regiment)
+    }
+
     /// Adds a regiment, numbering it if `numbered`.
     pub(crate) fn push_regiment(&mut self, regiment: &aaa_map::Regiment, numbered: bool) -> usize {
         let r = self.regiments.len();
@@ -253,7 +262,7 @@ impl World {
     }
 
     /// Takes `n` ids no object has, returning the first.
-    pub fn take_ids(&mut self, n: u32) -> u32 {
+    pub(crate) fn take_ids(&mut self, n: u32) -> u32 {
         let first = self.next_id;
         self.next_id += n;
         first

@@ -121,7 +121,7 @@ mod tests {
 
     use aaa_map::{Domain, Id, Tile};
 
-    use crate::{Command, Commission, Notice, Piece, Refused, State, World};
+    use crate::{Command, Notice, Piece, Refused, State, World};
 
     /// [`economy`] with its house, building 0, selling for half its cost
     /// of 301 money and 40 ammo.
@@ -198,15 +198,9 @@ mod tests {
     #[test]
     fn buildings_sell_for_a_share_of_their_cost_refunding_their_queue() {
         let mut w = market();
+        w.rules.recruit_times.insert(Id::from("truck"), 10.0);
         assert_eq!(w.sale_value(0), 151.0);
-        w.apply(
-            1,
-            Command::Commission {
-                building: 0,
-                commission: Box::new(Commission::new(truck(), 10.0)),
-            },
-        )
-        .unwrap();
+        w.apply(1, commission(0, "truck")).unwrap();
         assert_eq!(w.stockpile(1), 250.0);
         let sell = Command::Sell { building: 0 };
         assert_eq!(w.check(2, &sell), Err(Refused::NotYours));

@@ -324,8 +324,8 @@ pub(crate) fn player(
     }
 }
 
-/// Player 1's HQ at 20,20, putting out what it commissions 6 to its
-/// left, on open ground with nothing else.
+/// Player 1's HQ at 20,20, commissioning a [`truck`] in a second, which it
+/// puts out 6 to its left, on open ground with nothing else.
 pub(crate) fn headquarters() -> World {
     let mut hq = building(5, 1, [20.0, 20.0]);
     hq.deploy = Some(DeployPoints {
@@ -335,7 +335,28 @@ pub(crate) fn headquarters() -> World {
     let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
     w.pathing.block(hq.obstacle.as_ref().unwrap());
     w.add_buildings(&[hq]);
+    recruits(&mut w, "house", truck(), 1.0);
     w
+}
+
+/// Has buildings of template `building` commission `regiment`, which
+/// takes `seconds`.
+pub(crate) fn recruits(w: &mut World, building: &str, regiment: aaa_map::Regiment, seconds: f32) {
+    let template = regiment.template.clone();
+    let list = w.rules.recruit_lists.entry(Id::from(building)).or_default();
+    if !list.contains(&template) {
+        list.push(template.clone());
+    }
+    w.rules.recruit_times.insert(template.clone(), seconds);
+    w.rules.raisable.insert(template, regiment);
+}
+
+/// Asks the building at `building` to commission a regiment of `template`.
+pub(crate) fn commission(building: usize, template: &str) -> Command {
+    Command::Commission {
+        building,
+        template: Id::from(template),
+    }
 }
 
 /// The way buildings face unless told otherwise.
