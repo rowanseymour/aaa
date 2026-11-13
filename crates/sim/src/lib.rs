@@ -1109,6 +1109,16 @@ pub enum Target {
     Building(usize),
 }
 
+/// [`World::holdings`] from each placed object's role, owner and template.
+/// Regiments and buildings count in their own right, and what the map
+/// left out for lack of room counts for nothing.
+fn holdings<'a>(things: impl Iterator<Item = (Role, Option<u32>, &'a str)>) -> Vec<(u32, String)> {
+    things
+        .filter(|(role, ..)| !matches!(role, Role::Crowded | Role::Regiment | Role::Building))
+        .filter_map(|(_, owner, template)| Some((owner?, template.to_owned())))
+        .collect()
+}
+
 impl World {
     pub fn new(map: &Map) -> World {
         let sides = Sides {
@@ -1120,11 +1130,10 @@ impl World {
         world.tile_terrains = map.tile_terrains.clone();
         world.scenery = map.scenery.clone();
         world.clearable = map.clearable.clone();
-        world.holdings = map
-            .roles()
-            .filter(|(_, role)| !matches!(role, Role::Regiment | Role::Building))
-            .filter_map(|(t, _)| Some((aaa_map::owner(t)?, t.template.clone())))
-            .collect();
+        world.holdings = holdings(
+            map.roles()
+                .map(|(t, role)| (role, aaa_map::owner(t), t.template.as_str())),
+        );
         for p in &map.players {
             for t in &p.technologies {
                 world.grant(p.id, t.clone());
@@ -7294,6 +7303,30 @@ mod tests {
         w.holdings.push((1, "start_loc".into()));
         let building = w.balance(1).limits[1];
         assert_eq!((building.used, building.provided), (1.0, 20.0));
+    }
+
+    #[test]
+    fn what_a_map_leaves_out_for_lack_of_room_adds_nothing() {
+        let mut w = economy();
+        w.economies.insert(
+            Id::from("start_loc"),
+            aaa_map::Economy {
+                production: amounts(&[("building_limit_provided", 20.0)]),
+                ..Default::default()
+            },
+        );
+        let before = w.balance(1);
+        w.holdings = holdings(
+            [
+                (Role::Crowded, Some(1), "start_loc"),
+                (Role::Other, None, "start_loc"),
+            ]
+            .into_iter(),
+        );
+        assert!(w.holdings.is_empty());
+        assert_eq!(w.balance(1), before);
+        w.holdings = holdings([(Role::Other, Some(1), "start_loc")].into_iter());
+        assert_ne!(w.balance(1), before);
     }
 
     #[test]
