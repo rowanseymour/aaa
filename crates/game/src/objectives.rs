@@ -13,8 +13,6 @@ use crate::keys::Bindings;
 use crate::ui::{Font, Ink, coloured, label};
 use crate::{Loaded, Local, Screen, Sim};
 
-const BUTTON_ICON: &[u8] = include_bytes!("../../../assets/icons/flag.png");
-
 const BOX: f32 = 20.0;
 /// Between a line's box and its text, and between lines.
 const BOX_GAP: f32 = 3.0;
@@ -59,6 +57,7 @@ fn spawn(
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
+    mut icons: ResMut<displays::Icons>,
 ) {
     let game = &mut loaded.game;
     let strings = game.strings();
@@ -85,7 +84,7 @@ fn spawn(
         &bindings,
         Panel::Objectives,
         Rim::BottomLeft,
-        displays::icon(BUTTON_ICON, &mut images, formats.0),
+        icons.get(displays::icon!("flag"), &mut images, formats.0),
         said(
             "control_panel_ButtonObjectives_ToolTip",
             "Display Objectives",

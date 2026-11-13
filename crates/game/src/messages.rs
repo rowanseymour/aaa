@@ -24,8 +24,6 @@ use crate::{Leaders, Loaded, Local, Screen, Sim};
 
 /// The key that steps the camera back through the lines.
 pub const CYCLE: &str = "CycleMessageLog";
-const BUTTON_ICON: &[u8] = include_bytes!("../../../assets/icons/list.png");
-
 /// The log's width, before it wraps a line.
 const WIDTH: f32 = 564.0;
 const ICON: Vec2 = Vec2::new(16.0, 17.0);
@@ -350,6 +348,7 @@ type Parts<'a> = (
 #[derive(Component)]
 struct LookAt(u64);
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -358,6 +357,7 @@ pub fn spawn(
     local: Res<Local>,
     leaders: Res<Leaders>,
     bindings: Res<Bindings>,
+    mut icons: ResMut<displays::Icons>,
 ) {
     let corner = crate::special_ops::corner(&local, &leaders);
     let game = &mut loaded.game;
@@ -386,7 +386,7 @@ pub fn spawn(
         &bindings,
         Panel::MessageLog,
         Rim::BottomRight,
-        displays::icon(BUTTON_ICON, &mut images, formats.0),
+        icons.get(displays::icon!("list"), &mut images, formats.0),
         said(
             "control_panel_ButtonMessageLog_ToolTip",
             "Display Message Log",

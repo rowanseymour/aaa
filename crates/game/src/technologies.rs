@@ -17,8 +17,6 @@ use crate::{Loaded, Local, Screen, Sim};
 const NAME: &str = "control_panel_ButtonTechnology_ToolTip";
 const HELP: &str = "control_panel_ButtonTechnology_tooltip_2";
 const TITLE: &str = "technology_display_Child_text";
-const BUTTON_ICON: &[u8] = include_bytes!("../../../assets/icons/gear.png");
-
 /// A line is at least this tall, and its icon this wide.
 const LINE: f32 = 20.0;
 const ICON: f32 = 16.0;
@@ -66,6 +64,7 @@ fn spawn(
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
+    mut icons: ResMut<displays::Icons>,
 ) {
     let game = &mut loaded.game;
     let strings = game.strings();
@@ -95,7 +94,7 @@ fn spawn(
         &bindings,
         Panel::Technologies,
         Rim::TopRight,
-        displays::icon(BUTTON_ICON, &mut images, formats.0),
+        icons.get(displays::icon!("gear"), &mut images, formats.0),
         said(NAME, "Display Technologies"),
         said(HELP, "Displays a list of all your technologies."),
     );
