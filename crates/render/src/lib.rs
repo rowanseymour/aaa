@@ -202,13 +202,16 @@ pub fn spawn_map(
         ));
     }
     let mut models = Models::new(game, assets.formats.0, &map.players, pickable);
-    let buildings: std::collections::HashSet<u32> = map.buildings.iter().map(|b| b.id).collect();
+    let holding: std::collections::HashSet<u32> = (map.roles())
+        .filter(|(_, role)| *role == aaa_map::Role::HoldsBuilding)
+        .map(|(t, _)| t.id)
+        .collect();
     let rest = models.spawn(
         commands,
         game,
         &mut assets.models(),
         map.things.iter().filter(|t| !leave_out(t)),
-        &buildings,
+        &holding,
     );
     let (meshes, materials) = (&mut assets.meshes, &mut assets.materials);
     let footing = |t: &str| models.footing(t);

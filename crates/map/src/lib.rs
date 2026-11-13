@@ -6,6 +6,8 @@ mod buildings;
 mod fixtures;
 mod ground;
 mod grounds;
+mod obstacle;
+mod outline;
 pub mod pathing;
 mod units;
 
@@ -17,7 +19,9 @@ pub use aaa_data::{
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
 pub use grounds::{GroundKind, Grounds};
-pub use pathing::{Domain, Obstacle, Outline, Pathing, Zone};
+pub use obstacle::Obstacle;
+pub use outline::Outline;
+pub use pathing::{Domain, Pathing, Zone};
 pub use tgck::map::Relation;
 pub use units::{
     Division, Formation, Member, Packs, Player, Recruits, Regiment, Team, Trailer, UNPACKED_FACING,
@@ -117,7 +121,7 @@ impl Map {
                 snap(member, bodies);
             }
         }
-        let mut pathing = Pathing::new(&terrain, &variations, []);
+        let mut pathing = Pathing::new(&terrain, &variations);
         let grounds = Grounds::new(&terrain, &variations);
         let Placed {
             off_map,
@@ -197,6 +201,16 @@ impl Map {
             .filter(|t| !self.crowded.contains(&t.id))
     }
 
+    /// Each of [`Map::things`] with what it is in a match.
+    pub fn roles(&self) -> impl Iterator<Item = (&Thing, Role)> {
+        roles(
+            &self.things,
+            &self.regiments,
+            &self.buildings,
+            &self.crowded,
+        )
+    }
+
     /// Regroups the map's sides into `teams`, each a list of player ids, for
     /// a match: sides on a team are allies, at war with the other teams, and
     /// sides on none leave the match with everything they own. Independent
@@ -213,10 +227,59 @@ impl Map {
         let owned_by_leaver = |t: &Thing| owner(t).is_some_and(|o| leaving.contains(&o));
         self.things.retain(|t| !owned_by_leaver(t));
         self.regiments.retain(|r| !leaving.contains(&r.owner));
+        // A building whose own owner stays still goes with an organization
+        // it stands in that leaves.
+        let standing: HashSet<u32> = buildings::standing(&self.things)
+            .map(|(t, _)| t.id)
+            .collect();
         take_buildings(&mut self.buildings, &mut self.pathing, |b| {
-            leaving.contains(&b.owner)
+            leaving.contains(&b.owner) || !standing.contains(&b.id)
         });
     }
+}
+
+/// [`Map::roles`] of `things`, from what the map made of them.
+fn roles<'a>(
+    things: &'a [Thing],
+    regiments: &[Regiment],
+    buildings: &[Building],
+    crowded: &'a HashSet<u32>,
+) -> impl Iterator<Item = (&'a Thing, Role)> {
+    let regiment_ids: HashSet<u32> = regiments.iter().map(|r| r.id).collect();
+    let building_ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
+    let trailers: HashSet<u32> = (regiments.iter().flat_map(|r| &r.members))
+        .filter_map(|m| Some(m.trailer.as_ref()?.placed?.0))
+        .collect();
+    things.iter().map(move |t| {
+        let held = t.organization().map_or(&[][..], |o| &o.members[..]);
+        let role = match t.id {
+            id if crowded.contains(&id) => Role::Crowded,
+            id if regiment_ids.contains(&id) => Role::Regiment,
+            id if building_ids.contains(&id) => Role::Building,
+            id if trailers.contains(&id) => Role::Trailer,
+            _ if held.iter().any(|m| building_ids.contains(&m.id)) => Role::HoldsBuilding,
+            _ => Role::Other,
+        };
+        (t, role)
+    })
+}
+
+/// What one of [`Map::things`] is in a match, as [`Map::roles`] finds it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Role {
+    /// Without room where the map has it: see [`Map::crowded`].
+    Crowded,
+    /// One of [`Map::regiments`].
+    Regiment,
+    /// One of [`Map::buildings`].
+    Building,
+    /// What a regiment's member tows, which goes with it.
+    Trailer,
+    /// An organization that one of [`Map::buildings`] stands in, as an
+    /// unpacked Division HQ's does.
+    HoldsBuilding,
+    /// Anything else, such as scenery and where sides start.
+    Other,
 }
 
 /// Takes the buildings that `gone` picks off the map, giving back the
@@ -616,7 +679,7 @@ fn read_sides<R: std::io::Read + std::io::Seek>(
         })
         .unwrap_or(rules.stockpile_default)
         .clamp(0.0, rules.stockpile_max);
-    Ok(units::sides(
+    Ok(units::players_and_teams(
         &map.kingdoms()?,
         &map.teams()?,
         &map.restriction_groups()?,
@@ -989,6 +1052,57 @@ mod tests {
         let none = HashMap::new();
         let regiments = units::regiments(&things, &bodies, &HashMap::new(), &none, &HashMap::new());
         assert_eq!(regiments[0].members[0].health, 0.4);
+    }
+
+    #[test]
+    fn things_are_told_apart_by_what_they_are_in_a_match() {
+        let hq = organization("regiment_hq", vec![placed(11, "hq", 0, None, None)]);
+        let things = [
+            placed(1, "truck", 2, Some(2), None),
+            placed(2, "gun", 2, None, None),
+            placed(10, "hq_unpacked", 2, None, Some(hq)),
+            placed(20, "hut", 2, None, None),
+            placed(30, "rock", 0, None, None),
+            placed(40, "truck", 2, None, None),
+        ];
+        let bodies = HashMap::from([
+            (Id::from("truck"), moves(Some("gun"))),
+            (Id::from("gun"), moves(None)),
+        ]);
+        let fighters = HashMap::from(["hq", "hut"].map(|t| (Id::from(t), Fighter::default())));
+        // The last truck had no room, so neither regiment nor anything else.
+        let crowded = HashSet::from([40]);
+        let standing = without(&things, &crowded);
+        let regiments = units::regiments(
+            &standing,
+            &bodies,
+            &fighters,
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        let buildings = buildings::buildings(
+            &standing,
+            &bodies,
+            &fighters,
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+            &HashMap::new(),
+        );
+        let found: Vec<(u32, Role)> = roles(&things, &regiments, &buildings, &crowded)
+            .map(|(t, role)| (t.id, role))
+            .collect();
+        assert_eq!(
+            found,
+            [
+                (1, Role::Regiment),
+                (2, Role::Trailer),
+                (10, Role::HoldsBuilding),
+                (20, Role::Building),
+                (30, Role::Other),
+                (40, Role::Crowded),
+            ]
+        );
     }
 
     #[test]

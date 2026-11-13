@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use aaa_data::{Body, DeployPoints, Fighter, Id, Ranges};
 use tgck::map::{Detail, Thing};
 
-use crate::pathing::Obstacle;
+use crate::obstacle::Obstacle;
 use crate::units::{Regiment, emptied, facing, owner};
 
 /// An owned object that can be hurt but not move and isn't a regiment.
@@ -41,7 +41,7 @@ pub struct Building {
 /// The owned objects that can be hurt but not move and aren't regiments,
 /// placed on their own or standing in an organization, as a Division HQ's
 /// building does while it's unpacked.
-pub fn buildings(
+pub(crate) fn buildings(
     things: &[Thing],
     bodies: &HashMap<Id, Body>,
     fighters: &HashMap<Id, Fighter>,

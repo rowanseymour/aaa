@@ -20,7 +20,7 @@ use std::f32::consts::{FRAC_PI_4, PI, TAU};
 
 use aaa_map::pathing::{CELL_SIZE, tile_at};
 use aaa_map::{
-    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Shape,
+    DeployPoints, Domain, Fighter, Id, Map, Obstacle, Packs, Pathing, Requires, Role, Shape,
     TerrainEffect, Turret, Unpacks, Weapon, Zone,
 };
 
@@ -1082,15 +1082,10 @@ impl World {
         world.grounds = map.grounds.clone();
         world.scenery = map.scenery.clone();
         world.clearable = map.clearable.clone();
-        let regiments = map.regiments.iter().map(|r| r.id);
-        let taken: HashSet<u32> = regiments
-            .chain(map.buildings.iter().map(|b| b.id))
-            .collect();
         world.holdings = map
-            .things
-            .iter()
-            .filter(|t| !taken.contains(&t.id))
-            .filter_map(|t| Some((aaa_map::owner(t)?, t.template.clone())))
+            .roles()
+            .filter(|(_, role)| !matches!(role, Role::Regiment | Role::Building))
+            .filter_map(|(t, _)| Some((aaa_map::owner(t)?, t.template.clone())))
             .collect();
         for p in &map.players {
             for t in &p.technologies {
