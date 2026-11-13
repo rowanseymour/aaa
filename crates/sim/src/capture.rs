@@ -148,7 +148,22 @@ impl World {
 #[cfg(test)]
 mod tests {
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{Domain, Tile};
+
+    use crate::{Command, Fallen, Notice, State, World};
+
+    /// What `w`'s sides have been told of buildings changing hands.
+    fn captures(w: &World) -> Vec<Notice> {
+        let notices = w.notices.iter().cloned();
+        notices
+            .filter(|n| matches!(n, Notice::Lost { .. } | Notice::Captured { .. }))
+            .collect()
+    }
+
+    fn captured(building: usize, player: u32) -> Notice {
+        Notice::Captured { player, building }
+    }
 
     #[test]
     fn buildings_out_of_health_are_captured_destroyed_or_disabled() {

@@ -997,6 +997,77 @@ mod tests {
     use super::*;
     use crate::testing::*;
 
+    /// Everything about a match that orders and ticks can change.
+    fn snapshot(w: &World) -> String {
+        let units: Vec<_> = w
+            .units
+            .iter()
+            .map(|u| (u.position, u.facing, u.health, u.target, u.shot, u.died))
+            .collect();
+        let regiments: Vec<_> = w
+            .regiments
+            .iter()
+            .map(|r| (r.position, r.facing, r.formation, r.order, &r.engaged))
+            .collect();
+        let buildings: Vec<_> = w
+            .buildings
+            .iter()
+            .map(|b| (b.owner, b.health, b.target, b.state, b.captured))
+            .collect();
+        format!("{:?}", (w.ticks, units, regiments, buildings))
+    }
+
+    /// Four regiments of riflemen moving, running and fighting around a
+    /// house, played out to the end.
+    fn played_battle() -> World {
+        let rifles = |n| (0..n).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
+        let mut w = battle(&[1, 2, 3, 2], rifles(4), at_war());
+        let house = building(20, 2, [30.0, 10.0]);
+        w.pathing.block(house.obstacle.as_ref().unwrap());
+        w.add_buildings(&[house]);
+        let to = [30.0, 30.0];
+        w.apply(1, Command::Move { regiment: 0, to }).unwrap();
+        let to = [10.0, 50.0];
+        w.apply(3, Command::Run { regiment: 2, to }).unwrap();
+        run(&mut w, 15.0);
+        let to = [20.0, 20.0];
+        w.apply(2, Command::Move { regiment: 3, to }).unwrap();
+        run(&mut w, 30.0);
+        w
+    }
+
+    /// A match's numbers hashed with FNV-1a, which unlike std's hashers is
+    /// fixed for good, and which unlike hashing its Debug output doesn't
+    /// change when something's renamed.
+    fn fingerprint(worlds: &[&World]) -> u64 {
+        let f = |x: &f32| u64::from(x.to_bits());
+        let mut numbers = Vec::new();
+        for w in worlds {
+            numbers.push(w.ticks);
+            for u in &w.units {
+                numbers.extend(u.position.iter().chain(&u.facing).map(f));
+                numbers.extend([f(&u.health), u.died.unwrap_or(u64::MAX)]);
+                if let Some(t) = &u.trailer {
+                    numbers.extend(t.position.iter().chain(&t.facing).map(f));
+                }
+            }
+            for r in &w.regiments {
+                numbers.extend(r.position.iter().chain(&r.facing).map(f));
+                numbers.push(r.formation as u64);
+            }
+            for b in &w.buildings {
+                numbers.extend([u64::from(b.owner), f(&b.health)]);
+                numbers.push(b.captured.unwrap_or(u64::MAX));
+            }
+        }
+        numbers
+            .iter()
+            .flat_map(|n| n.to_le_bytes())
+            .fold(0xcbf2_9ce4_8422_2325, |h, b| {
+                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
+            })
+    }
+
     #[test]
     fn teams_decide_relations_for_their_players() {
         let team = |id, relations: [Relation; 4], team_relations| Team {

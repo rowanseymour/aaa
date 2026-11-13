@@ -359,9 +359,12 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{Domain, Fighter, Id, Pathing, Tile};
+
+    use crate::{CONTACT, Command, Enemy, Order, Refused, State, Target, Unit, distance};
 
     #[test]
     fn moving_regiments_stop_to_fight_what_fires_on_them_then_carry_on() {

@@ -384,7 +384,23 @@ impl World {
 mod tests {
     use super::*;
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{Domain, Fighter, Pathing};
+
+    /// Players 1 and 2 at war, as `battle` has them, seeing `range` round
+    /// themselves and showing those fighting them `remote` round them.
+    fn sighted(fighters: Vec<Fighter>, range: f32, remote: f32, fog: aaa_map::FogSetting) -> World {
+        let mut w = battle(&[1, 2], fighters, at_war());
+        w.sights
+            .insert(Id::from("squad"), aaa_map::Sight { range, remote });
+        w.set_fog(fog);
+        w
+    }
+
+    fn put(w: &mut World, u: usize, at: [f32; 2]) {
+        w.units[u].position = at;
+        w.units[u].previous = at;
+    }
 
     #[test]
     fn radii_reach_a_quarter_tile_past_whole_tiles() {

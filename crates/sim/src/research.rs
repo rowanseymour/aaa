@@ -270,9 +270,40 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::Id;
+
+    use crate::{Command, Commission, Notice, Refused, Researchable, World};
+
+    /// The economy's HQ listing two technologies for its side, 60 and 100
+    /// money, the second needing the first and a depot.
+    fn laboratory() -> World {
+        let mut w = economy();
+        let item = |technology: &str, money| aaa_map::Research {
+            technology: Id::from(technology),
+            grant: aaa_map::Grant::Side,
+            seconds: 1.0,
+            cost: amounts(&[("money", money)]),
+            structures: Vec::new(),
+            structures_any: false,
+            properties: Vec::new(),
+            properties_any: false,
+        };
+        let mut tiger = item("tech_tiger", 100.0);
+        tiger.properties = vec![Id::from("tech_heavy")];
+        tiger.structures = vec![vec![Id::from("depot")]];
+        (w.research_lists).insert(Id::from("house"), vec![item("tech_heavy", 60.0), tiger]);
+        w
+    }
+
+    fn research(technology: &str) -> Command {
+        Command::Research {
+            building: 0,
+            technology: Id::from(technology),
+        }
+    }
 
     #[test]
     fn research_is_paid_for_up_front_and_gives_the_side_its_technology() {

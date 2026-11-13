@@ -225,9 +225,12 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::Id;
+
+    use crate::{Command, Notice, Refused};
 
     #[test]
     fn regiments_attach_to_hqs_that_recruit_their_kind_and_have_room() {

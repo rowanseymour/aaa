@@ -135,9 +135,12 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{Id, Requires};
+
+    use crate::{Command, Commission, Notice, Refused, State, World};
 
     #[test]
     fn commissions_come_out_of_their_building_in_turn() {

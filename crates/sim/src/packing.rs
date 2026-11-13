@@ -264,9 +264,22 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+    use std::collections::HashSet;
+
+    use aaa_map::{Domain, Id, Obstacle, Pathing, Shape, Tile};
+
+    use crate::{Command, Notice, Refused, State, World};
+
+    /// A regiment of one truck.
+    fn convoy() -> aaa_map::Regiment {
+        aaa_map::Regiment {
+            hq: None,
+            template: "convoy".into(),
+            ..truck()
+        }
+    }
 
     #[test]
     fn trucks_unpack_where_theres_room_once_there() {

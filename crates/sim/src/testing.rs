@@ -2,9 +2,12 @@
 
 use std::collections::HashMap;
 
-use aaa_map::{Obstacle, Shape, SupplyEffect, TerrainEffect};
+use aaa_map::{
+    DeployPoints, Domain, Fighter, Id, Obstacle, Packs, Pathing, Shape, SupplyEffect, Unpacks,
+    Weapon,
+};
 
-use crate::*;
+use crate::{Command, Notice, Player, Relation, Sides, TICK, World, distance};
 
 pub(crate) fn member(id: u32, position: [f32; 2], speed: f32) -> aaa_map::Member {
     aaa_map::Member {
@@ -217,28 +220,6 @@ pub(crate) fn skirmish() -> World {
     w
 }
 
-/// A guard of player 1's, an ally's regiment for it to guard and an
-/// enemy out of range, 10 apart in a row, the guard noticing nothing
-/// for itself.
-pub(crate) fn escort() -> World {
-    let mut w = battle(
-        &[1, 3, 2],
-        vec![
-            soldier(vec![rifle(6.0, 50.0)]),
-            soldier(Vec::new()),
-            soldier(vec![rifle(6.0, 1.0)]),
-        ],
-        at_war(),
-    );
-    w.regiments[0].control_range = 4.0;
-    let guard = Command::GuardThing {
-        regiment: 0,
-        thing: Enemy::Regiment(1),
-    };
-    w.apply(1, guard).unwrap();
-    w
-}
-
 /// An unarmed building of `owner`'s with 100 health, 6 across and
 /// square to the axes, at `position`.
 pub(crate) fn building(id: u32, owner: u32, position: [f32; 2]) -> aaa_map::Building {
@@ -299,64 +280,12 @@ pub(crate) fn with_buildings(mut w: World, buildings: &[aaa_map::Building]) -> W
     w
 }
 
-/// A player 2 pillbox at (10, 24), noticing within 20, whose rifle
-/// can't hit aircraft, and unarmed soldiers of two of player 1's
-/// regiments: the first in its zone, the second, of `flags`, far off.
-pub(crate) fn sentry(flags: &[&str]) -> World {
-    let mut far = soldier(Vec::new());
-    far.flags = flags.iter().map(|&f| Id::from(f)).collect();
-    let mut w = battle(&[1, 1], vec![soldier(Vec::new()), far], at_war());
-    w.units[1].position = [40.0, 40.0];
-    let mut pillbox = building(20, 2, [10.0, 24.0]);
-    let mut rifle = rifle(12.0, 10.0);
-    rifle.targets.excluded.push(Id::from("air"));
-    pillbox.fighter.weapons = vec![rifle];
-    pillbox.fighter.notice = Some(20.0);
-    with_buildings(w, &[pillbox])
-}
-
-/// A pillbox south of the siege's soldier, facing it, whose rifle is on
-/// a turret that starts `start` degrees round, turns 90° a second and
-/// aims within `sweep` degrees.
-pub(crate) fn turreted(start: f32, sweep: f32) -> World {
-    let mut pillbox = building(20, 2, [10.0, 24.0]);
-    pillbox.fighter.weapons = vec![Weapon {
-        aimed_by: Some(0),
-        ..rifle(12.0, 10.0)
-    }];
-    pillbox.fighter.notice = Some(20.0);
-    pillbox.fighter.turrets = vec![Turret {
-        turn_rate: 90f32.to_radians(),
-        sweep: sweep.to_radians(),
-        start: start.to_radians(),
-        reset: None,
-        offset: [0.0; 2],
-    }];
-    let mut w = siege(&[pillbox]);
-    w.units[0].fighter = Some(soldier(Vec::new()));
-    // Already woken, as if saved so, since the soldier starts in reach.
-    w.buildings[0].awake = true;
-    w
-}
-
-/// What `w`'s sides have been told of buildings changing hands.
-pub(crate) fn captures(w: &World) -> Vec<Notice> {
-    let notices = w.notices.iter().cloned();
-    notices
-        .filter(|n| matches!(n, Notice::Lost { .. } | Notice::Captured { .. }))
-        .collect()
-}
-
 pub(crate) fn lost(building: usize, player: u32, by: u32) -> Notice {
     Notice::Lost {
         player,
         building,
         by,
     }
-}
-
-pub(crate) fn captured(building: usize, player: u32) -> Notice {
-    Notice::Captured { player, building }
 }
 
 /// Player 2's city centred at 40,10 with a zone of 15 and a house of
@@ -393,77 +322,6 @@ pub(crate) fn player(
         handicap: None,
         barred: Vec::new(),
     }
-}
-
-/// Everything about a match that orders and ticks can change.
-pub(crate) fn snapshot(w: &World) -> String {
-    let units: Vec<_> = w
-        .units
-        .iter()
-        .map(|u| (u.position, u.facing, u.health, u.target, u.shot, u.died))
-        .collect();
-    let regiments: Vec<_> = w
-        .regiments
-        .iter()
-        .map(|r| (r.position, r.facing, r.formation, r.order, &r.engaged))
-        .collect();
-    let buildings: Vec<_> = w
-        .buildings
-        .iter()
-        .map(|b| (b.owner, b.health, b.target, b.state, b.captured))
-        .collect();
-    format!("{:?}", (w.ticks, units, regiments, buildings))
-}
-
-/// Four regiments of riflemen moving, running and fighting around a
-/// house, played out to the end.
-pub(crate) fn played_battle() -> World {
-    let rifles = |n| (0..n).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
-    let mut w = battle(&[1, 2, 3, 2], rifles(4), at_war());
-    let house = building(20, 2, [30.0, 10.0]);
-    w.pathing.block(house.obstacle.as_ref().unwrap());
-    w.add_buildings(&[house]);
-    let to = [30.0, 30.0];
-    w.apply(1, Command::Move { regiment: 0, to }).unwrap();
-    let to = [10.0, 50.0];
-    w.apply(3, Command::Run { regiment: 2, to }).unwrap();
-    run(&mut w, 15.0);
-    let to = [20.0, 20.0];
-    w.apply(2, Command::Move { regiment: 3, to }).unwrap();
-    run(&mut w, 30.0);
-    w
-}
-
-/// A match's numbers hashed with FNV-1a, which unlike std's hashers is
-/// fixed for good, and which unlike hashing its Debug output doesn't
-/// change when something's renamed.
-pub(crate) fn fingerprint(worlds: &[&World]) -> u64 {
-    let f = |x: &f32| u64::from(x.to_bits());
-    let mut numbers = Vec::new();
-    for w in worlds {
-        numbers.push(w.ticks);
-        for u in &w.units {
-            numbers.extend(u.position.iter().chain(&u.facing).map(f));
-            numbers.extend([f(&u.health), u.died.unwrap_or(u64::MAX)]);
-            if let Some(t) = &u.trailer {
-                numbers.extend(t.position.iter().chain(&t.facing).map(f));
-            }
-        }
-        for r in &w.regiments {
-            numbers.extend(r.position.iter().chain(&r.facing).map(f));
-            numbers.push(r.formation as u64);
-        }
-        for b in &w.buildings {
-            numbers.extend([u64::from(b.owner), f(&b.health)]);
-            numbers.push(b.captured.unwrap_or(u64::MAX));
-        }
-    }
-    numbers
-        .iter()
-        .flat_map(|n| n.to_le_bytes())
-        .fold(0xcbf2_9ce4_8422_2325, |h, b| {
-            (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-        })
 }
 
 /// Player 1's HQ at 20,20, putting out what it commissions 6 to its
@@ -520,15 +378,6 @@ pub(crate) fn truck() -> aaa_map::Regiment {
             offset: [0.0, 0.0],
             seconds: 7.0,
         }),
-    }
-}
-
-/// A regiment of one truck.
-pub(crate) fn convoy() -> aaa_map::Regiment {
-    aaa_map::Regiment {
-        hq: None,
-        template: "convoy".into(),
-        ..truck()
     }
 }
 
@@ -650,26 +499,6 @@ pub(crate) fn supply(range: f32, relay: bool, stockpile_max: f32) -> aaa_map::Su
     }
 }
 
-/// Player 1's Corps HQ at 20,20 and two depots east of it, the first
-/// in the HQ's zone and the second only in the first's, each reaching
-/// 20 and the depots stocking up to 3 seconds.
-pub(crate) fn chain() -> World {
-    let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
-    let mut corps = building(5, 1, [20.0, 20.0]);
-    corps.template = "corps".into();
-    let depot = |id, x| {
-        let mut depot = building(id, 1, [x, 20.0]);
-        depot.template = "depot".into();
-        depot
-    };
-    w.add_buildings(&[depot(7, 50.0), depot(6, 34.0), corps]);
-    w.supplies
-        .insert(Id::from("corps"), supply(20.0, false, 0.0));
-    w.supplies
-        .insert(Id::from("depot"), supply(20.0, true, 3.0));
-    w
-}
-
 pub(crate) fn logistics(attachments: Option<u32>) -> aaa_map::Logistics {
     aaa_map::Logistics {
         supply_used: attachments.is_none(),
@@ -730,131 +559,9 @@ pub(crate) fn effect(range: f32, resupply: f32, supplied: bool, requires: &[&str
     }
 }
 
-/// [`division`] with a second company at 26,28 (regiment 2), both
-/// infantry, and an operation that resupplies the nearest infantry
-/// regiment within 15 for 10 seconds.
-pub(crate) fn resupplied() -> (World, Id) {
-    let mut w = division();
-    let mut c = raised_company(&mut w, 1);
-    c.renumber(80);
-    c.place([26.0, 28.0], [0.0, 1.0]);
-    w.add_regiment(&c);
-    let kind = aaa_map::Kind {
-        properties: Vec::new(),
-        flags: vec![Id::from("org_infantry")],
-        soft: Shape::Circle { radius: 1.0 },
-    };
-    w.kinds.insert(Id::from("company"), kind);
-    w.supply_effects
-        .insert(Id::from("resupplied"), effect(0.0, 0.25, true, &[]));
-    let operation = aaa_map::Operation::Enchant {
-        targets: aaa_map::Targets {
-            required: ["FRIEND", "ORGANIZATION", "ORG_INFANTRY"]
-                .map(Id::from)
-                .to_vec(),
-            excluded: Vec::new(),
-        },
-        area: 15.0,
-        max_targets: 1,
-        property: Id::from("resupplied"),
-        seconds: 10.0,
-    };
-    w.operations.insert(Id::from("resupply"), operation);
-    (w, Id::from("resupply"))
-}
-
-/// Players 1 and 2 at war, as `battle` has them, seeing `range` round
-/// themselves and showing those fighting them `remote` round them.
-pub(crate) fn sighted(
-    fighters: Vec<Fighter>,
-    range: f32,
-    remote: f32,
-    fog: aaa_map::FogSetting,
-) -> World {
-    let mut w = battle(&[1, 2], fighters, at_war());
-    w.sights
-        .insert(Id::from("squad"), aaa_map::Sight { range, remote });
-    w.set_fog(fog);
-    w
-}
-
-pub(crate) fn put(w: &mut World, u: usize, at: [f32; 2]) {
-    w.units[u].position = at;
-    w.units[u].previous = at;
-}
-
-/// Forest, whose first property is for infantry and whose second for
-/// vehicles, and the rules those properties work by.
-pub(crate) fn forest() -> (aaa_map::TileTerrain, aaa_map::TerrainRules) {
-    let forest = aaa_map::TileTerrain {
-        properties: vec![Id::from("forest_infantry"), Id::from("forest_vehicles")],
-        mountain: false,
-    };
-    let infantry = TerrainEffect {
-        requires: vec![Id::from("infantry")],
-        defense: 4.0,
-        resists: vec![(Id::from("gunfire"), 0.5)],
-        speed_limit: Some(1.5),
-    };
-    let vehicles = TerrainEffect {
-        requires: vec![Id::from("mobile"), Id::from("vehicle")],
-        defense: 0.0,
-        resists: vec![(Id::from("gunfire"), -0.2)],
-        speed_limit: Some(1.0),
-    };
-    let rules = aaa_map::TerrainRules {
-        effects: HashMap::from([
-            (Id::from("forest_infantry"), infantry),
-            (Id::from("forest_vehicles"), vehicles),
-        ]),
-        unlimited: vec![Id::from("trailblazing")],
-        ..aaa_map::TerrainRules::default()
-    };
-    (forest, rules)
-}
-
 pub(crate) fn kind(properties: &[&str]) -> aaa_map::Kind {
     aaa_map::Kind {
         properties: properties.iter().map(|&p| Id::from(p)).collect(),
         ..aaa_map::Kind::default()
     }
-}
-
-/// The economy's HQ listing two technologies for its side, 60 and 100
-/// money, the second needing the first and a depot.
-pub(crate) fn laboratory() -> World {
-    let mut w = economy();
-    let item = |technology: &str, money| aaa_map::Research {
-        technology: Id::from(technology),
-        grant: aaa_map::Grant::Side,
-        seconds: 1.0,
-        cost: amounts(&[("money", money)]),
-        structures: Vec::new(),
-        structures_any: false,
-        properties: Vec::new(),
-        properties_any: false,
-    };
-    let mut tiger = item("tech_tiger", 100.0);
-    tiger.properties = vec![Id::from("tech_heavy")];
-    tiger.structures = vec![vec![Id::from("depot")]];
-    (w.research_lists).insert(Id::from("house"), vec![item("tech_heavy", 60.0), tiger]);
-    w
-}
-
-pub(crate) fn research(technology: &str) -> Command {
-    Command::Research {
-        building: 0,
-        technology: Id::from(technology),
-    }
-}
-
-/// [`economy`] with its house, building 0, selling for half its cost
-/// of 301 money and 40 ammo.
-pub(crate) fn market() -> World {
-    let mut w = economy();
-    w.economies.get_mut(&Id::from("house")).unwrap().cost =
-        amounts(&[("money", 301.0), ("ammo", 40.0)]);
-    w.sellable.insert(Id::from("house"));
-    w.economy.sell_factor = 0.5;
-    w
 }

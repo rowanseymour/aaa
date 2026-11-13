@@ -479,7 +479,10 @@ impl World {
 #[cfg(test)]
 mod tests {
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{Domain, Pathing};
+
+    use crate::{Command, Commission, Fallen, NotYours, Notice, Refused};
 
     #[test]
     fn regiments_only_take_orders_from_their_owner() {

@@ -444,9 +444,12 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{Domain, Obstacle, Pathing, Shape, Tile};
+
+    use crate::{ARRIVAL_REACH, Command, Sides, Unit, World, within};
 
     #[test]
     fn regiments_move_at_their_slowest_members_speed() {

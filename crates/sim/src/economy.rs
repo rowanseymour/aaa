@@ -453,12 +453,12 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::testing::*;
-    use aaa_map::Role;
 
-    use crate::setup::holdings;
-    use crate::*;
+    use crate::testing::*;
+
+    use aaa_map::Id;
+
+    use crate::{Change, Command, Commission, Limit, Notice, Pause, Refused, State, World};
 
     #[test]
     fn sides_earn_what_they_own_produces_less_its_upkeep() {
@@ -612,27 +612,6 @@ mod tests {
         w.holdings.push((1, "start_loc".into()));
         let building = w.balance(1).limits[1];
         assert_eq!((building.used, building.provided), (1.0, 20.0));
-    }
-
-    #[test]
-    fn what_a_map_leaves_out_for_lack_of_room_adds_nothing() {
-        let mut w = economy();
-        w.economies.insert(
-            Id::from("start_loc"),
-            aaa_map::Economy {
-                production: amounts(&[("building_limit_provided", 20.0)]),
-                ..Default::default()
-            },
-        );
-        let before = w.balance(1);
-        w.holdings = holdings([
-            (Role::Crowded, Some(1), "start_loc"),
-            (Role::Other, None, "start_loc"),
-        ]);
-        assert!(w.holdings.is_empty());
-        assert_eq!(w.balance(1), before);
-        w.holdings = holdings([(Role::Other, Some(1), "start_loc")]);
-        assert_ne!(w.balance(1), before);
     }
 
     #[test]

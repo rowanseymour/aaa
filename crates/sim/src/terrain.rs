@@ -125,10 +125,44 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::combat::damage;
     use crate::testing::*;
-    use crate::*;
+    use std::collections::HashMap;
+
+    use aaa_map::{Domain, Id, Pathing, TerrainEffect, Tile};
+
+    use crate::{Command, Held, Target, World};
+
+    /// Forest, whose first property is for infantry and whose second for
+    /// vehicles, and the rules those properties work by.
+    fn forest() -> (aaa_map::TileTerrain, aaa_map::TerrainRules) {
+        let forest = aaa_map::TileTerrain {
+            properties: vec![Id::from("forest_infantry"), Id::from("forest_vehicles")],
+            mountain: false,
+        };
+        let infantry = TerrainEffect {
+            requires: vec![Id::from("infantry")],
+            defense: 4.0,
+            resists: vec![(Id::from("gunfire"), 0.5)],
+            speed_limit: Some(1.5),
+        };
+        let vehicles = TerrainEffect {
+            requires: vec![Id::from("mobile"), Id::from("vehicle")],
+            defense: 0.0,
+            resists: vec![(Id::from("gunfire"), -0.2)],
+            speed_limit: Some(1.0),
+        };
+        let rules = aaa_map::TerrainRules {
+            effects: HashMap::from([
+                (Id::from("forest_infantry"), infantry),
+                (Id::from("forest_vehicles"), vehicles),
+            ]),
+            unlimited: vec![Id::from("trailblazing")],
+            ..aaa_map::TerrainRules::default()
+        };
+        (forest, rules)
+    }
 
     #[test]
     fn terrain_holds_everyone_on_it_to_its_last_propertys_speed_limit() {

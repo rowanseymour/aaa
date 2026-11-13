@@ -225,9 +225,34 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::Tile;
+
+    use crate::{ARRIVAL_REACH, Command, Enemy, Order, Refused, State, World, distance, within};
+
+    /// A guard of player 1's, an ally's regiment for it to guard and an
+    /// enemy out of range, 10 apart in a row, the guard noticing nothing
+    /// for itself.
+    fn escort() -> World {
+        let mut w = battle(
+            &[1, 3, 2],
+            vec![
+                soldier(vec![rifle(6.0, 50.0)]),
+                soldier(Vec::new()),
+                soldier(vec![rifle(6.0, 1.0)]),
+            ],
+            at_war(),
+        );
+        w.regiments[0].control_range = 4.0;
+        let guard = Command::GuardThing {
+            regiment: 0,
+            thing: Enemy::Regiment(1),
+        };
+        w.apply(1, guard).unwrap();
+        w
+    }
 
     #[test]
     fn guards_rest_at_their_post_ready_to_fight_and_come_back_after() {

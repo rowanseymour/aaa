@@ -357,6 +357,27 @@ mod tests {
     use crate::testing::*;
 
     #[test]
+    fn what_a_map_leaves_out_for_lack_of_room_adds_nothing() {
+        let mut w = economy();
+        w.economies.insert(
+            Id::from("start_loc"),
+            aaa_map::Economy {
+                production: amounts(&[("building_limit_provided", 20.0)]),
+                ..Default::default()
+            },
+        );
+        let before = w.balance(1);
+        w.holdings = holdings([
+            (Role::Crowded, Some(1), "start_loc"),
+            (Role::Other, None, "start_loc"),
+        ]);
+        assert!(w.holdings.is_empty());
+        assert_eq!(w.balance(1), before);
+        w.holdings = holdings([(Role::Other, Some(1), "start_loc")]);
+        assert_ne!(w.balance(1), before);
+    }
+
+    #[test]
     fn numbered_regiments_count_per_side_and_template_never_reusing_one() {
         let mut w = headquarters();
         let mut t = truck();

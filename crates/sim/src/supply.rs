@@ -626,9 +626,68 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{DeployPoints, Domain, Id, Pathing, Shape, Weapon};
+
+    use crate::{
+        Command, Commission, Enemy, Ledger, Notice, Pause, Refused, Regiment, Relation, State,
+        Supplying, Target, World, deploy_point,
+    };
+
+    /// Player 1's Corps HQ at 20,20 and two depots east of it, the first
+    /// in the HQ's zone and the second only in the first's, each reaching
+    /// 20 and the depots stocking up to 3 seconds.
+    fn chain() -> World {
+        let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+        let mut corps = building(5, 1, [20.0, 20.0]);
+        corps.template = "corps".into();
+        let depot = |id, x| {
+            let mut depot = building(id, 1, [x, 20.0]);
+            depot.template = "depot".into();
+            depot
+        };
+        w.add_buildings(&[depot(7, 50.0), depot(6, 34.0), corps]);
+        w.supplies
+            .insert(Id::from("corps"), supply(20.0, false, 0.0));
+        w.supplies
+            .insert(Id::from("depot"), supply(20.0, true, 3.0));
+        w
+    }
+
+    /// [`division`] with a second company at 26,28 (regiment 2), both
+    /// infantry, and an operation that resupplies the nearest infantry
+    /// regiment within 15 for 10 seconds.
+    fn resupplied() -> (World, Id) {
+        let mut w = division();
+        let mut c = raised_company(&mut w, 1);
+        c.renumber(80);
+        c.place([26.0, 28.0], [0.0, 1.0]);
+        w.add_regiment(&c);
+        let kind = aaa_map::Kind {
+            properties: Vec::new(),
+            flags: vec![Id::from("org_infantry")],
+            soft: Shape::Circle { radius: 1.0 },
+        };
+        w.kinds.insert(Id::from("company"), kind);
+        w.supply_effects
+            .insert(Id::from("resupplied"), effect(0.0, 0.25, true, &[]));
+        let operation = aaa_map::Operation::Enchant {
+            targets: aaa_map::Targets {
+                required: ["FRIEND", "ORGANIZATION", "ORG_INFANTRY"]
+                    .map(Id::from)
+                    .to_vec(),
+                excluded: Vec::new(),
+            },
+            area: 15.0,
+            max_targets: 1,
+            property: Id::from("resupplied"),
+            seconds: 10.0,
+        };
+        w.operations.insert(Id::from("resupply"), operation);
+        (w, Id::from("resupply"))
+    }
 
     #[test]
     fn relays_pass_supply_on_down_a_chain_from_a_source() {

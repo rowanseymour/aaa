@@ -112,9 +112,23 @@ impl World {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+
     use crate::testing::*;
-    use crate::*;
+
+    use aaa_map::{Domain, Id, Tile};
+
+    use crate::{Command, Commission, Enemy, Fallen, Notice, Refused, State, World};
+
+    /// [`economy`] with its house, building 0, selling for half its cost
+    /// of 301 money and 40 ammo.
+    fn market() -> World {
+        let mut w = economy();
+        w.economies.get_mut(&Id::from("house")).unwrap().cost =
+            amounts(&[("money", 301.0), ("ammo", 40.0)]);
+        w.sellable.insert(Id::from("house"));
+        w.economy.sell_factor = 0.5;
+        w
+    }
 
     #[test]
     fn regiments_disband_unless_fighting_or_attached_and_lone_units_go_quietly() {

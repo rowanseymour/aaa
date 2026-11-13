@@ -720,7 +720,50 @@ impl World {
 mod tests {
     use super::*;
     use crate::testing::*;
-    use crate::*;
+
+    use std::f32::consts::{PI, TAU};
+
+    use crate::{Command, Enemy, NotYours, Target, World};
+
+    /// A player 2 pillbox at (10, 24), noticing within 20, whose rifle
+    /// can't hit aircraft, and unarmed soldiers of two of player 1's
+    /// regiments: the first in its zone, the second, of `flags`, far off.
+    fn sentry(flags: &[&str]) -> World {
+        let mut far = soldier(Vec::new());
+        far.flags = flags.iter().map(|&f| Id::from(f)).collect();
+        let mut w = battle(&[1, 1], vec![soldier(Vec::new()), far], at_war());
+        w.units[1].position = [40.0, 40.0];
+        let mut pillbox = building(20, 2, [10.0, 24.0]);
+        let mut rifle = rifle(12.0, 10.0);
+        rifle.targets.excluded.push(Id::from("air"));
+        pillbox.fighter.weapons = vec![rifle];
+        pillbox.fighter.notice = Some(20.0);
+        with_buildings(w, &[pillbox])
+    }
+
+    /// A pillbox south of the siege's soldier, facing it, whose rifle is on
+    /// a turret that starts `start` degrees round, turns 90° a second and
+    /// aims within `sweep` degrees.
+    fn turreted(start: f32, sweep: f32) -> World {
+        let mut pillbox = building(20, 2, [10.0, 24.0]);
+        pillbox.fighter.weapons = vec![Weapon {
+            aimed_by: Some(0),
+            ..rifle(12.0, 10.0)
+        }];
+        pillbox.fighter.notice = Some(20.0);
+        pillbox.fighter.turrets = vec![Turret {
+            turn_rate: 90f32.to_radians(),
+            sweep: sweep.to_radians(),
+            start: start.to_radians(),
+            reset: None,
+            offset: [0.0; 2],
+        }];
+        let mut w = siege(&[pillbox]);
+        w.units[0].fighter = Some(soldier(Vec::new()));
+        // Already woken, as if saved so, since the soldier starts in reach.
+        w.buildings[0].awake = true;
+        w
+    }
 
     #[test]
     fn enemies_in_range_fire_on_each_other_until_one_dies() {
