@@ -2,7 +2,7 @@
 //! selling buildings.
 
 use crate::economy::money;
-use crate::{Fallen, Left, Notice, Refused, State, World};
+use crate::{Left, Notice, Piece, Refused, State, World};
 
 impl World {
     /// Whether a regiment is a lone unit rather than an organization, as a
@@ -72,7 +72,7 @@ impl World {
         r.resume = None;
         if !self.lone(regiment) {
             let owner = self.regiments[regiment].owner;
-            let what = Fallen::Regiment(regiment);
+            let what = Piece::Regiment(regiment);
             self.notices.push(Notice::Destroyed { owner, what });
         }
     }
@@ -121,7 +121,7 @@ mod tests {
 
     use aaa_map::{Domain, Id, Tile};
 
-    use crate::{Command, Commission, Enemy, Fallen, Notice, Refused, State, World};
+    use crate::{Command, Commission, Notice, Piece, Refused, State, World};
 
     /// [`economy`] with its house, building 0, selling for half its cost
     /// of 301 money and 40 ammo.
@@ -141,10 +141,10 @@ mod tests {
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         assert_eq!(w.check(1, &disband(1)), Err(Refused::Unable));
         w.apply(1, Command::Detach { regiment: 1 }).unwrap();
-        w.regiments[1].engaged.push(Enemy::Regiment(0));
+        w.regiments[1].engaged.push(Piece::Regiment(0));
         assert_eq!(w.check(1, &disband(1)), Err(Refused::Unable));
         // A lone unit goes even while it fights.
-        w.regiments[0].engaged.push(Enemy::Regiment(1));
+        w.regiments[0].engaged.push(Piece::Regiment(1));
         assert_eq!(w.check(1, &disband(0)), Ok(()));
         assert_eq!(w.check(2, &disband(0)), Err(Refused::NotYours));
         w.regiments[1].engaged.clear();
@@ -158,7 +158,7 @@ mod tests {
         assert!(units.iter().all(|&u| w.units[u].died.is_none()));
         let lost = Notice::Destroyed {
             owner: 1,
-            what: Fallen::Regiment(1),
+            what: Piece::Regiment(1),
         };
         assert_eq!(w.notices, [lost]);
         assert_eq!(w.check(1, &disband(1)), Err(Refused::NotYours));
@@ -290,7 +290,7 @@ mod tests {
         assert_eq!(w.stockpile(1), 651.0);
         let destroyed = Notice::Destroyed {
             owner: 1,
-            what: Fallen::Building(0),
+            what: Piece::Building(0),
         };
         let sold = Notice::Sold {
             player: 1,

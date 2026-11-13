@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use aaa_map::{FogSetting, Id, Relation, Tile};
 
-use crate::{Enemy, World, distance};
+use crate::{Piece, World, distance};
 
 /// How a tile stands for a side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -335,14 +335,14 @@ impl World {
         let engaging = self
             .regiments
             .iter()
-            .filter(|o| o.engaged.contains(&Enemy::Regiment(r)));
+            .filter(|o| o.engaged.contains(&Piece::Regiment(r)));
         sides.extend(engaging.map(|o| o.owner));
         let bombarding = regiment
             .bombarded
             .iter()
             .filter(|b| b.tick + b.length >= self.ticks);
-        sides.extend(bombarding.map(|b| self.enemy_owner(b.by)));
-        sides.extend(regiment.engaged.iter().map(|&e| self.enemy_owner(e)));
+        sides.extend(bombarding.map(|b| self.piece_owner(b.by)));
+        sides.extend(regiment.engaged.iter().map(|&e| self.piece_owner(e)));
         let targets = regiment.units.iter().filter_map(|&u| self.units[u].target);
         sides.extend(targets.map(|t| self.owner(t)));
         sides.remove(&regiment.owner);
@@ -357,7 +357,7 @@ impl World {
         let engaging = self
             .regiments
             .iter()
-            .filter(|o| o.engaged.contains(&Enemy::Building(b)));
+            .filter(|o| o.engaged.contains(&Piece::Building(b)));
         sides.extend(engaging.map(|o| o.owner));
         sides.extend(building.target.map(|t| self.owner(t)));
         sides.remove(&building.owner);

@@ -4,7 +4,7 @@
 use aaa_map::{Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon};
 
 use crate::{
-    Enemy, Footing, LANDINGS_KEPT, Landing, Order, Projectile, Relation, State, TICK, Target,
+    Footing, LANDINGS_KEPT, Landing, Order, Piece, Projectile, Relation, State, TICK, Target,
     TurretAim, World, bounding_radius, distance, supply, wrap,
 };
 
@@ -464,7 +464,7 @@ impl World {
                 .filter(|&t| self.in_zone(&zone, t))
                 .map(|t| (t, (Tile::at(self.position(t)), self.owner(t))))
                 .collect();
-            let seen: Vec<Enemy> = (inside.iter())
+            let seen: Vec<Piece> = (inside.iter())
                 .filter(|(t, at)| building.inside.get(t) != Some(at))
                 .filter(|&&(t, _)| {
                     let weapons = &building.fighter.weapons;
@@ -472,7 +472,7 @@ impl World {
                         .iter()
                         .any(|w| self.can_target(s, w, t) && self.in_arc(b, w, t))
                 })
-                .map(|&(t, _)| self.enemy(t))
+                .map(|&(t, _)| self.piece(t))
                 .collect();
             let building = &mut self.buildings[b];
             building.inside = inside.into_iter().collect();
@@ -487,10 +487,10 @@ impl World {
     }
 
     /// The regiment or building a target is, or is in.
-    pub(crate) fn enemy(&self, t: Target) -> Enemy {
+    pub(crate) fn piece(&self, t: Target) -> Piece {
         match t {
-            Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
-            Target::Building(b) => Enemy::Building(b),
+            Target::Unit(u) => Piece::Regiment(self.units[u].regiment),
+            Target::Building(b) => Piece::Building(b),
         }
     }
 
@@ -502,7 +502,7 @@ impl World {
         let from = self.buildings[b].position;
         let noticed = &self.buildings[b].noticed;
         let valid = |t: Target| {
-            noticed.contains(&self.enemy(t))
+            noticed.contains(&self.piece(t))
                 && self.can_hit(s, weapon, t)
                 && self.in_arc(b, weapon, t)
                 && self.defended_rank(t) > 0
@@ -723,7 +723,7 @@ mod tests {
 
     use std::f32::consts::{PI, TAU};
 
-    use crate::{Command, Enemy, NotYours, Target, World};
+    use crate::{Command, NotYours, Piece, Target, World};
 
     /// A player 2 pillbox at (10, 24), noticing within 20, whose rifle
     /// can't hit aircraft, and unarmed soldiers of two of player 1's
@@ -960,7 +960,7 @@ mod tests {
         assert_eq!(w.units[0].health, 100.0);
         w.units[0].position = [10.0, 16.0];
         w.tick();
-        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
         assert_eq!(w.units[0].health, 90.0);
         // Spotting and firing on an enemy isn't being under siege; being
         // hit by one is.
@@ -975,7 +975,7 @@ mod tests {
     fn defenders_leave_alone_what_the_map_placed_near_them() {
         let mut w = sentry(&["infantry"]);
         run(&mut w, 5.0);
-        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
         assert!(!w.buildings[0].awake);
         assert!(w.buildings[0].target.is_none());
         assert_eq!(w.units[0].health, 100.0);
@@ -993,7 +993,7 @@ mod tests {
         assert!(w.buildings[0].awake);
         assert_eq!(
             w.buildings[0].noticed,
-            [Enemy::Regiment(0), Enemy::Regiment(1)]
+            [Piece::Regiment(0), Piece::Regiment(1)]
         );
         assert_eq!(w.buildings[0].target, Some(Target::Unit(0)));
         assert_eq!(w.units[0].health, 90.0);
@@ -1036,7 +1036,7 @@ mod tests {
         assert!(!w.buildings[0].awake);
         w.units[0].position = [10.0, 12.0];
         w.tick();
-        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
         assert!(w.buildings[0].awake);
     }
 
@@ -1051,7 +1051,7 @@ mod tests {
         assert!(!w.buildings[0].awake);
         w.units[0].position = [10.0, 12.0];
         w.tick();
-        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
         assert!(w.buildings[0].awake);
     }
 
@@ -1074,7 +1074,7 @@ mod tests {
         run(&mut w, 1.0);
         w.units[1].position = [10.0, 40.0];
         run(&mut w, 2.0);
-        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
         assert!(!w.buildings[0].awake);
         assert_eq!(w.units[0].health, 100.0);
     }
@@ -1104,7 +1104,7 @@ mod tests {
         // Facing -y, its left is +x.
         w.units[0].position = [20.0, 22.0];
         run(&mut w, 1.0);
-        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
         assert!(w.units[0].health < 100.0);
         // Back ahead of it, the soldier's out of the arc and left be.
         w.units[0].position = [10.0, 14.0];
@@ -1302,7 +1302,7 @@ mod tests {
         assert!(w.regiments[0].engaged.is_empty());
         w.units[1].position = [10.0, 43.9];
         run(&mut w, 2.0);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
     }
 
     #[test]

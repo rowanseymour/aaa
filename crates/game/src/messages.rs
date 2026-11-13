@@ -10,7 +10,7 @@ use aaa_data::{GameEvent, Id, InterfaceVars};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::textures;
-use aaa_sim::{Fallen, Notice, Pause, Relation, Seen, World};
+use aaa_sim::{Notice, Pause, Piece, Relation, Seen, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -685,12 +685,12 @@ fn told(
         // it's destroyed, whoever did it. What's nobody's tells no one.
         Notice::Destroyed { owner, what } if sim.sides.player(owner).is_some() => {
             let (name, about, event) = match what {
-                Fallen::Regiment(r) => (
+                Piece::Regiment(r) => (
                     look.regiment(sim, r),
                     About::Regiment(r),
                     "mobile_actor_lost",
                 ),
-                Fallen::Building(b) => (
+                Piece::Building(b) => (
                     look.building(sim, b),
                     About::Building(b),
                     "static_actor_lost",

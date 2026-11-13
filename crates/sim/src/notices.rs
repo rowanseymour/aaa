@@ -2,7 +2,7 @@
 
 use aaa_map::Id;
 
-use crate::{Pause, World};
+use crate::{Pause, Piece, World};
 
 /// Something a side is told.
 #[derive(Debug, Clone, PartialEq)]
@@ -62,7 +62,7 @@ pub enum Notice {
     /// It holds a technology it didn't.
     Gained { player: u32, technology: Id },
     /// Something of `owner`'s is destroyed, by whatever cause.
-    Destroyed { owner: u32, what: Fallen },
+    Destroyed { owner: u32, what: Piece },
     /// A building of its, by index into [`World::buildings`], has been
     /// sold, or destroyed when it could have been, for `paid` money.
     Sold {
@@ -70,14 +70,6 @@ pub enum Notice {
         building: usize,
         paid: f32,
     },
-}
-
-/// A regiment or building destroyed, by index into [`World::regiments`]
-/// or [`World::buildings`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Fallen {
-    Regiment(usize),
-    Building(usize),
 }
 
 impl World {

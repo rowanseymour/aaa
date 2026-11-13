@@ -4,7 +4,7 @@ use aaa_map::Id;
 
 use crate::packing::unpack_facing;
 use crate::{
-    Building, Command, Commission, Enemy, NotYours, Notice, Order, Refused, TICK, Work, World,
+    Building, Command, Commission, NotYours, Notice, Order, Piece, Refused, TICK, Work, World,
     normalised, unpack_site,
 };
 
@@ -153,7 +153,7 @@ impl World {
         if !self.armed(regiment)
             || enemy >= self.regiments.len()
             || self.destroyed(enemy)
-            || !self.hostile(regiment, Enemy::Regiment(enemy))
+            || !self.hostile(regiment, Piece::Regiment(enemy))
         {
             return Err(Refused::Unable);
         }
@@ -170,11 +170,11 @@ impl World {
         })
     }
 
-    fn may_guard(&self, player: u32, regiment: usize, thing: Enemy) -> Result<(), Refused> {
+    fn may_guard(&self, player: u32, regiment: usize, thing: Piece) -> Result<(), Refused> {
         self.may_command(player, regiment)?;
         let there = match thing {
-            Enemy::Regiment(g) => g != regiment && g < self.regiments.len(),
-            Enemy::Building(b) => b < self.buildings.len(),
+            Piece::Regiment(g) => g != regiment && g < self.regiments.len(),
+            Piece::Building(b) => b < self.buildings.len(),
         };
         match there && !self.left(thing) {
             true => Ok(()),
@@ -183,10 +183,10 @@ impl World {
     }
 
     /// Whether something a regiment could guard is no longer there to.
-    pub(crate) fn left(&self, thing: Enemy) -> bool {
+    pub(crate) fn left(&self, thing: Piece) -> bool {
         match thing {
-            Enemy::Regiment(g) => self.destroyed(g),
-            Enemy::Building(b) => self.buildings[b].gone(),
+            Piece::Regiment(g) => self.destroyed(g),
+            Piece::Building(b) => self.buildings[b].gone(),
         }
     }
 
@@ -368,7 +368,7 @@ impl World {
         &mut self,
         player: u32,
         regiment: usize,
-        thing: Enemy,
+        thing: Piece,
     ) -> Result<(), Refused> {
         self.may_guard(player, regiment, thing)?;
         if self.regiments[regiment].guard.and_then(|g| g.of) == Some(thing) {
@@ -467,7 +467,7 @@ mod tests {
 
     use aaa_map::{Domain, Pathing};
 
-    use crate::{Command, Commission, Fallen, NotYours, Notice, Refused};
+    use crate::{Command, Commission, NotYours, Notice, Piece, Refused};
 
     #[test]
     fn a_new_order_forgets_what_the_regiment_was_told_before() {
@@ -570,7 +570,7 @@ mod tests {
         assert!(!w.commands(7, 0));
         let lost = Notice::Destroyed {
             owner: w.regiments[0].owner,
-            what: Fallen::Regiment(0),
+            what: Piece::Regiment(0),
         };
         assert_eq!(w.notices, [lost]);
     }

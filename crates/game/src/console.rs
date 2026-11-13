@@ -877,7 +877,7 @@ fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let command = match aim {
         Aim::Guard => aaa_sim::Command::GuardThing {
             regiment: r,
-            thing: aaa_sim::Enemy::Regiment(e),
+            thing: aaa_sim::Piece::Regiment(e),
         },
         _ => aaa_sim::Command::Pursue {
             regiment: r,

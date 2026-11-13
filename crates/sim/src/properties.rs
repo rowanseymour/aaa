@@ -2,7 +2,7 @@
 
 use aaa_map::Id;
 
-use crate::{Enemy, TICK, World};
+use crate::{Piece, TICK, World};
 
 /// A property something has for a time.
 #[derive(Debug, Clone, PartialEq)]
@@ -16,11 +16,11 @@ pub struct Held {
 impl World {
     /// Gives a regiment or building a property for `seconds` from now,
     /// unless it still has it.
-    pub fn give(&mut self, to: Enemy, property: Id, seconds: f32) {
+    pub fn give(&mut self, to: Piece, property: Id, seconds: f32) {
         let until = self.ticks + (seconds / TICK).round() as u64;
         let held = match to {
-            Enemy::Regiment(r) => &mut self.regiments[r].properties,
-            Enemy::Building(b) => &mut self.buildings[b].properties,
+            Piece::Regiment(r) => &mut self.regiments[r].properties,
+            Piece::Building(b) => &mut self.buildings[b].properties,
         };
         if !held.iter().any(|h| h.property == property) {
             held.push(Held { property, until });

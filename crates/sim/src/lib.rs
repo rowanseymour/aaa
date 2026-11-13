@@ -43,7 +43,7 @@ pub use attach::Hq;
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::Commander;
 pub use fog::{Fog, Seen};
-pub use notices::{Fallen, Notice};
+pub use notices::Notice;
 pub use objectives::{Objective, Objectives, Standing};
 pub use packing::unpack_site;
 pub use properties::Held;
@@ -197,7 +197,7 @@ pub struct Regiment {
     pub order: Order,
     /// The enemies it's engaged with. While there are any it holds its
     /// ground against them.
-    pub engaged: Vec<Enemy>,
+    pub engaged: Vec<Piece>,
     /// Where it was headed and how it was to face there when it engaged,
     /// to carry on once it's done.
     resume: Option<([f32; 2], [f32; 2])>,
@@ -243,7 +243,7 @@ pub struct Regiment {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Guard {
     /// What it guards, for one that isn't guarding a place.
-    pub of: Option<Enemy>,
+    pub of: Option<Piece>,
     /// Where it rests: the place, or a point beside what it guards.
     pub post: [f32; 2],
     /// The way it faces there: away from what it guards.
@@ -317,9 +317,10 @@ impl Regiment {
     }
 }
 
-/// What a regiment can engage, or guard.
+/// A regiment or a building: what a side owns on the map, and so what a
+/// regiment engages or guards, what holds properties and what's destroyed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Enemy {
+pub enum Piece {
     /// Index into [`World::regiments`].
     Regiment(usize),
     /// Index into [`World::buildings`].
@@ -472,7 +473,7 @@ pub struct Building {
     pub target: Option<Target>,
     /// For one that defends itself, what it's noticed, which is all it
     /// fires on. Never forgotten, so not a sign of a fight.
-    pub noticed: Vec<Enemy>,
+    pub noticed: Vec<Piece>,
     /// For one that defends itself, whether it's been woken by noticing
     /// something: until then it neither aims nor fires.
     pub awake: bool,
@@ -662,7 +663,7 @@ pub enum Command {
     /// As [`Command::Guard`], but posted beside `thing`, following it and
     /// going after the enemy regiments fighting it, until it's gone.
     /// Refused for the regiment itself, or what's already gone.
-    GuardThing { regiment: usize, thing: Enemy },
+    GuardThing { regiment: usize, thing: Piece },
     /// Halts a regiment, its members forming up around where they stand on
     /// average, and drops where it was headed, so that once done with any
     /// engagement it stays put.
@@ -849,7 +850,7 @@ impl World {
         if self.destroyed(r) {
             self.notices.push(Notice::Destroyed {
                 owner: self.regiments[r].owner,
-                what: Fallen::Regiment(r),
+                what: Piece::Regiment(r),
             });
         }
     }

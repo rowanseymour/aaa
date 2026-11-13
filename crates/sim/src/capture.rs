@@ -1,7 +1,7 @@
 //! Buildings falling and changing hands, and cities going to whoever
 //! holds their zone.
 
-use crate::{CAPTURE_HEALTH, Fallen, Notice, Relation, State, Target, World};
+use crate::{CAPTURE_HEALTH, Notice, Piece, Relation, State, Target, World};
 
 impl World {
     /// Deals with a building out of health: `by` captures it if it can be
@@ -22,7 +22,7 @@ impl World {
         } else if building.fighter.destructible {
             let owner = building.owner;
             self.remove(b, State::Destroyed(ticks));
-            let what = Fallen::Building(b);
+            let what = Piece::Building(b);
             self.notices.push(Notice::Destroyed { owner, what });
             // What could have been sold pays its owner as if it had been.
             if self.sells(b) {
@@ -146,7 +146,7 @@ mod tests {
 
     use aaa_map::{Domain, Tile};
 
-    use crate::{Command, Fallen, Notice, State, World};
+    use crate::{Command, Notice, Piece, State, World};
 
     /// What `w`'s sides have been told of buildings changing hands.
     fn captures(w: &World) -> Vec<Notice> {
@@ -183,7 +183,7 @@ mod tests {
         assert_eq!(captures(&w), [lost(0, 2, 1), captured(0, 1)]);
         let destroyed = Notice::Destroyed {
             owner: 2,
-            what: Fallen::Building(1),
+            what: Piece::Building(1),
         };
         assert_eq!(w.notices.iter().filter(|&n| *n == destroyed).count(), 1);
     }

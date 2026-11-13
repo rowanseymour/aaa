@@ -1658,12 +1658,12 @@ fn guard_at(
     player: u32,
     selected: &[usize],
     focus: crate::Focus,
-) -> Option<aaa_sim::Enemy> {
+) -> Option<aaa_sim::Piece> {
     let (thing, owner) = match focus {
         crate::Focus::Nothing => return None,
         crate::Focus::Regiment(r) if selected.contains(&r) => return None,
-        crate::Focus::Regiment(r) => (aaa_sim::Enemy::Regiment(r), sim.regiments[r].owner),
-        crate::Focus::Building(b) => (aaa_sim::Enemy::Building(b), sim.buildings[b].owner),
+        crate::Focus::Regiment(r) => (aaa_sim::Piece::Regiment(r), sim.regiments[r].owner),
+        crate::Focus::Building(b) => (aaa_sim::Piece::Building(b), sim.buildings[b].owner),
     };
     (sim.sides.relation(player, owner) != aaa_sim::Relation::Enemy).then_some(thing)
 }
