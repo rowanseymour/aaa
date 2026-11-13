@@ -240,7 +240,7 @@ impl Organization {
         for p in &self.positions {
             w.i32(p.index);
             if p.index >= 0 {
-                members.next().unwrap().write(w)?;
+                members.next().unwrap().write_listed(w)?;
             }
         }
         for p in &self.positions {

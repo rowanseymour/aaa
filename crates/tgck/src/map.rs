@@ -725,7 +725,7 @@ pub fn write_things(things: &[Thing]) -> Result<(Vec<u8>, Vec<u8>)> {
     data.u32(THINGS_VERSION);
     for thing in things {
         let start = data.0.len();
-        thing.write(&mut data)?;
+        thing.write_listed(&mut data)?;
         index.u32((data.0.len() - start) as u32);
     }
     Ok((index.0, data.0))
@@ -840,6 +840,18 @@ impl Thing {
             seen_by,
             detail: Detail::Raw(Vec::new()),
         })
+    }
+
+    /// Writes a record of a thing list, or an organization's member, whose
+    /// class says what its detail is read as.
+    fn write_listed(&self, w: &mut Writer) -> Result<()> {
+        if !self.detail.fits(self.class) {
+            return Err(Error::Unwritable(format!(
+                "thing {} of class {} with another class's detail",
+                self.id, self.class
+            )));
+        }
+        self.write(w)
     }
 
     fn write(&self, w: &mut Writer) -> Result<()> {
@@ -967,6 +979,19 @@ impl Detail {
             Detail::Raw(raw) => w.bytes(raw),
         }
         Ok(())
+    }
+
+    /// Whether it's the detail a thing of `class` is read with, so what's
+    /// written reads back the same.
+    fn fits(&self, class: u32) -> bool {
+        match self {
+            Detail::Actor(_) => class == ACTOR,
+            Detail::Area(_) => class == AREA,
+            Detail::Camera(_) => class == CAMERA,
+            Detail::ReactiveScenery(_) => class == REACTIVE_SCENERY,
+            Detail::None => class == SCENERY,
+            Detail::Raw(_) => !matches!(class, ACTOR | AREA | CAMERA | SCENERY | REACTIVE_SCENERY),
+        }
     }
 }
 
@@ -1195,6 +1220,13 @@ mod tests {
         assert_eq!(actor.state, State::Raw(vec![1, 2, 3]), "Mind has no class");
         assert_eq!(t[1].detail, Detail::None);
         assert_eq!(write_things(&t).unwrap(), (index, things));
+
+        // Saved as they are, they'd read back as something else.
+        for (i, class) in [(0, SCENERY), (1, ACTOR), (1, 99)] {
+            let mut t = t.clone();
+            t[i].class = class;
+            assert!(matches!(write_things(&t), Err(Error::Unwritable(_))));
+        }
     }
 
     /// An actor that is an organization of one member, `depth` deep.
