@@ -505,10 +505,10 @@ pub fn tell(
 ) {
     // Taking them marks the sim changed, which what redraws on a change
     // would then do every frame.
-    if sim.0.notices.is_empty() {
+    if sim.0.notices().is_empty() {
         return;
     }
-    let notices = std::mem::take(&mut sim.0.notices);
+    let notices = sim.0.take_notices();
     let now = time.elapsed_secs();
     for notice in notices {
         if let Some(sound) = sound(&notice, local.0) {

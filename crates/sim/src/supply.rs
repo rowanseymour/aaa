@@ -7,22 +7,13 @@ use std::collections::BTreeMap;
 use aaa_map::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
 
 use crate::{
-    Building, Enemy, Order, Refused, Relation, State, TICK, Target, World, bounding_radius,
+    Building, Enemy, Held, Order, Refused, Relation, State, TICK, Target, World, bounding_radius,
     deploy_point, distance,
 };
 
 /// Ticks between looks at whether a building gives supply, each building
 /// on its own beat.
 pub(crate) const BEAT: u64 = (1.0 / TICK) as u64;
-
-/// A property something has for a time.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Held {
-    pub property: Id,
-    /// The tick its time is up on. It's taken off at its holder's next
-    /// look after.
-    pub until: u64,
-}
 
 /// Something that has bombarded a regiment lately.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -110,31 +101,6 @@ impl World {
         let timed = held.iter().map(|h| &h.property);
         let of = |p| self.rules.supply_effects.get(p);
         (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
-    }
-
-    /// Gives `player` a technology, for all it has and will have, unless
-    /// the map bars it.
-    pub fn grant(&mut self, player: u32, technology: Id) {
-        if self.barred(player, &technology) {
-            return;
-        }
-        let held = self.technologies.entry(player).or_default();
-        if !held.contains(&technology) {
-            held.push(technology);
-        }
-    }
-
-    /// Gives a regiment or building a property for `seconds` from now,
-    /// unless it still has it.
-    pub fn give(&mut self, to: Enemy, property: Id, seconds: f32) {
-        let until = self.ticks + (seconds / TICK).round() as u64;
-        let held = match to {
-            Enemy::Regiment(r) => &mut self.regiments[r].properties,
-            Enemy::Building(b) => &mut self.buildings[b].properties,
-        };
-        if !held.iter().any(|h| h.property == property) {
-            held.push(Held { property, until });
-        }
     }
 
     /// Carries out what the special operation `operation` does to supply

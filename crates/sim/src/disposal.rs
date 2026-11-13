@@ -3,8 +3,8 @@
 
 use aaa_map::Id;
 
-use crate::economy::{Fallen, money};
-use crate::{Left, Notice, Order, Refused, State, World};
+use crate::economy::money;
+use crate::{Fallen, Left, Notice, Order, Refused, State, World};
 
 impl World {
     /// Whether a regiment is a lone unit rather than an organization, as a

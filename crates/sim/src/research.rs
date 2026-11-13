@@ -51,6 +51,18 @@ impl World {
         })
     }
 
+    /// Gives `player` a technology, for all it has and will have, unless
+    /// the map bars it.
+    pub fn grant(&mut self, player: u32, technology: Id) {
+        if self.barred(player, &technology) {
+            return;
+        }
+        let held = self.technologies.entry(player).or_default();
+        if !held.contains(&technology) {
+            held.push(technology);
+        }
+    }
+
     /// Whether `player`'s side holds `technology`.
     pub fn holds(&self, player: u32, technology: &Id) -> bool {
         self.technologies

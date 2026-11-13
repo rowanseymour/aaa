@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use aaa_map::{FogSetting, Id, Relation, Tile};
 
-use crate::{Enemy, Target, World, distance};
+use crate::{Enemy, World, distance};
 
 /// How a tile stands for a side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -327,21 +327,6 @@ impl World {
         }
     }
 
-    /// The owner of what a regiment or building engages.
-    fn enemy_owner(&self, e: Enemy) -> u32 {
-        match e {
-            Enemy::Regiment(r) => self.regiments[r].owner,
-            Enemy::Building(b) => self.buildings[b].owner,
-        }
-    }
-
-    fn target_owner(&self, t: Target) -> u32 {
-        match t {
-            Target::Unit(u) => self.regiments[self.units[u].regiment].owner,
-            Target::Building(b) => self.buildings[b].owner,
-        }
-    }
-
     /// The sides other than its own fighting the regiment at `r`: those
     /// engaging or bombarding it, and those it engages or fires on.
     fn regiment_shown_to(&self, r: usize) -> BTreeSet<u32> {
@@ -359,7 +344,7 @@ impl World {
         sides.extend(bombarding.map(|b| self.enemy_owner(b.by)));
         sides.extend(regiment.engaged.iter().map(|&e| self.enemy_owner(e)));
         let targets = regiment.units.iter().filter_map(|&u| self.units[u].target);
-        sides.extend(targets.map(|t| self.target_owner(t)));
+        sides.extend(targets.map(|t| self.owner(t)));
         sides.remove(&regiment.owner);
         sides
     }
@@ -374,7 +359,7 @@ impl World {
             .iter()
             .filter(|o| o.engaged.contains(&Enemy::Building(b)));
         sides.extend(engaging.map(|o| o.owner));
-        sides.extend(building.target.map(|t| self.target_owner(t)));
+        sides.extend(building.target.map(|t| self.owner(t)));
         sides.remove(&building.owner);
         sides
     }

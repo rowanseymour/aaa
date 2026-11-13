@@ -51,11 +51,7 @@ impl World {
         for &(r, from) in fired_on {
             let reach = self.regiments[r].operational_range;
             if within_strictly(self.centre(r), self.position(from), reach) {
-                let enemy = match from {
-                    Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
-                    Target::Building(b) => Enemy::Building(b),
-                };
-                meetings.push((r, enemy));
+                meetings.push((r, self.enemy(from)));
             }
         }
         for (u, unit) in self.units.iter().enumerate() {
@@ -263,10 +259,7 @@ impl World {
         };
         let mut found = Vec::new();
         for t in self.targets() {
-            let enemy = match t {
-                Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
-                Target::Building(b) => Enemy::Building(b),
-            };
+            let enemy = self.enemy(t);
             if !found.contains(&enemy)
                 && self.in_zone(&zone, t)
                 && self.hostile(r, enemy)
@@ -297,11 +290,16 @@ impl World {
         }
     }
 
-    pub(crate) fn hostile(&self, r: usize, enemy: Enemy) -> bool {
-        let owner = match enemy {
+    /// The owner of what a regiment or building engages.
+    pub(crate) fn enemy_owner(&self, enemy: Enemy) -> u32 {
+        match enemy {
             Enemy::Regiment(e) => self.regiments[e].owner,
             Enemy::Building(b) => self.buildings[b].owner,
-        };
+        }
+    }
+
+    pub(crate) fn hostile(&self, r: usize, enemy: Enemy) -> bool {
+        let owner = self.enemy_owner(enemy);
         self.sides.relation(self.regiments[r].owner, owner) == Relation::Enemy
     }
 

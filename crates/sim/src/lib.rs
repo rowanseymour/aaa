@@ -16,10 +16,12 @@ mod experience;
 mod fog;
 mod guard;
 mod movement;
+mod notices;
 mod objectives;
 mod packing;
 pub mod path;
 mod production;
+mod properties;
 mod research;
 mod rules;
 mod setup;
@@ -38,14 +40,16 @@ use aaa_map::{
 
 pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
-pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
+pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::Commander;
 pub use fog::{Fog, Seen};
+pub use notices::{Fallen, Notice};
 pub use objectives::{Objective, Objectives, Standing};
 pub use packing::unpack_site;
+pub use properties::Held;
 pub use research::{Lacking, Researchable};
 pub use rules::Rules;
-pub use supply::{Bombarder, Held, Supplying};
+pub use supply::{Bombarder, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
@@ -138,8 +142,8 @@ pub struct World {
     pub treasuries: BTreeMap<u32, Treasury>,
     /// The experience of each side with a general, by player id.
     pub commanders: BTreeMap<u32, Commander>,
-    /// What sides have been told since these were last taken.
-    pub notices: Vec<Notice>,
+    /// What sides have been told: see [`World::take_notices`].
+    pub(crate) notices: Vec<Notice>,
     /// What each side sees of the map.
     pub fog: Fog,
     /// Ticks played.
