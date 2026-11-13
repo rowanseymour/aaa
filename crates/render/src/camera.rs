@@ -1,7 +1,8 @@
 //! An RTS-style camera orbiting a focus point on the ground.
 //!
 //! It starts in the game's own view: the map seen corner-on from a fixed
-//! angle, which only pans and zooms. Tab frees it to rotate and tilt.
+//! angle, which only pans and zooms. Where [`RtsCamera::freeable`], Tab
+//! frees it to rotate and tilt.
 
 use std::f32::consts::FRAC_PI_4;
 
@@ -33,6 +34,8 @@ pub struct RtsCamera {
     pub pitch: f32,
     pub distance: f32,
     pub free: bool,
+    /// Whether Tab frees it, as the editor's does; the game's never turns.
+    pub freeable: bool,
     /// The game camera's zoom limits, as multiples of its starting distance.
     pub zoom: (f32, f32),
     /// Whether the letter keys move it as the arrows do and turn it;
@@ -57,6 +60,7 @@ impl RtsCamera {
             pitch: GAME_PITCH,
             distance: game_distance(),
             free: false,
+            freeable: false,
             zoom: GAME_ZOOM,
             letter_keys: true,
         }
@@ -72,6 +76,7 @@ impl RtsCamera {
     pub fn default_angles(&mut self) {
         *self = RtsCamera {
             letter_keys: self.letter_keys,
+            freeable: self.freeable,
             ..RtsCamera::new(self.focus)
         };
     }
@@ -131,7 +136,7 @@ pub fn update(
 ) {
     let dt = time.delta_secs();
     for (mut cam, mut transform, mut projection) in &mut cameras {
-        if keys.just_pressed(KeyCode::Tab) {
+        if cam.freeable && keys.just_pressed(KeyCode::Tab) {
             cam.free = !cam.free;
             if !cam.free {
                 cam.yaw = GAME_YAW;

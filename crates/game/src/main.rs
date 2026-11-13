@@ -1941,9 +1941,7 @@ fn command(
     let Some(player) = local.0 else {
         return;
     };
-    // The free camera turns with the right button.
-    let free = cameras.single().is_ok_and(|(_, _, rts)| rts.free);
-    if !buttons.just_pressed(MouseButton::Right) || free {
+    if !buttons.just_pressed(MouseButton::Right) {
         return;
     }
     let ground = &loaded.map.ground;

@@ -18,7 +18,8 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 ## Goals
 
 - Play the original game on modern systems, Linux and macOS included, from its own data files.
-- Play like the original: the same rules giving the same results.
+- Play like the original: the same rules giving the same results. Where it looks or
+  controls differently on purpose, that's listed in [divergences](docs/divergences.md).
 - Stay driven by the data files, so the maps and mods made for the original keep working.
 - Make the game easier to mod, starting with a map editor and documented
   [file formats](docs/formats).
