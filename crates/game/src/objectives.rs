@@ -57,6 +57,7 @@ fn spawn(
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     bindings: Res<Bindings>,
+    mut icons: ResMut<displays::Icons>,
 ) {
     let game = &mut loaded.game;
     let strings = game.strings();
@@ -83,7 +84,7 @@ fn spawn(
         &bindings,
         Panel::Objectives,
         Rim::BottomLeft,
-        images.add(displays::glyph(flag_shape)),
+        icons.get(displays::icon!("objectives"), &mut images, formats.0),
         said(
             "control_panel_ButtonObjectives_ToolTip",
             "Display Objectives",
@@ -144,15 +145,6 @@ fn spawn(
         lists,
     });
     commands.insert_resource(Shown::default());
-}
-
-/// Whether a point of the glyph's square is on a flag: a pole, and a
-/// pennant forked at its tip.
-fn flag_shape(x: f32, y: f32) -> bool {
-    let pole = (-0.65..-0.45).contains(&x) && (-0.9..0.9).contains(&y);
-    let fork = 0.75 - 0.35 * (1.0 - (y + 0.45).abs() / 0.4);
-    let pennant = x >= -0.45 && x < fork && (-0.85..-0.05).contains(&y);
-    pole || pennant
 }
 
 /// What the window lists for a side holding `held`: those, or the line a

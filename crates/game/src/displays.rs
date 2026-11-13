@@ -2,10 +2,12 @@
 //! button on the minimap's rim or by its key, one at a time. The match
 //! holds still while one's up, unless it was already.
 
-use bevy::asset::RenderAssetUsages;
+use std::collections::HashMap;
+
+use aaa_render::textures;
+use bevy::image::CompressedImageFormats;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button, ScrollArea};
 
@@ -17,10 +19,8 @@ use crate::{Screen, minimap};
 /// What the key that closes whichever panel is up is bound to.
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
 
-/// A glyph's size on its button, and its texels across, more than it's
-/// drawn at so it stays crisp once the interface is scaled up.
-const GLYPH_SIZE: f32 = 22.0;
-const GLYPH_TEXELS: u32 = 64;
+/// A glyph's size on its button.
+pub const GLYPH_SIZE: f32 = 22.0;
 
 /// The layout the windows' places and sizes are given on.
 const LAYOUT: Vec2 = Vec2::new(1024.0, 768.0);
@@ -141,6 +141,7 @@ pub struct DisplaysPlugin;
 impl Plugin for DisplaysPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Displays>()
+            .init_resource::<Icons>()
             .add_systems(OnEnter(Screen::Match), reset)
             .add_systems(
                 Update,
@@ -415,44 +416,49 @@ fn light_buttons(
     }
 }
 
-/// A white glyph on a clear ground, to be tinted: where `inside` holds of
-/// the square from -1 to 1 each way, y down.
-pub fn glyph(inside: impl Fn(f32, f32) -> bool) -> Image {
-    silhouette(GLYPH_TEXELS, inside)
+/// One of the icons in `assets/icons`, white on clear for a button to
+/// tint, built in.
+#[derive(Clone, Copy)]
+pub struct Icon {
+    pub name: &'static str,
+    pub png: &'static [u8],
 }
 
-/// A [`glyph`] of any number of texels across.
-pub fn silhouette(texels: u32, inside: impl Fn(f32, f32) -> bool) -> Image {
-    // Each texel's coverage from a grid of samples across it.
-    const SAMPLES: u32 = 4;
-    let half = texels as f32 / 2.0;
-    let mut data = Vec::with_capacity((texels * texels * 4) as usize);
-    for v in 0..texels {
-        for u in 0..texels {
-            let mut hits = 0;
-            for j in 0..SAMPLES {
-                for i in 0..SAMPLES {
-                    let at = |t: u32, s: u32| {
-                        (t as f32 + (s as f32 + 0.5) / SAMPLES as f32 - half) / half
-                    };
-                    hits += inside(at(u, i), at(v, j)) as u32;
-                }
-            }
-            let alpha = (255 * hits / (SAMPLES * SAMPLES)) as u8;
-            data.extend_from_slice(&[255, 255, 255, alpha]);
+/// The [`Icon`] in `assets/icons` named `$name`.
+macro_rules! icon {
+    ($name:literal) => {
+        $crate::displays::Icon {
+            name: concat!($name, ".png"),
+            png: include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../../assets/icons/",
+                $name,
+                ".png"
+            )),
         }
+    };
+}
+pub(crate) use icon;
+
+/// The icons decoded so far, kept from one match to the next.
+#[derive(Resource, Default)]
+pub struct Icons(HashMap<&'static str, Handle<Image>>);
+
+impl Icons {
+    /// `icon` as an image, blank if it won't decode.
+    pub fn get(
+        &mut self,
+        icon: Icon,
+        images: &mut Assets<Image>,
+        formats: CompressedImageFormats,
+    ) -> Handle<Image> {
+        let decode = || textures::decode(icon.png, icon.name, formats, true);
+        let image = self
+            .0
+            .entry(icon.name)
+            .or_insert_with(|| decode().map(|i| images.add(i)).unwrap_or_default());
+        image.clone()
     }
-    Image::new(
-        Extent3d {
-            width: texels,
-            height: texels,
-            depth_or_array_layers: 1,
-        },
-        TextureDimension::D2,
-        data,
-        TextureFormat::Rgba8UnormSrgb,
-        RenderAssetUsages::default(),
-    )
 }
 
 #[cfg(test)]
