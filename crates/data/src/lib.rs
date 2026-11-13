@@ -1989,6 +1989,7 @@ impl GameData {
     /// What music plays when, and how loud.
     pub fn music_settings(&mut self) -> MusicSettings {
         let vars = self.avars();
+        let uvars = self.uvars();
         let var =
             |of: fn(&defs::AVars) -> Option<f32>, or: f32| vars.iter().find_map(of).unwrap_or(or);
         let id = |of: fn(&defs::AVars) -> Option<Id>| vars.iter().find_map(of);
@@ -2004,11 +2005,11 @@ impl GameData {
                 .unwrap_or_else(|| Id::from("music_silent")),
             observer: id(|v| v.observer_game_music.clone()),
             menu,
-            main_volume: self
-                .interface_setting(|v| v.audio_main_volume)
+            main_volume: (uvars.iter())
+                .find_map(|v| v.audio_main_volume)
                 .unwrap_or(0.8),
-            music_volume: self
-                .interface_setting(|v| v.audio_music_volume)
+            music_volume: (uvars.iter())
+                .find_map(|v| v.audio_music_volume)
                 .unwrap_or(0.7),
             duck_volume: var(|v| v.audio_fade_volume, 0.5),
             duck_time: var(|v| v.audio_fade_time, 1.0),
@@ -2028,17 +2029,18 @@ impl GameData {
 
     /// One of the interface's settings.
     fn interface_setting<T>(&mut self, of: impl Fn(defs::UVars) -> Option<T>) -> Option<T> {
-        // Not in the load lists; the game's own settings take precedence
-        // over the engine's.
+        self.uvars().into_iter().find_map(of)
+    }
+
+    /// The interface's settings, the game's own before the engine's.
+    fn uvars(&mut self) -> Vec<defs::UVars> {
+        // Not in the load lists.
         let files: Vec<(String, tgi::Parsed)> = ["UVars_AA.tgi", "UVars.tgi"]
             .into_iter()
             .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
             .collect();
         let files = scoped(&files);
-        files
-            .iter()
-            .flat_map(|f| f.read::<defs::UVars>("Vars"))
-            .find_map(of)
+        files.iter().flat_map(|f| f.read("Vars")).collect()
     }
 
     /// The orders the player can give, in the order the files list them.
@@ -2234,8 +2236,9 @@ impl GameData {
             .collect()
     }
 
-    /// Every sound, speech and music, by id. Music plays a stand-in, if the
-    /// settings name one, for each file the archives don't have.
+    /// Every sound, speech and music, by id. Streamed audio, music and
+    /// speech, plays a stand-in, if the settings name one, for each file the
+    /// archives don't have.
     pub fn audio(&mut self) -> HashMap<Id, Audio> {
         let stand_in = (self.avars().into_iter())
             .find_map(|v| v.default_audio_streaming_resource)
@@ -2246,11 +2249,10 @@ impl GameData {
             .iter()
             .flat_map(|f| f.read::<defs::Audio>("Audio"))
             .filter_map(|a| {
-                let music = a
-                    .category
-                    .as_deref()
-                    .is_some_and(|c| c.eq_ignore_ascii_case("MUSIC"));
-                let stand_in = stand_in.as_deref().filter(|_| music);
+                let streamed = (a.category.as_deref()).is_some_and(|c| {
+                    c.eq_ignore_ascii_case("MUSIC") || c.eq_ignore_ascii_case("SPEECH")
+                });
+                let stand_in = stand_in.as_deref().filter(|_| streamed);
                 Some((a.ids.clone()?, audio(&a, |p| self.path(p), stand_in)?))
             })
             .collect()

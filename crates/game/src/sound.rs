@@ -193,8 +193,7 @@ impl Sounds {
         Some(files[i].clone())
     }
 
-    /// A file to play, read from `game` the first time it's needed.
-    pub fn source(
+    fn source(
         &mut self,
         game: Option<&mut GameData>,
         assets: &mut Assets<AudioSource>,

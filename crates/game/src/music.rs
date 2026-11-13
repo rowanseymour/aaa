@@ -3,7 +3,7 @@
 //! as the new fades in, and music falls quieter while audio that asks it
 //! to plays.
 
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 use aaa_data::{Audio, GameData, Id, MusicSettings};
 use bevy::audio::Volume;
@@ -15,6 +15,10 @@ use crate::{Data, Loaded, Local, Screen, Sim, lobby};
 /// How many files music and speech can stream at once; music on its way
 /// out that would need more is cut off.
 const STREAMS: usize = 3;
+
+/// Seconds a file may take to start playing before it's given up on, as
+/// one that can't be played.
+const START_TIMEOUT: f64 = 2.0;
 
 #[derive(Resource)]
 pub struct Music {
@@ -28,20 +32,25 @@ pub struct Music {
     duck: f32,
     /// When audio that ducks music was last heard playing.
     ducked_at: Option<f64>,
+    /// The current music's files, read before a match loads takes the game
+    /// data away, so that it plays on through the loading.
+    ahead: HashMap<String, Handle<AudioSource>>,
 }
 
 struct Current {
     id: Id,
     audio: Audio,
     started: f64,
-    /// The file playing, until it ends.
-    playing: Option<Entity>,
+    /// The file playing, until it ends, and when it was set going.
+    playing: Option<(Entity, f64)>,
     /// Whether it has played its lead-in, or had none.
     led_in: bool,
 }
 
 struct Leaving {
     playing: Entity,
+    /// Its own volume.
+    volume: f32,
     /// Its fade level when it was replaced, and when that was.
     from: f32,
     since: f64,
@@ -56,13 +65,18 @@ struct MatchMusicDue;
 
 impl Music {
     pub fn new(game: &mut GameData) -> Music {
+        Music::with(game.music_settings())
+    }
+
+    fn with(settings: MusicSettings) -> Music {
         Music {
-            settings: game.music_settings(),
+            settings,
             asked: None,
             current: None,
             leaving: Vec::new(),
             duck: 1.0,
             ducked_at: None,
+            ahead: HashMap::new(),
         }
     }
 
@@ -75,22 +89,35 @@ impl Music {
         };
     }
 
-    /// Asks for the match music: that of the local player's nation, where
-    /// it has some, or the observers' where nobody is playing.
-    fn ask_for_match(&mut self, nation: Option<Option<&Id>>) {
-        let music = match nation {
-            Some(nation) => nation.cloned(),
-            None => self.settings.observer.clone(),
-        };
-        if let Some(music) = music {
-            self.ask(&music);
-        }
-    }
-
     /// How loud music at fade level `fade` plays, at `volume` of its own.
     fn loudness(&self, volume: f32, fade: f32) -> f32 {
         let s = &self.settings;
         s.main_volume * s.music_volume * volume * fade * self.duck
+    }
+
+    /// How loud music on its way out plays `now`; none once it's silent.
+    fn leaving_loudness(&self, l: &Leaving, now: f64) -> Option<f32> {
+        let level = l.from - (now - l.since) as f32 / l.out;
+        (level > 0.0).then(|| self.loudness(l.volume, level))
+    }
+
+    /// A file of the current music's, read ahead or else from `game`.
+    fn source(
+        &self,
+        game: Option<&mut GameData>,
+        assets: &mut Assets<AudioSource>,
+        path: &str,
+    ) -> Option<Handle<AudioSource>> {
+        if let Some(source) = self.ahead.get(path) {
+            return Some(source.clone());
+        }
+        let bytes = game?.read(path);
+        if bytes.is_none() {
+            warn!("{path}: can't be read");
+        }
+        Some(assets.add(AudioSource {
+            bytes: bytes?.into(),
+        }))
     }
 }
 
@@ -134,8 +161,12 @@ pub struct MusicPlugin;
 impl Plugin for MusicPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(OnEnter(Screen::MainMenu), ask_for_menu)
+            .add_systems(OnEnter(Screen::Loading), read_ahead)
             .add_systems(OnEnter(Screen::Match), |mut commands: Commands| {
                 commands.insert_resource(MatchMusicDue)
+            })
+            .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
+                commands.remove_resource::<MatchMusicDue>()
             })
             .add_systems(
                 Update,
@@ -162,12 +193,46 @@ fn ask_for_match(
         return;
     };
     commands.remove_resource::<MatchMusicDue>();
-    let nation = local.and_then(|l| l.0).map(|p| {
-        let id = sim.0.sides.player(p).and_then(|p| p.nation.as_deref());
-        let nation = id.and_then(|id| nations.0.iter().find(|n| n.id.as_str() == id));
-        nation.and_then(|n| n.music.as_ref())
-    });
-    music.ask_for_match(nation);
+    // The local player's nation's, where it has some; the observers' where
+    // nobody is playing.
+    let asked = match local.and_then(|l| l.0) {
+        Some(p) => {
+            let id = sim.0.sides.player(p).and_then(|p| p.nation.as_deref());
+            let id = id.map(Id::from);
+            let nation = id.and_then(|id| nations.0.iter().find(|n| n.id == id));
+            nation.and_then(|n| n.music.clone())
+        }
+        None => music.settings.observer.clone(),
+    };
+    if let Some(asked) = asked {
+        music.ask(&asked);
+    }
+}
+
+/// Reads the current music's files while the game data is still at hand.
+fn read_ahead(
+    mut music: ResMut<Music>,
+    mut loaded: Option<ResMut<Loaded>>,
+    mut data: Option<ResMut<Data>>,
+    mut assets: ResMut<Assets<AudioSource>>,
+) {
+    let Some(current) = &music.current else {
+        return;
+    };
+    let game = match (&mut loaded, &mut data) {
+        (Some(loaded), _) => &mut loaded.game,
+        (None, Some(data)) => &mut data.0,
+        (None, None) => return,
+    };
+    let files: Vec<String> = (current.audio.leadin.iter().chain(&current.audio.files))
+        .filter(|f| !music.ahead.contains_key(*f))
+        .cloned()
+        .collect();
+    for file in files {
+        if let Some(source) = music.source(Some(&mut *game), &mut assets, &file) {
+            music.ahead.insert(file, source);
+        }
+    }
 }
 
 /// Starts what's been asked for, goes on to the next file as each ends,
@@ -185,7 +250,7 @@ fn play(
     mut sinks: Query<&mut AudioSink>,
 ) {
     let now = time.elapsed_secs_f64();
-    let mut game = match (&mut loaded, &mut data) {
+    let game = match (&mut loaded, &mut data) {
         (Some(loaded), _) => Some(&mut loaded.game),
         (None, Some(data)) => Some(&mut data.0),
         (None, None) => None,
@@ -207,12 +272,7 @@ fn play(
     if let Some(id) = music.asked.take()
         && let Some(audio) = sounds.audio(&id).cloned()
     {
-        // Read now, while the game data is at hand, so that it plays on
-        // through a match loading.
-        let files: HashSet<&String> = audio.leadin.iter().chain(&audio.files).collect();
-        for file in files {
-            sounds.source(game.as_deref_mut(), &mut assets, file);
-        }
+        music.ahead.clear();
         if let Some(old) = music.current.take() {
             leave(&mut commands, &mut music, old, now);
         }
@@ -228,21 +288,21 @@ fn play(
     // Fading out.
     let mut leaving = std::mem::take(&mut music.leaving);
     leaving.retain(|l| {
-        let level = l.from - (now - l.since) as f32 / l.out;
+        let loudness = music.leaving_loudness(l, now);
         let sink = sinks.get_mut(l.playing);
         let ended = sink.as_ref().is_ok_and(|s| s.empty());
-        if level <= 0.0 || ended {
-            commands.entity(l.playing).despawn();
+        let Some(loudness) = loudness.filter(|_| !ended) else {
+            commands.entity(l.playing).try_despawn();
             return false;
-        }
+        };
         if let Ok(mut sink) = sink {
-            sink.set_volume(Volume::Linear(music.loudness(1.0, level)));
+            sink.set_volume(Volume::Linear(loudness));
         }
         true
     });
     // The new music takes a stream of its own.
     while leaving.len() >= STREAMS {
-        commands.entity(leaving.remove(0).playing).despawn();
+        commands.entity(leaving.remove(0).playing).try_despawn();
     }
     music.leaving = leaving;
 
@@ -251,20 +311,25 @@ fn play(
     };
     let fade = fade_in((now - current.started) as f32, current.audio.fade[0]);
     let loudness = music.loudness(current.audio.volume, fade);
-    if let Some(e) = current.playing {
+    if let Some((e, set_going)) = current.playing {
         match sinks.get_mut(e) {
             Ok(sink) if sink.empty() => {
                 commands.entity(e).despawn();
                 current.playing = None;
             }
             Ok(mut sink) => sink.set_volume(Volume::Linear(loudness)),
+            Err(_) if now - set_going > START_TIMEOUT => {
+                warn!("music {}: a file didn't start playing", current.id);
+                commands.entity(e).try_despawn();
+                current.playing = None;
+            }
             // Not started yet.
             Err(_) => {}
         }
     }
     if current.playing.is_none()
-        && let Some(file) = next(&mut sounds, &mut current)
-        && let Some(source) = sounds.source(game, &mut assets, &file)
+        && let Some(file) = next(&mut current, || sounds.random())
+        && let Some(source) = music.source(game, &mut assets, &file)
     {
         debug!("music {}: {file}", current.id);
         let e = commands
@@ -273,14 +338,14 @@ fn play(
                 PlaybackSettings::ONCE.with_volume(Volume::Linear(loudness)),
             ))
             .id();
-        current.playing = Some(e);
+        current.playing = Some((e, now));
     }
     music.current = Some(current);
 }
 
 /// The file music plays next: its lead-in, if it has one and hasn't yet,
 /// then any of its files, each pick as likely as the next.
-fn next(sounds: &mut Sounds, current: &mut Current) -> Option<String> {
+fn next(current: &mut Current, random: impl FnOnce() -> f32) -> Option<String> {
     let list = match current.led_in {
         true => &current.audio.files,
         false => {
@@ -291,13 +356,13 @@ fn next(sounds: &mut Sounds, current: &mut Current) -> Option<String> {
     if list.is_empty() {
         return None;
     }
-    let i = (sounds.random() * list.len() as f32) as usize;
+    let i = (random() * list.len() as f32) as usize;
     Some(list[i.min(list.len() - 1)].clone())
 }
 
 /// Sets replaced music fading out, or stops it where it has no fade-out.
 fn leave(commands: &mut Commands, music: &mut Music, old: Current, now: f64) {
-    let Some(playing) = old.playing else {
+    let Some((playing, _)) = old.playing else {
         return;
     };
     let [fade_in, out] = old.audio.fade;
@@ -305,11 +370,12 @@ fn leave(commands: &mut Commands, music: &mut Music, old: Current, now: f64) {
     match from > 0.0 {
         true => music.leaving.push(Leaving {
             playing,
+            volume: old.audio.volume,
             from,
             since: now,
             out,
         }),
-        false => commands.entity(playing).despawn(),
+        false => commands.entity(playing).try_despawn(),
     }
 }
 
@@ -384,14 +450,7 @@ mod tests {
 
     #[test]
     fn asking_for_the_playing_music_does_nothing() {
-        let mut music = Music {
-            settings: settings(),
-            asked: None,
-            current: None,
-            leaving: Vec::new(),
-            duck: 1.0,
-            ducked_at: None,
-        };
+        let mut music = Music::with(settings());
         music.ask(&Id::from("a"));
         music.ask(&Id::from("b"));
         assert_eq!(music.asked, Some(Id::from("b")));
@@ -404,5 +463,40 @@ mod tests {
         });
         music.ask(&Id::from("b"));
         assert_eq!(music.asked, None);
+    }
+
+    #[test]
+    fn leads_in_once_then_picks_from_its_files() {
+        let mut audio = silent();
+        audio.leadin = vec!["theme".into()];
+        audio.files = vec!["a".into(), "b".into()];
+        let mut current = Current {
+            id: Id::from("title"),
+            led_in: false,
+            audio,
+            started: 0.0,
+            playing: None,
+        };
+        assert_eq!(next(&mut current, || 0.9).as_deref(), Some("theme"));
+        assert_eq!(next(&mut current, || 0.9).as_deref(), Some("b"));
+        assert_eq!(next(&mut current, || 0.0).as_deref(), Some("a"));
+        // Never past the end, however the pick falls.
+        assert_eq!(next(&mut current, || 1.0).as_deref(), Some("b"));
+    }
+
+    #[test]
+    fn fades_out_at_its_own_volume() {
+        let music = Music::with(settings());
+        let leaving = Leaving {
+            playing: Entity::PLACEHOLDER,
+            volume: 1.33,
+            from: 1.0,
+            since: 10.0,
+            out: 2.0,
+        };
+        let full = 0.8 * 0.7 * 1.33;
+        assert!((music.leaving_loudness(&leaving, 10.0).unwrap() - full).abs() < 1e-6);
+        assert!((music.leaving_loudness(&leaving, 11.0).unwrap() - full / 2.0).abs() < 1e-6);
+        assert_eq!(music.leaving_loudness(&leaving, 12.0), None);
     }
 }
