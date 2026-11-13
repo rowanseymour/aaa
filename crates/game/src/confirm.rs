@@ -22,7 +22,7 @@ pub struct Words {
 
 impl Words {
     pub fn of(strings: &HashMap<String, String>) -> Self {
-        let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+        let said = crate::ui::said(strings);
         Words {
             ok: said("button_ok", "Ok"),
             cancel: said("button_cancel", "Cancel"),

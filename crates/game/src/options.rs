@@ -95,7 +95,7 @@ impl Options {
         strings: &HashMap<String, String>,
     ) -> Self {
         let known = named.filter(|id| configurations.iter().any(|c| c.id == *id));
-        let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+        let said = crate::ui::said(strings);
         // The game calls each tab "... Options", which the page's title
         // already says.
         let tab = |key: &str, or: &str| {

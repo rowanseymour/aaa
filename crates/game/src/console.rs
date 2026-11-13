@@ -589,8 +589,7 @@ fn game_pause(world: &mut World, args: &[&str]) -> Reply {
         true => time.pause(),
         false => time.unpause(),
     }
-    if pause && let Some(mut display) = world.get_resource_mut::<crate::technologies::TechDisplay>()
-    {
+    if pause && let Some(mut display) = world.get_resource_mut::<crate::displays::Displays>() {
         display.keep_paused();
     }
     Ok(String::new())

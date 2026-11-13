@@ -8,6 +8,7 @@
 mod attach;
 pub mod economy;
 mod fog;
+mod objectives;
 pub mod path;
 mod research;
 mod supply;
@@ -26,6 +27,7 @@ pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
 pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
 pub use fog::{Fog, Seen};
+pub use objectives::{Objective, Objectives, Standing};
 pub use research::{Lacking, Researchable};
 pub use supply::{Bombarder, Held, Supplying};
 
@@ -148,6 +150,10 @@ pub struct World {
     pub kinds: HashMap<Id, aaa_map::Kind>,
     /// The technologies each side has, by player id.
     pub technologies: BTreeMap<u32, Vec<Id>>,
+    /// The objectives each side holds, by player id.
+    pub objectives: BTreeMap<u32, Objectives>,
+    /// Whether those are kept in order of their text.
+    pub sort_objectives: bool,
     /// The special operations that bear on supply, by id.
     pub operations: HashMap<Id, aaa_map::Operation>,
     /// What those operations drop, by template, each standing anywhere and
@@ -1136,6 +1142,8 @@ impl World {
             supply_effects: HashMap::new(),
             kinds: HashMap::new(),
             technologies: BTreeMap::new(),
+            objectives: BTreeMap::new(),
+            sort_objectives: true,
             operations: HashMap::new(),
             drops: HashMap::new(),
             decays: HashMap::new(),

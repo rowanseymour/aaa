@@ -8,6 +8,7 @@ mod guard;
 mod hotkeys;
 mod id;
 mod messages;
+mod objectives;
 mod properties;
 mod research;
 mod supply;
@@ -19,6 +20,7 @@ pub use guard::{GUARDING, GuardRules};
 pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
+pub use objectives::{ObjectiveLook, ObjectiveLooks};
 pub use properties::PropertyLook;
 pub use research::{Grant, Research};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
@@ -3732,6 +3734,15 @@ mod tests {
         let block = parsed.root.blocks_of("SVars").next().unwrap();
         let svars: defs::SVars = templates.deserialize(block).unwrap();
         assert_eq!(svars.building_padding_meters, Some(3.0));
+    }
+
+    #[test]
+    fn settings_read_whether_objectives_sort() {
+        let parsed = tgi::parse("[SVars]\n{\n\tbool SortObjectives = false\n}\n");
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("SVars").next().unwrap();
+        let svars: defs::SVars = templates.deserialize(block).unwrap();
+        assert_eq!(svars.sort_objectives, Some(false));
     }
 
     #[test]

@@ -331,6 +331,14 @@ fn words(words: impl Into<String>, size: Font) -> impl Bundle {
     (Text::new(words), font(size), Pickable::IGNORE)
 }
 
+/// Looks up the game's text by key, falling back to the given words where
+/// its strings lack that key.
+pub fn said(
+    strings: &std::collections::HashMap<String, String>,
+) -> impl Fn(&str, &str) -> String + Copy + '_ {
+    |key, or| strings.get(key).map_or(or, String::as_str).to_string()
+}
+
 /// Text in one of the theme's [`Ink`]s.
 pub fn label(words: impl Into<String>, size: Font, ink: Ink) -> impl Bundle {
     (self::words(words, size), ink)

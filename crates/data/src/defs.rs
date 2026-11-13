@@ -950,6 +950,9 @@ pub struct Glyph {
 pub struct SVars {
     #[serde(rename = "BuildingPaddingMeters")]
     pub building_padding_meters: Option<f32>,
+    /// Whether a side's objectives are kept in order of their text.
+    #[serde(rename = "SortObjectives")]
+    pub sort_objectives: Option<bool>,
     /// How far up its target a projectile flying straight aims.
     #[serde(rename = "ProjectileTargetHeightRatio")]
     pub projectile_target_height_ratio: Option<f32>,
