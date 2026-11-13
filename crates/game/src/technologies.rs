@@ -94,7 +94,7 @@ fn spawn(
         &bindings,
         Panel::Technologies,
         Rim::TopRight,
-        icons.get(displays::icon!("gear"), &mut images, formats.0),
+        icons.get(displays::icon!("technologies"), &mut images, formats.0),
         said(NAME, "Display Technologies"),
         said(HELP, "Displays a list of all your technologies."),
     );

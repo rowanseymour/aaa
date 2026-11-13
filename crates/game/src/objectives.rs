@@ -84,7 +84,7 @@ fn spawn(
         &bindings,
         Panel::Objectives,
         Rim::BottomLeft,
-        icons.get(displays::icon!("flag"), &mut images, formats.0),
+        icons.get(displays::icon!("objectives"), &mut images, formats.0),
         said(
             "control_panel_ButtonObjectives_ToolTip",
             "Display Objectives",

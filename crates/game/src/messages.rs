@@ -386,7 +386,7 @@ pub fn spawn(
         &bindings,
         Panel::MessageLog,
         Rim::BottomRight,
-        icons.get(displays::icon!("list"), &mut images, formats.0),
+        icons.get(displays::icon!("message-log"), &mut images, formats.0),
         said(
             "control_panel_ButtonMessageLog_ToolTip",
             "Display Message Log",

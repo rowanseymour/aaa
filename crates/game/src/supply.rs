@@ -223,7 +223,7 @@ pub fn spawn(
     let icon = (game.read(CYCLE_ICON))
         .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
         .map(|i| images.add(i));
-    let ring = icons.get(displays::icon!("ring"), &mut images, formats.0);
+    let ring = icons.get(displays::icon!("supply-border"), &mut images, formats.0);
     let strings = game.strings();
     let said = crate::ui::said(&strings);
     let name = said(BORDER_NAME, "Toggle Supply Border");
