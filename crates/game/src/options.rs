@@ -25,7 +25,7 @@ use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Surface, button, card, label, layer, padded, slider, switch,
     text, toggle,
 };
-use crate::{Screen, menu};
+use crate::{Screen, UI_SCALES, UiScaleSetting, menu};
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
 const BORDER: &str = "options_dialog_Child_text_15";
@@ -62,10 +62,11 @@ pub struct Options {
     border_label: String,
     /// What the game calls the choice of the window's size.
     resolution_label: String,
-    /// What the choices of [`Display`] and [`AntiAliasing`] are called,
-    /// which the game has no words for.
+    /// What the choices of [`Display`], [`AntiAliasing`] and the
+    /// interface's scale are called, which the game has no words for.
     display_label: String,
     anti_aliasing_label: String,
+    ui_scale_label: String,
     /// What the game calls each tab, by [`Tab`], and the groups of options
     /// in them.
     game_tab: String,
@@ -117,6 +118,7 @@ impl Options {
             resolution_label: said(RESOLUTION, "Resolution"),
             display_label: "Display".into(),
             anti_aliasing_label: "Anti-aliasing".into(),
+            ui_scale_label: "Interface Scale".into(),
             game_tab: tab(GAME_TAB, "Gameplay"),
             video_tab: tab(VIDEO_TAB, "Video"),
             audio_tab: tab(AUDIO_TAB, "Audio"),
@@ -148,6 +150,7 @@ enum Open {
     Display,
     Resolution,
     AntiAliasing,
+    UiScale,
 }
 
 /// The options shown: those of the game, of how it's drawn, or of how it
@@ -299,6 +302,22 @@ impl Listed for AntiAliasing {
 #[derive(Component)]
 struct AntiAliasingHolder;
 
+/// Where the choice of the interface's scale goes.
+#[derive(Component)]
+struct UiScaleHolder;
+
+/// A button choosing the interface's scale.
+#[derive(Component)]
+struct UiScaleChoice(f32);
+
+/// The interface's scales offered, of [`UI_SCALES`].
+const UI_SCALE_CHOICES: [f32; 7] = [0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0];
+
+/// A scale as the options show it, e.g. `125%`.
+fn percentage(scale: f32) -> String {
+    format!("{:.0}%", scale * 100.0)
+}
+
 /// Where the choice of [`Display`] goes.
 #[derive(Component)]
 struct DisplayHolder;
@@ -399,6 +418,7 @@ impl Plugin for OptionsPlugin {
                     show_display,
                     show_resolution,
                     show_anti_aliasing,
+                    show_ui_scale,
                     mark_chosen,
                     show_border,
                     show_volumes,
@@ -549,6 +569,8 @@ fn show_body(
             choice(&mut commands, basic, &options.resolution_label, Resolution);
             let aa = &options.anti_aliasing_label;
             choice(&mut commands, basic, aa, AntiAliasingHolder);
+            let scale = &options.ui_scale_label;
+            choice(&mut commands, basic, scale, UiScaleHolder);
         }
         Tab::Audio => {
             let volume = section(&mut commands, body, &options.volume_title);
@@ -898,6 +920,49 @@ fn choose_anti_aliasing(
     }
 }
 
+/// Shows the interface's scale, and the others while picking.
+fn show_ui_scale(
+    mut commands: Commands,
+    setting: Res<UiScaleSetting>,
+    open: Res<Open>,
+    holder: Single<(Entity, Ref<UiScaleHolder>)>,
+) {
+    let (holder, added) = *holder;
+    if !setting.is_changed() && !open.is_changed() && !added.is_added() {
+        return;
+    }
+    commands.entity(holder).despawn_children();
+    let list = Dropdown {
+        row: holder,
+        width: px(LIST_WIDTH),
+        label: percentage(setting.0).into(),
+        open: *open == Open::UiScale,
+    };
+    let choices = UI_SCALE_CHOICES.iter().filter(|s| UI_SCALES.contains(s));
+    let choices = choices.map(|&s| ((UiScaleChoice(s), InList), percentage(s)));
+    list.spawn(
+        &mut commands,
+        (Opener(Open::UiScale), InList),
+        open_list,
+        choices,
+        choose_ui_scale,
+    );
+}
+
+fn choose_ui_scale(
+    activate: On<Activate>,
+    choices: Query<&UiScaleChoice>,
+    mut setting: ResMut<UiScaleSetting>,
+    mut open: ResMut<Open>,
+) {
+    if let Ok(choice) = choices.get(activate.entity) {
+        if setting.0 != choice.0 {
+            setting.0 = choice.0;
+        }
+        *open = Open::Nothing;
+    }
+}
+
 /// Gives the map's camera the anti-aliasing chosen, as it's chosen and as
 /// each match spawns its own. The post-process kinds go without MSAA,
 /// which they'd only add their cost to.
@@ -929,6 +994,7 @@ type Choice<'a> = (
     Option<&'a Pick<Display>>,
     Option<&'a ResolutionChoice>,
     Option<&'a Pick<AntiAliasing>>,
+    Option<&'a UiScaleChoice>,
 );
 
 /// The buttons the options choose with.
@@ -938,24 +1004,27 @@ type Choosing = Or<(
     With<Pick<Display>>,
     With<ResolutionChoice>,
     With<Pick<AntiAliasing>>,
+    With<UiScaleChoice>,
 )>;
 
 fn mark_chosen(
     options: Res<Options>,
     tab: Res<Tab>,
     anti_aliasing: Res<AntiAliasing>,
+    ui_scale: Res<UiScaleSetting>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut buttons: Query<Choice, Choosing>,
 ) {
     let window = window.single().ok();
     let size = window.map(size_of);
     let display = window.map(|w| Display::of(w.mode));
-    for (mut chosen, shown, hotkeys, mode, resolution, aa) in &mut buttons {
+    for (mut chosen, shown, hotkeys, mode, resolution, aa, scale) in &mut buttons {
         let now = shown.is_some_and(|t| t.0 == *tab)
             || hotkeys.is_some_and(|h| options.hotkeys.as_ref() == Some(&h.0))
             || mode.is_some_and(|m| display == Some(m.0))
             || resolution.is_some_and(|r| size == Some(r.0))
-            || aa.is_some_and(|a| *anti_aliasing == a.0);
+            || aa.is_some_and(|a| *anti_aliasing == a.0)
+            || scale.is_some_and(|s| ui_scale.0 == s.0);
         chosen.set_if_neq(Chosen(now));
     }
 }
@@ -1021,6 +1090,7 @@ mod tests {
             }))
             .insert_resource(Sounds::of(HashMap::new(), &[]))
             .init_resource::<Border>()
+            .insert_resource(UiScaleSetting(1.0))
             .add_message::<WindowResized>();
         app.update();
         app
@@ -1114,6 +1184,26 @@ mod tests {
         activate::<Opener>(&mut app, |o| o.0 == Open::AntiAliasing);
         app.update();
         assert_eq!(marked::<AntiAliasing>(&mut app), vec![AntiAliasing::Fxaa]);
+    }
+
+    #[test]
+    fn a_ui_scale_chosen_is_set_and_marked() {
+        let mut app = app();
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
+        activate::<Opener>(&mut app, |o| o.0 == Open::UiScale);
+        activate::<UiScaleChoice>(&mut app, |s| s.0 == 1.5);
+        assert_eq!(app.world().resource::<UiScaleSetting>().0, 1.5);
+        assert_eq!(*app.world().resource::<Open>(), Open::Nothing);
+        activate::<Opener>(&mut app, |o| o.0 == Open::UiScale);
+        app.update();
+        let world = app.world_mut();
+        let mut choices = world.query::<(&UiScaleChoice, &Chosen)>();
+        let marked: Vec<_> = choices
+            .iter(world)
+            .filter(|(_, c)| c.0)
+            .map(|(s, _)| s.0)
+            .collect();
+        assert_eq!(marked, vec![1.5]);
     }
 
     fn marked<T: Listed>(app: &mut App) -> Vec<T> {

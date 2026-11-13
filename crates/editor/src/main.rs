@@ -258,6 +258,7 @@ fn setup(
     let size = ground.size();
     let mut cam = RtsCamera {
         zoom: EDITOR_ZOOM,
+        freeable: true,
         ..RtsCamera::centred(ground)
     };
     if let Some(StartView([x, y, distance, yaw, pitch])) = start.as_deref().copied() {
