@@ -16,8 +16,8 @@ use crate::actions::GLYPH_DIR;
 use crate::menu::go;
 use crate::presets::Preset;
 use crate::ui::{
-    Card, Chosen, Dropdown, Font, Ink, Shown, Surface, button, card, clickable, dropdown, inert,
-    label, opener, padded, panel, switch, text,
+    Card, Chosen, Dropdown, Font, Ink, Shown, Surface, button, called, card, clickable, dropdown,
+    inert, label, opener, padded, panel, slug, switch, text,
 };
 use crate::{Data, Pending, Screen, Side, confirm};
 
@@ -580,15 +580,24 @@ fn spawn(mut commands: Commands, data: Res<Data>) {
                 ChildOf(list),
                 switch(padded()),
                 children![text(label, Font::Body)],
+                called(format!("lobby.map.{}", slug(aaa_data::map_title(&name)))),
                 MapChoice(name),
             ))
             .observe(choose_map);
     }
     commands
-        .spawn((ChildOf(right), button("Launch", Font::Large)))
+        .spawn((
+            ChildOf(right),
+            button("Launch", Font::Large),
+            called("lobby.launch"),
+        ))
         .observe(launch);
     commands
-        .spawn((ChildOf(right), button("Exit", Font::Large)))
+        .spawn((
+            ChildOf(right),
+            button("Exit", Font::Large),
+            called("lobby.exit"),
+        ))
         .observe(ask_exit);
 }
 
@@ -762,6 +771,7 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
         .spawn((
             ChildOf(presets),
             opener(row.clone()),
+            called("lobby.preset"),
             children![text(lobby.preset.label(), Font::Body)],
         ))
         .observe(open_presets);
@@ -775,6 +785,7 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
             .spawn((
                 ChildOf(list),
                 clickable(row.clone()),
+                called(format!("lobby.preset.{}", slug(&preset.label()))),
                 PresetChoice(preset),
                 children![text(preset.label(), Font::Body)],
             ))
@@ -810,6 +821,7 @@ fn show_slots(
                 continue;
             };
             let player = sides[i];
+            let side = format!("lobby.side{}", i + 1);
             let who = match lobby.person == Some(id) {
                 true => "Player",
                 false => "Computer",
@@ -843,6 +855,7 @@ fn show_slots(
                 true => commands.spawn((
                     ChildOf(row),
                     switch(cell(140.0)),
+                    called(format!("{side}.seat")),
                     SideChoice(Some(id)),
                     children![text(who, Font::Body)],
                 )),
@@ -868,7 +881,7 @@ fn show_slots(
                         .id();
                     flag.spawn(&mut commands, fixed);
                 }
-                None => nation_list(&mut commands, row, &lobby, id, flag, &all.0),
+                None => nation_list(&mut commands, row, &lobby, (id, &side), flag, &all.0),
             }
             // A random nation's general is random too.
             let nation = nation.and_then(|n| all.0.iter().find(|a| a.id.as_str() == n));
@@ -876,7 +889,7 @@ fn show_slots(
             let fixed = fixed.map(|f| nation.and_then(|n| n.generals.iter().find(|g| g.id == f)));
             match (fixed, nation) {
                 (None, Some(nation)) => {
-                    general_list(&mut commands, row, &lobby, id, &nation.generals);
+                    general_list(&mut commands, row, &lobby, (id, &side), &nation.generals);
                 }
                 (fixed, _) => {
                     let name = fixed
@@ -890,7 +903,7 @@ fn show_slots(
                 }
             }
             if lobby.person != Some(id) {
-                handicap_list(&mut commands, row, &lobby, player, &handicaps);
+                handicap_list(&mut commands, row, &lobby, (player, &side), &handicaps);
             }
         }
     }
@@ -908,10 +921,17 @@ fn show_slots(
             ChildOf(slots),
             switch(card(watch)),
             Card,
+            called("lobby.observer"),
             SideChoice(None),
             children![text(label, Font::Body)],
         ))
         .observe(choose_side);
+}
+
+/// What a choice of a nation, a general or a handicap is called after its
+/// list: its id in the data, or `random` for none.
+fn key(id: Option<&Id>) -> String {
+    id.map_or("random".into(), |id| slug(id.as_str()))
 }
 
 /// How wide a side's nation is shown: its flag, padded.
@@ -929,15 +949,16 @@ fn nation_list(
     commands: &mut Commands,
     row: Entity,
     lobby: &Lobby,
-    player: u32,
+    (player, side): (u32, &str),
     label: Shown,
     nations: &[Nation],
 ) {
     let choices = nations.iter().map(|n| (Some(n.id.clone()), n.name.clone()));
     let choices = std::iter::once((None, "Random".to_string())).chain(choices);
-    let choices = choices.map(|(n, name)| (NationChoice(player, n), name));
+    let choices = choices.map(|(n, name)| (key(n.as_ref()), NationChoice(player, n), name));
     let open = lobby.open == Open::Nations(player);
     let list = Dropdown {
+        id: format!("{side}.nation"),
         row,
         width: px(NATION_WIDTH),
         label,
@@ -958,7 +979,7 @@ fn handicap_list(
     commands: &mut Commands,
     row: Entity,
     lobby: &Lobby,
-    player: &Player,
+    (player, side): (&Player, &str),
     handicaps: &Handicaps,
 ) {
     let id = player.id;
@@ -966,9 +987,12 @@ fn handicap_list(
     let Some(had) = had else {
         return;
     };
-    let choices =
-        (handicaps.all.iter()).map(|h| (HandicapChoice(id, h.id.clone()), handicaps.shown(h)));
+    let choices = (handicaps.all.iter()).map(|h| {
+        let choice = HandicapChoice(id, h.id.clone());
+        (key(Some(&h.id)), choice, handicaps.shown(h))
+    });
     let list = Dropdown {
+        id: format!("{side}.handicap"),
         row,
         width: px(64),
         label: handicaps.shown(had),
@@ -989,7 +1013,7 @@ fn general_list(
     commands: &mut Commands,
     row: Entity,
     lobby: &Lobby,
-    player: u32,
+    (player, side): (u32, &str),
     generals: &[General],
 ) {
     let chosen = lobby.generals.get(&player);
@@ -998,9 +1022,10 @@ fn general_list(
     let offered = generals.iter().filter(|g| g.public);
     let choices = offered.map(|g| (Some(g.id.clone()), g.short_name.clone()));
     let choices = std::iter::once((None, "Random".to_string())).chain(choices);
-    let choices = choices.map(|(g, name)| (GeneralChoice(player, g), name));
+    let choices = choices.map(|(g, name)| (key(g.as_ref()), GeneralChoice(player, g), name));
     let open = lobby.open == Open::Generals(player);
     let list = Dropdown {
+        id: format!("{side}.general"),
         row,
         width: px(160),
         label: label.into(),

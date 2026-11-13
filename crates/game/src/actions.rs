@@ -815,6 +815,7 @@ pub fn spawn(
                     grid.spawn((
                         Slot(s),
                         Button,
+                        ui::called(format!("action.{}", s + 1)),
                         Hovered::default(),
                         Pickable::default(),
                         Click::COMMAND,

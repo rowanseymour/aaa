@@ -97,11 +97,19 @@ pub fn confirm<M>(
         ))
         .id();
     commands
-        .spawn((answer(words.ok.clone()), ChildOf(row)))
+        .spawn((
+            answer(words.ok.clone()),
+            ui::called("confirm.ok"),
+            ChildOf(row),
+        ))
         .observe(ok)
         .observe(dismiss);
     commands
-        .spawn((answer(words.cancel.clone()), ChildOf(row)))
+        .spawn((
+            answer(words.cancel.clone()),
+            ui::called("confirm.cancel"),
+            ChildOf(row),
+        ))
         .observe(dismiss);
 }
 

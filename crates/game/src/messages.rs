@@ -831,8 +831,14 @@ fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
             ));
             match line.place {
                 Some(_) => {
-                    icon.insert((LookAt(line.serial), Button, Hint(look.to_location.clone())))
-                        .observe(look_at);
+                    let id = crate::ui::called(format!("message.{}.look", line.serial));
+                    icon.insert((
+                        LookAt(line.serial),
+                        Button,
+                        id,
+                        Hint(look.to_location.clone()),
+                    ))
+                    .observe(look_at);
                 }
                 None => {
                     icon.insert(Pickable::IGNORE);

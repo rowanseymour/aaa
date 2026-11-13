@@ -126,7 +126,9 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let screenshot = screenshot.map(|path| ShotPlugin { path: path.into() });
+    let screenshot = screenshot.map(|path| ShotPlugin {
+        path: Some(path.into()),
+    });
     let camera = match camera.map(|c| floats(&c)) {
         None => None,
         Some(Some(view)) => Some(StartView(view)),
