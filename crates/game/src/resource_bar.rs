@@ -67,7 +67,7 @@ pub fn spawn(
     let game = &mut loaded.game;
     theme.short = game.invalid_colour().map(|[r, g, b]| Color::srgb(r, g, b));
     let strings = game.strings();
-    let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+    let said = crate::ui::said(&strings);
     commands.init_resource::<Preview>();
     let shortage = game
         .read(SHORTAGE_ICON)

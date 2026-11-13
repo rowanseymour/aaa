@@ -841,6 +841,7 @@ pub fn back_out(
     chosen: Res<SelectedBuilding>,
     mut page: ResMut<Page>,
     mut was: bevy::ecs::system::Local<Option<usize>>,
+    displays: Res<crate::displays::Displays>,
 ) {
     // A menu is the building's it was opened on.
     let switched = std::mem::replace(&mut *was, chosen.0) != chosen.0;
@@ -850,7 +851,9 @@ pub fn back_out(
         Page::Menu(_) => chosen.0.is_none() || switched,
         Page::Rally => chosen.0.is_none(),
     };
-    if gone || keys.just_pressed(KeyCode::Escape) {
+    // Escape closes a display panel that's up, not the page under it.
+    let escaped = keys.just_pressed(KeyCode::Escape) && crate::displays::closed(Some(displays));
+    if gone || escaped {
         page.set_if_neq(Page::Orders);
     }
 }

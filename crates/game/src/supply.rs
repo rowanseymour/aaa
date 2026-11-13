@@ -16,6 +16,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
+use crate::displays::Corner;
 use crate::effects::Effects;
 use crate::keys::{self, Bindings};
 use crate::sound::Sounds;
@@ -222,7 +223,7 @@ pub fn spawn(
         .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
         .map(|i| images.add(i));
     let strings = game.strings();
-    let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+    let said = crate::ui::said(&strings);
     let name = said(BORDER_NAME, "Toggle Supply Border");
     let what = said(BORDER_HELP, "Toggles the supply border off/on.");
     commands
@@ -239,18 +240,7 @@ pub fn spawn(
             Hint(what),
             // In the corner the minimap's disc leaves of its square, where
             // the game's control panel has it.
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(crate::MARGIN),
-                bottom: px(crate::MARGIN + minimap::DISC - minimap::CORNER_BUTTON),
-                width: px(minimap::CORNER_BUTTON),
-                height: px(minimap::CORNER_BUTTON),
-                border: UiRect::all(px(1)),
-                border_radius: BorderRadius::MAX,
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
+            Corner::TopLeft.node(),
             Surface::Hud,
             Edge::Border,
             GlobalZIndex(2),

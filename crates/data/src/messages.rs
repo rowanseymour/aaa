@@ -156,7 +156,7 @@ impl GameData {
 }
 
 /// A colour written `r,g, b`.
-fn colour(value: &str) -> Option<[f32; 3]> {
+pub(crate) fn colour(value: &str) -> Option<[f32; 3]> {
     let mut parts = value.split(',').map(|p| p.trim().parse::<f32>());
     let c = [
         parts.next()?.ok()?,
