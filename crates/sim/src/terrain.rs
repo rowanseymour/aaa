@@ -55,8 +55,8 @@ impl World {
         if listed.is_empty() {
             return Vec::new();
         }
-        let members = self.survivors(r).map(|u| &self.units[u].template_id);
-        let templates: Vec<&Id> = (members.chain([&self.regiments[r].template_id])).collect();
+        let members = self.survivors(r).map(|u| &self.units[u].template);
+        let templates: Vec<&Id> = (members.chain([&self.regiments[r].template])).collect();
         let gained = listed
             .iter()
             .filter(|p| templates.iter().any(|t| self.gains(t, p)));
@@ -87,7 +87,7 @@ impl World {
         let mut held: Vec<&Id> = Vec::new();
         for terrain in [self.regiments[unit.regiment].terrain, unit.terrain] {
             for p in &self.tile_terrains.get(terrain).properties {
-                if !held.contains(&p) && self.gains(&unit.template_id, p) {
+                if !held.contains(&p) && self.gains(&unit.template, p) {
                     held.push(p);
                 }
             }
@@ -115,9 +115,9 @@ impl World {
         let regiment = &self.regiments[unit.regiment];
         let timed = regiment.properties.iter().map(|h| &h.property);
         let technologies = self.technologies.get(&regiment.owner).into_iter().flatten();
-        let on = |p: &&Id| self.gains(&regiment.template_id, p) || self.gains(&unit.template_id, p);
-        let free = rules.free.contains(&unit.template_id)
-            || rules.free.contains(&regiment.template_id)
+        let on = |p: &&Id| self.gains(&regiment.template, p) || self.gains(&unit.template, p);
+        let free = rules.free.contains(&unit.template)
+            || rules.free.contains(&regiment.template)
             || (timed.chain(technologies.filter(on))).any(|p| rules.unlimited.contains(p));
         (!free).then_some(limit.max(rules.slowest))
     }

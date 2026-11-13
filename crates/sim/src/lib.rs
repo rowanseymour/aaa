@@ -16,10 +16,12 @@ mod experience;
 mod fog;
 mod guard;
 mod movement;
+mod notices;
 mod objectives;
 mod packing;
 pub mod path;
 mod production;
+mod properties;
 mod research;
 mod rules;
 mod setup;
@@ -38,14 +40,16 @@ use aaa_map::{
 
 pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
-pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
+pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::Commander;
 pub use fog::{Fog, Seen};
+pub use notices::Notice;
 pub use objectives::{Objective, Objectives, Standing};
 pub use packing::unpack_site;
+pub use properties::Held;
 pub use research::{Lacking, Researchable};
 pub use rules::Rules;
-pub use supply::{Bombarder, Held, Supplying};
+pub use supply::{Bombarder, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
@@ -133,13 +137,13 @@ pub struct World {
     /// What sides own that's neither a regiment nor a building but may
     /// still add to their economy, such as where they start: each owner
     /// and template.
-    pub holdings: Vec<(u32, String)>,
+    pub holdings: Vec<(u32, Id)>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
     /// The experience of each side with a general, by player id.
     pub commanders: BTreeMap<u32, Commander>,
-    /// What sides have been told since these were last taken.
-    pub notices: Vec<Notice>,
+    /// What sides have been told: see [`World::take_notices`].
+    pub(crate) notices: Vec<Notice>,
     /// What each side sees of the map.
     pub fog: Fog,
     /// Ticks played.
@@ -154,7 +158,7 @@ pub struct World {
     pub landings: Vec<Landing>,
     /// The last number each side has given a numbered template, by side
     /// and template.
-    numbers: HashMap<(u32, String), u32>,
+    numbers: HashMap<(u32, Id), u32>,
     /// An id no object has yet.
     next_id: u32,
     /// An id no commission has yet.
@@ -166,7 +170,7 @@ pub struct World {
 pub struct Regiment {
     /// Its object's id in the map.
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// The number its name is given, for one of a numbered template: see
     /// [`Rules::numbered`].
     pub number: Option<u32>,
@@ -193,7 +197,7 @@ pub struct Regiment {
     pub order: Order,
     /// The enemies it's engaged with. While there are any it holds its
     /// ground against them.
-    pub engaged: Vec<Enemy>,
+    pub engaged: Vec<Piece>,
     /// Where it was headed and how it was to face there when it engaged,
     /// to carry on once it's done.
     resume: Option<([f32; 2], [f32; 2])>,
@@ -232,8 +236,6 @@ pub struct Regiment {
     pub terrain: TerrainIndex,
     /// The properties that terrain gives it.
     pub terrain_properties: Vec<Id>,
-    /// `template`, as what's kept by template has it.
-    template_id: Id,
 }
 
 /// A regiment's order to keep a post: it comes back to it after every
@@ -241,7 +243,7 @@ pub struct Regiment {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Guard {
     /// What it guards, for one that isn't guarding a place.
-    pub of: Option<Enemy>,
+    pub of: Option<Piece>,
     /// Where it rests: the place, or a point beside what it guards.
     pub post: [f32; 2],
     /// The way it faces there: away from what it guards.
@@ -262,6 +264,17 @@ enum Step {
 }
 
 impl Regiment {
+    /// Takes up `order` in place of whatever it was told before, which
+    /// it forgets. What it's engaged with it stays engaged with.
+    pub(crate) fn take_order(&mut self, order: Order) {
+        self.order = order;
+        self.guard = None;
+        self.resume = None;
+        self.unpack_at = None;
+        self.unpack_again = None;
+        self.rally = None;
+    }
+
     /// Whether it's resting at the post it guards, which has it stand in
     /// its combat formation, aggressive, with a longer control range.
     pub fn guarding(&self) -> bool {
@@ -304,9 +317,10 @@ impl Regiment {
     }
 }
 
-/// What a regiment can engage, or guard.
+/// A regiment or a building: what a side owns on the map, and so what a
+/// regiment engages or guards, what holds properties and what's destroyed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Enemy {
+pub enum Piece {
     /// Index into [`World::regiments`].
     Regiment(usize),
     /// Index into [`World::buildings`].
@@ -348,7 +362,7 @@ struct Leg {
 pub struct Unit {
     /// Its object's id in the map.
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// Index into [`World::regiments`].
     pub regiment: usize,
     pub domain: Domain,
@@ -409,8 +423,6 @@ pub struct Unit {
     /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it: its
     /// regiment's, or its own tile's while it straggles.
     pub terrain: TerrainIndex,
-    /// `template`, as what's kept by template has it.
-    template_id: Id,
 }
 
 /// How a unit left the map without dying, and the tick it did.
@@ -426,7 +438,7 @@ pub enum Left {
 /// What a unit tows, dragged after the point it's coupled to so that it
 /// trails round corners.
 pub struct Trailer {
-    pub template: String,
+    pub template: Id,
     pub position: [f32; 2],
     /// Where it was a tick ago, as [`Unit::previous`].
     pub previous: [f32; 2],
@@ -444,7 +456,7 @@ pub struct Trailer {
 pub struct Building {
     /// Its object's id in the map.
     pub id: u32,
-    pub template: String,
+    pub template: Id,
     /// The number of the organization it stands in, as [`Regiment::number`],
     /// for one of a numbered template.
     pub number: Option<u32>,
@@ -461,7 +473,7 @@ pub struct Building {
     pub target: Option<Target>,
     /// For one that defends itself, what it's noticed, which is all it
     /// fires on. Never forgotten, so not a sign of a fight.
-    pub noticed: Vec<Enemy>,
+    pub noticed: Vec<Piece>,
     /// For one that defends itself, whether it's been woken by noticing
     /// something: until then it neither aims nor fires.
     pub awake: bool,
@@ -651,7 +663,7 @@ pub enum Command {
     /// As [`Command::Guard`], but posted beside `thing`, following it and
     /// going after the enemy regiments fighting it, until it's gone.
     /// Refused for the regiment itself, or what's already gone.
-    GuardThing { regiment: usize, thing: Enemy },
+    GuardThing { regiment: usize, thing: Piece },
     /// Halts a regiment, its members forming up around where they stand on
     /// average, and drops where it was headed, so that once done with any
     /// engagement it stays put.
@@ -838,7 +850,7 @@ impl World {
         if self.destroyed(r) {
             self.notices.push(Notice::Destroyed {
                 owner: self.regiments[r].owner,
-                what: Fallen::Regiment(r),
+                what: Piece::Regiment(r),
             });
         }
     }

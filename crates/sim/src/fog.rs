@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use aaa_map::{FogSetting, Id, Relation, Tile};
 
-use crate::{Enemy, Target, World, distance};
+use crate::{Piece, World, distance};
 
 /// How a tile stands for a side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -242,8 +242,8 @@ impl World {
             .unwrap_or(Seen::Unexplored)
     }
 
-    fn sight_of(&self, template: &str) -> Option<&aaa_map::Sight> {
-        self.rules.sights.get(&Id::from(template))
+    fn sight_of(&self, template: &Id) -> Option<&aaa_map::Sight> {
+        self.rules.sights.get(template)
     }
 
     /// Whether the unit at `u` has left the zone of control of its
@@ -327,21 +327,6 @@ impl World {
         }
     }
 
-    /// The owner of what a regiment or building engages.
-    fn enemy_owner(&self, e: Enemy) -> u32 {
-        match e {
-            Enemy::Regiment(r) => self.regiments[r].owner,
-            Enemy::Building(b) => self.buildings[b].owner,
-        }
-    }
-
-    fn target_owner(&self, t: Target) -> u32 {
-        match t {
-            Target::Unit(u) => self.regiments[self.units[u].regiment].owner,
-            Target::Building(b) => self.buildings[b].owner,
-        }
-    }
-
     /// The sides other than its own fighting the regiment at `r`: those
     /// engaging or bombarding it, and those it engages or fires on.
     fn regiment_shown_to(&self, r: usize) -> BTreeSet<u32> {
@@ -350,16 +335,16 @@ impl World {
         let engaging = self
             .regiments
             .iter()
-            .filter(|o| o.engaged.contains(&Enemy::Regiment(r)));
+            .filter(|o| o.engaged.contains(&Piece::Regiment(r)));
         sides.extend(engaging.map(|o| o.owner));
         let bombarding = regiment
             .bombarded
             .iter()
             .filter(|b| b.tick + b.length >= self.ticks);
-        sides.extend(bombarding.map(|b| self.enemy_owner(b.by)));
-        sides.extend(regiment.engaged.iter().map(|&e| self.enemy_owner(e)));
+        sides.extend(bombarding.map(|b| self.piece_owner(b.by)));
+        sides.extend(regiment.engaged.iter().map(|&e| self.piece_owner(e)));
         let targets = regiment.units.iter().filter_map(|&u| self.units[u].target);
-        sides.extend(targets.map(|t| self.target_owner(t)));
+        sides.extend(targets.map(|t| self.owner(t)));
         sides.remove(&regiment.owner);
         sides
     }
@@ -372,9 +357,9 @@ impl World {
         let engaging = self
             .regiments
             .iter()
-            .filter(|o| o.engaged.contains(&Enemy::Building(b)));
+            .filter(|o| o.engaged.contains(&Piece::Building(b)));
         sides.extend(engaging.map(|o| o.owner));
-        sides.extend(building.target.map(|t| self.target_owner(t)));
+        sides.extend(building.target.map(|t| self.owner(t)));
         sides.remove(&building.owner);
         sides
     }

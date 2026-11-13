@@ -877,7 +877,7 @@ fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let command = match aim {
         Aim::Guard => aaa_sim::Command::GuardThing {
             regiment: r,
-            thing: aaa_sim::Enemy::Regiment(e),
+            thing: aaa_sim::Piece::Regiment(e),
         },
         _ => aaa_sim::Command::Pursue {
             regiment: r,
@@ -961,7 +961,7 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
     let raising = &world.resource::<Raising>().0;
     let hq = &world.resource::<Sim>().0.buildings[b].template;
     let listed = raising
-        .list(hq)
+        .list(hq.as_str())
         .iter()
         .find(|t| t.as_str().eq_ignore_ascii_case(template));
     let template = listed.ok_or_else(|| format!("{hq} doesn't commission {template}"))?;

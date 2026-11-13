@@ -10,7 +10,7 @@ use aaa_data::{GameEvent, Id, InterfaceVars};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::textures;
-use aaa_sim::{Fallen, Notice, Pause, Relation, Seen, World};
+use aaa_sim::{Notice, Pause, Piece, Relation, Seen, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -91,7 +91,7 @@ impl Look {
             .iter()
             .find(|r| r.id == hq.id)
             .and_then(|r| r.number);
-        crate::object_display::numbered(&self.strings, number, self.name(&hq.building))
+        crate::object_display::numbered(&self.strings, number, self.name(hq.building.as_str()))
     }
 
     /// The text under `key`, or `or` where the strings lack it.
@@ -505,10 +505,10 @@ pub fn tell(
 ) {
     // Taking them marks the sim changed, which what redraws on a change
     // would then do every frame.
-    if sim.0.notices.is_empty() {
+    if sim.0.notices().is_empty() {
         return;
     }
-    let notices = std::mem::take(&mut sim.0.notices);
+    let notices = sim.0.take_notices();
     let now = time.elapsed_secs();
     for notice in notices {
         if let Some(sound) = sound(&notice, local.0) {
@@ -604,7 +604,10 @@ fn told(
         }
         Notice::CannotUnpack { player, regiment } if ours(player) => {
             let said = look.said("tai_error_unpack|s", "Cannot unpack %s");
-            let text = fill(&said, &[&look.name(&sim.regiments[regiment].template)]);
+            let text = fill(
+                &said,
+                &[&look.name(sim.regiments[regiment].template.as_str())],
+            );
             Told::Line("GENERIC_ERROR", text, at(About::Regiment(regiment)))
         }
         Notice::Attached {
@@ -682,12 +685,12 @@ fn told(
         // it's destroyed, whoever did it. What's nobody's tells no one.
         Notice::Destroyed { owner, what } if sim.sides.player(owner).is_some() => {
             let (name, about, event) = match what {
-                Fallen::Regiment(r) => (
+                Piece::Regiment(r) => (
                     look.regiment(sim, r),
                     About::Regiment(r),
                     "mobile_actor_lost",
                 ),
-                Fallen::Building(b) => (
+                Piece::Building(b) => (
                     look.building(sim, b),
                     About::Building(b),
                     "static_actor_lost",

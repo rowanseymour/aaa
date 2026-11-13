@@ -4,7 +4,7 @@ use aaa_map::Id;
 
 use crate::packing::unpack_facing;
 use crate::{
-    Building, Command, Commission, Enemy, NotYours, Notice, Order, Refused, TICK, Work, World,
+    Building, Command, Commission, NotYours, Notice, Order, Piece, Refused, TICK, Work, World,
     normalised, unpack_site,
 };
 
@@ -153,7 +153,7 @@ impl World {
         if !self.armed(regiment)
             || enemy >= self.regiments.len()
             || self.destroyed(enemy)
-            || !self.hostile(regiment, Enemy::Regiment(enemy))
+            || !self.hostile(regiment, Piece::Regiment(enemy))
         {
             return Err(Refused::Unable);
         }
@@ -170,11 +170,11 @@ impl World {
         })
     }
 
-    fn may_guard(&self, player: u32, regiment: usize, thing: Enemy) -> Result<(), Refused> {
+    fn may_guard(&self, player: u32, regiment: usize, thing: Piece) -> Result<(), Refused> {
         self.may_command(player, regiment)?;
         let there = match thing {
-            Enemy::Regiment(g) => g != regiment && g < self.regiments.len(),
-            Enemy::Building(b) => b < self.buildings.len(),
+            Piece::Regiment(g) => g != regiment && g < self.regiments.len(),
+            Piece::Building(b) => b < self.buildings.len(),
         };
         match there && !self.left(thing) {
             true => Ok(()),
@@ -183,10 +183,10 @@ impl World {
     }
 
     /// Whether something a regiment could guard is no longer there to.
-    pub(crate) fn left(&self, thing: Enemy) -> bool {
+    pub(crate) fn left(&self, thing: Piece) -> bool {
         match thing {
-            Enemy::Regiment(g) => self.destroyed(g),
-            Enemy::Building(b) => self.buildings[b].gone(),
+            Piece::Regiment(g) => self.destroyed(g),
+            Piece::Building(b) => self.buildings[b].gone(),
         }
     }
 
@@ -292,12 +292,8 @@ impl World {
     ) -> Result<(), Refused> {
         self.may_pursue(player, regiment, enemy)?;
         let r = &mut self.regiments[regiment];
-        r.order = Order::Pursue(enemy);
-        r.guard = None;
-        r.unpack_at = None;
-        r.rally = None;
+        r.take_order(Order::Pursue(enemy));
         r.engaged.clear();
-        r.resume = None;
         self.chase(regiment, enemy, true);
         Ok(())
     }
@@ -312,11 +308,8 @@ impl World {
     ) -> Result<(), NotYours> {
         self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
-        r.order = order;
-        r.guard = None;
+        r.take_order(order);
         r.unpack_at = unpack_at;
-        r.unpack_again = None;
-        r.rally = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
@@ -334,12 +327,8 @@ impl World {
     ) -> Result<(), NotYours> {
         self.may_command(player, regiment)?;
         let r = &mut self.regiments[regiment];
-        r.order = Order::Run;
-        r.guard = None;
-        r.unpack_at = None;
-        r.rally = None;
+        r.take_order(Order::Run);
         r.engaged.clear();
-        r.resume = None;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         self.send(regiment, target, facing);
@@ -350,11 +339,7 @@ impl World {
         self.may_command(player, regiment)?;
         let here = self.centre(regiment);
         let r = &mut self.regiments[regiment];
-        r.order = Order::Move;
-        r.guard = None;
-        r.resume = None;
-        r.unpack_at = None;
-        r.rally = None;
+        r.take_order(Order::Move);
         if r.engaged.is_empty() {
             let facing = r.facing;
             self.send(regiment, here, facing);
@@ -383,7 +368,7 @@ impl World {
         &mut self,
         player: u32,
         regiment: usize,
-        thing: Enemy,
+        thing: Piece,
     ) -> Result<(), Refused> {
         self.may_guard(player, regiment, thing)?;
         if self.regiments[regiment].guard.and_then(|g| g.of) == Some(thing) {
@@ -482,7 +467,53 @@ mod tests {
 
     use aaa_map::{Domain, Pathing};
 
-    use crate::{Command, Commission, Fallen, NotYours, Notice, Refused};
+    use crate::{Command, Commission, NotYours, Notice, Piece, Refused};
+
+    #[test]
+    fn a_new_order_forgets_what_the_regiment_was_told_before() {
+        let orders = [
+            Command::Move {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+            Command::Run {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+            Command::Stop { regiment: 0 },
+            Command::Guard {
+                regiment: 0,
+                to: [10.0, 20.0],
+            },
+        ];
+        for order in orders {
+            let mut w = world(Pathing::uniform(20, Domain::Land));
+            w.apply(
+                7,
+                Command::Guard {
+                    regiment: 0,
+                    to: [5.0, 5.0],
+                },
+            )
+            .unwrap();
+            let r = &mut w.regiments[0];
+            r.rally = Some([1.0, 1.0]);
+            r.unpack_at = Some(([2.0, 2.0], [0.0, 1.0]));
+            r.unpack_again = Some(99);
+            r.resume = Some(([3.0, 3.0], [0.0, 1.0]));
+            w.apply(7, order.clone()).unwrap();
+            let r = &w.regiments[0];
+            let guarding = matches!(order, Command::Guard { .. });
+            assert_eq!(r.guard.is_some(), guarding, "{order:?}");
+            assert!(!r.guard.is_some_and(|g| g.post == [5.0, 5.0]), "{order:?}");
+            assert_eq!(
+                (r.rally, r.unpack_at, r.unpack_again),
+                (None, None, None),
+                "{order:?}"
+            );
+            assert_eq!(r.resume, None, "{order:?}");
+        }
+    }
 
     #[test]
     fn regiments_only_take_orders_from_their_owner() {
@@ -539,7 +570,7 @@ mod tests {
         assert!(!w.commands(7, 0));
         let lost = Notice::Destroyed {
             owner: w.regiments[0].owner,
-            what: Fallen::Regiment(0),
+            what: Piece::Regiment(0),
         };
         assert_eq!(w.notices, [lost]);
     }

@@ -171,6 +171,7 @@ impl World {
         let share = building.health / building.fighter.health;
         let at = building.position;
         let owner = building.owner;
+        // Its ground is free for its truck, but its outline stays its own.
         if let Some(o) = building.obstacle.clone() {
             self.pathing.unblock(&o);
         }
@@ -230,11 +231,8 @@ impl World {
     fn return_truck(&mut self, regiment: usize, position: [f32; 2], facing: [f32; 2]) {
         let r = &mut self.regiments[regiment];
         r.unpacked_into = None;
-        r.unpack_at = None;
-        r.rally = None;
-        r.order = Order::Move;
+        r.take_order(Order::Move);
         r.engaged.clear();
-        r.resume = None;
         r.position = position;
         r.facing = facing;
         let offsets = &r.formations[r.current_formation()].offsets;
@@ -244,20 +242,7 @@ impl World {
                 continue;
             }
             unit.left = None;
-            let at = aaa_map::from_local(position, facing, offset);
-            unit.position = at;
-            unit.previous = at;
-            unit.facing = facing;
-            unit.end_facing = facing;
-            unit.halt();
-            unit.speed = 0.0;
-            unit.closing = false;
-            unit.target = None;
-            unit.shot = None;
-            unit.reloads.fill(0.0);
-            if let Some(t) = &mut unit.trailer {
-                t.behind(at, facing);
-            }
+            unit.stand_at(aaa_map::from_local(position, facing, offset), facing);
         }
     }
 }
@@ -636,7 +621,7 @@ mod tests {
         // a lone truck: the one it unpacked from, under its old id.
         assert_eq!(packed, r);
         assert_eq!(w.regiments.len(), 2);
-        assert_eq!(w.regiments[packed].template, "truck");
+        assert_eq!(w.regiments[packed].template.as_str(), "truck");
         assert_eq!(w.regiments[packed].number, Some(2));
         let u = w.regiments[packed].units[0];
         assert_eq!(w.regiments[packed].owner, 1);

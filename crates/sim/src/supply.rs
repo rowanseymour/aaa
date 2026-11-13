@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use aaa_map::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
 
 use crate::{
-    Building, Enemy, Order, Refused, Relation, State, TICK, Target, World, bounding_radius,
+    Building, Held, Order, Piece, Refused, Relation, State, TICK, Target, World, bounding_radius,
     deploy_point, distance,
 };
 
@@ -15,20 +15,11 @@ use crate::{
 /// on its own beat.
 pub(crate) const BEAT: u64 = (1.0 / TICK) as u64;
 
-/// A property something has for a time.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Held {
-    pub property: Id,
-    /// The tick its time is up on. It's taken off at its holder's next
-    /// look after.
-    pub until: u64,
-}
-
 /// Something that has bombarded a regiment lately.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Bombarder {
     /// The regiment or building that did.
-    pub by: Enemy,
+    pub by: Piece,
     /// The tick its last hit landed on.
     pub tick: u64,
     /// Ticks from then that it keeps the regiment out of supply.
@@ -63,8 +54,10 @@ impl Supplying {
 impl World {
     /// How the building at `b` gives supply, if it does.
     pub fn supply_of(&self, b: usize) -> Option<Supply> {
-        let template = self.buildings[b].template.as_str();
-        self.rules.supplies.get(&Id::from(template)).copied()
+        self.rules
+            .supplies
+            .get(&self.buildings[b].template)
+            .copied()
     }
 
     /// Whether a building that passes supply on has none to pass: nothing
@@ -98,10 +91,10 @@ impl World {
     fn effects<'a>(
         &'a self,
         owner: u32,
-        template: &str,
+        template: &Id,
         held: &'a [Held],
     ) -> impl Iterator<Item = &'a SupplyEffect> {
-        let kind = self.rules.kinds.get(&Id::from(template));
+        let kind = self.rules.kinds.get(template);
         let on = move |e: &&SupplyEffect| {
             let has = |p| kind.is_some_and(|k| k.properties.contains(p));
             e.requires.iter().all(has)
@@ -110,31 +103,6 @@ impl World {
         let timed = held.iter().map(|h| &h.property);
         let of = |p| self.rules.supply_effects.get(p);
         (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
-    }
-
-    /// Gives `player` a technology, for all it has and will have, unless
-    /// the map bars it.
-    pub fn grant(&mut self, player: u32, technology: Id) {
-        if self.barred(player, &technology) {
-            return;
-        }
-        let held = self.technologies.entry(player).or_default();
-        if !held.contains(&technology) {
-            held.push(technology);
-        }
-    }
-
-    /// Gives a regiment or building a property for `seconds` from now,
-    /// unless it still has it.
-    pub fn give(&mut self, to: Enemy, property: Id, seconds: f32) {
-        let until = self.ticks + (seconds / TICK).round() as u64;
-        let held = match to {
-            Enemy::Regiment(r) => &mut self.regiments[r].properties,
-            Enemy::Building(b) => &mut self.buildings[b].properties,
-        };
-        if !held.iter().any(|h| h.property == property) {
-            held.push(Held { property, until });
-        }
     }
 
     /// Carries out what the special operation `operation` does to supply
@@ -154,7 +122,7 @@ impl World {
                     .filter(|&r| !self.destroyed(r))
                     .filter_map(|r| {
                         let regiment = &self.regiments[r];
-                        let kind = self.rules.kinds.get(&Id::from(regiment.template.as_str()));
+                        let kind = self.rules.kinds.get(&regiment.template);
                         let side = self.standing_flag(player, regiment.owner);
                         let flags = kind.into_iter().flat_map(|k| &k.flags);
                         let d = distance(at, self.leader_position(r));
@@ -169,7 +137,7 @@ impl World {
                 }
                 // One that still has it gets nothing, but takes its place.
                 for (_, r) in near {
-                    self.give(Enemy::Regiment(r), property.clone(), seconds);
+                    self.give(Piece::Regiment(r), property.clone(), seconds);
                 }
             }
             Some(Operation::Drop(template)) => {
@@ -369,7 +337,7 @@ impl World {
     /// Whether anything has the regiment at `r` as a target of its
     /// engagement.
     pub(crate) fn engaged_by(&self, r: usize) -> bool {
-        let them = Enemy::Regiment(r);
+        let them = Piece::Regiment(r);
         (0..self.regiments.len())
             .any(|e| self.regiments[e].engaged.contains(&them) && !self.destroyed(e))
             || (self.buildings.iter()).any(|b| {
@@ -394,7 +362,7 @@ impl World {
     /// Notes a bombardment's hit on the regiment at `r` by `from`, whose
     /// weapon takes `recharge` seconds between shots.
     pub(crate) fn shell(&mut self, r: usize, from: Target, recharge: f32) {
-        let by = self.enemy(from);
+        let by = self.piece(from);
         let (ticks, timeout) = (self.ticks, self.rules.supply_rules.bombard_timeout);
         let regiment = &mut self.regiments[r];
         match regiment.bombarded.iter_mut().find(|b| b.by == by) {
@@ -422,8 +390,8 @@ impl World {
         let mut bombarded = std::mem::take(&mut self.regiments[r].bombarded);
         bombarded.retain(|b| {
             let gone = match b.by {
-                Enemy::Regiment(e) => self.destroyed(e),
-                Enemy::Building(e) => self.buildings[e].gone(),
+                Piece::Regiment(e) => self.destroyed(e),
+                Piece::Building(e) => self.buildings[e].gone(),
             };
             ticks < b.tick + b.length && !gone
         });
@@ -506,10 +474,7 @@ impl World {
         let regiment = &self.regiments[r];
         let rate = |u: usize| {
             let unit = &self.units[u];
-            let rate = self
-                .rules
-                .resupply_rates
-                .get(&Id::from(unit.template.as_str()));
+            let rate = self.rules.resupply_rates.get(&unit.template);
             let health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
             (rate.copied().unwrap_or(0.0) * pace.max(0.0), health)
         };
@@ -557,11 +522,11 @@ impl World {
         let offsets = &regiment.formations[regiment.current_formation()].offsets;
         let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
         let recruits = |b: &&Building| {
-            let list = self.rules.recruit_lists.get(&Id::from(b.template.as_str()));
+            let list = self.rules.recruit_lists.get(&b.template);
             b.standing()
                 && !b.busy()
                 && self.shares_supply(regiment.owner, b.owner)
-                && list.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
+                && list.is_some_and(|l| l.contains(&regiment.template))
                 && distance(at, b.position) < regiment.control(&self.rules.guard_rules)
         };
         let nearest = (self.buildings.iter().filter(recruits))
@@ -583,16 +548,7 @@ impl World {
         unit.died = None;
         unit.awaited = false;
         unit.health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
-        unit.position = stand;
-        unit.previous = stand;
-        unit.facing = facing;
-        unit.speed = 0.0;
-        unit.closing = false;
-        unit.target = None;
-        unit.reloads.fill(0.0);
-        if let Some(t) = &mut unit.trailer {
-            t.behind(stand, facing);
-        }
+        unit.stand_at(stand, facing);
         match points {
             Some((creation, deployment)) => {
                 // Straight out to the deployment point, then by a way
@@ -642,7 +598,7 @@ mod tests {
     use aaa_map::{DeployPoints, Domain, Id, Pathing, Shape, Weapon};
 
     use crate::{
-        Command, Commission, Enemy, Ledger, Notice, Pause, Refused, Regiment, Relation, State,
+        Command, Commission, Ledger, Notice, Pause, Piece, Refused, Regiment, Relation, State,
         Supplying, Target, World, deploy_point,
     };
 
@@ -955,7 +911,7 @@ mod tests {
     fn buildings_engage_only_what_their_weapons_target() {
         let mut w = division();
         w.buildings[0].owner = 2;
-        w.buildings[0].noticed.push(Enemy::Regiment(1));
+        w.buildings[0].noticed.push(Piece::Regiment(1));
         assert!(!w.engaged_by(1));
         let member = w.regiments[1].units[0];
         w.buildings[0].target = Some(Target::Unit(member));
@@ -1118,11 +1074,11 @@ mod tests {
         };
         let (bombarded, engaged) = shelled(true);
         assert_eq!(bombarded.len(), 1);
-        assert_eq!(bombarded[0].by, Enemy::Building(1));
+        assert_eq!(bombarded[0].by, Piece::Building(1));
         assert!(engaged.is_empty());
         let (bombarded, engaged) = shelled(false);
         assert!(bombarded.is_empty());
-        assert_eq!(engaged, [Enemy::Building(1)]);
+        assert_eq!(engaged, [Piece::Building(1)]);
         // A building that picks its own shots makes ordinary hits, and a
         // regiment ordered to bombard does so with whatever it fires.
         let mut w = supplied_division();
@@ -1137,7 +1093,7 @@ mod tests {
         let mut w = battle(&[1, 2], vec![soldier(vec![rifle(12.0, 30.0)]); 2], at_war());
         w.regiments[0].bombarding = true;
         w.tick();
-        assert_eq!(w.regiments[1].bombarded[0].by, Enemy::Regiment(0));
+        assert_eq!(w.regiments[1].bombarded[0].by, Piece::Regiment(0));
         assert!(w.regiments[0].bombarded.is_empty());
     }
 
@@ -1160,7 +1116,7 @@ mod tests {
         assert_eq!(w.supply_range(0), Some(35.0));
         assert!(w.supplied(1, far));
         // Below nothing it gives none, for as long as that lasts.
-        w.give(Enemy::Building(0), Id::from("sabotage"), 3.0);
+        w.give(Piece::Building(0), Id::from("sabotage"), 3.0);
         run(&mut w, 1.0);
         assert_eq!(w.supply_range(0), Some(-65.0));
         assert!(w.buildings[0].supply.zone.is_none());
@@ -1193,7 +1149,7 @@ mod tests {
         w.rules.kinds.insert(Id::from("company"), kind);
         assert_eq!(w.resupply_multiplier(1), 1.25);
         // They add up, on the half its health a second it gets back.
-        w.give(Enemy::Regiment(1), Id::from("rations"), 1.0);
+        w.give(Piece::Regiment(1), Id::from("rations"), 1.0);
         assert_eq!(w.resupply_multiplier(1), 1.5);
         let a = w.regiments[1].units[0];
         w.units[a].health = 10.0;
@@ -1204,7 +1160,7 @@ mod tests {
         run(&mut w, 1.0);
         assert_eq!(w.resupply_multiplier(1), 1.25);
         // But never to less than the least a multiplier can be.
-        w.give(Enemy::Regiment(1), Id::from("famine"), 5.0);
+        w.give(Piece::Regiment(1), Id::from("famine"), 5.0);
         assert_eq!(w.resupply_multiplier(1), 0.05);
     }
 

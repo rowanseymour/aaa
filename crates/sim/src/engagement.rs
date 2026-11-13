@@ -4,7 +4,7 @@
 use aaa_map::Zone;
 
 use crate::{
-    CONTACT, Enemy, Order, PURSUIT_DRIFT, PURSUIT_REACH, Relation, Step, Target, World, normalised,
+    CONTACT, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Relation, Step, Target, World, normalised,
     squared_distance, within, within_strictly,
 };
 
@@ -37,7 +37,7 @@ impl World {
             if engaged.is_empty() {
                 continue;
             }
-            let left: Vec<Enemy> = engaged
+            let left: Vec<Piece> = engaged
                 .into_iter()
                 .filter(|&e| self.within_range(r, e))
                 .collect();
@@ -47,15 +47,11 @@ impl World {
                 self.disengage(r);
             }
         }
-        let mut meetings: Vec<(usize, Enemy)> = Vec::new();
+        let mut meetings: Vec<(usize, Piece)> = Vec::new();
         for &(r, from) in fired_on {
             let reach = self.regiments[r].operational_range;
             if within_strictly(self.centre(r), self.position(from), reach) {
-                let enemy = match from {
-                    Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
-                    Target::Building(b) => Enemy::Building(b),
-                };
-                meetings.push((r, enemy));
+                meetings.push((r, self.piece(from)));
             }
         }
         for (u, unit) in self.units.iter().enumerate() {
@@ -66,10 +62,10 @@ impl World {
                 v != u
                     && other.alive()
                     && within(unit.position, other.position, CONTACT)
-                    && self.hostile(unit.regiment, Enemy::Regiment(other.regiment))
+                    && self.hostile(unit.regiment, Piece::Regiment(other.regiment))
             });
             if let Some((_, other)) = met {
-                meetings.push((unit.regiment, Enemy::Regiment(other.regiment)));
+                meetings.push((unit.regiment, Piece::Regiment(other.regiment)));
             }
         }
         for r in 0..self.regiments.len() {
@@ -182,8 +178,8 @@ impl World {
             }
         }
         let engaged = regiment.engaged.iter().flat_map(|&enemy| match enemy {
-            Enemy::Regiment(e) => units(e),
-            Enemy::Building(b) => vec![Target::Building(b)],
+            Piece::Regiment(e) => units(e),
+            Piece::Building(b) => vec![Target::Building(b)],
         });
         nearest(engaged.collect())
     }
@@ -191,7 +187,7 @@ impl World {
     /// Whether the enemy regiment `e` a regiment is pursuing is no longer
     /// one to go after.
     fn lost(&self, r: usize, e: usize) -> bool {
-        self.destroyed(e) || !self.hostile(r, Enemy::Regiment(e))
+        self.destroyed(e) || !self.hostile(r, Piece::Regiment(e))
     }
 
     /// Calls off a regiment's pursuit, leaving it to stand where it is
@@ -222,7 +218,7 @@ impl World {
         let zone = self.control_zone(r);
         let in_control = (self.survivors(e)).any(|u| self.in_zone(&zone, Target::Unit(u)));
         if in_control && within(self.centre(r), self.centre(e), reach) {
-            let enemy = Enemy::Regiment(e);
+            let enemy = Piece::Regiment(e);
             self.regiments[r].engaged.push(enemy);
             self.hold(r, enemy);
             return;
@@ -252,7 +248,7 @@ impl World {
 
     /// The enemies with something within a regiment's control range that
     /// its members can fire on.
-    fn in_control(&self, r: usize) -> Vec<Enemy> {
+    fn in_control(&self, r: usize) -> Vec<Piece> {
         let zone = self.control_zone(r);
         let fires_on = |t: Target| {
             self.survivors(r).any(|u| {
@@ -263,10 +259,7 @@ impl World {
         };
         let mut found = Vec::new();
         for t in self.targets() {
-            let enemy = match t {
-                Target::Unit(u) => Enemy::Regiment(self.units[u].regiment),
-                Target::Building(b) => Enemy::Building(b),
-            };
+            let enemy = self.piece(t);
             if !found.contains(&enemy)
                 && self.in_zone(&zone, t)
                 && self.hostile(r, enemy)
@@ -297,24 +290,29 @@ impl World {
         }
     }
 
-    pub(crate) fn hostile(&self, r: usize, enemy: Enemy) -> bool {
-        let owner = match enemy {
-            Enemy::Regiment(e) => self.regiments[e].owner,
-            Enemy::Building(b) => self.buildings[b].owner,
-        };
+    /// The owner of what a regiment or building engages.
+    pub(crate) fn piece_owner(&self, enemy: Piece) -> u32 {
+        match enemy {
+            Piece::Regiment(e) => self.regiments[e].owner,
+            Piece::Building(b) => self.buildings[b].owner,
+        }
+    }
+
+    pub(crate) fn hostile(&self, r: usize, enemy: Piece) -> bool {
+        let owner = self.piece_owner(enemy);
         self.sides.relation(self.regiments[r].owner, owner) == Relation::Enemy
     }
 
     /// Whether `enemy` is still one to `r` and in its operational range, or
     /// close enough to be run into where it has none.
-    fn within_range(&self, r: usize, enemy: Enemy) -> bool {
+    fn within_range(&self, r: usize, enemy: Piece) -> bool {
         let reach = self.regiments[r].operational_range.max(CONTACT);
         let here = self.centre(r);
         let near = match enemy {
-            Enemy::Regiment(e) => self
+            Piece::Regiment(e) => self
                 .survivors(e)
                 .any(|u| within_strictly(here, self.units[u].position, reach)),
-            Enemy::Building(b) => {
+            Piece::Building(b) => {
                 let building = &self.buildings[b];
                 building.standing() && within_strictly(here, building.position, reach)
             }
@@ -324,7 +322,7 @@ impl World {
 
     /// Stops a regiment that's just engaged where it stands, in its combat
     /// formation facing `enemy`, to carry on where it was going afterwards.
-    fn hold(&mut self, r: usize, enemy: Enemy) {
+    fn hold(&mut self, r: usize, enemy: Piece) {
         let here = self.centre(r);
         let there = self.middle(enemy);
         let regiment = &mut self.regiments[r];
@@ -364,7 +362,7 @@ mod tests {
 
     use aaa_map::{Domain, Fighter, Id, Pathing, Tile};
 
-    use crate::{CONTACT, Command, Enemy, Order, Refused, State, Target, Unit, distance};
+    use crate::{CONTACT, Command, Order, Piece, Refused, State, Target, Unit, distance};
 
     #[test]
     fn moving_regiments_stop_to_fight_what_fires_on_them_then_carry_on() {
@@ -379,7 +377,7 @@ mod tests {
         .unwrap();
         // In the enemy's range after 4s, at 18.
         run(&mut w, 4.5);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert_eq!(w.regiments[0].current_formation(), 1);
         assert!(w.units[0].health < 100.0);
         let stopped = w.units[0].position;
@@ -453,7 +451,7 @@ mod tests {
         )
         .unwrap();
         run(&mut w, 9.5);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert!(!w.units[0].moving());
         assert!(distance(w.units[0].position, w.units[1].position) <= CONTACT);
         run(&mut w, 15.0);
@@ -478,7 +476,7 @@ mod tests {
         .unwrap();
         // Each in the other's range, edge to edge, from y 12.1, after 1s.
         run(&mut w, 2.0);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Building(0)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Building(0)]);
         assert!(!w.units[0].moving());
         run(&mut w, 2.0);
         assert!(matches!(w.buildings[0].state, State::Destroyed(_)));
@@ -506,7 +504,7 @@ mod tests {
         run(&mut w, 1.5);
         assert!(w.regiments[0].engaged.is_empty());
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert!(w.regiments[0].position[1] < 16.0);
         assert!(w.underway(0));
         run(&mut w, 6.0);
@@ -529,7 +527,7 @@ mod tests {
         assert!(w.regiments[0].engaged.is_empty());
         w.regiments[0].formations[0].aggressive = true;
         w.tick();
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
     }
 
     #[test]
@@ -577,7 +575,7 @@ mod tests {
         assert!(w.regiments[0].engaged.is_empty());
         assert!(w.units[0].moving());
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert!(w.regiments[0].position[1] < 24.0);
         run(&mut w, 6.0);
         assert!(!w.units[1].alive());
@@ -609,7 +607,7 @@ mod tests {
         run(&mut w, 4.0);
         assert!(w.regiments[0].engaged.is_empty());
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert!((18.5..20.5).contains(&w.units[0].position[1]));
     }
 
@@ -628,7 +626,7 @@ mod tests {
         .unwrap();
         // Engaged from 19.2, after 4.6s, then closing in alone to 26.
         run(&mut w, 5.5);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert!(w.units[0].moving());
         assert!(w.regiments[0].position[1] < 21.0);
         run(&mut w, 4.0);
@@ -659,7 +657,7 @@ mod tests {
         )
         .unwrap();
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert!(!w.units[0].moving());
         run(&mut w, 3.0);
         assert!(!w.units[1].alive());
@@ -748,7 +746,7 @@ mod tests {
         )
         .unwrap();
         run(&mut w, 4.5);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         w.apply(
             1,
             Command::Run {
@@ -829,7 +827,7 @@ mod tests {
         )
         .unwrap();
         run(&mut w, 4.5);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         assert!(w.underway(0));
         assert!(near(w.destination(0), [10.0, 50.0]));
     }
@@ -846,10 +844,10 @@ mod tests {
         )
         .unwrap();
         run(&mut w, 4.5);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         let held = w.regiments[0].position;
         w.apply(1, Command::Stop { regiment: 0 }).unwrap();
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         w.destroy(1);
         run(&mut w, 10.0);
         assert!(w.regiments[0].engaged.is_empty());

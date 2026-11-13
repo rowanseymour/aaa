@@ -13,18 +13,18 @@ pub struct Hq {
     pub id: u32,
     pub owner: u32,
     /// The template of the building it is, or unpacks into.
-    pub building: String,
+    pub building: Id,
     pub position: [f32; 2],
     /// How many regiments it takes.
     pub places: u32,
 }
 
 impl World {
-    pub(crate) fn logistics_of(&self, template: &str) -> Option<Logistics> {
-        self.rules.logistics.get(&Id::from(template)).copied()
+    pub(crate) fn logistics_of(&self, template: &Id) -> Option<Logistics> {
+        self.rules.logistics.get(template).copied()
     }
 
-    fn places(&self, template: &str) -> Option<u32> {
+    fn places(&self, template: &Id) -> Option<u32> {
         self.logistics_of(template)?.attachments
     }
 
@@ -42,7 +42,7 @@ impl World {
                 out.push(Hq {
                     id: regiment.id,
                     owner: regiment.owner,
-                    building: building.clone(),
+                    building: Id::from(building.as_str()),
                     position: self.centre(r),
                     places,
                 });
@@ -69,10 +69,15 @@ impl World {
     fn truck_survives(&self, r: usize) -> bool {
         let unpacks = self.regiments[r].unpacks.as_ref();
         let trucks = unpacks
-            .and_then(|u| self.rules.packing.get(&u.building.template))
+            .and_then(|u| {
+                self.rules
+                    .packing
+                    .get(&Id::from(u.building.template.as_str()))
+            })
             .map(|p| &p.truck.members);
         let truck = |u: usize| {
-            trucks.is_none_or(|t| t.iter().any(|m| m.template == self.units[u].template))
+            let template = self.units[u].template.as_str();
+            trucks.is_none_or(|t| t.iter().any(|m| m.template.eq_ignore_ascii_case(template)))
         };
         self.survivors(r).any(truck)
     }
@@ -82,12 +87,18 @@ impl World {
     /// the regiment it unpacked from.
     fn hq_behind(&self, b: usize) -> Option<(u32, u32, &str)> {
         let building = &self.buildings[b];
-        let (id, template) = match (&building.organization, building.unpacked_from) {
-            (Some(o), _) => (o.id, o.template.as_str()),
-            (None, Some(r)) => (self.regiments[r].id, self.regiments[r].template.as_str()),
-            (None, None) => return None,
-        };
-        Some((id, self.places(template)?, template))
+        match (&building.organization, building.unpacked_from) {
+            (Some(o), _) => {
+                let places = self.places(&Id::from(o.template.as_str()))?;
+                Some((o.id, places, o.template.as_str()))
+            }
+            (None, Some(r)) => {
+                let regiment = &self.regiments[r];
+                let places = self.places(&regiment.template)?;
+                Some((regiment.id, places, regiment.template.as_str()))
+            }
+            (None, None) => None,
+        }
     }
 
     /// The template of the organization the building at `b` is the HQ of,
@@ -156,12 +167,8 @@ impl World {
     /// aside: its own side's, and one whose building recruits its kind.
     fn suits(&self, hq: &Hq, r: usize) -> bool {
         let regiment = &self.regiments[r];
-        let recruits = self
-            .rules
-            .recruit_lists
-            .get(&Id::from(hq.building.as_str()));
-        hq.owner == regiment.owner
-            && recruits.is_some_and(|l| l.contains(&Id::from(regiment.template.as_str())))
+        let recruits = self.rules.recruit_lists.get(&hq.building);
+        hq.owner == regiment.owner && recruits.is_some_and(|l| l.contains(&regiment.template))
     }
 
     /// The HQ an order to attach would put the regiment at `r` in: the

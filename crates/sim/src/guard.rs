@@ -3,7 +3,7 @@
 use aaa_map::pathing::CELL_SIZE;
 
 use crate::{
-    Enemy, Guard, Order, Regiment, Step, World, bounding_radius, distance, normalised, within,
+    Guard, Order, Piece, Regiment, Step, World, bounding_radius, distance, normalised, within,
 };
 
 /// How far what a regiment guards moves its post before the regiment
@@ -16,16 +16,13 @@ impl World {
     pub(crate) fn post(
         &mut self,
         regiment: usize,
-        of: Option<Enemy>,
+        of: Option<Piece>,
         post: [f32; 2],
         facing: Option<[f32; 2]>,
     ) {
         let r = &mut self.regiments[regiment];
         let facing = facing.unwrap_or(r.facing);
-        r.order = Order::Move;
-        r.unpack_at = None;
-        r.unpack_again = None;
-        r.rally = None;
+        r.take_order(Order::Move);
         r.guard = Some(Guard {
             of,
             post,
@@ -34,10 +31,7 @@ impl World {
             unreachable: None,
         });
         match r.engaged.is_empty() {
-            true => {
-                r.resume = None;
-                self.go_to_post(regiment);
-            }
+            true => self.go_to_post(regiment),
             // Where it's headed once done, as for a move.
             false => r.resume = Some((post, facing)),
         }
@@ -46,7 +40,7 @@ impl World {
     /// The post of a regiment guarding `thing`, and the way it faces there:
     /// off the thing's edge by half the regiment's control range, on the
     /// side the regiment is, facing away.
-    pub(crate) fn beside(&self, regiment: usize, thing: Enemy) -> ([f32; 2], [f32; 2]) {
+    pub(crate) fn beside(&self, regiment: usize, thing: Piece) -> ([f32; 2], [f32; 2]) {
         let r = &self.regiments[regiment];
         let here = self.centre(regiment);
         let there = self.middle(thing);
@@ -56,10 +50,10 @@ impl World {
 
     /// The point `away` from `thing` that a regiment guarding it rests at,
     /// kept on the map.
-    fn post_beside(&self, regiment: usize, thing: Enemy, away: [f32; 2]) -> [f32; 2] {
+    fn post_beside(&self, regiment: usize, thing: Piece, away: [f32; 2]) -> [f32; 2] {
         let radius = match thing {
-            Enemy::Regiment(_) => 0.0,
-            Enemy::Building(b) => {
+            Piece::Regiment(_) => 0.0,
+            Piece::Building(b) => {
                 let shape = self.buildings[b].obstacle.as_ref().map(|o| o.shape);
                 shape.map_or(0.0, bounding_radius)
             }
@@ -74,10 +68,10 @@ impl World {
     }
 
     /// Where something a regiment can engage or guard is.
-    pub(crate) fn middle(&self, thing: Enemy) -> [f32; 2] {
+    pub(crate) fn middle(&self, thing: Piece) -> [f32; 2] {
         match thing {
-            Enemy::Regiment(e) => self.centre(e),
-            Enemy::Building(b) => self.buildings[b].position,
+            Piece::Regiment(e) => self.centre(e),
+            Piece::Building(b) => self.buildings[b].position,
         }
     }
 
@@ -87,7 +81,7 @@ impl World {
     pub(crate) fn keep_guard(&mut self) {
         // Who's engaged with what, looked up once for all that guard things.
         let escorts = |r: &Regiment| r.guard.is_some_and(|g| g.of.is_some());
-        let engaging: Vec<(usize, Enemy)> = match self.regiments.iter().any(escorts) {
+        let engaging: Vec<(usize, Piece)> = match self.regiments.iter().any(escorts) {
             true => (self.regiments.iter().enumerate())
                 .flat_map(|(e, r)| r.engaged.iter().map(move |&with| (e, with)))
                 .collect(),
@@ -186,7 +180,7 @@ impl World {
         r: usize,
         guard: Guard,
         after: Option<usize>,
-        engaging: &[(usize, Enemy)],
+        engaging: &[(usize, Piece)],
     ) -> Option<usize> {
         let of = guard.of?;
         if !self.armed(r) {
@@ -195,7 +189,7 @@ impl World {
         let fair = |e: usize| {
             guard.unreachable != Some(e)
                 && !self.destroyed(e)
-                && self.hostile(r, Enemy::Regiment(e))
+                && self.hostile(r, Piece::Regiment(e))
         };
         let mut found: Vec<usize> = (engaging.iter())
             .filter(|&&(e, with)| with == of && fair(e))
@@ -203,10 +197,10 @@ impl World {
             .collect();
         if found.is_empty() {
             let fought = match of {
-                Enemy::Regiment(g) => self.regiments[g].engaged.first().copied(),
-                Enemy::Building(b) => self.buildings[b].target.map(|t| self.enemy(t)),
+                Piece::Regiment(g) => self.regiments[g].engaged.first().copied(),
+                Piece::Building(b) => self.buildings[b].target.map(|t| self.piece(t)),
             };
-            if let Some(Enemy::Regiment(e)) = fought {
+            if let Some(Piece::Regiment(e)) = fought {
                 found.extend(fair(e).then_some(e));
             }
         }
@@ -230,7 +224,7 @@ mod tests {
 
     use aaa_map::Tile;
 
-    use crate::{ARRIVAL_REACH, Command, Enemy, Order, Refused, State, World, distance, within};
+    use crate::{ARRIVAL_REACH, Command, Order, Piece, Refused, State, World, distance, within};
 
     /// A guard of player 1's, an ally's regiment for it to guard and an
     /// enemy out of range, 10 apart in a row, the guard noticing nothing
@@ -248,7 +242,7 @@ mod tests {
         w.regiments[0].control_range = 4.0;
         let guard = Command::GuardThing {
             regiment: 0,
-            thing: Enemy::Regiment(1),
+            thing: Piece::Regiment(1),
         };
         w.apply(1, guard).unwrap();
         w
@@ -273,7 +267,7 @@ mod tests {
         // 18 off, further than its control range of 18 takes in.
         run(&mut w, 1.0);
         assert_eq!(w.regiments[0].current_formation(), 1);
-        assert_eq!(w.regiments[0].engaged, [Enemy::Regiment(1)]);
+        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
         run(&mut w, 10.0);
         assert!(!w.units[1].alive());
         run(&mut w, 10.0);
@@ -326,9 +320,9 @@ mod tests {
         )
         .unwrap();
         w.tick();
-        assert!(w.regiments[2].engaged.contains(&Enemy::Regiment(1)));
+        assert!(w.regiments[2].engaged.contains(&Piece::Regiment(1)));
         assert_eq!(w.regiments[0].order, Order::Pursue(2));
-        assert_eq!(w.regiments[0].guard.unwrap().of, Some(Enemy::Regiment(1)));
+        assert_eq!(w.regiments[0].guard.unwrap().of, Some(Piece::Regiment(1)));
         run(&mut w, 10.0);
         assert!(w.destroyed(2));
         // Back beside it, on the side the fight left it.
@@ -347,16 +341,16 @@ mod tests {
         for x in 0..40 {
             w.pathing.set_blocked(Tile::new(x, 12));
         }
-        w.regiments[2].engaged.push(Enemy::Regiment(1));
+        w.regiments[2].engaged.push(Piece::Regiment(1));
         w.tick();
         assert_eq!(w.regiments[0].order, Order::Pursue(2));
         // As far as it can get by 3s, then back.
         run(&mut w, 5.0);
         assert_eq!(w.regiments[0].order, Order::Move);
-        assert!(w.regiments[2].engaged.contains(&Enemy::Regiment(1)));
+        assert!(w.regiments[2].engaged.contains(&Piece::Regiment(1)));
         // Back beside it, on the side that left it.
         run(&mut w, 5.0);
-        assert!(w.regiments[2].engaged.contains(&Enemy::Regiment(1)));
+        assert!(w.regiments[2].engaged.contains(&Piece::Regiment(1)));
         assert_eq!(w.regiments[0].order, Order::Move);
         assert!(distance(w.units[0].position, w.centre(1)) < 2.0 + ARRIVAL_REACH);
         assert!(w.regiments[0].guarding());
@@ -369,7 +363,7 @@ mod tests {
         w.units[0].position = [10.0, 0.5];
         let guard = Command::GuardThing {
             regiment: 0,
-            thing: Enemy::Building(0),
+            thing: Piece::Building(0),
         };
         w.apply(1, guard.clone()).unwrap();
         assert_eq!(w.regiments[0].guard.unwrap().post[1], 0.0);
@@ -383,12 +377,12 @@ mod tests {
     fn regiments_guard_anything_still_there_but_themselves() {
         let mut w = escort();
         let guard = |regiment, thing| Command::GuardThing { regiment, thing };
-        assert!(w.check(1, &guard(0, Enemy::Regiment(2))).is_ok());
+        assert!(w.check(1, &guard(0, Piece::Regiment(2))).is_ok());
         let unable = Err(Refused::Unable);
-        assert_eq!(w.check(1, &guard(0, Enemy::Regiment(0))), unable);
-        assert_eq!(w.check(1, &guard(0, Enemy::Regiment(9))), unable);
-        assert_eq!(w.check(1, &guard(0, Enemy::Building(0))), unable);
+        assert_eq!(w.check(1, &guard(0, Piece::Regiment(0))), unable);
+        assert_eq!(w.check(1, &guard(0, Piece::Regiment(9))), unable);
+        assert_eq!(w.check(1, &guard(0, Piece::Building(0))), unable);
         w.destroy(2);
-        assert_eq!(w.check(1, &guard(0, Enemy::Regiment(2))), unable);
+        assert_eq!(w.check(1, &guard(0, Piece::Regiment(2))), unable);
     }
 }

@@ -1,10 +1,8 @@
 //! Getting rid of what a side owns: disbanding regiments and trucks, and
 //! selling buildings.
 
-use aaa_map::Id;
-
-use crate::economy::{Fallen, money};
-use crate::{Left, Notice, Refused, State, World};
+use crate::economy::money;
+use crate::{Left, Notice, Piece, Refused, State, World};
 
 impl World {
     /// Whether a regiment is a lone unit rather than an organization, as a
@@ -40,7 +38,7 @@ impl World {
     /// Whether a building's template is one that can be sold.
     pub fn sells(&self, building: usize) -> bool {
         let template = &self.buildings[building].template;
-        self.rules.sellable.contains(&Id::from(template.as_str()))
+        self.rules.sellable.contains(template)
     }
 
     /// The money a building sells for: a share of its own template's cost,
@@ -74,7 +72,7 @@ impl World {
         r.resume = None;
         if !self.lone(regiment) {
             let owner = self.regiments[regiment].owner;
-            let what = Fallen::Regiment(regiment);
+            let what = Piece::Regiment(regiment);
             self.notices.push(Notice::Destroyed { owner, what });
         }
     }
@@ -84,17 +82,23 @@ impl World {
     pub(crate) fn sell(&mut self, building: usize) {
         let hq = self.hq_of(building);
         self.pay_sale(building);
+        self.remove(building, State::Sold(self.ticks));
+        if let Some(hq) = hq {
+            self.detach_all(hq);
+        }
+    }
+
+    /// Takes a building off the map for good, leaving it as `state`: its
+    /// ground free again, with nothing queued, aimed at or besieging it.
+    pub(crate) fn remove(&mut self, building: usize, state: State) {
         let b = &mut self.buildings[building];
-        b.state = State::Sold(self.ticks);
+        b.state = state;
         b.besieged = None;
         b.target = None;
         if let Some(o) = b.obstacle.take() {
             self.pathing.unblock(&o);
         }
         self.drop_queue(building);
-        if let Some(hq) = hq {
-            self.detach_all(hq);
-        }
     }
 
     /// Gives a building's owner what it sells for, and tells them.
@@ -117,7 +121,7 @@ mod tests {
 
     use aaa_map::{Domain, Id, Tile};
 
-    use crate::{Command, Commission, Enemy, Fallen, Notice, Refused, State, World};
+    use crate::{Command, Commission, Notice, Piece, Refused, State, World};
 
     /// [`economy`] with its house, building 0, selling for half its cost
     /// of 301 money and 40 ammo.
@@ -137,10 +141,10 @@ mod tests {
         w.apply(1, Command::Attach { regiment: 1 }).unwrap();
         assert_eq!(w.check(1, &disband(1)), Err(Refused::Unable));
         w.apply(1, Command::Detach { regiment: 1 }).unwrap();
-        w.regiments[1].engaged.push(Enemy::Regiment(0));
+        w.regiments[1].engaged.push(Piece::Regiment(0));
         assert_eq!(w.check(1, &disband(1)), Err(Refused::Unable));
         // A lone unit goes even while it fights.
-        w.regiments[0].engaged.push(Enemy::Regiment(1));
+        w.regiments[0].engaged.push(Piece::Regiment(1));
         assert_eq!(w.check(1, &disband(0)), Ok(()));
         assert_eq!(w.check(2, &disband(0)), Err(Refused::NotYours));
         w.regiments[1].engaged.clear();
@@ -154,7 +158,7 @@ mod tests {
         assert!(units.iter().all(|&u| w.units[u].died.is_none()));
         let lost = Notice::Destroyed {
             owner: 1,
-            what: Fallen::Regiment(1),
+            what: Piece::Regiment(1),
         };
         assert_eq!(w.notices, [lost]);
         assert_eq!(w.check(1, &disband(1)), Err(Refused::NotYours));
@@ -286,7 +290,7 @@ mod tests {
         assert_eq!(w.stockpile(1), 651.0);
         let destroyed = Notice::Destroyed {
             owner: 1,
-            what: Fallen::Building(0),
+            what: Piece::Building(0),
         };
         let sold = Notice::Sold {
             player: 1,

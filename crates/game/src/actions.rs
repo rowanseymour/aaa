@@ -438,7 +438,7 @@ impl Looks {
     /// The menu of what the selected building commissions.
     fn menu(&self, sim: &aaa_sim::World, building: Option<usize>) -> &[Recruit] {
         building
-            .and_then(|b| self.menus.get(&sim.buildings[b].template))
+            .and_then(|b| self.menus.get(sim.buildings[b].template.as_str()))
             .map_or(&[], Vec::as_slice)
     }
 
@@ -446,10 +446,7 @@ impl Looks {
     /// has it.
     fn topics(&self, sim: &aaa_sim::World, building: Option<usize>) -> &[Topic] {
         building
-            .and_then(|b| {
-                self.researches
-                    .get(&Id::from(sim.buildings[b].template.as_str()))
-            })
+            .and_then(|b| self.researches.get(&sim.buildings[b].template))
             .map_or(&[], Vec::as_slice)
     }
 }
@@ -668,7 +665,8 @@ pub fn spawn(
     // Buildings unpacked during the match need menus too: those of the
     // map's trucks, and of what any menu commissions.
     let mut menus = HashMap::new();
-    let mut templates: Vec<String> = sim.0.buildings.iter().map(|b| b.template.clone()).collect();
+    let standing = sim.0.buildings.iter().map(|b| b.template.to_string());
+    let mut templates: Vec<String> = standing.collect();
     templates.extend(
         sim.0
             .regiments
@@ -1660,12 +1658,12 @@ fn guard_at(
     player: u32,
     selected: &[usize],
     focus: crate::Focus,
-) -> Option<aaa_sim::Enemy> {
+) -> Option<aaa_sim::Piece> {
     let (thing, owner) = match focus {
         crate::Focus::Nothing => return None,
         crate::Focus::Regiment(r) if selected.contains(&r) => return None,
-        crate::Focus::Regiment(r) => (aaa_sim::Enemy::Regiment(r), sim.regiments[r].owner),
-        crate::Focus::Building(b) => (aaa_sim::Enemy::Building(b), sim.buildings[b].owner),
+        crate::Focus::Regiment(r) => (aaa_sim::Piece::Regiment(r), sim.regiments[r].owner),
+        crate::Focus::Building(b) => (aaa_sim::Piece::Building(b), sim.buildings[b].owner),
     };
     (sim.sides.relation(player, owner) != aaa_sim::Relation::Enemy).then_some(thing)
 }

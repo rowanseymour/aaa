@@ -426,7 +426,7 @@ fn holder(sim: &World, mode: &Mode) -> Option<usize> {
 /// their properties came in while their regiment stays selected.
 fn held(sim: &World, looks: &HashMap<Id, PropertyLook>, r: usize, shown: &[Id]) -> Vec<Id> {
     let regiment = &sim.regiments[r];
-    let kind = sim.rules().kinds.get(&Id::from(regiment.template.as_str()));
+    let kind = sim.rules().kinds.get(&regiment.template);
     let own = kind.into_iter().flat_map(|k| &k.properties).cloned();
     let terrain = regiment.terrain_properties.iter().cloned();
     let guarding =
@@ -710,7 +710,7 @@ impl Ui<'_> {
             .map_or([1.0; 3], |p| p.rgb);
         let icon = self
             .banners
-            .icon(self.game, self.images, &regiment.template);
+            .icon(self.game, self.images, regiment.template.as_str());
         let template = &regiment.template;
         let shown = self.detail.banners.iter().find(|(of, ..)| *of == r);
         let (wears, lacks) = shown.map_or((None, false), |&(_, wears, lacks)| (wears, lacks));
@@ -718,11 +718,11 @@ impl Ui<'_> {
         let (badges, banners) = (self.badges, &mut *self.banners);
         // An HQ's own frame goes with its badge.
         let frame = match wears.filter(|&hq| hq == regiment.id) {
-            Some(hq) => badges.frame(banners, self.game, self.images, template, hq),
-            None => banners.frame(self.game, self.images, template),
+            Some(hq) => badges.frame(banners, self.game, self.images, template.as_str(), hq),
+            None => banners.frame(self.game, self.images, template.as_str()),
         };
-        let badge =
-            wears.and_then(|hq| badges.badge(banners, self.game, self.images, template, hq));
+        let badge = wears
+            .and_then(|hq| badges.badge(banners, self.game, self.images, template.as_str(), hq));
         let out_of_supply = self.banners.out_of_supply.clone().filter(|_| lacks);
         let layers = [
             (self.banners.plate.clone(), Color::srgb(red, green, blue)),
@@ -837,7 +837,7 @@ impl Ui<'_> {
         self.title(commands, root, self.regiment_name(r), regiment.owner);
         let leader = leader(self.sim, r);
         let template = self.sim.units[leader].template.clone();
-        self.portrait(commands, root, &template, Fill::Regiment(r));
+        self.portrait(commands, root, template.as_str(), Fill::Regiment(r));
     }
 
     fn regiment(&mut self, commands: &mut Commands, root: Entity, r: usize) {
@@ -848,12 +848,12 @@ impl Ui<'_> {
         if !lone(self.sim, r) && !is_hq {
             // Cards across, wrapping, as the game's has them,
             // for all but an officer, who has the portrait.
-            let officer = is_officer(&self.sim.units[leader].template);
+            let officer = is_officer(self.sim.units[leader].template.as_str());
             let mut units = self.sim.regiments[r].units.clone();
             units.retain(|&u| !(officer && u == leader));
             let pictures: Vec<_> = units
                 .iter()
-                .map(|&u| self.picture(&self.sim.units[u].template.clone()))
+                .map(|&u| self.picture(self.sim.units[u].template.as_str()))
                 .collect();
             commands.entity(root).with_children(|display| {
                 display
@@ -938,7 +938,7 @@ impl Ui<'_> {
         const CARD: f32 = 66.0;
         for (i, &r) in rs.iter().enumerate() {
             let left = 8.0 + i as f32 * (CARD + 4.0);
-            let icon = self.picture(&self.sim.regiments[r].template.clone());
+            let icon = self.picture(self.sim.regiments[r].template.as_str());
             let units = self.sim.regiments[r].units.clone();
             let mut card = commands.spawn((
                 framed(at(left, 40.0, CARD, 138.0)),
@@ -984,7 +984,7 @@ impl Ui<'_> {
         let template = building.template.clone();
         let name = building_name(self.sim, &self.looks.names, &self.looks.strings, b);
         self.title(commands, root, name, building.owner);
-        self.portrait(commands, root, &template, Fill::Building(b));
+        self.portrait(commands, root, template.as_str(), Fill::Building(b));
         if self.sim.supply_of(b).is_some_and(|s| s.relay) {
             let fill = (Fill::Stockpile(b), Hint(String::new()));
             let node = at(PORTRAIT_BOX[0], 176.0, PORTRAIT_BOX[2], 3.0);
@@ -1040,7 +1040,7 @@ fn portrayed<'a>(sim: &'a World, looks: &'a Looks, mode: &Mode) -> Option<(&'a s
             let template = match regiment.unpacked_into {
                 Some(b) => sim.buildings[b].template.as_str(),
                 // A unit on its own is no organization.
-                None => match looks.primaries.get(&Id::from(regiment.template.as_str())) {
+                None => match looks.primaries.get(&regiment.template) {
                     Some(primary) => primary.as_ref()?.as_str(),
                     None => regiment.template.as_str(),
                 },
@@ -1289,7 +1289,7 @@ pub(crate) fn regiment_name(
     numbered(
         strings,
         regiment.number,
-        template_name(names, &regiment.template),
+        template_name(names, regiment.template.as_str()),
     )
 }
 
@@ -1305,7 +1305,7 @@ pub(crate) fn building_name(
     numbered(
         strings,
         building.number,
-        template_name(names, &building.template),
+        template_name(names, building.template.as_str()),
     )
 }
 
@@ -1347,7 +1347,7 @@ fn leader(sim: &World, r: usize) -> usize {
     let officer = units
         .iter()
         .copied()
-        .find(|&u| is_officer(&sim.units[u].template));
+        .find(|&u| is_officer(sim.units[u].template.as_str()));
     officer.unwrap_or(units[0])
 }
 
