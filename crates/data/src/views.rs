@@ -90,9 +90,7 @@ impl GameData {
             };
             out.insert(id.clone(), view);
         }
-        if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Thing");
-        }
+        add_renames(&mut out, &self.translations(), "Thing");
         out
     }
 

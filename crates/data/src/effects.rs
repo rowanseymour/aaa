@@ -206,13 +206,13 @@ impl GameData {
         let files = scoped(&files);
         let mut out = HashMap::new();
         for scope in &files {
-            let (file, root) = (scope.file, scope.root);
-            // Ground decals are declared as things of a VFX category.
-            let blocks = root.blocks_of("VFX").chain(root.blocks_of("Thing"));
-            for block in blocks {
-                let Some(v) = scope.deserialize::<defs::Vfx>(block) else {
-                    continue;
-                };
+            // Ground decals are declared as things of a VFX category. Every
+            // thing is tried as an effect to find them, so one that doesn't
+            // read as an effect is no fault in the data.
+            let effects = (scope.root.blocks_of("VFX")).filter_map(|b| scope.deserialize(b));
+            let things = (scope.root.blocks_of("Thing"))
+                .filter_map(|b| scope.templates.deserialize::<defs::Vfx>(b).ok());
+            for v in effects.chain(things) {
                 let is_vfx = v
                     .category
                     .as_deref()
@@ -223,10 +223,10 @@ impl GameData {
                 let model = v
                     .model
                     .as_deref()
-                    .map(|m| beside(file, m))
+                    .map(|m| beside(scope.file, m))
                     .filter(|m| self.exists(m));
                 let texture = (v.texture.as_deref())
-                    .map(|t| beside(file, t.trim()))
+                    .map(|t| beside(scope.file, t.trim()))
                     .filter(|t| self.exists(t));
                 out.insert(ids, vfx(v, model, texture));
             }

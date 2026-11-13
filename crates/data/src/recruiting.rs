@@ -129,9 +129,7 @@ impl GameData {
                 out.entry(into).or_insert_with(|| t.id.clone());
             }
         }
-        if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Thing");
-        }
+        add_renames(&mut out, &self.translations(), "Thing");
         out
     }
 
@@ -220,10 +218,7 @@ impl GameData {
 
     /// Each renamed object template's old id to its new one.
     fn thing_renames(&mut self) -> HashMap<Id, Id> {
-        let Some(bytes) = self.read("translate.tgi") else {
-            return HashMap::new();
-        };
-        renames(&tgi::decode(&bytes), "Thing")
+        renames(&self.translations(), "Thing")
     }
 
     /// Where what each template recruits appears, by template id.

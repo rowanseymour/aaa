@@ -72,6 +72,17 @@ pub struct GameData {
     tgis: Vec<String>,
     /// See [`GameData::definitions`].
     definitions: Option<Arc<Definitions>>,
+    kept: Kept,
+}
+
+/// Small files that many accessors read, read once and kept, so each is
+/// parsed, and any block in it that doesn't read is reported, once.
+#[derive(Default)]
+struct Kept {
+    translations: Option<Arc<[defs::Translate]>>,
+    svars: Option<Arc<[defs::SVars]>>,
+    uvars: Option<Arc<[defs::UVars]>>,
+    avars: Option<Arc<[defs::AVars]>>,
 }
 
 /// The object templates and shared properties the `.tgi` files define,
@@ -197,11 +208,16 @@ pub(crate) fn logged<T>(
     block: &tgi::Block,
     read: Result<T, tgi::de::Error>,
 ) -> Option<T> {
-    read.map_err(|e| {
-        let kind = block.kind().unwrap_or("");
-        log::warn!("{file}: {kind} block at line {}: {e}", block.line);
-    })
-    .ok()
+    read.map_err(|e| log::warn!("{}", warning(file, block, &e)))
+        .ok()
+}
+
+/// Where a block that doesn't read is, at the line it failed on if known,
+/// and why.
+fn warning(file: &str, block: &tgi::Block, e: &tgi::de::Error) -> String {
+    let kind = block.kind().unwrap_or("");
+    let line = e.line.unwrap_or(block.line);
+    format!("{file}:{line}: {kind} block doesn't read: {}", e.message)
 }
 
 /// The files, in the order they load, that don't fail to, with the
@@ -251,6 +267,7 @@ impl GameData {
             paths,
             tgis: Vec::new(),
             definitions: None,
+            kept: Kept::default(),
         };
         let names: Vec<String> = game.entries().map(str::to_string).collect();
         let tgis = listed_tgis(&names, |name| game.read(name).map(|b| tgi::decode(&b)));
@@ -382,10 +399,19 @@ impl GameData {
                 out.insert(t.id.clone(), v);
             }
         }
-        if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Thing");
-        }
+        add_renames(&mut out, &self.translations(), "Thing");
         out
+    }
+
+    /// The renames `translate.tgi` lists, read once.
+    pub(crate) fn translations(&mut self) -> Arc<[defs::Translate]> {
+        if let Some(kept) = &self.kept.translations {
+            return kept.clone();
+        }
+        let text = self.read("translate.tgi").map(|b| tgi::decode(&b));
+        let read: Arc<[defs::Translate]> = translations(text.as_deref().unwrap_or("")).into();
+        self.kept.translations = Some(read.clone());
+        read
     }
 
     /// Every `.tgi` file's [`Definitions`]. Deserialized once and kept, as
@@ -473,8 +499,12 @@ impl GameData {
 /// replacements, as `translate.tgi` lists them for `node`, e.g. `Thing`:
 /// one step on, so an id renamed to one that's itself only a rename has
 /// none, and in place of any entry still made under the old id.
-pub(crate) fn add_renames<T: Clone>(entries: &mut HashMap<Id, T>, translate: &str, node: &str) {
-    let renamed: Vec<(Id, Option<T>)> = renames(translate, node)
+pub(crate) fn add_renames<T: Clone>(
+    entries: &mut HashMap<Id, T>,
+    translations: &[defs::Translate],
+    node: &str,
+) {
+    let renamed: Vec<(Id, Option<T>)> = renames(translations, node)
         .into_iter()
         .map(|(old, new)| {
             let entry = entries.get(&new).cloned();
@@ -489,19 +519,27 @@ pub(crate) fn add_renames<T: Clone>(entries: &mut HashMap<Id, T>, translate: &st
     }
 }
 
+/// The renames a `translate.tgi` text lists.
+fn translations(text: &str) -> Vec<defs::Translate> {
+    (tgi::parse(text).root.blocks_of("Translate"))
+        .filter_map(|t| logged("translate.tgi", t, tgi::from_block(t)))
+        .collect()
+}
+
 /// Old ids of `node`s that maps may still use, to their replacements, from
 /// `translate.tgi`. Where an id is renamed more than once the first counts.
-pub(crate) fn renames(translate: &str, node: &str) -> HashMap<Id, Id> {
+pub(crate) fn renames(translations: &[defs::Translate], node: &str) -> HashMap<Id, Id> {
     let mut out = HashMap::new();
-    for t in tgi::parse(translate).root.blocks_of("Translate") {
-        let Some(t) = logged("translate.tgi", t, tgi::from_block::<defs::Translate>(t)) else {
-            continue;
-        };
-        if !t.node.is_some_and(|n| n.trim().eq_ignore_ascii_case(node)) {
+    for t in translations {
+        if !t
+            .node
+            .as_deref()
+            .is_some_and(|n| n.trim().eq_ignore_ascii_case(node))
+        {
             continue;
         }
-        if let (Some(old), Some(new)) = (t.ids_old, t.ids_new) {
-            out.entry(old).or_insert(new);
+        if let (Some(old), Some(new)) = (&t.ids_old, &t.ids_new) {
+            out.entry(old.clone()).or_insert(new.clone());
         }
     }
     out
@@ -691,7 +729,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn blocks_that_dont_read_are_left_out() {
+    fn blocks_that_dont_read_are_left_out_with_a_warning() {
         let files = [(
             "terrain/t.tgi".to_string(),
             tgi::parse(
@@ -699,11 +737,45 @@ mod tests {
             ),
         )];
         let files = scoped(&files);
-        let read: Vec<defs::Terrain> = files[0].read("Terrain").collect();
+        let mut read: Vec<defs::Terrain> = Vec::new();
+        let logged = warnings(|| read = files[0].read("Terrain").collect());
         assert_eq!(
             read.iter().map(|t| t.base_priority).collect::<Vec<_>>(),
             [2]
         );
+        assert_eq!(logged.len(), 1, "{logged:?}");
+        assert!(
+            logged[0].starts_with("terrain/t.tgi:3: Terrain block doesn't read: "),
+            "{}",
+            logged[0]
+        );
+    }
+
+    /// The warnings `f` logs on this thread, which is its own for each test.
+    fn warnings(f: impl FnOnce()) -> Vec<String> {
+        use std::cell::RefCell;
+
+        thread_local! {
+            static LOGGED: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        }
+        struct Capture;
+        impl log::Log for Capture {
+            fn enabled(&self, metadata: &log::Metadata) -> bool {
+                metadata.level() <= log::Level::Warn
+            }
+            fn log(&self, record: &log::Record) {
+                LOGGED.with(|l| l.borrow_mut().push(record.args().to_string()));
+            }
+            fn flush(&self) {}
+        }
+        static INSTALL: std::sync::Once = std::sync::Once::new();
+        INSTALL.call_once(|| {
+            log::set_logger(&Capture).unwrap();
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        LOGGED.with(|l| l.borrow_mut().clear());
+        f();
+        LOGGED.with(|l| l.take())
     }
 
     #[test]
@@ -786,7 +858,7 @@ mod tests {
             format!("/*\n{}*/\n", rename("Thing", "hidden", "c")),
         ]
         .concat();
-        add_renames(&mut entries, &translate, "Thing");
+        add_renames(&mut entries, &translations(&translate), "Thing");
         let get = |id: &str| entries.get(&Id::from(id)).copied();
         assert_eq!(get("a"), Some("b"));
         assert_eq!(get("b"), Some("c"));

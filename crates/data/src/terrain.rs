@@ -168,12 +168,11 @@ impl GameData {
         let water = water_colors(&files);
         let mut out = HashMap::new();
         for scope in &files {
-            let (file, root) = (scope.file, scope.root);
-            if !file.to_ascii_lowercase().starts_with("terrain/") {
+            if !scope.file.to_ascii_lowercase().starts_with("terrain/") {
                 continue;
             }
-            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            for block in root.blocks_of("Terrain") {
+            let dir = scope.file.rsplit_once('/').map_or("", |(d, _)| d);
+            for block in scope.root.blocks_of("Terrain") {
                 let Some(terrain) = scope.deserialize::<defs::Terrain>(block) else {
                     continue;
                 };
@@ -221,9 +220,7 @@ impl GameData {
                 }
             }
         }
-        if let Some(bytes) = self.read("translate.tgi") {
-            add_renames(&mut out, &tgi::decode(&bytes), "Variation");
-        }
+        add_renames(&mut out, &self.translations(), "Variation");
         out
     }
 
@@ -231,15 +228,13 @@ impl GameData {
     /// digits in their file names.
     pub fn transition_masks(&mut self) -> Vec<(String, Vec<u8>)> {
         const DIR: &str = "Terrain/Transitions/";
-        let Some(prefix) = self
-            .read(&format!("{DIR}transition_sets.tgi"))
-            .and_then(|b| {
-                let parsed = tgi::parse_bytes(&b);
-                let set = parsed.root.blocks_of("TransitionSet").next()?;
-                let set: defs::TransitionSet = logged(DIR, set, tgi::from_block(set))?;
-                set.path_prefix.map(|p| format!("{DIR}{p}"))
-            })
-        else {
+        let file = format!("{DIR}transition_sets.tgi");
+        let Some(prefix) = self.read(&file).and_then(|b| {
+            let parsed = tgi::parse_bytes(&b);
+            let set = parsed.root.blocks_of("TransitionSet").next()?;
+            let set: defs::TransitionSet = logged(&file, set, tgi::from_block(set))?;
+            set.path_prefix.map(|p| format!("{DIR}{p}"))
+        }) else {
             return Vec::new();
         };
         let lower = prefix.to_ascii_lowercase();

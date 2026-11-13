@@ -2,6 +2,7 @@
 //! the cues that set templates' sounds off.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{GameData, Id, defs, logged, scoped};
 
@@ -194,14 +195,19 @@ pub struct AudioWho {
 impl GameData {
     /// The game's settings for how it looks and sounds, the game's own
     /// before the engine's.
-    pub(crate) fn avars(&mut self) -> Vec<defs::AVars> {
+    pub(crate) fn avars(&mut self) -> Arc<[defs::AVars]> {
+        if let Some(kept) = &self.kept.avars {
+            return kept.clone();
+        }
         // Not in the load lists.
         let files: Vec<(String, tgi::Parsed)> = ["AVars_AA.tgi", "AVars.tgi"]
             .into_iter()
             .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
             .collect();
         let files = scoped(&files);
-        files.iter().flat_map(|f| f.read("Vars")).collect()
+        let read: Arc<[defs::AVars]> = files.iter().flat_map(|f| f.read("Vars")).collect();
+        self.kept.avars = Some(read.clone());
+        read
     }
 
     /// What music plays when, and how loud.
@@ -265,8 +271,8 @@ impl GameData {
     /// speech, plays a stand-in, if the settings name one, for each file the
     /// archives don't have.
     pub fn audio(&mut self) -> HashMap<Id, Audio> {
-        let stand_in = (self.avars().into_iter())
-            .find_map(|v| v.default_audio_streaming_resource)
+        let stand_in = (self.avars().iter())
+            .find_map(|v| v.default_audio_streaming_resource.clone())
             .and_then(|p| self.path(&p.replace('\\', "/")));
         let files = self.parse_tgis(|n| n.starts_with("audio/") || n.starts_with("templates/"));
         let files = scoped(&files);

@@ -1,7 +1,7 @@
-//! The interface's settings and looks: commands, cursors, formation
-//! buttons, the minimap and supply borders.
+//! How the interface looks and behaves, such as its commands and cursors.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{GameData, Id, beside, defs, frames, not_null, scoped, strings::localized, ui_path};
 
@@ -115,18 +115,23 @@ impl GameData {
         &mut self,
         of: impl Fn(defs::UVars) -> Option<T>,
     ) -> Option<T> {
-        self.uvars().into_iter().find_map(of)
+        self.uvars().iter().cloned().find_map(of)
     }
 
     /// The interface's settings, the game's own before the engine's.
-    pub(crate) fn uvars(&mut self) -> Vec<defs::UVars> {
+    pub(crate) fn uvars(&mut self) -> Arc<[defs::UVars]> {
+        if let Some(kept) = &self.kept.uvars {
+            return kept.clone();
+        }
         // Not in the load lists.
         let files: Vec<(String, tgi::Parsed)> = ["UVars_AA.tgi", "UVars.tgi"]
             .into_iter()
             .filter_map(|n| Some((n.to_string(), tgi::parse_bytes(&self.read(n)?))))
             .collect();
         let files = scoped(&files);
-        files.iter().flat_map(|f| f.read("Vars")).collect()
+        let read: Arc<[defs::UVars]> = files.iter().flat_map(|f| f.read("Vars")).collect();
+        self.kept.uvars = Some(read.clone());
+        read
     }
 
     /// The orders the player can give, in the order the files list them.
@@ -164,15 +169,14 @@ impl GameData {
         let files = scoped(&files);
         let mut out = HashMap::new();
         for scope in &files {
-            let (file, root) = (scope.file, scope.root);
-            for block in root.blocks_of("Cursor") {
+            for block in scope.root.blocks_of("Cursor") {
                 let Some(c) = scope.deserialize::<defs::Cursor>(block) else {
                     continue;
                 };
                 let (Some(ids), Some(pattern)) = (c.ids, c.frame_filename) else {
                     continue;
                 };
-                let frames = frames(&beside(file, &pattern), |f| self.exists(f));
+                let frames = frames(&beside(scope.file, &pattern), |f| self.exists(f));
                 if frames.is_empty() {
                     continue;
                 }
@@ -197,9 +201,8 @@ impl GameData {
         let files = scoped(&files);
         let mut out = HashMap::new();
         for scope in &files {
-            let (file, root) = (scope.file, scope.root);
-            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            for block in root.blocks_of("Formation") {
+            let dir = scope.file.rsplit_once('/').map_or("", |(d, _)| d);
+            for block in scope.root.blocks_of("Formation") {
                 let Some(f) = scope.deserialize::<defs::Formation>(block) else {
                     continue;
                 };
