@@ -27,6 +27,7 @@
 //! stands in only where none of those can be drawn.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use aaa_data::{GUARDING, GameData, Id, PropertyLook};
 use aaa_render::MapAssets;
@@ -242,9 +243,9 @@ pub struct Queued(usize);
 pub struct Looks {
     /// Templates' names, by id.
     names: HashMap<Id, String>,
-    strings: HashMap<String, String>,
+    strings: Arc<HashMap<String, String>>,
     /// How each property that has an icon shows, by id.
-    properties: HashMap<Id, PropertyLook>,
+    properties: Arc<HashMap<Id, PropertyLook>>,
     /// Each technology's research button icon, by id, for what's being
     /// researched.
     technologies: HashMap<Id, String>,
@@ -258,7 +259,7 @@ pub struct Looks {
 impl Looks {
     fn image(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         path: Option<&str>,
     ) -> Option<Handle<Image>> {
@@ -288,7 +289,7 @@ impl Looks {
 
 pub fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     formats: Res<CompressedImageFormatSupport>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -298,23 +299,22 @@ pub fn spawn(
         .entity(stage.camera())
         .insert(DespawnOnExit(Screen::Match));
     commands.insert_resource(stage);
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     let layouts = game.layouts();
-    let primaries = game.organizations().into_iter().map(|(id, o)| {
+    let organizations = game.organizations();
+    let primaries = organizations.iter().map(|(id, o)| {
         let slot = layouts.get(&o.layout).and_then(|l| l.primary);
-        (id, slot.and_then(|s| o.slots.get(s)?.clone()))
+        (id.clone(), slot.and_then(|s| o.slots.get(s)?.clone()))
     });
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
-        names: game
-            .listings()
-            .into_iter()
-            .map(|(id, l)| (id, l.name))
+        names: (game.listings().iter())
+            .map(|(id, l)| (id.clone(), l.name.clone()))
             .collect(),
         strings: game.strings(),
         properties: game.property_looks(),
-        technologies: (game.technologies().into_iter())
-            .filter_map(|(id, t)| Some((id, t.icon?)))
+        technologies: (game.technologies().iter())
+            .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
             .collect(),
         images: HashMap::new(),
         formats: formats.0,
@@ -491,7 +491,7 @@ pub fn lay_out(
     drawn: Res<Drawn>,
     badges: Res<Badges>,
     mut showing: ResMut<Showing>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut looks: ResMut<Looks>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
@@ -547,7 +547,7 @@ pub fn lay_out(
         drawn: &drawn,
         badges: &badges,
         detail: &detail,
-        game: &mut loaded.game,
+        game: &loaded.game,
         looks: &mut looks,
         banners: &mut banners,
         images: &mut images,
@@ -572,7 +572,7 @@ struct Ui<'a> {
     drawn: &'a Drawn,
     badges: &'a Badges,
     detail: &'a Detail,
-    game: &'a mut GameData,
+    game: &'a GameData,
     looks: &'a mut Looks,
     banners: &'a mut BannerImages,
     images: &'a mut Assets<Image>,
@@ -1068,7 +1068,7 @@ pub fn portray(
     leaders: Res<Leaders>,
     looks: Res<Looks>,
     mut drawn: ResMut<Drawn>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut assets: MapAssets,
     mut stage: ResMut<Stage>,
     mut asked: bevy::ecs::system::Local<Option<(Sitter, Alone)>>,
@@ -1091,7 +1091,7 @@ pub fn portray(
     if *asked != wanted {
         match &wanted {
             Some((sitter, alone)) => {
-                let (models, game) = (&mut drawn.0, &mut loaded.game);
+                let (models, game) = (&mut drawn.0, &loaded.game);
                 let assets = &mut assets.models();
                 let greeting = alone.is_some();
                 let sun = suns.iter().next().map_or(Dir3::NEG_Y, |sun| sun.forward());

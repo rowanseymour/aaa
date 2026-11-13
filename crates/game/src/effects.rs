@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
+use std::sync::Arc;
 
 use aaa_data::{
     Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, Shape, Vfx, VfxCue, VfxTint,
@@ -27,7 +28,7 @@ use crate::{BuildingView, Drawn, Loaded, Screen, Sim, UnitView};
 
 #[derive(Resource)]
 pub struct Effects {
-    vfx: HashMap<Id, Vfx>,
+    vfx: Arc<HashMap<Id, Vfx>>,
     objects: HashMap<Id, ObjectEffects>,
     /// The node names of the model points commands name, by id.
     bones: HashMap<Id, String>,
@@ -209,7 +210,7 @@ impl Effects {
         self.vfx.get(&Id::from(ids))?.tint
     }
 
-    pub fn new(game: &mut GameData, map: &Map) -> Effects {
+    pub fn new(game: &GameData, map: &Map) -> Effects {
         let vfx = game.vfx();
         let objects = game.object_effects();
         let bones = game.bones();
@@ -677,7 +678,7 @@ fn play(
     time: Res<Time>,
     sim: Res<Sim>,
     mut effects: ResMut<Effects>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut drawn: ResMut<Drawn>,
     mut assets: MapAssets,
     units: Query<(Entity, &UnitView, Option<&Footprint>)>,
@@ -758,7 +759,7 @@ fn play(
         })
     };
     let camera = cameras.iter().find(|(c, _)| c.is_active);
-    let Loaded { game, map } = &mut *loaded;
+    let Loaded { game, map } = &*loaded;
     for (_, p) in due {
         let cue = &p.cue;
         let (by, fired_by) = match p.source {
@@ -991,7 +992,7 @@ impl Place<'_, '_> {
         &self,
         play: &Play,
         models: &mut Models,
-        game: &mut GameData,
+        game: &GameData,
     ) -> Option<(Transform, Option<(Entity, OnThing)>)> {
         let Play {
             cue,
@@ -1032,7 +1033,7 @@ impl Place<'_, '_> {
         };
         let thing = (self.placed)(subject)?;
         let here = map_point(thing.root.translation);
-        let extent = |models: &mut Models, game: &mut GameData, p: &Placed| {
+        let extent = |models: &mut Models, game: &GameData, p: &Placed| {
             let path = models.model_path(p.thing, p.packing)?.to_string();
             let [bottom, top] = models.extent(game, &path)?;
             let scale = p.root.scale.y;
@@ -1127,7 +1128,7 @@ impl Place<'_, '_> {
     fn point(
         &self,
         models: &mut Models,
-        game: &mut GameData,
+        game: &GameData,
         thing: &Placed,
         id: &str,
     ) -> Option<Transform> {
@@ -1476,7 +1477,7 @@ mod tests {
 
     fn effects(objects: HashMap<Id, ObjectEffects>) -> Effects {
         Effects {
-            vfx: HashMap::new(),
+            vfx: Arc::default(),
             objects,
             bones: HashMap::new(),
             decals: DecalCache::default(),

@@ -3,6 +3,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 use crate::{GameData, Id, defs, scoped};
 
@@ -53,7 +54,7 @@ pub struct Formation {
 impl GameData {
     /// Organizations' ranges, by template id, including the ids the game
     /// has since renamed.
-    pub fn organization_ranges(&mut self) -> HashMap<Id, Ranges> {
+    pub fn organization_ranges(&self) -> HashMap<Id, Ranges> {
         self.by_template(|t| {
             let o = t.organization_component.as_ref()?;
             Some(Ranges {
@@ -65,7 +66,7 @@ impl GameData {
 
     /// What every organization template is made of, by template id,
     /// including the ids the game has since renamed.
-    pub fn organizations(&mut self) -> HashMap<Id, Organization> {
+    pub fn organizations(&self) -> HashMap<Id, Organization> {
         self.by_template(|t| {
             let o = t.organization_component.as_ref()?;
             Some(Organization {
@@ -82,7 +83,11 @@ impl GameData {
     }
 
     /// The organization layouts, by id.
-    pub fn layouts(&mut self) -> HashMap<Id, Layout> {
+    pub fn layouts(&self) -> Arc<HashMap<Id, Layout>> {
+        self.kept("layouts", || self.read_layouts())
+    }
+
+    fn read_layouts(&self) -> HashMap<Id, Layout> {
         let files =
             self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("templates/"));
         let files = scoped(&files);

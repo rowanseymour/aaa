@@ -115,7 +115,7 @@ impl Badges {
     pub fn badge(
         &self,
         banners: &mut BannerImages,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         template: &str,
         hq: u32,
@@ -136,7 +136,7 @@ impl Badges {
     pub fn frame(
         &self,
         banners: &mut BannerImages,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         template: &str,
         hq: u32,
@@ -177,11 +177,11 @@ impl Scenery {
 /// Loads what banners are drawn with.
 pub fn setup_banners(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
-    commands.insert_resource(BannerImages::load(&mut loaded.game, &mut images, formats.0));
+    commands.insert_resource(BannerImages::load(&loaded.game, &mut images, formats.0));
     let things = &loaded.map.things;
     let badge = |t: &tgck::map::Thing| {
         let held = Held {
@@ -241,7 +241,7 @@ const HQ_HEIGHT: f32 = 6.0;
 /// division's badge.
 pub fn add_hq_banners(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     sim: Res<Sim>,
     badges: Res<Badges>,
     mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
@@ -268,9 +268,9 @@ pub fn add_hq_banners(
             continue;
         }
         let (banners, assets) = (&mut *images.0, &mut *images.1);
-        let icon = banners.icon(&mut loaded.game, assets, template);
-        let frame = badges.frame(banners, &mut loaded.game, assets, template, hq);
-        let badge = badges.badge(banners, &mut loaded.game, assets, template, hq);
+        let icon = banners.icon(&loaded.game, assets, template);
+        let frame = badges.frame(banners, &loaded.game, assets, template, hq);
+        let badge = badges.badge(banners, &loaded.game, assets, template, hq);
         // Its template names none, and never will.
         if icon.is_none() {
             bare.insert(b);
@@ -386,7 +386,7 @@ pub fn show_hq_banners(
 #[allow(clippy::too_many_arguments)]
 pub fn add_banners(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     sim: Res<Sim>,
     scenery: Res<Scenery>,
     mut banners: ResMut<BannerImages>,
@@ -408,8 +408,8 @@ pub fn add_banners(
             .sides
             .player(regiment.owner)
             .map_or([1.0; 3], |p| p.rgb);
-        let icon = banners.icon(&mut loaded.game, &mut images, &regiment.template);
-        let frame = banners.frame(&mut loaded.game, &mut images, &regiment.template);
+        let icon = banners.icon(&loaded.game, &mut images, &regiment.template);
+        let frame = banners.frame(&loaded.game, &mut images, &regiment.template);
         // Only organization templates name a banner icon, so a unit outside
         // one, such as a supply truck, flies no banner.
         if icon.is_none() {
@@ -553,7 +553,7 @@ pub fn show_banners(
 /// side another, and shows on each banner that of the HQ its regiment is
 /// attached to, or is.
 pub fn badge_banners(
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     sim: Res<Sim>,
     mut badges: ResMut<Badges>,
     mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
@@ -597,14 +597,14 @@ pub fn badge_banners(
         if let (Some((hq, _)), Ok((mut image, _))) = (wears, layers.get_mut(banner.frame))
             && hq == regiment.id
         {
-            let frame = badges.frame(banners, &mut loaded.game, assets, template, hq);
+            let frame = badges.frame(banners, &loaded.game, assets, template, hq);
             image.image = frame.unwrap_or_default();
         }
         let Ok((mut image, mut visibility)) = layers.get_mut(banner.badge) else {
             continue;
         };
         let badge =
-            wears.and_then(|(hq, _)| badges.badge(banners, &mut loaded.game, assets, template, hq));
+            wears.and_then(|(hq, _)| badges.badge(banners, &loaded.game, assets, template, hq));
         *visibility = match badge.is_some() {
             true => Visibility::Inherited,
             false => Visibility::Hidden,

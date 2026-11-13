@@ -18,7 +18,7 @@ use crate::{Data, Loaded, Local, Sim};
 
 #[derive(Resource)]
 pub struct Sounds {
-    audio: HashMap<Id, Audio>,
+    audio: Arc<HashMap<Id, Audio>>,
     objects: HashMap<Id, ObjectAudio>,
     /// By archive path; `None` for files that couldn't be read.
     sources: HashMap<String, Option<Handle<AudioSource>>>,
@@ -117,7 +117,7 @@ fn seed() -> u64 {
 impl Sounds {
     /// With the files of the `ready` audio read ahead. Objects' audio is
     /// left to [`Sounds::load_objects`], for a match.
-    pub fn new(game: &mut GameData, ready: &[&str]) -> Sounds {
+    pub fn new(game: &GameData, ready: &[&str]) -> Sounds {
         let audio = game.audio();
         debug!("{} audio", audio.len());
         let read = ready
@@ -140,7 +140,7 @@ impl Sounds {
 
     /// With `audio` and the files given read ahead, and nothing else.
     #[cfg(test)]
-    pub fn of(audio: HashMap<Id, Audio>, read: &[&str]) -> Sounds {
+    pub fn of(audio: Arc<HashMap<Id, Audio>>, read: &[&str]) -> Sounds {
         Sounds {
             audio,
             objects: HashMap::new(),
@@ -160,7 +160,7 @@ impl Sounds {
     }
 
     /// Reads the audio object templates play.
-    pub fn load_objects(&mut self, game: &mut GameData) {
+    pub fn load_objects(&mut self, game: &GameData) {
         self.objects = game.object_audio();
         debug!("audio played by {} object templates", self.objects.len());
     }
@@ -286,7 +286,7 @@ impl Sounds {
 
     fn source(
         &mut self,
-        game: Option<&mut GameData>,
+        game: Option<&GameData>,
         assets: &mut Assets<AudioSource>,
         path: &str,
     ) -> Option<Handle<AudioSource>> {
@@ -348,8 +348,8 @@ impl Plugin for SoundPlugin {
 fn play(
     mut commands: Commands,
     mut sounds: ResMut<Sounds>,
-    mut loaded: Option<ResMut<Loaded>>,
-    mut data: Option<ResMut<Data>>,
+    loaded: Option<Res<Loaded>>,
+    data: Option<Res<Data>>,
     mut assets: ResMut<Assets<AudioSource>>,
     sim: Option<Res<Sim>>,
     local: Option<Res<Local>>,
@@ -414,9 +414,9 @@ fn play(
         let Some(file) = sounds.pick(&request.audio, &audio) else {
             continue;
         };
-        let game = match (&mut loaded, &mut data) {
-            (Some(loaded), _) => Some(&mut loaded.game),
-            (None, Some(data)) => Some(&mut data.0),
+        let game = match (&loaded, &data) {
+            (Some(loaded), _) => Some(&*loaded.game),
+            (None, Some(data)) => Some(&*data.0),
             (None, None) => None,
         };
         let Some(source) = sounds.source(game, &mut assets, &file) else {
@@ -496,7 +496,7 @@ mod tests {
                 music: 1.0,
             }));
         let audio = HashMap::from([(Id::from("click"), click())]);
-        let mut sounds = Sounds::of(audio, &["click.wav"]);
+        let mut sounds = Sounds::of(Arc::new(audio), &["click.wav"]);
         sounds.interface(app.world().resource::<Time>(), "click");
         app.insert_resource(sounds).update();
         let world = app.world_mut();
@@ -524,7 +524,7 @@ mod tests {
             selected: vec![reply],
             ..ObjectAudio::default()
         };
-        let mut sounds = Sounds::of(HashMap::new(), &[]);
+        let mut sounds = Sounds::of(Arc::default(), &[]);
         sounds.objects.insert(Id::from("infantry"), audio);
         let time = Time::<()>::default();
         sounds.switches.replies = false;

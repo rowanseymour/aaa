@@ -192,7 +192,7 @@ fn area_word(
 
 impl GameData {
     /// Every special operation defined on its own, by id.
-    pub fn special_operations(&mut self) -> HashMap<Id, SpecialOperation> {
+    pub fn special_operations(&self) -> HashMap<Id, SpecialOperation> {
         let strings = self.strings();
         let paces = self.paces(&strings);
         let definitions = self.definitions();
@@ -225,7 +225,7 @@ impl GameData {
 
     /// How a side's experience starts and grows: the match's Starting
     /// Experience setting and the tuning's gain a second.
-    pub fn experience_rules(&mut self) -> ExperienceRules {
+    pub fn experience_rules(&self) -> ExperienceRules {
         let files =
             self.parse_tgis(|n| n == "game/world_rules_aa.tgi" || n.starts_with("templates/"));
         let starting = (scoped(&files).iter())

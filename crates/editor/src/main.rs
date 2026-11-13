@@ -158,7 +158,7 @@ fn main() -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let loaded = GameData::open(&dir).and_then(|mut game| {
+    let loaded = GameData::open(&dir).and_then(|game| {
         let Some(map) = map else {
             for name in game.map_names() {
                 println!("{name}");
@@ -168,10 +168,10 @@ fn main() -> ExitCode {
         let name = game
             .find_map(map)
             .ok_or_else(|| format!("no map named {map:?}; run without a map name to list them"))?;
-        let recruits = aaa_map::Recruits::new(&mut game);
-        Map::load(&mut game, &recruits, &name).map(|map| Some(Loaded { game, map }))
+        let recruits = aaa_map::Recruits::new(&game);
+        Map::load(&game, &recruits, &name).map(|map| Some(Loaded { game, map }))
     });
-    let mut loaded = match loaded {
+    let loaded = match loaded {
         Ok(Some(l)) => {
             for w in &l.map.warnings {
                 eprintln!("aaa-editor: {w}");
@@ -243,13 +243,13 @@ fn main() -> ExitCode {
 
 fn setup(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut assets: MapAssets,
     lighting: Res<Lighting>,
     start: Option<Res<StartView>>,
     shooting: Res<Shooting>,
 ) {
-    let Loaded { game, map } = &mut *loaded;
+    let Loaded { game, map } = &*loaded;
     aaa_render::spawn_map(&mut commands, &mut assets, game, map, !shooting.0, |_| {
         false
     });

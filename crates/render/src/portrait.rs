@@ -230,7 +230,7 @@ impl Models {
     pub fn sit(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         stage: &mut Stage,
         sitter: &Sitter,
@@ -289,7 +289,7 @@ impl Models {
     fn sit_face(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         stage: &mut Stage,
         id: &Id,
@@ -352,7 +352,7 @@ impl Models {
     fn sit_model(
         &mut self,
         commands: &mut Commands,
-        game: &mut GameData,
+        game: &GameData,
         assets: &mut ModelAssets,
         stage: &mut Stage,
         template: &str,
@@ -379,7 +379,7 @@ impl Models {
 
 /// How the camera the model at `path` holds sees it; `None` if it holds
 /// none.
-fn camera(game: &mut GameData, path: &str) -> Option<Seen> {
+fn camera(game: &GameData, path: &str) -> Option<Seen> {
     let nif = Nif::parse(&game.read(path)?).ok()?;
     let found = nif.objects.iter().enumerate().find_map(|(i, o)| match o {
         nif::Object::Camera(c) if c.av.name.eq_ignore_ascii_case(CAMERA) => Some((i, c)),
@@ -397,7 +397,7 @@ fn camera(game: &mut GameData, path: &str) -> Option<Seen> {
 }
 
 /// How big the model at `path` is, as modelled.
-fn extent_of(game: &mut GameData, path: &str) -> Option<Extent> {
+fn extent_of(game: &GameData, path: &str) -> Option<Extent> {
     let nif = Nif::parse(&game.read(path)?).ok()?;
     let mut points = Vec::new();
     for placed in nif.shapes() {

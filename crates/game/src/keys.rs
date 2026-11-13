@@ -270,11 +270,11 @@ impl Bindings {
 /// Reads the hotkeys chosen in the options, and how the game marks them.
 pub fn load(
     mut commands: Commands,
-    mut loaded: ResMut<crate::Loaded>,
+    loaded: Res<crate::Loaded>,
     mut theme: ResMut<crate::ui::Theme>,
     options: Res<crate::options::Options>,
 ) {
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     theme.key = (game.highlight_colour()).map(|[r, g, b]| Color::srgb(r, g, b));
     let hotkeys = game.hotkeys(options.hotkeys());
     commands.insert_resource(Bindings::new(&hotkeys, &game.strings()));

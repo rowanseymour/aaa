@@ -1,5 +1,11 @@
 //! The game's data as a whole: access to the installed archives, and the
 //! definitions built from their files (terrain, object views, ...).
+//!
+//! Parsing is pure: [`tgi`] turns a file's bytes into blocks, and [`defs`]
+//! reads blocks as types. [`GameData`] is the layer above that reads the
+//! archives and keeps what it parses, and the tables much of the game asks
+//! for, so that each is made once. It can be shared between threads, which
+//! share what it keeps: a table read on one is there for the others.
 
 mod audio;
 mod combat;
@@ -55,34 +61,39 @@ pub use terrain::{
 };
 pub use views::{Animation, Footing, Portrait, View};
 
+use std::any::Any;
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::io::{BufReader, Cursor};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard};
 
-use tgck::{Archive, Map};
+use tgck::{Archive, Entry, Map};
 
 pub struct GameData {
-    archives: Vec<Archive<BufReader<File>>>,
+    /// Each behind a lock of its own, as reading one moves its place in
+    /// the file.
+    archives: Vec<Mutex<Archive<BufReader<File>>>>,
+    /// Each archive's entries, to look them up without the lock.
+    entries: Vec<Vec<Entry>>,
     /// Lower-case path to entry; where archives share a path the first wins.
     paths: HashMap<String, EntryRef>,
     /// The archive paths of the `.tgi` files the game loads, in the order
     /// it loads them.
     tgis: Vec<String>,
-    /// See [`GameData::definitions`].
-    definitions: Option<Arc<Definitions>>,
-    kept: Kept,
+    /// Each `.tgi` file read, parsed, by lower-case path, kept as long as
+    /// this is: tables are often built from the same files.
+    parsed: Mutex<HashMap<String, Arc<tgi::Parsed>>>,
+    /// What [`GameData::kept`] has built, by name.
+    tables: Mutex<HashMap<&'static str, Arc<dyn Any + Send + Sync>>>,
 }
 
-/// Small files that many accessors read, read once and kept, so each is
-/// parsed, and any block in it that doesn't read is reported, once.
-#[derive(Default)]
-struct Kept {
-    translations: Option<Arc<[defs::Translate]>>,
-    svars: Option<Arc<[defs::SVars]>>,
-    uvars: Option<Arc<[defs::UVars]>>,
-    avars: Option<Arc<[defs::AVars]>>,
+/// A lock that a thread panicking while holding it leaves usable: the maps
+/// these locks guard are only ever added to whole, and an archive's reader
+/// seeks to each entry it reads, wherever a read before it stopped.
+fn locked<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 /// The object templates and shared properties the `.tgi` files define,
@@ -115,7 +126,7 @@ pub(crate) struct Template {
 impl Definitions {
     /// Defining a Thing id again is an error that ends the reading of its
     /// file there, the blocks before it kept.
-    fn new(files: &[(String, tgi::Parsed)]) -> Self {
+    fn new<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> Self {
         let mut ids = HashSet::new();
         let mut things = Vec::new();
         let mut properties = HashMap::new();
@@ -222,13 +233,13 @@ fn warning(file: &str, block: &tgi::Block, e: &tgi::de::Error) -> String {
 
 /// The files, in the order they load, that don't fail to, with the
 /// templates each sees.
-pub(crate) fn scoped(files: &[(String, tgi::Parsed)]) -> Vec<Scoped<'_>> {
-    let scopes = tgi::Templates::scoped(files.iter().map(|(_, p)| &p.root));
+pub(crate) fn scoped<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> Vec<Scoped<'_>> {
+    let scopes = tgi::Templates::scoped(files.iter().map(|(_, p)| &p.borrow().root));
     (files.iter().zip(scopes))
         .filter_map(|((file, parsed), templates)| {
             Some(Scoped {
                 file,
-                root: &parsed.root,
+                root: &parsed.borrow().root,
                 templates: templates?,
             })
         })
@@ -256,18 +267,20 @@ impl GameData {
                 archives.push(open(path)?);
             }
         }
+        let entries: Vec<Vec<Entry>> = archives.iter().map(|a| a.entries.clone()).collect();
         let mut paths = HashMap::new();
-        for (a, archive) in archives.iter().enumerate() {
-            for (i, e) in archive.entries.iter().enumerate() {
+        for (a, entries) in entries.iter().enumerate() {
+            for (i, e) in entries.iter().enumerate() {
                 paths.entry(e.name.to_ascii_lowercase()).or_insert((a, i));
             }
         }
         let mut game = GameData {
-            archives,
+            archives: archives.into_iter().map(Mutex::new).collect(),
+            entries,
             paths,
             tgis: Vec::new(),
-            definitions: None,
-            kept: Kept::default(),
+            parsed: Mutex::default(),
+            tables: Mutex::default(),
         };
         let names: Vec<String> = game.entries().map(str::to_string).collect();
         let tgis = listed_tgis(&names, |name| game.read(name).map(|b| tgi::decode(&b)));
@@ -275,23 +288,58 @@ impl GameData {
         Ok(game)
     }
 
-    pub fn read(&mut self, name: &str) -> Option<Vec<u8>> {
+    pub fn read(&self, name: &str) -> Option<Vec<u8>> {
         let (a, i) = *self.paths.get(&name.to_ascii_lowercase())?;
-        let archive = &mut self.archives[a];
-        let entry = archive.entries[i].clone();
-        archive.read(&entry).ok()
+        locked(&self.archives[a]).read(&self.entries[a][i]).ok()
     }
 
     /// Every entry's path, in archive order.
     fn entries(&self) -> impl Iterator<Item = &str> {
-        self.archives
-            .iter()
-            .flat_map(|a| &a.entries)
-            .map(|e| e.name.as_str())
+        self.entries.iter().flatten().map(|e| e.name.as_str())
     }
 
     pub(crate) fn entry_name(&self, (a, i): EntryRef) -> &str {
-        &self.archives[a].entries[i].name
+        &self.entries[a][i].name
+    }
+
+    /// A `.tgi` file, parsed the first time it's asked for and kept.
+    pub(crate) fn parsed(&self, name: &str) -> Option<Arc<tgi::Parsed>> {
+        let key = name.to_ascii_lowercase();
+        if let Some(parsed) = locked(&self.parsed).get(&key) {
+            return Some(parsed.clone());
+        }
+        // Parsed without the lock, so other threads can read other files.
+        let parsed = Arc::new(tgi::parse_bytes(&self.read(name)?));
+        Some(locked(&self.parsed).entry(key).or_insert(parsed).clone())
+    }
+
+    /// The `.tgi` files named, parsed, in the order given, leaving out any
+    /// that aren't there.
+    pub(crate) fn parse_named<'n>(
+        &self,
+        names: impl IntoIterator<Item = &'n str>,
+    ) -> Vec<(String, Arc<tgi::Parsed>)> {
+        (names.into_iter())
+            .filter_map(|n| Some((n.to_string(), self.parsed(n)?)))
+            .collect()
+    }
+
+    /// What `build` makes, made the first time `key` is asked for and kept.
+    /// Each key is always built as the same type. Built without holding
+    /// any lock, as building one table often asks for others; two threads
+    /// asking at once may both build it, and the first one kept wins.
+    pub(crate) fn kept<T: Send + Sync + 'static>(
+        &self,
+        key: &'static str,
+        build: impl FnOnce() -> T,
+    ) -> Arc<T> {
+        let found = locked(&self.tables).get(key).cloned();
+        let kept = found.unwrap_or_else(|| {
+            let built: Arc<dyn Any + Send + Sync> = Arc::new(build());
+            locked(&self.tables).entry(key).or_insert(built).clone()
+        });
+        kept.downcast()
+            .unwrap_or_else(|_| panic!("{key} kept as another type"))
     }
 
     pub fn exists(&self, name: &str) -> bool {
@@ -309,20 +357,11 @@ impl GameData {
     /// Every `.tgi` file the game loads whose lower-case path passes
     /// `filter`, parsed, in the order the game loads them.
     pub(crate) fn parse_tgis(
-        &mut self,
+        &self,
         filter: impl Fn(&str) -> bool,
-    ) -> Vec<(String, tgi::Parsed)> {
-        let names: Vec<String> = (self.tgis.iter())
-            .filter(|n| filter(&n.to_ascii_lowercase()))
-            .cloned()
-            .collect();
-        names
-            .into_iter()
-            .filter_map(|n| {
-                let parsed = tgi::parse_bytes(&self.read(&n)?);
-                Some((n, parsed))
-            })
-            .collect()
+    ) -> Vec<(String, Arc<tgi::Parsed>)> {
+        let names = (self.tgis.iter()).filter(|n| filter(&n.to_ascii_lowercase()));
+        self.parse_named(names.map(String::as_str))
     }
 
     /// Archive paths of all maps, sorted.
@@ -343,7 +382,7 @@ impl GameData {
             .map(str::to_string)
     }
 
-    pub fn open_map(&mut self, name: &str) -> Result<Map<Cursor<Vec<u8>>>, String> {
+    pub fn open_map(&self, name: &str) -> Result<Map<Cursor<Vec<u8>>>, String> {
         let bytes = self
             .read(name)
             .ok_or_else(|| format!("{name}: not found"))?;
@@ -352,14 +391,14 @@ impl GameData {
 
     /// Whether it's night under a sun of this diffuse colour; never, if the
     /// settings don't say how dark night is.
-    pub fn night(&mut self, [r, g, b]: [f32; 3]) -> bool {
+    pub fn night(&self, [r, g, b]: [f32; 3]) -> bool {
         let svars = self.svars();
         let threshold = svars.iter().find_map(|v| v.sun_night_threshold);
         threshold.is_some_and(|t| r + g + b < t)
     }
 
     /// Seconds an enemy's damage keeps what it hurt under siege.
-    pub fn siege_seconds(&mut self) -> Option<f32> {
+    pub fn siege_seconds(&self) -> Option<f32> {
         let svars = self.svars();
         svars
             .iter()
@@ -368,7 +407,7 @@ impl GameData {
 
     /// How far around them city centres hold sway, by template id, including
     /// the ids the game has since renamed.
-    pub fn city_zones(&mut self) -> HashMap<Id, f32> {
+    pub fn city_zones(&self) -> HashMap<Id, f32> {
         // A city's other buildings have the component with no zone.
         self.by_template(|t| {
             let zone = t.city_component.as_ref()?.zone_radius;
@@ -378,7 +417,7 @@ impl GameData {
 
     /// The organization templates that fly no banner, such as animal herds:
     /// part of the scenery, which players can't pick.
-    pub fn scenery(&mut self) -> HashSet<Id> {
+    pub fn scenery(&self) -> HashSet<Id> {
         self.by_template(|t| {
             let icon = t.view.as_ref().and_then(|v| v.banner_icon.as_deref());
             (t.organization_component.is_some() && icon.and_then(ui_path).is_none()).then_some(())
@@ -390,7 +429,7 @@ impl GameData {
     /// What `of` finds in each template that has it, by template id,
     /// including the ids the game has since renamed.
     pub(crate) fn by_template<T: Clone>(
-        &mut self,
+        &self,
         of: impl Fn(&defs::Thing) -> Option<T>,
     ) -> HashMap<Id, T> {
         let mut out = HashMap::new();
@@ -404,32 +443,26 @@ impl GameData {
     }
 
     /// The renames `translate.tgi` lists, read once.
-    pub(crate) fn translations(&mut self) -> Arc<[defs::Translate]> {
-        if let Some(kept) = &self.kept.translations {
-            return kept.clone();
-        }
-        let text = self.read("translate.tgi").map(|b| tgi::decode(&b));
-        let read: Arc<[defs::Translate]> = translations(text.as_deref().unwrap_or("")).into();
-        self.kept.translations = Some(read.clone());
-        read
+    pub(crate) fn translations(&self) -> Arc<Vec<defs::Translate>> {
+        self.kept("translations", || {
+            let text = self.read("translate.tgi").map(|b| tgi::decode(&b));
+            translations(text.as_deref().unwrap_or(""))
+        })
     }
 
-    /// Every `.tgi` file's [`Definitions`]. Deserialized once and kept, as
-    /// there are thousands of templates and much of the game asks after them.
-    pub(crate) fn definitions(&mut self) -> Arc<Definitions> {
-        if let Some(definitions) = &self.definitions {
-            return definitions.clone();
-        }
-        let definitions = Arc::new(Definitions::new(&self.parse_tgis(|_| true)));
-        self.definitions = Some(definitions.clone());
-        definitions
+    /// Every `.tgi` file's [`Definitions`]: there are thousands of
+    /// templates and much of the game asks after them.
+    pub(crate) fn definitions(&self) -> Arc<Definitions> {
+        self.kept("definitions", || {
+            Definitions::new(&self.parse_tgis(|_| true))
+        })
     }
 
     /// How much of the `.tgi` data the definitions read: each top-level
     /// block is read as its definition, the way the methods above read it,
     /// or counted as unread where there is none. Templates count through the
     /// blocks that inherit from them.
-    pub fn coverage(&mut self) -> tgi::de::Coverage {
+    pub fn coverage(&self) -> tgi::de::Coverage {
         let files = self.parse_tgis(|_| true);
         let files = scoped(&files);
         let mut coverage = tgi::de::Coverage::default();
@@ -474,7 +507,7 @@ impl GameData {
     }
 
     /// The lighting presets the player can pick from, by id.
-    pub fn sun_presets(&mut self) -> Vec<defs::Sun> {
+    pub fn sun_presets(&self) -> Vec<defs::Sun> {
         let files = self.parse_tgis(|n| n.starts_with("sun/"));
         let files = scoped(&files);
         let mut out: Vec<defs::Sun> = files.iter().flat_map(|f| f.read("Sun")).collect();
@@ -484,12 +517,12 @@ impl GameData {
 
     /// How far beyond a blocking building's footprint the ground must be
     /// clear for it to be put there, in world units.
-    pub fn building_padding(&mut self) -> Option<f32> {
+    pub fn building_padding(&self) -> Option<f32> {
         self.svars().iter().find_map(|v| v.building_padding_meters)
     }
 
     /// The templates whose things each side numbers.
-    pub fn numbered(&mut self) -> HashSet<Id> {
+    pub fn numbered(&self) -> HashSet<Id> {
         let numbered = self.by_template(|t| t.numbered.filter(|&n| n));
         numbered.into_keys().collect()
     }
@@ -776,6 +809,43 @@ mod tests {
         LOGGED.with(|l| l.borrow_mut().clear());
         f();
         LOGGED.with(|l| l.take())
+    }
+
+    /// Game data with no archives, for what doesn't read any.
+    fn empty() -> GameData {
+        GameData {
+            archives: Vec::new(),
+            entries: Vec::new(),
+            paths: HashMap::new(),
+            tgis: Vec::new(),
+            parsed: Mutex::default(),
+            tables: Mutex::default(),
+        }
+    }
+
+    #[test]
+    fn tables_are_built_once_and_shared() {
+        let game = empty();
+        let builds = std::cell::Cell::new(0);
+        let build = || {
+            builds.set(builds.get() + 1);
+            vec![1, 2]
+        };
+        let first = game.kept("numbers", build);
+        let again = game.kept("numbers", build);
+        assert!(Arc::ptr_eq(&first, &again));
+        assert_eq!(builds.get(), 1);
+        // Another key is another table.
+        assert_eq!(*game.kept("other", || vec![3]), [3]);
+        assert_eq!(game.parsed("absent.tgi"), None);
+    }
+
+    #[test]
+    #[should_panic(expected = "numbers kept as another type")]
+    fn a_key_kept_as_another_type_panics() {
+        let game = empty();
+        game.kept("numbers", || vec![1]);
+        game.kept("numbers", || "one");
     }
 
     #[test]

@@ -122,12 +122,11 @@ fn coverage(dir: &str, kind: Option<&str>) -> Res {
 /// Each audio whose id contains `filter`, ignoring case.
 fn audio(dir: &str, filter: &str) -> Res {
     let filter = filter.to_ascii_lowercase();
-    let mut audio: Vec<_> = GameData::open(dir.as_ref())?
-        .audio()
-        .into_iter()
+    let all = GameData::open(dir.as_ref())?.audio();
+    let mut audio: Vec<_> = (all.iter())
         .filter(|(id, _)| id.as_str().to_ascii_lowercase().contains(&filter))
         .collect();
-    audio.sort_by(|a, b| a.0.cmp(&b.0));
+    audio.sort_by(|a, b| a.0.cmp(b.0));
     let mut missing = 0;
     for (id, a) in &audio {
         let files = [&a.leadin, &a.files, &a.fallout].map(|f| f.len());
@@ -152,7 +151,7 @@ fn audio(dir: &str, filter: &str) -> Res {
 /// case, with a `?` on audio that isn't defined.
 fn cues(dir: &str, filter: &str) -> Res {
     let filter = filter.to_ascii_lowercase();
-    let mut game = GameData::open(dir.as_ref())?;
+    let game = GameData::open(dir.as_ref())?;
     let audio = game.audio();
     let fighters = game.fighters();
     let mut objects: Vec<_> = game
@@ -214,7 +213,7 @@ fn cues(dir: &str, filter: &str) -> Res {
 /// The effects of each object template whose id contains `filter`, ignoring
 /// case, with a `?` on effects that aren't defined and each effect's kind.
 fn generals(dir: &str) -> Res {
-    let mut game = GameData::open(dir.as_ref())?;
+    let game = GameData::open(dir.as_ref())?;
     let rules = game.experience_rules();
     outln!(
         "starting {}, +{} a second",
@@ -253,7 +252,7 @@ fn generals(dir: &str) -> Res {
 }
 
 fn messages(dir: &str) -> Res {
-    let mut game = GameData::open(dir.as_ref())?;
+    let game = GameData::open(dir.as_ref())?;
     for k in game.message_kinds() {
         let icon = k.icon.as_deref().unwrap_or("-");
         let filter = k.filter.as_deref().unwrap_or("-");
@@ -280,7 +279,7 @@ fn messages(dir: &str) -> Res {
 
 fn effects(dir: &str, filter: &str) -> Res {
     let filter = filter.to_ascii_lowercase();
-    let mut game = GameData::open(dir.as_ref())?;
+    let game = GameData::open(dir.as_ref())?;
     let vfx = game.vfx();
     let fighters = game.fighters();
     let mut objects: Vec<_> = game

@@ -100,7 +100,7 @@ impl GameData {
     /// that name no model, such as sound emitters, or are invisible.
     /// Visible templates without a view, of their own or inherited, are left
     /// out.
-    pub fn views(&mut self) -> HashMap<Id, Option<View>> {
+    pub fn views(&self) -> HashMap<Id, Option<View>> {
         let mut out = HashMap::new();
         for Template { file, id, thing } in &self.definitions().things {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
@@ -117,7 +117,7 @@ impl GameData {
     }
 
     /// The portraits that templates' views and generals name, by id.
-    pub fn portraits(&mut self) -> HashMap<Id, Portrait> {
+    pub fn portraits(&self) -> HashMap<Id, Portrait> {
         let definitions = self.definitions();
         let of_views = definitions.things.iter().filter_map(|t| {
             let view = t.thing.view.as_ref()?;

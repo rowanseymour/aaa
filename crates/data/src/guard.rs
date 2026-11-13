@@ -26,7 +26,7 @@ impl Default for GuardRules {
 }
 
 impl GameData {
-    pub fn guard_rules(&mut self) -> GuardRules {
+    pub fn guard_rules(&self) -> GuardRules {
         let default = GuardRules::default();
         let bias = self.svars().iter().find_map(|v| v.guard_old_target_bias);
         let definitions = self.definitions();
