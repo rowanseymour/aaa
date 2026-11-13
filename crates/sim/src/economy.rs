@@ -197,7 +197,8 @@ impl World {
 
     /// A template's own economy, none for one that has none.
     pub(crate) fn economy_of(&self, template: &str) -> Economy {
-        self.economies
+        self.rules
+            .economies
             .get(&Id::from(template))
             .copied()
             .unwrap_or_default()
@@ -266,13 +267,13 @@ impl World {
             .filter_map(Commission::regiment)
         {
             let taken = self.commission_ledger(r).upkeep;
-            for &(consumed, _) in &self.economy.limits {
+            for &(consumed, _) in &self.rules.economy.limits {
                 upkeep.set(consumed, upkeep.get(consumed) + taken.get(consumed));
             }
         }
         // Unpacking and packing aren't construction: it earns through both.
         let working = b.state == State::Standing;
-        let production = match self.packing.get(&b.template) {
+        let production = match self.rules.packing.get(&b.template) {
             _ if !working => Amounts::default(),
             _ if !self.out_of_supply(building) => e.production,
             Some(packs) => self.commission_ledger(&packs.truck).production,
@@ -353,7 +354,7 @@ impl World {
     }
 
     pub fn balance(&self, player: u32) -> Balance {
-        self.ledger(player).balance(&self.economy)
+        self.ledger(player).balance(&self.rules.economy)
     }
 
     /// While `player` can't pay its upkeep, the share of its costs its
@@ -372,14 +373,14 @@ impl World {
 
     /// Sets how much money `player` has, within the most it can hold.
     pub fn set_stockpile(&mut self, player: u32, amount: f32) {
-        let max = self.economy.stockpile_max;
+        let max = self.rules.economy.stockpile_max;
         self.treasuries.entry(player).or_default().stockpile = amount.clamp(0.0, max);
     }
 
     /// The money commissioning `regiment` as raised takes: its own cost and
     /// its members'.
     pub fn cost(&self, regiment: &aaa_map::Regiment) -> f32 {
-        let money = money(&self.economy);
+        let money = money(&self.rules.economy);
         let members = regiment.members.iter().map(|m| m.template.as_str());
         let mut templates: Vec<&str> = members.collect();
         if !regiment.lone() {
@@ -393,7 +394,7 @@ impl World {
 
     /// What researching `item` costs, in the one resource stockpiled.
     pub fn research_cost(&self, item: &aaa_map::Research) -> f32 {
-        item.cost.get(money(&self.economy))
+        item.cost.get(money(&self.rules.economy))
     }
 
     /// What `player`'s stockpile and balance would be after `change`.
@@ -417,21 +418,21 @@ impl World {
                 }
             }
         }
-        (stockpile, ledger.balance(&self.economy))
+        (stockpile, ledger.balance(&self.rules.economy))
     }
 
     /// Credits each side's stockpile with a tick's worth of what it nets,
     /// telling it when it runs short and when it no longer is.
     pub(crate) fn earn(&mut self) {
         let ledgers = self.ledgers();
-        let max = self.economy.stockpile_max;
+        let max = self.rules.economy.stockpile_max;
         for (&player, treasury) in &mut self.treasuries {
             let balance = ledgers
                 .get(&player)
                 .copied()
                 .unwrap_or_default()
-                .balance(&self.economy);
-            let net = balance.net.get(money(&self.economy));
+                .balance(&self.rules.economy);
+            let net = balance.net.get(money(&self.rules.economy));
             let after = treasury.stockpile + net * TICK / 60.0;
             treasury.stockpile = after.clamp(0.0, max);
             if after < 0.0 {
@@ -513,7 +514,8 @@ mod tests {
         assert_eq!(balance.net.get("money"), 25.0 - 88.0);
         assert_eq!((balance.income, balance.costs), (25.0, 88.0));
         // Limits provided are capped.
-        w.economies
+        w.rules
+            .economies
             .get_mut(&Id::from("house"))
             .unwrap()
             .production
@@ -537,7 +539,7 @@ mod tests {
         assert_eq!(w.notices, [Notice::Short { player: 1, percent }]);
         // Told again only once it moves on by more than 5 points.
         let earn = |w: &mut World, money| {
-            let house = w.economies.get_mut(&Id::from("house")).unwrap();
+            let house = w.rules.economies.get_mut(&Id::from("house")).unwrap();
             house.production.set("money", money);
             run(w, 1.0);
         };
@@ -602,7 +604,7 @@ mod tests {
     #[test]
     fn start_locations_give_their_side_room_to_build() {
         let mut w = economy();
-        w.economies.insert(
+        w.rules.economies.insert(
             Id::from("start_loc"),
             aaa_map::Economy {
                 production: amounts(&[("building_limit_provided", 20.0)]),

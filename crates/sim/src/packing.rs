@@ -164,7 +164,7 @@ impl World {
         if !building.standing() {
             return;
         }
-        let Some(packs) = self.packing.get(&building.template).cloned() else {
+        let Some(packs) = self.rules.packing.get(&building.template).cloned() else {
             return;
         };
         log::debug!("{} {} packed up", building.template, building.id);
@@ -462,7 +462,7 @@ mod tests {
     #[test]
     fn buildings_pack_back_into_their_place_in_an_organization() {
         let mut w = headquarters();
-        w.packing.insert("depot".into(), packs());
+        w.rules.packing.insert("depot".into(), packs());
         let mut c = convoy();
         c.owner = 1;
         c.renumber(30);
@@ -515,7 +515,7 @@ mod tests {
     #[test]
     fn captured_buildings_pack_into_trucks_for_their_new_owner() {
         let mut w = headquarters();
-        w.packing.insert("depot".into(), packs());
+        w.rules.packing.insert("depot".into(), packs());
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
@@ -541,7 +541,7 @@ mod tests {
     #[test]
     fn buildings_a_map_has_pack_into_their_place_there() {
         let mut w = headquarters();
-        w.packing.insert("depot".into(), packs());
+        w.rules.packing.insert("depot".into(), packs());
         let depot = |id, x| {
             let mut depot = truck().unpacks.unwrap().building;
             (depot.id, depot.owner, depot.position) = (id, 1, [x, 40.0]);
@@ -558,7 +558,7 @@ mod tests {
             members: Vec::new(),
             ..convoy()
         }));
-        w.set_numbered(HashSet::from([Id::from("hq_unpacked")]));
+        w.rules.numbered = HashSet::from([Id::from("hq_unpacked")]);
         w.add_buildings(&[within, depot(50, 60.0)]);
         assert_eq!(
             (w.buildings[1].number, w.buildings[2].number),
@@ -591,11 +591,11 @@ mod tests {
     #[test]
     fn buildings_pack_back_into_their_trucks() {
         let mut w = headquarters();
-        w.packing.insert("depot".into(), packs());
+        w.rules.packing.insert("depot".into(), packs());
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
-        w.set_numbered(HashSet::from([Id::from("truck")]));
+        w.rules.numbered = HashSet::from([Id::from("truck")]);
         w.add_regiment(&t);
         let r = w.add_regiment(&t);
         assert_eq!(w.regiments[r].number, Some(2));

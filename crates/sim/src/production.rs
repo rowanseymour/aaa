@@ -90,7 +90,11 @@ impl World {
                 for (p, u) in self.regiments[r].units.clone().into_iter().enumerate() {
                     // Only those resupply can bring.
                     let template = Id::from(self.units[u].template.as_str());
-                    let comes = self.resupply_rates.get(&template).is_some_and(|&r| r > 0.0);
+                    let comes = self
+                        .rules
+                        .resupply_rates
+                        .get(&template)
+                        .is_some_and(|&r| r > 0.0);
                     self.units[u].awaited = p != leader && comes;
                 }
             }
@@ -199,7 +203,7 @@ mod tests {
     fn commissions_need_their_owners_required_buildings() {
         let mut w = headquarters();
         let ids = |ids: &[&str]| ids.iter().map(|&id| Id::from(id)).collect();
-        w.requires.insert(
+        w.rules.requires.insert(
             Id::from("TRUCK"),
             Requires {
                 structures: vec![ids(&["pool", "old_pool"]), ids(&["depot"])],
@@ -227,7 +231,7 @@ mod tests {
         ours.template = "Old_Pool".into();
         w.add_buildings(&[theirs, ours]);
         assert_eq!(lacks(&w), ["depot"]);
-        w.requires.get_mut(&Id::from("truck")).unwrap().any = true;
+        w.rules.requires.get_mut(&Id::from("truck")).unwrap().any = true;
         assert!(lacks(&w).is_empty());
         w.apply(1, commission()).unwrap();
         // Losing it stops further commissions.
@@ -253,9 +257,11 @@ mod tests {
             building: 0,
             commission: Box::new(Commission::new(regiment.clone(), 1.0)),
         };
-        w.requires
+        w.rules
+            .requires
             .insert(Id::from("truck"), needs(&["tech_heavy"], false));
-        w.requires
+        w.rules
+            .requires
             .insert(Id::from("rifleman"), needs(&["boat"], true));
         let lacking = w.lacks(1, 0, &regiment);
         assert_eq!(
@@ -265,7 +271,7 @@ mod tests {
         assert!(lacking.hidden);
         assert_eq!(w.apply(1, commission(&regiment)), Err(Refused::Lacking));
         // What the recruiter carries itself counts only for it.
-        w.kinds.insert(
+        w.rules.kinds.insert(
             Id::from("hq"),
             aaa_map::Kind {
                 properties: vec![Id::from("boat")],

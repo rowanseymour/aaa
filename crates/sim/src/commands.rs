@@ -212,7 +212,7 @@ impl World {
     /// How long the building takes to pack, if it can now.
     fn may_pack(&self, player: u32, building: usize) -> Result<u64, Refused> {
         let b = self.standing_for(player, building)?;
-        let Some(packs) = self.packing.get(&b.template) else {
+        let Some(packs) = self.rules.packing.get(&b.template) else {
             return Err(Refused::Unable);
         };
         if b.busy() || b.health <= packs.health_min * b.fighter.health {
