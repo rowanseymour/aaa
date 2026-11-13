@@ -25,10 +25,20 @@ const MEDAL_GLYPH: &str = "FactionExperience";
 
 /// How far right of the left edge, and down from the top, the panel
 /// leaves clear for what shares the corner with it.
-pub const CLEAR: Vec2 = Vec2::new(
+const CLEAR: Vec2 = Vec2::new(
     crate::MARGIN + BUTTON.x + 2.0 * GAP,
     crate::MARGIN + ROW + 2.0 * GAP,
 );
+
+/// Where what shares the top left corner starts: clear of the panel,
+/// which only a side with a general has.
+pub fn corner(local: &Local, leaders: &Leaders) -> Vec2 {
+    let led = local.0.is_some_and(|p| leaders.0.contains_key(&p));
+    match led {
+        true => CLEAR,
+        false => Vec2::splat(crate::MARGIN),
+    }
+}
 
 /// The key action that uses the operation in the `n`th button.
 fn action(n: usize) -> String {
@@ -39,12 +49,16 @@ pub struct SpecialOpsPlugin;
 
 impl Plugin for SpecialOpsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Match), spawn).add_systems(
-            Update,
-            refresh
-                .run_if(in_state(Screen::Match))
-                .run_if(resource_exists::<Panel>),
-        );
+        app.add_systems(OnEnter(Screen::Match), spawn)
+            .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
+                commands.remove_resource::<Panel>();
+            })
+            .add_systems(
+                Update,
+                refresh
+                    .run_if(in_state(Screen::Match))
+                    .run_if(resource_exists::<Panel>),
+            );
     }
 }
 
@@ -83,6 +97,10 @@ struct OperationButton {
 #[derive(Component)]
 struct OperationIcon;
 
+/// The bar under an operation's icon, showing how far it's recharged.
+#[derive(Component)]
+struct RechargeBar;
+
 fn spawn(
     mut commands: Commands,
     mut loaded: ResMut<Loaded>,
@@ -101,12 +119,17 @@ fn spawn(
     let game = &mut loaded.game;
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
-    let medal_path = format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png");
-    let medal = (game.read(&medal_path))
-        .and_then(|bytes| textures::decode(&bytes, &medal_path, formats.0, true))
-        .map(|i| images.add(i));
-    let mut icons: HashMap<String, Option<Handle<Image>>> = HashMap::new();
-    let operations = loaded.game.special_operations();
+    let mut cache: HashMap<String, Option<Handle<Image>>> = HashMap::new();
+    let mut image = |game: &mut aaa_data::GameData, path: &str| {
+        (cache.entry(path.to_string()))
+            .or_insert_with(|| {
+                let decoded = textures::decode(&game.read(path)?, path, formats.0, true)?;
+                Some(images.add(decoded))
+            })
+            .clone()
+    };
+    let medal = image(game, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
+    let operations = game.special_operations();
     let words = Words {
         title: said("game_interface_FactionExperience_ToolTip", "Experience"),
         general: said("ui_tooltip_item_general", "General"),
@@ -121,15 +144,7 @@ fn spawn(
     let buttons: Vec<_> = (general.operations.iter().enumerate())
         .filter_map(|(n, o)| {
             let op = operations.get(&o.id)?;
-            let icon = op.icon.as_ref().and_then(|path| {
-                let game = &mut loaded.game;
-                (icons.entry(path.clone()))
-                    .or_insert_with(|| {
-                        let decoded = textures::decode(&game.read(path)?, path, formats.0, true)?;
-                        Some(images.add(decoded))
-                    })
-                    .clone()
-            });
+            let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
             let name = bindings.marked(&action(n), &op.name);
             Some((o.cost, icon, name, Hint(tip(op, o.cost, &cost, &area))))
         })
@@ -222,17 +237,12 @@ fn spawn(
                                 button.spawn((size, Pickable::IGNORE));
                             }
                         }
-                        // How far it's recharged, and none is recharging
-                        // until operations can be used.
                         let bar = Node {
                             width: px(ICON.x),
                             height: px(BAR),
                             ..default()
                         };
-                        button.spawn(meter(bar, Gauge::Recharge)).insert(Meter {
-                            gauge: Gauge::Recharge,
-                            share: 1.0,
-                        });
+                        button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
                     });
             }
         });
@@ -286,8 +296,27 @@ fn refresh(
     mut boxes: Query<&mut Hint, With<ExperienceBox>>,
     buttons: Query<(&OperationButton, &Children)>,
     mut icons: Query<&mut Shade, With<OperationIcon>>,
+    mut bars: Query<&mut Meter, With<RechargeBar>>,
 ) {
     let experience = sim.0.experience(panel.player).unwrap_or(0.0);
+    // Against the experience itself, which the text only rounds.
+    for (button, children) in &buttons {
+        let shade = match experience >= button.cost {
+            true => Shade::Full,
+            false => Shade::Dimmed,
+        };
+        for &child in children {
+            if let Ok(mut s) = icons.get_mut(child) {
+                s.set_if_neq(shade);
+            }
+            // Every operation starts a match ready.
+            if let Ok(mut bar) = bars.get_mut(child)
+                && bar.share != 1.0
+            {
+                bar.share = 1.0;
+            }
+        }
+    }
     let rounded = experience.round() as i64;
     if panel.shown == Some(rounded) {
         return;
@@ -306,17 +335,6 @@ fn refresh(
     for mut h in &mut boxes {
         h.set_if_neq(Hint(hint.clone()));
     }
-    for (button, children) in &buttons {
-        let shade = match experience >= button.cost {
-            true => Shade::Full,
-            false => Shade::Dimmed,
-        };
-        for &child in children {
-            if let Ok(mut s) = icons.get_mut(child) {
-                s.set_if_neq(shade);
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -329,6 +347,45 @@ mod tests {
             text: text.into(),
             indented,
         }
+    }
+
+    #[test]
+    fn buttons_light_once_experience_reaches_their_cost_however_it_shows() {
+        let pathing = aaa_map::Pathing::uniform(8, aaa_map::Domain::Land);
+        let mut world = aaa_sim::World::from_regiments(Default::default(), pathing, &[]);
+        world.lead(1, 199.5, Some(5000.0));
+        let mut app = App::new();
+        app.insert_resource(Sim(world)).add_systems(Update, refresh);
+        app.insert_resource(Panel {
+            player: 1,
+            general: "Marshal Zhukov".into(),
+            max: Some(5000.0),
+            words: Words {
+                title: "Experience".into(),
+                general: "General".into(),
+                experience: "Experience".into(),
+                help: String::new(),
+            },
+            shown: None,
+        });
+        let icon = app.world_mut().spawn((OperationIcon, Shade::Dimmed)).id();
+        let bar = app
+            .world_mut()
+            .spawn((meter(Node::default(), Gauge::Recharge), RechargeBar))
+            .id();
+        app.world_mut()
+            .spawn(OperationButton { cost: 200.0 })
+            .add_children(&[icon, bar]);
+        app.update();
+        // Shown as 200, but short of it.
+        assert_eq!(app.world().get::<Shade>(icon), Some(&Shade::Dimmed));
+        assert_eq!(app.world().get::<Meter>(bar).map(|m| m.share), Some(1.0));
+        app.world_mut()
+            .resource_mut::<Sim>()
+            .0
+            .lead(1, 200.0, Some(5000.0));
+        app.update();
+        assert_eq!(app.world().get::<Shade>(icon), Some(&Shade::Full));
     }
 
     #[test]

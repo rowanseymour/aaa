@@ -3,13 +3,9 @@
 
 use std::collections::HashMap;
 
-use crate::properties::{Pace, line};
+use crate::properties::{Pace, fill, line, number};
 use crate::supply::is;
 use crate::{GameData, Id, defs, localized, scoped};
-
-/// The folder of icons drawn for a wide screen, which a `%s` in an icon's
-/// path stands for.
-const WIDE: &str = "1280";
 
 /// A special operation as its button and tooltip show it.
 #[derive(Debug, Clone, PartialEq)]
@@ -34,22 +30,14 @@ pub struct EffectLine {
     pub indented: bool,
 }
 
-/// How a side's experience starts and grows.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// How a side's experience starts and grows, none at all where the data
+/// doesn't say.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ExperienceRules {
     /// What every side with a general starts a match with.
     pub starting: f32,
     /// What every side with a general gains a second.
     pub per_second: f32,
-}
-
-impl Default for ExperienceRules {
-    fn default() -> Self {
-        ExperienceRules {
-            starting: 0.0,
-            per_second: 0.0,
-        }
-    }
 }
 
 /// What the tooltips need to put an operation's effects into words.
@@ -100,21 +88,30 @@ impl Words<'_> {
             self.said("ability_effect_desc_describe_economy")
                 .map(str::to_string)
         } else if kind("ENCHANTMENT") {
-            return self.enchantment(e);
+            let mut lines = self.enchantment(e);
+            if let Some(first) = lines.first_mut() {
+                first.text = self.with_versus(std::mem::take(&mut first.text), e);
+            }
+            return lines;
         } else {
             None
         };
         let Some(text) = main else {
             return Vec::new();
         };
-        let text = match self.versus(e.targets.as_deref()) {
-            Some(vs) => format!("{text} {vs}"),
-            None => text,
-        };
         vec![EffectLine {
-            text,
+            text: self.with_versus(text, e),
             indented: false,
         }]
+    }
+
+    /// An effect's line, with "vs" and its targets after it where it has
+    /// its own.
+    fn with_versus(&self, text: String, e: &defs::Effect) -> String {
+        match self.versus(e.targets.as_deref()) {
+            Some(vs) => format!("{text} {vs}"),
+            None => text,
+        }
     }
 
     /// "Resupply for 30 Seconds" and the lines of what the property does.
@@ -177,37 +174,6 @@ impl Words<'_> {
     }
 }
 
-/// An amount as C's `%g` writes the game's: 900, 0.5.
-fn number(amount: f32) -> String {
-    let rounded = (amount * 1000.0).round() / 1000.0;
-    format!("{rounded}")
-}
-
-/// A format string of the game's with its numbers and words filled in, in
-/// order. A glyph has no letter of ours, so its placeholder goes.
-fn fill(format: &str, with: &[&str]) -> String {
-    const PLACEHOLDERS: [&str; 5] = ["%+g", "%g", "%s", "%d", "%.2d"];
-    let format = format.replace("%lc", "");
-    let mut out = String::new();
-    let mut rest = format.as_str();
-    let mut with = with.iter();
-    loop {
-        let next = (PLACEHOLDERS.iter())
-            .filter_map(|p| Some((rest.find(p)?, p.len())))
-            .min();
-        match (next, with.next()) {
-            (Some((at, len)), Some(w)) => {
-                out.push_str(&rest[..at]);
-                out.push_str(w);
-                rest = &rest[at + len..];
-            }
-            _ => break,
-        }
-    }
-    out.push_str(rest);
-    out.replace("%%", "%")
-}
-
 /// The game's word for an area of `radius`, from the descriptions of
 /// `category`, the first range to hold it, its upper end left out.
 fn area_word(
@@ -250,12 +216,8 @@ impl GameData {
         let mut out: HashMap<Id, SpecialOperation> = (definitions.abilities.iter())
             .map(|(id, a)| (id.clone(), operation(&words, &definitions.descriptions, a)))
             .collect();
-        // Icons not drawn for a wide screen are in the shared folder.
         for op in out.values_mut() {
-            if let Some(path) = op.icon.take() {
-                let places = [path.clone(), path.replacen(&format!("{WIDE}/"), "", 1)];
-                op.icon = places.into_iter().find(|p| self.exists(p));
-            }
+            op.icon = op.icon.take().and_then(|path| self.wide_icon(&path));
         }
         out
     }
@@ -294,7 +256,7 @@ fn operation(
     let icon = (a.icon.as_deref())
         .and_then(|i| i.split_whitespace().next())
         .filter(|i| !i.eq_ignore_ascii_case("null"))
-        .map(|i| i.replace("%s", WIDE).trim_start_matches('/').to_string());
+        .map(|i| i.trim_start_matches('/').to_string());
     let (category, radius) = match a.volley_area > a.area {
         true => ("AREA_VOLLEY", a.volley_area),
         false => ("AREA", a.area),
@@ -387,7 +349,8 @@ mod tests {
         assert_eq!(op.name, "Armored Resupply");
         assert_eq!(
             op.icon.as_deref(),
-            Some("UI/1280/Game/SpecialOps/IconResupply.png")
+            // Found in the archives by `special_operations`.
+            Some("UI/%s/Game/SpecialOps/IconResupply.png")
         );
         assert_eq!((op.recharge, op.area.as_deref()), (300.0, Some("Large")));
         let lines: Vec<(&str, bool)> = (op.effects.iter())
@@ -422,6 +385,19 @@ mod tests {
         );
         // No name of its own, and no area to name.
         assert_eq!((op.name.as_str(), op.area), ("bomb", None));
+    }
+
+    #[test]
+    fn enchantments_with_targets_of_their_own_say_so() {
+        let a = definition(
+            "[AbilityDefinition]\n{\n\tIDS = sandbag\n\
+             \t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n\t\ttargets = building\n\
+             \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tname = \"#resupply_name\"\n\
+             \t\t\tduration = 30\n\t\t}\n\t}\n}\n",
+        );
+        let op = shown(&a);
+        let lines: Vec<&str> = op.effects.iter().map(|l| l.text.as_str()).collect();
+        assert_eq!(lines, ["Resupply for 30 Seconds vs Building"]);
     }
 
     #[test]

@@ -353,7 +353,10 @@ pub fn spawn(
     mut loaded: ResMut<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
+    local: Res<Local>,
+    leaders: Res<Leaders>,
 ) {
+    let corner = crate::special_ops::corner(&local, &leaders);
     let game = &mut loaded.game;
     let kinds = game
         .message_kinds()
@@ -391,9 +394,8 @@ pub fn spawn(
         LogBox,
         Node {
             position_type: PositionType::Absolute,
-            // Beside the special operations panel, under its experience.
-            top: px(crate::special_ops::CLEAR.y),
-            left: px(crate::special_ops::CLEAR.x),
+            top: px(corner.y),
+            left: px(corner.x),
             width: px(WIDTH),
             flex_direction: FlexDirection::Column,
             row_gap: px(LINE_GAP),
