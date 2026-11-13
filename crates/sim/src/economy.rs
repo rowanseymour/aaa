@@ -146,13 +146,8 @@ impl World {
 
     /// What a regiment would add to its owner's economy once raised.
     fn commission_ledger(&self, regiment: &aaa_map::Regiment) -> Ledger {
-        let members = regiment
-            .members
-            .iter()
-            .map(|m| Id::from(m.template.as_str()));
-        let members: Vec<Id> = members.collect();
-        let template = Id::from(regiment.template.as_str());
-        self.organization_ledger(&template, members.iter().collect())
+        let members = regiment.members.iter().map(|m| &m.template);
+        self.organization_ledger(&regiment.template, members.collect())
     }
 
     fn organization_ledger(&self, template: &Id, members: Vec<&Id>) -> Ledger {
@@ -306,14 +301,10 @@ impl World {
     /// its members'.
     pub fn cost(&self, regiment: &aaa_map::Regiment) -> f32 {
         let money = money(&self.rules.economy);
-        let members = regiment.members.iter().map(|m| m.template.as_str());
-        let mut templates: Vec<&str> = members.collect();
-        if !regiment.lone() {
-            templates.push(&regiment.template);
-        }
-        templates
-            .into_iter()
-            .map(|t| self.economy_of(&Id::from(t)).cost.get(money))
+        let members = regiment.members.iter().map(|m| &m.template);
+        let own = (!regiment.lone()).then_some(&regiment.template);
+        (members.chain(own))
+            .map(|t| self.economy_of(t).cost.get(money))
             .sum()
     }
 
@@ -335,7 +326,7 @@ impl World {
             Change::Unpack(r) => {
                 ledger = ledger.without(self.regiment_ledger(r));
                 if let Some(u) = &self.regiments[r].unpacks {
-                    let e = self.economy_of(&Id::from(u.building.template.as_str()));
+                    let e = self.economy_of(&u.building.template);
                     ledger += Ledger {
                         production: e.production,
                         upkeep: e.upkeep,

@@ -125,7 +125,7 @@ impl Badges {
         match &held.nation {
             Some(nation) => banners.nation_badge(game, images, nation, badge),
             None => {
-                let template = template.to_string();
+                let template = Id::from(template);
                 banners.badge(game, images, &Division { template, badge })
             }
         }

@@ -682,7 +682,7 @@ pub fn spawn(
         sim.0
             .regiments
             .iter()
-            .filter_map(|r| Some(r.unpacks.as_ref()?.building.template.clone())),
+            .filter_map(|r| Some(r.unpacks.as_ref()?.building.template.to_string())),
     );
     while let Some(template) = templates.pop() {
         if menus.contains_key(&template) {
@@ -740,7 +740,7 @@ pub fn spawn(
                     .as_ref()?
                     .building
                     .template
-                    .clone(),
+                    .to_string(),
             )
         }));
         menus.insert(template, menu);
@@ -1813,9 +1813,9 @@ pub fn aim(
         return;
     }
     if aim == Aim::Guard
-        && let Some(thing) = guard_at(&sim.0, player, &selected.0, focus)
+        && let Some(piece) = guard_at(&sim.0, player, &selected.0, focus)
     {
-        let guard = |regiment| aaa_sim::Command::GuardThing { regiment, thing };
+        let guard = |regiment| aaa_sim::Command::GuardPiece { regiment, piece };
         let regiments: Vec<(usize, [f32; 2])> = (selected.0.iter())
             .filter(|&&r| orders.give(&sim.0, player, guard(r)).is_ok())
             .map(|&r| (r, point))

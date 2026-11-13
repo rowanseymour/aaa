@@ -1238,12 +1238,12 @@ fn setup(
         let thing = match stored.get(&m.id) {
             Some(&t) => Cow::Borrowed(t),
             None => {
-                let footing = models.footing(&m.template);
+                let footing = models.footing(m.template.as_str());
                 let at = thing_at(
                     &map.ground,
                     footing,
                     m.id,
-                    &m.template,
+                    m.template.as_str(),
                     m.position,
                     m.facing,
                 );
