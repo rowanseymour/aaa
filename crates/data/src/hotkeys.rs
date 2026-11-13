@@ -4,7 +4,8 @@
 
 use std::collections::HashMap;
 
-use crate::{GameData, Id, defs, localized, scoped};
+use crate::strings::localized;
+use crate::{GameData, Id, defs, scoped};
 
 /// The file listing the hotkey files every configuration shares.
 const SHARED: &str = "Localization/Hotkeys/start.txt";

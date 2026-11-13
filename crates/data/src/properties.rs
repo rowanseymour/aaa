@@ -3,8 +3,9 @@
 
 use std::collections::HashMap;
 
+use crate::strings::localized;
 use crate::supply::{is, listed};
-use crate::{GameData, Id, defs, icon_beside, localized};
+use crate::{GameData, Id, defs, icon_beside};
 
 /// The folder of icons drawn for a wide screen, which a `%s` in an icon's
 /// path stands for.

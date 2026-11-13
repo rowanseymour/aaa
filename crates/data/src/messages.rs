@@ -3,7 +3,8 @@
 
 use std::collections::HashMap;
 
-use crate::{GameData, Id, localized};
+use crate::strings::localized;
+use crate::{GameData, Id};
 
 const MESSAGE_TYPES: &str = "game/message_types";
 const GAME_EVENTS: &str = "game/game_events";
