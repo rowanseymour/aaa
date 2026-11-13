@@ -104,9 +104,21 @@ impl World {
 
     /// The HQ the regiment at `r` is while it's packed, if it's one.
     pub fn packed_hq(&self, r: usize) -> Option<u32> {
+        self.packed_as(r, true)
+    }
+
+    /// The HQ the regiment at `r` was while packed, if its truck is gone.
+    pub(crate) fn truckless_hq(&self, r: usize) -> Option<u32> {
+        self.packed_as(r, false)
+    }
+
+    /// The HQ id of a packed HQ regiment at `r` whose truck's survival is
+    /// `survives`.
+    fn packed_as(&self, r: usize, survives: bool) -> Option<u32> {
         let regiment = &self.regiments[r];
         self.places(&regiment.template)?;
-        (regiment.unpacks.is_some() && self.truck_survives(r)).then_some(regiment.id)
+        let packed = regiment.unpacks.is_some() && self.truck_survives(r) == survives;
+        packed.then_some(regiment.id)
     }
 
     /// `player`'s regiments that have no HQ, by index, whether or not any
@@ -204,11 +216,13 @@ impl World {
         }
     }
 
-    /// Detaches the regiment at `r` if its HQ isn't among `hqs` any more.
-    /// It keeps one of another side, as it does on changing side itself.
-    pub(crate) fn keep_attached(&mut self, r: usize, hqs: &[Hq]) {
-        let regiment = &mut self.regiments[r];
-        regiment.hq = (regiment.hq).filter(|&id| hqs.iter().any(|h| h.id == id));
+    /// Detaches each regiment whose HQ isn't on the map, as a map's
+    /// attachments are only those its HQs list.
+    pub(crate) fn detach_from_missing(&mut self) {
+        let ids: Vec<u32> = self.hqs().iter().map(|h| h.id).collect();
+        for regiment in &mut self.regiments {
+            regiment.hq = regiment.hq.filter(|id| ids.contains(id));
+        }
     }
 
     /// Detaches every regiment attached to the HQ `hq`.
@@ -236,6 +250,61 @@ mod tests {
     use aaa_map::Id;
 
     use crate::{Command, Notice, Refused};
+
+    #[test]
+    fn hqs_destroyed_packed_or_unpacked_detach_their_regiments_at_once() {
+        let mut w = division();
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.destroy(0);
+        assert_eq!(w.regiments[1].hq, None);
+
+        let mut w = division();
+        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        let unpack = Command::Unpack {
+            regiment: 0,
+            at: [30.0, 40.0],
+            facing: NORTH,
+        };
+        w.apply(1, unpack).unwrap();
+        run(&mut w, 11.0);
+        let depot = w.regiments[0].unpacked_into.unwrap();
+        assert_eq!(w.regiments[1].hq, Some(50));
+        w.buildings[depot].fighter.destructible = true;
+        w.fall(depot, None);
+        assert_eq!(w.regiments[1].hq, None);
+    }
+
+    #[test]
+    fn a_packed_hq_is_lost_with_its_truck_whoever_else_survives() {
+        let mut w = division();
+        w.rules.packing.insert(Id::from("depot"), packs());
+        let mut t = truck();
+        let mut escort = t.members[0].clone();
+        escort.template = "soldier".into();
+        t.members.push(escort);
+        t.formations[0].offsets.push([2.0, 0.0]);
+        t.owner = 1;
+        t.renumber(70);
+        t.place([40.0, 30.0], [0.0, 1.0]);
+        let hq = w.add_regiment(&t);
+        w.regiments[1].hq = Some(70);
+        let truck = w.regiments[hq].units[0];
+        w.units[truck].die(0);
+        w.lost_member(truck);
+        assert!(!w.destroyed(hq));
+        assert_eq!(w.regiments[1].hq, None);
+    }
+
+    #[test]
+    fn attachments_to_hqs_not_on_the_map_are_dropped() {
+        let mut w = division();
+        w.regiments[1].hq = Some(999);
+        w.detach_from_missing();
+        assert_eq!(w.regiments[1].hq, None);
+        w.regiments[1].hq = Some(50);
+        w.detach_from_missing();
+        assert_eq!(w.regiments[1].hq, Some(50));
+    }
 
     #[test]
     fn regiments_attach_to_hqs_that_recruit_their_kind_and_have_room() {

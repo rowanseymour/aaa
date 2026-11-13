@@ -80,17 +80,17 @@ impl World {
     /// Pays a building's owner its sale value and takes it off the map
     /// without its being destroyed.
     pub(crate) fn sell(&mut self, building: usize) {
-        let hq = self.hq_of(building);
         self.pay_sale(building);
         self.remove(building, State::Sold(self.ticks));
-        if let Some(hq) = hq {
-            self.detach_all(hq);
-        }
     }
 
     /// Takes a building off the map for good, leaving it as `state`: its
     /// ground free again, with nothing queued, aimed at or besieging it.
+    /// An HQ loses its regiments.
     pub(crate) fn remove(&mut self, building: usize, state: State) {
+        if let Some(hq) = self.hq_of(building) {
+            self.detach_all(hq);
+        }
         let b = &mut self.buildings[building];
         b.state = state;
         b.besieged = None;
