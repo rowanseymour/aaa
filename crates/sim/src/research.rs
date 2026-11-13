@@ -101,13 +101,13 @@ impl World {
     pub fn lacks(&self, player: u32, building: usize, regiment: &aaa_map::Regiment) -> Lacking {
         let mut out = Lacking::default();
         let templates = std::iter::once(regiment.template.as_str())
-            .chain(regiment.members.iter().map(|m| m.thing.template.as_str()));
+            .chain(regiment.members.iter().map(|m| m.template.as_str()));
         out.barred = templates
             .into_iter()
             .any(|t| self.barred(player, &Id::from(t)));
         out.hidden = out.barred;
         for m in &regiment.members {
-            let Some(r) = self.requires.get(&Id::from(m.thing.template.as_str())) else {
+            let Some(r) = self.requires.get(&Id::from(m.template.as_str())) else {
                 continue;
             };
             let structures = self.missing(player, &r.structures, r.any);

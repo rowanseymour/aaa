@@ -217,7 +217,7 @@ impl World {
 
     /// What a regiment would add to its owner's economy once raised.
     fn commission_ledger(&self, regiment: &aaa_map::Regiment) -> Ledger {
-        let members = regiment.members.iter().map(|m| &m.thing.template);
+        let members = regiment.members.iter().map(|m| &m.template);
         self.organization_ledger(&regiment.template, members.collect())
     }
 
@@ -372,7 +372,7 @@ impl World {
     /// its members'.
     pub fn cost(&self, regiment: &aaa_map::Regiment) -> f32 {
         let money = money(&self.economy);
-        let members = regiment.members.iter().map(|m| m.thing.template.as_str());
+        let members = regiment.members.iter().map(|m| m.template.as_str());
         let mut templates: Vec<&str> = members.collect();
         if !regiment.lone() {
             templates.push(&regiment.template);
