@@ -5,10 +5,10 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::actions::Page;
-use crate::menu;
 use crate::options::Options;
 use crate::ui::{self, Font};
 use crate::{Focus, LoadingScreen, Screen, SelectionBox, console};
+use crate::{confirm, menu};
 
 /// Whether the menu is up, and whether the match was already paused
 /// before it went up, as the console can leave it.
@@ -99,10 +99,16 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
         .observe(options);
     commands
         .spawn((ui::button("Quit to Desktop", Font::Large), ChildOf(column)))
-        .observe(menu::ask_quit);
+        .observe(ask_quit);
     commands
         .spawn((ui::button("Return to Game", Font::Large), ChildOf(column)))
         .observe(resume);
+}
+
+/// Asks whether to exit the game, and does if so.
+fn ask_quit(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) {
+    let question = words.sure.clone();
+    confirm::confirm(&mut commands, &words, Screen::Match, question, menu::quit);
 }
 
 /// Shows the options over the menu, to go with it when it closes.
@@ -248,6 +254,9 @@ mod tests {
         escape(&mut app);
         press(&mut app, "Quit to Desktop");
         assert!(asking(&mut app));
+        let world = app.world_mut();
+        let mut texts = world.query::<&Text>();
+        assert!(texts.iter(world).any(|t| t.0 == "Are you sure?"));
         assert!(app.world_mut().resource::<Messages<AppExit>>().is_empty());
         escape(&mut app);
         assert!(!asking(&mut app));
