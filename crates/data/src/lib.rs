@@ -44,6 +44,24 @@ pub struct Nation {
     pub placeholders: HashMap<Id, Id>,
     /// Those who may lead its sides.
     pub generals: Vec<General>,
+    /// The archive path of the flag the lobby shows for it.
+    pub flag: Option<String>,
+}
+
+/// A bonus or penalty the lobby can give a side the computer plays.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Handicap {
+    /// E.g. `handicap_easy`.
+    pub id: Id,
+    /// What its name draws in place of words, by the glyph's image name,
+    /// e.g. `Rank1`.
+    pub glyph: Option<String>,
+    /// The word its description leads with, e.g. `Easy`, else its id.
+    pub title: String,
+    /// E.g. `EASY: Gives a military and economic penalty to the AI.`
+    pub description: String,
+    /// The technology the side starts with, if any.
+    pub property: Option<Id>,
 }
 
 /// A general who leads a side.
@@ -1839,6 +1857,7 @@ impl GameData {
                 "vfx" => coverage.read::<defs::Vfx>(block, t).map(drop),
                 "cursor" => coverage.read::<defs::Cursor>(block, t).map(drop),
                 "glyph" => coverage.read::<defs::Glyph>(block, t).map(drop),
+                "handicap" => coverage.read::<defs::Handicap>(block, t).map(drop),
                 "svars" => coverage.read::<defs::SVars>(block, t).map(drop),
                 "resource" => coverage.read::<defs::Resource>(block, t).map(drop),
                 // A string table, read whole.
@@ -1884,11 +1903,51 @@ impl GameData {
                     generals: (n.factions.as_deref().unwrap_or("").split(','))
                         .filter_map(|id| generals.get(&Id::from(id.trim())).cloned())
                         .collect(),
+                    flag: n.flag_icon.as_deref().and_then(ui_path),
                 })
             })
             .collect();
         nations.sort_by(|a, b| a.name.cmp(&b.name));
         nations
+    }
+
+    /// The handicaps the lobby offers, in the order the game lists them.
+    pub fn handicaps(&mut self) -> Vec<Handicap> {
+        let strings = self.strings();
+        let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
+        let glyphs: HashMap<char, String> = (scoped(&files).iter())
+            .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
+            .filter_map(|g| Some((char::from_u32(g.index?)?, g.display_name?)))
+            .collect();
+        let files = self.parse_tgis(|n| n.starts_with("game/handicaps"));
+        let handicaps: Vec<Handicap> = (scoped(&files).iter())
+            .flat_map(|f| f.read::<defs::Handicap>("Handicap"))
+            .filter_map(|h| {
+                let id = h.ids?;
+                let name = localized(&strings, h.name.as_deref()).unwrap_or_default();
+                let description = localized(&strings, h.description.as_deref()).unwrap_or_default();
+                Some(Handicap {
+                    glyph: only_char(&name).and_then(|g| glyphs.get(&g).cloned()),
+                    title: title_of(&description).unwrap_or_else(|| id.to_string()),
+                    description,
+                    property: (h.property_ids.as_deref().map(str::trim))
+                        .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("null"))
+                        .map(Id::from),
+                    id,
+                })
+            })
+            .collect();
+        handicaps
+    }
+
+    /// The archive path of the flag the lobby shows for a side whose nation
+    /// is left to chance.
+    pub fn random_flag(&mut self) -> Option<String> {
+        fn find(block: &tgi::Block) -> Option<&str> {
+            (block.value("default_flag_icon")).or_else(|| block.blocks().find_map(find))
+        }
+        let staging = tgi::parse_bytes(&self.read("UI/Menus/staging.tgi")?);
+        find(&staging.root).and_then(ui_path)
     }
 
     /// The generals who may lead a side, by id.
@@ -3356,6 +3415,27 @@ fn frames(pattern: &str, exists: impl Fn(&str) -> bool) -> Vec<String> {
     (first..).map(frame).take_while(|f| exists(f)).collect()
 }
 
+/// The one character `text` is, as a name that's just a glyph is.
+fn only_char(text: &str) -> Option<char> {
+    let mut chars = text.trim().chars();
+    chars.next().filter(|_| chars.next().is_none())
+}
+
+/// The word a description leads with before a colon, e.g. `Easy` for
+/// `EASY: Gives ...`.
+fn title_of(description: &str) -> Option<String> {
+    let (word, _) = description.split_once(':')?;
+    let word = word.trim();
+    let mut letters = word.chars();
+    let first = letters.next()?;
+    Some(
+        first
+            .to_uppercase()
+            .chain(letters.flat_map(char::to_lowercase))
+            .collect(),
+    )
+}
+
 /// The archive path of an interface image, whose `%s` folder, for a
 /// screen size, is empty for the default images.
 fn ui_path(path: &str) -> Option<String> {
@@ -3390,6 +3470,14 @@ mod tests {
             Some("UI/Game/ActionButtons/IconMove.png")
         );
         assert_eq!(ui_path("NULL"), None);
+    }
+
+    #[test]
+    fn handicaps_take_glyphs_from_their_names_and_titles_from_descriptions() {
+        assert_eq!(only_char("\u{86}"), Some('\u{86}'));
+        assert_eq!(only_char("Easy"), None);
+        assert_eq!(title_of("EASY: Gives a penalty.").as_deref(), Some("Easy"));
+        assert_eq!(title_of("No colon"), None);
     }
 
     #[test]

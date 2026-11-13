@@ -121,6 +121,9 @@ struct Pending {
     /// The general chosen for each side, by player id, when launched from
     /// the lobby; one of its nation's at random where none is.
     generals: HashMap<u32, aaa_data::Id>,
+    /// The technology each side the computer plays starts with from the
+    /// handicap the lobby gave it, by player id.
+    handicaps: HashMap<u32, aaa_data::Id>,
     /// How much of the map the fog of war hides, if not as the game's
     /// world rule has it.
     fog: Option<aaa_map::FogSetting>,
@@ -742,6 +745,7 @@ fn main() -> ExitCode {
                 person: None,
                 nations: HashMap::new(),
                 generals: HashMap::new(),
+                handicaps: HashMap::new(),
                 fog,
                 from_menu: false,
             })
@@ -784,6 +788,7 @@ fn prepare(
         person,
         nations: chosen,
         generals,
+        handicaps,
         from_menu,
         fog,
         ..
@@ -844,6 +849,9 @@ fn prepare(
     sim.sights = game.sights();
     sim.set_numbered(game.numbered());
     sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
+    for (player, technology) in handicaps {
+        sim.grant(player, technology);
+    }
     Ok(Prepared {
         loaded: Loaded { game, map },
         sim,

@@ -823,6 +823,18 @@ pub struct Nation {
     pub placeholder: Vec<Placeholder>,
     /// The ids of the generals who lead it, comma-separated.
     pub factions: Option<String>,
+    /// The lobby's image of its flag.
+    pub flag_icon: Option<String>,
+}
+
+/// A bonus or penalty the lobby can give a side the computer plays.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Handicap {
+    pub ids: Option<Id>,
+    pub name: Option<String>,
+    pub description: Option<String>,
+    /// The technology the side starts with, or `null`.
+    pub property_ids: Option<String>,
 }
 
 /// A general a side can be led by.
@@ -927,6 +939,8 @@ pub struct Glyph {
     pub ids: Option<Id>,
     /// The character's code.
     pub index: Option<u32>,
+    /// What the font's image of it is called, e.g. `Rank1`.
+    pub display_name: Option<String>,
 }
 
 /// The game's tuning settings.

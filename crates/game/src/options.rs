@@ -675,7 +675,9 @@ fn show_resolution(
     let list = Dropdown {
         row: holder,
         width: px(LIST_WIDTH),
-        label: size.map_or(String::new(), |s| format!("{}x{}", s.x, s.y)),
+        label: size
+            .map_or(String::new(), |s| format!("{}x{}", s.x, s.y))
+            .into(),
         open: *open == Open::Resolution,
     };
     // The screen the window's on, which the other modes take too.

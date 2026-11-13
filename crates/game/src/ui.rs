@@ -726,22 +726,58 @@ pub fn disabled(words: impl Into<String>, size: Font) -> impl Bundle {
 pub struct Dropdown {
     pub row: Entity,
     pub width: Val,
-    pub label: String,
+    pub label: Shown,
     pub open: bool,
 }
 
+/// What a [`Dropdown`] shows for a choice: words, after a picture if it has
+/// one.
+pub struct Shown {
+    pub icon: Option<Handle<Image>>,
+    pub words: String,
+}
+
+impl From<String> for Shown {
+    fn from(words: String) -> Self {
+        Shown { icon: None, words }
+    }
+}
+
+impl From<&str> for Shown {
+    fn from(words: &str) -> Self {
+        words.to_string().into()
+    }
+}
+
+impl Shown {
+    /// Spawns it in `cell`.
+    fn spawn(self, commands: &mut Commands, cell: Entity) {
+        if let Some(icon) = self.icon {
+            let size = Node {
+                width: px(17),
+                height: px(17),
+                margin: UiRect::right(px(6)),
+                ..default()
+            };
+            commands.spawn((ChildOf(cell), size, ImageNode::new(icon)));
+        }
+        commands.spawn((ChildOf(cell), text(self.words, Font::Body)));
+    }
+}
+
 impl Dropdown {
-    pub fn spawn<B: Bundle, C: Bundle, M1, M2>(
+    pub fn spawn<B: Bundle, C: Bundle, S: Into<Shown>, M1, M2>(
         self,
         commands: &mut Commands,
         opener_marker: B,
         on_open: impl IntoEntityObserver<M1>,
-        choices: impl Iterator<Item = (C, String)>,
+        choices: impl Iterator<Item = (C, S)>,
         on_choose: impl IntoEntityObserver<M2> + Copy,
     ) {
         let cell = Node {
             width: percent(100),
             justify_content: JustifyContent::Start,
+            align_items: AlignItems::Center,
             ..padded()
         };
         let holder = Node {
@@ -749,29 +785,23 @@ impl Dropdown {
             ..default()
         };
         let holder = commands.spawn((ChildOf(self.row), holder)).id();
-        commands
-            .spawn((
-                ChildOf(holder),
-                opener(cell.clone()),
-                opener_marker,
-                children![text(self.label, Font::Body)],
-            ))
-            .observe(on_open);
+        let label = commands
+            .spawn((ChildOf(holder), opener(cell.clone()), opener_marker))
+            .observe(on_open)
+            .id();
+        self.label.spawn(commands, label);
         if !self.open {
             return;
         }
         let list = commands
             .spawn((ChildOf(holder), dropdown(), GlobalZIndex(layer::LIST)))
             .id();
-        for (choice, name) in choices {
-            commands
-                .spawn((
-                    ChildOf(list),
-                    clickable(cell.clone()),
-                    choice,
-                    children![text(name, Font::Body)],
-                ))
-                .observe(on_choose);
+        for (choice, shown) in choices {
+            let item = commands
+                .spawn((ChildOf(list), clickable(cell.clone()), choice))
+                .observe(on_choose)
+                .id();
+            shown.into().spawn(commands, item);
         }
     }
 }
