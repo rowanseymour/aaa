@@ -737,6 +737,7 @@ impl Recruits {
             obstacle,
             deploy: self.deploy_points.get(template).copied(),
             organization: None,
+            awake: false,
         })
     }
 

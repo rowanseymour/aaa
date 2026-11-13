@@ -32,6 +32,8 @@ pub struct Building {
     pub obstacle: Option<Obstacle>,
     /// Where what it recruits appears and goes, for one that recruits.
     pub deploy: Option<DeployPoints>,
+    /// For one that defends itself, whether it was saved woken.
+    pub awake: bool,
     /// The organization it stands in, as a Division HQ's building does,
     /// without its members: packing puts the truck in the building's
     /// place there.
@@ -71,6 +73,7 @@ pub fn buildings(
                 facing: facing(t),
                 fighter: fighter.clone(),
                 health: actor.body().map_or(1.0, |b| b.health),
+                awake: actor.defender().is_some_and(|d| d.id >= 0),
                 zone: zones.get(&template).copied(),
                 members: actor
                     .city()

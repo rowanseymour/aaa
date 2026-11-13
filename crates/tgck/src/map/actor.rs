@@ -103,6 +103,7 @@ const PROPERTIES: u32 = 6;
 const ORGANIZATION: u32 = 7;
 const ELEMENT: u32 = 8;
 const CONSTRUCTION: u32 = 15;
+const DEFENDER: u32 = 20;
 const AIRCRAFT: u32 = 23;
 const CITY: u32 = 29;
 const HQ: u32 = 30;
@@ -1393,6 +1394,21 @@ impl Actor {
     pub fn city(&self) -> Option<&City> {
         self.decoded()?.iter().find_map(|c| match c {
             Component::City(c) => Some(c),
+            _ => None,
+        })
+    }
+
+    /// Its defender's place among the world's updatable objects, if its
+    /// record holds a defender: -1 while it's idle.
+    pub fn defender(&self) -> Option<Updatable> {
+        self.decoded()?.iter().find_map(|c| match c {
+            Component::Framed {
+                bit: DEFENDER,
+                data,
+            } => Some(Updatable {
+                version: u32::from_le_bytes(data.get(0..4)?.try_into().ok()?),
+                id: i32::from_le_bytes(data.get(4..8)?.try_into().ok()?),
+            }),
             _ => None,
         })
     }

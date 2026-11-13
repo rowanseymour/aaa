@@ -2782,6 +2782,7 @@ types:
     seq:
       - id: updatable
         type: updatable
+        doc: Its id is -1 while the building is idle, not yet woken.
       - id: version
         type: u4
         valid:

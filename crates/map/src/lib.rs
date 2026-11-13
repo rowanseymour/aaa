@@ -1072,6 +1072,7 @@ mod tests {
             }),
             deploy: None,
             organization: None,
+            awake: false,
         };
         let mut buildings = vec![wall(1, 2, 4.0), wall(2, 3, 12.0)];
         let mut pathing = Pathing::uniform(8, Domain::Land);
