@@ -546,20 +546,23 @@ pub fn dropdown() -> impl Bundle {
 
 /// Where what's drawn over the rest of the interface stacks, lowest first.
 pub mod layer {
-    /// A [`scrim`](super::scrim) and the dialog on it.
+    /// A menu over the match, on a [`scrim`](super::scrim).
     pub const DIALOG: i32 = 10;
     /// A page over the whole screen, such as the options.
     pub const PAGE: i32 = 15;
     /// An open [`Dropdown`](super::Dropdown)'s list.
     pub const LIST: i32 = 20;
+    /// A question that wants an answer before anything else.
+    pub const QUESTION: i32 = 25;
     /// The box that says what the cursor is over.
     pub const HINT: i32 = 30;
     /// The console.
     pub const CONSOLE: i32 = 100;
 }
 
-/// Dims the whole screen under a [`dialog`] on top of it.
-pub fn scrim() -> impl Bundle {
+/// Dims the whole screen under a [`dialog`] on top of it, drawn at
+/// `layer`.
+pub fn scrim(layer: i32) -> impl Bundle {
     (
         Node {
             position_type: PositionType::Absolute,
@@ -570,7 +573,7 @@ pub fn scrim() -> impl Bundle {
             ..default()
         },
         Surface::Scrim,
-        GlobalZIndex(layer::DIALOG),
+        GlobalZIndex(layer),
     )
 }
 
@@ -700,11 +703,12 @@ pub fn card(node: Node) -> Node {
 }
 
 pub fn button(words: impl Into<String>, size: Font) -> impl Bundle {
-    (
-        clickable(card(padded())),
-        Card,
-        children![text(words, size)],
-    )
+    shaped_button(words, size, padded())
+}
+
+/// A [`button`] laid out as `node`, which should keep [`padded`]'s padding.
+pub fn shaped_button(words: impl Into<String>, size: Font, node: Node) -> impl Bundle {
+    (clickable(card(node)), Card, children![text(words, size)])
 }
 
 /// A [`switch`] with words on it.
