@@ -22,7 +22,7 @@ pub struct PropertyLook {
 }
 
 /// A range of speeds and the game's word for them.
-struct Pace {
+pub(crate) struct Pace {
     range: [f32; 2],
     word: String,
 }
@@ -45,7 +45,11 @@ fn filled(format: &str, with: &str) -> String {
 }
 
 /// What the game says a modifier does, where it has words for it.
-fn line(strings: &HashMap<String, String>, paces: &[Pace], m: &defs::Modifier) -> Option<String> {
+pub(crate) fn line(
+    strings: &HashMap<String, String>,
+    paces: &[Pace],
+    m: &defs::Modifier,
+) -> Option<String> {
     let said = |key: String| {
         strings
             .get(&key)
@@ -83,7 +87,7 @@ fn line(strings: &HashMap<String, String>, paces: &[Pace], m: &defs::Modifier) -
 
 impl GameData {
     /// The game's words for speeds, in the order it lists them.
-    fn paces(&mut self, strings: &HashMap<String, String>) -> Vec<Pace> {
+    pub(crate) fn paces(&mut self, strings: &HashMap<String, String>) -> Vec<Pace> {
         let definitions = self.definitions();
         let speeds = (definitions.descriptions.iter()).filter(|d| is(&d.category, "SPEED"));
         speeds

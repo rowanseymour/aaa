@@ -10,6 +10,7 @@ mod id;
 mod messages;
 mod properties;
 mod research;
+mod special_ops;
 mod supply;
 mod terrain;
 
@@ -21,6 +22,7 @@ pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use properties::PropertyLook;
 pub use research::{Grant, Research};
+pub use special_ops::{EffectLine, ExperienceRules, SpecialOperation};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{TerrainEffect, TerrainRules};
 
@@ -75,11 +77,22 @@ pub struct General {
     pub name: String,
     /// What the lobby calls them, e.g. `Patton`.
     pub short_name: String,
-    /// The special operations they give their side, by id.
-    pub operations: Vec<Id>,
+    /// The special operations they give their side, in the order the
+    /// panel shows them.
+    pub operations: Vec<GeneralOperation>,
+    /// The most experience their side can hold, if there's a ceiling.
+    pub experience_max: Option<f32>,
     /// Whether the lobby offers them, as it doesn't those only scenarios
     /// use.
     pub public: bool,
+}
+
+/// A special operation as a general gives it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GeneralOperation {
+    pub id: Id,
+    /// The side's experience using it takes.
+    pub cost: f32,
 }
 
 pub struct GameData {
@@ -1999,8 +2012,14 @@ impl GameData {
                         .unwrap_or_else(|| name.clone()),
                     name,
                     operations: (g.ability.iter())
-                        .filter_map(|a| a.ability_ids.clone())
+                        .filter_map(|a| {
+                            Some(GeneralOperation {
+                                id: a.ability_ids.clone()?,
+                                cost: a.cost_faction_experience.unwrap_or(0.0),
+                            })
+                        })
                         .collect(),
+                    experience_max: g.experience_max.filter(|m| *m >= 0.0),
                     public: g.public != Some(false),
                     id: id.clone(),
                 };

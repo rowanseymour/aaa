@@ -1250,6 +1250,7 @@ mod tests {
             name: format!("General {id}"),
             short_name: id.into(),
             operations: Vec::new(),
+            experience_max: None,
             public: id != "patton_tutorial",
         };
         let nation = |id: &str, generals: &[&str]| Nation {

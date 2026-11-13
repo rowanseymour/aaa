@@ -641,6 +641,11 @@ fn float<T: Fraction>(text: &str) -> Option<T> {
     let percent = text.contains('%');
     let text = text.replace('%', "");
     let text = text.trim();
+    // C's float suffix, as in `1.0f`, which the game reads as the number.
+    let text = match text.strip_suffix(['f', 'F']) {
+        Some(n) if n.ends_with(|c: char| c.is_ascii_digit() || c == '.') => n,
+        _ => text,
+    };
     // Rust reads `inf`, `infinity` and `nan`; the game reads them as 0.
     if text.contains(|c: char| c.is_ascii_alphabetic() && !matches!(c, 'e' | 'E')) {
         return None;
@@ -788,8 +793,16 @@ mod tests {
         let i: Info = from_block(&block).unwrap();
         assert_eq!((i.offset, i.depth, i.count), ([2.5, 1.5], -3.25, None));
 
+        // C's float suffix is part of the number.
+        for (depth, want) in [("1.0f", 1.0), ("2F", 2.0), ("-.5f", -0.5)] {
+            let block = first(&format!("[Info]\noffset = 0, 0\ndepth = {depth}\n"));
+            assert_eq!(from_block::<Info>(&block).unwrap().depth, want, "{depth}");
+        }
+
         // Other trailing text is no typo, and words aren't infinities.
-        for depth in ["3m", "Infantry", "nano", "inf", "-inf", "infinity", "NaN"] {
+        for depth in [
+            "3m", "Infantry", "nano", "inf", "-inf", "infinity", "NaN", "f",
+        ] {
             let block = first(&format!("[Info]\noffset = 0, 0\ndepth = {depth}\n"));
             assert!(from_block::<Info>(&block).is_err(), "{depth}");
         }

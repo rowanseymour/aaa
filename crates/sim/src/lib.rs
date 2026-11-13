@@ -7,6 +7,7 @@
 
 mod attach;
 pub mod economy;
+mod experience;
 mod fog;
 pub mod path;
 mod research;
@@ -25,6 +26,7 @@ use aaa_map::{
 pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
 pub use economy::{Balance, Change, Fallen, Ledger, Limit, Notice, Treasury};
+pub use experience::Commander;
 pub use fog::{Fog, Seen};
 pub use research::{Lacking, Researchable};
 pub use supply::{Bombarder, Held, Supplying};
@@ -174,6 +176,10 @@ pub struct World {
     pub holdings: Vec<(u32, String)>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
+    /// The experience of each side with a general, by player id.
+    pub commanders: BTreeMap<u32, Commander>,
+    /// The experience every side with a general gains a second.
+    pub experience_per_second: f32,
     /// What sides have been told since these were last taken.
     pub notices: Vec<Notice>,
     /// How far each template sees, by template.
@@ -1146,6 +1152,8 @@ impl World {
             rng: 0x9e37_79b9_7f4a_7c15,
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),
+            commanders: BTreeMap::new(),
+            experience_per_second: 0.0,
             notices: Vec::new(),
             sights: HashMap::new(),
             fog,
@@ -2155,6 +2163,7 @@ impl World {
         self.rally();
         self.unpack();
         self.earn();
+        self.gain_experience();
         self.look();
         self.ticks += 1;
     }

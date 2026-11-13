@@ -40,6 +40,7 @@ mod presets;
 mod remote;
 mod resource_bar;
 mod sound;
+mod special_ops;
 mod supply;
 mod technologies;
 mod ui;
@@ -589,6 +590,7 @@ fn main() -> ExitCode {
     app.add_plugins(render)
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
+        .add_plugins(special_ops::SpecialOpsPlugin)
         .add_plugins(music::MusicPlugin)
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
@@ -860,6 +862,11 @@ fn prepare(
     sim.sights = game.sights();
     sim.set_numbered(game.numbered());
     sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
+    let experience = game.experience_rules();
+    sim.experience_per_second = experience.per_second;
+    for (&player, general) in &leaders.0 {
+        sim.lead(player, experience.starting, general.experience_max);
+    }
     let given = lobby::handicap_technologies(&map.players, &handicaps, handicaps_offered);
     for (player, technology) in given {
         sim.gain(player, technology);
@@ -2470,6 +2477,7 @@ mod tests {
             name: name.into(),
             short_name: id.into(),
             operations: Vec::new(),
+            experience_max: None,
             public: true,
         };
         let leaders = Leaders(HashMap::from([

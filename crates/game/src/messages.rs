@@ -391,8 +391,9 @@ pub fn spawn(
         LogBox,
         Node {
             position_type: PositionType::Absolute,
-            top: px(crate::MARGIN),
-            left: px(crate::MARGIN),
+            // Beside the special operations panel, under its experience.
+            top: px(crate::special_ops::CLEAR.y),
+            left: px(crate::special_ops::CLEAR.x),
             width: px(WIDTH),
             flex_direction: FlexDirection::Column,
             row_gap: px(LINE_GAP),
