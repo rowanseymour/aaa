@@ -1,6 +1,6 @@
 //! Supply as the map shows it: a border along the edge of the ground the
 //! player's side is supplied over, and a tint on buildings going without.
-//! A button at the minimap's corner, or its key, shows and hides the
+//! A button on the minimap's rim, or its key, shows and hides the
 //! border, as the options do. Another over the minimap, or its key, steps
 //! through the player's regiments that have no HQ.
 
@@ -16,7 +16,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::Blocks;
-use crate::displays::Corner;
+use crate::displays::Rim;
 use crate::effects::Effects;
 use crate::keys::{self, Bindings};
 use crate::sound::Sounds;
@@ -181,7 +181,7 @@ const CYCLE_ICON: &str = "UI/Game/Floaters/ButtonDetachedRegimentUnpressed.tga";
 const CYCLE_HELP: &str = "idle_buttons_IdleButton_tooltip_2";
 const CYCLE_SIZE: f32 = 42.0;
 
-/// The button at the minimap's corner that shows and hides the border:
+/// The button on the minimap's rim that shows and hides the border:
 /// a ring in the border's colour, lit while it's shown.
 #[derive(Component)]
 pub struct BorderButton {
@@ -238,10 +238,10 @@ pub fn spawn(
             RelativeCursorPosition::default(),
             bindings.marked(keys::SUPPLY_BORDER, &name),
             Hint(what),
-            // In the corner the minimap's disc leaves of its square, where
-            // the game's control panel has it.
-            Corner::TopLeft.node(),
-            Surface::Hud,
+            // Top left on the minimap's rim, about where the game's control
+            // panel has it.
+            Rim::TopLeft.node(),
+            Surface::Clear,
             Edge::Border,
             GlobalZIndex(2),
             DespawnOnExit(Screen::Match),

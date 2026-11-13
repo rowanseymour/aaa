@@ -1,5 +1,6 @@
 //! The display panels: windows over the match, each opened by a round
-//! button on the minimap's rim or by its key, one at a time. The match holds still while one's up, unless it was already.
+//! button on the minimap's rim or by its key, one at a time. The match
+//! holds still while one's up, unless it was already.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::picking::hover::Hovered;
@@ -70,31 +71,31 @@ pub fn closed(displays: Option<Res<Displays>>) -> bool {
 /// The places on the minimap's rim its round buttons sit, between the
 /// diamond's corners.
 #[derive(Clone, Copy)]
-pub enum Corner {
+pub enum Rim {
     TopLeft,
     TopRight,
     BottomLeft,
     BottomRight,
 }
 
-impl Corner {
-    /// Where a round button sits in it.
+impl Rim {
+    /// Where a round button sits there.
     pub fn node(self) -> Node {
-        let centre = crate::MARGIN + minimap::DISC / 2.0 - minimap::CORNER_BUTTON / 2.0;
+        let centre = crate::MARGIN + minimap::DISC / 2.0 - minimap::RIM_BUTTON / 2.0;
         let near = px(centre - minimap::BOLT);
         let far = px(centre + minimap::BOLT);
         let (left, bottom) = match self {
-            Corner::TopLeft => (near, far),
-            Corner::TopRight => (far, far),
-            Corner::BottomLeft => (near, near),
-            Corner::BottomRight => (far, near),
+            Rim::TopLeft => (near, far),
+            Rim::TopRight => (far, far),
+            Rim::BottomLeft => (near, near),
+            Rim::BottomRight => (far, near),
         };
         Node {
             position_type: PositionType::Absolute,
             left,
             bottom,
-            width: px(minimap::CORNER_BUTTON),
-            height: px(minimap::CORNER_BUTTON),
+            width: px(minimap::RIM_BUTTON),
+            height: px(minimap::RIM_BUTTON),
             border: UiRect::all(px(1)),
             border_radius: BorderRadius::MAX,
             justify_content: JustifyContent::Center,
@@ -176,12 +177,12 @@ fn reset(mut displays: ResMut<Displays>) {
     *displays = Displays::default();
 }
 
-/// Spawns the button at `corner` that opens `panel`, drawn with `glyph`.
+/// Spawns the button at `rim` that opens `panel`, drawn with `glyph`.
 pub fn spawn_button(
     commands: &mut Commands,
     bindings: &Bindings,
     panel: Panel,
-    corner: Corner,
+    rim: Rim,
     glyph: Handle<Image>,
     name: String,
     help: String,
@@ -195,7 +196,7 @@ pub fn spawn_button(
             bindings.marked(panel.keys().0, &name),
             Hint(help),
             PanelButton { panel, name },
-            corner.node(),
+            rim.node(),
             Surface::Clear,
             Edge::Border,
             GlobalZIndex(2),

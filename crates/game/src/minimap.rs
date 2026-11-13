@@ -27,7 +27,7 @@ use aaa_sim::{Relation, State};
 /// corners touch.
 pub const DISC: f32 = 236.0;
 /// Width of the round buttons on the disc's rim.
-pub const CORNER_BUTTON: f32 = 34.0;
+pub const RIM_BUTTON: f32 = 34.0;
 /// How far the buttons' centres are from the disc's, across and up: on the
 /// rim, midway between the diamond's corners.
 pub const BOLT: f32 = DISC / 2.0 * std::f32::consts::FRAC_1_SQRT_2;
@@ -258,7 +258,7 @@ pub struct Backdrop;
 /// Whether a point of the disc's square is on the disc or one of the
 /// buttons on its rim.
 fn backdrop_shape(x: f32, y: f32) -> bool {
-    let (bolt, radius) = (BOLT / (DISC / 2.0), CORNER_BUTTON / DISC);
+    let (bolt, radius) = (BOLT / (DISC / 2.0), RIM_BUTTON / DISC);
     let (bx, by) = (x.abs() - bolt, y.abs() - bolt);
     x * x + y * y <= 1.0 || bx * bx + by * by <= radius * radius
 }
