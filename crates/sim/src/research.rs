@@ -231,6 +231,19 @@ impl World {
         Ok(item)
     }
 
+    /// Gives `player` a technology as [`World::grant`] does, telling them
+    /// so when it's new to them.
+    pub fn gain(&mut self, player: u32, technology: Id) {
+        if self.holds(player, &technology) {
+            return;
+        }
+        self.grant(player, technology.clone());
+        // A barred one isn't granted.
+        if self.holds(player, &technology) {
+            self.notices.push(Notice::Gained { player, technology });
+        }
+    }
+
     /// Gives what the building at `building` has researched to whom its
     /// item says.
     pub(crate) fn researched(&mut self, building: usize, item: &Research) {
@@ -246,14 +259,7 @@ impl World {
             technology: technology.clone(),
         });
         match item.grant {
-            Grant::Side if !self.holds(player, &technology) => {
-                self.grant(player, technology.clone());
-                // A barred one isn't granted.
-                if self.holds(player, &technology) {
-                    self.notices.push(Notice::Gained { player, technology });
-                }
-            }
-            Grant::Side => {}
+            Grant::Side => self.gain(player, technology),
             Grant::Building => self.buildings[building].properties.push(held),
             // No building belongs to a settlement, so there's none to have
             // it.

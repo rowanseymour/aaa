@@ -534,7 +534,9 @@ pub fn dropdown() -> impl Bundle {
         Node {
             position_type: PositionType::Absolute,
             top: percent(100),
-            width: percent(100),
+            // As wide as its opener, or its longest choice where that's
+            // wider.
+            min_width: percent(100),
             flex_direction: FlexDirection::Column,
             border: UiRect::all(px(1)),
             ..default()
@@ -730,22 +732,72 @@ pub fn disabled(words: impl Into<String>, size: Font) -> impl Bundle {
 pub struct Dropdown {
     pub row: Entity,
     pub width: Val,
-    pub label: String,
+    pub label: Shown,
     pub open: bool,
 }
 
+/// What a [`Dropdown`] shows for a choice: words, after a picture if it has
+/// one, and a [`Hint`] if it has one.
+#[derive(Default)]
+pub struct Shown {
+    pub icon: Option<Handle<Image>>,
+    pub words: String,
+    pub hint: Option<String>,
+}
+
+impl From<String> for Shown {
+    fn from(words: String) -> Self {
+        Shown { words, ..default() }
+    }
+}
+
+impl From<&str> for Shown {
+    fn from(words: &str) -> Self {
+        words.to_string().into()
+    }
+}
+
+impl Shown {
+    pub fn spawn(self, commands: &mut Commands, cell: Entity) {
+        if let Some(hint) = self.hint {
+            commands.entity(cell).insert(Hint(hint));
+        }
+        if let Some(icon) = self.icon {
+            let gap = match self.words.is_empty() {
+                true => 0.0,
+                false => 6.0,
+            };
+            let size = Node {
+                margin: UiRect::right(px(gap)),
+                ..default()
+            };
+            commands.spawn((ChildOf(cell), size, ImageNode::new(icon)));
+        }
+        if !self.words.is_empty() {
+            // Unwrapped, so a list as wide as its longest choice is as tall
+            // as its choices.
+            let words = (
+                text(self.words, Font::Body),
+                TextLayout::new(Justify::Left, LineBreak::NoWrap),
+            );
+            commands.spawn((ChildOf(cell), words));
+        }
+    }
+}
+
 impl Dropdown {
-    pub fn spawn<B: Bundle, C: Bundle, M1, M2>(
+    pub fn spawn<B: Bundle, C: Bundle, S: Into<Shown>, M1, M2>(
         self,
         commands: &mut Commands,
         opener_marker: B,
         on_open: impl IntoEntityObserver<M1>,
-        choices: impl Iterator<Item = (C, String)>,
+        choices: impl Iterator<Item = (C, S)>,
         on_choose: impl IntoEntityObserver<M2> + Copy,
     ) {
         let cell = Node {
             width: percent(100),
             justify_content: JustifyContent::Start,
+            align_items: AlignItems::Center,
             ..padded()
         };
         let holder = Node {
@@ -753,29 +805,23 @@ impl Dropdown {
             ..default()
         };
         let holder = commands.spawn((ChildOf(self.row), holder)).id();
-        commands
-            .spawn((
-                ChildOf(holder),
-                opener(cell.clone()),
-                opener_marker,
-                children![text(self.label, Font::Body)],
-            ))
-            .observe(on_open);
+        let label = commands
+            .spawn((ChildOf(holder), opener(cell.clone()), opener_marker))
+            .observe(on_open)
+            .id();
+        self.label.spawn(commands, label);
         if !self.open {
             return;
         }
         let list = commands
             .spawn((ChildOf(holder), dropdown(), GlobalZIndex(layer::LIST)))
             .id();
-        for (choice, name) in choices {
-            commands
-                .spawn((
-                    ChildOf(list),
-                    clickable(cell.clone()),
-                    choice,
-                    children![text(name, Font::Body)],
-                ))
-                .observe(on_choose);
+        for (choice, shown) in choices {
+            let item = commands
+                .spawn((ChildOf(list), clickable(cell.clone()), choice))
+                .observe(on_choose)
+                .id();
+            shown.into().spawn(commands, item);
         }
     }
 }
