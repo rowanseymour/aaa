@@ -4,6 +4,7 @@
 //! happened. `spec/messages.md` is what it's built to.
 
 use std::collections::{HashMap, VecDeque};
+use std::sync::Arc;
 
 use aaa_data::{GameEvent, Id, InterfaceVars};
 use aaa_render::camera::RtsCamera;
@@ -58,7 +59,7 @@ struct Look {
     kinds: HashMap<Id, Kind>,
     events: HashMap<Id, GameEvent>,
     vars: InterfaceVars,
-    strings: aaa_data::Strings,
+    strings: Arc<aaa_data::Strings>,
     names: HashMap<Id, String>,
     /// What an icon that looks somewhere says.
     to_location: String,
@@ -351,7 +352,7 @@ struct LookAt(u64);
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
     local: Res<Local>,
@@ -360,7 +361,7 @@ pub fn spawn(
     mut icons: ResMut<displays::Icons>,
 ) {
     let corner = crate::special_ops::corner(&local, &leaders);
-    let game = &mut loaded.game;
+    let game = &loaded.game;
     let kinds = game
         .message_kinds()
         .into_iter()
@@ -413,9 +414,9 @@ pub fn spawn(
         to_location: (strings.get("ui_tooltip_message_location").cloned())
             .unwrap_or_else(|| "Move camera to message location".into()),
         strings,
-        names: (game.listings().into_iter())
-            .map(|(id, l)| (id, l.name))
-            .chain(game.technologies().into_iter().map(|(id, t)| (id, t.name)))
+        names: (game.listings().iter())
+            .map(|(id, l)| (id.clone(), l.name.clone()))
+            .chain((game.technologies().iter()).map(|(id, t)| (id.clone(), t.name.clone())))
             .collect(),
     };
     commands.insert_resource(MessageLog::new(look));
@@ -941,7 +942,7 @@ mod tests {
                 ),
             ]),
             vars: vars_of(vars),
-            strings: aaa_data::Strings::default(),
+            strings: Arc::default(),
             names: HashMap::new(),
             to_location: String::new(),
         }

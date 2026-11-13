@@ -50,7 +50,7 @@ pub const BUILDING_HEALTH_BAR: Vec2 = Vec2::new(3.35, 0.16);
 
 impl OverlayImages {
     pub fn load(
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
     ) -> Self {
@@ -140,7 +140,7 @@ pub struct BannerImages {
 
 impl BannerImages {
     pub fn load(
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
     ) -> Self {
@@ -176,7 +176,7 @@ impl BannerImages {
     /// first time it's asked for.
     pub fn icon(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         template: &str,
     ) -> Option<Handle<Image>> {
@@ -194,7 +194,7 @@ impl BannerImages {
     /// nation's; loaded the first time it's asked for.
     pub fn frame(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         template: &str,
     ) -> Option<Handle<Image>> {
@@ -208,7 +208,7 @@ impl BannerImages {
     /// one that isn't its template's; loaded the first time it's asked for.
     pub fn nation_frame(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         nation: &str,
     ) -> Option<Handle<Image>> {
@@ -234,7 +234,7 @@ impl BannerImages {
     /// it's asked for.
     pub fn nation_badge(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         nation: &str,
         badge: usize,
@@ -249,7 +249,7 @@ impl BannerImages {
     /// A nation with more divisions than badges goes round them again.
     pub fn badge(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         division: &Division,
     ) -> Option<Handle<Image>> {
@@ -261,7 +261,7 @@ impl BannerImages {
 
     fn image(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         images: &mut Assets<Image>,
         path: String,
     ) -> Option<Handle<Image>> {
@@ -509,11 +509,7 @@ pub fn border_paths(loops: &[Vec<[f32; 2]>]) -> Vec<Vec<[f32; 2]>> {
 }
 
 /// The image a border is drawn with, sampled over and over along it.
-pub fn border_image(
-    game: &mut GameData,
-    path: &str,
-    formats: CompressedImageFormats,
-) -> Option<Image> {
+pub fn border_image(game: &GameData, path: &str, formats: CompressedImageFormats) -> Option<Image> {
     let mut image = textures::decode(&game.read(path)?, path, formats, true)?;
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_v: ImageAddressMode::Repeat,

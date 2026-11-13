@@ -270,8 +270,8 @@ pub struct Lobby {
 }
 
 impl Lobby {
-    fn new(data: &mut Data, map: String, asked: Side) -> Lobby {
-        let brief = Brief::load(&mut data.0, &map);
+    fn new(data: &Data, map: String, asked: Side) -> Lobby {
+        let brief = Brief::load(&data.0, &map);
         let (preset, person) = match &brief {
             Ok(b) => (
                 Preset::made_for(&b.players),
@@ -421,7 +421,7 @@ impl Plugin for LobbyPlugin {
 /// keep them.
 fn load_pictures(
     mut commands: Commands,
-    mut data: ResMut<Data>,
+    data: Res<Data>,
     all: Res<Nations>,
     flags: Option<Res<Flags>>,
     mut handicaps: ResMut<Handicaps>,
@@ -451,12 +451,7 @@ fn load_pictures(
 }
 
 /// Picks the first of the scenarios, unless the lobby has been here before.
-fn enter(
-    mut commands: Commands,
-    mut data: ResMut<Data>,
-    asked: Res<Side>,
-    lobby: Option<ResMut<Lobby>>,
-) {
+fn enter(mut commands: Commands, data: Res<Data>, asked: Res<Side>, lobby: Option<ResMut<Lobby>>) {
     if let Some(mut lobby) = lobby {
         lobby.open = Open::Nothing;
         return;
@@ -464,7 +459,7 @@ fn enter(
     let Some(map) = scenarios(&data).into_iter().next() else {
         return;
     };
-    commands.insert_resource(Lobby::new(&mut data, map, *asked));
+    commands.insert_resource(Lobby::new(&data, map, *asked));
 }
 
 /// The maps a custom game is played on, by archive path: those in the maps
@@ -480,7 +475,7 @@ fn scenarios(data: &Data) -> Vec<String> {
 
 /// Lays out the lobby as the game does: the preset over the sides on the
 /// left, the map and the buttons on the right.
-fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
+fn spawn(mut commands: Commands, data: Res<Data>) {
     commands.spawn((Camera2d, DespawnOnExit(Screen::Lobby)));
     let root = commands
         .spawn((
@@ -578,7 +573,7 @@ fn spawn(mut commands: Commands, mut data: ResMut<Data>) {
         .id();
     commands.spawn((ChildOf(list), text("Scenario Maps", Font::Body)));
     for name in scenarios(&data) {
-        let label = Brief::load(&mut data.0, &name)
+        let label = Brief::load(&data.0, &name)
             .map_or_else(|_| aaa_data::map_title(&name).to_string(), |b| b.name);
         commands
             .spawn((
@@ -617,12 +612,12 @@ fn ask_exit(
 fn choose_map(
     activate: On<Activate>,
     choices: Query<&MapChoice>,
-    mut data: ResMut<Data>,
+    data: Res<Data>,
     asked: Res<Side>,
     mut commands: Commands,
 ) {
     if let Ok(MapChoice(name)) = choices.get(activate.entity) {
-        commands.insert_resource(Lobby::new(&mut data, name.clone(), *asked));
+        commands.insert_resource(Lobby::new(&data, name.clone(), *asked));
     }
 }
 
@@ -1252,6 +1247,7 @@ mod tests {
             operations: Vec::new(),
             experience_max: None,
             public: id != "patton_tutorial",
+            portrait: None,
         };
         let nation = |id: &str, generals: &[&str]| Nation {
             id: Id::from(id),

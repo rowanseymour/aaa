@@ -27,9 +27,9 @@ pub struct ObjectiveLooks {
 impl GameData {
     /// How the Objectives window's layout draws each state, white with no
     /// box where it doesn't say.
-    pub fn objective_looks(&mut self) -> ObjectiveLooks {
+    pub fn objective_looks(&self) -> ObjectiveLooks {
         // Not in the load lists.
-        let parsed = self.read(LAYOUT).map(|b| tgi::parse_bytes(&b));
+        let parsed = self.parsed(LAYOUT);
         let block = (parsed.as_ref()).and_then(|p| p.root.blocks_of(WINDOW).next());
         let look = |state: &str| {
             let value = |key: String| block.and_then(|b| b.value(&key)).map(str::trim);
@@ -51,7 +51,7 @@ impl GameData {
 
     /// Whether a side's objectives are kept in order of their text, rather
     /// than in the order they're given.
-    pub fn sort_objectives(&mut self) -> bool {
+    pub fn sort_objectives(&self) -> bool {
         (self.svars().iter())
             .find_map(|v| v.sort_objectives)
             .unwrap_or(true)

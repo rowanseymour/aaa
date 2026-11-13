@@ -68,7 +68,7 @@ pub struct Map {
 impl Map {
     /// Loads the map at an archive path, as [`GameData::find_map`] gives it,
     /// with `recruits` from the same game data.
-    pub fn load(game: &mut GameData, recruits: &Recruits, name: &str) -> Result<Map, String> {
+    pub fn load(game: &GameData, recruits: &Recruits, name: &str) -> Result<Map, String> {
         Map::load_as(game, recruits, name, &HashMap::new())
     }
 
@@ -76,7 +76,7 @@ impl Map {
     /// each putting its own templates in place of the placeholders it starts
     /// with, such as its Corps HQ.
     pub fn load_as(
-        game: &mut GameData,
+        game: &GameData,
         recruits: &Recruits,
         name: &str,
         nations: &HashMap<u32, Nation>,
@@ -632,7 +632,7 @@ pub struct Brief {
 impl Brief {
     /// Reads the brief of the map at an archive path, as
     /// [`GameData::find_map`] gives it.
-    pub fn load(game: &mut GameData, name: &str) -> Result<Brief, String> {
+    pub fn load(game: &GameData, name: &str) -> Result<Brief, String> {
         let mut map = game.open_map(name)?;
         let err = |e: tgck::Error| format!("{name}: {e}");
         let header = map.header().map_err(err)?;
@@ -665,7 +665,7 @@ pub fn sides(players: &[Player]) -> impl Iterator<Item = &Player> {
 }
 
 fn read_sides<R: std::io::Read + std::io::Seek>(
-    game: &mut GameData,
+    game: &GameData,
     map: &mut tgck::Map<R>,
 ) -> tgck::Result<(Vec<Player>, Vec<Team>)> {
     let rules = game.economy_rules();

@@ -2,6 +2,7 @@
 //! effects off.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{GameData, Id, Targets, beside, defs, not_null, scoped, views::texture_dirs};
 
@@ -200,7 +201,11 @@ pub struct WeaponEffects {
 
 impl GameData {
     /// Every visual effect, by id.
-    pub fn vfx(&mut self) -> HashMap<Id, Vfx> {
+    pub fn vfx(&self) -> Arc<HashMap<Id, Vfx>> {
+        self.kept("vfx", || self.read_vfx())
+    }
+
+    fn read_vfx(&self) -> HashMap<Id, Vfx> {
         // Effects live beside what uses them as well as in their own folder.
         let files = self.parse_tgis(|_| true);
         let files = scoped(&files);
@@ -235,7 +240,7 @@ impl GameData {
     }
 
     /// The effects of each object template that shows any, by template id.
-    pub fn object_effects(&mut self) -> HashMap<Id, ObjectEffects> {
+    pub fn object_effects(&self) -> HashMap<Id, ObjectEffects> {
         let mut out = self.by_template(|t| Some(object_effects(t)));
         out.retain(|_, e| !e.is_empty());
         out
@@ -243,7 +248,7 @@ impl GameData {
 
     /// The node names of the model points effects name by id, such as
     /// `gun_ae_01`.
-    pub fn bones(&mut self) -> HashMap<Id, String> {
+    pub fn bones(&self) -> HashMap<Id, String> {
         let files = self.parse_tgis(|n| n.starts_with("game/bones"));
         let files = scoped(&files);
         files

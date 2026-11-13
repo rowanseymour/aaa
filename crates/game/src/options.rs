@@ -86,7 +86,7 @@ pub struct Options {
 
 impl Options {
     /// The game's own choices.
-    pub fn new(game: &mut GameData) -> Self {
+    pub fn new(game: &GameData) -> Self {
         let strings = game.strings();
         let configurations = game.hotkey_configurations(&strings);
         let named = game.default_hotkey_configuration();
@@ -1090,7 +1090,7 @@ mod tests {
                 speech: 0.95,
                 music: 0.7,
             }))
-            .insert_resource(Sounds::of(std::collections::HashMap::new(), &[]))
+            .insert_resource(Sounds::of(Default::default(), &[]))
             .init_resource::<Border>()
             .insert_resource(UiScaleSetting(1.0))
             .add_message::<WindowResized>();

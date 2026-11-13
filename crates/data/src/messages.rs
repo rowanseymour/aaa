@@ -89,7 +89,7 @@ fn named(value: Option<&str>) -> Option<String> {
 
 impl GameData {
     /// The kinds of message, in the order the files define them.
-    pub fn message_kinds(&mut self) -> Vec<MessageKind> {
+    pub fn message_kinds(&self) -> Vec<MessageKind> {
         let files = self.parse_tgis(|n| n.starts_with(MESSAGE_TYPES));
         let blocks = files
             .iter()
@@ -115,7 +115,7 @@ impl GameData {
     }
 
     /// The game events, by id, with their lines in the game's language.
-    pub fn game_events(&mut self) -> HashMap<Id, GameEvent> {
+    pub fn game_events(&self) -> HashMap<Id, GameEvent> {
         let strings = self.strings();
         let files = self.parse_tgis(|n| n.starts_with(GAME_EVENTS));
         let blocks = files
@@ -145,11 +145,11 @@ impl GameData {
     }
 
     /// The interface's settings, the game's own over the engine's.
-    pub fn interface_vars(&mut self) -> InterfaceVars {
+    pub fn interface_vars(&self) -> InterfaceVars {
         let mut out = InterfaceVars::default();
         for name in ["UVars_AA.tgi", "UVars.tgi"] {
-            if let Some(bytes) = self.read(name) {
-                out.read(&tgi::parse_bytes(&bytes));
+            if let Some(parsed) = self.parsed(name) {
+                out.read(&parsed);
             }
         }
         out

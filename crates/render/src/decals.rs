@@ -64,7 +64,7 @@ impl MapAssets<'_> {
     #[allow(clippy::too_many_arguments)]
     pub fn decal(
         &mut self,
-        game: &mut GameData,
+        game: &GameData,
         cache: &mut DecalCache,
         ground: &Ground,
         decal: &Decal,

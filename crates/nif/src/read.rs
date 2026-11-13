@@ -372,10 +372,23 @@ impl Object {
                 Object::ExtraData(ExtraData { name, value })
             }
             "NiCamera" => {
-                scene(r)?;
-                let extra = if r.old() { 0 } else { 2 + 1 };
-                r.skip(extra + 6 * 4 + 5 * 4 + 4 + 4 + 4)?;
-                other()
+                let av = scene(r)?;
+                if !r.old() {
+                    r.skip(2)?;
+                }
+                let [left, right, top, bottom, near, far] = r.floats()?;
+                let orthographic = !r.old() && r.bool()?;
+                r.skip(5 * 4 + 4 + 4 + 4)?;
+                Object::Camera(Camera {
+                    av,
+                    left,
+                    right,
+                    top,
+                    bottom,
+                    near,
+                    far,
+                    orthographic,
+                })
             }
             "NiTextKeyExtraData" => {
                 let name = extra_data_name(r)?;

@@ -52,6 +52,7 @@ use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 
 use aaa_data::{Footing, GameData};
 use aaa_map::{Ground, Map, Recruits, Shape};
@@ -103,9 +104,9 @@ enum Screen {
     Match,
 }
 
-/// The game's data while the menus wait for a map.
+/// The game's data, which a match shares as it's loaded and played.
 #[derive(Resource)]
-struct Data(GameData);
+struct Data(Arc<GameData>);
 
 /// The map to play, which [`load`] sets up off the main thread.
 #[derive(Resource)]
@@ -147,6 +148,35 @@ pub(crate) struct LoadingScreen;
 #[derive(Component)]
 struct LoadingStatus;
 
+/// How far loading a match has got, which the loading screen says.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Stage {
+    Data,
+    Objects,
+    Resources,
+    Finished,
+}
+
+/// What the loading screen says for each [`Stage`], in the game's words.
+#[derive(Resource)]
+struct StageWords([String; 4]);
+
+impl StageWords {
+    fn of(strings: &aaa_data::Strings) -> Self {
+        let said = ui::said(strings);
+        StageWords([
+            said("app_status_loading_data", "Loading Data"),
+            said("app_status_loading_objects", "Loading Objects"),
+            said("app_status_loading_resources", "Loading Resources"),
+            said("app_status_finished", "Finished Loading"),
+        ])
+    }
+
+    fn of_stage(&self, stage: Stage) -> &str {
+        &self.0[stage as usize]
+    }
+}
+
 /// A match set up behind the loading screen; whether it waits there for the
 /// person to continue.
 #[derive(Resource)]
@@ -160,7 +190,7 @@ struct ContinueSlot;
 
 #[derive(Resource)]
 struct Loaded {
-    game: GameData,
+    game: Arc<GameData>,
     map: Map,
 }
 
@@ -169,7 +199,11 @@ struct Loaded {
 /// would hold up quitting mid-load until it finished.
 #[derive(Resource)]
 struct Preparing {
-    thread: std::thread::JoinHandle<Result<Prepared, (Box<GameData>, String)>>,
+    thread: std::thread::JoinHandle<Result<Prepared, String>>,
+    /// Where the thread has got to.
+    stage: Arc<Mutex<Stage>>,
+    /// What the loading screen last said.
+    shown: Stage,
     from_menu: bool,
 }
 
@@ -180,6 +214,7 @@ struct Prepared {
     raising: Recruits,
     person: Option<u32>,
     leaders: Leaders,
+    effects: effects::Effects,
 }
 
 #[derive(Resource)]
@@ -337,7 +372,7 @@ struct TrailerView {
 fn spawn_unit_view(
     commands: &mut Commands,
     models: &mut Models,
-    game: &mut GameData,
+    game: &GameData,
     assets: &mut ModelAssets,
     ground: &Ground,
     thing: &Thing,
@@ -547,7 +582,7 @@ fn main() -> ExitCode {
             .ok_or_else(|| format!("no map named {map:?}; run without one to pick from a menu"))?;
         Ok((game, Some(name)))
     });
-    let (mut game, map) = match opened {
+    let (game, map) = match opened {
         Ok(o) => o,
         Err(e) => {
             eprintln!("aaa-game: {e}");
@@ -698,7 +733,11 @@ fn main() -> ExitCode {
                 minimap::update.after(camera::Controls).after(fog::look),
                 minimap::tint,
                 (actions::back_out, actions::show).chain(),
-                (object_display::lay_out, object_display::refresh).chain(),
+                (
+                    object_display::lay_out,
+                    (object_display::refresh, object_display::portray),
+                )
+                    .chain(),
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
@@ -749,11 +788,12 @@ fn main() -> ExitCode {
         .insert_resource(lobby::Handicaps::new(game.handicaps()))
         .insert_resource(lobby::Leaving::of(&strings))
         .insert_resource(confirm::Words::of(&strings))
-        .insert_resource(options::Options::new(&mut game))
-        .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
-        .insert_resource(music::Music::new(&mut game))
+        .insert_resource(StageWords::of(&strings))
+        .insert_resource(options::Options::new(&game))
+        .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
+        .insert_resource(music::Music::new(&game))
         .insert_resource(sound::Volumes(game.volumes()))
-        .insert_resource(Data(game));
+        .insert_resource(Data(Arc::new(game)));
     match map {
         Some(name) => {
             app.insert_resource(Pending {
@@ -796,12 +836,14 @@ fn takes_input(
 
 /// Loads a map and sets up the sim and recruits for a match on it.
 fn prepare(
-    mut game: GameData,
+    game: Arc<GameData>,
     pending: Pending,
     nations: &[aaa_data::Nation],
     handicaps_offered: &[aaa_data::Handicap],
     side: Side,
-) -> Result<Prepared, (Box<GameData>, String)> {
+    stage: &Mutex<Stage>,
+) -> Result<Prepared, String> {
+    let reached = |s| *stage.lock().unwrap_or_else(|e| e.into_inner()) = s;
     let Pending {
         name,
         teams,
@@ -817,16 +859,13 @@ fn prepare(
     // fixes or one at random.
     let chosen = match from_menu {
         true => chosen,
-        false => aaa_map::Brief::load(&mut game, &name).map_or_else(
+        false => aaa_map::Brief::load(&game, &name).map_or_else(
             |_| HashMap::new(),
             |b| lobby::nations(&b.players, &HashMap::new(), nations),
         ),
     };
-    let raising = Recruits::new(&mut game);
-    let mut map = match Map::load_as(&mut game, &raising, &name, &chosen) {
-        Ok(map) => map,
-        Err(e) => return Err((Box::new(game), e)),
-    };
+    let raising = Recruits::new(&game);
+    let mut map = Map::load_as(&game, &raising, &name, &chosen)?;
     for w in &map.warnings {
         warn!("{name}: {w}");
     }
@@ -841,6 +880,7 @@ fn prepare(
     if !from_menu && side.0.is_some() && person.is_none() {
         warn!("{}: no such side to play", map.title);
     }
+    reached(Stage::Objects);
     let operations = game.operations();
     let dropped = operations.values().filter_map(|o| match o {
         aaa_map::Operation::Drop(template) => Some(template.clone()),
@@ -885,12 +925,20 @@ fn prepare(
     for (player, technology) in given {
         sim.gain(player, technology);
     }
+    let effects = effects::Effects::new(&game, &map);
+    // Built here, off the main thread, and kept for the interface to read
+    // as the match starts.
+    game.strings();
+    game.listings();
+    game.technologies();
+    game.property_looks();
     Ok(Prepared {
         loaded: Loaded { game, map },
         sim,
         raising,
         person,
         leaders,
+        effects,
     })
 }
 
@@ -902,6 +950,7 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
         raising,
         person,
         leaders,
+        effects,
     } = prepared;
     let lineup = lobby::Lineup::new(&loaded.map.players, person);
     for &(id, control) in &lineup.0 {
@@ -923,12 +972,13 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     world.insert_resource(Sim(sim));
     world.insert_resource(Orders::default());
     world.insert_resource(Raising(raising));
+    world.insert_resource(effects);
     world.insert_resource(loaded);
 }
 
 /// Shows the map being loaded, as the game does: its name over what it's
 /// about, and how loading goes.
-fn loading(mut commands: Commands, pending: Res<Pending>) {
+fn loading(mut commands: Commands, pending: Res<Pending>, words: Res<StageWords>) {
     use ui::{Edge, Font, Ink, Surface, label, text};
     commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
     let root = commands
@@ -977,7 +1027,10 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
             ..default()
         },
         children![
-            (LoadingStatus, label("Loading...", Font::Body, Ink::Help)),
+            (
+                LoadingStatus,
+                label(words.of_stage(Stage::Data), Font::Body, Ink::Help)
+            ),
             (
                 ContinueSlot,
                 Node {
@@ -995,24 +1048,41 @@ fn loading(mut commands: Commands, pending: Res<Pending>) {
 /// if it can't be loaded.
 fn load(world: &mut bevy::ecs::world::World) {
     if let Some(pending) = world.remove_resource::<Pending>() {
-        let Some(Data(game)) = world.remove_resource::<Data>() else {
+        let Some(game) = world.get_resource::<Data>().map(|d| d.0.clone()) else {
             return;
         };
         let nations = world.resource::<lobby::Nations>().0.clone();
         let handicaps = world.resource::<lobby::Handicaps>().all.clone();
         let side = *world.resource::<Side>();
         let from_menu = pending.from_menu;
-        let thread = std::thread::spawn(move || prepare(game, pending, &nations, &handicaps, side));
-        world.insert_resource(Preparing { thread, from_menu });
+        let stage = Arc::new(Mutex::new(Stage::Data));
+        let reached = stage.clone();
+        let thread = std::thread::spawn(move || {
+            prepare(game, pending, &nations, &handicaps, side, &reached)
+        });
+        world.insert_resource(Preparing {
+            thread,
+            stage,
+            shown: Stage::Data,
+            from_menu,
+        });
         return;
     }
-    if !world
-        .get_resource::<Preparing>()
-        .is_some_and(|p| p.thread.is_finished())
-    {
+    let Some(mut preparing) = world.get_resource_mut::<Preparing>() else {
+        return;
+    };
+    if !preparing.thread.is_finished() {
+        let stage = *preparing.stage.lock().unwrap_or_else(|e| e.into_inner());
+        if stage != preparing.shown {
+            preparing.shown = stage;
+            show_stage(world, stage);
+        }
         return;
     }
-    let Some(Preparing { thread, from_menu }) = world.remove_resource::<Preparing>() else {
+    let Some(Preparing {
+        thread, from_menu, ..
+    }) = world.remove_resource::<Preparing>()
+    else {
         return;
     };
     let prepared = thread
@@ -1020,23 +1090,33 @@ fn load(world: &mut bevy::ecs::world::World) {
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     match prepared {
         Ok(prepared) => {
+            // Shown this frame, before the match is set up on the next.
+            show_stage(world, Stage::Resources);
             begin(world, prepared);
             world.insert_resource(Readying { wait: from_menu });
             world.resource_mut::<NextState<Screen>>().set(Screen::Match);
         }
-        Err((game, e)) if from_menu => {
+        Err(e) if from_menu => {
             error!("{e}");
             let mut screens = world.query_filtered::<Entity, With<LoadingScreen>>();
             for screen in screens.iter(world).collect::<Vec<_>>() {
                 world.despawn(screen);
             }
-            world.insert_resource(Data(*game));
             world.resource_mut::<NextState<Screen>>().set(Screen::Lobby);
         }
-        Err((_, e)) => {
+        Err(e) => {
             error!("{e}");
             world.write_message(AppExit::error());
         }
+    }
+}
+
+/// Says on the loading screen how far loading has got.
+fn show_stage(world: &mut bevy::ecs::world::World, stage: Stage) {
+    let said = world.resource::<StageWords>().of_stage(stage).to_string();
+    let mut status = world.query_filtered::<&mut Text, With<LoadingStatus>>();
+    for mut text in status.iter_mut(world) {
+        text.0.clone_from(&said);
     }
 }
 
@@ -1047,6 +1127,7 @@ fn ready(
     readying: Option<Res<Readying>>,
     mut time: ResMut<Time<Virtual>>,
     mut status: Query<&mut Text, With<LoadingStatus>>,
+    words: Res<StageWords>,
     slot: Query<Entity, With<ContinueSlot>>,
     screen: Query<Entity, With<LoadingScreen>>,
 ) {
@@ -1060,7 +1141,7 @@ fn ready(
     }
     time.pause();
     for mut text in &mut status {
-        text.0 = "Finished Loading".into();
+        text.0 = words.of_stage(Stage::Finished).into();
     }
     for slot in &slot {
         commands
@@ -1084,13 +1165,13 @@ fn start(
 /// [`select`] draws.
 fn setup_overlays(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
-    let images = OverlayImages::load(&mut loaded.game, &mut images, formats.0);
+    let images = OverlayImages::load(&loaded.game, &mut images, formats.0);
     let mut tinted = |image: &Option<Handle<Image>>| {
         TINTS.map(|c| materials.add(overlay::mark_material(image.clone(), c)))
     };
@@ -1117,14 +1198,14 @@ fn setup_overlays(
 
 fn setup(
     mut commands: Commands,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     sim: Res<Sim>,
     local: Res<Local>,
     mut assets: MapAssets,
     mut sounds: ResMut<sound::Sounds>,
     mut window: Option<Single<&mut Window, With<PrimaryWindow>>>,
 ) {
-    let Loaded { game, map } = &mut *loaded;
+    let Loaded { game, map } = &*loaded;
     if let Some(window) = &mut window {
         window.title = format!("{} - aaa-game", map.title);
     }
@@ -1238,7 +1319,6 @@ fn setup(
         objects: HashMap::new(),
     });
     commands.insert_resource(Drawn(models));
-    commands.insert_resource(effects::Effects::new(game, map));
     sounds.load_objects(game);
 }
 
@@ -1340,12 +1420,12 @@ fn thing_at(
 fn spawn_views(
     mut commands: Commands,
     sim: Res<Sim>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut drawn: ResMut<Drawn>,
     mut viewed: ResMut<Viewed>,
     mut assets: MapAssets,
 ) {
-    let Loaded { game, map } = &mut *loaded;
+    let Loaded { game, map } = &*loaded;
     for u in viewed.units..sim.0.units.len() {
         let unit = &sim.0.units[u];
         let regiment = &sim.0.regiments[unit.regiment];
@@ -1428,7 +1508,7 @@ fn clear_scenery(
 fn show_packing(
     mut commands: Commands,
     sim: Res<Sim>,
-    mut loaded: ResMut<Loaded>,
+    loaded: Res<Loaded>,
     mut drawn: ResMut<Drawn>,
     mut assets: MapAssets,
     mut views: Query<(&mut BuildingView, &MapObject, &mut Visibility)>,
@@ -1455,7 +1535,7 @@ fn show_packing(
             let mut models = assets.models();
             let spawned = drawn.0.spawn_packing(
                 &mut commands,
-                &mut loaded.game,
+                &loaded.game,
                 &mut models,
                 &object.0,
                 building.owner,
@@ -2486,6 +2566,7 @@ mod tests {
             operations: Vec::new(),
             experience_max: None,
             public: true,
+            portrait: None,
         };
         let leaders = Leaders(HashMap::from([
             (1, general("patton", "General Patton")),

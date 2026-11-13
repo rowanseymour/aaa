@@ -2,6 +2,7 @@
 //! they say they do.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::strings::localized;
 use crate::supply::{is, listed};
@@ -112,7 +113,7 @@ impl GameData {
     }
 
     /// The game's words for speeds, in the order it lists them.
-    pub(crate) fn paces(&mut self, strings: &crate::Strings) -> Vec<Pace> {
+    pub(crate) fn paces(&self, strings: &crate::Strings) -> Vec<Pace> {
         let definitions = self.definitions();
         let speeds = (definitions.descriptions.iter()).filter(|d| is(&d.category, "SPEED"));
         speeds
@@ -128,7 +129,7 @@ impl GameData {
 
     /// What each shared property says under its name, by id: who it's
     /// for, then a line for each thing it does that the game has words for.
-    pub(crate) fn property_lines(&mut self, strings: &crate::Strings) -> HashMap<Id, Vec<String>> {
+    pub(crate) fn property_lines(&self, strings: &crate::Strings) -> HashMap<Id, Vec<String>> {
         let paces = self.paces(strings);
         let definitions = self.definitions();
         let name = |p: &defs::Property| localized(strings, p.name.as_deref()).unwrap_or_default();
@@ -152,7 +153,11 @@ impl GameData {
     }
 
     /// How each shared property that has an icon shows, by id.
-    pub fn property_looks(&mut self) -> HashMap<Id, PropertyLook> {
+    pub fn property_looks(&self) -> Arc<HashMap<Id, PropertyLook>> {
+        self.kept("property_looks", || self.read_property_looks())
+    }
+
+    fn read_property_looks(&self) -> HashMap<Id, PropertyLook> {
         let strings = self.strings();
         let mut lines = self.property_lines(&strings);
         let definitions = self.definitions();

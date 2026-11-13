@@ -2,6 +2,7 @@
 //! arrive.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{
     GameData, Id, Layout, add_renames, defs, icon_beside, renamed, renames, resource_name,
@@ -107,7 +108,7 @@ pub struct DeployPoints {
 impl GameData {
     /// What each template that recruits lists, in the order its buttons
     /// take, by template id: for a Corps HQ, what it commissions.
-    pub fn recruit_lists(&mut self) -> HashMap<Id, Vec<Id>> {
+    pub fn recruit_lists(&self) -> HashMap<Id, Vec<Id>> {
         self.by_template(|t| {
             let list = &t.recruit_component.as_ref()?.recruit_actor;
             let ids: Vec<Id> = list.iter().filter_map(|r| r.actor_ids.clone()).collect();
@@ -116,7 +117,7 @@ impl GameData {
     }
 
     /// How each template that packs or unpacks does, by template id.
-    pub fn deployments(&mut self) -> HashMap<Id, Deployment> {
+    pub fn deployments(&self) -> HashMap<Id, Deployment> {
         self.by_template(|t| {
             let m = t.mobile_deployment_component.as_ref()?;
             let d = Deployment::DEFAULT;
@@ -136,7 +137,7 @@ impl GameData {
 
     /// The packed building, such as a truck, that each building packs into,
     /// by template id: of those that unpack into it, the one defined first.
-    pub fn packs_into(&mut self) -> HashMap<Id, Id> {
+    pub fn packs_into(&self) -> HashMap<Id, Id> {
         let renames = self.thing_renames();
         let mut out = HashMap::new();
         for t in &self.definitions().things {
@@ -155,7 +156,7 @@ impl GameData {
     /// Seconds recruiting or commissioning one of each template takes, by
     /// template id: an organization's recruit time, else the inverse of
     /// how fast it resupplies.
-    pub fn recruit_times(&mut self) -> HashMap<Id, f32> {
+    pub fn recruit_times(&self) -> HashMap<Id, f32> {
         self.by_template(|t| match &t.organization_component {
             Some(o) => o.recruit_time,
             None => {
@@ -168,7 +169,7 @@ impl GameData {
 
     /// What buildings recruiting each template needs, by template id, for
     /// those that need any.
-    pub fn requirements(&mut self) -> HashMap<Id, Requires> {
+    pub fn requirements(&self) -> HashMap<Id, Requires> {
         let aliases = self.structure_aliases();
         self.by_template(|t| {
             let e = t.element_component.as_ref()?;
@@ -187,7 +188,11 @@ impl GameData {
     }
 
     /// The properties a side can hold, by id.
-    pub fn technologies(&mut self) -> HashMap<Id, Technology> {
+    pub fn technologies(&self) -> Arc<HashMap<Id, Technology>> {
+        self.kept("technologies", || self.read_technologies())
+    }
+
+    fn read_technologies(&self) -> HashMap<Id, Technology> {
         let strings = self.strings();
         let mut lines = self.property_lines(&strings);
         let definitions = self.definitions();
@@ -212,14 +217,14 @@ impl GameData {
 
     /// The transport each template that's carried to where it's recruited
     /// names, by template id.
-    pub fn transports(&mut self) -> HashMap<Id, Id> {
+    pub fn transports(&self) -> HashMap<Id, Id> {
         self.by_template(|t| (t.transport_actor.clone()).filter(|i| *i != Id::from("null")))
     }
 
     /// Every id a building a requirement names may go by on a map, as maps
     /// may still place one under any id it once had: its current one
     /// first, then those it was renamed from.
-    pub(crate) fn structure_aliases(&mut self) -> impl Fn(&Id) -> Vec<Id> + use<> {
+    pub(crate) fn structure_aliases(&self) -> impl Fn(&Id) -> Vec<Id> + use<> {
         let renames = self.thing_renames();
         let mut aliases: HashMap<Id, Vec<Id>> = HashMap::new();
         for (old, new) in &renames {
@@ -236,12 +241,12 @@ impl GameData {
     }
 
     /// Each renamed object template's old id to its new one.
-    fn thing_renames(&mut self) -> HashMap<Id, Id> {
+    fn thing_renames(&self) -> HashMap<Id, Id> {
         renames(&self.translations(), "Thing")
     }
 
     /// Where what each template recruits appears, by template id.
-    pub fn deploy_points(&mut self) -> HashMap<Id, DeployPoints> {
+    pub fn deploy_points(&self) -> HashMap<Id, DeployPoints> {
         self.by_template(|t| {
             let d = t.denizen_component.as_ref()?.deployment_info.as_ref()?;
             let creation = d.creation_offset.unwrap_or([0.0, 0.0]);
@@ -257,7 +262,11 @@ impl GameData {
     /// what its captain, the one member it's raised with, does as well as
     /// its own, which for a Division HQ is all of it, and takes to keep its
     /// own upkeep and each member's.
-    pub fn listings(&mut self) -> HashMap<Id, Listing> {
+    pub fn listings(&self) -> Arc<HashMap<Id, Listing>> {
+        self.kept("listings", || self.read_listings())
+    }
+
+    fn read_listings(&self) -> HashMap<Id, Listing> {
         let strings = self.strings();
         let layouts = self.layouts();
         let definitions = self.definitions();

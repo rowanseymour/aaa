@@ -79,6 +79,9 @@ pub struct Thing {
     pub name: Option<String>,
     /// Whether a side numbers those it has, as "1st Infantry Regiment".
     pub numbered: Option<bool>,
+    /// Whether the object display shows its owner's general's portrait
+    /// when it's selected, rather than its own.
+    pub show_faction_portrait: Option<bool>,
     /// On what's recruited, the transport that carries it to where it's
     /// sent, which puts it in a recruiter's Deploy to Location menu.
     pub transport_actor: Option<Id>,
@@ -698,6 +701,12 @@ pub struct View {
     /// The image marking it on the minimap, white to take its owner's
     /// colour, drawn square to the map's sides.
     pub minimap_icon: Option<String>,
+    /// The portrait template the object display shows for it.
+    pub portrait_ids: Option<Id>,
+    /// How many times its idle animation plays between fidgets, at least
+    /// and at most.
+    pub idle_loops_min: Option<u32>,
+    pub idle_loops_max: Option<u32>,
     #[serde(default)]
     pub when_selected: Vec<Fxc>,
     /// Given an order, or an order to attack.
@@ -719,6 +728,9 @@ pub struct Aspect {
     /// E.g. `aspect_unpacking`, for the state it's shown in.
     pub ids: Option<Id>,
     pub model: Option<String>,
+    /// How far across and along the ground it reaches; zeros to have that
+    /// measured from the model.
+    pub ground_size: Option<[f32; 2]>,
     #[serde(default)]
     pub texture_rename: Vec<TextureRename>,
     #[serde(default)]
@@ -734,6 +746,11 @@ pub struct ObjectAnimation {
     /// seconds, or `SELECTED`.
     #[serde(rename = "type")]
     pub kind: Option<String>,
+    /// Its `.kf` file, with `%s` for the view's resource prefix and then
+    /// its ids.
+    pub kf: Option<String>,
+    /// Seconds one play takes.
+    pub length: Option<f32>,
     pub start_min: Option<f32>,
     pub start_max: Option<f32>,
     /// Played as it starts.
@@ -869,6 +886,9 @@ pub struct General {
     pub staging_name: Option<String>,
     /// False for generals only scenarios use.
     pub public: Option<bool>,
+    /// The portrait template the object display shows for their side's
+    /// HQs.
+    pub portrait_ids: Option<Id>,
     #[serde(default)]
     pub ability: Vec<GeneralAbility>,
     /// The most experience their side can hold; negative for no ceiling.

@@ -119,7 +119,7 @@ fn enchantments(t: &defs::Thing) -> impl Iterator<Item = &defs::Property> {
 }
 
 impl GameData {
-    pub fn supply_rules(&mut self) -> SupplyRules {
+    pub fn supply_rules(&self) -> SupplyRules {
         let svars = self.svars();
         let default = SupplyRules::default();
         let of = |get: fn(&defs::SVars) -> Option<f32>, or: f32| {
@@ -139,7 +139,7 @@ impl GameData {
     /// What each property does to supply, for those that do anything to
     /// it, by its id: the shared ones, technologies among them, and those
     /// abilities give.
-    pub fn supply_effects(&mut self) -> HashMap<Id, SupplyEffect> {
+    pub fn supply_effects(&self) -> HashMap<Id, SupplyEffect> {
         let definitions = self.definitions();
         let shared = definitions.properties.values();
         let given = definitions
@@ -161,7 +161,7 @@ impl GameData {
     }
 
     /// Each template's [`Kind`], for those with properties, by template id.
-    pub fn kinds(&mut self) -> HashMap<Id, Kind> {
+    pub fn kinds(&self) -> HashMap<Id, Kind> {
         let definitions = self.definitions();
         self.by_template(|t| {
             let c = t.properties_component.as_ref()?;
@@ -184,7 +184,7 @@ impl GameData {
 
     /// The health each template's things lose a second to their own
     /// properties, for those that lose any, by template id.
-    pub fn decays(&mut self) -> HashMap<Id, f32> {
+    pub fn decays(&self) -> HashMap<Id, f32> {
         let definitions = self.definitions();
         self.by_template(|t| {
             let c = t.properties_component.as_ref()?;
@@ -202,7 +202,7 @@ impl GameData {
     }
 
     /// The special operations that bear on supply, by id.
-    pub fn operations(&mut self) -> HashMap<Id, Operation> {
+    pub fn operations(&self) -> HashMap<Id, Operation> {
         let definitions = self.definitions();
         let effects = self.supply_effects();
         let supplies = self.supplies();

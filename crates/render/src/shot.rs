@@ -120,7 +120,7 @@ impl Plugin for ShotPlugin {
 }
 
 /// An image for cameras to draw into, which can be copied back off the GPU.
-fn target(size: UVec2) -> Image {
+pub(crate) fn target(size: UVec2) -> Image {
     let mut image = Image::new_fill(
         Extent3d {
             width: size.x,
@@ -137,8 +137,9 @@ fn target(size: UVec2) -> Image {
     image
 }
 
-/// Points every camera at the capture image; every frame, as cameras can come
-/// and go, as with a change of screen.
+/// Points every camera that draws to a window at the capture image; every
+/// frame, as cameras can come and go, as with a change of screen. Those
+/// that draw to an image of their own are left to.
 ///
 /// UI goes to the top camera on the primary window by default, and there is
 /// none, so that camera is marked to draw it instead.
@@ -147,9 +148,14 @@ fn aim_cameras(
     shot: Res<Shot>,
     mut cameras: Query<(Entity, &Camera, &mut RenderTarget, Has<IsDefaultUiCamera>)>,
 ) {
-    let top = cameras.iter().max_by_key(|(e, c, ..)| (c.order, *e));
+    let own = |target: &RenderTarget| target.as_image().is_some_and(|i| *i != shot.target);
+    let screen = cameras.iter().filter(|(_, _, target, _)| !own(target));
+    let top = screen.max_by_key(|(e, c, ..)| (c.order, *e));
     let top = top.map(|(e, ..)| e);
     for (entity, _, mut target, marked) in &mut cameras {
+        if own(&target) {
+            continue;
+        }
         if target.as_image() != Some(&shot.target) {
             *target = shot.target.clone().into();
         }

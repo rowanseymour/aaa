@@ -203,13 +203,13 @@ impl<'a> Ctx<'a> {
 /// Folds case and underscores, so `DepthInfo`, `depthinfo` and `depth_info`
 /// are the same key.
 fn same_key(a: &str, b: &str) -> bool {
-    let fold = |s: &str| {
-        s.bytes()
-            .filter(|&c| c != b'_')
-            .map(|c| c.to_ascii_lowercase())
-            .collect::<Vec<_>>()
-    };
-    fold(a) == fold(b)
+    // Compared lazily: deserializing calls this for every field of every
+    // block, so allocating here dominated loading.
+    fn fold(s: &str) -> impl Iterator<Item = u8> + '_ {
+        let bytes = s.bytes().filter(|&c| c != b'_');
+        bytes.map(|c| c.to_ascii_lowercase())
+    }
+    fold(a).eq(fold(b))
 }
 
 fn key(item: &Item) -> &str {

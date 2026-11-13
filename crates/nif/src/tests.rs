@@ -1708,3 +1708,31 @@ fn walks_a_cyclic_or_branching_graph_in_bounded_time() {
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert!(nif.shapes().len() <= 41 * 64);
 }
+
+#[test]
+fn reads_a_camera_and_what_follows_it() {
+    let mut camera = scene("PortraitCamera", 0x10, [0.0, -12.0, 1.0], 1.0, &[]);
+    camera.extend(0u16.to_le_bytes());
+    camera.extend(floats(&[-0.1, 0.1, 0.2, -0.2, 1.0, 5000.0]));
+    camera.push(0);
+    // Its viewport and level of detail, a reference and two unused numbers.
+    camera.extend(floats(&[0.0, 1.0, 1.0, 0.0, 1.0]));
+    camera.extend((-1i32).to_le_bytes());
+    camera.extend([0u8; 8]);
+    let mut b = Builder::new();
+    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 2]));
+    b.add("NiCamera", camera);
+    b.add("NiNode", node("after", [0.0; 3], 1.0, &[]));
+    let nif = Nif::parse(&b.finish(&[0])).unwrap();
+    assert!(nif.incomplete.is_none());
+    let Object::Camera(camera) = &nif.objects[1] else {
+        panic!("no camera");
+    };
+    assert_eq!(camera.av.name, "PortraitCamera");
+    assert_eq!(camera.av.transform.translation, [0.0, -12.0, 1.0]);
+    let window = [camera.left, camera.right, camera.top, camera.bottom];
+    assert_eq!(window, [-0.1, 0.1, 0.2, -0.2]);
+    assert_eq!((camera.near, camera.far), (1.0, 5000.0));
+    assert!(!camera.orthographic);
+    assert!(matches!(&nif.objects[2], Object::Node(n) if n.av.name == "after"));
+}

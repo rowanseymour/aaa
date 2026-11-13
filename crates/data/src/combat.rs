@@ -2,6 +2,7 @@
 //! weapons and what those can hit.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{Cue, GameData, Id, WeaponEffects, audio::cues, defs, effects::vfx_cues, not_null};
 
@@ -235,13 +236,17 @@ impl Shape {
 impl GameData {
     /// How the objects of every template block and move, by template id,
     /// including the ids the game has since renamed.
-    pub fn bodies(&mut self) -> HashMap<Id, Body> {
+    pub fn bodies(&self) -> HashMap<Id, Body> {
         self.by_template(|t| Some(body(t)))
     }
 
     /// How the objects of every template that can be hurt fight, by
     /// template id, including the ids the game has since renamed.
-    pub fn fighters(&mut self) -> HashMap<Id, Fighter> {
+    pub fn fighters(&self) -> Arc<HashMap<Id, Fighter>> {
+        self.kept("fighters", || self.read_fighters())
+    }
+
+    fn read_fighters(&self) -> HashMap<Id, Fighter> {
         let definitions = self.definitions();
         let flights = self.by_template(|t| flight(t.projectile_component.as_ref()?));
         let mut out = self.by_template(|t| fighter(t, &definitions.properties));
@@ -252,7 +257,7 @@ impl GameData {
     }
 
     /// How far up their targets projectiles aim.
-    pub fn aim_heights(&mut self) -> AimHeights {
+    pub fn aim_heights(&self) -> AimHeights {
         let svars = self.svars();
         AimHeights {
             straight: (svars.iter())

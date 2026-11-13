@@ -2,6 +2,7 @@
 //! can name.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::{GameData, Id, defs, scoped};
 
@@ -25,13 +26,12 @@ impl FromIterator<(String, String)> for Strings {
 
 impl GameData {
     /// The game's text in its default language, by key.
-    pub fn strings(&mut self) -> Strings {
-        let glyphs = self.glyphs();
-        self.strings_with(&glyphs)
+    pub fn strings(&self) -> Arc<Strings> {
+        self.kept("strings", || self.read_strings())
     }
 
-    /// [`GameData::strings`], with the [`GameData::glyphs`] already read.
-    pub(crate) fn strings_with(&mut self, glyphs: &[defs::Glyph]) -> Strings {
+    fn read_strings(&self) -> Strings {
+        let glyphs = self.glyphs();
         let glyphs: HashMap<Id, char> = (glyphs.iter())
             .filter_map(|g| Some((g.ids.clone()?, char::from_u32(g.index?)?)))
             .collect();
@@ -47,7 +47,11 @@ impl GameData {
 
     /// The characters quoted text names by id, such as `n` for a newline
     /// or `ch_gem` for one the font draws as an icon.
-    pub(crate) fn glyphs(&mut self) -> Vec<defs::Glyph> {
+    pub(crate) fn glyphs(&self) -> Arc<Vec<defs::Glyph>> {
+        self.kept("glyphs", || self.read_glyphs())
+    }
+
+    fn read_glyphs(&self) -> Vec<defs::Glyph> {
         let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
         let files = scoped(&files);
         files

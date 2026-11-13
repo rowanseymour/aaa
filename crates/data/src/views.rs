@@ -1,9 +1,11 @@
 //! How templates are drawn: their models, where the models' textures are
 //! found, and their animations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::{GameData, Id, Shape, Template, add_renames, combat::conform, defs, ui_path};
+use crate::{
+    GameData, Id, Shape, Template, add_renames, beside, combat::conform, defs, not_null, ui_path,
+};
 
 /// How a template is drawn: its models and where their textures are.
 #[derive(Debug, Clone)]
@@ -32,6 +34,26 @@ pub struct View {
     /// Archive path of its picture in the interface, such as a unit's
     /// portrait in its regiment's panel or a building's button.
     pub icon: Option<String>,
+    /// The [`Portrait`] the object display shows for it, by id.
+    pub portrait: Option<Id>,
+    /// Whether the object display shows its owner's general's portrait
+    /// rather than its own.
+    pub faction_portrait: bool,
+    /// How far from its middle its normal model reaches over the ground,
+    /// where the data says rather than leaving it to be measured.
+    pub ground_reach: Option<f32>,
+}
+
+/// A model of a face for the object display to show, by its own camera.
+#[derive(Debug, Clone)]
+pub struct Portrait {
+    /// Its model and where its textures are; its animations are those the
+    /// model plays in the display: its `IDLE`, the `FIDGET`s that break
+    /// that up and what it plays when `SELECTED`.
+    pub view: View,
+    /// How many times it idles between fidgets: at least the first, and
+    /// fewer than the second.
+    pub idle_loops: [u32; 2],
 }
 
 /// What height a template's objects stand at.
@@ -78,7 +100,7 @@ impl GameData {
     /// that name no model, such as sound emitters, or are invisible.
     /// Visible templates without a view, of their own or inherited, are left
     /// out.
-    pub fn views(&mut self) -> HashMap<Id, Option<View>> {
+    pub fn views(&self) -> HashMap<Id, Option<View>> {
         let mut out = HashMap::new();
         for Template { file, id, thing } in &self.definitions().things {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
@@ -91,6 +113,40 @@ impl GameData {
             out.insert(id.clone(), view);
         }
         add_renames(&mut out, &self.translations(), "Thing");
+        out
+    }
+
+    /// The portraits that templates' views and generals name, by id.
+    pub fn portraits(&self) -> HashMap<Id, Portrait> {
+        let definitions = self.definitions();
+        let of_views = definitions.things.iter().filter_map(|t| {
+            let view = t.thing.view.as_ref()?;
+            not_null(view.portrait_ids.clone())
+        });
+        let of_generals =
+            (definitions.generals.iter()).filter_map(|g| not_null(g.portrait_ids.clone()));
+        let named: HashSet<Id> = of_views.chain(of_generals).collect();
+        let mut out = HashMap::new();
+        for Template { file, id, thing } in &definitions.things {
+            let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
+            let Some(view) = thing.view.as_ref().filter(|_| named.contains(id)) else {
+                continue;
+            };
+            let Some(mut drawn) = self.view(dir, thing, view) else {
+                continue;
+            };
+            drawn.animations = object_animations(dir, view);
+            drawn.animations.retain(|a| self.exists(&a.kf));
+            let least = view.idle_loops_min.unwrap_or(1);
+            let idle_loops = [least, view.idle_loops_max.unwrap_or(least + 1)];
+            out.insert(
+                id.clone(),
+                Portrait {
+                    view: drawn,
+                    idle_loops,
+                },
+            );
+        }
         out
     }
 
@@ -196,8 +252,34 @@ impl GameData {
             unpacking,
             packing,
             icon,
+            portrait: not_null(view.portrait_ids.clone()),
+            faction_portrait: thing.show_faction_portrait == Some(true),
+            ground_reach: (view.aspect_normal.iter())
+                .find_map(|a| a.ground_size)
+                .map(|[across, along]| across.max(along))
+                .filter(|reach| *reach > 0.0),
         })
     }
+}
+
+/// The animations a view's normal aspect lists, as a portrait's does, with
+/// the archive paths of their `.kf` files for a view defined in `dir`.
+fn object_animations(dir: &str, view: &defs::View) -> Vec<Animation> {
+    let prefix = view.resource_prefix.as_deref().unwrap_or("");
+    (view.aspect_normal.iter())
+        .flat_map(|a| &a.animation)
+        .filter_map(|a| {
+            let ids = a.ids.clone()?;
+            let kf = (a.kf.as_deref()?.replacen("%s", prefix, 1)).replacen("%s", &ids, 1);
+            Some(Animation {
+                kind: a.kind.clone().unwrap_or_default(),
+                ids,
+                kf: beside(&format!("{dir}/"), &kf.replace('\\', "/")),
+                length: a.length.unwrap_or(1.0),
+                walk_distance: None,
+            })
+        })
+        .collect()
 }
 
 fn footing(thing: &defs::Thing) -> Footing {
@@ -313,6 +395,9 @@ mod tests {
             unpacking: None,
             packing: None,
             icon: None,
+            portrait: None,
+            faction_portrait: false,
+            ground_reach: None,
         };
         // The last rename goes first, so the first renames what it made;
         // they reach into folders too, and case matters.
@@ -354,6 +439,76 @@ mod tests {
                 Footing::Ground
             ]
         );
+    }
+
+    #[test]
+    fn portraits_and_who_shows_them() {
+        let parsed = tgi::parse(
+            "[Template ObjectAnimation]\n{\n\tstring ids\n\tstring type\n\tstring kf = %s%s.kf\n\
+             \tfloat length = 1\n}\n\
+             [Template ObjectAnimationIdle Inherit=ObjectAnimation]\n{\n\ttype = IDLE\n\tlength = 3\n}\n\
+             [Template ObjectAnimationFidget Inherit=ObjectAnimation]\n{\n\ttype = FIDGET\n\tlength = 3\n}\n\
+             [Template ObjectAnimationSelected Inherit=ObjectAnimation]\n{\n\ttype = SELECTED\n}\n\
+             [Template Aspect]\n{\n\tpoint2 ground_size = 0,0\n\
+             \t[list Animation Template=ObjectAnimation]\n}\n\
+             [Template Object]\n{\n\tbool show_faction_portrait = false\n\t[View]\n\t{\n\
+             \t\tstring resource_prefix\n\t\tstring portrait_ids = null\n\
+             \t\tint idle_loops_min = 1\n\t\tint idle_loops_max = 3\n\
+             \t\t[AspectNormal Template=Aspect]\n\t}\n}\n\
+             [Template GeneralPortrait Template=Object]\n{\n\t[View]\n\t{\n\t\t[AspectNormal]\n\t\t{\n\
+             \t\t\t[Animation Template=ObjectAnimationIdle]\n\t\t\t{\n\t\t\t\tids = idle\n\t\t\t}\n\
+             \t\t\t[Animation Template=ObjectAnimationFidget]\n\t\t\t{\n\t\t\t\tids = fidget1\n\t\t\t}\n\
+             \t\t}\n\t}\n}\n\
+             [Template HQ Template=Object]\n{\n\tshow_faction_portrait = true\n}\n\
+             [Thing Template=GeneralPortrait]\n{\n\tids = rommel_portrait\n\t[View]\n\t{\n\
+             \t\tresource_prefix = Rommel/RommelPortrait\n\t\t[AspectNormal]\n\t\t{\n\
+             \t\t\t[Animation Template=ObjectAnimationSelected]\n\t\t\t{\n\t\t\t\tids = talk1\n\
+             \t\t\t\tlength = 2\n\t\t\t\tkf = /Shared/Talk.kf\n\t\t\t}\n\t\t}\n\t}\n}\n\
+             [Thing Template=Object]\n{\n\tids = officer\n\t[View]\n\t{\n\
+             \t\tportrait_ids = officer_portrait\n\t\t[AspectNormal]\n\t\t{\n\
+             \t\t\tground_size = 4,6.5\n\t\t}\n\t}\n}\n\
+             [Thing Template=HQ]\n{\n\tids = corps_hq\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let things: Vec<defs::Thing> = (parsed.root.blocks_of("Thing"))
+            .map(|b| templates.deserialize(b).unwrap())
+            .collect();
+        let [portrait, officer, hq] = &things[..] else {
+            panic!("three things");
+        };
+        // A portrait plays its template's animations and then its own.
+        let view = portrait.view.as_ref().unwrap();
+        let animations: Vec<_> = object_animations("Generals/GER", view)
+            .into_iter()
+            .map(|a| (a.kind, a.ids, a.kf, a.length))
+            .collect();
+        let animation = |kind: &str, ids: &str, kf: &str, length| {
+            (kind.to_string(), ids.to_string(), kf.to_string(), length)
+        };
+        let prefix = "Generals/GER/Rommel/RommelPortrait";
+        assert_eq!(
+            animations,
+            [
+                animation("IDLE", "idle", &format!("{prefix}idle.kf"), 3.0),
+                animation("FIDGET", "fidget1", &format!("{prefix}fidget1.kf"), 3.0),
+                animation("SELECTED", "talk1", "Shared/Talk.kf", 2.0),
+            ]
+        );
+        assert_eq!(
+            (view.idle_loops_min, view.idle_loops_max),
+            (Some(1), Some(3))
+        );
+        let named = officer.view.as_ref().unwrap().portrait_ids.clone();
+        assert_eq!(not_null(named), Some(Id::from("officer_portrait")));
+        assert_eq!(not_null(view.portrait_ids.clone()), None);
+        let ground = |thing: &defs::Thing| {
+            let view = thing.view.as_ref().unwrap();
+            view.aspect_normal.iter().find_map(|a| a.ground_size)
+        };
+        assert_eq!(ground(officer), Some([4.0, 6.5]));
+        assert_eq!(ground(portrait), Some([0.0, 0.0]));
+        assert_eq!(officer.show_faction_portrait, Some(false));
+        assert_eq!(hq.show_faction_portrait, Some(true));
     }
 
     #[test]

@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::{GameData, Id, defs, scoped, strings::localized, ui_path};
+use crate::{GameData, Id, defs, not_null, scoped, strings::localized, ui_path};
 
 /// A nation a side can play as.
 #[derive(Debug, Clone)]
@@ -56,6 +56,9 @@ pub struct General {
     /// Whether the lobby offers them, as it doesn't those only scenarios
     /// use.
     pub public: bool,
+    /// The [`crate::Portrait`] the object display shows for their side's
+    /// HQs, by id.
+    pub portrait: Option<Id>,
 }
 
 /// A special operation as a general gives it.
@@ -81,7 +84,7 @@ pub struct NationBanners {
 impl GameData {
     /// What each nation's banners are drawn with, and which nation each
     /// organization template is of.
-    pub fn nation_banners(&mut self) -> NationBanners {
+    pub fn nation_banners(&self) -> NationBanners {
         let files = self.parse_tgis(|n| {
             ["nations/", "templates/", "organizations/banners/"]
                 .iter()
@@ -122,7 +125,7 @@ impl GameData {
     }
 
     /// The nations sides can play as, by name.
-    pub fn nations(&mut self) -> Vec<Nation> {
+    pub fn nations(&self) -> Vec<Nation> {
         let strings = self.strings();
         let generals = self.generals(&strings);
         let files = self.parse_tgis(|n| n.starts_with("nations/"));
@@ -154,11 +157,10 @@ impl GameData {
     }
 
     /// The handicaps the lobby offers, in the order the game lists them.
-    pub fn handicaps(&mut self) -> Vec<Handicap> {
-        let glyphs = self.glyphs();
-        let strings = self.strings_with(&glyphs);
-        let glyphs: HashMap<char, String> = (glyphs.into_iter())
-            .filter_map(|g| Some((char::from_u32(g.index?)?, g.display_name?)))
+    pub fn handicaps(&self) -> Vec<Handicap> {
+        let strings = self.strings();
+        let glyphs: HashMap<char, String> = (self.glyphs().iter())
+            .filter_map(|g| Some((char::from_u32(g.index?)?, g.display_name.clone()?)))
             .collect();
         let files = self.parse_tgis(|n| n.starts_with("game/handicaps"));
         let handicaps: Vec<Handicap> = (scoped(&files).iter())
@@ -184,7 +186,7 @@ impl GameData {
 
     /// The archive path of the flag the lobby shows for a side whose nation
     /// is left to chance: the one a nation has where it names none.
-    pub fn random_flag(&mut self) -> Option<String> {
+    pub fn random_flag(&self) -> Option<String> {
         let files = self.parse_tgis(|n| n.starts_with("templates/"));
         let nation = (files.iter())
             .flat_map(|(_, p)| p.root.blocks_of("Template"))
@@ -193,7 +195,7 @@ impl GameData {
     }
 
     /// The generals who may lead a side, by id.
-    fn generals(&mut self, strings: &crate::Strings) -> HashMap<Id, General> {
+    fn generals(&self, strings: &crate::Strings) -> HashMap<Id, General> {
         let definitions = self.definitions();
         (definitions.generals.iter())
             .filter_map(|g| {
@@ -213,6 +215,7 @@ impl GameData {
                         .collect(),
                     experience_max: g.experience_max.filter(|m| *m >= 0.0),
                     public: g.public != Some(false),
+                    portrait: not_null(g.portrait_ids.clone()),
                     id: id.clone(),
                 };
                 Some((id, general))
@@ -221,7 +224,7 @@ impl GameData {
     }
 
     /// The colours players can take, by id, e.g. `blue`.
-    pub fn kingdom_colors(&mut self) -> HashMap<Id, [f32; 3]> {
+    pub fn kingdom_colors(&self) -> HashMap<Id, [f32; 3]> {
         let files = self.parse_tgis(|n| n == "game/kingdom_colors.tgi");
         let files = scoped(&files);
         files
