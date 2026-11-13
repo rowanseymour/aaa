@@ -58,8 +58,8 @@ pub struct Handicap {
     /// What its name draws in place of words, by the glyph's image name,
     /// e.g. `Rank1`.
     pub glyph: Option<String>,
-    /// The word its description leads with, e.g. `Easy`, else its id.
-    pub title: String,
+    /// What it's called, where that's words rather than a glyph.
+    pub name: Option<String>,
     /// E.g. `EASY: Gives a military and economic penalty to the AI.`
     pub description: String,
     /// The technology the side starts with, if any.
@@ -1939,10 +1939,9 @@ impl GameData {
 
     /// The handicaps the lobby offers, in the order the game lists them.
     pub fn handicaps(&mut self) -> Vec<Handicap> {
-        let strings = self.strings();
-        let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
-        let glyphs: HashMap<char, String> = (scoped(&files).iter())
-            .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
+        let glyphs = self.glyphs();
+        let strings = self.strings_with(&glyphs);
+        let glyphs: HashMap<char, String> = (glyphs.into_iter())
             .filter_map(|g| Some((char::from_u32(g.index?)?, g.display_name?)))
             .collect();
         let files = self.parse_tgis(|n| n.starts_with("game/handicaps"));
@@ -1952,9 +1951,10 @@ impl GameData {
                 let id = h.ids?;
                 let name = localized(&strings, h.name.as_deref()).unwrap_or_default();
                 let description = localized(&strings, h.description.as_deref()).unwrap_or_default();
+                let glyph = only_char(&name).and_then(|g| glyphs.get(&g).cloned());
                 Some(Handicap {
-                    glyph: only_char(&name).and_then(|g| glyphs.get(&g).cloned()),
-                    title: title_of(&description).unwrap_or_else(|| id.to_string()),
+                    name: Some(name).filter(|n| glyph.is_none() && !n.trim().is_empty()),
+                    glyph,
                     description,
                     property: (h.property_ids.as_deref().map(str::trim))
                         .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("null"))
@@ -1967,13 +1967,13 @@ impl GameData {
     }
 
     /// The archive path of the flag the lobby shows for a side whose nation
-    /// is left to chance.
+    /// is left to chance: the one a nation has where it names none.
     pub fn random_flag(&mut self) -> Option<String> {
-        fn find(block: &tgi::Block) -> Option<&str> {
-            (block.value("default_flag_icon")).or_else(|| block.blocks().find_map(find))
-        }
-        let staging = tgi::parse_bytes(&self.read("UI/Menus/staging.tgi")?);
-        find(&staging.root).and_then(ui_path)
+        let files = self.parse_tgis(|n| n.starts_with("templates/"));
+        let nation = (files.iter())
+            .flat_map(|(_, p)| p.root.blocks_of("Template"))
+            .find(|t| t.name().is_some_and(|n| n.eq_ignore_ascii_case("Nation")))?;
+        nation.value("flag_icon").and_then(ui_path)
     }
 
     /// The generals who may lead a side, by id.
@@ -2247,6 +2247,14 @@ impl GameData {
     /// The game's text in its default language, by key.
     pub fn strings(&mut self) -> HashMap<String, String> {
         let glyphs = self.glyphs();
+        self.strings_with(&glyphs)
+    }
+
+    /// [`GameData::strings`], with the [`GameData::glyphs`] already read.
+    fn strings_with(&mut self, glyphs: &[defs::Glyph]) -> HashMap<String, String> {
+        let glyphs: HashMap<Id, char> = (glyphs.iter())
+            .filter_map(|g| Some((g.ids.clone()?, char::from_u32(g.index?)?)))
+            .collect();
         let files = self.parse_tgis(|n| n.starts_with("localization/strings_"));
         let mut out = HashMap::new();
         let blocks = files.iter().flat_map(|(_, p)| p.root.blocks_of("Text"));
@@ -2259,13 +2267,12 @@ impl GameData {
 
     /// The characters quoted text names by id, such as `n` for a newline
     /// or `ch_gem` for one the font draws as an icon.
-    fn glyphs(&mut self) -> HashMap<Id, char> {
+    fn glyphs(&mut self) -> Vec<defs::Glyph> {
         let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
         let files = scoped(&files);
         files
             .iter()
             .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
-            .filter_map(|g| Some((g.ids?, char::from_u32(g.index?)?)))
             .collect()
     }
 
@@ -3503,21 +3510,6 @@ fn only_char(text: &str) -> Option<char> {
     chars.next().filter(|_| chars.next().is_none())
 }
 
-/// The word a description leads with before a colon, e.g. `Easy` for
-/// `EASY: Gives ...`.
-fn title_of(description: &str) -> Option<String> {
-    let (word, _) = description.split_once(':')?;
-    let word = word.trim();
-    let mut letters = word.chars();
-    let first = letters.next()?;
-    Some(
-        first
-            .to_uppercase()
-            .chain(letters.flat_map(char::to_lowercase))
-            .collect(),
-    )
-}
-
 /// The archive path of an interface image, whose `%s` folder, for a
 /// screen size, is empty for the default images.
 fn ui_path(path: &str) -> Option<String> {
@@ -3555,11 +3547,9 @@ mod tests {
     }
 
     #[test]
-    fn handicaps_take_glyphs_from_their_names_and_titles_from_descriptions() {
+    fn handicap_names_that_are_one_glyph_show_its_image() {
         assert_eq!(only_char("\u{86}"), Some('\u{86}'));
         assert_eq!(only_char("Easy"), None);
-        assert_eq!(title_of("EASY: Gives a penalty.").as_deref(), Some("Easy"));
-        assert_eq!(title_of("No colon"), None);
     }
 
     #[test]

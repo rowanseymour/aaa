@@ -731,15 +731,17 @@ pub struct Dropdown {
 }
 
 /// What a [`Dropdown`] shows for a choice: words, after a picture if it has
-/// one.
+/// one, and a [`Hint`] if it has one.
+#[derive(Default)]
 pub struct Shown {
     pub icon: Option<Handle<Image>>,
     pub words: String,
+    pub hint: Option<String>,
 }
 
 impl From<String> for Shown {
     fn from(words: String) -> Self {
-        Shown { icon: None, words }
+        Shown { words, ..default() }
     }
 }
 
@@ -750,18 +752,26 @@ impl From<&str> for Shown {
 }
 
 impl Shown {
-    /// Spawns it in `cell`.
     fn spawn(self, commands: &mut Commands, cell: Entity) {
+        if let Some(hint) = self.hint {
+            commands.entity(cell).insert(Hint(hint));
+        }
         if let Some(icon) = self.icon {
+            let gap = match self.words.is_empty() {
+                true => 0.0,
+                false => 6.0,
+            };
             let size = Node {
                 width: px(17),
                 height: px(17),
-                margin: UiRect::right(px(6)),
+                margin: UiRect::right(px(gap)),
                 ..default()
             };
             commands.spawn((ChildOf(cell), size, ImageNode::new(icon)));
         }
-        commands.spawn((ChildOf(cell), text(self.words, Font::Body)));
+        if !self.words.is_empty() {
+            commands.spawn((ChildOf(cell), text(self.words, Font::Body)));
+        }
     }
 }
 

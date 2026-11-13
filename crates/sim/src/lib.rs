@@ -5895,6 +5895,7 @@ mod tests {
             team_relations: stored(team_relations),
             stockpile: 0.0,
             technologies: Vec::new(),
+            handicap: None,
             barred: Vec::new(),
         }
     }

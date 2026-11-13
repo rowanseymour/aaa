@@ -149,6 +149,7 @@ mod tests {
             team_relations: Vec::new(),
             stockpile: 0.0,
             technologies: Vec::new(),
+            handicap: None,
             barred: Vec::new(),
         }
     }

@@ -122,8 +122,8 @@ struct Pending {
     /// The general chosen for each side, by player id, when launched from
     /// the lobby; one of its nation's at random where none is.
     generals: HashMap<u32, aaa_data::Id>,
-    /// The technology each side the computer plays starts with from the
-    /// handicap the lobby gave it, by player id.
+    /// The handicap the lobby gave each side, by player id, in place of
+    /// the map's.
     handicaps: HashMap<u32, aaa_data::Id>,
     /// How much of the map the fog of war hides, if not as the game's
     /// world rule has it.
@@ -734,6 +734,7 @@ fn main() -> ExitCode {
         app.insert_resource(remote);
     }
     app.insert_resource(lobby::Nations(game.nations()))
+        .insert_resource(lobby::Handicaps::new(game.handicaps()))
         .insert_resource(options::Options::new(&mut game))
         .insert_resource(sound::Sounds::new(&mut game, &ui::CLICKS))
         .insert_resource(music::Music::new(&mut game))
@@ -783,6 +784,7 @@ fn prepare(
     mut game: GameData,
     pending: Pending,
     nations: &[aaa_data::Nation],
+    handicaps_offered: &[aaa_data::Handicap],
     side: Side,
 ) -> Result<Prepared, (Box<GameData>, String)> {
     let Pending {
@@ -852,8 +854,9 @@ fn prepare(
     sim.sights = game.sights();
     sim.set_numbered(game.numbered());
     sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
-    for (player, technology) in handicaps {
-        sim.grant(player, technology);
+    let given = lobby::handicap_technologies(&map.players, &handicaps, handicaps_offered);
+    for (player, technology) in given {
+        sim.gain(player, technology);
     }
     Ok(Prepared {
         loaded: Loaded { game, map },
@@ -969,9 +972,10 @@ fn load(world: &mut bevy::ecs::world::World) {
             return;
         };
         let nations = world.resource::<lobby::Nations>().0.clone();
+        let handicaps = world.resource::<lobby::Handicaps>().all.clone();
         let side = *world.resource::<Side>();
         let from_menu = pending.from_menu;
-        let thread = std::thread::spawn(move || prepare(game, pending, &nations, side));
+        let thread = std::thread::spawn(move || prepare(game, pending, &nations, &handicaps, side));
         world.insert_resource(Preparing { thread, from_menu });
         return;
     }
@@ -2452,6 +2456,7 @@ mod tests {
             team_relations: Vec::new(),
             stockpile: 0.0,
             technologies: Vec::new(),
+            handicap: None,
             barred: Vec::new(),
         };
         let general = |id: &str, name: &str| aaa_data::General {

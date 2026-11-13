@@ -98,49 +98,75 @@ impl Flags {
 }
 
 /// The handicaps the lobby offers the computer's sides, with their icons
-/// by id.
+/// by id once the lobby has been shown.
 #[derive(Resource)]
-struct Handicaps {
-    all: Vec<Handicap>,
+pub struct Handicaps {
+    pub all: Vec<Handicap>,
     icons: HashMap<Id, Handle<Image>>,
 }
 
 impl Handicaps {
-    /// The one a side has until another's chosen: the one that changes
-    /// nothing, else the first.
-    fn default(&self) -> Option<&Handicap> {
-        (self.all.iter().find(|h| h.property.is_none())).or(self.all.first())
+    pub fn new(all: Vec<Handicap>) -> Handicaps {
+        Handicaps {
+            all,
+            icons: HashMap::new(),
+        }
     }
 
-    /// The one chosen of `chosen` by id, else the default.
-    fn chosen(&self, chosen: Option<&Id>) -> Option<&Handicap> {
-        let found = chosen.and_then(|id| self.all.iter().find(|h| h.id == *id));
-        found.or_else(|| self.default())
+    fn find(&self, id: &Id) -> Option<&Handicap> {
+        self.all.iter().find(|h| h.id == *id)
+    }
+
+    /// The one a side has: the one `chosen` for it, else the map's, else
+    /// the one that changes nothing, as having none doesn't either.
+    fn of(&self, chosen: Option<&Id>, map: Option<&Id>) -> Option<&Handicap> {
+        (chosen.or(map).and_then(|id| self.find(id)))
+            .or_else(|| self.all.iter().find(|h| h.property.is_none()))
+            .or(self.all.first())
     }
 
     fn shown(&self, handicap: &Handicap) -> Shown {
+        let icon = self.icons.get(&handicap.id).cloned();
+        let words = match (&icon, &handicap.name) {
+            (Some(_), _) => String::new(),
+            (None, Some(name)) => name.clone(),
+            (None, None) => handicap.id.to_string(),
+        };
         Shown {
-            icon: self.icons.get(&handicap.id).cloned(),
-            words: handicap.title.clone(),
+            icon,
+            words,
+            hint: Some(handicap.description.clone()).filter(|d| !d.is_empty()),
         }
     }
 }
 
-/// The technology each side the computer plays starts with from its
-/// handicap, by player id: the one `chosen` for it, else the default.
-fn handicap_technologies(
+/// The technology each side starts with from its handicap, by player id:
+/// the one `chosen` for it, else the one the map gives it.
+pub fn handicap_technologies(
+    players: &[Player],
+    chosen: &HashMap<u32, Id>,
+    all: &[Handicap],
+) -> HashMap<u32, Id> {
+    aaa_map::sides(players)
+        .filter_map(|p| {
+            let id = chosen.get(&p.id).or(p.handicap.as_ref())?;
+            let handicap = all.iter().find(|h| h.id == *id)?;
+            Some((p.id, handicap.property.clone()?))
+        })
+        .collect()
+}
+
+/// The handicaps chosen for the sides the computer plays, by player id; the
+/// lobby offers none for the person's.
+fn computer_handicaps(
     players: &[Player],
     person: Option<u32>,
     chosen: &HashMap<u32, Id>,
-    handicaps: &Handicaps,
 ) -> HashMap<u32, Id> {
     let lineup = Lineup::new(players, person);
     (lineup.0.into_iter())
         .filter(|&(_, control)| control == Control::Computer)
-        .filter_map(|(p, _)| {
-            let handicap = handicaps.chosen(chosen.get(&p))?;
-            Some((p, handicap.property.clone()?))
-        })
+        .filter_map(|(p, _)| Some((p, chosen.get(&p)?.clone())))
         .collect()
 }
 
@@ -387,6 +413,7 @@ fn load_pictures(
     mut data: ResMut<Data>,
     all: Res<Nations>,
     flags: Option<Res<Flags>>,
+    mut handicaps: ResMut<Handicaps>,
     formats: Res<CompressedImageFormatSupport>,
     mut images: ResMut<Assets<Image>>,
 ) {
@@ -394,7 +421,6 @@ fn load_pictures(
         return;
     }
     let random = data.0.random_flag();
-    let handicaps = data.0.handicaps();
     let mut load = |path: &str| {
         let bytes = data.0.read(path)?;
         textures::decode(&bytes, path, formats.0, true).map(|i| images.add(i))
@@ -403,17 +429,14 @@ fn load_pictures(
         .filter_map(|n| Some((n.id.clone(), load(n.flag.as_deref()?)?)))
         .collect();
     let random = random.and_then(|p| load(&p));
-    let icons = (handicaps.iter())
+    let icons = (handicaps.all.iter())
         .filter_map(|h| {
             let glyph = h.glyph.as_deref()?;
             Some((h.id.clone(), load(&format!("{GLYPH_DIR}/{glyph}.png"))?))
         })
         .collect();
+    handicaps.icons = icons;
     commands.insert_resource(Flags { nations, random });
-    commands.insert_resource(Handicaps {
-        all: handicaps,
-        icons,
-    });
 }
 
 /// Picks the first of the scenarios, unless the lobby has been here before.
@@ -667,7 +690,6 @@ fn launch(
     _: On<Activate>,
     lobby: Option<Res<Lobby>>,
     all: Res<Nations>,
-    handicaps: Res<Handicaps>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -685,12 +707,7 @@ fn launch(
         person: lobby.person,
         nations: nations(&brief.players, &lobby.nations, &all.0),
         generals: lobby.generals.clone(),
-        handicaps: handicap_technologies(
-            &brief.players,
-            lobby.person,
-            &lobby.handicaps,
-            &handicaps,
-        ),
+        handicaps: computer_handicaps(&brief.players, lobby.person, &lobby.handicaps),
         fog: None,
         from_menu: true,
     });
@@ -855,7 +872,7 @@ fn show_slots(
                 }
             }
             if lobby.person != Some(id) {
-                handicap_list(&mut commands, row, &lobby, id, &handicaps);
+                handicap_list(&mut commands, row, &lobby, player, &handicaps);
             }
         }
     }
@@ -929,23 +946,25 @@ fn handicap_list(
     commands: &mut Commands,
     row: Entity,
     lobby: &Lobby,
-    player: u32,
+    player: &Player,
     handicaps: &Handicaps,
 ) {
-    let Some(chosen) = handicaps.chosen(lobby.handicaps.get(&player)) else {
+    let id = player.id;
+    let had = handicaps.of(lobby.handicaps.get(&id), player.handicap.as_ref());
+    let Some(had) = had else {
         return;
     };
     let choices =
-        (handicaps.all.iter()).map(|h| (HandicapChoice(player, h.id.clone()), handicaps.shown(h)));
+        (handicaps.all.iter()).map(|h| (HandicapChoice(id, h.id.clone()), handicaps.shown(h)));
     let list = Dropdown {
         row,
-        width: px(120),
-        label: handicaps.shown(chosen),
-        open: lobby.open == Open::Handicaps(player),
+        width: px(64),
+        label: handicaps.shown(had),
+        open: lobby.open == Open::Handicaps(id),
     };
     list.spawn(
         commands,
-        HandicapsOf(player),
+        HandicapsOf(id),
         open_handicaps,
         choices,
         choose_handicap,
@@ -1057,6 +1076,7 @@ mod tests {
             team_relations: Vec::new(),
             stockpile: 0.0,
             technologies: Vec::new(),
+            handicap: None,
             barred: Vec::new(),
         }
     }
@@ -1085,28 +1105,36 @@ mod tests {
     }
 
     #[test]
-    fn computers_start_with_their_handicaps_technology() {
+    fn sides_start_with_the_chosen_handicap_else_the_maps() {
         let handicap = |id: &str, property: Option<&str>| Handicap {
             id: Id::from(id),
             glyph: None,
-            title: id.into(),
+            name: None,
             description: String::new(),
             property: property.map(Id::from),
         };
-        let handicaps = Handicaps {
-            all: vec![
-                handicap("easy", Some("penalty")),
-                handicap("medium", None),
-                handicap("hard", Some("bonus")),
-            ],
-            icons: HashMap::new(),
-        };
-        assert_eq!(handicaps.default().map(|h| h.id.as_str()), Some("medium"));
-        let chosen = HashMap::from([(10, Id::from("hard")), (12, Id::from("easy"))]);
-        let given = handicap_technologies(&players(), Some(12), &chosen, &handicaps);
-        // The person's side and the independent player get none, nor does
-        // a side left at the default, which changes nothing.
-        assert_eq!(given, HashMap::from([(10, Id::from("bonus"))]));
+        let handicaps = Handicaps::new(vec![
+            handicap("easy", Some("penalty")),
+            handicap("medium", None),
+            handicap("hard", Some("bonus")),
+        ]);
+        let (easy, hard) = (Id::from("easy"), Id::from("hard"));
+        let shown = |chosen, map| handicaps.of(chosen, map).map(|h| h.id.as_str());
+        assert_eq!(shown(None, None), Some("medium"));
+        assert_eq!(shown(None, Some(&easy)), Some("easy"));
+        assert_eq!(shown(Some(&hard), Some(&easy)), Some("hard"));
+
+        let mut players = players();
+        players[1].handicap = Some(hard.clone());
+        players[3].handicap = Some(easy.clone());
+        let chosen = HashMap::from([(10, hard.clone()), (12, easy.clone())]);
+        // The lobby offers the person's side none.
+        let chosen = computer_handicaps(&players, Some(12), &chosen);
+        assert_eq!(chosen, HashMap::from([(10, hard.clone())]));
+        let given = handicap_technologies(&players, &chosen, &handicaps.all);
+        // The independent player gets none, even from the map.
+        let bonus_and_penalty = [(10, Id::from("bonus")), (13, Id::from("penalty"))];
+        assert_eq!(given, HashMap::from(bonus_and_penalty));
     }
 
     #[test]
