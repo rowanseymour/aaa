@@ -28,7 +28,7 @@ impl World {
             | Command::Stop { regiment }
             | Command::Formation { regiment, .. } => Ok(self.may_command(player, regiment)?),
             Command::Pursue { regiment, enemy } => self.may_pursue(player, regiment, enemy),
-            Command::GuardThing { regiment, thing } => self.may_guard(player, regiment, thing),
+            Command::GuardPiece { regiment, piece } => self.may_guard(player, regiment, piece),
             Command::Unpack {
                 regiment,
                 at,
@@ -67,8 +67,8 @@ impl World {
             Command::Pursue { regiment, enemy } => self.order_pursue(player, regiment, enemy)?,
             Command::Stop { regiment } => self.order_stop(player, regiment)?,
             Command::Guard { regiment, to } => self.order_guard(player, regiment, to)?,
-            Command::GuardThing { regiment, thing } => {
-                self.order_guard_thing(player, regiment, thing)?
+            Command::GuardPiece { regiment, piece } => {
+                self.order_guard_piece(player, regiment, piece)?
             }
             Command::Unpack {
                 regiment,
@@ -170,21 +170,21 @@ impl World {
         })
     }
 
-    fn may_guard(&self, player: u32, regiment: usize, thing: Piece) -> Result<(), Refused> {
+    fn may_guard(&self, player: u32, regiment: usize, piece: Piece) -> Result<(), Refused> {
         self.may_command(player, regiment)?;
-        let there = match thing {
+        let there = match piece {
             Piece::Regiment(g) => g != regiment && g < self.regiments.len(),
             Piece::Building(b) => b < self.buildings.len(),
         };
-        match there && !self.left(thing) {
+        match there && !self.left(piece) {
             true => Ok(()),
             false => Err(Refused::Unable),
         }
     }
 
     /// Whether something a regiment could guard is no longer there to.
-    pub(crate) fn left(&self, thing: Piece) -> bool {
-        match thing {
+    pub(crate) fn left(&self, piece: Piece) -> bool {
+        match piece {
             Piece::Regiment(g) => self.destroyed(g),
             Piece::Building(b) => self.buildings[b].gone(),
         }
@@ -364,18 +364,18 @@ impl World {
         Ok(())
     }
 
-    fn order_guard_thing(
+    fn order_guard_piece(
         &mut self,
         player: u32,
         regiment: usize,
-        thing: Piece,
+        piece: Piece,
     ) -> Result<(), Refused> {
-        self.may_guard(player, regiment, thing)?;
-        if self.regiments[regiment].guard.and_then(|g| g.of) == Some(thing) {
+        self.may_guard(player, regiment, piece)?;
+        if self.regiments[regiment].guard.and_then(|g| g.of) == Some(piece) {
             return Ok(());
         }
-        let (post, facing) = self.beside(regiment, thing);
-        self.post(regiment, Some(thing), post, Some(facing));
+        let (post, facing) = self.beside(regiment, piece);
+        self.post(regiment, Some(piece), post, Some(facing));
         Ok(())
     }
 

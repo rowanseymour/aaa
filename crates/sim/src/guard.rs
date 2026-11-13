@@ -37,21 +37,21 @@ impl World {
         }
     }
 
-    /// The post of a regiment guarding `thing`, and the way it faces there:
-    /// off the thing's edge by half the regiment's control range, on the
+    /// The post of a regiment guarding `piece`, and the way it faces there:
+    /// off the piece's edge by half the regiment's control range, on the
     /// side the regiment is, facing away.
-    pub(crate) fn beside(&self, regiment: usize, thing: Piece) -> ([f32; 2], [f32; 2]) {
+    pub(crate) fn beside(&self, regiment: usize, piece: Piece) -> ([f32; 2], [f32; 2]) {
         let r = &self.regiments[regiment];
         let here = self.centre(regiment);
-        let there = self.middle(thing);
+        let there = self.middle(piece);
         let away = normalised([here[0] - there[0], here[1] - there[1]]).unwrap_or(r.facing);
-        (self.post_beside(regiment, thing, away), away)
+        (self.post_beside(regiment, piece, away), away)
     }
 
-    /// The point `away` from `thing` that a regiment guarding it rests at,
+    /// The point `away` from `piece` that a regiment guarding it rests at,
     /// kept on the map.
-    fn post_beside(&self, regiment: usize, thing: Piece, away: [f32; 2]) -> [f32; 2] {
-        let radius = match thing {
+    fn post_beside(&self, regiment: usize, piece: Piece, away: [f32; 2]) -> [f32; 2] {
+        let radius = match piece {
             Piece::Regiment(_) => 0.0,
             Piece::Building(b) => {
                 let shape = self.buildings[b].obstacle.as_ref().map(|o| o.shape);
@@ -59,7 +59,7 @@ impl World {
             }
         };
         let off = radius + self.regiments[regiment].control_range / 2.0;
-        let [x, y] = self.middle(thing);
+        let [x, y] = self.middle(piece);
         let size = self.pathing.side as f32 * CELL_SIZE;
         [
             (x + away[0] * off).clamp(0.0, size),
@@ -68,8 +68,8 @@ impl World {
     }
 
     /// Where something a regiment can engage or guard is.
-    pub(crate) fn middle(&self, thing: Piece) -> [f32; 2] {
-        match thing {
+    pub(crate) fn middle(&self, piece: Piece) -> [f32; 2] {
+        match piece {
             Piece::Regiment(e) => self.centre(e),
             Piece::Building(b) => self.buildings[b].position,
         }
@@ -240,9 +240,9 @@ mod tests {
             at_war(),
         );
         w.regiments[0].control_range = 4.0;
-        let guard = Command::GuardThing {
+        let guard = Command::GuardPiece {
             regiment: 0,
-            thing: Piece::Regiment(1),
+            piece: Piece::Regiment(1),
         };
         w.apply(1, guard).unwrap();
         w
@@ -361,9 +361,9 @@ mod tests {
         // 3 from the map's edge, the guard beyond it.
         let mut w = siege(&[building(20, 1, [10.0, 3.0])]);
         w.units[0].position = [10.0, 0.5];
-        let guard = Command::GuardThing {
+        let guard = Command::GuardPiece {
             regiment: 0,
-            thing: Piece::Building(0),
+            piece: Piece::Building(0),
         };
         w.apply(1, guard.clone()).unwrap();
         assert_eq!(w.regiments[0].guard.unwrap().post[1], 0.0);
@@ -376,7 +376,7 @@ mod tests {
     #[test]
     fn regiments_guard_anything_still_there_but_themselves() {
         let mut w = escort();
-        let guard = |regiment, thing| Command::GuardThing { regiment, thing };
+        let guard = |regiment, piece| Command::GuardPiece { regiment, piece };
         assert!(w.check(1, &guard(0, Piece::Regiment(2))).is_ok());
         let unable = Err(Refused::Unable);
         assert_eq!(w.check(1, &guard(0, Piece::Regiment(0))), unable);

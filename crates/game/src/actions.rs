@@ -1802,9 +1802,9 @@ pub fn aim(
         return;
     }
     if aim == Aim::Guard
-        && let Some(thing) = guard_at(&sim.0, player, &selected.0, focus)
+        && let Some(piece) = guard_at(&sim.0, player, &selected.0, focus)
     {
-        let guard = |regiment| aaa_sim::Command::GuardThing { regiment, thing };
+        let guard = |regiment| aaa_sim::Command::GuardPiece { regiment, piece };
         let regiments: Vec<(usize, [f32; 2])> = (selected.0.iter())
             .filter(|&&r| orders.give(&sim.0, player, guard(r)).is_ok())
             .map(|&r| (r, point))

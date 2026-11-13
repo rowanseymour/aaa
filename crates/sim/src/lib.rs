@@ -660,10 +660,10 @@ pub enum Command {
     /// and comes back to after every fight, until it's given another
     /// order. Resting there it's as [`Regiment::guarding`] has it.
     Guard { regiment: usize, to: [f32; 2] },
-    /// As [`Command::Guard`], but posted beside `thing`, following it and
+    /// As [`Command::Guard`], but posted beside `piece`, following it and
     /// going after the enemy regiments fighting it, until it's gone.
     /// Refused for the regiment itself, or what's already gone.
-    GuardThing { regiment: usize, thing: Piece },
+    GuardPiece { regiment: usize, piece: Piece },
     /// Halts a regiment, its members forming up around where they stand on
     /// average, and drops where it was headed, so that once done with any
     /// engagement it stays put.
