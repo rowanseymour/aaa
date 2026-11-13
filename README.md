@@ -15,6 +15,16 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 > The original game's behavior is written up as specs, and the code here is written only from
 > those specs, the data files and the game itself, played.
 
+<p>
+<a href="docs/screenshots/normandy.jpg"><img src="docs/screenshots/normandy.jpg" width="32%" alt="A match on the Normandy map"></a>
+<a href="docs/screenshots/stalingrad.jpg"><img src="docs/screenshots/stalingrad.jpg" width="32%" alt="A match on the Stalingrad map"></a>
+<a href="docs/screenshots/el-alamein.jpg"><img src="docs/screenshots/el-alamein.jpg" width="32%" alt="Tanks fighting on the El Alamein map"></a>
+<a href="docs/screenshots/guadalcanal.jpg"><img src="docs/screenshots/guadalcanal.jpg" width="32%" alt="A match on the Guadalcanal map"></a>
+<a href="docs/screenshots/lobby.jpg"><img src="docs/screenshots/lobby.jpg" width="32%" alt="A custom game's lobby, with each side's nation chosen"></a>
+<a href="docs/screenshots/berlin-editor.jpg"><img src="docs/screenshots/berlin-editor.jpg" width="32%" alt="The Berlin map in aaa-editor, with a window open on an object"></a>
+</p>
+
+
 ## Goals
 
 - Play the original game on modern systems, Linux and macOS included, from its own data files.
@@ -27,15 +37,6 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 ## Status
 
 Matches play on the original maps against an idle opponent. You can't win or lose yet.
-
-<p>
-<a href="docs/screenshots/normandy.jpg"><img src="docs/screenshots/normandy.jpg" width="32%" alt="A match on the Normandy map"></a>
-<a href="docs/screenshots/stalingrad.jpg"><img src="docs/screenshots/stalingrad.jpg" width="32%" alt="A match on the Stalingrad map"></a>
-<a href="docs/screenshots/el-alamein.jpg"><img src="docs/screenshots/el-alamein.jpg" width="32%" alt="Tanks fighting on the El Alamein map"></a>
-<a href="docs/screenshots/guadalcanal.jpg"><img src="docs/screenshots/guadalcanal.jpg" width="32%" alt="A match on the Guadalcanal map"></a>
-<a href="docs/screenshots/lobby.jpg"><img src="docs/screenshots/lobby.jpg" width="32%" alt="A custom game's lobby, with each side's nation chosen"></a>
-<a href="docs/screenshots/berlin-editor.jpg"><img src="docs/screenshots/berlin-editor.jpg" width="32%" alt="The Berlin map in aaa-editor, with a window open on an object"></a>
-</p>
 
 | Feature | Status |
 |---|---|
