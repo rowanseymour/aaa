@@ -45,12 +45,12 @@ You need Rust, and on Linux the system packages listed in the
 map editor, given the folder your copy of the game is installed in:
 
 ```sh
-./aaa.sh game --data="/path/to/Axis and Allies"
+./aaa.sh --data="/path/to/Axis and Allies"
 ./aaa.sh editor --data="/path/to/Axis and Allies"
 ```
 
-Set `AAA_INSTALL` to that folder to leave `--data` off. Run `./aaa.sh` with no
-arguments for usage.
+Set `AAA_INSTALL` to that folder to leave `--data` off. Run `./aaa.sh --help` for
+usage.
 
 ## Development
 

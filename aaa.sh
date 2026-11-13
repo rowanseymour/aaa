@@ -6,16 +6,16 @@ root=$(git rev-parse --show-toplevel)
 data=$AAA_INSTALL
 
 usage() {
-    echo "usage: $0 game|editor [map] [--data=dir] [app options...]" >&2
+    echo "usage: $0 [game|editor] [map] [--data=dir] [app options...]" >&2
     echo "  --data=dir  path to your legally owned copy of the game (default: \$AAA_INSTALL)" >&2
     exit 2
 }
 
+app=game
 case $1 in
-game | editor) app=$1 ;;
-*) usage ;;
+game | editor) app=$1; shift ;;
+-h | --help) usage ;;
 esac
-shift
 
 args=()
 while (($#)); do
