@@ -4,7 +4,8 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::{
-    GameData, Id, Shape, Template, add_renames, beside, combat::conform, defs, not_null, ui_path,
+    GameData, Id, Shape, Template, add_renames, beside, combat::conform, defs, not_null,
+    terrain::in_subfolder, ui_path,
 };
 
 /// How a template is drawn: its models and where their textures are.
@@ -89,10 +90,28 @@ impl GameData {
     /// of it, else that file name in each of the view's search paths in
     /// turn. `None` where none of them exists, as the game then draws the
     /// default texture.
-    pub fn find_texture(&self, view: &View, model: &str, file: &str) -> Option<String> {
-        texture_paths(view, model, file)
-            .into_iter()
-            .find(|p| self.exists(p))
+    ///
+    /// On a map whose biome keeps its own files in `subfolder`, each of
+    /// those places is looked in there first, and a model that's read from
+    /// there itself has its textures beside it there.
+    pub fn find_texture(
+        &self,
+        subfolder: Option<&str>,
+        view: &View,
+        model: &str,
+        file: &str,
+    ) -> Option<String> {
+        let read_from = self.path_in(subfolder, model);
+        let places = texture_paths(view, model, &read_from, file);
+        first_in(places, subfolder, |p| self.exists(p))
+    }
+
+    /// The archive path `path`'s file is read from on a map whose biome
+    /// keeps its own files in `subfolder`: the file of that name there,
+    /// beside it, where there is one.
+    pub fn path_in(&self, subfolder: Option<&str>, path: &str) -> String {
+        first_in(vec![path.to_string()], subfolder, |p| self.exists(p))
+            .unwrap_or_else(|| path.to_string())
     }
 
     /// The views of all object templates, by template id,
@@ -322,10 +341,25 @@ fn texture_renames(
     out
 }
 
+/// The first of `places` with a file, by `exists`: for each, the file of
+/// its name in `subfolder` of its folder, then the place itself.
+fn first_in(
+    places: Vec<String>,
+    subfolder: Option<&str>,
+    exists: impl Fn(&str) -> bool,
+) -> Option<String> {
+    places.into_iter().find_map(|place| {
+        let own = subfolder.map(|s| in_subfolder(&place, s));
+        own.filter(|own| exists(own))
+            .or_else(|| exists(&place).then_some(place))
+    })
+}
+
 /// Where a texture that `model`, one of `view`'s, names as `file` may be,
-/// in the order it's looked for.
-fn texture_paths(view: &View, model: &str, file: &str) -> Vec<String> {
-    let dir = model.rsplit_once('/').map_or("", |(d, _)| d);
+/// in the order it's looked for, `read_from` being the path the model's
+/// file is read from.
+fn texture_paths(view: &View, model: &str, read_from: &str, file: &str) -> Vec<String> {
+    let dir = read_from.rsplit_once('/').map_or("", |(d, _)| d);
     let mut path = join(dir, &file.replace('\\', "/"));
     let renames = view
         .texture_renames
@@ -402,16 +436,62 @@ mod tests {
         // The last rename goes first, so the first renames what it made;
         // they reach into folders too, and case matters.
         assert_eq!(
-            texture_paths(&view, "Village/hut.nif", "Hut\\Hut_wall.tga"),
+            texture_paths(
+                &view,
+                "Village/hut.nif",
+                "Village/hut.nif",
+                "Hut\\Hut_wall.tga"
+            ),
             [
                 "Village/HutMud/HutMud_wall.tga",
                 "Shared/Textures/HutMud_wall.tga",
                 "Village/Common/HutMud_wall.tga"
             ]
         );
-        let first = |model, file| texture_paths(&view, model, file).remove(0);
+        let first = |model, file| texture_paths(&view, model, model, file).remove(0);
+        // A model read from its biome's folder has its textures there,
+        // under its own renames.
+        assert_eq!(
+            texture_paths(
+                &view,
+                "Village/hut.nif",
+                "Village/Arctic/hut.nif",
+                "hut.tga"
+            )[0],
+            "Village/Arctic/hut.tga"
+        );
         assert_eq!(first("Village/hut.nif", "hut.tga"), "Village/hut.tga");
         assert_eq!(first("Village/ruin.nif", "Hut.tga"), "Village/Hut.tga");
+    }
+
+    #[test]
+    fn a_biomes_own_files_are_found_before_the_plain_ones() {
+        let has = [
+            "Unit/Arctic/Breath.dds",
+            "Shared/Breath.dds",
+            "Unit/Base.dds",
+        ];
+        let exists = |p: &str| has.contains(&p);
+        let places = || {
+            vec![
+                "Unit/Breath.dds".to_string(),
+                "Shared/Breath.dds".to_string(),
+            ]
+        };
+        // One only its biome has beside the model is found there, ahead
+        // of the search paths.
+        let arctic = first_in(places(), Some("Arctic"), exists);
+        assert_eq!(arctic.as_deref(), Some("Unit/Arctic/Breath.dds"));
+        let desert = first_in(places(), Some("Desert"), exists);
+        assert_eq!(desert.as_deref(), Some("Shared/Breath.dds"));
+        assert_eq!(first_in(places(), None, exists), desert);
+        // One its biome has no version of is the plain one.
+        let base = first_in(vec!["Unit/Base.dds".into()], Some("Arctic"), exists);
+        assert_eq!(base.as_deref(), Some("Unit/Base.dds"));
+        assert_eq!(
+            first_in(vec!["Unit/None.dds".into()], Some("Arctic"), exists),
+            None
+        );
     }
 
     #[test]

@@ -448,6 +448,9 @@ pub struct Models {
     /// Each model's lowest and highest point, by path.
     extents: HashMap<String, Option<[f32; 2]>>,
     timings: HashMap<String, Option<EffectTiming>>,
+    /// The folder, beside a model or texture, that holds the map's
+    /// biome's own version of it, if the biome has one.
+    pub(crate) subfolder: Option<String>,
     /// Whether meshes stay readable off the GPU, for mesh picking.
     pickable: bool,
     /// Set while what's spawned is lit by ambient light of this strength,
@@ -497,8 +500,10 @@ impl Models {
         formats: CompressedImageFormats,
         players: &[Player],
         pickable: bool,
+        biome: &str,
     ) -> Self {
         Models {
+            subfolder: game.biome_subfolders().get(&Id::from(biome)).cloned(),
             views: game.views(),
             portraits: game.portraits(),
             models: HashMap::new(),
@@ -532,8 +537,9 @@ impl Models {
     /// Where the node named `name`, exactly, is in the model at `path`,
     /// from its origin in its own units; `None` if it has no such node.
     pub fn point(&mut self, game: &GameData, path: &str, name: &str) -> Option<Transform> {
+        let subfolder = self.subfolder.as_deref();
         let points = self.points.entry(path.to_string()).or_insert_with(|| {
-            game.read(path)
+            game.read_in(subfolder, path)
                 .and_then(|b| Nif::parse(&b).ok())
                 .map(|nif| Nodes::new(&nif).points())
                 .unwrap_or_default()
@@ -544,8 +550,9 @@ impl Models {
     /// The heights of the lowest and highest of the meshes of the model at
     /// `path`, as modelled, in its own units.
     pub fn extent(&mut self, game: &GameData, path: &str) -> Option<[f32; 2]> {
+        let subfolder = self.subfolder.as_deref();
         *self.extents.entry(path.to_string()).or_insert_with(|| {
-            let nif = Nif::parse(&game.read(path)?).ok()?;
+            let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
             let mut out: Option<[f32; 2]> = None;
             for placed in nif.shapes() {
                 let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
@@ -565,8 +572,9 @@ impl Models {
     /// How the effect model at `path` plays; `None` if it can't be read or
     /// doesn't animate.
     pub fn effect_timing(&mut self, game: &GameData, path: &str) -> Option<EffectTiming> {
+        let subfolder = self.subfolder.as_deref();
         *self.timings.entry(path.to_string()).or_insert_with(|| {
-            let nif = Nif::parse(&game.read(path)?).ok()?;
+            let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
             EffectTiming::of(&nif)
         })
     }
@@ -855,7 +863,7 @@ impl Models {
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
-        let rig = Nif::parse(&game.read(path)?)
+        let rig = Nif::parse(&game.read_in(self.subfolder.as_deref(), path)?)
             .map_err(|e| warn!("{path}: {e}"))
             .ok()
             .and_then(|nif| {
@@ -1035,7 +1043,7 @@ impl Models {
         moving: Option<&aaa_data::Animation>,
         once: fn(&aaa_data::Animation) -> bool,
     ) -> Option<Model> {
-        let nif = Nif::parse(&game.read(path)?)
+        let nif = Nif::parse(&game.read_in(self.subfolder.as_deref(), path)?)
             .map_err(|e| warn!("{path}: {e}"))
             .ok()?;
         if let Some(kind) = &nif.incomplete {
@@ -1432,7 +1440,7 @@ impl Models {
         view: &View,
         model: &str,
     ) -> Option<Handle<Image>> {
-        let Some(path) = game.find_texture(view, model, file) else {
+        let Some(path) = game.find_texture(self.subfolder.as_deref(), view, model, file) else {
             warn!("{model}: texture {file} not found");
             return None;
         };

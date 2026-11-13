@@ -161,6 +161,22 @@ pub struct DepthColor {
 }
 
 impl GameData {
+    /// The folder each biome that has one keeps its own versions of models
+    /// and textures in, beside the plain ones, by the biome's id: see
+    /// [`GameData::path_in`].
+    pub fn biome_subfolders(&self) -> Arc<HashMap<Id, String>> {
+        self.kept("biome_subfolders", || {
+            let files =
+                self.parse_tgis(|n| n.starts_with("terrain/") || n.starts_with("templates/"));
+            biome_subfolders(&scoped(&files))
+        })
+    }
+
+    /// Reads the file [`GameData::path_in`] finds for `path`.
+    pub fn read_in(&self, subfolder: Option<&str>, path: &str) -> Option<Vec<u8>> {
+        self.read(&self.path_in(subfolder, path))
+    }
+
     /// Reads every terrain definition and indexes the variations by IDS,
     /// which is how maps refer to them.
     pub fn terrain_variations(&self) -> Arc<HashMap<Id, Variation>> {
@@ -252,6 +268,27 @@ impl GameData {
     }
 }
 
+fn biome_subfolders(files: &[Scoped]) -> HashMap<Id, String> {
+    files
+        .iter()
+        .flat_map(|f| f.read::<defs::Biome>("Biome"))
+        .filter_map(|b| {
+            let subfolder = b.texture_subfolder_name?;
+            let named = !subfolder.is_empty() && !subfolder.eq_ignore_ascii_case("null");
+            named.then_some((b.ids?, subfolder))
+        })
+        .collect()
+}
+
+/// The archive path of the file named as `path`'s is in `subfolder` of its
+/// folder.
+pub(crate) fn in_subfolder(path: &str, subfolder: &str) -> String {
+    match path.rsplit_once('/') {
+        Some((folder, file)) => format!("{folder}/{subfolder}/{file}"),
+        None => format!("{subfolder}/{path}"),
+    }
+}
+
 /// The depth colours of each water terrain, by IDS. Biomes name a
 /// `WaterInfo` template for each of their water terrains.
 fn water_colors(files: &[Scoped]) -> HashMap<Id, Vec<DepthColor>> {
@@ -288,6 +325,25 @@ fn terrain_kind(t: &defs::Terrain) -> TerrainKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn biomes_name_the_subfolder_of_their_own_models_and_textures() {
+        let parsed = tgi::parse(
+            "[Template Biome]\n{\n\tstring IDS\n\tstring texture_subfolder_name = null\n}\n\
+             [Biome template=Biome]\n{\n\tIDS = arctic_tundra\n\
+             \ttexture_subfolder_name = Arctic\n}\n\
+             [Biome template=Biome]\n{\n\tIDS = temperate_forest\n}\n",
+        );
+        let files = [("terrain/biomes.tgi".to_string(), parsed)];
+        let subfolders = biome_subfolders(&scoped(&files));
+        let arctic = (Id::from("arctic_tundra"), "Arctic".to_string());
+        assert_eq!(subfolders, HashMap::from([arctic]));
+        assert_eq!(
+            in_subfolder("Units/USA/USATruck/USATruckBase.dds", "Arctic"),
+            "Units/USA/USATruck/Arctic/USATruckBase.dds"
+        );
+        assert_eq!(in_subfolder("Base.dds", "Desert"), "Desert/Base.dds");
+    }
 
     #[test]
     fn terrain_properties_cap_speed_and_change_what_hits_do() {

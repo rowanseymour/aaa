@@ -205,7 +205,8 @@ pub fn spawn_map(
             Pickable::IGNORE,
         ));
     }
-    let mut models = Models::new(game, assets.formats.0, &map.players, pickable);
+    let biome = &map.terrain.biome;
+    let mut models = Models::new(game, assets.formats.0, &map.players, pickable, biome);
     let holding: std::collections::HashSet<u32> = (map.roles())
         .filter(|(_, role)| *role == aaa_map::Role::HoldsBuilding)
         .map(|(t, _)| t.id)
