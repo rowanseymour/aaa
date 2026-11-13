@@ -194,6 +194,9 @@ pub struct World {
     pub fog: Fog,
     /// Ticks played.
     pub ticks: u64,
+    /// Whether defending buildings have had their first look round, which
+    /// stands for the map loading.
+    loaded: bool,
     /// Projectiles on their way.
     pub flying: Vec<Projectile>,
     /// Projectiles that landed in the last [`LANDINGS_KEPT`] ticks, oldest
@@ -749,6 +752,12 @@ pub struct Building {
     /// For one that defends itself, what it's noticed, which is all it
     /// fires on. Never forgotten, so not a sign of a fight.
     pub noticed: Vec<Enemy>,
+    /// For one that defends itself, whether it's been woken by noticing
+    /// something: until then it neither aims nor fires.
+    pub awake: bool,
+    /// What was in its zone when it last looked, so it can tell what's
+    /// come in since.
+    inside: HashMap<Target, Footing>,
     /// While it's under siege, the tick that may end on.
     pub besieged: Option<u64>,
     /// Where each of its fighter's turrets points.
@@ -1062,6 +1071,9 @@ fn wrap(angle: f32) -> f32 {
     angle - TAU * ((angle + PI) / TAU).floor()
 }
 
+/// The tile something stands on and whose side it's on.
+type Footing = ((i32, i32), u32);
+
 /// Something a weapon can fire on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Target {
@@ -1133,6 +1145,7 @@ impl World {
             clearable: Vec::new(),
             cleared: Vec::new(),
             ticks: 0,
+            loaded: false,
             next_id: 1,
             next_commission: 0,
             flying: Vec::new(),
@@ -1371,6 +1384,8 @@ impl World {
                 health,
                 target: None,
                 noticed: Vec::new(),
+                awake: b.awake,
+                inside: HashMap::new(),
                 besieged: None,
                 shot: None,
                 state: match health > 0.0 {
@@ -3080,14 +3095,18 @@ impl World {
     fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
         let mut launched = Vec::new();
-        // Buildings that defend themselves fire even while disabled.
+        // Buildings that defend themselves sit idle until woken, and once
+        // woken fire even while disabled.
+        let defends = |b: usize| self.buildings[b].fighter.notice.is_some();
         let disabled = (0..self.buildings.len())
-            .filter(|&b| {
-                let b = &self.buildings[b];
-                b.state == State::Disabled && b.fighter.notice.is_some()
-            })
+            .filter(|&b| defends(b) && self.buildings[b].state == State::Disabled)
             .map(Target::Building);
-        let shooters: Vec<Target> = self.targets().chain(disabled).collect();
+        let shooters: Vec<Target> = (self.targets().chain(disabled))
+            .filter(|&t| match t {
+                Target::Building(b) => !defends(b) || self.buildings[b].awake,
+                Target::Unit(_) => true,
+            })
+            .collect();
         for s in shooters {
             // Nothing aiming reads turrets' yaw, so it's left out meanwhile.
             let mut turrets = match s {
@@ -3454,34 +3473,49 @@ impl World {
         }
     }
 
-    /// Has each building that defends itself notice what's come near enough
-    /// for one of its weapons to aim at, for good: a unit's whole regiment.
+    /// Has each building that defends itself notice, for good, what comes
+    /// into its zone that one of its weapons could aim at then: a unit's
+    /// whole regiment. Stepping onto another of the zone's tiles, or
+    /// changing sides there, is coming in again. Noticing anything once the
+    /// map has loaded wakes it; the first look stands for the map loading.
     fn notice(&mut self) {
         for b in 0..self.buildings.len() {
             let building = &self.buildings[b];
-            let Some(near) = building.fighter.notice.filter(|_| !building.gone()) else {
+            let Some(near) = building.fighter.notice else {
                 continue;
             };
+            // What's there when it stands again comes in afresh.
+            if building.gone() {
+                self.buildings[b].inside.clear();
+                continue;
+            }
             let s = Target::Building(b);
             let zone = self.pathing.zone(building.position, near);
-            let seen: Vec<Enemy> = self
+            let inside: Vec<(Target, Footing)> = self
                 .targets()
                 .filter(|&t| self.in_zone(&zone, t))
-                .filter(|&t| {
+                .map(|t| (t, (tile_at(self.position(t)), self.owner(t))))
+                .collect();
+            let seen: Vec<Enemy> = (inside.iter())
+                .filter(|(t, at)| building.inside.get(t) != Some(at))
+                .filter(|&&(t, _)| {
                     let weapons = &building.fighter.weapons;
                     weapons
                         .iter()
                         .any(|w| self.can_target(s, w, t) && self.in_arc(b, w, t))
                 })
-                .map(|t| self.enemy(t))
+                .map(|&(t, _)| self.enemy(t))
                 .collect();
-            let noticed = &mut self.buildings[b].noticed;
+            let building = &mut self.buildings[b];
+            building.inside = inside.into_iter().collect();
+            building.awake |= self.loaded && !seen.is_empty();
             for e in seen {
-                if !noticed.contains(&e) {
-                    noticed.push(e);
+                if !building.noticed.contains(&e) {
+                    building.noticed.push(e);
                 }
             }
         }
+        self.loaded = true;
     }
 
     /// The regiment or building a target is, or is in.
@@ -5364,12 +5398,18 @@ mod tests {
             }),
             deploy: None,
             organization: None,
+            awake: false,
         }
     }
 
     /// Player 1's rifleman at 10,10 and whatever buildings, on open ground.
     fn siege(buildings: &[aaa_map::Building]) -> World {
-        let mut w = battle(&[1], vec![soldier(vec![rifle(12.0, 30.0)])], at_war());
+        let w = battle(&[1], vec![soldier(vec![rifle(12.0, 30.0)])], at_war());
+        besiege(w, buildings)
+    }
+
+    /// `w` with `buildings` added, their ground blocked.
+    fn besiege(mut w: World, buildings: &[aaa_map::Building]) -> World {
         for b in buildings {
             if let Some(o) = &b.obstacle {
                 w.pathing.block(o);
@@ -5416,6 +5456,130 @@ mod tests {
         assert_eq!(w.units[0].health, 80.0);
     }
 
+    /// A player 2 pillbox at (10, 24), noticing within 20, whose rifle
+    /// can't hit aircraft, and unarmed soldiers of two of player 1's
+    /// regiments: the first in its zone, the second, of `flags`, far off.
+    fn sentry(flags: &[&str]) -> World {
+        let mut far = soldier(Vec::new());
+        far.flags = flags.iter().map(|&f| Id::from(f)).collect();
+        let mut w = battle(&[1, 1], vec![soldier(Vec::new()), far], at_war());
+        w.units[1].position = [40.0, 40.0];
+        let mut pillbox = building(20, 2, [10.0, 24.0]);
+        let mut rifle = rifle(12.0, 10.0);
+        rifle.targets.excluded.push(Id::from("air"));
+        pillbox.fighter.weapons = vec![rifle];
+        pillbox.fighter.notice = Some(20.0);
+        besiege(w, &[pillbox])
+    }
+
+    #[test]
+    fn defenders_leave_alone_what_the_map_placed_near_them() {
+        let mut w = sentry(&["infantry"]);
+        run(&mut w, 5.0);
+        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert!(!w.buildings[0].awake);
+        assert!(w.buildings[0].target.is_none());
+        assert_eq!(w.units[0].health, 100.0);
+    }
+
+    #[test]
+    fn defenders_woken_fire_on_what_they_noticed_as_the_map_loaded() {
+        let mut w = sentry(&["infantry"]);
+        run(&mut w, 2.0);
+        assert!(!w.buildings[0].awake);
+        // The second soldier walking in wakes it, and it fires on the
+        // first, nearer.
+        w.units[1].position = [10.0, 40.0];
+        w.tick();
+        assert!(w.buildings[0].awake);
+        assert_eq!(
+            w.buildings[0].noticed,
+            [Enemy::Regiment(0), Enemy::Regiment(1)]
+        );
+        assert_eq!(w.buildings[0].target, Some(Target::Unit(0)));
+        assert_eq!(w.units[0].health, 90.0);
+    }
+
+    #[test]
+    fn defenders_wake_for_what_the_map_placed_coming_back() {
+        let mut w = sentry(&["infantry"]);
+        run(&mut w, 1.0);
+        w.units[0].position = [40.0, 40.0];
+        run(&mut w, 1.0);
+        assert!(!w.buildings[0].awake);
+        w.units[0].position = [10.0, 10.0];
+        w.tick();
+        assert!(w.buildings[0].awake);
+        assert_eq!(w.units[0].health, 90.0);
+    }
+
+    #[test]
+    fn defenders_wake_for_what_changes_sides_near_them() {
+        let mut w = sentry(&["infantry"]);
+        w.regiments[0].owner = 2;
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].noticed.is_empty());
+        w.regiments[0].owner = 1;
+        w.tick();
+        assert!(w.buildings[0].awake);
+        assert_eq!(w.units[0].health, 90.0);
+    }
+
+    #[test]
+    fn defenders_notice_what_becomes_a_target_only_once_it_steps() {
+        let mut w = sentry(&["infantry"]);
+        let air = vec![Id::from("air")];
+        w.units[0].fighter.as_mut().unwrap().flags = air;
+        run(&mut w, 1.0);
+        w.units[0].fighter.as_mut().unwrap().flags = vec![Id::from("infantry")];
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].noticed.is_empty());
+        assert!(!w.buildings[0].awake);
+        w.units[0].position = [10.0, 12.0];
+        w.tick();
+        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert!(w.buildings[0].awake);
+    }
+
+    #[test]
+    fn captured_defenders_notice_their_new_enemies_only_once_they_step() {
+        let mut w = sentry(&["infantry"]);
+        w.regiments[0].owner = 2;
+        run(&mut w, 1.0);
+        w.buildings[0].owner = 1;
+        run(&mut w, 1.0);
+        assert!(w.buildings[0].noticed.is_empty());
+        assert!(!w.buildings[0].awake);
+        w.units[0].position = [10.0, 12.0];
+        w.tick();
+        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert!(w.buildings[0].awake);
+    }
+
+    #[test]
+    fn defenders_saved_awake_fire_on_what_the_map_placed() {
+        let w = sentry(&["infantry"]);
+        let mut pillbox = building(21, 2, [10.0, 24.0]);
+        pillbox.fighter = w.buildings[0].fighter.clone();
+        pillbox.awake = true;
+        let mut w = battle(&[1], vec![soldier(Vec::new())], at_war());
+        w = besiege(w, &[pillbox]);
+        w.tick();
+        assert!(w.buildings[0].awake);
+        assert_eq!(w.units[0].health, 90.0);
+    }
+
+    #[test]
+    fn defenders_wake_only_for_what_their_weapons_can_aim_at() {
+        let mut w = sentry(&["air"]);
+        run(&mut w, 1.0);
+        w.units[1].position = [10.0, 40.0];
+        run(&mut w, 2.0);
+        assert_eq!(w.buildings[0].noticed, [Enemy::Regiment(0)]);
+        assert!(!w.buildings[0].awake);
+        assert_eq!(w.units[0].health, 100.0);
+    }
+
     /// A pillbox south of the siege's soldier, facing it, whose rifle is on
     /// a turret that starts `start` degrees round, turns 90° a second and
     /// aims within `sweep` degrees.
@@ -5435,6 +5599,8 @@ mod tests {
         }];
         let mut w = siege(&[pillbox]);
         w.units[0].fighter = Some(soldier(Vec::new()));
+        // Already woken, as if saved so, since the soldier starts in reach.
+        w.buildings[0].awake = true;
         w
     }
 
