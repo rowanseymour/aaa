@@ -4,8 +4,6 @@
 //! for actions and never for keys. The bindings are the game's own;
 //! another set would be read into the same place.
 
-use std::collections::HashMap;
-
 use aaa_data::Hotkey;
 use bevy::prelude::*;
 
@@ -214,7 +212,7 @@ impl Bindings {
     /// The bindings a set of hotkeys makes, leaving out any on keys not
     /// known here, with the keys named as the game's `strings` name
     /// them.
-    pub fn new(hotkeys: &[Hotkey], strings: &HashMap<String, String>) -> Self {
+    pub fn new(hotkeys: &[Hotkey], strings: &aaa_data::Strings) -> Self {
         let separator = strings.get("hotkey_modifier_separator");
         let separator = separator.map_or("-", String::as_str);
         let bound = |h: &Hotkey| {
@@ -318,7 +316,7 @@ mod tests {
                 hotkey("ctrl-s", SUPPLY_BORDER),
                 hotkey("mousewheel", "deltazoom"),
             ],
-            &HashMap::new(),
+            &aaa_data::Strings::default(),
         );
         let mut keys = ButtonInput::<KeyCode>::default();
         keys.press(KeyCode::KeyS);
@@ -343,7 +341,8 @@ mod tests {
 
     #[test]
     fn names_mark_their_keys() {
-        let strings = HashMap::from([("key_delete".to_string(), "Delete".to_string())]);
+        let strings =
+            aaa_data::Strings::from_iter([("key_delete".to_string(), "Delete".to_string())]);
         let bindings = Bindings::new(
             &[
                 hotkey("d", "deploy"),

@@ -43,7 +43,7 @@ pub struct ExperienceRules {
 
 /// What the tooltips need to put an operation's effects into words.
 struct Words<'a> {
-    strings: &'a HashMap<String, String>,
+    strings: &'a crate::Strings,
     paces: &'a [Pace],
     properties: &'a HashMap<Id, defs::Property>,
     /// The names of templates and of thing categories, by id.
@@ -178,7 +178,7 @@ impl Words<'_> {
 /// The game's word for an area of `radius`, from the descriptions of
 /// `category`, the first range to hold it, its upper end left out.
 fn area_word(
-    strings: &HashMap<String, String>,
+    strings: &crate::Strings,
     descriptions: &[defs::Description],
     category: &str,
     radius: f32,
@@ -279,7 +279,7 @@ fn operation(
 mod tests {
     use super::*;
 
-    fn strings() -> HashMap<String, String> {
+    fn strings() -> crate::Strings {
         [
             ("ability_effect_desc_enchantment|sf", "%s for %g Seconds"),
             ("ability_effect_desc_summon|s", "Summons %s"),

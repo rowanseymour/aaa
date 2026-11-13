@@ -1,8 +1,6 @@
 //! The options, a page over the whole screen that the main menu and the
 //! menu over a match both open, and what's chosen in them.
 
-use std::collections::HashMap;
-
 use aaa_data::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 use aaa_render::camera::RtsCamera;
 use bevy::anti_alias::fxaa::Fxaa;
@@ -100,7 +98,7 @@ impl Options {
     pub fn of(
         configurations: Vec<HotkeyConfiguration>,
         named: Option<Id>,
-        strings: &HashMap<String, String>,
+        strings: &aaa_data::Strings,
     ) -> Self {
         let known = named.filter(|id| configurations.iter().any(|c| c.id == *id));
         let said = crate::ui::said(strings);
@@ -1074,7 +1072,11 @@ mod tests {
             configuration("classic", "Standard"),
             configuration("visual", "Visual"),
         ];
-        Options::of(configurations, named.map(Id::from), &HashMap::new())
+        Options::of(
+            configurations,
+            named.map(Id::from),
+            &aaa_data::Strings::default(),
+        )
     }
 
     fn app() -> App {
@@ -1088,7 +1090,7 @@ mod tests {
                 speech: 0.95,
                 music: 0.7,
             }))
-            .insert_resource(Sounds::of(HashMap::new(), &[]))
+            .insert_resource(Sounds::of(std::collections::HashMap::new(), &[]))
             .init_resource::<Border>()
             .insert_resource(UiScaleSetting(1.0))
             .add_message::<WindowResized>();
@@ -1116,7 +1118,11 @@ mod tests {
         assert_eq!(chosen(Some("visual")).as_deref(), Some("Visual"));
         assert_eq!(chosen(Some("missing")).as_deref(), Some("Standard"));
         assert_eq!(chosen(None).as_deref(), Some("Standard"));
-        let none = Options::of(Vec::new(), Some("classic".into()), &HashMap::new());
+        let none = Options::of(
+            Vec::new(),
+            Some("classic".into()),
+            &aaa_data::Strings::default(),
+        );
         assert!(none.hotkeys().is_none());
     }
 

@@ -217,7 +217,7 @@ pub struct Queued(usize);
 pub struct Looks {
     /// Templates' names, by id.
     names: HashMap<Id, String>,
-    strings: HashMap<String, String>,
+    strings: aaa_data::Strings,
     /// How each property that has an icon shows, by id.
     properties: HashMap<Id, PropertyLook>,
     /// Each technology's research button icon, by id, for what's being
@@ -1084,7 +1084,7 @@ fn unit_health(sim: &World, u: usize) -> f32 {
 pub(crate) fn regiment_name(
     sim: &World,
     names: &HashMap<Id, String>,
-    strings: &HashMap<String, String>,
+    strings: &aaa_data::Strings,
     r: usize,
 ) -> String {
     let regiment = &sim.regiments[r];
@@ -1100,7 +1100,7 @@ pub(crate) fn regiment_name(
 pub(crate) fn building_name(
     sim: &World,
     names: &HashMap<Id, String>,
-    strings: &HashMap<String, String>,
+    strings: &aaa_data::Strings,
     b: usize,
 ) -> String {
     let building = &sim.buildings[b];
@@ -1117,11 +1117,7 @@ fn template_name(names: &HashMap<Id, String>, template: &str) -> String {
 
 /// `name` with `number` before it, as "1st Infantry Regiment", in the
 /// game's words for each ending where it has them.
-pub(crate) fn numbered(
-    strings: &HashMap<String, String>,
-    number: Option<u32>,
-    name: String,
-) -> String {
+pub(crate) fn numbered(strings: &aaa_data::Strings, number: Option<u32>, name: String) -> String {
     let Some(n) = number else {
         return name;
     };
@@ -1257,7 +1253,7 @@ mod tests {
 
     #[test]
     fn names_are_numbered_in_the_games_words() {
-        let strings = HashMap::from([
+        let strings = aaa_data::Strings::from_iter([
             ("actor_name_numbered|ds".to_string(), "%dth %s".to_string()),
             (
                 "actor_name_numbered_st|ds".to_string(),

@@ -340,9 +340,7 @@ fn words(words: impl Into<String>, size: Font) -> impl Bundle {
 
 /// Looks up the game's text by key, falling back to the given words where
 /// its strings lack that key.
-pub fn said(
-    strings: &std::collections::HashMap<String, String>,
-) -> impl Fn(&str, &str) -> String + Copy + '_ {
+pub fn said(strings: &aaa_data::Strings) -> impl Fn(&str, &str) -> String + Copy + '_ {
     |key, or| strings.get(key).map_or(or, String::as_str).to_string()
 }
 

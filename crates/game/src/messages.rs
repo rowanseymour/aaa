@@ -58,7 +58,7 @@ struct Look {
     kinds: HashMap<Id, Kind>,
     events: HashMap<Id, GameEvent>,
     vars: InterfaceVars,
-    strings: HashMap<String, String>,
+    strings: aaa_data::Strings,
     names: HashMap<Id, String>,
     /// What an icon that looks somewhere says.
     to_location: String,
@@ -941,7 +941,7 @@ mod tests {
                 ),
             ]),
             vars: vars_of(vars),
-            strings: HashMap::new(),
+            strings: aaa_data::Strings::default(),
             names: HashMap::new(),
             to_location: String::new(),
         }

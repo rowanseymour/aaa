@@ -48,7 +48,7 @@ pub use properties::PropertyLook;
 pub use recruiting::{Amount, DeployPoints, Deployment, Listing, Requires, Technology};
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, SpecialOperation};
-pub use strings::resource_name;
+pub use strings::{Strings, resource_name};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,

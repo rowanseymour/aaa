@@ -193,7 +193,7 @@ impl GameData {
     }
 
     /// The generals who may lead a side, by id.
-    fn generals(&mut self, strings: &HashMap<String, String>) -> HashMap<Id, General> {
+    fn generals(&mut self, strings: &crate::Strings) -> HashMap<Id, General> {
         let definitions = self.definitions();
         (definitions.generals.iter())
             .filter_map(|g| {
