@@ -1240,6 +1240,14 @@ pub struct Formation {
     pub aggressive: bool,
 }
 
+/// What an organization in a formation holds. Read apart from the
+/// [`Formation`], so that one that doesn't read costs only how it shows.
+#[derive(Debug, Clone, Deserialize)]
+pub struct FormationProperties {
+    #[serde(default)]
+    pub property: Vec<Property>,
+}
+
 /// A sound, speech or music the game plays by id. Its base templates are
 /// declared in `Templates/template_audio.tgi`, which documents the fields.
 /// Percentages and `NULL`s are left as written for [`crate::Audio`] to
