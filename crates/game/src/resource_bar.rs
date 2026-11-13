@@ -20,9 +20,9 @@ const CELLS: [&str; 5] = [
     "unit_limit_consumed",
 ];
 
-const CELL: f32 = 96.0;
+const CELL: f32 = 80.0;
 /// The money cell's width, which has room for the stockpile beside its rate.
-const MONEY_CELL: f32 = 128.0;
+const MONEY_CELL: f32 = 112.0;
 const HEIGHT: f32 = 22.0;
 const GAP: f32 = 4.0;
 
