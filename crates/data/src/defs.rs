@@ -979,6 +979,9 @@ pub struct SVars {
     pub experience_faction_gain_periodic: Option<f32>,
     #[serde(rename = "BuildingPaddingMeters")]
     pub building_padding_meters: Option<f32>,
+    /// Whether a side's objectives are kept in order of their text.
+    #[serde(rename = "SortObjectives")]
+    pub sort_objectives: Option<bool>,
     /// How far up its target a projectile flying straight aims.
     #[serde(rename = "ProjectileTargetHeightRatio")]
     pub projectile_target_height_ratio: Option<f32>,
@@ -1043,6 +1046,12 @@ pub struct UVars {
     pub audio_speech_volume: Option<f32>,
     #[serde(rename = "AudioMusicVolume")]
     pub audio_music_volume: Option<f32>,
+    /// Whether the options' Unit Acknowledgement and Chat Notification
+    /// start on.
+    #[serde(rename = "UnitAcknowledgement")]
+    pub unit_acknowledgement: Option<bool>,
+    #[serde(rename = "UIEventFilterChatSound")]
+    pub chat_sound: Option<bool>,
 }
 
 /// A set of hotkeys players can choose.

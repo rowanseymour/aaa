@@ -16,6 +16,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 
 use crate::actions::{self, Aim, fill};
+use crate::displays::{self, Contents, Corner, Displays, Panel, Window};
 use crate::keys::Bindings;
 use crate::sound::Sounds;
 use crate::ui::{Font, Hint, font};
@@ -355,6 +356,7 @@ pub fn spawn(
     formats: Res<CompressedImageFormatSupport>,
     local: Res<Local>,
     leaders: Res<Leaders>,
+    bindings: Res<Bindings>,
 ) {
     let corner = crate::special_ops::corner(&local, &leaders);
     let game = &mut loaded.game;
@@ -377,6 +379,32 @@ pub fn spawn(
         })
         .collect();
     let strings = game.strings();
+    let said = crate::ui::said(&strings);
+    displays::spawn_button(
+        &mut commands,
+        &bindings,
+        Panel::MessageLog,
+        Corner::BottomRight,
+        images.add(displays::glyph(list_shape)),
+        said(
+            "control_panel_ButtonMessageLog_ToolTip",
+            "Display Message Log",
+        ),
+        said(
+            "control_panel_ButtonMessageLog_tooltip_2",
+            "Displays a log of all recent messages.",
+        ),
+    );
+    displays::spawn_window(
+        &mut commands,
+        Window {
+            panel: Panel::MessageLog,
+            title: said("game_interface_Child_text", "Message Log"),
+            at: Vec2::new(279.0, 53.0),
+            size: Vec2::new(542.0, 514.0),
+            pane: true,
+        },
+    );
     let look = Look {
         kinds,
         events: game.game_events(),
@@ -720,6 +748,60 @@ pub fn show(
             }
         }
     }
+}
+
+/// Whether a point of the glyph's square is on a list: three lines, each
+/// behind a dot, as the log's lines are behind their icons.
+fn list_shape(x: f32, y: f32) -> bool {
+    const ROWS: [f32; 3] = [-0.55, 0.0, 0.55];
+    const DOT: f32 = 0.16;
+    const BAR: f32 = 0.1;
+    ROWS.iter().any(|&row| {
+        let dy = y - row;
+        let dot = (x + 0.7).hypot(dy) < DOT;
+        let bar = (-0.35..0.85).contains(&x) && dy.abs() < BAR;
+        let ends = [-0.35, 0.85].iter().any(|&end| (x - end).hypot(dy) < BAR);
+        dot || bar || ends
+    })
+}
+
+/// The lines the Message Log window shows, by the serials of its oldest
+/// and newest, once it's shown any: `None` until then, `Some(None)` for none.
+#[derive(Default)]
+pub struct Listed(Option<Option<(u64, u64)>>);
+
+/// Lists the whole log in its window while that's up, oldest first, kept
+/// scrolled to the newest.
+pub fn list(
+    mut commands: Commands,
+    mut listed: bevy::prelude::Local<Listed>,
+    displays: Res<Displays>,
+    log: Res<MessageLog>,
+    mut contents: Query<(Entity, &Contents, &mut ScrollPosition)>,
+) {
+    if !displays.is_open(Panel::MessageLog) {
+        listed.0 = None;
+        return;
+    }
+    let span = (log.lines.front())
+        .zip(log.lines.back())
+        .map(|(a, b)| (a.serial, b.serial));
+    if listed.0 == Some(span) {
+        return;
+    }
+    let Some((list, _, mut scroll)) = contents
+        .iter_mut()
+        .find(|(_, c, _)| c.0 == Panel::MessageLog)
+    else {
+        return;
+    };
+    commands.entity(list).despawn_children();
+    for line in &log.lines {
+        spawn_row(&mut commands, list, &log.look, line);
+    }
+    // Layout holds it to the bottom of the list.
+    scroll.y = f32::MAX;
+    listed.0 = Some(span);
 }
 
 fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {

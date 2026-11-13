@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{GameData, HotkeyConfiguration, Id};
+use aaa_data::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 use aaa_render::camera::RtsCamera;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
@@ -19,7 +19,7 @@ use bevy::window::{
 use bevy::winit::WINIT_WINDOWS;
 use raw_window_handle::RawDisplayHandle;
 
-use crate::sound::{Channel, Volumes};
+use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
 use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Surface, button, card, label, layer, padded, slider, switch,
@@ -34,6 +34,9 @@ const GAME_TAB: &str = "options_dialog_ShowGameplayButton_Tooltip";
 const VIDEO_TAB: &str = "options_dialog_ShowVideoButton_Tooltip";
 const AUDIO_TAB: &str = "options_dialog_ShowAudioButton_Tooltip";
 const VOLUME: &str = "options_dialog_AudioPage_VolumeTitle_Label_Text";
+const SOUNDS: &str = "options_dialog_AudioPage_SoundsTitle_Label_Text";
+const CHAT: &str = "options_dialog_Child_text_31";
+const REPLIES: &str = "options_dialog_Child_text_32";
 /// What the game calls each of the [`Volumes`], by [`Channel::ALL`].
 const VOLUMES: [(&str, &str); 4] = [
     ("options_dialog_Child_text_27", "Main Volume"),
@@ -72,6 +75,10 @@ pub struct Options {
     extras_title: String,
     basic_title: String,
     volume_title: String,
+    sounds_title: String,
+    /// What the game calls each [`Sound`] switch.
+    chat_label: String,
+    replies_label: String,
     /// What the game calls each of the [`Volumes`], by [`Channel::ALL`].
     volume_labels: [String; 4],
     /// What the game's button to leave the options says.
@@ -95,7 +102,7 @@ impl Options {
         strings: &HashMap<String, String>,
     ) -> Self {
         let known = named.filter(|id| configurations.iter().any(|c| c.id == *id));
-        let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+        let said = crate::ui::said(strings);
         // The game calls each tab "... Options", which the page's title
         // already says.
         let tab = |key: &str, or: &str| {
@@ -117,6 +124,9 @@ impl Options {
             extras_title: said(EXTRAS, "Auxiliaries"),
             basic_title: said(BASIC, "Basic"),
             volume_title: said(VOLUME, "Volume"),
+            sounds_title: said(SOUNDS, "Sounds"),
+            chat_label: said(CHAT, "Chat Notification"),
+            replies_label: said(REPLIES, "Unit Acknowledgement"),
             volume_labels: VOLUMES.map(|(key, or)| said(key, or)),
             ok: said(OK, "Ok"),
         }
@@ -321,6 +331,35 @@ struct VolumeSlider(Channel);
 #[derive(Component)]
 struct VolumeLevel(Channel);
 
+/// A sound the options switch on or off.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Sound {
+    Chat,
+    Replies,
+}
+
+/// The button switching a [`Sound`].
+#[derive(Component)]
+struct SoundToggle(Sound);
+
+impl Options {
+    fn sound_label(&self, sound: Sound) -> &str {
+        match sound {
+            Sound::Chat => &self.chat_label,
+            Sound::Replies => &self.replies_label,
+        }
+    }
+}
+
+impl Sound {
+    fn on(self, switches: &mut SoundSwitches) -> &mut bool {
+        match self {
+            Sound::Chat => &mut switches.chat,
+            Sound::Replies => &mut switches.replies,
+        }
+    }
+}
+
 /// The button that shows or hides the supply border.
 #[derive(Component)]
 struct BorderToggle;
@@ -363,6 +402,7 @@ impl Plugin for OptionsPlugin {
                     mark_chosen,
                     show_border,
                     show_volumes,
+                    show_sound_switches,
                 )
                     .chain()
                     .run_if(any_with_component::<Page>),
@@ -499,19 +539,8 @@ fn show_body(
             let game = section(&mut commands, body, &options.game_title);
             choice(&mut commands, game, &options.hotkeys_label, Hotkeys);
             let extras = section(&mut commands, body, &options.extras_title);
-            let width = Node {
-                width: px(NAME_WIDTH + NAME_GAP + LIST_WIDTH),
-                justify_content: JustifyContent::Start,
-                ..padded()
-            };
             commands
-                .spawn((
-                    BorderToggle,
-                    ChildOf(extras),
-                    switch(card(width)),
-                    Card,
-                    children![text("", Font::Body)],
-                ))
+                .spawn((BorderToggle, ChildOf(extras), switched()))
                 .observe(|_: On<Activate>, mut border: ResMut<Border>| border.0 = !border.0);
         }
         Tab::Video => {
@@ -543,6 +572,53 @@ fn show_body(
                 )];
                 choice(&mut commands, volume, name, holder);
             }
+            let switches = section(&mut commands, body, &options.sounds_title);
+            for sound in [Sound::Chat, Sound::Replies] {
+                commands
+                    .spawn((SoundToggle(sound), ChildOf(switches), switched()))
+                    .observe(move |_: On<Activate>, mut sounds: ResMut<Sounds>| {
+                        let on = sound.on(&mut sounds.switches);
+                        *on = !*on;
+                    });
+            }
+        }
+    }
+}
+
+/// A button switching something on or off, as wide as an option's name
+/// and its list beside it, saying which it is once [`say_switched`].
+fn switched() -> impl Bundle {
+    let width = Node {
+        width: px(NAME_WIDTH + NAME_GAP + LIST_WIDTH),
+        justify_content: JustifyContent::Start,
+        ..padded()
+    };
+    (switch(card(width)), Card, children![text("", Font::Body)])
+}
+
+/// Has a [`switched`] button say what it switches and whether it's on.
+fn say_switched(children: &Children, texts: &mut Query<&mut Text>, name: &str, on: bool) {
+    let state = match on {
+        true => "On",
+        false => "Off",
+    };
+    let mut texts = texts.iter_many_mut(children);
+    if let Some(Ok(mut text)) = texts.fetch_next() {
+        text.0 = format!("{name}: {state}");
+    }
+}
+
+/// Says whether each sound switch is on.
+fn show_sound_switches(
+    options: Res<Options>,
+    sounds: Res<Sounds>,
+    toggles: Query<(&Children, Ref<SoundToggle>)>,
+    mut texts: Query<&mut Text>,
+) {
+    for (children, toggle) in &toggles {
+        if sounds.is_changed() || toggle.is_added() {
+            let on = *toggle.0.on(&mut sounds.switches.clone());
+            say_switched(children, &mut texts, options.sound_label(toggle.0), on);
         }
     }
 }
@@ -904,16 +980,8 @@ fn show_border(
     mut texts: Query<&mut Text>,
 ) {
     for (children, added) in &toggles {
-        if !border.is_changed() && !added.is_added() {
-            continue;
-        }
-        let state = match border.0 {
-            true => "On",
-            false => "Off",
-        };
-        let mut texts = texts.iter_many_mut(children);
-        if let Some(Ok(mut text)) = texts.fetch_next() {
-            text.0 = format!("{}: {state}", options.border_label);
+        if border.is_changed() || added.is_added() {
+            say_switched(children, &mut texts, &options.border_label, border.0);
         }
     }
 }
@@ -951,6 +1019,7 @@ mod tests {
                 speech: 0.95,
                 music: 0.7,
             }))
+            .insert_resource(Sounds::of(HashMap::new(), &[]))
             .init_resource::<Border>()
             .add_message::<WindowResized>();
         app.update();
@@ -1106,6 +1175,24 @@ mod tests {
             .collect();
         assert!(said.contains(&(Channel::Music, "25%".into())));
         assert!(said.contains(&(Channel::Speech, "95%".into())));
+    }
+
+    #[test]
+    fn a_sound_switch_turns_its_sound_off_and_says_so() {
+        let mut app = app();
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Audio);
+        let said = |app: &mut App, sound: Sound| {
+            let world = app.world_mut();
+            let mut toggles = world.query::<(&SoundToggle, &Children)>();
+            let (_, children) = toggles.iter(world).find(|(t, _)| t.0 == sound).unwrap();
+            world.get::<Text>(children[0]).unwrap().0.clone()
+        };
+        assert_eq!(said(&mut app, Sound::Replies), "Unit Acknowledgement: On");
+        activate::<SoundToggle>(&mut app, |t| t.0 == Sound::Replies);
+        assert_eq!(said(&mut app, Sound::Replies), "Unit Acknowledgement: Off");
+        assert_eq!(said(&mut app, Sound::Chat), "Chat Notification: On");
+        let switches = app.world().resource::<Sounds>().switches;
+        assert!(!switches.replies && switches.chat);
     }
 
     #[test]

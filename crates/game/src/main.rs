@@ -24,6 +24,7 @@ mod actions;
 mod banners;
 mod confirm;
 mod console;
+mod displays;
 mod effects;
 mod fog;
 mod ghost;
@@ -33,6 +34,7 @@ mod menu;
 mod messages;
 mod minimap;
 mod music;
+mod objectives;
 mod options;
 mod pane;
 mod pause;
@@ -616,7 +618,9 @@ fn main() -> ExitCode {
             options::OptionsPlugin,
             lobby::LobbyPlugin,
             pause::PausePlugin,
+            displays::DisplaysPlugin,
             technologies::TechnologyPlugin,
+            objectives::ObjectivesPlugin,
         ))
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
@@ -695,6 +699,7 @@ fn main() -> ExitCode {
                 (pane::lay_out, pane::refresh).chain(),
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
+                messages::list.after(messages::tell).after(displays::Keys),
                 (ghost::show, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain().after(carry_out),
@@ -778,12 +783,12 @@ fn main() -> ExitCode {
 fn takes_input(
     console: Res<console::Console>,
     menu: Res<pause::PauseMenu>,
-    display: Res<technologies::TechDisplay>,
+    displays: Res<displays::Displays>,
     loading: Query<(), With<LoadingScreen>>,
 ) -> bool {
     console::closed(console)
         && pause::closed(menu)
-        && technologies::closed(Some(display))
+        && displays::closed(Some(displays))
         && loading.is_empty()
 }
 
@@ -850,6 +855,7 @@ fn prepare(
     sim.terrain_rules = game.terrain_rules();
     sim.decays = game.decays();
     sim.operations = game.operations();
+    sim.sort_objectives = game.sort_objectives();
     let dropped = sim.operations.values().filter_map(|o| match o {
         aaa_map::Operation::Drop(template) => Some(template.clone()),
         aaa_map::Operation::Enchant { .. } => None,
@@ -1242,7 +1248,7 @@ fn selection_sounds(
     if let Some(&r) = selected.0.iter().find(|r| !before.contains(r)) {
         let regiment = &sim.0.regiments[r];
         let at = sim.0.centre(r);
-        sounds.cue(
+        sounds.reply(
             &time,
             &regiment.template,
             |a| &a.selected,
@@ -2028,7 +2034,7 @@ fn acknowledge(
 ) {
     if let Some(&first) = regiments.first() {
         let template = &sim.regiments[first].template;
-        sounds.cue(time, template, |a| &a.commanded, sim.centre(first), player);
+        sounds.reply(time, template, |a| &a.commanded, sim.centre(first), player);
     }
 }
 

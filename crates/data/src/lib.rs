@@ -8,6 +8,7 @@ mod guard;
 mod hotkeys;
 mod id;
 mod messages;
+mod objectives;
 mod properties;
 mod research;
 mod special_ops;
@@ -20,6 +21,7 @@ pub use guard::{GUARDING, GuardRules};
 pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
+pub use objectives::{ObjectiveLook, ObjectiveLooks};
 pub use properties::PropertyLook;
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, SpecialOperation};
@@ -850,6 +852,15 @@ pub struct Volumes {
     pub fx: f32,
     pub speech: f32,
     pub music: f32,
+}
+
+/// Which of the sounds the options can switch off are on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SoundSwitches {
+    /// Units' spoken replies to being selected or given an order.
+    pub replies: bool,
+    /// The sound that greets a chat message in a match.
+    pub chat: bool,
 }
 
 /// How the supply border is drawn.
@@ -2109,6 +2120,16 @@ impl GameData {
             fx: FX_VOLUME,
             speech: var(|v| v.audio_speech_volume, 0.95),
             music: var(|v| v.audio_music_volume, 0.7),
+        }
+    }
+
+    /// The options' sound switches, as they start.
+    pub fn sound_switches(&mut self) -> SoundSwitches {
+        let uvars = self.uvars();
+        let on = |of: fn(&defs::UVars) -> Option<bool>| uvars.iter().find_map(of).unwrap_or(true);
+        SoundSwitches {
+            replies: on(|v| v.unit_acknowledgement),
+            chat: on(|v| v.chat_sound),
         }
     }
 
@@ -3751,6 +3772,15 @@ mod tests {
         let block = parsed.root.blocks_of("SVars").next().unwrap();
         let svars: defs::SVars = templates.deserialize(block).unwrap();
         assert_eq!(svars.building_padding_meters, Some(3.0));
+    }
+
+    #[test]
+    fn settings_read_whether_objectives_sort() {
+        let parsed = tgi::parse("[SVars]\n{\n\tbool SortObjectives = false\n}\n");
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("SVars").next().unwrap();
+        let svars: defs::SVars = templates.deserialize(block).unwrap();
+        assert_eq!(svars.sort_objectives, Some(false));
     }
 
     #[test]

@@ -244,7 +244,7 @@ fn strips_keep_winding() {
 }
 
 fn objects_strip(points: &[u16]) -> Vec<[u16; 3]> {
-    crate::objects::strip_triangles(points).collect()
+    crate::read::strip_triangles(points).collect()
 }
 
 #[test]

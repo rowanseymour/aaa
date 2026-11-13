@@ -27,8 +27,11 @@
 
 use std::fmt;
 
+mod animation;
 mod objects;
+mod read;
 
+pub use animation::*;
 pub use objects::*;
 
 /// Format versions the reader accepts: 10.1.0.0, 10.0.1.0 and 4.2.2.0.
