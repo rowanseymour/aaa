@@ -4,7 +4,7 @@
 //! the bottom says what it's doing. It shows in one of the game's four
 //! [`Mode`]s:
 //!
-//! - Simple actor, for a building or a unit on its own: its picture over
+//! - Simple actor, for a building or a unit on its own: its portrait over
 //!   its health, and what a building's been asked to commission, the first
 //!   with its progress; clicking one calls it off.
 //! - Company, for a regiment: its officer's portrait over the regiment's
@@ -20,12 +20,19 @@
 //! Beside the title of a regiment, or of the building one unpacked into,
 //! is an icon for each property it holds that has one, saying under the
 //! pointer what it does.
+//!
+//! The portrait of one thing is drawn from a model: the face its template
+//! names, a regiment's being its commanding officer's, its owner's general
+//! where its template says so, else all of its own model. Its flat picture
+//! stands in only where none of those can be drawn.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use aaa_data::{GUARDING, GameData, Id, PropertyLook};
+use aaa_render::MapAssets;
 use aaa_render::overlay::BannerImages;
+use aaa_render::portrait::{Sitter, Stage};
 use aaa_render::textures;
 use aaa_sim::{Order, State, World};
 use bevy::image::CompressedImageFormatSupport;
@@ -64,6 +71,19 @@ fn at(left: f32, top: f32, width: f32, height: f32) -> Node {
         ..default()
     }
 }
+
+/// The game's layout's box for the portrait, and how far in from its
+/// left, top, right and bottom the portrait itself is.
+const PORTRAIT_BOX: [f32; 4] = [9.0, 47.0, 129.0, 124.0];
+const PORTRAIT_IN: [f32; 4] = [2.0, 2.0, 2.0, 7.0];
+/// The portrait's size within its box, in the game's interface units.
+const PORTRAIT: Vec2 = Vec2::new(
+    PORTRAIT_BOX[2] - PORTRAIT_IN[0] - PORTRAIT_IN[2],
+    PORTRAIT_BOX[3] - PORTRAIT_IN[1] - PORTRAIT_IN[3],
+);
+/// How many pixels the portrait is drawn with for each of the logical
+/// pixels it shows in, enough for the densest screens.
+const PORTRAIT_DENSITY: f32 = 2.0;
 
 /// Where the game's layout puts an HQ's places, and how big the area they
 /// share is and each of them.
@@ -200,6 +220,11 @@ pub enum Status {
     Building(usize),
 }
 
+/// Where the portrait shows, holding the flat picture until there's a
+/// portrait drawn to show.
+#[derive(Component)]
+pub struct PortraitBox;
+
 /// A unit's picture, darkened once it's dead.
 #[derive(Component)]
 pub struct UnitPicture(usize);
@@ -224,6 +249,9 @@ pub struct Looks {
     /// Each technology's research button icon, by id, for what's being
     /// researched.
     technologies: HashMap<Id, String>,
+    /// The template in each organization's primary slot, by the
+    /// organization's; none for one with no such slot.
+    primaries: HashMap<Id, Option<Id>>,
     images: HashMap<String, Option<Handle<Image>>>,
     formats: bevy::image::CompressedImageFormats,
 }
@@ -263,9 +291,23 @@ pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
     formats: Res<CompressedImageFormatSupport>,
+    mut images: ResMut<Assets<Image>>,
 ) {
+    let width = (PORTRAIT.x * SCALE * PORTRAIT_DENSITY).round() as u32;
+    let stage = Stage::new(&mut commands, &mut images, width);
+    commands
+        .entity(stage.camera())
+        .insert(DespawnOnExit(Screen::Match));
+    commands.insert_resource(stage);
     let game = &loaded.game;
+    let layouts = game.layouts();
+    let organizations = game.organizations();
+    let primaries = organizations.iter().map(|(id, o)| {
+        let slot = layouts.get(&o.layout).and_then(|l| l.primary);
+        (id.clone(), slot.and_then(|s| o.slots.get(s)?.clone()))
+    });
     commands.insert_resource(Looks {
+        primaries: primaries.collect(),
         names: (game.listings().iter())
             .map(|(id, l)| (id.clone(), l.name.clone()))
             .collect(),
@@ -566,13 +608,29 @@ impl Ui<'_> {
         });
     }
 
-    /// A picture in a box, with a bar below filled as `fill` says.
-    #[allow(clippy::too_many_arguments)]
+    /// The portrait's box, holding `template`'s picture until [`portray`]
+    /// has a portrait to show there, over a bar filled as `fill` says.
     fn portrait(&mut self, commands: &mut Commands, root: Entity, template: &str, fill: Fill) {
         let picture = self.picture(template);
+        let [left, top, width, height] = PORTRAIT_BOX;
+        let [in_left, in_top, _, in_bottom] = PORTRAIT_IN;
         commands.entity(root).with_children(|display| {
-            display.spawn((framed(at(8.0, 44.0, 124.0, 124.0)), picture_node(picture)));
-            bar(display, at(8.0, 171.0, 124.0, 4.0), fill);
+            display.spawn(framed(at(left, top, width, height)));
+            let inside = || at(left + in_left, top + in_top, PORTRAIT.x, PORTRAIT.y);
+            // What shows round a portrait that doesn't fill its box.
+            display.spawn((inside(), BackgroundColor(Color::BLACK), Pickable::IGNORE));
+            display.spawn((
+                inside(),
+                picture_node(picture),
+                PortraitBox,
+                Pickable::IGNORE,
+            ));
+            let bar_top = top + height - in_bottom + 1.0;
+            bar(
+                display,
+                at(left + in_left, bar_top, PORTRAIT.x, in_bottom - 3.0),
+                fill,
+            );
         });
     }
 
@@ -913,7 +971,7 @@ impl Ui<'_> {
         self.portrait(commands, root, &template, Fill::Building(b));
         if self.sim.supply_of(b).is_some_and(|s| s.relay) {
             let fill = (Fill::Stockpile(b), Hint(String::new()));
-            let node = at(8.0, 176.0, 124.0, 3.0);
+            let node = at(PORTRAIT_BOX[0], 176.0, PORTRAIT_BOX[2], 3.0);
             commands
                 .entity(root)
                 .with_child((meter(node, Gauge::Stockpile), fill));
@@ -948,6 +1006,131 @@ impl Ui<'_> {
                 bar(display, at(240.0, 110.0, 64.0, 4.0), Fill::Progress(b));
             }
         });
+    }
+}
+
+/// The template whose portrait stands for what the display shows, and
+/// its owner: a building's own, or a regiment's primary slot's, which for
+/// an HQ is the building once it's unpacked. None for a regiment with no
+/// such slot, and for several things.
+fn portrayed<'a>(sim: &'a World, looks: &'a Looks, mode: &Mode) -> Option<(&'a str, u32)> {
+    match mode.actor()? {
+        Actor::Building(b, _) => {
+            let building = &sim.buildings[*b];
+            Some((building.template.as_str(), building.owner))
+        }
+        Actor::Regiment(r) => {
+            let regiment = &sim.regiments[*r];
+            let template = match regiment.unpacked_into {
+                Some(b) => sim.buildings[b].template.as_str(),
+                // A unit on its own is no organization.
+                None => match looks.primaries.get(&Id::from(regiment.template.as_str())) {
+                    Some(primary) => primary.as_ref()?.as_str(),
+                    None => regiment.template.as_str(),
+                },
+            };
+            Some((template, regiment.owner))
+        }
+    }
+}
+
+/// Who the portrait of `template`, owned by `owner`, is of: its owner's
+/// general where it says so and there is one, else the face it names, and
+/// failing either its own model.
+fn sitter(drawn: &Drawn, leaders: &Leaders, template: &str, owner: u32) -> Sitter {
+    let general = (drawn.0.shows_faction_portrait(template))
+        .then(|| leaders.0.get(&owner))
+        .flatten();
+    let face = match general {
+        Some(general) => general.portrait.clone(),
+        None => drawn.0.portrait(template).cloned(),
+    };
+    face.map_or_else(
+        || Sitter::Model {
+            template: template.to_string(),
+            owner: Some(owner),
+        },
+        Sitter::Face,
+    )
+}
+
+/// The one thing a display of a thing on its own shows: whether it's a
+/// building, and which.
+type Alone = Option<(bool, usize)>;
+
+/// Draws the portrait of what the display shows, and shows it in the
+/// portrait's box once it's there to show.
+#[allow(clippy::too_many_arguments)]
+pub fn portray(
+    mut commands: Commands,
+    showing: Res<Showing>,
+    sim: Res<Sim>,
+    leaders: Res<Leaders>,
+    looks: Res<Looks>,
+    mut drawn: ResMut<Drawn>,
+    loaded: Res<Loaded>,
+    mut assets: MapAssets,
+    mut stage: ResMut<Stage>,
+    mut asked: bevy::ecs::system::Local<Option<(Sitter, Alone)>>,
+    mut boxes: Query<(&mut ImageNode, &mut Node), With<PortraitBox>>,
+    suns: Query<&Transform, With<DirectionalLight>>,
+) {
+    let mode = showing.0.as_ref().map(|(mode, _)| mode);
+    let wanted = mode.and_then(|mode| {
+        let (template, owner) = portrayed(&sim.0, &looks, mode)?;
+        // Each thing shown on its own gets a portrait afresh, where a
+        // regiment keeps one that's already up.
+        let alone = match mode {
+            Mode::SimpleActor(Actor::Building(b, _)) => Some((true, *b)),
+            Mode::SimpleActor(Actor::Regiment(r)) => Some((false, *r)),
+            _ => None,
+        };
+        Some((sitter(&drawn, &leaders, template, owner), alone))
+    });
+    // Asked once, as one that can't be drawn still can't the next time.
+    if *asked != wanted {
+        match &wanted {
+            Some((sitter, alone)) => {
+                let (models, game) = (&mut drawn.0, &loaded.game);
+                let assets = &mut assets.models();
+                let greeting = alone.is_some();
+                let sun = suns.iter().next().map_or(Dir3::NEG_Y, |sun| sun.forward());
+                models.sit(
+                    &mut commands,
+                    game,
+                    assets,
+                    &mut stage,
+                    sitter,
+                    greeting,
+                    sun,
+                );
+                for spawned in stage.spawned() {
+                    commands
+                        .entity(spawned)
+                        .insert(DespawnOnExit(Screen::Match));
+                }
+            }
+            None => stage.clear(&mut commands),
+        }
+        *asked = wanted;
+    }
+    let Some((portrait, fitted)) = stage.picture() else {
+        return;
+    };
+    // A fitted model's picture keeps its shape, in a band across the box.
+    let height = match fitted {
+        true => PORTRAIT.x / aaa_render::portrait::FIT_ASPECT,
+        false => PORTRAIT.y,
+    };
+    let top = PORTRAIT_BOX[1] + PORTRAIT_IN[1] + (PORTRAIT.y - height) / 2.0;
+    for (mut shown, mut node) in &mut boxes {
+        if shown.image != portrait {
+            shown.image = portrait.clone();
+            // A face's picture fills its box whatever shape that is.
+            shown.image_mode = bevy::ui::widget::NodeImageMode::Stretch;
+            node.top = px(top * SCALE);
+            node.height = px(height * SCALE);
+        }
     }
 }
 

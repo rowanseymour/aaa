@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use aaa_data::{Footing, GameData, Id, Shape, View};
+use aaa_data::{Footing, GameData, Id, Portrait, Shape, View};
 use aaa_map::{Ground, Player, owner};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
@@ -98,6 +98,9 @@ pub(crate) struct Part {
     pub blended: bool,
     /// Its owner's colour shows where its texture is see-through.
     team: bool,
+    /// How much ambient light its material reflects, and how much of the
+    /// light that falls on it, where it has a material to say.
+    reflects: Option<([f32; 3], [f32; 3])>,
 }
 
 /// A part's material: most are standard, those that add to what's behind
@@ -152,8 +155,8 @@ impl PartMaterial {
 
 /// A loaded model.
 #[derive(Clone)]
-struct Model {
-    meshes: Meshes,
+pub(crate) struct Model {
+    pub(crate) meshes: Meshes,
     particles: Vec<Arc<System>>,
     /// Its selection box's width and length, in model units.
     selection: Option<Vec2>,
@@ -162,7 +165,7 @@ struct Model {
 /// A model's meshes placed in the model, or a rig of its nodes for one that
 /// plays a `.kf` animation.
 #[derive(Clone)]
-enum Meshes {
+pub(crate) enum Meshes {
     Parts(Vec<Part>),
     Rig(Arc<Rig>),
 }
@@ -427,14 +430,16 @@ enum Placed {
 
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
-    views: HashMap<Id, Option<View>>,
+    pub(crate) views: HashMap<Id, Option<View>>,
+    /// The faces the object display shows, by id.
+    pub(crate) portraits: HashMap<Id, Portrait>,
     /// By path, and for rigs the animation's path too.
-    models: HashMap<String, Option<Model>>,
+    pub(crate) models: HashMap<String, Option<Model>>,
     textures: HashMap<String, Option<Handle<Image>>>,
     /// Bevy's texture formats this GPU can sample compressed.
     formats: CompressedImageFormats,
     /// Each player's colour, by id.
-    colours: HashMap<u32, [f32; 3]>,
+    pub(crate) colours: HashMap<u32, [f32; 3]>,
     /// Team-coloured copies of materials, by the material and the colour's
     /// bits.
     painted: HashMap<(AssetId<StandardMaterial>, [u32; 3]), Handle<TeamMaterial>>,
@@ -445,6 +450,10 @@ pub struct Models {
     timings: HashMap<String, Option<EffectTiming>>,
     /// Whether meshes stay readable off the GPU, for mesh picking.
     pickable: bool,
+    /// Set while what's spawned is lit by ambient light of this strength,
+    /// of which each material reflects its own share: on the map, where
+    /// it isn't, all reflect alike.
+    pub(crate) ambient: Option<f32>,
 }
 
 /// How an effect's model plays.
@@ -491,6 +500,7 @@ impl Models {
     ) -> Self {
         Models {
             views: game.views(),
+            portraits: game.portraits(),
             models: HashMap::new(),
             textures: HashMap::new(),
             formats,
@@ -500,6 +510,7 @@ impl Models {
             extents: HashMap::new(),
             timings: HashMap::new(),
             pickable,
+            ambient: None,
         }
     }
 
@@ -815,6 +826,9 @@ impl Models {
             unpacking: None,
             packing: None,
             icon: None,
+            portrait: None,
+            faction_portrait: false,
+            ground_reach: None,
         };
         let model = self.own_animation(game, assets, path, view)?;
         let root = commands
@@ -865,7 +879,7 @@ impl Models {
                 particles,
                 selection: None,
             }),
-            None => self.load(game, assets, path, &view, None, None),
+            None => self.load(game, assets, path, &view, None, None, once),
         };
         self.models.insert(key, model.clone());
         model
@@ -874,7 +888,7 @@ impl Models {
     /// Spawns a model's meshes and particle systems under `root`, painted
     /// in `colour` where they take their owner's, animations `offset`
     /// seconds in.
-    fn spawn_meshes(
+    pub(crate) fn spawn_meshes(
         &mut self,
         commands: &mut Commands,
         assets: &mut ModelAssets,
@@ -943,9 +957,13 @@ impl Models {
         colour: Option<[f32; 3]>,
     ) -> PartMaterial {
         let material = self.paint(assets, part, colour);
-        match part.animation.as_ref().is_some_and(|a| a.paints()) {
+        let material = match part.animation.as_ref().is_some_and(|a| a.paints()) {
             true => material.copy(assets),
             false => material,
+        };
+        match self.ambient {
+            Some(light) => reflecting(material, part, light, assets),
+            None => material,
         }
     }
 
@@ -981,7 +999,7 @@ impl Models {
         PartMaterial::Team(painted)
     }
 
-    fn model(
+    pub(crate) fn model(
         &mut self,
         game: &GameData,
         assets: &mut ModelAssets,
@@ -991,20 +1009,23 @@ impl Models {
     ) -> Option<Model> {
         let idle = idle(view);
         let mut key = path.to_string();
-        let once = view.animations.iter().filter(|a| once(a));
-        for a in idle.into_iter().chain(moving).chain(once) {
+        let played = view.animations.iter().filter(|a| once(a));
+        for a in idle.into_iter().chain(moving).chain(played) {
             key += &format!("#{}", a.kf);
         }
         key += &lookup_key(path, view);
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
-        let model = self.load(game, assets, path, view, idle, moving);
+        let model = self.load(game, assets, path, view, idle, moving, once);
         self.models.insert(key, model.clone());
         model
     }
 
-    fn load(
+    /// A model, as a rig if it has an `idle` animation to play, which can
+    /// then also play once each of its view's animations that `once` picks.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn load(
         &mut self,
         game: &GameData,
         assets: &mut ModelAssets,
@@ -1012,6 +1033,7 @@ impl Models {
         view: &View,
         idle: Option<&aaa_data::Animation>,
         moving: Option<&aaa_data::Animation>,
+        once: fn(&aaa_data::Animation) -> bool,
     ) -> Option<Model> {
         let nif = Nif::parse(&game.read(path)?)
             .map_err(|e| warn!("{path}: {e}"))
@@ -1021,7 +1043,8 @@ impl Models {
         }
         let selection = selection_box(&nif);
         let particles = self.particles(game, assets, &nif, path, view);
-        if let Some(rig) = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving)) {
+        let rig = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving, once));
+        if let Some(rig) = rig {
             return Some(Model {
                 meshes: Meshes::Rig(Arc::new(rig)),
                 particles,
@@ -1049,6 +1072,7 @@ impl Models {
         view: &View,
         idle: &aaa_data::Animation,
         moving: Option<&aaa_data::Animation>,
+        once: fn(&aaa_data::Animation) -> bool,
     ) -> Option<Rig> {
         let kf = |a: &aaa_data::Animation| {
             Nif::parse(&game.read(&a.kf)?)
@@ -1170,6 +1194,7 @@ impl Models {
         let writes_depth = nif
             .property::<nif::ZBuffer>(props)
             .is_none_or(|z| z.write());
+        let reflects = material.map(|m| (m.ambient, m.diffuse));
         let source = alpha.filter(|_| alpha_mode == AlphaMode::Add);
         let material = match (source.and_then(|a| Source::of(a.source())), material) {
             (Some(source), Some(m)) => {
@@ -1197,6 +1222,7 @@ impl Models {
             animation: None,
             blended: matches!(alpha_mode, AlphaMode::Blend | AlphaMode::Add),
             team: false,
+            reflects,
         })
     }
 
@@ -1437,6 +1463,41 @@ impl Models {
     }
 }
 
+/// A part's material as it shows under ambient light of strength `light`,
+/// reflecting its own share of that rather than as much as it does of
+/// light that falls on it: a copy that glows with the difference, where
+/// there is one.
+fn reflecting(
+    material: PartMaterial,
+    part: &Part,
+    light: f32,
+    assets: &mut ModelAssets,
+) -> PartMaterial {
+    let Some((ambient, diffuse)) = part.reflects else {
+        return material;
+    };
+    let linear = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b).to_linear().to_vec3();
+    let more = (linear(ambient) - linear(diffuse) * light).max(Vec3::ZERO);
+    if more.max_element() < 1e-3 {
+        return material;
+    }
+    let glow = |base: &mut StandardMaterial| {
+        base.emissive = LinearRgba::rgb(more.x, more.y, more.z);
+        base.emissive_texture = base.base_color_texture.clone();
+    };
+    let copy = material.copy(assets);
+    match &copy {
+        PartMaterial::Standard(h) => assets.materials.get_mut(h).map(|mut m| glow(&mut m)),
+        PartMaterial::Team(h) => (assets.team_materials.get_mut(h)).map(|mut m| glow(&mut m.base)),
+        PartMaterial::Solid(h) => {
+            (assets.solid_materials.get_mut(h)).map(|mut m| glow(&mut m.base))
+        }
+        // These reflect their own share of it wherever they're drawn.
+        PartMaterial::Glow(_) => return material,
+    };
+    copy
+}
+
 /// What tells the model at `path` as loaded for `view` from the same one
 /// loaded for a view that finds its textures elsewhere.
 fn lookup_key(path: &str, view: &View) -> String {
@@ -1592,7 +1653,7 @@ fn once(a: &aaa_data::Animation) -> bool {
 
 /// The idle animation a view's models play: the one named `idle`, else the
 /// first of its kind.
-fn idle(view: &View) -> Option<&aaa_data::Animation> {
+pub(crate) fn idle(view: &View) -> Option<&aaa_data::Animation> {
     let mut idles = view.animations.iter().filter(|a| a.kind == "IDLE");
     idles
         .clone()
@@ -1944,6 +2005,9 @@ mod tests {
             unpacking: None,
             packing: None,
             icon: None,
+            portrait: None,
+            faction_portrait: false,
+            ground_reach: None,
         };
         let (unit, regiment) = (view(&["Shared/SharedTextures"]), view(&[]));
         assert_ne!(

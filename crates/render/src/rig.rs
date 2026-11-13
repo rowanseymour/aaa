@@ -757,6 +757,16 @@ impl Playing {
         }
     }
 
+    /// Whether it's playing something once rather than idling or moving.
+    pub fn busy(&self) -> bool {
+        self.once.is_some()
+    }
+
+    /// Seconds one play of its idle animation takes.
+    pub(crate) fn idle_length(&self) -> f32 {
+        self.rig.idle.length
+    }
+
     fn dying(&self) -> bool {
         matches!(&self.once, Some(o) if matches!(o.clip, OnceClip::Death(_)))
     }
@@ -772,10 +782,19 @@ impl Playing {
     }
 }
 
-pub fn play(time: Res<Time>, mut rigs: Query<&mut Playing>, mut transforms: Query<&mut Transform>) {
-    for mut p in &mut rigs {
+pub fn play(
+    time: Res<Time>,
+    real: Res<Time<Real>>,
+    mut rigs: Query<(&mut Playing, Has<crate::portrait::Sitting>)>,
+    mut transforms: Query<&mut Transform>,
+) {
+    for (mut p, sitting) in &mut rigs {
         let p = &mut *p;
-        let dt = time.delta_secs() * p.rate;
+        // A portrait's sitter carries on while the game is paused.
+        let dt = match sitting {
+            true => real.delta_secs(),
+            false => time.delta_secs() * p.rate,
+        };
         if let Some(once) = &mut p.once {
             once.time += dt;
             let ended = once.time >= p.rig.once(once.clip).length;

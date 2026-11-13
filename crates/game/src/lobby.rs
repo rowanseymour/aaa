@@ -1247,6 +1247,7 @@ mod tests {
             operations: Vec::new(),
             experience_max: None,
             public: id != "patton_tutorial",
+            portrait: None,
         };
         let nation = |id: &str, generals: &[&str]| Nation {
             id: Id::from(id),
