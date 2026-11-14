@@ -1,20 +1,32 @@
-//! The menus before a match: the main menu and the kinds of new game.
+//! The menus before a match: the main menu and the kinds of new game, which
+//! open over the same screen, as the game has them.
 
 use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
-use crate::ui::{Font, Surface, backed, button, called, disabled};
+use crate::ui::{Font, Ink, Surface, backed, button, called, disabled, label};
 use crate::{Screen, confirm};
 
 pub struct MenuPlugin;
 
 impl Plugin for MenuPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::MainMenu), main_menu)
-            .add_systems(OnEnter(Screen::NewGame), new_game);
+        app.add_sub_state::<MenuPage>()
+            .add_systems(OnEnter(Screen::MainMenu), backdrop)
+            .add_systems(OnEnter(MenuPage::Top), main_menu)
+            .add_systems(OnEnter(MenuPage::NewGame), new_game);
     }
+}
+
+/// Which of the main menu's columns is up.
+#[derive(SubStates, Clone, Copy, PartialEq, Eq, Hash, Debug, Default)]
+#[source(Screen = Screen::MainMenu)]
+pub(crate) enum MenuPage {
+    #[default]
+    Top,
+    NewGame,
 }
 
 /// Asks whether to exit the game, and does if so.
@@ -32,12 +44,41 @@ pub fn go(to: Screen) -> impl Fn(On<Activate>, ResMut<NextState<Screen>>) {
     move |_, mut next| next.set(to)
 }
 
+/// An observer that opens one of the main menu's columns, from its own
+/// screen or another.
+pub fn open(
+    page: MenuPage,
+) -> impl Fn(On<Activate>, ResMut<NextState<Screen>>, ResMut<NextState<MenuPage>>) {
+    move |_, mut screen, mut next| {
+        screen.set_if_different(Screen::MainMenu);
+        next.set(page);
+    }
+}
+
+/// What stays on the main menu's screen whichever column is up.
+fn backdrop(mut commands: Commands) {
+    commands.spawn((Camera2d, DespawnOnExit(Screen::MainMenu)));
+    commands.spawn((
+        label(
+            concat!("Version ", env!("CARGO_PKG_VERSION")),
+            Font::Body,
+            Ink::Muted,
+        ),
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(24),
+            bottom: px(16),
+            ..default()
+        },
+        DespawnOnExit(Screen::MainMenu),
+    ));
+}
+
 /// The column of buttons down the right of the menus, as the game has it.
-fn column(commands: &mut Commands, screen: Screen) -> Entity {
-    commands.spawn((Camera2d, DespawnOnExit(screen)));
+fn column(commands: &mut Commands, page: MenuPage) -> Entity {
     let root = commands
         .spawn((
-            DespawnOnExit(screen),
+            DespawnOnExit(page),
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -84,7 +125,7 @@ fn main_menu(
     // Decoded once and kept, for each return to the menu.
     mut logo: Local<Option<Option<Handle<Image>>>>,
 ) {
-    let column = column(&mut commands, Screen::MainMenu);
+    let column = column(&mut commands, MenuPage::Top);
     let logo = logo.get_or_insert_with(|| {
         textures::decode(LOGO, "logo.png", formats.0, true).map(|i| images.add(i))
     });
@@ -106,7 +147,8 @@ fn main_menu(
             called("menu.new-game"),
             ChildOf(column),
         ))
-        .observe(go(Screen::NewGame));
+        .observe(open(MenuPage::NewGame));
+    commands.spawn((disabled("Multiplayer", Font::Large), ChildOf(column)));
     commands
         .spawn((
             button("Options", Font::Large),
@@ -125,7 +167,7 @@ fn main_menu(
 }
 
 fn new_game(mut commands: Commands) {
-    let column = column(&mut commands, Screen::NewGame);
+    let column = column(&mut commands, MenuPage::NewGame);
     commands.spawn((disabled("Campaign", Font::Large), ChildOf(column)));
     commands
         .spawn((
@@ -141,5 +183,40 @@ fn new_game(mut commands: Commands) {
             called("menu.back"),
             ChildOf(column),
         ))
-        .observe(go(Screen::MainMenu));
+        .observe(open(MenuPage::Top));
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::state::app::StatesPlugin;
+
+    use super::*;
+
+    #[derive(Resource, Default)]
+    struct Entered(u32);
+
+    /// Presses a button that opens `page`.
+    fn press(app: &mut App, page: MenuPage) {
+        let world = app.world_mut();
+        let entity = world.spawn_empty().observe(open(page)).id();
+        world.trigger(Activate { entity });
+        app.update();
+    }
+
+    #[test]
+    fn columns_switch_without_leaving_the_screen() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::MainMenu)
+            .add_sub_state::<MenuPage>()
+            .init_resource::<Entered>()
+            .add_systems(OnEnter(Screen::MainMenu), |mut e: ResMut<Entered>| e.0 += 1);
+        app.update();
+        press(&mut app, MenuPage::NewGame);
+        let page = |app: &App| *app.world().resource::<State<MenuPage>>().get();
+        assert_eq!(page(&app), MenuPage::NewGame);
+        press(&mut app, MenuPage::Top);
+        assert_eq!(page(&app), MenuPage::Top);
+        assert_eq!(app.world().resource::<Entered>().0, 1);
+    }
 }

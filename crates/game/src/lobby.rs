@@ -12,7 +12,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
 
 use crate::actions::GLYPH_DIR;
-use crate::menu::go;
+use crate::menu::{MenuPage, open};
 use crate::presets::Preset;
 use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Shown, Surface, button, called, card, clickable, dropdown,
@@ -543,7 +543,7 @@ fn ask_exit(
         &words,
         Screen::Lobby,
         question,
-        go(Screen::NewGame),
+        open(MenuPage::NewGame),
     );
 }
 
@@ -1037,6 +1037,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, confirm::ConfirmPlugin))
             .insert_state(Screen::Lobby)
+            .add_sub_state::<MenuPage>()
             .insert_resource(confirm::Words::default())
             .insert_resource(Leaving::of(&aaa_data::Strings::default()))
             .init_resource::<ButtonInput<KeyCode>>()
@@ -1072,7 +1073,11 @@ mod tests {
         let app = exit_answering("Ok");
         assert_eq!(
             *app.world().resource::<State<Screen>>().get(),
-            Screen::NewGame
+            Screen::MainMenu
+        );
+        assert_eq!(
+            *app.world().resource::<State<MenuPage>>().get(),
+            MenuPage::NewGame
         );
     }
 
