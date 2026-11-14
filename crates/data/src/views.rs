@@ -72,6 +72,29 @@ pub enum Footing {
     Air,
 }
 
+impl View {
+    /// A view that draws `models` alone, at their modelled size, finding
+    /// their textures beside them or in `texture_dirs`, as an effect's does.
+    pub fn of_models(models: Vec<String>, texture_dirs: Vec<String>) -> View {
+        View {
+            models,
+            texture_dirs,
+            texture_renames: HashMap::new(),
+            scale: 1.0,
+            animations: Vec::new(),
+            conform: None,
+            footing: Footing::Ground,
+            unpacking: None,
+            packing: None,
+            falling: None,
+            icon: None,
+            portrait: None,
+            faction_portrait: false,
+            ground_reach: None,
+        }
+    }
+}
+
 /// An animation a template's models can play.
 #[derive(Debug, Clone)]
 pub struct Animation {
@@ -474,21 +497,11 @@ mod tests {
         let block = parsed.root.blocks_of("View").next().unwrap();
         let view: defs::View = tgi::from_block(block).unwrap();
         let path = |m: &str| format!("Village/{m}");
+        let models = vec![path("hut.nif"), path("ruin.nif")];
+        let dirs = vec!["Shared/Textures".into(), "../Common".into()];
         let view = View {
-            models: vec![path("hut.nif"), path("ruin.nif")],
-            texture_dirs: vec!["Shared/Textures".into(), "../Common".into()],
             texture_renames: texture_renames(&view, Some("Village/hut.nif"), path),
-            scale: 1.0,
-            animations: Vec::new(),
-            conform: None,
-            footing: Footing::Ground,
-            unpacking: None,
-            packing: None,
-            falling: None,
-            icon: None,
-            portrait: None,
-            faction_portrait: false,
-            ground_reach: None,
+            ..View::of_models(models, dirs)
         };
         // The last rename goes first, so the first renames what it made;
         // they reach into folders too, and case matters.

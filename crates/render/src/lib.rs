@@ -6,6 +6,7 @@ pub mod camera;
 pub mod decals;
 mod glow;
 pub mod log;
+mod measures;
 pub mod models;
 pub mod objects;
 pub mod overlay;
@@ -34,7 +35,7 @@ use tgck::map::Sun;
 
 use blend::GroundMaterial;
 use glow::GlowMaterial;
-use models::{ModelAssets, Models};
+use models::{MaterialStores, ModelAssets, Models};
 use solid::SolidMaterial;
 use team::TeamMaterial;
 pub use team::Tint;
@@ -73,6 +74,11 @@ impl Edge {
     }
 }
 
+/// Plays models' animations on by a frame. What starts or stops one goes
+/// before it, so that it does so on the same frame each time.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Animate;
+
 impl Plugin for MapRenderPlugin {
     fn build(&self, app: &mut App) {
         // The shader has to be registered before the material that loads it.
@@ -109,7 +115,9 @@ impl Plugin for MapRenderPlugin {
                 Update,
                 (
                     models::pace,
-                    (models::animate, rig::play).after(models::pace),
+                    (models::animate, rig::play)
+                        .after(models::pace)
+                        .in_set(Animate),
                     portrait::fidget.before(rig::play),
                     camera::update.in_set(camera::Controls),
                     (
@@ -134,10 +142,7 @@ pub struct MapObject(pub Thing);
 #[derive(SystemParam)]
 pub struct MapAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
-    glow_materials: ResMut<'w, Assets<GlowMaterial>>,
-    team_materials: ResMut<'w, Assets<TeamMaterial>>,
-    solid_materials: ResMut<'w, Assets<SolidMaterial>>,
+    materials: MaterialStores<'w>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
     water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
@@ -152,10 +157,7 @@ impl MapAssets<'_> {
     pub fn models(&mut self) -> ModelAssets<'_> {
         ModelAssets {
             meshes: &mut self.meshes,
-            materials: &mut self.materials,
-            glow_materials: &mut self.glow_materials,
-            team_materials: &mut self.team_materials,
-            solid_materials: &mut self.solid_materials,
+            materials: self.materials.parts(),
             images: &mut self.images,
             skins: &mut self.skins,
         }
@@ -218,7 +220,7 @@ pub fn spawn_map(
         map.things.iter().filter(|t| !leave_out(t)),
         &holding,
     );
-    let (meshes, materials) = (&mut assets.meshes, &mut assets.materials);
+    let (meshes, materials) = (&mut assets.meshes, &mut assets.materials.standard);
     let footing = |t: &str| models.footing(t);
     objects::spawn(
         commands,

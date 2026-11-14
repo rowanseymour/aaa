@@ -100,6 +100,21 @@ impl World {
         }
     }
 
+    /// A target's defence as damage finds it now, and its template's own,
+    /// for one with a body.
+    pub fn defense(&self, t: Target) -> Option<(f32, f32)> {
+        let plain = match t {
+            Target::Unit(u) => self.units[u].fighter.as_ref()?.defense,
+            Target::Building(b) => self.buildings[b].fighter.defense,
+        };
+        let ground = self
+            .terrain_effects(t)
+            .iter()
+            .map(|e| e.defense)
+            .sum::<f32>();
+        Some((plain + ground, plain))
+    }
+
     pub(crate) fn owner(&self, t: Target) -> u32 {
         match t {
             Target::Unit(u) => self.regiments[self.units[u].regiment].owner,

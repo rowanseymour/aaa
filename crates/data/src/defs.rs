@@ -81,6 +81,9 @@ pub struct Thing {
     pub ids: Option<Id>,
     /// A `#` key into the localized strings.
     pub name: Option<String>,
+    /// A `#` key into the localized strings, for what the object display
+    /// says of it.
+    pub description: Option<String>,
     /// Whether a side numbers those it has, as "1st Infantry Regiment".
     pub numbered: Option<bool>,
     /// Whether the object display shows its owner's general's portrait
@@ -199,6 +202,8 @@ pub struct BodyComponent {
     #[serde(default)]
     pub when_health: Vec<Fxc>,
     pub defense: Option<f32>,
+    /// The icon its defence shows by, from the archive root.
+    pub defense_icon: Option<String>,
     pub captureable: Option<bool>,
     pub destructible: Option<bool>,
 }

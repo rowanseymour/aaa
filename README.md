@@ -73,13 +73,8 @@ cargo test
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome. For anything large, open an
-issue first so we can talk it through.
-
-Because of the clean-room approach above, contributions must come from how the game
-behaves, never from its code: nothing taken from disassembling or decompiling it, and
-nothing that mirrors its structure. Playing the game and reading its data files is
-fair game.
+Bug reports, ideas and pull requests are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md),
+in particular for what the clean-room approach asks of contributions.
 
 ## Legal
 
@@ -87,4 +82,4 @@ Not affiliated with or endorsed by TimeGate Studios, Atari or Hasbro. Axis &
 Allies is a trademark of Hasbro, used here only to describe which game's files
 these tools read.
 
-Copyright © 2026 Rowan Seymour. Licensed under the [GNU GPL v3 or later](LICENSE).
+Copyright © 2026 Rowan Seymour and contributors. Licensed under the [GNU GPL v3 or later](LICENSE).

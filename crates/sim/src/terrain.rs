@@ -231,6 +231,12 @@ mod tests {
         w.stand();
         let held = |w: &World, u| w.terrain_effects(Target::Unit(u)).len();
         assert_eq!((held(&w, 0), held(&w, 1)), (1, 0));
+        // What it holds adds to its defence.
+        for unit in &mut w.units {
+            unit.fighter = Some(soldier(vec![]));
+        }
+        let raised = |u| (w.defense(Target::Unit(u))).map(|(now, plain)| now - plain);
+        assert_eq!((raised(0), raised(1)), (Some(4.0), Some(0.0)));
         assert!(w.regiments[0].terrain_properties.is_empty());
         assert_eq!((w.speed_limit(0), w.speed_limit(1)), (Some(1.0), None));
         w.regiments[0].control_range = 10.0;

@@ -8,6 +8,7 @@ use std::sync::Arc;
 use aaa_data::{AnimationKind, Footing, GameData, Id, Portrait, Shape, View};
 use aaa_map::{Ground, Player, owner};
 use bevy::asset::RenderAssetUsages;
+use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
 use bevy::math::Affine2;
@@ -23,8 +24,9 @@ use tgck::map::Thing;
 
 use crate::MapObject;
 use crate::glow::{Glow, GlowMaterial};
-use crate::particles::{self, Look, System};
-use crate::rig::{Nodes, Rig};
+use crate::measures::Measures;
+use crate::particles::{self, Frames, Look, System};
+use crate::rig::{Clips, Nodes, Rig};
 use crate::solid::{Solid, SolidMaterial};
 use crate::team::{self, Team, TeamMaterial};
 use crate::terrain::world;
@@ -123,33 +125,57 @@ impl PartMaterial {
             PartMaterial::Solid(m) => entity.insert(MeshMaterial3d(m.clone())),
         };
     }
+}
 
-    /// A copy of the material of its own, to animate.
-    fn copy(&self, assets: &mut ModelAssets) -> Self {
-        self.copied(
-            assets.materials,
-            assets.glow_materials,
-            assets.team_materials,
-            assets.solid_materials,
-        )
-    }
+/// The stores a [`PartMaterial`] can be in.
+pub struct PartMaterials<'a> {
+    pub standard: &'a mut Assets<StandardMaterial>,
+    pub glow: &'a mut Assets<GlowMaterial>,
+    pub team: &'a mut Assets<TeamMaterial>,
+    pub solid: &'a mut Assets<SolidMaterial>,
+}
 
-    /// [`Self::copy`], into the stores themselves.
-    pub(crate) fn copied(
-        &self,
-        materials: &mut Assets<StandardMaterial>,
-        glow_materials: &mut Assets<GlowMaterial>,
-        team_materials: &mut Assets<TeamMaterial>,
-        solid_materials: &mut Assets<SolidMaterial>,
-    ) -> Self {
+impl PartMaterials<'_> {
+    /// A copy of `material` of its own, to animate.
+    pub(crate) fn copy(&mut self, material: &PartMaterial) -> PartMaterial {
         fn copy<M: Asset + Clone>(store: &mut Assets<M>, h: &Handle<M>) -> Handle<M> {
             store.get(h).cloned().map_or(h.clone(), |m| store.add(m))
         }
-        match self {
-            PartMaterial::Standard(h) => PartMaterial::Standard(copy(materials, h)),
-            PartMaterial::Glow(h) => PartMaterial::Glow(copy(glow_materials, h)),
-            PartMaterial::Team(h) => PartMaterial::Team(copy(team_materials, h)),
-            PartMaterial::Solid(h) => PartMaterial::Solid(copy(solid_materials, h)),
+        match material {
+            PartMaterial::Standard(h) => PartMaterial::Standard(copy(self.standard, h)),
+            PartMaterial::Glow(h) => PartMaterial::Glow(copy(self.glow, h)),
+            PartMaterial::Team(h) => PartMaterial::Team(copy(self.team, h)),
+            PartMaterial::Solid(h) => PartMaterial::Solid(copy(self.solid, h)),
+        }
+    }
+
+    /// The standard material `material` is built on, to change.
+    fn base_mut(&mut self, material: &PartMaterial) -> Option<&mut StandardMaterial> {
+        match material {
+            PartMaterial::Standard(h) => self.standard.get_mut(h).map(|m| m.into_inner()),
+            PartMaterial::Glow(h) => self.glow.get_mut(h).map(|m| &mut m.into_inner().base),
+            PartMaterial::Team(h) => self.team.get_mut(h).map(|m| &mut m.into_inner().base),
+            PartMaterial::Solid(h) => self.solid.get_mut(h).map(|m| &mut m.into_inner().base),
+        }
+    }
+}
+
+/// The stores a [`PartMaterial`] can be in, for a system.
+#[derive(SystemParam)]
+pub struct MaterialStores<'w> {
+    pub(crate) standard: ResMut<'w, Assets<StandardMaterial>>,
+    glow: ResMut<'w, Assets<GlowMaterial>>,
+    team: ResMut<'w, Assets<TeamMaterial>>,
+    solid: ResMut<'w, Assets<SolidMaterial>>,
+}
+
+impl MaterialStores<'_> {
+    pub fn parts(&mut self) -> PartMaterials<'_> {
+        PartMaterials {
+            standard: &mut self.standard,
+            glow: &mut self.glow,
+            team: &mut self.team,
+            solid: &mut self.solid,
         }
     }
 }
@@ -329,13 +355,7 @@ impl Animated {
 
     /// Paints its part at its time, and gives the part's transform then if
     /// it moves.
-    pub(crate) fn pose(
-        &self,
-        materials: &mut Assets<StandardMaterial>,
-        glow_materials: &mut Assets<GlowMaterial>,
-        team_materials: &mut Assets<TeamMaterial>,
-        solid_materials: &mut Assets<SolidMaterial>,
-    ) -> Option<Transform> {
+    pub(crate) fn pose(&self, materials: &mut PartMaterials) -> Option<Transform> {
         let t = self.time;
         let moved = (!self.animation.motion.is_empty()).then(|| self.animation.transform(t));
         let alpha = self
@@ -351,13 +371,7 @@ impl Animated {
         if alpha.is_none() && uv.is_none() {
             return moved;
         }
-        let base = match &self.material {
-            PartMaterial::Standard(h) => materials.get_mut(h).map(|m| m.into_inner()),
-            PartMaterial::Glow(h) => glow_materials.get_mut(h).map(|m| &mut m.into_inner().base),
-            PartMaterial::Team(h) => team_materials.get_mut(h).map(|m| &mut m.into_inner().base),
-            PartMaterial::Solid(h) => solid_materials.get_mut(h).map(|m| &mut m.into_inner().base),
-        };
-        if let Some(m) = base {
+        if let Some(m) = materials.base_mut(&self.material) {
             if let Some(alpha) = alpha {
                 m.base_color.set_alpha(alpha.clamp(0.0, 1.0));
             }
@@ -372,20 +386,12 @@ impl Animated {
 pub fn animate(
     time: Res<Time>,
     mut parts: Query<(&mut Animated, &mut Transform)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut glow_materials: ResMut<Assets<GlowMaterial>>,
-    mut team_materials: ResMut<Assets<TeamMaterial>>,
-    mut solid_materials: ResMut<Assets<SolidMaterial>>,
+    mut stores: MaterialStores,
 ) {
+    let mut materials = stores.parts();
     for (mut a, mut transform) in &mut parts {
         a.time += time.delta_secs() * a.rate;
-        let moved = a.pose(
-            &mut materials,
-            &mut glow_materials,
-            &mut team_materials,
-            &mut solid_materials,
-        );
-        if let Some(moved) = moved {
+        if let Some(moved) = a.pose(&mut materials) {
             *transform = moved;
         }
     }
@@ -434,30 +440,76 @@ pub struct Models {
     pub(crate) views: HashMap<Id, Option<View>>,
     /// The faces the object display shows, by id.
     pub(crate) portraits: HashMap<Id, Portrait>,
-    /// By path, and for rigs the animation's path too.
-    pub(crate) models: HashMap<String, Option<Model>>,
-    textures: HashMap<String, Option<Handle<Image>>>,
-    /// Bevy's texture formats this GPU can sample compressed.
-    formats: CompressedImageFormats,
+    /// By path, what they're loaded to play and where their textures are
+    /// found.
+    models: HashMap<String, Option<Model>>,
+    textures: Textures,
     /// Each player's colour, by id.
     pub(crate) colours: HashMap<u32, [f32; 3]>,
     /// Team-coloured copies of materials, by the material and the colour's
     /// bits.
     painted: HashMap<(AssetId<StandardMaterial>, [u32; 3]), Handle<TeamMaterial>>,
-    /// Each model's named nodes, by path, as [`Nodes::points`] has them.
-    points: HashMap<String, HashMap<String, nif::Transform>>,
-    /// Each model's lowest and highest point, by path.
-    extents: HashMap<String, Option<[f32; 2]>>,
-    timings: HashMap<String, Option<EffectTiming>>,
+    /// What's measured of each model, by path.
+    measures: HashMap<String, Option<Arc<Measures>>>,
+    /// `.kf` files by path, each shared by every model that plays it.
+    clips: HashMap<String, Option<Arc<Nif>>>,
+    /// The model file read last, by path, for whatever asks for it next:
+    /// a model's measures and its meshes are often wanted one after the
+    /// other.
+    last: Option<(String, Arc<Nif>)>,
     /// The folder, beside a model or texture, that holds the map's
     /// biome's own version of it, if the biome has one.
-    pub(crate) subfolder: Option<String>,
+    subfolder: Option<String>,
     /// Whether meshes stay readable off the GPU, for mesh picking.
     pickable: bool,
-    /// Set while what's spawned is lit by ambient light of this strength,
-    /// of which each material reflects its own share: on the map, where
-    /// it isn't, all reflect alike.
-    pub(crate) ambient: Option<f32>,
+}
+
+/// Textures loaded for models: from files by archive path, and those
+/// stored in a model by its path and the texture's index in it.
+struct Textures {
+    loaded: HashMap<String, Option<Handle<Image>>>,
+    /// Bevy's texture formats this GPU can sample compressed.
+    formats: CompressedImageFormats,
+}
+
+/// How a model's parts are painted as it's spawned.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Paint {
+    /// Its owner's colour, for the parts that take it.
+    pub colour: Option<[f32; 3]>,
+    /// Lit by ambient light of this strength, of which each material
+    /// reflects its own share: on the map, where it isn't, all reflect
+    /// alike.
+    pub ambient: Option<f32>,
+}
+
+/// Which of its view's animations a model is loaded to play.
+#[derive(Clone, Copy)]
+pub(crate) struct Plays<'a> {
+    /// What it idles with, as a rig; without one it stands as modelled.
+    pub idle: Option<&'a aaa_data::Animation>,
+    pub moving: Option<&'a aaa_data::Animation>,
+    /// Picks those it plays once when told to.
+    pub once: fn(&aaa_data::Animation) -> bool,
+}
+
+impl<'a> Plays<'a> {
+    /// A unit's: idling, moving with `moving`, and using its abilities and
+    /// dying once each.
+    pub fn unit(view: &'a View, moving: Option<&'a aaa_data::Animation>) -> Self {
+        Plays {
+            idle: idle(view),
+            moving,
+            once,
+        }
+    }
+
+    /// The animations of `view`'s it plays once: what a model's cache key
+    /// and the clips it loads are both made from.
+    fn once_in<'v>(&self, view: &'v View) -> impl Iterator<Item = &'v aaa_data::Animation> {
+        let once = self.once;
+        view.animations.iter().filter(move |a| once(a))
+    }
 }
 
 /// How an effect's model plays.
@@ -507,25 +559,28 @@ impl Models {
             views: game.views(),
             portraits: game.portraits(),
             models: HashMap::new(),
-            textures: HashMap::new(),
-            formats,
+            textures: Textures {
+                loaded: HashMap::new(),
+                formats,
+            },
             colours: players.iter().map(|p| (p.id, p.rgb)).collect(),
             painted: HashMap::new(),
-            points: HashMap::new(),
-            extents: HashMap::new(),
-            timings: HashMap::new(),
+            measures: HashMap::new(),
+            clips: HashMap::new(),
+            last: None,
             pickable,
-            ambient: None,
         }
+    }
+
+    /// The view a template's things are drawn with, if it has one.
+    pub(crate) fn view(&self, template: &str) -> Option<&View> {
+        self.views.get(&Id::from(template))?.as_ref()
     }
 
     /// The archive path of the model `thing` is drawn with, or with
     /// `packing` its packing model, unpacking if that's true.
     pub fn model_path(&self, thing: &Thing, packing: Option<bool>) -> Option<&str> {
-        let view = self
-            .views
-            .get(&Id::from(thing.template.as_str()))?
-            .as_ref()?;
+        let view = self.view(&thing.template)?;
         match packing {
             Some(true) => view.unpacking.as_deref(),
             Some(false) => view.packing.as_deref(),
@@ -537,45 +592,60 @@ impl Models {
     /// Where the node named `name`, exactly, is in the model at `path`,
     /// from its origin in its own units; `None` if it has no such node.
     pub fn point(&mut self, game: &GameData, path: &str, name: &str) -> Option<Transform> {
-        let subfolder = self.subfolder.as_deref();
-        let points = self.points.entry(path.to_string()).or_insert_with(|| {
-            game.read_in(subfolder, path)
-                .and_then(|b| Nif::parse(&b).ok())
-                .map(|nif| Nodes::new(&nif).points())
-                .unwrap_or_default()
-        });
-        points.get(name).map(bevy_transform)
+        self.measures(game, path)?
+            .points
+            .get(name)
+            .map(bevy_transform)
     }
 
     /// The heights of the lowest and highest of the meshes of the model at
     /// `path`, as modelled, in its own units.
     pub fn extent(&mut self, game: &GameData, path: &str) -> Option<[f32; 2]> {
-        let subfolder = self.subfolder.as_deref();
-        *self.extents.entry(path.to_string()).or_insert_with(|| {
-            let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
-            let mut out: Option<[f32; 2]> = None;
-            for placed in nif.shapes() {
-                let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
-                    continue;
-                };
-                for &p in &g.positions {
-                    let z = placed.transform.apply(p)[2];
-                    let [lo, hi] = out.get_or_insert([z, z]);
-                    *lo = lo.min(z);
-                    *hi = hi.max(z);
-                }
-            }
-            out
-        })
+        let extent = self.measures(game, path)?.extent?;
+        Some([extent.low, extent.high])
     }
 
     /// How the effect model at `path` plays; `None` if it can't be read or
     /// doesn't animate.
     pub fn effect_timing(&mut self, game: &GameData, path: &str) -> Option<EffectTiming> {
-        let subfolder = self.subfolder.as_deref();
-        *self.timings.entry(path.to_string()).or_insert_with(|| {
-            let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
-            EffectTiming::of(&nif)
+        self.measures(game, path)?.timing
+    }
+
+    /// What's measured of the model at `path`; `None` if it can't be read.
+    pub(crate) fn measures(&mut self, game: &GameData, path: &str) -> Option<Arc<Measures>> {
+        if let Some(measures) = self.measures.get(path) {
+            return measures.clone();
+        }
+        let measures =
+            (self.parse(game, path)).map(|nif| Arc::new(Measures::of(&nif, &Nodes::new(&nif))));
+        self.measures.insert(path.to_string(), measures.clone());
+        measures
+    }
+
+    /// The model file at `path`, read from the biome's folder where it has
+    /// its own; warns if it's there but can't be read.
+    fn parse(&mut self, game: &GameData, path: &str) -> Option<Arc<Nif>> {
+        if let Some((last, nif)) = &self.last
+            && last == path
+        {
+            return Some(nif.clone());
+        }
+        let nif = Nif::parse(&game.read_in(self.subfolder.as_deref(), path)?)
+            .map_err(|e| warn!("{path}: {e}"))
+            .ok()?;
+        if let Some(kind) = &nif.incomplete {
+            debug!("{path}: stops at {kind}");
+        }
+        let nif = Arc::new(nif);
+        self.last = Some((path.to_string(), nif.clone()));
+        Some(nif)
+    }
+
+    /// The `.kf` file at `path`.
+    fn clip(&mut self, game: &GameData, path: &str) -> Option<Arc<Nif>> {
+        cached(&mut self.clips, path, || {
+            let kf = Nif::parse(&game.read(path)?).map_err(|e| warn!("{path}: {e}"));
+            kf.ok().map(Arc::new)
         })
     }
 
@@ -622,25 +692,19 @@ impl Models {
     /// The archive path of a template's picture in the interface, if it
     /// has one.
     pub fn icon(&self, template: &str) -> Option<&str> {
-        self.views
-            .get(&Id::from(template))?
-            .as_ref()?
-            .icon
-            .as_deref()
+        self.view(template)?.icon.as_deref()
     }
 
     /// The outline under which a template's models tilt to follow the
     /// ground, for [`pose`]; `None` for models that stay upright.
     pub fn conform(&self, template: &str) -> Option<Shape> {
-        self.views.get(&Id::from(template))?.as_ref()?.conform
+        self.view(template)?.conform
     }
 
     /// What height a template's objects stand at, for [`pose`]; on the
     /// ground for templates without a view.
     pub fn footing(&self, template: &str) -> Footing {
-        let view = self.views.get(&Id::from(template));
-        view.and_then(Option::as_ref)
-            .map_or(Footing::Ground, |v| v.footing)
+        self.view(template).map_or(Footing::Ground, |v| v.footing)
     }
 
     /// Spawns a unit of the player `owner` that moves at `speed`, its model
@@ -656,45 +720,23 @@ impl Models {
         owner: u32,
         speed: f32,
     ) -> Option<Entity> {
-        let view = self
-            .views
-            .get(&Id::from(thing.template.as_str()))?
-            .clone()?;
+        let view = self.view(&thing.template)?.clone();
         let moving = moving(&view, speed);
         self.spawn_model(commands, game, assets, thing, Some(owner), &view, moving)
     }
 
-    /// Spawns an object that stands still, such as a building. `None` if its
-    /// model can't be drawn.
+    /// Spawns an object that stands still, such as a building, painted in
+    /// `owner`'s colour. `None` if its model can't be drawn.
     pub fn spawn_object(
         &mut self,
         commands: &mut Commands,
         game: &GameData,
         assets: &mut ModelAssets,
         thing: &Thing,
+        owner: Option<u32>,
     ) -> Option<Entity> {
-        let view = self
-            .views
-            .get(&Id::from(thing.template.as_str()))?
-            .clone()?;
-        self.spawn_model(commands, game, assets, thing, owner(thing), &view, None)
-    }
-
-    /// Spawns a building of the player `owner`'s, such as one that's just
-    /// unpacked. `None` if its model can't be drawn.
-    pub fn spawn_building(
-        &mut self,
-        commands: &mut Commands,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        thing: &Thing,
-        owner: u32,
-    ) -> Option<Entity> {
-        let view = self
-            .views
-            .get(&Id::from(thing.template.as_str()))?
-            .clone()?;
-        self.spawn_model(commands, game, assets, thing, Some(owner), &view, None)
+        let view = self.view(&thing.template)?.clone();
+        self.spawn_model(commands, game, assets, thing, owner, &view, None)
     }
 
     /// Spawns the model a building plays once as it packs, or unpacks,
@@ -711,23 +753,23 @@ impl Models {
         unpacking: bool,
         into: f32,
     ) -> Option<Entity> {
-        let view = self
-            .views
-            .get(&Id::from(thing.template.as_str()))?
-            .clone()?;
+        let view = self.view(&thing.template)?.clone();
         let path = match unpacking {
             true => view.unpacking.clone()?,
             false => view.packing.clone()?,
         };
-        let model = self.own_animation(game, assets, &path, view.clone())?;
+        let model = self.own_animation(game, assets, &path, &view)?;
         if !matches!(model.meshes, Meshes::Rig(_)) {
             return None;
         }
         let root = commands
             .spawn((Name::new(path), placed(thing, &view), Visibility::default()))
             .id();
-        let colour = self.colours.get(&owner).copied();
-        self.spawn_meshes(commands, assets, root, model, colour, into);
+        let paint = Paint {
+            colour: self.colours.get(&owner).copied(),
+            ambient: None,
+        };
+        self.spawn_meshes(commands, assets, root, model, paint, into);
         Some(root)
     }
 
@@ -742,10 +784,7 @@ impl Models {
         thing: &Thing,
         owner: u32,
     ) -> Option<Entity> {
-        let view = self
-            .views
-            .get(&Id::from(thing.template.as_str()))?
-            .clone()?;
+        let view = self.view(&thing.template)?.clone();
         let falling = View {
             models: vec![view.falling.clone()?],
             animations: Vec::new(),
@@ -788,10 +827,9 @@ impl Models {
                 .min()
                 .unwrap_or(Placed::NoModel);
         }
-        let Some(Some(view)) = self.views.get(&Id::from(thing.template.as_str())) else {
+        let Some(view) = self.view(&thing.template).cloned() else {
             return Placed::Missing;
         };
-        let view = view.clone();
         match self.spawn_model(commands, game, assets, thing, owner, &view, None) {
             Some(_) => Placed::Drawn,
             None => Placed::Missing,
@@ -815,8 +853,11 @@ impl Models {
             return None;
         }
         let model = &view.models[variation(thing) % view.models.len()];
-        let model = self.model(game, assets, model, view, moving)?;
-        let colour = owner.and_then(|o| self.colours.get(&o).copied());
+        let model = self.model(game, assets, model, view, Plays::unit(view, moving))?;
+        let paint = Paint {
+            colour: owner.and_then(|o| self.colours.get(&o).copied()),
+            ambient: None,
+        };
         let mut root = commands.spawn((
             Name::new(thing.template.clone()),
             MapObject(thing.clone()),
@@ -830,7 +871,7 @@ impl Models {
         // well apart.
         let offset = (thing.id as f32 * 0.618_034).fract() * 60.0;
         let root = root.id();
-        self.spawn_meshes(commands, assets, root, model, colour, offset);
+        self.spawn_meshes(commands, assets, root, model, paint, offset);
         Some(root)
     }
 
@@ -846,23 +887,8 @@ impl Models {
         texture_dirs: &[String],
         transform: Transform,
     ) -> Option<Entity> {
-        let view = View {
-            models: vec![path.to_string()],
-            texture_dirs: texture_dirs.to_vec(),
-            texture_renames: HashMap::new(),
-            scale: 1.0,
-            animations: Vec::new(),
-            conform: None,
-            footing: Footing::Ground,
-            unpacking: None,
-            packing: None,
-            falling: None,
-            icon: None,
-            portrait: None,
-            faction_portrait: false,
-            ground_reach: None,
-        };
-        let model = self.own_animation(game, assets, path, view)?;
+        let view = View::of_models(vec![path.to_string()], texture_dirs.to_vec());
+        let model = self.own_animation(game, assets, path, &view)?;
         let root = commands
             .spawn((
                 Name::new(path.to_string()),
@@ -870,7 +896,7 @@ impl Models {
                 Visibility::default(),
             ))
             .id();
-        self.spawn_meshes(commands, assets, root, model, None, 0.0);
+        self.spawn_meshes(commands, assets, root, model, Paint::default(), 0.0);
         Some(root)
     }
 
@@ -881,52 +907,28 @@ impl Models {
         game: &GameData,
         assets: &mut ModelAssets,
         path: &str,
-        view: View,
+        view: &View,
     ) -> Option<Model> {
-        let key = format!("{path}#own{}", lookup_key(path, &view));
+        let key = format!("{path}#own{}", lookup_key(path, view));
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
-        let rig = Nif::parse(&game.read_in(self.subfolder.as_deref(), path)?)
-            .map_err(|e| warn!("{path}: {e}"))
-            .ok()
-            .and_then(|nif| {
-                let nodes = Nodes::new(&nif);
-                let meshes = self.rig_meshes(game, assets, &nif, path, &view, &nodes);
-                let rig = nodes.rig(
-                    &nif,
-                    meshes,
-                    None,
-                    None,
-                    &[],
-                    &[],
-                    assets.meshes,
-                    assets.skins,
-                )?;
-                Some((rig, self.particles(game, assets, &nif, path, &view)))
-            });
-        let model = match rig {
-            Some((rig, particles)) => Some(Model {
-                meshes: Meshes::Rig(Arc::new(rig)),
-                particles,
-                selection: None,
-            }),
-            None => self.load(game, assets, path, &view, None, None, once),
-        };
+        let model = self
+            .parse(game, path)
+            .and_then(|nif| self.build(game, assets, &nif, path, view, Some(Clips::default())));
         self.models.insert(key, model.clone());
         model
     }
 
     /// Spawns a model's meshes and particle systems under `root`, painted
-    /// in `colour` where they take their owner's, animations `offset`
-    /// seconds in.
+    /// as `paint` says, animations `offset` seconds in.
     pub(crate) fn spawn_meshes(
         &mut self,
         commands: &mut Commands,
         assets: &mut ModelAssets,
         root: Entity,
         model: Model,
-        colour: Option<[f32; 3]>,
+        paint: Paint,
         offset: f32,
     ) {
         let parts = match model.meshes {
@@ -944,7 +946,7 @@ impl Models {
             Meshes::Rig(rig) => {
                 let materials = rig
                     .parts()
-                    .map(|p| self.own_paint(assets, p, colour))
+                    .map(|p| self.own_paint(assets, p, paint))
                     .collect();
                 let joints = rig.spawn(commands, root, offset, materials);
                 let node = |i| rig.joint(i).map(|j| joints[j]);
@@ -961,7 +963,7 @@ impl Models {
         };
         let materials: Vec<_> = parts
             .iter()
-            .map(|p| self.own_paint(assets, p, colour))
+            .map(|p| self.own_paint(assets, p, paint))
             .collect();
         commands.entity(root).with_children(|parent| {
             for (part, material) in parts.into_iter().zip(materials) {
@@ -982,18 +984,13 @@ impl Models {
 
     /// A part's material as [`Self::paint`] gives it, copied if the part's
     /// animation changes it.
-    fn own_paint(
-        &mut self,
-        assets: &mut ModelAssets,
-        part: &Part,
-        colour: Option<[f32; 3]>,
-    ) -> PartMaterial {
-        let material = self.paint(assets, part, colour);
+    fn own_paint(&mut self, assets: &mut ModelAssets, part: &Part, paint: Paint) -> PartMaterial {
+        let material = self.paint(assets, part, paint.colour);
         let material = match part.animation.as_ref().is_some_and(|a| a.paints()) {
-            true => material.copy(assets),
+            true => assets.materials.copy(&material),
             false => material,
         };
-        match self.ambient {
+        match paint.ambient {
             Some(light) => reflecting(material, part, light, assets),
             None => material,
         }
@@ -1017,13 +1014,14 @@ impl Models {
         // Masked texels would be cut out before the colour shows.
         let Some(base) = assets
             .materials
+            .standard
             .get(h)
             .filter(|m| m.alpha_mode == AlphaMode::Opaque)
         else {
             return part.material.clone();
         };
         let base = base.clone();
-        let painted = assets.team_materials.add(TeamMaterial {
+        let painted = assets.materials.team.add(TeamMaterial {
             base,
             extension: Team::new(colour),
         });
@@ -1031,60 +1029,83 @@ impl Models {
         PartMaterial::Team(painted)
     }
 
+    /// The model at `path`, its textures found as `view` finds them,
+    /// loaded to play what `plays` picks.
     pub(crate) fn model(
         &mut self,
         game: &GameData,
         assets: &mut ModelAssets,
         path: &str,
         view: &View,
-        moving: Option<&aaa_data::Animation>,
+        plays: Plays,
     ) -> Option<Model> {
-        let idle = idle(view);
         let mut key = path.to_string();
-        let played = view.animations.iter().filter(|a| once(a));
-        for a in idle.into_iter().chain(moving).chain(played) {
+        let once = plays.once_in(view);
+        for a in plays.idle.into_iter().chain(plays.moving).chain(once) {
             key += &format!("#{}", a.kf);
         }
         key += &lookup_key(path, view);
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
-        let model = self.load(game, assets, path, view, idle, moving, once);
+        let model = self.parse(game, path).and_then(|nif| {
+            let clips = self.clips(game, view, plays);
+            self.build(game, assets, &nif, path, view, clips)
+        });
         self.models.insert(key, model.clone());
         model
     }
 
-    /// A model, as a rig if it has an `idle` animation to play, which can
-    /// then also play once each of its view's animations that `once` picks.
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn load(
+    /// The clips a rig plays, as `plays` picks them from `view`; `None`
+    /// without an idle clip that can be read.
+    fn clips(&mut self, game: &GameData, view: &View, plays: Plays) -> Option<Clips> {
+        let idle = plays.idle?;
+        let mut clips = Clips {
+            idle: Some((self.clip(game, &idle.kf)?, idle.length)),
+            ..Clips::default()
+        };
+        clips.moving =
+            (plays.moving).and_then(|a| Some((self.clip(game, &a.kf)?, a.walk_distance?)));
+        for a in plays.once_in(view) {
+            let Some(kf) = self.clip(game, &a.kf) else {
+                continue;
+            };
+            match a.kind {
+                AnimationKind::Die => clips.deaths.push((kf, a.length)),
+                _ => clips.abilities.push((a.ids.clone(), kf, a.length)),
+            }
+        }
+        Some(clips)
+    }
+
+    /// A model from its file, as a rig playing `clips` if it has them and
+    /// they animate any of its nodes, else standing as modelled.
+    fn build(
         &mut self,
         game: &GameData,
         assets: &mut ModelAssets,
+        nif: &Nif,
         path: &str,
         view: &View,
-        idle: Option<&aaa_data::Animation>,
-        moving: Option<&aaa_data::Animation>,
-        once: fn(&aaa_data::Animation) -> bool,
+        clips: Option<Clips>,
     ) -> Option<Model> {
-        let nif = Nif::parse(&game.read_in(self.subfolder.as_deref(), path)?)
-            .map_err(|e| warn!("{path}: {e}"))
-            .ok()?;
-        if let Some(kind) = &nif.incomplete {
-            debug!("{path}: stops at {kind}");
-        }
-        let selection = selection_box(&nif);
-        let particles = self.particles(game, assets, &nif, path, view);
-        let rig = idle.and_then(|a| self.rig(game, assets, &nif, path, view, a, moving, once));
-        if let Some(rig) = rig {
-            return Some(Model {
-                meshes: Meshes::Rig(Arc::new(rig)),
-                particles,
-                selection,
-            });
+        let nodes = Nodes::new(nif);
+        let selection = selection_box(nif, &nodes.frames);
+        let mut loader = self.loader(game, assets, nif, path, view);
+        let particles = loader.particles(&nodes.frames);
+        if let Some(clips) = clips {
+            let meshes = loader.rig_meshes(&nodes);
+            if let Some(rig) = nodes.rig(nif, meshes, &clips, assets.meshes, assets.skins) {
+                return Some(Model {
+                    meshes: Meshes::Rig(Arc::new(rig)),
+                    particles,
+                    selection,
+                });
+            }
         }
         // Skinned shapes are drawn in the pose they were modelled in.
-        let parts = self.scene_parts(game, assets, &nif, path, view, nif.shapes(), true);
+        let mut loader = self.loader(game, assets, nif, path, view);
+        let parts = loader.scene_parts(nif.shapes(), true);
         (!parts.is_empty() || !particles.is_empty()).then_some(Model {
             meshes: Meshes::Parts(parts),
             particles,
@@ -1092,63 +1113,50 @@ impl Models {
         })
     }
 
-    /// A model as a rig of its nodes idling with `idle`, if its `.kf`
-    /// file reads and animates any of them, and moving with `moving`.
-    #[allow(clippy::too_many_arguments)]
-    fn rig(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
-        idle: &aaa_data::Animation,
-        moving: Option<&aaa_data::Animation>,
-        once: fn(&aaa_data::Animation) -> bool,
-    ) -> Option<Rig> {
-        let kf = |a: &aaa_data::Animation| {
-            Nif::parse(&game.read(&a.kf)?)
-                .map_err(|e| warn!("{}: {e}", a.kf))
-                .ok()
-        };
-        let idle_kf = kf(idle)?;
-        let moving = moving.and_then(|a| Some((kf(a)?, a.walk_distance?)));
-        let mut abilities = Vec::new();
-        let mut deaths = Vec::new();
-        for a in view.animations.iter().filter(|a| once(a)) {
-            let Some(clip) = kf(a) else {
-                continue;
-            };
-            match a.kind {
-                AnimationKind::Die => deaths.push((clip, a.length)),
-                _ => abilities.push((a.ids.clone(), clip, a.length)),
-            }
-        }
-        let nodes = Nodes::new(nif);
-        let meshes = self.rig_meshes(game, assets, nif, path, view, &nodes);
-        nodes.rig(
+    /// What builds the parts of the model file `nif`, at `path`, with its
+    /// textures found as `view` finds them.
+    fn loader<'a, 'w>(
+        &'a mut self,
+        game: &'a GameData,
+        assets: &'a mut ModelAssets<'w>,
+        nif: &'a Nif,
+        path: &'a str,
+        view: &'a View,
+    ) -> Loader<'a, 'w> {
+        Loader {
+            game,
+            assets,
+            textures: &mut self.textures,
+            subfolder: self.subfolder.as_deref(),
+            pickable: self.pickable,
             nif,
-            meshes,
-            Some((&idle_kf, idle.length)),
-            moving.as_ref().map(|(kf, distance)| (kf, *distance)),
-            &abilities,
-            &deaths,
-            assets.meshes,
-            assets.skins,
-        )
+            path,
+            view,
+        }
     }
+}
 
+/// Builds the parts of one model file: its meshes, their materials and
+/// textures, and its particle systems.
+struct Loader<'a, 'w> {
+    game: &'a GameData,
+    assets: &'a mut ModelAssets<'w>,
+    textures: &'a mut Textures,
+    /// As [`Models::subfolder`].
+    subfolder: Option<&'a str>,
+    /// As [`Models::pickable`].
+    pickable: bool,
+    nif: &'a Nif,
+    /// The file's archive path.
+    path: &'a str,
+    view: &'a View,
+}
+
+impl Loader<'_, '_> {
     /// The parts of a rig's shapes, each with its index in
     /// [`Nodes::shapes`].
-    fn rig_meshes(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
-        nodes: &Nodes,
-    ) -> Vec<(Part, usize)> {
+    fn rig_meshes(&mut self, nodes: &Nodes) -> Vec<(Part, usize)> {
+        let nif = self.nif;
         let mut meshes = Vec::new();
         for (i, shape) in nodes.shapes.iter().enumerate() {
             let Some(s) = nif.get_as::<nif::Shape>(Some(shape.shape)) else {
@@ -1164,7 +1172,7 @@ impl Models {
                 None => s.av.transform,
             };
             let props = &shape.properties;
-            if let Some(mut part) = self.part(game, assets, nif, path, view, g, props, &transform) {
+            if let Some(mut part) = self.part(g, props, &transform) {
                 part.team = team::marked(nif, &s.av);
                 part.animation = painting(nif, props).map(Arc::new);
                 meshes.push((part, i));
@@ -1175,18 +1183,13 @@ impl Models {
 
     /// A mesh and its material, with `props` the properties in effect for
     /// it, nearest first.
-    #[allow(clippy::too_many_arguments)]
     fn part(
         &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
         g: &nif::Geometry,
         props: &[nif::Ref],
         transform: &nif::Transform,
     ) -> Option<Part> {
+        let nif = self.nif;
         let base = nif
             .property::<nif::Texturing>(props)
             .and_then(|t| t.base.as_ref());
@@ -1201,7 +1204,7 @@ impl Models {
         if self.pickable {
             mesh.asset_usage = RenderAssetUsages::default();
         }
-        let texture = self.base_texture(game, assets, nif, path, view, props);
+        let texture = self.base_texture(props);
         let alpha = nif.property::<nif::Alpha>(props);
         let double_sided = nif
             .property::<nif::Stencil>(props)
@@ -1230,8 +1233,9 @@ impl Models {
         let glow = (alpha.filter(|_| alpha_mode == AlphaMode::Add))
             .zip(material)
             .and_then(|(a, m)| Glow::new(m.ambient, m.diffuse, a.source()));
+        let materials = &mut self.assets.materials;
         let material = match glow {
-            Some(glow) => PartMaterial::Glow(assets.glow_materials.add(GlowMaterial {
+            Some(glow) => PartMaterial::Glow(materials.glow.add(GlowMaterial {
                 // Without highlights, as the game draws them.
                 base: StandardMaterial {
                     reflectance: 0.0,
@@ -1241,15 +1245,15 @@ impl Models {
                 extension: glow,
             })),
             _ if alpha_mode == AlphaMode::Blend && writes_depth => {
-                PartMaterial::Solid(assets.solid_materials.add(SolidMaterial {
+                PartMaterial::Solid(materials.solid.add(SolidMaterial {
                     base: standard,
                     extension: Solid::default(),
                 }))
             }
-            _ => PartMaterial::Standard(assets.materials.add(standard)),
+            _ => PartMaterial::Standard(materials.standard.add(standard)),
         };
         Some(Part {
-            mesh: assets.meshes.add(mesh),
+            mesh: self.assets.meshes.add(mesh),
             material,
             animation: None,
             blended: matches!(alpha_mode, AlphaMode::Blend | AlphaMode::Add),
@@ -1258,33 +1262,24 @@ impl Models {
         })
     }
 
-    /// A model's particle systems that can be drawn.
-    fn particles(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
-    ) -> Vec<Arc<System>> {
+    /// The model's particle systems that can be drawn, its scene objects
+    /// being where `frames` has them.
+    fn particles(&mut self, frames: &Frames) -> Vec<Arc<System>> {
+        let nif = self.nif;
         let placed = nif.particle_systems();
         let old = nif.old_particle_systems();
-        if placed.is_empty() && old.is_empty() {
-            return Vec::new();
-        }
-        let frames = Nodes::new(nif).frames;
         let mut out = Vec::new();
         for (_, p) in placed {
             let Some(&at) = p.path.last() else { continue };
-            let look = self.particle_look(game, assets, nif, path, view, &p.properties);
-            if let Some(system) = System::read(nif, &frames, at, look) {
+            let look = self.particle_look(&p.properties);
+            if let Some(system) = System::read(nif, frames, at, look) {
                 out.push(Arc::new(system));
             }
         }
         for (particles, p) in old {
-            let look = self.particle_look(game, assets, nif, path, view, &p.properties);
-            let copies = self.mesh_copies(game, assets, nif, path, view, particles);
-            if let Some(system) = System::read_old(nif, &frames, &p, look, copies) {
+            let look = self.particle_look(&p.properties);
+            let copies = self.mesh_copies(particles);
+            if let Some(system) = System::read_old(nif, frames, &p, look, copies) {
                 out.push(Arc::new(system));
             }
         }
@@ -1293,15 +1288,8 @@ impl Models {
 
     /// The meshes an older-format mesh particle system's particles show,
     /// one set for each in its modifier's list; empty for other systems.
-    fn mesh_copies(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
-        particles: &nif::OldParticles,
-    ) -> Vec<Arc<Vec<Part>>> {
+    fn mesh_copies(&mut self, particles: &nif::OldParticles) -> Vec<Arc<Vec<Part>>> {
+        let nif = self.nif;
         let meshes = nif
             .get_as::<nif::OldParticleData>(particles.shape.data)
             .is_some_and(|d| matches!(d.kind, nif::OldParticleKind::Meshes { .. }));
@@ -1315,27 +1303,15 @@ impl Models {
             })
             .collect();
         list.into_iter()
-            .map(|r| {
-                let shapes = nif.shapes_below(r);
-                Arc::new(self.scene_parts(game, assets, nif, path, view, shapes, false))
-            })
+            .map(|r| Arc::new(self.scene_parts(nif.shapes_below(r), false)))
             .collect()
     }
 
     /// The parts of `shapes`, each animated by its own controllers and
     /// those of the objects above it, with the first object on each path
     /// taken as having no transform of its own unless `root_placed`.
-    #[allow(clippy::too_many_arguments)]
-    fn scene_parts(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
-        shapes: Vec<nif::Placed>,
-        root_placed: bool,
-    ) -> Vec<Part> {
+    fn scene_parts(&mut self, shapes: Vec<nif::Placed>, root_placed: bool) -> Vec<Part> {
+        let nif = self.nif;
         let mut parts = Vec::new();
         for placed in shapes {
             let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
@@ -1358,9 +1334,7 @@ impl Models {
                     }
                     (None, painting) => (placed.transform, painting),
                 };
-            if let Some(mut part) =
-                self.part(game, assets, nif, path, view, g, props, &mesh_transform)
-            {
+            if let Some(mut part) = self.part(g, props, &mesh_transform) {
                 part.animation = animation.map(Arc::new);
                 part.team = team::marked(nif, &placed.shape.av);
                 parts.push(part);
@@ -1372,17 +1346,10 @@ impl Models {
     /// How a particle system's squares are drawn: its texture whole, lit
     /// as its vertex colour property says and blended as its alpha
     /// property says.
-    fn particle_look(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
-        props: &[nif::Ref],
-    ) -> Look {
+    fn particle_look(&mut self, props: &[nif::Ref]) -> Look {
+        let nif = self.nif;
         let texturing = nif.property::<nif::Texturing>(props);
-        let texture = self.base_texture(game, assets, nif, path, view, props);
+        let texture = self.base_texture(props);
         let m = nif.property::<nif::Material>(props);
         let opacity = m.map_or(1.0, |m| m.alpha);
         // Squares that also test alpha still blend: cut out instead, soft
@@ -1420,7 +1387,7 @@ impl Models {
         let emissive = emissive.map_or(LinearRgba::BLACK, |[r, g, b]| {
             LinearRgba::from(Color::srgb(r, g, b)) * unit
         });
-        let material = assets.materials.add(StandardMaterial {
+        let material = self.assets.materials.standard.add(StandardMaterial {
             base_color,
             base_color_texture: texture,
             emissive,
@@ -1437,54 +1404,36 @@ impl Models {
     }
 
     /// The base texture `props` give a shape, from a file or embedded.
-    fn base_texture(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        nif: &Nif,
-        path: &str,
-        view: &View,
-        props: &[nif::Ref],
-    ) -> Option<Handle<Image>> {
+    fn base_texture(&mut self, props: &[nif::Ref]) -> Option<Handle<Image>> {
+        let nif = self.nif;
         let base = nif.property::<nif::Texturing>(props)?.base.as_ref()?;
         let source = nif.get_as::<nif::SourceTexture>(base.source)?;
         match (&source.file, nif.get_as(source.pixels)) {
-            (Some(file), _) => self.texture(game, assets, file, view, path),
+            (Some(file), _) => self.texture(file),
             (None, Some(p)) => {
-                let key = format!("{path}#{}", source.pixels.unwrap_or_default());
-                self.embedded(assets, key, p)
+                let key = format!("{}#{}", self.path, source.pixels.unwrap_or_default());
+                self.embedded(key, p)
             }
             _ => None,
         }
     }
 
-    fn texture(
-        &mut self,
-        game: &GameData,
-        assets: &mut ModelAssets,
-        file: &str,
-        view: &View,
-        model: &str,
-    ) -> Option<Handle<Image>> {
-        let Some(path) = game.find_texture(self.subfolder.as_deref(), view, model, file) else {
+    fn texture(&mut self, file: &str) -> Option<Handle<Image>> {
+        let (game, model) = (self.game, self.path);
+        let Some(path) = game.find_texture(self.subfolder, self.view, model, file) else {
             warn!("{model}: texture {file} not found");
             return None;
         };
-        let formats = self.formats;
-        cached(&mut self.textures, &path, || {
+        let (formats, images) = (self.textures.formats, &mut self.assets.images);
+        cached(&mut self.textures.loaded, &path, || {
             let image = load_image(&game.read(&path)?, &path, formats)?;
-            Some(assets.images.add(image))
+            Some(images.add(image))
         })
     }
 
-    fn embedded(
-        &mut self,
-        assets: &mut ModelAssets,
-        key: String,
-        pixels: &nif::Pixels,
-    ) -> Option<Handle<Image>> {
-        let formats = self.formats;
-        cached(&mut self.textures, &key, || {
+    fn embedded(&mut self, key: String, pixels: &nif::Pixels) -> Option<Handle<Image>> {
+        let (formats, images) = (self.textures.formats, &mut self.assets.images);
+        cached(&mut self.textures.loaded, &key, || {
             let Some(image) = embedded_image(pixels, formats) else {
                 warn!(
                     "{key}: unsupported embedded texture format {:?}",
@@ -1492,7 +1441,7 @@ impl Models {
                 );
                 return None;
             };
-            Some(assets.images.add(image))
+            Some(images.add(image))
         })
     }
 }
@@ -1515,20 +1464,15 @@ fn reflecting(
     if more.max_element() < 1e-3 {
         return material;
     }
-    let glow = |base: &mut StandardMaterial| {
+    // These reflect their own share of it wherever they're drawn.
+    if let PartMaterial::Glow(_) = material {
+        return material;
+    }
+    let copy = assets.materials.copy(&material);
+    if let Some(base) = assets.materials.base_mut(&copy) {
         base.emissive = LinearRgba::rgb(more.x, more.y, more.z);
         base.emissive_texture = base.base_color_texture.clone();
-    };
-    let copy = material.copy(assets);
-    match &copy {
-        PartMaterial::Standard(h) => assets.materials.get_mut(h).map(|mut m| glow(&mut m)),
-        PartMaterial::Team(h) => (assets.team_materials.get_mut(h)).map(|mut m| glow(&mut m.base)),
-        PartMaterial::Solid(h) => {
-            (assets.solid_materials.get_mut(h)).map(|mut m| glow(&mut m.base))
-        }
-        // These reflect their own share of it wherever they're drawn.
-        PartMaterial::Glow(_) => return material,
-    };
+    }
     copy
 }
 
@@ -1552,14 +1496,13 @@ fn alpha_mode(alpha: Option<&nif::Alpha>, opacity: f32) -> AlphaMode {
 
 /// The size of the hidden box a model marks its selectable extent with:
 /// width across its -y facing and length along it.
-fn selection_box(nif: &Nif) -> Option<Vec2> {
+fn selection_box(nif: &Nif, frames: &Frames) -> Option<Vec2> {
     let (at, shape) = nif.objects.iter().enumerate().find_map(|(i, o)| match o {
         Object::Shape(s) if s.av.name.eq_ignore_ascii_case("SelectionBox") => Some((i, s)),
         _ => None,
     })?;
     let g = nif.get_as::<nif::Geometry>(shape.data)?;
     // Where the nodes above it put it, which may turn it.
-    let frames = Nodes::new(nif).frames;
     let placed = frames.0.get(&at).map_or(shape.av.transform, |a| a.model);
     let (mut min, mut max) = (Vec2::MAX, Vec2::MIN);
     for &p in &g.positions {
@@ -1659,10 +1602,7 @@ pub(crate) fn bevy_transform(t: &nif::Transform) -> Transform {
 /// Bevy asset stores the models are added to.
 pub struct ModelAssets<'a> {
     pub meshes: &'a mut Assets<Mesh>,
-    pub materials: &'a mut Assets<StandardMaterial>,
-    pub glow_materials: &'a mut Assets<GlowMaterial>,
-    pub team_materials: &'a mut Assets<TeamMaterial>,
-    pub solid_materials: &'a mut Assets<SolidMaterial>,
+    pub materials: PartMaterials<'a>,
     pub images: &'a mut Assets<Image>,
     pub skins: &'a mut Assets<SkinnedMeshInverseBindposes>,
 }
@@ -2008,7 +1948,7 @@ mod tests {
             roots: vec![Some(0)],
             incomplete: None,
         };
-        let size = selection_box(&nif).expect("a box");
+        let size = selection_box(&nif, &Nodes::new(&nif).frames).expect("a box");
         assert!(size.abs_diff_eq(Vec2::new(2.0, 4.0), 1e-5), "{size}");
     }
 
@@ -2032,21 +1972,8 @@ mod tests {
 
     #[test]
     fn models_are_kept_apart_by_where_their_textures_are() {
-        let view = |dirs: &[&str]| View {
-            models: Vec::new(),
-            texture_dirs: dirs.iter().map(|d| d.to_string()).collect(),
-            texture_renames: HashMap::new(),
-            scale: 1.0,
-            animations: Vec::new(),
-            conform: None,
-            footing: Footing::Ground,
-            unpacking: None,
-            packing: None,
-            falling: None,
-            icon: None,
-            portrait: None,
-            faction_portrait: false,
-            ground_reach: None,
+        let view = |dirs: &[&str]| {
+            View::of_models(Vec::new(), dirs.iter().map(|d| d.to_string()).collect())
         };
         let (unit, regiment) = (view(&["Shared/SharedTextures"]), view(&[]));
         assert_ne!(

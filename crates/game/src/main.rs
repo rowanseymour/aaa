@@ -399,7 +399,7 @@ fn spawn_unit_view(
             t.position,
             t.facing,
         );
-        if let Some(e) = models.spawn_building(commands, game, assets, &towed, owner) {
+        if let Some(e) = models.spawn_object(commands, game, assets, &towed, Some(owner)) {
             let conform = models.conform(t.template.as_str());
             commands.entity(e).insert(TrailerView {
                 unit,
@@ -736,7 +736,11 @@ fn main() -> ExitCode {
                 .chain()
                 .run_if(in_state(Screen::Match)),
         )
-        .add_systems(FixedUpdate, step.run_if(in_state(Screen::Match)))
+        .add_plugins(HoldFirstTick)
+        .add_systems(
+            FixedUpdate,
+            step.in_set(Ticks).run_if(in_state(Screen::Match)),
+        )
         .add_systems(
             Update,
             (
@@ -744,7 +748,8 @@ fn main() -> ExitCode {
                     fog::look,
                     (fog::shade_ground, fog::hide_scenery),
                     spawn_views,
-                    (show_units, show_trailers, show_buildings, show_packing),
+                    (show_units, show_trailers, show_buildings, show_packing)
+                        .before(aaa_render::Animate),
                     deliveries::show,
                     fog::hide_buildings,
                 )
@@ -1339,7 +1344,13 @@ fn setup(
     for (i, b) in map.buildings.iter().enumerate() {
         debug_assert_eq!(sim.0.buildings[i].id, b.id);
         let thing = stored[&b.id];
-        match models.spawn_object(&mut commands, game, &mut assets.models(), thing) {
+        match models.spawn_object(
+            &mut commands,
+            game,
+            &mut assets.models(),
+            thing,
+            aaa_map::owner(thing),
+        ) {
             Some(e) => {
                 let [x, y, z] = thing.position;
                 commands.entity(e).insert(BuildingView {
@@ -1425,6 +1436,41 @@ fn target_position(sim: &World, target: Target) -> [f32; 2] {
         Target::Building(b) => sim.buildings[b].position,
     }
 }
+
+/// The match has been shown once, so the sim may step. Until then what's
+/// shown is how the match begins, however long its first frame took.
+#[derive(Resource)]
+struct Shown;
+
+/// Holds the sim's ticks off until the match has been shown once.
+struct HoldFirstTick;
+
+impl Plugin for HoldFirstTick {
+    fn build(&self, app: &mut App) {
+        app.configure_sets(FixedUpdate, Ticks.run_if(resource_exists::<Shown>))
+            .add_systems(
+                Update,
+                show_first
+                    .run_if(in_state(Screen::Match))
+                    .run_if(not(resource_exists::<Shown>)),
+            )
+            .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
+                commands.remove_resource::<Shown>()
+            });
+    }
+}
+
+/// Lets the sim step from the next frame, its first tick a tick's time
+/// from now rather than after whatever time loading left over.
+fn show_first(mut commands: Commands, mut fixed: ResMut<Time<Fixed>>) {
+    let over = fixed.overstep();
+    fixed.discard_overstep(over);
+    commands.insert_resource(Shown);
+}
+
+/// What advances the sim a tick.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+struct Ticks;
 
 fn step(
     mut sim: ResMut<Sim>,
@@ -1533,11 +1579,13 @@ fn spawn_views(
             building.facing,
         );
         let mut models = assets.models();
-        let Some(e) =
-            drawn
-                .0
-                .spawn_building(&mut commands, game, &mut models, &thing, building.owner)
-        else {
+        let Some(e) = drawn.0.spawn_object(
+            &mut commands,
+            game,
+            &mut models,
+            &thing,
+            Some(building.owner),
+        ) else {
             continue;
         };
         let [x, y, z] = thing.position;
@@ -2622,6 +2670,37 @@ fn show_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_sim_waits_for_the_match_to_be_shown() {
+        #[derive(Resource, Default)]
+        struct Stepped(u32);
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .add_plugins(HoldFirstTick)
+            .insert_state(Screen::Loading)
+            .init_resource::<Stepped>()
+            .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
+            // Every frame long enough for a tick.
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                std::time::Duration::from_secs_f32(TICK * 1.5),
+            ))
+            .add_systems(
+                FixedUpdate,
+                (|mut s: ResMut<Stepped>| s.0 += 1)
+                    .in_set(Ticks)
+                    .run_if(in_state(Screen::Match)),
+            );
+        app.update();
+        app.update();
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(Screen::Match);
+        app.update();
+        assert_eq!(app.world().resource::<Stepped>().0, 0, "first frame");
+        app.update();
+        assert!(app.world().resource::<Stepped>().0 > 0, "after it");
+    }
 
     /// A side a person may play, on no team.
     pub(crate) fn player(id: u32) -> aaa_map::Player {
