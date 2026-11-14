@@ -13,8 +13,12 @@ use crate::{
 #[derive(Debug, Clone, PartialEq)]
 pub struct Listing {
     pub name: String,
+    /// What the object display says of it.
+    pub description: Option<String>,
     /// Archive path of its button's icon.
     pub icon: Option<String>,
+    /// Archive path of the icon its defence shows by.
+    pub defense_icon: Option<String>,
     /// What it costs, earns and takes to keep, by resource.
     pub cost: Vec<Amount>,
     pub production: Vec<Amount>,
@@ -367,6 +371,10 @@ impl GameData {
             let members = members(t, &things, &layouts);
             Some(Listing {
                 name: localized(&strings, t.name.as_deref())?,
+                description: localized(&strings, t.description.as_deref())
+                    .filter(|d| !d.trim().is_empty()),
+                defense_icon: (t.body_component.as_ref())
+                    .and_then(|b| ui_path(b.defense_icon.as_deref()?)),
                 icon: view
                     .and_then(|v| v.icon.as_deref())
                     .filter(|i| i.to_ascii_lowercase().starts_with("/ui/"))

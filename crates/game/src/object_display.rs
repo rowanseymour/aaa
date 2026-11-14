@@ -37,7 +37,7 @@ use aaa_render::MapAssets;
 use aaa_render::overlay::BannerImages;
 use aaa_render::portrait::{Sitter, Stage};
 use aaa_render::textures;
-use aaa_sim::{Ledger, Order, Pause, Piece, Relation, State, World};
+use aaa_sim::{Ledger, Order, Pause, Piece, Relation, State, Target, World};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
@@ -253,6 +253,28 @@ pub enum Status {
     Building(usize),
 }
 
+/// The figure by the shield: the defence of what's selected, as it stands.
+#[derive(Component, Clone, Copy)]
+pub struct Defends(Target);
+
+/// The shield and its figure together, which give the defence's tooltip.
+#[derive(Component, Clone, Copy)]
+pub struct Shield(Target);
+
+/// The game's layout's place for a lone thing's defence: its icon, with
+/// the figure beside it.
+const DEFENSE: [f32; 4] = [196.0, 46.0, 16.0, 16.0];
+/// The game's layout's box for what a lone thing's template says of it,
+/// and how far in its words start.
+const DESCRIPTION: [f32; 4] = [244.0, 46.0, 239.0, 104.0];
+const DESCRIPTION_IN: f32 = 5.0;
+/// The game's colours for a figure that's above or below its plain one.
+const RAISED: Color = Color::srgb(0.0, 1.0, 0.0);
+const LOWERED: Color = Color::srgb(1.0, 0.0, 0.0);
+/// The game's colour for the name of an owner the player is neutral
+/// towards.
+const NEUTRAL: Color = Color::srgb(0.8, 0.8, 0.8);
+
 /// Where the portrait shows, holding the flat picture until there's a
 /// portrait drawn to show.
 #[derive(Component)]
@@ -276,6 +298,8 @@ pub struct Queued(usize);
 pub struct Looks {
     /// Templates' and technologies' names, by id.
     names: HashMap<Id, String>,
+    /// What each template says of itself and shows its defence by.
+    listings: Arc<HashMap<Id, aaa_data::Listing>>,
     /// Each resource's glyph, by the resource's field name in the data.
     glyphs: HashMap<&'static str, Handle<Image>>,
     strings: Arc<aaa_data::Strings>,
@@ -364,6 +388,7 @@ pub fn spawn(
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
         names: names.collect(),
+        listings: listings.clone(),
         glyphs,
         strings: game.strings(),
         properties,
@@ -695,7 +720,12 @@ impl Ui<'_> {
     /// The name and owner across the top.
     fn title(&self, commands: &mut Commands, root: Entity, name: String, owner: u32) {
         let player = self.sim.sides.player(owner);
-        let colour = TINTS[tint(self.sim, self.local, owner)];
+        let neutral =
+            (self.local).is_some_and(|p| self.sim.sides.relation(p, owner) == Relation::Neutral);
+        let colour = match neutral {
+            true => NEUTRAL,
+            false => TINTS[tint(self.sim, self.local, owner)],
+        };
         commands.entity(root).with_children(|display| {
             display.spawn((
                 at(8.0, 5.0, 300.0, 14.0),
@@ -703,12 +733,15 @@ impl Ui<'_> {
             ));
             if let Some(p) = player {
                 // The owner's own colour, whoever's looking, as the lobby marks it.
-                let [red, green, blue] = p.rgb;
-                display.spawn((
-                    at(9.0, 22.0, 3.0, 11.0),
-                    BackgroundColor(Color::srgb(red, green, blue)),
-                    Pickable::IGNORE,
-                ));
+                // An independent side's things show none.
+                if !p.independent {
+                    let [red, green, blue] = p.rgb;
+                    display.spawn((
+                        at(9.0, 22.0, 3.0, 11.0),
+                        BackgroundColor(Color::srgb(red, green, blue)),
+                        Pickable::IGNORE,
+                    ));
+                }
                 display.spawn((
                     at(18.0, 21.0, 290.0, 14.0),
                     ui::coloured(self.leaders.owner(p, self.local), Font::Hud, colour),
@@ -937,16 +970,84 @@ impl Ui<'_> {
         match *actor {
             Actor::Regiment(r) => {
                 self.heading(commands, root, r);
+                let regiment = &self.sim.regiments[r];
+                let captain = captain(self.sim, self.looks, r);
+                let unit = self.sim.units[captain].template.clone();
+                self.defense(commands, root, Target::Unit(captain), &unit);
+                let says = [&regiment.template, &unit];
+                let says = says.into_iter().find_map(|t| self.described(t));
+                self.description(commands, root, says);
                 self.properties(commands, root);
                 self.status(commands, root, Status::Regiment(r));
             }
-            Actor::Building(b, _) => {
+            Actor::Building(b, ref queue) => {
                 self.structure(commands, root, b);
-                self.queue(commands, root, b);
+                let template = self.sim.buildings[b].template.clone();
+                self.defense(commands, root, Target::Building(b), &template);
+                // What it's commissioning shows where its description would.
+                match queue.is_empty() {
+                    true => self.description(commands, root, self.described(&template)),
+                    false => self.queue(commands, root, b),
+                }
                 self.properties(commands, root);
                 self.status(commands, root, Status::Building(b));
             }
         }
+    }
+
+    /// What `template` says of itself, if anything.
+    fn described(&self, template: &Id) -> Option<String> {
+        self.looks.listings.get(template)?.description.clone()
+    }
+
+    /// The shield and the defence of `target`, for one with a body, whose
+    /// `template` gives the icon.
+    fn defense(&mut self, commands: &mut Commands, root: Entity, target: Target, template: &Id) {
+        if self.sim.defense(target).is_none() {
+            return;
+        }
+        let icon = (self.looks.listings.get(template)).and_then(|l| l.defense_icon.clone());
+        let icon = self.looks.image(self.game, self.images, icon.as_deref());
+        let [left, top, width, height] = DEFENSE;
+        commands.entity(root).with_children(|display| {
+            let row = Node {
+                align_items: AlignItems::Center,
+                column_gap: px(2.0 * SCALE),
+                ..at(left, top, 40.0, height)
+            };
+            // Filled in by [`refresh`], as its defence changes.
+            let figure = ui::coloured("", Font::Small, Color::WHITE);
+            let figure = (figure, Defends(target));
+            let shield = Node {
+                width: px(width * SCALE),
+                height: px(height * SCALE),
+                ..default()
+            };
+            display
+                .spawn((row, Shield(target), Hint(String::new())))
+                .with_children(|row| {
+                    if let Some(icon) = icon {
+                        row.spawn((shield, ImageNode::new(icon), Pickable::IGNORE));
+                    }
+                    row.spawn(figure);
+                });
+        });
+    }
+
+    /// The box of what a lone thing's template says of it; none for one
+    /// that says nothing.
+    fn description(&self, commands: &mut Commands, root: Entity, says: Option<String>) {
+        let Some(says) = says else {
+            return;
+        };
+        let [left, top, width, height] = DESCRIPTION;
+        let node = Node {
+            padding: UiRect::all(px(DESCRIPTION_IN * SCALE)),
+            ..at(left, top, width, height)
+        };
+        commands.entity(root).with_children(|display| {
+            display.spawn((framed(node), children![label(says, Font::Hud, Ink::Body)]));
+        });
     }
 
     /// The company display: a regiment with its units, or an HQ with its
@@ -1320,6 +1421,9 @@ pub fn refresh(
     mut pictures: Query<(&UnitPicture, &mut Shade)>,
     mut statuses: Query<(&Status, &mut Text)>,
     mut lines: Query<(Entity, &Status, &mut EconomyLine)>,
+    mut defenses: Query<(&Defends, &mut Text, &mut TextColor), Without<Status>>,
+    mut shields: Query<(&Shield, &mut Hint, &Hovered), Without<Says>>,
+    theme: Res<ui::Theme>,
     mut commands: Commands,
 ) {
     let sim = &sim.0;
@@ -1378,6 +1482,33 @@ pub fn refresh(
             }
         });
         line.0 = now;
+    }
+    let defense = |of: Target| {
+        let (now, plain) = sim.defense(of).unwrap_or_default();
+        // Adding nothing keeps what rounds up to nothing from reading "-0".
+        (format!("{:.0}", now.round() + 0.0), now.partial_cmp(&plain))
+    };
+    for (of, mut text, mut colour) in &mut defenses {
+        let (figure, against) = defense(of.0);
+        let tint = match against {
+            Some(std::cmp::Ordering::Greater) => RAISED,
+            Some(std::cmp::Ordering::Less) => LOWERED,
+            _ => theme.ink(Ink::Body),
+        };
+        if text.0 != figure {
+            text.0 = figure;
+        }
+        colour.set_if_neq(TextColor(tint));
+    }
+    for (of, mut hint, _) in shields.iter_mut().filter(|(.., on)| on.get()) {
+        let title = looks.said("ui_tooltip_defense_value");
+        let explains = looks.said("template_game_DefenseValues_ToolTip");
+        let mut words = vec![title, defense(of.0).0, explains];
+        words.retain(|line| !line.is_empty());
+        let words = words.join("\n");
+        if hint.0 != words {
+            hint.0 = words;
+        }
     }
     for (picture, mut shade) in &mut pictures {
         shade.set_if_neq(match sim.units[picture.0].alive() {
