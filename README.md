@@ -38,14 +38,17 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 ## Status
 
 | Feature | Status |
-|---|---|
-| Data files, maps and models | ✅ Read in full |
-| Rendering | ✅ Ground, units, animations, effects |
-| UI | 🟡 Menus, lobby and in-match interface for custom games, and basic options; no campaign screens yet |
+|---------------------|---------|
+| Data files          | ✅ Maps and models read in full |
+| Rendering           | ✅ Ground, units, animations, effects |
+| UI                  | 🟡 Menus, lobby and in-match interface for custom games, and basic options |
 | Movement and combat | 🟡 Regiments move, fight and take buildings and cities |
-| Economy and supply | ✅ Income, upkeep, supply, building, recruiting and research |
-| Map editor | 🟡 Views maps; no editing yet |
-| AI, multiplayer, saves, campaigns | ⬜ Not started |
+| Economy and supply  | ✅ Income, upkeep, supply, building, recruiting and research |
+| Campaign mode       | ⬜ Not started |
+| Multiplayer         | 🟡 Basic architecture |
+| Map editor          | 🟡 Basic viewing of maps and placed objects |
+| Loading and saving  | ⬜ Not started |
+| AI                  | ⬜ Not started |
 
 ## Running
 
