@@ -1,7 +1,13 @@
 //! Setting a match up from the game's data, and playing one with no window:
 //! what a server of matches is built from.
 
+mod client;
 mod film;
+mod host;
+mod link;
+pub mod protocol;
+#[cfg(test)]
+mod testing;
 
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
@@ -12,7 +18,10 @@ use aaa_sim::World;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
+pub use client::{Client, welcome};
 pub use film::{Film, NotFilm};
+pub use host::{Event, Host, Refusal};
+pub use link::{Link, Local, Lost, pair};
 
 /// What a match is played on and by, as its lobby leaves it: all that
 /// every copy of the match has to agree on before it starts.
@@ -232,31 +241,8 @@ pub fn generals(
 
 #[cfg(test)]
 mod tests {
+    use super::testing::player;
     use super::*;
-    use aaa_map::Relation;
-
-    fn player(id: u32, independent: bool, playable: bool) -> Player {
-        Player {
-            id,
-            name: format!("kingdom_{id}"),
-            color: "blue".into(),
-            rgb: [0.0, 0.0, 1.0],
-            team: None,
-            independent,
-            playable,
-            default_defeat: true,
-            outcome: Default::default(),
-            won_by_cities: false,
-            nation: None,
-            general: None,
-            relations: vec![Relation::Neutral; 4],
-            team_relations: Vec::new(),
-            stockpile: 0.0,
-            technologies: Vec::new(),
-            handicap: None,
-            barred: Vec::new(),
-        }
-    }
 
     fn players() -> Vec<Player> {
         vec![

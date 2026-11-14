@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::{Command, Refused, SECOND, World};
 
+/// How many times as fast a match can be played.
+pub const SPEEDS: std::ops::RangeInclusive<f32> = 0.05..=16.0;
+
 /// Steps between the hashes a [`Record`] keeps of its match.
 const CHECK_EVERY: u64 = SECOND;
 
@@ -19,7 +22,7 @@ pub enum Action {
     /// Holds the match still, or lets it go on.
     Pause(bool),
     /// Has the match play this many times as fast; nothing unless it's
-    /// more than none.
+    /// one of [`SPEEDS`].
     Speed(f32),
     /// Has a side win, as [`World::win`].
     Win(u32),
@@ -42,7 +45,7 @@ impl Action {
     fn set_clock(&self, clock: &mut (bool, f32)) {
         match *self {
             Action::Pause(pause) => clock.0 = pause,
-            Action::Speed(speed) if speed.is_finite() && speed > 0.0 => clock.1 = speed,
+            Action::Speed(speed) if SPEEDS.contains(&speed) => clock.1 = speed,
             _ => {}
         }
     }
@@ -420,8 +423,8 @@ mod tests {
         assert!(!s.paused());
         let given: Vec<u64> = s.record().given.iter().map(|g| g.step).collect();
         assert_eq!(given, [0, 0, 0, 0, 0]);
-        // A speed that's none at all is passed over.
-        for speed in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+        // A speed a match isn't played at is passed over.
+        for speed in [0.0, -1.0, 0.01, 17.0, f32::NAN, f32::INFINITY] {
             s.act(Action::Speed(speed));
             assert_eq!(s.speeding(), 4.0);
         }
