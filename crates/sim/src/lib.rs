@@ -57,6 +57,7 @@ pub use properties::Held;
 pub use research::{Lacking, Researchable};
 pub use rules::Rules;
 pub use schedule::{Action, Diverged, Given, Record, Schedule};
+use serde::{Deserialize, Serialize};
 pub use supply::{Bombarder, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
@@ -340,7 +341,7 @@ impl Regiment {
 
 /// A regiment or a building: what a side owns on the map, and so what a
 /// regiment engages or guards, what holds properties and what's destroyed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Piece {
     /// Index into [`World::regiments`].
     Regiment(usize),
@@ -663,7 +664,7 @@ impl From<NotYours> for Refused {
 /// play the same orders out on the same tick. Regiments and buildings are
 /// by index into [`World::regiments`] and [`World::buildings`], which only
 /// ever grow, so the same in every copy.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
     /// Sends a regiment to `to`, turned to face the way it's going, each
     /// member making for its place in the formation there. An engaged

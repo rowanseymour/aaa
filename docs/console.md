@@ -39,7 +39,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `unpack x y [degrees]`: sends the selected packed building to unpack at x y, facing that far counter-clockwise from the map's x axis
 - `destroyselected`: destroys the selected regiments
 - `advance seconds`: plays that much of the game at once, paused or not
-- `record`: says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way
+- `record [file]`: says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for aaa-server to play again
 - `fog`: lifts the fog of war from the screen, or lays it again
 - `gamespeed [speed]`: runs the game that many times as fast, 0.05 to 16; without, says how fast
 - `gamepause [1/0]`: pauses or resumes the game; without, switches

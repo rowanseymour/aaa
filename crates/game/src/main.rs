@@ -206,6 +206,7 @@ struct Preparing {
 /// What [`prepare`] sets a match up with.
 struct Prepared {
     loaded: Loaded,
+    setup: aaa_server::Setup,
     sim: World,
     raising: Recruits,
     person: Option<u32>,
@@ -215,6 +216,11 @@ struct Prepared {
 
 #[derive(Resource)]
 struct Sim(World);
+
+/// What the match was set up from, which with its [`Orders`]' record is
+/// all it takes to play it again.
+#[derive(Resource)]
+struct Began(aaa_server::Setup);
 
 /// The orders every player gives, and the record of those carried out.
 #[derive(Resource, Default, Deref, DerefMut)]
@@ -960,6 +966,7 @@ fn prepare(
     game.property_looks();
     Ok(Prepared {
         loaded: Loaded { game, map },
+        setup,
         sim,
         raising,
         person,
@@ -972,6 +979,7 @@ fn prepare(
 fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     let Prepared {
         loaded,
+        setup,
         sim,
         raising,
         person,
@@ -996,6 +1004,7 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     world.insert_resource(leaders);
     world.insert_resource(lineup);
     world.insert_resource(Sim(sim));
+    world.insert_resource(Began(setup));
     world.insert_resource(Orders::default());
     world.insert_resource(Raising(raising));
     world.insert_resource(effects);

@@ -2,6 +2,9 @@
 //! carried out on, so that another copy of the match given them on the same
 //! steps plays out the same way.
 
+use aaa_map::Id;
+use serde::{Deserialize, Serialize};
+
 use crate::{Command, Refused, SECOND, World};
 
 /// Steps between the hashes a [`Record`] keeps of its match.
@@ -9,7 +12,7 @@ const CHECK_EVERY: u64 = SECOND;
 
 /// Something a match is given: the only ways it's changed besides playing
 /// on.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Action {
     /// A player's order.
     Order { player: u32, command: Command },
@@ -22,8 +25,13 @@ pub enum Action {
     Win(u32),
     /// Has a side lose, as [`World::lose`].
     Lose(u32),
-    /// Puts a regiment on the map, as [`World::add_new_regiment`].
-    Raise(Box<aaa_map::Regiment>),
+    /// Puts a regiment on the map, as [`World::raise`].
+    Raise {
+        template: Id,
+        owner: u32,
+        at: [f32; 2],
+        facing: [f32; 2],
+    },
     /// Kills the regiment at this index into [`World::regiments`]
     /// outright.
     Destroy(usize),
@@ -49,7 +57,12 @@ impl Action {
             Action::Pause(_) | Action::Speed(_) => {}
             Action::Win(player) => world.win(player),
             Action::Lose(player) => world.lose(player),
-            Action::Raise(regiment) => _ = world.add_new_regiment(*regiment),
+            Action::Raise {
+                template,
+                owner,
+                at,
+                facing,
+            } => _ = world.raise(&template, owner, at, facing),
             Action::Destroy(regiment) if regiment < world.regiments.len() => {
                 world.destroy(regiment)
             }
@@ -60,7 +73,7 @@ impl Action {
 }
 
 /// An action as a match was given it.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Given {
     /// The ticks the match had played when it was carried out.
     pub step: u64,
@@ -70,7 +83,7 @@ pub struct Given {
 /// What a match has been given and how it stood along the way: enough,
 /// with how the match began, to play it out again and to tell whether
 /// that went the same way.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Record {
     /// The ticks played.
     pub steps: u64,
@@ -328,6 +341,11 @@ mod tests {
 
     #[test]
     fn what_changes_a_match_besides_orders_is_recorded_and_replayed() {
+        let fresh = || {
+            let mut w = fresh();
+            w.rules.raisable.insert("truck".into(), truck());
+            w
+        };
         let (mut w, mut s) = (fresh(), Schedule::default());
         s.act(Action::Win(3));
         for _ in 0..20 {
@@ -335,12 +353,37 @@ mod tests {
         }
         assert_eq!(w.outcome(3), crate::Outcome::Won);
         let regiments = w.regiments.len();
-        s.act(Action::Raise(Box::new(truck())));
+        let raise = |template: &str| Action::Raise {
+            template: template.into(),
+            owner: 1,
+            at: [40.0, 40.0],
+            facing: [0.0, 1.0],
+        };
+        s.act(raise("truck"));
+        // As are a template the match can't raise, an owner it hasn't
+        // got and a place that isn't on the map.
+        s.act(raise("tank"));
+        for (owner, at, facing) in [
+            (9, [40.0, 40.0], [0.0, 1.0]),
+            (1, [f32::NAN, 40.0], [0.0, 1.0]),
+            (1, [-1.0, 40.0], [0.0, 1.0]),
+            (1, [40.0, 1e9], [0.0, 1.0]),
+            (1, [40.0, 40.0], [0.0, 0.0]),
+            (1, [40.0, 40.0], [f32::NAN, 1.0]),
+        ] {
+            s.act(Action::Raise {
+                template: "truck".into(),
+                owner,
+                at,
+                facing,
+            });
+        }
         s.act(Action::Destroy(0));
         // One the match hasn't got is passed over.
         s.act(Action::Destroy(99));
         assert!(s.carry_out(&mut w).is_empty());
         assert_eq!(w.regiments.len(), regiments + 1);
+        assert_eq!(w.regiments[regiments].owner, 1);
         assert!(w.destroyed(0));
         for _ in 0..20 {
             s.step(&mut w);
@@ -349,7 +392,7 @@ mod tests {
         for _ in 0..20 {
             s.step(&mut w);
         }
-        assert_eq!(s.record().given.len(), 5);
+        assert_eq!(s.record().given.len(), 12);
         let mut again = fresh();
         assert_eq!(s.record().replay(&mut again), Ok(()));
         assert_eq!(again.hash(), w.hash());

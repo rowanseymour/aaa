@@ -805,6 +805,18 @@ impl Recruits {
         out
     }
 
+    /// Every regiment [`Recruits::raise`] can raise, by template, each
+    /// standing anywhere and owned by nobody.
+    pub fn raisable(&self) -> HashMap<Id, Regiment> {
+        let templates = self.organizations.keys().chain(self.bodies.keys());
+        templates
+            .filter_map(|t| {
+                let raised = self.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]);
+                Some((t.clone(), raised.ok()?))
+            })
+            .collect()
+    }
+
     /// A regiment of `template` owned by `owner`, standing in its starting
     /// formation around `position` and facing `facing`. It takes the id `id`
     /// and its members the ones after it.

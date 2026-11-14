@@ -2,7 +2,7 @@
 //! the side you play on it, or watch, and the computer plays every other
 //! side.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use aaa_data::{General, Handicap, Id, Nation};
 use aaa_map::{Brief, Player};
@@ -156,7 +156,7 @@ fn computer_handicaps(
     players: &[Player],
     person: Option<u32>,
     chosen: &HashMap<u32, Id>,
-) -> HashMap<u32, Id> {
+) -> BTreeMap<u32, Id> {
     let lineup = Lineup::new(players, person);
     (lineup.0.into_iter())
         .filter(|&(_, control)| control == Control::Computer)
@@ -669,8 +669,8 @@ fn launch(
             map: lobby.map.clone(),
             seed: seed.get(),
             teams: lobby.preset.arrange(&brief.players),
-            nations: lobby.nations.clone(),
-            generals: lobby.generals.clone(),
+            nations: lobby.nations.clone().into_iter().collect(),
+            generals: lobby.generals.clone().into_iter().collect(),
             handicaps: computer_handicaps(&brief.players, lobby.person, &lobby.handicaps),
             fog: None,
         },
@@ -1157,7 +1157,7 @@ mod tests {
         let chosen = HashMap::from([(10, hard.clone()), (12, easy.clone())]);
         // The lobby offers the person's side none.
         let chosen = computer_handicaps(&players, Some(12), &chosen);
-        assert_eq!(chosen, HashMap::from([(10, hard.clone())]));
+        assert_eq!(chosen, BTreeMap::from([(10, hard.clone())]));
         let given = aaa_server::handicap_technologies(&players, &chosen, &handicaps.all);
         // The independent player gets none, even from the map.
         let bonus_and_penalty = [(10, Id::from("bonus")), (13, Id::from("penalty"))];
