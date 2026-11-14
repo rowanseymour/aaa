@@ -2,6 +2,7 @@
 
 [![CI](https://github.com/rowanseymour/aaa/actions/workflows/ci.yml/badge.svg)](https://github.com/rowanseymour/aaa/actions/workflows/ci.yml)
 [![License: GPL v3+](https://img.shields.io/badge/license-GPL%20v3%2B-blue.svg)](LICENSE)
+[![Bevy 0.20](https://img.shields.io/badge/bevy-0.20-232326.svg?logo=bevy&logoColor=white)](https://bevy.org)
 
 An open source re-implementation of [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)),
 the real-time strategy game, written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org).
