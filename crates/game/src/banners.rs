@@ -503,13 +503,25 @@ pub fn show_banners(
         let housed = regiment
             .unpacked_into
             .is_some_and(|b| sim.0.hq_of(b).is_some());
-        let at = live().next().filter(|_| !housed).map(|first| {
-            let sum = live().fold(Vec2::ZERO, |sum, u| sum + Vec2::from(u.drawn_at(t)));
-            let [x, y] = (sum / count as f32).to_array();
+        // One being dropped is where it'll form up, until all are down.
+        let awaited = (regiment.units.first())
+            .filter(|_| regiment.arriving)
+            .map(|&u| &sim.0.units[u]);
+        let at = awaited.or(live().next()).filter(|_| !housed).map(|first| {
+            let [x, y] = match awaited {
+                Some(_) => regiment.position,
+                None => {
+                    let at = live().map(|u| Vec2::from(u.drawn_at(t)));
+                    (at.sum::<Vec2>() / count as f32).to_array()
+                }
+            };
             let footing = drawn.0.footing(first.template.as_str());
             world(x, y, ground.stand_at(footing, [x, y]) + HEIGHT)
         });
-        let seen = fog.shows_regiment(&sim.0, banner.regiment);
+        // With none down for the fog to show, as the ground there is.
+        let dropping = awaited.is_some() && count == 0;
+        let seen = fog.shows_regiment(&sim.0, banner.regiment)
+            || dropping && fog.at(regiment.position) == aaa_sim::Seen::Visible;
         let at = at.filter(|_| seen);
         let Some(p) = at.and_then(|p| camera.world_to_viewport(&global, p).ok()) else {
             *visibility = Visibility::Hidden;
