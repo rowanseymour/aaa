@@ -884,7 +884,8 @@ impl Ui<'_> {
             let inside = at(left, top, side, side);
             match (place, building) {
                 (Place::Regiment(r), _) => {
-                    card.insert((Button, Pick(r), says(Says::Regiment(r))));
+                    let id = ui::called(format!("object.slot.{}", i + 1));
+                    card.insert((Button, id, Pick(r), says(Says::Regiment(r))));
                     card.observe(pick);
                     card.with_children(|card| {
                         self.banner(card, inside, r);
@@ -901,7 +902,9 @@ impl Ui<'_> {
                         place: n,
                         held: true,
                     };
-                    card.insert((Button, Queued(n), says(of))).observe(cancel);
+                    let id = ui::called(format!("object.slot.{}", i + 1));
+                    card.insert((Button, id, Queued(n), says(of)))
+                        .observe(cancel);
                     card.with_children(|card| {
                         card.spawn((inside, picture_node(picture), Pickable::IGNORE));
                         let [left, top, width, height] = SLOT_PROGRESS;
@@ -1083,6 +1086,7 @@ impl Ui<'_> {
             let mut card = commands.spawn((
                 framed(at(left, 40.0, CARD, 138.0)),
                 Button,
+                ui::called(format!("object.regiment.{}", self.sim.regiments[r].id)),
                 Pick(r),
                 says(of),
                 ChildOf(root),
@@ -1162,7 +1166,8 @@ impl Ui<'_> {
                     held: false,
                 };
                 let card = (framed(node), picture_node(picture), Button, Queued(i));
-                display.spawn((card, says(of))).observe(cancel);
+                let id = ui::called(format!("object.queued.{}", i + 1));
+                display.spawn((card, id, says(of))).observe(cancel);
             }
             if !queue.is_empty() {
                 let of = Says::Queued {

@@ -95,13 +95,25 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<T
         .id();
     let column = commands.spawn((ChildOf(overlay), ui::dialog())).id();
     commands
-        .spawn((ui::button("Options", Font::Large), ChildOf(column)))
+        .spawn((
+            ui::button("Options", Font::Large),
+            ui::called("pause.options"),
+            ChildOf(column),
+        ))
         .observe(options);
     commands
-        .spawn((ui::button("Quit to Desktop", Font::Large), ChildOf(column)))
+        .spawn((
+            ui::button("Quit to Desktop", Font::Large),
+            ui::called("pause.quit"),
+            ChildOf(column),
+        ))
         .observe(ask_quit);
     commands
-        .spawn((ui::button("Return to Game", Font::Large), ChildOf(column)))
+        .spawn((
+            ui::button("Return to Game", Font::Large),
+            ui::called("pause.return"),
+            ChildOf(column),
+        ))
         .observe(resume);
 }
 

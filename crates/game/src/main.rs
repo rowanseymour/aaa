@@ -26,6 +26,7 @@ mod confirm;
 mod console;
 mod deliveries;
 mod displays;
+mod drive;
 mod effects;
 mod fog;
 mod ghost;
@@ -54,6 +55,7 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use aaa_data::{Footing, GameData};
 use aaa_map::{Ground, Map, Recruits, Shape};
@@ -82,12 +84,16 @@ usage:
 options:
   --side <n>                play the map's nth player (\"Side n\" in its lobby)
                             instead of the first one a person may play
-  --exec <script.txt>       run a file of console commands once the match starts;
-                            may be given more than once
+  --exec <script.txt>       run a file of console commands once the match starts,
+                            or from the first menu without a map; may be given
+                            more than once
   --console <port>          take console lines on a port of this machine, each
                             answered with what the console says, then an empty line
-  --screenshot <file.png>   save a frame to a file and exit, without a window
+  --screenshot <file.png>   save a frame to a file and exit, without a window,
+                            once any scripts have run
   --shot-after <seconds>    with --screenshot, play that long into the match first
+  --headless                run without a window, for the console to drive and
+                            take screenshots of
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it
   --fog <setting>           none, explored or full: how much of the map the fog
@@ -497,6 +503,7 @@ struct Options {
     console: Option<u16>,
     screenshot: Option<String>,
     shot_after: f64,
+    headless: bool,
     ui_scale: f32,
     fog: Option<aaa_map::FogSetting>,
     log: Option<String>,
@@ -521,6 +528,13 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         Some(s) => s.parse().ok().filter(|s: &f64| (0.0..=600.0).contains(s))?,
         None => 0.0,
     };
+    let headless = match args.iter().position(|a| a == "--headless") {
+        Some(at) => {
+            args.remove(at);
+            true
+        }
+        None => false,
+    };
     let ui_scale = match take_option(args, "--ui-scale")? {
         Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
         None => 1.0,
@@ -536,6 +550,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         console,
         screenshot,
         shot_after,
+        headless,
         ui_scale,
         fog,
         log,
@@ -550,6 +565,7 @@ fn main() -> ExitCode {
         console,
         screenshot,
         shot_after,
+        headless,
         ui_scale,
         fog,
         log,
@@ -572,7 +588,10 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let screenshot = screenshot.map(|path| ShotPlugin { path: path.into() });
+    let once = screenshot.is_some();
+    let screenshot = (once || headless).then(|| ShotPlugin {
+        path: screenshot.map(Into::into),
+    });
     let (dir, map) = match args.as_slice() {
         [dir] => (dir, None),
         [dir, map] => (dir, Some(map)),
@@ -608,13 +627,27 @@ fn main() -> ExitCode {
     app.add_plugins(DefaultPlugins.set(window).set(log));
     if let Some(s) = screenshot {
         app.add_plugins(s);
-        // Every frame takes the same time, so a shot some way into a match
-        // catches the same moment however fast the machine draws.
-        app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
-            std::time::Duration::from_secs_f64(1.0 / 60.0),
-        ));
+        let frame = std::time::Duration::from_secs_f64(1.0 / 60.0);
+        match once {
+            // Every frame takes the same time, so a shot some way into a
+            // match catches the same moment however fast the machine draws.
+            true => _ = app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(frame)),
+            // Nothing else holds a run without a window to the speed one is
+            // drawn at, and so the match to the speed it's played at.
+            false => {
+                _ = app.add_systems(
+                    Last,
+                    move |mut drawn: bevy::ecs::system::Local<Option<Instant>>| {
+                        let left = drawn.and_then(|at| frame.checked_sub(at.elapsed()));
+                        std::thread::sleep(left.unwrap_or_default());
+                        *drawn = Some(Instant::now());
+                    },
+                )
+            }
+        }
+        app.configure_sets(Update, shot::Capture.run_if(console::idle));
         // Of the match, not the loading screen before it.
-        if map.is_some() {
+        if once && map.is_some() {
             app.insert_resource(ShotAfter(shot_after))
                 .add_systems(OnEnter(Screen::Match), note_start)
                 .configure_sets(
@@ -668,6 +701,7 @@ fn main() -> ExitCode {
             technologies::TechnologyPlugin,
             objectives::ObjectivesPlugin,
         ))
+        .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(OnEnter(Screen::Loading), loading)
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
@@ -1173,7 +1207,11 @@ fn ready(
     }
     for slot in &slot {
         commands
-            .spawn((ChildOf(slot), ui::button("Continue", ui::Font::Large)))
+            .spawn((
+                ChildOf(slot),
+                ui::button("Continue", ui::Font::Large),
+                ui::called("loading.continue"),
+            ))
             .observe(start);
     }
 }

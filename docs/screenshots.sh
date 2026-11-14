@@ -1,7 +1,7 @@
 #!/bin/sh
-# Rebuilds the README's screenshots in docs/screenshots/: three from the game,
-# each set up by a script of console commands, and one from the editor with a
-# window open on an object. Name some to rebuild only those.
+# Rebuilds the README's screenshots in docs/screenshots/: those from the game
+# each set up by a script of console commands, and the editor's with a window
+# open on an object. Name some to rebuild only those.
 #
 #   docs/screenshots.sh "/path/to/Axis and Allies 2004" [name...]
 #
@@ -50,6 +50,14 @@ game() {
     fit "$1"
 }
 
+# menus <name>, with the script on stdin, which starts from the first menu.
+menus() {
+    cat >"$work/$1.txt"
+    wanted "$1" || return 0
+    "$bin/aaa-game" "$game" --exec "$work/$1.txt" --screenshot "$work/$1-raw.png"
+    fit "$1"
+}
+
 # editor <name> <map> <camera> <ids to inspect>
 editor() {
     wanted "$1" || return 0
@@ -85,6 +93,23 @@ advance 4
 select 10744
 lookat 342 289
 zoom 0.6
+EOF
+
+game guadalcanal allies02_guadalcanal <<'EOF'
+lookat 46 276
+zoom 0.5
+advance 3
+EOF
+
+# Each side's nation, then the list of the first side's generals.
+menus lobby <<'EOF'
+click menu.new-game
+click menu.custom
+click lobby.side3.nation; click lobby.side3.nation.nation-ger
+click lobby.side4.nation; click lobby.side4.nation.nation-jpn
+click lobby.side1.nation; click lobby.side1.nation.nation-usa
+click lobby.side2.nation; click lobby.side2.nation.nation-gbr
+click lobby.side3.general
 EOF
 
 editor berlin-editor '(2v2)Berlin' 0.235,0.26,70,0.785,0.75 12193

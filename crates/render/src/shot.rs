@@ -1,4 +1,4 @@
-//! Saves a frame to a file and exits, without a window.
+//! Saves frames to files, without a window.
 //!
 //! Cameras draw into an image instead, so a capture can't be lost to a window
 //! that is hidden, covered or can't be presented, and needs no display.
@@ -47,11 +47,15 @@ pub fn window(title: String, shooting: bool) -> WindowPlugin {
     }
 }
 
-/// Points every camera at an image and saves it to `path` once the scene is
-/// ready, then exits. Goes with [`window`].
+/// Points every camera at an image, for [`take`] to save. Given a `path`,
+/// saves it there once the scene is ready, then exits. Goes with [`window`].
 pub struct ShotPlugin {
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
 }
+
+/// A frame [`take`] was asked for is on disk, or why it isn't.
+#[derive(Event)]
+pub struct Taken(pub Result<PathBuf, String>);
 
 /// Counts frames towards the capture and takes it. An app whose scene isn't
 /// ready from the start, such as one that loads it in the background, gives
@@ -65,11 +69,40 @@ struct Compiling(Arc<AtomicUsize>);
 
 #[derive(Resource)]
 struct Shot {
-    path: PathBuf,
     target: Handle<Image>,
+    /// The frame to save and exit on.
+    once: Option<Wanted>,
+    /// The frames [`take`] was asked for, the first of them being waited on.
+    asked: std::collections::VecDeque<Wanted>,
+}
+
+/// A frame to save, and how long it has been waited for.
+struct Wanted {
+    path: PathBuf,
     frames: u32,
     quiet: u32,
     asked: bool,
+}
+
+impl Wanted {
+    fn new(path: PathBuf) -> Wanted {
+        Wanted {
+            path,
+            frames: 0,
+            quiet: 0,
+            asked: false,
+        }
+    }
+}
+
+/// Saves the next settled frame of a windowless run to `path`, triggering
+/// [`Taken`] once it has; `false` if cameras draw to a window instead.
+pub fn take(world: &mut World, path: PathBuf) -> bool {
+    let Some(mut shot) = world.get_resource_mut::<Shot>() else {
+        return false;
+    };
+    shot.asked.push_back(Wanted::new(path));
+    true
 }
 
 #[derive(Debug, PartialEq)]
@@ -79,7 +112,7 @@ enum Step {
     GiveUp,
 }
 
-impl Shot {
+impl Wanted {
     /// Advances a frame, given how many pipelines are still compiling.
     fn tick(&mut self, compiling: usize) -> Step {
         self.frames += 1;
@@ -104,13 +137,11 @@ impl Plugin for ShotPlugin {
             .add(target(SIZE));
         app.insert_resource(compiling.clone())
             .insert_resource(Shot {
-                path: self.path.clone(),
                 target,
-                frames: 0,
-                quiet: 0,
-                asked: false,
+                once: self.path.clone().map(Wanted::new),
+                asked: default(),
             })
-            .add_systems(Update, (aim_cameras, capture.in_set(Capture)));
+            .add_systems(Update, (aim_cameras, capture.in_set(Capture), serve));
         if let Some(render) = app.get_sub_app_mut(RenderApp) {
             render
                 .insert_resource(compiling)
@@ -172,39 +203,75 @@ fn count_compiling(cache: Res<PipelineCache>, compiling: Res<Compiling>) {
     compiling.0.store(waiting, Ordering::Relaxed);
 }
 
-fn capture(
-    mut commands: Commands,
-    mut shot: ResMut<Shot>,
-    compiling: Res<Compiling>,
-    mut exit: MessageWriter<AppExit>,
+fn capture(mut commands: Commands, mut shot: ResMut<Shot>, compiling: Res<Compiling>) {
+    let shot = &mut *shot;
+    if let Some(once) = &mut shot.once {
+        advance(&mut commands, once, &shot.target, &compiling, Then::Exit);
+    }
+}
+
+/// Takes the frames [`take`] was asked for, one at a time.
+fn serve(mut commands: Commands, mut shot: ResMut<Shot>, compiling: Res<Compiling>) {
+    let shot = &mut *shot;
+    if let Some(next) = shot.asked.front_mut() {
+        advance(&mut commands, next, &shot.target, &compiling, Then::Tell);
+    }
+}
+
+/// What follows a frame being saved, or given up on.
+#[derive(Clone, Copy)]
+enum Then {
+    Exit,
+    /// Triggers [`Taken`] and goes on to the next asked for.
+    Tell,
+}
+
+/// Waits a frame more for `wanted`, or takes it.
+fn advance(
+    commands: &mut Commands,
+    wanted: &mut Wanted,
+    target: &Handle<Image>,
+    compiling: &Compiling,
+    then: Then,
 ) {
-    match shot.tick(compiling.0.load(Ordering::Relaxed)) {
+    let path = wanted.path.clone();
+    match wanted.tick(compiling.0.load(Ordering::Relaxed)) {
         Step::Wait => {}
         Step::GiveUp => {
-            error!(
-                "no frame for {} after {MAX_FRAMES} frames",
-                shot.path.display()
-            );
-            exit.write(AppExit::error());
+            let said = format!("no frame for {} after {MAX_FRAMES} frames", path.display());
+            commands.queue(move |world: &mut World| finish(world, then, Err(said)));
         }
         Step::Capture => {
-            let path = shot.path.clone();
-            commands
-                .spawn(Screenshot::image(shot.target.clone()))
-                .observe(
-                    move |captured: On<ScreenshotCaptured>, mut exit: MessageWriter<AppExit>| {
-                        exit.write(match save(&captured.image, &path) {
-                            Ok(()) => {
-                                info!("saved {}", path.display());
-                                AppExit::Success
-                            }
-                            Err(e) => {
-                                error!("{}: {e}", path.display());
-                                AppExit::error()
-                            }
-                        });
-                    },
-                );
+            commands.spawn(Screenshot::image(target.clone())).observe(
+                move |captured: On<ScreenshotCaptured>, mut commands: Commands| {
+                    let saved = save(&captured.image, &path)
+                        .map(|_| path.clone())
+                        .map_err(|e| format!("{}: {e}", path.display()));
+                    commands.queue(move |world: &mut World| finish(world, then, saved));
+                },
+            );
+        }
+    }
+}
+
+fn finish(world: &mut World, then: Then, saved: Result<PathBuf, String>) {
+    match then {
+        Then::Exit => {
+            let exit = match saved {
+                Ok(path) => {
+                    info!("saved {}", path.display());
+                    AppExit::Success
+                }
+                Err(e) => {
+                    error!("{e}");
+                    AppExit::error()
+                }
+            };
+            world.write_message(exit);
+        }
+        Then::Tell => {
+            world.resource_mut::<Shot>().asked.pop_front();
+            world.trigger(Taken(saved));
         }
     }
 }
@@ -223,14 +290,8 @@ pub fn save(image: &Image, path: &std::path::Path) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    fn shot() -> Shot {
-        Shot {
-            path: "out.png".into(),
-            target: Handle::default(),
-            frames: 0,
-            quiet: 0,
-            asked: false,
-        }
+    fn shot() -> Wanted {
+        Wanted::new("out.png".into())
     }
 
     #[test]

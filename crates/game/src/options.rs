@@ -20,8 +20,8 @@ use raw_window_handle::RawDisplayHandle;
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
 use crate::ui::{
-    Card, Chosen, Dropdown, Font, Ink, Surface, button, card, label, layer, padded, slider, switch,
-    text, toggle,
+    Card, Chosen, Dropdown, Font, Ink, Surface, button, called, card, label, layer, padded, slider,
+    slug, switch, text, toggle,
 };
 use crate::{Screen, UI_SCALES, UiScaleSetting, menu};
 
@@ -186,6 +186,8 @@ trait Listed: Copy + PartialEq + Send + Sync + 'static {
     const ALL: &'static [Self];
     /// The list it's chosen from.
     const LIST: Open;
+    /// What the list's button is [`called`](crate::ui::called).
+    const ID: &'static str;
     fn name(self) -> &'static str;
 }
 
@@ -204,12 +206,13 @@ fn listed<T: Listed, M>(
 ) {
     commands.entity(holder).despawn_children();
     let list = Dropdown {
+        id: T::ID.into(),
         row: holder,
         width: px(LIST_WIDTH),
         label: current.map_or("", T::name).into(),
         open: open == T::LIST,
     };
-    let choices = choices.map(|c| ((Pick(c), InList), c.name().to_string()));
+    let choices = choices.map(|c| (slug(c.name()), (Pick(c), InList), c.name().to_string()));
     list.spawn(
         commands,
         (Opener(T::LIST), InList),
@@ -235,6 +238,7 @@ enum Display {
 impl Listed for Display {
     const ALL: &'static [Self] = &[Display::Windowed, Display::Borderless, Display::Fullscreen];
     const LIST: Open = Open::Display;
+    const ID: &'static str = "options.display";
 
     fn name(self) -> &'static str {
         match self {
@@ -285,6 +289,7 @@ impl Listed for AntiAliasing {
         AntiAliasing::Smaa,
     ];
     const LIST: Open = Open::AntiAliasing;
+    const ID: &'static str = "options.anti-aliasing";
 
     fn name(self) -> &'static str {
         match self {
@@ -446,7 +451,13 @@ pub fn page(commands: &mut Commands, options: &Options) -> Entity {
         ..default()
     };
     let page = commands
-        .spawn((Page, page, Surface::Solid, GlobalZIndex(layer::PAGE)))
+        .spawn((
+            Page,
+            page,
+            Surface::Solid,
+            GlobalZIndex(layer::PAGE),
+            crate::ui::Covers,
+        ))
         .id();
     let main = Node {
         flex_grow: 1.0,
@@ -471,14 +482,27 @@ pub fn page(commands: &mut Commands, options: &Options) -> Entity {
         (Tab::Audio, &options.audio_tab),
     ] {
         commands
-            .spawn((TabButton(tab), toggle(name, Font::Large), ChildOf(side)))
+            .spawn((
+                TabButton(tab),
+                toggle(name, Font::Large),
+                called(match tab {
+                    Tab::Game => "options.tab.game",
+                    Tab::Video => "options.tab.video",
+                    Tab::Audio => "options.tab.audio",
+                }),
+                ChildOf(side),
+            ))
             .observe(move |_: On<Activate>, mut shown: ResMut<Tab>| {
                 shown.set_if_neq(tab);
             });
     }
     commands.spawn((menu::spacer(), ChildOf(side)));
     commands
-        .spawn((button(&options.ok, Font::Large), ChildOf(side)))
+        .spawn((
+            button(&options.ok, Font::Large),
+            called("options.ok"),
+            ChildOf(side),
+        ))
         .observe(leave);
     page
 }
@@ -558,7 +582,12 @@ fn show_body(
             choice(&mut commands, game, &options.hotkeys_label, Hotkeys);
             let extras = section(&mut commands, body, &options.extras_title);
             commands
-                .spawn((BorderToggle, ChildOf(extras), switched()))
+                .spawn((
+                    BorderToggle,
+                    ChildOf(extras),
+                    switched(),
+                    called("options.supply-border"),
+                ))
                 .observe(|_: On<Activate>, mut border: ResMut<Border>| border.0 = !border.0);
         }
         Tab::Video => {
@@ -595,7 +624,15 @@ fn show_body(
             let switches = section(&mut commands, body, &options.sounds_title);
             for sound in [Sound::Chat, Sound::Replies] {
                 commands
-                    .spawn((SoundToggle(sound), ChildOf(switches), switched()))
+                    .spawn((
+                        SoundToggle(sound),
+                        ChildOf(switches),
+                        switched(),
+                        called(match sound {
+                            Sound::Chat => "options.sound.chat",
+                            Sound::Replies => "options.sound.replies",
+                        }),
+                    ))
                     .observe(move |_: On<Activate>, mut sounds: ResMut<Sounds>| {
                         let on = sound.on(&mut sounds.switches);
                         *on = !*on;
@@ -693,13 +730,17 @@ fn show_hotkeys(
     }
     commands.entity(holder).despawn_children();
     let list = Dropdown {
+        id: "options.hotkeys".into(),
         row: holder,
         width: px(LIST_WIDTH),
         label: options.hotkeys().map_or("", |c| c.name.as_str()).into(),
         open: *open == Open::Hotkeys,
     };
     let choices = options.configurations.iter();
-    let choices = choices.map(|c| ((HotkeysChoice(c.id.clone()), InList), c.name.clone()));
+    let choices = choices.map(|c| {
+        let choice = (HotkeysChoice(c.id.clone()), InList);
+        (slug(c.id.as_str()), choice, c.name.clone())
+    });
     list.spawn(
         &mut commands,
         (Opener(Open::Hotkeys), InList),
@@ -836,6 +877,7 @@ fn show_resolution(
     *shown = size;
     commands.entity(holder).despawn_children();
     let list = Dropdown {
+        id: "options.resolution".into(),
         row: holder,
         width: px(LIST_WIDTH),
         label: size
@@ -853,7 +895,10 @@ fn show_resolution(
     });
     let sizes = RESOLUTIONS.iter().map(|&(w, h)| UVec2::new(w, h));
     let sizes = sizes.filter(|s| room.is_none_or(|room| s.cmplt(room).all()));
-    let choices = sizes.map(|s| ((ResolutionChoice(s), InList), format!("{}x{}", s.x, s.y)));
+    let choices = sizes.map(|s| {
+        let size = format!("{}x{}", s.x, s.y);
+        (size.clone(), (ResolutionChoice(s), InList), size)
+    });
     list.spawn(
         &mut commands,
         (Opener(Open::Resolution), InList),
@@ -931,13 +976,17 @@ fn show_ui_scale(
     }
     commands.entity(holder).despawn_children();
     let list = Dropdown {
+        id: "options.ui-scale".into(),
         row: holder,
         width: px(LIST_WIDTH),
         label: percentage(setting.0).into(),
         open: *open == Open::UiScale,
     };
     let choices = UI_SCALE_CHOICES.iter().filter(|s| UI_SCALES.contains(s));
-    let choices = choices.map(|&s| ((UiScaleChoice(s), InList), percentage(s)));
+    let choices = choices.map(|&s| {
+        let shown = percentage(s);
+        (slug(&shown), (UiScaleChoice(s), InList), shown)
+    });
     list.spawn(
         &mut commands,
         (Opener(Open::UiScale), InList),

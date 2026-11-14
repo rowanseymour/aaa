@@ -707,6 +707,7 @@ pub fn scrim(layer: i32) -> impl Bundle {
         },
         Surface::Scrim,
         GlobalZIndex(layer),
+        Covers,
     )
 }
 
@@ -727,6 +728,32 @@ pub fn dialog() -> impl Bundle {
 /// A button, lit while hovered or [`Chosen`].
 #[derive(Component)]
 pub struct MenuButton;
+
+/// What scripts call a button, to press it by: the only one so called on
+/// screen, its parts split by `.` from the screen it's on down to itself.
+#[derive(Component, Clone, PartialEq, Eq, Debug)]
+pub struct ButtonId(pub String);
+
+/// A [`ButtonId`].
+pub fn called(id: impl Into<String>) -> ButtonId {
+    ButtonId(id.into())
+}
+
+/// A part of a [`ButtonId`] from a name or an id in the data: lower case,
+/// with `-` for whatever isn't a letter or a digit.
+pub fn slug(name: &str) -> String {
+    let dashed = |c: char| match c.is_alphanumeric() {
+        true => c.to_ascii_lowercase(),
+        false => '-',
+    };
+    let slug: String = name.chars().map(dashed).collect();
+    let parts: Vec<&str> = slug.split('-').filter(|p| !p.is_empty()).collect();
+    parts.join("-")
+}
+
+/// Covers the screen, so that what's under it can't be pressed.
+#[derive(Component)]
+pub struct Covers;
 
 /// Marks a [`MenuButton`] as the current choice.
 #[derive(Component, Default, PartialEq)]
@@ -861,6 +888,8 @@ pub fn disabled(words: impl Into<String>, size: Font) -> impl Bundle {
 /// A button in a row saying what's chosen, over the list of choices while
 /// it's open, which is drawn over everything else.
 pub struct Dropdown {
+    /// What its button is [`called`], and its choices after it.
+    pub id: String,
     pub row: Entity,
     pub width: Val,
     pub label: Shown,
@@ -922,7 +951,7 @@ impl Dropdown {
         commands: &mut Commands,
         opener_marker: B,
         on_open: impl IntoEntityObserver<M1>,
-        choices: impl Iterator<Item = (C, S)>,
+        choices: impl Iterator<Item = (String, C, S)>,
         on_choose: impl IntoEntityObserver<M2> + Copy,
     ) {
         let cell = Node {
@@ -937,7 +966,12 @@ impl Dropdown {
         };
         let holder = commands.spawn((ChildOf(self.row), holder)).id();
         let label = commands
-            .spawn((ChildOf(holder), opener(cell.clone()), opener_marker))
+            .spawn((
+                ChildOf(holder),
+                opener(cell.clone()),
+                opener_marker,
+                called(self.id.clone()),
+            ))
             .observe(on_open)
             .id();
         self.label.spawn(commands, label);
@@ -947,9 +981,10 @@ impl Dropdown {
         let list = commands
             .spawn((ChildOf(holder), dropdown(), GlobalZIndex(layer::LIST)))
             .id();
-        for (choice, shown) in choices {
+        for (key, choice, shown) in choices {
+            let id = called(format!("{}.{key}", self.id));
             let item = commands
-                .spawn((ChildOf(list), clickable(cell.clone()), choice))
+                .spawn((ChildOf(list), clickable(cell.clone()), choice, id))
                 .observe(on_choose)
                 .id();
             shown.into().spawn(commands, item);
