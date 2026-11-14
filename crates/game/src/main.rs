@@ -192,6 +192,27 @@ struct Readying {
     wait: bool,
 }
 
+/// A loading screen left up over a match that's set up, until its host,
+/// which is elsewhere and may be waiting on others, begins it.
+#[derive(Component)]
+struct AwaitingHost;
+
+/// What the loading screen says then. Not the game's words: it has none
+/// for this.
+const AWAITING_HOST: &str = "Waiting for other players";
+
+/// Takes down a loading screen that's [`AwaitingHost`] once the match has
+/// begun, or its host has gone.
+fn stop_awaiting(
+    mut commands: Commands,
+    orders: Res<Orders>,
+    awaiting: Query<Entity, With<AwaitingHost>>,
+) {
+    if !orders.waiting() {
+        awaiting.iter().for_each(|e| commands.entity(e).despawn());
+    }
+}
+
 /// Where the loading screen puts its Continue button.
 #[derive(Component)]
 struct ContinueSlot;
@@ -911,7 +932,7 @@ fn main() -> ExitCode {
         )
         .add_systems(
             Update,
-            (carry_out, keep_time)
+            (carry_out, stop_awaiting, keep_time)
                 .chain()
                 .after(console::run)
                 .run_if(in_state(Screen::Match)),
@@ -1211,9 +1232,12 @@ fn show_stage(world: &mut bevy::ecs::world::World, stage: Stage) {
 }
 
 /// Once the match is set up, says so and holds it until the person
-/// continues, or starts it straight away.
+/// continues, or starts it straight away: which, for a match hosted
+/// elsewhere, is to tell its host and wait for it to begin.
+#[allow(clippy::too_many_arguments)]
 fn ready(
     mut commands: Commands,
+    mut orders: ResMut<Orders>,
     readying: Option<Res<Readying>>,
     mut time: ResMut<Time<Virtual>>,
     mut status: Query<&mut Text, With<LoadingStatus>>,
@@ -1226,7 +1250,17 @@ fn ready(
     };
     commands.remove_resource::<Readying>();
     if !readying.wait {
-        screen.iter().for_each(|e| commands.entity(e).despawn());
+        orders.ready();
+        if !orders.waiting() {
+            screen.iter().for_each(|e| commands.entity(e).despawn());
+            return;
+        }
+        for screen in &screen {
+            commands.entity(screen).insert(AwaitingHost);
+        }
+        for mut text in &mut status {
+            text.0 = AWAITING_HOST.into();
+        }
         return;
     }
     time.pause();
@@ -1248,9 +1282,11 @@ fn ready(
 fn start(
     _: On<bevy::ui_widgets::Activate>,
     mut commands: Commands,
+    mut orders: ResMut<Orders>,
     mut time: ResMut<Time<Virtual>>,
     screen: Query<Entity, With<LoadingScreen>>,
 ) {
+    orders.ready();
     screen.iter().for_each(|e| commands.entity(e).despawn());
     time.unpause();
 }

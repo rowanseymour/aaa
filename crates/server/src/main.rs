@@ -29,8 +29,8 @@ options:
   --film <file>       where to keep the match as a film
   --host <address>    host the match at an address, e.g. 0.0.0.0:4000, for
                       clients that join, playing it at its own speed
-  --clients <number>  how many clients a hosted match waits for before it
-                      begins; 1 unless given
+  --clients <number>  how many clients a hosted match waits for, each to join
+                      and be ready to play, before it begins; 1 unless given
   --players <ids>     with --join, the players to give the orders of, by id,
                       e.g. 1,2; none unless given";
 
@@ -144,6 +144,7 @@ fn host(
     let mut listener = quic::listen(hosting.at)?;
     eprintln!("hosting at {}", listener.at()?);
     let mut host = Host::new(setup, world);
+    host.want(hosting.clients);
     let mut greet = |host: &mut Host<quic::Remote>| {
         while let Some(link) = listener.accept() {
             host.greet(link);
@@ -161,7 +162,7 @@ fn host(
             eprintln!("client {client}'s copy stopped matching by tick {step}")
         }
     };
-    while host.clients() < hosting.clients {
+    while host.waiting() {
         greet(&mut host);
         host.wait().into_iter().for_each(said);
         std::thread::sleep(IDLE);
@@ -215,6 +216,9 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             eprintln!("joined as client {}", welcome.client);
             let mut world = aaa_server::start(&game, &welcome.setup, || {})?.world;
             let mut client = Client::new(link);
+            client
+                .ready()
+                .map_err(|_| format!("{at}: the host has gone"))?;
             while client.advance(&mut world, usize::MAX).is_ok() {
                 std::thread::sleep(IDLE);
             }

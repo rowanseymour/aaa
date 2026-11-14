@@ -1321,6 +1321,7 @@ fn barred(orders: &Orders, action: &Action) -> Result<(), String> {
     let watching = "the match's host takes nothing from those who only watch";
     Err(match (orders.players(), action) {
         _ if orders.gone() => "the match's host has gone".into(),
+        _ if orders.waiting() => "the match's host has yet to begin it".into(),
         (Some([]), Action::Order { .. } | Action::Pause(_) | Action::Speed(_)) => watching.into(),
         (Some(players), Action::Order { .. }) => {
             let ids: Vec<String> = players.iter().map(u32::to_string).collect();
@@ -1572,7 +1573,9 @@ pub(crate) fn run(world: &mut World) {
     let now = world.resource::<Time<Real>>().elapsed_secs_f64();
     let loading = world
         .get_resource::<State<Screen>>()
-        .is_some_and(|s| *s.get() == Screen::Loading);
+        .is_some_and(|s| *s.get() == Screen::Loading)
+        // A match its host has yet to begin is as good as still loading.
+        || world.get_resource::<Orders>().is_some_and(Orders::waiting);
     let mut console = world.resource_mut::<Console>();
     if console.until.is_some_and(|until| now >= until) {
         console.until = None;

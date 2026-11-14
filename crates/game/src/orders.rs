@@ -100,15 +100,30 @@ impl Orders {
         self.players().is_some()
     }
 
+    /// Tells the host that the game's copy of the match is set up: a
+    /// host elsewhere may hold the match for every copy until then.
+    pub(crate) fn ready(&mut self) {
+        // A host that's gone is found so as the match is next played.
+        let _ = self.client.ready();
+    }
+
     /// Whether the host has gone, and with it the match.
     pub(crate) fn gone(&self) -> bool {
         self.gone
     }
 
+    /// Whether the host, being elsewhere, has yet to begin the match:
+    /// it may hold it until every copy is set up, and carries out nothing
+    /// asked of it before then.
+    pub(crate) fn waiting(&self) -> bool {
+        let record = self.record();
+        self.joined_to() && !self.gone && record.steps == 0 && record.given.is_empty()
+    }
+
     /// Whether the host would carry `action` out if asked.
     pub(crate) fn may(&self, action: &Action) -> bool {
         let allowed = |players| aaa_server::allows(players, action);
-        !self.gone && self.players().is_none_or(allowed)
+        !self.gone && !self.waiting() && self.players().is_none_or(allowed)
     }
 
     /// Asks for `command` from `player`, unless `world`, the game's copy
@@ -336,6 +351,15 @@ mod tests {
         }
     }
 
+    /// As [`joined`], the match begun and a tick of it played.
+    fn begun(players: &[u32]) -> (Host<Local>, Orders, World) {
+        let (mut host, mut orders, mut world) = joined(players);
+        host.turn();
+        orders.step(&mut world);
+        assert!(!orders.waiting());
+        (host, orders, world)
+    }
+
     fn stop(player: u32, regiment: usize) -> Action {
         let command = Command::Stop { regiment };
         Action::Order { player, command }
@@ -344,6 +368,17 @@ mod tests {
     #[test]
     fn a_joined_match_plays_the_ticks_its_host_has_sent_as_they_fall_due() {
         let (mut host, mut orders, mut world) = joined(&[1]);
+        // The host may wait to hear the game has the match set up.
+        host.wait();
+        assert!(host.waiting() && orders.waiting());
+        orders.ready();
+        host.wait();
+        assert!(!host.waiting());
+        // Until the match begins nothing is asked, as nothing would come
+        // of it.
+        assert!(orders.waiting() && !orders.may(&Action::Pause(true)));
+        let stop = Command::Stop { regiment: 0 };
+        assert_eq!(orders.give(&world, 1, stop), Err(Refused::NotYours));
         assert!(orders.joined_to());
         assert_eq!(orders.players(), Some(&[1][..]));
         // A tick the host hasn't sent isn't played.
@@ -384,12 +419,11 @@ mod tests {
         let (mut host, mut orders, mut world) = joined(&[1]);
         let (link, _) = testing::let_in(&mut host, &[2]);
         let (mut other, mut theirs) = (Client::new(link), testing::fresh());
-        // What's asked before the match begins comes to nothing.
+        // What would come to nothing before the match begins isn't asked.
         orders.act(Action::Pause(true));
-        assert!(orders.pausing());
-        host.wait();
-        orders.carry_out(&mut world);
-        assert!(!orders.pausing() && !orders.paused());
+        assert!(!orders.pausing());
+        host.turn();
+        orders.step(&mut world);
         orders.act(Action::Pause(true));
         orders.act(Action::Speed(2.0));
         // However long the host takes to hear of it.
@@ -429,12 +463,12 @@ mod tests {
         assert_eq!((orders.speeding(), orders.speed()), (4.0, 4.0));
         // The tick the match went on with came with it.
         other.advance(&mut theirs, usize::MAX).unwrap();
-        assert_eq!((world.ticks, world.hash()), (1, theirs.hash()));
+        assert_eq!((world.ticks, world.hash()), (2, theirs.hash()));
     }
 
     #[test]
     fn only_what_a_host_elsewhere_would_carry_out_is_asked_of_it() {
-        let (mut host, mut orders, mut world) = joined(&[1]);
+        let (mut host, mut orders, mut world) = begun(&[1]);
         // Another player's orders, and what's outside the match's rules.
         let theirs = Command::Stop { regiment: 1 };
         assert_eq!(world.check(2, &theirs), Ok(()));
@@ -446,9 +480,9 @@ mod tests {
         assert!(orders.may(&stop(1, 0)) && orders.may(&Action::Pause(true)));
         host.turn();
         orders.step(&mut world);
-        assert_eq!((world.ticks, orders.record().given.len()), (1, 0));
+        assert_eq!((world.ticks, orders.record().given.len()), (2, 0));
         // One only watching asks for nothing, and expects nothing.
-        let (mut host, mut watching, mut world) = joined(&[]);
+        let (mut host, mut watching, mut world) = begun(&[]);
         watching.act(Action::Pause(true));
         assert!(!watching.pausing());
         assert_eq!(
@@ -457,7 +491,7 @@ mod tests {
         );
         host.turn();
         watching.step(&mut world);
-        assert_eq!((world.ticks, host.schedule().record().given.len()), (1, 0));
+        assert_eq!((world.ticks, host.schedule().record().given.len()), (2, 0));
         // A host here does whatever it's asked.
         let hosting = Orders::hosting(Setup::default(), fresh());
         assert!(!hosting.joined_to() && hosting.players().is_none());
@@ -466,7 +500,7 @@ mod tests {
 
     #[test]
     fn a_host_that_goes_is_found_gone_once_what_it_sent_is_played() {
-        let (mut host, mut orders, mut world) = joined(&[1]);
+        let (mut host, mut orders, mut world) = begun(&[1]);
         for _ in 0..3 {
             host.turn();
         }
@@ -477,7 +511,7 @@ mod tests {
         orders.carry_out(&mut world);
         assert!(!orders.gone());
         orders.step(&mut world);
-        assert_eq!((world.ticks, world.hash()), (3, hash));
+        assert_eq!((world.ticks, world.hash()), (4, hash));
         assert!(orders.gone());
         // Nothing asked is coming now, and nothing more is asked.
         assert_eq!(orders.speeding(), 1.0);
@@ -488,7 +522,7 @@ mod tests {
             Err(Refused::NotYours)
         );
         orders.step(&mut world);
-        assert_eq!(world.ticks, 3);
+        assert_eq!(world.ticks, 4);
     }
 
     #[test]
