@@ -85,7 +85,7 @@ impl<K> Timed<K> {
     /// Whether its key time wraps round to the start, rather than holding
     /// or turning back, at the end.
     fn loops(&self) -> bool {
-        (self.controller.flags >> 1) & 3 == 0
+        self.controller.cycle() == nif::Cycle::Loop
     }
 
     /// Whether its key time wraps round between `before` and `t`, however
@@ -442,7 +442,7 @@ impl System {
         // The system's clock already runs at its frequency.
         timing.frequency = 1.0;
         if c.reset {
-            timing.flags &= !6;
+            timing.set_cycle(nif::Cycle::Loop);
         }
         let active = match t.flags & 1 {
             0 => old_switching(t.start, t.stop, c.emit_start, emit_stop(c)),

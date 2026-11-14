@@ -4,7 +4,7 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{GameData, Id};
+use aaa_data::{AnimationKind, GameData, Id};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Exposure, RenderTarget};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
@@ -306,7 +306,7 @@ impl Models {
             None => {
                 let view = &portrait.view;
                 let model = self.load(game, assets, &path, view, idle(view), None, |a| {
-                    a.kind != "IDLE"
+                    a.kind != AnimationKind::Idle
                 });
                 self.models.insert(key, model.clone());
                 model
@@ -321,7 +321,7 @@ impl Models {
             ))
             .id();
         self.spawn_meshes(commands, assets, root, model, None, 0.0);
-        let of_kind = |kind: &str| -> Vec<String> {
+        let of_kind = |kind: AnimationKind| -> Vec<String> {
             let animations = portrait.view.animations.iter();
             animations
                 .filter(|a| a.kind == kind)
@@ -331,12 +331,12 @@ impl Models {
         // Any number will do to start from, as long as sittings differ.
         let seed = stage.sat.wrapping_mul(0x9e37_79b9);
         let mut fidgets = Fidgets {
-            ids: of_kind("FIDGET"),
+            ids: of_kind(AnimationKind::Fidget),
             idle_loops: portrait.idle_loops,
             left: f32::NAN,
             seed: seed | 1,
         };
-        let greetings = of_kind("SELECTED");
+        let greetings = of_kind(AnimationKind::Selected);
         if greeting && !greetings.is_empty() {
             let pick = fidgets.roll() as usize % greetings.len();
             commands

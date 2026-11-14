@@ -1,7 +1,9 @@
 //! Playing animation data: sampling key groups and applying controllers'
 //! data to transforms.
 
-use crate::{Controller, Interpolation, Key, Keyframes, Keys, PathSettings, Rotation, Transform};
+use crate::{
+    Controller, Cycle, Interpolation, Key, Keyframes, Keys, PathSettings, Rotation, Transform,
+};
 
 impl Controller {
     /// The time in the data's keys at `t` seconds of playing.
@@ -11,14 +13,13 @@ impl Controller {
         if span <= 0.0 {
             return self.start;
         }
-        // Flag bits 1-2: 0 loops, 1 plays back and forth, 2 holds the end.
-        match (self.flags >> 1) & 3 {
-            1 => {
+        match self.cycle() {
+            Cycle::Reverse => {
                 let u = (t - self.start).rem_euclid(2.0 * span);
                 self.start + if u > span { 2.0 * span - u } else { u }
             }
-            2 => t.clamp(self.start, self.stop),
-            _ => self.start + (t - self.start).rem_euclid(span),
+            Cycle::Clamp => t.clamp(self.start, self.stop),
+            Cycle::Loop => self.start + (t - self.start).rem_euclid(span),
         }
     }
 }

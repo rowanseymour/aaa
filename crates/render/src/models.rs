@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::f32::consts::FRAC_PI_2;
 use std::sync::Arc;
 
-use aaa_data::{Footing, GameData, Id, Portrait, Shape, View};
+use aaa_data::{AnimationKind, Footing, GameData, Id, Portrait, Shape, View};
 use aaa_map::{Ground, Player, owner};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
@@ -16,12 +16,13 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
 use nif::{
-    Controller, ControllerKind, Keyframes, Keys, Nif, Object, TextureChange, TexturePlacement,
+    Controller, ControllerKind, Keyframes, Keys, Nif, Object, PixelFormat, TextureChange,
+    TexturePlacement, VertexColors,
 };
 use tgck::map::Thing;
 
 use crate::MapObject;
-use crate::glow::{Glow, GlowMaterial, Source};
+use crate::glow::{Glow, GlowMaterial};
 use crate::particles::{self, Look, System};
 use crate::rig::{Nodes, Rig};
 use crate::solid::{Solid, SolidMaterial};
@@ -480,8 +481,7 @@ impl EffectTiming {
             if c.stop <= c.start || c.frequency <= 0.0 {
                 continue;
             }
-            // Flag bits 1-2 of 2 hold the end; the rest repeat.
-            let loops = (c.flags >> 1) & 3 != 2;
+            let loops = c.cycle() != nif::Cycle::Clamp;
             let length = (c.stop - c.phase) / c.frequency;
             let t = out.get_or_insert(EffectTiming {
                 length: 0.0,
@@ -1095,8 +1095,8 @@ impl Models {
             let Some(clip) = kf(a) else {
                 continue;
             };
-            match a.kind.as_str() {
-                "DIE" => deaths.push((clip, a.length)),
+            match a.kind {
+                AnimationKind::Die => deaths.push((clip, a.length)),
                 _ => abilities.push((a.ids.clone(), clip, a.length)),
             }
         }
@@ -1172,7 +1172,7 @@ impl Models {
         // and diffuse colours, as they do without a property to say.
         let tinted = nif
             .property::<nif::VertexColor>(props)
-            .is_none_or(|v| v.vertex_mode == 2);
+            .is_none_or(|v| v.stand_for() == VertexColors::AmbientDiffuse);
         let mut mesh = mesh(g, transform, uv_set, tinted)?;
         if self.pickable {
             mesh.asset_usage = RenderAssetUsages::default();
@@ -1203,19 +1203,19 @@ impl Models {
             .property::<nif::ZBuffer>(props)
             .is_none_or(|z| z.write());
         let reflects = material.map(|m| (m.ambient, m.diffuse));
-        let source = alpha.filter(|_| alpha_mode == AlphaMode::Add);
-        let material = match (source.and_then(|a| Source::of(a.source())), material) {
-            (Some(source), Some(m)) => {
-                PartMaterial::Glow(assets.glow_materials.add(GlowMaterial {
-                    // Without highlights, as the game draws them.
-                    base: StandardMaterial {
-                        reflectance: 0.0,
-                        perceptual_roughness: 1.0,
-                        ..standard
-                    },
-                    extension: Glow::new(m.ambient, m.diffuse, source),
-                }))
-            }
+        let glow = (alpha.filter(|_| alpha_mode == AlphaMode::Add))
+            .zip(material)
+            .and_then(|(a, m)| Glow::new(m.ambient, m.diffuse, a.source()));
+        let material = match glow {
+            Some(glow) => PartMaterial::Glow(assets.glow_materials.add(GlowMaterial {
+                // Without highlights, as the game draws them.
+                base: StandardMaterial {
+                    reflectance: 0.0,
+                    perceptual_roughness: 1.0,
+                    ..standard
+                },
+                extension: glow,
+            })),
             _ if alpha_mode == AlphaMode::Blend && writes_depth => {
                 PartMaterial::Solid(assets.solid_materials.add(SolidMaterial {
                     base: standard,
@@ -1377,16 +1377,18 @@ impl Models {
         // lit.
         let (vertex, lit) = nif
             .property::<nif::VertexColor>(props)
-            .map_or((2, true), |v| (v.vertex_mode, v.lighting == 1));
-        let replace = texture.is_some() && texturing.is_some_and(|t| t.apply_mode == 0);
+            .map_or((VertexColors::AmbientDiffuse, true), |v| {
+                (v.stand_for(), v.lit())
+            });
+        let replace = texture.is_some() && texturing.is_some_and(|t| t.replaces());
         let (base_color, emissive, lit, tinted) = match (replace, vertex, lit) {
             // The texture alone.
             (true, _, _) => (Color::WHITE, None, false, false),
-            (false, 1, false) => (Color::WHITE, None, false, true),
+            (false, VertexColors::Emissive, false) => (Color::WHITE, None, false, true),
             // Lit by no light, so only the emissive colour shows.
             (false, _, false) => (rgb(emissive, opacity), None, false, false),
             // The particle's colour is its ambient and diffuse, and alpha.
-            (false, 2, true) => (Color::WHITE, emissive, true, true),
+            (false, VertexColors::AmbientDiffuse, true) => (Color::WHITE, emissive, true, true),
             (false, _, true) => (rgb(m.map(|m| m.diffuse), opacity), emissive, true, false),
         };
         // Bevy scales emissive light by the exposure, which the lights undo.
@@ -1461,8 +1463,8 @@ impl Models {
         cached(&mut self.textures, &key, || {
             let Some(image) = embedded_image(pixels, formats) else {
                 warn!(
-                    "{key}: unsupported embedded texture format {}",
-                    pixels.format
+                    "{key}: unsupported embedded texture format {:?}",
+                    pixels.pixel_format()
                 );
                 return None;
             };
@@ -1572,8 +1574,7 @@ pub(crate) fn controllers(nif: &Nif, first: nif::Ref) -> impl Iterator<Item = &C
         Some(c)
     })
     .take(16)
-    // Flag bit 3 marks the controller active.
-    .filter(|c| c.flags & 8 != 0)
+    .filter(|c| c.active())
 }
 
 /// The keyframes moving the shape at the end of `path`, on it or any
@@ -1647,7 +1648,7 @@ pub struct ModelAssets<'a> {
 fn moving(view: &View, speed: f32) -> Option<&aaa_data::Animation> {
     view.animations
         .iter()
-        .filter(|a| a.kind == "MOVE")
+        .filter(|a| a.kind == AnimationKind::Move)
         .filter_map(|a| Some((a, a.walk_distance? / a.length - speed)))
         .min_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
         .map(|(a, _)| a)
@@ -1656,13 +1657,16 @@ fn moving(view: &View, speed: f32) -> Option<&aaa_data::Animation> {
 /// Whether an animation is one units play once when told to: using an
 /// ability or dying.
 fn once(a: &aaa_data::Animation) -> bool {
-    a.kind == "ABILITY" || a.kind == "DIE"
+    matches!(a.kind, AnimationKind::Ability | AnimationKind::Die)
 }
 
 /// The idle animation a view's models play: the one named `idle`, else the
 /// first of its kind.
 pub(crate) fn idle(view: &View) -> Option<&aaa_data::Animation> {
-    let mut idles = view.animations.iter().filter(|a| a.kind == "IDLE");
+    let mut idles = view
+        .animations
+        .iter()
+        .filter(|a| a.kind == AnimationKind::Idle);
     idles
         .clone()
         .find(|a| a.ids.eq_ignore_ascii_case("idle"))
@@ -1733,9 +1737,9 @@ pub(crate) fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -
         depth_or_array_layers: 1,
     };
     let pixels = (width * height) as usize;
-    let (format, data, levels) = match p.format {
-        0 | 1 => {
-            let n = if p.format == 0 { 3 } else { 4 };
+    let (format, data, levels) = match p.pixel_format() {
+        f @ (PixelFormat::Rgb | PixelFormat::Rgba) => {
+            let n = if f == PixelFormat::Rgb { 3 } else { 4 };
             let src = p.data.get(offset as usize..offset as usize + pixels * n)?;
             let rgba = src
                 .chunks_exact(n)
@@ -1743,10 +1747,12 @@ pub(crate) fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -
                 .collect();
             (TextureFormat::Rgba8UnormSrgb, rgba, 1)
         }
-        4..=6 if formats.contains(CompressedImageFormats::BC) => {
-            let format = match p.format {
-                4 => TextureFormat::Bc1RgbaUnormSrgb,
-                5 => TextureFormat::Bc2RgbaUnormSrgb,
+        bc @ (PixelFormat::Dxt1 | PixelFormat::Dxt3 | PixelFormat::Dxt5)
+            if formats.contains(CompressedImageFormats::BC) =>
+        {
+            let format = match bc {
+                PixelFormat::Dxt1 => TextureFormat::Bc1RgbaUnormSrgb,
+                PixelFormat::Dxt3 => TextureFormat::Bc2RgbaUnormSrgb,
                 _ => TextureFormat::Bc3RgbaUnormSrgb,
             };
             (format, p.data.clone(), p.mipmaps.len() as u32)
