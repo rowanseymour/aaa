@@ -32,6 +32,9 @@ pub struct View {
     pub unpacking: Option<String>,
     /// Archive path of the model a building plays once as it packs.
     pub packing: Option<String>,
+    /// Archive path of the model it's drawn with as it falls, under its
+    /// parachute.
+    pub falling: Option<String>,
     /// Archive path of its picture in the interface, such as a unit's
     /// portrait in its regiment's panel or a building's button.
     pub icon: Option<String>,
@@ -217,10 +220,12 @@ impl GameData {
             .filter(|p| self.exists(p));
         let unpacking = state_model("aspect_unpacking");
         let packing = state_model("aspect_packing");
+        let falling = state_model("falling");
         let aspects: Vec<String> = aspects
             .into_iter()
             .filter(|p| {
-                self.exists(p) && Some(p) != unpacking.as_ref() && Some(p) != packing.as_ref()
+                let states = [&unpacking, &packing, &falling];
+                self.exists(p) && states.iter().all(|s| Some(p) != s.as_ref())
             })
             .collect();
         let normal = normal.filter(|p| self.exists(p));
@@ -270,6 +275,7 @@ impl GameData {
             footing: footing(thing),
             unpacking,
             packing,
+            falling,
             icon,
             portrait: not_null(view.portrait_ids.clone()),
             faction_portrait: thing.show_faction_portrait == Some(true),
@@ -428,6 +434,7 @@ mod tests {
             footing: Footing::Ground,
             unpacking: None,
             packing: None,
+            falling: None,
             icon: None,
             portrait: None,
             faction_portrait: false,

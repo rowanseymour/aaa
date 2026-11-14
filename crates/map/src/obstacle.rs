@@ -105,7 +105,7 @@ impl Obstacle {
 
     /// The low and high corners of the box `shape` takes up standing as it
     /// does.
-    pub(crate) fn bounds(&self, shape: Shape) -> ([f32; 2], [f32; 2]) {
+    pub fn bounds(&self, shape: Shape) -> ([f32; 2], [f32; 2]) {
         let [x, y] = self.position;
         let (half_x, half_y) = match shape {
             Shape::Point => (0.0, 0.0),

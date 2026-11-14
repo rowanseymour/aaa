@@ -642,6 +642,19 @@ fn told(
             let name = look.regiment(sim, regiment);
             Told::Event(event, vec![name], at(About::Regiment(regiment)))
         }
+        // Named by its template: it has no number until it's dropped.
+        Notice::Recruited {
+            player, delivery, ..
+        } if ours(player) => {
+            let delivery = &sim.deliveries[delivery];
+            let dropped = delivery.regiment.map(|r| &sim.regiments[r].template);
+            let name = delivery.cargo().or(dropped).map(|t| look.name(t.as_str()));
+            let place = Place {
+                about: None,
+                at: delivery.position,
+            };
+            Told::Event("company_recruited", name.into_iter().collect(), Some(place))
+        }
         Notice::Researched {
             player,
             building,

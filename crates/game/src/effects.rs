@@ -408,9 +408,10 @@ fn building_states(b: &aaa_sim::Building) -> Vec<&'static str> {
 
 fn unit_states(u: &aaa_sim::Unit) -> Vec<&'static str> {
     // Not one that left the map by unpacking, which is no death.
-    match u.died {
-        None => Vec::new(),
-        Some(_) => vec![DEAD],
+    match (u.died, u.descent) {
+        (Some(_), _) => vec![DEAD],
+        (None, Some(_)) => vec!["falling"],
+        (None, None) => Vec::new(),
     }
 }
 

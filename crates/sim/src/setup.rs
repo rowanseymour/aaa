@@ -89,6 +89,7 @@ impl World {
             regiments: Vec::new(),
             units: Vec::new(),
             buildings: Vec::new(),
+            deliveries: Vec::new(),
             scenery: Vec::new(),
             clearable: Vec::new(),
             cleared: Vec::new(),
@@ -158,6 +159,7 @@ impl World {
                 left: None,
                 // One its regiment has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
+                descent: None,
                 terrain: TerrainIndex::default(),
                 id: m.id,
                 template: m.template.clone(),
@@ -233,6 +235,7 @@ impl World {
             bombarded: Vec::new(),
             properties: Vec::new(),
             guard: None,
+            arriving: false,
             terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),
         });

@@ -731,6 +731,29 @@ impl Models {
         Some(root)
     }
 
+    /// Spawns the model a unit of the player `owner` is drawn with as it
+    /// falls, under its parachute, standing still. `None` if it has none
+    /// that can be drawn.
+    pub fn spawn_falling(
+        &mut self,
+        commands: &mut Commands,
+        game: &GameData,
+        assets: &mut ModelAssets,
+        thing: &Thing,
+        owner: u32,
+    ) -> Option<Entity> {
+        let view = self
+            .views
+            .get(&Id::from(thing.template.as_str()))?
+            .clone()?;
+        let falling = View {
+            models: vec![view.falling.clone()?],
+            animations: Vec::new(),
+            ..view
+        };
+        self.spawn_model(commands, game, assets, thing, Some(owner), &falling, None)
+    }
+
     /// Whether `thing` is an organization drawn as its members: one whose
     /// template names no model, such as a herd, or one in `holding`, whose
     /// own model is the truck it packs into.
@@ -833,6 +856,7 @@ impl Models {
             footing: Footing::Ground,
             unpacking: None,
             packing: None,
+            falling: None,
             icon: None,
             portrait: None,
             faction_portrait: false,
@@ -2012,6 +2036,7 @@ mod tests {
             footing: Footing::Ground,
             unpacking: None,
             packing: None,
+            falling: None,
             icon: None,
             portrait: None,
             faction_portrait: false,

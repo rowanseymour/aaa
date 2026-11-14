@@ -39,6 +39,11 @@ impl World {
                 building,
                 ref template,
             } => self.may_commission(player, building, template).map(drop),
+            Command::Deliver {
+                building,
+                ref template,
+                to,
+            } => self.may_deliver(player, building, template, to),
             Command::Research {
                 building,
                 ref technology,
@@ -80,7 +85,15 @@ impl World {
             } => self.set_formation(player, regiment, formation)?,
             Command::Pack { building } => self.order_pack(player, building)?,
             Command::Commission { building, template } => {
-                self.commission(player, building, &template)?
+                self.commission(player, building, &template, None)?
+            }
+            Command::Deliver {
+                building,
+                template,
+                to,
+            } => {
+                self.may_deliver(player, building, &template, to)?;
+                self.commission(player, building, &template, Some(to))?
             }
             Command::Research {
                 building,
@@ -218,7 +231,7 @@ impl World {
     }
 
     /// The regiment of `template` the building would raise.
-    fn may_commission(
+    pub(crate) fn may_commission(
         &self,
         player: u32,
         building: usize,
@@ -409,6 +422,7 @@ impl World {
         player: u32,
         building: usize,
         template: &Id,
+        to: Option<[f32; 2]>,
     ) -> Result<(), Refused> {
         let regiment = self.may_commission(player, building, template)?;
         let paid = self.cost(regiment);
@@ -416,6 +430,7 @@ impl World {
         let work = Work::Raise(Box::new(regiment.clone()));
         let mut commission = Commission::of(work, seconds.unwrap_or(0.0));
         commission.paid = paid;
+        commission.to = to;
         let left = self.stockpile(player) - commission.paid;
         self.set_stockpile(player, left);
         self.enqueue(building, commission);

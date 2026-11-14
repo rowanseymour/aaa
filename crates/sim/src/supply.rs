@@ -331,7 +331,11 @@ impl World {
     /// last look, is going without.
     pub fn lacks_supply(&self, r: usize) -> bool {
         let used = self.logistics_of(&self.regiments[r].template);
-        used.is_some_and(|l| l.supply_used) && !self.destroyed(r) && !self.regiments[r].in_supply
+        let regiment = &self.regiments[r];
+        used.is_some_and(|l| l.supply_used)
+            && !self.destroyed(r)
+            && !regiment.arriving
+            && !regiment.in_supply
     }
 
     /// Whether anything has the regiment at `r` as a target of its
@@ -432,7 +436,9 @@ impl World {
             self.forget_bombarders(r);
             let regiment = &self.regiments[r];
             let used = self.logistics_of(&regiment.template);
-            let Some(logistics) = used.filter(|l| l.supply_used && !self.destroyed(r)) else {
+            // One still being dropped is with its aircraft, not in supply.
+            let present = !self.destroyed(r) && !regiment.arriving;
+            let Some(logistics) = used.filter(|l| l.supply_used && present) else {
                 self.regiments[r].in_supply = false;
                 continue;
             };
