@@ -33,6 +33,16 @@ impl World {
         }
     }
 
+    /// The centre of the city the building at `b` belongs to, if it's one
+    /// of a city's buildings but not its centre.
+    pub fn city_of(&self, b: usize) -> Option<usize> {
+        let id = self.buildings[b].id;
+        (0..self.buildings.len()).find(|&c| {
+            let centre = &self.buildings[c];
+            c != b && centre.zone.is_some() && !centre.gone() && centre.members.contains(&id)
+        })
+    }
+
     /// Gives a building, and the rest of its city if it's one's centre, to
     /// `owner`.
     pub(crate) fn change_hands(&mut self, b: usize, owner: u32) {
@@ -235,6 +245,13 @@ mod tests {
         .unwrap();
         run(&mut w, 15.0);
         assert!(w.buildings.iter().all(|b| b.owner == 1));
+    }
+
+    #[test]
+    fn a_citys_buildings_know_its_centre() {
+        let w = siege(&city());
+        assert_eq!(w.city_of(1), Some(0));
+        assert_eq!(w.city_of(0), None);
     }
 
     #[test]

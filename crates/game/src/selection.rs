@@ -62,13 +62,10 @@ pub fn rank(sim: &World, local: Option<u32>, thing: Thing) -> Rank {
 
 /// What a click on `thing` selects: a city's building stands for its city.
 pub fn picked(sim: &World, thing: Thing) -> Thing {
-    let Thing::Building(b) = thing else {
-        return thing;
-    };
-    let id = sim.buildings[b].id;
-    (sim.buildings.iter())
-        .position(|c| c.zone.is_some() && !c.gone() && c.members.contains(&id))
-        .map_or(thing, Thing::Building)
+    match thing {
+        Thing::Building(b) => sim.city_of(b).map_or(thing, Thing::Building),
+        Thing::Regiment(_) => thing,
+    }
 }
 
 /// Whether the player may give the selection orders: it's their own.

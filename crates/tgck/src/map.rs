@@ -199,9 +199,14 @@ impl<R: Read + Seek> Map<R> {
         Sun::parse(&self.container.read_named("SUN")?)
     }
 
+    /// The map's string table as stored, in .tgi syntax.
+    pub fn string_table(&mut self) -> Result<Vec<u8>> {
+        self.container.read_named("MAPSTRINGS")
+    }
+
     /// The map's string table, in .tgi text syntax.
     pub fn strings(&mut self) -> Result<String> {
-        let bytes = self.container.read_named("MAPSTRINGS")?;
+        let bytes = self.string_table()?;
         // Windows-1252 in practice; Latin-1 is identical for everything but 0x80..0x9F.
         Ok(bytes.iter().map(|&b| b as char).collect())
     }
