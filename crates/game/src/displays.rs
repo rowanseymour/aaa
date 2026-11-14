@@ -14,7 +14,8 @@ use bevy::ui_widgets::{Activate, Button, ScrollArea};
 use crate::actions::Blocks;
 use crate::keys::Bindings;
 use crate::ui::{self, Click, Edge, Font, Hint, Ink, Marked, Surface, Theme, label};
-use crate::{Screen, minimap};
+use crate::{Orders, Screen, minimap};
+use aaa_sim::Action;
 
 /// What the key that closes whichever panel is up is bound to.
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
@@ -302,7 +303,7 @@ pub fn pane(node: Node) -> impl Bundle {
 #[derive(bevy::ecs::system::SystemParam)]
 pub struct Toggling<'w, 's> {
     displays: ResMut<'w, Displays>,
-    time: ResMut<'w, Time<Virtual>>,
+    orders: ResMut<'w, Orders>,
     windows: Query<'w, 's, (&'static PanelWindow, &'static mut Node)>,
 }
 
@@ -320,8 +321,8 @@ impl Toggling<'_, '_> {
     pub fn open(&mut self, panel: Panel) {
         let displays = &mut *self.displays;
         if displays.open.is_none() {
-            displays.paused_it = !self.time.is_paused();
-            self.time.pause();
+            displays.paused_it = !self.orders.pausing();
+            self.orders.act(Action::Pause(true));
         }
         displays.open = Some(panel);
         self.show();
@@ -335,7 +336,7 @@ impl Toggling<'_, '_> {
             return;
         }
         if std::mem::take(&mut displays.paused_it) {
-            self.time.unpause();
+            self.orders.act(Action::Pause(false));
         }
         self.show();
     }
@@ -500,6 +501,7 @@ mod tests {
             .init_resource::<crate::actions::Page>()
             .init_resource::<crate::Focus>()
             .init_resource::<Displays>()
+            .init_resource::<Orders>()
             .insert_resource(Bindings::new(&hotkeys, &aaa_data::Strings::default()))
             .add_systems(Update, keys.after(pause::Toggle).run_if(pause::closed));
         for panel in [Panel::Technologies, Panel::MessageLog] {
@@ -523,7 +525,7 @@ mod tests {
     }
 
     fn paused(app: &App) -> bool {
-        app.world().resource::<Time<Virtual>>().is_paused()
+        app.world().resource::<Orders>().pausing()
     }
 
     #[test]
@@ -561,7 +563,7 @@ mod tests {
     #[test]
     fn closing_it_leaves_a_match_paused_before_it_opened() {
         let mut app = app();
-        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        (app.world_mut().resource_mut::<Orders>()).act(Action::Pause(true));
         press(&mut app, KeyCode::F2);
         press(&mut app, KeyCode::F2);
         assert!(open(&app).is_none() && paused(&app));

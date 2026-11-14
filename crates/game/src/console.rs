@@ -28,6 +28,7 @@ use crate::remote::Remote;
 use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::waypoints::Sent;
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
+use aaa_sim::Action;
 
 /// Lines kept for scrolling back through.
 const SCROLLBACK: usize = 200;
@@ -492,7 +493,10 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "advance" => advance(world, &args),
                 "record" => no_args(&args).map(|_| {
                     let sim = &world.resource::<Sim>().0;
-                    let orders = world.resource::<Orders>().record().given.len();
+                    let given = &world.resource::<Orders>().record().given;
+                    let orders = (given.iter())
+                        .filter(|g| matches!(g.action, Action::Order { .. }))
+                        .count();
                     format!(
                         "{} ticks, {orders} orders, hash {:016x}",
                         sim.ticks,
@@ -641,16 +645,25 @@ fn wait(world: &mut World, args: &[&str]) -> Reply {
     Ok(String::new())
 }
 
+/// The match's schedule, which only a match under way carries out.
+fn playing(world: &mut World) -> Result<Mut<'_, Orders>, String> {
+    let screen = world.get_resource::<State<Screen>>();
+    if screen.is_none_or(|s| *s.get() != Screen::Match) {
+        return Err("only during a match".into());
+    }
+    world.get_resource_mut::<Orders>().ok_or("no match".into())
+}
+
 fn game_speed(world: &mut World, args: &[&str]) -> Reply {
-    let mut time = world.resource_mut::<Time<Virtual>>();
+    let mut orders = playing(world)?;
     match args {
-        [] => Ok(format!("{}", time.relative_speed())),
+        [] => Ok(format!("{}", orders.speeding())),
         [speed] => {
             let speed = number(speed)?;
             if !(0.05..=16.0).contains(&speed) {
                 return Err("takes 0.05 to 16".into());
             }
-            time.set_relative_speed(speed);
+            orders.act(Action::Speed(speed));
             Ok(String::new())
         }
         _ => Err(usage("gamespeed")),
@@ -721,17 +734,14 @@ fn resolution(world: &mut World, args: &[&str]) -> Reply {
 }
 
 fn game_pause(world: &mut World, args: &[&str]) -> Reply {
-    let mut time = world.resource_mut::<Time<Virtual>>();
+    let mut orders = playing(world)?;
     let pause = match args {
-        [] => !time.is_paused(),
+        [] => !orders.pausing(),
         ["1"] => true,
         ["0"] => false,
         _ => return Err(usage("gamepause")),
     };
-    match pause {
-        true => time.pause(),
-        false => time.unpause(),
-    }
+    orders.act(Action::Pause(pause));
     if pause && let Some(mut display) = world.get_resource_mut::<crate::displays::Displays>() {
         display.keep_paused();
     }
@@ -896,13 +906,15 @@ fn decide(world: &mut World, args: &[&str], won: bool) -> Reply {
     let [word] = args else {
         return Err(usage(if won { "missionwon" } else { "missionlost" }));
     };
-    let sim = &mut world.resource_mut::<Sim>().0;
-    let id = kingdom(sim, word)?;
-    match won {
-        true => sim.win(id),
-        false => sim.lose(id),
-    }
-    Ok(outcome(sim))
+    let id = kingdom(&world.resource::<Sim>().0, word)?;
+    act(
+        world,
+        match won {
+            true => Action::Win(id),
+            false => Action::Lose(id),
+        },
+    );
+    Ok(outcome(&world.resource::<Sim>().0))
 }
 
 fn placement_kingdom(world: &mut World, args: &[&str]) -> Reply {
@@ -967,9 +979,9 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
         .resource::<Raising>()
         .0
         .raise(template, 0, owner, position, facing)?;
-    let sim = &mut world.resource_mut::<Sim>().0;
-    let r = sim.add_new_regiment(regiment);
-    let regiment = &sim.regiments[r];
+    act(world, Action::Raise(Box::new(regiment)));
+    let sim = &world.resource::<Sim>().0;
+    let regiment = sim.regiments.last().ok_or("nothing raised")?;
     Ok(format!(
         "{} {} of {} units at {:.1} {:.1}",
         regiment.template,
@@ -1261,6 +1273,14 @@ fn selected_building(world: &World) -> Result<usize, String> {
     (world.resource::<SelectedBuilding>().0).ok_or_else(|| "no building selected".into())
 }
 
+/// Has the match do `action` at once, so that what follows finds it done.
+fn act(world: &mut World, action: Action) {
+    world.resource_scope(|world, mut orders: Mut<Orders>| {
+        orders.act(action);
+        crate::log_refused(orders.carry_out(&mut world.resource_mut::<Sim>().0));
+    });
+}
+
 fn give(world: &mut World, player: u32, command: aaa_sim::Command) -> Result<(), aaa_sim::Refused> {
     world.resource_scope(|world, mut orders: Mut<Orders>| {
         orders.give(&world.resource::<Sim>().0, player, command)
@@ -1295,7 +1315,7 @@ fn destroy_selected(world: &mut World, args: &[&str]) -> Reply {
         return Err("nothing selected".into());
     }
     for r in selected {
-        world.resource_mut::<Sim>().0.destroy(r);
+        act(world, Action::Destroy(r));
     }
     Ok(String::new())
 }

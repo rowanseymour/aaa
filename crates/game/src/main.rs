@@ -251,6 +251,27 @@ fn carry_out(mut sim: ResMut<Sim>, mut orders: ResMut<Orders>) {
     log_refused(orders.carry_out(&mut sim.0));
 }
 
+/// Runs the game's clock as the match has been told to play: held while
+/// it's paused, and at its speed. The loading screen holds the clock
+/// itself until the match is started.
+fn keep_time(
+    orders: Res<Orders>,
+    mut time: ResMut<Time<Virtual>>,
+    loading: Query<(), With<LoadingScreen>>,
+) {
+    if !loading.is_empty() {
+        return;
+    }
+    match (orders.paused(), time.is_paused()) {
+        (true, false) => time.pause(),
+        (false, true) => time.unpause(),
+        _ => {}
+    }
+    if time.relative_speed() != orders.speed() {
+        time.set_relative_speed(orders.speed());
+    }
+}
+
 /// The models objects are drawn with, for drawing more mid-match.
 #[derive(Resource)]
 struct Drawn(Models);
@@ -854,10 +875,14 @@ fn main() -> ExitCode {
         )
         .add_systems(
             Update,
-            carry_out
+            (carry_out, keep_time)
+                .chain()
                 .after(console::run)
                 .run_if(in_state(Screen::Match)),
-        );
+        )
+        // So that a pause asked for by a key holds the match from this
+        // frame, not the next.
+        .configure_sets(Update, (pause::Toggle, displays::Keys).before(carry_out));
     if let Some(remote) = remote {
         app.insert_resource(remote);
     }
@@ -2731,6 +2756,37 @@ fn show_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_clock_follows_the_pause_and_speed_the_match_is_given() {
+        let pathing = aaa_map::Pathing::uniform(4, aaa_map::Domain::Land);
+        let sim = World::from_regiments(Default::default(), pathing, &[]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Sim(sim))
+            .init_resource::<Orders>()
+            .add_systems(Update, (carry_out, keep_time).chain());
+        let clock = |app: &App| {
+            let time = app.world().resource::<Time<Virtual>>();
+            (time.is_paused(), time.relative_speed())
+        };
+        app.update();
+        assert_eq!(clock(&app), (false, 1.0));
+        let mut orders = app.world_mut().resource_mut::<Orders>();
+        orders.act(aaa_sim::Action::Pause(true));
+        orders.act(aaa_sim::Action::Speed(2.0));
+        app.update();
+        assert_eq!(clock(&app), (true, 2.0));
+        assert_eq!(app.world().resource::<Orders>().record().given.len(), 2);
+        // While the loading screen is up the clock is its to hold.
+        let loading = app.world_mut().spawn(LoadingScreen).id();
+        (app.world_mut().resource_mut::<Orders>()).act(aaa_sim::Action::Pause(false));
+        app.update();
+        assert!(clock(&app).0);
+        app.world_mut().despawn(loading);
+        app.update();
+        assert!(!clock(&app).0);
+    }
 
     #[test]
     fn the_sim_waits_for_the_match_to_be_shown() {

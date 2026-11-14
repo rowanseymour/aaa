@@ -7,8 +7,9 @@ use bevy::ui_widgets::Activate;
 use crate::actions::Page;
 use crate::options::Options;
 use crate::ui::{self, Font};
-use crate::{Focus, LoadingScreen, Screen, SelectionBox, console};
+use crate::{Focus, LoadingScreen, Orders, Screen, SelectionBox, console};
 use crate::{confirm, menu};
+use aaa_sim::Action;
 
 /// Whether the menu is up, and whether the match was already paused
 /// before it went up, as the console can leave it.
@@ -62,7 +63,7 @@ fn toggle(
     loading: Query<(), With<LoadingScreen>>,
     mut commands: Commands,
     menu: ResMut<PauseMenu>,
-    time: ResMut<Time<Virtual>>,
+    orders: ResMut<Orders>,
     overlays: Query<Entity, With<Overlay>>,
     mut focus: ResMut<Focus>,
     mut boxes: Query<&mut Visibility, With<SelectionBox>>,
@@ -71,20 +72,20 @@ fn toggle(
         return;
     }
     if menu.open {
-        close(&mut commands, menu, time, &overlays);
+        close(&mut commands, menu, orders, &overlays);
     } else if *page == Page::Orders {
         // What the map was showing of the cursor would otherwise stay up
         // under the menu, as nothing updates it while it's open.
         focus.set_if_neq(Focus::Nothing);
         boxes.iter_mut().for_each(|mut v| *v = Visibility::Hidden);
-        open(&mut commands, menu, time);
+        open(&mut commands, menu, orders);
     }
 }
 
-fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut time: ResMut<Time<Virtual>>) {
+fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut orders: ResMut<Orders>) {
     menu.open = true;
-    menu.was_paused = time.is_paused();
-    time.pause();
+    menu.was_paused = orders.pausing();
+    orders.act(Action::Pause(true));
 
     let overlay = commands
         .spawn((
@@ -137,12 +138,12 @@ fn options(
 fn close(
     commands: &mut Commands,
     mut menu: ResMut<PauseMenu>,
-    mut time: ResMut<Time<Virtual>>,
+    mut orders: ResMut<Orders>,
     overlays: &Query<Entity, With<Overlay>>,
 ) {
     menu.open = false;
     if !menu.was_paused {
-        time.unpause();
+        orders.act(Action::Pause(false));
     }
     overlays.iter().for_each(|e| commands.entity(e).despawn());
 }
@@ -151,10 +152,10 @@ fn resume(
     _: On<Activate>,
     mut commands: Commands,
     menu: ResMut<PauseMenu>,
-    time: ResMut<Time<Virtual>>,
+    orders: ResMut<Orders>,
     overlays: Query<Entity, With<Overlay>>,
 ) {
-    close(&mut commands, menu, time, &overlays);
+    close(&mut commands, menu, orders, &overlays);
 }
 
 #[cfg(test)]
@@ -178,6 +179,7 @@ mod tests {
         .init_resource::<console::Console>()
         .init_resource::<Page>()
         .init_resource::<Focus>()
+        .init_resource::<Orders>()
         .insert_resource(Options::of(Vec::new(), None, &aaa_data::Strings::default()));
         app.update();
         app
@@ -213,7 +215,7 @@ mod tests {
     }
 
     fn paused(app: &App) -> bool {
-        app.world().resource::<Time<Virtual>>().is_paused()
+        app.world().resource::<Orders>().pausing()
     }
 
     #[test]
@@ -228,7 +230,7 @@ mod tests {
     #[test]
     fn closing_it_leaves_a_match_paused_before_it_paused() {
         let mut app = app();
-        app.world_mut().resource_mut::<Time<Virtual>>().pause();
+        (app.world_mut().resource_mut::<Orders>()).act(Action::Pause(true));
         escape(&mut app);
         escape(&mut app);
         assert!(!open(&app) && paused(&app));
