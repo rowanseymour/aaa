@@ -509,7 +509,7 @@ pub(crate) mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<Assets<AudioSource>>()
             .insert_resource(Sounds::of(Default::default(), &[]))
-            .insert_resource(Volumes(aaa_data::Volumes {
+            .insert_resource(Volumes::from(aaa_data::Volumes {
                 main: 1.0,
                 fx: 1.0,
                 speech: 1.0,
@@ -550,7 +550,9 @@ pub(crate) mod tests {
         let mut app = app(0.0);
         app.update();
         assert!(players(&mut app).is_empty());
-        app.world_mut().resource_mut::<Volumes>().0.music = 1.0;
+        app.world_mut()
+            .resource_mut::<Volumes>()
+            .set(crate::sound::Channel::Music, 1.0);
         app.update();
         // Started now, not when it was asked for: at the start of its fade.
         let started = players(&mut app);
