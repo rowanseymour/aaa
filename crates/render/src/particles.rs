@@ -9,18 +9,23 @@
 
 use std::collections::HashMap;
 use std::f32::consts::TAU;
+use std::ops::Range;
 use std::sync::Arc;
 
-use bevy::asset::RenderAssetUsages;
-use bevy::camera::visibility::NoFrustumCulling;
+use bevy::asset::{AssetMut, RenderAssetUsages, uuid_handle};
+use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
 use bevy::light::NotShadowCaster;
 use bevy::math::Affine3A;
 use bevy::mesh::{Indices, PrimitiveTopology};
+use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
+use bevy::render::render_resource::{AsBindGroup, TextureFormat};
+use bevy::shader::ShaderRef;
 use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif, Object};
 
 use crate::models::{Animated, MaterialStores, Part, bevy_transform, controllers};
-use crate::terrain::world;
+use crate::terrain::{self, world};
+use crate::{blend, textures};
 
 /// A model's particle system, as read from it once for every object that
 /// draws the model.
@@ -32,10 +37,7 @@ pub(crate) struct System {
     /// The most particles it holds at once.
     capacity: usize,
     steps: Vec<Step>,
-    material: Handle<StandardMaterial>,
-    /// Its squares take each particle's colour, which its lighting may
-    /// ignore.
-    tinted: bool,
+    look: Look,
     /// How fast its particles age and move against the model's clock.
     clock: f32,
     /// The meshes each particle shows a copy of instead of a square, by
@@ -43,10 +45,33 @@ pub(crate) struct System {
     copies: Vec<Arc<Vec<Part>>>,
 }
 
-/// How a particle system is drawn.
+/// How a particle system's squares are drawn.
+#[derive(Clone, Copy, Default)]
 pub(crate) struct Look {
-    pub material: Handle<StandardMaterial>,
+    /// Its texture's layer of [`TEXTURES`].
+    pub layer: u32,
+    /// The colour of its squares, linear, before their texture and their
+    /// particle's colour.
+    pub colour: [f32; 4],
+    /// The colour they give off, linear, if lit.
+    pub emissive: [f32; 3],
+    pub lit: bool,
+    pub blend: Blend,
+    /// Its squares take each particle's colour, which its lighting may
+    /// ignore.
     pub tinted: bool,
+}
+
+/// How a square goes over what's behind it.
+#[derive(Clone, Copy, Default, PartialEq, Debug)]
+pub(crate) enum Blend {
+    /// Mixed by its alpha.
+    #[default]
+    Over,
+    /// Added, scaled by its alpha.
+    Add,
+    /// Covering it, except where its alpha is under `cutoff`.
+    Opaque { cutoff: f32 },
 }
 
 /// Where one of a model's scene objects is.
@@ -397,9 +422,11 @@ impl System {
                 world_space: system.world_space,
                 capacity,
                 steps,
-                material: look.material,
-                // Without colour keys the squares are white.
-                tinted: look.tinted && has_colours,
+                look: Look {
+                    // Without colour keys the squares are white.
+                    tinted: look.tinted && has_colours,
+                    ..look
+                },
                 clock: 1.0,
                 copies: Vec::new(),
             })
@@ -561,8 +588,10 @@ impl System {
                     on: true,
                 })
                 .collect(),
-            material: look.material,
-            tinted: look.tinted && has_colours,
+            look: Look {
+                tinted: look.tinted && has_colours,
+                ..look
+            },
             clock: t.frequency,
             copies,
         })
@@ -635,7 +664,6 @@ fn world_vec([x, y, z]: [f32; 3]) -> Vec3 {
 /// node where a rig has one.
 pub(crate) fn spawn(
     commands: &mut Commands,
-    meshes: &mut Assets<Mesh>,
     systems: &[Arc<System>],
     root: Entity,
     node: impl Fn(usize) -> Option<Entity>,
@@ -658,57 +686,22 @@ pub(crate) fn spawn(
                     .id()
             })
             .collect();
-        let mesh = meshes.add(
-            Mesh::new(
-                PrimitiveTopology::TriangleList,
-                RenderAssetUsages::default(),
-            )
-            .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, Vec::<[f32; 2]>::new())
-            .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new())
-            .with_inserted_indices(Indices::U32(Vec::new())),
-        );
-        if let Some(mut m) = meshes.get_mut(&mesh) {
-            fill(&mut m, &[], Vec3::Y, &[]);
-        }
-        let draw = commands
-            .spawn((
-                Name::new("particles"),
-                Mesh3d(mesh.clone()),
-                MeshMaterial3d(system.material.clone()),
-                Transform::default(),
-                Visibility::default(),
-                ParticleMesh,
-                // Its bounds change every frame.
-                NoFrustumCulling,
-                NotShadowCaster,
-                ChildOf(anchors[0]),
-            ))
-            .id();
         commands.entity(anchors[0]).insert(Particles {
             system: system.clone(),
             anchors,
-            draw,
-            mesh,
             state: State::new(seed.wrapping_mul(31).wrapping_add(i as u32), offset),
-            corners: Vec::new(),
             copies: Vec::new(),
             rate: 1.0,
         });
     }
 }
 
-/// A particle system playing.
+/// A particle system playing. Its squares are drawn by a [`Batch`].
 #[derive(Component)]
 pub struct Particles {
     system: Arc<System>,
     anchors: Vec<Entity>,
-    draw: Entity,
-    mesh: Handle<Mesh>,
     state: State,
-    /// Each square's corners, relative to the mesh, kept to fill it from.
-    corners: Vec<[f32; 3]>,
     /// The entity showing each mesh particle's copy, by particle.
     copies: Vec<(u32, Entity)>,
     /// Seconds of its animation per second played.
@@ -815,7 +808,7 @@ type CopyParts = (With<MeshCopy>, Without<Particles>);
 /// The meshes of those copies, among others.
 type CopyMeshes = (Without<MeshCopy>, Without<Particles>);
 
-/// Marks the entity a system's squares are drawn by.
+/// Marks the entities particles' squares are drawn by.
 #[derive(Component)]
 pub struct ParticleMesh;
 
@@ -1351,19 +1344,17 @@ impl Rng {
 /// The 3D cameras, which aren't particle meshes.
 type Cameras = (With<Camera3d>, Without<ParticleMesh>);
 
-/// Plays every particle system and redraws its squares to face the camera.
-/// Runs once transforms are propagated, so it sees where the anchors are
-/// this frame.
+/// Plays every particle system. Runs once transforms are propagated, so it
+/// sees where the anchors are this frame.
 pub fn play(
     time: Res<Time>,
     mut systems: Query<(&mut Particles, &GlobalTransform), Without<ParticleMesh>>,
     anchors: Query<&GlobalTransform, Without<ParticleMesh>>,
-    cameras: Query<(&Camera, &GlobalTransform), Cameras>,
-    mut draws: Query<(&mut Transform, &mut GlobalTransform), With<ParticleMesh>>,
-    mut meshes: ResMut<Assets<Mesh>>,
 ) {
     let dt = time.delta_secs();
-    let camera = cameras.iter().find(|(c, _)| c.is_active).map(|(_, g)| g);
+    if dt <= 0.0 {
+        return;
+    }
     for (mut particles, own) in &mut systems {
         let particles = &mut *particles;
         let own = own.affine();
@@ -1371,70 +1362,441 @@ pub fn play(
             true => Affine3A::IDENTITY,
             false => own.inverse(),
         };
-        if dt > 0.0 {
-            let space = Space {
-                anchors: particles
-                    .anchors
-                    .iter()
-                    .map(|&a| to_space * anchors.get(a).map_or(own, |g| g.affine()))
-                    .collect(),
-            };
-            let dt = dt * particles.rate * particles.system.clock;
-            particles.system.step(&mut particles.state, &space, dt);
-        }
-        let Some(camera) = camera else { continue };
-        let (right, up) = (camera.right().as_vec3(), camera.up().as_vec3());
-        let to_world = to_space.inverse();
-        let scale = own.matrix3.x_axis.length();
-        let from_world = own.inverse();
-        let state = &particles.state;
-        let points = state
-            .particles
-            .iter()
-            .map(|p| to_world.transform_point3(p.position));
-        // Placed at the middle of its particles, which is what systems sort
-        // back to front by.
-        let centre = match state.particles.len() {
-            0 => own.translation.into(),
-            n => points.clone().sum::<Vec3>() / n as f32,
+        let space = Space {
+            anchors: particles
+                .anchors
+                .iter()
+                .map(|&a| to_space * anchors.get(a).map_or(own, |g| g.affine()))
+                .collect(),
         };
-        let local_centre = from_world.transform_point3(centre);
-        if let Ok((mut t, mut global)) = draws.get_mut(particles.draw) {
-            t.translation = local_centre;
-            // Propagation has run, so its place this frame is set here.
-            *global = GlobalTransform::from(own) * GlobalTransform::from(*t);
+        let dt = dt * particles.rate * particles.system.clock;
+        particles.system.step(&mut particles.state, &space, dt);
+    }
+}
+
+/// Every particle texture, as a layer of one array, so one material draws
+/// every system and all their squares go in one mesh, in the order they're
+/// drawn in.
+pub(crate) const TEXTURES: Handle<Image> = uuid_handle!("6b0c3f0e-8d0a-4e57-9a8f-2f3c1d6e9b41");
+
+/// The side of each layer of [`TEXTURES`], which every particle texture is
+/// resampled to: the largest they come in.
+const SIDE: usize = 128;
+
+/// The particle textures loaded so far, as layers of [`TEXTURES`]: white
+/// first, for systems with none.
+pub(crate) struct Layers {
+    /// By where each was loaded from: none if it couldn't be.
+    by_source: HashMap<String, Option<u32>>,
+    /// Every layer's pixels and mipmaps, one after another, as the array
+    /// takes them.
+    data: Vec<u8>,
+    count: u32,
+    mips: u32,
+}
+
+impl Default for Layers {
+    fn default() -> Self {
+        let white = white();
+        Layers {
+            by_source: HashMap::new(),
+            mips: white.texture_descriptor.mip_level_count,
+            data: white.data.unwrap_or_default(),
+            count: 1,
         }
-        particles.corners.clear();
-        // Mesh particles draw as copies of their meshes instead.
-        let squares = particles.system.copies.is_empty();
-        for (p, w) in state.particles.iter().zip(points).filter(|_| squares) {
-            let half = p.radius * p.size * scale;
-            for (x, y) in CORNERS {
-                let corner = w + (right * x + up * y) * half;
-                let local = from_world.transform_point3(corner) - local_centre;
-                particles.corners.push(local.to_array());
+    }
+}
+
+impl Layers {
+    /// The layer of the texture from `source`, loaded by `load` the first
+    /// time: none if it can't be.
+    pub fn layer(
+        &mut self,
+        source: &str,
+        images: &mut Assets<Image>,
+        load: impl FnOnce() -> Option<Image>,
+    ) -> Option<u32> {
+        if let Some(&layer) = self.by_source.get(source) {
+            return layer;
+        }
+        let layer = load().and_then(resampled).and_then(|i| i.data).map(|data| {
+            self.data.extend(data);
+            self.count += 1;
+            // Bevy can't add a layer in place, so the whole array goes up
+            // again, but only as models load.
+            _ = images.insert(&TEXTURES, self.array());
+            self.count - 1
+        });
+        self.by_source.insert(source.to_string(), layer);
+        layer
+    }
+
+    /// Every layer so far, as an array texture.
+    fn array(&self) -> Image {
+        let side = SIDE as u32;
+        let format = TextureFormat::Rgba8UnormSrgb;
+        blend::array_image(
+            self.data.clone(),
+            (side, side),
+            self.mips,
+            format,
+            self.count,
+        )
+    }
+}
+
+/// A layer of plain white.
+fn white() -> Image {
+    terrain::layer_image(vec![255; SIDE * SIDE * 4], SIDE)
+}
+
+/// `image` as a layer of [`TEXTURES`]: bilinearly resampled, as it would be
+/// sampled at its own size, and mipmapped.
+fn resampled(image: Image) -> Option<Image> {
+    let image = textures::decompress(image)?.convert(TextureFormat::Rgba8UnormSrgb)?;
+    let (w, h) = (image.width() as usize, image.height() as usize);
+    let src = image.data?;
+    let texel = |x: isize, y: isize, c: usize| {
+        let (x, y) = (
+            x.rem_euclid(w as isize) as usize,
+            y.rem_euclid(h as isize) as usize,
+        );
+        src[(y * w + x) * 4 + c] as f32
+    };
+    let mut data = Vec::with_capacity(SIDE * SIDE * 4);
+    for i in 0..SIDE * SIDE {
+        // Where this texel's centre falls among the source's, which repeat.
+        let u = ((i % SIDE) as f32 + 0.5) * w as f32 / SIDE as f32 - 0.5;
+        let v = ((i / SIDE) as f32 + 0.5) * h as f32 / SIDE as f32 - 0.5;
+        let (x, y) = (u.floor() as isize, v.floor() as isize);
+        let (fx, fy) = (u - u.floor(), v - v.floor());
+        for c in 0..4 {
+            let top = texel(x, y, c) * (1.0 - fx) + texel(x + 1, y, c) * fx;
+            let bottom = texel(x, y + 1, c) * (1.0 - fx) + texel(x + 1, y + 1, c) * fx;
+            data.push((top * (1.0 - fy) + bottom * fy).round() as u8);
+        }
+    }
+    Some(terrain::layer_image(data, SIDE))
+}
+
+/// Draws every system's squares, whatever its texture and blending, with
+/// [`TEXTURES`].
+pub type ParticleMaterial = ExtendedMaterial<StandardMaterial, ParticleTextures>;
+
+#[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
+pub struct ParticleTextures {
+    #[texture(100, dimension = "2d_array")]
+    #[sampler(101)]
+    textures: Handle<Image>,
+}
+
+impl MaterialExtension for ParticleTextures {
+    fn vertex_shader() -> ShaderRef {
+        "embedded://aaa_render/particles.wesl".into()
+    }
+
+    fn fragment_shader() -> ShaderRef {
+        "embedded://aaa_render/particles.wesl".into()
+    }
+}
+
+/// The meshes every system's squares are drawn in: one for each layer the
+/// cameras draw. A mesh for each system, refilled every frame, cost more to
+/// upload and draw than everything else the systems do.
+#[derive(Resource, Default)]
+pub struct Draws {
+    material: Option<Handle<ParticleMaterial>>,
+    /// How many layers [`TEXTURES`] had when the material last bound it.
+    layers: u32,
+    draws: Vec<Draw>,
+    /// Kept between frames for their room.
+    squares: Vec<Square>,
+    systems: Vec<Drawn>,
+}
+
+/// The mesh drawing the systems in one layer, as its camera sees them.
+struct Draw {
+    layers: Option<RenderLayers>,
+    entity: Entity,
+    mesh: Handle<Mesh>,
+    /// Spawned this frame, so its entity isn't there to place yet.
+    new: bool,
+    /// Its mesh holds squares, so it has to be emptied once it has none.
+    filled: bool,
+    view: Option<Eye>,
+    /// Its systems' squares this frame, in the order they're drawn.
+    runs: Vec<Range<usize>>,
+}
+
+/// Where a camera is and which way it looks.
+#[derive(Clone, Copy)]
+struct Eye {
+    at: Vec3,
+    forward: Vec3,
+    right: Vec3,
+    up: Vec3,
+}
+
+/// A system's squares this frame.
+struct Drawn {
+    draw: usize,
+    /// How far in front of the camera the middle of its squares is.
+    depth: f32,
+    squares: Range<usize>,
+}
+
+/// A particle's square, in the world.
+#[derive(Clone, Copy)]
+struct Square {
+    at: Vec3,
+    half: f32,
+    colour: [f32; 4],
+    /// Its system's look, as the shader takes it: its texture layer and how
+    /// it blends and is lit, and its emissive colour and alpha cutoff.
+    look: [f32; 2],
+    extra: [f32; 4],
+}
+
+/// What [`draw`] needs of a system.
+type SystemLook = (
+    &'static Particles,
+    &'static GlobalTransform,
+    &'static InheritedVisibility,
+    Option<&'static RenderLayers>,
+);
+
+/// What [`draw`] needs of a camera.
+type CameraLook = (
+    &'static Camera,
+    &'static GlobalTransform,
+    Option<&'static RenderLayers>,
+);
+
+/// Redraws every system's squares to face the camera that sees them. Runs
+/// once visibility is propagated, so hidden systems are left out, and
+/// before what each camera sees is worked out, so a new mesh is drawn at
+/// once.
+#[allow(clippy::too_many_arguments)]
+pub fn draw(
+    mut commands: Commands,
+    mut draws: ResMut<Draws>,
+    systems: Query<SystemLook, Without<ParticleMesh>>,
+    cameras: Query<CameraLook, Cameras>,
+    mut placed: Query<(&mut Transform, &mut GlobalTransform), With<ParticleMesh>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut images: ResMut<Assets<Image>>,
+    mut materials: ResMut<Assets<ParticleMaterial>>,
+) {
+    let textures = match images.get(&TEXTURES) {
+        Some(image) => image.texture_descriptor.size.depth_or_array_layers,
+        None => {
+            _ = images.insert(&TEXTURES, Layers::default().array());
+            1
+        }
+    };
+    let Draws {
+        material,
+        layers,
+        draws,
+        squares,
+        systems: drawn,
+    } = &mut *draws;
+    let material = material.get_or_insert_with(|| {
+        materials.add(ParticleMaterial {
+            base: StandardMaterial {
+                alpha_mode: AlphaMode::Premultiplied,
+                double_sided: true,
+                cull_mode: None,
+                // Without highlights, as the game draws them.
+                perceptual_roughness: 1.0,
+                reflectance: 0.0,
+                ..default()
+            },
+            extension: ParticleTextures { textures: TEXTURES },
+        })
+    });
+    // A larger array is a new texture, which the material binds only once
+    // it's changed itself.
+    if std::mem::replace(layers, textures) != textures {
+        materials.get_mut(&*material).map(AssetMut::into_inner);
+    }
+    let eye = |layers: Option<&RenderLayers>| {
+        let layers = layers.unwrap_or(&RenderLayers::layer(0)).clone();
+        let (_, camera, _) = cameras.iter().find(|(c, _, seen)| {
+            c.is_active && seen.unwrap_or(&RenderLayers::layer(0)).intersects(&layers)
+        })?;
+        Some(Eye {
+            at: camera.translation(),
+            forward: camera.forward().as_vec3(),
+            right: camera.right().as_vec3(),
+            up: camera.up().as_vec3(),
+        })
+    };
+    for draw in draws.iter_mut() {
+        draw.view = eye(draw.layers.as_ref());
+    }
+    // The mesh drawing `layers`, and the camera that sees it.
+    let mut draw_for = |layers: Option<&RenderLayers>| {
+        let i = match draws.iter().position(|d| d.layers.as_ref() == layers) {
+            Some(i) => i,
+            None => {
+                let mut draw = spawn_draw(&mut commands, &mut meshes, material, layers);
+                draw.view = eye(layers);
+                draws.push(draw);
+                draws.len() - 1
             }
+        };
+        (i, draws[i].view)
+    };
+    // Made at once, so its pipeline is ready for the first square.
+    draw_for(None);
+    drawn.clear();
+    squares.clear();
+    for (particles, own, shown, layers) in &systems {
+        let (system, state) = (&particles.system, &particles.state);
+        // Mesh particles draw as copies of their meshes instead.
+        if !system.copies.is_empty() || !shown.get() || state.particles.is_empty() {
+            continue;
         }
-        let facing = from_world
-            .transform_vector3(camera.back().as_vec3())
-            .normalize_or_zero();
-        let tinted = particles.system.tinted;
-        let colours: Vec<[f32; 4]> = state
-            .particles
-            .iter()
-            .filter(|_| squares)
-            .map(|p| match tinted {
+        let (draw, Some(view)) = draw_for(layers) else {
+            continue;
+        };
+        let own = own.affine();
+        let to_world = match system.world_space {
+            true => Affine3A::IDENTITY,
+            false => own,
+        };
+        let scale = own.matrix3.x_axis.length();
+        let look = &system.look;
+        let (mode, cutoff) = match look.blend {
+            Blend::Over => (0, 0.0),
+            Blend::Add => (1, 0.0),
+            Blend::Opaque { cutoff } => (2, cutoff),
+        };
+        let flags = mode + if look.lit { 4 } else { 0 };
+        let [er, eg, eb] = look.emissive;
+        let start = squares.len();
+        squares.extend(state.particles.iter().map(|p| Square {
+            at: to_world.transform_point3(p.position),
+            half: p.radius * p.size * scale,
+            colour: match look.tinted {
                 // The model's colours are sRGB, as everywhere else.
                 true => {
                     let [r, g, b, a] = p.colour;
-                    Color::srgba(r, g, b, a).to_linear().to_f32_array()
+                    let c = Color::srgba(r, g, b, a).to_linear().to_f32_array();
+                    std::array::from_fn(|i| c[i] * look.colour[i])
                 }
-                false => [1.0; 4],
-            })
-            .collect();
-        if let Some(mut mesh) = meshes.get_mut(&particles.mesh) {
-            fill(&mut mesh, &particles.corners, facing, &colours);
+                false => look.colour,
+            },
+            look: [look.layer as f32, flags as f32],
+            extra: [er, eg, eb, cutoff],
+        }));
+        drawn.push(Drawn {
+            draw,
+            depth: depth(&squares[start..], &view),
+            squares: start..squares.len(),
+        });
+    }
+    far_to_near(drawn);
+    for system in drawn.iter() {
+        draws[system.draw].runs.push(system.squares.clone());
+    }
+    draws.retain_mut(|draw| {
+        let new = std::mem::take(&mut draw.new);
+        let runs = std::mem::take(&mut draw.runs);
+        let Some(view) = draw.view.filter(|_| !runs.is_empty() || draw.filled) else {
+            return true;
+        };
+        // At the camera, so it's sorted after every other blended model.
+        let at = Transform::from_translation(view.at);
+        match placed.get_mut(draw.entity) {
+            // Propagation has run, so its place this frame is set here.
+            Ok((mut t, mut g)) => (*t, *g) = (at, at.into()),
+            Err(_) if new => {
+                commands
+                    .entity(draw.entity)
+                    .insert((at, GlobalTransform::from(at)));
+            }
+            // Something despawned it, so another is made when needed.
+            Err(_) => return false,
         }
+        let mut ordered = runs.iter().flat_map(|r| &squares[r.clone()]);
+        if let Some(mut mesh) = meshes.get_mut(&draw.mesh) {
+            fill(&mut mesh, &mut ordered, &view);
+        }
+        draw.filled = !runs.is_empty();
+        // Kept for its room.
+        draw.runs = runs;
+        draw.runs.clear();
+        true
+    });
+}
+
+/// How far in front of `view` the middle of the box around `squares` is,
+/// which systems are drawn far to near by.
+fn depth(squares: &[Square], view: &Eye) -> f32 {
+    let (low, high) = squares.iter().fold((Vec3::MAX, Vec3::MIN), |(l, h), s| {
+        (l.min(s.at), h.max(s.at))
+    });
+    ((low + high) / 2.0 - view.at).dot(view.forward)
+}
+
+/// Puts systems in the order they're drawn: far to near, as blended squares
+/// cover what's drawn before them.
+fn far_to_near(systems: &mut [Drawn]) {
+    systems.sort_by(|a, b| b.depth.total_cmp(&a.depth));
+}
+
+/// Spawns the entity drawing the squares in `layers`.
+fn spawn_draw(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    material: &Handle<ParticleMaterial>,
+    layers: Option<&RenderLayers>,
+) -> Draw {
+    let mut mesh = Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, Vec::<[f32; 3]>::new())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, Vec::<[f32; 2]>::new())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_1, Vec::<[f32; 2]>::new())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_TANGENT, Vec::<[f32; 4]>::new())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new())
+    .with_inserted_indices(Indices::U32(Vec::new()));
+    let nowhere = Eye {
+        at: Vec3::ZERO,
+        forward: Vec3::NEG_Z,
+        right: Vec3::X,
+        up: Vec3::Y,
+    };
+    fill(&mut mesh, &mut std::iter::empty(), &nowhere);
+    let mesh = meshes.add(mesh);
+    let mut entity = commands.spawn((
+        Name::new("particles"),
+        Mesh3d(mesh.clone()),
+        MeshMaterial3d(material.clone()),
+        // Visibility has been propagated this frame, and it's drawn from
+        // its first.
+        Visibility::Visible,
+        InheritedVisibility::VISIBLE,
+        ParticleMesh,
+        // Its bounds change every frame.
+        NoFrustumCulling,
+        NotShadowCaster,
+    ));
+    if let Some(layers) = layers {
+        entity.insert(layers.clone());
+    }
+    Draw {
+        layers: layers.cloned(),
+        entity: entity.id(),
+        mesh,
+        new: true,
+        filled: false,
+        view: None,
+        runs: Vec::new(),
     }
 }
 
@@ -1442,40 +1804,58 @@ pub fn play(
 const CORNERS: [(f32, f32); 4] = [(-1.0, -1.0), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)];
 const UVS: [[f32; 2]; 4] = [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]];
 
-/// Refills a system's mesh in place: four `corners` a square, each square
-/// in its particle's colour, all facing `facing`. With no squares it holds
-/// one empty triangle, as Bevy can't upload a mesh without vertices.
-fn fill(mesh: &mut Mesh, corners: &[[f32; 3]], facing: Vec3, colours: &[[f32; 4]]) {
+/// Refills a mesh in place: a square for each of `squares`, facing `view`
+/// and placed from where it is. With no squares it holds one empty
+/// triangle, as Bevy can't upload a mesh without vertices.
+fn fill<'a>(mesh: &mut Mesh, squares: &mut (impl Iterator<Item = &'a Square> + Clone), view: &Eye) {
     use bevy::mesh::VertexAttributeValues as V;
-    let empty = corners.is_empty();
-    let n = if empty { 3 } else { corners.len() };
-    if let Some(V::Float32x3(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) {
+    let n = squares.clone().count();
+    // Each square's value at each of its corners, or a value for each
+    // corner of the empty triangle.
+    fn corners<'a, T: Copy>(
+        v: &mut Vec<T>,
+        squares: &(impl Iterator<Item = &'a Square> + Clone),
+        f: impl Fn(&Square) -> [T; 4],
+        none: T,
+    ) {
         v.clear();
-        match empty {
-            true => v.extend([[0.0; 3]; 3]),
-            false => v.extend_from_slice(corners),
+        v.extend(squares.clone().flat_map(&f));
+        if v.is_empty() {
+            v.extend([none; 3]);
         }
+    }
+    let (right, up) = (view.right, view.up);
+    if let Some(V::Float32x3(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) {
+        corners(
+            v,
+            squares,
+            |s| {
+                let at = s.at - view.at;
+                CORNERS.map(|(x, y)| (at + (right * x + up * y) * s.half).to_array())
+            },
+            [0.0; 3],
+        );
     }
     if let Some(V::Float32x3(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL) {
-        v.clear();
-        v.extend(std::iter::repeat_n(facing.to_array(), n));
+        corners(v, squares, |_| [(-view.forward).to_array(); 4], [0.0; 3]);
     }
     if let Some(V::Float32x2(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_0) {
-        v.clear();
-        v.extend(UVS.iter().cycle().take(n));
+        corners(v, squares, |_| UVS, [0.0; 2]);
+    }
+    if let Some(V::Float32x2(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_UV_1) {
+        corners(v, squares, |s| [s.look; 4], [0.0; 2]);
+    }
+    if let Some(V::Float32x4(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_TANGENT) {
+        corners(v, squares, |s| [s.extra; 4], [0.0; 4]);
     }
     if let Some(V::Float32x4(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR) {
-        v.clear();
-        match empty {
-            true => v.extend([[0.0; 4]; 3]),
-            false => v.extend(colours.iter().flat_map(|&c| [c; 4])),
-        }
+        corners(v, squares, |s| [s.colour; 4], [0.0; 4]);
     }
     if let Some(Indices::U32(v)) = mesh.indices_mut() {
         v.clear();
-        match empty {
-            true => v.extend([0, 1, 2]),
-            false => v.extend((0..corners.len() as u32 / 4).flat_map(|q| {
+        match n {
+            0 => v.extend([0, 1, 2]),
+            n => v.extend((0..n as u32).flat_map(|q| {
                 let b = q * 4;
                 [b, b + 1, b + 2, b, b + 2, b + 3]
             })),
@@ -1555,8 +1935,10 @@ mod tests {
                     on: true,
                 })
                 .collect(),
-            material: Handle::default(),
-            tinted: true,
+            look: Look {
+                tinted: true,
+                ..default()
+            },
             clock: 1.0,
             copies: Vec::new(),
         }
@@ -1871,6 +2253,61 @@ mod tests {
             k.controller.flags = 0x0c;
             assert!(!k.wraps(1.0, 6.0));
         }
+    }
+
+    #[test]
+    fn systems_draw_far_to_near_by_the_middle_of_their_box() {
+        let view = Eye {
+            at: Vec3::ZERO,
+            forward: Vec3::NEG_Z,
+            right: Vec3::X,
+            up: Vec3::Y,
+        };
+        let square = |z: f32| Square {
+            at: Vec3::new(0.0, 0.0, z),
+            half: 1.0,
+            colour: [1.0; 4],
+            look: [0.0; 2],
+            extra: [0.0; 4],
+        };
+        // Mostly near, but reaching far: the middle of its box counts, not
+        // of its squares.
+        let spread = [square(-1.0), square(-1.0), square(-1.0), square(-9.0)];
+        assert_eq!(depth(&spread, &view), 5.0);
+        let at = |depth: f32| Drawn {
+            draw: 0,
+            depth,
+            squares: 0..1,
+        };
+        let mut systems = vec![at(2.0), at(5.0), at(3.0)];
+        far_to_near(&mut systems);
+        let order: Vec<f32> = systems.iter().map(|s| s.depth).collect();
+        assert_eq!(order, [5.0, 3.0, 2.0]);
+    }
+
+    #[test]
+    fn textures_are_resampled_as_they_would_be_sampled() {
+        // Black and white columns, two texels wide.
+        let data = [[0, 0, 0, 255], [255; 4]].repeat(2).concat();
+        let image = Image::new(
+            bevy::render::render_resource::Extent3d {
+                width: 2,
+                height: 2,
+                depth_or_array_layers: 1,
+            },
+            bevy::render::render_resource::TextureDimension::D2,
+            data,
+            TextureFormat::Rgba8UnormSrgb,
+            RenderAssetUsages::default(),
+        );
+        let layer = resampled(image).unwrap();
+        assert_eq!((layer.width(), layer.height()), (SIDE as u32, SIDE as u32));
+        let red = |x: usize| layer.data.as_ref().unwrap()[x * 4];
+        // Each column's centre keeps its colour, blending towards the other
+        // between them and, as the texture repeats, across its edges.
+        assert!(red(SIDE / 4) < 5 && red(SIDE * 3 / 4) > 250);
+        assert!((100..156).contains(&red(SIDE / 2)));
+        assert!((100..156).contains(&red(0)));
     }
 
     #[test]

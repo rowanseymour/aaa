@@ -456,7 +456,7 @@ fn solid(color: [f32; 3], n: usize) -> Image {
     layer_image([r, g, b, a].repeat(n * n), n)
 }
 
-fn layer_image(data: Vec<u8>, n: usize) -> Image {
+pub(crate) fn layer_image(data: Vec<u8>, n: usize) -> Image {
     let n = n as u32;
     let mut image = Image::new(
         Extent3d {

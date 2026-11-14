@@ -86,6 +86,7 @@ impl Plugin for MapRenderPlugin {
         embedded_asset!(app, "water.wesl");
         embedded_asset!(app, "glow.wesl");
         embedded_asset!(app, "team.wesl");
+        embedded_asset!(app, "particles.wesl");
         let beyond = match self.edge {
             Edge::Hard => Color::srgb(0.55, 0.7, 0.85),
             Edge::Fade => Color::BLACK,
@@ -95,9 +96,11 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<GlowMaterial>::default())
             .add_plugins(MaterialPlugin::<TeamMaterial>::default())
             .add_plugins(MaterialPlugin::<SolidMaterial>::default())
+            .add_plugins(MaterialPlugin::<particles::ParticleMaterial>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .insert_resource(MeshPicking(self.pickable))
+            .init_resource::<particles::Draws>()
             .add_systems(
                 PostUpdate,
                 (
@@ -109,6 +112,10 @@ impl Plugin for MapRenderPlugin {
                         .after(particles::play)
                         .before(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
                         .before(bevy::camera::visibility::VisibilitySystems::CalculateBounds),
+                    particles::draw
+                        .after(portrait::layer)
+                        .after(bevy::camera::visibility::VisibilitySystems::VisibilityPropagate)
+                        .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
                 ),
             )
             .add_systems(
