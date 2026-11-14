@@ -312,6 +312,11 @@ const VERBS: &[Verb] = &[
         "plays that much of the game at once, paused or not",
     ),
     verb(
+        "record",
+        "",
+        "says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way",
+    ),
+    verb(
         "fog",
         "",
         "lifts the fog of war from the screen, or lays it again",
@@ -485,6 +490,15 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "detach" => attach(world, &args, false),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
+                "record" => no_args(&args).map(|_| {
+                    let sim = &world.resource::<Sim>().0;
+                    let orders = world.resource::<Orders>().record().given.len();
+                    format!(
+                        "{} ticks, {orders} orders, hash {:016x}",
+                        sim.ticks,
+                        sim.hash()
+                    )
+                }),
                 "fog" => no_args(&args).map(|_| {
                     let mut fog = world.resource_mut::<crate::fog::Fog>();
                     fog.lifted = !fog.lifted;
