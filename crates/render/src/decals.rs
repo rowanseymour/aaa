@@ -89,10 +89,10 @@ impl MapAssets<'_> {
                 let kind = format!("{decal:?}");
                 let shared = cache.materials.entry(kind);
                 shared
-                    .or_insert_with(|| self.materials.add(material(decal, image, 1.0)))
+                    .or_insert_with(|| self.materials.standard.add(material(decal, image, 1.0)))
                     .clone()
             }
-            false => self.materials.add(material(decal, image, opacity)),
+            false => self.materials.standard.add(material(decal, image, opacity)),
         };
         let [x, y] = position;
         let lift = LAYER_LIFT * f32::from(decal.layer);
