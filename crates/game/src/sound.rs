@@ -44,7 +44,22 @@ struct Request {
 
 /// How loud each kind of audio plays, as the options set it.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
-pub struct Volumes(pub aaa_data::Volumes);
+pub struct Volumes {
+    levels: aaa_data::Volumes,
+    /// Nothing is heard whatever the levels, which stay as the options show
+    /// them.
+    /// What would play is still picked, so that it can be logged.
+    muted: bool,
+}
+
+impl From<aaa_data::Volumes> for Volumes {
+    fn from(levels: aaa_data::Volumes) -> Volumes {
+        Volumes {
+            levels,
+            muted: false,
+        }
+    }
+}
 
 /// One of the [`Volumes`] the options set.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -60,6 +75,11 @@ impl Channel {
 }
 
 impl Volumes {
+    /// As these, heard or not.
+    pub fn muted(self, muted: bool) -> Volumes {
+        Volumes { muted, ..self }
+    }
+
     pub fn get(&self, channel: Channel) -> f32 {
         let mut copy = *self;
         *copy.level_mut(channel)
@@ -70,7 +90,7 @@ impl Volumes {
     }
 
     fn level_mut(&mut self, channel: Channel) -> &mut f32 {
-        let v = &mut self.0;
+        let v = &mut self.levels;
         match channel {
             Channel::Main => &mut v.main,
             Channel::Fx => &mut v.fx,
@@ -79,14 +99,27 @@ impl Volumes {
         }
     }
 
-    /// How loud audio of a category plays, all its volumes taken together.
-    pub fn of(&self, category: AudioCategory) -> f32 {
+    pub fn is_muted(&self) -> bool {
+        self.muted
+    }
+
+    /// How loud audio of a category is set to play, all its volumes taken
+    /// together.
+    pub fn set_for(&self, category: AudioCategory) -> f32 {
         let channel = match category {
             AudioCategory::Sound => Channel::Fx,
             AudioCategory::Speech => Channel::Speech,
             AudioCategory::Music => Channel::Music,
         };
-        self.0.main * self.get(channel)
+        self.levels.main * self.get(channel)
+    }
+
+    /// How loud audio of a category is heard.
+    pub fn of(&self, category: AudioCategory) -> f32 {
+        match self.muted {
+            true => 0.0,
+            false => self.set_for(category),
+        }
     }
 }
 
@@ -396,7 +429,7 @@ fn play(
             volume *= gain(distance, audio.falloff, audio.range);
         }
         // Nothing heard isn't played, so not read or decoded either.
-        let heard = volume * volumes.of(audio.category);
+        let heard = volume * volumes.set_for(audio.category);
         if heard <= 0.0 {
             continue;
         }
@@ -419,11 +452,14 @@ fn play(
             (None, Some(data)) => Some(&*data.0),
             (None, None) => None,
         };
+        let speed = 1.0 + sounds.between(audio.pitch_adjust);
+        debug!("{}: {file} at {volume:.2}", request.audio);
+        if volumes.is_muted() {
+            continue;
+        }
         let Some(source) = sounds.source(game, &mut assets, &file) else {
             continue;
         };
-        let speed = 1.0 + sounds.between(audio.pitch_adjust);
-        debug!("{}: {file} at {volume:.2}", request.audio);
         let e = commands
             .spawn((
                 AudioPlayer::new(source),
@@ -461,7 +497,7 @@ mod tests {
 
     #[test]
     fn each_category_plays_at_its_volume_under_the_main() {
-        let mut volumes = Volumes(aaa_data::Volumes {
+        let mut volumes = Volumes::from(aaa_data::Volumes {
             main: 0.5,
             fx: 0.8,
             speech: 1.0,
@@ -472,6 +508,20 @@ mod tests {
         assert_eq!(volumes.of(AudioCategory::Music), 0.1);
         volumes.set(Channel::Main, 2.0);
         assert_eq!(volumes.get(Channel::Main), 1.0);
+    }
+
+    #[test]
+    fn muted_nothing_is_heard_though_the_levels_stay() {
+        let volumes = Volumes::from(aaa_data::Volumes {
+            main: 0.5,
+            fx: 0.8,
+            speech: 1.0,
+            music: 0.2,
+        })
+        .muted(true);
+        assert_eq!(volumes.of(AudioCategory::Sound), 0.0);
+        assert_eq!(volumes.of(AudioCategory::Music), 0.0);
+        assert_eq!(volumes.get(Channel::Fx), 0.8);
     }
 
     /// An interface click, played from `click.wav`.
@@ -485,16 +535,19 @@ mod tests {
 
     /// Plays a click with the FX volume at `fx`, and says how many plays
     /// started and whether its file was read.
-    fn click_at(fx: f32) -> (usize, bool) {
+    fn click_at(fx: f32, muted: bool) -> (usize, bool) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, SoundPlugin))
             .init_resource::<Assets<AudioSource>>()
-            .insert_resource(Volumes(aaa_data::Volumes {
-                main: 1.0,
-                fx,
-                speech: 1.0,
-                music: 1.0,
-            }));
+            .insert_resource(
+                Volumes::from(aaa_data::Volumes {
+                    main: 1.0,
+                    fx,
+                    speech: 1.0,
+                    music: 1.0,
+                })
+                .muted(muted),
+            );
         let audio = HashMap::from([(Id::from("click"), click())]);
         let mut sounds = Sounds::of(Arc::new(audio), &["click.wav"]);
         sounds.interface(app.world().resource::<Time>(), "click");
@@ -507,8 +560,13 @@ mod tests {
 
     #[test]
     fn audio_turned_all_the_way_down_isnt_read_or_played() {
-        assert_eq!(click_at(0.5), (1, true));
-        assert_eq!(click_at(0.0), (0, false));
+        assert_eq!(click_at(0.5, false), (1, true));
+        assert_eq!(click_at(0.0, false), (0, false));
+    }
+
+    #[test]
+    fn muted_audio_isnt_read_or_played() {
+        assert_eq!(click_at(0.5, true), (0, false));
     }
 
     #[test]

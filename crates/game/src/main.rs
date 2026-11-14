@@ -90,11 +90,11 @@ options:
                             more than once
   --console <port>          take console lines on a port of this machine, each
                             answered with what the console says, then an empty line
-  --screenshot <file.png>   save a frame to a file and exit, without a window,
-                            once any scripts have run
+  --screenshot <file.png>   save a frame to a file and exit, without a window
+                            or sound, once any scripts have run
   --shot-after <seconds>    with --screenshot, play that long into the match first
-  --headless                run without a window, for the console to drive and
-                            take screenshots of
+  --headless                run without a window or sound, for the console to
+                            drive and take screenshots of
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it
   --fog <setting>           none, explored or full: how much of the map the fog
@@ -590,7 +590,8 @@ fn main() -> ExitCode {
         }
     };
     let once = screenshot.is_some();
-    let screenshot = (once || headless).then(|| ShotPlugin {
+    let windowless = once || headless;
+    let screenshot = windowless.then(|| ShotPlugin {
         path: screenshot.map(Into::into),
     });
     let (dir, map) = match args.as_slice() {
@@ -625,7 +626,15 @@ fn main() -> ExitCode {
         window.resizable = false;
         window.enabled_buttons.maximize = false;
     }
-    app.add_plugins(DefaultPlugins.set(window).set(log));
+    let plugins = DefaultPlugins.set(window).set(log);
+    match windowless {
+        // Muted, it has no use for the machine's audio device, only for
+        // somewhere its systems can keep the audio they'd read.
+        true => app
+            .add_plugins(plugins.disable::<bevy::audio::AudioPlugin>())
+            .init_asset::<AudioSource>(),
+        false => app.add_plugins(plugins),
+    };
     if let Some(s) = screenshot {
         app.add_plugins(s);
         let frame = std::time::Duration::from_secs_f64(1.0 / 60.0);
@@ -837,6 +846,8 @@ fn main() -> ExitCode {
         app.insert_resource(remote);
     }
     let strings = game.strings();
+    // Nobody is at a run without a window to hear it.
+    let volumes = sound::Volumes::from(game.volumes()).muted(windowless);
     app.insert_resource(lobby::Nations(game.nations()))
         .insert_resource(lobby::Handicaps::new(game.handicaps()))
         .insert_resource(lobby::Leaving::of(&strings))
@@ -846,7 +857,7 @@ fn main() -> ExitCode {
         .insert_resource(options::Options::new(&game))
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
         .insert_resource(music::Music::new(&game))
-        .insert_resource(sound::Volumes(game.volumes()))
+        .insert_resource(volumes)
         .insert_resource(Data(Arc::new(game)));
     match map {
         Some(name) => {

@@ -1133,7 +1133,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, OptionsPlugin))
             .insert_state(Screen::Options)
             .insert_resource(options(Some("classic")))
-            .insert_resource(Volumes(aaa_data::Volumes {
+            .insert_resource(Volumes::from(aaa_data::Volumes {
                 main: 0.8,
                 fx: 0.8,
                 speech: 0.95,
