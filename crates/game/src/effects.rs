@@ -835,7 +835,14 @@ fn play(
             false => Quat::IDENTITY,
         };
         let unturned = transform.rotation;
-        transform.rotation = turn * unturned;
+        // A model takes only a heading from where it's put, unless it
+        // hangs off what it's attached to.
+        let hangs = attach.is_some() && !vfx.gyroscope;
+        let stood = match path.is_some() && !hangs {
+            true => upright(unturned * Vec3::Z),
+            false => unturned,
+        };
+        transform.rotation = turn * stood;
         // The building that made it, if that's still there.
         let view = match by {
             Some(Subject::Thing(t @ Target::Building(b))) if !sim.buildings[b].gone() => {
@@ -1144,6 +1151,16 @@ impl Place<'_, '_> {
 fn facing([x, y, z]: [f32; 3]) -> Vec3 {
     // The game's -y is Bevy's +z.
     world(x, y, z).try_normalize().unwrap_or(Vec3::Z)
+}
+
+/// The turn that points a model along `heading` the right way up; none
+/// for a heading straight up or down, which says nothing of which way.
+fn upright(heading: Vec3) -> Quat {
+    match heading.cross(Vec3::Y).length_squared() > 1e-6 {
+        // A model's forward is +z, where looking is along -z.
+        true => Transform::IDENTITY.looking_to(-heading, Vec3::Y).rotation,
+        false => Quat::IDENTITY,
+    }
 }
 
 /// What [`follow`] reads and moves of an effect.
@@ -1474,6 +1491,22 @@ mod tests {
         let further = Quat::from_rotation_y(0.5);
         let root = Transform::from_rotation(further * root.rotation);
         assert!(same(on.place(&root).rotation, further * now));
+    }
+
+    #[test]
+    fn models_stand_upright_along_their_heading() {
+        // On a point lying on its side, turned a quarter turn about.
+        use std::f32::consts::FRAC_PI_2;
+        let lying = Quat::from_rotation_y(FRAC_PI_2) * Quat::from_rotation_z(FRAC_PI_2);
+        let stood = upright(lying * Vec3::Z);
+        assert!((stood * Vec3::Z).distance(Vec3::X) < 1e-5);
+        assert!((stood * Vec3::Y).distance(Vec3::Y) < 1e-5);
+        // Pitched with a heading up a slope, but not rolled.
+        let up = Vec3::new(0.0, 1.0, 1.0).normalize();
+        let stood = upright(up);
+        assert!((stood * Vec3::Z).distance(up) < 1e-5);
+        assert!((stood * Vec3::X).y.abs() < 1e-5);
+        assert_eq!(upright(Vec3::Y), Quat::IDENTITY);
     }
 
     fn effects(objects: HashMap<Id, ObjectEffects>) -> Effects {

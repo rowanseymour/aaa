@@ -16,6 +16,62 @@ const GAME_TICKS: f32 = 16.0;
 const RINGS: u32 = 16;
 const RING: u32 = 8;
 
+/// The slowest an aircraft flies, as it does coming in from rest.
+const CREEP: f32 = 0.1;
+
+/// How long a stretch an aircraft changes speed over: a longer one is
+/// cut into equal pieces about this long, and it's the first of them.
+const PIECE: f32 = 20.0;
+
+/// The longest an aircraft waits to let the next go, in seconds.
+const HOLD: f32 = 0.6;
+
+/// An aircraft's change of speed, which goes evenly with how far it's
+/// flown of a stretch rather than with time.
+#[derive(Debug, Clone, Copy)]
+struct Ramp {
+    from: f32,
+    to: f32,
+    /// How far it changes over, and how far of that it's flown.
+    over: f32,
+    gone: f32,
+}
+
+impl Ramp {
+    /// From `from` to `to` over a stretch `over` long, `gone` of it
+    /// flown; a stretch of no length is over once any of it's flown.
+    fn new(from: f32, to: f32, over: f32, gone: f32) -> Ramp {
+        Ramp {
+            from,
+            to,
+            over: over.max(f32::MIN_POSITIVE),
+            gone,
+        }
+    }
+
+    /// From `from` to `to` over the first piece of a stretch `length`
+    /// long.
+    fn over_stretch(from: f32, to: f32, length: f32) -> Ramp {
+        let pieces = match length > PIECE + CREEP {
+            true => libm::floorf(length / PIECE),
+            false => 1.0,
+        };
+        Ramp::new(from, to, length / pieces, 0.0)
+    }
+
+    fn speed(&self) -> f32 {
+        let done = (self.gone / self.over).min(1.0);
+        (self.from + (self.to - self.from) * done).max(CREEP)
+    }
+
+    /// How far it flies in a tick, which is flown.
+    fn fly(&mut self) -> f32 {
+        let step = self.speed() * TICK;
+        self.gone += step;
+        step
+    }
+}
+
 /// An aircraft bringing a regiment onto the map.
 pub struct Delivery {
     /// Its object's id.
@@ -47,12 +103,15 @@ pub struct Delivery {
     entry: [f32; 2],
     /// The way its run goes, from where it came in over its target.
     line: [f32; 2],
-    /// How far along its run it's flown, and how far along the next
-    /// drop is.
+    /// How far along its run it's flown, and how far along the mark
+    /// it lets the next go at is, if it hasn't waited too long by then.
     flown: f32,
-    next_drop: f32,
-    /// How many members it's let go, dropped or not.
+    mark: f32,
+    ramp: Ramp,
+    /// How many members it's let go, dropped or not, and how many
+    /// seconds ago the last, once one's gone.
     released: usize,
+    held: Option<f32>,
 }
 
 impl Delivery {
@@ -67,15 +126,19 @@ impl Delivery {
         [px + (x - px) * t, py + (y - py) * t]
     }
 
-    /// Whether its next drop is due.
-    fn due(&self, members: usize) -> bool {
-        self.flown >= self.next_drop && self.released < members
-    }
-
-    /// Whether it's begun its drop, which it flies at half speed, and
-    /// has more to let go.
-    fn dropping(&self, members: usize) -> bool {
-        (self.released > 0 || self.flown >= self.next_drop) && self.released < members
+    /// How far short of where the tick has it its next drop was due, at
+    /// its mark or once it had held the next as long as it will; `None`
+    /// for one not due.
+    fn due(&self, members: usize) -> Option<f32> {
+        let past_mark = Some(self.flown - self.mark).filter(|p| *p >= 0.0);
+        // Ticks don't add up to the hold exactly.
+        let over = self.held.map(|h| h - HOLD).filter(|o| *o > -TICK / 100.0);
+        let past_hold = over.map(|o| o.max(0.0) * self.ramp.speed());
+        let past = match (past_mark, past_hold) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        past.filter(|_| self.released < members)
     }
 }
 
@@ -199,14 +262,15 @@ impl World {
         let (owner, from) = (building.owner, building.position);
         let entry = self.entry(from, to);
         let line = normalised([to[0] - entry[0], to[1] - entry[1]]).unwrap_or(building.facing);
-        // It slows to half speed for the drop, which is centred on the
-        // target as if those dropped were half as far apart as they are.
+        // The drop is centred on the target as if it were flown at half
+        // speed throughout, one let go every `delay`.
         let pace = airlift.speed / 2.0;
         let lead = (regiment.members.iter())
             .map(|m| self.carry(&m.template, airlift.height, pace))
             .fold(0.0, f32::max);
         let before = (regiment.members.len().saturating_sub(1) / 2) as f32;
         let (d, id, hq) = (self.deliveries.len(), self.take_ids(1), self.hq_of(b));
+        let mark = distance(entry, to) - lead - airlift.delay * pace * before;
         self.deliveries.push(Delivery {
             id,
             template: airlift.transport.clone(),
@@ -223,8 +287,11 @@ impl World {
             entry,
             line,
             flown: 0.0,
-            next_drop: distance(entry, to) - lead - airlift.delay * pace * before,
+            mark,
+            // In from rest.
+            ramp: Ramp::over_stretch(0.0, airlift.speed, mark),
             released: 0,
+            held: None,
             airlift,
         });
         self.notices.push(Notice::Recruited {
@@ -297,27 +364,35 @@ impl World {
         };
         let speed = delivery.airlift.speed;
         if delivery.released < members {
-            let pace = match delivery.dropping(members) {
-                true => speed / 2.0,
-                false => speed,
-            };
             let delivery = &mut self.deliveries[d];
-            delivery.flown += pace * TICK;
+            delivery.flown += delivery.ramp.fly();
+            delivery.held = delivery.held.map(|h| h + TICK);
             delivery.previous = delivery.position;
             let (flown, [lx, ly]) = (delivery.flown, delivery.line);
             delivery.position = [
                 delivery.entry[0] + lx * flown,
                 delivery.entry[1] + ly * flown,
             ];
-            while self.deliveries[d].due(members) {
-                self.release(d);
+            if let Some(past) = delivery.due(members) {
+                let pace = delivery.ramp.speed();
+                self.release(d, past);
+                let delivery = &mut self.deliveries[d];
+                delivery.held = Some(past / pace);
+                delivery.ramp = match delivery.released < members {
+                    // Slowing to half speed by its next mark.
+                    true => Ramp::new(pace, speed / 2.0, delivery.airlift.delay * speed, past),
+                    false => {
+                        let home = distance(delivery.position, delivery.entry);
+                        Ramp::over_stretch(pace, speed, home)
+                    }
+                };
             }
             return;
         }
         // Home the way it came, turning as tightly as it can.
         let delivery = &mut self.deliveries[d];
         let entry = delivery.entry;
-        let step = speed * TICK;
+        let step = delivery.ramp.fly();
         delivery.previous = delivery.position;
         if within(delivery.position, entry, step) {
             delivery.position = entry;
@@ -340,9 +415,10 @@ impl World {
         delivery.position[1] += delivery.facing[1] * step;
     }
 
-    /// Lets go the next of what the delivery at `d` brings, putting its
-    /// regiment on the map with the first.
-    fn release(&mut self, d: usize) {
+    /// Lets go the next of what the delivery at `d` brings, `past` short
+    /// of where the tick has it, putting its regiment on the map with the
+    /// first.
+    fn release(&mut self, d: usize, past: f32) {
         if let Some(mut cargo) = self.deliveries[d].cargo.take() {
             let delivery = &self.deliveries[d];
             let (target, line, hq) = (delivery.target, delivery.line, delivery.hq);
@@ -369,16 +445,16 @@ impl World {
             return;
         };
         let u = self.regiments[r].units[delivery.released];
-        // Let go where the drop was due, not where the tick has it.
-        let along = delivery.next_drop.clamp(0.0, delivery.flown);
+        let along = (delivery.flown - past).max(0.0);
         let (line, target) = (delivery.line, delivery.target);
         let at = [
             delivery.entry[0] + line[0] * along,
             delivery.entry[1] + line[1] * along,
         ];
         delivery.released += 1;
-        delivery.next_drop += delivery.airlift.delay * delivery.airlift.speed;
-        let (height, pace) = (delivery.airlift.height, delivery.airlift.speed / 2.0);
+        delivery.mark += delivery.airlift.delay * delivery.airlift.speed;
+        // Thrown on at the speed it's flying as it lets go.
+        let (height, pace) = (delivery.airlift.height, delivery.ramp.speed());
         let template = &self.units[u].template;
         let own = self.rules.falls.get(template).map_or(0.0, |f| f.height);
         let from = (height - own).max(0.0);
@@ -556,8 +632,7 @@ mod tests {
         run(&mut w, 2.0);
         let lower = w.units[0].descent.expect("falling");
         assert!(lower.height < 10.0 && w.units[0].position[0] > 30.0);
-        // They come down in a line, as far apart as the plane flew
-        // between them.
+        // They come down in a line along its way.
         let mut landed = [[0.0; 2]; 3];
         for _ in 0..80 {
             w.tick();
@@ -568,13 +643,19 @@ mod tests {
             }
         }
         assert!(landed.iter().all(|p| p[0].abs() < 1e-3), "{landed:?}");
-        // The first short of the target by half a gap and how much
-        // further its fall is reckoned to carry it than it does.
+        // The first is let go half a gap and a fall's carry at half
+        // speed short of the target, and thrown on at full speed; the
+        // second at the mark the plane slows to half speed by; the third
+        // as far on as it flies before it's held one as long as it will.
         let ahead: Vec<f32> = landed.iter().map(|p| p[1]).collect();
-        let short = 1.4 + 3.5 * ((34.0f32 / 49.05).sqrt() - (30.0f32 / 49.05).sqrt());
-        assert!((ahead[0] + short).abs() < 1e-3, "{landed:?}");
-        assert!((ahead[1] - ahead[0] - 2.8).abs() < 1e-3, "{landed:?}");
-        assert!((ahead[2] - ahead[1] - 2.8).abs() < 1e-3, "{landed:?}");
+        let fall = (30.0f32 / 49.05).sqrt();
+        let from = -1.4 - 3.5 * (34.0f32 / 49.05).sqrt();
+        assert!((ahead[0] - (from + 7.0 * fall)).abs() < 1e-3, "{landed:?}");
+        assert!(
+            (ahead[1] - (from + 2.8 + 3.5 * fall)).abs() < 0.05,
+            "{landed:?}"
+        );
+        assert!((ahead[2] - ahead[1] - 2.1).abs() < 0.05, "{landed:?}");
         // Once down they form up around where their leader landed,
         // facing the way the plane flew.
         run(&mut w, 8.0);
@@ -595,6 +676,22 @@ mod tests {
         run(&mut w, 30.0);
         assert!(w.deliveries[0].left.is_some());
         assert!(near(w.deliveries[0].position, entry));
+    }
+
+    #[test]
+    fn aircraft_change_speed_over_the_first_piece_of_a_stretch() {
+        // A stretch of 65 is three pieces.
+        let mut ramp = super::Ramp::over_stretch(0.0, 7.0, 65.0);
+        assert_eq!(ramp.speed(), super::CREEP);
+        ramp.gone = 65.0 / 6.0;
+        assert!((ramp.speed() - 3.5).abs() < 1e-4);
+        ramp.gone = 30.0;
+        assert_eq!(ramp.speed(), 7.0);
+        // One with nowhere to go starts as it is.
+        let mut ramp = super::Ramp::over_stretch(0.0, 7.0, -3.0);
+        assert_eq!(ramp.speed(), super::CREEP);
+        ramp.fly();
+        assert_eq!(ramp.speed(), 7.0);
     }
 
     #[test]
@@ -621,13 +718,21 @@ mod tests {
         w.apply(1, deliver([40.0, 20.0])).unwrap();
         run(&mut w, 2.0);
         // A house goes up where the first would land.
-        let house = building(30, 2, [38.0, 20.0]);
+        let house = building(30, 2, [41.0, 20.0]);
         w.pathing.block(house.obstacle.as_ref().unwrap());
         w.add_buildings(&[house]);
-        run(&mut w, 12.0);
-        let first = w.units[0].position;
+        while w.units.first().is_none_or(|u| u.descent.is_none()) {
+            w.tick();
+        }
+        // On a ring out from where he'd have come down.
+        let lands = w.units[0].descent.expect("falling").lands();
+        let aimed = [
+            40.0 - 1.4 - 3.5 * (34.0f32 / 49.05).sqrt() + 7.0 * (30.0f32 / 49.05).sqrt(),
+            20.0,
+        ];
+        assert!(distance(lands, aimed) > 0.9, "{lands:?}");
+        run(&mut w, 15.0);
         assert!(w.units[0].alive());
-        assert!((first[0] - 38.0).abs() > 3.0 || (first[1] - 20.0).abs() > 3.0);
     }
 
     #[test]
@@ -677,7 +782,7 @@ mod tests {
         assert_eq!(w.deliveries.len(), 1);
         assert_eq!(w.bound_for(50).count(), 1);
         assert_eq!(w.free_places(&hqs[0]), free - 1);
-        run(&mut w, 20.0);
+        run(&mut w, 30.0);
         let r = w.deliveries[0].regiment.expect("dropped");
         assert_eq!(w.regiments[r].hq, Some(50));
         assert_eq!(w.free_places(&hqs[0]), free - 1);
