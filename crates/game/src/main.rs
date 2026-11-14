@@ -122,32 +122,14 @@ struct Data(Arc<GameData>);
 /// The map to play, which [`load`] sets up off the main thread.
 #[derive(Resource)]
 struct Pending {
-    name: String,
+    setup: aaa_server::Setup,
     /// What the loading screen calls it.
     title: String,
     /// What the loading screen says of it.
     description: String,
-    /// The teams the lobby put the sides in, by player id, for
-    /// [`Map::arrange`]; none to play it as made.
-    teams: Option<Vec<Vec<u32>>>,
     /// The player the person plays, or none to watch, when launched from
     /// the lobby.
     person: Option<u32>,
-    /// The nation each side plays as, by player id, when launched from the
-    /// lobby.
-    nations: HashMap<u32, aaa_data::Nation>,
-    /// The general chosen for each side, by player id, when launched from
-    /// the lobby; one of its nation's at random where none is.
-    generals: HashMap<u32, aaa_data::Id>,
-    /// The handicap the lobby gave each side, by player id, in place of
-    /// the map's.
-    handicaps: HashMap<u32, aaa_data::Id>,
-    /// How much of the map the fog of war hides, if not as the game's
-    /// world rule has it.
-    fog: Option<aaa_map::FogSetting>,
-    /// What the match's chances are drawn from, and the lobby's picks for
-    /// sides left to chance.
-    seed: u64,
     /// Whether it was launched from the lobby, which failing to load it goes
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
@@ -288,7 +270,7 @@ struct Seed(Option<u64>);
 impl Seed {
     /// The one asked for, else one no match has had.
     fn get(self) -> u64 {
-        self.0.unwrap_or_else(lobby::fresh_seed)
+        self.0.unwrap_or_else(aaa_server::fresh_seed)
     }
 }
 
@@ -904,16 +886,15 @@ fn main() -> ExitCode {
         Some(name) => {
             app.insert_resource(Pending {
                 title: aaa_data::map_title(&name).to_string(),
-                name,
                 description: String::new(),
-                teams: None,
                 person: None,
-                nations: HashMap::new(),
-                generals: HashMap::new(),
-                handicaps: HashMap::new(),
-                fog,
-                seed: Seed(seed).get(),
                 from_menu: false,
+                setup: aaa_server::Setup {
+                    map: name,
+                    seed: Seed(seed).get(),
+                    fog,
+                    ..Default::default()
+                },
             })
             .insert_state(Screen::Loading);
         }
@@ -945,113 +926,30 @@ fn takes_input(
 fn prepare(
     game: Arc<GameData>,
     pending: Pending,
-    nations: &[aaa_data::Nation],
-    handicaps_offered: &[aaa_data::Handicap],
     side: Side,
     stage: &Mutex<Stage>,
 ) -> Result<Prepared, String> {
     let reached = |s| *stage.lock().unwrap_or_else(|e| e.into_inner()) = s;
     let Pending {
-        name,
-        teams,
+        setup,
         person,
-        nations: chosen,
-        generals,
-        handicaps,
         from_menu,
-        fog,
-        seed,
         ..
     } = pending;
-    info!("seed {seed}");
-    // Given on the command line, each side plays as the nation its map
-    // fixes or one at random.
-    let chosen = match from_menu {
-        true => chosen,
-        false => aaa_map::Brief::load(&game, &name).map_or_else(
-            |_| HashMap::new(),
-            |b| lobby::nations(&b.players, &HashMap::new(), nations, seed),
-        ),
-    };
-    let raising = Recruits::new(&game);
-    let mut map = Map::load_as(&game, &raising, &name, &chosen)?;
-    for w in &map.warnings {
-        warn!("{name}: {w}");
-    }
-    let leaders = Leaders(lobby::generals(&map.players, &chosen, &generals, seed));
-    if let Some(teams) = &teams {
-        map.arrange(teams);
-    }
+    info!("seed {}", setup.seed);
+    let aaa_server::Started {
+        map,
+        raising,
+        world: sim,
+        generals,
+    } = aaa_server::start(&game, &setup, || reached(Stage::Objects))?;
+    let leaders = Leaders(generals);
     let person = match from_menu {
         true => person,
         false => lobby::default_person(&map.players, side),
     };
     if !from_menu && side.0.is_some() && person.is_none() {
         warn!("{}: no such side to play", map.title);
-    }
-    reached(Stage::Objects);
-    let operations = game.operations();
-    let dropped = operations.values().filter_map(|o| match o {
-        aaa_map::Operation::Drop(template) => Some(template.clone()),
-        aaa_map::Operation::Enchant { .. } => None,
-    });
-    let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
-    let recruit_lists = game.recruit_lists();
-    let recruited: HashSet<&aaa_map::Id> = recruit_lists.values().flatten().collect();
-    let raisable = (recruited.into_iter())
-        .filter_map(|t| {
-            let raised = raising.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]);
-            let raised = raised.map_err(|e| debug!("can't commission {t}: {e}"));
-            Some((t.clone(), raised.ok()?))
-        })
-        .collect();
-    let experience = game.experience_rules();
-    let mut rules = aaa_sim::Rules {
-        seed,
-        terrain_rules: game.terrain_rules(),
-        packing: raising.packings(),
-        requires: game.requirements(),
-        economies: game.economies(),
-        sellable: game.sellable(),
-        economy: game.economy_rules(),
-        supplies: game.supplies(),
-        supply_rules: game.supply_rules(),
-        guard_rules: game.guard_rules(),
-        supply_effects: game.supply_effects(),
-        kinds: game.kinds(),
-        sort_objectives: game.sort_objectives(),
-        operations,
-        drops,
-        decays: game.decays(),
-        logistics: game.logistics(),
-        resupply_rates: game.resupply_rates(),
-        recruit_lists,
-        raisable,
-        airlifts: game.airlifts(),
-        falls: game.falls(),
-        recruit_times: game.recruit_times(),
-        research_lists: game.research_lists(),
-        experience_per_second: experience.per_second,
-        sights: game.sights(),
-        numbered: game.numbered(),
-        sustaining: game.sustaining(),
-        team_victory: game.team_victory(),
-        ..Default::default()
-    };
-    if let Some(gravity) = game.gravity() {
-        rules.gravity = gravity;
-    }
-    if let Some(seconds) = game.siege_seconds() {
-        rules.siege_seconds = seconds;
-    }
-    let mut sim = World::new(&map, rules);
-    sim.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
-    for (&player, general) in &leaders.0 {
-        sim.lead(player, experience.starting, general.experience_max);
-    }
-    let given = lobby::handicap_technologies(&map.players, &handicaps, handicaps_offered);
-    for (player, technology) in given {
-        sim.gain(player, technology);
     }
     let effects = effects::Effects::new(&game, &map);
     // Built here, off the main thread, and kept for the interface to read
@@ -1179,15 +1077,11 @@ fn load(world: &mut bevy::ecs::world::World) {
         let Some(game) = world.get_resource::<Data>().map(|d| d.0.clone()) else {
             return;
         };
-        let nations = world.resource::<lobby::Nations>().0.clone();
-        let handicaps = world.resource::<lobby::Handicaps>().all.clone();
         let side = *world.resource::<Side>();
         let from_menu = pending.from_menu;
         let stage = Arc::new(Mutex::new(Stage::Data));
         let reached = stage.clone();
-        let thread = std::thread::spawn(move || {
-            prepare(game, pending, &nations, &handicaps, side, &reached)
-        });
+        let thread = std::thread::spawn(move || prepare(game, pending, side, &reached));
         world.insert_resource(Preparing {
             thread,
             stage,

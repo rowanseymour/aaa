@@ -30,6 +30,7 @@ dependencies = [
  "aaa-data",
  "aaa-map",
  "aaa-render",
+ "aaa-server",
  "aaa-sim",
  "bevy",
  "raw-window-handle",
@@ -54,6 +55,16 @@ dependencies = [
  "bevy",
  "nif",
  "tgck",
+]
+
+[[package]]
+name = "aaa-server"
+version = "0.1.0"
+dependencies = [
+ "aaa-data",
+ "aaa-map",
+ "aaa-sim",
+ "log",
 ]
 
 [[package]]
