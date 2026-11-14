@@ -25,7 +25,7 @@ use tgck::map::Thing;
 use crate::MapObject;
 use crate::glow::{Glow, GlowMaterial};
 use crate::measures::Measures;
-use crate::particles::{self, Frames, Look, System};
+use crate::particles::{self, Blend, Frames, Look, System};
 use crate::rig::{Clips, Nodes, Rig};
 use crate::solid::{Solid, SolidMaterial};
 use crate::team::{self, Team, TeamMaterial};
@@ -468,6 +468,7 @@ pub struct Models {
 /// stored in a model by its path and the texture's index in it.
 struct Textures {
     loaded: HashMap<String, Option<Handle<Image>>>,
+    particles: particles::Layers,
     /// Bevy's texture formats this GPU can sample compressed.
     formats: CompressedImageFormats,
 }
@@ -561,6 +562,7 @@ impl Models {
             models: HashMap::new(),
             textures: Textures {
                 loaded: HashMap::new(),
+                particles: particles::Layers::default(),
                 formats,
             },
             colours: players.iter().map(|p| (p.id, p.rgb)).collect(),
@@ -933,14 +935,7 @@ impl Models {
     ) {
         let parts = match model.meshes {
             Meshes::Parts(parts) => {
-                particles::spawn(
-                    commands,
-                    assets.meshes,
-                    &model.particles,
-                    root,
-                    |_| None,
-                    offset,
-                );
+                particles::spawn(commands, &model.particles, root, |_| None, offset);
                 parts
             }
             Meshes::Rig(rig) => {
@@ -950,14 +945,7 @@ impl Models {
                     .collect();
                 let joints = rig.spawn(commands, root, offset, materials);
                 let node = |i| rig.joint(i).map(|j| joints[j]);
-                particles::spawn(
-                    commands,
-                    assets.meshes,
-                    &model.particles,
-                    root,
-                    node,
-                    offset,
-                );
+                particles::spawn(commands, &model.particles, root, node, offset);
                 return;
             }
         };
@@ -1136,6 +1124,13 @@ impl Models {
     }
 }
 
+/// Where a texture comes from: a file, by its path, or pixels in the model,
+/// by a key of their own.
+enum Source<'a> {
+    File(String),
+    Embedded(String, &'a nif::Pixels),
+}
+
 /// Builds the parts of one model file: its meshes, their materials and
 /// textures, and its particle systems.
 struct Loader<'a, 'w> {
@@ -1152,7 +1147,7 @@ struct Loader<'a, 'w> {
     view: &'a View,
 }
 
-impl Loader<'_, '_> {
+impl<'a> Loader<'a, '_> {
     /// The parts of a rig's shapes, each with its index in
     /// [`Nodes::shapes`].
     fn rig_meshes(&mut self, nodes: &Nodes) -> Vec<(Part, usize)> {
@@ -1349,15 +1344,18 @@ impl Loader<'_, '_> {
     fn particle_look(&mut self, props: &[nif::Ref]) -> Look {
         let nif = self.nif;
         let texturing = nif.property::<nif::Texturing>(props);
-        let texture = self.base_texture(props);
+        let layer = self.particle_layer(props);
         let m = nif.property::<nif::Material>(props);
         let opacity = m.map_or(1.0, |m| m.alpha);
         // Squares that also test alpha still blend: cut out instead, soft
         // smoke turns to specks.
         let alpha = nif.property::<nif::Alpha>(props);
-        let alpha_mode = match alpha_mode(alpha, opacity) {
-            AlphaMode::Mask(_) if alpha.is_some_and(|a| a.blend()) => AlphaMode::Blend,
-            mode => mode,
+        let blend = match alpha_mode(alpha, opacity) {
+            AlphaMode::Mask(_) if alpha.is_some_and(|a| a.blend()) => Blend::Over,
+            AlphaMode::Mask(cutoff) => Blend::Opaque { cutoff },
+            AlphaMode::Opaque => Blend::Opaque { cutoff: 0.0 },
+            AlphaMode::Add => Blend::Add,
+            _ => Blend::Over,
         };
         let rgb = |c: Option<[f32; 3]>, a: f32| {
             let [r, g, b] = c.unwrap_or([1.0; 3]);
@@ -1371,7 +1369,7 @@ impl Loader<'_, '_> {
             .map_or((VertexColors::AmbientDiffuse, true), |v| {
                 (v.stand_for(), v.lit())
             });
-        let replace = texture.is_some() && texturing.is_some_and(|t| t.replaces());
+        let replace = layer.is_some() && texturing.is_some_and(|t| t.replaces());
         let (base_color, emissive, lit, tinted) = match (replace, vertex, lit) {
             // The texture alone.
             (true, _, _) => (Color::WHITE, None, false, false),
@@ -1382,49 +1380,69 @@ impl Loader<'_, '_> {
             (false, VertexColors::AmbientDiffuse, true) => (Color::WHITE, emissive, true, true),
             (false, _, true) => (rgb(m.map(|m| m.diffuse), opacity), emissive, true, false),
         };
-        // Bevy scales emissive light by the exposure, which the lights undo.
-        let unit = 1.0 / bevy::camera::Exposure::default().exposure();
-        let emissive = emissive.map_or(LinearRgba::BLACK, |[r, g, b]| {
-            LinearRgba::from(Color::srgb(r, g, b)) * unit
+        let emissive = emissive.map_or([0.0; 3], |[r, g, b]| {
+            LinearRgba::from(Color::srgb(r, g, b)).to_f32_array_no_alpha()
         });
-        let material = self.assets.materials.standard.add(StandardMaterial {
-            base_color,
-            base_color_texture: texture,
+        Look {
+            layer: layer.unwrap_or(0),
+            colour: base_color.to_linear().to_f32_array(),
             emissive,
-            alpha_mode,
-            unlit: !lit,
-            double_sided: true,
-            cull_mode: None,
-            // Without highlights, as the game draws them.
-            perceptual_roughness: 1.0,
-            reflectance: 0.0,
-            ..default()
-        });
-        Look { material, tinted }
+            lit,
+            blend,
+            tinted,
+        }
     }
 
-    /// The base texture `props` give a shape, from a file or embedded.
-    fn base_texture(&mut self, props: &[nif::Ref]) -> Option<Handle<Image>> {
+    /// Where the base texture `props` give a shape comes from.
+    fn base_source(&self, props: &[nif::Ref]) -> Option<Source<'a>> {
         let nif = self.nif;
         let base = nif.property::<nif::Texturing>(props)?.base.as_ref()?;
         let source = nif.get_as::<nif::SourceTexture>(base.source)?;
         match (&source.file, nif.get_as(source.pixels)) {
-            (Some(file), _) => self.texture(file),
+            (Some(file), _) => {
+                let (game, model) = (self.game, self.path);
+                let Some(path) = game.find_texture(self.subfolder, self.view, model, file) else {
+                    warn!("{model}: texture {file} not found");
+                    return None;
+                };
+                Some(Source::File(path))
+            }
             (None, Some(p)) => {
                 let key = format!("{}#{}", self.path, source.pixels.unwrap_or_default());
-                self.embedded(key, p)
+                Some(Source::Embedded(key, p))
             }
             _ => None,
         }
     }
 
-    fn texture(&mut self, file: &str) -> Option<Handle<Image>> {
-        let (game, model) = (self.game, self.path);
-        let Some(path) = game.find_texture(self.subfolder, self.view, model, file) else {
-            warn!("{model}: texture {file} not found");
-            return None;
-        };
-        let (formats, images) = (self.textures.formats, &mut self.assets.images);
+    /// The base texture `props` give a shape, from a file or embedded.
+    fn base_texture(&mut self, props: &[nif::Ref]) -> Option<Handle<Image>> {
+        match self.base_source(props)? {
+            Source::File(path) => self.texture(path),
+            Source::Embedded(key, pixels) => self.embedded(key, pixels),
+        }
+    }
+
+    /// The base texture `props` give a particle system, as a layer of the
+    /// particle textures.
+    fn particle_layer(&mut self, props: &[nif::Ref]) -> Option<u32> {
+        let source = self.base_source(props)?;
+        let (game, images) = (self.game, &mut *self.assets.images);
+        let layers = &mut self.textures.particles;
+        // Decoded on the CPU, whatever the GPU samples compressed.
+        let bc = CompressedImageFormats::BC;
+        match source {
+            Source::File(path) => {
+                layers.layer(&path, images, || load_image(&game.read(&path)?, &path, bc))
+            }
+            Source::Embedded(key, pixels) => {
+                layers.layer(&key, images, || embedded_image(pixels, bc))
+            }
+        }
+    }
+
+    fn texture(&mut self, path: String) -> Option<Handle<Image>> {
+        let (game, formats, images) = (self.game, self.textures.formats, &mut self.assets.images);
         cached(&mut self.textures.loaded, &path, || {
             let image = load_image(&game.read(&path)?, &path, formats)?;
             Some(images.add(image))

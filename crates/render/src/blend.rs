@@ -291,11 +291,23 @@ fn derive(bases: &[(u8, Vec<u8>)]) -> Vec<Option<Vec<u8>>> {
 /// array texture with a repeating sampler.
 pub fn texture_array(layers: Vec<Image>) -> Image {
     let first = &layers[0];
-    let (width, height) = (first.width(), first.height());
+    let size = (first.width(), first.height());
     let mips = first.texture_descriptor.mip_level_count;
     let format = first.texture_descriptor.format;
     let count = layers.len() as u32;
     let data = layers.into_iter().flat_map(|l| l.data.unwrap()).collect();
+    array_image(data, size, mips, format, count)
+}
+
+/// An array texture with a repeating sampler, of `count` layers of `size`,
+/// each with `mips` levels, from their data one after another.
+pub fn array_image(
+    data: Vec<u8>,
+    (width, height): (u32, u32),
+    mips: u32,
+    format: TextureFormat,
+    count: u32,
+) -> Image {
     let mut image = Image::new_uninit(
         Extent3d {
             width,
