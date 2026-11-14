@@ -124,6 +124,7 @@ pub const PURSUIT_REACH: f32 = 0.6;
 pub const PURSUIT_DRIFT: f32 = 0.14646;
 
 /// A match in progress.
+#[derive(Clone)]
 pub struct World {
     pub sides: Sides,
     pub pathing: Pathing,
@@ -186,6 +187,7 @@ pub struct World {
     rng: u64,
 }
 
+#[derive(Clone)]
 pub struct Regiment {
     /// Its object's id in the map.
     pub id: u32,
@@ -381,6 +383,7 @@ struct Leg {
     snapped: bool,
 }
 
+#[derive(Clone)]
 pub struct Unit {
     /// Its object's id in the map.
     pub id: u32,
@@ -462,6 +465,7 @@ pub enum Left {
 
 /// What a unit tows, dragged after the point it's coupled to so that it
 /// trails round corners.
+#[derive(Clone)]
 pub struct Trailer {
     pub template: Id,
     pub position: [f32; 2],
@@ -478,6 +482,7 @@ pub struct Trailer {
 
 /// An owned object that can be hurt but not move, such as a house, a
 /// bunker or a city's centre.
+#[derive(Clone)]
 pub struct Building {
     /// Its object's id in the map.
     pub id: u32,

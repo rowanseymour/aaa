@@ -25,7 +25,6 @@ pub struct Host<L> {
     /// What the next client let in is known as.
     next: u32,
     begun: bool,
-    cheats: bool,
 }
 
 /// A client as the host has it.
@@ -33,6 +32,8 @@ struct Seat<L> {
     id: u32,
     link: L,
     players: Vec<u32>,
+    /// Whether it's let do anything.
+    trusted: bool,
     diverged: bool,
     lost: bool,
 }
@@ -62,14 +63,15 @@ pub enum Event {
 
 impl<L> Seat<L> {
     /// Whether the host carries out `action` for it.
-    fn may(&self, action: &Action, cheats: bool) -> bool {
-        match action {
-            Action::Order { player, .. } => self.players.contains(player),
-            Action::Pause(_) | Action::Speed(_) => !self.players.is_empty(),
-            Action::Win(_) | Action::Lose(_) | Action::Raise { .. } | Action::Destroy(_) => {
-                cheats && !self.players.is_empty()
+    fn may(&self, action: &Action) -> bool {
+        self.trusted
+            || match action {
+                Action::Order { player, .. } => self.players.contains(player),
+                Action::Pause(_) | Action::Speed(_) => !self.players.is_empty(),
+                Action::Win(_) | Action::Lose(_) | Action::Raise { .. } | Action::Destroy(_) => {
+                    false
+                }
             }
-        }
     }
 }
 
@@ -84,14 +86,21 @@ impl<L: Link> Host<L> {
             clients: Vec::new(),
             next: 1,
             begun: false,
-            cheats: false,
         }
     }
 
-    /// Has it carry out what changes a match outside its rules, such as
-    /// [`Action::Win`], for the clients that play.
-    pub fn allow_cheats(&mut self, cheats: bool) {
-        self.cheats = cheats;
+    /// Has it carry out whatever `client` asks from here on: any player's
+    /// orders, and what changes a match outside its rules, such as
+    /// [`Action::Win`]. For the client of whoever runs the host.
+    pub fn trust(&mut self, client: u32) {
+        for seat in &mut self.clients {
+            seat.trusted |= seat.id == client;
+        }
+    }
+
+    /// What the match was set up from.
+    pub fn setup(&self) -> &Setup {
+        &self.setup
     }
 
     pub fn world(&self) -> &World {
@@ -130,6 +139,7 @@ impl<L: Link> Host<L> {
             id,
             link,
             players,
+            trusted: false,
             diverged: false,
             lost: false,
         });
@@ -140,12 +150,37 @@ impl<L: Link> Host<L> {
     /// carry out what they asked that it lets them, and plays a tick
     /// unless the match is held still.
     pub fn turn(&mut self) -> Vec<Event> {
+        self.go(None)
+    }
+
+    /// As [`Host::turn`], but playing no tick: for carrying out what's
+    /// asked sooner than the next tick.
+    pub fn relay(&mut self) -> Vec<Event> {
+        self.go(Some(false))
+    }
+
+    /// As [`Host::turn`], but playing a tick whether or not the match is
+    /// held still: for what keeps the match's time itself.
+    pub fn tick(&mut self) -> Vec<Event> {
+        self.go(Some(true))
+    }
+
+    /// A turn, playing a tick as `tick` says, or by whether the match is
+    /// held still if it doesn't.
+    fn go(&mut self, tick: Option<bool>) -> Vec<Event> {
         self.begun = true;
         let mut events = Vec::new();
         let mut actions = Vec::new();
         let checks = &self.schedule.record().checks;
         for seat in &mut self.clients {
-            for _ in 0..HEARD_A_TURN {
+            // One it trusts is heard out, having nobody to hold up but
+            // those it's trusted by.
+            let most = if seat.trusted {
+                usize::MAX
+            } else {
+                HEARD_A_TURN
+            };
+            for _ in 0..most {
                 let heard = seat.link.receive();
                 let heard =
                     heard.map(|m| m.map(|m| (m.len() <= LONGEST_HEARD).then(|| decode(&m))));
@@ -153,7 +188,7 @@ impl<L: Link> Host<L> {
                 match heard {
                     Ok(None) => break,
                     Ok(Some(Some(ToHost::Ask(action)))) => {
-                        if seat.may(&action, self.cheats) {
+                        if seat.may(&action) {
                             actions.push(action);
                         }
                     }
@@ -176,7 +211,7 @@ impl<L: Link> Host<L> {
         for action in &actions {
             self.schedule.act(action.clone());
         }
-        let tick = !self.schedule.pausing();
+        let tick = tick.unwrap_or(!self.schedule.pausing());
         if tick || !actions.is_empty() {
             self.tell(&ToClient::Step(Bundle { actions, tick }));
         }
@@ -189,6 +224,8 @@ impl<L: Link> Host<L> {
             true => _ = self.schedule.step(&mut self.world),
             false => _ = self.schedule.carry_out(&mut self.world),
         }
+        // Nobody reads them here, and they'd only mount up.
+        self.world.take_notices();
         let lost = self.clients.extract_if(.., |c| c.lost);
         events.extend(lost.map(|c| Event::Left(c.id)));
         events
@@ -255,6 +292,36 @@ mod tests {
         World::from_regiments(sides, pathing, &[regiment(0), regiment(1)])
     }
 
+    /// A client and the copy of the match it plays.
+    struct Copy {
+        client: Client<Local>,
+        world: World,
+    }
+
+    impl std::ops::Deref for Copy {
+        type Target = Client<Local>;
+
+        fn deref(&self) -> &Client<Local> {
+            &self.client
+        }
+    }
+
+    impl std::ops::DerefMut for Copy {
+        fn deref_mut(&mut self) -> &mut Client<Local> {
+            &mut self.client
+        }
+    }
+
+    impl Copy {
+        fn world(&self) -> &World {
+            &self.world
+        }
+
+        fn advance(&mut self, most: usize) -> Result<(), crate::Lost> {
+            self.client.advance(&mut self.world, most)
+        }
+    }
+
     fn setup() -> Setup {
         Setup {
             map: "field".into(),
@@ -265,7 +332,7 @@ mod tests {
 
     /// A host with a client for each of `seats`, giving the orders of
     /// the players it lists.
-    fn hosted(seats: &[&[u32]]) -> (Host<Local>, Vec<Client<Local>>) {
+    fn hosted(seats: &[&[u32]]) -> (Host<Local>, Vec<Copy>) {
         let mut host = Host::new(setup(), fresh());
         let clients = seats.iter().map(|players| {
             let (ours, mut theirs) = pair();
@@ -273,7 +340,10 @@ mod tests {
             let welcome = welcome(&mut theirs).unwrap().unwrap();
             assert_eq!((welcome.client, &welcome.setup), (id, &setup()));
             assert_eq!(welcome.players, *players);
-            Client::new(theirs, fresh())
+            Copy {
+                client: Client::new(theirs),
+                world: fresh(),
+            }
         });
         let clients = clients.collect();
         (host, clients)
@@ -285,7 +355,7 @@ mod tests {
     }
 
     /// Plays `turns` turns, every client keeping up.
-    fn play(host: &mut Host<Local>, clients: &mut [Client<Local>], turns: usize) {
+    fn play(host: &mut Host<Local>, clients: &mut [Copy], turns: usize) {
         for _ in 0..turns {
             assert_eq!(host.turn(), []);
             for c in clients.iter_mut() {
@@ -329,7 +399,7 @@ mod tests {
         play(&mut host, &mut clients, 3);
         assert!(host.schedule().record().given.is_empty());
         assert_eq!(host.world().ticks, 3);
-        host.allow_cheats(true);
+        host.trust(1);
         clients[0].ask(Action::Win(1)).unwrap();
         clients[1].ask(Action::Win(2)).unwrap();
         play(&mut host, &mut clients, 1);
@@ -457,8 +527,45 @@ mod tests {
         // The rest the turn after.
         assert_eq!(host.turn(), []);
         assert_eq!(host.schedule().record().given.len(), HEARD_A_TURN + 5);
+        // But for one it trusts, which is heard out.
+        host.trust(1);
+        for _ in 0..HEARD_A_TURN + 5 {
+            clients[0].ask(Action::Pause(false)).unwrap();
+        }
+        assert_eq!(host.turn(), []);
+        assert_eq!(host.schedule().record().given.len(), 2 * HEARD_A_TURN + 10);
         // And a message too long to be anything it has to say, not at all.
         clients[1].link().send(vec![0; LONGEST_HEARD + 1]).unwrap();
         assert_eq!(host.turn(), [Event::Left(2)]);
+    }
+
+    #[test]
+    fn a_trusted_client_is_let_do_anything() {
+        let (mut host, mut clients) = hosted(&[&[], &[2]]);
+        host.trust(1);
+        clients[0].ask(go(2, 1, [5.0, 30.0])).unwrap();
+        clients[0].ask(Action::Lose(1)).unwrap();
+        clients[0].ask(Action::Pause(true)).unwrap();
+        clients[1].ask(Action::Lose(1)).unwrap();
+        play(&mut host, &mut clients, 1);
+        assert_eq!(host.schedule().record().given.len(), 3);
+    }
+
+    #[test]
+    fn a_host_that_keeps_time_itself_says_when_a_tick_is_played() {
+        let (mut host, mut clients) = hosted(&[&[1]]);
+        clients[0].ask(go(1, 0, [30.0, 12.0])).unwrap();
+        clients[0].ask(Action::Pause(true)).unwrap();
+        // What's asked is carried out without a tick going by.
+        assert_eq!(host.relay(), []);
+        clients[0].advance(usize::MAX).unwrap();
+        assert_eq!(clients[0].world().ticks, 0);
+        assert_eq!(clients[0].schedule().record().given.len(), 2);
+        assert!(clients[0].schedule().paused());
+        // And a tick is played though the match is held still.
+        assert_eq!(host.tick(), []);
+        clients[0].advance(usize::MAX).unwrap();
+        assert_eq!((host.world().ticks, clients[0].world().ticks), (1, 1));
+        assert_eq!(clients[0].world().hash(), host.world().hash());
     }
 }

@@ -16,10 +16,9 @@ pub fn welcome(link: &mut impl Link) -> Result<Option<Welcome>, Lost> {
     }
 }
 
-/// A copy of a match played as its host says.
+/// What plays a copy of a match as its host says.
 pub struct Client<L> {
     link: L,
-    world: World,
     schedule: Schedule,
     /// How many of its record's hashes the host has been sent.
     checked: usize,
@@ -28,22 +27,16 @@ pub struct Client<L> {
 }
 
 impl<L: Link> Client<L> {
-    /// A client playing `world`, the match its [`welcome`] set up and
-    /// which has yet to be played, with its host at the other end of
-    /// `link`.
-    pub fn new(link: L, world: World) -> Client<L> {
+    /// A client with its host at the other end of `link`, to play a copy
+    /// of the match its [`welcome`] set up.
+    pub fn new(link: L) -> Client<L> {
         Client {
             link,
-            world,
             schedule: Schedule::default(),
             checked: 0,
             diverged: Vec::new(),
             refused: Vec::new(),
         }
-    }
-
-    pub fn world(&self) -> &World {
-        &self.world
     }
 
     /// What its copy of the match has been given, and the pause and speed
@@ -70,9 +63,10 @@ impl<L: Link> Client<L> {
         std::mem::take(&mut self.refused)
     }
 
-    /// Does what the host has said to since it last did, up to `most`
-    /// steps of it so that one far behind catches up a part at a time.
-    pub fn advance(&mut self, most: usize) -> Result<(), Lost> {
+    /// Has `world`, its copy of the match and nobody else's to change, do
+    /// what the host has said to since it last did: up to `most` steps of
+    /// it, so that one far behind catches up a part at a time.
+    pub fn advance(&mut self, world: &mut World, most: usize) -> Result<(), Lost> {
         let mut steps = 0;
         while steps < most {
             let Some(message) = self.link.receive()? else {
@@ -85,8 +79,8 @@ impl<L: Link> Client<L> {
                         self.schedule.act(action);
                     }
                     self.refused.extend(match bundle.tick {
-                        true => self.schedule.step(&mut self.world),
-                        false => self.schedule.carry_out(&mut self.world),
+                        true => self.schedule.step(world),
+                        false => self.schedule.carry_out(world),
                     });
                     let checks = &self.schedule.record().checks;
                     for &(step, hash) in &checks[self.checked..] {

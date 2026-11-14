@@ -1,6 +1,7 @@
 //! What a host and a client reach each other over: whole messages, each
 //! arriving once and in the order sent, or the link is lost.
 
+use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 
 /// The other end has gone, and nothing more will come from or reach it.
@@ -21,7 +22,9 @@ pub trait Link {
 #[derive(Debug)]
 pub struct Local {
     to: Sender<Vec<u8>>,
-    from: Receiver<Vec<u8>>,
+    /// Behind a lock only so that an end can be shared between threads,
+    /// which a receiver alone can't be; it's never waited for.
+    from: Mutex<Receiver<Vec<u8>>>,
 }
 
 /// The two ends of a link within the program.
@@ -30,11 +33,11 @@ pub fn pair() -> (Local, Local) {
     let (to_a, from_b) = mpsc::channel();
     let a = Local {
         to: to_b,
-        from: from_b,
+        from: Mutex::new(from_b),
     };
     let b = Local {
         to: to_a,
-        from: from_a,
+        from: Mutex::new(from_a),
     };
     (a, b)
 }
@@ -45,7 +48,8 @@ impl Link for Local {
     }
 
     fn receive(&mut self) -> Result<Option<Vec<u8>>, Lost> {
-        match self.from.try_recv() {
+        let from = self.from.get_mut().unwrap_or_else(|e| e.into_inner());
+        match from.try_recv() {
             Ok(message) => Ok(Some(message)),
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err(Lost),

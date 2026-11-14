@@ -73,6 +73,7 @@ impl Ramp {
 }
 
 /// An aircraft bringing a regiment onto the map.
+#[derive(Clone)]
 pub struct Delivery {
     /// Its object's id.
     pub id: u32,

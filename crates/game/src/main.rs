@@ -39,6 +39,7 @@ mod music;
 mod object_display;
 mod objectives;
 mod options;
+mod orders;
 mod outcome;
 mod pause;
 mod presets;
@@ -76,6 +77,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
+use orders::Orders;
 use tgck::map::{Detail, Thing};
 
 const USAGE: &str = "\
@@ -205,7 +207,7 @@ struct Preparing {
 /// What [`prepare`] sets a match up with.
 struct Prepared {
     loaded: Loaded,
-    setup: aaa_server::Setup,
+    orders: Orders,
     sim: World,
     raising: Recruits,
     person: Option<u32>,
@@ -215,15 +217,6 @@ struct Prepared {
 
 #[derive(Resource)]
 struct Sim(World);
-
-/// What the match was set up from, which with its [`Orders`]' record is
-/// all it takes to play it again.
-#[derive(Resource)]
-struct Began(aaa_server::Setup);
-
-/// The orders every player gives, and the record of those carried out.
-#[derive(Resource, Default, Deref, DerefMut)]
-struct Orders(aaa_sim::Schedule);
 
 /// Says which of the orders carried out were refused.
 fn log_refused(refused: Vec<(u32, aaa_sim::Refused)>) {
@@ -965,7 +958,8 @@ fn prepare(
     game.property_looks();
     Ok(Prepared {
         loaded: Loaded { game, map },
-        setup,
+        // The host's copy, made here to keep it off the window's thread.
+        orders: Orders::hosting(setup, sim.clone()),
         sim,
         raising,
         person,
@@ -978,7 +972,7 @@ fn prepare(
 fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     let Prepared {
         loaded,
-        setup,
+        orders,
         sim,
         raising,
         person,
@@ -1002,9 +996,8 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     world.insert_resource(Local(lineup.person()));
     world.insert_resource(leaders);
     world.insert_resource(lineup);
+    world.insert_resource(orders);
     world.insert_resource(Sim(sim));
-    world.insert_resource(Began(setup));
-    world.insert_resource(Orders::default());
     world.insert_resource(Raising(raising));
     world.insert_resource(effects);
     world.insert_resource(loaded);
