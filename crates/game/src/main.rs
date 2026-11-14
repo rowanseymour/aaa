@@ -39,6 +39,7 @@ mod music;
 mod object_display;
 mod objectives;
 mod options;
+mod outcome;
 mod pause;
 mod presets;
 mod remote;
@@ -700,6 +701,7 @@ fn main() -> ExitCode {
             displays::DisplaysPlugin,
             technologies::TechnologyPlugin,
             objectives::ObjectivesPlugin,
+            outcome::OutcomePlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(OnEnter(Screen::Loading), loading)
@@ -839,6 +841,7 @@ fn main() -> ExitCode {
         .insert_resource(lobby::Handicaps::new(game.handicaps()))
         .insert_resource(lobby::Leaving::of(&strings))
         .insert_resource(confirm::Words::of(&strings))
+        .insert_resource(outcome::Words::of(&strings))
         .insert_resource(StageWords::of(&strings))
         .insert_resource(options::Options::new(&game))
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
@@ -975,6 +978,8 @@ fn prepare(
         experience_per_second: experience.per_second,
         sights: game.sights(),
         numbered: game.numbered(),
+        sustaining: game.sustaining(),
+        team_victory: game.team_victory(),
         ..Default::default()
     };
     if let Some(gravity) = game.gravity() {
@@ -2697,9 +2702,9 @@ mod tests {
         assert!(app.world().resource::<Stepped>().0 > 0, "after it");
     }
 
-    #[test]
-    fn things_name_the_persons_side_the_player_and_the_computers_its_general() {
-        let player = |id: u32| aaa_map::Player {
+    /// A side a person may play, on no team.
+    pub(crate) fn player(id: u32) -> aaa_map::Player {
+        aaa_map::Player {
             id,
             name: format!("kingdom_{id}"),
             color: "blue".into(),
@@ -2707,6 +2712,9 @@ mod tests {
             team: None,
             independent: false,
             playable: true,
+            default_defeat: true,
+            outcome: Default::default(),
+            won_by_cities: false,
             nation: None,
             general: None,
             relations: Vec::new(),
@@ -2715,7 +2723,11 @@ mod tests {
             technologies: Vec::new(),
             handicap: None,
             barred: Vec::new(),
-        };
+        }
+    }
+
+    #[test]
+    fn things_name_the_persons_side_the_player_and_the_computers_its_general() {
         let general = |id: &str, name: &str| aaa_data::General {
             id: id.into(),
             name: name.into(),

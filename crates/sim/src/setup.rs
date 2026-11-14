@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, HashMap, VecDeque};
 use aaa_map::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
 
 use crate::{
-    Building, Fog, Order, Regiment, Rules, Sides, State, Supplying, Trailer, Treasury, TurretAim,
-    Unit, World, normalised, wrap,
+    Building, Fate, Fog, Order, Outcome, Regiment, Rules, Sides, State, Supplying, Trailer,
+    Treasury, TurretAim, Unit, World, normalised, wrap,
 };
 
 /// [`World::holdings`] from each placed object's role, owner and template.
@@ -81,6 +81,16 @@ impl World {
     ) -> World {
         // Nothing's hidden until the match sets its fog.
         let fog = Fog::new(pathing.side, aaa_map::FogSetting::None);
+        let fate = |p: &aaa_map::Player| Fate {
+            outcome: p.outcome,
+            default_defeat: p.default_defeat,
+            by_cities: p.won_by_cities,
+        };
+        let fates: BTreeMap<u32, Fate> = sides.players.iter().map(|p| (p.id, fate(p))).collect();
+        // A match is over once a side has won or every side has lost.
+        let decided = |of: Outcome| fates.values().filter(move |f| f.outcome == of);
+        let over = decided(Outcome::Won).next().is_some()
+            || !fates.is_empty() && decided(Outcome::Playing).next().is_none();
         let mut world = World {
             sides,
             pathing,
@@ -101,6 +111,8 @@ impl World {
             landings: Vec::new(),
             technologies: BTreeMap::new(),
             objectives: BTreeMap::new(),
+            fates,
+            over,
             rng: 0x9e37_79b9_7f4a_7c15,
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),

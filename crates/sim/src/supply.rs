@@ -7,13 +7,13 @@ use std::collections::BTreeMap;
 use aaa_map::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
 
 use crate::{
-    Building, Held, Order, Piece, Refused, Relation, State, TICK, Target, World, bounding_radius,
-    deploy_point, distance,
+    Building, Held, Order, Piece, Refused, Relation, SECOND, State, TICK, Target, World,
+    bounding_radius, deploy_point, distance,
 };
 
 /// Ticks between looks at whether a building gives supply, each building
 /// on its own beat.
-pub(crate) const BEAT: u64 = (1.0 / TICK) as u64;
+pub(crate) const BEAT: u64 = SECOND;
 
 /// Something that has bombarded a regiment lately.
 #[derive(Debug, Clone, Copy, PartialEq)]

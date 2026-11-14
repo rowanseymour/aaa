@@ -313,6 +313,9 @@ pub(crate) fn player(
         team,
         independent: team.is_none(),
         playable: team.is_some(),
+        default_defeat: true,
+        outcome: Default::default(),
+        won_by_cities: false,
         nation: None,
         general: None,
         relations: stored(relations),
@@ -325,7 +328,8 @@ pub(crate) fn player(
 }
 
 /// Player 1's HQ at 20,20, commissioning a [`truck`] in a second, which it
-/// puts out 6 to its left, on open ground with nothing else.
+/// puts out 6 to its left, on open ground with nothing else, in a match
+/// that doesn't end.
 pub(crate) fn headquarters() -> World {
     let mut hq = building(5, 1, [20.0, 20.0]);
     hq.deploy = Some(DeployPoints {
@@ -336,6 +340,10 @@ pub(crate) fn headquarters() -> World {
     w.pathing.block(hq.obstacle.as_ref().unwrap());
     w.add_buildings(&[hq]);
     recruits(&mut w, "house", truck(), 1.0);
+    // Nobody's out for having nothing, the sides with no base included.
+    for p in 1..=3 {
+        w.set_default_defeat(p, false);
+    }
     w
 }
 

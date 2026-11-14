@@ -27,6 +27,12 @@ pub struct Player {
     pub independent: bool,
     /// A person may play it.
     pub playable: bool,
+    /// Whether having nothing left that keeps it in the match defeats it.
+    pub default_defeat: bool,
+    /// How the match stood for it when the map was saved.
+    pub outcome: Outcome,
+    /// Whether it won by the share of the map's cities its team held.
+    pub won_by_cities: bool,
     /// The nation it plays as, e.g. `nation_usa`, where the map fixes one or
     /// it was loaded with one.
     pub nation: Option<String>,
@@ -62,6 +68,16 @@ pub struct Team {
     /// How it stands toward each team, by index in
     /// [`Map::teams`](crate::Map::teams).
     pub team_relations: Vec<Relation>,
+}
+
+/// How a match has come out for a side. Once it's no longer playing,
+/// nothing changes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Outcome {
+    #[default]
+    Playing,
+    Won,
+    Lost,
 }
 
 /// How the player `from` stands toward the player `to`, by their ids:
@@ -134,6 +150,13 @@ pub(crate) fn players_and_teams(
                 .position(|t| t.head.id == k.team && k.team != 0),
             independent: k.independent != 0,
             playable: k.playable,
+            default_defeat: k.default_victory_condition.unwrap_or(true),
+            outcome: match k.outcome {
+                1 => Outcome::Won,
+                2 => Outcome::Lost,
+                _ => Outcome::Playing,
+            },
+            won_by_cities: k.city_ratio_victory.unwrap_or(false),
             nation: (!k.nation.is_empty()).then(|| k.nation.clone()),
             // Maps whose nation the lobby chooses can still name a general,
             // which the lobby's choice replaces.

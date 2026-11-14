@@ -62,13 +62,33 @@ pub fn confirm<M>(
     question: impl Into<String>,
     ok: impl IntoEntityObserver<M>,
 ) {
+    let asked = ask(commands, screen, question);
+    offer(commands, asked, words.ok.clone(), "confirm.ok", ok);
+    offer(
+        commands,
+        asked,
+        words.cancel.clone(),
+        "confirm.cancel",
+        nothing,
+    );
+}
+
+/// What an answer that only takes its question down does.
+pub fn nothing(_: On<Activate>) {}
+
+/// A question put up, and the row its answers go in.
+#[derive(Clone, Copy)]
+pub struct Asked {
+    root: Entity,
+    row: Entity,
+}
+
+/// Puts `question` up on `screen` with no answers yet: [`offer`] adds
+/// them. Escape or leaving the screen takes it down.
+pub fn ask(commands: &mut Commands, screen: Screen, question: impl Into<String>) -> Asked {
     let root = commands
         .spawn((Question, DespawnOnExit(screen), ui::scrim(layer::QUESTION)))
         .id();
-    // Already gone if Escape or the other answer took it down this frame.
-    let dismiss = move |_: On<Activate>, mut commands: Commands| {
-        commands.entity(root).try_despawn();
-    };
     let dialog = commands
         .spawn((
             ChildOf(root),
@@ -96,24 +116,30 @@ pub fn confirm<M>(
             },
         ))
         .id();
+    Asked { root, row }
+}
+
+/// Adds an answer saying `words` to a question, called `id` for the
+/// console: giving it runs `then`, and takes the question down.
+pub fn offer<M>(
+    commands: &mut Commands,
+    asked: Asked,
+    words: String,
+    id: &str,
+    then: impl IntoEntityObserver<M>,
+) {
+    let Asked { root, row } = asked;
+    // Already gone if Escape or another answer took it down this frame.
+    let dismiss = move |_: On<Activate>, mut commands: Commands| {
+        commands.entity(root).try_despawn();
+    };
     commands
-        .spawn((
-            answer(words.ok.clone()),
-            ui::called("confirm.ok"),
-            ChildOf(row),
-        ))
-        .observe(ok)
-        .observe(dismiss);
-    commands
-        .spawn((
-            answer(words.cancel.clone()),
-            ui::called("confirm.cancel"),
-            ChildOf(row),
-        ))
+        .spawn((answer(words), ui::called(id), ChildOf(row)))
+        .observe(then)
         .observe(dismiss);
 }
 
-/// A [`ui::button`] sharing its row equally with the other answer.
+/// A [`ui::button`] sharing its row equally with the other answers.
 fn answer(words: String) -> impl Bundle {
     let node = Node {
         flex_grow: 1.0,

@@ -243,6 +243,21 @@ const VERBS: &[Verb] = &[
         "plays as a kingdom, by name or id; without one, lists them",
     ),
     verb(
+        "outcome",
+        "",
+        "says whether the match is over, and how it's come out for each kingdom",
+    ),
+    verb(
+        "missionwon",
+        "kingdom",
+        "has a kingdom, by name or id, win the match",
+    ),
+    verb(
+        "missionlost",
+        "kingdom",
+        "has a kingdom, by name or id, lose the match",
+    ),
+    verb(
         "move",
         "regiment x y",
         "sends a regiment, by its id, to x y",
@@ -449,6 +464,9 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "create" => create(world, &args),
                 "placementkingdom" => placement_kingdom(world, &args),
                 "playerkingdom" => player_kingdom(world, &args),
+                "missionwon" => decide(world, &args, true),
+                "missionlost" => decide(world, &args, false),
+                "outcome" => no_args(&args).map(|_| outcome(&world.resource::<Sim>().0)),
                 "move" => order(world, &args, Aim::Move),
                 "attack" => order(world, &args, Aim::Attack),
                 "guard" => order(world, &args, Aim::Guard),
@@ -842,6 +860,35 @@ fn kingdoms(sim: &aaa_sim::World, current: Option<u32>) -> String {
         })
         .collect();
     format!("kingdoms: {}", names.join(", "))
+}
+
+/// Whether the match is over, and how it's come out for each side.
+fn outcome(sim: &aaa_sim::World) -> String {
+    let sides = sim.sides.players.iter().map(|p| {
+        let outcome = match sim.outcome(p.id) {
+            aaa_sim::Outcome::Playing => "playing",
+            aaa_sim::Outcome::Won => "won",
+            aaa_sim::Outcome::Lost => "lost",
+        };
+        format!("\"{}\" ({}) {outcome}", p.name, p.id)
+    });
+    let sides: Vec<String> = sides.collect();
+    let state = if sim.over { "over" } else { "running" };
+    format!("match {state}: {}", sides.join(", "))
+}
+
+/// Has a kingdom win or lose the match, as a map's triggers can.
+fn decide(world: &mut World, args: &[&str], won: bool) -> Reply {
+    let [word] = args else {
+        return Err(usage(if won { "missionwon" } else { "missionlost" }));
+    };
+    let sim = &mut world.resource_mut::<Sim>().0;
+    let id = kingdom(sim, word)?;
+    match won {
+        true => sim.win(id),
+        false => sim.lose(id),
+    }
+    Ok(outcome(sim))
 }
 
 fn placement_kingdom(world: &mut World, args: &[&str]) -> Reply {

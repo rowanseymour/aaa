@@ -77,6 +77,20 @@ pub enum Notice {
         building: usize,
         paid: f32,
     },
+    /// It's lost the match, which goes on.
+    Defeated { player: u32 },
+    /// It's won the match.
+    Victorious { player: u32 },
+    /// Every side of the team at this index into
+    /// [`Sides::teams`](crate::Sides::teams) has lost the match, which
+    /// goes on.
+    TeamDefeated { team: usize },
+    /// The team at this index into [`Sides::teams`](crate::Sides::teams)
+    /// has won the match.
+    TeamVictorious { team: usize },
+    /// It holds, with its team, the share of the map's cities that wins
+    /// the match: this many.
+    CitiesHeld { player: u32, cities: usize },
 }
 
 impl World {

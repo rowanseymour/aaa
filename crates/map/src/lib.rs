@@ -27,8 +27,8 @@ pub use tgck::map::Relation;
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
 pub use units::{
-    Division, Formation, Member, Packs, Player, Recruits, Regiment, Team, Trailer, UNPACKED_FACING,
-    Unpacks, owner, relation,
+    Division, Formation, Member, Outcome, Packs, Player, Recruits, Regiment, Team, Trailer,
+    UNPACKED_FACING, Unpacks, owner, relation,
 };
 
 use std::collections::{HashMap, HashSet};
@@ -814,6 +814,9 @@ mod tests {
             team: Some(team),
             independent: false,
             playable: true,
+            default_defeat: true,
+            outcome: Default::default(),
+            won_by_cities: false,
             nation: None,
             general: None,
             relations: vec![Enemy; 5],
