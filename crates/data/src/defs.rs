@@ -208,6 +208,9 @@ pub struct BodyComponent {
     pub destructible: Option<bool>,
 }
 
+/// What makes a building a city centre, claiming a zone of the map. A city
+/// isn't a settlement: that's a Kohan II town, a template with a
+/// `SettlementComponent`, which no AA template or map has.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CityComponent {
     pub zone_radius: Option<f32>,

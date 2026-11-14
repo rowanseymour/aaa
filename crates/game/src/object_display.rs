@@ -16,7 +16,8 @@
 //! - Group, for several: a card each, up to [`MAX_SELECTED`], with the
 //!   banner, the regiment's health and each unit's; clicking one selects
 //!   it alone.
-//! - Settlement, for a city.
+//! - Settlement, for a settlement (see [`aaa_data::defs::CityComponent`]):
+//!   unused, since a city shows as a simple actor.
 //!
 //! Beside the title of a regiment or a building is an icon for each
 //! property it holds that has one, a building one unpacked into showing
@@ -179,7 +180,7 @@ enum Mode {
     SimpleActor(Actor),
     /// A regiment's, or an HQ's, packed or not.
     Company(Actor),
-    /// A city's.
+    /// A settlement's, which no AA thing is.
     #[allow(dead_code)]
     Settlement,
     /// That of several regiments.
