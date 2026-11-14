@@ -1032,6 +1032,9 @@ pub struct SVars {
     /// Whether a side's objectives are kept in order of their text.
     #[serde(rename = "SortObjectives")]
     pub sort_objectives: Option<bool>,
+    /// Whether the sides of a team win and lose together.
+    #[serde(rename = "TeamVictory")]
+    pub team_victory: Option<bool>,
     /// How far up its target a projectile flying straight aims.
     #[serde(rename = "ProjectileTargetHeightRatio")]
     pub projectile_target_height_ratio: Option<f32>,

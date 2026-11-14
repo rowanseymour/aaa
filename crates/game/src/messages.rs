@@ -564,6 +564,7 @@ fn told(
         let player = sim.sides.player(id);
         player.map_or_else(String::new, |p| leaders.owner(p, local))
     };
+    let team_name = |team: usize| sim.sides.teams[team].name.clone();
     Some(match notice {
         Notice::Short { player, percent } if ours(player) => {
             let percent = (percent as i64).to_string();
@@ -718,6 +719,16 @@ fn told(
                 }
                 false => return None,
             }
+        }
+        // How the match comes out is told to everyone.
+        Notice::Defeated { player } => Told::Event("kingdom_defeated", vec![side(player)], None),
+        Notice::Victorious { player } => Told::Event("kingdom_victory", vec![side(player)], None),
+        Notice::TeamDefeated { team } => Told::Event("team_defeated", vec![team_name(team)], None),
+        Notice::TeamVictorious { team } => Told::Event("team_victory", vec![team_name(team)], None),
+        Notice::CitiesHeld { player, cities } => {
+            let team = sim.sides.player(player).and_then(|p| p.team);
+            let name = team.map_or_else(|| side(player), team_name);
+            Told::Event("city_ratio_victory", vec![name, cities.to_string()], None)
         }
         _ => return None,
     })

@@ -21,6 +21,7 @@ mod messages;
 mod nations;
 mod objectives;
 mod organizations;
+mod outcome;
 mod properties;
 mod recruiting;
 mod research;
@@ -890,12 +891,15 @@ mod tests {
     }
 
     #[test]
-    fn settings_read_whether_objectives_sort() {
-        let parsed = tgi::parse("[SVars]\n{\n\tbool SortObjectives = false\n}\n");
+    fn settings_read_whether_objectives_sort_and_teams_win_together() {
+        let parsed = tgi::parse(
+            "[SVars]\n{\n\tbool SortObjectives = false\n\tflag TeamVictory = false\n}\n",
+        );
         let templates = tgi::Templates::new([&parsed.root]);
         let block = parsed.root.blocks_of("SVars").next().unwrap();
         let svars: defs::SVars = templates.deserialize(block).unwrap();
         assert_eq!(svars.sort_objectives, Some(false));
+        assert_eq!(svars.team_victory, Some(false));
     }
 
     #[test]

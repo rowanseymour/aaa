@@ -19,6 +19,7 @@ mod guard;
 mod movement;
 mod notices;
 mod objectives;
+mod outcome;
 mod packing;
 pub mod path;
 mod production;
@@ -39,7 +40,7 @@ use aaa_map::{
     Unpacks, Weapon,
 };
 
-pub use aaa_map::{Player, Relation, Team};
+pub use aaa_map::{Outcome, Player, Relation, Team};
 pub use attach::Hq;
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
@@ -47,6 +48,7 @@ pub use experience::Commander;
 pub use fog::{Fog, Seen};
 pub use notices::Notice;
 pub use objectives::{Objective, Objectives, Standing};
+pub use outcome::Fate;
 pub use packing::unpack_site;
 pub use properties::Held;
 pub use research::{Lacking, Researchable};
@@ -55,6 +57,9 @@ pub use supply::{Bombarder, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
+
+/// Ticks to a second of play.
+pub(crate) const SECOND: u64 = (1.0 / TICK) as u64;
 
 /// Ticks [`World::landings`] keeps each landing for.
 pub const LANDINGS_KEPT: u64 = 50;
@@ -138,6 +143,11 @@ pub struct World {
     pub technologies: BTreeMap<u32, Vec<Id>>,
     /// The objectives each side holds, by player id.
     pub objectives: BTreeMap<u32, Objectives>,
+    /// Where each side stands in the match, by player id.
+    pub fates: BTreeMap<u32, Fate>,
+    /// Whether the match is over: every side's outcome is decided, though
+    /// play carries on.
+    pub over: bool,
     /// What sides own that's neither a regiment nor a building but may
     /// still add to their economy, such as where they start: each owner
     /// and template.
@@ -909,6 +919,7 @@ impl World {
         self.gain_experience();
         self.look();
         self.ticks += 1;
+        self.settle_outcomes();
     }
 }
 

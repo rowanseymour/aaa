@@ -75,6 +75,14 @@ pub struct Rules {
     /// The templates whose regiments are numbered, as are the buildings
     /// standing in their organizations.
     pub numbered: HashSet<Id>,
+    /// The templates whose things keep their side in the match, as every
+    /// regiment does.
+    pub sustaining: HashSet<Id>,
+    /// Whether the sides of a team win and lose together.
+    pub team_victory: bool,
+    /// The percentage of the map's cities a team wins by holding; 0 for
+    /// no such win.
+    pub city_victory_ratio: u32,
 }
 
 impl Default for Rules {
@@ -108,6 +116,9 @@ impl Default for Rules {
             experience_per_second: 0.0,
             sights: HashMap::new(),
             numbered: HashSet::new(),
+            sustaining: HashSet::new(),
+            team_victory: true,
+            city_victory_ratio: 0,
         }
     }
 }

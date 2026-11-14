@@ -22,6 +22,9 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `create template [x y]`: raises a regiment for the placement kingdom where the camera points, or at x y, and says its id
 - `placementkingdom [kingdom]`: sets, by name or id, who owns what create raises; without one, lists the kingdoms
 - `playerkingdom [kingdom]`: plays as a kingdom, by name or id; without one, lists them
+- `outcome`: says whether the match is over, and how it's come out for each kingdom
+- `missionwon kingdom`: has a kingdom, by name or id, win the match
+- `missionlost kingdom`: has a kingdom, by name or id, lose the match
 - `move regiment x y`: sends a regiment, by its id, to x y
 - `attack regiment (x y | enemy)`: sends a regiment, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy regiment, by its id
 - `guard regiment (x y | other)`: posts a regiment, by its id, at x y or beside another regiment, by its id, to come back to after every fight
