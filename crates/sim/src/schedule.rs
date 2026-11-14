@@ -1,19 +1,70 @@
-//! The orders a match is given, kept with the step each was carried out on,
-//! so that another copy of the match given them on the same steps plays out
-//! the same way.
+//! What a match is given, orders above all, kept with the step each was
+//! carried out on, so that another copy of the match given them on the same
+//! steps plays out the same way.
 
 use crate::{Command, Refused, SECOND, World};
 
 /// Steps between the hashes a [`Record`] keeps of its match.
 const CHECK_EVERY: u64 = SECOND;
 
-/// An order as a match was given it.
+/// Something a match is given: the only ways it's changed besides playing
+/// on.
+#[derive(Debug, Clone)]
+pub enum Action {
+    /// A player's order.
+    Order { player: u32, command: Command },
+    /// Holds the match still, or lets it go on.
+    Pause(bool),
+    /// Has the match play this many times as fast; nothing unless it's
+    /// more than none.
+    Speed(f32),
+    /// Has a side win, as [`World::win`].
+    Win(u32),
+    /// Has a side lose, as [`World::lose`].
+    Lose(u32),
+    /// Puts a regiment on the map, as [`World::add_new_regiment`].
+    Raise(Box<aaa_map::Regiment>),
+    /// Kills the regiment at this index into [`World::regiments`]
+    /// outright.
+    Destroy(usize),
+}
+
+impl Action {
+    /// Leaves `clock`, a match's pause and speed, as it has them.
+    fn set_clock(&self, clock: &mut (bool, f32)) {
+        match *self {
+            Action::Pause(pause) => clock.0 = pause,
+            Action::Speed(speed) if speed.is_finite() && speed > 0.0 => clock.1 = speed,
+            _ => {}
+        }
+    }
+
+    /// Carries it out in `world`, which is all of it but for the pause
+    /// and speed a match is played at.
+    fn apply(self, world: &mut World) -> Result<(), (u32, Refused)> {
+        match self {
+            Action::Order { player, command } => {
+                return world.apply(player, command).map_err(|e| (player, e));
+            }
+            Action::Pause(_) | Action::Speed(_) => {}
+            Action::Win(player) => world.win(player),
+            Action::Lose(player) => world.lose(player),
+            Action::Raise(regiment) => _ = world.add_new_regiment(*regiment),
+            Action::Destroy(regiment) if regiment < world.regiments.len() => {
+                world.destroy(regiment)
+            }
+            Action::Destroy(_) => {}
+        }
+        Ok(())
+    }
+}
+
+/// An action as a match was given it.
 #[derive(Debug, Clone)]
 pub struct Given {
     /// The ticks the match had played when it was carried out.
     pub step: u64,
-    pub player: u32,
-    pub command: Command,
+    pub action: Action,
 }
 
 /// What a match has been given and how it stood along the way: enough,
@@ -23,7 +74,7 @@ pub struct Given {
 pub struct Record {
     /// The ticks played.
     pub steps: u64,
-    /// The orders carried out, in the order they were.
+    /// The actions carried out, in the order they were.
     pub given: Vec<Given>,
     /// [`World::hash`] after some of the steps, by the ticks played then.
     pub checks: Vec<(u64, u64)>,
@@ -36,12 +87,25 @@ pub struct Diverged {
     pub step: u64,
 }
 
-/// The orders waiting to be carried out in a match, and the [`Record`] of
-/// those that have been. They're the only way players change a match.
-#[derive(Debug, Default)]
+/// The actions waiting to be carried out in a match, the [`Record`] of
+/// those that have been, and the pause and speed they've left it at.
+#[derive(Debug)]
 pub struct Schedule {
-    waiting: Vec<(u32, Command)>,
+    waiting: Vec<Action>,
     record: Record,
+    paused: bool,
+    speed: f32,
+}
+
+impl Default for Schedule {
+    fn default() -> Self {
+        Schedule {
+            waiting: Vec::new(),
+            record: Record::default(),
+            paused: false,
+            speed: 1.0,
+        }
+    }
 }
 
 impl Schedule {
@@ -49,31 +113,63 @@ impl Schedule {
     /// now.
     pub fn give(&mut self, world: &World, player: u32, command: Command) -> Result<(), Refused> {
         world.check(player, &command)?;
-        self.waiting.push((player, command));
+        self.act(Action::Order { player, command });
         Ok(())
     }
 
-    /// Carries out every order waiting, returning those refused. Checked
-    /// when given, they're only refused where one before them changed
-    /// things, such as a building told to pack and then to commission.
-    /// Carried out between two ticks, they're recorded as though just
-    /// before the second, which comes to the same.
+    /// Queues `action`.
+    pub fn act(&mut self, action: Action) {
+        self.waiting.push(action);
+    }
+
+    /// Whether the match is held still.
+    pub fn paused(&self) -> bool {
+        self.paused
+    }
+
+    /// As [`Schedule::paused`], once what's waiting is carried out.
+    pub fn pausing(&self) -> bool {
+        self.clock_once_carried_out().0
+    }
+
+    /// How many times as fast the match is played.
+    pub fn speed(&self) -> f32 {
+        self.speed
+    }
+
+    /// As [`Schedule::speed`], once what's waiting is carried out.
+    pub fn speeding(&self) -> f32 {
+        self.clock_once_carried_out().1
+    }
+
+    fn clock_once_carried_out(&self) -> (bool, f32) {
+        let mut clock = (self.paused, self.speed);
+        self.waiting.iter().for_each(|a| a.set_clock(&mut clock));
+        clock
+    }
+
+    /// Carries out every action waiting, returning the orders refused.
+    /// Checked when given, they're only refused where one before them
+    /// changed things, such as a building told to pack and then to
+    /// commission. Carried out between two ticks, actions are recorded as
+    /// though just before the second, which comes to the same.
     pub fn carry_out(&mut self, world: &mut World) -> Vec<(u32, Refused)> {
         let mut refused = Vec::new();
-        for (player, command) in self.waiting.drain(..) {
+        for action in self.waiting.drain(..) {
+            let mut clock = (self.paused, self.speed);
+            action.set_clock(&mut clock);
+            (self.paused, self.speed) = clock;
+            let step = world.ticks;
             self.record.given.push(Given {
-                step: world.ticks,
-                player,
-                command: command.clone(),
+                step,
+                action: action.clone(),
             });
-            if let Err(e) = world.apply(player, command) {
-                refused.push((player, e));
-            }
+            refused.extend(action.apply(world).err());
         }
         refused
     }
 
-    /// Carries out the orders waiting and plays a tick, returning the
+    /// Carries out the actions waiting and plays a tick, returning the
     /// orders refused.
     pub fn step(&mut self, world: &mut World) -> Vec<(u32, Refused)> {
         let refused = self.carry_out(world);
@@ -103,7 +199,7 @@ impl Record {
         let mut carry_out = |world: &mut World| {
             while let Some(g) = given.next_if(|g| g.step <= world.ticks) {
                 // Refused here as it was there.
-                let _ = world.apply(g.player, g.command.clone());
+                let _ = g.action.clone().apply(world);
             }
         };
         while world.ticks < self.steps {
@@ -156,7 +252,11 @@ mod tests {
         let (w, s) = played();
         let record = s.record();
         assert_eq!(record.steps, w.ticks);
-        let given: Vec<_> = record.given.iter().map(|g| (g.step, g.player)).collect();
+        let by = |g: &Given| match g.action {
+            Action::Order { player, .. } => player,
+            _ => 0,
+        };
+        let given: Vec<_> = record.given.iter().map(|g| (g.step, by(g))).collect();
         assert_eq!(given, [(0, 1), (30, 3), (30, 2), (30, 2)]);
         assert_eq!(record.checks.len() as u64, w.ticks / CHECK_EVERY);
     }
@@ -224,6 +324,66 @@ mod tests {
         let mut again = fresh();
         assert_eq!(s.record().replay(&mut again), Ok(()));
         assert_eq!(again.hash(), w.hash());
+    }
+
+    #[test]
+    fn what_changes_a_match_besides_orders_is_recorded_and_replayed() {
+        let (mut w, mut s) = (fresh(), Schedule::default());
+        s.act(Action::Win(3));
+        for _ in 0..20 {
+            s.step(&mut w);
+        }
+        assert_eq!(w.outcome(3), crate::Outcome::Won);
+        let regiments = w.regiments.len();
+        s.act(Action::Raise(Box::new(truck())));
+        s.act(Action::Destroy(0));
+        // One the match hasn't got is passed over.
+        s.act(Action::Destroy(99));
+        assert!(s.carry_out(&mut w).is_empty());
+        assert_eq!(w.regiments.len(), regiments + 1);
+        assert!(w.destroyed(0));
+        for _ in 0..20 {
+            s.step(&mut w);
+        }
+        s.act(Action::Lose(2));
+        for _ in 0..20 {
+            s.step(&mut w);
+        }
+        assert_eq!(s.record().given.len(), 5);
+        let mut again = fresh();
+        assert_eq!(s.record().replay(&mut again), Ok(()));
+        assert_eq!(again.hash(), w.hash());
+    }
+
+    #[test]
+    fn pause_and_speed_take_hold_as_they_are_carried_out() {
+        let (mut w, mut s) = (fresh(), Schedule::default());
+        assert!(!s.paused() && s.speed() == 1.0);
+        s.act(Action::Pause(true));
+        s.act(Action::Speed(4.0));
+        // Asked for, and so what the next to ask finds, but not yet so.
+        assert!(s.pausing() && !s.paused());
+        assert!(s.speeding() == 4.0 && s.speed() == 1.0);
+        let before = w.hash();
+        s.carry_out(&mut w);
+        assert!(s.paused() && s.pausing() && s.speed() == 4.0);
+        // Neither is anything to the match itself.
+        assert_eq!(w.hash(), before);
+        s.act(Action::Pause(false));
+        s.act(Action::Pause(true));
+        s.act(Action::Pause(false));
+        assert!(!s.pausing() && s.paused());
+        s.step(&mut w);
+        assert!(!s.paused());
+        let given: Vec<u64> = s.record().given.iter().map(|g| g.step).collect();
+        assert_eq!(given, [0, 0, 0, 0, 0]);
+        // A speed that's none at all is passed over.
+        for speed in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            s.act(Action::Speed(speed));
+            assert_eq!(s.speeding(), 4.0);
+        }
+        s.carry_out(&mut w);
+        assert_eq!(s.speed(), 4.0);
     }
 
     #[test]
