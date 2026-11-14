@@ -51,6 +51,9 @@ pub struct Effects {
     detail: f32,
     /// The map's sun is dark enough that effects for the night show.
     night: bool,
+    /// The match has been looked at once: what's seen from then on came
+    /// about during it.
+    looked: bool,
     rng: u64,
 }
 
@@ -62,6 +65,8 @@ struct Play {
     target: Option<Target>,
     /// The sim tick it happened on.
     tick: u64,
+    /// It came with the match, as part of how it begins.
+    opening: bool,
     /// For a projectile, where it landed.
     landed: Option<[f32; 2]>,
     /// For an attack, the index of the weapon among its attacker's.
@@ -142,8 +147,8 @@ struct Fading {
 
 /// Seconds a picture laid on the ground takes to show, given its own time
 /// to: none for one whose effect starts the moment the match does.
-fn fade_in(own: f32, tick: u64, delay: f32) -> f32 {
-    match tick == 0 && delay <= 0.0 {
+fn fade_in(own: f32, opening: bool, delay: f32) -> f32 {
+    match opening && delay <= 0.0 {
         true => 0.0,
         false => own,
     }
@@ -245,6 +250,7 @@ impl Effects {
             aim: game.aim_heights().straight,
             detail: 1.0,
             night,
+            looked: false,
             rng: 0x9e37_79b9_7f4a_7c15,
         }
     }
@@ -267,6 +273,18 @@ impl Effects {
         (self.rng >> 40) as f32 / (1u64 << 24) as f32
     }
 
+    /// When a look at the match, `at` seconds in and on the sim's `tick`,
+    /// sees things happen.
+    fn look(&mut self, at: f64, tick: u64) -> When {
+        let opening = !std::mem::replace(&mut self.looked, true);
+        When {
+            at,
+            tick,
+            opening,
+            weapon: None,
+        }
+    }
+
     fn queue(&mut self, when: When, cues: &[VfxCue], source: Source, target: Option<Target>) {
         for cue in cues {
             let play = Play {
@@ -274,6 +292,7 @@ impl Effects {
                 source,
                 target,
                 tick: when.tick,
+                opening: when.opening,
                 landed: None,
                 weapon: when.weapon,
             };
@@ -288,6 +307,7 @@ impl Effects {
         let when = When {
             at,
             tick: landing.tick,
+            opening: false,
             weapon: Some(landing.weapon),
         };
         let target = Some(landing.target);
@@ -374,6 +394,9 @@ impl Effects {
 struct When {
     at: f64,
     tick: u64,
+    /// It's the first look at the match, so what's there came with it,
+    /// though the sim may have stepped before that look.
+    opening: bool,
     /// For an attack, the index of its weapon.
     weapon: Option<usize>,
 }
@@ -533,11 +556,7 @@ fn notice(
     scenery: Query<(Entity, &MapObject), NewScenery>,
 ) {
     let sim = &sim.0;
-    let at = When {
-        at: time.elapsed_secs_f64(),
-        tick: sim.ticks,
-        weapon: None,
-    };
+    let at = effects.look(time.elapsed_secs_f64(), sim.ticks);
     let fresh = |l: &&Landing| effects.landed.is_none_or(|t| l.tick > t);
     let landings: Vec<Landing> = sim.landings.iter().filter(fresh).cloned().collect();
     for l in &landings {
@@ -851,7 +870,7 @@ fn play(
             };
             // One made as the match begins is there in full at once.
             let decal = &Decal {
-                fade: [fade_in(decal.fade[0], p.tick, cue.delay), decal.fade[1]],
+                fade: [fade_in(decal.fade[0], p.opening, cue.delay), decal.fade[1]],
                 ..decal.clone()
             };
             let at = map_point(transform.translation);
@@ -1385,9 +1404,17 @@ mod tests {
         assert_eq!(opacity([0.0, 0.0], 3.0, Some(2.0)), 0.0);
         assert_eq!(opacity([0.0, 0.0], 3.0, None), 1.0);
         // Only what starts with the match skips coming in.
-        assert_eq!(fade_in(10.0, 0, 0.0), 0.0);
-        assert_eq!(fade_in(10.0, 0, 0.5), 10.0);
-        assert_eq!(fade_in(10.0, 3, 0.0), 10.0);
+        assert_eq!(fade_in(10.0, true, 0.0), 0.0);
+        assert_eq!(fade_in(10.0, true, 0.5), 10.0);
+        assert_eq!(fade_in(10.0, false, 0.0), 10.0);
+    }
+
+    #[test]
+    fn the_first_look_opens_the_match_whatever_the_tick() {
+        let mut effects = effects(HashMap::new());
+        // The sim can step before the match is first looked at.
+        assert!(effects.look(0.1, 1).opening);
+        assert!(!effects.look(0.2, 2).opening);
     }
 
     #[test]
@@ -1490,6 +1517,7 @@ mod tests {
             aim: 0.65,
             detail: 1.0,
             night: false,
+            looked: false,
             rng: 1,
         }
     }
@@ -1498,6 +1526,7 @@ mod tests {
         When {
             at: tick as f64,
             tick,
+            opening: tick == 0,
             weapon: None,
         }
     }
