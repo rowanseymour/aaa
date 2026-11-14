@@ -217,8 +217,14 @@ pub fn hide_scenery(
 
 /// Lifts or lays the fog over the screen on the developer key, where
 /// cheats are allowed.
-pub fn cheat(keys: Res<ButtonInput<KeyCode>>, bindings: Res<keys::Bindings>, mut fog: ResMut<Fog>) {
-    if bindings.pressed(&keys, "Fog") {
+pub fn cheat(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<keys::Bindings>,
+    orders: Res<crate::Orders>,
+    mut fog: ResMut<Fog>,
+) {
+    // A match hosted elsewhere isn't the game's to cheat at.
+    if bindings.pressed(&keys, "Fog") && !orders.joined_to() {
         fog.lifted = !fog.lifted;
     }
 }

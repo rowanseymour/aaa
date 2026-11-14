@@ -84,8 +84,11 @@ fn toggle(
 
 fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut orders: ResMut<Orders>) {
     menu.open = true;
-    menu.was_paused = orders.pausing();
-    orders.act(Action::Pause(true));
+    // A match hosted elsewhere is other people's too, and plays on.
+    menu.was_paused = orders.pausing() || orders.joined_to();
+    if !orders.joined_to() {
+        orders.act(Action::Pause(true));
+    }
 
     let overlay = commands
         .spawn((

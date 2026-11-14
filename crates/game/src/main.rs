@@ -1,5 +1,5 @@
 //! Plays Axis & Allies (2004) matches, set up in a custom game's lobby or on
-//! a map given on the command line.
+//! a map given on the command line, or hosted elsewhere and joined.
 //!
 //! You play one of the map's sides, or watch, and the computer plays the rest. Click one of your units or its
 //! banner to select its regiment, Shift+click to add a regiment to the
@@ -55,10 +55,11 @@ mod waypoints;
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use aaa_data::{Footing, GameData};
 use aaa_map::{Ground, Map, Recruits, Shape};
@@ -71,6 +72,7 @@ use aaa_render::overlay::{
 use aaa_render::shot::{self, ShotPlugin};
 use aaa_render::terrain::{map_point, world};
 use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
+use aaa_server::protocol::Welcome;
 use aaa_sim::{Relation, State, TICK, Target, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
@@ -84,8 +86,14 @@ const USAGE: &str = "\
 usage:
   aaa-game <game dir> [options]          set up a game from the menus
   aaa-game <game dir> <map> [options]    play a map, e.g. \"allies10_berlin\"
+  aaa-game <game dir> --join <address> [options]
+                                         play in the match hosted at an
+                                         address, e.g. 127.0.0.1:4000
 
 options:
+  --players <ids>           with --join, the players to give the orders of, by
+                            id, e.g. 1,2, playing the first; none, to watch,
+                            unless given
   --side <n>                play the map's nth player (\"Side n\" in its lobby)
                             instead of the first one a person may play
   --exec <script.txt>       run a file of console commands once the match starts,
@@ -135,6 +143,9 @@ struct Pending {
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
     from_menu: bool,
+    /// The link to its host and what the host let the game in with, where
+    /// the match is hosted elsewhere.
+    joined: Option<(orders::Line, Welcome)>,
 }
 
 /// The loading screen, which stays over the match while it's set up.
@@ -517,6 +528,9 @@ struct Options {
     fog: Option<aaa_map::FogSetting>,
     seed: Option<u64>,
     log: Option<String>,
+    /// Where the match to play in is hosted, and the players to ask its
+    /// host for.
+    join: Option<(SocketAddr, Vec<u32>)>,
 }
 
 /// Takes the options out of `args`; `None` if any is malformed.
@@ -558,6 +572,23 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         None => None,
     };
     let log = take_option(args, "--log")?;
+    let players = match take_option(args, "--players")? {
+        Some(ids) => Some(
+            (ids.split(',').map(str::parse))
+                .collect::<Result<_, _>>()
+                .ok()?,
+        ),
+        None => None,
+    };
+    let join = match (take_option(args, "--join")?, players) {
+        (Some(at), players) => Some((at.parse().ok()?, players.unwrap_or_default())),
+        (None, Some(_)) => return None,
+        (None, None) => None,
+    };
+    // Its host set the match up.
+    if join.is_some() && (side.is_some() || fog.is_some() || seed.is_some()) {
+        return None;
+    }
     Some(Options {
         side,
         scripts,
@@ -569,7 +600,21 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         fog,
         seed,
         log,
+        join,
     })
+}
+
+/// How long the host of a match is waited on to say whether the game is
+/// let in.
+const ANSWERED: Duration = Duration::from_secs(10);
+
+/// Asks the host at `at` to let the game in to its match to give the
+/// orders of `players`: the link to it, and what it let the game in with.
+fn join(at: SocketAddr, players: Vec<u32>) -> Result<(orders::Line, Welcome), String> {
+    let mut link = aaa_server::quic::connect(at)?;
+    let welcome = aaa_server::enter(&mut link, players, ANSWERED)
+        .map_err(|e| format!("{at}: not let in: {e:?}"))?;
+    Ok((Box::new(link), welcome))
 }
 
 fn main() -> ExitCode {
@@ -585,6 +630,7 @@ fn main() -> ExitCode {
         fog,
         seed,
         log,
+        join: joining,
     }) = options(&mut args)
     else {
         eprintln!("{USAGE}");
@@ -611,7 +657,7 @@ fn main() -> ExitCode {
     });
     let (dir, map) = match args.as_slice() {
         [dir] => (dir, None),
-        [dir, map] => (dir, Some(map)),
+        [dir, map] if joining.is_none() => (dir, Some(map)),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -628,6 +674,15 @@ fn main() -> ExitCode {
     });
     let (game, map) = match opened {
         Ok(o) => o,
+        Err(e) => {
+            eprintln!("aaa-game: {e}");
+            return ExitCode::FAILURE;
+        }
+    };
+    // Before there's a window, so that a host that isn't there or won't
+    // let the game in is said where the game was asked for.
+    let joined = match joining.map(|(at, players)| join(at, players)).transpose() {
+        Ok(j) => j,
         Err(e) => {
             eprintln!("aaa-game: {e}");
             return ExitCode::FAILURE;
@@ -653,7 +708,9 @@ fn main() -> ExitCode {
     if let Some(s) = screenshot {
         app.add_plugins(s);
         let frame = std::time::Duration::from_secs_f64(1.0 / 60.0);
-        match once {
+        // A match hosted elsewhere is played at its host's pace, which
+        // only frames that take the time they stand for keep to.
+        match once && joined.is_none() {
             // Every frame takes the same time, so a shot some way into a
             // match catches the same moment however fast the machine draws.
             true => _ = app.insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(frame)),
@@ -672,7 +729,7 @@ fn main() -> ExitCode {
         }
         app.configure_sets(Update, shot::Capture.run_if(console::idle));
         // Of the match, not the loading screen before it.
-        if once && map.is_some() {
+        if once && (map.is_some() || joined.is_some()) {
             app.insert_resource(ShotAfter(shot_after))
                 .add_systems(OnEnter(Screen::Match), note_start)
                 .configure_sets(
@@ -879,19 +936,24 @@ fn main() -> ExitCode {
         .insert_resource(music::Music::new(&game))
         .insert_resource(volumes)
         .insert_resource(Data(Arc::new(game)));
-    match map {
-        Some(name) => {
+    let setup = match &joined {
+        Some((_, welcome)) => Some(welcome.setup.clone()),
+        None => map.map(|name| aaa_server::Setup {
+            map: name,
+            seed: Seed(seed).get(),
+            fog,
+            ..Default::default()
+        }),
+    };
+    match setup {
+        Some(setup) => {
             app.insert_resource(Pending {
-                title: aaa_data::map_title(&name).to_string(),
+                title: aaa_data::map_title(&setup.map).to_string(),
                 description: String::new(),
                 person: None,
                 from_menu: false,
-                setup: aaa_server::Setup {
-                    map: name,
-                    seed: Seed(seed).get(),
-                    fog,
-                    ..Default::default()
-                },
+                setup,
+                joined,
             })
             .insert_state(Screen::Loading);
         }
@@ -931,6 +993,7 @@ fn prepare(
         setup,
         person,
         from_menu,
+        joined,
         ..
     } = pending;
     info!("seed {}", setup.seed);
@@ -941,9 +1004,11 @@ fn prepare(
         generals,
     } = aaa_server::start(&game, &setup, || reached(Stage::Objects))?;
     let leaders = Leaders(generals);
-    let person = match from_menu {
-        true => person,
-        false => lobby::default_person(&map.players, side),
+    let person = match (&joined, from_menu) {
+        // Its host says who the game plays.
+        (Some((_, welcome)), _) => welcome.players.first().copied(),
+        (None, true) => person,
+        (None, false) => lobby::default_person(&map.players, side),
     };
     if !from_menu && side.0.is_some() && person.is_none() {
         warn!("{}: no such side to play", map.title);
@@ -957,8 +1022,11 @@ fn prepare(
     game.property_looks();
     Ok(Prepared {
         loaded: Loaded { game, map },
-        // The host's copy, made here to keep it off the window's thread.
-        orders: Orders::hosting(setup, sim.clone()),
+        orders: match joined {
+            Some((link, welcome)) => Orders::joined(link, welcome),
+            // The host's copy, made here to keep it off the window's thread.
+            None => Orders::hosting(setup, sim.clone()),
+        },
         sim,
         raising,
         person,
@@ -1428,8 +1496,24 @@ fn step(
     mut orders: ResMut<Orders>,
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
+    mut fixed: ResMut<Time<Fixed>>,
 ) {
+    let played = sim.0.ticks;
     step_world(&mut sim.0, &mut orders, &mut selected.0, &mut chosen.0);
+    if sim.0.ticks == played {
+        wait_for_tick(&mut fixed);
+    }
+}
+
+/// Leaves the tick that fell due and wasn't played, its host not having
+/// said to, due again on the next frame. Until then what's drawn between
+/// the last two ticks stays where the last left it, rather than starting
+/// out from the one before again.
+fn wait_for_tick(fixed: &mut Time<Fixed>) {
+    let over = fixed.overstep();
+    fixed.discard_overstep(over);
+    // Short of a whole tick, which would be due within this frame.
+    fixed.accumulate_overstep(fixed.timestep() - Duration::from_nanos(1));
 }
 
 /// Plays a tick of the game after carrying out the orders waiting,
@@ -2673,6 +2757,75 @@ mod tests {
         app.world_mut().despawn(loading);
         app.update();
         assert!(!clock(&app).0);
+    }
+
+    #[test]
+    fn a_match_to_join_is_asked_for_by_its_hosts_address() {
+        let asked = |words: &[&str]| {
+            let mut args = words.iter().map(|w| w.to_string()).collect();
+            options(&mut args).map(|o| (o.join, args))
+        };
+        let at: SocketAddr = "127.0.0.1:4000".parse().unwrap();
+        let (join, left) = asked(&["game", "--join", "127.0.0.1:4000"]).unwrap();
+        assert_eq!((join, left), (Some((at, vec![])), vec!["game".to_string()]));
+        let (join, _) = asked(&["--players", "2,1", "game", "--join", "127.0.0.1:4000"]).unwrap();
+        assert_eq!(join, Some((at, vec![2, 1])));
+        assert_eq!(asked(&["game", "berlin"]).unwrap().0, None);
+        // Its host set the match up, and says who plays what.
+        for words in [
+            &["game", "--join", "nowhere"][..],
+            &["game", "--join", "127.0.0.1:4000", "--players", "one"],
+            &["game", "--join", "127.0.0.1:4000", "--seed", "5"],
+            &["game", "--join", "127.0.0.1:4000", "--side", "2"],
+            &["game", "--join", "127.0.0.1:4000", "--fog", "none"],
+            &["game", "berlin", "--players", "1"],
+        ] {
+            assert!(asked(words).is_none(), "{words:?}");
+        }
+    }
+
+    #[test]
+    fn a_tick_a_host_elsewhere_has_yet_to_send_stays_due_and_the_last_stays_drawn() {
+        let (mut host, orders, sim) = orders::testing::joined(&[1]);
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(Sim(sim))
+            .insert_resource(orders)
+            .init_resource::<Selected>()
+            .init_resource::<SelectedBuilding>()
+            .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
+            // Three frames to a tick and a bit.
+            .insert_resource(bevy::time::TimeUpdateStrategy::ManualDuration(
+                Duration::from_secs_f32(TICK * 0.4),
+            ))
+            .add_systems(FixedUpdate, step);
+        let drawn = |app: &App| {
+            let ticks = app.world().resource::<Sim>().0.ticks;
+            (
+                ticks,
+                app.world().resource::<Time<Fixed>>().overstep_fraction(),
+            )
+        };
+        // However long the host takes, what's drawn holds at the end of
+        // the last tick played.
+        for _ in 0..10 {
+            app.update();
+        }
+        let (ticks, between) = drawn(&app);
+        assert!(ticks == 0 && between > 0.99, "{between}");
+        // The tick is played on the frame after it comes, and drawn from
+        // its start.
+        host.turn();
+        app.update();
+        let (ticks, between) = drawn(&app);
+        assert!(ticks == 1 && between > 0.3 && between < 0.5, "{between}");
+        // Two that come at once are both played as the next falls due.
+        host.turn();
+        host.turn();
+        app.update();
+        assert_eq!(drawn(&app).0, 1);
+        app.update();
+        assert_eq!(drawn(&app).0, 3);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use crate::ui::{self, Font, layer};
 /// What the dialog's buttons say, and the game's question.
 #[derive(Resource)]
 pub struct Words {
-    ok: String,
+    pub ok: String,
     cancel: String,
     /// The game's question before what can't be undone.
     pub sure: String,

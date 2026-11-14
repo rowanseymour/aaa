@@ -44,6 +44,10 @@ struct Seat<L> {
     trusted: bool,
     diverged: bool,
     lost: bool,
+    /// How many actions it's asked for, and how many of those it's been
+    /// told are dealt with.
+    asked: u64,
+    answered: u64,
 }
 
 /// Why a client wasn't let in.
@@ -74,17 +78,20 @@ pub enum Event {
     Diverged { client: u32, step: u64 },
 }
 
+/// Whether a host carries out `action` for a client it doesn't trust
+/// that gives the orders of `players`.
+pub fn allows(players: &[u32], action: &Action) -> bool {
+    match action {
+        Action::Order { player, .. } => players.contains(player),
+        Action::Pause(_) | Action::Speed(_) => !players.is_empty(),
+        Action::Win(_) | Action::Lose(_) | Action::Raise { .. } | Action::Destroy(_) => false,
+    }
+}
+
 impl<L> Seat<L> {
     /// Whether the host carries out `action` for it.
     fn may(&self, action: &Action) -> bool {
-        self.trusted
-            || match action {
-                Action::Order { player, .. } => self.players.contains(player),
-                Action::Pause(_) | Action::Speed(_) => !self.players.is_empty(),
-                Action::Win(_) | Action::Lose(_) | Action::Raise { .. } | Action::Destroy(_) => {
-                    false
-                }
-            }
+        self.trusted || allows(&self.players, action)
     }
 }
 
@@ -165,6 +172,8 @@ impl<L: Link> Host<L> {
             trusted: false,
             diverged: false,
             lost: false,
+            asked: 0,
+            answered: 0,
         });
         Ok(id)
     }
@@ -227,12 +236,16 @@ impl<L: Link> Host<L> {
 
     /// Finds the clients let in that have gone before the match has
     /// begun, without beginning it. What a client asks for before it
-    /// begins is dropped.
+    /// begins is dropped, as it's told.
     pub fn wait(&mut self) -> Vec<Event> {
         for seat in &mut self.clients {
             for _ in 0..HEARD_A_TURN {
                 match seat.link.receive() {
-                    Ok(Some(_)) => {}
+                    Ok(Some(message)) => {
+                        let asked = message.len() <= LONGEST_HEARD
+                            && matches!(decode(&message), Some(ToHost::Ask(_)));
+                        seat.asked += u64::from(asked);
+                    }
                     Ok(None) => break,
                     Err(_) => {
                         seat.lost = true;
@@ -241,8 +254,21 @@ impl<L: Link> Host<L> {
                 }
             }
         }
+        self.answer();
         let lost = self.clients.extract_if(.., |c| c.lost);
         lost.map(|c| Event::Left(c.id)).collect()
+    }
+
+    /// Tells each client that's asked for more since it was last told
+    /// that all it's asked for is dealt with.
+    fn answer(&mut self) {
+        for seat in &mut self.clients {
+            if seat.answered < seat.asked {
+                seat.answered = seat.asked;
+                let answered = encode(&ToClient::Answered(seat.asked));
+                seat.lost |= seat.link.send(answered).is_err();
+            }
+        }
     }
 
     /// Takes what the clients have sent, has every copy of the match
@@ -287,6 +313,7 @@ impl<L: Link> Host<L> {
                 match heard {
                     Ok(None) => break,
                     Ok(Some(Some(ToHost::Ask(action)))) => {
+                        seat.asked += 1;
                         if seat.may(&action) {
                             actions.push(action);
                         }
@@ -314,6 +341,7 @@ impl<L: Link> Host<L> {
         if tick || !actions.is_empty() {
             self.tell(&ToClient::Step(Bundle { actions, tick }));
         }
+        self.answer();
         for &event in &events {
             if let Event::Diverged { client, step } = event {
                 self.tell(&ToClient::Diverged { client, step });
@@ -593,6 +621,60 @@ mod tests {
         host.turn();
         let mut admit = |players: &[u32]| host.admit(pair().0, players.to_vec());
         assert_eq!(admit(&[]), Err(Refusal::Begun));
+    }
+
+    #[test]
+    fn a_client_is_told_when_what_it_asked_is_dealt_with() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2]]);
+        // Dropped, before the match begins.
+        clients[0].ask(Action::Pause(true)).unwrap();
+        assert_eq!((clients[0].asked(), clients[0].answered()), (1, 0));
+        assert_eq!(host.wait(), []);
+        clients[0].advance(usize::MAX).unwrap();
+        assert_eq!(clients[0].answered(), 1);
+        assert!(!clients[0].schedule().paused());
+        // Carried out or not, and only once its copy has done it.
+        clients[0].ask(Action::Win(1)).unwrap();
+        clients[0].ask(Action::Speed(2.0)).unwrap();
+        clients[1].ask(Action::Speed(2.0)).unwrap();
+        host.turn();
+        let Copy { client, world } = &mut clients[0];
+        client.play(world, 0).unwrap();
+        assert_eq!((client.answered(), client.schedule().speed()), (1, 1.0));
+        client.play(world, 1).unwrap();
+        assert_eq!((client.answered(), client.schedule().speed()), (3, 2.0));
+        clients[1].advance(usize::MAX).unwrap();
+        assert_eq!((clients[1].asked(), clients[1].answered()), (1, 1));
+    }
+
+    #[test]
+    fn a_client_keeping_time_itself_plays_only_the_ticks_it_asks_for() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2]]);
+        host.turn();
+        host.turn();
+        clients[0].ask(Action::Pause(true)).unwrap();
+        host.turn();
+        let Copy { client, world } = &mut clients[1];
+        assert_eq!(client.behind(), 2);
+        // Up to the tick after those asked for, and no further.
+        client.play(world, 1).unwrap();
+        assert_eq!((world.ticks, client.behind()), (1, 1));
+        assert!(!client.schedule().paused());
+        client.play(world, 0).unwrap();
+        assert_eq!(world.ticks, 1);
+        client.play(world, 5).unwrap();
+        assert_eq!((world.ticks, client.behind()), (2, 0));
+        // What comes after the last tick needs none.
+        assert!(client.schedule().paused());
+        assert_eq!(world.hash(), host.world().hash());
+        // The host is only found gone once all it sent is played.
+        clients[0].ask(Action::Pause(false)).unwrap();
+        host.turn();
+        drop(host);
+        let Copy { client, world } = &mut clients[1];
+        assert_eq!(client.play(world, 0), Ok(()));
+        assert_eq!(client.play(world, 1), Err(crate::Lost));
+        assert_eq!(world.ticks, 3);
     }
 
     #[test]

@@ -1,5 +1,5 @@
 //! Telling the player how the match has come out for their side, the
-//! moment it's decided.
+//! moment it's decided, or that it's ended with its host going.
 
 use aaa_sim::Outcome;
 use bevy::prelude::*;
@@ -7,7 +7,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::confirm::{self, ask, nothing, offer};
-use crate::{Local, Screen, Sim, menu};
+use crate::{Local, Orders, Screen, Sim, menu};
 
 /// What the dialog says.
 #[derive(Resource)]
@@ -16,6 +16,8 @@ pub struct Words {
     lost: String,
     end: String,
     keep_playing: String,
+    /// Not the game's words: there, another machine takes over as host.
+    host_gone: String,
 }
 
 impl Words {
@@ -26,6 +28,7 @@ impl Words {
             lost: said("ui_mission_message_lost", "Mission Lost"),
             end: said("ui_mission_label_end_game", "End Mission"),
             keep_playing: said("ui_mission_label_keep_playing", "Keep Playing"),
+            host_gone: "The host has left the game".into(),
         }
     }
 }
@@ -36,10 +39,14 @@ impl Default for Words {
     }
 }
 
-/// The side whose outcome the player has been told, so as to tell it
-/// once.
+/// What the player has been told, so as to tell it once.
 #[derive(Resource, Default)]
-struct Told(Option<u32>);
+struct Told {
+    /// The side whose outcome they've been told.
+    side: Option<u32>,
+    /// Whether they've been told the match's host has gone.
+    host_gone: bool,
+}
 
 pub struct OutcomePlugin;
 
@@ -47,12 +54,15 @@ impl Plugin for OutcomePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Told>()
             .add_systems(OnEnter(Screen::Match), |mut told: ResMut<Told>| {
-                told.0 = None
+                *told = Told::default()
             })
             .add_systems(
                 Update,
-                tell.run_if(in_state(Screen::Match))
-                    .run_if(resource_exists::<Sim>),
+                (
+                    tell.run_if(resource_exists::<Sim>),
+                    tell_host_gone.run_if(resource_exists::<Orders>),
+                )
+                    .run_if(in_state(Screen::Match)),
             );
     }
 }
@@ -66,7 +76,7 @@ fn tell(
     words: Res<Words>,
     mut told: ResMut<Told>,
 ) {
-    let Some(side) = local.0.filter(|&side| told.0 != Some(side)) else {
+    let Some(side) = local.0.filter(|&side| told.side != Some(side)) else {
         return;
     };
     let won = match sim.0.outcome(side) {
@@ -74,7 +84,7 @@ fn tell(
         Outcome::Won => true,
         Outcome::Lost => false,
     };
-    told.0 = Some(side);
+    told.side = Some(side);
     let message = if won { &words.won } else { &words.lost };
     let asked = ask(&mut commands, Screen::Match, message.clone());
     offer(
@@ -88,6 +98,26 @@ fn tell(
         let keep = words.keep_playing.clone();
         offer(&mut commands, asked, keep, "outcome.keep", nothing);
     }
+}
+
+/// Says that the match's host has gone, which leaves the match where it
+/// stood: to look over, or to end.
+fn tell_host_gone(
+    mut commands: Commands,
+    orders: Res<Orders>,
+    words: Res<Words>,
+    confirm: Res<confirm::Words>,
+    mut told: ResMut<Told>,
+) {
+    if !orders.gone() || told.host_gone {
+        return;
+    }
+    told.host_gone = true;
+    let asked = ask(&mut commands, Screen::Match, words.host_gone.clone());
+    let end = words.end.clone();
+    offer(&mut commands, asked, end, "outcome.end", ask_end);
+    let ok = confirm.ok.clone();
+    offer(&mut commands, asked, ok, "outcome.ok", nothing);
 }
 
 /// Asks whether to end the mission, which leaves the game, and does if so.
