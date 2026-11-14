@@ -73,6 +73,11 @@ impl Edge {
     }
 }
 
+/// Plays models' animations on by a frame. What starts or stops one goes
+/// before it, so that it does so on the same frame each time.
+#[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
+pub struct Animate;
+
 impl Plugin for MapRenderPlugin {
     fn build(&self, app: &mut App) {
         // The shader has to be registered before the material that loads it.
@@ -109,7 +114,9 @@ impl Plugin for MapRenderPlugin {
                 Update,
                 (
                     models::pace,
-                    (models::animate, rig::play).after(models::pace),
+                    (models::animate, rig::play)
+                        .after(models::pace)
+                        .in_set(Animate),
                     portrait::fidget.before(rig::play),
                     camera::update.in_set(camera::Controls),
                     (
