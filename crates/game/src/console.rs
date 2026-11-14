@@ -1623,6 +1623,34 @@ mod tests {
         assert_eq!(words("echo a#b"), [["echo", "a#b"]]);
     }
 
+    /// docs/console.md is written from [`VERBS`], so the two can't drift;
+    /// `UPDATE_DOCS=1` rewrites it.
+    #[test]
+    fn docs_list_the_verbs() {
+        let mut page = String::from(
+            "# Console commands\n\n\
+             <!-- Written from the verbs in crates/game/src/console.rs by its \
+             docs_list_the_verbs test; run it with UPDATE_DOCS=1 to rewrite. -->\n\n\
+             How lines are written, and how scripts and a port feed them in, is in \
+             [console.rs](../crates/game/src/console.rs). Words in [brackets] are \
+             optional, and (a | b) means either.\n\n",
+        );
+        for v in VERBS {
+            let usage = format!("{} {}", v.name, v.args);
+            page += &format!("- `{}`: {}\n", usage.trim_end(), v.does);
+        }
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/console.md");
+        if std::env::var_os("UPDATE_DOCS").is_some() {
+            std::fs::write(path, &page).unwrap();
+        } else {
+            let on_disk = std::fs::read_to_string(path).unwrap_or_default();
+            assert!(
+                on_disk == page,
+                "docs/console.md is stale; rerun this test with UPDATE_DOCS=1"
+            );
+        }
+    }
+
     #[test]
     fn finds_verbs_ignoring_case() {
         assert_eq!(find("LookAt").map(|v| v.name), Some("lookat"));
