@@ -277,6 +277,7 @@ fn play(
     if let Some(id) = music.asked.take()
         && let Some(audio) = sounds.audio(&id).cloned()
     {
+        debug!("music {id} asked for");
         music.ahead.clear();
         if let Some(old) = music.current.take() {
             leave(&mut commands, &mut music, old, now);
