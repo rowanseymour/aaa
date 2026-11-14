@@ -275,7 +275,7 @@ const VERBS: &[Verb] = &[
     verb(
         "select",
         "[id ...]",
-        "selects the player's regiments, or one of its buildings, by their ids; without any, says what's selected",
+        "selects regiments, or one building, of any side by their ids; without any, says what's selected",
     ),
     verb(
         "commission",
@@ -1056,8 +1056,12 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
             false => ids.join(" "),
         });
     }
-    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let local = world.resource::<Local>().0;
     let scenery = world.resource::<crate::banners::Scenery>();
+    // What the player can't see would only be let go of again.
+    let fog = world.get_resource::<crate::fog::Fog>();
+    let seen_building = |b| fog.is_none_or(|f| f.building(b) == crate::fog::Look::Shown);
+    let seen_regiment = |r| fog.is_none_or(|f| f.shows_regiment(sim, r));
     if let [id] = args
         // A building packed up has handed its id to its truck.
         && let Some(b) = sim
@@ -1065,8 +1069,8 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
             .iter()
             .position(|b| !b.gone() && b.id.to_string() == *id)
     {
-        if sim.buildings[b].owner != player || !sim.buildings[b].standing() {
-            return Err(format!("building {id} isn't the player's to select"));
+        if !sim.buildings[b].standing() || !seen_building(b) {
+            return Err(format!("building {id} isn't standing in sight"));
         }
         world.resource_mut::<Selected>().0.clear();
         world.resource_mut::<SelectedBuilding>().0 = Some(b);
@@ -1088,12 +1092,25 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
         .iter()
         .map(|id| {
             let r = regiment_by_id(sim, id)?;
-            match sim.commands(player, r) && !scenery.has(sim, r) {
+            match !sim.destroyed(r) && !scenery.has(sim, r) && seen_regiment(r) {
                 true => Ok(r),
-                false => Err(format!("regiment {id} isn't the player's to select")),
+                false => Err(format!("regiment {id} can't be selected")),
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
+    // Taken as a click and Shift-clicks would take them.
+    let (mut regiments, mut building) = (Vec::new(), None);
+    let mut selection = crate::selection::Selection {
+        regiments: &mut regiments,
+        building: &mut building,
+    };
+    for &r in &picked {
+        let rank = |t| crate::selection::rank(sim, local, t);
+        selection.add(rank, crate::selection::Thing::Regiment(r));
+    }
+    if regiments != picked {
+        return Err("regiments of sides standing differently can't be selected together".into());
+    }
     world.resource_mut::<Selected>().0 = picked;
     world.resource_mut::<SelectedBuilding>().0 = None;
     Ok(String::new())

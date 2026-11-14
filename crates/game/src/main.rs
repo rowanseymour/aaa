@@ -44,6 +44,7 @@ mod pause;
 mod presets;
 mod remote;
 mod resource_bar;
+mod selection;
 mod sound;
 mod special_ops;
 mod supply;
@@ -763,7 +764,7 @@ fn main() -> ExitCode {
                     fog::hide_buildings,
                 )
                     .chain(),
-                drop_lost_building,
+                keep_selection,
                 clear_scenery,
                 selection_sounds,
                 show_focus,
@@ -1415,10 +1416,12 @@ fn setup(
     sounds.load_objects(game);
 }
 
-/// Plays the callout of a regiment newly added to the selection.
+/// Plays the callout of a regiment of the player's newly added to the
+/// selection: others' are selected in silence.
 fn selection_sounds(
     selected: Res<Selected>,
     sim: Res<Sim>,
+    local: Res<Local>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
     mut before: bevy::prelude::Local<Vec<usize>>,
@@ -1426,7 +1429,8 @@ fn selection_sounds(
     if !selected.is_changed() {
         return;
     }
-    if let Some(&r) = selected.0.iter().find(|r| !before.contains(r)) {
+    let fresh = selected.0.iter().find(|r| !before.contains(r));
+    if let Some(&r) = fresh.filter(|&&r| Some(sim.0.regiments[r].owner) == local.0) {
         let regiment = &sim.0.regiments[r];
         let at = sim.0.centre(r);
         sounds.reply(
@@ -1687,14 +1691,25 @@ fn show_packing(
     }
 }
 
-/// Lets go of the selected building once it's no longer the player's to
-/// give orders to.
-fn drop_lost_building(sim: Res<Sim>, local: Res<Local>, mut chosen: ResMut<SelectedBuilding>) {
-    if let Some(b) = chosen.0 {
-        let building = &sim.0.buildings[b];
-        if Some(building.owner) != local.0 || !building.standing() {
-            chosen.0 = None;
-        }
+/// Lets go of what the player can no longer see of others' things, and of
+/// a building that's fallen or packed up. Whose it is doesn't matter: a
+/// building captured while selected stays selected.
+fn keep_selection(
+    sim: Res<Sim>,
+    fog: Res<fog::Fog>,
+    mut selected: ResMut<Selected>,
+    mut chosen: ResMut<SelectedBuilding>,
+) {
+    let sim = &sim.0;
+    // The game keeps a building that drops into the fog as its remembered
+    // picture, but the display would show it as it is now, so it goes.
+    if let Some(b) = chosen.0
+        && (!sim.buildings[b].standing() || fog.building(b) != fog::Look::Shown)
+    {
+        chosen.0 = None;
+    }
+    if selected.0.iter().any(|&r| !fog.shows_regiment(sim, r)) {
+        selected.0.retain(|&r| fog.shows_regiment(sim, r));
     }
 }
 
@@ -2022,9 +2037,10 @@ fn focus(
     focus.set_if_neq(found);
 }
 
-/// Left click selects the regiment of yours under the cursor and dragging
-/// selects those with a unit in the box, either adding to the selection with
-/// Shift, which also takes a clicked regiment already in it back out.
+/// Left click selects what's under the cursor, whoever's it is, and
+/// dragging what the box covers, by [`selection`]'s rules; with Shift or
+/// Ctrl held, a click adds to the selection or takes back out what's in it,
+/// and a box adds to it.
 #[allow(clippy::too_many_arguments)]
 fn select(
     buttons: Res<ButtonInput<MouseButton>>,
@@ -2036,8 +2052,7 @@ fn select(
     (loaded, drawn): (Res<Loaded>, Res<Drawn>),
     local: Res<Local>,
     focus: Res<Focus>,
-    sim: Res<Sim>,
-    scenery: Res<banners::Scenery>,
+    (sim, scenery, fog): (Res<Sim>, Res<banners::Scenery>, Res<fog::Fog>),
     mut selected: ResMut<Selected>,
     mut chosen: ResMut<SelectedBuilding>,
     mut start: bevy::prelude::Local<Option<Vec2>>,
@@ -2075,38 +2090,33 @@ fn select(
     if !released || start.take().is_none() {
         return;
     }
-    let Some(player) = local.0 else {
-        return;
+    let sim = &sim.0;
+    let rank = |t| selection::rank(sim, local.0, t);
+    let adding = keys.any_pressed([
+        KeyCode::ShiftLeft,
+        KeyCode::ShiftRight,
+        KeyCode::ControlLeft,
+        KeyCode::ControlRight,
+    ]);
+    let mut selection = selection::Selection {
+        regiments: &mut selected.0,
+        building: &mut chosen.0,
     };
-    let adding = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
     let Some(rect) = dragged else {
-        match *focus {
-            Focus::Regiment(r) if sim.0.commands(player, r) => {
-                chosen.0 = None;
-                match selected.0.iter().position(|&s| s == r) {
-                    Some(i) if adding => {
-                        selected.0.remove(i);
-                    }
-                    None if adding && selected.0.len() < object_display::MAX_SELECTED => {
-                        selected.0.push(r)
-                    }
-                    None if adding => {}
-                    _ => selected.0 = vec![r],
-                }
+        let thing = match *focus {
+            Focus::Regiment(r) if !sim.destroyed(r) && !scenery.has(sim, r) => {
+                Some(selection::Thing::Regiment(r))
             }
-            Focus::Building(b)
-                if !adding
-                    && sim.0.buildings[b].owner == player
-                    && sim.0.buildings[b].standing() =>
-            {
-                selected.0.clear();
-                chosen.0 = Some(b);
+            Focus::Building(b) if sim.buildings[b].standing() => {
+                Some(selection::picked(sim, selection::Thing::Building(b)))
             }
-            _ if adding => {}
-            _ => {
-                selected.0.clear();
-                chosen.0 = None;
-            }
+            _ => None,
+        };
+        match (thing, adding) {
+            (Some(thing), true) => selection.toggle(rank, thing),
+            (Some(thing), false) => selection.replace(thing),
+            (None, true) => {}
+            (None, false) => selection.clear(),
         }
         return;
     };
@@ -2114,31 +2124,50 @@ fn select(
         return;
     };
     let ground = &loaded.map.ground;
-    let inside = |u: usize| {
-        let unit = &sim.0.units[u];
-        let [x, y] = unit.position;
-        let z = ground.stand_at(drawn.0.footing(unit.template.as_str()), [x, y]);
+    let drawn_at = |at: [f32; 2], z: f32| {
         camera
-            .world_to_viewport(transform, world(x, y, z))
-            .is_ok_and(|p| rect.contains(p))
+            .world_to_viewport(transform, world(at[0], at[1], z))
+            .ok()
     };
+    let unit_at = |u: usize| {
+        let unit = &sim.units[u];
+        let z = ground.stand_at(drawn.0.footing(unit.template.as_str()), unit.position);
+        drawn_at(unit.position, z)
+    };
+    let mut inside: Vec<(selection::Thing, Vec2)> = (0..sim.regiments.len())
+        .filter(|&r| !scenery.has(sim, r))
+        .filter_map(|r| {
+            let at = (sim.survivors(r))
+                .filter(|&u| fog.shows_unit(u))
+                .filter_map(unit_at)
+                .find(|&p| rect.contains(p))?;
+            Some((selection::Thing::Regiment(r), at))
+        })
+        .collect();
+    for (b, building) in sim.buildings.iter().enumerate() {
+        let seen = building.standing() && fog.building(b) == fog::Look::Shown;
+        let at = drawn_at(building.position, ground.height_at(building.position));
+        let Some(at) = at.filter(|&p| seen && rect.contains(p)) else {
+            continue;
+        };
+        // A city once, however many of its buildings the box covers.
+        let thing = selection::picked(sim, selection::Thing::Building(b));
+        if !inside.iter().any(|&(t, _)| t == thing) {
+            inside.push((thing, at));
+        }
+    }
     if !adding {
-        selected.0.clear();
-        chosen.0 = None;
+        selection.clear();
     }
-    for r in 0..sim.0.regiments.len() {
-        if selected.0.len() >= object_display::MAX_SELECTED {
-            break;
-        }
-        if sim.0.commands(player, r)
-            && !scenery.has(&sim.0, r)
-            && !selected.0.contains(&r)
-            && sim.0.survivors(r).any(inside)
-        {
-            selected.0.push(r);
-            chosen.0 = None;
-        }
-    }
+    // Nearest the middle of what's selected, else of the box.
+    let held: Vec<Vec2> = (selection.regiments.iter())
+        .filter_map(|&r| sim.survivors(r).find_map(unit_at))
+        .collect();
+    let middle = match held.len() {
+        0 => rect.center(),
+        n => held.iter().sum::<Vec2>() / n as f32,
+    };
+    selection.boxed(rank, inside, middle);
 }
 
 /// Right click sends the selected regiments where it points, each keeping
@@ -2165,7 +2194,10 @@ fn command(
     let Some(player) = local.0 else {
         return;
     };
-    if !buttons.just_pressed(MouseButton::Right) {
+    // Others' things take no orders.
+    if !buttons.just_pressed(MouseButton::Right)
+        || !selection::commanded(&sim.0, local.0, &selected.0, chosen.0)
+    {
         return;
     }
     let ground = &loaded.map.ground;
