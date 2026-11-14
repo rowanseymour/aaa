@@ -1643,7 +1643,10 @@ mod tests {
         if std::env::var_os("UPDATE_DOCS").is_some() {
             std::fs::write(path, &page).unwrap();
         } else {
-            let on_disk = std::fs::read_to_string(path).unwrap_or_default();
+            // A Windows checkout may have given the page CRLF line endings.
+            let on_disk = std::fs::read_to_string(path)
+                .unwrap_or_default()
+                .replace("\r\n", "\n");
             assert!(
                 on_disk == page,
                 "docs/console.md is stale; rerun this test with UPDATE_DOCS=1"
