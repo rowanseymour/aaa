@@ -32,6 +32,9 @@ pub struct Host<L> {
     greeted: Vec<L>,
     /// What the next client let in is known as.
     next: u32,
+    /// How many clients it's to have before the match begins, and the
+    /// most it lets in, if that's been said.
+    wanted: Option<usize>,
     begun: bool,
 }
 
@@ -44,6 +47,8 @@ struct Seat<L> {
     trusted: bool,
     diverged: bool,
     lost: bool,
+    /// Whether it's said its copy of the match is set up.
+    ready: bool,
     /// How many actions it's asked for, and how many of those it's been
     /// told are dealt with.
     asked: u64,
@@ -65,7 +70,8 @@ pub enum Refusal {
     /// It speaks another version of the protocol than the host's, which
     /// is this one.
     Protocol(u32),
-    /// The host has as many waiting to ask as it will have.
+    /// The host has as many clients, or as many waiting to ask, as it
+    /// will have.
     Full,
 }
 
@@ -106,8 +112,24 @@ impl<L: Link> Host<L> {
             clients: Vec::new(),
             greeted: Vec::new(),
             next: 1,
+            wanted: None,
             begun: false,
         }
+    }
+
+    /// Has it let in `clients` clients and no more, and be
+    /// [`Host::waiting`] until it has them.
+    pub fn want(&mut self, clients: usize) {
+        self.wanted = Some(clients);
+    }
+
+    /// Whether those running it should hold off beginning the match:
+    /// while it has fewer clients than it [wants](Host::want), or any has
+    /// yet to say, as far as it's heard, that its copy of the match is
+    /// set up. A match begun before then leaves those clients behind
+    /// from the start.
+    pub fn waiting(&self) -> bool {
+        self.clients.len() < self.wanted.unwrap_or(0) || self.clients.iter().any(|c| !c.ready)
     }
 
     /// Has it carry out whatever `client` asks from here on: any player's
@@ -172,6 +194,7 @@ impl<L: Link> Host<L> {
             trusted: false,
             diverged: false,
             lost: false,
+            ready: false,
             asked: 0,
             answered: 0,
         });
@@ -183,6 +206,12 @@ impl<L: Link> Host<L> {
     fn refuses(&self, players: &[u32]) -> Option<Refusal> {
         if self.begun {
             return Some(Refusal::Begun);
+        }
+        if self
+            .wanted
+            .is_some_and(|wanted| self.clients.len() >= wanted)
+        {
+            return Some(Refusal::Full);
         }
         players.iter().find_map(|&p| {
             if self.world.sides.player(p).is_none() {
@@ -234,17 +263,20 @@ impl<L: Link> Host<L> {
         seated
     }
 
-    /// Finds the clients let in that have gone before the match has
-    /// begun, without beginning it. What a client asks for before it
-    /// begins is dropped, as it's told.
+    /// Hears from the clients let in before the match has begun, without
+    /// beginning it: which are ready, and which have gone. What a client
+    /// asks for before it begins is dropped, as it's told.
     pub fn wait(&mut self) -> Vec<Event> {
         for seat in &mut self.clients {
             for _ in 0..HEARD_A_TURN {
                 match seat.link.receive() {
                     Ok(Some(message)) => {
-                        let asked = message.len() <= LONGEST_HEARD
-                            && matches!(decode(&message), Some(ToHost::Ask(_)));
-                        seat.asked += u64::from(asked);
+                        let heard = (message.len() <= LONGEST_HEARD).then(|| decode(&message));
+                        match heard.flatten() {
+                            Some(ToHost::Ask(_)) => seat.asked += 1,
+                            Some(ToHost::Ready) => seat.ready = true,
+                            Some(ToHost::Check { .. }) | None => {}
+                        }
                     }
                     Ok(None) => break,
                     Err(_) => {
@@ -318,6 +350,7 @@ impl<L: Link> Host<L> {
                             actions.push(action);
                         }
                     }
+                    Ok(Some(Some(ToHost::Ready))) => seat.ready = true,
                     Ok(Some(Some(ToHost::Check { step, hash }))) => {
                         // The host has played every tick a client has.
                         let stands = checks.binary_search(&(step, hash)).is_ok();
@@ -621,6 +654,40 @@ mod tests {
         host.turn();
         let mut admit = |players: &[u32]| host.admit(pair().0, players.to_vec());
         assert_eq!(admit(&[]), Err(Refusal::Begun));
+    }
+
+    #[test]
+    fn a_host_hears_which_clients_are_ready_before_the_match_begins() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[]]);
+        assert!(host.waiting());
+        clients[1].ready().unwrap();
+        clients[1].ready().unwrap();
+        clients[0].ready().unwrap();
+        assert_eq!(host.wait(), []);
+        assert!(host.waiting());
+        // One that goes isn't waited on, unless it's one of those wanted.
+        drop(clients.remove(2));
+        assert_eq!(host.wait(), [Event::Left(3)]);
+        assert!(!host.waiting());
+        host.want(3);
+        assert!(host.waiting());
+        let (ours, mut theirs) = pair();
+        assert_eq!(host.admit(ours, vec![]), Ok(4));
+        welcome(&mut theirs).unwrap();
+        let mut fourth = Client::new(theirs);
+        assert!(host.waiting());
+        fourth.ready().unwrap();
+        host.wait();
+        assert!(!host.waiting());
+        // With those it wants, it lets in no more.
+        let (ours, mut late) = pair();
+        assert_eq!(host.admit(ours, vec![]), Err(Refusal::Full));
+        assert_eq!(welcome(&mut late), Err(NotJoined::Refused(Refusal::Full)));
+        assert_eq!((host.clients(), host.world().ticks), (3, 0));
+        // Nor is a match under way held up by hearing it.
+        clients[0].ready().unwrap();
+        play(&mut host, &mut clients, 2);
+        assert_eq!(clients[1].world().ticks, 2);
     }
 
     #[test]

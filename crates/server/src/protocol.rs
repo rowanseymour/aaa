@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 2;
+pub const PROTOCOL: u32 = 3;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -28,6 +28,9 @@ pub struct Join {
 pub enum ToHost {
     /// Asks for an action to be carried out.
     Ask(Action),
+    /// The client has set its copy of the match up, and plays it as soon
+    /// as the host says to.
+    Ready,
     /// How the client's copy of the match stood once it had played
     /// `step` ticks.
     Check { step: u64, hash: u64 },
@@ -96,6 +99,7 @@ mod tests {
             command: Command::Stop { regiment: 3 },
         };
         let to_host = [
+            ToHost::Ready,
             ToHost::Ask(order.clone()),
             ToHost::Check {
                 step: 10,

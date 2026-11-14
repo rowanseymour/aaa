@@ -124,6 +124,12 @@ impl<L: Link> Client<L> {
         Ok(())
     }
 
+    /// Tells the host that its copy of the match is set up, which a host
+    /// may wait for before the match begins.
+    pub fn ready(&mut self) -> Result<(), Lost> {
+        self.link.send(encode(&ToHost::Ready))
+    }
+
     /// How many actions it's asked the host for.
     pub fn asked(&self) -> u64 {
         self.asked
