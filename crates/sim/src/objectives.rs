@@ -65,6 +65,25 @@ impl Objectives {
     }
 }
 
+crate::hash::digest!(Objective {
+    name,
+    text,
+    primary,
+    standing
+});
+
+impl crate::hash::Digest for Objectives {
+    fn digest(&self, h: &mut crate::hash::Hasher) {
+        self.0.digest(h);
+    }
+}
+
+impl crate::hash::Digest for Standing {
+    fn digest(&self, h: &mut crate::hash::Hasher) {
+        (*self as u8).digest(h);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

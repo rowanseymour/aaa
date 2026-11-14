@@ -551,6 +551,29 @@ fn spot(at: [f32; 2], facing: [f32; 2], shape: Option<Shape>) -> Obstacle {
     }
 }
 
+crate::hash::digest!(Ramp {
+    from,
+    to,
+    over,
+    gone
+});
+
+crate::hash::digest!(Delivery {
+    id, template, owner, position, previous, facing, height, target, hq, regiment, left,
+    entry, line, flown, mark, ramp, released, held,
+} skip {
+    // Its template's.
+    cargo, airlift,
+});
+
+crate::hash::digest!(Descent {
+    height,
+    previous,
+    from,
+    start,
+    lands
+});
+
 #[cfg(test)]
 mod tests {
     use aaa_map::{Airlift, Fall, Id};

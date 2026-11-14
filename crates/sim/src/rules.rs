@@ -9,6 +9,9 @@ use aaa_map::{Id, Packs, Requires};
 /// covers out of play, so a test sets only those it exercises.
 #[derive(Debug, Clone)]
 pub struct Rules {
+    /// What the match's chances are drawn from: every copy of a match is
+    /// given the same one.
+    pub seed: u64,
     pub terrain_rules: aaa_map::TerrainRules,
     /// What each building template packs into, for those that can.
     pub packing: HashMap<Id, Packs>,
@@ -88,6 +91,7 @@ pub struct Rules {
 impl Default for Rules {
     fn default() -> Self {
         Rules {
+            seed: 0,
             terrain_rules: Default::default(),
             packing: HashMap::new(),
             requires: HashMap::new(),

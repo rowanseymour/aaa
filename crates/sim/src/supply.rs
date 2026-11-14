@@ -593,6 +593,13 @@ impl World {
     }
 }
 
+crate::hash::digest!(Bombarder { by, tick, length });
+
+crate::hash::digest!(Supplying { connected, stockpile, judged, busy, laid } skip {
+    // Follows from where it stands.
+    zone,
+});
+
 #[cfg(test)]
 mod tests {
 

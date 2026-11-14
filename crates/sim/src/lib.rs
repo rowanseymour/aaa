@@ -16,6 +16,7 @@ mod engagement;
 mod experience;
 mod fog;
 mod guard;
+mod hash;
 mod movement;
 mod notices;
 mod objectives;
@@ -32,7 +33,7 @@ mod terrain;
 #[cfg(test)]
 mod testing;
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::{PI, TAU};
 
 use aaa_map::{
@@ -46,6 +47,7 @@ pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::Commander;
 pub use fog::{Fog, Seen};
+use hash::{Digest, Hasher, digest};
 pub use notices::Notice;
 pub use objectives::{Objective, Objectives, Standing};
 pub use outcome::Fate;
@@ -172,7 +174,7 @@ pub struct World {
     pub landings: Vec<Landing>,
     /// The last number each side has given a numbered template, by side
     /// and template.
-    numbers: HashMap<(u32, Id), u32>,
+    numbers: BTreeMap<(u32, Id), u32>,
     /// An id no object has yet.
     next_id: u32,
     /// An id no commission has yet.
@@ -499,7 +501,7 @@ pub struct Building {
     pub awake: bool,
     /// What was in its zone when it last looked, so it can tell what's
     /// come in since.
-    inside: HashMap<Target, Footing>,
+    inside: BTreeMap<Target, Footing>,
     /// While it's under siege, the tick that may end on.
     pub besieged: Option<u64>,
     /// Where each of its fighter's turrets points.
@@ -808,7 +810,7 @@ fn wrap(angle: f32) -> f32 {
 type Footing = (Tile, u32);
 
 /// Something a weapon can fire on.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Target {
     /// Index into [`World::units`].
     Unit(usize),
@@ -986,6 +988,180 @@ impl Sides {
     }
 }
 
+digest!(World {
+    regiments, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
+    holdings, treasuries, commanders, fog, ticks, loaded, flying, landings, numbers, next_id,
+    next_commission, rng,
+} skip {
+    // Fixed by the map and the game's data.
+    sides, rules, tile_terrains, scenery,
+    // Follow from the buildings standing and the scenery cleared.
+    pathing, clearable,
+    // Taken by whatever shows them, whenever it does.
+    notices,
+});
+
+digest!(Regiment {
+    id, template, number, owner, units, speed, position, facing, formation, combat,
+    operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
+    unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
+    guard, arriving, terrain_properties,
+} skip {
+    // Its template's.
+    formations, unpacks,
+    // Follows from where it stands.
+    terrain,
+});
+
+digest!(Guard {
+    of,
+    post,
+    facing,
+    step,
+    unreachable
+});
+
+digest!(Leg {
+    heading,
+    aim,
+    snapped
+});
+
+digest!(Unit {
+    id, template, regiment, position, previous, facing, end_facing, path, from, leg, goal,
+    exact, ways, look, speed, acceleration, turn_rate, turn_radius, trailer, closing, health,
+    reloads, target, shot, died, besieged, left, awaited, descent,
+} skip {
+    // Its template's.
+    domain, shape, fighter,
+    // Follows from where it stands.
+    terrain,
+});
+
+digest!(Trailer {
+    template,
+    position,
+    previous,
+    facing,
+    hitch,
+    coupling
+});
+
+digest!(Building {
+    id, template, number, owner, position, facing, health, reloads, target, noticed, awake,
+    inside, besieged, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
+    captured, unpacked_from, zone, members, supply, properties, created,
+} skip {
+    // Its template's, or as the map has it.
+    fighter, deploy, organization, obstacle,
+});
+
+digest!(Commission {
+    work,
+    ticks,
+    paid,
+    to,
+    held,
+    id
+});
+
+digest!(TurretAim { yaw, idle });
+
+digest!(Projectile { from, by, weapon, target, at, lands, bombard } skip {
+    // Its firer's template's.
+    shot,
+});
+
+digest!(Landing {
+    tick,
+    from,
+    weapon,
+    target,
+    at
+});
+
+impl Digest for Step {
+    fn digest(&self, h: &mut Hasher) {
+        (*self as u8).digest(h);
+    }
+}
+
+impl Digest for Piece {
+    fn digest(&self, h: &mut Hasher) {
+        match *self {
+            Piece::Regiment(r) => (0u8, r).digest(h),
+            Piece::Building(b) => (1u8, b).digest(h),
+        }
+    }
+}
+
+impl Digest for Target {
+    fn digest(&self, h: &mut Hasher) {
+        match *self {
+            Target::Unit(u) => (0u8, u).digest(h),
+            Target::Building(b) => (1u8, b).digest(h),
+        }
+    }
+}
+
+impl Digest for Order {
+    fn digest(&self, h: &mut Hasher) {
+        match *self {
+            Order::Move => 0u8.digest(h),
+            Order::Run => 1u8.digest(h),
+            Order::Attack => 2u8.digest(h),
+            Order::Pursue(r) => (3u8, r).digest(h),
+        }
+    }
+}
+
+impl Digest for Left {
+    fn digest(&self, h: &mut Hasher) {
+        match *self {
+            Left::Unpacked(tick) => (0u8, tick).digest(h),
+            Left::Disbanded(tick) => (1u8, tick).digest(h),
+        }
+    }
+}
+
+impl Digest for State {
+    fn digest(&self, h: &mut Hasher) {
+        match *self {
+            State::Standing => 0u8.digest(h),
+            State::Disabled => 1u8.digest(h),
+            State::Destroyed(tick) => (2u8, tick).digest(h),
+            State::Packed(tick, r) => (3u8, (tick, r)).digest(h),
+            State::Sold(tick) => (4u8, tick).digest(h),
+        }
+    }
+}
+
+impl Digest for Work {
+    /// By what it's for: the rest is that template's or technology's.
+    fn digest(&self, h: &mut Hasher) {
+        match self {
+            Work::Raise(r) => (0u8, &r.template).digest(h),
+            Work::Research(r) => (1u8, &r.technology).digest(h),
+        }
+    }
+}
+
+impl Digest for Pause {
+    fn digest(&self, h: &mut Hasher) {
+        match *self {
+            Pause::Limit(limit) => (0u8, limit).digest(h),
+            Pause::Disabled => 1u8.digest(h),
+            Pause::Supply => 2u8.digest(h),
+        }
+    }
+}
+
+impl Digest for Outcome {
+    fn digest(&self, h: &mut Hasher) {
+        (*self as u8).digest(h);
+    }
+}
+
 fn normalised([x, y]: [f32; 2]) -> Option<[f32; 2]> {
     let length = libm::hypotf(x, y);
     (length > 1e-6).then(|| [x / length, y / length])
@@ -1059,12 +1235,9 @@ mod tests {
                 numbers.push(b.captured.unwrap_or(u64::MAX));
             }
         }
-        numbers
-            .iter()
-            .flat_map(|n| n.to_le_bytes())
-            .fold(0xcbf2_9ce4_8422_2325, |h, b| {
-                (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3)
-            })
+        let mut h = Hasher::new();
+        numbers.iter().for_each(|n| n.digest(&mut h));
+        h.finish()
     }
 
     #[test]
@@ -1112,6 +1285,69 @@ mod tests {
         assert_eq!(sides.relation(1, 2), Relation::Ally);
         assert_eq!(sides.relation(1, 3), Relation::Enemy);
         assert_eq!(sides.relation(3, 1), Relation::Neutral);
+    }
+
+    #[test]
+    fn copies_given_the_same_orders_hash_the_same() {
+        let (a, b) = (played_battle(), played_battle());
+        assert_eq!(a.hash(), b.hash());
+        // Hashing changes nothing, and a tick does.
+        assert_eq!(a.hash(), a.hash());
+        let mut c = played_battle();
+        c.tick();
+        assert_ne!(a.hash(), c.hash());
+    }
+
+    #[test]
+    fn an_order_only_one_copy_was_given_shows_in_its_hash() {
+        let (a, mut b) = (played_battle(), played_battle());
+        let to = [40.0, 40.0];
+        let given = (0..b.regiments.len()).any(|regiment| {
+            let owner = b.regiments[regiment].owner;
+            b.apply(owner, Command::Move { regiment, to }).is_ok()
+        });
+        assert!(given);
+        assert_ne!(a.hash(), b.hash());
+    }
+
+    #[test]
+    fn what_is_drawn_by_chance_shows_in_the_hash() {
+        let (a, mut b) = (played_battle(), played_battle());
+        b.chance();
+        assert_ne!(a.hash(), b.hash());
+    }
+
+    #[test]
+    fn what_sides_have_and_see_shows_in_the_hash() {
+        let a = played_battle().hash();
+        let differs = |change: fn(&mut World)| {
+            let mut b = played_battle();
+            change(&mut b);
+            a != b.hash()
+        };
+        assert!(differs(
+            |w| w.treasuries.entry(1).or_default().stockpile += 1.0
+        ));
+        assert!(differs(|w| w.grant(1, Id::from("radar"))));
+        assert!(differs(|w| w.set_fog(aaa_map::FogSetting::Full)));
+        assert!(differs(
+            |w| w.fates.get_mut(&1).unwrap().default_defeat ^= true
+        ));
+        assert!(differs(|w| w.regiments[0].in_supply ^= true));
+        assert!(differs(|w| w.buildings[0].awake ^= true));
+    }
+
+    #[test]
+    fn a_number_that_is_none_hashes_the_same_whatever_its_bits() {
+        let hash = |x: f32| {
+            let mut h = Hasher::new();
+            x.digest(&mut h);
+            h.finish()
+        };
+        let other = f32::from_bits(f32::NAN.to_bits() ^ 0x8000_0001);
+        assert!(other.is_nan());
+        assert_eq!(hash(f32::NAN), hash(other));
+        assert_ne!(hash(0.0), hash(-0.0));
     }
 
     #[test]

@@ -27,3 +27,5 @@ impl World {
         }
     }
 }
+
+crate::hash::digest!(Held { property, until });
