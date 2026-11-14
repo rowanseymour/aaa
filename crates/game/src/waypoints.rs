@@ -250,13 +250,17 @@ pub fn rally(
     mut commands: Commands,
     sim: Res<Sim>,
     chosen: Res<SelectedBuilding>,
+    local: Res<crate::Local>,
     looks: Res<Looks>,
     markers: Query<(Entity, &RallyMarker)>,
     mut drawn: ResMut<Drawn>,
     loaded: Res<Loaded>,
     mut assets: MapAssets,
 ) {
-    let wanted = chosen.0.and_then(|b| Some((b, sim.0.buildings[b].rally?)));
+    // Only the player sees where their own send what they raise.
+    let wanted = (chosen.0)
+        .filter(|&b| Some(sim.0.buildings[b].owner) == local.0)
+        .and_then(|b| Some((b, sim.0.buildings[b].rally?)));
     let mut kept = false;
     for (e, m) in &markers {
         match Some((m.0, m.1)) == wanted && !kept {

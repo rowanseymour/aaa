@@ -883,14 +883,17 @@ pub fn back_out(
     keys: Res<ButtonInput<KeyCode>>,
     selected: Res<Selected>,
     chosen: Res<SelectedBuilding>,
+    (sim, local): (Res<Sim>, Res<crate::Local>),
     mut page: ResMut<Page>,
     mut was: bevy::ecs::system::Local<Option<usize>>,
     displays: Res<crate::displays::Displays>,
 ) {
     // A menu is the building's it was opened on.
     let switched = std::mem::replace(&mut *was, chosen.0) != chosen.0;
+    let theirs = !crate::selection::commanded(&sim.0, local.0, &selected.0, chosen.0);
     let gone = match *page {
         Page::Orders => false,
+        _ if theirs => true,
         Page::Aiming(_) => selected.0.is_empty(),
         Page::Menu(_) => chosen.0.is_none() || switched,
         Page::Rally => chosen.0.is_none(),
@@ -935,7 +938,8 @@ pub fn show(
     mut commands: Commands,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
-    let nothing = selected.0.is_empty() && building.is_none();
+    // Others' things have no buttons.
+    let nothing = !crate::selection::commanded(&sim.0, local.0, &selected.0, building);
     // What hovering, or aiming, the order would do to the economy.
     let unpacking = selected.0.first().copied().filter(|&r| {
         selected.0.len() == 1 && sim.0.regiments.get(r).is_some_and(|r| r.unpacks.is_some())
