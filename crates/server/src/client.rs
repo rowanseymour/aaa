@@ -3,16 +3,35 @@
 
 use aaa_sim::{Action, Refused, Schedule, World};
 
-use crate::protocol::{ToClient, ToHost, Welcome, decode, encode};
-use crate::{Link, Lost};
+use crate::protocol::{Join, PROTOCOL, ToClient, ToHost, Welcome, decode, encode};
+use crate::{Link, Lost, Refusal};
+
+/// Why a client hasn't joined a match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotJoined {
+    /// The link to the host was lost, or it sent what isn't a welcome.
+    Lost,
+    /// The host wouldn't let it in.
+    Refused(Refusal),
+}
+
+/// Asks the host at the other end of `link` to be let in to give the
+/// orders of `players`, or only to watch if there are none. Its answer is
+/// its [`welcome`].
+pub fn join(link: &mut impl Link, players: Vec<u32>) -> Result<(), Lost> {
+    let protocol = PROTOCOL;
+    link.send(encode(&Join { protocol, players }))
+}
 
 /// What the host first tells a client at the other end of `link`, which
 /// is what to set its copy of the match up from; `None` until it comes.
-pub fn welcome(link: &mut impl Link) -> Result<Option<Welcome>, Lost> {
-    match link.receive()?.map(|m| decode(&m)) {
+pub fn welcome(link: &mut impl Link) -> Result<Option<Welcome>, NotJoined> {
+    let heard = link.receive().map_err(|_| NotJoined::Lost)?;
+    match heard.map(|m| decode(&m)) {
         None => Ok(None),
         Some(Some(ToClient::Start(welcome))) => Ok(Some(welcome)),
-        Some(_) => Err(Lost),
+        Some(Some(ToClient::Refused(refusal))) => Err(NotJoined::Refused(refusal)),
+        Some(_) => Err(NotJoined::Lost),
     }
 }
 
@@ -89,8 +108,8 @@ impl<L: Link> Client<L> {
                     self.checked = checks.len();
                 }
                 ToClient::Diverged { client, step } => self.diverged.push((client, step)),
-                // The match is already set up.
-                ToClient::Start(_) => return Err(Lost),
+                // It's already been let in.
+                ToClient::Start(_) | ToClient::Refused(_) => return Err(Lost),
             }
         }
         Ok(())

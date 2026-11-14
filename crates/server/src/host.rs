@@ -1,15 +1,21 @@
 //! The host of a match: the one copy that decides what the match is
 //! given and when, and tells every client.
 
-use aaa_sim::{Action, Schedule, World};
+use aaa_sim::{Action, Record, Schedule, World};
 
-use crate::protocol::{Bundle, ToClient, ToHost, Welcome, decode, encode};
+use serde::{Deserialize, Serialize};
+
+use crate::protocol::{Bundle, Join, PROTOCOL, ToClient, ToHost, Welcome, decode, encode};
 use crate::{Link, Setup};
 
 /// The most messages taken from a client in one turn, so that one sending
 /// without end holds nobody else up and puts only so much in a turn; the
 /// rest wait for the next.
 const HEARD_A_TURN: usize = 64;
+
+/// The most clients waiting to say what they want that it keeps links
+/// to.
+const GREETED: usize = 32;
 
 /// The longest message taken from a client, in bytes, which is well over
 /// what anything it has to say comes to. A longer one is taken as
@@ -22,6 +28,8 @@ pub struct Host<L> {
     world: World,
     schedule: Schedule,
     clients: Vec<Seat<L>>,
+    /// Links to those that have yet to ask to be let in.
+    greeted: Vec<L>,
     /// What the next client let in is known as.
     next: u32,
     begun: bool,
@@ -39,7 +47,7 @@ struct Seat<L> {
 }
 
 /// Why a client wasn't let in.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Refusal {
     /// The match has begun, and what it's been given so far isn't passed
     /// on.
@@ -48,8 +56,13 @@ pub enum Refusal {
     NoPlayer(u32),
     /// Another client gives this player's orders.
     Taken(u32),
-    /// Its link was lost.
+    /// Its link was lost, or it asked with what isn't a message.
     Lost,
+    /// It speaks another version of the protocol than the host's, which
+    /// is this one.
+    Protocol(u32),
+    /// The host has as many waiting to ask as it will have.
+    Full,
 }
 
 /// Something a turn brought that those running the host may want to know.
@@ -84,6 +97,7 @@ impl<L: Link> Host<L> {
             world,
             schedule: Schedule::default(),
             clients: Vec::new(),
+            greeted: Vec::new(),
             next: 1,
             begun: false,
         }
@@ -111,29 +125,38 @@ impl<L: Link> Host<L> {
         &self.schedule
     }
 
+    /// How many clients it has.
+    pub fn clients(&self) -> usize {
+        self.clients.len()
+    }
+
+    /// Ends its part in the match, leaving its copy as it stands and the
+    /// record of what it was given. Its clients find their links lost
+    /// once they've had what it sent.
+    pub fn finish(self) -> (World, Record) {
+        (self.world, self.schedule.record().clone())
+    }
+
     /// Lets in a client at the other end of `link` to give the orders of
     /// `players`, or only to watch if there are none, returning what it's
-    /// known as.
-    pub fn admit(&mut self, mut link: L, players: Vec<u32>) -> Result<u32, Refusal> {
-        if self.begun {
-            return Err(Refusal::Begun);
-        }
-        for &p in &players {
-            if self.world.sides.player(p).is_none() {
-                return Err(Refusal::NoPlayer(p));
-            }
-            if self.clients.iter().any(|c| c.players.contains(&p)) {
-                return Err(Refusal::Taken(p));
-            }
+    /// known as. One that isn't let in is told why.
+    pub fn admit(&mut self, mut link: L, mut players: Vec<u32>) -> Result<u32, Refusal> {
+        players.sort_unstable();
+        players.dedup();
+        let refused = self.refuses(&players).or_else(|| {
+            let welcome = Welcome {
+                client: self.next,
+                setup: self.setup.clone(),
+                players: players.clone(),
+            };
+            let sent = link.send(encode(&ToClient::Start(welcome)));
+            sent.err().map(|_| Refusal::Lost)
+        });
+        if let Some(refusal) = refused {
+            let _ = link.send(encode(&ToClient::Refused(refusal)));
+            return Err(refusal);
         }
         let id = self.next;
-        let welcome = Welcome {
-            client: id,
-            setup: self.setup.clone(),
-            players: players.clone(),
-        };
-        let sent = link.send(encode(&ToClient::Start(welcome)));
-        sent.map_err(|_| Refusal::Lost)?;
         self.next += 1;
         self.clients.push(Seat {
             id,
@@ -144,6 +167,82 @@ impl<L: Link> Host<L> {
             lost: false,
         });
         Ok(id)
+    }
+
+    /// Why a client wouldn't be let in to give the orders of `players`,
+    /// if it wouldn't.
+    fn refuses(&self, players: &[u32]) -> Option<Refusal> {
+        if self.begun {
+            return Some(Refusal::Begun);
+        }
+        players.iter().find_map(|&p| {
+            if self.world.sides.player(p).is_none() {
+                return Some(Refusal::NoPlayer(p));
+            }
+            let taken = self.clients.iter().any(|c| c.players.contains(&p));
+            taken.then_some(Refusal::Taken(p))
+        })
+    }
+
+    /// Takes a link to a client that has yet to say what it wants, which
+    /// [`Host::seat`] lets in once it has.
+    pub fn greet(&mut self, mut link: L) {
+        if self.greeted.len() < GREETED {
+            self.greeted.push(link);
+        } else {
+            let _ = link.send(encode(&ToClient::Refused(Refusal::Full)));
+        }
+    }
+
+    /// Lets in the clients greeted that have since asked to join, each as
+    /// [`Host::admit`] would, returning what became of each that asked.
+    pub fn seat(&mut self) -> Vec<Result<u32, Refusal>> {
+        let mut seated = Vec::new();
+        for mut link in std::mem::take(&mut self.greeted) {
+            let asked = match link.receive() {
+                Ok(None) if !self.begun => {
+                    self.greeted.push(link);
+                    continue;
+                }
+                // Too late to ask, as it's told on not being let in.
+                Ok(None) => Ok(Vec::new()),
+                Ok(Some(message)) if message.len() > LONGEST_HEARD => Err(Refusal::Lost),
+                Ok(Some(message)) => match decode::<Join>(&message) {
+                    Some(join) if join.protocol == PROTOCOL => Ok(join.players),
+                    Some(_) => Err(Refusal::Protocol(PROTOCOL)),
+                    None => Err(Refusal::Lost),
+                },
+                Err(_) => Err(Refusal::Lost),
+            };
+            seated.push(match asked {
+                Ok(players) => self.admit(link, players),
+                Err(refusal) => {
+                    let _ = link.send(encode(&ToClient::Refused(refusal)));
+                    Err(refusal)
+                }
+            });
+        }
+        seated
+    }
+
+    /// Finds the clients let in that have gone before the match has
+    /// begun, without beginning it. What a client asks for before it
+    /// begins is dropped.
+    pub fn wait(&mut self) -> Vec<Event> {
+        for seat in &mut self.clients {
+            for _ in 0..HEARD_A_TURN {
+                match seat.link.receive() {
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(_) => {
+                        seat.lost = true;
+                        break;
+                    }
+                }
+            }
+        }
+        let lost = self.clients.extract_if(.., |c| c.lost);
+        lost.map(|c| Event::Left(c.id)).collect()
     }
 
     /// Takes what the clients have sent, has every copy of the match
@@ -247,7 +346,7 @@ mod tests {
 
     use super::*;
     use crate::testing::player;
-    use crate::{Client, Local, pair, welcome};
+    use crate::{Client, Link, Local, NotJoined, pair, welcome};
 
     /// A match of players 1 and 2, each with a soldier, the first's at
     /// 10,10 and the second's 10 further along y.
@@ -567,5 +666,78 @@ mod tests {
         clients[0].advance(usize::MAX).unwrap();
         assert_eq!((host.world().ticks, clients[0].world().ticks), (1, 1));
         assert_eq!(clients[0].world().hash(), host.world().hash());
+    }
+
+    #[test]
+    fn clients_that_ask_to_join_are_let_in_or_told_why_not() {
+        let mut host = Host::new(setup(), fresh());
+        let mut ends = Vec::new();
+        for _ in 0..4 {
+            let (ours, theirs) = pair();
+            host.greet(ours);
+            ends.push(theirs);
+        }
+        // Nothing until they ask.
+        assert_eq!(host.seat(), []);
+        // A player asked for twice is asked for once.
+        crate::join(&mut ends[0], vec![1, 1]).unwrap();
+        crate::join(&mut ends[1], vec![1, 2]).unwrap();
+        let older = Join {
+            protocol: PROTOCOL + 1,
+            players: vec![2],
+        };
+        ends[2].send(encode(&older)).unwrap();
+        let taken = Refusal::Taken(1);
+        let spoken = Refusal::Protocol(PROTOCOL);
+        assert_eq!(host.seat(), [Ok(1), Err(taken), Err(spoken)]);
+        let welcomed = welcome(&mut ends[0]).unwrap().unwrap();
+        assert_eq!((welcomed.client, welcomed.players), (1, vec![1]));
+        assert_eq!(welcome(&mut ends[1]), Err(NotJoined::Refused(taken)));
+        assert_eq!(welcome(&mut ends[2]), Err(NotJoined::Refused(spoken)));
+        // One that hasn't asked by the time the match begins is too late.
+        assert_eq!(welcome(&mut ends[3]), Ok(None));
+        host.turn();
+        assert_eq!(host.seat(), [Err(Refusal::Begun)]);
+        let begun = NotJoined::Refused(Refusal::Begun);
+        assert_eq!(welcome(&mut ends[3]), Err(begun));
+        // As is one that comes after.
+        let (ours, mut late) = pair();
+        host.greet(ours);
+        crate::join(&mut late, Vec::new()).unwrap();
+        assert_eq!(host.seat(), [Err(Refusal::Begun)]);
+        assert_eq!(welcome(&mut late), Err(begun));
+    }
+
+    #[test]
+    fn only_so_many_are_kept_waiting_to_ask() {
+        let mut host = Host::new(setup(), fresh());
+        let ends = (0..GREETED + 1).map(|_| {
+            let (ours, theirs) = pair();
+            host.greet(ours);
+            theirs
+        });
+        let mut ends: Vec<Local> = ends.collect();
+        let full = NotJoined::Refused(Refusal::Full);
+        assert_eq!(welcome(&mut ends[GREETED]), Err(full));
+        assert_eq!(welcome(&mut ends[0]), Ok(None));
+        // What asks with nonsense is gone.
+        ends[0].send(vec![250; 40]).unwrap();
+        assert_eq!(host.seat(), [Err(Refusal::Lost)]);
+    }
+
+    #[test]
+    fn a_client_that_goes_before_the_match_begins_leaves_its_players_free() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2]]);
+        assert_eq!(host.wait(), []);
+        // What's asked before it begins comes to nothing.
+        clients[1].ask(Action::Pause(true)).unwrap();
+        drop(clients.remove(0));
+        assert_eq!(host.wait(), [Event::Left(1)]);
+        assert_eq!(host.clients(), 1);
+        let (ours, _theirs) = pair();
+        assert_eq!(host.admit(ours, vec![1]), Ok(3));
+        play(&mut host, &mut clients, 2);
+        assert!(host.schedule().record().given.is_empty());
+        assert_eq!(host.world().ticks, 2);
     }
 }

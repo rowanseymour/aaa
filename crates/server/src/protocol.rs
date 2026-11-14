@@ -8,7 +8,20 @@
 use aaa_sim::Action;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
-use crate::Setup;
+use crate::{Refusal, Setup};
+
+/// The version of all this that this build speaks: a host lets in only
+/// clients that speak its own.
+pub const PROTOCOL: u32 = 1;
+
+/// What a client first says to a host: that it wants in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Join {
+    /// The [`PROTOCOL`] the client speaks.
+    pub protocol: u32,
+    /// The players it wants to give the orders of; none to only watch.
+    pub players: Vec<u32>,
+}
 
 /// From a client to the host.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -25,6 +38,8 @@ pub enum ToHost {
 pub enum ToClient {
     /// The match to set up, and what the client is in it.
     Start(Welcome),
+    /// The client isn't let in, and nothing more follows.
+    Refused(Refusal),
     /// What every copy of the match does next.
     Step(Bundle),
     /// A client's copy of the match stopped standing as the host's does.
@@ -104,7 +119,13 @@ mod tests {
                 client: 2,
                 step: 30,
             },
+            ToClient::Refused(Refusal::Protocol(PROTOCOL)),
         ];
+        let join = Join {
+            protocol: PROTOCOL,
+            players: vec![3],
+        };
+        assert_eq!(decode(&encode(&join)), Some(join));
         for message in to_client {
             assert_eq!(decode(&encode(&message)), Some(message));
         }

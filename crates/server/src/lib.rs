@@ -6,6 +6,7 @@ mod film;
 mod host;
 mod link;
 pub mod protocol;
+pub mod quic;
 #[cfg(test)]
 mod testing;
 
@@ -18,7 +19,7 @@ use aaa_sim::World;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
-pub use client::{Client, welcome};
+pub use client::{Client, NotJoined, join, welcome};
 pub use film::{Film, NotFilm};
 pub use host::{Event, Host, Refusal};
 pub use link::{Link, Local, Lost, pair};
