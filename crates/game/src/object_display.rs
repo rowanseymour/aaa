@@ -304,6 +304,8 @@ pub struct Looks {
     /// Each resource's glyph, by the resource's field name in the data.
     glyphs: HashMap<&'static str, Handle<Image>>,
     strings: Arc<aaa_data::Strings>,
+    /// The map's own text, for the names it gives things and sides.
+    map: Arc<aaa_data::Strings>,
     /// How each property that has an icon shows, by id: the shared ones,
     /// and under ids of their own those of `formations`.
     properties: HashMap<Id, PropertyLook>,
@@ -392,6 +394,7 @@ pub fn spawn(
         listings: listings.clone(),
         glyphs,
         strings: game.strings(),
+        map: loaded.map.strings.clone(),
         properties,
         formations,
         technologies: (technologies.iter())
@@ -718,7 +721,8 @@ impl Ui<'_> {
     }
 
     fn regiment_name(&self, r: usize) -> String {
-        regiment_name(self.sim, &self.looks.names, &self.looks.strings, r)
+        let looks = &self.looks;
+        regiment_name(self.sim, &looks.names, &looks.strings, &looks.map, r)
     }
 
     /// The name and owner across the top.
@@ -748,7 +752,11 @@ impl Ui<'_> {
                 }
                 display.spawn((
                     at(18.0, 21.0, 290.0, 14.0),
-                    ui::coloured(self.leaders.owner(p, self.local), Font::Hud, colour),
+                    ui::coloured(
+                        self.leaders.owner(p, self.local, &self.looks.map),
+                        Font::Hud,
+                        colour,
+                    ),
                 ));
             }
         });
@@ -1233,7 +1241,8 @@ impl Ui<'_> {
     fn structure(&mut self, commands: &mut Commands, root: Entity, b: usize) {
         let building = &self.sim.buildings[b];
         let template = building.template.clone();
-        let name = building_name(self.sim, &self.looks.names, &self.looks.strings, b);
+        let looks = &self.looks;
+        let name = building_name(self.sim, &looks.names, &looks.strings, &looks.map, b);
         self.title(commands, root, name, building.owner);
         let of = Says::Building(b);
         self.portrait(commands, root, template.as_str(), Fill::Building(b), of);
@@ -1782,16 +1791,21 @@ fn economy(ledger: &Ledger) -> Vec<(&'static str, String)> {
     entries.collect()
 }
 
-/// A regiment's name as the game gives it: its template's, numbered if
-/// it's one its side numbers. `names` are the templates' names, by
-/// template, and `strings` the game's text, for the numbering.
+/// A regiment's name as the game gives it: the one its map gives it, else
+/// its template's, numbered if it's one its side numbers. `names` are the
+/// templates' names, by template, `strings` the game's text, for the
+/// numbering, and `map` the map's own.
 pub(crate) fn regiment_name(
     sim: &World,
     names: &HashMap<Id, String>,
     strings: &aaa_data::Strings,
+    map: &aaa_data::Strings,
     r: usize,
 ) -> String {
     let regiment = &sim.regiments[r];
+    if let Some(name) = map_name(map, regiment.id) {
+        return name;
+    }
     numbered(
         strings,
         regiment.number,
@@ -1800,19 +1814,34 @@ pub(crate) fn regiment_name(
 }
 
 /// A building's name, as [`regiment_name`]: numbered as the organization
-/// it stands in is.
+/// it stands in is. A city's buildings go by the name the map gives the
+/// city.
 pub(crate) fn building_name(
     sim: &World,
     names: &HashMap<Id, String>,
     strings: &aaa_data::Strings,
+    map: &aaa_data::Strings,
     b: usize,
 ) -> String {
+    // A city's name is the map's, where it gives one.
+    let city = sim.city_of(b).map(|c| sim.buildings[c].id);
+    if let Some(name) = city.and_then(|c| map_name(map, c)) {
+        return name;
+    }
     let building = &sim.buildings[b];
+    if let Some(name) = map_name(map, building.id) {
+        return name;
+    }
     numbered(
         strings,
         building.number,
         template_name(names, building.template.as_str()),
     )
+}
+
+/// The name a map gives the thing with an id, if it gives it one.
+fn map_name(map: &aaa_data::Strings, id: u32) -> Option<String> {
+    map.get(&format!("name_{id}")).cloned()
 }
 
 fn template_name(names: &HashMap<Id, String>, template: &str) -> String {

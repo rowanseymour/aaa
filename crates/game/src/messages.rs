@@ -61,6 +61,8 @@ struct Look {
     vars: InterfaceVars,
     strings: Arc<aaa_data::Strings>,
     names: HashMap<Id, String>,
+    /// The map's own text, for the names it gives things and sides.
+    map: Arc<aaa_data::Strings>,
     /// What an icon that looks somewhere says.
     to_location: String,
 }
@@ -71,11 +73,11 @@ impl Look {
     }
 
     fn regiment(&self, sim: &World, r: usize) -> String {
-        crate::object_display::regiment_name(sim, &self.names, &self.strings, r)
+        crate::object_display::regiment_name(sim, &self.names, &self.strings, &self.map, r)
     }
 
     fn building(&self, sim: &World, b: usize) -> String {
-        crate::object_display::building_name(sim, &self.names, &self.strings, b)
+        crate::object_display::building_name(sim, &self.names, &self.strings, &self.map, b)
     }
 
     /// An HQ's name: its building's, numbered as its organization is,
@@ -414,6 +416,7 @@ pub fn spawn(
         to_location: (strings.get("ui_tooltip_message_location").cloned())
             .unwrap_or_else(|| "Move camera to message location".into()),
         strings,
+        map: loaded.map.strings.clone(),
         names: (game.listings().iter())
             .map(|(id, l)| (id.clone(), l.name.clone()))
             .chain((game.technologies().iter()).map(|(id, t)| (id.clone(), t.name.clone())))
@@ -562,9 +565,12 @@ fn told(
     };
     let side = |id: u32| {
         let player = sim.sides.player(id);
-        player.map_or_else(String::new, |p| leaders.owner(p, local))
+        player.map_or_else(String::new, |p| leaders.owner(p, local, &look.map))
     };
-    let team_name = |team: usize| sim.sides.teams[team].name.clone();
+    let team_name = |team: usize| {
+        let name = &sim.sides.teams[team].name;
+        look.map.get(name).unwrap_or(name).clone()
+    };
     Some(match notice {
         Notice::Short { player, percent } if ours(player) => {
             let percent = (percent as i64).to_string();
@@ -977,6 +983,7 @@ mod tests {
             vars: vars_of(vars),
             strings: Arc::default(),
             names: HashMap::new(),
+            map: Default::default(),
             to_location: String::new(),
         }
     }

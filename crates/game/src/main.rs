@@ -278,12 +278,23 @@ struct Leaders(HashMap<u32, aaa_data::General>);
 
 impl Leaders {
     /// What a side's things call their owner: the person's own side is the
-    /// player, the computer's its general.
-    fn owner(&self, player: &aaa_map::Player, local: Option<u32>) -> String {
+    /// player, the computer's its general, and one without a general by
+    /// the name the map gives it.
+    fn owner(
+        &self,
+        player: &aaa_map::Player,
+        local: Option<u32>,
+        map: &aaa_data::Strings,
+    ) -> String {
         if local == Some(player.id) {
             return "Player".into();
         }
-        (self.0.get(&player.id)).map_or_else(|| player.name.clone(), |g| g.name.clone())
+        if let Some(general) = self.0.get(&player.id) {
+            return general.name.clone();
+        }
+        map.get(&player.name)
+            .cloned()
+            .unwrap_or_else(|| player.name.clone())
     }
 }
 
@@ -2791,12 +2802,19 @@ mod tests {
             (1, general("patton", "General Patton")),
             (2, general("rommel", "General Rommel")),
         ]));
-        assert_eq!(leaders.owner(&player(1), Some(1)), "Player");
-        assert_eq!(leaders.owner(&player(2), Some(1)), "General Rommel");
+        let map: aaa_data::Strings = [("kingdom_4".into(), "Civilian (Aggressive)".into())]
+            .into_iter()
+            .collect();
+        assert_eq!(leaders.owner(&player(1), Some(1), &map), "Player");
+        assert_eq!(leaders.owner(&player(2), Some(1), &map), "General Rommel");
         // Watching, every side is the computer's.
-        assert_eq!(leaders.owner(&player(1), None), "General Patton");
-        // A side with no nation has no general.
-        assert_eq!(leaders.owner(&player(3), Some(1)), "kingdom_3");
+        assert_eq!(leaders.owner(&player(1), None, &map), "General Patton");
+        // A side with no general goes by the map's name for it, if any.
+        assert_eq!(leaders.owner(&player(3), Some(1), &map), "kingdom_3");
+        assert_eq!(
+            leaders.owner(&player(4), Some(1), &map),
+            "Civilian (Aggressive)"
+        );
     }
 
     #[test]

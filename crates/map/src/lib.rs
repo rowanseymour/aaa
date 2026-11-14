@@ -32,6 +32,7 @@ pub use units::{
 };
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use aaa_data::{GameData, Nation};
 use tgck::map::{Sun, Terrain, Thing, Triggers, Value};
@@ -39,6 +40,8 @@ use tgck::map::{Sun, Terrain, Thing, Triggers, Value};
 pub struct Map {
     /// The file name without its extension, e.g. `(2v2)Berlin`.
     pub title: String,
+    /// The map's own text, such as the names it gives its cities and sides.
+    pub strings: Arc<aaa_data::Strings>,
     pub ground: Ground,
     pub terrain: Terrain,
     pub things: Vec<Thing>,
@@ -173,8 +176,17 @@ impl Map {
         for r in &mut regiments {
             recruits.give_unpacks(r);
         }
+        // A map with no string table names nothing of its own.
+        let strings = match map.string_table() {
+            Ok(table) => game.map_strings(&table),
+            Err(e) => {
+                warnings.push(format!("strings: {e}"));
+                Default::default()
+            }
+        };
         Ok(Map {
             title: aaa_data::map_title(name).to_string(),
+            strings: Arc::new(strings),
             ground,
             regiments,
             buildings,

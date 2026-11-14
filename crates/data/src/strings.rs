@@ -30,11 +30,22 @@ impl GameData {
         self.kept("strings", || self.read_strings())
     }
 
-    fn read_strings(&self) -> Strings {
+    /// A map's own text by key, such as the name it gives a city
+    /// (`name_3954`) or a side (`independent_5`), from its string table as
+    /// stored, in `.tgi` syntax.
+    pub fn map_strings(&self, table: &[u8]) -> Strings {
+        table_strings(&tgi::parse_bytes(table), &self.glyph_chars())
+    }
+
+    fn glyph_chars(&self) -> HashMap<Id, char> {
         let glyphs = self.glyphs();
-        let glyphs: HashMap<Id, char> = (glyphs.iter())
+        (glyphs.iter())
             .filter_map(|g| Some((g.ids.clone()?, char::from_u32(g.index?)?)))
-            .collect();
+            .collect()
+    }
+
+    fn read_strings(&self) -> Strings {
+        let glyphs = self.glyph_chars();
         let files = self.parse_tgis(|n| n.starts_with("localization/strings_"));
         let mut out = HashMap::new();
         let blocks = files.iter().flat_map(|(_, p)| p.root.blocks_of("Text"));
@@ -59,6 +70,15 @@ impl GameData {
             .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
             .collect()
     }
+}
+
+/// The strings of a table's `Text` blocks, the first text of a key kept.
+fn table_strings(parsed: &tgi::Parsed, glyphs: &HashMap<Id, char>) -> Strings {
+    let mut out = HashMap::new();
+    for (key, text) in parsed.root.blocks_of("Text").flat_map(text_strings) {
+        out.entry(key).or_insert_with(|| unescape(&text, glyphs));
+    }
+    Strings(out)
 }
 
 /// A `Text` block's strings by lower-case key, which keeps any `|` and
@@ -131,6 +151,15 @@ pub fn resource_name(strings: &Strings, field: &str) -> String {
 mod tests {
     use super::*;
     use crate::ui_path;
+
+    #[test]
+    fn a_maps_strings_are_read_in_its_own_encoding() {
+        // Windows-1252's right quote, which Latin-1 has as a control code.
+        let table = b"[Text language=Default]\n{\n\tids = map_strings_table\n\tName_3954 = \"Rommel\x92s HQ\"\n}\n";
+        let strings = table_strings(&tgi::parse_bytes(table), &HashMap::new());
+        assert_eq!(strings.get("name_3954").unwrap(), "Rommel\u{2019}s HQ");
+        assert!(strings.get("ids").is_none());
+    }
 
     #[test]
     fn commands_take_names_and_icons_from_the_interface() {

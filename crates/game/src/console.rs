@@ -1074,8 +1074,10 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
     let scenery = world.resource::<crate::banners::Scenery>();
     // What the player can't see would only be let go of again.
     let fog = world.get_resource::<crate::fog::Fog>();
-    let seen_building = |b| fog.is_none_or(|f| f.building(b) == crate::fog::Look::Shown);
-    let seen_regiment = |r| fog.is_none_or(|f| f.shows_regiment(sim, r));
+    // Lifting the fog shows everything only from the next frame.
+    let lifted = fog.is_none_or(|f| f.lifted);
+    let seen_building = |b| lifted || fog.is_some_and(|f| f.building(b) == crate::fog::Look::Shown);
+    let seen_regiment = |r| lifted || fog.is_some_and(|f| f.shows_regiment(sim, r));
     if let [id] = args
         // A building packed up has handed its id to its truck.
         && let Some(b) = sim
