@@ -646,10 +646,10 @@ impl Models {
         })
     }
 
-    /// Spawns every object whose template has a readable model and returns
-    /// the rest, each with whether it should have had one: false for
-    /// templates that name no model, such as sound emitters, and for
-    /// organizations drawn as their members, such as herds and those in
+    /// Spawns every object whose template has a readable model, returning
+    /// their roots and the rest, each with whether it should have had one:
+    /// false for templates that name no model, such as sound emitters, and
+    /// for organizations drawn as their members, such as herds and those in
     /// `holding`: ones a building stands in, by id.
     pub fn spawn<'a>(
         &mut self,
@@ -657,11 +657,11 @@ impl Models {
         assets: &mut ModelAssets,
         things: impl IntoIterator<Item = &'a Thing>,
         holding: &HashSet<u32>,
-    ) -> Vec<(&'a Thing, bool)> {
-        let mut rest = Vec::new();
+    ) -> (Vec<Entity>, Vec<(&'a Thing, bool)>) {
+        let (mut roots, mut rest) = (Vec::new(), Vec::new());
         let (mut drawn, mut modelless) = (0, 0);
         for t in things {
-            let placed = self.place(commands, assets, t, None, holding);
+            let placed = self.place(commands, assets, t, None, holding, &mut roots);
             match placed {
                 Placed::Drawn if self.by_members(t, holding) => rest.push((t, false)),
                 Placed::Drawn => {}
@@ -682,7 +682,7 @@ impl Models {
             missing.values().sum::<usize>(),
         );
         debug!("templates without a readable model: {missing:?}");
-        rest
+        (roots, rest)
     }
 
     /// The archive path of a template's picture in the interface, if it
@@ -800,6 +800,7 @@ impl Models {
         thing: &Thing,
         within: Option<u32>,
         holding: &HashSet<u32>,
+        roots: &mut Vec<Entity>,
     ) -> Placed {
         let owner = owner(thing).or(within);
         if self.by_members(thing, holding) {
@@ -808,7 +809,7 @@ impl Models {
             let members = thing.organization().map_or(&[][..], |o| &o.members);
             return members
                 .iter()
-                .map(|m| self.place(commands, assets, m, owner, holding))
+                .map(|m| self.place(commands, assets, m, owner, holding, roots))
                 .min()
                 .unwrap_or(Placed::NoModel);
         }
@@ -816,7 +817,10 @@ impl Models {
             return Placed::Missing;
         };
         match self.spawn_model(commands, assets, thing, owner, &view, None) {
-            Some(_) => Placed::Drawn,
+            Some(root) => {
+                roots.push(root);
+                Placed::Drawn
+            }
             None => Placed::Missing,
         }
     }

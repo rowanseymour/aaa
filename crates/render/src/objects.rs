@@ -57,6 +57,8 @@ fn shape(kind: Kind) -> (Mesh, [f32; 3], f32) {
     }
 }
 
+/// Spawns placeholder markers for `things`, each with whether it should
+/// have had a model, returning them.
 pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -65,8 +67,9 @@ pub fn spawn(
     footing: impl Fn(&str) -> Footing,
     things: &[(&Thing, bool)],
     show: bool,
-) {
+) -> Vec<Entity> {
     let mut handles = HashMap::new();
+    let mut spawned = Vec::new();
     for &(thing, should_have_model) in things {
         let kind = kind(&thing.template, should_have_model);
         let (mesh, material, lift) = handles
@@ -94,7 +97,7 @@ pub fn spawn(
         if fx != 0.0 || fy != 0.0 {
             transform.look_to(world(fx, fy, 0.0), Vec3::Y);
         }
-        commands.spawn((
+        let marker = commands.spawn((
             Name::new(thing.template.clone()),
             MapObject(thing.clone()),
             Mesh3d(mesh),
@@ -107,7 +110,9 @@ pub fn spawn(
                 Visibility::Hidden
             },
         ));
+        spawned.push(marker.id());
     }
+    spawned
 }
 
 /// Shows or hides all placeholder markers.

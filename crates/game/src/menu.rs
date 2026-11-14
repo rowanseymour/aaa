@@ -6,7 +6,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
-use crate::ui::{Font, Ink, Surface, backed, button, called, disabled, label};
+use crate::ui::{Font, Ink, Surface, backed, button, called, disabled, label, panel};
 use crate::{Screen, confirm};
 
 pub struct MenuPlugin;
@@ -56,21 +56,23 @@ pub fn open(
 }
 
 /// What stays on the main menu's screen whichever column is up.
+/// The camera comes with [`crate::backdrop`].
 fn backdrop(mut commands: Commands) {
-    commands.spawn((Camera2d, DespawnOnExit(Screen::MainMenu)));
+    let version = concat!("Version ", env!("CARGO_PKG_VERSION"));
     commands.spawn((
-        label(
-            concat!("Version ", env!("CARGO_PKG_VERSION")),
-            Font::Body,
-            Ink::Muted,
+        // Backed to be read over the map.
+        panel(
+            Surface::Hud,
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(16),
+                bottom: px(12),
+                padding: UiRect::axes(px(8), px(4)),
+                ..default()
+            },
         ),
-        Node {
-            position_type: PositionType::Absolute,
-            left: px(24),
-            bottom: px(16),
-            ..default()
-        },
         DespawnOnExit(Screen::MainMenu),
+        children![label(version, Font::Body, Ink::Muted)],
     ));
 }
 

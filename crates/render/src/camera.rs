@@ -106,19 +106,21 @@ impl RtsCamera {
 }
 
 /// Spawns the camera that looks at a map.
-pub fn spawn(commands: &mut Commands, cam: RtsCamera) {
+pub fn spawn(commands: &mut Commands, cam: RtsCamera) -> Entity {
     // For crate::color_lights.
-    commands.spawn((
-        Camera3d::default(),
-        Tonemapping::None,
-        // Dithering only runs as part of tonemapping.
-        DebandDither::Disabled,
-        // The water blends over the scene behind it.
-        ScreenSpaceTransmission::default(),
-        cam.projection(),
-        cam.transform(),
-        cam,
-    ));
+    commands
+        .spawn((
+            Camera3d::default(),
+            Tonemapping::None,
+            // Dithering only runs as part of tonemapping.
+            DebandDither::Disabled,
+            // The water blends over the scene behind it.
+            ScreenSpaceTransmission::default(),
+            cam.projection(),
+            cam.transform(),
+            cam,
+        ))
+        .id()
 }
 
 /// The camera's keyboard and mouse controls, for pausing while the

@@ -186,37 +186,28 @@ pub fn spawn_map(
     markers: bool,
     leave_out: impl Fn(&Thing) -> bool,
 ) -> Models {
-    let built = terrain::build(
-        game,
-        &map.ground,
-        &map.terrain,
-        &mut assets.images,
-        assets.edge.fade(),
-    );
+    let fade = assets.edge.fade();
+    let prepared = terrain::prepare(game, &map.ground, &map.terrain, fade);
+    let size = map.ground.size();
+    if let Some(material) = spawn_land(commands, assets, prepared, &map.sun, size, ()) {
+        commands.insert_resource(GroundFog(material));
+    }
+    spawn_objects(commands, assets, game, map, markers, |t| !leave_out(t), ())
+}
+
+/// Spawns the map's objects that `which` picks, each root with its
+/// [`MapObject`] and `tag`, and placeholder markers for those that can't be
+/// drawn, shown if `markers`.
+pub fn spawn_objects(
+    commands: &mut Commands,
+    assets: &mut MapAssets,
+    game: &Arc<GameData>,
+    map: &Map,
+    markers: bool,
+    which: impl Fn(&Thing) -> bool,
+    tag: impl Bundle + Clone,
+) -> Models {
     let pickable = assets.picking.0;
-    if let Some((mut mesh, material)) = built.ground {
-        if pickable {
-            mesh.asset_usage = RenderAssetUsages::default();
-        }
-        let material = assets.ground_materials.add(material);
-        commands.insert_resource(GroundFog(material.clone()));
-        commands.spawn((
-            Name::new("ground"),
-            Mesh3d(assets.meshes.add(mesh)),
-            MeshMaterial3d(material),
-            NotShadowCaster,
-        ));
-    }
-    if let Some((mesh, material)) = built.water {
-        commands.spawn((
-            Name::new("water"),
-            Mesh3d(assets.meshes.add(mesh)),
-            MeshMaterial3d(assets.water_materials.add(material)),
-            NotShadowCaster,
-            // Clicks go through to what's under the water.
-            Pickable::IGNORE,
-        ));
-    }
     let biome = &map.terrain.biome;
     let mut models = Models::new(
         game.clone(),
@@ -229,15 +220,15 @@ pub fn spawn_map(
         .filter(|(_, role)| *role == aaa_map::Role::HoldsBuilding)
         .map(|(t, _)| t.id)
         .collect();
-    let rest = models.spawn(
+    let (mut spawned, rest) = models.spawn(
         commands,
         &mut assets.models(),
-        map.things.iter().filter(|t| !leave_out(t)),
+        map.things.iter().filter(|t| which(t)),
         &holding,
     );
     let (meshes, materials) = (&mut assets.meshes, &mut assets.materials.standard);
     let footing = |t: &str| models.footing(t);
-    objects::spawn(
+    spawned.extend(objects::spawn(
         commands,
         meshes,
         materials,
@@ -245,13 +236,57 @@ pub fn spawn_map(
         footing,
         &rest,
         markers,
-    );
-    light(commands, &map.sun, map.ground.size());
+    ));
+    for e in spawned {
+        commands.entity(e).insert(tag.clone());
+    }
     models
 }
 
+/// Spawns the ground and water [`terrain::prepare`]d for a map `size`
+/// across, and its sun's light, each with `tag`. The ground's material is
+/// returned, for its fog of war.
+pub fn spawn_land(
+    commands: &mut Commands,
+    assets: &mut MapAssets,
+    prepared: terrain::Prepared,
+    sun: &Sun,
+    size: f32,
+    tag: impl Bundle + Clone,
+) -> Option<Handle<GroundMaterial>> {
+    let built = prepared.finish(&mut assets.images);
+    let ground = built.ground.map(|(mut mesh, material)| {
+        if assets.picking.0 {
+            mesh.asset_usage = RenderAssetUsages::default();
+        }
+        let material = assets.ground_materials.add(material);
+        commands.spawn((
+            Name::new("ground"),
+            Mesh3d(assets.meshes.add(mesh)),
+            MeshMaterial3d(material.clone()),
+            NotShadowCaster,
+            tag.clone(),
+        ));
+        material
+    });
+    if let Some((mesh, material)) = built.water {
+        commands.spawn((
+            Name::new("water"),
+            Mesh3d(assets.meshes.add(mesh)),
+            MeshMaterial3d(assets.water_materials.add(material)),
+            NotShadowCaster,
+            // Clicks go through to what's under the water.
+            Pickable::IGNORE,
+            tag.clone(),
+        ));
+    }
+    let light = light(commands, sun, size);
+    commands.entity(light).insert(tag);
+    ground
+}
+
 /// Lights a map of `size` across from its sun.
-fn light(commands: &mut Commands, sun: &Sun, size: f32) {
+fn light(commands: &mut Commands, sun: &Sun, size: f32) -> Entity {
     let mut directional = DirectionalLight {
         shadow_maps_enabled: true,
         ..default()
@@ -259,16 +294,18 @@ fn light(commands: &mut Commands, sun: &Sun, size: f32) {
     let mut ambient = GlobalAmbientLight::default();
     color_lights(&mut directional, &mut ambient, sun.diffuse, sun.ambient);
     let [dx, dy, dz] = sun.direction;
-    commands.spawn((
-        directional,
-        Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y),
-        CascadeShadowConfigBuilder {
-            maximum_distance: size * 1.5,
-            ..default()
-        }
-        .build(),
-    ));
     commands.insert_resource(ambient);
+    commands
+        .spawn((
+            directional,
+            Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y),
+            CascadeShadowConfigBuilder {
+                maximum_distance: size * 1.5,
+                ..default()
+            }
+            .build(),
+        ))
+        .id()
 }
 
 /// Gives the sun and ambient lights a sun's `diffuse` and `ambient` colours.
