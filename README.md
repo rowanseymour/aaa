@@ -25,15 +25,13 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 <a href="docs/screenshots/berlin-editor.jpg"><img src="docs/screenshots/berlin-editor.jpg" width="32%" alt="The Berlin map in aaa-editor, with a window open on an object"></a>
 </p>
 
-
 ## Goals
 
-- Play the original game on modern systems, Linux and macOS included, from its own data files.
 - Play like the original: the same rules giving the same results. Where it looks or
   controls differently on purpose, that's listed in [divergences](docs/divergences.md).
+- Plays on modern systems, Linux and macOS included.
 - Stay driven by the data files, so the maps and mods made for the original keep working.
-- Make the game easier to mod, starting with a map editor and documented
-  [file formats](docs/formats).
+- Make the game easier to mod and extend, starting with a map editor and documented [file formats](docs/formats).
 
 ## Status
 
