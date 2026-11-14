@@ -10,7 +10,8 @@
 # one build differ among themselves: for checking that a change draws what it
 # drew before. The shots, and for each scene that differs an image of where,
 # go in target/screenshots-compare/. TAKES sets how many shots each build
-# takes of a scene (default 2); more catch rarer flickers.
+# takes of a scene (default 2); more catch rarer flickers. The ref's game has
+# to understand the console commands the scenes below use.
 #
 #   tools/screenshots.sh --compare main "/path/to/Axis and Allies 2004" [name...]
 #
@@ -37,11 +38,28 @@ root=$(cd "$(dirname "$0")/.." && pwd)
 work=$(mktemp -d)
 cleanup() {
     if [ -n "$ref" ] && [ -d "$work/base" ]; then
-        git -C "$root" worktree remove --force "$work/base"
+        git -C "$root" worktree remove --force "$work/base" || true
     fi
     rm -rf "$work"
 }
 trap cleanup EXIT
+# Not every shell runs the EXIT trap when interrupted.
+trap 'exit 130' INT TERM
+
+# Scenes whose shot couldn't be taken, reported once they've all been tried.
+failed=
+
+# shoot <name> <command...>: runs the command that saves <name>'s frame,
+# noting the scene as failed if it doesn't.
+shoot() {
+    name=$1
+    shift
+    if "$@"; then
+        taken "$name"
+    else
+        failed="$failed $name"
+    fi
+}
 
 W=1000
 H=562
@@ -70,23 +88,22 @@ taken() {
 game() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    "$bin/aaa-game" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" --screenshot "$work/$1.png"
-    taken "$1"
+    shoot "$1" "$bin/aaa-game" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" \
+        --screenshot "$work/$1.png"
 }
 
 # menus <name>, with the script on stdin, which starts from the first menu.
 menus() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    "$bin/aaa-game" "$game" --exec "$work/$1.txt" --screenshot "$work/$1.png"
-    taken "$1"
+    shoot "$1" "$bin/aaa-game" "$game" --exec "$work/$1.txt" --screenshot "$work/$1.png"
 }
 
 # editor <name> <map> <camera> <ids to inspect>
 editor() {
     wanted "$1" || return 0
-    "$bin/aaa-editor" "$game" "$2" --camera "$3" --inspect "$4" --screenshot "$work/$1.png"
-    taken "$1"
+    shoot "$1" "$bin/aaa-editor" "$game" "$2" --camera "$3" --inspect "$4" \
+        --screenshot "$work/$1.png"
 }
 
 scenes() {
@@ -140,8 +157,19 @@ EOF
     editor berlin-editor '(2v2)Berlin' 0.235,0.26,70,0.785,0.75 12193
 }
 
+# build <checkout> [cargo options...]
 build() {
-    cargo build --release -p aaa-game -p aaa-editor --manifest-path "$1/Cargo.toml"
+    checkout=$1
+    shift
+    cargo build --release -p aaa-game -p aaa-editor --manifest-path "$checkout/Cargo.toml" "$@"
+}
+
+# Stops if any scene couldn't be shot, saying which and from what.
+check() {
+    if [ -n "$failed" ]; then
+        echo "couldn't shoot$failed from $1" >&2
+        exit 1
+    fi
 }
 
 if [ -z "$ref" ]; then
@@ -149,12 +177,20 @@ if [ -z "$ref" ]; then
     bin=$root/target/release
     mkdir -p "$root/docs/screenshots"
     scenes
+    check "this checkout"
     exit 0
 fi
 
 # The pixels two frames differ in, ignoring small changes of colour.
 differ() {
-    magick compare -metric AE -fuzz 2% "$1" "$2" null: 2>&1 | cut -d' ' -f1
+    n=$(magick compare -metric AE -fuzz 2% "$1" "$2" null: 2>&1 | cut -d' ' -f1)
+    case $n in
+    '' | *[!0-9.e+-]*)
+        echo "can't compare $1 with $2" >&2
+        exit 1
+        ;;
+    esac
+    echo "$n"
 }
 
 takes=${TAKES:-2}
@@ -162,10 +198,12 @@ out=$root/target/screenshots-compare
 rm -rf "$out"
 mkdir -p "$out"
 build "$root"
+# Forgets worktrees earlier runs were stopped before removing.
+git -C "$root" worktree prune
 git -C "$root" worktree add --quiet --detach "$work/base" "$ref"
 # The ref builds into a target of its own, kept so later comparisons only
 # rebuild what changed.
-CARGO_TARGET_DIR=$root/target/compare-base build "$work/base"
+build "$work/base" --target-dir "$root/target/compare-base"
 for side in new base; do
     case $side in
     new) bin=$root/target/release ;;
@@ -175,10 +213,8 @@ for side in new base; do
     while [ "$take" -le "$takes" ]; do
         log=$out/$side-$take.log
         echo "shooting $side, take $take of $takes"
-        scenes >"$log" 2>&1 || {
-            echo "a scene failed from $side; see $log" >&2
-            exit 1
-        }
+        scenes >"$log" 2>&1
+        check "$side (see $log)"
         take=$((take + 1))
     done
 done
