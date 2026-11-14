@@ -234,41 +234,21 @@ struct Prepared {
 #[derive(Resource)]
 struct Sim(World);
 
-/// Commands from every player, in the order given, waiting to be carried
-/// out between ticks. They're the only way players change a match, so that
-/// every copy of it can play the same commands out on the same tick.
-#[derive(Resource, Default)]
-struct Orders(Vec<(u32, aaa_sim::Command)>);
+/// The orders every player gives, and the record of those carried out.
+#[derive(Resource, Default, Deref, DerefMut)]
+struct Orders(aaa_sim::Schedule);
 
-impl Orders {
-    /// Queues `command` from `player`, unless the sim would refuse it now.
-    fn give(
-        &mut self,
-        sim: &World,
-        player: u32,
-        command: aaa_sim::Command,
-    ) -> Result<(), aaa_sim::Refused> {
-        sim.check(player, &command)?;
-        self.0.push((player, command));
-        Ok(())
-    }
-
-    /// Carries out every command waiting. Checked when given, they're only
-    /// refused where one before them changed things, such as a building
-    /// told to pack and then to commission.
-    fn carry_out(&mut self, sim: &mut World) {
-        for (player, command) in self.0.drain(..) {
-            if let Err(e) = sim.apply(player, command) {
-                info!("player {player}'s order refused: {e:?}");
-            }
-        }
+/// Says which of the orders carried out were refused.
+fn log_refused(refused: Vec<(u32, aaa_sim::Refused)>) {
+    for (player, e) in refused {
+        info!("player {player}'s order refused: {e:?}");
     }
 }
 
 /// Carries out orders as soon as they're given, ticking or not, so that
 /// what shows them sees them taken up.
 fn carry_out(mut sim: ResMut<Sim>, mut orders: ResMut<Orders>) {
-    orders.carry_out(&mut sim.0);
+    log_refused(orders.carry_out(&mut sim.0));
 }
 
 /// The models objects are drawn with, for drawing more mid-match.
@@ -1534,8 +1514,7 @@ fn step_world(
     selected: &mut Vec<usize>,
     chosen: &mut Option<usize>,
 ) {
-    orders.carry_out(sim);
-    sim.tick();
+    log_refused(orders.step(sim));
     if let &[r] = &selected[..]
         && let Some(b) = sim.regiments[r].unpacked_into
     {

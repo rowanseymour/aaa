@@ -27,6 +27,7 @@ mod production;
 mod properties;
 mod research;
 mod rules;
+mod schedule;
 mod setup;
 mod supply;
 mod terrain;
@@ -55,6 +56,7 @@ pub use packing::unpack_site;
 pub use properties::Held;
 pub use research::{Lacking, Researchable};
 pub use rules::Rules;
+pub use schedule::{Diverged, Given, Record, Schedule};
 pub use supply::{Bombarder, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
