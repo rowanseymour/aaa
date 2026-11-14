@@ -32,6 +32,7 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 - Plays on modern systems, Linux and macOS included.
 - Stay driven by the data files, so the maps and mods made for the original keep working.
 - Make the game easier to mod and extend, starting with a map editor and documented [file formats](docs/formats).
+- Keep the engine core generic and reusable for future RTS projects.
 
 ## Status
 
@@ -43,7 +44,7 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 | Movement and combat | 🟡 Regiments move, fight and take buildings and cities |
 | Economy and supply  | ✅ Income, upkeep, supply, building, recruiting and research |
 | Campaign mode       | ⬜ Not started |
-| Multiplayer         | 🟡 Basic architecture |
+| Multiplayer         | 🟡 Basic architecture and beginnings of a standalone server |
 | Map editor          | 🟡 Basic viewing of maps and placed objects |
 | Loading and saving  | ⬜ Not started |
 | AI                  | ⬜ Not started |
