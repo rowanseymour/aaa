@@ -75,8 +75,7 @@ pub enum Footing {
 /// An animation a template's models can play.
 #[derive(Debug, Clone)]
 pub struct Animation {
-    /// What it is for: `IDLE`, `MOVE`, `DIE`, ...
-    pub kind: String,
+    pub kind: AnimationKind,
     /// Which one of its kind, e.g. `idle`, `fidget1`, `walk`.
     pub ids: String,
     /// Archive path of its `.kf` file.
@@ -85,6 +84,57 @@ pub struct Animation {
     pub length: f32,
     /// For moving animations, how far one play carries the unit.
     pub walk_distance: Option<f32>,
+}
+
+/// What an animation is for, from its `type`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnimationKind {
+    Idle,
+    Move,
+    /// Played once to use an ability, such as attacking.
+    Ability,
+    Die,
+    /// Breaks up a portrait's idling.
+    Fidget,
+    /// Played as the thing is selected.
+    Selected,
+    /// Played after a random wait, over and over.
+    Random,
+    /// A kind nothing here acts on, uppercased.
+    Other(String),
+}
+
+impl AnimationKind {
+    /// Each named kind, as the data files spell it.
+    const NAMES: [(&str, AnimationKind); 7] = [
+        ("IDLE", AnimationKind::Idle),
+        ("MOVE", AnimationKind::Move),
+        ("ABILITY", AnimationKind::Ability),
+        ("DIE", AnimationKind::Die),
+        ("FIDGET", AnimationKind::Fidget),
+        ("SELECTED", AnimationKind::Selected),
+        ("RANDOM", AnimationKind::Random),
+    ];
+
+    /// From a `type` as the data files spell it, in any case.
+    pub fn parse(kind: &str) -> Self {
+        let kind = kind.to_ascii_uppercase();
+        let named = Self::NAMES.into_iter().find(|(name, _)| *name == kind);
+        named.map_or(AnimationKind::Other(kind), |(_, k)| k)
+    }
+}
+
+/// As the data files spell it.
+impl std::fmt::Display for AnimationKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        let name = match self {
+            AnimationKind::Other(kind) => kind,
+            named => (Self::NAMES.iter())
+                .find(|(_, k)| k == named)
+                .map_or("", |(name, _)| *name),
+        };
+        f.write_str(name)
+    }
 }
 
 impl GameData {
@@ -256,7 +306,7 @@ impl GameData {
                         .replacen("%s", &ids, 1),
                 );
                 Some(Animation {
-                    kind: a.kind.clone().unwrap_or_default(),
+                    kind: AnimationKind::parse(a.kind.as_deref().unwrap_or_default()),
                     ids,
                     kf,
                     length: a.length.unwrap_or(1.0),
@@ -297,7 +347,7 @@ fn object_animations(dir: &str, view: &defs::View) -> Vec<Animation> {
             let ids = a.ids.clone()?;
             let kf = (a.kf.as_deref()?.replacen("%s", prefix, 1)).replacen("%s", &ids, 1);
             Some(Animation {
-                kind: a.kind.clone().unwrap_or_default(),
+                kind: AnimationKind::parse(a.kind.as_deref().unwrap_or_default()),
                 ids,
                 kf: beside(&format!("{dir}/"), &kf.replace('\\', "/")),
                 length: a.length.unwrap_or(1.0),
@@ -569,16 +619,25 @@ mod tests {
             .into_iter()
             .map(|a| (a.kind, a.ids, a.kf, a.length))
             .collect();
-        let animation = |kind: &str, ids: &str, kf: &str, length| {
-            (kind.to_string(), ids.to_string(), kf.to_string(), length)
-        };
+        let animation =
+            |kind, ids: &str, kf: &str, length| (kind, ids.to_string(), kf.to_string(), length);
         let prefix = "Generals/GER/Rommel/RommelPortrait";
         assert_eq!(
             animations,
             [
-                animation("IDLE", "idle", &format!("{prefix}idle.kf"), 3.0),
-                animation("FIDGET", "fidget1", &format!("{prefix}fidget1.kf"), 3.0),
-                animation("SELECTED", "talk1", "Shared/Talk.kf", 2.0),
+                animation(
+                    AnimationKind::Idle,
+                    "idle",
+                    &format!("{prefix}idle.kf"),
+                    3.0
+                ),
+                animation(
+                    AnimationKind::Fidget,
+                    "fidget1",
+                    &format!("{prefix}fidget1.kf"),
+                    3.0
+                ),
+                animation(AnimationKind::Selected, "talk1", "Shared/Talk.kf", 2.0),
             ]
         );
         assert_eq!(
@@ -596,6 +655,18 @@ mod tests {
         assert_eq!(ground(portrait), Some([0.0, 0.0]));
         assert_eq!(officer.show_faction_portrait, Some(false));
         assert_eq!(hq.show_faction_portrait, Some(true));
+    }
+
+    #[test]
+    fn animation_kinds_read_in_any_case_and_print_as_the_files_spell_them() {
+        assert_eq!(AnimationKind::parse("Random"), AnimationKind::Random);
+        assert_eq!(AnimationKind::parse("DIE"), AnimationKind::Die);
+        let open = AnimationKind::parse("open_gate");
+        assert_eq!(open, AnimationKind::Other("OPEN_GATE".into()));
+        for (name, kind) in AnimationKind::NAMES {
+            assert_eq!(kind.to_string(), name);
+        }
+        assert_eq!(open.to_string(), "OPEN_GATE");
     }
 
     #[test]

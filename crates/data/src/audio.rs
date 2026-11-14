@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::{GameData, Id, defs, logged, scoped};
+use crate::{AnimationKind, GameData, Id, defs, logged, scoped};
 
 /// An [`Audio`] an object plays when something happens.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,11 +49,11 @@ impl ObjectAudio {
 /// An [`Audio`] played as one of a model's animations starts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnimationAudio {
-    /// The animation's kind, e.g. `RANDOM` or `SELECTED`.
-    pub kind: String,
+    pub kind: AnimationKind,
     pub ids: Option<String>,
-    /// For `RANDOM` animations, the range of seconds it waits, from being
-    /// created and from the end of each play, before it starts again.
+    /// For [`AnimationKind::Random`] animations, the range of seconds it
+    /// waits, from being created and from the end of each play, before it
+    /// starts again.
     pub interval: Option<[f32; 2]>,
     pub audio: Id,
     pub looping: bool,
@@ -313,9 +313,9 @@ fn object_audio(thing: &defs::Thing) -> ObjectAudio {
     let animations = aspects
         .flat_map(|a| &a.animation)
         .flat_map(|anim| {
-            let kind = anim.kind.clone().unwrap_or_default().to_ascii_uppercase();
-            let interval = match (kind.as_str(), anim.start_min, anim.start_max) {
-                ("RANDOM", Some(min), Some(max)) => Some([min, max]),
+            let kind = AnimationKind::parse(anim.kind.as_deref().unwrap_or_default());
+            let interval = match (&kind, anim.start_min, anim.start_max) {
+                (AnimationKind::Random, Some(min), Some(max)) => Some([min, max]),
                 _ => None,
             };
             anim.play_sfx.iter().filter_map(move |p| {
@@ -617,7 +617,7 @@ mod tests {
             [(Id::from("construction"), cue("built", "SELF", 0.0))]
         );
         let crickets = AnimationAudio {
-            kind: "RANDOM".to_string(),
+            kind: AnimationKind::Random,
             ids: None,
             interval: Some([20.0, 60.0]),
             audio: Id::from("crickets"),

@@ -61,7 +61,7 @@ pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
 };
-pub use views::{Animation, Footing, Portrait, View};
+pub use views::{Animation, AnimationKind, Footing, Portrait, View};
 
 use std::any::Any;
 use std::borrow::Borrow;
