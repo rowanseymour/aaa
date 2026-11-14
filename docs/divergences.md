@@ -36,5 +36,5 @@ Options the original doesn't offer, all in the Video tab's Basic section:
 ## Tools
 
 - **Console.** A command console, also reachable over a local port, for testing and
-  scripting; the original has none. See [console.rs](../crates/game/src/console.rs).
+  scripting; the original has none. See [its commands](console.md).
 - **Fog of war override.** `--fog` sets how much the fog hides, for testing.
