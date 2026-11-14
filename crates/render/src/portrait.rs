@@ -2,8 +2,6 @@
 //! model holds, or a thing's whole model fitted to the picture, drawn to an
 //! image of its own, apart from the map.
 
-use std::collections::HashMap;
-
 use aaa_data::{AnimationKind, GameData, Id};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Exposure, RenderTarget};
@@ -13,8 +11,8 @@ use bevy::prelude::*;
 use nif::Nif;
 
 use crate::Playing;
-use crate::models::{ModelAssets, Models, bevy_transform, cached, idle};
-use crate::rig::Nodes;
+use crate::models::{ModelAssets, Models, Paint, Plays, bevy_transform, idle};
+use crate::particles::Frames;
 use crate::shot;
 use crate::terrain::world;
 
@@ -41,8 +39,6 @@ const FIT_ACROSS: f32 = 15.0;
 /// The way a fitted model is seen from, in model space: ahead of it, to
 /// one side and above.
 const FIT_FROM: [f32; 3] = [1.0, -1.0, 1.0];
-/// How far above a model's lowest point still counts as its foot.
-const FOOT: f32 = 0.1;
 
 /// What a portrait shows.
 #[derive(Clone, PartialEq, Debug)]
@@ -71,15 +67,11 @@ pub struct Stage {
     sitter: Option<(Sitter, Entity)>,
     /// How many have sat, so that no two fidget alike.
     sat: u32,
-    /// How each face's model's camera sees it, by the model's path.
-    cameras: HashMap<String, Option<Seen>>,
-    /// How big each fitted model is, by its path.
-    extents: HashMap<String, Option<Extent>>,
 }
 
 /// How a sitter is seen: from where, and how wide.
 #[derive(Clone, Copy, Debug)]
-struct Seen {
+pub(crate) struct Seen {
     /// The eye, from the model's origin.
     transform: Transform,
     /// The angle from the bottom of the picture to its top.
@@ -125,8 +117,6 @@ impl Stage {
             light: None,
             sitter: None,
             sat: 0,
-            cameras: HashMap::new(),
-            extents: HashMap::new(),
         }
     }
 
@@ -209,16 +199,13 @@ impl Fidgets {
 impl Models {
     /// The portrait a template's things show, by id, if it names one.
     pub fn portrait(&self, template: &str) -> Option<&Id> {
-        let view = self.views.get(&Id::from(template))?.as_ref()?;
-        view.portrait.as_ref()
+        self.view(template)?.portrait.as_ref()
     }
 
     /// Whether a template's things show their owner's general's portrait
     /// rather than their own.
     pub fn shows_faction_portrait(&self, template: &str) -> bool {
-        let view = self.views.get(&Id::from(template));
-        view.and_then(Option::as_ref)
-            .is_some_and(|v| v.faction_portrait)
+        self.view(template).is_some_and(|v| v.faction_portrait)
     }
 
     /// Puts `sitter` on the stage in place of whoever was there, a face
@@ -249,15 +236,12 @@ impl Models {
             let layer = RenderLayers::layer(LAYER);
             commands.spawn((light, shining, layer)).id()
         });
-        let level = Color::srgb(AMBIENT, AMBIENT, AMBIENT).to_linear().red;
-        self.ambient = Some(level);
         let placed = match sitter {
             Sitter::Face(id) => self.sit_face(commands, game, assets, stage, id, greeting),
             Sitter::Model { template, owner } => {
-                self.sit_model(commands, game, assets, stage, template, *owner)
+                self.sit_model(commands, game, assets, template, *owner)
             }
         };
-        self.ambient = None;
         let Some((root, seen)) = placed else {
             return false;
         };
@@ -297,21 +281,14 @@ impl Models {
     ) -> Option<(Entity, Seen)> {
         let portrait = self.portraits.get(id)?.clone();
         let path = portrait.view.models.first()?.clone();
-        let seen = cached(&mut stage.cameras, &path, || {
-            camera(game, self.subfolder.as_deref(), &path)
-        })?;
-        let key = format!("{path}#face");
-        let model = match self.models.get(&key) {
-            Some(model) => model.clone(),
-            None => {
-                let view = &portrait.view;
-                let model = self.load(game, assets, &path, view, idle(view), None, |a| {
-                    a.kind != AnimationKind::Idle
-                });
-                self.models.insert(key, model.clone());
-                model
-            }
-        }?;
+        let seen = self.measures(game, &path)?.camera?;
+        let view = &portrait.view;
+        let plays = Plays {
+            idle: idle(view),
+            moving: None,
+            once: |a| a.kind != AnimationKind::Idle,
+        };
+        let model = self.model(game, assets, &path, view, plays)?;
         let root = commands
             .spawn((
                 Name::new(path),
@@ -320,7 +297,7 @@ impl Models {
                 Visibility::default(),
             ))
             .id();
-        self.spawn_meshes(commands, assets, root, model, None, 0.0);
+        self.spawn_meshes(commands, assets, root, model, staged(None), 0.0);
         let of_kind = |kind: AnimationKind| -> Vec<String> {
             let animations = portrait.view.animations.iter();
             animations
@@ -356,16 +333,13 @@ impl Models {
         commands: &mut Commands,
         game: &GameData,
         assets: &mut ModelAssets,
-        stage: &mut Stage,
         template: &str,
         owner: Option<u32>,
     ) -> Option<(Entity, Seen)> {
-        let view = self.views.get(&Id::from(template))?.clone()?;
+        let view = self.view(template)?.clone();
         let path = view.models.first()?.clone();
-        let extent = cached(&mut stage.extents, &path, || {
-            extent_of(game, self.subfolder.as_deref(), &path)
-        })?;
-        let model = self.model(game, assets, &path, &view, None)?;
+        let extent = self.measures(game, &path)?.extent?;
+        let model = self.model(game, assets, &path, &view, Plays::unit(&view, None))?;
         let root = commands
             .spawn((
                 Name::new(path),
@@ -375,22 +349,27 @@ impl Models {
             ))
             .id();
         let colour = owner.and_then(|o| self.colours.get(&o).copied());
-        self.spawn_meshes(commands, assets, root, model, colour, 0.0);
+        self.spawn_meshes(commands, assets, root, model, staged(colour), 0.0);
         let reach = view.ground_reach.unwrap_or(extent.foot);
-        Some((root, fitted(extent.height, reach, extent.furthest)))
+        Some((root, fitted(extent.height(), reach, extent.furthest)))
     }
 }
 
-/// How the camera the model at `path` holds sees it; `None` if it holds
-/// none.
-fn camera(game: &GameData, subfolder: Option<&str>, path: &str) -> Option<Seen> {
-    let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
+/// Painted in `colour`, under the stage's ambient light.
+fn staged(colour: Option<[f32; 3]>) -> Paint {
+    Paint {
+        colour,
+        ambient: Some(Color::srgb(AMBIENT, AMBIENT, AMBIENT).to_linear().red),
+    }
+}
+
+/// How the camera a face's model holds sees it; `None` if it holds none.
+pub(crate) fn seen_by(nif: &Nif, frames: &Frames) -> Option<Seen> {
     let found = nif.objects.iter().enumerate().find_map(|(i, o)| match o {
         nif::Object::Camera(c) if c.av.name.eq_ignore_ascii_case(CAMERA) => Some((i, c)),
         _ => None,
     });
     let (at, camera) = found?;
-    let frames = Nodes::new(&nif).frames;
     let placed = frames.0.get(&at).map_or(camera.av.transform, |a| a.model);
     Some(Seen {
         transform: eye(&placed),
@@ -398,48 +377,6 @@ fn camera(game: &GameData, subfolder: Option<&str>, path: &str) -> Option<Seen> 
         near: camera.near,
         far: camera.far,
     })
-}
-
-/// How big the model at `path` is, as modelled.
-fn extent_of(game: &GameData, subfolder: Option<&str>, path: &str) -> Option<Extent> {
-    let nif = Nif::parse(&game.read_in(subfolder, path)?).ok()?;
-    let mut points = Vec::new();
-    for placed in nif.shapes() {
-        let Some(g) = nif.get_as::<nif::Geometry>(placed.shape.data) else {
-            continue;
-        };
-        points.extend(g.positions.iter().map(|&p| placed.transform.apply(p)));
-    }
-    Extent::of(&points)
-}
-
-/// How big a model is, in its own units.
-#[derive(Clone, Copy, Debug, PartialEq)]
-struct Extent {
-    /// From its lowest point to its highest.
-    height: f32,
-    /// How far along either of its ground axes its foot reaches from its
-    /// origin.
-    foot: f32,
-    /// How far from its origin its furthest point is.
-    furthest: f32,
-}
-
-impl Extent {
-    /// The extent of a model with these points, up being their last axis.
-    fn of(points: &[[f32; 3]]) -> Option<Extent> {
-        let heights = points.iter().map(|p| p[2]);
-        let low = heights.clone().reduce(f32::min)?;
-        let high = heights.reduce(f32::max)?;
-        let foot = points.iter().filter(|p| p[2] <= low + FOOT);
-        Some(Extent {
-            height: high - low,
-            foot: foot.fold(0.0, |r, p| r.max(p[0].abs()).max(p[1].abs())),
-            furthest: points
-                .iter()
-                .fold(0.0, |r, &p| r.max(Vec3::from(p).length())),
-        })
-    }
 }
 
 /// Where a model's camera placed at `placed` in the model looks from, as a
@@ -552,21 +489,6 @@ mod tests {
         assert!(eye.forward().distance(world(0.0, 1.0, 0.0)) < 1e-5);
         assert!(eye.up().distance(world(0.0, 0.0, 1.0)) < 1e-5);
         assert!(eye.right().distance(world(1.0, 0.0, 0.0)) < 1e-5);
-    }
-
-    #[test]
-    fn a_models_extent_is_its_height_and_its_foots_reach() {
-        let points = [
-            [3.0, -1.0, 0.5],
-            [-2.0, 4.0, 0.55],
-            // Above the foot, so its reach doesn't count.
-            [9.0, 0.0, 2.0],
-            [0.0, 0.0, 6.5],
-        ];
-        let extent = Extent::of(&points).unwrap();
-        assert_eq!((extent.height, extent.foot), (6.0, 4.0));
-        assert!((extent.furthest - 85f32.sqrt()).abs() < 1e-5);
-        assert_eq!(Extent::of(&[]), None);
     }
 
     #[test]

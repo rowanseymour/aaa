@@ -84,9 +84,10 @@ pub fn show(
             let owner = local.0.unwrap_or(0);
             let Loaded { game, .. } = &*loaded;
             let mut models = assets.models();
-            let Some(e) = drawn
-                .0
-                .spawn_building(&mut commands, game, &mut models, &thing, owner)
+            let Some(e) =
+                drawn
+                    .0
+                    .spawn_object(&mut commands, game, &mut models, &thing, Some(owner))
             else {
                 return;
             };

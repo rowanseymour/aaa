@@ -6,6 +6,7 @@ pub mod camera;
 pub mod decals;
 mod glow;
 pub mod log;
+mod measures;
 pub mod models;
 pub mod objects;
 pub mod overlay;
@@ -34,7 +35,7 @@ use tgck::map::Sun;
 
 use blend::GroundMaterial;
 use glow::GlowMaterial;
-use models::{ModelAssets, Models};
+use models::{MaterialStores, ModelAssets, Models};
 use solid::SolidMaterial;
 use team::TeamMaterial;
 pub use team::Tint;
@@ -134,10 +135,7 @@ pub struct MapObject(pub Thing);
 #[derive(SystemParam)]
 pub struct MapAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
-    materials: ResMut<'w, Assets<StandardMaterial>>,
-    glow_materials: ResMut<'w, Assets<GlowMaterial>>,
-    team_materials: ResMut<'w, Assets<TeamMaterial>>,
-    solid_materials: ResMut<'w, Assets<SolidMaterial>>,
+    materials: MaterialStores<'w>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
     water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
@@ -152,10 +150,7 @@ impl MapAssets<'_> {
     pub fn models(&mut self) -> ModelAssets<'_> {
         ModelAssets {
             meshes: &mut self.meshes,
-            materials: &mut self.materials,
-            glow_materials: &mut self.glow_materials,
-            team_materials: &mut self.team_materials,
-            solid_materials: &mut self.solid_materials,
+            materials: self.materials.parts(),
             images: &mut self.images,
             skins: &mut self.skins,
         }
@@ -218,7 +213,7 @@ pub fn spawn_map(
         map.things.iter().filter(|t| !leave_out(t)),
         &holding,
     );
-    let (meshes, materials) = (&mut assets.meshes, &mut assets.materials);
+    let (meshes, materials) = (&mut assets.meshes, &mut assets.materials.standard);
     let footing = |t: &str| models.footing(t);
     objects::spawn(
         commands,

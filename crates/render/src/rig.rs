@@ -128,6 +128,18 @@ impl Moves {
     }
 }
 
+/// The `.kf` files a rig plays, each with how long one play takes: in
+/// world units moved for `moving`, else in seconds. With no `idle` it idles
+/// with the keyframes the model's own nodes carry.
+#[derive(Default)]
+pub struct Clips {
+    pub idle: Option<(Arc<Nif>, f32)>,
+    pub moving: Option<(Arc<Nif>, f32)>,
+    /// What it plays once to use an ability, by the animation's ids.
+    pub abilities: Vec<(String, Arc<Nif>, f32)>,
+    pub deaths: Vec<(Arc<Nif>, f32)>,
+}
+
 /// A rig's nodes as nif indices and the meshes hanging from them.
 pub struct Nodes {
     nodes: Vec<RigNode>,
@@ -261,33 +273,25 @@ impl Nodes {
     }
 
     /// The rig for these nodes, with parts for [`Nodes::shapes`] by index:
-    /// built in its own space for a skinned shape, else in its node's.
-    /// The clips are `.kf` files with how long one play takes: in world
-    /// units moved for `moving`, else in seconds. With no `idle` clip it
-    /// idles with the keyframes the model's own nodes carry.
-    #[allow(clippy::too_many_arguments)]
+    /// built in its own space for a skinned shape, else in its node's,
+    /// playing `clips`.
     pub fn rig(
         self,
         nif: &Nif,
         meshes: Vec<(Part, usize)>,
-        idle: Option<(&Nif, f32)>,
-        moving: Option<(&Nif, f32)>,
-        abilities: &[(String, Nif, f32)],
-        deaths: &[(Nif, f32)],
+        clips: &Clips,
         assets: &mut Assets<Mesh>,
         skins: &mut Assets<SkinnedMeshInverseBindposes>,
     ) -> Option<Rig> {
-        let moving = moving.and_then(|(kf, length)| self.clip(kf, length));
-        let idle = match idle {
-            Some((kf, length)) => self.clip(kf, length)?,
+        let moving = (clips.moving.as_ref()).and_then(|(kf, length)| self.clip(kf, *length));
+        let idle = match &clips.idle {
+            Some((kf, length)) => self.clip(kf, *length)?,
             None => self.own_clip(nif)?,
         };
-        let abilities = abilities
-            .iter()
+        let abilities = (clips.abilities.iter())
             .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
             .collect();
-        let deaths = deaths
-            .iter()
+        let deaths = (clips.deaths.iter())
             .filter_map(|(kf, length)| self.clip(kf, *length))
             .collect();
         let meshes = meshes

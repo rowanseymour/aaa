@@ -398,7 +398,7 @@ fn spawn_unit_view(
             t.position,
             t.facing,
         );
-        if let Some(e) = models.spawn_building(commands, game, assets, &towed, owner) {
+        if let Some(e) = models.spawn_object(commands, game, assets, &towed, Some(owner)) {
             let conform = models.conform(t.template.as_str());
             commands.entity(e).insert(TrailerView {
                 unit,
@@ -1334,7 +1334,13 @@ fn setup(
     for (i, b) in map.buildings.iter().enumerate() {
         debug_assert_eq!(sim.0.buildings[i].id, b.id);
         let thing = stored[&b.id];
-        match models.spawn_object(&mut commands, game, &mut assets.models(), thing) {
+        match models.spawn_object(
+            &mut commands,
+            game,
+            &mut assets.models(),
+            thing,
+            aaa_map::owner(thing),
+        ) {
             Some(e) => {
                 let [x, y, z] = thing.position;
                 commands.entity(e).insert(BuildingView {
@@ -1528,11 +1534,13 @@ fn spawn_views(
             building.facing,
         );
         let mut models = assets.models();
-        let Some(e) =
-            drawn
-                .0
-                .spawn_building(&mut commands, game, &mut models, &thing, building.owner)
-        else {
+        let Some(e) = drawn.0.spawn_object(
+            &mut commands,
+            game,
+            &mut models,
+            &thing,
+            Some(building.owner),
+        ) else {
             continue;
         };
         let [x, y, z] = thing.position;

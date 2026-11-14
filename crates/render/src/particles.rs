@@ -19,10 +19,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif, Object};
 
-use crate::glow::GlowMaterial;
-use crate::models::{Animated, Part, bevy_transform, controllers};
-use crate::solid::SolidMaterial;
-use crate::team::TeamMaterial;
+use crate::models::{Animated, MaterialStores, Part, bevy_transform, controllers};
 use crate::terrain::world;
 
 /// A model's particle system, as read from it once for every object that
@@ -726,17 +723,14 @@ pub struct MeshCopy;
 /// away when it dies, and puts it where the particle is, turned and sized
 /// as it is. Runs after [`play`] and before anything is drawn, so it places
 /// the copies itself rather than waiting for transforms to be propagated.
-#[allow(clippy::too_many_arguments)]
 pub fn place_copies(
     mut commands: Commands,
     mut systems: Query<(&mut Particles, &GlobalTransform)>,
     mut copies: Query<(&mut Transform, &mut GlobalTransform, &Children), CopyParts>,
     mut parts: Query<(&Transform, &mut GlobalTransform), CopyMeshes>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
-    mut glow_materials: ResMut<Assets<GlowMaterial>>,
-    mut team_materials: ResMut<Assets<TeamMaterial>>,
-    mut solid_materials: ResMut<Assets<SolidMaterial>>,
+    mut stores: MaterialStores,
 ) {
+    let mut materials = stores.parts();
     for (mut particles, home) in &mut systems {
         let particles = &mut *particles;
         if particles.system.copies.is_empty() {
@@ -789,25 +783,13 @@ pub fn place_copies(
             for part in meshes.iter() {
                 let painted = part.animation.as_ref().is_some_and(|a| a.paints());
                 let material = match painted {
-                    true => part.material.copied(
-                        &mut materials,
-                        &mut glow_materials,
-                        &mut team_materials,
-                        &mut solid_materials,
-                    ),
+                    true => materials.copy(&part.material),
                     false => part.material.clone(),
                 };
                 let animated = part.animation.as_ref().map(|animation| {
                     Animated::at_rate(animation.clone(), state.time, rate, material.clone())
                 });
-                let posed = animated.as_ref().and_then(|a| {
-                    a.pose(
-                        &mut materials,
-                        &mut glow_materials,
-                        &mut team_materials,
-                        &mut solid_materials,
-                    )
-                });
+                let posed = animated.as_ref().and_then(|a| a.pose(&mut materials));
                 let t = posed.unwrap_or_default();
                 let mut child =
                     commands.spawn((Mesh3d(part.mesh.clone()), t, global * t, ChildOf(copy)));
