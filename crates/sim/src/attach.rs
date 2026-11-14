@@ -160,13 +160,14 @@ impl World {
     }
 
     /// How many more regiments an HQ can take: its places less those
-    /// attached and those its building has yet to put out.
+    /// attached, those its building has yet to put out and those on
+    /// their way by air.
     pub fn free_places(&self, hq: &Hq) -> u32 {
         let queued: usize = (0..self.buildings.len())
             .filter(|&b| self.hq_of(b) == Some(hq.id))
             .map(|b| self.buildings[b].queue.len())
             .sum();
-        let taken = self.attached(hq.id).count() + queued;
+        let taken = self.attached(hq.id).count() + queued + self.bound_for(hq.id).count();
         hq.places.saturating_sub(taken as u32)
     }
 

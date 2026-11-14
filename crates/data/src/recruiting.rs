@@ -31,6 +31,31 @@ pub struct Amount {
     pub amount: f32,
 }
 
+/// The aircraft that flies a template to where it's recruited.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Airlift {
+    /// The aircraft's template.
+    pub transport: Id,
+    /// World units a second it flies at.
+    pub speed: f32,
+    /// The radius of the circle it turns in.
+    pub turn_radius: f32,
+    /// How far above the ground it flies.
+    pub height: f32,
+    /// Seconds between the things it drops.
+    pub delay: f32,
+}
+
+/// How a template falls when it's dropped from the air.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Fall {
+    /// How far below what drops it it starts.
+    pub height: f32,
+    /// How much nearer it lands to where it's dropped than its fall alone
+    /// would carry it.
+    pub drag: f32,
+}
+
 /// How a template packs and unpacks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Deployment {
@@ -219,6 +244,44 @@ impl GameData {
     /// names, by template id.
     pub fn transports(&self) -> HashMap<Id, Id> {
         self.by_template(|t| (t.transport_actor.clone()).filter(|i| *i != Id::from("null")))
+    }
+
+    /// How each template that's flown to where it's recruited gets
+    /// there, by template id.
+    pub fn airlifts(&self) -> HashMap<Id, Airlift> {
+        let things = &self.definitions().things;
+        let plane = |id: &Id| {
+            let t = &things.iter().find(|t| t.id == *id)?.thing;
+            let mover = t.mover_component.as_ref()?;
+            Some(Airlift {
+                transport: id.clone(),
+                speed: mover.speed_max?,
+                turn_radius: mover.turn_radius.unwrap_or(0.0),
+                height: t.aircraft_component.as_ref()?.operational_height?,
+                delay: (t.transport_component.as_ref())
+                    .and_then(|c| c.deployment_delay)
+                    .unwrap_or(0.0),
+            })
+        };
+        (self.transports().into_iter())
+            .filter_map(|(cargo, transport)| Some((cargo, plane(&transport)?)))
+            .collect()
+    }
+
+    /// How each template falls when it's dropped, by template id.
+    pub fn falls(&self) -> HashMap<Id, Fall> {
+        self.by_template(|t| {
+            Some(Fall {
+                height: t.size.iter().find_map(|s| s.height).unwrap_or(0.0),
+                drag: t.fall_drag.unwrap_or(0.0),
+            })
+        })
+    }
+
+    /// How fast what falls gains speed, in world units a second each
+    /// second.
+    pub fn gravity(&self) -> Option<f32> {
+        self.svars().iter().find_map(|v| v.gravity).map(f32::abs)
     }
 
     /// Every id a building a requirement names may go by on a map, as maps

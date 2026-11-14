@@ -51,7 +51,9 @@ pub use nations::{General, GeneralOperation, Handicap, Nation, NationBanners};
 pub use objectives::{ObjectiveLook, ObjectiveLooks};
 pub use organizations::{Formation, Layout, Organization, Ranges};
 pub use properties::PropertyLook;
-pub use recruiting::{Amount, DeployPoints, Deployment, Listing, Requires, Technology};
+pub use recruiting::{
+    Airlift, Amount, DeployPoints, Deployment, Fall, Listing, Requires, Technology,
+};
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, SpecialOperation};
 pub use strings::{Strings, resource_name};

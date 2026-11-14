@@ -264,8 +264,8 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "commission",
-        "template",
-        "asks the selected building to commission a template it lists",
+        "template [x y]",
+        "asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there",
     ),
     verb(
         "research",
@@ -1053,8 +1053,13 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
 }
 
 fn commission(world: &mut World, args: &[&str]) -> Reply {
-    let [template] = args else {
-        return Err(usage("commission"));
+    let (template, to) = match args {
+        [template] => (template, None),
+        [template, x, y] => {
+            let to = place(&world.resource::<Loaded>().map.ground, x, y)?;
+            (template, Some(to))
+        }
+        _ => return Err(usage("commission")),
     };
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
     let b = selected_building(world)?;
@@ -1065,9 +1070,14 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         .iter()
         .find(|t| t.as_str().eq_ignore_ascii_case(template));
     let template = listed.ok_or_else(|| format!("{hq} doesn't commission {template}"))?;
-    let command = aaa_sim::Command::Commission {
-        building: b,
-        template: template.clone(),
+    let (building, template) = (b, template.clone());
+    let command = match to {
+        Some(to) => aaa_sim::Command::Deliver {
+            building,
+            template,
+            to,
+        },
+        None => aaa_sim::Command::Commission { building, template },
     };
     give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
     Ok(String::new())

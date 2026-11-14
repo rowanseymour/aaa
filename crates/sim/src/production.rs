@@ -53,6 +53,11 @@ impl World {
                     continue;
                 }
             };
+            if let Some(to) = done.to
+                && self.dispatch(b, regiment.clone(), to)
+            {
+                continue;
+            }
             let building = &self.buildings[b];
             let Some(deploy) = building.deploy else {
                 continue;
@@ -143,7 +148,7 @@ mod tests {
         let mut w = headquarters();
         w.rules.recruit_times.insert(Id::from("truck"), 10.0);
         assert_eq!(
-            w.commission(2, 0, &Id::from("truck")),
+            w.commission(2, 0, &Id::from("truck"), None),
             Err(Refused::NotYours)
         );
         w.apply(1, commission(0, "truck")).unwrap();

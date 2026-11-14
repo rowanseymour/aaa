@@ -13,9 +13,10 @@ mod tile_terrains;
 mod units;
 
 pub use aaa_data::{
-    Amounts, Damage, DeployPoints, Economy, EconomyRules, Fighter, Flight, FlightKind, FogSetting,
-    Grant, GuardRules, Id, Kind, Logistics, Operation, Requires, Research, Shape, Sight, Supply,
-    SupplyEffect, SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
+    Airlift, Amounts, Damage, DeployPoints, Economy, EconomyRules, Fall, Fighter, Flight,
+    FlightKind, FogSetting, Grant, GuardRules, Id, Kind, Logistics, Operation, Requires, Research,
+    Shape, Sight, Supply, SupplyEffect, SupplyRules, Targets, TerrainEffect, TerrainRules, Turret,
+    Weapon,
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};

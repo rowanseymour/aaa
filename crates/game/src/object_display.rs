@@ -166,6 +166,9 @@ enum Place {
     Regiment(usize),
     /// What the place is held for, by where it is in the HQ's queue.
     Queued(usize),
+    /// The aircraft bringing the regiment the place is held for, by index
+    /// into the sim's deliveries.
+    Flown(usize),
 }
 
 /// Which of the game's displays shows, and what of; a change in it lays
@@ -213,6 +216,8 @@ pub enum Fill {
     Progress(usize),
     /// How much of a relay's supply stockpile is left.
     Stockpile(usize),
+    /// The health of a delivery's aircraft, which nothing hurts.
+    Flight,
 }
 
 /// Whose tooltip a part of the display gives under the pointer.
@@ -548,6 +553,7 @@ fn detail(
         let attached = sim.attached(hq.id).map(Place::Regiment);
         let places = (hq.places as usize).min(MAX_SLOTS);
         attached
+            .chain(sim.bound_for(hq.id).map(Place::Flown))
             .chain((0..queued).map(Place::Queued))
             .chain(std::iter::repeat(Place::Empty))
             .take(places)
@@ -908,6 +914,16 @@ impl Ui<'_> {
                             0 => bar(card, node, Fill::Progress(b), None),
                             _ => drop(card.spawn(meter(node, Gauge::Progress))),
                         }
+                    });
+                }
+                (Place::Flown(d), _) => {
+                    let template = self.sim.deliveries[d].template.as_str();
+                    let picture = self.picture(template);
+                    card.insert(Hint(template_name(&self.looks.names, template)));
+                    card.with_children(|card| {
+                        card.spawn((inside, picture_node(picture), Pickable::IGNORE));
+                        let [left, top, width, height] = SLOT_HEALTH;
+                        bar(card, at(left, top, width, height), Fill::Flight, None);
                     });
                 }
                 _ => drop(card.insert(Hint(self.looks.said(EMPTY_SLOT)))),
@@ -1312,7 +1328,7 @@ pub fn refresh(
         let share = match (*fill, full > 0.0) {
             (_, true) => now / full,
             // What has no health to lose shows whole.
-            (Fill::Unit(_) | Fill::Regiment(_) | Fill::Building(_), false) => 1.0,
+            (Fill::Unit(_) | Fill::Regiment(_) | Fill::Building(_) | Fill::Flight, false) => 1.0,
             (Fill::Progress(_) | Fill::Stockpile(_), false) => 0.0,
         };
         if meter.share != share {
@@ -1462,6 +1478,7 @@ fn measure(sim: &World, fill: Fill) -> (f32, f32) {
             let max = sim.supply_of(b).map_or(0.0, |s| s.stockpile_max);
             (sim.buildings[b].supply.stockpile, max)
         }
+        Fill::Flight => (1.0, 1.0),
     }
 }
 

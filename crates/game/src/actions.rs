@@ -166,6 +166,9 @@ pub enum Page {
     /// Waiting for a click on the map to set the selected building's
     /// rally point there.
     Rally,
+    /// Waiting for a click on the map to have the selected building
+    /// deliver there the entry at this index into its menu.
+    Delivering(usize),
     /// One of the selected building's menus of what it recruits or
     /// researches.
     Menu(Menu),
@@ -310,7 +313,8 @@ fn layout(
 ) -> [Option<Entry>; SLOTS] {
     let mut out = [None; SLOTS];
     match (page, building) {
-        (Page::Orders, Some(b)) => {
+        // Aiming a delivery, the grid is back to the building's own.
+        (Page::Orders | Page::Delivering(_), Some(b)) => {
             for (menu, place) in [(Menu::Deploy, b.deploy), (Menu::Location, b.location)] {
                 if b.offers(menu) {
                     put(&mut out, place, Entry::Open(menu));
@@ -356,7 +360,7 @@ fn layout(
             }
             out[CANCEL] = Some(Entry::Cancel);
         }
-        (Page::Menu(_) | Page::Rally, None) => {}
+        (Page::Menu(_) | Page::Rally | Page::Delivering(_), None) => {}
         (Page::Orders, None) => {
             for (i, &place) in slots.iter().enumerate() {
                 if offered[i] {
@@ -453,6 +457,20 @@ impl Looks {
         building
             .and_then(|b| self.menus.get(sim.buildings[b].template.as_str()))
             .map_or(&[], Vec::as_slice)
+    }
+
+    /// What the selected building is being aimed to deliver, if `page`
+    /// is aiming it.
+    pub fn delivered(
+        &self,
+        sim: &aaa_sim::World,
+        building: Option<usize>,
+        page: Page,
+    ) -> Option<&aaa_map::Regiment> {
+        let Page::Delivering(i) = page else {
+            return None;
+        };
+        self.menu(sim, building).get(i)?.regiment.as_ref()
     }
 
     /// The research menu of the selected building, as its research list
@@ -856,7 +874,7 @@ pub fn over_grid(
 }
 
 pub fn aiming(page: Res<Page>) -> bool {
-    matches!(*page, Page::Aiming(_) | Page::Rally)
+    matches!(*page, Page::Aiming(_) | Page::Rally | Page::Delivering(_))
 }
 
 /// Goes back to the orders on Escape, and when what the page is for is
@@ -876,6 +894,7 @@ pub fn back_out(
         Page::Aiming(_) => selected.0.is_empty(),
         Page::Menu(_) => chosen.0.is_none() || switched,
         Page::Rally => chosen.0.is_none(),
+        Page::Delivering(_) => chosen.0.is_none() || switched,
     };
     // Escape closes a display panel that's up, not the page under it.
     let escaped = keys.just_pressed(KeyCode::Escape) && crate::displays::closed(Some(displays));
@@ -923,6 +942,8 @@ pub fn show(
     });
     let mut previewed = match *page {
         Page::Aiming(Aim::Unpack) => unpacking.map(Previewed::Unpack),
+        Page::Delivering(_) => (looks.delivered(&sim.0, building, *page))
+            .map(|r| Previewed::Commission(Box::new(r.clone()))),
         _ => None,
     };
     panel.set_if_neq(match nothing {
@@ -1158,6 +1179,7 @@ pub fn show(
         (None, Page::Aiming(Aim::Guard)) => prompt("Left click what or where to guard"),
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
+        (None, Page::Delivering(_)) => prompt("Left click where to deploy"),
         (None, _) => None,
     };
     tooltip.say(tip);
@@ -1423,7 +1445,13 @@ impl Presser<'_, '_> {
                         building: b,
                         template: template.clone(),
                     };
-                    let given = self.orders.give(sim, player, command);
+                    // What's flown in is aimed first, and ordered where
+                    // it's aimed.
+                    let flown = sim.rules().airlifts.contains_key(&template);
+                    let given = match flown {
+                        true => sim.check(player, &command),
+                        false => self.orders.give(sim, player, command),
+                    };
                     if let Err(e) = given {
                         debug!("can't commission {template}: {e:?}");
                         // As the game does, it says nothing for what's not
@@ -1432,7 +1460,10 @@ impl Presser<'_, '_> {
                             self.refusal.0 = Some((slot, e));
                         }
                     }
-                    *self.page = commissioned(*self.page, given);
+                    *self.page = match (flown, given) {
+                        (true, Ok(())) => Page::Delivering(i),
+                        _ => commissioned(*self.page, given),
+                    };
                 }
             }
             Entry::Research(i) => {
@@ -1689,19 +1720,18 @@ pub fn aim(
     scenery: Res<crate::banners::Scenery>,
     loaded: Res<Loaded>,
     local: Res<Local>,
-    selected: Res<Selected>,
-    chosen: Res<SelectedBuilding>,
+    (selected, chosen): (Res<Selected>, Res<SelectedBuilding>),
     focus: Res<crate::Focus>,
-    looks: Res<crate::waypoints::Looks>,
+    (looks, menus): (Res<crate::waypoints::Looks>, Res<Looks>),
     sim: Res<Sim>,
     mut orders: ResMut<Orders>,
     mut page: ResMut<Page>,
     time: Res<Time>,
     mut sounds: ResMut<crate::sound::Sounds>,
     mut sent: MessageWriter<crate::waypoints::Sent>,
-    mut refused: MessageWriter<Refused>,
+    (mut refused, mut failed): (MessageWriter<Refused>, MessageWriter<Failed>),
 ) {
-    if !matches!(*page, Page::Aiming(_) | Page::Rally) {
+    if !matches!(*page, Page::Aiming(_) | Page::Rally | Page::Delivering(_)) {
         return;
     }
     if buttons.just_pressed(MouseButton::Right) {
@@ -1715,6 +1745,38 @@ pub fn aim(
         return;
     };
     let point = at.point();
+    if let Page::Delivering(i) = *page {
+        // Only the map aims one, and a place it can't land goes on
+        // being aimed.
+        let regiment = menus.delivered(&sim.0, chosen.0, *page);
+        let (Some(b), Some(regiment), crate::Pointing::Ground(_)) = (chosen.0, regiment, at) else {
+            return;
+        };
+        let deliver = aaa_sim::Command::Deliver {
+            building: b,
+            template: regiment.template.clone(),
+            to: point,
+        };
+        match orders.give(&sim.0, player, deliver) {
+            Err(aaa_sim::Refused::NoRoom) => {}
+            // The money may have gone since it was aimed.
+            Err(aaa_sim::Refused::Unaffordable) => {
+                let listed = menus.menu(&sim.0, chosen.0).get(i);
+                let name = listed.map_or("", |r| r.look.name.as_str());
+                let cost = sim.0.cost(regiment).ceil().to_string();
+                let text = fill(&menus.affording, &[name, &cost]);
+                let about = About::Building(b);
+                failed.write(Failed { text, about });
+                *page = Page::Orders;
+            }
+            Err(e) => {
+                debug!("can't deliver {}: {e:?}", regiment.template);
+                *page = Page::Orders;
+            }
+            Ok(()) => *page = Page::Orders,
+        }
+        return;
+    }
     let focus = match at {
         crate::Pointing::Ground(_) => *focus,
         // The minimap's marks are too close together to pick out friends,

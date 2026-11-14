@@ -55,6 +55,13 @@ pub struct Rules {
     /// What those regiment templates raise, by template, each standing
     /// anywhere and owned by nobody.
     pub raisable: HashMap<Id, aaa_map::Regiment>,
+    /// The aircraft that flies in each regiment template that's
+    /// delivered, by template.
+    pub airlifts: HashMap<Id, aaa_map::Airlift>,
+    /// How each template falls when it's dropped, by template.
+    pub falls: HashMap<Id, aaa_map::Fall>,
+    /// World units a second each second that what falls gains.
+    pub gravity: f32,
     /// Seconds commissioning a regiment of each template takes, by
     /// template.
     pub recruit_times: HashMap<Id, f32>,
@@ -93,6 +100,9 @@ impl Default for Rules {
             resupply_rates: HashMap::new(),
             recruit_lists: HashMap::new(),
             raisable: HashMap::new(),
+            airlifts: HashMap::new(),
+            falls: HashMap::new(),
+            gravity: 49.05,
             recruit_times: HashMap::new(),
             research_lists: HashMap::new(),
             experience_per_second: 0.0,

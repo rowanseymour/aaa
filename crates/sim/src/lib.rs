@@ -9,6 +9,7 @@ mod attach;
 mod capture;
 mod combat;
 mod commands;
+mod delivery;
 mod disposal;
 pub mod economy;
 mod engagement;
@@ -40,6 +41,7 @@ use aaa_map::{
 
 pub use aaa_map::{Player, Relation, Team};
 pub use attach::Hq;
+pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::Commander;
 pub use fog::{Fog, Seen};
@@ -122,6 +124,8 @@ pub struct World {
     pub regiments: Vec<Regiment>,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
+    /// The aircraft bringing regiments in, and those that have gone.
+    pub deliveries: Vec<Delivery>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
     /// The scenery still standing that a building going up clears away,
@@ -232,6 +236,9 @@ pub struct Regiment {
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
     pub guard: Option<Guard>,
+    /// Whether it's still being dropped: some of it yet to be let go, or
+    /// to land.
+    pub arriving: bool,
     /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it.
     pub terrain: TerrainIndex,
     /// The properties that terrain gives it.
@@ -420,6 +427,9 @@ pub struct Unit {
     /// Whether it's yet to join its regiment, as a recruit's members are
     /// until supply brings them.
     pub awaited: bool,
+    /// Its fall, for one coming down by parachute, which is awaited
+    /// until it lands.
+    pub descent: Option<Descent>,
     /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it: its
     /// regiment's, or its own tile's while it straggles.
     pub terrain: TerrainIndex,
@@ -549,6 +559,9 @@ pub struct Commission {
     pub ticks: u64,
     /// The money taken for it, given back if it's called off.
     pub paid: f32,
+    /// Where it's to be delivered, for one that's flown there rather
+    /// than put out by its building.
+    pub to: Option<[f32; 2]>,
     /// Whether it's taken its share of its owner's limits, which it does
     /// on reaching the front of the queue once there's room. Research
     /// takes none, so it's held from the start.
@@ -574,6 +587,7 @@ impl Commission {
             work,
             ticks: ((seconds / TICK).round() as u64).max(1),
             paid: 0.0,
+            to: None,
             id: 0,
         }
     }
@@ -682,6 +696,14 @@ pub enum Command {
     /// done with what it was asked for before. Refused for one it doesn't
     /// recruit.
     Commission { building: usize, template: Id },
+    /// As [`Command::Commission`], for a regiment that's flown in and
+    /// dropped at `to`. Refused for one nothing flies, or where it
+    /// hasn't [room to land](World::room_to_land).
+    Deliver {
+        building: usize,
+        template: Id,
+        to: [f32; 2],
+    },
     /// Asks a building to research `technology`, one of those it lists,
     /// once it's done with what it was asked for before. Refused for one
     /// it doesn't offer, as [`World::researchable`] has it.
@@ -785,10 +807,14 @@ pub enum Target {
 }
 
 impl World {
-    /// Where a regiment's surviving members stand on average.
+    /// Where a regiment's surviving members stand on average, or, with
+    /// none on the ground yet, where it does.
     pub fn centre(&self, regiment: usize) -> [f32; 2] {
         let survivors: Vec<usize> = self.survivors(regiment).collect();
-        self.average(&survivors)
+        match survivors.is_empty() {
+            true => self.regiments[regiment].position,
+            false => self.average(&survivors),
+        }
     }
 
     /// A regiment's members still alive.
@@ -811,9 +837,10 @@ impl World {
         r.resume.is_some() || self.survivors(regiment).any(|u| self.units[u].moving())
     }
 
-    /// Whether a regiment has lost every member.
+    /// Whether a regiment has lost every member, which one still being
+    /// dropped hasn't.
     pub fn destroyed(&self, regiment: usize) -> bool {
-        self.survivors(regiment).next().is_none()
+        !self.regiments[regiment].arriving && self.survivors(regiment).next().is_none()
     }
 
     fn average(&self, units: &[usize]) -> [f32; 2] {
@@ -875,6 +902,7 @@ impl World {
         self.supply();
         self.resupply();
         self.produce();
+        self.deliver();
         self.rally();
         self.unpack();
         self.earn();

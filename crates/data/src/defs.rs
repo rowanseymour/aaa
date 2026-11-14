@@ -92,6 +92,9 @@ pub struct Thing {
     /// Whether a recruiter hides it, rather than greys it, while the
     /// properties it needs are missing.
     pub hide_if_missing_properties: Option<bool>,
+    /// How much nearer it lands to where it's dropped from than its fall
+    /// alone would carry it.
+    pub fall_drag: Option<f32>,
     #[serde(default)]
     pub flags: Vec<Flags>,
     pub view: Option<View>,
@@ -99,6 +102,8 @@ pub struct Thing {
     pub size: Vec<Size>,
     pub character_component: Option<CharacterComponent>,
     pub mover_component: Option<MoverComponent>,
+    pub aircraft_component: Option<AircraftComponent>,
+    pub transport_component: Option<TransportComponent>,
     pub body_component: Option<BodyComponent>,
     pub properties_component: Option<PropertiesComponent>,
     pub performer_component: Option<PerformerComponent>,
@@ -599,6 +604,18 @@ pub struct AbilityFlags {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct AircraftComponent {
+    /// How far above the ground it flies.
+    pub operational_height: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct TransportComponent {
+    /// Seconds between the things it puts down.
+    pub deployment_delay: Option<f32>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct MoverComponent {
     /// World units a second.
     pub speed_max: Option<f32>,
@@ -684,6 +701,8 @@ pub struct Size {
     pub square_size: Option<f32>,
     pub rect_width: Option<f32>,
     pub rect_height: Option<f32>,
+    /// How tall it stands.
+    pub height: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1025,6 +1044,9 @@ pub struct SVars {
     /// The most a stockpile holds.
     #[serde(rename = "EconomyStockpileResourceMax")]
     pub economy_stockpile_resource_max: Option<f32>,
+    /// How fast what falls gains speed; negative, for downwards.
+    #[serde(rename = "Gravity")]
+    pub gravity: Option<f32>,
     /// The share of its cost a building sells for.
     #[serde(rename = "SellFactor")]
     pub sell_factor: Option<f32>,

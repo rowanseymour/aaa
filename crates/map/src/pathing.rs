@@ -173,6 +173,18 @@ impl Pathing {
         p
     }
 
+    /// The length of the map's sides, in world units.
+    pub fn size(&self) -> f32 {
+        self.side as f32 * CELL_SIZE
+    }
+
+    /// The point nearest `at` that's a tile in from the map's low edges
+    /// and just under one in from its high ones.
+    pub fn inside(&self, at: [f32; 2]) -> [f32; 2] {
+        let high = (self.size() - CELL_SIZE).next_down().max(CELL_SIZE);
+        at.map(|c| c.clamp(CELL_SIZE, high))
+    }
+
     /// Whether `o`'s shape lies wholly on the map.
     pub fn on_map(&self, o: &Obstacle) -> bool {
         let size = self.side as f32 * CELL_SIZE;

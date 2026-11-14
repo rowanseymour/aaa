@@ -145,7 +145,7 @@ impl World {
     }
 
     /// What a regiment would add to its owner's economy once raised.
-    fn commission_ledger(&self, regiment: &aaa_map::Regiment) -> Ledger {
+    pub(crate) fn commission_ledger(&self, regiment: &aaa_map::Regiment) -> Ledger {
         let members = regiment.members.iter().map(|m| &m.template);
         self.organization_ledger(&regiment.template, members.collect())
     }
@@ -265,6 +265,9 @@ impl World {
         }
         for (owner, template) in &self.holdings {
             *out.entry(*owner).or_default() += self.holding_ledger(template);
+        }
+        for d in 0..self.deliveries.len() {
+            *out.entry(self.deliveries[d].owner).or_default() += self.delivery_ledger(d);
         }
         out
     }

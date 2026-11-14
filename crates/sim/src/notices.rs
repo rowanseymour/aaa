@@ -52,6 +52,13 @@ pub enum Notice {
         building: usize,
         regiment: usize,
     },
+    /// A building of its, by index into [`World::buildings`], has sent
+    /// for the delivery at this index into [`World::deliveries`].
+    Recruited {
+        player: u32,
+        building: usize,
+        delivery: usize,
+    },
     /// A building of its, by index into [`World::buildings`], has finished
     /// researching `technology`.
     Researched {

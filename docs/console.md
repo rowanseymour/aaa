@@ -26,7 +26,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `attack regiment (x y | enemy)`: sends a regiment, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy regiment, by its id
 - `guard regiment (x y | other)`: posts a regiment, by its id, at x y or beside another regiment, by its id, to come back to after every fight
 - `select [id ...]`: selects the player's regiments, or one of its buildings, by their ids; without any, says what's selected
-- `commission template`: asks the selected building to commission a template it lists
+- `commission template [x y]`: asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there
 - `research technology`: asks the selected building to research a technology it lists
 - `pack`: packs up the selected building
 - `sell`: sells the selected building

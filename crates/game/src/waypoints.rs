@@ -168,6 +168,7 @@ pub fn cursor(
     let frames = match *page {
         Page::Aiming(aim) if over_map => looks.cursors.get(&aim),
         Page::Rally if over_map => looks.rally_cursor.as_ref(),
+        Page::Delivering(_) if over_map => looks.cursors.get(&Aim::Move),
         _ => None,
     };
     let icon = match frames {

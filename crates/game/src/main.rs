@@ -24,6 +24,7 @@ mod actions;
 mod banners;
 mod confirm;
 mod console;
+mod deliveries;
 mod displays;
 mod drive;
 mod effects;
@@ -683,6 +684,8 @@ fn main() -> ExitCode {
         .init_resource::<SelectedBuilding>()
         .init_resource::<Focus>()
         .init_resource::<ghost::Ghost>()
+        .init_resource::<ghost::Landing>()
+        .init_resource::<deliveries::Flights>()
         .init_resource::<supply::Border>()
         .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
@@ -705,6 +708,7 @@ fn main() -> ExitCode {
             OnEnter(Screen::Match),
             (
                 setup,
+                deliveries::reset,
                 fog::setup,
                 setup_overlays,
                 keys::load,
@@ -739,6 +743,7 @@ fn main() -> ExitCode {
                     (fog::shade_ground, fog::hide_scenery),
                     spawn_views,
                     (show_units, show_trailers, show_buildings, show_packing),
+                    deliveries::show,
                     fog::hide_buildings,
                 )
                     .chain(),
@@ -782,7 +787,7 @@ fn main() -> ExitCode {
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
-                (ghost::show, ghost::redden).chain(),
+                (ghost::show, ghost::land, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain().after(carry_out),
                 waypoints::rally,
@@ -958,6 +963,8 @@ fn prepare(
         resupply_rates: game.resupply_rates(),
         recruit_lists,
         raisable,
+        airlifts: game.airlifts(),
+        falls: game.falls(),
         recruit_times: game.recruit_times(),
         research_lists: game.research_lists(),
         experience_per_second: experience.per_second,
@@ -965,6 +972,9 @@ fn prepare(
         numbered: game.numbered(),
         ..Default::default()
     };
+    if let Some(gravity) = game.gravity() {
+        rules.gravity = gravity;
+    }
     if let Some(seconds) = game.siege_seconds() {
         rules.siege_seconds = seconds;
     }
