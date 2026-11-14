@@ -27,7 +27,8 @@ use crate::lobby::Lineup;
 use crate::remote::Remote;
 use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::waypoints::Sent;
-use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
+use crate::{Began, Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
+use aaa_map::Id;
 use aaa_sim::Action;
 
 /// Lines kept for scrolling back through.
@@ -314,8 +315,8 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "record",
-        "",
-        "says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way",
+        "[file]",
+        "says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for aaa-server to play again",
     ),
     verb(
         "fog",
@@ -491,18 +492,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "detach" => attach(world, &args, false),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
-                "record" => no_args(&args).map(|_| {
-                    let sim = &world.resource::<Sim>().0;
-                    let given = &world.resource::<Orders>().record().given;
-                    let orders = (given.iter())
-                        .filter(|g| matches!(g.action, Action::Order { .. }))
-                        .count();
-                    format!(
-                        "{} ticks, {orders} orders, hash {:016x}",
-                        sim.ticks,
-                        sim.hash()
-                    )
-                }),
+                "record" => record(world, &args),
                 "fog" => no_args(&args).map(|_| {
                     let mut fog = world.resource_mut::<crate::fog::Fog>();
                     fog.lifted = !fog.lifted;
@@ -517,6 +507,32 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
 fn usage(name: &str) -> String {
     let v = find(name).expect("a verb");
     format!("usage: {} {}", v.name, v.args)
+}
+
+fn record(world: &mut World, args: &[&str]) -> Reply {
+    let sim = &world.resource::<Sim>().0;
+    let record = world.resource::<Orders>().record();
+    let orders = (record.given.iter())
+        .filter(|g| matches!(g.action, Action::Order { .. }))
+        .count();
+    let said = format!(
+        "{} ticks, {orders} orders, hash {:016x}",
+        sim.ticks,
+        sim.hash()
+    );
+    match args {
+        [] => Ok(said),
+        [file] => {
+            let began = world.get_resource::<Began>().ok_or("no match to keep")?;
+            let film = aaa_server::Film {
+                setup: began.0.clone(),
+                record: record.clone(),
+            };
+            film.write(std::path::Path::new(file))?;
+            Ok(said)
+        }
+        _ => Err(usage("record")),
+    }
 }
 
 fn no_args(args: &[&str]) -> Result<(), String> {
@@ -975,13 +991,21 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
         .ok_or("no placement kingdom; set one with placementkingdom")?;
     // Facing the way the camera looks, so it's seen from behind.
     let facing = [-yaw.sin(), yaw.cos()];
-    let regiment = world
-        .resource::<Raising>()
-        .0
-        .raise(template, 0, owner, position, facing)?;
-    act(world, Action::Raise(Box::new(regiment)));
+    // Only for what it says of a template that can't be raised.
+    let raising = &world.resource::<Raising>().0;
+    raising.raise(template, 0, owner, position, facing)?;
+    let template = Id::from(*template);
+    let before = world.resource::<Sim>().0.regiments.len();
+    let raise = Action::Raise {
+        template: template.clone(),
+        owner,
+        at: position,
+        facing,
+    };
+    act(world, raise);
     let sim = &world.resource::<Sim>().0;
-    let regiment = sim.regiments.last().ok_or("nothing raised")?;
+    let raised = sim.regiments.get(before..).and_then(<[_]>::last);
+    let regiment = raised.ok_or_else(|| format!("{template} can't be raised"))?;
     Ok(format!(
         "{} {} of {} units at {:.1} {:.1}",
         regiment.template,

@@ -2,6 +2,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::{GameData, Id, defs, scoped};
 
 /// How far a thing sees, in world units.
@@ -14,7 +16,7 @@ pub struct Sight {
 }
 
 /// How much of the map a match hides.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum FogSetting {
     /// Nothing: every side sees everywhere.
     None,

@@ -2,12 +2,12 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// An id the game matches ignoring case, such as a template's or terrain's
 /// `IDS`: equal, hashed and ordered by its ASCII-lower-case form, but kept
 /// as written.
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct Id(Box<str>);
 

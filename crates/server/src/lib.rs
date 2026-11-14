@@ -1,17 +1,22 @@
 //! Setting a match up from the game's data, and playing one with no window:
 //! what a server of matches is built from.
 
-use std::collections::{HashMap, HashSet};
+mod film;
+
+use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
 use aaa_data::{GameData, General, Handicap, Id, Nation};
 use aaa_map::{FogSetting, Map, Player, Recruits};
 use aaa_sim::World;
 use log::{debug, warn};
+use serde::{Deserialize, Serialize};
+
+pub use film::{Film, NotFilm};
 
 /// What a match is played on and by, as its lobby leaves it: all that
 /// every copy of the match has to agree on before it starts.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Setup {
     /// The map's name, as the game's data has it.
     pub map: String,
@@ -23,12 +28,12 @@ pub struct Setup {
     pub teams: Option<Vec<Vec<u32>>>,
     /// The nation chosen for each side, by player id; one at random where
     /// the map fixes none and none is chosen.
-    pub nations: HashMap<u32, Id>,
+    pub nations: BTreeMap<u32, Id>,
     /// The general chosen for each side, by player id; one of its nation's
     /// at random where none is.
-    pub generals: HashMap<u32, Id>,
+    pub generals: BTreeMap<u32, Id>,
     /// The handicap given each side, by player id, in place of the map's.
-    pub handicaps: HashMap<u32, Id>,
+    pub handicaps: BTreeMap<u32, Id>,
     /// How much of the map the fog of war hides, if not as the game's
     /// world rule has it.
     pub fog: Option<FogSetting>,
@@ -73,14 +78,14 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     });
     let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
     let recruit_lists = game.recruit_lists();
-    let recruited: HashSet<&aaa_map::Id> = recruit_lists.values().flatten().collect();
-    let raisable = (recruited.into_iter())
-        .filter_map(|t| {
-            let raised = raising.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]);
-            let raised = raised.map_err(|e| debug!("can't commission {t}: {e}"));
-            Some((t.clone(), raised.ok()?))
-        })
-        .collect();
+    let raisable = raising.raisable();
+    for t in recruit_lists.values().flatten() {
+        if !raisable.contains_key(t)
+            && let Err(e) = raising.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])
+        {
+            debug!("can't commission {t}: {e}");
+        }
+    }
     let experience = game.experience_rules();
     let mut rules = aaa_sim::Rules {
         seed,
@@ -141,7 +146,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
 /// the one `chosen` for it, else the one the map gives it.
 pub fn handicap_technologies(
     players: &[Player],
-    chosen: &HashMap<u32, Id>,
+    chosen: &BTreeMap<u32, Id>,
     all: &[Handicap],
 ) -> HashMap<u32, Id> {
     aaa_map::sides(players)
@@ -157,7 +162,7 @@ pub fn handicap_technologies(
 /// the one `chosen`, else one at random.
 pub fn nations(
     players: &[Player],
-    chosen: &HashMap<u32, Id>,
+    chosen: &BTreeMap<u32, Id>,
     nations: &[Nation],
     seed: u64,
 ) -> HashMap<u32, Nation> {
@@ -204,7 +209,7 @@ fn pick_at_random<T>(seed: u64, pick: Pick, player: u32, items: &[T]) -> Option<
 pub fn generals(
     players: &[Player],
     nations: &HashMap<u32, Nation>,
-    chosen: &HashMap<u32, Id>,
+    chosen: &BTreeMap<u32, Id>,
     seed: u64,
 ) -> HashMap<u32, General> {
     nations
@@ -275,7 +280,7 @@ mod tests {
         let all = [nation("nation_usa"), nation("nation_ger")];
         let mut players = players();
         players[0].nation = Some("nation_ger".into());
-        let chosen = HashMap::from([(10, Id::from("nation_usa")), (12, Id::from("nation_usa"))]);
+        let chosen = BTreeMap::from([(10, Id::from("nation_usa")), (12, Id::from("nation_usa"))]);
         let nations = nations(&players, &chosen, &all, 7);
         let id = |p| nations[&p].id.as_str();
         assert_eq!(id(10), "nation_ger");
@@ -334,7 +339,7 @@ mod tests {
         ]);
         let mut players: Vec<Player> = (1..=7).map(|id| player(id, false, true)).collect();
         players[5].general = Some("patton_tutorial".into());
-        let chosen = HashMap::from([
+        let chosen = BTreeMap::from([
             (1, Id::from("Nimitz")),
             (2, Id::from("rommel")),
             (6, Id::from("nimitz")),

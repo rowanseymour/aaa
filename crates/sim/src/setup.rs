@@ -143,6 +143,28 @@ impl World {
         self.add_regiment(&regiment)
     }
 
+    /// Adds a regiment of `template`, one of [`Rules::raisable`], owned by
+    /// `owner` and standing in its starting formation around `at` facing
+    /// `facing`, returning its index. `None`, with nothing added, for a
+    /// template that isn't, an owner the match hasn't got, a place off
+    /// the map or a facing that's no direction.
+    pub fn raise(
+        &mut self,
+        template: &Id,
+        owner: u32,
+        at: [f32; 2],
+        facing: [f32; 2],
+    ) -> Option<usize> {
+        let size = self.pathing.size();
+        let on_map = at.iter().all(|c| (0.0..=size).contains(c));
+        let facing = normalised(facing).filter(|f| f.iter().all(|c| c.is_finite()))?;
+        self.sides.player(owner).filter(|_| on_map)?;
+        let mut regiment = self.rules.raisable.get(template)?.clone();
+        regiment.owner = owner;
+        regiment.place(at, facing);
+        Some(self.add_new_regiment(regiment))
+    }
+
     /// Adds a regiment, numbering it if `numbered`.
     pub(crate) fn push_regiment(&mut self, regiment: &aaa_map::Regiment, numbered: bool) -> usize {
         let r = self.regiments.len();
