@@ -5,6 +5,7 @@ pub mod blend;
 pub mod camera;
 pub mod decals;
 mod glow;
+mod loader;
 pub mod log;
 mod measures;
 pub mod models;

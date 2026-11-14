@@ -15,7 +15,7 @@ use bevy::render::render_resource::TextureFormat;
 use nif::{Nif, Object};
 use tgck::map::CELL_SIZE;
 
-use crate::models::embedded_image;
+use crate::loader::embedded_image;
 use crate::terrain::world;
 use crate::textures;
 
