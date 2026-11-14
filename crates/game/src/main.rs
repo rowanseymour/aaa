@@ -100,6 +100,8 @@ options:
                             though smaller if the window's too narrow for it
   --fog <setting>           none, explored or full: how much of the map the fog
                             of war hides, rather than the game's default
+  --seed <number>           what the match's chances are drawn from, to play one
+                            out the same way again, rather than a new one
   --log <filter>            what to log, as for RUST_LOG, e.g. \"debug\" or
                             \"aaa_game=debug\"; RUST_LOG still applies on top";
 
@@ -143,6 +145,9 @@ struct Pending {
     /// How much of the map the fog of war hides, if not as the game's
     /// world rule has it.
     fog: Option<aaa_map::FogSetting>,
+    /// What the match's chances are drawn from, and the lobby's picks for
+    /// sides left to chance.
+    seed: u64,
     /// Whether it was launched from the lobby, which failing to load it goes
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
@@ -274,6 +279,17 @@ struct Drawn(Models);
 /// line.
 #[derive(Resource, Clone, Copy)]
 struct Side(Option<usize>);
+
+/// What matches' chances are drawn from, as asked on the command line.
+#[derive(Resource, Clone, Copy)]
+struct Seed(Option<u64>);
+
+impl Seed {
+    /// The one asked for, else one no match has had.
+    fn get(self) -> u64 {
+        self.0.unwrap_or_else(lobby::fresh_seed)
+    }
+}
 
 /// The general who leads each side, by player id; none for sides without a
 /// nation.
@@ -508,6 +524,7 @@ struct Options {
     headless: bool,
     ui_scale: f32,
     fog: Option<aaa_map::FogSetting>,
+    seed: Option<u64>,
     log: Option<String>,
 }
 
@@ -545,6 +562,10 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         Some(f) => Some(aaa_map::FogSetting::named(&f)?),
         None => None,
     };
+    let seed = match take_option(args, "--seed")? {
+        Some(n) => Some(n.parse().ok()?),
+        None => None,
+    };
     let log = take_option(args, "--log")?;
     Some(Options {
         side,
@@ -555,6 +576,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         headless,
         ui_scale,
         fog,
+        seed,
         log,
     })
 }
@@ -570,6 +592,7 @@ fn main() -> ExitCode {
         headless,
         ui_scale,
         fog,
+        seed,
         log,
     }) = options(&mut args)
     else {
@@ -701,6 +724,7 @@ fn main() -> ExitCode {
         .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
+        .insert_resource(Seed(seed))
         .add_plugins((
             ui::UiPlugin,
             confirm::ConfirmPlugin,
@@ -872,6 +896,7 @@ fn main() -> ExitCode {
                 generals: HashMap::new(),
                 handicaps: HashMap::new(),
                 fog,
+                seed: Seed(seed).get(),
                 from_menu: false,
             })
             .insert_state(Screen::Loading);
@@ -919,15 +944,17 @@ fn prepare(
         handicaps,
         from_menu,
         fog,
+        seed,
         ..
     } = pending;
+    info!("seed {seed}");
     // Given on the command line, each side plays as the nation its map
     // fixes or one at random.
     let chosen = match from_menu {
         true => chosen,
         false => aaa_map::Brief::load(&game, &name).map_or_else(
             |_| HashMap::new(),
-            |b| lobby::nations(&b.players, &HashMap::new(), nations),
+            |b| lobby::nations(&b.players, &HashMap::new(), nations, seed),
         ),
     };
     let raising = Recruits::new(&game);
@@ -935,7 +962,7 @@ fn prepare(
     for w in &map.warnings {
         warn!("{name}: {w}");
     }
-    let leaders = Leaders(lobby::generals(&map.players, &chosen, &generals));
+    let leaders = Leaders(lobby::generals(&map.players, &chosen, &generals, seed));
     if let Some(teams) = &teams {
         map.arrange(teams);
     }
@@ -964,6 +991,7 @@ fn prepare(
         .collect();
     let experience = game.experience_rules();
     let mut rules = aaa_sim::Rules {
+        seed,
         terrain_rules: game.terrain_rules(),
         packing: raising.packings(),
         requires: game.requirements(),

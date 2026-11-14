@@ -43,6 +43,8 @@ impl World {
     }
 }
 
+crate::hash::digest!(Commander { experience, max });
+
 #[cfg(test)]
 mod tests {
     use super::*;

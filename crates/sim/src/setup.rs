@@ -1,6 +1,6 @@
 //! Setting a match up from its map, and adding to it as it's played.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 
 use aaa_map::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
 
@@ -91,6 +91,7 @@ impl World {
         let decided = |of: Outcome| fates.values().filter(move |f| f.outcome == of);
         let over = decided(Outcome::Won).next().is_some()
             || !fates.is_empty() && decided(Outcome::Playing).next().is_none();
+        let rng = rules.seed;
         let mut world = World {
             sides,
             pathing,
@@ -113,13 +114,13 @@ impl World {
             objectives: BTreeMap::new(),
             fates,
             over,
-            rng: 0x9e37_79b9_7f4a_7c15,
+            rng,
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),
             commanders: BTreeMap::new(),
             notices: Vec::new(),
             fog,
-            numbers: HashMap::new(),
+            numbers: BTreeMap::new(),
         };
         for regiment in regiments {
             world.add_regiment(regiment);
@@ -312,7 +313,7 @@ impl World {
                 target: None,
                 noticed: Vec::new(),
                 awake: b.awake,
-                inside: HashMap::new(),
+                inside: BTreeMap::new(),
                 besieged: None,
                 shot: None,
                 state: match health > 0.0 {
@@ -351,6 +352,25 @@ mod tests {
     use crate::testing::*;
 
     use std::collections::HashSet;
+
+    #[test]
+    fn a_match_draws_its_chances_from_its_seed() {
+        let drawn = |seed| {
+            let rules = Rules {
+                seed,
+                ..Default::default()
+            };
+            let mut w = World::build(
+                Sides::default(),
+                Pathing::uniform(4, Domain::Land),
+                rules,
+                &[],
+            );
+            [w.chance(), w.chance(), w.chance()]
+        };
+        assert_eq!(drawn(7), drawn(7));
+        assert_ne!(drawn(7), drawn(8));
+    }
 
     #[test]
     fn what_a_map_leaves_out_for_lack_of_room_adds_nothing() {

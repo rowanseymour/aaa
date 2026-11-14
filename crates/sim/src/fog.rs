@@ -365,6 +365,30 @@ impl World {
     }
 }
 
+crate::hash::digest!(Fog { setting, sides } skip {
+    // The map's.
+    side,
+});
+
+impl crate::hash::Digest for SideFog {
+    fn digest(&self, h: &mut crate::hash::Hasher) {
+        // What it sees now follows from where things stand.
+        let SideFog {
+            ever,
+            remote,
+            now: _,
+        } = self;
+        h.bits(ever);
+        h.bits(remote);
+    }
+}
+
+impl crate::hash::Digest for FogSetting {
+    fn digest(&self, h: &mut crate::hash::Hasher) {
+        (*self as u8).digest(h);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

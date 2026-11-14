@@ -19,7 +19,7 @@ use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Shown, Surface, button, called, card, clickable, dropdown,
     inert, label, opener, padded, panel, slug, switch, text,
 };
-use crate::{Data, Pending, Screen, Side, confirm};
+use crate::{Data, Pending, Screen, Seed, Side, confirm};
 
 /// Who plays a side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,24 +187,42 @@ pub fn nations(
     players: &[Player],
     chosen: &HashMap<u32, Id>,
     nations: &[Nation],
+    seed: u64,
 ) -> HashMap<u32, Nation> {
-    let random = RandomState::new();
     let find = |id: &str| nations.iter().find(|n| n.id.as_str() == id);
     aaa_map::sides(players)
         .filter_map(|p| {
             let nation = match (&p.nation, chosen.get(&p.id)) {
                 (Some(fixed), _) => find(fixed),
                 (None, Some(id)) => find(id.as_str()),
-                (None, None) => pick_at_random(&random, p.id, nations),
+                (None, None) => pick_at_random(seed, Pick::Nation, p.id, nations),
             };
             Some((p.id, nation?.clone()))
         })
         .collect()
 }
 
-/// One of `items` for `player`, at random; none where there are none.
-fn pick_at_random<'a, T>(random: &RandomState, player: u32, items: &'a [T]) -> Option<&'a T> {
-    let roll = random.hash_one(player) as usize;
+/// A seed no match has had, for one that isn't given its own.
+pub fn fresh_seed() -> u64 {
+    RandomState::new().hash_one(std::time::SystemTime::now())
+}
+
+/// What's picked for a side left to chance, so that each is its own pick.
+#[derive(Clone, Copy)]
+enum Pick {
+    Nation = 1,
+    General = 2,
+}
+
+/// One of `items` for `player`, at random but the same wherever the match
+/// has the same `seed`; none where there are none.
+fn pick_at_random<T>(seed: u64, pick: Pick, player: u32, items: &[T]) -> Option<&T> {
+    let mut z = seed
+        .wrapping_add(u64::from(player) << 8 | pick as u64)
+        .wrapping_mul(0x9e37_79b9_7f4a_7c15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    let roll = ((z ^ (z >> 31)) >> 16) as usize;
     items.get(roll % items.len().max(1))
 }
 
@@ -215,8 +233,8 @@ pub fn generals(
     players: &[Player],
     nations: &HashMap<u32, Nation>,
     chosen: &HashMap<u32, Id>,
+    seed: u64,
 ) -> HashMap<u32, General> {
-    let random = RandomState::new();
     nations
         .iter()
         .filter_map(|(&p, nation)| {
@@ -228,7 +246,7 @@ pub fn generals(
                 .or_else(|| chosen.get(&p).and_then(find).filter(|g| g.public))
                 .or_else(|| {
                     let offered: Vec<&General> = all.iter().filter(|g| g.public).collect();
-                    pick_at_random(&random, p, &offered).copied()
+                    pick_at_random(seed, Pick::General, p, &offered).copied()
                 });
             Some((p, general?.clone()))
         })
@@ -722,6 +740,7 @@ fn launch(
     _: On<Activate>,
     lobby: Option<Res<Lobby>>,
     all: Res<Nations>,
+    seed: Res<Seed>,
     mut commands: Commands,
     mut next: ResMut<NextState<Screen>>,
 ) {
@@ -731,16 +750,18 @@ fn launch(
     let Ok(brief) = &lobby.brief else {
         return;
     };
+    let seed = seed.get();
     commands.insert_resource(Pending {
         name: lobby.map.clone(),
         title: brief.name.clone(),
         description: brief.description.clone(),
         teams: lobby.preset.arrange(&brief.players),
         person: lobby.person,
-        nations: nations(&brief.players, &lobby.nations, &all.0),
+        nations: nations(&brief.players, &lobby.nations, &all.0, seed),
         generals: lobby.generals.clone(),
         handicaps: computer_handicaps(&brief.players, lobby.person, &lobby.handicaps),
         fog: None,
+        seed,
         from_menu: true,
     });
     next.set(Screen::Loading);
@@ -1257,13 +1278,31 @@ mod tests {
         let mut players = players();
         players[0].nation = Some("nation_ger".into());
         let chosen = HashMap::from([(10, Id::from("nation_usa")), (12, Id::from("nation_usa"))]);
-        let nations = nations(&players, &chosen, &all);
+        let nations = nations(&players, &chosen, &all, 7);
         let id = |p| nations[&p].id.as_str();
         assert_eq!(id(10), "nation_ger");
         assert_eq!(id(12), "nation_usa");
         assert!(["nation_usa", "nation_ger"].contains(&id(13)));
         // Independent players play as no nation.
         assert!(!nations.contains_key(&11));
+    }
+
+    #[test]
+    fn picks_left_to_chance_follow_the_seed() {
+        let items = [0, 1, 2, 3, 4, 5, 6, 7];
+        let picked = |seed, pick| -> Vec<i32> {
+            (1..=8)
+                .map(|p| *pick_at_random(seed, pick, p, &items).unwrap())
+                .collect()
+        };
+        for pick in [Pick::Nation, Pick::General] {
+            assert_eq!(picked(7, pick), picked(7, pick));
+            assert_ne!(picked(7, pick), picked(8, pick));
+            // Each side's is its own.
+            assert!(picked(7, pick).iter().any(|&n| n != picked(7, pick)[0]));
+        }
+        assert_ne!(picked(7, Pick::Nation), picked(7, Pick::General));
+        assert!(pick_at_random::<i32>(7, Pick::Nation, 1, &[]).is_none());
     }
 
     #[test]
@@ -1303,7 +1342,7 @@ mod tests {
             (6, Id::from("nimitz")),
             (7, Id::from("patton_tutorial")),
         ]);
-        let generals = generals(&players, &nations, &chosen);
+        let generals = generals(&players, &nations, &chosen, 7);
         let id = |p| generals[&p].id.as_str();
         assert_eq!(id(1), "nimitz");
         // A general of another nation's leads none of this one's sides, and

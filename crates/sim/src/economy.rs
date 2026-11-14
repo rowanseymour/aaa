@@ -371,6 +371,11 @@ impl World {
     }
 }
 
+crate::hash::digest!(Treasury {
+    stockpile,
+    shortage
+});
+
 #[cfg(test)]
 mod tests {
 

@@ -225,6 +225,12 @@ impl World {
     }
 }
 
+crate::hash::digest!(Fate {
+    outcome,
+    default_defeat,
+    by_cities
+});
+
 #[cfg(test)]
 mod tests {
     use super::*;
