@@ -321,8 +321,11 @@ impl Toggling<'_, '_> {
     pub fn open(&mut self, panel: Panel) {
         let displays = &mut *self.displays;
         if displays.open.is_none() {
-            displays.paused_it = !self.orders.pausing();
-            self.orders.act(Action::Pause(true));
+            // A match hosted elsewhere is other people's too, and plays on.
+            displays.paused_it = !self.orders.pausing() && !self.orders.joined_to();
+            if !self.orders.joined_to() {
+                self.orders.act(Action::Pause(true));
+            }
         }
         displays.open = Some(panel);
         self.show();

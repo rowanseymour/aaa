@@ -1,6 +1,9 @@
 //! A client of a match: a copy that asks its host for what it wants done
 //! and plays what the host tells every copy.
 
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
 use aaa_sim::{Action, Refused, Schedule, World};
 
 use crate::protocol::{Join, PROTOCOL, ToClient, ToHost, Welcome, decode, encode};
@@ -9,6 +12,8 @@ use crate::{Link, Lost, Refusal};
 /// Why a client hasn't joined a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotJoined {
+    /// The host said nothing for as long as it was waited on.
+    Unanswered,
     /// The link to the host was lost, or it sent what isn't a welcome.
     Lost,
     /// The host wouldn't let it in.
@@ -35,14 +40,50 @@ pub fn welcome(link: &mut impl Link) -> Result<Option<Welcome>, NotJoined> {
     }
 }
 
+/// The most the host has said and its copy has yet to do that a client
+/// takes in, leaving the rest to its link, which holds the host up in the
+/// end rather than keep ever more.
+const TAKEN_IN: usize = 256;
+
+/// How often [`enter`] looks for the host's answer.
+const LOOKS: Duration = Duration::from_millis(10);
+
+/// [`join`]s the match of the host at the other end of `link`, waiting no
+/// longer than `wait` for its [`welcome`].
+pub fn enter(
+    link: &mut impl Link,
+    players: Vec<u32>,
+    wait: Duration,
+) -> Result<Welcome, NotJoined> {
+    join(link, players).map_err(|_| NotJoined::Lost)?;
+    let asked = Instant::now();
+    loop {
+        match welcome(link)? {
+            Some(welcome) => return Ok(welcome),
+            None if asked.elapsed() < wait => std::thread::sleep(LOOKS),
+            None => return Err(NotJoined::Unanswered),
+        }
+    }
+}
+
 /// What plays a copy of a match as its host says.
 pub struct Client<L> {
     link: L,
+    /// What the host has said that its copy has yet to do, in order.
+    heard: VecDeque<ToClient>,
+    /// How many of those play a tick.
+    behind: usize,
+    /// Whether nothing more will come from the host.
+    lost: bool,
     schedule: Schedule,
     /// How many of its record's hashes the host has been sent.
     checked: usize,
     diverged: Vec<(u32, u64)>,
     refused: Vec<(u32, Refused)>,
+    /// How many actions it's asked the host for, and how many of those
+    /// its copy has done all that will come of.
+    asked: u64,
+    answered: u64,
 }
 
 impl<L: Link> Client<L> {
@@ -51,10 +92,15 @@ impl<L: Link> Client<L> {
     pub fn new(link: L) -> Client<L> {
         Client {
             link,
+            heard: VecDeque::new(),
+            behind: 0,
+            lost: false,
             schedule: Schedule::default(),
             checked: 0,
             diverged: Vec::new(),
             refused: Vec::new(),
+            asked: 0,
+            answered: 0,
         }
     }
 
@@ -73,7 +119,20 @@ impl<L: Link> Client<L> {
     /// Asks the host for `action`, which is carried out, if the host lets
     /// it be, when the host says so.
     pub fn ask(&mut self, action: Action) -> Result<(), Lost> {
-        self.link.send(encode(&ToHost::Ask(action)))
+        self.link.send(encode(&ToHost::Ask(action)))?;
+        self.asked += 1;
+        Ok(())
+    }
+
+    /// How many actions it's asked the host for.
+    pub fn asked(&self) -> u64 {
+        self.asked
+    }
+
+    /// How many of the actions it's asked for are done with: carried out
+    /// in its copy if the host let them be, and never to be if not.
+    pub fn answered(&self) -> u64 {
+        self.answered
     }
 
     /// The orders the match has refused since this was last asked, each
@@ -82,34 +141,88 @@ impl<L: Link> Client<L> {
         std::mem::take(&mut self.refused)
     }
 
+    /// How many ticks the host has played that its copy has yet to, as
+    /// far as it's taken in.
+    pub fn behind(&mut self) -> usize {
+        self.hear();
+        self.behind
+    }
+
     /// Has `world`, its copy of the match and nobody else's to change, do
     /// what the host has said to since it last did: up to `most` steps of
-    /// it, so that one far behind catches up a part at a time.
+    /// it, so that one far behind catches up a part at a time. The link
+    /// is only lost once all the host said has been done.
     pub fn advance(&mut self, world: &mut World, most: usize) -> Result<(), Lost> {
-        let mut steps = 0;
-        while steps < most {
-            let Some(message) = self.link.receive()? else {
-                break;
-            };
-            match decode(&message).ok_or(Lost)? {
-                ToClient::Step(bundle) => {
-                    steps += 1;
+        self.run(world, most, usize::MAX)
+    }
+
+    /// As [`Client::advance`], but stopping short of the tick after the
+    /// next `ticks` of them: for a copy that keeps time itself, and plays
+    /// a tick only when one is due.
+    pub fn play(&mut self, world: &mut World, ticks: usize) -> Result<(), Lost> {
+        self.run(world, usize::MAX, ticks)
+    }
+
+    /// Takes in what the host has sent.
+    fn hear(&mut self) {
+        while !self.lost && self.heard.len() < TAKEN_IN {
+            match self.link.receive().map(|m| m.map(|m| decode(&m))) {
+                Ok(None) => break,
+                Ok(Some(Some(ToClient::Step(bundle)))) => {
+                    self.behind += usize::from(bundle.tick);
+                    self.heard.push_back(ToClient::Step(bundle));
+                }
+                Ok(Some(Some(said @ (ToClient::Diverged { .. } | ToClient::Answered(_))))) => {
+                    self.heard.push_back(said)
+                }
+                // It's already been let in.
+                Ok(Some(Some(ToClient::Start(_) | ToClient::Refused(_)))) => self.lost = true,
+                Ok(Some(None)) | Err(Lost) => self.lost = true,
+            }
+        }
+    }
+
+    /// Has `world` do what the host has said, up to `steps` steps of it
+    /// of which `ticks` play a tick.
+    fn run(&mut self, world: &mut World, mut steps: usize, mut ticks: usize) -> Result<(), Lost> {
+        loop {
+            if self.heard.is_empty() {
+                self.hear();
+            }
+            match self.heard.front() {
+                Some(ToClient::Step(bundle)) if steps == 0 || (bundle.tick && ticks == 0) => break,
+                Some(_) => {}
+                None if self.lost => return Err(Lost),
+                None => break,
+            }
+            match self.heard.pop_front() {
+                Some(ToClient::Step(bundle)) => {
+                    steps -= 1;
                     for action in bundle.actions {
                         self.schedule.act(action);
                     }
                     self.refused.extend(match bundle.tick {
-                        true => self.schedule.step(world),
+                        true => {
+                            ticks -= 1;
+                            self.behind -= 1;
+                            self.schedule.step(world)
+                        }
                         false => self.schedule.carry_out(world),
                     });
                     let checks = &self.schedule.record().checks;
                     for &(step, hash) in &checks[self.checked..] {
-                        self.link.send(encode(&ToHost::Check { step, hash }))?;
+                        // A host that's gone is found so once what it
+                        // said before it went has been done.
+                        let _ = self.link.send(encode(&ToHost::Check { step, hash }));
                     }
                     self.checked = checks.len();
                 }
-                ToClient::Diverged { client, step } => self.diverged.push((client, step)),
-                // It's already been let in.
-                ToClient::Start(_) | ToClient::Refused(_) => return Err(Lost),
+                Some(ToClient::Diverged { client, step }) => self.diverged.push((client, step)),
+                // Never more than it's asked, whatever the host says.
+                Some(ToClient::Answered(asked)) => {
+                    self.answered = asked.clamp(self.answered, self.asked)
+                }
+                Some(ToClient::Start(_) | ToClient::Refused(_)) | None => {}
             }
         }
         Ok(())

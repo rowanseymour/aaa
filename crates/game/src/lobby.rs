@@ -665,6 +665,7 @@ fn launch(
         description: brief.description.clone(),
         person: lobby.person,
         from_menu: true,
+        joined: None,
         setup: aaa_server::Setup {
             map: lobby.map.clone(),
             seed: seed.get(),

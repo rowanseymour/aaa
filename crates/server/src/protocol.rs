@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 1;
+pub const PROTOCOL: u32 = 2;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -44,6 +44,10 @@ pub enum ToClient {
     Step(Bundle),
     /// A client's copy of the match stopped standing as the host's does.
     Diverged { client: u32, step: u64 },
+    /// How many of the actions this client has asked for the host has
+    /// dealt with: every step before this has those it carried out, and
+    /// the rest it never will.
+    Answered(u64),
 }
 
 /// What a client is told as it's let in.
@@ -120,6 +124,7 @@ mod tests {
                 step: 30,
             },
             ToClient::Refused(Refusal::Protocol(PROTOCOL)),
+            ToClient::Answered(3),
         ];
         let join = Join {
             protocol: PROTOCOL,

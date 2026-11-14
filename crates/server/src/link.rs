@@ -18,6 +18,16 @@ pub trait Link {
     fn receive(&mut self) -> Result<Option<Vec<u8>>, Lost>;
 }
 
+impl<L: Link + ?Sized> Link for Box<L> {
+    fn send(&mut self, message: Vec<u8>) -> Result<(), Lost> {
+        (**self).send(message)
+    }
+
+    fn receive(&mut self) -> Result<Option<Vec<u8>>, Lost> {
+        (**self).receive()
+    }
+}
+
 /// An end of a link to another part of the same program.
 #[derive(Debug)]
 pub struct Local {

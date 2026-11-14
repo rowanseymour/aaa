@@ -493,10 +493,16 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
                 "record" => record(world, &args),
-                "fog" => no_args(&args).map(|_| {
+                "fog" => no_args(&args).and_then(|_| {
+                    if world
+                        .get_resource::<Orders>()
+                        .is_some_and(Orders::joined_to)
+                    {
+                        return Err(HOSTED_HERE.into());
+                    }
                     let mut fog = world.resource_mut::<crate::fog::Fog>();
                     fog.lifted = !fog.lifted;
-                    String::new()
+                    Ok(String::new())
                 }),
                 _ => unreachable!("{name} isn't handled"),
             }
@@ -680,6 +686,7 @@ fn game_speed(world: &mut World, args: &[&str]) -> Reply {
                 let (slowest, fastest) = aaa_sim::SPEEDS.into_inner();
                 return Err(format!("takes {slowest} to {fastest}"));
             }
+            barred(&orders, &Action::Speed(speed))?;
             orders.act(Action::Speed(speed));
             Ok(String::new())
         }
@@ -758,6 +765,7 @@ fn game_pause(world: &mut World, args: &[&str]) -> Reply {
         ["0"] => false,
         _ => return Err(usage("gamepause")),
     };
+    barred(&orders, &Action::Pause(pause))?;
     orders.act(Action::Pause(pause));
     if pause && let Some(mut display) = world.get_resource_mut::<crate::displays::Displays>() {
         display.keep_paused();
@@ -930,7 +938,7 @@ fn decide(world: &mut World, args: &[&str], won: bool) -> Reply {
             true => Action::Win(id),
             false => Action::Lose(id),
         },
-    );
+    )?;
     Ok(outcome(&world.resource::<Sim>().0))
 }
 
@@ -957,6 +965,10 @@ fn player_kingdom(world: &mut World, args: &[&str]) -> Reply {
         [] => Ok(kingdoms(sim, world.resource::<Local>().0)),
         [word] => {
             let id = kingdom(sim, word)?;
+            let given = world.get_resource::<Orders>().and_then(Orders::players);
+            if given.is_some_and(|players| !players.contains(&id)) {
+                return Err("the match's host didn't let the game in to play that kingdom".into());
+            }
             world.resource_mut::<Local>().0 = Some(id);
             if let Some(mut lineup) = world.get_resource_mut::<Lineup>() {
                 lineup.seat(Some(id));
@@ -1003,7 +1015,7 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
         at: position,
         facing,
     };
-    act(world, raise);
+    act(world, raise)?;
     let sim = &world.resource::<Sim>().0;
     let raised = sim.regiments.get(before..).and_then(<[_]>::last);
     let regiment = raised.ok_or_else(|| format!("{template} can't be raised"))?;
@@ -1047,10 +1059,10 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
             facing: crate::actions::UNPACK_FACING,
         },
     };
-    give(world, owner, command).map_err(|e| match e {
-        aaa_sim::Refused::NotYours => format!("regiment {id} is destroyed"),
-        e => format!("refused: {e:?}"),
-    })?;
+    if sim.destroyed(r) {
+        return Err(format!("regiment {id} is destroyed"));
+    }
+    give(world, owner, command)?;
     world.write_message(Sent {
         to: Some(point),
         aim,
@@ -1082,7 +1094,7 @@ fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
             enemy: e,
         },
     };
-    give(world, owner, command).map_err(|e| format!("refused: {e:?}"))?;
+    give(world, owner, command)?;
     world.write_message(Sent {
         to: None,
         aim,
@@ -1196,7 +1208,7 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         },
         None => aaa_sim::Command::Commission { building, template },
     };
-    give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
+    give(world, player, command)?;
     Ok(String::new())
 }
 
@@ -1217,7 +1229,7 @@ fn research(world: &mut World, args: &[&str]) -> Reply {
         building: b,
         technology: item.technology.clone(),
     };
-    give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
+    give(world, player, command)?;
     Ok(String::new())
 }
 
@@ -1226,7 +1238,7 @@ fn building_order(world: &mut World, args: &[&str], order: fn(usize) -> aaa_sim:
     no_args(args)?;
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
     let b = selected_building(world)?;
-    give(world, player, order(b)).map_err(|e| format!("refused: {e:?}"))?;
+    give(world, player, order(b))?;
     Ok(String::new())
 }
 
@@ -1237,8 +1249,7 @@ fn disband(world: &mut World, args: &[&str]) -> Reply {
     let sim = &world.resource::<Sim>().0;
     let regiment = regiment_by_id(sim, id)?;
     let owner = sim.regiments[regiment].owner;
-    give(world, owner, aaa_sim::Command::Disband { regiment })
-        .map_err(|e| format!("refused: {e:?}"))?;
+    give(world, owner, aaa_sim::Command::Disband { regiment })?;
     Ok(String::new())
 }
 
@@ -1253,7 +1264,7 @@ fn attach(world: &mut World, args: &[&str], attach: bool) -> Reply {
         true => aaa_sim::Command::Attach { regiment },
         false => aaa_sim::Command::Detach { regiment },
     };
-    give(world, owner, command).map_err(|e| format!("refused: {e:?}"))?;
+    give(world, owner, command)?;
     Ok(String::new())
 }
 
@@ -1276,7 +1287,7 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
         at: point,
         facing,
     };
-    give(world, player, command).map_err(|e| format!("refused: {e:?}"))?;
+    give(world, player, command)?;
     let at = aaa_sim::unpack_site(point);
     world.write_message(crate::waypoints::Sent {
         to: Some(at),
@@ -1298,17 +1309,48 @@ fn selected_building(world: &World) -> Result<usize, String> {
     (world.resource::<SelectedBuilding>().0).ok_or_else(|| "no building selected".into())
 }
 
-/// Has the match do `action` at once, so that what follows finds it done.
-fn act(world: &mut World, action: Action) {
-    world.resource_scope(|world, mut orders: Mut<Orders>| {
-        orders.act(action);
-        crate::log_refused(orders.carry_out(&mut world.resource_mut::<Sim>().0));
-    });
+/// What's said of a cheat tried in a match hosted elsewhere.
+const HOSTED_HERE: &str = "only in a match hosted here";
+
+/// Why the match's host wouldn't carry out `action` if asked from here,
+/// if it wouldn't.
+fn barred(orders: &Orders, action: &Action) -> Result<(), String> {
+    if orders.may(action) {
+        return Ok(());
+    }
+    let watching = "the match's host takes nothing from those who only watch";
+    Err(match (orders.players(), action) {
+        _ if orders.gone() => "the match's host has gone".into(),
+        (Some([]), Action::Order { .. } | Action::Pause(_) | Action::Speed(_)) => watching.into(),
+        (Some(players), Action::Order { .. }) => {
+            let ids: Vec<String> = players.iter().map(u32::to_string).collect();
+            let ids = ids.join(", ");
+            format!("the match's host takes only the orders of kingdom {ids} from here")
+        }
+        _ => HOSTED_HERE.into(),
+    })
 }
 
-fn give(world: &mut World, player: u32, command: aaa_sim::Command) -> Result<(), aaa_sim::Refused> {
+/// Has the match do `action` at once, so that what follows finds it done,
+/// which only a match hosted here does for what's outside its rules.
+fn act(world: &mut World, action: Action) -> Result<(), String> {
     world.resource_scope(|world, mut orders: Mut<Orders>| {
-        orders.give(&world.resource::<Sim>().0, player, command)
+        barred(&orders, &action)?;
+        orders.act(action);
+        crate::log_refused(orders.carry_out(&mut world.resource_mut::<Sim>().0));
+        Ok(())
+    })
+}
+
+fn give(world: &mut World, player: u32, command: aaa_sim::Command) -> Result<(), String> {
+    world.resource_scope(|world, mut orders: Mut<Orders>| {
+        let sim = &world.resource::<Sim>().0;
+        let refused = |e| format!("refused: {e:?}");
+        sim.check(player, &command).map_err(refused)?;
+        let action = Action::Order { player, command };
+        barred(&orders, &action)?;
+        orders.act(action);
+        Ok(())
     })
 }
 
@@ -1319,6 +1361,12 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
     let seconds = number(seconds)?;
     if !(0.0..=600.0).contains(&seconds) {
         return Err("takes 0 to 600 seconds".into());
+    }
+    if world
+        .get_resource::<Orders>()
+        .is_some_and(Orders::joined_to)
+    {
+        return Err("the match's host plays it, when it will; wait lets time go by".into());
     }
     let mut orders = world.remove_resource::<Orders>().ok_or("no match")?;
     let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
@@ -1335,13 +1383,14 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
 
 fn destroy_selected(world: &mut World, args: &[&str]) -> Reply {
     no_args(args)?;
-    let selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
+    let selected = world.resource::<Selected>().0.clone();
     if selected.is_empty() {
         return Err("nothing selected".into());
     }
     for r in selected {
-        act(world, Action::Destroy(r));
+        act(world, Action::Destroy(r))?;
     }
+    world.resource_mut::<Selected>().0.clear();
     Ok(String::new())
 }
 

@@ -123,6 +123,10 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
     Ok((dir, Asked::Play(setup, seconds.ok_or(())?, film, hosting)))
 }
 
+/// How long the host of a match to join is waited on to say whether
+/// it's let in.
+const ANSWERED: Duration = Duration::from_secs(10);
+
 /// How long it sleeps between looks at what's come over a link, with
 /// nothing else to do.
 const IDLE: Duration = Duration::from_millis(10);
@@ -206,15 +210,8 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
         }
         Asked::Join(at, players) => {
             let mut link = quic::connect(at)?;
-            let lost = |_| format!("{at}: the host has gone");
-            aaa_server::join(&mut link, players).map_err(lost)?;
-            let welcome = loop {
-                match aaa_server::welcome(&mut link) {
-                    Ok(Some(welcome)) => break welcome,
-                    Ok(None) => std::thread::sleep(IDLE),
-                    Err(e) => return Err(format!("{at}: not let in: {e:?}")),
-                }
-            };
+            let welcome = aaa_server::enter(&mut link, players, ANSWERED)
+                .map_err(|e| format!("{at}: not let in: {e:?}"))?;
             eprintln!("joined as client {}", welcome.client);
             let mut world = aaa_server::start(&game, &welcome.setup, || {})?.world;
             let mut client = Client::new(link);

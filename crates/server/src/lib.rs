@@ -19,9 +19,9 @@ use aaa_sim::World;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
-pub use client::{Client, NotJoined, join, welcome};
+pub use client::{Client, NotJoined, enter, join, welcome};
 pub use film::{Film, NotFilm};
-pub use host::{Event, Host, Refusal};
+pub use host::{Event, Host, Refusal, allows};
 pub use link::{Link, Local, Lost, pair};
 
 /// What a match is played on and by, as its lobby leaves it: all that
