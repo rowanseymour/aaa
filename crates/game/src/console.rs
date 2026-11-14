@@ -676,8 +676,9 @@ fn game_speed(world: &mut World, args: &[&str]) -> Reply {
         [] => Ok(format!("{}", orders.speeding())),
         [speed] => {
             let speed = number(speed)?;
-            if !(0.05..=16.0).contains(&speed) {
-                return Err("takes 0.05 to 16".into());
+            if !aaa_sim::SPEEDS.contains(&speed) {
+                let (slowest, fastest) = aaa_sim::SPEEDS.into_inner();
+                return Err(format!("takes {slowest} to {fastest}"));
             }
             orders.act(Action::Speed(speed));
             Ok(String::new())
