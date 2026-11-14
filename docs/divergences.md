@@ -43,11 +43,6 @@ talk is our own, so this project and the original can't join each other's matche
   [protocol.rs](../crates/server/src/protocol.rs).
 - **Transport.** Machines connect over QUIC, which is encrypted, rather than the
   original's networking. See [quic.rs](../crates/server/src/quic.rs).
-- **A match played alone has a host too.** It's a client of a host in the same
-  program, so playing alone goes the way playing with others does. See
-  [orders.rs](../crates/game/src/orders.rs).
-- **Films.** A recorded match is kept in a format of our own, and the original's
-  films aren't read. See [film.rs](../crates/server/src/film.rs).
 - **A server with no window.** `aaa-server` hosts a match without playing in it;
   the original's host is always one of the players.
 
