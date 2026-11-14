@@ -38,7 +38,7 @@ pub fn show(
     mut flights: ResMut<Flights>,
     mut placed: Query<(&mut Transform, &mut Visibility)>,
 ) {
-    let Loaded { game, map } = &*loaded;
+    let map = &loaded.map;
     let ground = &map.ground;
     let t = fixed.overstep_fraction();
     let flights = &mut *flights;
@@ -80,14 +80,10 @@ pub fn show(
                     delivery.facing,
                 );
                 let mut models = assets.models();
-                let e = drawn.0.spawn_unit(
-                    &mut commands,
-                    game,
-                    &mut models,
-                    &thing,
-                    delivery.owner,
-                    0.0,
-                )?;
+                let e =
+                    drawn
+                        .0
+                        .spawn_unit(&mut commands, &mut models, &thing, delivery.owner, 0.0)?;
                 commands.entity(e).insert(DespawnOnExit(Screen::Match));
                 Some(e)
             });
@@ -113,13 +109,10 @@ pub fn show(
                 let template = unit.template.as_str();
                 let thing = thing_at(ground, Footing::Ground, unit.id, template, at, unit.facing);
                 let mut models = assets.models();
-                let e = drawn.0.spawn_falling(
-                    &mut commands,
-                    game,
-                    &mut models,
-                    &thing,
-                    delivery.owner,
-                )?;
+                let e =
+                    drawn
+                        .0
+                        .spawn_falling(&mut commands, &mut models, &thing, delivery.owner)?;
                 commands.entity(e).insert(DespawnOnExit(Screen::Match));
                 Some(e)
             });

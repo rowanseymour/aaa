@@ -13,7 +13,7 @@ use bevy::mesh::{Mesh, VertexAttributeValues};
 use bevy::prelude::*;
 use nif::{Controller, ControllerKind, Keyframes, Keys, Nif, Object};
 
-use crate::models::{Animated, Part, PartMaterial, bevy_transform, controllers};
+use crate::models::{Animated, ModelAssets, Part, PartMaterial, bevy_transform, controllers};
 use crate::particles::{Anchor, Frames};
 use crate::terrain::world;
 
@@ -280,8 +280,7 @@ impl Nodes {
         nif: &Nif,
         meshes: Vec<(Part, usize)>,
         clips: &Clips,
-        assets: &mut Assets<Mesh>,
-        skins: &mut Assets<SkinnedMeshInverseBindposes>,
+        assets: &mut ModelAssets,
     ) -> Option<Rig> {
         let moving = (clips.moving.as_ref()).and_then(|(kf, length)| self.clip(kf, *length));
         let idle = match &clips.idle {
@@ -306,7 +305,7 @@ impl Nodes {
                 let skinned = nif
                     .get_as::<nif::Shape>(Some(shape))
                     .is_some_and(|s| s.skin.is_some());
-                let skin = self.skin(nif, shape, node, &model, &part.mesh, assets, skins);
+                let skin = self.skin(nif, shape, node, &model, &part.mesh, assets);
                 // A skin that can't be bound stands as it was modelled.
                 let (node, transform) = match skinned {
                     true => (None, bevy_transform(&model)),
@@ -334,7 +333,6 @@ impl Nodes {
     /// Binds the mesh of a skinned shape under rig node `node`, at `model`
     /// in the model, to its bones: their nodes and inverse bind poses, with
     /// each vertex's four strongest weights added to the mesh.
-    #[allow(clippy::too_many_arguments)]
     fn skin(
         &self,
         nif: &Nif,
@@ -342,8 +340,7 @@ impl Nodes {
         node: usize,
         model: &nif::Transform,
         mesh: &Handle<Mesh>,
-        assets: &mut Assets<Mesh>,
-        skins: &mut Assets<SkinnedMeshInverseBindposes>,
+        assets: &mut ModelAssets,
     ) -> Option<Skin> {
         let shape = nif.get_as::<nif::Shape>(Some(shape))?;
         let instance = nif.get_as::<nif::SkinInstance>(shape.skin)?;
@@ -356,7 +353,7 @@ impl Nodes {
         if joints.len() != data.bones.len() || joints.len() > 256 {
             return None;
         }
-        let mut mesh = assets.get_mut(mesh)?;
+        let mut mesh = assets.meshes.get_mut(mesh)?;
         let n = mesh.count_vertices();
         let mut influences = vec![Vec::new(); n];
         for (j, bone) in data.bones.iter().enumerate() {
@@ -406,7 +403,7 @@ impl Nodes {
         });
         Some(Skin {
             bones: joints,
-            poses: skins.add(SkinnedMeshInverseBindposes::from(poses)),
+            poses: assets.skins.add(SkinnedMeshInverseBindposes::from(poses)),
             apart,
         })
     }

@@ -93,6 +93,17 @@ impl View {
             ground_reach: None,
         }
     }
+
+    /// The view its objects are drawn with as they fall under their
+    /// parachutes, if they fall: the falling model, without the animations
+    /// of their usual ones.
+    pub fn falling_view(&self) -> Option<View> {
+        Some(View {
+            models: vec![self.falling.clone()?],
+            animations: Vec::new(),
+            ..self.clone()
+        })
+    }
 }
 
 /// An animation a template's models can play.
@@ -485,6 +496,23 @@ pub(crate) fn texture_dirs(paths: &[defs::TextureSearchPath]) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn falls_as_its_falling_model_without_its_animations() {
+        let mut view = View::of_models(vec!["Para.nif".into()], Vec::new());
+        assert!(view.falling_view().is_none());
+        view.falling = Some("Chute.nif".into());
+        view.animations.push(Animation {
+            kind: AnimationKind::Idle,
+            ids: "idle".into(),
+            kf: "Para_idle.kf".into(),
+            length: 1.0,
+            walk_distance: None,
+        });
+        let falling = view.falling_view().expect("it falls");
+        assert_eq!(falling.models, ["Chute.nif"]);
+        assert!(falling.animations.is_empty());
+    }
 
     #[test]
     fn textures_take_their_own_models_renames_then_the_search_paths() {

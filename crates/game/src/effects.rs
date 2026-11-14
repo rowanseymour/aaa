@@ -804,7 +804,7 @@ fn play(
             bones: &effects.bones,
             aim: effects.aim,
         };
-        let spotted = place.spot(&p, &mut drawn.0, game);
+        let spotted = place.spot(&p, &mut drawn.0);
         let Some((mut transform, attach)) = spotted else {
             debug!(
                 "{}: nowhere to play at {} {:?}",
@@ -820,7 +820,7 @@ fn play(
         if !detail_allows(vfx.critical, effects.detail, roll) {
             continue;
         }
-        let length = path.and_then(|p| drawn.0.effect_timing(game, p).map(|t| t.length));
+        let length = path.and_then(|p| drawn.0.effect_timing(p).map(|t| t.length));
         let lasts = lifetime(&vfx, cue, length);
         let discard = lasts.is_some() && !vfx.never_discard;
         if discard && !on_screen(camera, transform.translation) {
@@ -861,15 +861,16 @@ fn play(
                 fade: [fade_in(decal.fade[0], p.tick, cue.delay), decal.fade[1]],
                 ..decal.clone()
             };
-            let at = map_point(transform.translation);
-            let facing = map_point(transform.rotation * Vec3::NEG_Z);
             let shown = opacity(decal.fade, 0.0, lasts);
             let cache = &mut effects.decals;
-            let laid = assets.decal(game, cache, &map.ground, decal, at, facing, shown);
+            let laid = assets.decal(game, cache, &map.ground, decal, &transform, shown);
             let Some(laid) = laid else {
                 continue;
             };
-            debug!("{}: {} at {at:?}", cue.vfx, decal.texture);
+            debug!(
+                "{}: {} at {}",
+                cue.vfx, decal.texture, transform.translation
+            );
             let mut entity = commands.spawn((
                 laid,
                 Effect {
@@ -897,7 +898,6 @@ fn play(
         let mut models = assets.models();
         let Some(e) = drawn.0.spawn_effect(
             &mut commands,
-            game,
             &mut models,
             path,
             &vfx.texture_dirs,
@@ -1000,7 +1000,6 @@ impl Place<'_, '_> {
         &self,
         play: &Play,
         models: &mut Models,
-        game: &GameData,
     ) -> Option<(Transform, Option<(Entity, OnThing)>)> {
         let Play {
             cue,
@@ -1041,9 +1040,9 @@ impl Place<'_, '_> {
         };
         let thing = (self.placed)(subject)?;
         let here = map_point(thing.root.translation);
-        let extent = |models: &mut Models, game: &GameData, p: &Placed| {
+        let extent = |models: &mut Models, p: &Placed| {
             let path = models.model_path(p.thing, p.packing)?.to_string();
-            let [bottom, top] = models.extent(game, &path)?;
+            let [bottom, top] = models.extent(&path)?;
             let scale = p.root.scale.y;
             Some([bottom * scale, top * scale])
         };
@@ -1053,7 +1052,7 @@ impl Place<'_, '_> {
                 if !thing.living {
                     return None;
                 }
-                let target_extent = extent(models, game, &thing)?;
+                let target_extent = extent(models, &thing)?;
                 let by = attacker.and_then(self.placed);
                 let across = match &by {
                     Some(a) => {
@@ -1063,7 +1062,7 @@ impl Place<'_, '_> {
                     None => Vec2::from(here),
                 };
                 let height = match by {
-                    Some(a) => hit_height(self.aim, extent(models, game, &a), target_extent),
+                    Some(a) => hit_height(self.aim, extent(models, &a), target_extent),
                     None => hit_height(self.aim, None, target_extent),
                 };
                 let base = thing.root.translation.y;
@@ -1077,9 +1076,7 @@ impl Place<'_, '_> {
                 let weapons = thing.fighter.map_or(&[][..], |f| &f.weapons[..]);
                 let weapon = weapons.get(play.weapon.unwrap_or(0));
                 let turret = weapon.and_then(|w| w.turret_point.as_ref());
-                if let Some(point) =
-                    turret.and_then(|id| self.point(models, game, &thing, id.as_str()))
-                {
+                if let Some(point) = turret.and_then(|id| self.point(models, &thing, id.as_str())) {
                     let on = OnThing {
                         point,
                         offset,
@@ -1111,7 +1108,7 @@ impl Place<'_, '_> {
             }
             _ => {
                 let point = match &cue.location {
-                    Some(id) => match (self.point(models, game, &thing, id), cue.attached) {
+                    Some(id) => match (self.point(models, &thing, id), cue.attached) {
                         (Some(p), _) => p,
                         // Detached, it plays as though it had no location.
                         (None, false) => Transform::IDENTITY,
@@ -1133,16 +1130,10 @@ impl Place<'_, '_> {
 
     /// Where the point a command names by `id` is in the model `thing` is
     /// drawn with now, if it has it.
-    fn point(
-        &self,
-        models: &mut Models,
-        game: &GameData,
-        thing: &Placed,
-        id: &str,
-    ) -> Option<Transform> {
+    fn point(&self, models: &mut Models, thing: &Placed, id: &str) -> Option<Transform> {
         let name = self.bones.get(&Id::from(id)).map_or(id, |n| n);
         let path = models.model_path(thing.thing, thing.packing)?.to_string();
-        models.point(game, &path, name)
+        models.point(&path, name)
     }
 }
 

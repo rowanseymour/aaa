@@ -1390,7 +1390,6 @@ pub fn portray(
     leaders: Res<Leaders>,
     looks: Res<Looks>,
     mut drawn: ResMut<Drawn>,
-    loaded: Res<Loaded>,
     mut assets: MapAssets,
     mut stage: ResMut<Stage>,
     mut asked: bevy::ecs::system::Local<Option<(Sitter, Alone)>>,
@@ -1413,19 +1412,11 @@ pub fn portray(
     if *asked != wanted {
         match &wanted {
             Some((sitter, alone)) => {
-                let (models, game) = (&mut drawn.0, &loaded.game);
+                let models = &mut drawn.0;
                 let assets = &mut assets.models();
                 let greeting = alone.is_some();
                 let sun = suns.iter().next().map_or(Dir3::NEG_Y, |sun| sun.forward());
-                models.sit(
-                    &mut commands,
-                    game,
-                    assets,
-                    &mut stage,
-                    sitter,
-                    greeting,
-                    sun,
-                );
+                models.sit(&mut commands, assets, &mut stage, sitter, greeting, sun);
                 for spawned in stage.spawned() {
                     commands
                         .entity(spawned)

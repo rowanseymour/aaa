@@ -8,7 +8,7 @@ use aaa_map::Ground;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
-use crate::terrain::world;
+use crate::terrain::{map_point, world};
 use crate::{MapAssets, overlay, textures};
 
 /// How much higher each layer of decals lies than the one below, so that
@@ -56,22 +56,27 @@ fn material(decal: &Decal, image: Handle<Image>, opacity: f32) -> StandardMateri
     }
 }
 
+/// Where on the map a decal `placed` lies, and which way the top of its
+/// picture points: where the effect placing it faces.
+fn laid_at(placed: &Transform) -> ([f32; 2], [f32; 2]) {
+    (map_point(placed.translation), map_point(*placed.forward()))
+}
+
 impl MapAssets<'_> {
-    /// What draws `decal` laid at `position` with its picture's top toward
-    /// `facing`, shown as much as `opacity`; `None` where its picture
-    /// can't be read. It's placed where it lies, so that it's drawn in
-    /// its turn among what's blended.
-    #[allow(clippy::too_many_arguments)]
+    /// What draws `decal` laid where `placed` puts it, with its picture's
+    /// top toward where it faces, shown as much as `opacity`; `None` where
+    /// its picture can't be read. It's placed where it lies, so that it's
+    /// drawn in its turn among what's blended.
     pub fn decal(
         &mut self,
         game: &GameData,
         cache: &mut DecalCache,
         ground: &Ground,
         decal: &Decal,
-        position: [f32; 2],
-        facing: [f32; 2],
+        placed: &Transform,
         opacity: f32,
     ) -> Option<impl Bundle + use<>> {
+        let (position, facing) = laid_at(placed);
         let image = match cache.pictures.get(&decal.texture) {
             Some(known) => known.clone(),
             None => {
@@ -106,5 +111,20 @@ impl MapAssets<'_> {
             MeshMaterial3d(material),
             Transform::from_translation(origin),
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::terrain::world;
+
+    #[test]
+    fn decals_lie_under_their_effect_and_point_the_way_it_faces() {
+        let east = world(1.0, 0.0, 0.0);
+        let placed = Transform::from_translation(world(3.0, 4.0, 2.0)).looking_to(east, Vec3::Y);
+        let (position, facing) = laid_at(&placed);
+        assert_eq!(position, [3.0, 4.0]);
+        assert!(Vec2::from(facing).abs_diff_eq(Vec2::X, 1e-6), "{facing:?}");
     }
 }
