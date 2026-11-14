@@ -8,11 +8,11 @@ the real-time strategy game, written in [Rust](https://rust-lang.org) with [Bevy
 It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 
 > [!IMPORTANT]
-> You need your own copy of the game. This project contains no game code or data.
+> You need your own copy of the original game. This project contains none of its code or data.
 
 > [!NOTE]
-> This is not a decompilation of the game: the code is written from scratch, clean-room style.
-> The original game's behavior is written up as specs, and the code here is written only from
+> This is not a decompilation project: the code is written from scratch, clean-room style.
+> The original game's behavior is written up as specs, and the code here is written from
 > those specs, the data files and the game itself, played.
 
 <p>
@@ -36,12 +36,11 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 
 ## Status
 
-Matches play on the original maps against an idle opponent. You can't win or lose yet.
-
 | Feature | Status |
 |---|---|
 | Data files, maps and models | ✅ Read in full |
-| Drawing the game | ✅ Ground, units, animations, effects, the game's own interface |
+| Rendering | ✅ Ground, units, animations, effects |
+| UI | 🟡 Almost complete |
 | Movement and combat | 🟡 Regiments move, fight and take buildings and cities |
 | Economy and supply | 🟡 Income, upkeep, supply and HQs; nothing to build or buy yet |
 | Map editor | 🟡 Views maps; no editing yet |
