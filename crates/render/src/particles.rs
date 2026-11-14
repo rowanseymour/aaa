@@ -23,6 +23,7 @@ use bevy::render::render_resource::{AsBindGroup, TextureFormat};
 use bevy::shader::ShaderRef;
 use nif::{BoolKeys, ControllerKind, EmitterShape, Keys, ModifierKind, Nif, Object};
 
+use crate::loader::TextureSource;
 use crate::models::{Animated, MaterialStores, Part, bevy_transform, controllers};
 use crate::terrain::{self, world};
 use crate::{blend, textures};
@@ -1387,7 +1388,7 @@ const SIDE: usize = 128;
 /// first, for systems with none.
 pub(crate) struct Layers {
     /// By where each was loaded from: none if it couldn't be.
-    by_source: HashMap<String, Option<u32>>,
+    by_source: HashMap<TextureSource, Option<u32>>,
     /// Every layer's pixels and mipmaps, one after another, as the array
     /// takes them.
     data: Vec<u8>,
@@ -1412,7 +1413,7 @@ impl Layers {
     /// time: none if it can't be.
     pub fn layer(
         &mut self,
-        source: &str,
+        source: &TextureSource,
         images: &mut Assets<Image>,
         load: impl FnOnce() -> Option<Image>,
     ) -> Option<u32> {
@@ -1427,7 +1428,7 @@ impl Layers {
             _ = images.insert(&TEXTURES, self.array());
             self.count - 1
         });
-        self.by_source.insert(source.to_string(), layer);
+        self.by_source.insert(source.clone(), layer);
         layer
     }
 
