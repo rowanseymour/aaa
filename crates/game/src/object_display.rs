@@ -451,12 +451,15 @@ pub fn spawn(
 fn wanted(
     sim: &World,
     hqs: &[aaa_sim::Hq],
+    local: Option<u32>,
     selected: &[usize],
     chosen: Option<usize>,
 ) -> Option<Mode> {
     let actor = match (selected, chosen) {
         ([], Some(b)) => {
-            let queue = sim.buildings[b].queue.iter();
+            // Only its side and their allies see what it's commissioning.
+            let queue = (sim.buildings[b].queue.iter())
+                .filter(|_| ours(sim, local, sim.buildings[b].owner));
             Actor::Building(b, queue.map(|c| c.template().to_string()).collect())
         }
         ([], None) => return None,
@@ -627,7 +630,7 @@ pub fn lay_out(
     row: Query<Entity, With<PropertyRow>>,
 ) {
     let hqs = sim.0.hqs();
-    let mode = wanted(&sim.0, &hqs, &selected.0, chosen.0);
+    let mode = wanted(&sim.0, &hqs, local.0, &selected.0, chosen.0);
     let mode = mode.map(|m| {
         let shown = match &showing.0 {
             Some((was, detail)) if holder(&sim.0, was) == holder(&sim.0, &m) => {
