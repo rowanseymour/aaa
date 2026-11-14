@@ -21,6 +21,7 @@
 //! arrows, not letters, move the camera.
 
 mod actions;
+mod backdrop;
 mod banners;
 mod confirm;
 mod console;
@@ -748,7 +749,12 @@ fn main() -> ExitCode {
                 )
             }
         }
-        app.configure_sets(Update, shot::Capture.run_if(console::idle));
+        app.configure_sets(
+            Update,
+            shot::Capture
+                .run_if(console::idle)
+                .run_if(backdrop::settled),
+        );
         // Of the match, not the loading screen before it.
         if once && (map.is_some() || joined.is_some()) {
             app.insert_resource(ShotAfter(shot_after))
@@ -778,7 +784,13 @@ fn main() -> ExitCode {
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .add_systems(PreUpdate, fit_ui)
-        .configure_sets(Update, camera::Controls.run_if(takes_input))
+        // The menu's backdrop has a camera too, which stays put.
+        .configure_sets(
+            Update,
+            camera::Controls
+                .run_if(in_state(Screen::Match))
+                .run_if(takes_input),
+        )
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
@@ -798,6 +810,7 @@ fn main() -> ExitCode {
             ui::UiPlugin,
             confirm::ConfirmPlugin,
             menu::MenuPlugin,
+            backdrop::BackdropPlugin,
             options::OptionsPlugin,
             lobby::LobbyPlugin,
             pause::PausePlugin,

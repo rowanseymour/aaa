@@ -59,9 +59,72 @@ pub fn map_point(v: Vec3) -> [f32; 2] {
 }
 
 /// The ground, blended across terrain types, and the water surface.
-pub struct Built {
+pub(crate) struct Built {
     pub ground: Option<(Mesh, GroundMaterial)>,
     pub water: Option<(Mesh, WaterMaterial)>,
+}
+
+/// What [`prepare`] makes: everything [`Built`] needs but its images'
+/// handles.
+pub struct Prepared {
+    ground: Option<PreparedGround>,
+    water: Option<PreparedWater>,
+}
+
+struct PreparedGround {
+    mesh: Mesh,
+    layers: blend::Layers,
+    textures: Image,
+    masks: Image,
+    fog: Image,
+}
+
+struct PreparedWater {
+    mesh: Mesh,
+    animation: Vec4,
+    frames: Image,
+}
+
+impl Prepared {
+    /// Adds its images and builds the materials.
+    pub(crate) fn finish(self, images: &mut Assets<Image>) -> Built {
+        let ground = self.ground.map(|g| {
+            let material = GroundMaterial {
+                base: StandardMaterial {
+                    perceptual_roughness: 1.0,
+                    reflectance: 0.1,
+                    ..default()
+                },
+                extension: Blend {
+                    layers: g.layers,
+                    textures: images.add(g.textures),
+                    masks: images.add(g.masks),
+                    fog: images.add(g.fog),
+                },
+            };
+            (g.mesh, material)
+        });
+        let water = self.water.map(|w| {
+            let material = WaterMaterial {
+                // Lit without highlights, as the game draws it. Transmission
+                // gives the shader the scene behind to blend over; Blend
+                // keeps it out of the depth buffer, as in the game.
+                base: StandardMaterial {
+                    alpha_mode: AlphaMode::Blend,
+                    specular_transmission: 1.0,
+                    perceptual_roughness: 1.0,
+                    reflectance: 0.0,
+                    ..default()
+                },
+                extension: Water {
+                    animation: w.animation,
+                    frames: images.add(w.frames),
+                },
+            };
+            (w.mesh, material)
+        });
+        Built { ground, water }
+    }
 }
 
 /// Side of each terrain texture in the array.
@@ -80,13 +143,9 @@ struct Kind {
     order: (i32, u16),
 }
 
-pub fn build(
-    game: &GameData,
-    ground: &Ground,
-    terrain: &Terrain,
-    images: &mut Assets<Image>,
-    fade: f32,
-) -> Built {
+/// Builds a map's ground and water, `fade` fading its edge to black, all
+/// but what needs a Bevy world, so it can be done on another thread.
+pub fn prepare(game: &GameData, ground: &Ground, terrain: &Terrain, fade: f32) -> Prepared {
     let variations = game.terrain_variations();
     let side = terrain.side;
 
@@ -164,28 +223,14 @@ pub fn build(
         }
         let fps = animation.map_or(0.0, |a| a.fps);
         let count = frames.len() as f32;
-        (
-            water_mesh(ground, &water, &colors, fade),
-            WaterMaterial {
-                // Lit without highlights, as the game draws it. Transmission
-                // gives the shader the scene behind to blend over; Blend
-                // keeps it out of the depth buffer, as in the game.
-                base: StandardMaterial {
-                    alpha_mode: AlphaMode::Blend,
-                    specular_transmission: 1.0,
-                    perceptual_roughness: 1.0,
-                    reflectance: 0.0,
-                    ..default()
-                },
-                extension: Water {
-                    animation: Vec4::new(WATER_REPEAT, WATER_REPEAT, fps, count),
-                    frames: images.add(blend::texture_array(frames)),
-                },
-            },
-        )
+        PreparedWater {
+            mesh: water_mesh(ground, &water, &colors, fade),
+            animation: Vec4::new(WATER_REPEAT, WATER_REPEAT, fps, count),
+            frames: blend::texture_array(frames),
+        }
     });
     if kinds.is_empty() {
-        return Built {
+        return Prepared {
             ground: None,
             water,
         };
@@ -206,25 +251,17 @@ pub fn build(
         *r = Vec4::new(k.repeat[0], k.repeat[1], 0.0, 0.0);
     }
     let textures = blend::texture_array(kinds.into_iter().map(|k| k.image).collect());
-    let masks = masks.unwrap_or_else(blend::empty_masks);
-    let material = GroundMaterial {
-        base: StandardMaterial {
-            perceptual_roughness: 1.0,
-            reflectance: 0.1,
-            ..default()
-        },
-        extension: Blend {
+    Prepared {
+        ground: Some(PreparedGround {
+            mesh,
             layers: blend::Layers {
                 repeats,
                 edge: Vec4::new(ground.size(), fade, 0.0, 0.0),
             },
-            textures: images.add(textures),
-            masks: images.add(masks),
-            fog: images.add(blend::fog_image(side, vec![255; side * side])),
-        },
-    };
-    Built {
-        ground: Some((mesh, material)),
+            textures,
+            masks: masks.unwrap_or_else(blend::empty_masks),
+            fog: blend::fog_image(side, vec![255; side * side]),
+        }),
         water,
     }
 }
