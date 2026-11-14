@@ -33,6 +33,22 @@ Options the original doesn't offer, all in the Video tab's Basic section:
 - **Interface Scale:** draws the interface larger or smaller, for high-resolution
   screens.
 
+## Multiplayer
+
+Matches between machines work as the original's do: every machine plays its own copy
+of the match, and a host decides what the match is given and when. How the machines
+talk is our own, so this project and the original can't join each other's matches.
+
+- **Protocol.** The messages are ours, not the original's. See
+  [protocol.rs](../crates/server/src/protocol.rs).
+- **Transport.** Machines connect over QUIC, which is encrypted, rather than the
+  original's networking. See [quic.rs](../crates/server/src/quic.rs).
+- **Recorded matches (films).** A match can be recorded and played again, as in the
+  original, which calls a recording a film. Ours are kept in a format of our own, and
+  the original's aren't read. See [film.rs](../crates/server/src/film.rs).
+- **A server with no window.** `aaa-server` hosts a match without playing in it;
+  the original's host is always one of the players.
+
 ## Tools
 
 - **Console.** A command console, also reachable over a local port, for testing and

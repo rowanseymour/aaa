@@ -1,17 +1,23 @@
-//! Plays a match with no window, as fast as it will go.
+//! Plays a match with no window: alone as fast as it will go, as the host
+//! of one for clients elsewhere, or as such a client.
 
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
+use std::time::{Duration, Instant};
 
 use aaa_data::GameData;
-use aaa_server::{Film, Setup};
-use aaa_sim::{Schedule, TICK, World};
+use aaa_server::{Client, Event, Film, Host, Setup, quic};
+use aaa_sim::{Record, Schedule, TICK, World};
 
 const USAGE: &str = "\
 usage:
   aaa-server <game dir> <map> [options]    play a map, e.g. \"allies10_berlin\"
   aaa-server <game dir> --replay <file>    play a film again, checking that it
                                            plays out as it did
+  aaa-server <game dir> --join <address>   play a copy of the match hosted at
+                                           an address, e.g. 127.0.0.1:4000,
+                                           until its host goes
 
 options:
   --seed <number>     what the match's chances are drawn from, rather than
@@ -20,7 +26,13 @@ options:
                       longest film it plays again; 60 unless given
   --fog <setting>     none, explored or full: how much of the map the fog of
                       war hides, rather than the game's default
-  --film <file>       where to keep the match as a film";
+  --film <file>       where to keep the match as a film
+  --host <address>    host the match at an address, e.g. 0.0.0.0:4000, for
+                      clients that join, playing it at its own speed
+  --clients <number>  how many clients a hosted match waits for before it
+                      begins; 1 unless given
+  --players <ids>     with --join, the players to give the orders of, by id,
+                      e.g. 1,2; none unless given";
 
 /// The most seconds of a match it plays, so that a film whose length was
 /// damaged doesn't keep it playing for good.
@@ -30,10 +42,20 @@ const LONGEST: f32 = 36000.0;
 #[derive(Debug)]
 enum Asked {
     /// Play the match for this many seconds, keeping it as a film in a
-    /// file if one's named.
-    Play(Setup, f32, Option<String>),
+    /// file if one's named, and hosting it if it's to be.
+    Play(Setup, f32, Option<String>, Option<Hosting>),
+    /// Play a copy of the match hosted at this address, asking for these
+    /// players.
+    Join(SocketAddr, Vec<u32>),
     /// Play the film in this file again.
     Replay(String),
+}
+
+/// Where a match is hosted, and how many clients it waits for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Hosting {
+    at: SocketAddr,
+    clients: usize,
 }
 
 /// Removes `flag` and the value after it from `args`; an error if the
@@ -56,6 +78,28 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
         let [dir] = <[String; 1]>::try_from(args).map_err(|_| ())?;
         return Ok((dir, Asked::Replay(film)));
     }
+    if let Some(at) = take_option(&mut args, "--join")? {
+        let players = match take_option(&mut args, "--players")? {
+            Some(ids) => {
+                (ids.split(',').map(str::parse).collect::<Result<_, _>>()).map_err(|_| ())?
+            }
+            None => Vec::new(),
+        };
+        let [dir] = <[String; 1]>::try_from(args).map_err(|_| ())?;
+        return Ok((dir, Asked::Join(at.parse().map_err(|_| ())?, players)));
+    }
+    let clients = match take_option(&mut args, "--clients")? {
+        Some(n) => Some(n.parse().ok().filter(|&n| n > 0).ok_or(())?),
+        None => None,
+    };
+    let hosting = match (take_option(&mut args, "--host")?, clients) {
+        (Some(at), clients) => Some(Hosting {
+            at: at.parse().map_err(|_| ())?,
+            clients: clients.unwrap_or(1),
+        }),
+        (None, Some(_)) => return Err(()),
+        (None, None) => None,
+    };
     let seed = match take_option(&mut args, "--seed")? {
         Some(n) => n.parse().map_err(|_| ())?,
         None => aaa_server::fresh_seed(),
@@ -76,7 +120,61 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
         fog,
         ..Default::default()
     };
-    Ok((dir, Asked::Play(setup, seconds.ok_or(())?, film)))
+    Ok((dir, Asked::Play(setup, seconds.ok_or(())?, film, hosting)))
+}
+
+/// How long it sleeps between looks at what's come over a link, with
+/// nothing else to do.
+const IDLE: Duration = Duration::from_millis(10);
+
+/// Hosts the match `world`, which `setup` set up, as `hosting` says: once
+/// its clients have joined, plays `ticks` ticks of it in step with them at
+/// the speed it's given, or until they've all gone. Returns its copy as it
+/// ends up and what it was given.
+fn host(
+    setup: Setup,
+    world: World,
+    ticks: u64,
+    hosting: Hosting,
+) -> Result<(World, Record), String> {
+    let mut listener = quic::listen(hosting.at)?;
+    eprintln!("hosting at {}", listener.at()?);
+    let mut host = Host::new(setup, world);
+    let mut greet = |host: &mut Host<quic::Remote>| {
+        while let Some(link) = listener.accept() {
+            host.greet(link);
+        }
+        for seated in host.seat() {
+            match seated {
+                Ok(client) => eprintln!("client {client} joined"),
+                Err(refusal) => eprintln!("a client wasn't let in: {refusal:?}"),
+            }
+        }
+    };
+    let said = |event| match event {
+        Event::Left(client) => eprintln!("client {client} left"),
+        Event::Diverged { client, step } => {
+            eprintln!("client {client}'s copy stopped matching by tick {step}")
+        }
+    };
+    while host.clients() < hosting.clients {
+        greet(&mut host);
+        host.wait().into_iter().for_each(said);
+        std::thread::sleep(IDLE);
+    }
+    let (began, mut due) = (Instant::now(), Duration::ZERO);
+    while host.world().ticks < ticks && host.clients() > 0 {
+        host.turn().into_iter().for_each(said);
+        // Only to tell those that come now that they're too late.
+        greet(&mut host);
+        due += Duration::from_secs_f32(TICK / host.schedule().speed());
+        std::thread::sleep(due.saturating_sub(began.elapsed()));
+    }
+    // Its links go before what carries them, which sees that what they
+    // were sent gets there.
+    let finished = host.finish();
+    drop(listener);
+    Ok(finished)
 }
 
 /// Does what's `asked` with the game in `dir`, returning the match as it
@@ -84,21 +182,49 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
 fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
     let game = GameData::open(Path::new(dir))?;
     match asked {
-        Asked::Play(setup, seconds, film) => {
+        Asked::Play(setup, seconds, film, hosting) => {
             let found = game.find_map(&setup.map);
             let map = found.ok_or_else(|| format!("no map \"{}\"", setup.map))?;
             let setup = Setup { map, ..setup };
-            let mut world = aaa_server::start(&game, &setup, || {})?.world;
-            let mut schedule = Schedule::default();
-            for _ in 0..(seconds / TICK).round() as u64 {
-                schedule.step(&mut world);
-            }
+            let world = aaa_server::start(&game, &setup, || {})?.world;
+            let ticks = (seconds / TICK).round() as u64;
+            let (world, record) = match hosting {
+                Some(hosting) => host(setup.clone(), world, ticks, hosting)?,
+                None => {
+                    let (mut world, mut schedule) = (world, Schedule::default());
+                    for _ in 0..ticks {
+                        schedule.step(&mut world);
+                    }
+                    (world, schedule.record().clone())
+                }
+            };
             let seed = setup.seed;
             if let Some(path) = film {
-                let record = schedule.record().clone();
                 Film { setup, record }.write(Path::new(&path))?;
             }
             Ok((world, seed))
+        }
+        Asked::Join(at, players) => {
+            let mut link = quic::connect(at)?;
+            let lost = |_| format!("{at}: the host has gone");
+            aaa_server::join(&mut link, players).map_err(lost)?;
+            let welcome = loop {
+                match aaa_server::welcome(&mut link) {
+                    Ok(Some(welcome)) => break welcome,
+                    Ok(None) => std::thread::sleep(IDLE),
+                    Err(e) => return Err(format!("{at}: not let in: {e:?}")),
+                }
+            };
+            eprintln!("joined as client {}", welcome.client);
+            let mut world = aaa_server::start(&game, &welcome.setup, || {})?.world;
+            let mut client = Client::new(link);
+            while client.advance(&mut world, usize::MAX).is_ok() {
+                std::thread::sleep(IDLE);
+            }
+            for (client, step) in client.diverged() {
+                eprintln!("client {client}'s copy stopped matching the host's by tick {step}");
+            }
+            Ok((world, welcome.setup.seed))
         }
         Asked::Replay(path) => {
             let film = Film::read(Path::new(&path))?;
@@ -179,18 +305,19 @@ mod tests {
             "--film",
             "out.film",
         ]));
-        let (dir, Asked::Play(setup, seconds, film)) = asked.unwrap() else {
+        let (dir, Asked::Play(setup, seconds, film, hosting)) = asked.unwrap() else {
             panic!("not a match to play");
         };
         assert_eq!((dir.as_str(), setup.map.as_str()), ("game", "berlin"));
         assert_eq!((setup.seed, seconds), (7, 5.0));
         assert_eq!(film.as_deref(), Some("out.film"));
-        let (_, Asked::Play(setup, seconds, film)) =
+        assert_eq!(hosting, None);
+        let (_, Asked::Play(setup, seconds, film, hosting)) =
             super::asked(args(&["game", "berlin"])).unwrap()
         else {
             panic!("not a match to play");
         };
-        assert!(setup.fog.is_none() && film.is_none());
+        assert!(setup.fog.is_none() && film.is_none() && hosting.is_none());
         assert_eq!(seconds, 60.0);
     }
 
@@ -199,6 +326,33 @@ mod tests {
         let (dir, asked) = asked(args(&["--replay", "out.film", "game"])).unwrap();
         assert!(matches!(asked, Asked::Replay(film) if film == "out.film"));
         assert_eq!(dir, "game");
+    }
+
+    #[test]
+    fn a_match_is_hosted_at_an_address_or_joined_at_one() {
+        let hosted = |words: &[&str]| match asked(args(words)) {
+            Ok((_, Asked::Play(_, _, _, hosting))) => hosting,
+            _ => panic!("not a match to play"),
+        };
+        let at: SocketAddr = "127.0.0.1:4000".parse().unwrap();
+        let hosting = hosted(&["game", "berlin", "--host", "127.0.0.1:4000"]);
+        assert_eq!(hosting, Some(Hosting { at, clients: 1 }));
+        let words = [
+            "game",
+            "--clients",
+            "3",
+            "berlin",
+            "--host",
+            "127.0.0.1:4000",
+        ];
+        assert_eq!(hosted(&words), Some(Hosting { at, clients: 3 }));
+        let joined = |words: &[&str]| match asked(args(words)) {
+            Ok((_, Asked::Join(at, players))) => (at, players),
+            _ => panic!("not a match to join"),
+        };
+        assert_eq!(joined(&["game", "--join", "127.0.0.1:4000"]), (at, vec![]));
+        let words = ["--players", "1,12", "game", "--join", "127.0.0.1:4000"];
+        assert_eq!(joined(&words), (at, vec![1, 12]));
     }
 
     #[test]
@@ -213,6 +367,19 @@ mod tests {
             &["game", "berlin", "--film"],
             &["game", "berlin", "--replay", "out.film"],
             &["--replay", "out.film"],
+            &["game", "berlin", "--host", "nowhere"],
+            &["game", "berlin", "--clients", "2"],
+            &[
+                "game",
+                "berlin",
+                "--host",
+                "127.0.0.1:4000",
+                "--clients",
+                "0",
+            ],
+            &["game", "berlin", "--join", "127.0.0.1:4000"],
+            &["game", "--join", "127.0.0.1:4000", "--players", "1,two"],
+            &["game", "--join", "127.0.0.1:4000", "--seed", "3"],
         ] {
             assert!(asked(args(words)).is_err(), "{words:?}");
         }
