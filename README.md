@@ -12,9 +12,9 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 > You need your own copy of the original game. This project contains none of its code or data.
 
 > [!NOTE]
-> This is not a decompilation project: the code is written from scratch, clean-room style.
-> The original game's behavior is written up as specs, and the code here is written from
-> those specs, the data files and the game itself, played.
+> This is a clean-room reimplementation rather than a recompilation: it reproduces the
+> original game's behavior, not its code. That behavior is written up as specs, and the code
+> here is written from those specs, the data files and the game itself, played.
 
 <p>
 <a href="docs/screenshots/normandy.jpg"><img src="docs/screenshots/normandy.jpg" width="32%" alt="A match on the Normandy map"></a>
