@@ -64,13 +64,15 @@ pub fn confirm<M>(
 ) {
     let asked = ask(commands, screen, question);
     offer(commands, asked, words.ok.clone(), "confirm.ok", ok);
-    offer(
+    let cancel = offer(
         commands,
         asked,
         words.cancel.clone(),
         "confirm.cancel",
         nothing,
     );
+    // Escape answers Cancel, so it's the one marked as the default.
+    commands.entity(cancel).insert(ui::Chosen(true));
 }
 
 /// What an answer that only takes its question down does.
@@ -100,9 +102,11 @@ pub fn ask(commands: &mut Commands, screen: Screen, question: impl Into<String>)
                     align_items: AlignItems::Center,
                     padding: UiRect::all(px(32)),
                     row_gap: px(32),
+                    border: UiRect::all(px(1)),
                     ..default()
                 },
             ),
+            ui::Edge::Card,
         ))
         .id();
     commands.spawn((ui::text(question, Font::Question), ChildOf(dialog)));
@@ -127,7 +131,7 @@ pub fn offer<M>(
     words: String,
     id: &str,
     then: impl IntoEntityObserver<M>,
-) {
+) -> Entity {
     let Asked { root, row } = asked;
     // Already gone if Escape or another answer took it down this frame.
     let dismiss = move |_: On<Activate>, mut commands: Commands| {
@@ -136,7 +140,8 @@ pub fn offer<M>(
     commands
         .spawn((answer(words), ui::called(id), ChildOf(row)))
         .observe(then)
-        .observe(dismiss);
+        .observe(dismiss)
+        .id()
 }
 
 /// A [`ui::button`] sharing its row equally with the other answers.

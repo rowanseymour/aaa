@@ -75,7 +75,7 @@ impl Theme {
             Surface::Hud => see_through(0.85),
             Surface::Popup => see_through(0.7),
             Surface::Slot => see_through(0.6),
-            Surface::Scrim => see_through(0.4),
+            Surface::Scrim => see_through(0.7),
             Surface::Panel => lit(0.07),
             Surface::Track => lit(0.1),
             Surface::Button => lit(0.12),
