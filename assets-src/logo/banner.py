@@ -7,7 +7,12 @@ import random, subprocess, sys
 logo, out, tmp = sys.argv[1], sys.argv[2], sys.argv[3]
 random.seed(1)
 W = int(sys.argv[4])          # canvas width at the logo's scale; height is the logo's
-L = (W - 1024) // 2
+# The logo is enlarged until only these rows of it fill the height: the ring
+# runs off the top and bottom, the figures inside it don't.
+T, B = 108, 916
+Z = 1024 / (B - T)
+LW = round(1024 * Z)
+L = (W - LW) // 2
 P, F = 150, 30
 src = [(22, 22), (852, 22), (22, 852), (852, 852)]
 ops = ["-rotate 0", "-rotate 90", "-rotate 180", "-rotate 270", "-flop", "-flip", "-transpose", "-transverse"]
@@ -20,7 +25,7 @@ for i, (x, y) in enumerate(src):
 det = [f"magick -size {W}x1024 xc:gray50"]
 for _ in range(2600 * W // 3072):
     x, y = random.randint(-P // 2, W - P // 2), random.randint(-P // 2, 1024 - P // 2)
-    if L + 150 < x < L + 1024 - 150 - P:
+    if L + 150 * Z < x < L + LW - (150 + P) * Z:
         continue
     det.append(f"{tmp}/p{random.randrange(4)}{random.randrange(8)}.png -geometry +{x}+{y} -compose over -composite")
 det.append(f"{tmp}/detail.png")
@@ -38,7 +43,7 @@ for k, x in enumerate(range(0, W, 704)):
     f = "-flop" if k % 2 else ""
     cmd.append(f"\\( {tmp}/top.png {f} \\) -geometry +{x}+0 -composite \\( {tmp}/bot.png {f} \\) -geometry +{x}+954 -composite")
 cmd.append(f"{tmp}/left.png -geometry +0+0 -composite {tmp}/right.png -geometry +{W-70}+0 -composite")
-run(f"magick -size 1024x1024 xc:black -fill white -draw 'rectangle 110,70 913,953' -blur 0x35 {tmp}/lmask.png")
-cmd.append(f"\\( {logo} {tmp}/lmask.png -alpha off -compose copyopacity -composite \\) -geometry +{L}+0 -compose over -composite")
+run(f"magick -size {LW}x1024 xc:black -fill white -draw 'rectangle {round(110 * Z)},-100 {round(913 * Z)},1124' -blur 0x{round(35 * Z)} {tmp}/lmask.png")
+cmd.append(f"\\( {logo} -filter Lanczos -resize {LW}x{LW} -crop {LW}x1024+0+{round(T * Z)} +repage {tmp}/lmask.png -alpha off -compose copyopacity -composite \\) -geometry +{L}+0 -compose over -composite")
 cmd.append(f"-resize 1800x -strip -quality 88 {out}")
 run(" ".join(cmd))
