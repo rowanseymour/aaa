@@ -108,7 +108,6 @@ options:
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
     MainMenu,
-    NewGame,
     Options,
     Lobby,
     Loading,
