@@ -1736,3 +1736,56 @@ fn reads_a_camera_and_what_follows_it() {
     assert!(!camera.orthographic);
     assert!(matches!(&nif.objects[2], Object::Node(n) if n.av.name == "after"));
 }
+
+#[test]
+fn setting_a_cycle_keeps_the_other_flags() {
+    let mut c = Controller {
+        kind: ControllerKind::Keyframe,
+        modifier: String::new(),
+        next: None,
+        flags: 0x2c,
+        frequency: 1.0,
+        phase: 0.0,
+        start: 0.0,
+        stop: 1.0,
+        target: None,
+        data: None,
+    };
+    assert_eq!((c.cycle(), c.active()), (Cycle::Clamp, true));
+    c.set_cycle(Cycle::Loop);
+    assert_eq!((c.cycle(), c.flags), (Cycle::Loop, 0x28));
+    c.set_cycle(Cycle::Reverse);
+    assert_eq!(c.cycle(), Cycle::Reverse);
+}
+
+#[test]
+fn stored_numbers_read_as_what_they_mean() {
+    let pixels = |format| Pixels {
+        format,
+        mipmaps: Vec::new(),
+        data: Vec::new(),
+    };
+    let formats = [0, 1, 2, 3, 4, 5, 6, 7].map(|f| pixels(f).pixel_format());
+    use PixelFormat::*;
+    assert_eq!(
+        formats,
+        [Rgb, Rgba, Palette, Palette, Dxt1, Dxt3, Dxt5, Other(7)]
+    );
+
+    let colours = |vertex_mode, lighting| VertexColor {
+        vertex_mode,
+        lighting,
+    };
+    let read = |v: VertexColor| (v.stand_for(), v.lit());
+    assert_eq!(read(colours(0, 0)), (VertexColors::Ignored, false));
+    assert_eq!(read(colours(1, 1)), (VertexColors::Emissive, true));
+    assert_eq!(read(colours(2, 1)), (VertexColors::AmbientDiffuse, true));
+
+    let alpha = |source: u16| Alpha {
+        flags: 1 | (source << 1),
+        threshold: 0,
+    };
+    let sources = [0, 2, 6, 7].map(|s| alpha(s).source());
+    use BlendFactor as F;
+    assert_eq!(sources, [F::One, F::Color, F::Alpha, F::Other(7)]);
+}

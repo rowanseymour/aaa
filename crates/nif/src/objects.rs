@@ -201,6 +201,14 @@ pub struct TextureSlot {
     pub placement: Option<TexturePlacement>,
 }
 
+impl Texturing {
+    /// Whether the base texture is drawn instead of the colour beneath it,
+    /// rather than combined with it.
+    pub fn replaces(&self) -> bool {
+        self.apply_mode == 0
+    }
+}
+
 /// How a texture slot moves, turns and stretches its texture.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TexturePlacement {
@@ -225,11 +233,37 @@ pub struct SourceTexture {
 /// A texture stored inside the model.
 #[derive(Debug, Clone)]
 pub struct Pixels {
-    /// 0: RGB, 1: RGBA, 2-3: palette, 4-6: DXT1, DXT3, DXT5.
+    /// As stored; [`Pixels::pixel_format`] says what it means.
     pub format: u32,
     /// Width, height and byte offset of each level, largest first.
     pub mipmaps: Vec<[u32; 3]>,
     pub data: Vec<u8>,
+}
+
+/// How a [`Pixels`] stores its texels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PixelFormat {
+    Rgb,
+    Rgba,
+    Palette,
+    Dxt1,
+    Dxt3,
+    Dxt5,
+    Other(u32),
+}
+
+impl Pixels {
+    pub fn pixel_format(&self) -> PixelFormat {
+        match self.format {
+            0 => PixelFormat::Rgb,
+            1 => PixelFormat::Rgba,
+            2 | 3 => PixelFormat::Palette,
+            4 => PixelFormat::Dxt1,
+            5 => PixelFormat::Dxt3,
+            6 => PixelFormat::Dxt5,
+            n => PixelFormat::Other(n),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -261,11 +295,27 @@ impl Alpha {
     pub fn adds(&self) -> bool {
         (self.flags >> 5) & 0xf == 0
     }
-    /// What the colour drawn is scaled by: 0 one, 2 the colour itself, 6
-    /// its alpha, and so on through the usual blend factors.
-    pub fn source(&self) -> u16 {
-        (self.flags >> 1) & 0xf
+    /// What the colour drawn is scaled by.
+    pub fn source(&self) -> BlendFactor {
+        match (self.flags >> 1) & 0xf {
+            0 => BlendFactor::One,
+            2 => BlendFactor::Color,
+            6 => BlendFactor::Alpha,
+            n => BlendFactor::Other(n),
+        }
     }
+}
+
+/// What a colour is scaled by as it's blended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlendFactor {
+    One,
+    /// The colour itself.
+    Color,
+    /// The colour's alpha.
+    Alpha,
+    /// One of the other usual blend factors, by number.
+    Other(u16),
 }
 
 #[derive(Debug, Clone)]
@@ -296,11 +346,34 @@ pub struct Stencil {
 /// How a shape's vertex colours and lights combine.
 #[derive(Debug, Clone)]
 pub struct VertexColor {
-    /// What the vertex colours stand for: 0 nothing, 1 emissive, 2
-    /// ambient and diffuse.
+    /// As stored; [`VertexColor::stand_for`] says what it means.
     pub vertex_mode: u32,
-    /// 0 for emissive light only, 1 for emissive, ambient and diffuse.
+    /// As stored; [`VertexColor::lit`] says what it means.
     pub lighting: u32,
+}
+
+/// What a shape's vertex colours stand for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VertexColors {
+    Ignored,
+    Emissive,
+    AmbientDiffuse,
+}
+
+impl VertexColor {
+    pub fn stand_for(&self) -> VertexColors {
+        match self.vertex_mode {
+            1 => VertexColors::Emissive,
+            2 => VertexColors::AmbientDiffuse,
+            _ => VertexColors::Ignored,
+        }
+    }
+
+    /// Whether ambient and diffuse light reach the shape, not just its
+    /// emissive colour.
+    pub fn lit(&self) -> bool {
+        self.lighting == 1
+    }
 }
 
 impl Stencil {
@@ -715,6 +788,43 @@ pub struct Controller {
     pub stop: f32,
     pub target: Ref,
     pub data: Ref,
+}
+
+/// What a controller does once its time passes its stop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cycle {
+    /// Starts over.
+    Loop,
+    /// Plays backwards to the start, then forwards again.
+    Reverse,
+    /// Holds the end.
+    Clamp,
+}
+
+impl Controller {
+    /// Whether it plays at all.
+    pub fn active(&self) -> bool {
+        self.flags & 8 != 0
+    }
+
+    /// The value no cycle is stored as reads as [`Cycle::Loop`], as it
+    /// plays.
+    pub fn cycle(&self) -> Cycle {
+        match (self.flags >> 1) & 3 {
+            1 => Cycle::Reverse,
+            2 => Cycle::Clamp,
+            _ => Cycle::Loop,
+        }
+    }
+
+    pub fn set_cycle(&mut self, cycle: Cycle) {
+        let bits = match cycle {
+            Cycle::Loop => 0,
+            Cycle::Reverse => 1,
+            Cycle::Clamp => 2,
+        };
+        self.flags = (self.flags & !6) | (bits << 1);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
