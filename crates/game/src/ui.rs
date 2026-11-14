@@ -378,8 +378,18 @@ pub fn text(words: impl Into<String>, size: Font) -> impl Bundle {
     label(words, size, Ink::Body)
 }
 
+/// A side's colour, laid out as `node`; where that leaves its height
+/// unset, it's as tall as the row it's in.
+pub fn swatch([red, green, blue]: [f32; 3], node: Node) -> impl Bundle {
+    (
+        node,
+        BackgroundColor(Color::srgb(red, green, blue)),
+        Pickable::IGNORE,
+    )
+}
+
 /// A [`panel`]'s corners.
-const CORNER: f32 = 12.0;
+pub const CORNER: f32 = 12.0;
 
 /// The box the interface's boxes are built on: a background for what it's
 /// for, laid out and shaped as `node`, such as the minimap's disc or a strip
