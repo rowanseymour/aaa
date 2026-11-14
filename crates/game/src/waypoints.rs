@@ -213,7 +213,6 @@ pub fn mark(
             let mut models = assets.models();
             let spawned = drawn.0.spawn_effect(
                 &mut commands,
-                &loaded.game,
                 &mut models,
                 &marking.model,
                 &[],
@@ -276,7 +275,6 @@ pub fn rally(
     let mut models = assets.models();
     let spawned = drawn.0.spawn_effect(
         &mut commands,
-        &loaded.game,
         &mut models,
         model,
         &[],

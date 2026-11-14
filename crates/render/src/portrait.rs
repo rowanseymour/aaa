@@ -2,7 +2,7 @@
 //! model holds, or a thing's whole model fitted to the picture, drawn to an
 //! image of its own, apart from the map.
 
-use aaa_data::{AnimationKind, GameData, Id};
+use aaa_data::{AnimationKind, Id};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Exposure, RenderTarget};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
@@ -213,11 +213,9 @@ impl Models {
     /// The first to sit is lit from `sun`, the way the map's sun shines,
     /// and so are all after. False if it has no model that can be drawn,
     /// which leaves the stage empty.
-    #[allow(clippy::too_many_arguments)]
     pub fn sit(
         &mut self,
         commands: &mut Commands,
-        game: &GameData,
         assets: &mut ModelAssets,
         stage: &mut Stage,
         sitter: &Sitter,
@@ -237,10 +235,8 @@ impl Models {
             commands.spawn((light, shining, layer)).id()
         });
         let placed = match sitter {
-            Sitter::Face(id) => self.sit_face(commands, game, assets, stage, id, greeting),
-            Sitter::Model { template, owner } => {
-                self.sit_model(commands, game, assets, template, *owner)
-            }
+            Sitter::Face(id) => self.sit_face(commands, assets, stage, id, greeting),
+            Sitter::Model { template, owner } => self.sit_model(commands, assets, template, *owner),
         };
         let Some((root, seen)) = placed else {
             return false;
@@ -273,7 +269,6 @@ impl Models {
     fn sit_face(
         &mut self,
         commands: &mut Commands,
-        game: &GameData,
         assets: &mut ModelAssets,
         stage: &mut Stage,
         id: &Id,
@@ -281,14 +276,14 @@ impl Models {
     ) -> Option<(Entity, Seen)> {
         let portrait = self.portraits.get(id)?.clone();
         let path = portrait.view.models.first()?.clone();
-        let seen = self.measures(game, &path)?.camera?;
+        let seen = self.measures(&path)?.camera?;
         let view = &portrait.view;
         let plays = Plays {
             idle: idle(view),
             moving: None,
             once: |a| a.kind != AnimationKind::Idle,
         };
-        let model = self.model(game, assets, &path, view, plays)?;
+        let model = self.model(assets, &path, view, plays)?;
         let root = commands
             .spawn((
                 Name::new(path),
@@ -331,15 +326,14 @@ impl Models {
     fn sit_model(
         &mut self,
         commands: &mut Commands,
-        game: &GameData,
         assets: &mut ModelAssets,
         template: &str,
         owner: Option<u32>,
     ) -> Option<(Entity, Seen)> {
         let view = self.view(template)?.clone();
         let path = view.models.first()?.clone();
-        let extent = self.measures(game, &path)?.extent?;
-        let model = self.model(game, assets, &path, &view, Plays::unit(&view, None))?;
+        let extent = self.measures(&path)?.extent?;
+        let model = self.model(assets, &path, &view, Plays::unit(&view, None))?;
         let root = commands
             .spawn((
                 Name::new(path),

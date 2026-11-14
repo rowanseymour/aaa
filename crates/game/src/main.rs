@@ -389,7 +389,6 @@ struct TrailerView {
 fn spawn_unit_view(
     commands: &mut Commands,
     models: &mut Models,
-    game: &GameData,
     assets: &mut ModelAssets,
     ground: &Ground,
     thing: &Thing,
@@ -408,7 +407,7 @@ fn spawn_unit_view(
             t.position,
             t.facing,
         );
-        if let Some(e) = models.spawn_object(commands, game, assets, &towed, Some(owner)) {
+        if let Some(e) = models.spawn_object(commands, assets, &towed, Some(owner)) {
             let conform = models.conform(t.template.as_str());
             commands.entity(e).insert(TrailerView {
                 unit,
@@ -417,7 +416,7 @@ fn spawn_unit_view(
             });
         }
     }
-    let Some(e) = models.spawn_unit(commands, game, assets, thing, owner, speed) else {
+    let Some(e) = models.spawn_unit(commands, assets, thing, owner, speed) else {
         return false;
     };
     commands.entity(e).insert(UnitView {
@@ -1274,7 +1273,6 @@ fn setup(
         if !spawn_unit_view(
             &mut commands,
             &mut models,
-            game,
             &mut model_assets,
             &map.ground,
             &thing,
@@ -1297,7 +1295,6 @@ fn setup(
         let thing = stored[&b.id];
         match models.spawn_object(
             &mut commands,
-            game,
             &mut assets.models(),
             thing,
             aaa_map::owner(thing),
@@ -1495,7 +1492,7 @@ fn spawn_views(
     mut viewed: ResMut<Viewed>,
     mut assets: MapAssets,
 ) {
-    let Loaded { game, map } = &*loaded;
+    let map = &loaded.map;
     for u in viewed.units..sim.0.units.len() {
         let unit = &sim.0.units[u];
         let regiment = &sim.0.regiments[unit.regiment];
@@ -1511,7 +1508,6 @@ fn spawn_views(
         spawn_unit_view(
             &mut commands,
             &mut drawn.0,
-            game,
             &mut models,
             &map.ground,
             &thing,
@@ -1532,13 +1528,11 @@ fn spawn_views(
             building.facing,
         );
         let mut models = assets.models();
-        let Some(e) = drawn.0.spawn_object(
-            &mut commands,
-            game,
-            &mut models,
-            &thing,
-            Some(building.owner),
-        ) else {
+        let Some(e) =
+            drawn
+                .0
+                .spawn_object(&mut commands, &mut models, &thing, Some(building.owner))
+        else {
             continue;
         };
         let [x, y, z] = thing.position;
@@ -1580,7 +1574,6 @@ fn clear_scenery(
 fn show_packing(
     mut commands: Commands,
     sim: Res<Sim>,
-    loaded: Res<Loaded>,
     mut drawn: ResMut<Drawn>,
     mut assets: MapAssets,
     mut views: Query<(&mut BuildingView, &MapObject, &mut Visibility)>,
@@ -1607,7 +1600,6 @@ fn show_packing(
             let mut models = assets.models();
             let spawned = drawn.0.spawn_packing(
                 &mut commands,
-                &loaded.game,
                 &mut models,
                 &object.0,
                 building.owner,

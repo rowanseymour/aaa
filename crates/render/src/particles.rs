@@ -14,6 +14,7 @@ use std::sync::Arc;
 
 use bevy::asset::{AssetMut, RenderAssetUsages, uuid_handle};
 use bevy::camera::visibility::{NoFrustumCulling, RenderLayers};
+use bevy::ecs::system::SystemParam;
 use bevy::light::NotShadowCaster;
 use bevy::math::Affine3A;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -1566,6 +1567,14 @@ type SystemLook = (
     Option<&'static RenderLayers>,
 );
 
+/// The assets [`draw`] makes and changes.
+#[derive(SystemParam)]
+pub struct DrawStores<'w> {
+    meshes: ResMut<'w, Assets<Mesh>>,
+    images: ResMut<'w, Assets<Image>>,
+    materials: ResMut<'w, Assets<ParticleMaterial>>,
+}
+
 /// What [`draw`] needs of a camera.
 type CameraLook = (
     &'static Camera,
@@ -1577,17 +1586,19 @@ type CameraLook = (
 /// once visibility is propagated, so hidden systems are left out, and
 /// before what each camera sees is worked out, so a new mesh is drawn at
 /// once.
-#[allow(clippy::too_many_arguments)]
 pub fn draw(
     mut commands: Commands,
     mut draws: ResMut<Draws>,
     systems: Query<SystemLook, Without<ParticleMesh>>,
     cameras: Query<CameraLook, Cameras>,
     mut placed: Query<(&mut Transform, &mut GlobalTransform), With<ParticleMesh>>,
-    mut meshes: ResMut<Assets<Mesh>>,
-    mut images: ResMut<Assets<Image>>,
-    mut materials: ResMut<Assets<ParticleMaterial>>,
+    mut stores: DrawStores,
 ) {
+    let DrawStores {
+        meshes,
+        images,
+        materials,
+    } = &mut stores;
     let textures = match images.get(&TEXTURES) {
         Some(image) => image.texture_descriptor.size.depth_or_array_layers,
         None => {
@@ -1641,7 +1652,7 @@ pub fn draw(
         let i = match draws.iter().position(|d| d.layers.as_ref() == layers) {
             Some(i) => i,
             None => {
-                let mut draw = spawn_draw(&mut commands, &mut meshes, material, layers);
+                let mut draw = spawn_draw(&mut commands, meshes, material, layers);
                 draw.view = eye(layers);
                 draws.push(draw);
                 draws.len() - 1

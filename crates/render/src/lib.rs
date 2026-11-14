@@ -23,6 +23,8 @@ pub mod water;
 
 pub use rig::Playing;
 
+use std::sync::Arc;
+
 use aaa_data::GameData;
 use aaa_map::Map;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
@@ -179,7 +181,7 @@ impl MapAssets<'_> {
 pub fn spawn_map(
     commands: &mut Commands,
     assets: &mut MapAssets,
-    game: &GameData,
+    game: &Arc<GameData>,
     map: &Map,
     markers: bool,
     leave_out: impl Fn(&Thing) -> bool,
@@ -216,14 +218,19 @@ pub fn spawn_map(
         ));
     }
     let biome = &map.terrain.biome;
-    let mut models = Models::new(game, assets.formats.0, &map.players, pickable, biome);
+    let mut models = Models::new(
+        game.clone(),
+        assets.formats.0,
+        &map.players,
+        pickable,
+        biome,
+    );
     let holding: std::collections::HashSet<u32> = (map.roles())
         .filter(|(_, role)| *role == aaa_map::Role::HoldsBuilding)
         .map(|(t, _)| t.id)
         .collect();
     let rest = models.spawn(
         commands,
-        game,
         &mut assets.models(),
         map.things.iter().filter(|t| !leave_out(t)),
         &holding,

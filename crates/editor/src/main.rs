@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use aaa_data::GameData;
 use aaa_map::Map;
@@ -56,7 +57,7 @@ struct Lighting {
 
 #[derive(Resource)]
 struct Loaded {
-    game: GameData,
+    game: Arc<GameData>,
     map: Map,
 }
 
@@ -171,7 +172,12 @@ fn main() -> ExitCode {
             .find_map(map)
             .ok_or_else(|| format!("no map named {map:?}; run without a map name to list them"))?;
         let recruits = aaa_map::Recruits::new(&game);
-        Map::load(&game, &recruits, &name).map(|map| Some(Loaded { game, map }))
+        Map::load(&game, &recruits, &name).map(|map| {
+            Some(Loaded {
+                game: Arc::new(game),
+                map,
+            })
+        })
     });
     let loaded = match loaded {
         Ok(Some(l)) => {

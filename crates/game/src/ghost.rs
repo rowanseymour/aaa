@@ -82,12 +82,10 @@ pub fn show(
                 actions::UNPACK_FACING,
             );
             let owner = local.0.unwrap_or(0);
-            let Loaded { game, .. } = &*loaded;
             let mut models = assets.models();
-            let Some(e) =
-                drawn
-                    .0
-                    .spawn_object(&mut commands, game, &mut models, &thing, Some(owner))
+            let Some(e) = drawn
+                .0
+                .spawn_object(&mut commands, &mut models, &thing, Some(owner))
             else {
                 return;
             };
@@ -195,20 +193,14 @@ pub fn land(
             }
         }
         None => {
-            let Loaded { game, .. } = &*loaded;
             let mut models = assets.models();
             let members = standing.members.iter().filter_map(|m| {
                 let template = m.template.as_str();
                 let footing = drawn.0.footing(template);
                 let thing = thing_at(ground, footing, m.id, template, m.position, m.facing);
-                let e = drawn.0.spawn_unit(
-                    &mut commands,
-                    game,
-                    &mut models,
-                    &thing,
-                    player,
-                    m.speed,
-                )?;
+                let e = drawn
+                    .0
+                    .spawn_unit(&mut commands, &mut models, &thing, player, m.speed)?;
                 commands.entity(e).insert(DespawnOnExit(Screen::Match));
                 if !fits {
                     commands.entity(e).insert(Unfit);
