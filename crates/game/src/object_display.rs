@@ -124,13 +124,16 @@ fn slot_at(i: usize, count: usize) -> [f32; 2] {
 /// The strings' key for what an HQ's empty place says under the pointer.
 const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
 
-/// The icons for what's selected's properties run along the top into the
-/// display's right corner, clear of the longest name: how far the last is
-/// from the right edge and the row from the top, how big each is and how
-/// far it is to the next.
-const PROPERTIES_IN: Vec2 = Vec2::new(8.0, 6.0);
+/// The strip across the top: how tall it is, so what's below can start
+/// clear of it, and how far its contents are in from its sides.
+const HEADER: f32 = 40.0;
+const HEADER_IN: f32 = 8.0;
+/// The owner's colour beside their name, and the gap between them.
+const OWNER_BAND: f32 = 4.0;
+const OWNER_GAP: f32 = 6.0;
+/// Each property's icon in the strip, and the gap between them.
 const PROPERTY: f32 = 24.0;
-const PROPERTY_PITCH: f32 = 26.0;
+const PROPERTY_GAP: f32 = 2.0;
 /// As many as there are places for.
 const MAX_PROPERTIES: usize = 7;
 
@@ -725,8 +728,16 @@ impl Ui<'_> {
         regiment_name(self.sim, &looks.names, &looks.strings, &looks.map, r)
     }
 
-    /// The name and owner across the top.
-    fn title(&self, commands: &mut Commands, root: Entity, name: String, owner: u32) {
+    /// The strip across the top: the name over the owner, and, where it
+    /// has `properties`, the icons for those that show on its right.
+    fn title(
+        &mut self,
+        commands: &mut Commands,
+        root: Entity,
+        name: String,
+        owner: u32,
+        properties: bool,
+    ) {
         let player = self.sim.sides.player(owner);
         let neutral =
             (self.local).is_some_and(|p| self.sim.sides.relation(p, owner) == Relation::Neutral);
@@ -734,32 +745,70 @@ impl Ui<'_> {
             true => NEUTRAL,
             false => TINTS[tint(self.sim, self.local, owner)],
         };
+        let mut row = None;
         commands.entity(root).with_children(|display| {
-            display.spawn((
-                at(8.0, 5.0, 300.0, 14.0),
-                label(name, Font::HudTitle, Ink::Body),
-            ));
-            if let Some(p) = player {
-                // The owner's own colour, whoever's looking, as the lobby marks it.
-                // An independent side's things show none.
-                if !p.independent {
-                    let [red, green, blue] = p.rgb;
-                    display.spawn((
-                        at(9.0, 22.0, 3.0, 11.0),
-                        BackgroundColor(Color::srgb(red, green, blue)),
-                        Pickable::IGNORE,
-                    ));
-                }
-                display.spawn((
-                    at(18.0, 21.0, 290.0, 14.0),
-                    ui::coloured(
-                        self.leaders.owner(p, self.local, &self.looks.map),
-                        Font::Hud,
-                        colour,
-                    ),
-                ));
-            }
+            let strip = Node {
+                position_type: PositionType::Absolute,
+                top: px(0),
+                left: px(0),
+                right: px(0),
+                height: px(HEADER * SCALE),
+                padding: UiRect::horizontal(px(HEADER_IN * SCALE)),
+                align_items: AlignItems::Center,
+                border_radius: BorderRadius::top(px(ui::CORNER)),
+                ..default()
+            };
+            display
+                .spawn((strip, Surface::Slot, Pickable::IGNORE))
+                .with_children(|strip| {
+                    // Cut short rather than wrapped, which would outgrow the strip.
+                    let lines = Node {
+                        flex_direction: FlexDirection::Column,
+                        flex_grow: 1.0,
+                        min_width: px(0),
+                        overflow: Overflow::clip(),
+                        ..default()
+                    };
+                    let unwrapped = || TextLayout::new(Justify::Left, LineBreak::NoWrap);
+                    strip
+                        .spawn((lines, Pickable::IGNORE))
+                        .with_children(|lines| {
+                            lines.spawn((label(name, Font::HudTitle, Ink::Body), unwrapped()));
+                            let Some(p) = player else {
+                                return;
+                            };
+                            let line = Node {
+                                column_gap: px(OWNER_GAP * SCALE),
+                                ..default()
+                            };
+                            lines.spawn((line, Pickable::IGNORE)).with_children(|line| {
+                                // The owner's own colour, whoever's looking, as the lobby
+                                // marks it, as tall as the line. An independent side's
+                                // things show none.
+                                if !p.independent {
+                                    let band = Node {
+                                        width: px(OWNER_BAND * SCALE),
+                                        ..default()
+                                    };
+                                    line.spawn(ui::swatch(p.rgb, band));
+                                }
+                                let owner = self.leaders.owner(p, self.local, &self.looks.map);
+                                line.spawn((ui::coloured(owner, Font::Hud, colour), unwrapped()));
+                            });
+                        });
+                    if properties {
+                        let icons = Node {
+                            column_gap: px(PROPERTY_GAP * SCALE),
+                            flex_shrink: 0.0,
+                            ..default()
+                        };
+                        row = Some(strip.spawn((PropertyRow, icons, Pickable::IGNORE)).id());
+                    }
+                });
         });
+        if let Some(row) = row {
+            self.icons(commands, row);
+        }
     }
 
     /// The portrait's box, holding `template`'s picture until [`portray`]
@@ -792,30 +841,19 @@ impl Ui<'_> {
         });
     }
 
-    /// The row of icons for the properties that show.
-    fn properties(&mut self, commands: &mut Commands, root: Entity) {
-        let node = Node {
-            position_type: PositionType::Absolute,
-            width: percent(100),
-            height: percent(100),
-            ..default()
-        };
-        let row = commands.spawn((PropertyRow, node, Pickable::IGNORE)).id();
-        commands.entity(root).add_child(row);
-        self.icons(commands, row);
-    }
-
-    /// An icon in the display's corner for each property that shows.
+    /// An icon for each property that shows.
     fn icons(&mut self, commands: &mut Commands, row: Entity) {
-        for (i, id) in self.detail.properties.iter().enumerate() {
+        for id in &self.detail.properties {
             let Some(look) = self.looks.properties.get(id).cloned() else {
                 continue;
             };
             let icon = self.looks.image(self.game, self.images, Some(&look.icon));
             let said = std::iter::once(look.name).chain(look.lines);
-            let after = (self.detail.properties.len() - 1 - i) as f32;
-            let left = WIDTH - PROPERTIES_IN.x - PROPERTY - after * PROPERTY_PITCH;
-            let node = at(left, PROPERTIES_IN.y, PROPERTY, PROPERTY);
+            let node = Node {
+                width: px(PROPERTY * SCALE),
+                height: px(PROPERTY * SCALE),
+                ..default()
+            };
             commands.entity(row).with_child((
                 node,
                 picture_node(icon),
@@ -989,7 +1027,6 @@ impl Ui<'_> {
                 let says = [&regiment.template, &unit];
                 let says = says.into_iter().find_map(|t| self.described(t));
                 self.description(commands, root, says);
-                self.properties(commands, root);
                 self.status(commands, root, Status::Regiment(r));
             }
             Actor::Building(b, ref queue) => {
@@ -1001,7 +1038,6 @@ impl Ui<'_> {
                     true => self.description(commands, root, self.described(&template)),
                     false => self.queue(commands, root, b),
                 }
-                self.properties(commands, root);
                 self.status(commands, root, Status::Building(b));
             }
         }
@@ -1071,7 +1107,6 @@ impl Ui<'_> {
                 self.structure(commands, root, b);
                 // Its places show what it's been asked for.
                 self.slots(commands, root, Some(b));
-                self.properties(commands, root);
                 self.status(commands, root, Status::Building(b));
             }
         }
@@ -1081,7 +1116,7 @@ impl Ui<'_> {
     /// captain's health.
     fn heading(&mut self, commands: &mut Commands, root: Entity, r: usize) {
         let regiment = &self.sim.regiments[r];
-        self.title(commands, root, self.regiment_name(r), regiment.owner);
+        self.title(commands, root, self.regiment_name(r), regiment.owner, true);
         let captain = captain(self.sim, self.looks, r);
         let template = self.sim.units[captain].template.clone();
         let (fill, of) = (Fill::Unit(captain), Says::Unit(captain));
@@ -1172,7 +1207,6 @@ impl Ui<'_> {
             });
         }
         self.slots(commands, root, None);
-        self.properties(commands, root);
         self.status(commands, root, Status::Regiment(r));
     }
 
@@ -1184,6 +1218,7 @@ impl Ui<'_> {
             root,
             self.regiment_name(first),
             self.sim.regiments[first].owner,
+            false,
         );
         const CARD: f32 = 66.0;
         for (i, &r) in rs.iter().enumerate() {
@@ -1197,7 +1232,7 @@ impl Ui<'_> {
                 false => Says::Regiment(r),
             };
             let mut card = commands.spawn((
-                framed(at(left, 40.0, CARD, 138.0)),
+                framed(at(left, HEADER, CARD, 138.0)),
                 Button,
                 ui::called(format!("object.regiment.{}", self.sim.regiments[r].id)),
                 Pick(r),
@@ -1243,7 +1278,7 @@ impl Ui<'_> {
         let template = building.template.clone();
         let looks = &self.looks;
         let name = building_name(self.sim, &looks.names, &looks.strings, &looks.map, b);
-        self.title(commands, root, name, building.owner);
+        self.title(commands, root, name, building.owner, true);
         let of = Says::Building(b);
         self.portrait(commands, root, template.as_str(), Fill::Building(b), of);
         if self.sim.supply_of(b).is_some_and(|s| s.relay) {

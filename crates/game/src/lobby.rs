@@ -680,15 +680,12 @@ fn launch(
 
 /// A side's colour, as the lobby marks it.
 fn swatch(player: &Player) -> impl Bundle {
-    let [r, g, b] = player.rgb;
-    (
-        Node {
-            width: px(6),
-            height: px(20),
-            ..default()
-        },
-        BackgroundColor(Color::srgb(r, g, b)),
-    )
+    let node = Node {
+        width: px(6),
+        height: px(20),
+        ..default()
+    };
+    crate::ui::swatch(player.rgb, node)
 }
 
 /// Shows the preset, and the others the map can be played as while picking.
