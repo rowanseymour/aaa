@@ -27,7 +27,7 @@ use crate::lobby::Lineup;
 use crate::remote::Remote;
 use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::waypoints::Sent;
-use crate::{Began, Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
+use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 use aaa_map::Id;
 use aaa_sim::Action;
 
@@ -511,7 +511,8 @@ fn usage(name: &str) -> String {
 
 fn record(world: &mut World, args: &[&str]) -> Reply {
     let sim = &world.resource::<Sim>().0;
-    let record = world.resource::<Orders>().record();
+    let given = world.resource::<Orders>();
+    let record = given.record();
     let orders = (record.given.iter())
         .filter(|g| matches!(g.action, Action::Order { .. }))
         .count();
@@ -523,9 +524,8 @@ fn record(world: &mut World, args: &[&str]) -> Reply {
     match args {
         [] => Ok(said),
         [file] => {
-            let began = world.get_resource::<Began>().ok_or("no match to keep")?;
             let film = aaa_server::Film {
-                setup: began.0.clone(),
+                setup: given.setup().clone(),
                 record: record.clone(),
             };
             film.write(std::path::Path::new(file))?;
@@ -1320,9 +1320,9 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
     if !(0.0..=600.0).contains(&seconds) {
         return Err("takes 0 to 600 seconds".into());
     }
+    let mut orders = world.remove_resource::<Orders>().ok_or("no match")?;
     let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
     let mut chosen = world.resource::<SelectedBuilding>().0;
-    let mut orders = world.remove_resource::<Orders>().unwrap_or_default();
     let sim = &mut world.resource_mut::<Sim>().0;
     for _ in 0..(seconds / aaa_sim::TICK).round() as u32 {
         crate::step_world(sim, &mut orders, &mut selected, &mut chosen);
