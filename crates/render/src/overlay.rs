@@ -1,6 +1,6 @@
 //! What the game draws over objects to show what the cursor is on and what
 //! is selected: rings and squares on the ground, white and tinted as they're
-//! drawn, health bars that face the screen, and regiments' banners.
+//! drawn, health bars that face the screen, and organizations' banners.
 
 use std::collections::HashMap;
 
@@ -109,27 +109,27 @@ fn bar_frame(frames: &[Handle<Image>], share: f32) -> Option<&Handle<Image>> {
     frames.get(frame)
 }
 
-/// The images a banner shows by the state of its regiment and side, each
+/// The images a banner shows by the state of its organization and side, each
 /// drawn the banner's size.
 #[derive(Default)]
 pub struct BannerLayers {
     /// Round it, always.
     pub frame: Option<Handle<Image>>,
-    /// Behind it while the regiment is engaged.
+    /// Behind it while the organization is engaged.
     pub engaged: Option<Handle<Image>>,
-    /// While the regiment is out of supply.
+    /// While the organization is out of supply.
     pub out_of_supply: Option<Handle<Image>>,
     /// Flashing while its side can't pay its upkeep.
     pub shortage: Option<Handle<Image>>,
 }
 
-/// The layers of the banners that float over regiments, each a square
+/// The layers of the banners that float over organizations, each a square
 /// image drawn the same size, one over another.
 #[derive(Resource)]
 pub struct BannerImages {
     /// The plate, grey to be tinted in the owner's colour.
     pub plate: Option<Handle<Image>>,
-    /// Corner brackets around it while the cursor is on the regiment, white
+    /// Corner brackets around it while the cursor is on the organization, white
     /// to be tinted.
     pub focus: Option<Handle<Image>>,
     /// The archive path of each organization template's icon.

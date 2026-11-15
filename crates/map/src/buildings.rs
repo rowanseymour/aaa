@@ -7,9 +7,9 @@ use aaa_data::{Body, DeployPoints, Fighter, Id, Ranges};
 use tgck::map::Thing;
 
 use crate::obstacle::Obstacle;
-use crate::units::{Regiment, emptied, facing, owner};
+use crate::units::{Organization, emptied, facing, owner};
 
-/// An owned object that can be hurt but not move and isn't a regiment.
+/// An owned object that can be hurt but not move and isn't an organization.
 #[derive(Debug, Clone)]
 pub struct Building {
     /// Its object's id, as in [`Map::things`](crate::Map::things).
@@ -37,10 +37,10 @@ pub struct Building {
     /// The organization it stands in, as a Division HQ's building does,
     /// without its members: packing puts the truck in the building's
     /// place there.
-    pub organization: Option<Box<Regiment>>,
+    pub organization: Option<Box<Organization>>,
 }
 
-/// The owned objects that can be hurt but not move and aren't regiments,
+/// The owned objects that can be hurt but not move and aren't organizations,
 /// placed on their own or standing in an organization, as a Division HQ's
 /// building does while it's unpacked.
 pub(crate) fn buildings(

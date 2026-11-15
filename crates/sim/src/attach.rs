@@ -1,11 +1,11 @@
-//! HQs and the regiments attached to them, which is what lets a regiment
-//! be in supply.
+//! HQs and the organizations attached to them, which is what lets an
+//! organization be in supply.
 
 use aaa_map::{Id, Logistics};
 
 use crate::{Refused, World, distance};
 
-/// A Division HQ as it stands: packed, a regiment of its truck, or
+/// A Division HQ as it stands: packed, an organization of its truck, or
 /// unpacked, a building.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Hq {
@@ -15,7 +15,7 @@ pub struct Hq {
     /// The template of the building it is, or unpacks into.
     pub building: Id,
     pub position: [f32; 2],
-    /// How many regiments it takes.
+    /// How many organizations it takes.
     pub places: u32,
 }
 
@@ -31,17 +31,17 @@ impl World {
     /// The HQs on the map, in the order the attach order steps through.
     pub fn hqs(&self) -> Vec<Hq> {
         let mut out = Vec::new();
-        // Packed, each is its regiment for as long as its truck lasts.
-        for (r, regiment) in self.regiments.iter().enumerate() {
-            let places = self.places(&regiment.template);
-            let (Some(places), Some(unpacks)) = (places, &regiment.unpacks) else {
+        // Packed, each is its organization for as long as its truck lasts.
+        for (r, organization) in self.organizations.iter().enumerate() {
+            let places = self.places(&organization.template);
+            let (Some(places), Some(unpacks)) = (places, &organization.unpacks) else {
                 continue;
             };
             let building = &unpacks.building.template;
             if self.truck_survives(r) {
                 out.push(Hq {
-                    id: regiment.id,
-                    owner: regiment.owner,
+                    id: organization.id,
+                    owner: organization.owner,
                     building: building.clone(),
                     position: self.centre(r),
                     places,
@@ -63,11 +63,11 @@ impl World {
         out
     }
 
-    /// Whether any of the truck a packed building's regiment is still
+    /// Whether any of the truck a packed building's organization is still
     /// lives: the units its building packs into, or any where the data
     /// doesn't say.
     fn truck_survives(&self, r: usize) -> bool {
-        let unpacks = self.regiments[r].unpacks.as_ref();
+        let unpacks = self.organizations[r].unpacks.as_ref();
         let trucks = unpacks
             .and_then(|u| self.rules.packing.get(&u.building.template))
             .map(|p| &p.truck.members);
@@ -79,7 +79,7 @@ impl World {
 
     /// The id, places and organization template of the HQ the building at
     /// `b` is, if it's one: the organization a map has it standing in, or
-    /// the regiment it unpacked from.
+    /// the organization it unpacked from.
     fn hq_behind(&self, b: usize) -> Option<(u32, u32, &str)> {
         let building = &self.buildings[b];
         match (&building.organization, building.unpacked_from) {
@@ -88,9 +88,9 @@ impl World {
                 Some((o.id, places, o.template.as_str()))
             }
             (None, Some(r)) => {
-                let regiment = &self.regiments[r];
-                let places = self.places(&regiment.template)?;
-                Some((regiment.id, places, regiment.template.as_str()))
+                let organization = &self.organizations[r];
+                let places = self.places(&organization.template)?;
+                Some((organization.id, places, organization.template.as_str()))
             }
             (None, None) => None,
         }
@@ -102,45 +102,45 @@ impl World {
         self.hq_behind(b).map(|(.., template)| template)
     }
 
-    /// The HQ the regiment at `r` is while it's packed, if it's one.
+    /// The HQ the organization at `r` is while it's packed, if it's one.
     pub fn packed_hq(&self, r: usize) -> Option<u32> {
         self.packed_as(r, true)
     }
 
-    /// The HQ the regiment at `r` was while packed, if its truck is gone.
+    /// The HQ the organization at `r` was while packed, if its truck is gone.
     pub(crate) fn truckless_hq(&self, r: usize) -> Option<u32> {
         self.packed_as(r, false)
     }
 
-    /// The HQ id of a packed HQ regiment at `r` whose truck's survival is
+    /// The HQ id of a packed HQ organization at `r` whose truck's survival is
     /// `survives`.
     fn packed_as(&self, r: usize, survives: bool) -> Option<u32> {
-        let regiment = &self.regiments[r];
-        self.places(&regiment.template)?;
-        let packed = regiment.unpacks.is_some() && self.truck_survives(r) == survives;
-        packed.then_some(regiment.id)
+        let organization = &self.organizations[r];
+        self.places(&organization.template)?;
+        let packed = organization.unpacks.is_some() && self.truck_survives(r) == survives;
+        packed.then_some(organization.id)
     }
 
-    /// `player`'s regiments that have no HQ, by index, whether or not any
+    /// `player`'s organizations that have no HQ, by index, whether or not any
     /// HQ takes their kind. An HQ isn't one, nor is a unit outside an
     /// organization, such as a depot's truck.
     pub fn detached(&self, player: u32) -> Vec<usize> {
-        let regimental = |r: usize| {
-            let logistics = self.logistics_of(&self.regiments[r].template);
+        let organizational = |r: usize| {
+            let logistics = self.logistics_of(&self.organizations[r].template);
             logistics.is_some_and(|l| l.attachments.is_none())
         };
-        (0..self.regiments.len())
+        (0..self.organizations.len())
             .filter(|&r| {
-                let regiment = &self.regiments[r];
-                regiment.owner == player
-                    && regiment.hq.is_none()
-                    && regimental(r)
+                let organization = &self.organizations[r];
+                organization.owner == player
+                    && organization.hq.is_none()
+                    && organizational(r)
                     && !self.destroyed(r)
             })
             .collect()
     }
 
-    /// Whether any of `player`'s detached regiments is of a kind one of its
+    /// Whether any of `player`'s detached organizations is of a kind one of its
     /// HQs takes, whether or not the HQ has a place.
     pub fn attachable(&self, player: u32) -> bool {
         let hqs = self.hqs();
@@ -153,13 +153,13 @@ impl World {
         self.hq_behind(b).map(|(id, ..)| id)
     }
 
-    /// The regiments attached to the HQ `hq`, by index.
+    /// The organizations attached to the HQ `hq`, by index.
     pub fn attached(&self, hq: u32) -> impl Iterator<Item = usize> + '_ {
-        (0..self.regiments.len())
-            .filter(move |&r| self.regiments[r].hq == Some(hq) && !self.destroyed(r))
+        (0..self.organizations.len())
+            .filter(move |&r| self.organizations[r].hq == Some(hq) && !self.destroyed(r))
     }
 
-    /// How many more regiments an HQ can take: its places less those
+    /// How many more organizations an HQ can take: its places less those
     /// attached, those its building has yet to put out and those on
     /// their way by air.
     pub fn free_places(&self, hq: &Hq) -> u32 {
@@ -171,22 +171,23 @@ impl World {
         hq.places.saturating_sub(taken as u32)
     }
 
-    /// Whether an HQ is one the regiment at `r` could attach to, places
+    /// Whether an HQ is one the organization at `r` could attach to, places
     /// aside: its own side's, and one whose building recruits its kind.
     fn suits(&self, hq: &Hq, r: usize) -> bool {
-        let regiment = &self.regiments[r];
+        let organization = &self.organizations[r];
         let recruits = self.rules.recruit_lists.get(&hq.building);
-        hq.owner == regiment.owner && recruits.is_some_and(|l| l.contains(&regiment.template))
+        hq.owner == organization.owner
+            && recruits.is_some_and(|l| l.contains(&organization.template))
     }
 
-    /// The HQ an order to attach would put the regiment at `r` in: the
+    /// The HQ an order to attach would put the organization at `r` in: the
     /// nearest with a place for one that's detached, else the next after
     /// its own, round to the first again.
     pub fn attaches_to(&self, r: usize) -> Option<u32> {
         let hqs = self.hqs();
         let open = |h: &&Hq| self.suits(h, r) && self.free_places(h) > 0;
         let at = self.leader_position(r);
-        match self.regiments[r]
+        match self.organizations[r]
             .hq
             .and_then(|id| hqs.iter().position(|h| h.id == id))
         {
@@ -202,7 +203,7 @@ impl World {
 
     pub(crate) fn may_attach(&self, player: u32, r: usize) -> Result<u32, Refused> {
         self.may_command(player, r)?;
-        let used = self.logistics_of(&self.regiments[r].template);
+        let used = self.logistics_of(&self.organizations[r].template);
         if !used.is_some_and(|l| l.supply_used) {
             return Err(Refused::Unable);
         }
@@ -211,35 +212,35 @@ impl World {
 
     pub(crate) fn may_detach(&self, player: u32, r: usize) -> Result<(), Refused> {
         self.may_command(player, r)?;
-        match self.regiments[r].hq {
+        match self.organizations[r].hq {
             Some(_) => Ok(()),
             None => Err(Refused::Unable),
         }
     }
 
-    /// Detaches each regiment whose HQ isn't on the map, as a map's
+    /// Detaches each organization whose HQ isn't on the map, as a map's
     /// attachments are only those its HQs list.
     pub(crate) fn detach_from_missing(&mut self) {
         let ids: Vec<u32> = self.hqs().iter().map(|h| h.id).collect();
-        for regiment in &mut self.regiments {
-            regiment.hq = regiment.hq.filter(|id| ids.contains(id));
+        for organization in &mut self.organizations {
+            organization.hq = organization.hq.filter(|id| ids.contains(id));
         }
     }
 
-    /// Detaches every regiment attached to the HQ `hq`.
+    /// Detaches every organization attached to the HQ `hq`.
     pub(crate) fn detach_all(&mut self, hq: u32) {
-        for regiment in &mut self.regiments {
-            regiment.hq = regiment.hq.filter(|&id| id != hq);
+        for organization in &mut self.organizations {
+            organization.hq = organization.hq.filter(|&id| id != hq);
         }
     }
 
-    /// Hands the regiment at `r` to `owner`. It keeps its place at its
-    /// HQ, though that's its old side's; a packed HQ loses its regiments.
+    /// Hands the organization at `r` to `owner`. It keeps its place at its
+    /// HQ, though that's its old side's; a packed HQ loses its organizations.
     pub fn change_side(&mut self, r: usize, owner: u32) {
         if let Some(hq) = self.packed_hq(r) {
             self.detach_all(hq);
         }
-        self.regiments[r].owner = owner;
+        self.organizations[r].owner = owner;
     }
 }
 
@@ -253,26 +254,26 @@ mod tests {
     use crate::{Command, Notice, Refused};
 
     #[test]
-    fn hqs_destroyed_packed_or_unpacked_detach_their_regiments_at_once() {
+    fn hqs_destroyed_packed_or_unpacked_detach_their_organizations_at_once() {
         let mut w = division();
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
         w.destroy(0);
-        assert_eq!(w.regiments[1].hq, None);
+        assert_eq!(w.organizations[1].hq, None);
 
         let mut w = division();
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
         let unpack = Command::Unpack {
-            regiment: 0,
+            organization: 0,
             at: [30.0, 40.0],
             facing: NORTH,
         };
         w.apply(1, unpack).unwrap();
         run(&mut w, 11.0);
-        let depot = w.regiments[0].unpacked_into.unwrap();
-        assert_eq!(w.regiments[1].hq, Some(50));
+        let depot = w.organizations[0].unpacked_into.unwrap();
+        assert_eq!(w.organizations[1].hq, Some(50));
         w.buildings[depot].fighter.destructible = true;
         w.fall(depot, None);
-        assert_eq!(w.regiments[1].hq, None);
+        assert_eq!(w.organizations[1].hq, None);
     }
 
     #[test]
@@ -287,91 +288,91 @@ mod tests {
         t.owner = 1;
         t.renumber(70);
         t.place([40.0, 30.0], [0.0, 1.0]);
-        let hq = w.add_regiment(&t);
-        w.regiments[1].hq = Some(70);
-        let truck = w.regiments[hq].units[0];
+        let hq = w.add_organization(&t);
+        w.organizations[1].hq = Some(70);
+        let truck = w.organizations[hq].units[0];
         w.units[truck].die(0);
         w.lost_member(truck);
         assert!(!w.destroyed(hq));
-        assert_eq!(w.regiments[1].hq, None);
+        assert_eq!(w.organizations[1].hq, None);
     }
 
     #[test]
     fn attachments_to_hqs_not_on_the_map_are_dropped() {
         let mut w = division();
-        w.regiments[1].hq = Some(999);
+        w.organizations[1].hq = Some(999);
         w.detach_from_missing();
-        assert_eq!(w.regiments[1].hq, None);
-        w.regiments[1].hq = Some(50);
+        assert_eq!(w.organizations[1].hq, None);
+        w.organizations[1].hq = Some(50);
         w.detach_from_missing();
-        assert_eq!(w.regiments[1].hq, Some(50));
+        assert_eq!(w.organizations[1].hq, Some(50));
     }
 
     #[test]
-    fn regiments_attach_to_hqs_that_recruit_their_kind_and_have_room() {
+    fn organizations_attach_to_hqs_that_recruit_their_kind_and_have_room() {
         let mut w = division();
         assert_eq!(w.hqs().len(), 1);
         assert_eq!(w.hqs()[0].id, 50);
-        // Packed, it's its regiment, and the company is the one detached.
+        // Packed, it's its organization, and the company is the one detached.
         assert_eq!((w.packed_hq(0), w.packed_hq(1)), (Some(50), None));
         assert_eq!((w.detached(1), w.detached(2)), (vec![1], vec![]));
         assert!(w.attachable(1) && !w.attachable(2));
         // The HQ itself is in no supply and attaches to nothing.
         assert_eq!(
-            w.check(1, &Command::Attach { regiment: 0 }),
+            w.check(1, &Command::Attach { organization: 0 }),
             Err(Refused::Unable)
         );
         assert_eq!(
-            w.check(1, &Command::Detach { regiment: 1 }),
+            w.check(1, &Command::Detach { organization: 1 }),
             Err(Refused::Unable)
         );
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
-        assert_eq!(w.regiments[1].hq, Some(50));
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        assert_eq!(w.organizations[1].hq, Some(50));
         assert_eq!(w.attached(50).collect::<Vec<_>>(), [1]);
         // No other HQ to step on to.
         assert_eq!(
-            w.check(1, &Command::Attach { regiment: 1 }),
+            w.check(1, &Command::Attach { organization: 1 }),
             Err(Refused::Unable)
         );
-        // A second one, nearer: a detached regiment takes the nearest, an
+        // A second one, nearer: a detached organization takes the nearest, an
         // attached one the next round.
         let mut t = truck();
         (t.id, t.owner) = (70, 1);
         t.members[0].id = 70;
         t.place([26.0, 24.0], [0.0, 1.0]);
-        w.add_regiment(&t);
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
-        assert_eq!(w.regiments[1].hq, Some(70));
+        w.add_organization(&t);
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        assert_eq!(w.organizations[1].hq, Some(70));
         assert!(w.detached(1).is_empty());
         w.notices.clear();
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
-        assert_eq!(w.regiments[1].hq, Some(50));
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        assert_eq!(w.organizations[1].hq, Some(50));
         // The player's told of each, a move as leaving then joining.
-        let (player, regiment) = (1, 1);
+        let (player, organization) = (1, 1);
         let left = |hq| Notice::Detached {
             player,
             hq,
-            regiment,
+            organization,
         };
         let joined = |hq| Notice::Attached {
             player,
             hq,
-            regiment,
+            organization,
         };
         assert_eq!(w.notices, [left(70), joined(50)]);
-        w.apply(1, Command::Detach { regiment: 1 }).unwrap();
+        w.apply(1, Command::Detach { organization: 1 }).unwrap();
         assert_eq!(w.notices[2..], [left(50)]);
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
-        assert_eq!(w.regiments[1].hq, Some(70));
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        assert_eq!(w.organizations[1].hq, Some(70));
         // Not an enemy's, nor one that doesn't recruit its kind.
-        w.regiments[1].hq = None;
-        w.regiments[0].owner = 2;
+        w.organizations[1].hq = None;
+        w.organizations[0].owner = 2;
         w.rules.recruit_lists.clear();
         assert_eq!(w.attaches_to(1), None);
     }
 
     #[test]
-    fn regiments_no_hq_recruits_are_detached_too() {
+    fn organizations_no_hq_recruits_are_detached_too() {
         let mut w = division();
         // Agents, which nothing recruits, and a truck outside any
         // organization.
@@ -382,66 +383,66 @@ mod tests {
         agents.renumber(80);
         agents.template = "agents".into();
         agents.place([20.0, 20.0], [0.0, 1.0]);
-        w.add_regiment(&agents);
+        w.add_organization(&agents);
         let mut lorry = truck();
         (lorry.id, lorry.owner, lorry.template) = (90, 1, "lorry".into());
         lorry.members[0].id = 90;
         lorry.place([22.0, 30.0], [0.0, 1.0]);
-        w.add_regiment(&lorry);
+        w.add_organization(&lorry);
         assert_eq!(w.detached(1), [1, 2]);
         // Only the company is one an HQ could take.
         assert!(w.attachable(1));
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
         assert_eq!(w.detached(1), [2]);
         assert!(!w.attachable(1));
     }
 
     #[test]
-    fn regiments_lose_their_hq_when_its_destroyed() {
+    fn organizations_lose_their_hq_when_its_destroyed() {
         let mut w = division();
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
         run(&mut w, 1.0);
-        assert!(w.regiments[1].in_supply);
+        assert!(w.organizations[1].in_supply);
         w.destroy(0);
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[1].hq, None);
-        assert!(!w.regiments[1].in_supply);
+        assert_eq!(w.organizations[1].hq, None);
+        assert!(!w.organizations[1].in_supply);
     }
 
     #[test]
-    fn regiments_that_change_side_keep_their_place_at_their_hq() {
+    fn organizations_that_change_side_keep_their_place_at_their_hq() {
         let mut w = supplied_division();
         let hq = w.hqs().remove(0);
         // With an ally, its old side's zones are still its own.
         w.change_side(1, 3);
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[1].hq, Some(50));
-        assert!(w.regiments[1].in_supply);
+        assert_eq!(w.organizations[1].hq, Some(50));
+        assert!(w.organizations[1].in_supply);
         assert_eq!(w.free_places(&hq), 1);
         // With an enemy it's still attached, but needs that side's zones.
         w.change_side(1, 2);
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[1].hq, Some(50));
-        assert!(!w.regiments[1].in_supply);
+        assert_eq!(w.organizations[1].hq, Some(50));
+        assert!(!w.organizations[1].in_supply);
         assert_eq!(w.free_places(&hq), 1);
-        // An HQ that changes side loses its regiments at once.
+        // An HQ that changes side loses its organizations at once.
         w.change_side(0, 3);
-        assert_eq!(w.regiments[1].hq, None);
+        assert_eq!(w.organizations[1].hq, None);
     }
 
     #[test]
-    fn captured_hqs_lose_their_regiments_at_once() {
+    fn captured_hqs_lose_their_organizations_at_once() {
         let mut w = division();
         let hq = Command::Unpack {
-            regiment: 0,
+            organization: 0,
             at: [30.0, 40.0],
             facing: NORTH,
         };
         w.apply(1, hq).unwrap();
         run(&mut w, 30.0);
-        let b = w.regiments[0].unpacked_into.expect("unpacked");
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        let b = w.organizations[0].unpacked_into.expect("unpacked");
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
         w.change_hands(b, 2);
-        assert_eq!(w.regiments[1].hq, None);
+        assert_eq!(w.organizations[1].hq, None);
     }
 }

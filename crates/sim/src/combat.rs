@@ -141,7 +141,7 @@ impl World {
 
     pub(crate) fn owner(&self, t: Target) -> u32 {
         match t {
-            Target::Unit(u) => self.regiments[self.units[u].regiment].owner,
+            Target::Unit(u) => self.organizations[self.units[u].organization].owner,
             Target::Building(b) => self.buildings[b].owner,
         }
     }
@@ -165,7 +165,7 @@ impl World {
     /// Fires every weapon that's ready at what it can hit, then takes the
     /// dead out of the fight, so that all hit each other at once. Only
     /// turrets fire on the move: anything else turns its user to aim.
-    /// Returns, for each unit hit, its regiment and what fired.
+    /// Returns, for each unit hit, its organization and what fired.
     pub(crate) fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
         let mut launched = Vec::new();
@@ -282,7 +282,7 @@ impl World {
         let mut fired_on = Vec::new();
         for hit in hits {
             if let Target::Unit(u) = hit.target {
-                let r = self.units[u].regiment;
+                let r = self.units[u].organization;
                 let alive = self.units[u].alive();
                 match (hit.bombard, hit.from) {
                     // Bombardment keeps what it hurts out of supply rather
@@ -355,7 +355,7 @@ impl World {
         let window = (self.rules.siege_seconds / TICK).round() as u64;
         match hit.target {
             Target::Unit(u) => {
-                let owner = self.regiments[self.units[u].regiment].owner;
+                let owner = self.organizations[self.units[u].organization].owner;
                 let enemy = self.sides.relation(hit.by, owner) == Relation::Enemy;
                 let unit = &mut self.units[u];
                 if !unit.alive() {
@@ -382,7 +382,7 @@ impl World {
                     && hit.amount > 0.0
                 {
                     // A bombarder holds it for as long as it keeps a
-                    // regiment out of supply, if that's longer.
+                    // organization out of supply, if that's longer.
                     let held = hit.bombard.map_or(0.0, |recharge| {
                         self.rules.supply_rules.bombard_timeout + recharge
                     });
@@ -441,7 +441,7 @@ impl World {
     /// What `s` fires `weapon` at: the best it can, armed enemies first,
     /// then what can be captured or destroyed, then the rest, and the
     /// nearest of them; or the one it fired on last as long as it's as good.
-    /// A unit whose regiment is pursuing an enemy fires on that enemy
+    /// A unit whose organization is pursuing an enemy fires on that enemy
     /// first whenever it can.
     fn aim(&self, s: Target, weapon: &Weapon, last: Option<Target>) -> Option<Target> {
         if let Target::Building(b) = s
@@ -451,14 +451,14 @@ impl World {
         }
         let from = self.position(s);
         let quarry = match s {
-            Target::Unit(u) => match self.regiments[self.units[u].regiment].order {
+            Target::Unit(u) => match self.organizations[self.units[u].organization].order {
                 Order::Pursue(e) => Some(e),
                 _ => None,
             },
             Target::Building(_) => None,
         };
         let of_quarry = |t: Target| match (quarry, t) {
-            (Some(e), Target::Unit(v)) => self.units[v].regiment == e,
+            (Some(e), Target::Unit(v)) => self.units[v].organization == e,
             _ => false,
         };
         let pursued = self
@@ -488,7 +488,7 @@ impl World {
 
     /// Has each building that defends itself notice, for good, what comes
     /// into its zone that one of its weapons could aim at then: a unit's
-    /// whole regiment. Stepping onto another of the zone's tiles, or
+    /// whole organization. Stepping onto another of the zone's tiles, or
     /// changing sides there, is coming in again. Noticing anything once the
     /// map has loaded wakes it; the first look stands for the map loading.
     pub(crate) fn notice(&mut self) {
@@ -531,10 +531,10 @@ impl World {
         self.loaded = true;
     }
 
-    /// The regiment or building a target is, or is in.
+    /// The organization or building a target is, or is in.
     pub(crate) fn piece(&self, t: Target) -> Piece {
         match t {
-            Target::Unit(u) => Piece::Regiment(self.units[u].regiment),
+            Target::Unit(u) => Piece::Organization(self.units[u].organization),
             Target::Building(b) => Piece::Building(b),
         }
     }
@@ -581,10 +581,10 @@ impl World {
         let armed = !f.weapons.is_empty();
         if let Target::Unit(u) = t {
             let unit = &self.units[u];
-            let regiment = &self.regiments[unit.regiment];
-            // A unit in no regiment is one of its own template.
-            let lone = unit.template == regiment.template;
-            if regiment.aggressive() || armed && lone {
+            let organization = &self.organizations[unit.organization];
+            // A unit in no organization is one of its own template.
+            let lone = unit.template == organization.template;
+            if organization.aggressive() || armed && lone {
                 return 3;
             }
         }
@@ -772,7 +772,7 @@ mod tests {
 
     /// A player 2 pillbox at (10, 24), noticing within 20, whose rifle
     /// can't hit aircraft, and unarmed soldiers of two of player 1's
-    /// regiments: the first in its zone, the second, of `flags`, far off.
+    /// organizations: the first in its zone, the second, of `flags`, far off.
     fn sentry(flags: &[&str]) -> World {
         let mut far = soldier(Vec::new());
         far.flags = flags.iter().map(|&f| Id::from(f)).collect();
@@ -884,7 +884,7 @@ mod tests {
             w.apply(
                 1,
                 Command::Move {
-                    regiment: 0,
+                    organization: 0,
                     to: [10.0, 14.0],
                 },
             )
@@ -1005,7 +1005,7 @@ mod tests {
         assert_eq!(w.units[0].health, 100.0);
         w.units[0].position = [10.0, 16.0];
         w.tick();
-        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Organization(0)]);
         assert_eq!(w.units[0].health, 90.0);
         // Spotting and firing on an enemy isn't being under siege; being
         // hit by one is.
@@ -1020,7 +1020,7 @@ mod tests {
     fn defenders_leave_alone_what_the_map_placed_near_them() {
         let mut w = sentry(&["infantry"]);
         run(&mut w, 5.0);
-        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Organization(0)]);
         assert!(!w.buildings[0].awake);
         assert!(w.buildings[0].target.is_none());
         assert_eq!(w.units[0].health, 100.0);
@@ -1038,7 +1038,7 @@ mod tests {
         assert!(w.buildings[0].awake);
         assert_eq!(
             w.buildings[0].noticed,
-            [Piece::Regiment(0), Piece::Regiment(1)]
+            [Piece::Organization(0), Piece::Organization(1)]
         );
         assert_eq!(w.buildings[0].target, Some(Target::Unit(0)));
         assert_eq!(w.units[0].health, 90.0);
@@ -1060,10 +1060,10 @@ mod tests {
     #[test]
     fn defenders_wake_for_what_changes_sides_near_them() {
         let mut w = sentry(&["infantry"]);
-        w.regiments[0].owner = 2;
+        w.organizations[0].owner = 2;
         run(&mut w, 1.0);
         assert!(w.buildings[0].noticed.is_empty());
-        w.regiments[0].owner = 1;
+        w.organizations[0].owner = 1;
         w.tick();
         assert!(w.buildings[0].awake);
         assert_eq!(w.units[0].health, 90.0);
@@ -1081,14 +1081,14 @@ mod tests {
         assert!(!w.buildings[0].awake);
         w.units[0].position = [10.0, 12.0];
         w.tick();
-        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Organization(0)]);
         assert!(w.buildings[0].awake);
     }
 
     #[test]
     fn captured_defenders_notice_their_new_enemies_only_once_they_step() {
         let mut w = sentry(&["infantry"]);
-        w.regiments[0].owner = 2;
+        w.organizations[0].owner = 2;
         run(&mut w, 1.0);
         w.buildings[0].owner = 1;
         run(&mut w, 1.0);
@@ -1096,7 +1096,7 @@ mod tests {
         assert!(!w.buildings[0].awake);
         w.units[0].position = [10.0, 12.0];
         w.tick();
-        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Organization(0)]);
         assert!(w.buildings[0].awake);
     }
 
@@ -1119,7 +1119,7 @@ mod tests {
         run(&mut w, 1.0);
         w.units[1].position = [10.0, 40.0];
         run(&mut w, 2.0);
-        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Organization(0)]);
         assert!(!w.buildings[0].awake);
         assert_eq!(w.units[0].health, 100.0);
     }
@@ -1149,7 +1149,7 @@ mod tests {
         // Facing -y, its left is +x.
         w.units[0].position = [20.0, 22.0];
         run(&mut w, 1.0);
-        assert_eq!(w.buildings[0].noticed, [Piece::Regiment(0)]);
+        assert_eq!(w.buildings[0].noticed, [Piece::Organization(0)]);
         assert!(w.units[0].health < 100.0);
         // Back ahead of it, the soldier's out of the arc and left be.
         w.units[0].position = [10.0, 14.0];
@@ -1335,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn regiments_answer_fire_only_from_nearer_than_their_operational_range() {
+    fn organizations_answer_fire_only_from_nearer_than_their_operational_range() {
         let mut w = battle(
             &[1, 2],
             vec![soldier(Vec::new()), soldier(vec![rifle(40.0, 10.0)])],
@@ -1344,10 +1344,10 @@ mod tests {
         w.units[1].position = [10.0, 44.0];
         w.tick();
         assert!(w.units[0].health < 100.0);
-        assert!(w.regiments[0].engaged.is_empty());
+        assert!(w.organizations[0].engaged.is_empty());
         w.units[1].position = [10.0, 43.9];
         run(&mut w, 2.0);
-        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
     }
 
     #[test]

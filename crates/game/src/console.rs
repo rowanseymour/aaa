@@ -237,7 +237,7 @@ const VERBS: &[Verb] = &[
     verb(
         "create",
         "template [x y]",
-        "raises a regiment for the placement kingdom where the camera points, or at x y, and says its id",
+        "raises an organization for the placement kingdom where the camera points, or at x y, and says its id",
     ),
     verb(
         "placementkingdom",
@@ -266,23 +266,23 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "move",
-        "regiment x y",
-        "sends a regiment, by its id, to x y",
+        "organization x y",
+        "sends an organization, by its id, to x y",
     ),
     verb(
         "attack",
-        "regiment (x y | enemy)",
-        "sends a regiment, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy regiment, by its id",
+        "organization (x y | enemy)",
+        "sends an organization, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy organization, by its id",
     ),
     verb(
         "guard",
-        "regiment (x y | other)",
-        "posts a regiment, by its id, at x y or beside another regiment, by its id, to come back to after every fight",
+        "organization (x y | other)",
+        "posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight",
     ),
     verb(
         "select",
         "[id ...]",
-        "selects regiments, or one building, of any side by their ids; without any, says what's selected",
+        "selects organizations, or one building, of any side by their ids; without any, says what's selected",
     ),
     verb(
         "commission",
@@ -301,23 +301,27 @@ const VERBS: &[Verb] = &[
     ),
     verb("pack", "", "packs up the selected building"),
     verb("sell", "", "sells the selected building"),
-    verb("disband", "regiment", "disbands a regiment, by its id"),
+    verb(
+        "disband",
+        "organization",
+        "disbands an organization, by its id",
+    ),
     verb(
         "attach",
-        "regiment",
-        "attaches a regiment, by its id, to an HQ with a place for it, or moves it on to the next",
+        "organization",
+        "attaches an organization, by its id, to an HQ with a place for it, or moves it on to the next",
     ),
     verb(
         "detach",
-        "regiment",
-        "detaches a regiment, by its id, from its HQ",
+        "organization",
+        "detaches an organization, by its id, from its HQ",
     ),
     verb(
         "unpack",
         "x y [degrees]",
         "sends the selected packed building to unpack at x y, facing that far counter-clockwise from the map's x axis",
     ),
-    verb("destroyselected", "", "destroys the selected regiments"),
+    verb("destroyselected", "", "destroys the selected organizations"),
     verb(
         "advance",
         "seconds",
@@ -1019,7 +1023,7 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
     let raising = &world.resource::<Raising>().0;
     raising.raise(template, 0, owner, position, facing)?;
     let template = Id::from(*template);
-    let before = world.resource::<Sim>().0.regiments.len();
+    let before = world.resource::<Sim>().0.organizations.len();
     let raise = Action::Raise {
         template: template.clone(),
         owner,
@@ -1028,19 +1032,19 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
     };
     act(world, raise)?;
     let sim = &world.resource::<Sim>().0;
-    let raised = sim.regiments.get(before..).and_then(<[_]>::last);
-    let regiment = raised.ok_or_else(|| format!("{template} can't be raised"))?;
+    let raised = sim.organizations.get(before..).and_then(<[_]>::last);
+    let organization = raised.ok_or_else(|| format!("{template} can't be raised"))?;
     Ok(format!(
         "{} {} of {} units at {:.1} {:.1}",
-        regiment.template,
-        regiment.id,
-        regiment.units.len(),
+        organization.template,
+        organization.id,
+        organization.units.len(),
         position[0],
         position[1]
     ))
 }
 
-/// Gives a regiment an order at a place, marked as if clicked there.
+/// Gives an organization an order at a place, marked as if clicked there.
 fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     match (aim, args) {
         (Aim::Attack, [id, enemy]) => return after(world, id, enemy, aim),
@@ -1056,52 +1060,52 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     };
     let point = place(&world.resource::<Loaded>().map.ground, x, y)?;
     let sim = &world.resource::<Sim>().0;
-    let r = regiment_by_id(sim, id)?;
-    let owner = sim.regiments[r].owner;
-    let (regiment, to) = (r, point);
+    let r = organization_by_id(sim, id)?;
+    let owner = sim.organizations[r].owner;
+    let (organization, to) = (r, point);
     let command = match aim {
-        Aim::Move => aaa_sim::Command::Move { regiment, to },
-        Aim::Attack => aaa_sim::Command::Attack { regiment, to },
-        Aim::Run => aaa_sim::Command::Run { regiment, to },
-        Aim::Guard => aaa_sim::Command::Guard { regiment, to },
+        Aim::Move => aaa_sim::Command::Move { organization, to },
+        Aim::Attack => aaa_sim::Command::Attack { organization, to },
+        Aim::Run => aaa_sim::Command::Run { organization, to },
+        Aim::Guard => aaa_sim::Command::Guard { organization, to },
         Aim::Unpack => aaa_sim::Command::Unpack {
-            regiment,
+            organization,
             at: to,
             facing: crate::actions::UNPACK_FACING,
         },
     };
     if sim.destroyed(r) {
-        return Err(format!("regiment {id} is destroyed"));
+        return Err(format!("organization {id} is destroyed"));
     }
     give(world, owner, command)?;
     world.write_message(Sent {
         to: Some(point),
         aim,
-        regiments: vec![(r, point)],
+        organizations: vec![(r, point)],
     });
     Ok(String::new())
 }
 
-/// Sends a regiment after an enemy regiment, or to guard another, both by
-/// their ids.
+/// Sends an organization after an enemy organization, or to guard another, both
+/// by their ids.
 fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let sim = &world.resource::<Sim>().0;
     let find = |id: &str| {
-        sim.regiments
+        sim.organizations
             .iter()
             .position(|r| r.id.to_string() == id)
-            .ok_or_else(|| format!("no regiment {id}"))
+            .ok_or_else(|| format!("no organization {id}"))
     };
     let (r, e) = (find(id)?, find(enemy)?);
     let there = sim.centre(e);
-    let owner = sim.regiments[r].owner;
+    let owner = sim.organizations[r].owner;
     let command = match aim {
         Aim::Guard => aaa_sim::Command::GuardPiece {
-            regiment: r,
-            piece: aaa_sim::Piece::Regiment(e),
+            organization: r,
+            piece: aaa_sim::Piece::Organization(e),
         },
         _ => aaa_sim::Command::Pursue {
-            regiment: r,
+            organization: r,
             enemy: e,
         },
     };
@@ -1109,7 +1113,7 @@ fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     world.write_message(Sent {
         to: None,
         aim,
-        regiments: vec![(r, there)],
+        organizations: vec![(r, there)],
     });
     Ok(String::new())
 }
@@ -1120,7 +1124,7 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
         let selected = &world.resource::<Selected>().0;
         let mut ids: Vec<String> = selected
             .iter()
-            .map(|&r| sim.regiments[r].id.to_string())
+            .map(|&r| sim.organizations[r].id.to_string())
             .collect();
         if let Some(b) = world.resource::<SelectedBuilding>().0 {
             ids.push(sim.buildings[b].id.to_string());
@@ -1137,7 +1141,7 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
     // Lifting the fog shows everything only from the next frame.
     let lifted = fog.is_none_or(|f| f.lifted);
     let seen_building = |b| lifted || fog.is_some_and(|f| f.building(b) == crate::fog::Look::Shown);
-    let seen_regiment = |r| lifted || fog.is_some_and(|f| f.shows_regiment(sim, r));
+    let seen_organization = |r| lifted || fog.is_some_and(|f| f.shows_organization(sim, r));
     if let [id] = args
         // A building packed up has handed its id to its truck.
         && let Some(b) = sim
@@ -1160,32 +1164,34 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
     }
     if ids.len() > crate::object_display::MAX_SELECTED {
         return Err(format!(
-            "takes up to {} regiments",
+            "takes up to {} organizations",
             crate::object_display::MAX_SELECTED
         ));
     }
     let picked = ids
         .iter()
         .map(|id| {
-            let r = regiment_by_id(sim, id)?;
-            match !sim.destroyed(r) && !scenery.has(sim, r) && seen_regiment(r) {
+            let r = organization_by_id(sim, id)?;
+            match !sim.destroyed(r) && !scenery.has(sim, r) && seen_organization(r) {
                 true => Ok(r),
-                false => Err(format!("regiment {id} can't be selected")),
+                false => Err(format!("organization {id} can't be selected")),
             }
         })
         .collect::<Result<Vec<_>, _>>()?;
     // Taken as a click and Shift-clicks would take them.
-    let (mut regiments, mut building) = (Vec::new(), None);
+    let (mut organizations, mut building) = (Vec::new(), None);
     let mut selection = crate::selection::Selection {
-        regiments: &mut regiments,
+        organizations: &mut organizations,
         building: &mut building,
     };
     for &r in &picked {
         let rank = |t| crate::selection::rank(sim, local, t);
-        selection.add(rank, crate::selection::Thing::Regiment(r));
+        selection.add(rank, crate::selection::Thing::Organization(r));
     }
-    if regiments != picked {
-        return Err("regiments of sides standing differently can't be selected together".into());
+    if organizations != picked {
+        return Err(
+            "organizations of sides standing differently can't be selected together".into(),
+        );
     }
     world.resource_mut::<Selected>().0 = picked;
     world.resource_mut::<SelectedBuilding>().0 = None;
@@ -1283,9 +1289,9 @@ fn disband(world: &mut World, args: &[&str]) -> Reply {
         return Err(usage("disband"));
     };
     let sim = &world.resource::<Sim>().0;
-    let regiment = regiment_by_id(sim, id)?;
-    let owner = sim.regiments[regiment].owner;
-    give(world, owner, aaa_sim::Command::Disband { regiment })?;
+    let organization = organization_by_id(sim, id)?;
+    let owner = sim.organizations[organization].owner;
+    give(world, owner, aaa_sim::Command::Disband { organization })?;
     Ok(String::new())
 }
 
@@ -1294,11 +1300,11 @@ fn attach(world: &mut World, args: &[&str], attach: bool) -> Reply {
         return Err(usage(if attach { "attach" } else { "detach" }));
     };
     let sim = &world.resource::<Sim>().0;
-    let regiment = regiment_by_id(sim, id)?;
-    let owner = sim.regiments[regiment].owner;
+    let organization = organization_by_id(sim, id)?;
+    let owner = sim.organizations[organization].owner;
     let command = match attach {
-        true => aaa_sim::Command::Attach { regiment },
-        false => aaa_sim::Command::Detach { regiment },
+        true => aaa_sim::Command::Attach { organization },
+        false => aaa_sim::Command::Detach { organization },
     };
     give(world, owner, command)?;
     Ok(String::new())
@@ -1319,7 +1325,7 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
         return Err("select one packed building".into());
     };
     let command = aaa_sim::Command::Unpack {
-        regiment: r,
+        organization: r,
         at: point,
         facing,
     };
@@ -1328,17 +1334,17 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
     world.write_message(crate::waypoints::Sent {
         to: Some(at),
         aim: crate::actions::Aim::Unpack,
-        regiments: vec![(r, at)],
+        organizations: vec![(r, at)],
     });
     Ok(format!("unpacking at {:.0} {:.0}", at[0], at[1]))
 }
 
 /// Queues `command` from `player` for the next tick, as a click would.
-/// The regiment with object id `id`, by index.
-fn regiment_by_id(sim: &aaa_sim::World, id: &str) -> Result<usize, String> {
-    (sim.regiments.iter())
+/// The organization with object id `id`, by index.
+fn organization_by_id(sim: &aaa_sim::World, id: &str) -> Result<usize, String> {
+    (sim.organizations.iter())
         .position(|r| r.id.to_string() == id)
-        .ok_or_else(|| format!("no regiment {id}"))
+        .ok_or_else(|| format!("no organization {id}"))
 }
 
 fn selected_building(world: &World) -> Result<usize, String> {

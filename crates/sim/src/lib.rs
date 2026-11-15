@@ -116,13 +116,13 @@ pub const EXACT_REACH: f32 = 0.1;
 /// spreads them over 1 to 1.3 seconds and 0.3 to 0.6.
 const LOOK: u32 = 12;
 
-/// The share of a regiment's control range its pursued enemy has to come
+/// The share of an organization's control range its pursued enemy has to come
 /// within for it to engage.
 pub const PURSUIT_REACH: f32 = 0.6;
 
-/// How far, squared, the enemy a regiment pursues gets from where it's
-/// headed, against how far, squared, it is from the regiment, before the
-/// regiment turns after it: about 22.5° off course.
+/// How far, squared, the enemy an organization pursues gets from where it's
+/// headed, against how far, squared, it is from the organization, before the
+/// organization turns after it: about 22.5° off course.
 pub const PURSUIT_DRIFT: f32 = 0.14646;
 
 /// A match in progress.
@@ -134,10 +134,10 @@ pub struct World {
     pub(crate) rules: Rules,
     /// The terrain under each tile, for what it does to those on it.
     pub tile_terrains: aaa_map::TileTerrains,
-    pub regiments: Vec<Regiment>,
+    pub organizations: Vec<Organization>,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
-    /// The aircraft bringing regiments in, and those that have gone.
+    /// The aircraft bringing organizations in, and those that have gone.
     pub deliveries: Vec<Delivery>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
@@ -156,7 +156,7 @@ pub struct World {
     /// Whether the match is over: every side's outcome is decided, though
     /// play carries on.
     pub over: bool,
-    /// What sides own that's neither a regiment nor a building but may
+    /// What sides own that's neither an organization nor a building but may
     /// still add to their economy, such as where they start: each owner
     /// and template.
     pub holdings: Vec<(u32, Id)>,
@@ -201,7 +201,7 @@ pub struct World {
 }
 
 #[derive(Clone)]
-pub struct Regiment {
+pub struct Organization {
     /// Its object's id in the map.
     pub id: u32,
     pub template: Id,
@@ -248,7 +248,7 @@ pub struct Regiment {
     /// move on to once it's rolled out.
     pub rally: Option<[f32; 2]>,
     /// The place in `units` of its leader, whose position is the
-    /// regiment's for supply.
+    /// organization's for supply.
     pub leader: Option<usize>,
     /// The HQ it's attached to, by its organization's object id.
     pub hq: Option<u32>,
@@ -275,7 +275,7 @@ pub struct Regiment {
     pub terrain_properties: Vec<Id>,
 }
 
-/// A regiment's order to keep a post: it comes back to it after every
+/// An organization's order to keep a post: it comes back to it after every
 /// fight, and beside something goes after whoever is fighting that.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Guard {
@@ -300,7 +300,7 @@ enum Step {
     Arrived,
 }
 
-impl Regiment {
+impl Organization {
     /// Takes up `order` in place of whatever it was told before, which
     /// it forgets. What it's engaged with it stays engaged with.
     pub(crate) fn take_order(&mut self, order: Order) {
@@ -354,17 +354,17 @@ impl Regiment {
     }
 }
 
-/// A regiment or a building: what a side owns on the map, and so what a
-/// regiment engages or guards, what holds properties and what's destroyed.
+/// An organization or a building: what a side owns on the map, and so what a
+/// organization engages or guards, what holds properties and what's destroyed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Piece {
-    /// Index into [`World::regiments`].
-    Regiment(usize),
+    /// Index into [`World::organizations`].
+    Organization(usize),
     /// Index into [`World::buildings`].
     Building(usize),
 }
 
-/// How a regiment goes where it's sent.
+/// How an organization goes where it's sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Order {
     /// Engaging enemies that fire on it or that it runs into on the way,
@@ -377,8 +377,8 @@ pub enum Order {
     /// whatever formation it was put in, until it gets there; then back to
     /// [`Order::Move`].
     Attack,
-    /// Going after the enemy regiment at this index into
-    /// [`World::regiments`] wherever it goes, engaging it once near enough
+    /// Going after the enemy organization at this index into
+    /// [`World::organizations`] wherever it goes, engaging it once near enough
     /// and engaging what it meets on the way as on [`Order::Move`], its
     /// members firing on that enemy first; until it's gone or can't be
     /// reached, then standing as on [`Order::Move`].
@@ -401,8 +401,8 @@ pub struct Unit {
     /// Its object's id in the map.
     pub id: u32,
     pub template: Id,
-    /// Index into [`World::regiments`].
-    pub regiment: usize,
+    /// Index into [`World::organizations`].
+    pub organization: usize,
     pub domain: Domain,
     /// In world units.
     pub position: [f32; 2],
@@ -455,14 +455,14 @@ pub struct Unit {
     pub besieged: Option<u64>,
     /// How it left the map without dying, if it has.
     pub left: Option<Left>,
-    /// Whether it's yet to join its regiment, as a recruit's members are
+    /// Whether it's yet to join its organization, as a recruit's members are
     /// until supply brings them.
     pub awaited: bool,
     /// Its fall, for one coming down by parachute, which is awaited
     /// until it lands.
     pub descent: Option<Descent>,
     /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it: its
-    /// regiment's, or its own tile's while it straggles.
+    /// organization's, or its own tile's while it straggles.
     pub terrain: TerrainIndex,
 }
 
@@ -500,8 +500,8 @@ pub struct Building {
     /// Its object's id in the map.
     pub id: u32,
     pub template: Id,
-    /// The number of the organization it stands in, as [`Regiment::number`],
-    /// for one of a numbered template.
+    /// The number of the organization it stands in, as
+    /// [`Organization::number`], for one of a numbered template.
     pub number: Option<u32>,
     /// The owning [`Player::id`], which changes when it's captured.
     pub owner: u32,
@@ -545,13 +545,13 @@ pub struct Building {
     pub deploy: Option<DeployPoints>,
     /// The organization the map has it standing in, without its members:
     /// packing puts its truck in the building's place there.
-    pub organization: Option<Box<aaa_map::Regiment>>,
+    pub organization: Option<Box<aaa_map::Organization>>,
     /// Where what it commissions moves on to once out, if set.
     pub rally: Option<[f32; 2]>,
     /// The tick it last changed hands on.
     pub captured: Option<u64>,
-    /// For one unpacked during the match, the regiment it unpacked from,
-    /// by index into [`World::regiments`], which packing brings back.
+    /// For one unpacked during the match, the organization it unpacked from,
+    /// by index into [`World::organizations`], which packing brings back.
     pub unpacked_from: Option<usize>,
     /// For a city's centre, how far around it the city reaches.
     pub zone: Option<f32>,
@@ -577,8 +577,8 @@ pub enum State {
     Disabled,
     /// Out of health and gone, since the tick it fell on.
     Destroyed(u64),
-    /// Packed up and gone, since the tick it packed on, into the regiment
-    /// at this index into [`World::regiments`].
+    /// Packed up and gone, since the tick it packed on, into the organization
+    /// at this index into [`World::organizations`].
     Packed(u64, usize),
     /// Sold and gone, since the tick it was sold on.
     Sold(u64),
@@ -607,9 +607,9 @@ pub struct Commission {
 /// What a building's queue works on.
 #[derive(Debug, Clone)]
 pub enum Work {
-    /// A regiment, standing anywhere: it's placed and given ids once it's
+    /// An organization, standing anywhere: it's placed and given ids once it's
     /// done.
-    Raise(Box<aaa_map::Regiment>),
+    Raise(Box<aaa_map::Organization>),
     Research(aaa_map::Research),
 }
 
@@ -625,8 +625,8 @@ impl Commission {
         }
     }
 
-    /// The regiment it raises, if it raises one.
-    pub fn regiment(&self) -> Option<&aaa_map::Regiment> {
+    /// The organization it raises, if it raises one.
+    pub fn organization(&self) -> Option<&aaa_map::Organization> {
         match &self.work {
             Work::Raise(r) => Some(r),
             Work::Research(_) => None,
@@ -683,57 +683,60 @@ impl From<NotYours> for Refused {
 }
 
 /// An order a player gives, as data, so that every copy of a match can
-/// play the same orders out on the same tick. Regiments and buildings are
-/// by index into [`World::regiments`] and [`World::buildings`], which only
+/// play the same orders out on the same tick. Organizations and buildings are
+/// by index into [`World::organizations`] and [`World::buildings`], which only
 /// ever grow, so the same in every copy.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Command {
-    /// Sends a regiment to `to`, turned to face the way it's going, each
+    /// Sends an organization to `to`, turned to face the way it's going, each
     /// member making for its place in the formation there. An engaged
-    /// regiment only sets off once it's done.
-    Move { regiment: usize, to: [f32; 2] },
+    /// organization only sets off once it's done.
+    Move { organization: usize, to: [f32; 2] },
     /// As [`Command::Move`], but in its combat formation and taking on
     /// every enemy that comes within its control range on the way.
-    Attack { regiment: usize, to: [f32; 2] },
+    Attack { organization: usize, to: [f32; 2] },
     /// As [`Command::Move`], but breaking off any engagement and engaging
     /// nothing on the way.
-    Run { regiment: usize, to: [f32; 2] },
-    /// Sends a regiment after the enemy regiment `enemy`, breaking off any
-    /// engagement, to engage it once near enough. Refused for a regiment
-    /// with nothing to fire, or what isn't an enemy's.
-    Pursue { regiment: usize, enemy: usize },
-    /// Posts a regiment at `to`, which it goes to as on [`Command::Move`]
+    Run { organization: usize, to: [f32; 2] },
+    /// Sends an organization after the enemy organization `enemy`, breaking off
+    /// any engagement, to engage it once near enough. Refused for an
+    /// organization with nothing to fire, or what isn't an enemy's.
+    Pursue { organization: usize, enemy: usize },
+    /// Posts an organization at `to`, which it goes to as on [`Command::Move`]
     /// and comes back to after every fight, until it's given another
-    /// order. Resting there it's as [`Regiment::guarding`] has it.
-    Guard { regiment: usize, to: [f32; 2] },
+    /// order. Resting there it's as [`Organization::guarding`] has it.
+    Guard { organization: usize, to: [f32; 2] },
     /// As [`Command::Guard`], but posted beside `piece`, following it and
-    /// going after the enemy regiments fighting it, until it's gone.
-    /// Refused for the regiment itself, or what's already gone.
-    GuardPiece { regiment: usize, piece: Piece },
-    /// Halts a regiment, its members forming up around where they stand on
+    /// going after the enemy organizations fighting it, until it's gone.
+    /// Refused for the organization itself, or what's already gone.
+    GuardPiece { organization: usize, piece: Piece },
+    /// Halts an organization, its members forming up around where they stand on
     /// average, and drops where it was headed, so that once done with any
     /// engagement it stays put.
-    Stop { regiment: usize },
+    Stop { organization: usize },
     /// Sends a packed building to unpack at [`unpack_site`] for `at`, the
     /// building facing `facing`. Refused where it can't unpack or the
     /// building wouldn't fit.
     Unpack {
-        regiment: usize,
+        organization: usize,
         at: [f32; 2],
         facing: [f32; 2],
     },
-    /// Switches a regiment to another of its formations, its members
+    /// Switches an organization to another of its formations, its members
     /// taking their new places where it stands, or is headed.
-    Formation { regiment: usize, formation: usize },
+    Formation {
+        organization: usize,
+        formation: usize,
+    },
     /// Starts a building packing into what it packs into, such as a
     /// truck, dropping whatever it was asked to commission. Refused while
     /// it's unpacking or packing, or too hurt to pack.
     Pack { building: usize },
-    /// Asks a building to commission a regiment of `template` once it's
+    /// Asks a building to commission an organization of `template` once it's
     /// done with what it was asked for before. Refused for one it doesn't
     /// recruit.
     Commission { building: usize, template: Id },
-    /// As [`Command::Commission`], for a regiment that's flown in and
+    /// As [`Command::Commission`], for an organization that's flown in and
     /// dropped at `to`. Refused for one nothing flies, or where it
     /// hasn't [room to land](World::room_to_land).
     Deliver {
@@ -756,16 +759,16 @@ pub enum Command {
         building: usize,
         at: Option<[f32; 2]>,
     },
-    /// Attaches a regiment to an HQ with a place for its kind: the nearest
+    /// Attaches an organization to an HQ with a place for its kind: the nearest
     /// for one that's detached, else the next after its own, round to the
     /// first again. Refused with none to go to.
-    Attach { regiment: usize },
-    /// Detaches a regiment from its HQ.
-    Detach { regiment: usize },
-    /// Takes a regiment, or a lone unit such as a depot's truck, off the
-    /// map for good, for nothing. Refused for a regiment that's engaged or
+    Attach { organization: usize },
+    /// Detaches an organization from its HQ.
+    Detach { organization: usize },
+    /// Takes an organization, or a lone unit such as a depot's truck, off the
+    /// map for good, for nothing. Refused for an organization that's engaged or
     /// attached to an HQ, or anything on its way to unpack.
-    Disband { regiment: usize },
+    Disband { organization: usize },
     /// Takes a building off the map for its [`World::sale_value`].
     /// Refused for one whose template can't be sold, one unpacking or
     /// packing, and one under siege where the rules say so.
@@ -853,40 +856,40 @@ pub enum Target {
 }
 
 impl World {
-    /// Where a regiment's surviving members stand on average, or, with
+    /// Where an organization's surviving members stand on average, or, with
     /// none on the ground yet, where it does.
-    pub fn centre(&self, regiment: usize) -> [f32; 2] {
-        let survivors: Vec<usize> = self.survivors(regiment).collect();
+    pub fn centre(&self, organization: usize) -> [f32; 2] {
+        let survivors: Vec<usize> = self.survivors(organization).collect();
         match survivors.is_empty() {
-            true => self.regiments[regiment].position,
+            true => self.organizations[organization].position,
             false => self.average(&survivors),
         }
     }
 
-    /// A regiment's members still alive.
-    pub fn survivors(&self, regiment: usize) -> impl Iterator<Item = usize> + '_ {
-        let units = &self.regiments[regiment].units;
+    /// An organization's members still alive.
+    pub fn survivors(&self, organization: usize) -> impl Iterator<Item = usize> + '_ {
+        let units = &self.organizations[organization].units;
         units.iter().copied().filter(|&u| self.units[u].alive())
     }
 
-    /// Where a regiment is headed: where it stands once there, or, while
+    /// Where an organization is headed: where it stands once there, or, while
     /// fighting on the way, where it carries on to after.
-    pub fn destination(&self, regiment: usize) -> [f32; 2] {
-        let r = &self.regiments[regiment];
+    pub fn destination(&self, organization: usize) -> [f32; 2] {
+        let r = &self.organizations[organization];
         r.resume.map_or(r.position, |(to, _)| to)
     }
 
-    /// Whether a regiment is still on its way somewhere: moving, or
+    /// Whether an organization is still on its way somewhere: moving, or
     /// fighting before it carries on.
-    pub fn underway(&self, regiment: usize) -> bool {
-        let r = &self.regiments[regiment];
-        r.resume.is_some() || self.survivors(regiment).any(|u| self.units[u].moving())
+    pub fn underway(&self, organization: usize) -> bool {
+        let r = &self.organizations[organization];
+        r.resume.is_some() || self.survivors(organization).any(|u| self.units[u].moving())
     }
 
-    /// Whether a regiment has lost every member, which one still being
+    /// Whether an organization has lost every member, which one still being
     /// dropped hasn't.
-    pub fn destroyed(&self, regiment: usize) -> bool {
-        !self.regiments[regiment].arriving && self.survivors(regiment).next().is_none()
+    pub fn destroyed(&self, organization: usize) -> bool {
+        !self.organizations[organization].arriving && self.survivors(organization).next().is_none()
     }
 
     fn average(&self, units: &[usize]) -> [f32; 2] {
@@ -898,9 +901,9 @@ impl World {
         [x / n, y / n]
     }
 
-    /// Kills a regiment's surviving members outright.
-    pub fn destroy(&mut self, regiment: usize) {
-        for u in self.regiments[regiment].units.clone() {
+    /// Kills an organization's surviving members outright.
+    pub fn destroy(&mut self, organization: usize) {
+        for u in self.organizations[organization].units.clone() {
             let unit = &mut self.units[u];
             if unit.alive() {
                 unit.die(self.ticks);
@@ -909,17 +912,17 @@ impl World {
         }
     }
 
-    /// Tells of the regiment of the unit at `u`, just killed, if it has
-    /// none left. A packed HQ whose truck is gone loses its regiments.
+    /// Tells of the organization of the unit at `u`, just killed, if it has
+    /// none left. A packed HQ whose truck is gone loses its organizations.
     fn lost_member(&mut self, u: usize) {
-        let r = self.units[u].regiment;
+        let r = self.units[u].organization;
         if let Some(hq) = self.truckless_hq(r) {
             self.detach_all(hq);
         }
         if self.destroyed(r) {
             self.notices.push(Notice::Destroyed {
-                owner: self.regiments[r].owner,
-                what: Piece::Regiment(r),
+                owner: self.organizations[r].owner,
+                what: Piece::Organization(r),
             });
         }
     }
@@ -994,7 +997,7 @@ fn within_strictly(a: [f32; 2], b: [f32; 2], reach: f32) -> bool {
     squared_distance(a, b) < reach * reach
 }
 
-/// An order to a regiment from a player that doesn't own it.
+/// An order to an organization from a player that doesn't own it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotYours;
 
@@ -1023,7 +1026,7 @@ impl Sides {
 }
 
 digest!(World {
-    regiments, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
+    organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
     holdings, treasuries, commanders, operated, reveals, incoming, watches, afflicted, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng,
 } skip {
@@ -1035,7 +1038,7 @@ digest!(World {
     notices,
 });
 
-digest!(Regiment {
+digest!(Organization {
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
@@ -1062,7 +1065,7 @@ digest!(Leg {
 });
 
 digest!(Unit {
-    id, template, regiment, position, previous, facing, end_facing, path, from, leg, goal,
+    id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, acceleration, turn_rate, turn_radius, trailer, closing, health,
     reloads, target, shot, died, besieged, left, awaited, descent,
 } skip {
@@ -1123,7 +1126,7 @@ impl Digest for Step {
 impl Digest for Piece {
     fn digest(&self, h: &mut Hasher) {
         match *self {
-            Piece::Regiment(r) => (0u8, r).digest(h),
+            Piece::Organization(r) => (0u8, r).digest(h),
             Piece::Building(b) => (1u8, b).digest(h),
         }
     }
@@ -1213,8 +1216,8 @@ mod tests {
             .iter()
             .map(|u| (u.position, u.facing, u.health, u.target, u.shot, u.died))
             .collect();
-        let regiments: Vec<_> = w
-            .regiments
+        let organizations: Vec<_> = w
+            .organizations
             .iter()
             .map(|r| (r.position, r.facing, r.formation, r.order, &r.engaged))
             .collect();
@@ -1223,10 +1226,10 @@ mod tests {
             .iter()
             .map(|b| (b.owner, b.health, b.target, b.state, b.captured))
             .collect();
-        format!("{:?}", (w.ticks, units, regiments, buildings))
+        format!("{:?}", (w.ticks, units, organizations, buildings))
     }
 
-    /// Four regiments of riflemen moving, running and fighting around a
+    /// Four organizations of riflemen moving, running and fighting around a
     /// house, played out to the end.
     fn played_battle() -> World {
         let rifles = |n| (0..n).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
@@ -1235,12 +1238,33 @@ mod tests {
         w.pathing.block(house.obstacle.as_ref().unwrap());
         w.add_buildings(&[house]);
         let to = [30.0, 30.0];
-        w.apply(1, Command::Move { regiment: 0, to }).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
         let to = [10.0, 50.0];
-        w.apply(3, Command::Run { regiment: 2, to }).unwrap();
+        w.apply(
+            3,
+            Command::Run {
+                organization: 2,
+                to,
+            },
+        )
+        .unwrap();
         run(&mut w, 15.0);
         let to = [20.0, 20.0];
-        w.apply(2, Command::Move { regiment: 3, to }).unwrap();
+        w.apply(
+            2,
+            Command::Move {
+                organization: 3,
+                to,
+            },
+        )
+        .unwrap();
         run(&mut w, 30.0);
         w
     }
@@ -1260,7 +1284,7 @@ mod tests {
                     numbers.extend(t.position.iter().chain(&t.facing).map(f));
                 }
             }
-            for r in &w.regiments {
+            for r in &w.organizations {
                 numbers.extend(r.position.iter().chain(&r.facing).map(f));
                 numbers.push(r.formation as u64);
             }
@@ -1336,9 +1360,9 @@ mod tests {
     fn an_order_only_one_copy_was_given_shows_in_its_hash() {
         let (a, mut b) = (played_battle(), played_battle());
         let to = [40.0, 40.0];
-        let given = (0..b.regiments.len()).any(|regiment| {
-            let owner = b.regiments[regiment].owner;
-            b.apply(owner, Command::Move { regiment, to }).is_ok()
+        let given = (0..b.organizations.len()).any(|organization| {
+            let owner = b.organizations[organization].owner;
+            b.apply(owner, Command::Move { organization, to }).is_ok()
         });
         assert!(given);
         assert_ne!(a.hash(), b.hash());
@@ -1367,7 +1391,7 @@ mod tests {
         assert!(differs(
             |w| w.fates.get_mut(&1).unwrap().default_defeat ^= true
         ));
-        assert!(differs(|w| w.regiments[0].in_supply ^= true));
+        assert!(differs(|w| w.organizations[0].in_supply ^= true));
         assert!(differs(|w| w.buildings[0].awake ^= true));
     }
 
@@ -1415,7 +1439,15 @@ mod tests {
         towing.pathing.block(&rock);
         towing.scenery.push(rock);
         for to in [[16.0, 16.0], [4.0, 14.0], [12.0, 4.0]] {
-            towing.apply(7, Command::Move { regiment: 0, to }).unwrap();
+            towing
+                .apply(
+                    7,
+                    Command::Move {
+                        organization: 0,
+                        to,
+                    },
+                )
+                .unwrap();
             run(&mut towing, 8.0);
         }
         let battle = played_battle();

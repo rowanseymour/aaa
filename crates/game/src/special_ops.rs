@@ -607,8 +607,8 @@ fn clicked(
     focus: crate::Focus,
 ) -> Option<aaa_sim::Command> {
     let on = match (at, focus) {
-        (crate::Pointing::Ground(_), crate::Focus::Regiment(r)) => {
-            Some(aaa_sim::Piece::Regiment(r))
+        (crate::Pointing::Ground(_), crate::Focus::Organization(r)) => {
+            Some(aaa_sim::Piece::Organization(r))
         }
         (crate::Pointing::Ground(_), crate::Focus::Building(b)) => {
             Some(aaa_sim::Piece::Building(b))
@@ -830,7 +830,8 @@ mod tests {
         };
         let mut rules = aaa_sim::Rules::default();
         rules.operations.insert(Id::from("resupply"), resupply);
-        let mut world = aaa_sim::World::from_regiments_by(Default::default(), pathing, rules, &[]);
+        let mut world =
+            aaa_sim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
         let op = aaa_sim::SpecialOp::new(Id::from("resupply"), 200.0, 10.0);
         world.lead(1, experience, Some(5000.0), vec![op]);
         world
@@ -908,7 +909,8 @@ mod tests {
             seconds: 30.0,
         };
         rules.operations.insert(Id::from("resupply"), resupply);
-        let mut sim = aaa_sim::World::from_regiments_by(Default::default(), pathing, rules, &[]);
+        let mut sim =
+            aaa_sim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
         let op = aaa_sim::SpecialOp::new(Id::from("resupply"), 0.0, 0.0);
         sim.lead(1, 0.0, None, vec![op]);
         let ground = crate::Pointing::Ground([3.0, 4.0]);
@@ -923,7 +925,7 @@ mod tests {
             clicked(&sim, 1, 0, ground, crate::Focus::Nothing),
             operate([3.0, 4.0])
         );
-        // A building isn't a regiment, so the click gives nothing.
+        // A building isn't an organization, so the click gives nothing.
         assert_eq!(clicked(&sim, 1, 0, ground, crate::Focus::Building(0)), None);
         // On the minimap, what's under the cursor on the map plays no part.
         let minimap = crate::Pointing::Minimap([5.0, 6.0]);

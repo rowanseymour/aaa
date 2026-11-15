@@ -2,14 +2,14 @@
 //! a map given on the command line, or hosted elsewhere and joined.
 //!
 //! You play one of the map's sides, or watch, and the computer plays the rest. Click one of your units or its
-//! banner to select its regiment, Shift+click to add a regiment to the
+//! banner to select its organization, Shift+click to add an organization to the
 //! selection or take it out, or drag a box over several, with Shift to add
 //! them, up to six at once. Click one of your buildings to select it
 //! instead; the [`object_display`] along the bottom shows what's selected. The selection
 //! passes from a truck to the building it unpacks into, and back as the
 //! building packs up. Right-click the ground to send the selection there, keeping its
-//! regiments' places relative to each other and stopping to fight enemies on
-//! the way. The number keys pick the selection's formation, in the order each regiment's
+//! organizations' places relative to each other and stopping to fight enemies on
+//! the way. The number keys pick the selection's formation, in the order each organization's
 //! layout lists them, and the buttons in the corner give the selection the
 //! orders in [`actions`]. Clicking the minimap moves the camera there, or
 //! gives an aimed order there, and the key left of 1 opens a console for
@@ -345,16 +345,16 @@ impl Leaders {
 #[derive(Resource)]
 struct Local(Option<u32>);
 
-/// The regiments orders go to, in the order they were picked.
+/// The organizations orders go to, in the order they were picked.
 #[derive(Resource, Default)]
 struct Selected(Vec<usize>);
 
 /// The player's building that's selected, whose orders the buttons give
-/// while no regiments are.
+/// while no organizations are.
 #[derive(Resource, Default)]
 struct SelectedBuilding(Option<usize>);
 
-/// What raising regiments and commissioning things takes, read from the
+/// What raising organizations and commissioning things takes, read from the
 /// game's data as the match starts.
 #[derive(Resource)]
 struct Raising(Recruits);
@@ -376,7 +376,7 @@ struct Viewed {
 enum Focus {
     #[default]
     Nothing,
-    Regiment(usize),
+    Organization(usize),
     Building(usize),
 }
 
@@ -389,7 +389,7 @@ struct Marks {
     squares: [Handle<StandardMaterial>; 3],
 }
 
-/// The box drawn while dragging to select regiments.
+/// The box drawn while dragging to select organizations.
 #[derive(Component)]
 struct SelectionBox;
 
@@ -1403,14 +1403,14 @@ fn setup(
         leave_out.contains(&t.id)
     });
     // Units are drawn as the map stores them, with its variations and
-    // scales; members a regiment has lost aren't stored, so stand on the
+    // scales; members an organization has lost aren't stored, so stand on the
     // ground.
     let stored: HashMap<u32, &Thing> = map.standing().map(|t| (t.id, t)).collect();
-    let members = map.regiments.iter().flat_map(|r| &r.members);
+    let members = map.organizations.iter().flat_map(|r| &r.members);
     let mut missing = 0;
     for (i, m) in members.enumerate() {
         debug_assert_eq!(sim.0.units[i].id, m.id);
-        let owner = sim.0.regiments[sim.0.units[i].regiment].owner;
+        let owner = sim.0.organizations[sim.0.units[i].organization].owner;
         let thing = match stored.get(&m.id) {
             Some(&t) => Cow::Borrowed(t),
             None => {
@@ -1442,8 +1442,8 @@ fn setup(
         }
     }
     info!(
-        "{} regiments of {} units, {missing} without a model",
-        sim.0.regiments.len(),
+        "{} organizations of {} units, {missing} without a model",
+        sim.0.organizations.len(),
         sim.0.units.len()
     );
     let mut missing = 0;
@@ -1473,10 +1473,10 @@ fn setup(
         "{} buildings, {missing} without a model",
         sim.0.buildings.len()
     );
-    // Looking at the person's side: a regiment of theirs, else a building,
+    // Looking at the person's side: an organization of theirs, else a building,
     // else where they start.
     let own = |owner: u32| local.0 == Some(owner);
-    let regiment = (0..sim.0.regiments.len())
+    let organization = (0..sim.0.organizations.len())
         .find(|&r| local.0.is_some_and(|p| sim.0.commands(p, r)))
         .map(|r| sim.0.centre(r));
     let building = || {
@@ -1489,7 +1489,7 @@ fn setup(
             things.find(|t| t.template == "start_loc" && aaa_map::owner(t).is_some_and(own));
         start.map(|t| [t.position[0], t.position[1]])
     };
-    let cam = match regiment.or_else(building).or_else(start) {
+    let cam = match organization.or_else(building).or_else(start) {
         Some([x, y]) => RtsCamera::new(world(x, y, map.ground.height_at([x, y]))),
         None => RtsCamera::centred(&map.ground),
     };
@@ -1509,7 +1509,7 @@ fn setup(
     sounds.load_objects(game);
 }
 
-/// Plays the callout of a regiment of the player's newly added to the
+/// Plays the callout of an organization of the player's newly added to the
 /// selection: others' are selected in silence.
 fn selection_sounds(
     selected: Res<Selected>,
@@ -1523,15 +1523,15 @@ fn selection_sounds(
         return;
     }
     let fresh = selected.0.iter().find(|r| !before.contains(r));
-    if let Some(&r) = fresh.filter(|&&r| Some(sim.0.regiments[r].owner) == local.0) {
-        let regiment = &sim.0.regiments[r];
+    if let Some(&r) = fresh.filter(|&&r| Some(sim.0.organizations[r].owner) == local.0) {
+        let organization = &sim.0.organizations[r];
         let at = sim.0.centre(r);
         sounds.reply(
             &time,
-            regiment.template.as_str(),
+            organization.template.as_str(),
             |a| &a.selected,
             at,
-            regiment.owner,
+            organization.owner,
         );
     }
     before.clone_from(&selected.0);
@@ -1606,7 +1606,7 @@ fn wait_for_tick(fixed: &mut Time<Fixed>) {
 }
 
 /// Plays a tick of the game after carrying out the orders waiting,
-/// dropping destroyed regiments from the selection. A packed building
+/// dropping destroyed organizations from the selection. A packed building
 /// selected on its own that unpacks hands the selection to the building,
 /// and a building that packs to what it packed into.
 fn step_world(
@@ -1617,7 +1617,7 @@ fn step_world(
 ) {
     log_refused(orders.step(sim));
     if let &[r] = &selected[..]
-        && let Some(b) = sim.regiments[r].unpacked_into
+        && let Some(b) = sim.organizations[r].unpacked_into
     {
         *chosen = Some(b);
     }
@@ -1668,7 +1668,7 @@ fn spawn_views(
     let map = &loaded.map;
     for u in viewed.units..sim.0.units.len() {
         let unit = &sim.0.units[u];
-        let regiment = &sim.0.regiments[unit.regiment];
+        let organization = &sim.0.organizations[unit.organization];
         let thing = thing_at(
             &map.ground,
             drawn.0.footing(unit.template.as_str()),
@@ -1684,9 +1684,9 @@ fn spawn_views(
             &mut models,
             &map.ground,
             &thing,
-            regiment.speed,
+            organization.speed,
             unit.trailer.as_ref(),
-            regiment.owner,
+            organization.owner,
             u,
         );
     }
@@ -1811,8 +1811,8 @@ fn keep_selection(
     {
         chosen.0 = None;
     }
-    if selected.0.iter().any(|&r| !fog.shows_regiment(sim, r)) {
-        selected.0.retain(|&r| fog.shows_regiment(sim, r));
+    if selected.0.iter().any(|&r| !fog.shows_organization(sim, r)) {
+        selected.0.retain(|&r| fog.shows_organization(sim, r));
     }
 }
 
@@ -1836,7 +1836,7 @@ fn show_units(
     let t = fixed.overstep_fraction();
     for (mut view, mut transform, mut visibility, mut playing) in &mut views {
         let unit = &sim.0.units[view.unit];
-        let owner = sim.0.regiments[unit.regiment].owner;
+        let owner = sim.0.organizations[unit.organization].owner;
         if unit.left.is_some() || unit.awaited {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
@@ -1907,7 +1907,7 @@ fn show_units(
             }
         }
         if let Some(mut playing) = playing.filter(|_| unit.alive()) {
-            let speed = sim.0.regiments[unit.regiment].speed;
+            let speed = sim.0.organizations[unit.organization].speed;
             playing.set_moving(unit.moving().then_some(speed));
         }
     }
@@ -2034,9 +2034,9 @@ impl Pointer<'_, '_> {
     }
 }
 
-/// The regiment, of those `taking` takes, with the living unit nearest
+/// The organization, of those `taking` takes, with the living unit nearest
 /// `point`, if one's within `reach`.
-fn nearest_regiment(
+fn nearest_organization(
     sim: &World,
     point: [f32; 2],
     reach: f32,
@@ -2045,8 +2045,8 @@ fn nearest_regiment(
     nearest(
         sim.units
             .iter()
-            .filter(|u| u.alive() && taking(u.regiment))
-            .map(|u| (u.regiment, u.position)),
+            .filter(|u| u.alive() && taking(u.organization))
+            .map(|u| (u.organization, u.position)),
         point,
         reach,
     )
@@ -2080,8 +2080,8 @@ fn pointed(
     pick_ground(ground, ray)
 }
 
-/// Finds what the cursor is over: the regiment or HQ whose banner it's on,
-/// else the regiment of the nearest unit within reach of the ground it
+/// Finds what the cursor is over: the organization or HQ whose banner it's on,
+/// else the organization of the nearest unit within reach of the ground it
 /// points at, else the building standing there; nothing while it's on the
 /// minimap or the interface's panels, which cover the map.
 #[allow(clippy::too_many_arguments)]
@@ -2119,8 +2119,8 @@ fn focus(
     let unit = nearest(
         (sim.0.units.iter().enumerate())
             .filter(|&(u, unit)| unit.alive() && fog.shows_unit(u))
-            .filter(|(_, unit)| !scenery.has(&sim.0, unit.regiment))
-            .map(|(_, unit)| (unit.regiment, unit.position)),
+            .filter(|(_, unit)| !scenery.has(&sim.0, unit.organization))
+            .map(|(_, unit)| (unit.organization, unit.position)),
         point,
         REACH,
     );
@@ -2134,7 +2134,7 @@ fn focus(
         })
     };
     let found = match unit {
-        Some(r) => Focus::Regiment(r),
+        Some(r) => Focus::Organization(r),
         None => building().map_or(Focus::Nothing, Focus::Building),
     };
     focus.set_if_neq(found);
@@ -2202,13 +2202,13 @@ fn select(
         KeyCode::ControlRight,
     ]);
     let mut selection = selection::Selection {
-        regiments: &mut selected.0,
+        organizations: &mut selected.0,
         building: &mut chosen.0,
     };
     let Some(rect) = dragged else {
         let thing = match *focus {
-            Focus::Regiment(r) if !sim.destroyed(r) && !scenery.has(sim, r) => {
-                Some(selection::Thing::Regiment(r))
+            Focus::Organization(r) if !sim.destroyed(r) && !scenery.has(sim, r) => {
+                Some(selection::Thing::Organization(r))
             }
             Focus::Building(b) if sim.buildings[b].standing() => {
                 Some(selection::picked(sim, selection::Thing::Building(b)))
@@ -2237,14 +2237,14 @@ fn select(
         let z = ground.stand_at(drawn.0.footing(unit.template.as_str()), unit.position);
         drawn_at(unit.position, z)
     };
-    let mut inside: Vec<(selection::Thing, Vec2)> = (0..sim.regiments.len())
+    let mut inside: Vec<(selection::Thing, Vec2)> = (0..sim.organizations.len())
         .filter(|&r| !scenery.has(sim, r))
         .filter_map(|r| {
             let at = (sim.survivors(r))
                 .filter(|&u| fog.shows_unit(u))
                 .filter_map(unit_at)
                 .find(|&p| rect.contains(p))?;
-            Some((selection::Thing::Regiment(r), at))
+            Some((selection::Thing::Organization(r), at))
         })
         .collect();
     for (b, building) in sim.buildings.iter().enumerate() {
@@ -2263,7 +2263,7 @@ fn select(
         selection.clear();
     }
     // Nearest the middle of what's selected, else of the box.
-    let held: Vec<Vec2> = (selection.regiments.iter())
+    let held: Vec<Vec2> = (selection.organizations.iter())
         .filter_map(|&r| sim.survivors(r).find_map(unit_at))
         .collect();
     let middle = match held.len() {
@@ -2273,8 +2273,8 @@ fn select(
     selection.boxed(rank, inside, middle);
 }
 
-/// Right click sends the selected regiments where it points, each keeping
-/// its place relative to the rest, or after the enemy regiment it's on,
+/// Right click sends the selected organizations where it points, each keeping
+/// its place relative to the rest, or after the enemy organization it's on,
 /// those that can't fight it going there instead. With a building that
 /// commissions selected, it sets its rally point there.
 #[allow(clippy::too_many_arguments)]
@@ -2325,11 +2325,11 @@ fn command(
         sent.write(waypoints::Sent {
             to: None,
             aim: actions::Aim::Attack,
-            regiments: pursuing,
+            organizations: pursuing,
         });
         moving = rest;
     }
-    let regiments = send(
+    let organizations = send(
         &sim.0,
         &mut orders,
         player,
@@ -2341,32 +2341,32 @@ fn command(
     sent.write(waypoints::Sent {
         to: Some(point),
         aim: actions::Aim::Move,
-        regiments,
+        organizations,
     });
 }
 
-/// The enemy regiment of `player`'s that `focus` is on, if it's one.
+/// The enemy organization of `player`'s that `focus` is on, if it's one.
 fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
-    let Focus::Regiment(e) = focus else {
+    let Focus::Organization(e) = focus else {
         return None;
     };
-    let owner = sim.regiments[e].owner;
+    let owner = sim.organizations[e].owner;
     (sim.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(e)
 }
 
-/// Sends regiments after the enemy regiment `e`. Returns those that went,
+/// Sends organizations after the enemy organization `e`. Returns those that went,
 /// each with where the enemy is, and those that can't.
 fn pursue(
     sim: &World,
     orders: &mut Orders,
     player: u32,
-    regiments: &[usize],
+    organizations: &[usize],
     e: usize,
 ) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
     let there = sim.centre(e);
-    let (went, rest): (Vec<usize>, Vec<usize>) = regiments.iter().partition(|&&r| {
+    let (went, rest): (Vec<usize>, Vec<usize>) = organizations.iter().partition(|&&r| {
         let command = aaa_sim::Command::Pursue {
-            regiment: r,
+            organization: r,
             enemy: e,
         };
         orders.give(sim, player, command).is_ok()
@@ -2374,16 +2374,16 @@ fn pursue(
     (went.into_iter().map(|r| (r, there)).collect(), rest)
 }
 
-/// Plays the first of the regiments answering an order.
+/// Plays the first of the organizations answering an order.
 fn acknowledge(
     sim: &World,
     sounds: &mut sound::Sounds,
     time: &Time,
     player: u32,
-    regiments: &[usize],
+    organizations: &[usize],
 ) {
-    if let Some(&first) = regiments.first() {
-        let template = &sim.regiments[first].template;
+    if let Some(&first) = organizations.first() {
+        let template = &sim.organizations[first].template;
         sounds.reply(
             time,
             template.as_str(),
@@ -2394,25 +2394,25 @@ fn acknowledge(
     }
 }
 
-/// Gives regiments an order at a point, each keeping its place relative to
+/// Gives organizations an order at a point, each keeping its place relative to
 /// the rest within a map `size` across, unless they all go `together` to
 /// the point itself. Returns those that went, each with where to.
 fn send(
     sim: &World,
     orders: &mut Orders,
     player: u32,
-    regiments: &[usize],
+    organizations: &[usize],
     [px, py]: [f32; 2],
     (aim, together): (actions::Aim, bool),
     size: f32,
 ) -> Vec<(usize, [f32; 2])> {
-    let centres: Vec<[f32; 2]> = regiments.iter().map(|&r| sim.centre(r)).collect();
+    let centres: Vec<[f32; 2]> = organizations.iter().map(|&r| sim.centre(r)).collect();
     let n = centres.len() as f32;
     let [cx, cy] = centres
         .iter()
         .fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
     let mut sent = Vec::new();
-    for (&r, [x, y]) in regiments.iter().zip(centres) {
+    for (&r, [x, y]) in organizations.iter().zip(centres) {
         let target = match together {
             true => [px, py],
             false => [
@@ -2420,14 +2420,14 @@ fn send(
                 (py + y - cy).clamp(0.0, size),
             ],
         };
-        let (regiment, to) = (r, target);
+        let (organization, to) = (r, target);
         let command = match aim {
-            actions::Aim::Move => aaa_sim::Command::Move { regiment, to },
-            actions::Aim::Attack => aaa_sim::Command::Attack { regiment, to },
-            actions::Aim::Run => aaa_sim::Command::Run { regiment, to },
-            actions::Aim::Guard => aaa_sim::Command::Guard { regiment, to },
+            actions::Aim::Move => aaa_sim::Command::Move { organization, to },
+            actions::Aim::Attack => aaa_sim::Command::Attack { organization, to },
+            actions::Aim::Run => aaa_sim::Command::Run { organization, to },
+            actions::Aim::Guard => aaa_sim::Command::Guard { organization, to },
             actions::Aim::Unpack => aaa_sim::Command::Unpack {
-                regiment,
+                organization,
                 at: to,
                 facing: actions::UNPACK_FACING,
             },
@@ -2461,16 +2461,16 @@ fn choose_formation(
         return;
     };
     for &r in &selected.0 {
-        let regiment = &sim.0.regiments[r];
-        let Some(formation) = regiment.formations.get(f) else {
+        let organization = &sim.0.organizations[r];
+        let Some(formation) = organization.formations.get(f) else {
             continue;
         };
         let command = aaa_sim::Command::Formation {
-            regiment: r,
+            organization: r,
             formation: f,
         };
         if orders.give(&sim.0, player, command).is_ok() {
-            debug!("{} to formation {}", regiment.template, formation.id);
+            debug!("{} to formation {}", organization.template, formation.id);
         }
     }
 }
@@ -2579,7 +2579,7 @@ type ShownMark = (
     &'static mut Visibility,
 );
 
-/// Rings the units of the regiment under the cursor and squares the
+/// Rings the units of the organization under the cursor and squares the
 /// building under it, each mark sized to the model's footprint.
 #[allow(clippy::too_many_arguments)]
 fn show_focus(
@@ -2606,11 +2606,11 @@ fn show_focus(
     let mut square = None;
     match *focus {
         Focus::Nothing => {}
-        Focus::Regiment(r) => {
-            let material = &marks.rings[tint(&sim.0, local.0, sim.0.regiments[r].owner)];
+        Focus::Organization(r) => {
+            let material = &marks.rings[tint(&sim.0, local.0, sim.0.organizations[r].owner)];
             for (view, footprint) in &units {
                 let unit = &sim.0.units[view.unit];
-                if unit.regiment != r || !unit.alive() {
+                if unit.organization != r || !unit.alive() {
                     continue;
                 }
                 let at = unit.drawn_at(t);
@@ -2690,7 +2690,7 @@ fn claimed_size(building: &aaa_sim::Building, footprint: Option<&Footprint>) -> 
         .unwrap_or(Vec2::splat(4.0))
 }
 
-/// Draws a health bar below each unit of the selected regiments and the one
+/// Draws a health bar below each unit of the selected organizations and the one
 /// under the cursor, and in front of the selected building and the one
 /// under the cursor, whoever's they are: the width a bar has there but
 /// square to the screen and over everything.
@@ -2718,11 +2718,12 @@ fn show_health(
         // Where on the ground each bar's middle goes, its size there, and
         // the frame it shows.
         let mut shown = Vec::new();
-        let regiment_shown = |r: usize| selected.0.contains(&r) || *focus == Focus::Regiment(r);
+        let organization_shown =
+            |r: usize| selected.0.contains(&r) || *focus == Focus::Organization(r);
         let building_shown = |b: usize| chosen.0 == Some(b) || *focus == Focus::Building(b);
         for (view, footprint) in &units {
             let unit = &sim.0.units[view.unit];
-            if !regiment_shown(unit.regiment) || !unit.alive() {
+            if !organization_shown(unit.organization) || !unit.alive() {
                 continue;
             }
             let Some(fighter) = &unit.fighter else {
@@ -2820,7 +2821,7 @@ mod tests {
     #[test]
     fn the_clock_follows_the_pause_and_speed_the_match_is_given() {
         let pathing = aaa_map::Pathing::uniform(4, aaa_map::Domain::Land);
-        let sim = World::from_regiments(Default::default(), pathing, &[]);
+        let sim = World::from_organizations(Default::default(), pathing, &[]);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(Sim(sim))

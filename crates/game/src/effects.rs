@@ -653,7 +653,7 @@ type NewScenery = (Without<Scenery>, crate::fog::IsScenery);
 /// Whose a target is.
 fn owner(sim: &World, t: Target) -> u32 {
     match t {
-        Target::Unit(u) => sim.regiments[sim.units[u].regiment].owner,
+        Target::Unit(u) => sim.organizations[sim.units[u].organization].owner,
         Target::Building(b) => sim.buildings[b].owner,
     }
 }

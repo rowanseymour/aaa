@@ -28,14 +28,14 @@ pub enum Action {
     Win(u32),
     /// Has a side lose, as [`World::lose`].
     Lose(u32),
-    /// Puts a regiment on the map, as [`World::raise`].
+    /// Puts an organization on the map, as [`World::raise`].
     Raise {
         template: Id,
         owner: u32,
         at: [f32; 2],
         facing: [f32; 2],
     },
-    /// Kills the regiment at this index into [`World::regiments`]
+    /// Kills the organization at this index into [`World::organizations`]
     /// outright.
     Destroy(usize),
     /// Words from the person playing side `from`, or from one watching
@@ -88,8 +88,8 @@ impl Action {
                 at,
                 facing,
             } => _ = world.raise(&template, owner, at, facing),
-            Action::Destroy(regiment) if regiment < world.regiments.len() => {
-                world.destroy(regiment)
+            Action::Destroy(organization) if organization < world.organizations.len() => {
+                world.destroy(organization)
             }
             Action::Destroy(_) => {}
             Action::Chat { from, to, words } => {
@@ -263,7 +263,7 @@ mod tests {
     use super::*;
     use crate::testing::*;
 
-    /// Four regiments of riflemen at war.
+    /// Four organizations of riflemen at war.
     fn fresh() -> World {
         let rifles = (0..4).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
         battle(&[1, 2, 3, 2], rifles, at_war())
@@ -272,7 +272,7 @@ mod tests {
     /// A match played for a minute, its sides given orders along the way.
     fn played() -> (World, Schedule) {
         let (mut w, mut s) = (fresh(), Schedule::default());
-        let go = |regiment, to| Command::Move { regiment, to };
+        let go = |organization, to| Command::Move { organization, to };
         s.give(&w, 1, go(0, [30.0, 30.0])).unwrap();
         for _ in 0..30 {
             s.step(&mut w);
@@ -315,9 +315,10 @@ mod tests {
     fn orders_given_since_the_last_tick_are_replayed_too() {
         let (mut w, mut s) = played();
         let to = [5.0, 5.0];
-        let given = (0..w.regiments.len()).any(|regiment| {
-            let owner = w.regiments[regiment].owner;
-            s.give(&w, owner, Command::Move { regiment, to }).is_ok()
+        let given = (0..w.organizations.len()).any(|organization| {
+            let owner = w.organizations[organization].owner;
+            s.give(&w, owner, Command::Move { organization, to })
+                .is_ok()
         });
         assert!(given);
         let before = w.hash();
@@ -343,7 +344,17 @@ mod tests {
         let (mut w, mut s) = (fresh(), Schedule::default());
         // Not player 2's to order.
         let to = [30.0, 30.0];
-        assert!(s.give(&w, 2, Command::Move { regiment: 0, to }).is_err());
+        assert!(
+            s.give(
+                &w,
+                2,
+                Command::Move {
+                    organization: 0,
+                    to
+                }
+            )
+            .is_err()
+        );
         assert!(s.step(&mut w).is_empty());
         assert!(s.record().given.is_empty());
     }
@@ -351,10 +362,18 @@ mod tests {
     #[test]
     fn orders_refused_as_they_are_carried_out_are_handed_back_and_recorded() {
         let (mut w, mut s) = (fresh(), Schedule::default());
-        // Fine when given, but by its turn the regiment has gone.
+        // Fine when given, but by its turn the organization has gone.
         let to = [30.0, 30.0];
-        s.give(&w, 1, Command::Disband { regiment: 0 }).unwrap();
-        s.give(&w, 1, Command::Move { regiment: 0, to }).unwrap();
+        s.give(&w, 1, Command::Disband { organization: 0 }).unwrap();
+        s.give(
+            &w,
+            1,
+            Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
         let refused = s.step(&mut w);
         assert_eq!(refused.len(), 1);
         assert_eq!(refused[0].0, 1);
@@ -380,7 +399,7 @@ mod tests {
             s.step(&mut w);
         }
         assert_eq!(w.outcome(3), crate::Outcome::Won);
-        let regiments = w.regiments.len();
+        let organizations = w.organizations.len();
         let raise = |template: &str| Action::Raise {
             template: template.into(),
             owner: 1,
@@ -410,8 +429,8 @@ mod tests {
         // One the match hasn't got is passed over.
         s.act(Action::Destroy(99));
         assert!(s.carry_out(&mut w).is_empty());
-        assert_eq!(w.regiments.len(), regiments + 1);
-        assert_eq!(w.regiments[regiments].owner, 1);
+        assert_eq!(w.organizations.len(), organizations + 1);
+        assert_eq!(w.organizations[organizations].owner, 1);
         assert!(w.destroyed(0));
         for _ in 0..20 {
             s.step(&mut w);

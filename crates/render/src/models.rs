@@ -1556,10 +1556,10 @@ mod tests {
         let view = |dirs: &[&str]| {
             View::of_models(Vec::new(), dirs.iter().map(|d| d.to_string()).collect())
         };
-        let (unit, regiment) = (view(&["Shared/SharedTextures"]), view(&[]));
+        let (unit, organization) = (view(&["Shared/SharedTextures"]), view(&[]));
         assert_ne!(
             Lookup::of("Tank.nif", &unit),
-            Lookup::of("Tank.nif", &regiment)
+            Lookup::of("Tank.nif", &organization)
         );
         assert_eq!(
             Lookup::of("Tank.nif", &unit),

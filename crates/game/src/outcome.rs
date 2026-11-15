@@ -150,7 +150,7 @@ mod tests {
             players: [1, 2].map(crate::tests::player).into(),
             teams: Vec::new(),
         };
-        let sim = World::from_regiments(sides, Pathing::uniform(8, Domain::Land), &[]);
+        let sim = World::from_organizations(sides, Pathing::uniform(8, Domain::Land), &[]);
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, OutcomePlugin))
             .insert_state(Screen::Match)

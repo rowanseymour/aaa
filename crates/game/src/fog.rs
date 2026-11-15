@@ -74,9 +74,12 @@ impl Fog {
         self.units.get(u).copied().unwrap_or(true)
     }
 
-    /// Whether any member of a regiment shows.
-    pub fn shows_regiment(&self, sim: &World, r: usize) -> bool {
-        sim.regiments[r].units.iter().any(|&u| self.shows_unit(u))
+    /// Whether any member of an organization shows.
+    pub fn shows_organization(&self, sim: &World, r: usize) -> bool {
+        sim.organizations[r]
+            .units
+            .iter()
+            .any(|&u| self.shows_unit(u))
     }
 
     pub fn building(&self, b: usize) -> Look {

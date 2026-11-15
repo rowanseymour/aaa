@@ -38,7 +38,7 @@ pub fn show(
     mut transforms: Query<&mut Transform>,
 ) {
     let unpacks = match (*page, &selected.0[..]) {
-        (Page::Aiming(Aim::Unpack), &[r]) => sim.0.regiments[r].unpacks.as_ref(),
+        (Page::Aiming(Aim::Unpack), &[r]) => sim.0.organizations[r].unpacks.as_ref(),
         _ => None,
     };
     let point = pointer.at(&loaded.map.ground).map(Pointing::point);
@@ -128,13 +128,13 @@ pub fn redden(
     }
 }
 
-/// The preview of a regiment being aimed for delivery: its members'
+/// The preview of an organization being aimed for delivery: its members'
 /// models, its template, where it's centred and whether it can land
 /// there.
 #[derive(Resource, Default)]
 pub struct Landing(Option<(Vec<Entity>, aaa_data::Id, [f32; 2], bool)>);
 
-/// While a delivery is being aimed, the regiment follows the cursor over
+/// While a delivery is being aimed, the organization follows the cursor over
 /// the map, each member where it would stand, drawn all in red where it
 /// couldn't land.
 #[allow(clippy::too_many_arguments)]
@@ -152,14 +152,14 @@ pub fn land(
     pointer: Pointer,
     mut transforms: Query<&mut Transform>,
 ) {
-    let regiment = looks.delivered(&sim.0, chosen.0, *page);
+    let organization = looks.delivered(&sim.0, chosen.0, *page);
     // The minimap doesn't aim one: it stays where it was.
     let point = match pointer.at(&loaded.map.ground) {
         Some(Pointing::Ground(p)) => Some(p),
         _ => landing.0.as_ref().map(|(_, _, at, _)| *at),
     };
     let player = local.0.unwrap_or(0);
-    let wanted = regiment.zip(point).map(|(r, at)| {
+    let wanted = organization.zip(point).map(|(r, at)| {
         let fits = sim.0.room_to_land(player, &r.template, at);
         (r, at, fits)
     });
@@ -172,11 +172,11 @@ pub fn land(
             commands.entity(e).despawn();
         }
     }
-    let Some((regiment, at, fits)) = wanted else {
+    let Some((organization, at, fits)) = wanted else {
         return;
     };
     let ground = &loaded.map.ground;
-    let mut standing = regiment.clone();
+    let mut standing = organization.clone();
     standing.place(at, LANDING_FACING);
     match &mut landing.0 {
         Some((members, _, placed, _)) => {
@@ -208,10 +208,10 @@ pub fn land(
                 Some(e)
             });
             let members = members.collect();
-            landing.0 = Some((members, regiment.template.clone(), at, fits));
+            landing.0 = Some((members, organization.template.clone(), at, fits));
         }
     }
 }
 
-/// The way a regiment being aimed for delivery faces.
+/// The way an organization being aimed for delivery faces.
 const LANDING_FACING: [f32; 2] = [0.0, -1.0];

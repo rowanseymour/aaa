@@ -1,4 +1,4 @@
-//! The aircraft bringing regiments in, flying over the map, and what
+//! The aircraft bringing organizations in, flying over the map, and what
 //! they've dropped coming down under its parachute.
 
 use std::collections::HashMap;
@@ -58,7 +58,9 @@ pub fn show(
         }
     };
     let done = |d: &aaa_sim::Delivery| {
-        d.left.is_some() && d.regiment.is_none_or(|r| !sim.0.regiments[r].arriving)
+        d.left.is_some()
+            && d.organization
+                .is_none_or(|r| !sim.0.organizations[r].arriving)
     };
     for (d, delivery) in sim.0.deliveries.iter().enumerate().skip(flights.over) {
         // Level over where it's bound, whatever it crosses.
@@ -93,10 +95,10 @@ pub fn show(
                 place(e, over, turned, seen(delivery.owner, at));
             }
         }
-        let Some(r) = delivery.regiment else {
+        let Some(r) = delivery.organization else {
             continue;
         };
-        for &u in &sim.0.regiments[r].units {
+        for &u in &sim.0.organizations[r].units {
             let unit = &sim.0.units[u];
             let Some(descent) = unit.descent else {
                 if let Some(Some(e)) = flights.falling.remove(&u) {

@@ -54,7 +54,7 @@ pub struct Setup {
 /// A match set up and yet to be played.
 pub struct Started {
     pub map: Map,
-    /// What raises the regiments and buildings the match adds.
+    /// What raises the organizations and buildings the match adds.
     pub raising: Recruits,
     pub world: World,
     /// The faction that leads each side with one, by player id.

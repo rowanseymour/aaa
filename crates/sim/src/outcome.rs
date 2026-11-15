@@ -110,14 +110,14 @@ impl World {
     }
 
     /// The sides that own something that keeps a side in the match: a
-    /// regiment, or a building or holding of a
+    /// organization, or a building or holding of a
     /// [sustaining](crate::Rules::sustaining) template.
     fn sustained(&self) -> BTreeSet<u32> {
         let sustaining = &self.rules.sustaining;
-        let regiments = (0..self.regiments.len())
+        let organizations = (0..self.organizations.len())
             .filter(|&r| !self.destroyed(r))
-            .filter(|&r| !self.lone(r) || sustaining.contains(&self.regiments[r].template))
-            .map(|r| self.regiments[r].owner);
+            .filter(|&r| !self.lone(r) || sustaining.contains(&self.organizations[r].template))
+            .map(|r| self.organizations[r].owner);
         let buildings = (self.buildings.iter())
             .filter(|b| b.state == State::Standing && sustaining.contains(&b.template))
             .map(|b| b.owner);
@@ -125,7 +125,7 @@ impl World {
         let held = (self.holdings.iter())
             .filter(|(_, template)| sustaining.contains(template))
             .map(|&(owner, _)| owner);
-        regiments.chain(buildings).chain(held).collect()
+        organizations.chain(buildings).chain(held).collect()
     }
 
     /// Whether a side is kept in the match by what the `sustained` sides
@@ -260,7 +260,7 @@ mod tests {
             ],
             teams: vec![team(10), team(11)],
         };
-        let mut w = World::from_regiments(sides, land(), &[]);
+        let mut w = World::from_organizations(sides, land(), &[]);
         for owner in 1..=4 {
             company(&mut w, owner);
         }
@@ -278,7 +278,7 @@ mod tests {
             players: players.collect(),
             teams: Vec::new(),
         };
-        let mut w = World::from_regiments(sides, land(), &[]);
+        let mut w = World::from_organizations(sides, land(), &[]);
         for owner in 1..=3 {
             company(&mut w, owner);
         }
@@ -294,10 +294,10 @@ mod tests {
         ids.map(|p| w.outcome(p)).collect()
     }
 
-    /// Kills every regiment of `owner`.
+    /// Kills every organization of `owner`.
     fn rout(w: &mut World, owner: u32) {
-        for r in 0..w.regiments.len() {
-            if w.regiments[r].owner == owner {
+        for r in 0..w.organizations.len() {
+            if w.organizations[r].owner == owner {
                 w.destroy(r);
             }
         }
@@ -363,7 +363,7 @@ mod tests {
     }
 
     #[test]
-    fn only_regiments_and_sustaining_templates_keep_a_side_in() {
+    fn only_organizations_and_sustaining_templates_keep_a_side_in() {
         let mut w = free_for_all();
         let depot = building(50, 1, [20.0, 20.0]);
         let hq = aaa_map::Building {
@@ -395,7 +395,7 @@ mod tests {
             players: vec![side(1, outcomes[0]), side(2, outcomes[1])],
             teams: Vec::new(),
         };
-        let world = |outcomes| World::from_regiments(sides(outcomes), land(), &[]);
+        let world = |outcomes| World::from_organizations(sides(outcomes), land(), &[]);
         let mut w = world([Lost, Won]);
         assert!(w.over);
         run(&mut w, 2.0);

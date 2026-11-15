@@ -34,7 +34,7 @@ pub(crate) fn world(pathing: Pathing) -> World {
         offsets,
         aggressive: false,
     };
-    let regiment = aaa_map::Regiment {
+    let organization = aaa_map::Organization {
         hq: None,
         id: 1,
         template: "squad".into(),
@@ -52,7 +52,7 @@ pub(crate) fn world(pathing: Pathing) -> World {
         primary: None,
         unpacks: None,
     };
-    World::from_regiments(Sides::default(), pathing, &[regiment])
+    World::from_organizations(Sides::default(), pathing, &[organization])
 }
 
 pub(crate) fn run(world: &mut World, seconds: f32) {
@@ -73,7 +73,7 @@ pub(crate) fn vehicle(
 ) -> World {
     let mut m = member(2, [10.0, 10.0], 2.0);
     (m.acceleration, m.turn_rate, m.trailer) = (acceleration, turn_rate, trailer);
-    let regiment = aaa_map::Regiment {
+    let organization = aaa_map::Organization {
         hq: None,
         id: 1,
         template: "tank".into(),
@@ -92,10 +92,10 @@ pub(crate) fn vehicle(
         primary: None,
         unpacks: None,
     };
-    World::from_regiments(
+    World::from_organizations(
         Sides::default(),
         Pathing::uniform(20, Domain::Land),
-        &[regiment],
+        &[organization],
     )
 }
 
@@ -147,17 +147,17 @@ pub(crate) fn soldier(weapons: Vec<Weapon>) -> Fighter {
     }
 }
 
-/// A regiment for each of `owners`, of one fighter each, the first at
+/// An organization for each of `owners`, of one fighter each, the first at
 /// 10,10 and each next 10 further along y.
 pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> World {
-    let regiments = owners
+    let organizations = owners
         .iter()
         .zip(fighters)
         .enumerate()
         .map(|(i, (&owner, fighter))| {
             let mut m = member(i as u32 * 2 + 2, [10.0, 10.0 + 10.0 * i as f32], 2.0);
             m.fighter = Some(fighter);
-            aaa_map::Regiment {
+            aaa_map::Organization {
                 hq: None,
                 id: i as u32 * 2 + 1,
                 template: "squad".into(),
@@ -178,7 +178,7 @@ pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> Wo
             }
         })
         .collect::<Vec<_>>();
-    World::from_regiments(sides, Pathing::uniform(40, Domain::Land), &regiments)
+    World::from_organizations(sides, Pathing::uniform(40, Domain::Land), &organizations)
 }
 
 /// Players 1 and 2 at war, and 3 allied to 1.
@@ -210,7 +210,7 @@ pub(crate) fn skirmish() -> World {
         at_war(),
     );
     w.units[1].position = [10.0, 30.0];
-    let r = &mut w.regiments[0];
+    let r = &mut w.organizations[0];
     r.formations.push(aaa_map::Formation {
         id: "wide".into(),
         offsets: vec![[0.0, 0.0]],
@@ -336,7 +336,7 @@ pub(crate) fn headquarters() -> World {
         creation: [0.0, 0.0],
         deployment: [-6.0, 0.0],
     });
-    let mut w = World::from_regiments(at_war(), Pathing::uniform(40, Domain::Land), &[]);
+    let mut w = World::from_organizations(at_war(), Pathing::uniform(40, Domain::Land), &[]);
     w.pathing.block(hq.obstacle.as_ref().unwrap());
     w.add_buildings(&[hq]);
     recruits(&mut w, "house", truck(), 1.0);
@@ -347,19 +347,24 @@ pub(crate) fn headquarters() -> World {
     w
 }
 
-/// Has buildings of template `building` commission `regiment`, which
+/// Has buildings of template `building` commission `organization`, which
 /// takes `seconds`.
-pub(crate) fn recruits(w: &mut World, building: &str, regiment: aaa_map::Regiment, seconds: f32) {
-    let template = regiment.template.clone();
+pub(crate) fn recruits(
+    w: &mut World,
+    building: &str,
+    organization: aaa_map::Organization,
+    seconds: f32,
+) {
+    let template = organization.template.clone();
     let list = w.rules.recruit_lists.entry(Id::from(building)).or_default();
     if !list.contains(&template) {
         list.push(template.clone());
     }
     w.rules.recruit_times.insert(template.clone(), seconds);
-    w.rules.raisable.insert(template, regiment);
+    w.rules.raisable.insert(template, organization);
 }
 
-/// Asks the building at `building` to commission a regiment of `template`.
+/// Asks the building at `building` to commission an organization of `template`.
 pub(crate) fn commission(building: usize, template: &str) -> Command {
     Command::Commission {
         building,
@@ -371,7 +376,7 @@ pub(crate) fn commission(building: usize, template: &str) -> Command {
 pub(crate) const NORTH: [f32; 2] = aaa_map::UNPACKED_FACING;
 
 /// A truck that unpacks into an 8-wide depot, standing at the origin.
-pub(crate) fn truck() -> aaa_map::Regiment {
+pub(crate) fn truck() -> aaa_map::Organization {
     let mut depot = building(0, 0, [0.0, 0.0]);
     depot.template = "depot".into();
     depot.obstacle.as_mut().unwrap().shape = Shape::Rect {
@@ -381,7 +386,7 @@ pub(crate) fn truck() -> aaa_map::Regiment {
     let mut m = member(0, [0.0, 0.0], 3.0);
     m.template = "truck".into();
     m.fighter = Some(soldier(Vec::new()));
-    aaa_map::Regiment {
+    aaa_map::Organization {
         hq: None,
         id: 0,
         template: "truck".into(),
@@ -434,7 +439,7 @@ pub(crate) fn amounts(of: &[(&str, f32)]) -> aaa_map::Amounts {
 /// theirs, with the game's limits and shortfall prices, and player 1
 /// holding 500.
 /// AA's resources: money bought with, ammo and oil kept up, and the
-/// regiment and building limits.
+/// organization and building limits.
 pub(crate) fn aa_resources() -> Vec<aaa_map::ResourceKind> {
     use aaa_map::ResourceKind as R;
     let free = || amounts(&[("money", 0.0)]);
@@ -501,24 +506,24 @@ pub(crate) fn economy() -> World {
     w
 }
 
-/// A regiment of three soldiers of `owner`'s, which with each soldier
+/// An organization of three soldiers of `owner`'s, which with each soldier
 /// keeps up ammo.
 pub(crate) fn company(w: &mut World, owner: u32) -> usize {
-    let regiment = raised_company(w, owner);
-    w.add_regiment(&regiment)
+    let organization = raised_company(w, owner);
+    w.add_organization(&organization)
 }
 
 /// A [`company`] yet to be put on the map, taking a place under the
-/// regiment limit.
-pub(crate) fn raised_company(w: &mut World, owner: u32) -> aaa_map::Regiment {
+/// organization limit.
+pub(crate) fn raised_company(w: &mut World, owner: u32) -> aaa_map::Organization {
     let members = (0..3).map(|i| member(20 + i, [5.0 + i as f32, 5.0], 1.0));
-    let mut regiment = truck();
-    regiment.template = "company".into();
-    regiment.owner = owner;
-    regiment.members = members.collect();
-    regiment.unpacks = None;
-    regiment.primary = None;
-    regiment.formations[0].offsets = vec![[0.0, 0.0]; 3];
+    let mut organization = truck();
+    organization.template = "company".into();
+    organization.owner = owner;
+    organization.members = members.collect();
+    organization.unpacks = None;
+    organization.primary = None;
+    organization.formations[0].offsets = vec![[0.0, 0.0]; 3];
     let economy = |upkeep| aaa_map::Economy {
         upkeep: amounts(upkeep),
         ..Default::default()
@@ -530,7 +535,7 @@ pub(crate) fn raised_company(w: &mut World, owner: u32) -> aaa_map::Regiment {
     w.rules
         .economies
         .insert(Id::from("soldier"), economy(&[("ammo", 2.0)]));
-    regiment
+    organization
 }
 
 pub(crate) fn supply(range: f32, relay: bool, stockpile_max: f32) -> aaa_map::Supply {
@@ -551,8 +556,8 @@ pub(crate) fn logistics(attachments: Option<u32>) -> aaa_map::Logistics {
 }
 
 /// [`economy`] with its HQ supplying 30 around it, a Division HQ's
-/// truck of player 1's that takes two companies at 30,30 (regiment 0)
-/// and a company of three at 26,20 (regiment 1), detached.
+/// truck of player 1's that takes two companies at 30,30 (organization 0)
+/// and a company of three at 26,20 (organization 1), detached.
 pub(crate) fn division() -> World {
     let mut w = economy();
     w.rules
@@ -572,7 +577,7 @@ pub(crate) fn division() -> World {
     (t.id, t.owner) = (50, 1);
     t.members[0].id = 50;
     t.place([30.0, 30.0], [0.0, 1.0]);
-    w.add_regiment(&t);
+    w.add_organization(&t);
     let mut c = raised_company(&mut w, 1);
     c.renumber(60);
     c.primary = Some(0);
@@ -581,8 +586,8 @@ pub(crate) fn division() -> World {
         m.fighter = Some(soldier(Vec::new()));
     }
     c.place([26.0, 20.0], [0.0, 1.0]);
-    w.add_regiment(&c);
-    for u in w.regiments[1].units.clone() {
+    w.add_organization(&c);
+    for u in w.organizations[1].units.clone() {
         w.units[u].template = "soldier".into();
     }
     w
@@ -592,9 +597,9 @@ pub(crate) fn division() -> World {
 /// supply.
 pub(crate) fn supplied_division() -> World {
     let mut w = division();
-    w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+    w.apply(1, Command::Attach { organization: 1 }).unwrap();
     run(&mut w, 2.0);
-    assert!(w.regiments[1].in_supply);
+    assert!(w.organizations[1].in_supply);
     w
 }
 

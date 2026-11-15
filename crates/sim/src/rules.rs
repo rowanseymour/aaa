@@ -15,7 +15,7 @@ pub struct Rules {
     pub terrain_rules: aaa_map::TerrainRules,
     /// What each building template packs into, for those that can.
     pub packing: HashMap<Id, Packs>,
-    /// The buildings a player needs to commission a regiment with a member
+    /// The buildings a player needs to commission an organization with a member
     /// of each template, by template.
     pub requires: HashMap<Id, Requires>,
     /// Each template's own cost, production and upkeep, by template.
@@ -47,25 +47,25 @@ pub struct Rules {
     /// they're put on the map, by template.
     pub decays: HashMap<Id, f32>,
     /// How each organization template stands with supply, by template.
-    /// Regiments of those without it are never in or out of supply.
+    /// Organizations of those without it are never in or out of supply.
     pub logistics: HashMap<Id, aaa_map::Logistics>,
     /// The share of its health each template gets back a second in
     /// supply, by template.
     pub resupply_rates: HashMap<Id, f32>,
-    /// The regiment templates each building template recruits, which are
+    /// The organization templates each building template recruits, which are
     /// those that can attach to it as an HQ.
     pub recruit_lists: HashMap<Id, Vec<Id>>,
-    /// What those regiment templates raise, by template, each standing
+    /// What those organization templates raise, by template, each standing
     /// anywhere and owned by nobody.
-    pub raisable: HashMap<Id, aaa_map::Regiment>,
-    /// The aircraft that flies in each regiment template that's
+    pub raisable: HashMap<Id, aaa_map::Organization>,
+    /// The aircraft that flies in each organization template that's
     /// delivered, by template.
     pub airlifts: HashMap<Id, aaa_map::Airlift>,
     /// How each template falls when it's dropped, by template.
     pub falls: HashMap<Id, aaa_map::Fall>,
     /// World units a second each second that what falls gains.
     pub gravity: f32,
-    /// Seconds commissioning a regiment of each template takes, by
+    /// Seconds commissioning an organization of each template takes, by
     /// template.
     pub recruit_times: HashMap<Id, f32>,
     /// What each template that researches lists, in its menu's order, by
@@ -75,11 +75,11 @@ pub struct Rules {
     pub experience_per_second: f32,
     /// How far each template sees, by template.
     pub sights: HashMap<Id, aaa_map::Sight>,
-    /// The templates whose regiments are numbered, as are the buildings
+    /// The templates whose organizations are numbered, as are the buildings
     /// standing in their organizations.
     pub numbered: HashSet<Id>,
     /// The templates whose things keep their side in the match, as every
-    /// regiment does.
+    /// organization does.
     pub sustaining: HashSet<Id>,
     /// Whether the sides of a team win and lose together.
     pub team_victory: bool,

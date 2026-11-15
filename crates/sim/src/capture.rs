@@ -76,7 +76,7 @@ impl World {
             .collect();
         for i in std::iter::once(b).chain(members) {
             self.drop_queue(i);
-            // An HQ that changes side loses its regiments.
+            // An HQ that changes side loses its organizations.
             if let Some(hq) = self.hq_of(i) {
                 self.detach_all(hq);
             }
@@ -220,7 +220,7 @@ mod tests {
         w.apply(
             1,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [30.0, 10.0],
             },
         )
@@ -234,7 +234,7 @@ mod tests {
         w.apply(
             1,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 10.0],
             },
         )
@@ -252,7 +252,7 @@ mod tests {
         w.apply(
             1,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [30.0, 10.0],
             },
         )
@@ -284,7 +284,7 @@ mod tests {
         w.apply(
             1,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [30.0, 10.0],
             },
         )

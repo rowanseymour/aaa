@@ -96,7 +96,7 @@ mod tests {
             facing: [0.0, 1.0],
         };
         let guard = Command::GuardPiece {
-            regiment: 4,
+            organization: 4,
             piece: Piece::Building(1),
         };
         let rally = Command::Rally {

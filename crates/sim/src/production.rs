@@ -46,15 +46,15 @@ impl World {
             let Some(done) = building.queue.pop_front() else {
                 continue;
             };
-            let mut regiment = match done.work {
-                Work::Raise(regiment) => *regiment,
+            let mut organization = match done.work {
+                Work::Raise(organization) => *organization,
                 Work::Research(item) => {
                     self.researched(b, &item);
                     continue;
                 }
             };
             if let Some(to) = done.to
-                && self.dispatch(b, regiment.clone(), to)
+                && self.dispatch(b, organization.clone(), to)
             {
                 continue;
             }
@@ -67,28 +67,28 @@ impl World {
             let from = deploy_point(position, facing, deploy.creation);
             let to = deploy_point(position, facing, deploy.deployment);
             let heading = normalised([to[0] - from[0], to[1] - from[1]]).unwrap_or(facing);
-            regiment.owner = owner;
-            regiment.place(from, heading);
-            let r = self.add_new_regiment(regiment);
+            organization.owner = owner;
+            organization.place(from, heading);
+            let r = self.add_new_organization(organization);
             log::debug!(
                 "{} {} put out by {} {}",
-                self.regiments[r].template,
-                self.regiments[r].id,
+                self.organizations[r].template,
+                self.organizations[r].id,
                 self.buildings[b].template,
                 self.buildings[b].id
             );
-            self.regiments[r].hq = self.hq_of(b);
+            self.organizations[r].hq = self.hq_of(b);
             self.notices.push(Notice::PutOut {
                 player: owner,
                 building: b,
-                regiment: r,
+                organization: r,
             });
             // Those that resupply come out as their leader alone, the
             // rest to follow.
-            let used = self.logistics_of(&self.regiments[r].template);
+            let used = self.logistics_of(&self.organizations[r].template);
             if used.is_some_and(|l| l.supply_used) {
-                let leader = self.regiments[r].leader.unwrap_or(0);
-                for (p, u) in self.regiments[r].units.clone().into_iter().enumerate() {
+                let leader = self.organizations[r].leader.unwrap_or(0);
+                for (p, u) in self.organizations[r].units.clone().into_iter().enumerate() {
                     // Only those resupply can bring.
                     let rate = self.rules.resupply_rates.get(&self.units[u].template);
                     let comes = rate.is_some_and(|&r| r > 0.0);
@@ -96,30 +96,30 @@ impl World {
                 }
             }
             self.roll_out(r, to, heading);
-            self.regiments[r].rally = rally;
+            self.organizations[r].rally = rally;
         }
     }
 
-    /// Moves regiments that have rolled out of what put them out on to its
+    /// Moves organizations that have rolled out of what put them out on to its
     /// rally point.
     pub(crate) fn rally(&mut self) {
-        for r in 0..self.regiments.len() {
-            let Some(at) = self.regiments[r].rally else {
+        for r in 0..self.organizations.len() {
+            let Some(at) = self.organizations[r].rally else {
                 continue;
             };
             if self.destroyed(r) {
-                self.regiments[r].rally = None;
+                self.organizations[r].rally = None;
             } else if !self.underway(r) {
-                let owner = self.regiments[r].owner;
+                let owner = self.organizations[r].owner;
                 let _ = self.order_move(owner, r, at);
             }
         }
     }
 
-    /// Sends a regiment just put out straight to `to`, through whatever
+    /// Sends an organization just put out straight to `to`, through whatever
     /// put it out, each member to its place in the formation there.
-    fn roll_out(&mut self, regiment: usize, to: [f32; 2], facing: [f32; 2]) {
-        let r = &mut self.regiments[regiment];
+    fn roll_out(&mut self, organization: usize, to: [f32; 2], facing: [f32; 2]) {
+        let r = &mut self.organizations[organization];
         r.position = to;
         r.facing = facing;
         let offsets = &r.formations[r.current_formation()].offsets;
@@ -154,19 +154,19 @@ mod tests {
         w.apply(1, commission(0, "truck")).unwrap();
         w.apply(1, commission(0, "truck")).unwrap();
         run(&mut w, 9.0);
-        assert!(w.regiments.is_empty());
+        assert!(w.organizations.is_empty());
         run(&mut w, 1.0);
-        assert_eq!(w.regiments.len(), 1);
+        assert_eq!(w.organizations.len(), 1);
         assert_eq!(w.buildings[0].queue.len(), 1);
         let put_out = Notice::PutOut {
             player: 1,
             building: 0,
-            regiment: 0,
+            organization: 0,
         };
         assert_eq!(w.notices.iter().filter(|&n| *n == put_out).count(), 1);
-        let r = &w.regiments[0];
+        let r = &w.organizations[0];
         assert_eq!(r.owner, 1);
-        // New ids, the lone truck's its regiment's too.
+        // New ids, the lone truck's its organization's too.
         assert_eq!((r.id, w.units[0].id), (6, 6));
         // It drives out to the HQ's left, which facing -y is +x.
         assert!(near(w.units[0].position, [20.0, 20.0]));
@@ -180,7 +180,7 @@ mod tests {
         assert_eq!(w.apply(1, cancel(0)), Err(Refused::Unable));
         w.apply(1, cancel(1)).unwrap();
         run(&mut w, 10.0);
-        assert_eq!(w.regiments.len(), 1);
+        assert_eq!(w.organizations.len(), 1);
     }
 
     #[test]
@@ -230,11 +230,11 @@ mod tests {
             ..Requires::default()
         };
         // A second member, which decides where the two differ.
-        let mut regiment = truck();
-        let mut rifleman = regiment.members[0].clone();
+        let mut organization = truck();
+        let mut rifleman = organization.members[0].clone();
         rifleman.template = "rifleman".into();
-        regiment.members.push(rifleman);
-        recruits(&mut w, "hq", regiment.clone(), 1.0);
+        organization.members.push(rifleman);
+        recruits(&mut w, "hq", organization.clone(), 1.0);
         let commission = || commission(0, "truck");
         w.rules
             .requires
@@ -242,7 +242,7 @@ mod tests {
         w.rules
             .requires
             .insert(Id::from("rifleman"), needs(&["boat"], true));
-        let lacking = w.lacks(1, 0, &regiment);
+        let lacking = w.lacks(1, 0, &organization);
         assert_eq!(
             lacking.properties,
             [Id::from("tech_heavy"), Id::from("boat")]
@@ -257,14 +257,14 @@ mod tests {
                 ..aaa_map::Kind::default()
             },
         );
-        let lacking = w.lacks(1, 0, &regiment);
+        let lacking = w.lacks(1, 0, &organization);
         assert_eq!(lacking.properties, [Id::from("tech_heavy")]);
         assert!(!lacking.hidden);
         // A technology counts once the side holds it, and only for that side.
         w.grant(2, Id::from("tech_heavy"));
-        assert!(!w.lacks(1, 0, &regiment).is_empty());
+        assert!(!w.lacks(1, 0, &organization).is_empty());
         w.grant(1, Id::from("tech_heavy"));
-        assert!(w.lacks(1, 0, &regiment).is_empty());
+        assert!(w.lacks(1, 0, &organization).is_empty());
         w.apply(1, commission()).unwrap();
     }
 
@@ -285,7 +285,7 @@ mod tests {
         w.apply(
             1,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [26.0, 4.0],
             },
         )
@@ -320,11 +320,11 @@ mod tests {
         assert_eq!(w.destination(0), [26.0, 30.0]);
         run(&mut w, 5.0);
         assert!(near(w.units[0].position, [26.0, 30.0]));
-        assert!(w.regiments[0].rally.is_none());
+        assert!(w.organizations[0].rally.is_none());
         // An order on the way calls it off.
         w.apply(1, commission(0, "truck")).unwrap();
         run(&mut w, 2.0);
-        w.apply(1, Command::Stop { regiment: 1 }).unwrap();
+        w.apply(1, Command::Stop { organization: 1 }).unwrap();
         run(&mut w, 8.0);
         assert!(w.units[1].position[1] < 25.0);
         // Without one, they stay where they come out.

@@ -534,11 +534,11 @@ pub fn update(
     let shown =
         |(u, unit): &(usize, &aaa_sim::Unit)| unit.alive() && (revealed || fog.shows_unit(*u));
     for (_, unit) in sim.0.units.iter().enumerate().filter(shown) {
-        let regiment = &sim.0.regiments[unit.regiment];
-        let fighting = !regiment.engaged.is_empty() || unit.besieged.is_some();
-        let rgb = match own(regiment.owner) && fighting {
+        let organization = &sim.0.organizations[unit.organization];
+        let fighting = !organization.engaged.is_empty() || unit.besieged.is_some();
+        let rgb = match own(organization.owner) && fighting {
             true => minimap.colours.under_siege,
-            false => colour(&minimap.colours.units, regiment.owner),
+            false => colour(&minimap.colours.units, organization.owner),
         };
         canvas.square(to_px(unit.position), 2.0, rgb);
     }
