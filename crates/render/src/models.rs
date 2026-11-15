@@ -451,7 +451,7 @@ enum Placed {
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
     /// What every model, texture and clip is read from.
-    pub(crate) game: Arc<GameData>,
+    game: Arc<GameData>,
     pub(crate) views: HashMap<Id, Option<View>>,
     /// The faces the object display shows, by id.
     pub(crate) portraits: HashMap<Id, Portrait>,
@@ -700,6 +700,11 @@ impl Models {
     /// ground, for [`pose`]; `None` for models that stay upright.
     pub fn conform(&self, template: &str) -> Option<Shape> {
         self.view(template)?.conform
+    }
+
+    /// The templates that raise an organization.
+    pub(crate) fn organization_templates(&self) -> std::collections::HashSet<Id> {
+        self.game.organization_components().into_keys().collect()
     }
 
     /// What height a template's objects stand at, for [`pose`]; on the

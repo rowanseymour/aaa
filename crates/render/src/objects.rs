@@ -1,6 +1,7 @@
 //! Placeholder markers for placed objects without a readable model:
-//! organizations in their owner's colour, start locations, magenta boxes for everything else that should have had a
-//! model, and red boxes for objects that have none such as sound emitters.
+//! organizations in their owner's colour, start locations, magenta boxes for
+//! everything else that should have had a model, and red boxes for objects
+//! that have none such as sound emitters.
 
 use std::collections::{HashMap, HashSet};
 
@@ -29,10 +30,9 @@ pub struct Marker;
 const UNOWNED: [f32; 3] = [0.5, 0.5, 0.5];
 
 fn kind(thing: &Thing, organizations: &HashSet<Id>, should_have_model: bool) -> Kind {
-    let t = thing.template.to_ascii_lowercase();
-    if t.contains("start_loc") {
+    if thing.template.to_ascii_lowercase().contains("start_loc") {
         Kind::Start
-    } else if organizations.contains(&Id::from(t.as_str())) {
+    } else if organizations.contains(&Id::from(thing.template.as_str())) {
         Kind::Organization(aaa_map::owner(thing).unwrap_or(0))
     } else if should_have_model {
         Kind::Missing
@@ -65,7 +65,10 @@ pub fn spawn(
     things: &[(&Thing, bool)],
     show: bool,
 ) -> Vec<Entity> {
-    let organizations: HashSet<Id> = models.game.organization_components().into_keys().collect();
+    if things.is_empty() {
+        return Vec::new();
+    }
+    let organizations = models.organization_templates();
     let mut handles = HashMap::new();
     let mut spawned = Vec::new();
     for &(thing, should_have_model) in things {
