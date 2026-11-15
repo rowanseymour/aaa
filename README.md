@@ -30,12 +30,12 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 
 ## Goals
 
-- Play like the original: the same rules giving the same results. Where it looks or
+- Play like the original: the same rules giving the same results. Any where it looks or
   controls differently on purpose, that's listed in [divergences](docs/divergences.md).
-- Plays on modern systems, Linux and macOS included.
+- Playable on modern systems, Linux and macOS included.
 - Stay driven by the data files, so the original's maps and mods keep working and new ones
-  are easier to make, starting with a map editor. The engine stays generic enough that, with
-  a little more work, it could also run [Kohan II](https://en.wikipedia.org/wiki/Kohan_II:_Kings_of_War), which shares its file formats.
+  are easier to make. The engine stays generic enough that, with
+  a little work, it could also run [Kohan II](https://en.wikipedia.org/wiki/Kohan_II:_Kings_of_War), which shares its file formats.
 - Document every [file format](docs/formats) the game uses.
 
 ## Status
