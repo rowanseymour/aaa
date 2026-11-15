@@ -6,7 +6,7 @@ use std::sync::Arc;
 use aaa_data::{
     Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges, Shape,
 };
-use tgck::map::{Detail, Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
+use tgck::map::{Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
 
 use crate::buildings::Building;
 use crate::obstacle::Obstacle;
@@ -221,10 +221,7 @@ pub(crate) fn facing(thing: &Thing) -> [f32; 2] {
 
 /// The player that owns a placed object, where the map records one.
 pub fn owner(thing: &Thing) -> Option<u32> {
-    match &thing.detail {
-        Detail::Actor(actor) if actor.kingdom != 0 => Some(actor.kingdom),
-        _ => None,
-    }
+    thing.actor().map(|a| a.kingdom).filter(|&k| k != 0)
 }
 
 /// A group of units that moves and fights together.
@@ -488,7 +485,7 @@ fn member(
         bodies,
         fighters,
     )?;
-    if let Detail::Actor(actor) = &thing.detail {
+    if let Some(actor) = thing.actor() {
         member.health = actor.body().map_or(1.0, |b| b.health);
     }
     Some(member)
