@@ -1,9 +1,10 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fs::{self, File};
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Seek, Write};
 use std::path::Path;
 use std::process::ExitCode;
 
+use tgck::map::{HeightMap, Terrain, Thing};
 use tgck::{Archive, Container, Map};
 
 const USAGE: &str = "\
@@ -33,8 +34,10 @@ fn main() -> ExitCode {
         ["cat", ar, name] => cat(ar, name),
         ["sections", file] => sections(file),
         ["unpack", file, out] => unpack(file, out),
-        ["map", maps @ ..] if !maps.is_empty() => each_map(maps),
-        ["check", maps @ ..] if !maps.is_empty() => check(maps),
+        ["map", maps @ ..] if !maps.is_empty() => each_map(maps, "failed", map),
+        ["check", maps @ ..] if !maps.is_empty() => {
+            each_map(maps, "don't load or round-trip", check)
+        }
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -207,35 +210,31 @@ fn unpack(path: &str, out_dir: &str) -> Res {
     Ok(())
 }
 
-/// Summarises each map, going on past ones that fail.
-fn each_map(paths: &[&str]) -> Res {
+/// Runs `each` on every map, going on past ones that fail, and reports each
+/// failure on stdout with the map's other output.
+fn each_map(paths: &[&str], failing: &str, mut each: impl FnMut(&str) -> Res) -> Res {
     let mut failed = 0;
     for path in paths {
-        if let Err(e) = map(path) {
+        if let Err(e) = each(path) {
             if is_broken_pipe(e.as_ref()) {
                 return Err(e);
             }
-            eprintln!("{path}: {e}");
+            outln!("{path}: {e}");
             failed += 1;
         }
     }
     match failed {
         0 => Ok(()),
-        n => Err(format!("{n} of {} maps failed", paths.len()).into()),
+        n => Err(format!("{n} of {} maps {failing}", paths.len()).into()),
     }
 }
 
+/// Summarises a map.
 fn map(path: &str) -> Res {
     let mut m = Map::open(path)?;
     let header = m.header()?;
     let name = m.string(&header.name)?;
-    let name = name.as_deref().unwrap_or("?");
     let hm = m.height_map()?;
-    let (lo, hi) = hm
-        .heights
-        .iter()
-        .fold((f32::MAX, f32::MIN), |(lo, hi), &h| (lo.min(h), hi.max(h)));
-    let water = hm.layer.iter().filter(|&&b| b != 0).count();
     let terrain = m.terrain()?;
     if terrain.side + 1 != hm.side {
         return Err(format!(
@@ -245,8 +244,26 @@ fn map(path: &str) -> Res {
         .into());
     }
     let things = m.things()?;
+    outln!("{path}: \"{}\"", name.as_deref().unwrap_or("?"));
+    print_terrain(&hm, &terrain)?;
+    let weather = &header.creator.weather;
+    outln!(
+        "  saved by {} {}, weather {}",
+        header.app_version,
+        header.edition,
+        if weather.is_empty() { "none" } else { weather }
+    );
+    print_things(&things)?;
+    print_kingdoms(&mut m)
+}
+
+fn print_terrain(hm: &HeightMap, terrain: &Terrain) -> Res {
+    let (lo, hi) = hm
+        .heights
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(lo, hi), &h| (lo.min(h), hi.max(h)));
+    let water = hm.layer.iter().filter(|&&b| b != 0).count();
     let extent = hm.side.saturating_sub(1) as f32 * tgck::map::CELL_SIZE;
-    outln!("{path}: \"{name}\"");
     let side = hm.side;
     let water_pct = 100.0 * water as f64 / hm.layer.len().max(1) as f64;
     outln!(
@@ -259,13 +276,10 @@ fn map(path: &str) -> Res {
         terrain.biome,
         terrain.names.len(),
     );
-    let weather = &header.creator.weather;
-    outln!(
-        "  saved by {} {}, weather {}",
-        header.app_version,
-        header.edition,
-        if weather.is_empty() { "none" } else { weather }
-    );
+    Ok(())
+}
+
+fn print_things(things: &[Thing]) -> Res {
     let (templates, top) = top_counts(things.iter().map(|t| t.template.as_str()), 8);
     outln!("  {} objects, {templates} templates: {top}", things.len());
     let starts: Vec<String> = things
@@ -280,6 +294,10 @@ fn map(path: &str) -> Res {
         .collect();
     let (_, top) = top_counts(kingdoms.iter().map(String::as_str), 8);
     outln!("  actors by kingdom: {top}");
+    Ok(())
+}
+
+fn print_kingdoms<R: Read + Seek>(m: &mut Map<R>) -> Res {
     let teams = m.teams()?;
     for kingdom in m.kingdoms()?.kingdoms.iter().flatten() {
         let team = teams
@@ -308,34 +326,20 @@ fn map(path: &str) -> Res {
     Ok(())
 }
 
-/// Loads each map whole, saves it again and compares every section's
-/// payload with the original's.
-fn check(paths: &[&str]) -> Res {
-    let mut failed = 0;
-    for path in paths {
-        match round_trip(path) {
-            Ok((diffs, _)) if !diffs.is_empty() => {
-                failed += 1;
-                outln!("{path}: {}", diffs.join(", "));
-            }
-            Ok((_, identical)) => {
-                let file = if identical {
-                    "identical"
-                } else {
-                    "recompressed"
-                };
-                outln!("{path}: ok, file {file}");
-            }
-            Err(e) => {
-                failed += 1;
-                outln!("{path}: {e}");
-            }
-        }
+/// Loads a map whole, saves it again and compares every section's payload
+/// with the original's.
+fn check(path: &str) -> Res {
+    let (diffs, identical) = round_trip(path)?;
+    if !diffs.is_empty() {
+        return Err(diffs.join(", ").into());
     }
-    match failed {
-        0 => Ok(()),
-        n => Err(format!("{n} of {} maps don't load or round-trip", paths.len()).into()),
-    }
+    let file = if identical {
+        "identical"
+    } else {
+        "recompressed"
+    };
+    outln!("{path}: ok, file {file}");
+    Ok(())
 }
 
 /// The sections that differ once `path` is saved again, and whether the
