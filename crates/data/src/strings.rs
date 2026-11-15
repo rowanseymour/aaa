@@ -134,7 +134,7 @@ impl PingLook {
 /// What the font's image of the glyph `id` is called: its display name
 /// run together, as `Faction Experience` is drawn from
 /// `FactionExperience.png`.
-fn glyph_image(glyphs: &[defs::Glyph], id: &Id) -> Option<String> {
+pub(crate) fn glyph_image(glyphs: &[defs::Glyph], id: &Id) -> Option<String> {
     let glyph = glyphs.iter().find(|g| g.ids.as_ref() == Some(id))?;
     Some(glyph.display_name.as_deref()?.replace(' ', ""))
 }

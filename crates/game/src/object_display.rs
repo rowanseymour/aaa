@@ -247,7 +247,7 @@ fn says(of: Says) -> impl Bundle {
 /// The line saying what a regiment or building counts for in its side's
 /// economy, with what it says now: see [`economy`].
 #[derive(Component, Default)]
-pub struct EconomyLine(Vec<(&'static str, String)>);
+pub struct EconomyLine(Vec<(Id, String)>);
 
 /// The line saying what a regiment or building is doing.
 #[derive(Component, Clone, Copy)]
@@ -303,8 +303,8 @@ pub struct Looks {
     names: HashMap<Id, String>,
     /// What each template says of itself and shows its defence by.
     listings: Arc<HashMap<Id, aaa_data::Listing>>,
-    /// Each resource's glyph, by the resource's field name in the data.
-    glyphs: HashMap<&'static str, Handle<Image>>,
+    /// Each resource's glyph, by the resource's id.
+    glyphs: HashMap<Id, Handle<Image>>,
     strings: Arc<aaa_data::Strings>,
     /// The map's own text, for the names it gives things and sides.
     map: Arc<aaa_data::Strings>,
@@ -1497,8 +1497,10 @@ pub fn refresh(
             hint.0 = words;
         }
     }
+    let resources = &sim.rules().economy.resources;
     for (row, status, mut line) in &mut lines {
-        let now = counted(sim, local.0, *status).map_or_else(Vec::new, |l| economy(&l));
+        let now =
+            (counted(sim, local.0, *status)).map_or_else(Vec::new, |l| economy(&l, resources));
         if line.0 == now {
             continue;
         }
@@ -1792,32 +1794,22 @@ fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
 }
 
 /// What a thing counts for in its side's economy, as the display's line
-/// has it, each with its resource's field name in the data: of each
-/// resource what it earns less what it takes to keep, signed, but for
-/// the limits it takes up, which are bare. Nothing for what comes to
-/// nothing.
-fn economy(ledger: &Ledger) -> Vec<(&'static str, String)> {
-    // As the game orders them: a limit made room in before one taken up.
-    const ORDER: [&str; 7] = [
-        "money",
-        "ammo",
-        "oil",
-        "unit_limit_provided",
-        "unit_limit_consumed",
-        "building_limit_provided",
-        "building_limit_consumed",
-    ];
-    let entries = ORDER.into_iter().filter_map(|kind| {
+/// has it, by resource in the order `resources` are defined: of each what
+/// it earns less what it takes to keep, signed, but for a limited
+/// resource taken up, which is bare. Nothing for what comes to nothing.
+fn economy(ledger: &Ledger, resources: &[aaa_data::ResourceKind]) -> Vec<(Id, String)> {
+    let entries = resources.iter().filter_map(|r| {
+        let kind = r.id.as_str();
         let net = ledger.production.get(kind) - ledger.upkeep.get(kind);
         // To few enough figures that sums' rounding doesn't show.
-        let (net, figure) = match kind.ends_with("_consumed") {
+        let (net, figure) = match r.role == aaa_data::ResourceRole::LimitedConsumed {
             true => (net.abs().round(), format!("{}", net.abs().round())),
             false => {
                 let net = (net * 1000.0).round() / 1000.0;
                 (net, format!("{net:+}"))
             }
         };
-        (net != 0.0).then_some((kind, figure))
+        (net != 0.0).then(|| (r.id.clone(), figure))
     });
     entries.collect()
 }
@@ -2019,6 +2011,17 @@ mod tests {
 
     #[test]
     fn the_economy_line_signs_all_but_the_limits_taken_up() {
+        // AA's, in its order: a limit made room in before one taken up.
+        use aaa_data::ResourceKind as R;
+        let resources = [
+            R::stockpiled("money"),
+            R::upkeep("ammo", Default::default()),
+            R::upkeep("oil", Default::default()),
+            R::upkeep("unit_limit_provided", Default::default()),
+            R::limited("unit_limit_consumed", "unit_limit_provided"),
+            R::upkeep("building_limit_provided", Default::default()),
+            R::limited("building_limit_consumed", "building_limit_provided"),
+        ];
         let ledger = |earned: &[(&str, f32)], kept: &[(&str, f32)]| {
             let mut ledger = Ledger::default();
             earned
@@ -2028,7 +2031,7 @@ mod tests {
             ledger
         };
         let line = |ledger: Ledger| -> Vec<String> {
-            let line = economy(&ledger).into_iter();
+            let line = economy(&ledger, &resources).into_iter();
             line.map(|(kind, figure)| format!("{kind} {figure}"))
                 .collect()
         };

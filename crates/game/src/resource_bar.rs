@@ -2,6 +2,7 @@
 //! they net of each resource a minute, and a second bar under it previewing
 //! what the order under the cursor would make of them.
 
+use aaa_data::{Id, ResourceRole};
 use aaa_map::Regiment;
 use aaa_render::textures;
 use aaa_sim::{Balance, Change};
@@ -11,18 +12,10 @@ use bevy::prelude::*;
 use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};
 
-/// What each cell shows, in order: a rate, or a limit by what it uses.
-const CELLS: [&str; 5] = [
-    "money",
-    "ammo",
-    "oil",
-    "building_limit_consumed",
-    "unit_limit_consumed",
-];
-
 const CELL: f32 = 80.0;
-/// The money cell's width, which has room for the stockpile beside its rate.
-const MONEY_CELL: f32 = 112.0;
+/// The stockpile's cell's width, which has room for the stockpile beside
+/// its rate.
+const STOCKPILE_CELL: f32 = 112.0;
 const HEIGHT: f32 = 22.0;
 const GAP: f32 = 4.0;
 
@@ -44,10 +37,14 @@ pub enum Previewed {
 #[derive(Component)]
 pub struct Bar(bool);
 
-/// The text of a cell of a bar, by index into [`CELLS`], drawn in a span
-/// for each run of it.
+/// The text of a cell of a bar, drawn in a span for each run of it.
 #[derive(Component)]
-pub struct Cell(bool, usize);
+pub struct Cell {
+    preview: bool,
+    resource: Id,
+    /// Whether it's the stockpiled resource's, which shows the stockpile.
+    stockpiled: bool,
+}
 
 /// The mark beside the bar while the player can't pay their upkeep.
 #[derive(Component)]
@@ -76,6 +73,11 @@ pub fn spawn(
         "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
     );
     let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
+    // The sim keeps one stockpile, of the first stockpiled resource.
+    let resources = game.resources();
+    let stockpile = (resources.iter()).find(|r| r.role == ResourceRole::Stockpiled);
+    let stockpiled = |id: &Id| stockpile.is_some_and(|r| &r.id == id);
+    let cells = game.economy_bar();
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
         root.spawn((
             Bar(preview),
@@ -95,11 +97,12 @@ pub fn spawn(
             ),
         ))
         .with_children(|bar| {
-            for (i, kind) in CELLS.into_iter().enumerate() {
+            for kind in &cells {
+                let stockpiled = stockpiled(kind);
                 bar.spawn(Node {
-                    width: px(match kind {
-                        "money" => MONEY_CELL,
-                        _ => CELL,
+                    width: px(match stockpiled {
+                        true => STOCKPILE_CELL,
+                        false => CELL,
                     }),
                     column_gap: px(3),
                     align_items: AlignItems::Center,
@@ -116,7 +119,12 @@ pub fn spawn(
                             },
                         ));
                     }
-                    cell.spawn((Cell(preview, i), label("", Font::Hud, Ink::Body)));
+                    let text = Cell {
+                        preview,
+                        resource: kind.clone(),
+                        stockpiled,
+                    };
+                    cell.spawn((text, label("", Font::Hud, Ink::Body)));
                 });
             }
         });
@@ -212,14 +220,14 @@ pub fn show(
         }
     }
     for (entity, cell, children) in &cells {
-        let shown = match cell.0 {
+        let shown = match cell.preview {
             true => previewed.as_ref(),
             false => Some(&now),
         };
         let Some((stockpile, balance)) = shown else {
             continue;
         };
-        let parts = cell_parts(CELLS[cell.1], *stockpile, balance);
+        let parts = cell_parts(&cell.resource, cell.stockpiled, *stockpile, balance);
         paint(&mut commands, entity, children, parts, &mut spans);
     }
 }
@@ -256,30 +264,35 @@ fn paint(
 
 /// What a cell says, in runs that are each short or not: the stockpile and
 /// its rate, a resource's rate, or a limit's use against what's provided.
-fn cell_parts(kind: &str, stockpile: f32, balance: &Balance) -> Vec<(String, bool)> {
+fn cell_parts(
+    kind: &Id,
+    stockpiled: bool,
+    stockpile: f32,
+    balance: &Balance,
+) -> Vec<(String, bool)> {
     // The sign comes from the rate, not its rounding, so a rate just under
     // zero reads -0.
     let rate = |r: f32| {
         let sign = if r < 0.0 { '-' } else { '+' };
         (format!("{sign}{}", r.abs().round()), r < 0.0)
     };
-    if let Some(limit) = balance.limits.iter().find(|l| l.consumed.as_str() == kind) {
+    if let Some(limit) = balance.limits.iter().find(|l| l.consumed == *kind) {
         let (used, provided) = (limit.used.round(), limit.provided.round());
         return vec![
             (used.to_string(), used > provided),
             (format!("/{provided}"), false),
         ];
     }
-    let net = balance.net.get(kind);
-    match kind {
-        "money" => vec![
+    let net = balance.net.get(kind.as_str());
+    match stockpiled {
+        true => vec![
             // Adding zero turns a -0 into 0.
             ((stockpile.floor() + 0.0).to_string(), stockpile < 0.0),
             ("(".into(), false),
             rate(net),
             (")".into(), false),
         ],
-        _ => vec![rate(net)],
+        false => vec![rate(net)],
     }
 }
 
@@ -311,10 +324,17 @@ mod tests {
             ..Default::default()
         };
         let balance = ledger.balance(&rules);
-        let said: Vec<String> = CELLS
+        let cells = [
+            "money",
+            "ammo",
+            "oil",
+            "building_limit_consumed",
+            "unit_limit_consumed",
+        ];
+        let said: Vec<String> = cells
             .iter()
-            .map(|k| {
-                cell_parts(k, 518.7, &balance)
+            .map(|&k| {
+                cell_parts(&Id::from(k), k == "money", 518.7, &balance)
                     .into_iter()
                     .map(|p| p.0)
                     .collect()
@@ -338,7 +358,9 @@ mod tests {
             ..Default::default()
         };
         let balance = ledger.balance(&rules);
-        let parts = |kind, stockpile| cell_parts(kind, stockpile, &balance);
+        let parts = |kind: &str, stockpile| {
+            cell_parts(&Id::from(kind), kind == "money", stockpile, &balance)
+        };
         let short = |s: &str| (s.to_string(), true);
         let body = |s: &str| (s.to_string(), false);
         assert_eq!(

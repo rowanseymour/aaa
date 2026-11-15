@@ -88,31 +88,31 @@ const MENU_CANCEL: usize = 11;
 /// The command whose look the cancel button borrows, as the game gives
 /// none of its own for backing out of an order or a menu.
 const CANCEL_LOOK: &str = "construction_cancel";
-/// Where the game's font keeps the glyphs it draws resources with, and
-/// each resource's, by its field name in the data.
+/// Where the game's font keeps the images of the glyphs it draws
+/// resources with.
 pub(crate) const GLYPH_DIR: &str = "Fonts/medium/1280";
-pub(crate) const GLYPHS: [(&str, &str); 7] = [
-    ("money", "money"),
-    ("ammo", "ammo"),
-    ("oil", "fuel"),
-    ("unit_limit_consumed", "unitlimit"),
-    ("building_limit_consumed", "building"),
-    ("unit_limit_provided", "unitlimit"),
-    ("building_limit_provided", "building"),
-];
 
-/// Each resource's glyph, by the resource's field name in the data.
+/// Each resource's glyph, by the resource's id.
 pub(crate) fn glyphs(
     game: &GameData,
     images: &mut Assets<Image>,
     formats: bevy::image::CompressedImageFormats,
-) -> HashMap<&'static str, Handle<Image>> {
-    let glyph = |&(kind, name): &(&'static str, &str)| {
-        let path = format!("{GLYPH_DIR}/{name}.png");
-        let image = textures::decode(&game.read(&path)?, &path, formats, true)?;
-        Some((kind, images.add(image)))
-    };
-    GLYPHS.iter().filter_map(glyph).collect()
+) -> HashMap<Id, Handle<Image>> {
+    // Resources often share a glyph, such as a limit and what provides it.
+    let mut decoded: HashMap<String, Option<Handle<Image>>> = HashMap::new();
+    let mut out = HashMap::new();
+    for r in game.resources().iter() {
+        let Some(name) = &r.glyph else { continue };
+        let handle = decoded.entry(name.clone()).or_insert_with(|| {
+            let path = format!("{GLYPH_DIR}/{name}.png");
+            let image = textures::decode(&game.read(&path)?, &path, formats, true)?;
+            Some(images.add(image))
+        });
+        if let Some(h) = handle {
+            out.insert(r.id.clone(), h.clone());
+        }
+    }
+    out
 }
 
 /// What an order does once its button is pressed.
@@ -644,7 +644,7 @@ pub fn spawn(
         amounts
             .iter()
             .map(|a| Quantity {
-                glyph: glyphs.get(a.kind.as_str()).cloned(),
+                glyph: glyphs.get(&a.kind).cloned(),
                 amount: a.amount,
                 earned,
                 resource: a.resource.clone(),
