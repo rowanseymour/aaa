@@ -44,7 +44,7 @@ impl World {
     /// The money a building sells for: a share of its own template's cost,
     /// whatever was paid for it, to the nearest whole amount.
     pub fn sale_value(&self, building: usize) -> f32 {
-        let cost = self.economy_of(&self.buildings[building].template).cost;
+        let cost = &self.economy_of(&self.buildings[building].template).cost;
         (cost.get(money(&self.rules.economy)) * self.rules.economy.sell_factor).round()
     }
 

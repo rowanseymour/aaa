@@ -159,7 +159,8 @@ impl GameData {
     pub(crate) fn uvars(&self) -> Arc<Vec<defs::UVars>> {
         self.kept("uvars", || {
             // Not in the load lists.
-            let files = self.parse_named(["UVars_AA.tgi", "UVars.tgi"]);
+            let versions = self.versions("UVars.tgi");
+            let files = self.parse_named(versions.iter().map(String::as_str));
             let files = scoped(&files);
             files.iter().flat_map(|f| f.read("Vars")).collect()
         })

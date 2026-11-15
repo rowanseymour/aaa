@@ -205,15 +205,6 @@ pub(crate) fn localized(strings: &Strings, name: Option<&str>) -> Option<String>
     }
 }
 
-/// What the game calls a resource, by its field name in the data, such as
-/// Money for `money`.
-pub fn resource_name(strings: &Strings, field: &str) -> String {
-    strings
-        .get(&format!("resources_{field}_name"))
-        .cloned()
-        .unwrap_or_else(|| field.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

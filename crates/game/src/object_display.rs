@@ -1724,7 +1724,7 @@ impl Teller<'_> {
                     let done = format!("{}%", now as u32);
                     lines.push(row("ui_tooltip_item_title_production_percentage", done));
                 }
-                if let (0, Some(pause)) = (place, building.paused) {
+                if let (0, Some(pause)) = (place, &building.paused) {
                     let why = match pause {
                         Pause::Limit(_) => "ui_tooltip_queue_paused_unit_limit",
                         Pause::Disabled => "ui_tooltip_queue_paused_disabled",

@@ -15,8 +15,8 @@ mod units;
 pub use aaa_data::{
     Airlift, Amounts, Damage, DeployPoints, Economy, EconomyRules, Fall, Fighter, Flight,
     FlightKind, FogSetting, Grant, GuardRules, Id, Kind, Logistics, Operation, Requires, Research,
-    Shape, Sight, Supply, SupplyEffect, SupplyRules, Targets, TerrainEffect, TerrainRules, Turret,
-    Weapon,
+    ResourceKind, Shape, Sight, Supply, SupplyEffect, SupplyRules, Targets, TerrainEffect,
+    TerrainRules, Turret, Weapon,
 };
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
@@ -698,6 +698,7 @@ fn read_sides<R: std::io::Read + std::io::Seek>(
         &map.restriction_groups()?,
         &game.kingdom_colors(),
         default,
+        rules.stockpiled().next().map_or("", Id::as_str),
         &handicaps(&map.header()?.parameters.kingdoms),
     ))
 }

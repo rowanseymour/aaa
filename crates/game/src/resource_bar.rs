@@ -263,7 +263,7 @@ fn cell_parts(kind: &str, stockpile: f32, balance: &Balance) -> Vec<(String, boo
         let sign = if r < 0.0 { '-' } else { '+' };
         (format!("{sign}{}", r.abs().round()), r < 0.0)
     };
-    if let Some(limit) = balance.limits.iter().find(|l| l.consumed == kind) {
+    if let Some(limit) = balance.limits.iter().find(|l| l.consumed.as_str() == kind) {
         let (used, provided) = (limit.used.round(), limit.provided.round());
         return vec![
             (used.to_string(), used > provided),
@@ -286,7 +286,16 @@ fn cell_parts(kind: &str, stockpile: f32, balance: &Balance) -> Vec<(String, boo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aaa_map::ResourceKind;
     use aaa_sim::{Ledger, economy::EconomyRules};
+
+    fn resources() -> Vec<ResourceKind> {
+        vec![
+            ResourceKind::stockpiled("money"),
+            ResourceKind::limited("unit_limit_consumed", "unit_limit_provided"),
+            ResourceKind::limited("building_limit_consumed", "building_limit_provided"),
+        ]
+    }
 
     #[test]
     fn cells_show_rates_and_limits_as_the_game_does() {
@@ -297,10 +306,7 @@ mod tests {
         ledger.production.set("unit_limit_provided", 6.0);
         ledger.upkeep.set("building_limit_consumed", 1.0);
         let rules = EconomyRules {
-            limits: vec![
-                ("unit_limit_consumed", "unit_limit_provided"),
-                ("building_limit_consumed", "building_limit_provided"),
-            ],
+            resources: resources(),
             limited_max: 20.0,
             ..Default::default()
         };
@@ -327,10 +333,7 @@ mod tests {
         ledger.upkeep.set("building_limit_consumed", 5.0);
         ledger.production.set("building_limit_provided", 5.0);
         let rules = EconomyRules {
-            limits: vec![
-                ("unit_limit_consumed", "unit_limit_provided"),
-                ("building_limit_consumed", "building_limit_provided"),
-            ],
+            resources: resources(),
             limited_max: 20.0,
             ..Default::default()
         };

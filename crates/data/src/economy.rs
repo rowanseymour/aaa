@@ -1,96 +1,185 @@
 //! What sides earn and spend: the resources, each template's own cost,
 //! production and upkeep, and the settings that bound them.
 
+use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::Arc;
 
-use crate::{GameData, Id, defs, scoped};
+use crate::{GameData, Id, Strings, defs, not_null, scoped, strings::localized};
 
-/// The resources the data's costs, upkeeps and production name, by field
-/// name, in the order [`Amounts`] keeps them.
-pub const RESOURCES: [&str; 7] = [
-    "money",
-    "ammo",
-    "oil",
-    "unit_limit_consumed",
-    "building_limit_consumed",
-    "unit_limit_provided",
-    "building_limit_provided",
-];
+pub use defs::ResourceRole;
 
-/// So much of each of the [`RESOURCES`].
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Amounts(pub [f32; RESOURCES.len()]);
+/// One of the resources the data defines, which costs, upkeeps and
+/// production name by its id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ResourceKind {
+    pub id: Id,
+    pub role: ResourceRole,
+    /// For a limited resource, the one that provides room for it.
+    pub limited_by: Option<Id>,
+    /// What making up a shortfall of one unit of it costs, in stockpiled
+    /// resources.
+    pub purchase_cost: Amounts,
+    /// What the game calls it, its id where the data names nothing.
+    pub name: String,
+    /// The glyph it's drawn with, by the glyph's id.
+    pub icon: Option<String>,
+}
 
-impl Amounts {
-    /// The resource's place in [`RESOURCES`].
-    pub fn index(kind: &str) -> Option<usize> {
-        RESOURCES.iter().position(|r| r.eq_ignore_ascii_case(kind))
-    }
-
-    /// How much there is of a resource, 0 for one it doesn't know.
-    pub fn get(&self, kind: &str) -> f32 {
-        Self::index(kind).map_or(0.0, |i| self.0[i])
-    }
-
-    pub fn set(&mut self, kind: &str, amount: f32) {
-        if let Some(i) = Self::index(kind) {
-            self.0[i] = amount;
+impl ResourceKind {
+    fn new(id: &str, role: ResourceRole) -> Self {
+        ResourceKind {
+            id: id.into(),
+            role,
+            limited_by: None,
+            purchase_cost: Amounts::default(),
+            name: id.to_string(),
+            icon: None,
         }
     }
 
-    /// Each resource there's any of, by field name.
-    pub fn nonzero(&self) -> impl Iterator<Item = (&'static str, f32)> + '_ {
-        RESOURCES.into_iter().zip(self.0).filter(|&(_, a)| a != 0.0)
+    /// A resource that's stockpiled and bought with.
+    pub fn stockpiled(id: &str) -> Self {
+        Self::new(id, ResourceRole::Stockpiled)
+    }
+
+    /// A resource that's kept up as it's produced, a shortfall of it bought
+    /// at `purchase_cost`.
+    pub fn upkeep(id: &str, purchase_cost: Amounts) -> Self {
+        ResourceKind {
+            purchase_cost,
+            ..Self::new(id, ResourceRole::Upkeep)
+        }
+    }
+
+    /// A resource whose use is capped by what's produced of `by`.
+    pub fn limited(id: &str, by: &str) -> Self {
+        ResourceKind {
+            limited_by: Some(by.into()),
+            ..Self::new(id, ResourceRole::LimitedConsumed)
+        }
+    }
+}
+
+/// So much of each resource, by id; none of a resource it doesn't name.
+#[derive(Debug, Clone, Default)]
+pub struct Amounts(Vec<(Id, f32)>);
+
+impl Amounts {
+    /// How much there is of a resource.
+    pub fn get(&self, kind: &str) -> f32 {
+        (self.0.iter())
+            .find(|(id, _)| id.as_str().eq_ignore_ascii_case(kind))
+            .map_or(0.0, |&(_, a)| a)
+    }
+
+    pub fn set(&mut self, kind: &str, amount: f32) {
+        match (self.0.iter_mut()).find(|(id, _)| id.as_str().eq_ignore_ascii_case(kind)) {
+            Some((_, a)) => *a = amount,
+            None => self.0.push((kind.into(), amount)),
+        }
+    }
+
+    fn credit(&mut self, kind: &Id, amount: f32) {
+        match self.0.iter_mut().find(|(id, _)| id == kind) {
+            Some((_, a)) => *a += amount,
+            None => self.0.push((kind.clone(), amount)),
+        }
+    }
+
+    /// Each resource named, in the order first named.
+    pub fn iter(&self) -> impl Iterator<Item = (&Id, f32)> + '_ {
+        self.0.iter().map(|(id, a)| (id, *a))
+    }
+
+    /// Each resource there's any of, in the order first named.
+    pub fn nonzero(&self) -> impl Iterator<Item = (&Id, f32)> + '_ {
+        self.iter().filter(|&(_, a)| a != 0.0)
+    }
+}
+
+/// Equal when they have as much of every resource, a resource one doesn't
+/// name being none.
+impl PartialEq for Amounts {
+    fn eq(&self, other: &Self) -> bool {
+        let covers = |a: &Self, b: &Self| a.iter().all(|(id, n)| b.get(id.as_str()) == n);
+        covers(self, other) && covers(other, self)
     }
 }
 
 impl From<&defs::Resources> for Amounts {
     fn from(r: &defs::Resources) -> Self {
         let mut out = Amounts::default();
-        for (kind, amount) in r.amounts() {
-            out.set(kind, amount);
+        // The lists every cost starts from give each resource a 0.
+        for (kind, amount) in r.amounts().filter(|&(_, a)| a != 0.0) {
+            out.credit(kind, amount);
         }
         out
     }
 }
 
+impl AddAssign<&Amounts> for Amounts {
+    fn add_assign(&mut self, other: &Amounts) {
+        for (kind, amount) in other.iter() {
+            self.credit(kind, amount);
+        }
+    }
+}
+
+impl SubAssign<&Amounts> for Amounts {
+    fn sub_assign(&mut self, other: &Amounts) {
+        for (kind, amount) in other.iter() {
+            self.credit(kind, -amount);
+        }
+    }
+}
+
 impl AddAssign for Amounts {
     fn add_assign(&mut self, other: Amounts) {
-        for (a, b) in self.0.iter_mut().zip(other.0) {
-            *a += b;
-        }
+        *self += &other;
     }
 }
 
 impl SubAssign for Amounts {
     fn sub_assign(&mut self, other: Amounts) {
-        for (a, b) in self.0.iter_mut().zip(other.0) {
-            *a -= b;
-        }
+        *self -= &other;
     }
 }
 
-impl Add for Amounts {
+impl Add<&Amounts> for Amounts {
     type Output = Amounts;
-    fn add(mut self, other: Amounts) -> Amounts {
+    fn add(mut self, other: &Amounts) -> Amounts {
         self += other;
         self
     }
 }
 
-impl Sub for Amounts {
+impl Sub<&Amounts> for Amounts {
     type Output = Amounts;
-    fn sub(mut self, other: Amounts) -> Amounts {
+    fn sub(mut self, other: &Amounts) -> Amounts {
         self -= other;
         self
     }
 }
 
+impl Add for Amounts {
+    type Output = Amounts;
+    fn add(self, other: Amounts) -> Amounts {
+        self + &other
+    }
+}
+
+impl Sub for Amounts {
+    type Output = Amounts;
+    fn sub(self, other: Amounts) -> Amounts {
+        self - &other
+    }
+}
+
 /// A template's own economy, as its data gives it, not counting its
 /// members'.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Economy {
     /// Taken once, when it's commissioned.
     pub cost: Amounts,
@@ -130,13 +219,8 @@ pub struct Logistics {
 /// The settings that bound every side's economy.
 #[derive(Debug, Clone, PartialEq)]
 pub struct EconomyRules {
-    /// What making up a shortfall of a unit of each resource costs, in
-    /// money; 0 for those that can't be bought.
-    pub purchase_cost: Amounts,
-    /// The resources that are stockpiled.
-    pub stockpiled: Vec<&'static str>,
-    /// Each resource held to another, consumed by provided.
-    pub limits: Vec<(&'static str, &'static str)>,
+    /// The resources, in the order the data defines them.
+    pub resources: Vec<ResourceKind>,
     /// The most a limiting resource provides, in total.
     pub limited_max: f32,
     /// The most a stockpile holds.
@@ -153,9 +237,7 @@ pub struct EconomyRules {
 impl Default for EconomyRules {
     fn default() -> Self {
         EconomyRules {
-            purchase_cost: Amounts::default(),
-            stockpiled: vec!["money"],
-            limits: Vec::new(),
+            resources: Vec::new(),
             limited_max: f32::INFINITY,
             stockpile_max: f32::INFINITY,
             stockpile_default: 0.0,
@@ -165,13 +247,46 @@ impl Default for EconomyRules {
     }
 }
 
+impl EconomyRules {
+    pub fn resource(&self, id: &str) -> Option<&ResourceKind> {
+        (self.resources.iter()).find(|r| r.id.as_str().eq_ignore_ascii_case(id))
+    }
+
+    /// The resources that are stockpiled, which things are bought with.
+    pub fn stockpiled(&self) -> impl Iterator<Item = &Id> + '_ {
+        (self.resources.iter())
+            .filter(|r| r.role == ResourceRole::Stockpiled)
+            .map(|r| &r.id)
+    }
+
+    /// Each limited resource with the one that provides room for it.
+    pub fn limits(&self) -> impl Iterator<Item = (&Id, &Id)> + '_ {
+        (self.resources.iter())
+            .filter(|r| r.role == ResourceRole::LimitedConsumed)
+            .filter_map(|r| Some((&r.id, r.limited_by.as_ref()?)))
+    }
+}
+
 impl GameData {
     /// Each template's own [`Economy`], for those that have one, by
-    /// template id.
+    /// template id. A resource the data doesn't define is an error in the
+    /// data, logged once and left out.
     pub fn economies(&self) -> HashMap<Id, Economy> {
+        let resources = self.resources();
+        let undefined = std::sync::Mutex::new(HashSet::new());
+        let of = |r: Option<&defs::Resources>| {
+            let mut out = Amounts::default();
+            for (id, amount) in r.into_iter().flat_map(defs::Resources::amounts) {
+                if resources.iter().any(|k| &k.id == id) {
+                    out.credit(id, amount);
+                } else if crate::locked(&undefined).insert(id.clone()) {
+                    log::warn!("{id} is named as a resource, which no [Resource] defines");
+                }
+            }
+            out
+        };
         self.by_template(|t| {
             let e = t.economy_component.as_ref()?;
-            let of = |r: Option<&defs::Resources>| r.map(Amounts::from).unwrap_or_default();
             Some(Economy {
                 cost: of(e.cost.as_ref()),
                 production: of(e.production.as_ref()),
@@ -229,42 +344,22 @@ impl GameData {
         })
     }
 
+    /// The resources the data defines, in the order it defines them, the
+    /// first kept of any defined twice.
+    pub fn resources(&self) -> Arc<Vec<ResourceKind>> {
+        self.kept("resources", || self.read_resources())
+    }
+
+    fn read_resources(&self) -> Vec<ResourceKind> {
+        resource_kinds(&self.parse_tgis(|_| true), &self.strings())
+    }
+
     /// The resources' and the tuning settings' bounds on economies.
     pub fn economy_rules(&self) -> EconomyRules {
-        let files = self.parse_tgis(|n| {
-            n == "game/resources.tgi"
-                || n == "game/world_rules_aa.tgi"
-                || n.starts_with("templates/")
-        });
-        let files = scoped(&files);
-        let resources: Vec<defs::Resource> = files
-            .iter()
-            .flat_map(|f| f.read::<defs::Resource>("Resource"))
-            .collect();
-        let known = |id: &Id| {
-            RESOURCES
-                .into_iter()
-                .find(|r| id.as_str().eq_ignore_ascii_case(r))
+        let mut rules = EconomyRules {
+            resources: self.resources().to_vec(),
+            ..EconomyRules::default()
         };
-        let mut rules = EconomyRules::default();
-        let mut stockpiled = Vec::new();
-        for r in &resources {
-            let Some(kind) = r.ids.as_ref().and_then(known) else {
-                continue;
-            };
-            match &r.purchase_cost {
-                Some(cost) => rules.purchase_cost.set(kind, cost.money.unwrap_or(0.0)),
-                // Resources bought with nothing else are what's stockpiled.
-                None if r.limited_by.is_none() => stockpiled.push(kind),
-                None => {}
-            }
-            if let Some(by) = r.limited_by.as_ref().and_then(known) {
-                rules.limits.push((kind, by));
-            }
-        }
-        if !stockpiled.is_empty() {
-            rules.stockpiled = stockpiled;
-        }
         let svars = self.svars();
         let first = |of: fn(&defs::SVars) -> Option<f32>| svars.iter().find_map(of);
         if let Some(v) = first(|s| s.economy_limited_resource_max) {
@@ -280,40 +375,77 @@ impl GameData {
             rules.sell_under_siege = v;
         }
         // The match's setting stands in for the tuning one.
-        let rule = files
-            .iter()
-            .flat_map(|f| f.read::<defs::WorldRule>("WorldRule"))
-            .find(|r| {
-                r.ids
-                    .as_ref()
-                    .is_some_and(|id| id.as_str().eq_ignore_ascii_case("ResourceStockpileDefault"))
-            })
-            .and_then(|r| r.default?.parse().ok());
+        let rule =
+            (self.world_rule("ResourceStockpileDefault")).and_then(|r| r.default?.parse().ok());
         if let Some(v) = rule.or_else(|| first(|s| s.resource_stockpile_default)) {
             rules.stockpile_default = v;
         }
         rules
     }
 
-    /// The tuning settings, the game's own (`SVars_AA.tgi`), which take
+    /// The tuning settings, the game's own (such as `SVars_AA.tgi`), which take
     /// precedence, before the engine's.
     pub(crate) fn svars(&self) -> Arc<Vec<defs::SVars>> {
         self.kept("svars", || self.read_svars())
     }
 
     fn read_svars(&self) -> Vec<defs::SVars> {
-        let files = self.parse_tgis(|n| n == "game/svars_aa.tgi" || n == "game/svars.tgi");
+        let versions = self.versions("Game/SVars.tgi");
+        let files = self.parse_tgis(|n| versions.iter().any(|v| v == n));
         let files = scoped(&files);
-        let mut out: Vec<(bool, defs::SVars)> = files
+        let mut out: Vec<(Option<usize>, defs::SVars)> = files
             .iter()
             .flat_map(|f| {
-                let own = f.file.to_ascii_lowercase().ends_with("svars_aa.tgi");
-                f.read::<defs::SVars>("SVars").map(move |s| (own, s))
+                let lower = f.file.to_ascii_lowercase();
+                let at = versions.iter().position(|v| *v == lower);
+                f.read::<defs::SVars>("SVars").map(move |s| (at, s))
             })
             .collect();
-        out.sort_by_key(|(own, _)| !own);
+        out.sort_by_key(|(at, _)| *at);
         out.into_iter().map(|(_, s)| s).collect()
     }
+}
+
+/// The `[Resource]` definitions of `files`, in order, the first kept of any
+/// defined twice. One without a type, or naming a resource none of them
+/// define, is an error in the data.
+fn resource_kinds<P: Borrow<tgi::Parsed>>(
+    files: &[(String, P)],
+    strings: &Strings,
+) -> Vec<ResourceKind> {
+    let mut out: Vec<ResourceKind> = Vec::new();
+    for f in &scoped(files) {
+        for r in f.read::<defs::Resource>("Resource") {
+            let Some(id) = r.ids else { continue };
+            if out.iter().any(|k| k.id == id) {
+                log::warn!("{}: resource {id} defined again", f.file);
+                continue;
+            }
+            let Some(role) = r.kind else {
+                log::warn!("{}: resource {id} has no type", f.file);
+                continue;
+            };
+            out.push(ResourceKind {
+                name: localized(strings, r.name.as_deref()).unwrap_or_else(|| id.to_string()),
+                role,
+                limited_by: not_null(r.limited_by),
+                purchase_cost: (r.purchase_cost.as_ref())
+                    .map(Amounts::from)
+                    .unwrap_or_default(),
+                icon: r.icon,
+                id,
+            });
+        }
+    }
+    for r in &out {
+        let named = (r.limited_by.iter()).chain(r.purchase_cost.iter().map(|(id, _)| id));
+        for id in named {
+            if !out.iter().any(|k| &k.id == id) {
+                log::warn!("resource {} names {id}, which isn't a resource", r.id);
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -328,14 +460,96 @@ mod tests {
         let mut b = Amounts::default();
         b.set("money", 2.0);
         b.set("unit_limit_provided", 6.0);
-        let sum = a + b;
+        let sum = a.clone() + &b;
         assert_eq!(sum.get("money"), 14.0);
         assert_eq!(sum.get("unit_limit_provided"), 6.0);
-        assert_eq!((sum - b).get("money"), 12.0);
+        assert_eq!((sum.clone() - &b).get("money"), 12.0);
         assert_eq!(sum.get("nothing"), 0.0);
+        let named: Vec<_> = sum.nonzero().map(|(k, v)| (k.as_str(), v)).collect();
         assert_eq!(
-            sum.nonzero().collect::<Vec<_>>(),
-            [("money", 14.0), ("ammo", 5.0), ("unit_limit_provided", 6.0)]
+            named,
+            [("money", 14.0), ("AMMO", 5.0), ("unit_limit_provided", 6.0)]
         );
+        // A resource not named is none of it.
+        let mut c = a.clone();
+        c.set("oil", 0.0);
+        assert_eq!(a, c);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn amounts_read_only_the_numbers_a_block_gives() {
+        let parsed = tgi::parse(
+            "[Cost]\n{\n\tmoney = 5\n\toil = 0\n\tnote = cheap\n\t[Nested]\n\t{\n\t\tammo = 1\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("Cost").next().unwrap();
+        let read: defs::Resources = tgi::from_block(block).unwrap();
+        let amounts = Amounts::from(&read);
+        let named: Vec<_> = amounts.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        assert_eq!(named, [("money", 5.0)]);
+    }
+
+    /// The templates resources are defined with, as AA and Kohan II have
+    /// them.
+    const TEMPLATES: &str = "\
+[template Resource]\n{\n\tstring IDS\n\tlocalized name\n\tstring type\n\tstring limited_by = null\n\tstring icon\n}\n\
+[template PurchaseResource inherit=Resource]\n{\n\ttype = STOCKPILED\n}\n\
+[template UpkeepResource inherit=Resource]\n{\n\ttype = UPKEEP\n\t[PurchaseCost]\n}\n\
+[template LimitedConsumedResource inherit=Resource]\n{\n\ttype = LIMITED_CONSUMED\n}\n";
+
+    fn kinds(resources: &str) -> Vec<ResourceKind> {
+        let files = [
+            (
+                "templates/template_resource.tgi".to_string(),
+                tgi::parse(TEMPLATES),
+            ),
+            ("game/resources.tgi".to_string(), tgi::parse(resources)),
+        ];
+        let strings: Strings = [("resources_gold_name".to_string(), "Gold".to_string())]
+            .into_iter()
+            .collect();
+        resource_kinds(&files, &strings)
+    }
+
+    #[test]
+    fn resources_and_their_roles_come_from_the_data() {
+        let found = kinds(
+            "[Resource template=PurchaseResource]\n{\n\tIDS = gold\n\tname = \"#resources_gold_name\"\n\ticon = ch_treasure_chest\n}\n\
+             [Resource template=UpkeepResource]\n{\n\tIDS = wood\n\t[PurchaseCost]\n\tgold = 3\n}\n\
+             [Resource template=UpkeepResource]\n{\n\tIDS = food_provided\n}\n\
+             [Resource template=LimitedConsumedResource]\n{\n\tIDS = food_consumed\n\tlimited_by = food_provided\n}\n\
+             [Resource template=PurchaseResource]\n{\n\tIDS = GOLD\n}\n",
+        );
+        let mut wood_cost = Amounts::default();
+        wood_cost.set("gold", 3.0);
+        let mut gold = ResourceKind::stockpiled("gold");
+        gold.name = "Gold".into();
+        gold.icon = Some("ch_treasure_chest".into());
+        assert_eq!(
+            found,
+            [
+                gold,
+                ResourceKind::upkeep("wood", wood_cost),
+                ResourceKind::upkeep("food_provided", Amounts::default()),
+                ResourceKind::limited("food_consumed", "food_provided"),
+            ]
+        );
+        let rules = EconomyRules {
+            resources: found,
+            ..EconomyRules::default()
+        };
+        let ids = |of: Vec<&Id>| of.into_iter().map(Id::to_string).collect::<Vec<_>>();
+        assert_eq!(ids(rules.stockpiled().collect()), ["gold"]);
+        let limits: Vec<_> = rules
+            .limits()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        assert_eq!(limits, [("food_consumed", "food_provided")]);
+    }
+
+    #[test]
+    fn a_resource_of_no_known_type_isnt_one() {
+        let found = kinds("[Resource template=Resource]\n{\n\tIDS = mana\n\ttype = HOARDED\n}\n");
+        assert_eq!(found, []);
     }
 }
