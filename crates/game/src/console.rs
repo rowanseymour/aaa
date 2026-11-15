@@ -289,6 +289,11 @@ const VERBS: &[Verb] = &[
         "technology",
         "asks the selected building to research a technology it lists",
     ),
+    verb(
+        "usefactionability",
+        "n x y",
+        "uses the nth of the general's special operations, from 0 as the panel lists them, on the ground at x y",
+    ),
     verb("pack", "", "packs up the selected building"),
     verb("sell", "", "sells the selected building"),
     verb("disband", "regiment", "disbands a regiment, by its id"),
@@ -478,6 +483,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "attack" => order(world, &args, Aim::Attack),
                 "guard" => order(world, &args, Aim::Guard),
                 "select" => select(world, &args),
+                "usefactionability" => use_faction_ability(world, &args),
                 "commission" => commission(world, &args),
                 "research" => research(world, &args),
                 "unpack" => unpack(world, &args),
@@ -1209,6 +1215,27 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         None => aaa_sim::Command::Commission { building, template },
     };
     give(world, player, command)?;
+    Ok(String::new())
+}
+
+fn use_faction_ability(world: &mut World, args: &[&str]) -> Reply {
+    let [n, x, y] = args else {
+        return Err(usage("usefactionability"));
+    };
+    let i: usize = n.parse().map_err(|_| usage("usefactionability"))?;
+    let at = place(&world.resource::<Loaded>().map.ground, x, y)?;
+    let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let sim = &world.resource::<Sim>().0;
+    if sim.experience(player).is_none() {
+        return Err("no general leads this side".into());
+    }
+    let op = sim
+        .special_op(player, i)
+        .ok_or(format!("the general has no operation {i}"))?;
+    let given = sim.operation_aim(player, i, None, at);
+    let at = given.ok_or(format!("{} isn't given on the ground", op.id))?;
+    let operation = aaa_sim::Command::Operate { operation: i, at };
+    give(world, player, operation)?;
     Ok(String::new())
 }
 

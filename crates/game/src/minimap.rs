@@ -744,20 +744,20 @@ impl Minimap {
 }
 
 /// Clicking or dragging on the diamond centres the camera there, while no
-/// order is aimed for the click to give.
+/// order or special operation is aimed for the click to give.
 pub fn steer(
     buttons: Res<ButtonInput<MouseButton>>,
     mut dragging: Local<bool>,
     minimap: Res<Minimap>,
     loaded: Res<Loaded>,
-    page: Res<crate::actions::Page>,
+    (page, armed): (Res<crate::actions::Page>, Res<crate::special_ops::Armed>),
     views: Query<&RelativeCursorPosition, With<MinimapView>>,
     mut cameras: Query<&mut RtsCamera>,
 ) {
     let over = over(&views);
     // Only a press that starts on the minimap drags across it.
     if buttons.just_pressed(MouseButton::Left) {
-        *dragging = on_disc(over).is_some() && !crate::actions::aiming(page);
+        *dragging = on_disc(over).is_some() && !crate::actions::aiming(page) && armed.0.is_none();
     }
     if !buttons.pressed(MouseButton::Left) {
         *dragging = false;

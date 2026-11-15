@@ -68,6 +68,16 @@ impl World {
         World::build(sides, pathing, Rules::default(), regiments)
     }
 
+    /// As [`World::from_regiments`], played by `rules`.
+    pub fn from_regiments_by(
+        sides: Sides,
+        pathing: Pathing,
+        rules: Rules,
+        regiments: &[aaa_map::Regiment],
+    ) -> World {
+        World::build(sides, pathing, rules, regiments)
+    }
+
     /// What the match is played by, fixed once it's begun.
     pub fn rules(&self) -> &Rules {
         &self.rules

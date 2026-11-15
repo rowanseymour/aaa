@@ -1,6 +1,7 @@
 //! The special operations panel in the top left corner: the player's
 //! side's experience, and a button for each of its general's special
-//! operations, greyed out while it can't be used.
+//! operations, greyed out while it can't be used. Pressing one, or its key,
+//! arms the cursor with it, and the next left click in the world gives it.
 
 use std::collections::HashMap;
 
@@ -9,12 +10,17 @@ use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
+use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
+use bevy::ui_widgets::{Activate, Button};
 
-use crate::actions::{self, BUTTON, Blocks, GAP, GLYPH_DIR, PAD};
+use crate::actions::{self, BUTTON, Blocks, GAP, GLYPH_DIR, PAD, Page, fill};
 use crate::keys::Bindings;
+use crate::messages::Failed;
+use crate::orders::Orders;
 use crate::ui::{
-    self, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel, tooltip,
+    self, Click, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel,
+    tooltip,
 };
 use crate::{Leaders, Loaded, Local, Screen, Sim};
 
@@ -58,6 +64,10 @@ impl Plugin for SpecialOpsPlugin {
             .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
                 commands.remove_resource::<Panel>();
             })
+            .init_resource::<Armed>()
+            .add_systems(OnExit(Screen::Match), |mut armed: ResMut<Armed>| {
+                armed.0 = None
+            })
             .add_systems(
                 Update,
                 (refresh, tips)
@@ -67,9 +77,18 @@ impl Plugin for SpecialOpsPlugin {
     }
 }
 
+/// The special operation the cursor's armed with, by its place in the
+/// general's list: the next left click in the world gives it.
+#[derive(Resource, Default, Debug, PartialEq)]
+pub struct Armed(pub Option<usize>);
+
+pub fn armed(armed: Res<Armed>) -> bool {
+    armed.0.is_some()
+}
+
 /// What the panel shows of the player's side, which has a general.
 #[derive(Resource)]
-struct Panel {
+pub(crate) struct Panel {
     player: u32,
     general: String,
     max: Option<f32>,
@@ -78,12 +97,18 @@ struct Panel {
     shown: Option<i64>,
 }
 
-/// The tooltips' words from the game's strings.
-struct Words {
+/// The tooltips' and messages' words from the game's strings.
+pub(crate) struct Words {
     title: String,
     general: String,
     experience: String,
     help: String,
+    /// "Special Operation %s has not yet recharged".
+    unready: String,
+    /// "Insufficient experience to use Special Operation %s".
+    short: String,
+    /// "Recharging (%d:%.2d left)".
+    recharging: String,
 }
 
 #[derive(Component)]
@@ -93,12 +118,18 @@ struct ExperienceText;
 #[derive(Component)]
 struct ExperienceBox;
 
-/// An operation's button, by what using it costs.
+/// An operation's button.
 #[derive(Component)]
-struct OperationButton {
-    cost: f32,
-    /// Its tooltip, beside the tray while the pointer's on the button.
+pub(crate) struct OperationButton {
+    /// Its operation's place in the general's list.
+    index: usize,
+    name: String,
+    /// It's used as soon as it's pressed, with no aiming.
+    on_self: bool,
+    /// Its tooltip, beside the tray while the pointer's on the button, and
+    /// the tooltip's line saying how long it has left to recharge.
     tip: Entity,
+    recharge_line: Entity,
 }
 
 #[derive(Component)]
@@ -145,6 +176,18 @@ fn spawn(
             "game_interface_FactionExperience_ToolTip_2",
             "Spend experience to activate Special Operations.",
         ),
+        unready: said(
+            "ui_error_faction_ability_recharge_time|s",
+            "Special Operation %s has not yet recharged",
+        ),
+        short: said(
+            "ui_error_faction_ability_cost|s",
+            "Insufficient experience to use Special Operation %s",
+        ),
+        recharging: said(
+            "ui_floater_ability_recharge_time|dd",
+            "Recharging (%d:%.2d left)",
+        ),
     };
     let cost = said("ui_tooltip_item_title_cost", "Cost");
     let area = said("ui_tooltip_item_title_area", "Area");
@@ -154,7 +197,7 @@ fn spawn(
             let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
             let name = bindings.marked(&action(n), &op.name);
             let figures = figures(op, o.cost, &cost, &area);
-            Some((o.cost, icon, name, op.clone(), figures))
+            Some((n, icon, name, op.clone(), figures))
         })
         .collect();
     commands
@@ -223,10 +266,19 @@ fn spawn(
                     ),
                 ))
                 .with_children(|tray| {
-                    for (cost, icon, name, op, figures) in buttons {
-                        let tip = pane(tray, &name, &op, &figures);
+                    for (index, icon, name, op, figures) in buttons {
+                        let (tip, recharge_line) = pane(tray, &name, &op, &figures);
                         tray.spawn((
-                            OperationButton { cost, tip },
+                            OperationButton {
+                                index,
+                                name: op.name.clone(),
+                                on_self: op.on_self,
+                                tip,
+                                recharge_line,
+                            },
+                            Button,
+                            ui::called(format!("special_op.{}", index + 1)),
+                            Click::COMMAND,
                             Hovered::default(),
                             Pickable::default(),
                             panel(
@@ -269,7 +321,8 @@ fn spawn(
                                 ..default()
                             };
                             button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
-                        });
+                        })
+                        .observe(press);
                     }
                 });
         });
@@ -300,15 +353,17 @@ fn figures(
 }
 
 /// Spawns an operation's tooltip, hidden until its button is hovered: its
-/// name, what its effects do, its Cost and Area, then its description. It
-/// sits a little way right of the tray, level with its top, as the action
-/// palette's sits above the palette.
+/// name, what its effects do, its Cost and Area, how long it has left to
+/// recharge while it is, then its description. It sits a little way right
+/// of the tray, level with its top, as the action palette's sits above the
+/// palette. Gives the tooltip and its recharge line.
 fn pane(
     tray: &mut ChildSpawnerCommands,
     name: &Marked,
     op: &SpecialOperation,
     figures: &[(String, String)],
-) -> Entity {
+) -> (Entity, Entity) {
+    let mut line = Entity::PLACEHOLDER;
     let node = Node {
         display: Display::None,
         position_type: PositionType::Absolute,
@@ -318,7 +373,8 @@ fn pane(
         width: px(actions::SIZE.x),
         ..default()
     };
-    tray.spawn(tooltip(node))
+    let tip = tray
+        .spawn(tooltip(node))
         .with_children(|tip| {
             ui::marked(tip, name, Font::HudTitle, Ink::Body);
             if !op.effects.is_empty() {
@@ -355,11 +411,20 @@ fn pane(
                     }
                 });
             }
+            line = (tip.spawn((
+                label("", Font::Small, Ink::Body),
+                Node {
+                    display: Display::None,
+                    ..default()
+                },
+            )))
+            .id();
             if let Some(description) = &op.description {
                 tip.spawn(label(description.clone(), Font::Small, Ink::Help));
             }
         })
-        .id()
+        .id();
+    (tip, line)
 }
 
 /// Shows the tooltip of the operation under the pointer, and only that.
@@ -377,6 +442,171 @@ fn tips(buttons: Query<(&OperationButton, &Hovered)>, mut nodes: Query<&mut Node
     }
 }
 
+/// "Recharging (4:05 left)", the seconds `left` rounded up.
+fn recharging(text: &str, left: f32) -> String {
+    let left = left.ceil() as u32;
+    let (minutes, seconds) = (left / 60, left % 60);
+    (text.replacen("%d", &minutes.to_string(), 1)).replacen("%.2d", &format!("{seconds:02}"), 1)
+}
+
+/// The order to use the `i`th operation, where it's aimed being no part of
+/// whether it can be used.
+fn probe(i: usize) -> aaa_sim::Command {
+    aaa_sim::Command::Operate {
+        operation: i,
+        at: [0.0; 2],
+    }
+}
+
+/// What pressing an operation needs: the side, the sim, the cursor and
+/// somewhere to say why one's refused.
+#[derive(SystemParam)]
+pub(crate) struct User<'w> {
+    panel: Option<Res<'w, Panel>>,
+    sim: Res<'w, Sim>,
+    orders: Option<ResMut<'w, Orders>>,
+    armed: ResMut<'w, Armed>,
+    page: ResMut<'w, Page>,
+    failed: MessageWriter<'w, Failed>,
+}
+
+impl User<'_> {
+    /// Arms the cursor with `button`'s operation, or uses one that needs no
+    /// aiming at once, unless it can't be used now.
+    fn press(&mut self, button: &OperationButton) {
+        let Some(panel) = &self.panel else {
+            return;
+        };
+        let player = panel.player;
+        match self.sim.0.check(player, &probe(button.index)) {
+            Ok(()) if button.on_self => {
+                let given = (self.orders.as_mut())
+                    .map(|o| o.give(&self.sim.0, player, probe(button.index)));
+                if let Some(Err(e)) = given {
+                    self.refuse(&button.name, e);
+                }
+            }
+            Ok(()) => {
+                self.armed.0 = Some(button.index);
+                // Not aiming an order too.
+                self.page.set_if_neq(Page::Orders);
+            }
+            Err(e) => self.refuse(&button.name, e),
+        }
+    }
+
+    /// Tells the player why the operation `name` can't be used.
+    fn refuse(&mut self, name: &str, refused: aaa_sim::Refused) {
+        let Some(panel) = &self.panel else {
+            return;
+        };
+        let said = match refused {
+            aaa_sim::Refused::Recharging => &panel.words.unready,
+            aaa_sim::Refused::Unaffordable => &panel.words.short,
+            e => {
+                debug!("can't use {name}: {e:?}");
+                return;
+            }
+        };
+        let text = fill(said, &[name]);
+        self.failed.write(Failed { text, about: None });
+    }
+}
+
+/// An operation's button clicked.
+fn press(activate: On<Activate>, buttons: Query<&OperationButton>, mut user: User) {
+    if let Ok(button) = buttons.get(activate.entity) {
+        user.press(button);
+    }
+}
+
+/// Presses the operation a key just pressed is bound to.
+pub fn hotkeys(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<Bindings>,
+    buttons: Query<&OperationButton>,
+    mut user: User,
+) {
+    if keys.get_just_pressed().next().is_none() {
+        return;
+    }
+    let pressed = buttons
+        .iter()
+        .find(|b| bindings.pressed(&keys, &action(b.index)));
+    if let Some(button) = pressed {
+        user.press(button);
+    }
+}
+
+/// While the cursor's armed, the next left click in the world gives the
+/// operation: on what's under the cursor where the operation works on it,
+/// else on the ground for one aimed at a place. Either way the click
+/// disarms it, as do a right click and aiming an order (Escape is the pause
+/// menu's to handle).
+#[allow(clippy::too_many_arguments)]
+pub fn give(
+    buttons: Res<ButtonInput<MouseButton>>,
+    pointer: crate::Pointer,
+    loaded: Res<Loaded>,
+    focus: Res<crate::Focus>,
+    named: Query<&OperationButton>,
+    mut user: User,
+) {
+    let Some(i) = user.armed.0 else {
+        return;
+    };
+    let aiming = !matches!(*user.page, Page::Orders | Page::Menu(_));
+    if buttons.just_pressed(MouseButton::Right) || aiming {
+        user.armed.0 = None;
+        return;
+    }
+    if !buttons.just_pressed(MouseButton::Left) {
+        return;
+    }
+    let Some(at) = pointer.at(&loaded.map.ground) else {
+        return;
+    };
+    user.armed.0 = None;
+    let Some(player) = user.panel.as_ref().map(|p| p.player) else {
+        return;
+    };
+    let Some(command) = clicked(&user.sim.0, player, i, at, *focus) else {
+        return;
+    };
+    let given = (user.orders.as_mut()).map(|o| o.give(&user.sim.0, player, command));
+    // What can be used may have changed since it was armed.
+    if let Some(Err(e)) = given {
+        let name = named.iter().find(|b| b.index == i).map(|b| b.name.clone());
+        user.refuse(&name.unwrap_or_default(), e);
+    }
+}
+
+/// The order a click `at` gives with `player`'s `i`th operation armed, with
+/// `focus` under the cursor, if it gives one. Only a click on the map
+/// itself is on what's under the cursor.
+fn clicked(
+    sim: &aaa_sim::World,
+    player: u32,
+    i: usize,
+    at: crate::Pointing,
+    focus: crate::Focus,
+) -> Option<aaa_sim::Command> {
+    let on = match (at, focus) {
+        (crate::Pointing::Ground(_), crate::Focus::Regiment(r)) => {
+            Some(aaa_sim::Piece::Regiment(r))
+        }
+        (crate::Pointing::Ground(_), crate::Focus::Building(b)) => {
+            Some(aaa_sim::Piece::Building(b))
+        }
+        _ => None,
+    };
+    let to = sim.operation_aim(player, i, on, at.point())?;
+    Some(aaa_sim::Command::Operate {
+        operation: i,
+        at: to,
+    })
+}
+
 /// "474/5000": the experience rounded, and the ceiling when there is one.
 fn experience_text(experience: i64, max: Option<f32>) -> String {
     match max {
@@ -385,8 +615,10 @@ fn experience_text(experience: i64, max: Option<f32>) -> String {
     }
 }
 
-/// Keeps the experience and its tooltip up to date, and greys out the
-/// operations the side can't afford.
+/// Keeps the experience and its tooltip up to date, greys out the
+/// operations the side can't use now, and shows how far each has
+/// recharged.
+#[allow(clippy::too_many_arguments)]
 fn refresh(
     mut panel: ResMut<Panel>,
     sim: Res<Sim>,
@@ -395,23 +627,41 @@ fn refresh(
     buttons: Query<(&OperationButton, &Children)>,
     mut icons: Query<&mut Shade, With<OperationIcon>>,
     mut bars: Query<&mut Meter, With<RechargeBar>>,
+    mut lines: Query<(&mut Text, &mut Node), Without<ExperienceText>>,
 ) {
-    let experience = sim.0.experience(panel.player).unwrap_or(0.0);
-    // Against the experience itself, which the text only rounds.
+    let sim = &sim.0;
+    let experience = sim.experience(panel.player).unwrap_or(0.0);
     for (button, children) in &buttons {
-        let shade = match experience >= button.cost {
-            true => Shade::Full,
-            false => Shade::Dimmed,
+        let shade = match sim.check(panel.player, &probe(button.index)) {
+            Ok(()) => Shade::Full,
+            Err(_) => Shade::Dimmed,
         };
+        let op = sim.special_op(panel.player, button.index);
+        let charged = op.map_or(1.0, |o| o.charged());
         for &child in children {
             if let Ok(mut s) = icons.get_mut(child) {
                 s.set_if_neq(shade);
             }
-            // Every operation starts a match ready.
             if let Ok(mut bar) = bars.get_mut(child)
-                && bar.share != 1.0
+                && bar.share != charged
             {
-                bar.share = 1.0;
+                bar.share = charged;
+            }
+        }
+        if let Ok((mut t, mut node)) = lines.get_mut(button.recharge_line) {
+            let left = op.map_or(0.0, |o| o.left);
+            let display = match left > 0.0 {
+                true => Display::Flex,
+                false => Display::None,
+            };
+            if node.display != display {
+                node.display = display;
+            }
+            if left > 0.0 {
+                let said = recharging(&panel.words.recharging, left);
+                if t.0 != said {
+                    t.0 = said;
+                }
             }
         }
     }
@@ -437,48 +687,189 @@ fn refresh(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use bevy::ecs::system::RunSystemOnce;
 
-    #[test]
-    fn buttons_light_once_experience_reaches_their_cost_however_it_shows() {
+    use super::*;
+    use aaa_data::Id;
+
+    fn words() -> Words {
+        Words {
+            title: "Experience".into(),
+            general: "General".into(),
+            experience: "Experience".into(),
+            help: String::new(),
+            unready: "Special Operation %s has not yet recharged".into(),
+            short: "Insufficient experience to use Special Operation %s".into(),
+            recharging: "Recharging (%d:%.2d left)".into(),
+        }
+    }
+
+    fn button(index: usize, tip: Entity, recharge_line: Entity) -> OperationButton {
+        OperationButton {
+            index,
+            name: "Resupply".into(),
+            on_self: false,
+            tip,
+            recharge_line,
+        }
+    }
+
+    /// A side of `experience` whose one operation, a resupply, costs 200
+    /// and recharges in 10 seconds.
+    fn operating(experience: f32) -> aaa_sim::World {
         let pathing = aaa_map::Pathing::uniform(8, aaa_map::Domain::Land);
-        let mut world = aaa_sim::World::from_regiments(Default::default(), pathing, &[]);
-        world.lead(1, 199.5, Some(5000.0));
-        let mut app = App::new();
-        app.insert_resource(Sim(world)).add_systems(Update, refresh);
-        app.insert_resource(Panel {
+        let resupply = aaa_map::Operation::Enchant {
+            targets: Default::default(),
+            area: 15.0,
+            max_targets: 4,
+            property: Id::from("property_resupply"),
+            seconds: 30.0,
+        };
+        let mut rules = aaa_sim::Rules::default();
+        rules.operations.insert(Id::from("resupply"), resupply);
+        let mut world = aaa_sim::World::from_regiments_by(Default::default(), pathing, rules, &[]);
+        let op = aaa_sim::SpecialOp::new(Id::from("resupply"), 200.0, 10.0);
+        world.lead(1, experience, Some(5000.0), vec![op]);
+        world
+    }
+
+    fn panel() -> Panel {
+        Panel {
             player: 1,
             general: "Marshal Zhukov".into(),
             max: Some(5000.0),
-            words: Words {
-                title: "Experience".into(),
-                general: "General".into(),
-                experience: "Experience".into(),
-                help: String::new(),
-            },
+            words: words(),
             shown: None,
-        });
+        }
+    }
+
+    #[test]
+    fn buttons_light_once_experience_reaches_their_cost_however_it_shows() {
+        let mut app = App::new();
+        app.insert_resource(Sim(operating(199.5)))
+            .add_systems(Update, refresh);
+        app.insert_resource(panel());
         let icon = app.world_mut().spawn((OperationIcon, Shade::Dimmed)).id();
         let bar = app
             .world_mut()
             .spawn((meter(Node::default(), Gauge::Recharge), RechargeBar))
             .id();
+        let line = app
+            .world_mut()
+            .spawn((Text::default(), Node::default()))
+            .id();
         app.world_mut()
-            .spawn(OperationButton {
-                cost: 200.0,
-                tip: Entity::PLACEHOLDER,
-            })
+            .spawn(button(0, Entity::PLACEHOLDER, line))
             .add_children(&[icon, bar]);
         app.update();
         // Shown as 200, but short of it.
         assert_eq!(app.world().get::<Shade>(icon), Some(&Shade::Dimmed));
         assert_eq!(app.world().get::<Meter>(bar).map(|m| m.share), Some(1.0));
+        let display = |app: &App| app.world().get::<Node>(line).map(|n| n.display);
+        assert_eq!(display(&app), Some(Display::None));
+        app.world_mut().resource_mut::<Sim>().0 = operating(450.0);
+        app.update();
+        assert_eq!(app.world().get::<Shade>(icon), Some(&Shade::Full));
+        // Used, it greys out and its bar empties, its tooltip saying how
+        // long it has left.
+        let used = aaa_sim::Command::Operate {
+            operation: 0,
+            at: [4.0, 4.0],
+        };
         app.world_mut()
             .resource_mut::<Sim>()
             .0
-            .lead(1, 200.0, Some(5000.0));
+            .apply(1, used)
+            .unwrap();
         app.update();
-        assert_eq!(app.world().get::<Shade>(icon), Some(&Shade::Full));
+        assert_eq!(app.world().get::<Shade>(icon), Some(&Shade::Dimmed));
+        assert_eq!(app.world().get::<Meter>(bar).map(|m| m.share), Some(0.0));
+        assert_eq!(display(&app), Some(Display::Flex));
+        let said = app.world().get::<Text>(line).map(|t| t.0.clone());
+        assert_eq!(said.as_deref(), Some("Recharging (0:10 left)"));
+    }
+
+    #[test]
+    fn a_click_gives_the_operation_on_the_ground_but_not_on_what_it_cant_work_on() {
+        let pathing = aaa_map::Pathing::uniform(8, aaa_map::Domain::Land);
+        let mut rules = aaa_sim::Rules::default();
+        let resupply = aaa_map::Operation::Enchant {
+            targets: aaa_map::Targets {
+                required: vec![Id::from("organization")],
+                excluded: Vec::new(),
+            },
+            area: 15.0,
+            max_targets: 4,
+            property: Id::from("property_resupply"),
+            seconds: 30.0,
+        };
+        rules.operations.insert(Id::from("resupply"), resupply);
+        let mut sim = aaa_sim::World::from_regiments_by(Default::default(), pathing, rules, &[]);
+        let op = aaa_sim::SpecialOp::new(Id::from("resupply"), 0.0, 0.0);
+        sim.lead(1, 0.0, None, vec![op]);
+        let ground = crate::Pointing::Ground([3.0, 4.0]);
+        let operate = |at| Some(aaa_sim::Command::Operate { operation: 0, at });
+        assert_eq!(
+            clicked(&sim, 1, 0, ground, crate::Focus::Nothing),
+            operate([3.0, 4.0])
+        );
+        // A building isn't a regiment, so the click gives nothing.
+        assert_eq!(clicked(&sim, 1, 0, ground, crate::Focus::Building(0)), None);
+        // On the minimap, what's under the cursor on the map plays no part.
+        let minimap = crate::Pointing::Minimap([5.0, 6.0]);
+        assert_eq!(
+            clicked(&sim, 1, 0, minimap, crate::Focus::Building(0)),
+            operate([5.0, 6.0])
+        );
+        // Nor does a side with no such operation give one.
+        assert_eq!(clicked(&sim, 1, 1, ground, crate::Focus::Nothing), None);
+    }
+
+    #[test]
+    fn recharge_time_shows_in_minutes_and_seconds_rounded_up() {
+        let text = "Recharging (%d:%.2d left)";
+        assert_eq!(recharging(text, 244.2), "Recharging (4:05 left)");
+        assert_eq!(recharging(text, 0.5), "Recharging (0:01 left)");
+    }
+
+    /// An app with the operation armed or refused by a press of its
+    /// button, and the messages it posted.
+    fn pressed(experience: f32) -> (App, Vec<String>) {
+        let mut app = App::new();
+        app.add_message::<Failed>()
+            .init_resource::<Armed>()
+            .init_resource::<Page>()
+            .insert_resource(Sim(operating(experience)))
+            .insert_resource(panel());
+        let b = app
+            .world_mut()
+            .spawn(button(0, Entity::PLACEHOLDER, Entity::PLACEHOLDER))
+            .id();
+        app.world_mut()
+            .run_system_once(move |buttons: Query<&OperationButton>, mut user: User| {
+                user.press(buttons.get(b).unwrap());
+            })
+            .unwrap();
+        let said = app
+            .world_mut()
+            .resource_mut::<Messages<Failed>>()
+            .drain()
+            .map(|f| f.text)
+            .collect();
+        (app, said)
+    }
+
+    #[test]
+    fn a_press_arms_the_cursor_or_says_why_it_cant() {
+        let (app, said) = pressed(200.0);
+        assert_eq!(app.world().resource::<Armed>(), &Armed(Some(0)));
+        assert!(said.is_empty());
+        let (app, said) = pressed(100.0);
+        assert_eq!(app.world().resource::<Armed>(), &Armed(None));
+        assert_eq!(
+            said,
+            ["Insufficient experience to use Special Operation Resupply"]
+        );
     }
 
     #[test]
@@ -494,6 +885,7 @@ mod tests {
             description: None,
             icon: None,
             recharge: 300.0,
+            on_self: false,
             area: Some("Large".into()),
             effects: Vec::new(),
         };
@@ -518,21 +910,10 @@ mod tests {
             .map(|_| app.world_mut().spawn(hidden()).id())
             .collect();
         let on = Hovered(true);
-        app.world_mut().spawn((
-            OperationButton {
-                cost: 0.0,
-                tip: tips[0],
-            },
-            on,
-        ));
+        let line = Entity::PLACEHOLDER;
+        app.world_mut().spawn((button(0, tips[0], line), on));
         let off = Hovered(false);
-        app.world_mut().spawn((
-            OperationButton {
-                cost: 0.0,
-                tip: tips[1],
-            },
-            off,
-        ));
+        app.world_mut().spawn((button(1, tips[1], line), off));
         app.update();
         let shown = |e: Entity| app.world().get::<Node>(e).map(|n| n.display);
         assert_eq!(shown(tips[0]), Some(Display::Flex));

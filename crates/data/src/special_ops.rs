@@ -17,6 +17,9 @@ pub struct SpecialOperation {
     pub icon: Option<String>,
     /// Seconds after use before it's ready again.
     pub recharge: f32,
+    /// It's used on its user's own side as soon as it's pressed, with no
+    /// aiming.
+    pub on_self: bool,
     /// The game's word for the size of the area it lands on, if it has one.
     pub area: Option<String>,
     /// What its effects do, a line each, with the lines of what an
@@ -223,6 +226,15 @@ impl GameData {
         out
     }
 
+    /// Each special operation's seconds after use before it's ready again,
+    /// by id: the part of [`GameData::special_operations`] play needs,
+    /// without putting the rest into words.
+    pub fn operation_recharges(&self) -> HashMap<Id, f32> {
+        (self.definitions().abilities.iter())
+            .map(|(id, a)| (id.clone(), a.recharge_time))
+            .collect()
+    }
+
     /// How a side's experience starts and grows: the match's Starting
     /// Experience setting and the tuning's gain a second.
     pub fn experience_rules(&self) -> ExperienceRules {
@@ -270,6 +282,9 @@ fn operation(
         description: localized(words.strings, a.description.as_deref()),
         icon,
         recharge: a.recharge_time,
+        on_self: crate::Targets::parse(a.targets.as_deref().unwrap_or(""))
+            .required
+            .contains(&Id::from("self")),
         area,
         effects: a.effect.iter().flat_map(|e| words.effect(e)).collect(),
     }
@@ -332,6 +347,15 @@ mod tests {
             range: Some([4.0, 1000.0]),
         }];
         operation(&words, &descriptions, a)
+    }
+
+    #[test]
+    fn operations_on_their_own_side_need_no_aiming() {
+        let scan = definition(
+            "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\ttargets = +ACTOR, +SELF, +INVULNERABLE\n}\n",
+        );
+        let drop = definition("[AbilityDefinition]\n{\n\tIDS = supply_drop\n\ttargets = NULL\n}\n");
+        assert_eq!((shown(&scan).on_self, shown(&drop).on_self), (true, false));
     }
 
     #[test]

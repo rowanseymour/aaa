@@ -502,6 +502,7 @@ mod tests {
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::console::Console>()
             .init_resource::<crate::actions::Page>()
+            .init_resource::<crate::special_ops::Armed>()
             .init_resource::<crate::Focus>()
             .init_resource::<Displays>()
             .init_resource::<Orders>()

@@ -154,10 +154,11 @@ pub fn load(
 }
 
 /// Shows the aimed order's cursor over the map and the minimap's diamond,
-/// and the usual one elsewhere.
+/// the attack cursor for an armed special operation, and the usual one
+/// elsewhere.
 pub fn cursor(
     mut commands: Commands,
-    page: Res<Page>,
+    (page, armed): (Res<Page>, Res<crate::special_ops::Armed>),
     looks: Res<Looks>,
     time: Res<Time>,
     pointer: Pointer,
@@ -169,6 +170,7 @@ pub fn cursor(
         Page::Aiming(aim) if over_map => looks.cursors.get(&aim),
         Page::Rally if over_map => looks.rally_cursor.as_ref(),
         Page::Delivering(_) if over_map => looks.cursors.get(&Aim::Move),
+        _ if over_map && armed.0.is_some() => looks.cursors.get(&Aim::Attack),
         _ => None,
     };
     let icon = match frames {
