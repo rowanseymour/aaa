@@ -54,7 +54,13 @@ impl Plugin for ConsolePlugin {
             // Not while the pause menu is up, whose pause the console could undo.
             .add_systems(
                 Update,
-                (keys.run_if(crate::pause::closed), run, show).chain(),
+                (
+                    keys.run_if(crate::pause::closed)
+                        .run_if(crate::chat::closed),
+                    run,
+                    show,
+                )
+                    .chain(),
             );
     }
 }

@@ -69,6 +69,15 @@ impl InterfaceVars {
         self.0.get(&name.to_ascii_lowercase())?.trim().parse().ok()
     }
 
+    /// A colour the files write as three numbers from 0 to 1, such as
+    /// `1,1,0`.
+    pub fn rgb(&self, name: &str) -> Option<[f32; 3]> {
+        let value = self.0.get(&name.to_ascii_lowercase())?;
+        let mut parts = value.split(',').map(|p| p.trim().parse::<f32>().ok());
+        let rgb = [parts.next()??, parts.next()??, parts.next()??];
+        parts.next().is_none().then_some(rgb)
+    }
+
     /// Whether a flag is on; `default` for one the files don't set.
     pub fn flag(&self, name: &str, default: bool) -> bool {
         match self.0.get(&name.to_ascii_lowercase()) {

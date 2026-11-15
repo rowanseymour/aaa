@@ -62,6 +62,7 @@ impl Plugin for PausePlugin {
                     .before(crate::actions::back_out)
                     .run_if(in_state(Screen::Match))
                     .run_if(console::closed)
+                    .run_if(crate::chat::closed)
                     .run_if(crate::displays::closed)
                     // It goes over the menu, which would open unseen.
                     .run_if(crate::connection::closed),
