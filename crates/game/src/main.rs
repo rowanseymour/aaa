@@ -313,6 +313,11 @@ impl Seed {
 struct Leaders(HashMap<u32, aaa_data::Faction>);
 
 impl Leaders {
+    /// The banner, by id, the faction leading `player`'s side flies.
+    fn banner(&self, player: u32) -> Option<&aaa_data::Id> {
+        self.0.get(&player)?.banner.as_ref()
+    }
+
     /// What a side is called, as its things' owner and in lines: the
     /// person's own side is the player, the computer's after the computer
     /// player of its faction, such as `Kesselring AI`, and the rest by the
@@ -2970,6 +2975,7 @@ mod tests {
             public: true,
             portrait: None,
             computer_name: computer.map(Into::into),
+            banner: None,
         };
         let leaders = Leaders(HashMap::from([
             (1, faction("patton", Some("Patton AI"))),

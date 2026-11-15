@@ -4,14 +4,13 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{GameData, Id};
+use aaa_data::{BannerDecal, GameData, Id};
 use aaa_map::{Division, Ground, Shape, from_local};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
-use bevy::render::render_resource::TextureFormat;
 use nif::{Nif, Object};
 use tgck::map::CELL_SIZE;
 
@@ -110,29 +109,34 @@ fn bar_frame(frames: &[Handle<Image>], share: f32) -> Option<&Handle<Image>> {
     frames.get(frame)
 }
 
+/// The images a banner shows by the state of its regiment and side, each
+/// drawn the banner's size.
+#[derive(Default)]
+pub struct BannerLayers {
+    /// Round it, always.
+    pub frame: Option<Handle<Image>>,
+    /// Behind it while the regiment is engaged.
+    pub engaged: Option<Handle<Image>>,
+    /// While the regiment is out of supply.
+    pub out_of_supply: Option<Handle<Image>>,
+    /// Flashing while its side can't pay its upkeep.
+    pub shortage: Option<Handle<Image>>,
+}
+
 /// The layers of the banners that float over regiments, each a square
 /// image drawn the same size, one over another.
 #[derive(Resource)]
 pub struct BannerImages {
     /// The plate, grey to be tinted in the owner's colour.
     pub plate: Option<Handle<Image>>,
-    /// Crossed rifles behind it while the regiment is engaged.
-    pub engaged: Option<Handle<Image>>,
     /// Corner brackets around it while the cursor is on the regiment, white
     /// to be tinted.
     pub focus: Option<Handle<Image>>,
-    /// The border it wears while the regiment is out of supply.
-    pub out_of_supply: Option<Handle<Image>>,
-    /// The border that flashes on it while its side can't pay its upkeep.
-    pub shortage: Option<Handle<Image>>,
     /// The archive path of each organization template's icon.
     icon_paths: HashMap<Id, String>,
-    /// The frame for a template of no nation: a nation's, which all share
-    /// a shape, with its colour taken out.
-    plain_frame: Option<Handle<Image>>,
-    /// The frames and division badges of each nation, and each
-    /// organization template's nation.
-    nations: aaa_data::NationBanners,
+    /// Which banner each organization template flies, each banner's
+    /// frame, and each nation's division badges.
+    banners: aaa_data::Banners,
     /// Images loaded so far, by path.
     loaded: HashMap<String, Option<Handle<Image>>>,
     formats: CompressedImageFormats,
@@ -149,24 +153,12 @@ impl BannerImages {
             Some(images.add(image))
         };
         let plate = add("Organizations/Banners/Shared/BannerPlayerColor.png");
-        let engaged = add("Organizations/Banners/Shared/BannerEngaged1.png");
         let focus = add("Effects/Selection/BannerFocusBase.tga");
-        let out_of_supply = add("Organizations/Banners/Shared/BannerOutOfSupply.png");
-        let shortage = add("Organizations/Banners/Shared/BannerBleeding.png");
-        let nations = game.nation_banners();
-        let plain_frame = nations.frames.values().min().and_then(|path| {
-            let image = textures::decode(&game.read(path)?, path, formats, true)?;
-            Some(images.add(whitened(image)))
-        });
         BannerImages {
             plate,
-            engaged,
             focus,
-            out_of_supply,
-            shortage,
             icon_paths: game.banner_icons(),
-            plain_frame,
-            nations,
+            banners: game.banners(),
             loaded: HashMap::new(),
             formats,
         }
@@ -186,36 +178,31 @@ impl BannerImages {
 
     /// The id of the nation an organization of `template` is of.
     fn nation_of(&self, template: &str) -> Option<String> {
-        let nation = self.nations.of_template.get(&Id::from(template))?;
+        let nation = self.banners.of_template.get(&Id::from(template))?;
         Some(nation.to_string())
     }
 
-    /// The frame round the banner of an organization of `template`, its
-    /// nation's; loaded the first time it's asked for.
-    pub fn frame(
+    /// The images of the banner an organization of `template` flies, for
+    /// a side whose faction flies `faction`; each loaded the first time
+    /// it's asked for.
+    pub fn layers(
         &mut self,
         game: &GameData,
         images: &mut Assets<Image>,
         template: &str,
-    ) -> Option<Handle<Image>> {
-        match self.nation_of(template) {
-            Some(nation) => self.nation_frame(game, images, &nation),
-            None => self.plain_frame.clone(),
-        }
-    }
-
-    /// The frame round the banners of `nation`, by its id, for what flies
-    /// one that isn't its template's; loaded the first time it's asked for.
-    pub fn nation_frame(
-        &mut self,
-        game: &GameData,
-        images: &mut Assets<Image>,
-        nation: &str,
-    ) -> Option<Handle<Image>> {
-        let Some(path) = self.nations.frames.get(&Id::from(nation)).cloned() else {
-            return self.plain_frame.clone();
+        faction: Option<&Id>,
+    ) -> BannerLayers {
+        let banner = self.banners.banner(&Id::from(template), faction).cloned();
+        let mut decal = |when| {
+            let path = self.banners.decal(banner.as_ref()?, when)?.to_string();
+            self.image(game, images, path)
         };
-        self.image(game, images, path)
+        BannerLayers {
+            frame: decal(BannerDecal::Always),
+            engaged: decal(BannerDecal::Engaged),
+            out_of_supply: decal(BannerDecal::OutOfSupply),
+            shortage: decal(BannerDecal::UpkeepShortage),
+        }
     }
 
     /// How many badges the nation of an organization of `template` has.
@@ -226,7 +213,7 @@ impl BannerImages {
 
     /// How many badges `nation` has, by its id.
     pub fn nation_badges(&self, nation: &str) -> usize {
-        let badges = self.nations.badges.get(&Id::from(nation));
+        let badges = self.banners.badges.get(&Id::from(nation));
         badges.map_or(0, Vec::len)
     }
 
@@ -239,7 +226,7 @@ impl BannerImages {
         nation: &str,
         badge: usize,
     ) -> Option<Handle<Image>> {
-        let badges = self.nations.badges.get(&Id::from(nation))?;
+        let badges = self.banners.badges.get(&Id::from(nation))?;
         let path = badges.get(badge)?.clone();
         self.image(game, images, path)
     }
@@ -270,24 +257,6 @@ impl BannerImages {
             textures::decode(&game.read(&path)?, &path, formats, true).map(|i| images.add(i))
         })
     }
-}
-
-/// An image with every coloured texel turned white, black and see-through
-/// ones left be.
-fn whitened(mut image: Image) -> Image {
-    if let Some(data) = image.data.as_mut().filter(|_| {
-        matches!(
-            image.texture_descriptor.format,
-            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm
-        )
-    }) {
-        for texel in data.as_chunks_mut::<4>().0 {
-            if texel[3] > 0 && texel[..3] != [0, 0, 0] {
-                texel[..3].fill(255);
-            }
-        }
-    }
-    image
 }
 
 /// A flip book's frames, in the order the model holds them.

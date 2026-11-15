@@ -48,7 +48,7 @@ pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use interface::{Command, ConnectionLook, CursorLook, FormationLook, SupplyBorder};
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
-pub use nations::{Faction, FactionOperation, Handicap, Nation, NationBanners};
+pub use nations::{BannerDecal, Banners, Faction, FactionOperation, Handicap, Nation};
 pub use objectives::{ObjectiveLook, ObjectiveLooks};
 pub use organizations::{Formation, Layout, Organization, Ranges};
 pub use properties::PropertyLook;

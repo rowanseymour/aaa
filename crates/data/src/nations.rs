@@ -1,9 +1,9 @@
-//! The nations sides play as, their factions and banners, and the
+//! The nations sides play as, their factions, organizations' banners, and the
 //! lobby's handicaps.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use crate::{GameData, Id, defs, not_null, scoped, strings::localized, ui_path};
+use crate::{GameData, Id, beside, defs, not_null, scoped, strings::localized, ui_path};
 
 /// A nation a side can play as.
 #[derive(Debug, Clone)]
@@ -62,6 +62,9 @@ pub struct Faction {
     /// What a computer player playing as them is called, e.g. `Kesselring
     /// AI`, from the profile it plays by.
     pub computer_name: Option<String>,
+    /// The banner, by id, their side's organizations fly where their
+    /// templates say to.
+    pub banner: Option<Id>,
 }
 
 /// A special operation as a faction gives it.
@@ -72,34 +75,106 @@ pub struct FactionOperation {
     pub cost: f32,
 }
 
-/// What nations' banners are drawn with, by nation id, e.g. `nation_usa`.
+/// What organizations' banners are drawn with.
 #[derive(Debug, Clone, Default)]
-pub struct NationBanners {
+pub struct Banners {
     /// The nation each organization template is of, by template id.
     pub of_template: HashMap<Id, Id>,
-    /// The archive path of the frame round a nation's banners.
-    pub frames: HashMap<Id, String>,
+    /// The banner each template's organizations fly, by template id.
+    pub flown: HashMap<Id, Id>,
+    /// The templates whose organizations fly their faction's banner
+    /// instead, where it has one.
+    pub follow_faction: HashSet<Id>,
+    /// Each banner's decals, by banner id: when each shows, and the
+    /// archive path of its first image, in the order the banner lists them.
+    pub decals: HashMap<Id, Vec<(BannerDecal, String)>>,
     /// The archive paths of the badges a nation's divisions wear, in the
     /// order HQs number them.
     pub badges: HashMap<Id, Vec<String>>,
 }
 
+/// When a banner's decal shows, of those drawn from the banner's own
+/// images.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BannerDecal {
+    /// Always: the frame round the banner.
+    Always,
+    Engaged,
+    OutOfSupply,
+    UpkeepShortage,
+}
+
+impl BannerDecal {
+    /// Its `function` in the data, matched ignoring case.
+    fn read(function: &str) -> Option<BannerDecal> {
+        let is = |f: &str| function.trim().eq_ignore_ascii_case(f);
+        [
+            ("NONE", BannerDecal::Always),
+            ("ENGAGED", BannerDecal::Engaged),
+            ("OUT_OF_SUPPLY", BannerDecal::OutOfSupply),
+            ("UPKEEP_SHORTAGE", BannerDecal::UpkeepShortage),
+        ]
+        .into_iter()
+        .find_map(|(f, d)| is(f).then_some(d))
+    }
+}
+
+impl Banners {
+    /// The banner an organization of `template` flies, by id, for a side
+    /// whose faction flies `faction`'s: the faction's, where the template
+    /// follows it and it's defined, else the template's own.
+    pub fn banner<'a>(&'a self, template: &Id, faction: Option<&'a Id>) -> Option<&'a Id> {
+        let own = self.flown.get(template);
+        let faction = faction.filter(|f| self.decals.contains_key(*f));
+        match self.follow_faction.contains(template) {
+            true => faction.or(own),
+            false => own,
+        }
+    }
+
+    /// The archive path of the first image `banner` shows `when`.
+    pub fn decal(&self, banner: &Id, when: BannerDecal) -> Option<&str> {
+        let decals = self.decals.get(banner)?;
+        decals
+            .iter()
+            .find(|(d, _)| *d == when)
+            .map(|(_, p)| p.as_str())
+    }
+}
+
+/// `banner`'s decals that show `when` they're read as, each by its first
+/// image's archive path: relative to `file`'s folder, with `%s` its prefix.
+fn decals(file: &str, banner: &defs::Banner) -> Vec<(BannerDecal, String)> {
+    let prefix = banner.resource_prefix.as_deref().unwrap_or("");
+    let decals = banner.plane.iter().flat_map(|p| &p.decal);
+    decals
+        .filter_map(|d| {
+            let when = BannerDecal::read(d.function.as_deref()?)?;
+            let texture = d.texture.iter().find_map(|t| t.texture.as_deref())?;
+            Some((when, beside(file, &texture.trim().replace("%s", prefix))))
+        })
+        .collect()
+}
+
 impl GameData {
-    /// What each nation's banners are drawn with, and which nation each
-    /// organization template is of.
-    pub fn nation_banners(&self) -> NationBanners {
+    /// What organizations' banners are drawn with, and which nation each
+    /// organization template is of. A template or faction naming a banner
+    /// that isn't defined is an error in the data, logged.
+    pub fn banners(&self) -> Banners {
         let files = self.parse_tgis(|n| {
             ["nations/", "templates/", "organizations/banners/"]
                 .iter()
                 .any(|d| n.starts_with(d))
         });
         let files = scoped(&files);
-        let prefixes: HashMap<Id, String> = files
-            .iter()
-            .flat_map(|f| f.read::<defs::Banner>("Banner"))
-            .filter_map(|b| Some((b.ids?, b.resource_prefix?)))
-            .collect();
-        let mut out = NationBanners::default();
+        let mut out = Banners::default();
+        for f in &files {
+            for b in f.read::<defs::Banner>("Banner") {
+                if let Some(id) = b.ids.clone() {
+                    out.decals.entry(id).or_insert_with(|| decals(f.file, &b));
+                }
+            }
+        }
         let mut by_group = HashMap::new();
         for nation in files.iter().flat_map(|f| f.read::<defs::Nation>("Nation")) {
             let Some(ids) = nation.ids else {
@@ -108,14 +183,6 @@ impl GameData {
             let badges = nation.badge.iter();
             let paths = badges.map(|b| format!("Nations/{}", b.badge_texture));
             out.badges.insert(ids.clone(), paths.collect());
-            // The banner named for the nation, `ger_banner` for
-            // `nation_ger`.
-            let lower = ids.as_str().to_ascii_lowercase();
-            let banner = lower.strip_prefix("nation_").map(|n| format!("{n}_banner"));
-            if let Some(prefix) = banner.and_then(|b| prefixes.get(&Id::from(b.as_str()))) {
-                let path = format!("Organizations/Banners/{prefix}BannerBase.png");
-                out.frames.insert(ids.clone(), path);
-            }
             if let Some(group) = nation.placement_group_ids {
                 by_group.insert(group, ids);
             }
@@ -124,6 +191,33 @@ impl GameData {
             let group = t.placement.as_ref()?.placement_group_ids.as_ref()?;
             by_group.get(group).cloned()
         });
+        let flies = self.by_template(|t| {
+            let view = t.view.as_ref()?;
+            let banner = not_null(view.banner_ids.clone())?;
+            Some((banner, view.use_faction_banner == Some(true)))
+        });
+        for (template, (banner, follows)) in flies {
+            if follows {
+                out.follow_faction.insert(template.clone());
+            }
+            out.flown.insert(template, banner);
+        }
+        let undefined = |banner: &Id| !out.decals.contains_key(banner);
+        let mut missing: Vec<_> = (out.flown.iter())
+            .filter(|(_, b)| undefined(b))
+            .map(|(t, b)| format!("template {t} flies banner {b}"))
+            .collect();
+        for f in &self.definitions().factions {
+            if let (Some(id), Some(b)) = (&f.ids, not_null(f.banner_ids.clone()))
+                && undefined(&b)
+            {
+                missing.push(format!("faction {id} flies banner {b}"));
+            }
+        }
+        missing.sort();
+        for m in missing {
+            log::warn!("{m}, which isn't defined");
+        }
         out
     }
 
@@ -221,6 +315,7 @@ impl GameData {
                     public: g.public != Some(false),
                     portrait: not_null(g.portrait_ids.clone()),
                     computer_name: computer_names.get(&id).cloned(),
+                    banner: not_null(g.banner_ids.clone()),
                     id: id.clone(),
                 };
                 Some((id, faction))
@@ -278,5 +373,64 @@ mod tests {
     fn handicap_names_that_are_one_glyph_show_its_image() {
         assert_eq!(only_char("\u{86}"), Some('\u{86}'));
         assert_eq!(only_char("Easy"), None);
+    }
+
+    #[test]
+    fn a_banners_decals_are_its_images_by_when_they_show() {
+        let parsed = tgi::parse(
+            "[Template Base]\n{\n\t[Plane]\n\t{\n\
+             \t\t[Decal]\n\t\t{\n\t\t\tfunction = ROUT\n\t\t\t[Texture]\n\t\t\ttexture = Shared/Rout.png\n\t\t}\n\
+             \t\t[Decal]\n\t\t{\n\t\t\tfunction = none \n\t\t\t[Texture]\n\t\t\ttexture = %sBannerBase.png\n\t\t}\n\
+             \t\t[Decal]\n\t\t{\n\t\t\tfunction = ENGAGED\n\t\t\t[Texture]\n\t\t\ttexture = Shared/Engaged1.png\n\t\t}\n\
+             \t\t[Decal]\n\t\t{\n\t\t\tfunction = ENGAGED\n\t\t\t[Texture]\n\t\t\ttexture = Shared/Engaged2.png\n\t\t}\n\
+             \t}\n}\n\
+             [Banner Template=Base]\n{\n\tids = ger_banner\n\tresource_prefix = GER/GER\n}\n",
+        );
+        let files = [("organizations/banners/ger_banner.tgi".to_string(), parsed)];
+        let files = scoped(&files);
+        let banner = files[0].read::<defs::Banner>("Banner").next().unwrap();
+        let mut banners = Banners::default();
+        let id = Id::from("ger_banner");
+        banners
+            .decals
+            .insert(id.clone(), decals(files[0].file, &banner));
+        let decal = |when| banners.decal(&id, when);
+        let frame = "organizations/banners/GER/GERBannerBase.png";
+        assert_eq!(decal(BannerDecal::Always), Some(frame));
+        // The first of two.
+        let engaged = "organizations/banners/Shared/Engaged1.png";
+        assert_eq!(decal(BannerDecal::Engaged), Some(engaged));
+        assert_eq!(decal(BannerDecal::OutOfSupply), None);
+    }
+
+    #[test]
+    fn templates_that_follow_their_faction_fly_its_banner_where_it_has_one() {
+        let mut banners = Banners::default();
+        for b in ["ger_banner", "default_banner", "royalist_banner"] {
+            banners.decals.insert(b.into(), Vec::new());
+        }
+        banners.flown.insert("infantry".into(), "ger_banner".into());
+        banners
+            .flown
+            .insert("company".into(), "default_banner".into());
+        banners.follow_faction.insert("company".into());
+        let royalist = Id::from("royalist_banner");
+        let flies = |t: &str, f| banners.banner(&Id::from(t), f).map(Id::to_string);
+        assert_eq!(
+            flies("infantry", Some(&royalist)).as_deref(),
+            Some("ger_banner")
+        );
+        assert_eq!(
+            flies("company", Some(&royalist)).as_deref(),
+            Some("royalist_banner")
+        );
+        assert_eq!(flies("company", None).as_deref(), Some("default_banner"));
+        // A faction's banner that isn't defined leaves the template's.
+        let missing = Id::from("missing_banner");
+        assert_eq!(
+            flies("company", Some(&missing)).as_deref(),
+            Some("default_banner")
+        );
+        assert_eq!(flies("unknown", None), None);
     }
 }
