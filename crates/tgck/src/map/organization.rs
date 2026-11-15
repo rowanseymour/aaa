@@ -1,6 +1,5 @@
-//! The Organization and Element components: a herd or regiment holding its
-//! members' whole records, and what each member keeps of the damage it
-//! deals. Laid out as `organization` and `element` in [`rmp.ksy`].
+//! The Organization and Element components, laid out as `organization` and
+//! `element` in [`rmp.ksy`].
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
@@ -9,116 +8,81 @@ use super::header::{optional, optional_plain};
 use super::{ACTOR, ReadAs, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
-/// A herd or regiment.
+/// The Organization component, the `organization` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Organization {
     pub updatable: Updatable,
     pub version: u32,
-    /// The `OrganizationLayout` the members are arranged by.
     pub layout: String,
-    /// Each layout slot's element template; empty for an empty slot.
     pub slots: Vec<String>,
-    /// The members where they stand, in position order, one for each of
-    /// [`Organization::positions`] that's filled.
+    /// The `member` of each filled position, in position order.
     pub members: Vec<Thing>,
     pub positions: Vec<Position>,
-    /// The position of the member in the lead; -1 for none.
     pub leader: i32,
-    /// A fraction of its maximum, the sum of its members'.
     pub morale: f32,
-    /// The index of its formation; -1 for none.
     pub formation: i32,
-    /// From version 3 on.
     pub desired_formation: Option<i32>,
-    /// Version 0 only.
+    /// `old_value`.
     pub old: Option<u32>,
-    /// From version 4 on.
     pub fighting: Option<Fighting>,
-    /// From version 5 on: a level its properties set; 1 in every map.
     pub level: Option<f32>,
-    /// From version 6 on: a time; 0 in every map.
     pub time: Option<f32>,
-    /// From version 8 on: its position, (x, y), as last recorded.
     pub position: Option<[f32; 2]>,
-    /// From version 9 on: the thing id of the HQ it's attached to.
     pub hq: Option<u32>,
-    /// From version 10 on: the thing id of the transport carrying it.
     pub transport: Option<u32>,
 }
 
-/// A place in the organization's layout.
+/// An `organization_position`, less its member, with its entry in each of
+/// the per-position lists that follow it: `old`, `position_templates`,
+/// `slot_positions` and `replenished`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Position {
-    /// The member's index; -1 when the position is empty.
     pub index: i32,
-    /// Versions 2 to 6.
     pub old: Option<u32>,
-    /// From version 7 on: the template of the member that belongs here.
     pub template: Option<String>,
-    /// Where it stands relative to the organization.
     pub offset: [f32; 2],
-    /// From version 1 on, for a position whose member was lost: the health
-    /// its replacement has built up, the member returning at full health.
-    /// 0 for a filled position.
     pub replenished: Option<f32>,
 }
 
-/// What an organization keeps for fighting, from version 4 on.
+/// The organization's fields from `efficiency` to `damage`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Fighting {
-    /// Its attack efficiency, which eases over time towards
-    /// [`Organization::level`].
     pub efficiency: f32,
-    /// Whether its formation is an aggressive one.
     pub formation_aggressive: u8,
-    /// Whether it's aggressive now.
     pub aggressive: u8,
-    /// The last hit any of its members took.
     pub damage: Damage,
 }
 
-/// A hit an element or organization took.
+/// A `damage` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Damage {
-    /// The attacker's thing id.
     pub attacker: u32,
-    /// The thing id of the one credited with the attack when that's someone
-    /// else, such as the commander for its own abilities; 0 otherwise.
     pub credited: u32,
-    /// The damage type's id.
     pub name: String,
     pub amount: f32,
-    /// The game time it landed.
     pub time: f32,
     pub tail: DamageTail,
 }
 
-/// The end of a [`Damage`], whose layout follows the world version.
+/// The fields of a [`Damage`] after `time`, which the world version decides.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum DamageTail {
-    /// Before world version 15.
+    /// No more fields.
     None,
-    /// World versions 15 to 17: a byte the game ignores.
+    /// `old`.
     Byte(u8),
-    /// World versions 18 and 19: `use_kind`, as `damage` in [`rmp.ksy`]
-    /// describes.
-    ///
-    /// [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
+    /// `use_kind`.
     Word(u32),
-    /// From world version 20 on: `use_kind`, then `cause`.
+    /// `use_kind`, then `cause`.
     Words([u32; 2]),
 }
 
-/// The Element component: what an organization's member keeps.
+/// The Element component, the `element` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ElementState {
     pub version: u32,
-    /// From version 1 on.
     pub updatable: Option<Updatable>,
-    /// Up to version 1.
     pub old: Option<u8>,
-    /// From version 3 on: the hits it took lately, kept only while it's the
-    /// member whose fate its regiment watches.
     pub damages: Option<Vec<Damage>>,
 }
 

@@ -2,23 +2,7 @@
 
 A Rust parser for `.tgi` files, the text format Axis & Allies (2004) uses for
 units, buildings, abilities, templates, map settings, localisation and
-configuration.
-
-```text
-/* block comment */
-[Thing Template=BaseTank]          ; header: words plus key=value attributes
-{
-    IDS = test_tank                ; key = value, to end of line
-    name = "#test_tank_name"       ; surrounding quotes are stripped
-    [Body]                         ; a header without braces owns the fields
-    health = 200                   ; after it, up to the next header or '}'
-    defense = 1
-}
-```
-
-Schema files declare typed fields (`fixed health`, `flag destructible = true`)
-and nested block slots (`[optional OnDeath template=Ability]`); these parse into
-the same tree.
+configuration. The format is described in the [crate docs](src/lib.rs).
 
 ## Usage
 
@@ -33,10 +17,6 @@ let health = thing.blocks_of("BodyComponent").next()
     .and_then(|b| b.value("health"));
 ```
 
-Files are decoded as UTF-8 (with or without BOM), falling back to Windows-1252.
-Malformed input (missing `]`, unbalanced braces, stray text) produces warnings
-instead of errors, so every file the game ships loads.
-
 The tree is left as written; `Templates` resolves `Template=` / `Inherit=`
 inheritance on request:
 
@@ -45,27 +25,22 @@ let templates = tgi::Templates::new(files.iter().map(|p| &p.root));
 let resolved = templates.resolve(thing);           // thing with its parents merged in
 ```
 
-With the `serde` feature, a block reads into any `Deserialize` type, keys
-matching fields regardless of case and underscores (see the `de` module for
-the rules):
+With the `serde` feature, a block reads into any `Deserialize` type (see the
+`de` module for how keys match):
 
 ```rust
 #[derive(serde::Deserialize)]
-struct Variation { texture: String, terrain_color: Option<[f32; 3]> }
+struct Thing { ids: String, body_component: Body }
+#[derive(serde::Deserialize)]
+struct Body { health: u32, defense: Option<u32> }
 
-let v: Variation = tgi::from_block(block)?;           // as written
-let v: Variation = templates.deserialize(block)?;     // with inheritance resolved
+let t: Thing = tgi::from_block(thing)?;             // as written
+let t: Thing = templates.deserialize(thing)?;       // with inheritance resolved
 ```
 
 ## Command line
 
-```sh
-tgi check *.tgi     # parse and report warnings
-tgi dump file.tgi   # print the tree in normalised form
-```
-
-Tested against all 1,842 `.tgi` files in the game: every file parses, the 14
-warnings all point at genuine mistakes in the data, and every file round-trips
-through `dump` unchanged.
+The `tgi` binary reports a file's warnings or prints its parsed tree; run it
+without arguments for usage.
 
 Licensed under the [GNU GPL v3 or later](../../LICENSE).

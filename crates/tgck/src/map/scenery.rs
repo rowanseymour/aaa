@@ -8,34 +8,30 @@ use super::expect;
 use super::header::{self, check_version};
 use crate::{Cursor, Result, Writer};
 
-/// Trees, grass, hedges and the like, with up to two parts that react to
-/// units and blasts.
+/// The `reactive_scenery` detail of `rmp.ksy`; a part is `None` where
+/// `parts` lacks its bit.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ReactiveScenery {
-    /// The parts its template had when saved, a bit each as in `parts`;
-    /// the game adds any the template has gained since.
     pub template_parts: u32,
-    /// Set off by units passing through, such as tall grass.
+    /// The `stir` part's updatable.
     pub stir: Option<Updatable>,
     pub topple: Option<Topple>,
 }
 
-/// The part that falls when hit hard enough, and may grow back.
+/// A `topple` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Topple {
     pub version: u32,
+    /// Its part's updatable.
     pub updatable: Updatable,
     pub state: ToppleState,
-    /// The game time the state began.
     pub state_time: f32,
-    /// The game time it began growing back.
     pub regrow_time: f32,
-    /// The way it falls, a unit vector in its own frame.
     pub direction: [f32; 2],
-    /// From version 1 on: how far grown it was when it fell, 0 to 1.
     pub growth: Option<f32>,
 }
 
+/// A `topple_state` of `rmp.ksy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ToppleState {
     Standing,
@@ -88,7 +84,7 @@ impl ReactiveScenery {
     }
 }
 
-/// What each part holds: its id among the world's updatables.
+/// Reads a `scenery_part`, keeping only its updatable.
 fn part(cur: &mut Cursor) -> Result<Updatable> {
     expect(cur, "scenery part version", 0)?;
     let updatable = Updatable::parse(cur)?;

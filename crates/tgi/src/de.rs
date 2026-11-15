@@ -11,8 +11,8 @@
 //! }
 //! ```
 //!
-//! A key matches a struct field ignoring case and underscores, as the game
-//! does with case and the files are inconsistent about both (`IDS`,
+//! A key matches a struct field regardless of case, as in the game, and of
+//! underscores, since the files are inconsistent about both (`IDS` for `ids`,
 //! `DepthInfo` for `depth_info`). Fields and blocks are matched the same way,
 //! a block by its kind. A map's keys ignore only case, since they are the
 //! file's own names. Where a key repeats, a sequence field takes every
@@ -89,13 +89,13 @@ impl Templates<'_> {
 
 /// How often each key was read or skipped, by the lower-case kinds of the
 /// blocks it is in from the top-level block down, e.g. `thing/view/aspect`.
-/// Only fields with values count, and template slots in schema files
-/// (`[list Property]`, `[optional OnDeath]`) don't.
+/// Only fields with values count, and none inside schema slots.
 #[derive(Debug, Default, Clone)]
 pub struct Coverage {
     keys: BTreeMap<(String, String), Count>,
 }
 
+/// How often a key was read and skipped.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct Count {
     pub read: usize,
@@ -158,7 +158,7 @@ impl Coverage {
     }
 }
 
-/// Whether a block declares a template slot rather than holding data.
+/// Whether a block is a schema slot rather than data.
 fn is_slot(block: &Block) -> bool {
     block
         .kind()

@@ -1,7 +1,6 @@
 //! Reading each object type. Each layout lists the fields present in
 //! version 10.1.0.0; `[old: ...]` marks how 10.0.1.0 and 4.2.2.0 differ,
-//! `[4.2.2.0: ...]` how 4.2.2.0 differs further. Types read only so they
-//! can be stepped over become [`Object::Other`].
+//! `[4.2.2.0: ...]` how 4.2.2.0 differs further.
 //!
 //! ```text
 //! named      string name, refs extra data [4.2.2.0: ref to the first of a
@@ -844,14 +843,13 @@ fn old_particle_controller(r: &mut Reader) -> Result<OldParticleController> {
     })
 }
 
-/// Linear keys of f32 time and a u8 on/off value.
 fn bool_keys(r: &mut Reader) -> Result<BoolKeys> {
     let n = r.u32()? as usize;
     r.ensure(n.saturating_mul(5))?;
     (0..n).map(|_| Ok((r.f32()?, r.u8()? != 0))).collect()
 }
 
-/// Geometry plus per-particle sizes and rotations, and the particle count.
+/// Particle data and the particle count.
 fn particles_data(r: &mut Reader) -> Result<(usize, OldParticleData)> {
     let (n, geometry) = geometry(r)?;
     let radii = match r.old() {
@@ -1008,7 +1006,7 @@ fn named(r: &mut Reader) -> Result<(String, Vec<Ref>, Ref)> {
     Ok((name, extra_data, r.reference()?))
 }
 
-/// The name of an extra data object; 4.2.2.0 has none, but links to the next.
+/// The name of an extra data object; empty in 4.2.2.0.
 fn extra_data_name(r: &mut Reader) -> Result<String> {
     if r.netimmerse() {
         r.reference()?;
@@ -1047,7 +1045,6 @@ fn scene(r: &mut Reader) -> Result<SceneObject> {
     })
 }
 
-/// A skin's transform: rotation rows, then translation and scale.
 fn bone_transform(r: &mut Reader) -> Result<Transform> {
     let rotation = [r.floats()?, r.floats()?, r.floats()?];
     Ok(Transform {

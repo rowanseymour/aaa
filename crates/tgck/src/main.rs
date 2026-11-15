@@ -11,7 +11,7 @@ const USAGE: &str = "\
 usage:
   tgck list     <archive.rwd> [filter]          list entries (filter: case-insensitive substring)
   tgck stats    <archive.rwd>...                file counts and sizes by extension
-  tgck extract  <archive.rwd> <out-dir> [filter]
+  tgck extract  <archive.rwd> <out-dir> [filter] write matching entries under <out-dir>
   tgck cat      <archive.rwd> <entry-name>      write one entry to stdout
   tgck sections <file>                          list the sections of any TGCK file
   tgck unpack   <file> <out-dir>                write each section, decompressed, as <name>.bin

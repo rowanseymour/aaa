@@ -1,5 +1,4 @@
-//! The objects a model holds. Types read only so they can be stepped over
-//! become [`Object::Other`]; how each is laid out is in the `read` module.
+//! The objects a model holds; how each is laid out is in the `read` module.
 
 use crate::{Ref, Transform};
 
@@ -37,12 +36,12 @@ pub enum Object {
     OldParticleData(OldParticleData),
     OldParticleController(OldParticleController),
     OldModifier(OldModifier),
-    /// Understood well enough to step over; the type name.
+    /// A type read only so it can be stepped over; its name.
     Other(String),
 }
 
 impl Object {
-    /// The scene fields of a node or shape.
+    /// The scene fields of anything placed in the scene.
     pub fn scene(&self) -> Option<&SceneObject> {
         match self {
             Object::Node(n) => Some(&n.av),
@@ -107,8 +106,8 @@ object_types!(
     OldModifier(OldModifier),
 );
 
-/// An [`OldParticleController`] is a controller too, so chains of
-/// controllers can be followed past it.
+/// An [`OldParticleController`] is a controller too, so it can be found in
+/// a chain of controllers.
 impl ObjectType for Controller {
     fn of(object: &Object) -> Option<&Self> {
         match object {
@@ -339,7 +338,7 @@ impl ZBuffer {
 
 #[derive(Debug, Clone)]
 pub struct Stencil {
-    /// Which faces are drawn; 3 means both sides.
+    /// As stored; [`Stencil::double_sided`] says what it means.
     pub draw_mode: u32,
 }
 
@@ -665,8 +664,8 @@ pub enum OldParticleKind {
     },
 }
 
-/// The emitter and particle list of an [`OldParticles`]. Each `_variation`
-/// goes with the value before it; angles are in radians.
+/// The emitter and particle list of an [`OldParticles`]. Its `_variation`s
+/// are as on an [`Emitter`]; angles are in radians.
 #[derive(Debug, Clone)]
 pub struct OldParticleController {
     /// Of kind [`ControllerKind::OldParticles`], with no data.
@@ -734,7 +733,7 @@ pub enum OldModifierKind {
     Gravity {
         decay: f32,
         strength: f32,
-        /// 0 planar, 1 spherical.
+        /// As in [`Gravity::force`].
         force: u32,
         position: [f32; 3],
         direction: [f32; 3],
@@ -769,15 +768,12 @@ pub struct EmitterKeys {
 /// Times and an on/off value, each holding until the next key's time.
 pub type BoolKeys = Vec<(f32, bool)>;
 
-/// Plays its data on its target: a [`Keyframes`] on a scene object for
-/// [`ControllerKind::Keyframe`], a [`Keys`] on a material's alpha for
-/// [`ControllerKind::Alpha`], on a texture's placement for
-/// [`ControllerKind::Texture`], and for the particle kinds, on the
-/// [`Modifier`] named `modifier` of the [`ParticleSystem`] it targets.
+/// Plays its data on its target, as each [`ControllerKind`] says.
 #[derive(Debug, Clone)]
 pub struct Controller {
     pub kind: ControllerKind,
-    /// Empty for kinds that don't drive a modifier.
+    /// For the particle kinds, which [`Modifier`] of the targeted
+    /// [`ParticleSystem`] it drives; empty for the others.
     pub modifier: String,
     /// The next controller on the same target.
     pub next: Ref,
@@ -807,8 +803,8 @@ impl Controller {
         self.flags & 8 != 0
     }
 
-    /// The value no cycle is stored as reads as [`Cycle::Loop`], as it
-    /// plays.
+    /// The flags' fourth cycle value isn't a cycle; it reads as
+    /// [`Cycle::Loop`], which is how it plays.
     pub fn cycle(&self) -> Cycle {
         match (self.flags >> 1) & 3 {
             1 => Cycle::Reverse,
@@ -829,7 +825,9 @@ impl Controller {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ControllerKind {
+    /// A scene object's transform, from [`Keyframes`].
     Keyframe,
+    /// A material's alpha, from [`Object::Floats`].
     Alpha,
     /// An emitter's birth rate and when it's on, from an [`EmitterKeys`].
     Emitter,
@@ -847,11 +845,8 @@ pub enum ControllerKind {
     /// controllers can be followed past it.
     Unread,
     /// Moves, turns or stretches the texture in one of a texturing
-    /// property's slots.
-    Texture {
-        slot: u32,
-        change: TextureChange,
-    },
+    /// property's slots, from [`Object::Floats`].
+    Texture { slot: u32, change: TextureChange },
     /// Moves a scene object along a curve, [`Object::Positions`], by how
     /// far along it its data, [`Object::Floats`], says.
     Path(PathSettings),
@@ -860,9 +855,9 @@ pub enum ControllerKind {
 /// How a path controller moves its object.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PathSettings {
-    /// 0x10: placed by distance along the curve rather than by the
-    /// positions' key times; 0x20: turned to face along it; 0x40: facing
-    /// back along it.
+    /// As stored; [`Path::constant_speed`](crate::Path::constant_speed),
+    /// [`Path::follows`](crate::Path::follows) and
+    /// [`Path::flips`](crate::Path::flips) say what it means.
     pub flags: u16,
     pub bank_direction: i32,
     pub max_bank: f32,

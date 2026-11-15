@@ -239,12 +239,8 @@ fn rejects_other_versions() {
 
 #[test]
 fn strips_keep_winding() {
-    let t: Vec<_> = objects_strip(&[0, 1, 2, 3, 3, 4]);
+    let t: Vec<_> = crate::read::strip_triangles(&[0, 1, 2, 3, 3, 4]).collect();
     assert_eq!(t, [[0, 1, 2], [1, 3, 2]]);
-}
-
-fn objects_strip(points: &[u16]) -> Vec<[u16; 3]> {
-    crate::read::strip_triangles(points).collect()
 }
 
 #[test]
@@ -1266,7 +1262,6 @@ fn steps_over_controllers() {
     );
     assert_eq!(path.data, Some(5));
     assert!(matches!(&nif.objects[4], Object::Positions(k) if k.keys.len() == 2));
-    // Kept so chains through them can be followed.
     assert!(
         matches!(&nif.objects[8], Object::Controller(c) if c.kind == ControllerKind::Unread && c.target == Some(9))
     );

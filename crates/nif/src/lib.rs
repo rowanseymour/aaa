@@ -21,9 +21,8 @@
 //! footer   u32 root count, i32 roots (object indices; -1 = none)
 //! ```
 //!
-//! Strings are a u32 length and Latin-1 bytes, booleans one byte. Object
-//! types this reader does not know end the read early: the objects before
-//! them are kept and [`Nif::incomplete`] names the type.
+//! Strings are a u32 length and Latin-1 bytes, booleans one byte. See
+//! [`Nif::incomplete`] for types the reader does not know.
 
 use std::fmt;
 
@@ -34,7 +33,6 @@ mod read;
 pub use animation::*;
 pub use objects::*;
 
-/// Format versions the reader accepts: 10.1.0.0, 10.0.1.0 and 4.2.2.0.
 pub const VERSION: u32 = 0x0A01_0000;
 pub const OLD_VERSION: u32 = 0x0A00_0100;
 pub const NETIMMERSE_VERSION: u32 = 0x0402_0200;
@@ -433,8 +431,8 @@ impl<'a> Reader<'a> {
     pub(crate) fn skip(&mut self, n: usize) -> Result<()> {
         self.bytes(n).map(drop)
     }
-    /// Fails unless `n` more bytes remain, so a corrupt count is caught
-    /// before it is used to allocate.
+    /// Fails unless `n` more bytes remain, so a corrupt count fails at once
+    /// rather than after reading that many items.
     pub(crate) fn ensure(&self, n: usize) -> Result<()> {
         if n > self.remaining() {
             return Err(Error::Corrupt(format!(

@@ -11,22 +11,19 @@ use super::{
 use crate::container::{self, Section};
 use crate::{Error, Result};
 
-/// Every section of a map, decoded. [`MapFile::to_bytes`] writes them back
-/// in the order and with the compression they were read with, so a map
-/// that's loaded and saved unchanged holds the same section payloads.
+/// Every section of a map, decoded, each field holding what the [`Map`]
+/// accessor of its name reads. [`MapFile::to_bytes`] writes them back in the
+/// order and with the compression they were read with, so a map that's
+/// loaded and saved unchanged holds the same section payloads.
 #[derive(Debug, Clone)]
 pub struct MapFile {
     pub header: MapHeader,
-    /// The map resource's data version (MAP).
     pub data_version: u32,
-    /// Its version decides the layout of several other sections.
     pub world: World,
     pub rules: WorldRules,
     pub terrain: Terrain,
     pub height_map: HeightMap,
     pub mountain_height_map: HeightMap,
-    /// Whether the world was saved mid-cutscene; None exactly before world
-    /// version 10.
     pub cutscene_mode: Option<bool>,
     pub ids: IdManager,
     pub restriction_groups: RestrictionGroups,
@@ -34,13 +31,11 @@ pub struct MapFile {
     pub objectives: Objectives,
     pub kingdoms: Kingdoms,
     pub things: Vec<Thing>,
-    /// None if the map is older than the sections.
     pub used_required_objects: Option<Vec<Thing>>,
     pub triggers: Triggers,
     pub sun: Sun,
     pub updatables: Updatables,
     pub misc_data: MiscData,
-    /// The string table, in .tgi text syntax.
     pub strings: String,
     /// The sections in file order, for their names and compression.
     sections: Vec<Section>,

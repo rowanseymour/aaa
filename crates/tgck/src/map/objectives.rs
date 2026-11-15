@@ -1,5 +1,4 @@
-//! OBJECTIVES: the goals a map sets its kingdoms, which triggers then give,
-//! complete or fail. Laid out as [`rmp.ksy`] specifies.
+//! OBJECTIVES, laid out as [`rmp.ksy`] specifies.
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
@@ -7,21 +6,18 @@ use super::expect;
 use super::header::bool;
 use crate::{Cursor, Result, Writer};
 
+/// The OBJECTIVES section, the `objectives` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Objectives {
     pub objectives: Vec<Objective>,
-    /// Above every objective's number in shipped maps, even where higher ones
-    /// were deleted, so presumably what the editor numbers the next new one.
     pub next_number: u32,
 }
 
+/// An `objective` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Objective {
-    /// E.g. `objective_0`, by which triggers and kingdoms refer to it.
     pub name: String,
-    /// A string id; the same as the name in every shipped map.
     pub text: String,
-    /// Shown with the primary objectives rather than the optional ones.
     pub primary: bool,
 }
 
