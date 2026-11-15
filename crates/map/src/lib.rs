@@ -334,10 +334,8 @@ fn members_mut(thing: &mut Thing) -> &mut [Thing] {
 }
 
 fn organization_members(thing: &mut Thing) -> Option<&mut Vec<Thing>> {
-    use tgck::map::{Component, Detail, State};
-    let Detail::Actor(actor) = &mut thing.detail else {
-        return None;
-    };
+    use tgck::map::{Component, State};
+    let actor = thing.actor_mut()?;
     let State::Decoded { components, .. } = &mut actor.state else {
         return None;
     };

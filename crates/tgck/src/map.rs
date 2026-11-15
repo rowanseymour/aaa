@@ -850,28 +850,35 @@ impl Thing {
         self.detail.write(w)
     }
 
-    /// The organization this thing is, if its record holds one.
-    pub fn organization(&self) -> Option<&Organization> {
+    /// The actor this thing is, if it's one.
+    pub fn actor(&self) -> Option<&Actor> {
         match &self.detail {
-            Detail::Actor(actor) => actor.organization(),
+            Detail::Actor(actor) => Some(actor),
             _ => None,
         }
+    }
+
+    /// [`Thing::actor`], mutably.
+    pub fn actor_mut(&mut self) -> Option<&mut Actor> {
+        match &mut self.detail {
+            Detail::Actor(actor) => Some(actor),
+            _ => None,
+        }
+    }
+
+    /// The organization this thing is, if its record holds one.
+    pub fn organization(&self) -> Option<&Organization> {
+        self.actor()?.organization()
     }
 
     /// The id of the trailer this thing tows, if it tows one.
     pub fn towed(&self) -> Option<u32> {
-        match &self.detail {
-            Detail::Actor(actor) => actor.towed(),
-            _ => None,
-        }
+        self.actor()?.towed()
     }
 
     /// Which of its nation's division badges this thing wears as an HQ.
     pub fn hq_badge(&self) -> Option<i32> {
-        match &self.detail {
-            Detail::Actor(actor) => actor.hq_badge(),
-            _ => None,
-        }
+        self.actor()?.hq_badge()
     }
 }
 

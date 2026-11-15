@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use aaa_data::{Body, DeployPoints, Fighter, Id, Ranges};
-use tgck::map::{Detail, Thing};
+use tgck::map::Thing;
 
 use crate::obstacle::Obstacle;
 use crate::units::{Regiment, emptied, facing, owner};
@@ -61,9 +61,7 @@ pub(crate) fn buildings(
             if moves || t.organization().is_some() {
                 return None;
             }
-            let Detail::Actor(actor) = &t.detail else {
-                return None;
-            };
+            let actor = t.actor()?;
             let [x, y, _] = t.position;
             Some(Building {
                 id: t.id,
