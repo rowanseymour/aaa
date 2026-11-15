@@ -29,7 +29,7 @@ pub struct Words {
 }
 
 impl Words {
-    pub fn of(strings: &aaa_data::Strings) -> Self {
+    pub fn of(strings: &tgdata::Strings) -> Self {
         let said = ui::said(strings);
         Words {
             all: said("ui_game_chat_filter_all", "All"),
@@ -42,7 +42,7 @@ impl Words {
 
 impl Default for Words {
     fn default() -> Self {
-        Words::of(&aaa_data::Strings::default())
+        Words::of(&tgdata::Strings::default())
     }
 }
 
@@ -498,7 +498,7 @@ mod tests {
             ("vworld", "ChatActivate"),
             ("GameChatPanel|editbox", "ChatSend"),
         ]
-        .map(|(target, command)| aaa_data::Hotkey {
+        .map(|(target, command)| tgdata::Hotkey {
             chord: "enter".into(),
             target: target.into(),
             command: Some(command.into()),

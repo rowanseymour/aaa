@@ -474,8 +474,8 @@ impl Icons {
 #[cfg(test)]
 mod tests {
 
-    use aaa_data::Hotkey;
     use bevy::state::app::StatesPlugin;
+    use tgdata::Hotkey;
 
     use super::*;
     use crate::pause::{self, PausePlugin};
@@ -507,7 +507,7 @@ mod tests {
             .init_resource::<crate::Focus>()
             .init_resource::<Displays>()
             .init_resource::<Orders>()
-            .insert_resource(Bindings::new(&hotkeys, &aaa_data::Strings::default()))
+            .insert_resource(Bindings::new(&hotkeys, &tgdata::Strings::default()))
             .add_systems(Update, keys.after(pause::Toggle).run_if(pause::closed));
         for panel in [Panel::Technologies, Panel::MessageLog] {
             app.world_mut().spawn((PanelWindow(panel), Node::default()));

@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use aaa_data::{GameData, View};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::math::Affine2;
@@ -13,6 +12,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
 use nif::{Nif, PixelFormat, VertexColors};
+use tgdata::{GameData, View};
 
 use crate::glow::{Glow, GlowMaterial};
 use crate::models::{

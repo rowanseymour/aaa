@@ -2,12 +2,12 @@
 //! they net of each resource a minute, and a second bar under it previewing
 //! what the order under the cursor would make of them.
 
-use aaa_data::{Id, ResourceRole};
 use aaa_map::Organization;
 use aaa_render::textures;
 use aaa_sim::{Balance, Change};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
+use tgdata::{Id, ResourceRole};
 
 use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};

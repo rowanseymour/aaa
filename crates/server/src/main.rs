@@ -6,9 +6,9 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use aaa_data::GameData;
 use aaa_server::{Client, Event, Film, Host, Setup, quic};
 use aaa_sim::{Record, Schedule, TICK, World};
+use tgdata::GameData;
 
 const USAGE: &str = "\
 usage:

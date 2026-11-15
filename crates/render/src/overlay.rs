@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{BannerDecal, GameData, Id};
 use aaa_map::{Division, Ground, Shape, from_local};
 use bevy::asset::RenderAssetUsages;
 use bevy::image::{CompressedImageFormats, ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
@@ -13,6 +12,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use nif::{Nif, Object};
 use tgck::map::CELL_SIZE;
+use tgdata::{BannerDecal, GameData, Id};
 
 use crate::loader::embedded_image;
 use crate::terrain::world;
@@ -136,7 +136,7 @@ pub struct BannerImages {
     icon_paths: HashMap<Id, String>,
     /// Which banner each organization template flies, each banner's
     /// frame, and each nation's division badges.
-    banners: aaa_data::Banners,
+    banners: tgdata::Banners,
     /// Images loaded so far, by path.
     loaded: HashMap<String, Option<Handle<Image>>>,
     formats: CompressedImageFormats,

@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Footing, Id, Shape, TerrainKind, Variation};
 use tgck::map::{CELL_SIZE, HeightMap, RESOLUTION_BITS, Terrain};
+use tgdata::{Footing, Id, Shape, TerrainKind, Variation};
 
 /// The ground: the height map, with the mountain height map added around
 /// mountains and water (where it lays the water's bed), and mountains'

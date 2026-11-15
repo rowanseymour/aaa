@@ -2,13 +2,13 @@
 //! model holds, or a thing's whole model fitted to the picture, drawn to an
 //! image of its own, apart from the map.
 
-use aaa_data::{AnimationKind, Id};
 use bevy::camera::visibility::RenderLayers;
 use bevy::camera::{ClearColorConfig, Exposure, RenderTarget};
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::light::AmbientLight;
 use bevy::prelude::*;
 use nif::Nif;
+use tgdata::{AnimationKind, Id};
 
 use crate::Playing;
 use crate::models::{ModelAssets, Models, Paint, Plays, bevy_transform, idle};

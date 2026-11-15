@@ -5,10 +5,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aaa_data::Id;
 use aaa_map::Ground;
 use bevy::prelude::*;
 use tgck::map::Thing;
+use tgdata::Id;
 
 use crate::terrain::world;
 use crate::{MapObject, Models};

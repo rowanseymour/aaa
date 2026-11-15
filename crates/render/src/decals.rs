@@ -3,10 +3,10 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Decal, GameData};
 use aaa_map::Ground;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
+use tgdata::{Decal, GameData};
 
 use crate::terrain::{map_point, world};
 use crate::{MapAssets, overlay, textures};

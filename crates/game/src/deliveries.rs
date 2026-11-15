@@ -3,11 +3,11 @@
 
 use std::collections::HashMap;
 
-use aaa_data::Footing;
 use aaa_render::MapAssets;
 use aaa_render::models::pose;
 use aaa_sim::Seen;
 use bevy::prelude::*;
+use tgdata::Footing;
 
 use crate::{Drawn, Loaded, Local, Screen, Sim, fog, thing_at};
 

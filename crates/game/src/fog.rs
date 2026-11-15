@@ -4,11 +4,11 @@
 
 use std::collections::HashSet;
 
-use aaa_data::Id;
 use aaa_render::GroundFog;
 use aaa_render::blend::{self, GroundMaterial};
 use aaa_sim::{Seen, World};
 use bevy::prelude::*;
+use tgdata::Id;
 
 use crate::{BuildingView, Loaded, Local, Sim, UnitView, keys};
 

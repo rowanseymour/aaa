@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 
-use aaa_data::PingLook;
 use aaa_server::protocol::{Seated, Standing, Status};
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
+use tgdata::PingLook;
 
 use crate::ui::{self, Font, Ink};
 use crate::{Leaders, Loaded, Local, Orders, Screen, Sim, confirm, menu, messages};
@@ -42,7 +42,7 @@ pub struct Words {
 }
 
 impl Words {
-    pub fn of(strings: &aaa_data::Strings) -> Self {
+    pub fn of(strings: &tgdata::Strings) -> Self {
         let said = ui::said(strings);
         let standings = [
             (
@@ -103,7 +103,7 @@ impl Words {
     }
 
     /// What the game menu's entry that opens the dialog says.
-    pub fn menu_entry(strings: &aaa_data::Strings) -> String {
+    pub fn menu_entry(strings: &tgdata::Strings) -> String {
         ui::said(strings)(
             "game_menu_ButtonConnectionStatus_Client_View_text",
             "Connection Status",
@@ -113,7 +113,7 @@ impl Words {
 
 impl Default for Words {
     fn default() -> Self {
-        Words::of(&aaa_data::Strings::default())
+        Words::of(&tgdata::Strings::default())
     }
 }
 

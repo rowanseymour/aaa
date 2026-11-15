@@ -9,7 +9,7 @@ description = "Sets matches of Axis & Allies (2004) up from the game's data and 
 publish = false
 
 [dependencies]
-aaa-data = { path = "../data" }
+tgdata = { path = "../tgdata" }
 aaa-map = { path = "../map" }
 aaa-sim = { path = "../sim" }
 log = "0.4"

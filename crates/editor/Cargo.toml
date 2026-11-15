@@ -9,7 +9,7 @@ description = "Map editor for Axis & Allies (2004), which views maps"
 publish = false
 
 [dependencies]
-aaa-data = { path = "../data" }
+tgdata = { path = "../tgdata" }
 aaa-map = { path = "../map" }
 aaa-render = { path = "../render" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

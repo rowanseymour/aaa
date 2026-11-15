@@ -1,7 +1,6 @@
 //! The options, a page over the whole screen that the main menu and the
 //! menu over a match both open, and what's chosen in them.
 
-use aaa_data::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 use aaa_render::camera::RtsCamera;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
@@ -16,6 +15,7 @@ use bevy::window::{
 };
 use bevy::winit::WINIT_WINDOWS;
 use raw_window_handle::RawDisplayHandle;
+use tgdata::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
@@ -98,7 +98,7 @@ impl Options {
     pub fn of(
         configurations: Vec<HotkeyConfiguration>,
         named: Option<Id>,
-        strings: &aaa_data::Strings,
+        strings: &tgdata::Strings,
     ) -> Self {
         let known = named.filter(|id| configurations.iter().any(|c| c.id == *id));
         let said = crate::ui::said(strings);
@@ -1124,7 +1124,7 @@ mod tests {
         Options::of(
             configurations,
             named.map(Id::from),
-            &aaa_data::Strings::default(),
+            &tgdata::Strings::default(),
         )
     }
 
@@ -1133,7 +1133,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, StatesPlugin, OptionsPlugin))
             .insert_state(Screen::Options)
             .insert_resource(options(Some("classic")))
-            .insert_resource(Volumes::from(aaa_data::Volumes {
+            .insert_resource(Volumes::from(tgdata::Volumes {
                 main: 0.8,
                 fx: 0.8,
                 speech: 0.95,
@@ -1170,7 +1170,7 @@ mod tests {
         let none = Options::of(
             Vec::new(),
             Some("classic".into()),
-            &aaa_data::Strings::default(),
+            &tgdata::Strings::default(),
         );
         assert!(none.hotkeys().is_none());
     }

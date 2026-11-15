@@ -16,7 +16,7 @@
 //! - Group, for several: a card each, up to [`MAX_SELECTED`], with the
 //!   banner, the organization's health and each unit's; clicking one selects
 //!   it alone.
-//! - Settlement, for a settlement (see [`aaa_data::defs::CityComponent`]):
+//! - Settlement, for a settlement (see [`tgdata::defs::CityComponent`]):
 //!   unused, since a city shows as a simple actor.
 //!
 //! Beside the title of an organization or a building is an icon for each
@@ -33,7 +33,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aaa_data::{GUARDING, GameData, Id, PropertyLook};
 use aaa_render::MapAssets;
 use aaa_render::overlay::BannerImages;
 use aaa_render::portrait::{Sitter, Stage};
@@ -44,6 +43,7 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
+use tgdata::{GUARDING, GameData, Id, PropertyLook};
 
 use crate::actions::Blocks;
 use crate::banners::{self, Badges};
@@ -302,12 +302,12 @@ pub struct Looks {
     /// Templates' and technologies' names, by id.
     names: HashMap<Id, String>,
     /// What each template says of itself and shows its defence by.
-    listings: Arc<HashMap<Id, aaa_data::Listing>>,
+    listings: Arc<HashMap<Id, tgdata::Listing>>,
     /// Each resource's glyph, by the resource's id.
     glyphs: HashMap<Id, Handle<Image>>,
-    strings: Arc<aaa_data::Strings>,
+    strings: Arc<tgdata::Strings>,
     /// The map's own text, for the names it gives things and sides.
-    map: Arc<aaa_data::Strings>,
+    map: Arc<tgdata::Strings>,
     /// How each property that has an icon shows, by id: the shared ones,
     /// and under ids of their own those of `formations`.
     properties: HashMap<Id, PropertyLook>,
@@ -1816,12 +1816,12 @@ fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
 /// has it, by resource in the order `resources` are defined: of each what
 /// it earns less what it takes to keep, signed, but for a limited
 /// resource taken up, which is bare. Nothing for what comes to nothing.
-fn economy(ledger: &Ledger, resources: &[aaa_data::ResourceKind]) -> Vec<(Id, String)> {
+fn economy(ledger: &Ledger, resources: &[tgdata::ResourceKind]) -> Vec<(Id, String)> {
     let entries = resources.iter().filter_map(|r| {
         let kind = r.id.as_str();
         let net = ledger.production.get(kind) - ledger.upkeep.get(kind);
         // To few enough figures that sums' rounding doesn't show.
-        let (net, figure) = match r.role == aaa_data::ResourceRole::LimitedConsumed {
+        let (net, figure) = match r.role == tgdata::ResourceRole::LimitedConsumed {
             true => (net.abs().round(), format!("{}", net.abs().round())),
             false => {
                 let net = (net * 1000.0).round() / 1000.0;
@@ -1840,8 +1840,8 @@ fn economy(ledger: &Ledger, resources: &[aaa_data::ResourceKind]) -> Vec<(Id, St
 pub(crate) fn organization_name(
     sim: &World,
     names: &HashMap<Id, String>,
-    strings: &aaa_data::Strings,
-    map: &aaa_data::Strings,
+    strings: &tgdata::Strings,
+    map: &tgdata::Strings,
     r: usize,
 ) -> String {
     let organization = &sim.organizations[r];
@@ -1861,8 +1861,8 @@ pub(crate) fn organization_name(
 pub(crate) fn building_name(
     sim: &World,
     names: &HashMap<Id, String>,
-    strings: &aaa_data::Strings,
-    map: &aaa_data::Strings,
+    strings: &tgdata::Strings,
+    map: &tgdata::Strings,
     b: usize,
 ) -> String {
     // A city's name is the map's, where it gives one.
@@ -1882,7 +1882,7 @@ pub(crate) fn building_name(
 }
 
 /// The name a map gives the thing with an id, if it gives it one.
-fn map_name(map: &aaa_data::Strings, id: u32) -> Option<String> {
+fn map_name(map: &tgdata::Strings, id: u32) -> Option<String> {
     map.get(&format!("name_{id}")).cloned()
 }
 
@@ -1892,7 +1892,7 @@ fn template_name(names: &HashMap<Id, String>, template: &str) -> String {
 
 /// `name` with `number` before it, as "1st Infantry Regiment", in the
 /// game's words for each ending where it has them.
-pub(crate) fn numbered(strings: &aaa_data::Strings, number: Option<u32>, name: String) -> String {
+pub(crate) fn numbered(strings: &tgdata::Strings, number: Option<u32>, name: String) -> String {
     let Some(n) = number else {
         return name;
     };
@@ -2031,7 +2031,7 @@ mod tests {
     #[test]
     fn the_economy_line_signs_all_but_the_limits_taken_up() {
         // AA's, in its order: a limit made room in before one taken up.
-        use aaa_data::ResourceKind as R;
+        use tgdata::ResourceKind as R;
         let resources = [
             R::stockpiled("money"),
             R::upkeep("ammo", Default::default()),
@@ -2122,7 +2122,7 @@ mod tests {
 
     #[test]
     fn names_are_numbered_in_the_games_words() {
-        let strings = aaa_data::Strings::from_iter([
+        let strings = tgdata::Strings::from_iter([
             ("actor_name_numbered|ds".to_string(), "%dth %s".to_string()),
             (
                 "actor_name_numbered_st|ds".to_string(),

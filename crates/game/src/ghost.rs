@@ -12,7 +12,7 @@ use crate::{Drawn, Loaded, Local, Pointer, Pointing, Screen, Selected, Sim, thin
 
 /// The preview shown: its root, what it is, where, and whether it fits.
 #[derive(Resource, Default)]
-pub struct Ghost(Option<(Entity, aaa_data::Id, [f32; 2], bool)>);
+pub struct Ghost(Option<(Entity, tgdata::Id, [f32; 2], bool)>);
 
 /// On a preview that doesn't fit, for [`redden`] to paint.
 #[derive(Component)]
@@ -132,7 +132,7 @@ pub fn redden(
 /// models, its template, where it's centred and whether it can land
 /// there.
 #[derive(Resource, Default)]
-pub struct Landing(Option<(Vec<Entity>, aaa_data::Id, [f32; 2], bool)>);
+pub struct Landing(Option<(Vec<Entity>, tgdata::Id, [f32; 2], bool)>);
 
 /// While a delivery is being aimed, the organization follows the cursor over
 /// the map, each member where it would stand, drawn all in red where it

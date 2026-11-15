@@ -2,19 +2,19 @@ use std::collections::BTreeMap;
 use std::io::Write;
 use std::process::ExitCode;
 
-use aaa_data::GameData;
+use tgdata::GameData;
 use tgi::Count;
 
 const USAGE: &str = "\
 usage:
-  aaa-data coverage <game dir>          how much of each top-level block kind the definitions read
-  aaa-data coverage <game dir> <kind>   each key of one kind, e.g. Thing, with how often it is read
-  aaa-data audio    <game dir> [filter] sounds, speech and music by id, with their files and any missing
-  aaa-data cues     <game dir> [filter] the audio object templates play, by what sets it off
-  aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off
-  aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post
-  aaa-data resources <game dir>         the resources, with what each is for and what a shortfall of it costs, and the resource bar's cells
-  aaa-data factions <game dir>          each nation's factions, their computer players and their special operations as tooltips show them";
+  tgdata coverage <game dir>          how much of each top-level block kind the definitions read
+  tgdata coverage <game dir> <kind>   each key of one kind, e.g. Thing, with how often it is read
+  tgdata audio    <game dir> [filter] sounds, speech and music by id, with their files and any missing
+  tgdata cues     <game dir> [filter] the audio object templates play, by what sets it off
+  tgdata effects  <game dir> [filter] the visual effects object templates show, by what sets them off
+  tgdata messages <game dir>          the kinds of message, then the game events and the lines they post
+  tgdata resources <game dir>         the resources, with what each is for and what a shortfall of it costs, and the resource bar's cells
+  tgdata factions <game dir>          each nation's factions, their computer players and their special operations as tooltips show them";
 
 /// Prints the library's warnings, such as data blocks that don't read.
 struct Stderr;
@@ -27,7 +27,7 @@ impl log::Log for Stderr {
     fn log(&self, record: &log::Record) {
         if self.enabled(record.metadata()) {
             eprintln!(
-                "aaa-data: {}: {}",
+                "tgdata: {}: {}",
                 record.level().as_str().to_lowercase(),
                 record.args()
             );
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Err(e) => {
-            eprintln!("aaa-data: {e}");
+            eprintln!("tgdata: {e}");
             ExitCode::FAILURE
         }
     }
@@ -186,7 +186,7 @@ fn cues(dir: &str, filter: &str) -> Res {
         .collect();
     objects.sort_by(|a, b| a.0.cmp(&b.0));
     let mut undefined = BTreeMap::new();
-    let mut line = |event: &str, id: &aaa_data::Id| -> std::io::Result<()> {
+    let mut line = |event: &str, id: &tgdata::Id| -> std::io::Result<()> {
         let mark = match audio.contains_key(id) {
             true => "",
             false => {
@@ -322,7 +322,7 @@ fn effects(dir: &str, filter: &str) -> Res {
         .collect();
     objects.sort_by(|a, b| a.0.cmp(&b.0));
     let mut undefined = BTreeMap::new();
-    let mut line = |event: &str, c: &aaa_data::VfxCue| -> std::io::Result<()> {
+    let mut line = |event: &str, c: &tgdata::VfxCue| -> std::io::Result<()> {
         let what = match vfx.get(&c.vfx) {
             Some(v) => {
                 let mut what = match &v.model {

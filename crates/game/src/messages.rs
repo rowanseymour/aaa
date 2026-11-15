@@ -6,7 +6,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use aaa_data::{GameEvent, Id, InterfaceVars};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::textures;
@@ -16,6 +15,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
+use tgdata::{GameEvent, Id, InterfaceVars};
 
 use crate::actions::{self, Aim, fill};
 use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
@@ -60,10 +60,10 @@ struct Look {
     kinds: HashMap<Id, Kind>,
     events: HashMap<Id, GameEvent>,
     vars: InterfaceVars,
-    strings: Arc<aaa_data::Strings>,
+    strings: Arc<tgdata::Strings>,
     names: HashMap<Id, String>,
     /// The map's own text, for the names it gives things and sides.
-    map: Arc<aaa_data::Strings>,
+    map: Arc<tgdata::Strings>,
     /// What an icon that looks somewhere says.
     to_location: String,
     /// What marks a side named in a line.
@@ -325,7 +325,7 @@ impl MessageLog {
     }
 
     /// The map's own text, for the names it gives sides.
-    pub(crate) fn map_strings(&self) -> std::sync::Arc<aaa_data::Strings> {
+    pub(crate) fn map_strings(&self) -> std::sync::Arc<tgdata::Strings> {
         self.look.map.clone()
     }
 

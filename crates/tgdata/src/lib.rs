@@ -1,4 +1,4 @@
-//! The game's data as a whole: access to the installed archives, and the
+//! A game's data as a whole: access to the installed archives, and the
 //! definitions built from their files (terrain, object views, ...).
 //!
 //! Parsing is pure: [`tgi`] turns a file's bytes into blocks, and [`defs`]

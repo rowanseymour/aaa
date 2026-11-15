@@ -9,7 +9,7 @@ description = "Plays Axis & Allies (2004) matches"
 publish = false
 
 [dependencies]
-aaa-data = { path = "../data" }
+tgdata = { path = "../tgdata" }
 aaa-map = { path = "../map" }
 aaa-render = { path = "../render" }
 aaa-sim = { path = "../sim" }

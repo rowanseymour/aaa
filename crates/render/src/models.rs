@@ -7,7 +7,6 @@ use std::f32::consts::FRAC_PI_2;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use aaa_data::{AnimationKind, Footing, GameData, Id, Portrait, Shape, View};
 use aaa_map::{Ground, Player, owner};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormats;
@@ -19,6 +18,7 @@ use nif::{
     Controller, ControllerKind, Keyframes, Keys, Nif, Object, TextureChange, TexturePlacement,
 };
 use tgck::map::Thing;
+use tgdata::{AnimationKind, Footing, GameData, Id, Portrait, Shape, View};
 
 use crate::MapObject;
 use crate::glow::GlowMaterial;
@@ -494,16 +494,16 @@ pub(crate) struct Paint {
 #[derive(Clone, Copy)]
 pub(crate) struct Plays<'a> {
     /// What it idles with, as a rig; without one it stands as modelled.
-    pub idle: Option<&'a aaa_data::Animation>,
-    pub moving: Option<&'a aaa_data::Animation>,
+    pub idle: Option<&'a tgdata::Animation>,
+    pub moving: Option<&'a tgdata::Animation>,
     /// Picks those it plays once when told to.
-    pub once: fn(&aaa_data::Animation) -> bool,
+    pub once: fn(&tgdata::Animation) -> bool,
 }
 
 impl<'a> Plays<'a> {
     /// A unit's: idling, moving with `moving`, and using its abilities and
     /// dying once each.
-    pub fn unit(view: &'a View, moving: Option<&'a aaa_data::Animation>) -> Self {
+    pub fn unit(view: &'a View, moving: Option<&'a tgdata::Animation>) -> Self {
         Plays {
             idle: idle(view),
             moving,
@@ -513,7 +513,7 @@ impl<'a> Plays<'a> {
 
     /// The animations of `view`'s it plays once: what a model's cache key
     /// and the clips it loads are both made from.
-    fn once_in<'v>(&self, view: &'v View) -> impl Iterator<Item = &'v aaa_data::Animation> {
+    fn once_in<'v>(&self, view: &'v View) -> impl Iterator<Item = &'v tgdata::Animation> {
         let once = self.once;
         view.animations.iter().filter(move |a| once(a))
     }
@@ -844,7 +844,7 @@ impl Models {
         thing: &Thing,
         owner: Option<u32>,
         view: &View,
-        moving: Option<&aaa_data::Animation>,
+        moving: Option<&tgdata::Animation>,
     ) -> Option<Entity> {
         if view.models.is_empty() {
             return None;
@@ -1314,7 +1314,7 @@ pub struct ModelAssets<'a> {
 
 /// The moving animation that best suits `speed`: the one whose stride
 /// takes as long, played at its natural pace.
-fn moving(view: &View, speed: f32) -> Option<&aaa_data::Animation> {
+fn moving(view: &View, speed: f32) -> Option<&tgdata::Animation> {
     view.animations
         .iter()
         .filter(|a| a.kind == AnimationKind::Move)
@@ -1325,13 +1325,13 @@ fn moving(view: &View, speed: f32) -> Option<&aaa_data::Animation> {
 
 /// Whether an animation is one units play once when told to: using an
 /// ability or dying.
-fn once(a: &aaa_data::Animation) -> bool {
+fn once(a: &tgdata::Animation) -> bool {
     matches!(a.kind, AnimationKind::Ability | AnimationKind::Die)
 }
 
 /// The idle animation a view's models play: the one named `idle`, else the
 /// first of its kind.
-pub(crate) fn idle(view: &View) -> Option<&aaa_data::Animation> {
+pub(crate) fn idle(view: &View) -> Option<&tgdata::Animation> {
     let mut idles = view
         .animations
         .iter()
