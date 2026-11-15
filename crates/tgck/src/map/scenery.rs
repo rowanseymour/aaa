@@ -4,8 +4,6 @@
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::actor::Updatable;
-use super::expect;
-use super::header::{self, check_version};
 use crate::{Cursor, Result, Writer};
 
 /// The `reactive_scenery` detail of `rmp.ksy`; a part is `None` where
@@ -51,7 +49,7 @@ const TOPPLE: u32 = 2;
 
 impl ReactiveScenery {
     pub(super) fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "reactive scenery version", 0)?;
+        cur.expect("reactive scenery version", 0)?;
         let parts = cur.u32()?;
         if parts & !(STIR | TOPPLE) != 0 {
             return Err(crate::Error::Corrupt(format!("scenery parts {parts:#x}")));
@@ -86,9 +84,9 @@ impl ReactiveScenery {
 
 /// Reads a `scenery_part`, keeping only its updatable.
 fn part(cur: &mut Cursor) -> Result<Updatable> {
-    expect(cur, "scenery part version", 0)?;
+    cur.expect("scenery part version", 0)?;
     let updatable = Updatable::parse(cur)?;
-    expect(cur, "scenery part base version", 0)?;
+    cur.expect("scenery part base version", 0)?;
     Ok(updatable)
 }
 
@@ -100,7 +98,7 @@ fn write_part(w: &mut Writer, updatable: &Updatable) {
 
 impl Topple {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        let version = check_version("topple", cur.u32()?, 0..=1)?;
+        let version = cur.version("topple", 0..=1)?;
         Ok(Topple {
             version,
             updatable: part(cur)?,
@@ -119,10 +117,7 @@ impl Topple {
         w.f32(self.state_time);
         w.f32(self.regrow_time);
         w.f32s(&self.direction);
-        header::optional(self.version >= 1, "topple growth", self.growth, |g| {
-            w.f32(g);
-            Ok(())
-        })
+        w.optional_plain(self.version >= 1, "topple growth", self.growth, Writer::f32)
     }
 }
 

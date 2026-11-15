@@ -3,7 +3,6 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::expect;
 use crate::{Cursor, Result, Writer};
 
 /// The `ai_map` of `rmp.ksy`.
@@ -72,12 +71,12 @@ pub struct ShoreTile {
 
 impl AiMap {
     pub(super) fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "AI map version", 0)?;
-        if !super::header::bool(cur, "AI map flag")? {
+        cur.expect("AI map version", 0)?;
+        if !cur.bool("AI map flag")? {
             return Ok(AiMap { data: None });
         }
         let regions = cur.list(|cur| {
-            expect(cur, "AI region version", 0)?;
+            cur.expect("AI region version", 0)?;
             Ok(AiRegion {
                 center: cur.f32s()?,
                 neighbors: cur.list(|cur| Ok((cur.u32()?, cur.f32()?)))?,
@@ -89,37 +88,35 @@ impl AiMap {
         })
     }
 
-    pub(super) fn write(&self, w: &mut Writer) {
+    pub(super) fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(0);
         w.u8(self.data.is_some().into());
-        let Some(data) = &self.data else { return };
-        w.u32(data.regions.len() as u32);
-        for r in &data.regions {
+        let Some(data) = &self.data else {
+            return Ok(());
+        };
+        w.list("regions", &data.regions, |w, r| {
             w.u32(0);
             w.f32s(&r.center);
-            w.u32(r.neighbors.len() as u32);
-            for &(region, distance) in &r.neighbors {
+            w.list("neighbors", &r.neighbors, |w, &(region, distance)| {
                 w.u32(region);
                 w.f32(distance);
-            }
-        }
-        w.u32(data.blocks.len() as u32);
-        for b in &data.blocks {
-            b.write(w);
-        }
+                Ok(())
+            })
+        })?;
+        w.list("blocks", &data.blocks, |w, b| b.write(w))
     }
 }
 
 impl AiBlock {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "AI block version", 0)?;
+        cur.expect("AI block version", 0)?;
         let region = cur.u32()?;
         let area = cur.u32()?;
         let mut side = || -> Result<AiBlockSide> {
             Ok(AiBlockSide {
                 bound: cur.u16()?,
                 links: cur.list(|cur| {
-                    expect(cur, "AI block link version", 0)?;
+                    cur.expect("AI block link version", 0)?;
                     Ok(AiBlockLink {
                         span: [cur.u16()?, cur.u16()?, cur.u16()?, cur.u16()?],
                         block: cur.u32()?,
@@ -134,25 +131,25 @@ impl AiBlock {
         })
     }
 
-    fn write(&self, w: &mut Writer) {
+    fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(0);
         w.u32(self.region);
         w.u32(self.area);
-        for side in &self.sides {
+        self.sides.iter().try_for_each(|side| {
             w.u16(side.bound);
-            w.u32(side.links.len() as u32);
-            for link in &side.links {
+            w.list("links", &side.links, |w, link| {
                 w.u32(0);
                 link.span.iter().for_each(|&v| w.u16(v));
                 w.u32(link.block);
-            }
-        }
+                Ok(())
+            })
+        })
     }
 }
 
 impl ShoreMesh {
     pub(super) fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "shore mesh version", 0)?;
+        cur.expect("shore mesh version", 0)?;
         Ok(ShoreMesh {
             points: cur.list(|cur| cur.f32s())?,
             corners: cur.list(|cur| cur.u32())?,
@@ -167,18 +164,19 @@ impl ShoreMesh {
         })
     }
 
-    pub(super) fn write(&self, w: &mut Writer) {
+    pub(super) fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(0);
-        w.u32(self.points.len() as u32);
-        self.points.iter().for_each(|p| w.f32s(p));
-        w.u32(self.corners.len() as u32);
-        self.corners.iter().for_each(|&c| w.u32(c));
-        w.u32(self.tiles.len() as u32);
-        for t in &self.tiles {
+        w.list("points", &self.points, |w, p| {
+            w.f32s(p);
+            Ok(())
+        })?;
+        w.u32s("corners", &self.corners)?;
+        w.list("tiles", &self.tiles, |w, t| {
             [t.x, t.y, t.first_corner, t.last_corner]
                 .iter()
                 .for_each(|&v| w.u32(v));
-        }
+            Ok(())
+        })
     }
 }
 
@@ -188,11 +186,11 @@ mod tests {
 
     fn round_trip<T: PartialEq + std::fmt::Debug>(
         value: &T,
-        write: impl Fn(&T, &mut Writer),
+        write: impl Fn(&T, &mut Writer) -> Result<()>,
         parse: impl Fn(&mut Cursor) -> Result<T>,
     ) {
         let mut w = Writer::default();
-        write(value, &mut w);
+        write(value, &mut w).unwrap();
         let mut cur = Cursor::new(&w.0);
         assert_eq!(&parse(&mut cur).unwrap(), value);
         cur.finish("test").unwrap();
@@ -239,7 +237,7 @@ mod tests {
         round_trip(&AiMap { data: None }, AiMap::write, AiMap::parse);
 
         let mut w = Writer::default();
-        AiMap { data: None }.write(&mut w);
+        AiMap { data: None }.write(&mut w).unwrap();
         assert_eq!(w.0, [0, 0, 0, 0, 0], "a version and a clear flag");
     }
 

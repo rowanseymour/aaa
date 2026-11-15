@@ -6,8 +6,6 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::expect;
-use super::header::{bool, check_version, optional, optional_plain};
 use super::organization::{ElementState, Organization};
 use crate::{Cursor, Error, Result, Writer};
 
@@ -274,7 +272,7 @@ impl Actor {
 
     fn parse_header(cur: &mut Cursor) -> Result<Self> {
         let versions = Actor::MIN_VERSION..=Actor::MAX_VERSION;
-        let version = check_version("actor", cur.u32()?, versions)?;
+        let version = cur.version("actor", versions)?;
         Ok(Actor {
             version,
             kingdom: cur.u32()?,
@@ -402,15 +400,6 @@ fn record_order(components: u32) -> impl Iterator<Item = u32> {
         .filter(move |&b| has(b))
 }
 
-pub(super) fn version(cur: &mut Cursor, what: &str, max: u32) -> Result<u32> {
-    check_version(what, cur.u32()?, 0..=max)
-}
-
-fn write_f32s(w: &mut Writer, vs: &[f32]) {
-    w.u32(vs.len() as u32);
-    w.f32s(vs);
-}
-
 /// `n` items of `size` bytes, checking the count against what's left first.
 fn bytes<'a>(cur: &mut Cursor<'a>, n: u32, size: usize) -> Result<&'a [u8]> {
     let len = (n as usize)
@@ -454,7 +443,7 @@ impl Component {
 impl Updatable {
     pub(super) fn parse(cur: &mut Cursor) -> Result<Self> {
         Ok(Updatable {
-            version: version(cur, "updatable", 1)?,
+            version: cur.version("updatable", 0..=1)?,
             id: cur.i32()?,
         })
     }
@@ -468,7 +457,7 @@ impl Updatable {
 impl Construction {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         let updatable = Updatable::parse(cur)?;
-        let version = version(cur, "construction", 1)?;
+        let version = cur.version("construction", 0..=1)?;
         let progress = cur.list(Cursor::f32)?;
         let (upgrade, old_upgrade) = if version >= 1 {
             let progress = cur.list(Cursor::f32)?;
@@ -489,17 +478,22 @@ impl Construction {
     fn write(&self, w: &mut Writer) -> Result<()> {
         self.updatable.write(w);
         w.u32(self.version);
-        write_f32s(w, &self.progress);
+        w.f32_list("construction progress", &self.progress)?;
         let new = self.version >= 1;
-        optional(new, "construction's upgrade", self.upgrade.as_ref(), |u| {
-            write_f32s(w, &u.progress);
-            w.string(&u.template)
-        })?;
-        optional_plain(
+        w.optional(
+            new,
+            "construction's upgrade",
+            self.upgrade.as_ref(),
+            |w, u| {
+                w.f32_list("upgrade progress", &u.progress)?;
+                w.string(&u.template)
+            },
+        )?;
+        w.optional_plain(
             !new,
             "construction's old upgrade",
             self.old_upgrade,
-            |old| old.iter().for_each(|&v| w.u32(v)),
+            |w, old| old.iter().for_each(|&v| w.u32(v)),
         )
     }
 }
@@ -507,7 +501,7 @@ impl Construction {
 impl City {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         let updatable = Updatable::parse(cur)?;
-        let version = version(cur, "city", 1)?;
+        let version = cur.version("city", 0..=1)?;
         Ok(City {
             updatable,
             version,
@@ -519,15 +513,15 @@ impl City {
         self.updatable.write(w);
         w.u32(self.version);
         let buildings = self.buildings.as_deref();
-        optional_plain(self.version >= 1, "city's buildings", buildings, |b| {
-            w.u32s(b)
+        w.optional(self.version >= 1, "city's buildings", buildings, |w, v| {
+            w.u32s("buildings", v)
         })
     }
 }
 
 impl Body {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        let version = version(cur, "body", 4)?;
+        let version = cur.version("body", 0..=4)?;
         Ok(Body {
             version,
             updatable: (version >= 2).then(|| Updatable::parse(cur)).transpose()?,
@@ -541,15 +535,19 @@ impl Body {
     fn write(&self, w: &mut Writer) -> Result<()> {
         let v = self.version;
         w.u32(v);
-        optional_plain(v >= 2, "body's updatable", self.updatable, |u| u.write(w))?;
-        optional_plain(v >= 1, "body's death time", self.death_time, |t| w.f32(t))?;
+        w.optional_plain(v >= 2, "body's updatable", self.updatable, |w, u| {
+            u.write(w)
+        })?;
+        w.optional_plain(v >= 1, "body's death time", self.death_time, |w, t| {
+            w.f32(t)
+        })?;
         w.f32(self.health);
-        optional_plain(v >= 3, "body's sink time", self.sink_time, |t| w.f32(t))?;
-        optional_plain(
+        w.optional_plain(v >= 3, "body's sink time", self.sink_time, Writer::f32)?;
+        w.optional_plain(
             v >= 4,
             "body's last damage time",
             self.last_damage_time,
-            |t| w.f32(t),
+            Writer::f32,
         )
     }
 }
@@ -557,7 +555,7 @@ impl Body {
 impl Mover {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         let updatable = Updatable::parse(cur)?;
-        let v = version(cur, "mover", 8)?;
+        let v = cur.version("mover", 0..=8)?;
         Ok(Mover {
             updatable,
             version: v,
@@ -596,26 +594,37 @@ impl Mover {
         w.f32s(&self.destination);
         w.f32(self.speed);
         w.f32(self.target_speed);
-        optional_plain(v >= 8, "mover's top speed", self.max_speed, |s| w.f32(s))?;
-        optional_plain(v < 4, "mover's old value", self.old, |o| w.f32s(&o))?;
+        w.optional_plain(v >= 8, "mover's top speed", self.max_speed, Writer::f32)?;
+        w.optional_plain(v < 4, "mover's old value", self.old, |w, o| w.f32s(&o))?;
         w.u32(self.follow);
         w.f32(self.follow_distance);
         let old_flag = (1..7).contains(&v);
-        optional_plain(old_flag, "mover's old flag", self.old_flag, |f| w.u8(f))?;
-        optional_plain(v >= 2, "mover's instant turn", self.turn_instantly, |t| {
-            w.u8(t)
-        })?;
-        optional_plain(v >= 3, "mover's target facing", self.target_facing, |f| {
-            w.f32s(&f)
-        })?;
-        optional_plain(v >= 3, "mover's speed scale", self.speed_scale, |s| {
+        w.optional_plain(old_flag, "mover's old flag", self.old_flag, Writer::u8)?;
+        w.optional_plain(
+            v >= 2,
+            "mover's instant turn",
+            self.turn_instantly,
+            Writer::u8,
+        )?;
+        w.optional_plain(
+            v >= 3,
+            "mover's target facing",
+            self.target_facing,
+            |w, f| w.f32s(&f),
+        )?;
+        w.optional_plain(v >= 3, "mover's speed scale", self.speed_scale, |w, s| {
             w.f32(s)
         })?;
-        optional_plain(v >= 5, "mover's falling", self.falling, |(flag, drag)| {
-            w.u8(flag);
-            w.f32(drag);
-        })?;
-        optional_plain(v >= 6, "mover's fall", self.fall.as_ref(), |fall| {
+        w.optional_plain(
+            v >= 5,
+            "mover's falling",
+            self.falling,
+            |w, (flag, drag)| {
+                w.u8(flag);
+                w.f32(drag);
+            },
+        )?;
+        w.optional_plain(v >= 6, "mover's fall", self.fall.as_ref(), |w, fall| {
             w.u8(fall.turns);
             w.f32s(&fall.direction);
             w.u8(fall.has_landing);
@@ -628,14 +637,11 @@ impl Mover {
 impl Properties {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         let updatable = Updatable::parse(cur)?;
-        let version = version(cur, "properties", 1)?;
-        let n = cur.u32()?;
-        let properties = (0..n)
-            .map(|_| match cur.u32()? {
-                u32::MAX => Ok(None),
-                class => Property::parse(cur, class).map(Some),
-            })
-            .collect::<Result<_>>()?;
+        let version = cur.version("properties", 0..=1)?;
+        let properties = cur.list(|cur| match cur.u32()? {
+            u32::MAX => Ok(None),
+            class => Property::parse(cur, class).map(Some),
+        })?;
         Ok(Properties {
             updatable,
             version,
@@ -646,13 +652,13 @@ impl Properties {
     fn write(&self, w: &mut Writer) -> Result<()> {
         self.updatable.write(w);
         w.u32(self.version);
-        w.u32(self.properties.len() as u32);
-        for property in &self.properties {
+        w.list("properties", &self.properties, |w, property| {
             match property {
                 Some(p) => p.write(w)?,
                 None => w.u32(u32::MAX),
             }
-        }
+            Ok(())
+        })?;
         Ok(())
     }
 }
@@ -663,7 +669,7 @@ impl Property {
         if class > 1 {
             return Err(Error::Corrupt(format!("property class {class}")));
         }
-        let version = version(cur, "property", 3)?;
+        let version = cur.version("property", 0..=3)?;
         Ok(Property {
             class,
             version,
@@ -674,7 +680,7 @@ impl Property {
             from_actor: (version >= 2).then(|| cur.u32()).transpose()?,
             extra: (class == 1 && version >= 3)
                 .then(|| {
-                    expect(cur, "property extra version", 0)?;
+                    cur.expect("property extra version", 0)?;
                     cur.u32()
                 })
                 .transpose()?,
@@ -695,14 +701,17 @@ impl Property {
         let v = self.version;
         w.u32(v);
         w.f32(self.gained_at);
-        optional_plain(v >= 1, "property's source", self.source, |s| w.u32(s))?;
+        w.optional_plain(v >= 1, "property's source", self.source, Writer::u32)?;
         w.string(&self.id)?;
-        optional_plain(v >= 2, "property's duplicate flag", self.duplicate, |d| {
-            w.u8(d)
-        })?;
-        optional_plain(v >= 2, "property's actor", self.from_actor, |a| w.u32(a))?;
+        w.optional_plain(
+            v >= 2,
+            "property's duplicate flag",
+            self.duplicate,
+            Writer::u8,
+        )?;
+        w.optional_plain(v >= 2, "property's actor", self.from_actor, Writer::u32)?;
         let extra = self.class == 1 && v >= 3;
-        optional_plain(extra, "property's extra value", self.extra, |e| {
+        w.optional_plain(extra, "property's extra value", self.extra, |w, e| {
             w.u32(0);
             w.u32(e);
         })
@@ -717,13 +726,13 @@ impl Trailer {
             old_stance: (3..12).contains(&v).then(|| cur.u32()).transpose()?,
             saved_group: (v >= 4)
                 .then(|| {
-                    bool(cur, "saved group flag")?
+                    cur.bool("saved group flag")?
                         .then(|| cur.string())
                         .transpose()
                 })
                 .transpose()?,
             group: (v >= 5)
-                .then(|| bool(cur, "group flag")?.then(|| cur.u32()).transpose())
+                .then(|| cur.bool("group flag")?.then(|| cur.u32()).transpose())
                 .transpose()?,
             map_string: (v >= 6).then(|| cur.string()).transpose()?,
             towing: (v >= 8)
@@ -799,13 +808,14 @@ impl Trailer {
             w.u32(v);
         }
         if let Some(lists) = &self.lists {
-            lists.lists.iter().for_each(|l| w.u32s(l));
-            w.u32(lists.recent_attacks.len() as u32);
             lists
-                .recent_attacks
+                .lists
                 .iter()
-                .flatten()
-                .for_each(|&v| w.u32(v));
+                .try_for_each(|l| w.u32s("trailer list", l))?;
+            w.list("recent attacks", &lists.recent_attacks, |w, attack| {
+                attack.iter().for_each(|&v| w.u32(v));
+                Ok(())
+            })?;
         }
         if let Some(v) = self.num_deploying {
             w.u32(v);
@@ -828,27 +838,27 @@ impl Skip {
             "Performer" => skip_performer(cur),
             "Economy" | "Builder" | "Detection" | "Portal" => {
                 Updatable::parse(cur)?;
-                version(cur, "component", 0).map(drop)
+                cur.expect("component version", 0).map(drop)
             }
             "Denizen" => skip_denizen(cur),
             "Supply" => skip_supply(cur),
             "Structure" => skip_structure(cur),
             "Recruit" => skip_recruit(cur),
             "Experience" => {
-                version(cur, "experience", 0)?;
+                cur.expect("experience version", 0)?;
                 cur.u32().map(drop)
             }
             "MobileDeployment" => skip_mobile_deployment(cur),
             "Defender" => skip_defender(cur),
             "Research" => {
                 Updatable::parse(cur)?;
-                version(cur, "research", 0)?;
+                cur.expect("research version", 0)?;
                 skip_strings(cur)
             }
             "Transport" => skip_transport(cur),
             "Lair" => {
                 Updatable::parse(cur)?;
-                version(cur, "lair", 0)?;
+                cur.expect("lair version", 0)?;
                 cur.u32s()?;
                 cur.bytes(8).map(drop)
             }
@@ -879,13 +889,13 @@ fn skip_strings(cur: &mut Cursor) -> Result<()> {
 /// A layout id, then the layout's own state.
 fn skip_layout(cur: &mut Cursor) -> Result<()> {
     cur.string()?;
-    version(cur, "layout", 0)?;
+    cur.expect("layout version", 0)?;
     cur.string()?;
     skip_strings(cur)
 }
 
 fn skip_ability(cur: &mut Cursor) -> Result<()> {
-    let v = version(cur, "ability", 1)?;
+    let v = cur.version("ability", 0..=1)?;
     cur.bytes(13)?;
     if v >= 1 {
         cur.u32s()?;
@@ -895,14 +905,14 @@ fn skip_ability(cur: &mut Cursor) -> Result<()> {
 
 fn skip_character(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "character", 2)?;
+    let v = cur.version("character", 0..=2)?;
     cur.u32()?;
     if v < 1 {
         cur.u32()?;
     }
     // The animation type and index, then its player's state.
     cur.bytes(8)?;
-    version(cur, "animation", 0)?;
+    cur.expect("animation version", 0)?;
     cur.bytes(13)?;
     if v >= 2 {
         cur.u32()?;
@@ -912,7 +922,7 @@ fn skip_character(cur: &mut Cursor) -> Result<()> {
 
 fn skip_performer(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = check_version("performer", cur.u32()?, 4..=9)?;
+    let v = cur.version("performer", 4..=9)?;
     cur.bytes(24)?;
     if v < 5 {
         cur.u32s()?;
@@ -946,7 +956,7 @@ fn skip_performer(cur: &mut Cursor) -> Result<()> {
 
 fn skip_denizen(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "denizen", 4)?;
+    let v = cur.version("denizen", 0..=4)?;
     if v >= 1 {
         cur.u8()?;
     }
@@ -966,7 +976,7 @@ fn skip_denizen(cur: &mut Cursor) -> Result<()> {
 }
 
 fn skip_supply(cur: &mut Cursor) -> Result<()> {
-    let v = version(cur, "supply", 2)?;
+    let v = cur.version("supply", 0..=2)?;
     if v >= 1 {
         Updatable::parse(cur)?;
     }
@@ -977,7 +987,7 @@ fn skip_supply(cur: &mut Cursor) -> Result<()> {
 }
 
 fn skip_structure(cur: &mut Cursor) -> Result<()> {
-    let v = version(cur, "structure", 13)?;
+    let v = cur.version("structure", 0..=13)?;
     if v >= 6 {
         Updatable::parse(cur)?;
     }
@@ -1002,7 +1012,7 @@ fn skip_structure(cur: &mut Cursor) -> Result<()> {
 
 fn skip_recruit(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "recruit", 3)?;
+    let v = cur.version("recruit", 0..=3)?;
     if v == 0 {
         return Ok(());
     }
@@ -1026,7 +1036,7 @@ fn skip_recruit(cur: &mut Cursor) -> Result<()> {
 
 fn skip_mobile_deployment(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "mobile deployment", 3)?;
+    let v = cur.version("mobile deployment", 0..=3)?;
     cur.u32()?;
     if v >= 1 {
         cur.u32()?;
@@ -1038,18 +1048,18 @@ fn skip_mobile_deployment(cur: &mut Cursor) -> Result<()> {
 }
 
 fn skip_id_list(cur: &mut Cursor) -> Result<()> {
-    version(cur, "id list", 0)?;
+    cur.expect("id list version", 0)?;
     cur.u32s().map(drop)
 }
 
 fn skip_resource_amounts(cur: &mut Cursor) -> Result<()> {
-    version(cur, "resource amounts", 0)?;
+    cur.expect("resource amounts version", 0)?;
     cur.list(Cursor::f32).map(drop)
 }
 
 fn skip_defender(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "defender", 2)?;
+    let v = cur.version("defender", 0..=2)?;
     if v >= 1 {
         (0..cur.u32()?).try_for_each(|_| skip_ability(cur))?;
     }
@@ -1061,7 +1071,7 @@ fn skip_defender(cur: &mut Cursor) -> Result<()> {
 }
 
 fn skip_transport(cur: &mut Cursor) -> Result<()> {
-    let v = version(cur, "transport", 6)?;
+    let v = cur.version("transport", 0..=6)?;
     cur.string()?;
     if cur.u8()? != 0 {
         skip_layout(cur)?;
@@ -1091,7 +1101,7 @@ fn skip_transport(cur: &mut Cursor) -> Result<()> {
 
 fn skip_hq(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "hq", 3)?;
+    let v = cur.version("hq", 0..=3)?;
     // The badge.
     cur.i32()?;
     match v {
@@ -1113,7 +1123,7 @@ fn skip_hq(cur: &mut Cursor) -> Result<()> {
 /// What every mind's state starts with.
 fn skip_mind_base(cur: &mut Cursor) -> Result<()> {
     Updatable::parse(cur)?;
-    let v = version(cur, "mind", 3)?;
+    let v = cur.version("mind", 0..=3)?;
     cur.bytes(8)?;
     (0..cur.u32()?).try_for_each(|_| skip_command(cur))?;
     if v >= 1 {
@@ -1129,7 +1139,7 @@ fn skip_mind_base(cur: &mut Cursor) -> Result<()> {
 
 /// An order queued for an actor.
 fn skip_command(cur: &mut Cursor) -> Result<()> {
-    let v = version(cur, "command", 3)?;
+    let v = cur.version("command", 0..=3)?;
     cur.string()?;
     let flags = cur.u32()?;
     cur.u32()?;
@@ -1151,14 +1161,14 @@ fn skip_command(cur: &mut Cursor) -> Result<()> {
 }
 
 fn skip_path(cur: &mut Cursor) -> Result<()> {
-    version(cur, "path", 0)?;
+    cur.expect("path version", 0)?;
     let n = cur.u32()?;
     bytes(cur, n, 36)?;
     cur.u32().map(drop)
 }
 
 fn skip_element_mind(cur: &mut Cursor) -> Result<()> {
-    let v = version(cur, "element mind", 14)?;
+    let v = cur.version("element mind", 0..=14)?;
     if v == 0 {
         return Ok(());
     }
@@ -1220,7 +1230,7 @@ fn skip_element_mind(cur: &mut Cursor) -> Result<()> {
 }
 
 fn skip_organization_mind(cur: &mut Cursor) -> Result<()> {
-    let v = version(cur, "organization mind", 21)?;
+    let v = cur.version("organization mind", 0..=21)?;
     if v == 0 {
         return Ok(());
     }

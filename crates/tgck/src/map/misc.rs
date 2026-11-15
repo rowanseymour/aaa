@@ -3,13 +3,12 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::header::{bool, check_version, optional};
-use crate::{Cursor, Error, Result, Writer};
+use crate::{Cursor, Error, Result, Writer, check_version};
 
 /// Reads the MAP section.
 pub(super) fn parse_data_version(data: &[u8]) -> Result<u32> {
     let mut cur = Cursor::new(data);
-    let version = check_version("map data", cur.u32()?, 0..=0)?;
+    let version = cur.version("map data", 0..=0)?;
     cur.finish("MAP")?;
     Ok(version)
 }
@@ -70,16 +69,13 @@ impl MiscData {
         )?;
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        let n = cur.u32()?;
         let misc = MiscData {
-            used_names: (0..n)
-                .map(|_| {
-                    Ok(UsedName {
-                        name_list: cur.string()?,
-                        index: cur.u32()?,
-                    })
+            used_names: cur.list(|cur| {
+                Ok(UsedName {
+                    name_list: cur.string()?,
+                    index: cur.u32()?,
                 })
-                .collect::<Result<_>>()?,
+            })?,
             pre_cutscene_game_speed: cur.f32()?,
             active_weather: cur.string()?,
             ui_script_listens: (world_version >= 24).then(|| cur.strings()).transpose()?,
@@ -98,30 +94,29 @@ impl MiscData {
             Self::MIN_WORLD_VERSION..=u32::MAX,
         )?;
         let mut w = Writer::default();
-        w.u32(self.used_names.len() as u32);
-        for used in &self.used_names {
+        w.list("used names", &self.used_names, |w, used| {
             w.string(&used.name_list)?;
             w.u32(used.index);
-        }
+            Ok(())
+        })?;
         w.f32(self.pre_cutscene_game_speed);
         w.string(&self.active_weather)?;
-        optional(
+        w.optional(
             world_version >= 24,
             "ui_script_listens",
-            self.ui_script_listens.as_ref(),
-            |names| w.strings(names),
+            self.ui_script_listens.as_deref(),
+            |w, v| w.strings("ui script listens", v),
         )?;
-        optional(
+        w.optional_plain(
             world_version >= 28,
             "game_counter",
             self.game_counter,
-            |counter| {
+            |w, counter| {
                 w.u8(counter.is_some().into());
                 if let Some(counter) = counter {
                     w.f32(counter.start_time);
                     w.f32(counter.duration);
                 }
-                Ok(())
             },
         )?;
         Ok(w.0)
@@ -131,7 +126,7 @@ impl MiscData {
 impl GameCounter {
     /// Reads one if the presence byte says there is one.
     fn parse(cur: &mut Cursor) -> Result<Option<Self>> {
-        if !bool(cur, "game counter presence")? {
+        if !cur.bool("game counter presence")? {
             return Ok(None);
         }
         Ok(Some(GameCounter {

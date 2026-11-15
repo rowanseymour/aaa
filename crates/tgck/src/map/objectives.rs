@@ -2,8 +2,6 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::expect;
-use super::header::bool;
 use crate::{Cursor, Result, Writer};
 
 /// The OBJECTIVES section, the `objectives` of `rmp.ksy`.
@@ -25,17 +23,14 @@ impl Objectives {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        let count = cur.u32()?;
-        let objectives = (0..count)
-            .map(|_| {
-                expect(cur, "objective version", 0)?;
-                Ok(Objective {
-                    name: cur.string()?,
-                    text: cur.string()?,
-                    primary: bool(cur, "objective primary")?,
-                })
+        let objectives = cur.list(|cur| {
+            cur.expect("objective version", 0)?;
+            Ok(Objective {
+                name: cur.string()?,
+                text: cur.string()?,
+                primary: cur.bool("objective primary")?,
             })
-            .collect::<Result<_>>()?;
+        })?;
         let next_number = cur.u32()?;
         cur.finish("OBJECTIVES")?;
         Ok(Objectives {
@@ -46,13 +41,13 @@ impl Objectives {
 
     pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut w = Writer::default();
-        w.u32(self.objectives.len() as u32);
-        for objective in &self.objectives {
+        w.list("objectives", &self.objectives, |w, objective| {
             w.u32(0);
             w.string(&objective.name)?;
             w.string(&objective.text)?;
             w.u8(objective.primary.into());
-        }
+            Ok(())
+        })?;
         w.u32(self.next_number);
         Ok(w.0)
     }
