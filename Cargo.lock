@@ -25,7 +25,7 @@ dependencies = [
 
 [[package]]
 name = "aaa-game"
-version = "0.1.0"
+version = "0.1.0-alpha"
 dependencies = [
  "aaa-data",
  "aaa-map",
@@ -4184,7 +4184,7 @@ dependencies = [
 
 [[package]]
 name = "nif"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "nix"
@@ -5824,14 +5824,14 @@ checksum = "55937e1799185b12863d447f42597ed69d9928686b8d88a1df17376a097d8369"
 
 [[package]]
 name = "tgck"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "miniz_oxide 0.8.9",
 ]
 
 [[package]]
 name = "tgi"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
 ]

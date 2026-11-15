@@ -1,6 +1,6 @@
 [package]
 name = "aaa-game"
-version.workspace = true
+version = "0.1.0-alpha"
 edition.workspace = true
 # Bevy 0.20 needs a newer compiler than the libraries do.
 rust-version = "1.97.1"
