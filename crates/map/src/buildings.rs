@@ -58,10 +58,10 @@ pub(crate) fn buildings(
             let template = Id::from(t.template.as_str());
             let fighter = fighters.get(&template)?;
             let moves = bodies.get(&template).is_some_and(|b| b.speed.is_some());
-            if moves || t.organization().is_some() {
+            let actor = t.actor()?;
+            if moves || actor.organization().is_some() {
                 return None;
             }
-            let actor = t.actor()?;
             let [x, y, _] = t.position;
             Some(Building {
                 id: t.id,

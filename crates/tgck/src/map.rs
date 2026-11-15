@@ -823,7 +823,7 @@ impl Thing {
     fn write(&self, w: &mut Writer, read_as: ReadAs) -> Result<()> {
         let fits = match read_as {
             ReadAs::Listed => self.detail.fits(self.class),
-            ReadAs::Actor(class) => self.class == class && matches!(self.detail, Detail::Actor(_)),
+            ReadAs::Actor(class) => self.class == class && self.actor().is_some(),
         };
         if !fits {
             return Err(Error::Unwritable(format!(
@@ -1220,6 +1220,12 @@ mod tests {
         assert_eq!(actor.template_components, 0x200);
         assert_eq!(actor.state, State::Raw(vec![1, 2, 3]), "Mind has no class");
         assert_eq!(t[1].detail, Detail::None);
+        assert_eq!(t[0].actor(), Some(actor));
+        assert!(t[1].actor().is_none());
+        let mut owned = t[0].clone();
+        owned.actor_mut().unwrap().kingdom = 3;
+        assert_eq!(owned.actor().map(|a| a.kingdom), Some(3));
+        assert!(t[1].clone().actor_mut().is_none());
         assert_eq!(write_things(&t).unwrap(), (index, things));
 
         // Saved as they are, they'd read back as something else.
