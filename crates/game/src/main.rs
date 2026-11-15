@@ -936,12 +936,15 @@ fn main() -> ExitCode {
                             .run_if(minimap::pointer_away)
                             .run_if(actions::pointer_away),
                     )
-                        .run_if(not(actions::aiming)),
+                        .run_if(not(actions::aiming))
+                        .run_if(not(special_ops::armed)),
                     actions::aim.run_if(actions::pointer_away),
+                    special_ops::give,
                 )
                     .chain(),
                 choose_formation,
                 actions::hotkeys,
+                special_ops::hotkeys,
                 supply::cycle_detached,
                 messages::cycle,
                 supply::toggle_border,

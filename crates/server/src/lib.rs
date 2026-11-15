@@ -139,8 +139,15 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     }
     let mut world = World::new(&map, rules);
     world.set_fog(setup.fog.unwrap_or_else(|| game.fog_setting()));
+    let recharges = game.operation_recharges();
     for (&player, general) in &generals {
-        world.lead(player, experience.starting, general.experience_max);
+        let ops = (general.operations.iter())
+            .map(|o| {
+                let recharge = recharges.get(&o.id).copied().unwrap_or(0.0);
+                aaa_sim::SpecialOp::new(o.id.clone(), o.cost, recharge)
+            })
+            .collect();
+        world.lead(player, experience.starting, general.experience_max, ops);
     }
     let given = handicap_technologies(&map.players, &setup.handicaps, &game.handicaps());
     for (player, technology) in given {

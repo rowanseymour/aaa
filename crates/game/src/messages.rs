@@ -548,8 +548,8 @@ pub struct Refused {
 #[derive(Message)]
 pub struct Failed {
     pub text: String,
-    /// What it was given to, where the message points.
-    pub about: About,
+    /// What it was given to, where the message points, if anything.
+    pub about: Option<About>,
 }
 
 /// Tells the player of each order just [`Refused`] or [`Failed`].
@@ -586,7 +586,7 @@ pub fn refuse(
         log.say("GENERIC_ERROR", text, place, &time, &mut sounds);
     }
     for Failed { text, about } in failed.read() {
-        let place = Some(Place::of(&sim.0, *about));
+        let place = about.map(|a| Place::of(&sim.0, a));
         log.say("GENERIC_ERROR", text.clone(), place, &time, &mut sounds);
     }
 }

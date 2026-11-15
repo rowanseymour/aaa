@@ -1531,7 +1531,10 @@ impl Presser<'_, '_> {
             _ => fill(&looks.research_refused, &[name]),
         };
         let about = About::Building(building);
-        self.failed.write(Failed { text, about });
+        self.failed.write(Failed {
+            text,
+            about: Some(about),
+        });
     }
 }
 
@@ -1621,6 +1624,7 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::Lacking => "Lacks a building or technology it needs",
         aaa_sim::Refused::Unaffordable => "Not enough money",
         aaa_sim::Refused::Full => "HQ is full",
+        aaa_sim::Refused::Recharging => "Recharging",
     }
 }
 
@@ -1770,7 +1774,10 @@ pub fn aim(
                 let cost = sim.0.cost(regiment).ceil().to_string();
                 let text = fill(&menus.affording, &[name, &cost]);
                 let about = About::Building(b);
-                failed.write(Failed { text, about });
+                failed.write(Failed {
+                    text,
+                    about: Some(about),
+                });
                 *page = Page::Orders;
             }
             Err(e) => {

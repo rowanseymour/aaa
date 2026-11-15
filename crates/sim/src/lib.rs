@@ -46,7 +46,7 @@ pub use aaa_map::{Outcome, Player, Relation, Team};
 pub use attach::Hq;
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
-pub use experience::Commander;
+pub use experience::{Commander, SpecialOp};
 pub use fog::{Fog, Seen};
 use hash::{Digest, Hasher, digest};
 pub use notices::Notice;
@@ -653,10 +653,14 @@ pub enum Refused {
     /// Its owner lacks buildings or technologies that what it would raise
     /// needs.
     Lacking,
-    /// Its owner hasn't the money for it.
+    /// Its owner hasn't the money for it, or for a special operation the
+    /// experience.
     Unaffordable,
     /// The HQ that would raise it has no place left for it.
     Full,
+    /// It's a special operation that hasn't recharged since it was last
+    /// used.
+    Recharging,
 }
 
 impl From<NotYours> for Refused {
@@ -753,6 +757,11 @@ pub enum Command {
     /// Refused for one whose template can't be sold, one unpacking or
     /// packing, and one under siege where the rules say so.
     Sell { building: usize },
+    /// Uses the `operation`th of the player's general's special
+    /// operations, aimed at `at`. Refused while it's recharging, when the
+    /// side hasn't the experience for it, and for one the match can't
+    /// carry out.
+    Operate { operation: usize, at: [f32; 2] },
 }
 
 impl Building {
@@ -926,7 +935,7 @@ impl World {
         self.rally();
         self.unpack();
         self.earn();
-        self.gain_experience();
+        self.lead_sides();
         self.look();
         self.ticks += 1;
         self.settle_outcomes();

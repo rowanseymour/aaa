@@ -79,12 +79,14 @@ fn reset(mut menu: ResMut<PauseMenu>) {
 }
 
 /// Opens or closes the menu on Escape, unless Escape is backing out of an
-/// action page or the loading screen is still up.
+/// action page or an armed special operation, or the loading screen is
+/// still up.
 #[allow(clippy::too_many_arguments)]
 fn toggle(
     words: Res<Words>,
     keys: Res<ButtonInput<KeyCode>>,
     page: Res<Page>,
+    mut armed: ResMut<crate::special_ops::Armed>,
     loading: Query<(), With<LoadingScreen>>,
     mut commands: Commands,
     menu: ResMut<PauseMenu>,
@@ -98,6 +100,8 @@ fn toggle(
     }
     if menu.open {
         close(&mut commands, menu, orders, &overlays);
+    } else if armed.0.is_some() {
+        armed.0 = None;
     } else if *page == Page::Orders {
         // What the map was showing of the cursor would otherwise stay up
         // under the menu, as nothing updates it while it's open.
@@ -229,6 +233,7 @@ mod tests {
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<console::Console>()
         .init_resource::<Page>()
+        .init_resource::<crate::special_ops::Armed>()
         .init_resource::<Focus>()
         .init_resource::<Orders>()
         .insert_resource(Options::of(Vec::new(), None, &aaa_data::Strings::default()));
@@ -293,6 +298,16 @@ mod tests {
         app.insert_resource(Page::Rally);
         escape(&mut app);
         assert!(!open(&app));
+    }
+
+    #[test]
+    fn escape_disarms_a_special_operation_first() {
+        let mut app = app();
+        app.insert_resource(crate::special_ops::Armed(Some(1)));
+        escape(&mut app);
+        assert!(!open(&app));
+        let armed = app.world().resource::<crate::special_ops::Armed>();
+        assert_eq!(armed, &crate::special_ops::Armed(None));
     }
 
     #[test]

@@ -117,18 +117,13 @@ impl World {
                 property,
                 seconds,
             }) => {
-                let organization = Id::from("organization");
                 let mut near: Vec<(f32, usize)> = (0..self.regiments.len())
                     .filter(|&r| !self.destroyed(r))
                     .filter_map(|r| {
-                        let regiment = &self.regiments[r];
-                        let kind = self.rules.kinds.get(&regiment.template);
-                        let side = self.standing_flag(player, regiment.owner);
-                        let flags = kind.into_iter().flat_map(|k| &k.flags);
+                        let kind = self.rules.kinds.get(&self.regiments[r].template);
                         let d = distance(at, self.leader_position(r));
                         let reach = area + kind.map_or(0.0, |k| bounding_radius(k.soft));
-                        let fits = targets.allow(flags.chain([&organization, &side]));
-                        (d <= reach && fits).then_some((d, r))
+                        (d <= reach && self.enchants(player, &targets, r)).then_some((d, r))
                     })
                     .collect();
                 near.sort_by(|a, b| a.0.total_cmp(&b.0));
@@ -169,6 +164,40 @@ impl World {
             None => return Err(Refused::Unable),
         }
         Ok(())
+    }
+
+    /// Whether an operation `player` uses on `targets` can work on the
+    /// regiment at `r`, judged from `player`'s side.
+    fn enchants(&self, player: u32, targets: &aaa_map::Targets, r: usize) -> bool {
+        let regiment = &self.regiments[r];
+        let kind = self.rules.kinds.get(&regiment.template);
+        let side = self.standing_flag(player, regiment.owner);
+        let organization = Id::from("organization");
+        let flags = kind.into_iter().flat_map(|k| &k.flags);
+        targets.allow(flags.chain([&organization, &side]))
+    }
+
+    /// Where a click gives `player`'s general's `i`th operation, if
+    /// anywhere: on `on`, what's under the cursor, when the operation works
+    /// on it, else at `at` on the ground for one that's aimed at a place.
+    /// A click on something it doesn't work on gives nothing.
+    pub fn operation_aim(
+        &self,
+        player: u32,
+        i: usize,
+        on: Option<Piece>,
+        at: [f32; 2],
+    ) -> Option<[f32; 2]> {
+        let op = self.special_op(player, i)?;
+        match (self.rules.operations.get(&op.id)?, on) {
+            (Operation::Enchant { targets, .. }, Some(Piece::Regiment(r))) => {
+                let fits = !self.destroyed(r) && self.enchants(player, targets, r);
+                fits.then(|| self.leader_position(r))
+            }
+            (Operation::Enchant { area, .. }, None) => (*area > 0.0).then_some(at),
+            (Operation::Drop(_), None) => Some(at),
+            (_, Some(_)) => None,
+        }
     }
 
     /// Whether `a`'s zones supply `b`'s regiments too.
@@ -1198,6 +1227,26 @@ mod tests {
         assert_eq!(w.regiments[2].properties, held);
         w.operate(1, &resupply, [26.0, 21.0]).unwrap();
         assert_eq!(given(&w), [false, true, true]);
+    }
+
+    #[test]
+    fn a_click_gives_an_operation_on_what_it_works_on_or_the_ground() {
+        let (mut w, resupply) = resupplied();
+        let ops = |id: &str| vec![crate::SpecialOp::new(Id::from(id), 0.0, 0.0)];
+        w.lead(1, 0.0, None, ops(resupply.as_str()));
+        w.lead(2, 0.0, None, ops(resupply.as_str()));
+        let infantry = Some(Piece::Regiment(1));
+        let at = [5.0, 5.0];
+        assert_eq!(
+            w.operation_aim(1, 0, infantry, at),
+            Some(w.leader_position(1))
+        );
+        // Not on what it doesn't work on: an enemy's, or not infantry.
+        assert_eq!(w.operation_aim(2, 0, infantry, at), None);
+        assert_eq!(w.operation_aim(1, 0, Some(Piece::Regiment(0)), at), None);
+        // On the ground, where it has an area.
+        assert_eq!(w.operation_aim(1, 0, None, at), Some(at));
+        assert_eq!(w.operation_aim(1, 1, None, at), None);
     }
 
     #[test]

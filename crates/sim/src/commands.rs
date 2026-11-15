@@ -57,6 +57,7 @@ impl World {
             Command::Detach { regiment } => self.may_detach(player, regiment),
             Command::Disband { regiment } => self.may_disband(player, regiment),
             Command::Sell { building } => self.may_sell(player, building),
+            Command::Operate { operation, .. } => self.may_operate(player, operation),
         }
     }
 
@@ -138,6 +139,7 @@ impl World {
                 self.may_sell(player, building)?;
                 self.sell(building);
             }
+            Command::Operate { operation, at } => self.special_operation(player, operation, at)?,
         }
         Ok(())
     }
