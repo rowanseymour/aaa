@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 4;
+pub const PROTOCOL: u32 = 5;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -36,6 +36,11 @@ pub enum ToHost {
     Check { step: u64, hash: u64 },
     /// The client is leaving the match, and nothing more follows.
     Leave,
+    /// How many ticks the client's copy of the match has played, which
+    /// also tells the host the client is still there.
+    Played(u64),
+    /// Whether the client is for dropping those holding the match.
+    Vote(bool),
 }
 
 /// From the host to a client.
@@ -59,6 +64,60 @@ pub enum ToClient {
     /// The host is leaving a match that's over; who leaves with it
     /// follows, then nothing more.
     Ended,
+    /// How everyone stands.
+    Status(Status),
+    /// Nothing but that the host is still there.
+    Alive,
+}
+
+/// How the match and its clients stand, as the host sees them.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct Status {
+    pub seats: Vec<Seated>,
+    /// Whether the match is held for everyone, its ticks waiting on those
+    /// whose standing holds it and then on the rest catching up.
+    pub held: bool,
+    /// How many are for dropping those holding the match, and how many it
+    /// takes.
+    pub votes: u32,
+    pub needed: u32,
+    /// The seconds, rounded up, before those holding the match can be
+    /// dropped, while it's held by any.
+    pub countdown: Option<u32>,
+}
+
+/// A client as the host sees it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Seated {
+    pub client: u32,
+    pub players: Vec<u32>,
+    /// Whether it's the client of whoever runs the host.
+    pub host: bool,
+    pub standing: Standing,
+    /// Whether it's for dropping those holding the match.
+    pub vote: bool,
+}
+
+/// What's become of a client's part in the match.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Standing {
+    #[default]
+    Ok,
+    /// Unheard from for long enough to hold the match.
+    Disconnected,
+    /// Its copy of the match stopped standing as the host's does.
+    OutOfSync,
+    /// Behind on a match let go after being held, which waits for it.
+    CatchingUp,
+}
+
+impl Standing {
+    /// Whether it holds the match. Being out of sync doesn't, though the
+    /// original holds for it, while there's no way for players to vote one
+    /// out: it would hold the match for good.
+    pub fn holds(self) -> bool {
+        self == Standing::Disconnected
+    }
 }
 
 /// What a client is told as it's let in.
@@ -109,6 +168,8 @@ mod tests {
         let to_host = [
             ToHost::Ready,
             ToHost::Leave,
+            ToHost::Played(12),
+            ToHost::Vote(true),
             ToHost::Ask(order.clone()),
             ToHost::Check {
                 step: 10,
@@ -143,6 +204,20 @@ mod tests {
                 players: vec![1],
             },
             ToClient::Ended,
+            ToClient::Alive,
+            ToClient::Status(Status {
+                seats: vec![Seated {
+                    client: 2,
+                    players: vec![1],
+                    host: false,
+                    standing: Standing::Disconnected,
+                    vote: true,
+                }],
+                held: true,
+                votes: 1,
+                needed: 2,
+                countdown: Some(9),
+            }),
         ];
         let join = Join {
             protocol: PROTOCOL,

@@ -1,12 +1,16 @@
 //! The host of a match: the one copy that decides what the match is
 //! given and when, and tells every client.
 
+use std::time::{Duration, Instant};
+
 use aaa_sim::{Action, Record, Schedule, World};
 
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::{Bundle, Join, PROTOCOL, ToClient, ToHost, Welcome, decode, encode};
-use crate::{Link, Setup};
+use crate::protocol::{
+    Bundle, Join, PROTOCOL, Seated, Standing, Status, ToClient, ToHost, Welcome, decode, encode,
+};
+use crate::{Clock, Link, Setup};
 
 /// The most messages taken from a client in one turn, so that one sending
 /// without end holds nobody else up and puts only so much in a turn; the
@@ -22,6 +26,26 @@ const GREETED: usize = 32;
 /// nonsense, so that what every copy of the match keeps of it is small.
 const LONGEST_HEARD: usize = 1024;
 
+/// How long a client playing the match goes unheard from before it holds
+/// the match.
+const UNHEARD: Duration = Duration::from_secs(2);
+
+/// The longest a client goes without hearing anything, so that it knows
+/// the host is there.
+const QUIET: Duration = Duration::from_millis(100);
+
+/// How often every client is told how everyone stands.
+const TOLD: Duration = Duration::from_secs(1);
+
+/// How long each client may hold the match before it can be dropped. It
+/// drains while the client holds it and refills by a tenth as fast while
+/// it doesn't, so one that keeps holding it gets less grace each time.
+const ALLOWANCE: Duration = Duration::from_secs(15);
+const REFILLED: u32 = 10;
+
+/// What's left of an allowance when it counts as run out.
+const RUN_OUT: Duration = Duration::from_millis(100);
+
 /// A match and the clients playing and watching it.
 pub struct Host<L> {
     setup: Setup,
@@ -36,6 +60,22 @@ pub struct Host<L> {
     /// most it lets in, if that's been said.
     wanted: Option<usize>,
     begun: bool,
+    clock: Clock,
+    /// The time at this turn, and at the last that drained or refilled
+    /// the allowances.
+    now: Instant,
+    counted: Option<Instant>,
+    /// When the clients were last told how everyone stands.
+    told: Option<Instant>,
+    /// Whether the match is held for everyone, and the actions asked while
+    /// it is, which wait for it to go on.
+    held: bool,
+    put_off: Vec<Action>,
+    /// Whether any client's standing holds the match, rather than it
+    /// waiting only on the rest catching up.
+    holding: bool,
+    /// How many ticks it's had every copy of the match play.
+    issued: u64,
 }
 
 /// A client as the host has it.
@@ -53,6 +93,18 @@ struct Seat<L> {
     /// told are dealt with.
     asked: u64,
     answered: u64,
+    /// When it was last heard from, and last sent anything.
+    heard: Instant,
+    sent: Instant,
+    /// How many ticks it's said its copy has played.
+    played: u64,
+    /// How much longer it may hold the match before it can be dropped.
+    allowance: Duration,
+    /// Whether it's for dropping those holding the match.
+    vote: bool,
+    /// How many it had asked for before the first of its actions put off
+    /// while the match is held.
+    put_off_from: Option<u64>,
 }
 
 /// Why a client wasn't let in.
@@ -83,6 +135,8 @@ pub enum Event {
     Left(u32),
     /// A client's copy of the match stopped standing as the host's does.
     Diverged { client: u32, step: u64 },
+    /// The match is held for everyone, or let go.
+    Held(bool),
 }
 
 /// Whether a host carries out `action` for a client it doesn't trust
@@ -106,7 +160,16 @@ impl<L: Link> Host<L> {
     /// A host of the match `world`, which `setup` set up and which has
     /// yet to be played.
     pub fn new(setup: Setup, world: World) -> Host<L> {
+        let clock = Clock::default();
         Host {
+            now: clock.now(),
+            clock,
+            counted: None,
+            told: None,
+            held: false,
+            put_off: Vec::new(),
+            holding: false,
+            issued: 0,
             setup,
             world,
             schedule: Schedule::default(),
@@ -116,6 +179,18 @@ impl<L: Link> Host<L> {
             wanted: None,
             begun: false,
         }
+    }
+
+    /// Has it tell the time by `clock`.
+    pub fn clock(&mut self, clock: Clock) {
+        self.now = clock.now();
+        self.clock = clock;
+    }
+
+    /// Whether the match is held for everyone, waiting on those whose
+    /// standing holds it or then on the rest catching up.
+    pub fn held(&self) -> bool {
+        self.held
     }
 
     /// Has it let in `clients` clients and no more, and be
@@ -213,6 +288,12 @@ impl<L: Link> Host<L> {
             ready: false,
             asked: 0,
             answered: 0,
+            heard: self.now,
+            sent: self.now,
+            played: 0,
+            allowance: ALLOWANCE,
+            vote: false,
+            put_off_from: None,
         });
         Ok(id)
     }
@@ -283,16 +364,19 @@ impl<L: Link> Host<L> {
     /// beginning it: which are ready, and which have gone. What a client
     /// asks for before it begins is dropped, as it's told.
     pub fn wait(&mut self) -> Vec<Event> {
+        self.now = self.clock.now();
         for seat in &mut self.clients {
             for _ in 0..HEARD_A_TURN {
                 match seat.link.receive() {
                     Ok(Some(message)) => {
+                        seat.heard = self.now;
                         let heard = (message.len() <= LONGEST_HEARD).then(|| decode(&message));
                         match heard.flatten() {
                             Some(ToHost::Ask(_)) => seat.asked += 1,
                             Some(ToHost::Ready) => seat.ready = true,
                             Some(ToHost::Leave) => seat.lost = true,
-                            Some(ToHost::Check { .. }) | None => {}
+                            Some(ToHost::Check { .. } | ToHost::Played(_) | ToHost::Vote(_))
+                            | None => {}
                         }
                         if seat.lost {
                             break;
@@ -307,6 +391,7 @@ impl<L: Link> Host<L> {
             }
         }
         self.answer();
+        self.keep_up();
         self.part()
     }
 
@@ -326,12 +411,15 @@ impl<L: Link> Host<L> {
     }
 
     /// Tells each client that's asked for more since it was last told
-    /// that all it's asked for is dealt with.
+    /// that all it's asked for is dealt with, short of what waits for a
+    /// held match to go on.
     fn answer(&mut self) {
         for seat in &mut self.clients {
-            if seat.answered < seat.asked {
-                seat.answered = seat.asked;
-                let answered = encode(&ToClient::Answered(seat.asked));
+            let dealt_with = seat.put_off_from.unwrap_or(seat.asked);
+            if seat.answered < dealt_with {
+                seat.answered = dealt_with;
+                seat.sent = self.now;
+                let answered = encode(&ToClient::Answered(dealt_with));
                 seat.lost |= seat.link.send(answered).is_err();
             }
         }
@@ -359,9 +447,19 @@ impl<L: Link> Host<L> {
     /// A turn, playing a tick as `tick` says, or by whether the match is
     /// held still if it doesn't.
     fn go(&mut self, tick: Option<bool>) -> Vec<Event> {
+        self.now = self.clock.now();
+        if !self.begun {
+            // Setting a copy of the match up is no time to be heard from.
+            for seat in &mut self.clients {
+                seat.heard = self.now;
+            }
+        }
         self.begun = true;
         let mut events = Vec::new();
         let mut actions = Vec::new();
+        // Each client's first action taken this turn, by how many it had
+        // asked for before it.
+        let mut first_taken = Vec::new();
         let checks = &self.schedule.record().checks;
         for seat in &mut self.clients {
             // One it trusts is heard out, having nobody to hold up but
@@ -376,15 +474,23 @@ impl<L: Link> Host<L> {
                 let heard =
                     heard.map(|m| m.map(|m| (m.len() <= LONGEST_HEARD).then(|| decode(&m))));
                 let heard = heard.map(|m| m.map(Option::flatten));
+                if let Ok(Some(_)) = heard {
+                    seat.heard = self.now;
+                }
                 match heard {
                     Ok(None) => break,
                     Ok(Some(Some(ToHost::Ask(action)))) => {
-                        seat.asked += 1;
                         if seat.may(&action) {
+                            if !first_taken.iter().any(|&(id, _)| id == seat.id) {
+                                first_taken.push((seat.id, seat.asked));
+                            }
                             actions.push(action);
                         }
+                        seat.asked += 1;
                     }
                     Ok(Some(Some(ToHost::Ready))) => seat.ready = true,
+                    Ok(Some(Some(ToHost::Played(played)))) => seat.played = seat.played.max(played),
+                    Ok(Some(Some(ToHost::Vote(vote)))) => seat.vote = vote,
                     Ok(Some(Some(ToHost::Leave))) => {
                         seat.lost = true;
                         break;
@@ -405,33 +511,171 @@ impl<L: Link> Host<L> {
                 }
             }
         }
-        for action in &actions {
-            self.schedule.act(action.clone());
-        }
-        let tick = tick.unwrap_or(!self.schedule.pausing());
-        if tick || !actions.is_empty() {
-            self.tell(&ToClient::Step(Bundle { actions, tick }));
-        }
-        self.answer();
         for &event in &events {
             if let Event::Diverged { client, step } = event {
                 self.tell(&ToClient::Diverged { client, step });
             }
         }
-        match tick {
-            true => _ = self.schedule.step(&mut self.world),
-            false => _ = self.schedule.carry_out(&mut self.world),
+        let was_held = self.held;
+        self.judge();
+        if self.held {
+            // What's asked while the match is held waits for it to go on,
+            // and so isn't answered until it has.
+            self.put_off.append(&mut actions);
+            for seat in &mut self.clients {
+                let first = first_taken.iter().find(|&&(id, _)| id == seat.id);
+                seat.put_off_from = seat.put_off_from.or(first.map(|&(_, asked)| asked));
+            }
+        } else {
+            for seat in &mut self.clients {
+                seat.put_off_from = None;
+            }
+            let mut put_off = std::mem::take(&mut self.put_off);
+            put_off.append(&mut actions);
+            actions = put_off;
+            for action in &actions {
+                self.schedule.act(action.clone());
+            }
+            let tick = tick.unwrap_or(!self.schedule.pausing());
+            if tick || !actions.is_empty() {
+                self.tell(&ToClient::Step(Bundle { actions, tick }));
+            }
+            self.issued += u64::from(tick);
+            match tick {
+                true => _ = self.schedule.step(&mut self.world),
+                false => _ = self.schedule.carry_out(&mut self.world),
+            }
+            // Nobody reads them here, and they'd only mount up.
+            self.world.take_notices();
         }
-        // Nobody reads them here, and they'd only mount up.
-        self.world.take_notices();
+        self.answer();
+        if self.held != was_held {
+            events.push(Event::Held(self.held));
+        }
+        // Everyone hears at once that the match is held or let go.
+        let due = self.told.is_none_or(|t| self.now >= t + TOLD);
+        if due || self.held != was_held {
+            self.told = Some(self.now);
+            self.tell(&ToClient::Status(self.status()));
+        }
         events.extend(self.part());
+        self.keep_up();
         events
+    }
+
+    /// How `seat` stands at this turn.
+    fn standing(&self, seat: &Seat<L>) -> Standing {
+        // The client of whoever runs the host is never lost to it.
+        if !seat.trusted && self.now >= seat.heard + UNHEARD {
+            Standing::Disconnected
+        } else if seat.diverged {
+            Standing::OutOfSync
+        } else if self.held && !self.holding && seat.played < self.issued {
+            Standing::CatchingUp
+        } else {
+            Standing::Ok
+        }
+    }
+
+    /// Whether `seat` holds the match. Whoever runs the host is never
+    /// dropped, so nor does its client hold the match for good.
+    fn holds(&self, seat: &Seat<L>) -> bool {
+        !seat.trusted && self.standing(seat).holds()
+    }
+
+    /// How many of those still heard from are for dropping those holding
+    /// the match, and how many it takes: more than half of them.
+    fn votes(&self) -> (u32, u32) {
+        let heard: Vec<_> = (self.clients.iter())
+            .filter(|c| self.standing(c) != Standing::Disconnected)
+            .collect();
+        let needed = heard.len() as u32 / 2 + 1;
+        let votes = heard.iter().filter(|c| c.vote).count() as u32;
+        (votes, needed)
+    }
+
+    /// The longest any of those holding the match may yet hold it before
+    /// they can be dropped, if any are.
+    fn countdown(&self) -> Option<Duration> {
+        let holding = self.clients.iter().filter(|c| self.holds(c));
+        holding.map(|c| c.allowance).max()
+    }
+
+    /// Holds the match while any client's standing holds it, and then
+    /// until every client has caught up; drains and refills the
+    /// allowances; and drops those holding it once enough are for it and
+    /// they've had their allowances.
+    fn judge(&mut self) {
+        let passed = self.counted.map_or(Duration::ZERO, |c| self.now - c);
+        self.counted = Some(self.now);
+        let holding: Vec<bool> = self.clients.iter().map(|c| self.holds(c)).collect();
+        self.holding = holding.contains(&true);
+        for (seat, &holds) in self.clients.iter_mut().zip(&holding) {
+            seat.allowance = match holds {
+                true => seat.allowance.saturating_sub(passed),
+                false => (seat.allowance + passed / REFILLED).min(ALLOWANCE),
+            };
+        }
+        if self.holding {
+            self.held = true;
+            let (votes, needed) = self.votes();
+            let run_out = self.countdown().is_some_and(|left| left <= RUN_OUT);
+            if votes >= needed && run_out {
+                for (seat, &holds) in self.clients.iter_mut().zip(&holding) {
+                    seat.lost |= holds;
+                }
+                for seat in &mut self.clients {
+                    seat.vote = false;
+                }
+            }
+        } else if self.held {
+            let issued = self.issued;
+            let caught_up = self.clients.iter().all(|c| c.lost || c.played >= issued);
+            self.held = !caught_up;
+        }
+    }
+
+    /// How everyone stands, as every client is told.
+    pub fn status(&self) -> Status {
+        let seats = (self.clients.iter())
+            .map(|c| Seated {
+                client: c.id,
+                players: c.players.clone(),
+                host: c.trusted,
+                standing: self.standing(c),
+                vote: c.vote,
+            })
+            .collect();
+        let (votes, needed) = self.votes();
+        let countdown = self
+            .countdown()
+            .map(|left| left.as_secs_f32().ceil() as u32);
+        Status {
+            seats,
+            held: self.held,
+            votes,
+            needed,
+            countdown,
+        }
+    }
+
+    /// Lets each client that's heard nothing for a while know the host is
+    /// still there.
+    fn keep_up(&mut self) {
+        let alive = encode(&ToClient::Alive);
+        for seat in &mut self.clients {
+            if self.now >= seat.sent + QUIET {
+                seat.sent = self.now;
+                seat.lost |= seat.link.send(alive.clone()).is_err();
+            }
+        }
     }
 
     /// Sends `message` to every client.
     fn tell(&mut self, message: &ToClient) {
         let bytes = encode(message);
         for seat in &mut self.clients {
+            seat.sent = self.now;
             seat.lost |= seat.link.send(bytes.clone()).is_err();
         }
     }
@@ -530,15 +774,23 @@ mod tests {
     /// A host with a client for each of `seats`, giving the orders of
     /// the players it lists.
     fn hosted(seats: &[&[u32]]) -> (Host<Local>, Vec<Copy>) {
+        hosted_by(&Clock::stopped(), seats)
+    }
+
+    /// As [`hosted`], everyone telling the time by `clock`.
+    fn hosted_by(clock: &Clock, seats: &[&[u32]]) -> (Host<Local>, Vec<Copy>) {
         let mut host = Host::new(setup(), fresh());
+        host.clock(clock.clone());
         let clients = seats.iter().map(|players| {
             let (ours, mut theirs) = pair();
             let id = host.admit(ours, players.to_vec()).unwrap();
             let welcome = welcome(&mut theirs).unwrap().unwrap();
             assert_eq!((welcome.client, &welcome.setup), (id, &setup()));
             assert_eq!(welcome.players, *players);
+            let mut client = Client::new(theirs);
+            client.clock(clock.clone());
             Copy {
-                client: Client::new(theirs),
+                client,
                 world: fresh(),
             }
         });
@@ -672,6 +924,145 @@ mod tests {
             assert_eq!(c.diverged(), [(2, 20)]);
         }
         assert_eq!(clients[0].world().hash(), host.world().hash());
+        let standing: Vec<_> = host.status().seats.iter().map(|s| s.standing).collect();
+        assert_eq!(standing, [Standing::Ok, Standing::OutOfSync]);
+    }
+
+    /// Plays turns a second apart, the clients but `silent` keeping up,
+    /// returning what they brought.
+    fn wait_out(
+        clock: &Clock,
+        host: &mut Host<Local>,
+        clients: &mut [Copy],
+        silent: usize,
+        seconds: u32,
+    ) -> Vec<Event> {
+        let mut events = Vec::new();
+        for _ in 0..seconds {
+            clock.pass(Duration::from_secs(1));
+            events.extend(host.turn());
+            for (i, c) in clients.iter_mut().enumerate() {
+                if i != silent {
+                    c.advance(usize::MAX).unwrap();
+                }
+            }
+        }
+        events
+    }
+
+    #[test]
+    fn a_client_unheard_from_holds_the_match_until_it_is_heard_again() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2]]);
+        play(&mut host, &mut clients, 5);
+        // Two seconds from when it was last heard, the turn after it last
+        // sent.
+        assert_eq!(wait_out(&clock, &mut host, &mut clients, 1, 2), []);
+        assert_eq!(
+            wait_out(&clock, &mut host, &mut clients, 1, 1),
+            [Event::Held(true)]
+        );
+        let ticks = host.world().ticks;
+        wait_out(&clock, &mut host, &mut clients, 1, 3);
+        // Everyone stops at the same tick, and hears why.
+        assert_eq!(host.world().ticks, ticks);
+        let status = clients[0].status().unwrap().clone();
+        assert!(status.held);
+        assert_eq!(status.seats[1].standing, Standing::Disconnected);
+        assert_eq!(clients[0].world().ticks, ticks);
+        // Heard from again, it plays what it missed and the match goes on.
+        clients[1].advance(usize::MAX).unwrap();
+        assert_eq!(clients[1].world().ticks, ticks);
+        assert_eq!(host.turn(), [Event::Held(false)]);
+        assert_eq!(host.world().ticks, ticks + 1);
+        play(&mut host, &mut clients, 1);
+        assert!(!clients[0].status().unwrap().held);
+    }
+
+    #[test]
+    fn those_holding_the_match_are_dropped_once_enough_vote_and_their_time_is_up() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2], &[]]);
+        play(&mut host, &mut clients, 5);
+        // The watcher goes quiet.
+        wait_out(&clock, &mut host, &mut clients, 2, 3);
+        assert!(host.held());
+        // Two of the three, those still heard from, are enough.
+        clients[0].vote(true).unwrap();
+        clients[1].vote(true).unwrap();
+        wait_out(&clock, &mut host, &mut clients, 2, 12);
+        let status = clients[0].status().unwrap().clone();
+        assert_eq!((status.votes, status.needed), (2, 2));
+        assert_eq!(status.countdown, Some(2));
+        assert_eq!(wait_out(&clock, &mut host, &mut clients, 2, 1), []);
+        assert_eq!(host.clients(), 3);
+        let events = wait_out(&clock, &mut host, &mut clients, 2, 2);
+        assert_eq!(events, [Event::Left(3), Event::Held(false)]);
+        assert_eq!(host.clients(), 2);
+        assert_eq!(clients[0].take_left(), [(3, vec![])]);
+        // The votes go with the drop.
+        let status = clients[0].status().unwrap();
+        assert_eq!(status.votes, 0);
+        let ticks = host.world().ticks;
+        wait_out(&clock, &mut host, &mut clients, 2, 1);
+        assert_eq!(host.world().ticks, ticks + 1);
+    }
+
+    #[test]
+    fn those_holding_the_match_stay_without_enough_votes() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2], &[]]);
+        play(&mut host, &mut clients, 5);
+        clients[0].vote(true).unwrap();
+        // What one votes before it's lost doesn't count once it is.
+        clients[2].vote(true).unwrap();
+        wait_out(&clock, &mut host, &mut clients, 2, 30);
+        assert!(host.held());
+        assert_eq!(host.clients(), 3);
+        let status = host.status();
+        assert_eq!(
+            (status.votes, status.needed, status.countdown),
+            (1, 2, Some(0))
+        );
+    }
+
+    #[test]
+    fn what_is_asked_while_the_match_is_held_waits_for_it_to_go_on() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2]]);
+        play(&mut host, &mut clients, 5);
+        wait_out(&clock, &mut host, &mut clients, 1, 3);
+        assert!(host.held());
+        let (first, then) = (go(1, 0, [5.0, 5.0]), go(1, 0, [6.0, 6.0]));
+        clients[0].ask(first.clone()).unwrap();
+        wait_out(&clock, &mut host, &mut clients, 1, 1);
+        assert!(host.schedule().record().given.is_empty());
+        // Not dealt with until it's carried out.
+        assert_eq!(clients[0].answered(), 0);
+        clients[1].advance(usize::MAX).unwrap();
+        clients[0].ask(then.clone()).unwrap();
+        host.turn();
+        let given: Vec<_> = (host.schedule().record().given.iter())
+            .map(|g| g.action.clone())
+            .collect();
+        assert_eq!(given, [first, then]);
+        clients[0].advance(usize::MAX).unwrap();
+        assert_eq!(clients[0].answered(), 2);
+    }
+
+    #[test]
+    fn a_client_unheard_from_by_the_host_finds_it_lost() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1]]);
+        play(&mut host, &mut clients, 2);
+        clock.pass(Duration::from_millis(2900));
+        assert_eq!(clients[0].advance(usize::MAX), Ok(()));
+        // A host with nothing to say still says so.
+        host.turn();
+        clock.pass(Duration::from_millis(2900));
+        assert_eq!(clients[0].advance(usize::MAX), Ok(()));
+        clock.pass(Duration::from_millis(3000));
+        assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
     }
 
     #[test]

@@ -2,6 +2,7 @@
 //! what a server of matches is built from.
 
 mod client;
+mod clock;
 mod film;
 mod host;
 mod link;
@@ -20,6 +21,7 @@ use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 
 pub use client::{Client, NotJoined, enter, join, welcome};
+pub use clock::Clock;
 pub use film::{Film, NotFilm};
 pub use host::{Event, Host, Refusal, allows};
 pub use link::{Link, Local, Lost, pair};
