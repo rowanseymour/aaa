@@ -203,14 +203,11 @@ impl<L: Link> Client<L> {
                     self.behind += usize::from(bundle.tick);
                     self.heard.push_back(ToClient::Step(bundle));
                 }
-                Ok(Some(Some(ToClient::Ended))) => {
-                    self.heard.push_back(ToClient::Ended);
-                    self.lost = true;
-                }
                 Ok(Some(Some(
                     said @ (ToClient::Diverged { .. }
                     | ToClient::Answered(_)
-                    | ToClient::Left { .. }),
+                    | ToClient::Left { .. }
+                    | ToClient::Ended),
                 ))) => self.heard.push_back(said),
                 // It's already been let in.
                 Ok(Some(Some(ToClient::Start(_) | ToClient::Refused(_)))) => self.lost = true,

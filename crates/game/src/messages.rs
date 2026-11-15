@@ -209,6 +209,15 @@ impl Fill {
             side: Some(rgb),
         }
     }
+
+    /// The name of `player`'s side, marked unless it's independent, as
+    /// the selection panel marks an owner.
+    fn side_of(name: String, player: &aaa_map::Player) -> Fill {
+        match player.independent {
+            true => Fill::from(name),
+            false => Fill::side(name, player.rgb),
+        }
+    }
 }
 
 impl From<String> for Fill {
@@ -577,9 +586,9 @@ pub fn refuse(
     }
 }
 
-/// Posts a line for each player whose machine has left the match since
-/// last time, whether by choice or by being lost, and one once the host
-/// has left a match that's over. One that only watched gave no player's
+/// Posts a line once the host is leaving a match that's over, then one
+/// for each player whose machine has left the match since last time,
+/// whether by choice or by being lost, the host's among them. One that only watched gave no player's
 /// orders, and goes unremarked.
 pub fn tell_leaving(
     mut orders: ResMut<Orders>,
@@ -590,6 +599,13 @@ pub fn tell_leaving(
     mut log: ResMut<MessageLog>,
     mut sounds: ResMut<Sounds>,
 ) {
+    if orders.take_ended() {
+        let said = log.look.said(
+            "ui_mission_message_host_has_ended_game",
+            "The host has ended the game.",
+        );
+        log.say("GENERIC_EVENT", said, None, &time, &mut sounds);
+    }
     for (client, players) in orders.take_left() {
         info!("client {client} has left the match, giving the orders of {players:?}");
         for player in players.iter().filter_map(|&p| sim.0.sides.player(p)) {
@@ -597,16 +613,9 @@ pub fn tell_leaving(
             let said = log
                 .look
                 .said("networking_player_quit|s", "Player %s quit the game");
-            let words = fill_all(&said, &[Fill::side(name, player.rgb)]);
+            let words = fill_all(&said, &[Fill::side_of(name, player)]);
             log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
         }
-    }
-    if orders.take_ended() {
-        let said = log.look.said(
-            "ui_mission_message_host_has_ended_game",
-            "The host has ended the game.",
-        );
-        log.say("GENERIC_EVENT", said, None, &time, &mut sounds);
     }
 }
 
@@ -675,7 +684,7 @@ fn told(
         ours(owner) || local.is_some_and(|p| sim.seen(p, place.at) == Seen::Visible)
     };
     let side = |id: u32| match sim.sides.player(id) {
-        Some(p) => Fill::side(leaders.owner(p, local, &look.map), p.rgb),
+        Some(p) => Fill::side_of(leaders.owner(p, local, &look.map), p),
         None => Fill::from(String::new()),
     };
     let team_name = |team: usize| {
@@ -1299,6 +1308,15 @@ mod tests {
             ..line
         };
         assert_eq!(parts_of(&line).last(), Some(&part(Some(red), "")));
+        // An independent side's name is left unmarked.
+        let mut civilian = crate::tests::player(3);
+        civilian.independent = true;
+        assert_eq!(Fill::side_of("Civilian".into(), &civilian).side, None);
+        let kingdom = crate::tests::player(1);
+        assert_eq!(
+            Fill::side_of("Bob".into(), &kingdom).side,
+            Some(kingdom.rgb)
+        );
     }
 
     #[test]

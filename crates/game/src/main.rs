@@ -1066,7 +1066,7 @@ fn prepare(
         orders: match joined {
             Some((link, welcome)) => Orders::joined(link, welcome),
             // The host's copy, made here to keep it off the window's thread.
-            None => Orders::hosting(setup, sim.clone()),
+            None => Orders::hosting(setup, sim.clone(), person),
         },
         sim,
         raising,

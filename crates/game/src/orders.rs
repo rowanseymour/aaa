@@ -49,18 +49,21 @@ impl Default for Orders {
     fn default() -> Self {
         let pathing = aaa_map::Pathing::uniform(1, aaa_map::Domain::Land);
         let world = World::from_regiments(Default::default(), pathing, &[]);
-        Orders::hosting(Setup::default(), world)
+        Orders::hosting(Setup::default(), world, None)
     }
 }
 
 impl Orders {
     /// Those of a match hosted here, which `setup` set up, `world` being
     /// the host's copy of it.
-    pub(crate) fn hosting(setup: Setup, world: World) -> Orders {
+    pub(crate) fn hosting(setup: Setup, world: World, person: Option<u32>) -> Orders {
+        // Theirs is the side the others hear has quit should they leave
+        // early.
+        let players = person.filter(|&p| world.sides.player(p).is_some());
         let mut host = Host::new(setup.clone(), world);
         let (ours, mut theirs) = aaa_server::pair();
-        // Whoever runs the host plays any side, or none, and may cheat.
-        let admitted = host.admit(ours, Vec::new());
+        // Whoever runs the host may give any side's orders, and cheat.
+        let admitted = host.admit(ours, players.into_iter().collect());
         host.trust(admitted.expect("a host lets in the first to ask"));
         // The game set the match up itself.
         let welcome = aaa_server::welcome(&mut theirs);
@@ -115,10 +118,10 @@ impl Orders {
         self.gone
     }
 
-    /// Whether the host has been found to have left the match once it
-    /// was over, the first time this is asked after it has.
+    /// Whether the host has said it's leaving the match now that it's
+    /// over, the first time this is asked after it has.
     pub(crate) fn take_ended(&mut self) -> bool {
-        let ended = self.gone && self.client.ended() && !self.ended_taken;
+        let ended = self.client.ended() && !self.ended_taken;
         self.ended_taken |= ended;
         ended
     }
@@ -532,7 +535,7 @@ mod tests {
         watching.step(&mut world);
         assert_eq!((world.ticks, host.schedule().record().given.len()), (2, 0));
         // A host here does whatever it's asked.
-        let hosting = Orders::hosting(Setup::default(), fresh());
+        let hosting = Orders::hosting(Setup::default(), fresh(), None);
         assert!(!hosting.joined_to() && hosting.players().is_none());
         assert!(hosting.may(&Action::Win(1)) && hosting.may(&stop(2, 1)));
     }
@@ -594,7 +597,7 @@ mod tests {
 
     #[test]
     fn a_game_leaving_a_match_it_hosts_ends_it() {
-        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh());
+        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), None);
         let Hosted::Here(host) = &mut orders.host else {
             unreachable!()
         };
@@ -611,6 +614,21 @@ mod tests {
     }
 
     #[test]
+    fn a_game_leaving_a_match_it_hosts_early_is_heard_to_quit() {
+        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), Some(1));
+        let Hosted::Here(host) = &mut orders.host else {
+            unreachable!()
+        };
+        let (link, _) = super::testing::let_in(host, &[2]);
+        let mut other = aaa_server::Client::new(link);
+        drop(orders);
+        let mut world = super::testing::fresh();
+        assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
+        assert!(!other.ended());
+        assert_eq!(other.take_left(), [(1, vec![1])]);
+    }
+
+    #[test]
     fn a_game_leaving_a_match_tells_its_host() {
         let (mut host, orders, _) = begun(&[1]);
         drop(orders);
@@ -620,7 +638,7 @@ mod tests {
     #[test]
     fn what_is_asked_is_carried_out_in_both_copies_at_once() {
         let mut world = fresh();
-        let mut orders = Orders::hosting(Setup::default(), world.clone());
+        let mut orders = Orders::hosting(Setup::default(), world.clone(), None);
         orders.act(Action::Speed(2.0));
         orders.act(Action::Pause(true));
         // Known to be coming before it's come.
@@ -642,7 +660,7 @@ mod tests {
     #[test]
     fn a_step_plays_a_tick_of_both_copies() {
         let mut world = fresh();
-        let mut orders = Orders::hosting(Setup::default(), world.clone());
+        let mut orders = Orders::hosting(Setup::default(), world.clone(), None);
         // Held still or not: the game's clock is what's held.
         orders.act(Action::Pause(true));
         for _ in 0..25 {
