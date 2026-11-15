@@ -702,6 +702,11 @@ impl Models {
         self.view(template)?.conform
     }
 
+    /// The templates that raise an organization.
+    pub(crate) fn organization_templates(&self) -> std::collections::HashSet<Id> {
+        self.game.organization_components().into_keys().collect()
+    }
+
     /// What height a template's objects stand at, for [`pose`]; on the
     /// ground for templates without a view.
     pub fn footing(&self, template: &str) -> Footing {

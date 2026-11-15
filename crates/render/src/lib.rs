@@ -227,13 +227,12 @@ pub fn spawn_objects(
         &holding,
     );
     let (meshes, materials) = (&mut assets.meshes, &mut assets.materials.standard);
-    let footing = |t: &str| models.footing(t);
     spawned.extend(objects::spawn(
         commands,
         meshes,
         materials,
         &map.ground,
-        footing,
+        &models,
         &rest,
         markers,
     ));

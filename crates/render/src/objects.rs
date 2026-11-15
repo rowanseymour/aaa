@@ -1,21 +1,23 @@
-//! Placeholder markers for placed objects without a readable model: units,
-//! start locations, magenta boxes for everything else that should have had a
-//! model, and red boxes for objects that have none such as sound emitters.
+//! Placeholder markers for placed objects without a readable model:
+//! organizations in their owner's colour, start locations, magenta boxes for
+//! everything else that should have had a model, and red boxes for objects
+//! that have none such as sound emitters.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use aaa_data::Footing;
+use aaa_data::Id;
 use aaa_map::Ground;
 use bevy::prelude::*;
 use tgck::map::Thing;
 
-use crate::MapObject;
 use crate::terrain::world;
+use crate::{MapObject, Models};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 enum Kind {
     Start,
-    Unit(usize),
+    /// An organization, by its owner's id; 0 for none.
+    Organization(u32),
     Missing,
     Modelless,
 }
@@ -24,23 +26,14 @@ enum Kind {
 #[derive(Component)]
 pub struct Marker;
 
-const NATIONS: [(&str, [f32; 3]); 5] = [
-    ("usa", [0.3, 0.45, 0.2]),
-    ("gbr", [0.75, 0.6, 0.35]),
-    ("ger", [0.45, 0.45, 0.5]),
-    ("rus", [0.6, 0.15, 0.1]),
-    ("jpn", [0.85, 0.8, 0.2]),
-];
+/// The colour of an organization no player owns.
+const UNOWNED: [f32; 3] = [0.5, 0.5, 0.5];
 
-fn kind(template: &str, should_have_model: bool) -> Kind {
-    let t = template.to_ascii_lowercase();
-    if t.contains("start_loc") {
+fn kind(thing: &Thing, organizations: &HashSet<Id>, should_have_model: bool) -> Kind {
+    if thing.template.to_ascii_lowercase().contains("start_loc") {
         Kind::Start
-    } else if let Some(n) = NATIONS
-        .iter()
-        .position(|(n, _)| t.starts_with("regiment_") && t.contains(&format!("_{n}_")))
-    {
-        Kind::Unit(n)
+    } else if organizations.contains(&Id::from(thing.template.as_str())) {
+        Kind::Organization(aaa_map::owner(thing).unwrap_or(0))
     } else if should_have_model {
         Kind::Missing
     } else {
@@ -48,34 +41,42 @@ fn kind(template: &str, should_have_model: bool) -> Kind {
     }
 }
 
-fn shape(kind: Kind) -> (Mesh, [f32; 3], f32) {
+fn shape(kind: Kind, colours: &HashMap<u32, [f32; 3]>) -> (Mesh, [f32; 3], f32) {
     match kind {
         Kind::Start => (Cylinder::new(0.8, 12.0).into(), [1.0, 0.1, 0.1], 6.0),
-        Kind::Unit(n) => (Cuboid::new(2.5, 1.0, 1.5).into(), NATIONS[n].1, 0.5),
+        Kind::Organization(owner) => {
+            let colour = colours.get(&owner).copied().unwrap_or(UNOWNED);
+            (Cuboid::new(2.5, 1.0, 1.5).into(), colour, 0.5)
+        }
         Kind::Missing => (Cuboid::new(3.0, 2.5, 3.0).into(), [1.0, 0.0, 1.0], 1.25),
         Kind::Modelless => (Cuboid::new(1.5, 1.5, 1.5).into(), [0.9, 0.1, 0.1], 0.75),
     }
 }
 
 /// Spawns placeholder markers for `things`, each with whether it should
-/// have had a model, returning them.
+/// have had a model, returning them. `models` gives where each stands and
+/// its owner's colour.
 pub fn spawn(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
     ground: &Ground,
-    footing: impl Fn(&str) -> Footing,
+    models: &Models,
     things: &[(&Thing, bool)],
     show: bool,
 ) -> Vec<Entity> {
+    if things.is_empty() {
+        return Vec::new();
+    }
+    let organizations = models.organization_templates();
     let mut handles = HashMap::new();
     let mut spawned = Vec::new();
     for &(thing, should_have_model) in things {
-        let kind = kind(&thing.template, should_have_model);
+        let kind = kind(thing, &organizations, should_have_model);
         let (mesh, material, lift) = handles
             .entry(kind)
             .or_insert_with(|| {
-                let (mesh, [r, g, b], lift) = shape(kind);
+                let (mesh, [r, g, b], lift) = shape(kind, &models.colours);
                 (
                     meshes.add(mesh),
                     materials.add(StandardMaterial {
@@ -91,7 +92,7 @@ pub fn spawn(
         let mut transform = Transform::from_translation(world(
             x,
             y,
-            ground.stand_at(footing(&thing.template), [x, y]) + lift,
+            ground.stand_at(models.footing(&thing.template), [x, y]) + lift,
         ));
         let [fx, fy, _] = thing.facing;
         if fx != 0.0 || fy != 0.0 {
