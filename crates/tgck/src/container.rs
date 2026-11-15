@@ -15,10 +15,12 @@ use crate::{Cursor, Error, Result, Writer, utf16_lossy};
 pub const MAGIC: &[u8; 4] = b"TGCK";
 /// The only container version the game reads.
 pub(crate) const VERSION: u32 = 2;
+/// The magic, version and section count.
+const HEADER_LEN: usize = 12;
 const SECTION_RECORD_LEN: u64 = 0x60;
-const SECTION_NAME_LEN: usize = 0x40;
+pub(crate) const SECTION_NAME_LEN: usize = 0x40;
 /// The zlib level the game compresses sections with.
-const ZLIB_LEVEL: u8 = 6;
+pub(crate) const ZLIB_LEVEL: u8 = 6;
 /// Refuse to inflate sections claiming more than this; real ones are at most
 /// a couple of MB, and zlib lets a small file claim far more.
 const MAX_UNPACKED: u64 = 32 << 20;
@@ -56,7 +58,7 @@ impl<R: Read + Seek> Container<R> {
         let len = reader.seek(SeekFrom::End(0))?;
         reader.seek(SeekFrom::Start(0))?;
 
-        let mut head = [0u8; 12];
+        let mut head = [0u8; HEADER_LEN];
         if len < head.len() as u64 {
             return Err(Error::Corrupt(format!(
                 "{len} bytes is too short for a TGCK file"
