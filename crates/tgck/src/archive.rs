@@ -120,10 +120,8 @@ impl<R: Read + Seek> Archive<R> {
 
 fn parse_directory(dir: &[u8], files: &Section) -> Result<Vec<Entry>> {
     let mut cur = Cursor::new(dir);
-    let count = cur.u32()?;
-    // An entry takes at least 26 bytes.
-    let mut entries = Vec::with_capacity((count as usize).min(cur.remaining() / 26));
-    for i in 0..count {
+    let mut i = 0;
+    let entries = cur.list(|cur| {
         let name = cur.string()?;
         let rel = cur.u64()?;
         let size = cur.u64()?;
@@ -137,14 +135,15 @@ fn parse_directory(dir: &[u8], files: &Section) -> Result<Vec<Entry>> {
                 "entry {i} ({name}) outside Files section"
             )));
         }
-        entries.push(Entry {
+        i += 1;
+        Ok(Entry {
             name,
             offset: files.offset + rel,
             size,
             unknown,
             index,
-        });
-    }
+        })
+    })?;
     cur.finish("directory")?;
     Ok(entries)
 }
