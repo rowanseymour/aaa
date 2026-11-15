@@ -381,9 +381,23 @@ mod tests {
              \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tIDS = scanned\n\t\t\tduration = 10\n\
              \t\t\t[Modifier]\n\t\t\t{\n\t\t\t\ttype = FLAG\n\t\t\t\tmodifier_flag = MINIMAP_NO_FOG\n\t\t\t}\n\t\t}\n\t}\n}\n",
         );
-        assert_eq!(crate::supply::reveals(&scan), Some(10.0));
+        assert_eq!(crate::supply::reveals(&scan, &HashMap::new()), Some(10.0));
         let other = definition("[AbilityDefinition]\n{\n\tIDS = fear\n}\n");
-        assert_eq!(crate::supply::reveals(&other), None);
+        assert_eq!(crate::supply::reveals(&other, &HashMap::new()), None);
+    }
+
+    #[test]
+    fn a_reveal_falls_back_to_its_shared_property_s_flag_and_time() {
+        let text = "[Property]\n{\n\tIDS = scanned\n\tduration = 12\n                    \t[Modifier]\n\t{\n\t\ttype = FLAG\n\t\tmodifier_flag = MINIMAP_NO_FOG\n\t}\n}\n";
+        let parsed = tgi::parse(text);
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Property").next().unwrap();
+        let shared: defs::Property = templates.deserialize(block).unwrap();
+        let properties = HashMap::from([(Id::from("scanned"), shared)]);
+        let scan = definition(
+            "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n             \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tIDS = scanned\n\t\t}\n\t}\n}\n",
+        );
+        assert_eq!(crate::supply::reveals(&scan, &properties), Some(12.0));
     }
 
     #[test]

@@ -80,15 +80,22 @@ pub enum Operation {
 }
 
 /// How long an operation lifts the fog from its user's minimap, for one
-/// that gives a property doing that.
-pub(crate) fn reveals(a: &defs::AbilityDefinition) -> Option<f32> {
+/// that gives a property doing that: the property as the operation gives
+/// it, else as it's defined on its own.
+pub(crate) fn reveals(
+    a: &defs::AbilityDefinition,
+    properties: &HashMap<Id, defs::Property>,
+) -> Option<f32> {
     a.effect.iter().find_map(|e| {
         let p = e.enchantment_property.as_ref()?;
+        let shared = p.ids.as_ref().and_then(|id| properties.get(id));
+        let modifiers = match p.modifier.is_empty() {
+            true => shared.map_or(&p.modifier, |s| &s.modifier),
+            false => &p.modifier,
+        };
         let flag = |m: &defs::Modifier| is(&m.modifier_flag, "MINIMAP_NO_FOG");
-        p.modifier
-            .iter()
-            .any(flag)
-            .then(|| p.duration.unwrap_or(0.0))
+        let seconds = p.duration.or_else(|| shared?.duration).unwrap_or(0.0);
+        modifiers.iter().any(flag).then_some(seconds)
     })
 }
 
@@ -240,7 +247,7 @@ impl GameData {
                     seconds,
                 },
                 (None, Some(template)) => Operation::Drop(template),
-                (None, None) => match reveals(a) {
+                (None, None) => match reveals(a, &definitions.properties) {
                     Some(seconds) => Operation::Reveal { seconds },
                     None => continue,
                 },

@@ -1,7 +1,7 @@
 //! The experience a side's general earns, and spending it on the general's
 //! special operations.
 
-use aaa_map::Id;
+use aaa_map::{Id, Operation};
 
 use crate::{LANDINGS_KEPT, Refused, SECOND, TICK, World};
 
@@ -21,8 +21,8 @@ pub struct Operated {
     pub tick: u64,
     pub player: u32,
     pub operation: Id,
-    /// Its centre.
-    pub at: [f32; 2],
+    /// Its centre, for one aimed somewhere on the map.
+    pub at: Option<[f32; 2]>,
 }
 
 /// One of a general's special operations, and how far it's recharged.
@@ -128,13 +128,13 @@ impl World {
         op.left = op.recharge;
         let cost = op.cost;
         commander.set(commander.experience - cost);
-        let tick = self.ticks;
-        let operation = id;
+        // One used on the side itself is aimed nowhere.
+        let aimed = !matches!(self.rules.operations[&id], Operation::Reveal { .. });
         self.operated.push(Operated {
-            tick,
+            tick: self.ticks,
             player,
-            operation,
-            at,
+            operation: id,
+            at: aimed.then_some(at),
         });
         Ok(())
     }
@@ -287,7 +287,7 @@ mod tests {
             tick: 0,
             player: 1,
             operation: Id::from("resupply"),
-            at: [4.0, 4.0],
+            at: Some([4.0, 4.0]),
         };
         assert_eq!(w.operated, [carried_out]);
         // One refused isn't.
@@ -312,6 +312,7 @@ mod tests {
         w.tick();
         w.apply(1, operate(0)).unwrap();
         assert!(w.revealed(1) && !w.revealed(2));
+        assert_eq!(w.operated[0].at, None);
         let ticks = |seconds: f32| (seconds / TICK).round() as usize;
         for _ in 0..ticks(10.0) {
             w.tick();
