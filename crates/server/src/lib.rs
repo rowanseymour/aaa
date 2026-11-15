@@ -305,6 +305,7 @@ mod tests {
             experience_max: None,
             public: id != "patton_tutorial",
             portrait: None,
+            computer_name: None,
         };
         let nation = |id: &str, generals: &[&str]| Nation {
             id: Id::from(id),

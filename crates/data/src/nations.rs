@@ -59,6 +59,9 @@ pub struct General {
     /// The [`crate::Portrait`] the object display shows for their side's
     /// HQs, by id.
     pub portrait: Option<Id>,
+    /// What a computer player playing as them is called, e.g. `Kesselring
+    /// AI`, from the profile it plays by.
+    pub computer_name: Option<String>,
 }
 
 /// A special operation as a general gives it.
@@ -196,6 +199,7 @@ impl GameData {
 
     /// The generals who may lead a side, by id.
     fn generals(&self, strings: &crate::Strings) -> HashMap<Id, General> {
+        let computer_names = self.computer_names(strings);
         let definitions = self.definitions();
         (definitions.generals.iter())
             .filter_map(|g| {
@@ -216,11 +220,36 @@ impl GameData {
                     experience_max: g.experience_max.filter(|m| *m >= 0.0),
                     public: g.public != Some(false),
                     portrait: not_null(g.portrait_ids.clone()),
+                    computer_name: computer_names.get(&id).cloned(),
                     id: id.clone(),
                 };
                 Some((id, general))
             })
             .collect()
+    }
+
+    /// What the computer player of each general is called, by the
+    /// general's id: the name of the profile made for them, rather than
+    /// one a campaign plays as several of a nation's generals.
+    fn computer_names(&self, strings: &crate::Strings) -> HashMap<Id, String> {
+        let files = self.parse_tgis(|n| n.starts_with("sai/"));
+        let files = scoped(&files);
+        // Each general's name so far, with how many generals its profile
+        // plays as.
+        let mut names: HashMap<Id, (usize, String)> = HashMap::new();
+        for profile in files.iter().flat_map(|f| f.read::<defs::Sai>("SAI")) {
+            let Some(name) = localized(strings, profile.name.as_deref()) else {
+                continue;
+            };
+            let generals: Vec<Id> = profile.faction.into_iter().filter_map(|f| f.ids).collect();
+            for general in &generals {
+                let better = (names.get(general)).is_none_or(|(many, _)| generals.len() < *many);
+                if better {
+                    names.insert(general.clone(), (generals.len(), name.clone()));
+                }
+            }
+        }
+        names.into_iter().map(|(g, (_, name))| (g, name)).collect()
     }
 
     /// The colours players can take, by id, e.g. `blue`.
