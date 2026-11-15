@@ -38,7 +38,7 @@ use std::rc::Rc;
 
 use serde::de::{self, DeserializeOwned, IntoDeserializer, Visitor};
 
-use crate::{Block, Field, Item, Templates};
+use crate::{Block, Field, Item, Templates, parse_bool};
 
 /// Why a block didn't deserialize, with the line it happened at if known.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -149,20 +149,13 @@ impl Coverage {
         for item in &block.items {
             match item {
                 Item::Field(f) => self.count(path, f, false),
-                Item::Block(b) if !is_slot(b) => {
+                Item::Block(b) if b.slot().is_none() => {
                     self.unread(&child_path(path, b), b, templates);
                 }
                 Item::Block(_) => {}
             }
         }
     }
-}
-
-/// Whether a block is a schema slot rather than data.
-fn is_slot(block: &Block) -> bool {
-    block
-        .kind()
-        .is_some_and(|k| k.eq_ignore_ascii_case("list") || k.eq_ignore_ascii_case("optional"))
 }
 
 fn child_path(path: &str, block: &Block) -> String {
@@ -300,10 +293,7 @@ impl<'a> Node<'a> {
 
     fn parse<T>(self, expected: &str, read: fn(&str) -> Option<T>) -> Result<T, Error> {
         let (text, line) = self.text(expected)?;
-        read(text.trim()).ok_or_else(|| Error {
-            line: Some(line),
-            message: format!("expected {expected}, found {text:?}"),
-        })
+        read_scalar(text, expected, read).map_err(|e| e.at(line))
     }
 
     /// Visits a block's items as a map, keyed by the matching name in
@@ -376,7 +366,27 @@ impl<'de> IntoDeserializer<'de, Error> for Node<'_> {
     }
 }
 
+/// The scalar methods, the same for a field's value and a list element,
+/// each reading the text with a parser that says whether it fits.
 macro_rules! parse_scalars {
+    () => {
+        parse_scalars! {
+            deserialize_bool visit_bool bool, "true or false", parse_bool;
+            deserialize_i8 visit_i8 i8, "an integer", integer;
+            deserialize_i16 visit_i16 i16, "an integer", integer;
+            deserialize_i32 visit_i32 i32, "an integer", integer;
+            deserialize_i64 visit_i64 i64, "an integer", integer;
+            deserialize_i128 visit_i128 i128, "an integer", integer;
+            deserialize_u8 visit_u8 u8, "an integer", integer;
+            deserialize_u16 visit_u16 u16, "an integer", integer;
+            deserialize_u32 visit_u32 u32, "an integer", integer;
+            deserialize_u64 visit_u64 u64, "an integer", integer;
+            deserialize_u128 visit_u128 u128, "an integer", integer;
+            deserialize_f32 visit_f32 f32, "a number", float;
+            deserialize_f64 visit_f64 f64, "a number", float;
+            deserialize_char visit_char char, "a character", whole;
+        }
+    };
     ($($method:ident $visit:ident $ty:ty, $expected:literal, $read:ident;)*) => {
         $(fn $method<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
             visitor.$visit(self.parse::<$ty>($expected, $read)?)
@@ -398,30 +408,7 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
         }
     }
 
-    parse_scalars! {
-        deserialize_i8 visit_i8 i8, "an integer", integer;
-        deserialize_i16 visit_i16 i16, "an integer", integer;
-        deserialize_i32 visit_i32 i32, "an integer", integer;
-        deserialize_i64 visit_i64 i64, "an integer", integer;
-        deserialize_u8 visit_u8 u8, "an integer", integer;
-        deserialize_u16 visit_u16 u16, "an integer", integer;
-        deserialize_u32 visit_u32 u32, "an integer", integer;
-        deserialize_u64 visit_u64 u64, "an integer", integer;
-        deserialize_f32 visit_f32 f32, "a number", float;
-        deserialize_f64 visit_f64 f64, "a number", float;
-        deserialize_char visit_char char, "a character", whole;
-    }
-
-    fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        let (text, line) = self.text("true or false")?;
-        match parse_bool(text) {
-            Some(b) => visitor.visit_bool(b),
-            None => Err(Error {
-                line: Some(line),
-                message: format!("expected true or false, found {text:?}"),
-            }),
-        }
-    }
+    parse_scalars!();
 
     fn deserialize_str<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
         visitor.visit_str(self.text("a value")?.0)
@@ -560,7 +547,7 @@ fn tally(items: &[&Item], ctx: &Ctx, read: usize) {
     for (i, item) in items.iter().enumerate() {
         match item {
             Item::Field(f) => coverage.count(&ctx.path, f, i < read),
-            Item::Block(b) if i >= read && !is_slot(b) => {
+            Item::Block(b) if i >= read && b.slot().is_none() => {
                 coverage.unread(&child_path(&ctx.path, b), b, ctx.templates);
             }
             Item::Block(_) => {}
@@ -586,32 +573,10 @@ impl<'de> de::Deserializer<'de> for Scalar<'_> {
         visitor.visit_str(self.0)
     }
 
-    parse_scalars! {
-        deserialize_i8 visit_i8 i8, "an integer", integer;
-        deserialize_i16 visit_i16 i16, "an integer", integer;
-        deserialize_i32 visit_i32 i32, "an integer", integer;
-        deserialize_i64 visit_i64 i64, "an integer", integer;
-        deserialize_u8 visit_u8 u8, "an integer", integer;
-        deserialize_u16 visit_u16 u16, "an integer", integer;
-        deserialize_u32 visit_u32 u32, "an integer", integer;
-        deserialize_u64 visit_u64 u64, "an integer", integer;
-        deserialize_f32 visit_f32 f32, "a number", float;
-        deserialize_f64 visit_f64 f64, "a number", float;
-        deserialize_char visit_char char, "a character", whole;
-    }
-
-    fn deserialize_bool<V: Visitor<'de>>(self, visitor: V) -> Result<V::Value, Error> {
-        match parse_bool(self.0) {
-            Some(b) => visitor.visit_bool(b),
-            None => Err(de::Error::custom(format!(
-                "expected true or false, found {:?}",
-                self.0
-            ))),
-        }
-    }
+    parse_scalars!();
 
     serde::forward_to_deserialize_any! {
-        i128 u128 str string bytes byte_buf option unit
+        str string bytes byte_buf option unit
         unit_struct newtype_struct seq tuple tuple_struct map struct enum identifier ignored_any
     }
 }
@@ -681,20 +646,17 @@ impl Fraction for f64 {
     }
 }
 
-/// `true` or `false`, in any case, or `1` or `0`.
-fn parse_bool(text: &str) -> Option<bool> {
-    match text.trim().to_ascii_lowercase().as_str() {
-        "true" | "1" => Some(true),
-        "false" | "0" => Some(false),
-        _ => None,
+impl Scalar<'_> {
+    /// As [`Node::parse`], so [`parse_scalars`] can call either.
+    fn parse<T>(&self, expected: &str, read: fn(&str) -> Option<T>) -> Result<T, Error> {
+        read_scalar(self.0, expected, read)
     }
 }
 
-impl Scalar<'_> {
-    fn parse<T>(&self, expected: &str, read: fn(&str) -> Option<T>) -> Result<T, Error> {
-        read(self.0)
-            .ok_or_else(|| de::Error::custom(format!("expected {expected}, found {:?}", self.0)))
-    }
+/// Reads a scalar's text, trimmed, or says what was expected instead.
+fn read_scalar<T>(text: &str, expected: &str, read: fn(&str) -> Option<T>) -> Result<T, Error> {
+    read(text.trim())
+        .ok_or_else(|| de::Error::custom(format!("expected {expected}, found {text:?}")))
 }
 
 #[cfg(test)]
@@ -771,14 +733,21 @@ mod tests {
     }
 
     #[test]
-    fn reads_lists_of_any_scalar() {
+    fn reads_any_scalar_as_a_value_or_in_a_list() {
         #[derive(Debug, Deserialize, PartialEq)]
         struct Mixed {
-            list: (bool, u8, i64, char),
+            list: (bool, u8, i128, char),
+            wide: u128,
+            flag: bool,
         }
-        let block = first("[Mixed]\nlist = TRUE, 7, -3, x\n");
+        let block = first("[Mixed]\nlist = TRUE, 7, -3, x\nwide = 5\nflag = 0\n");
         let m: Mixed = from_block(&block).unwrap();
-        assert_eq!(m.list, (true, 7, -3, 'x'));
+        assert_eq!((m.list, m.wide, m.flag), ((true, 7, -3, 'x'), 5, false));
+        let err = from_block::<Mixed>(&first("[Mixed]\nlist = yes, 7, -3, x\n")).unwrap_err();
+        assert_eq!(
+            err.to_string(),
+            "line 2: expected true or false, found \"yes\""
+        );
     }
 
     #[test]
