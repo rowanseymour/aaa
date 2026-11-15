@@ -4,9 +4,9 @@
 [![License: GPL v3+](https://img.shields.io/badge/license-GPL%20v3%2B-blue.svg)](LICENSE)
 [![Bevy 0.20](https://img.shields.io/badge/bevy-0.20-232326.svg?logo=bevy&logoColor=white)](https://bevy.org)
 
-An open source re-implementation of [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)),
-the real-time strategy game, written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org).
-It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
+An open source reimplementation of the real-time strategy game [Axis & Allies (2004)](https://en.wikipedia.org/wiki/Axis_%26_Allies_(2004_video_game)), 
+and the underlying engine used for that game and [Kohan II](https://en.wikipedia.org/wiki/Kohan_II:_Kings_of_War). 
+It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Name is pronounced _aaaaahh_.
 
 > [!IMPORTANT]
 > You need your own copy of the original game. This project contains none of its code or data.
@@ -33,9 +33,7 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 - Play like the original: the same rules giving the same results. Any where it looks or
   controls differently on purpose, that's listed in [divergences](docs/divergences.md).
 - Playable on modern systems, Linux and macOS included.
-- Stay driven by the data files, so the original's maps and mods keep working and new ones
-  are easier to make. The engine stays generic enough that, with
-  a little work, it could also run [Kohan II](https://en.wikipedia.org/wiki/Kohan_II:_Kings_of_War), which shares its file formats.
+- Stay driven by the data files, so the original's maps and mods keep working and new ones are easier to make.
 - Document every [file format](docs/formats) the game uses.
 
 ## Status
