@@ -33,9 +33,10 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 - Play like the original: the same rules giving the same results. Where it looks or
   controls differently on purpose, that's listed in [divergences](docs/divergences.md).
 - Plays on modern systems, Linux and macOS included.
-- Stay driven by the data files, so the maps and mods made for the original keep working.
-- Make the game easier to mod and extend, starting with a map editor and documented [file formats](docs/formats).
-- Keep the engine core generic and reusable for future RTS projects.
+- Stay driven by the data files, so the original's maps and mods keep working and new ones
+  are easier to make, starting with a map editor. The engine stays generic enough that, with
+  a little more work, it could also run [Kohan II](https://en.wikipedia.org/wiki/Kohan_II:_Kings_of_War), which shares its file formats.
+- Document every [file format](docs/formats) the game uses.
 
 ## Status
 
