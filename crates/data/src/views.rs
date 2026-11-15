@@ -40,7 +40,7 @@ pub struct View {
     pub icon: Option<String>,
     /// The [`Portrait`] the object display shows for it, by id.
     pub portrait: Option<Id>,
-    /// Whether the object display shows its owner's general's portrait
+    /// Whether the object display shows its owner's faction's portrait
     /// rather than its own.
     pub faction_portrait: bool,
     /// How far from its middle its normal model reaches over the ground,
@@ -222,16 +222,16 @@ impl GameData {
         out
     }
 
-    /// The portraits that templates' views and generals name, by id.
+    /// The portraits that templates' views and factions name, by id.
     pub fn portraits(&self) -> HashMap<Id, Portrait> {
         let definitions = self.definitions();
         let of_views = definitions.things.iter().filter_map(|t| {
             let view = t.thing.view.as_ref()?;
             not_null(view.portrait_ids.clone())
         });
-        let of_generals =
-            (definitions.generals.iter()).filter_map(|g| not_null(g.portrait_ids.clone()));
-        let named: HashSet<Id> = of_views.chain(of_generals).collect();
+        let of_factions =
+            (definitions.factions.iter()).filter_map(|g| not_null(g.portrait_ids.clone()));
+        let named: HashSet<Id> = of_views.chain(of_factions).collect();
         let mut out = HashMap::new();
         for Template { file, id, thing } in &definitions.things {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
@@ -633,12 +633,12 @@ mod tests {
              \t\tstring resource_prefix\n\t\tstring portrait_ids = null\n\
              \t\tint idle_loops_min = 1\n\t\tint idle_loops_max = 3\n\
              \t\t[AspectNormal Template=Aspect]\n\t}\n}\n\
-             [Template GeneralPortrait Template=Object]\n{\n\t[View]\n\t{\n\t\t[AspectNormal]\n\t\t{\n\
+             [Template FactionPortrait Template=Object]\n{\n\t[View]\n\t{\n\t\t[AspectNormal]\n\t\t{\n\
              \t\t\t[Animation Template=ObjectAnimationIdle]\n\t\t\t{\n\t\t\t\tids = idle\n\t\t\t}\n\
              \t\t\t[Animation Template=ObjectAnimationFidget]\n\t\t\t{\n\t\t\t\tids = fidget1\n\t\t\t}\n\
              \t\t}\n\t}\n}\n\
              [Template HQ Template=Object]\n{\n\tshow_faction_portrait = true\n}\n\
-             [Thing Template=GeneralPortrait]\n{\n\tids = rommel_portrait\n\t[View]\n\t{\n\
+             [Thing Template=FactionPortrait]\n{\n\tids = rommel_portrait\n\t[View]\n\t{\n\
              \t\tresource_prefix = Rommel/RommelPortrait\n\t\t[AspectNormal]\n\t\t{\n\
              \t\t\t[Animation Template=ObjectAnimationSelected]\n\t\t\t{\n\t\t\t\tids = talk1\n\
              \t\t\t\tlength = 2\n\t\t\t\tkf = /Shared/Talk.kf\n\t\t\t}\n\t\t}\n\t}\n}\n\

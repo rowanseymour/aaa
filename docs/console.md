@@ -31,7 +31,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `select [id ...]`: selects regiments, or one building, of any side by their ids; without any, says what's selected
 - `commission template [x y]`: asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there
 - `research technology`: asks the selected building to research a technology it lists
-- `usefactionability n x y`: uses the nth of the general's special operations, from 0 as the panel lists them, on the ground at x y
+- `usefactionability n x y`: uses the nth of the faction's special operations, from 0 as the panel lists them, on the ground at x y
 - `pack`: packs up the selected building
 - `sell`: sells the selected building
 - `disband regiment`: disbands a regiment, by its id

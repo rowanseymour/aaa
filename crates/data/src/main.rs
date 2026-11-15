@@ -14,7 +14,7 @@ usage:
   aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off
   aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post
   aaa-data resources <game dir>         the resources, with what each is for and what a shortfall of it costs, and the resource bar's cells
-  aaa-data generals <game dir>          each nation's generals, their computer players and their special operations as tooltips show them";
+  aaa-data factions <game dir>          each nation's factions, their computer players and their special operations as tooltips show them";
 
 /// Prints the library's warnings, such as data blocks that don't read.
 struct Stderr;
@@ -57,7 +57,7 @@ fn main() -> ExitCode {
         ["effects", dir] => effects(dir, ""),
         ["effects", dir, filter] => effects(dir, filter),
         ["messages", dir] => messages(dir),
-        ["generals", dir] => generals(dir),
+        ["factions", dir] => factions(dir),
         ["resources", dir] => resources(dir),
         _ => {
             eprintln!("{USAGE}");
@@ -237,7 +237,7 @@ fn cues(dir: &str, filter: &str) -> Res {
 
 /// The effects of each object template whose id contains `filter`, ignoring
 /// case, with a `?` on effects that aren't defined and each effect's kind.
-fn generals(dir: &str) -> Res {
+fn factions(dir: &str) -> Res {
     let game = GameData::open(dir.as_ref())?;
     let rules = game.experience_rules();
     outln!(
@@ -247,7 +247,7 @@ fn generals(dir: &str) -> Res {
     );
     let operations = game.special_operations();
     for nation in game.nations() {
-        for g in &nation.generals {
+        for g in &nation.factions {
             let max = g
                 .experience_max
                 .map_or("none".to_string(), |m| m.to_string());

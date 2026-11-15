@@ -147,7 +147,7 @@ mod tests {
             outcome: Default::default(),
             won_by_cities: false,
             nation: None,
-            general: None,
+            faction: None,
             relations: vec![Relation::Neutral; 6],
             team_relations: Vec::new(),
             stockpile: 0.0,

@@ -829,7 +829,7 @@ mod tests {
             outcome: Default::default(),
             won_by_cities: false,
             nation: None,
-            general: None,
+            faction: None,
             relations: vec![Enemy; 5],
             team_relations: vec![Enemy; 2],
             stockpile: 0.0,

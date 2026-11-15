@@ -88,7 +88,7 @@ pub struct Thing {
     pub description: Option<String>,
     /// Whether a side numbers those it has, as "1st Infantry Regiment".
     pub numbered: Option<bool>,
-    /// Whether the object display shows its owner's general's portrait
+    /// Whether the object display shows its owner's faction's portrait
     /// when it's selected, rather than its own.
     pub show_faction_portrait: Option<bool>,
     /// On what's recruited, the transport that carries it to where it's
@@ -888,7 +888,7 @@ pub struct Nation {
     pub badge: Vec<Badge>,
     #[serde(default)]
     pub placeholder: Vec<Placeholder>,
-    /// The ids of the generals who lead it, comma-separated.
+    /// The ids of the factions that lead it, comma-separated.
     pub factions: Option<String>,
     /// The lobby's image of its flag.
     pub flag_icon: Option<String>,
@@ -906,20 +906,20 @@ pub struct Handicap {
     pub property_ids: Option<String>,
 }
 
-/// A general a side can be led by.
+/// A faction a side can be led by.
 #[derive(Debug, Clone, Deserialize)]
-pub struct General {
+pub struct Faction {
     pub ids: Option<Id>,
     pub name: Option<String>,
     /// What the lobby calls them.
     pub staging_name: Option<String>,
-    /// False for generals only scenarios use.
+    /// False for factions only scenarios use.
     pub public: Option<bool>,
     /// The portrait template the object display shows for their side's
     /// HQs.
     pub portrait_ids: Option<Id>,
     #[serde(default)]
-    pub ability: Vec<GeneralAbility>,
+    pub ability: Vec<FactionAbility>,
     /// The most experience their side can hold; negative for no ceiling.
     pub experience_max: Option<f32>,
 }
@@ -930,20 +930,20 @@ pub struct Sai {
     /// What the computer player is called, or the key of the string that
     /// says.
     pub name: Option<String>,
-    /// The generals it plays as, by id.
+    /// The factions it plays as, by id.
     #[serde(default)]
     pub faction: Vec<SaiFaction>,
 }
 
-/// A general a computer player's profile plays as.
+/// A faction a computer player's profile plays as.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaiFaction {
     pub ids: Option<Id>,
 }
 
-/// A special operation a general gives their side.
+/// A special operation a faction gives their side.
 #[derive(Debug, Clone, Deserialize)]
-pub struct GeneralAbility {
+pub struct FactionAbility {
     pub ability_ids: Option<Id>,
     /// The side's experience using it takes.
     pub cost_faction_experience: Option<f32>,
@@ -1047,7 +1047,7 @@ pub struct Glyph {
 /// The game's tuning settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SVars {
-    /// The experience a side with a general gains each second.
+    /// The experience a side with a faction gains each second.
     #[serde(rename = "ExperienceFactionGainPeriodic")]
     pub experience_faction_gain_periodic: Option<f32>,
     #[serde(rename = "BuildingPaddingMeters")]

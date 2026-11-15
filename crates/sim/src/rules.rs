@@ -71,7 +71,7 @@ pub struct Rules {
     /// What each template that researches lists, in its menu's order, by
     /// template id.
     pub research_lists: HashMap<Id, Vec<aaa_map::Research>>,
-    /// The experience every side with a general gains a second.
+    /// The experience every side with a faction gains a second.
     pub experience_per_second: f32,
     /// How far each template sees, by template.
     pub sights: HashMap<Id, aaa_map::Sight>,

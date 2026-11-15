@@ -64,9 +64,9 @@ pub struct EffectLine {
 /// doesn't say.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct ExperienceRules {
-    /// What every side with a general starts a match with.
+    /// What every side with a faction starts a match with.
     pub starting: f32,
-    /// What every side with a general gains a second.
+    /// What every side with a faction gains a second.
     pub per_second: f32,
 }
 

@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 8;
+pub const PROTOCOL: u32 = 9;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -43,6 +43,8 @@ pub enum ToHost {
     Vote(bool),
     /// Whether the client is for kicking `client` out of the match.
     Kick { client: u32, vote: bool },
+    /// Words for everyone, to pass on at once, outside the steps.
+    Say(String),
 }
 
 /// From the host to a client.
@@ -72,6 +74,17 @@ pub enum ToClient {
     Status(Status),
     /// Nothing but that the host is still there.
     Alive,
+    /// Words a client said for everyone, passed on at once, held match or
+    /// not, and so in no step.
+    Said(Said),
+}
+
+/// Words a client said for everyone.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Said {
+    /// The side of the person who said them, or none for one watching.
+    pub from: Option<u32>,
+    pub words: String,
 }
 
 /// How the match and its clients stand, as the host sees them.
@@ -205,6 +218,7 @@ mod tests {
                 client: 3,
                 vote: true,
             },
+            ToHost::Say("hi".into()),
             ToHost::Ask(order.clone()),
             ToHost::Check {
                 step: 10,
@@ -248,6 +262,10 @@ mod tests {
             }),
             ToClient::Ended,
             ToClient::Alive,
+            ToClient::Said(Said {
+                from: Some(1),
+                words: "hi".into(),
+            }),
             ToClient::Status(Status {
                 seats: vec![Seated {
                     client: 2,

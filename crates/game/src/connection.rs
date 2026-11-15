@@ -1,12 +1,14 @@
 //! The connection dialog: how everyone in a match stands as its host sees
 //! them. It opens by itself once the match has been held for a moment and
 //! closes when it goes on, and it's where players vote to drop those
-//! holding it or to kick a player out.
+//! holding it or to kick a player out. Its chat gets through to everyone
+//! at once, held match or not.
 
 use std::collections::HashMap;
 
 use aaa_data::PingLook;
 use aaa_server::protocol::{Seated, Standing, Status};
+use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
@@ -35,6 +37,7 @@ pub struct Words {
     leave: String,
     leave_confirm: String,
     observer: String,
+    send: String,
     standings: HashMap<Standing, String>,
 }
 
@@ -89,6 +92,10 @@ impl Words {
             ),
             leave_confirm: said("csd_leave_game_confirm", "Exit the game?"),
             observer: said("game_interface_KingdomDropDown_observer_text", "Observer"),
+            send: said(
+                "connection_status_dialog_ChatPanel_SendButton_Client_View_text",
+                "Send",
+            ),
             standings: (standings.into_iter())
                 .map(|(s, key, stock)| (s, said(key, stock)))
                 .collect(),
@@ -128,6 +135,8 @@ pub struct Dialog {
     held_since: Option<f32>,
     /// How it's laid out, to lay it out again only when that changes.
     drawn: Option<Drawn>,
+    /// What's being typed in its chat, kept while it's laid out again.
+    typing: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -208,6 +217,9 @@ struct Countdown;
 
 #[derive(Component)]
 struct Root;
+/// What's being typed in the chat, as shown.
+#[derive(Component)]
+struct Typing;
 
 pub struct ConnectionPlugin;
 
@@ -220,7 +232,7 @@ impl Plugin for ConnectionPlugin {
             })
             .add_systems(
                 Update,
-                (watch, draw, fill_in)
+                (watch, draw, fill_in, keys, show_typing)
                     .chain()
                     .run_if(in_state(Screen::Match))
                     .run_if(resource_exists::<Orders>),
@@ -393,6 +405,7 @@ fn draw(
     if status.held {
         lower_panel(&mut commands, panel, &words);
     }
+    chat_panel(&mut commands, panel, &words);
     let buttons = commands
         .spawn((
             ChildOf(panel),
@@ -651,6 +664,89 @@ fn lower_panel(commands: &mut Commands, panel: Entity, words: &Words) {
     ));
 }
 
+/// The dialog's chat: the message log, all of it, then where to type.
+fn chat_panel(commands: &mut Commands, panel: Entity, words: &Words) {
+    commands.spawn((
+        ChildOf(panel),
+        messages::WholeLog::default(),
+        ScrollPosition::default(),
+        Node {
+            flex_direction: FlexDirection::Column,
+            height: px(150),
+            overflow: Overflow::scroll_y(),
+            ..default()
+        },
+    ));
+    let line = commands.spawn((ChildOf(panel), row())).id();
+    commands.spawn((
+        ChildOf(line),
+        ui::text("_", Font::Body),
+        Typing,
+        Node {
+            flex_grow: 1.0,
+            overflow: Overflow::clip(),
+            ..default()
+        },
+    ));
+    commands
+        .spawn((
+            ChildOf(line),
+            ui::button(words.send.clone(), Font::Body),
+            ui::called("connection.send"),
+        ))
+        .observe(send_pressed);
+}
+
+/// Takes the keyboard while the dialog is open, for its chat: what's
+/// typed, and Enter to send it.
+fn keys(
+    mut presses: MessageReader<KeyboardInput>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut dialog: ResMut<Dialog>,
+    mut orders: ResMut<Orders>,
+    console: Res<crate::console::Console>,
+    asked: Query<(), With<confirm::Question>>,
+) {
+    // Not under the console, or a question asked over the dialog.
+    let under = !crate::console::closed(console) || !asked.is_empty();
+    if dialog.opened.is_none() || under {
+        presses.clear();
+        return;
+    }
+    if keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]) {
+        presses.clear();
+        send(&mut dialog, &mut orders);
+        return;
+    }
+    let mut typing = std::mem::take(&mut dialog.typing);
+    crate::chat::type_into(&mut typing, &mut presses);
+    if dialog.typing != typing {
+        dialog.typing = typing;
+    }
+}
+
+/// Has what's typed said to everyone, if there's anything.
+fn send(dialog: &mut Dialog, orders: &mut Orders) {
+    let words = std::mem::take(&mut dialog.typing);
+    if !words.trim().is_empty() {
+        orders.say(words);
+    }
+}
+
+fn send_pressed(_: On<Activate>, mut dialog: ResMut<Dialog>, mut orders: ResMut<Orders>) {
+    send(&mut dialog, &mut orders);
+}
+
+/// Keeps what's typed on show, with where the next goes.
+fn show_typing(dialog: Res<Dialog>, mut texts: Query<&mut Text, With<Typing>>) {
+    let shown = format!("{}_", dialog.typing);
+    for mut text in &mut texts {
+        if text.0 != shown {
+            text.0 = shown.clone();
+        }
+    }
+}
+
 /// Sets or takes back the game's vote to drop those holding the match.
 fn vote(_: On<Activate>, mut orders: ResMut<Orders>) {
     let voted = orders.voted();
@@ -720,6 +816,7 @@ mod tests {
             app.add_plugins((
                 MinimalPlugins,
                 StatesPlugin,
+                bevy::input::InputPlugin,
                 ConnectionPlugin,
                 confirm::ConfirmPlugin,
             ))
@@ -731,7 +828,6 @@ mod tests {
             .insert_resource(Local(Some(1)))
             .init_resource::<Leaders>()
             .init_resource::<ui::Gem>()
-            .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::console::Console>();
             app.update();
             Match {
@@ -775,6 +871,14 @@ mod tests {
             shown
         }
 
+        /// Presses and lets go of `chord`, a frame each.
+        fn key(&mut self, chord: &str) {
+            let keys = crate::drive::press(self.app.world_mut(), chord).unwrap();
+            self.app.update();
+            crate::drive::release(self.app.world_mut(), &keys);
+            self.app.update();
+        }
+
         /// Presses the button [`ui::called`] `id`.
         fn press_called(&mut self, id: &str) {
             let world = self.app.world_mut();
@@ -816,6 +920,56 @@ mod tests {
         m.second(false);
         m.second(false);
         assert!(m.shown().is_empty());
+    }
+
+    #[test]
+    fn its_chat_gets_through_at_once_while_the_match_is_held() {
+        let mut m = Match::new();
+        m.second(false);
+        for _ in 0..5 {
+            m.second(true);
+        }
+        assert!(m.app.world().resource::<Orders>().status().unwrap().held);
+        for key in ["h", "i", "space", "x", "backspace"] {
+            m.key(key);
+        }
+        assert!(m.shown().contains(&"hi _".to_string()));
+        m.key("enter");
+        assert!(m.shown().contains(&"_".to_string()));
+        // Sent with Send too, and nothing typed sends nothing.
+        m.key("o");
+        m.press_called("connection.send");
+        m.press_called("connection.send");
+        m.host.turn();
+        m.other.advance(&mut m.other_world, usize::MAX).unwrap();
+        let said: Vec<_> = m.other.take_said().into_iter().map(|s| s.words).collect();
+        assert_eq!(said, ["hi ", "o"]);
+        // Outside the steps.
+        assert!(m.host.schedule().record().given.is_empty());
+    }
+
+    #[test]
+    fn nothing_is_typed_under_the_question_whether_to_leave() {
+        let mut m = Match::new();
+        open(&mut m.app.world_mut().resource_mut());
+        m.app.update();
+        m.press_called("connection.leave");
+        m.key("h");
+        m.key("enter");
+        assert!(!m.shown().contains(&"h_".to_string()));
+        m.host.turn();
+        m.other.advance(&mut m.other_world, usize::MAX).unwrap();
+        assert_eq!(m.other.take_said(), []);
+    }
+
+    #[test]
+    fn closed_it_types_nothing() {
+        let mut m = Match::new();
+        m.key("h");
+        m.key("enter");
+        m.host.turn();
+        m.other.advance(&mut m.other_world, usize::MAX).unwrap();
+        assert_eq!(m.other.take_said(), []);
     }
 
     #[test]

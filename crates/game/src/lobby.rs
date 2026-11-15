@@ -4,7 +4,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use aaa_data::{General, Handicap, Id, Nation};
+use aaa_data::{Faction, Handicap, Id, Nation};
 use aaa_map::{Brief, Player};
 use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
@@ -171,8 +171,8 @@ enum Open {
     Presets,
     /// The nations for this player's side.
     Nations(u32),
-    /// The generals for this player's side.
-    Generals(u32),
+    /// The factions for this player's side.
+    Factions(u32),
     /// The handicaps for this player's side.
     Handicaps(u32),
 }
@@ -189,9 +189,9 @@ pub struct Lobby {
     /// The nation chosen for each side, by player id; one at random where
     /// none is.
     nations: HashMap<u32, Id>,
-    /// The general chosen for each side, by player id; one at random where
+    /// The faction chosen for each side, by player id; one at random where
     /// none is.
-    generals: HashMap<u32, Id>,
+    factions: HashMap<u32, Id>,
     /// The handicap chosen for each side the computer plays, by player id;
     /// the default where none is.
     handicaps: HashMap<u32, Id>,
@@ -214,7 +214,7 @@ impl Lobby {
             preset,
             person,
             nations: HashMap::new(),
-            generals: HashMap::new(),
+            factions: HashMap::new(),
             handicaps: HashMap::new(),
             open: Open::Nothing,
         };
@@ -295,14 +295,14 @@ struct NationsOf(u32);
 #[derive(Component)]
 struct NationChoice(u32, Option<Id>);
 
-/// The button that opens a side's generals, by player id.
+/// The button that opens a side's factions, by player id.
 #[derive(Component)]
-struct GeneralsOf(u32);
+struct FactionsOf(u32);
 
-/// One of the generals in a side's list, by player id; none for one at
+/// One of the factions in a side's list, by player id; none for one at
 /// random.
 #[derive(Component)]
-struct GeneralChoice(u32, Option<Id>);
+struct FactionChoice(u32, Option<Id>);
 
 /// The button that opens a side's handicaps, by player id.
 #[derive(Component)]
@@ -589,31 +589,31 @@ fn choose_nation(activate: On<Activate>, choices: Query<&NationChoice>, mut lobb
             Some(n) => lobby.nations.insert(*player, n.clone()),
             None => lobby.nations.remove(player),
         };
-        // Generals lead only their own nation's sides.
-        lobby.generals.remove(player);
+        // Factions lead only their own nation's sides.
+        lobby.factions.remove(player);
         lobby.open = Open::Nothing;
     }
 }
 
-/// Opens the list of generals for a side, or closes it.
-fn open_generals(activate: On<Activate>, sides: Query<&GeneralsOf>, mut lobby: ResMut<Lobby>) {
-    if let Ok(GeneralsOf(player)) = sides.get(activate.entity) {
+/// Opens the list of factions for a side, or closes it.
+fn open_factions(activate: On<Activate>, sides: Query<&FactionsOf>, mut lobby: ResMut<Lobby>) {
+    if let Ok(FactionsOf(player)) = sides.get(activate.entity) {
         lobby.open = match lobby.open {
-            Open::Generals(p) if p == *player => Open::Nothing,
-            _ => Open::Generals(*player),
+            Open::Factions(p) if p == *player => Open::Nothing,
+            _ => Open::Factions(*player),
         };
     }
 }
 
-fn choose_general(
+fn choose_faction(
     activate: On<Activate>,
-    choices: Query<&GeneralChoice>,
+    choices: Query<&FactionChoice>,
     mut lobby: ResMut<Lobby>,
 ) {
-    if let Ok(GeneralChoice(player, general)) = choices.get(activate.entity) {
-        match general {
-            Some(g) => lobby.generals.insert(*player, g.clone()),
-            None => lobby.generals.remove(player),
+    if let Ok(FactionChoice(player, faction)) = choices.get(activate.entity) {
+        match faction {
+            Some(g) => lobby.factions.insert(*player, g.clone()),
+            None => lobby.factions.remove(player),
         };
         lobby.open = Open::Nothing;
     }
@@ -671,7 +671,7 @@ fn launch(
             seed: seed.get(),
             teams: lobby.preset.arrange(&brief.players),
             nations: lobby.nations.clone().into_iter().collect(),
-            generals: lobby.generals.clone().into_iter().collect(),
+            factions: lobby.factions.clone().into_iter().collect(),
             handicaps: computer_handicaps(&brief.players, lobby.person, &lobby.handicaps),
             fog: None,
         },
@@ -814,13 +814,13 @@ fn show_slots(
                 }
                 None => nation_list(&mut commands, row, &lobby, (id, &side), flag, &all.0),
             }
-            // A random nation's general is random too.
+            // A random nation's faction is random too.
             let nation = nation.and_then(|n| all.0.iter().find(|a| a.id.as_str() == n));
-            let fixed = player.general.as_deref().map(Id::from);
-            let fixed = fixed.map(|f| nation.and_then(|n| n.generals.iter().find(|g| g.id == f)));
+            let fixed = player.faction.as_deref().map(Id::from);
+            let fixed = fixed.map(|f| nation.and_then(|n| n.factions.iter().find(|g| g.id == f)));
             match (fixed, nation) {
                 (None, Some(nation)) => {
-                    general_list(&mut commands, row, &lobby, (id, &side), &nation.generals);
+                    faction_list(&mut commands, row, &lobby, (id, &side), &nation.factions);
                 }
                 (fixed, _) => {
                     let name = fixed
@@ -859,7 +859,7 @@ fn show_slots(
         .observe(choose_side);
 }
 
-/// What a choice of a nation, a general or a handicap is called after its
+/// What a choice of a nation, a faction or a handicap is called after its
 /// list: its id in the data, or `random` for none.
 fn key(id: Option<&Id>) -> String {
     id.map_or("random".into(), |id| slug(id.as_str()))
@@ -938,23 +938,23 @@ fn handicap_list(
     );
 }
 
-/// A side's general in `row`, and the list of its nation's `generals` the
+/// A side's faction in `row`, and the list of its nation's `factions` the
 /// lobby offers to choose another from while it's open.
-fn general_list(
+fn faction_list(
     commands: &mut Commands,
     row: Entity,
     lobby: &Lobby,
     (player, side): (u32, &str),
-    generals: &[General],
+    factions: &[Faction],
 ) {
-    let chosen = lobby.generals.get(&player);
-    let chosen = chosen.and_then(|id| generals.iter().find(|g| g.id == *id));
+    let chosen = lobby.factions.get(&player);
+    let chosen = chosen.and_then(|id| factions.iter().find(|g| g.id == *id));
     let label = chosen.map_or("Random".into(), |g| g.short_name.clone());
-    let offered = generals.iter().filter(|g| g.public);
+    let offered = factions.iter().filter(|g| g.public);
     let choices = offered.map(|g| (Some(g.id.clone()), g.short_name.clone()));
     let choices = std::iter::once((None, "Random".to_string())).chain(choices);
-    let choices = choices.map(|(g, name)| (key(g.as_ref()), GeneralChoice(player, g), name));
-    let open = lobby.open == Open::Generals(player);
+    let choices = choices.map(|(g, name)| (key(g.as_ref()), FactionChoice(player, g), name));
+    let open = lobby.open == Open::Factions(player);
     let list = Dropdown {
         id: format!("{side}.general"),
         row,
@@ -964,10 +964,10 @@ fn general_list(
     };
     list.spawn(
         commands,
-        GeneralsOf(player),
-        open_generals,
+        FactionsOf(player),
+        open_factions,
         choices,
-        choose_general,
+        choose_faction,
     );
 }
 
@@ -1110,7 +1110,7 @@ mod tests {
             outcome: Default::default(),
             won_by_cities: false,
             nation: None,
-            general: None,
+            faction: None,
             relations: vec![Relation::Neutral; 4],
             team_relations: Vec::new(),
             stockpile: 0.0,

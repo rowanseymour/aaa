@@ -307,15 +307,15 @@ impl Seed {
     }
 }
 
-/// The general who leads each side, by player id; none for sides without a
+/// The faction that leads each side, by player id; none for sides without a
 /// nation.
 #[derive(Resource, Default)]
-struct Leaders(HashMap<u32, aaa_data::General>);
+struct Leaders(HashMap<u32, aaa_data::Faction>);
 
 impl Leaders {
     /// What a side is called, as its things' owner and in lines: the
     /// person's own side is the player, the computer's after the computer
-    /// player of its general, such as `Kesselring AI`, and the rest by the
+    /// player of its faction, such as `Kesselring AI`, and the rest by the
     /// name the map gives them.
     fn owner(
         &self,
@@ -326,8 +326,8 @@ impl Leaders {
         if local == Some(player.id) {
             return "Player".into();
         }
-        let general = self.0.get(&player.id);
-        if let Some(name) = general.and_then(|g| g.computer_name.clone()) {
+        let faction = self.0.get(&player.id);
+        if let Some(name) = faction.and_then(|g| g.computer_name.clone()) {
             return name;
         }
         map.get(&player.name)
@@ -916,8 +916,10 @@ fn main() -> ExitCode {
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
+                messages::relist.after(messages::tell_leaving),
                 chat::keys
                     .run_if(takes_input)
+                    .run_if(connection::closed)
                     .run_if(resource_exists::<Orders>)
                     .before(carry_out),
                 messages::tell_leaving
@@ -957,7 +959,7 @@ fn main() -> ExitCode {
                     supply::toggle_border,
                     fog::cheat,
                 )
-                    .run_if(chat::closed),
+                    .run_if(keys_free),
             )
                 .run_if(in_state(Screen::Match))
                 .run_if(takes_input)
@@ -1042,6 +1044,12 @@ fn takes_input(
         && loading.is_empty()
 }
 
+/// Whether the match has the keyboard: neither the chat bar nor the
+/// connection dialog, which both take what's typed, has it.
+pub fn keys_free(chat: Option<Res<chat::Chat>>, dialog: Option<Res<connection::Dialog>>) -> bool {
+    chat::closed(chat) && dialog.is_none_or(connection::closed)
+}
+
 /// Loads a map and sets up the sim and recruits for a match on it.
 fn prepare(
     game: Arc<GameData>,
@@ -1062,9 +1070,9 @@ fn prepare(
         map,
         raising,
         world: sim,
-        generals,
+        factions,
     } = aaa_server::start(&game, &setup, || reached(Stage::Objects))?;
-    let leaders = Leaders(generals);
+    let leaders = Leaders(factions);
     let person = match (&joined, from_menu) {
         // Its host says who the game plays.
         (Some((_, welcome, _)), _) => welcome.players.first().copied(),
@@ -1114,9 +1122,9 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
                 .team
                 .map_or("no team".into(), |t| format!("team {}", t + 1));
             let nation = p.nation.as_deref().unwrap_or("no nation");
-            let general = leaders.0.get(&id).map_or("no general", |g| g.id.as_str());
+            let faction = leaders.0.get(&id).map_or("no faction", |g| g.id.as_str());
             info!(
-                "{} ({}, {team}, {nation}, {general}): {control:?}",
+                "{} ({}, {team}, {nation}, {faction}): {control:?}",
                 p.name, p.color
             );
         }
@@ -2949,7 +2957,7 @@ mod tests {
             outcome: Default::default(),
             won_by_cities: false,
             nation: None,
-            general: None,
+            faction: None,
             relations: Vec::new(),
             team_relations: Vec::new(),
             stockpile: 0.0,
@@ -2961,7 +2969,7 @@ mod tests {
 
     #[test]
     fn sides_are_called_the_player_the_computer_player_or_as_the_map_has_it() {
-        let general = |id: &str, computer: Option<&str>| aaa_data::General {
+        let faction = |id: &str, computer: Option<&str>| aaa_data::Faction {
             id: id.into(),
             name: format!("General {id}"),
             short_name: id.into(),
@@ -2972,16 +2980,16 @@ mod tests {
             computer_name: computer.map(Into::into),
         };
         let leaders = Leaders(HashMap::from([
-            (1, general("patton", Some("Patton AI"))),
-            (2, general("rommel", Some("Rommel AI"))),
+            (1, faction("patton", Some("Patton AI"))),
+            (2, faction("rommel", Some("Rommel AI"))),
             // No computer player plays as this one.
-            (3, general("patton_tutorial", None)),
+            (3, faction("patton_tutorial", None)),
         ]));
         let map: aaa_data::Strings = [("kingdom_4".into(), "Civilian (Aggressive)".into())]
             .into_iter()
             .collect();
         assert_eq!(leaders.owner(&player(1), Some(1), &map), "Player");
-        // Never the general's own name.
+        // Never the faction's own name.
         assert_eq!(leaders.owner(&player(2), Some(1), &map), "Rommel AI");
         // Watching, every side is the computer's.
         assert_eq!(leaders.owner(&player(1), None, &map), "Patton AI");
