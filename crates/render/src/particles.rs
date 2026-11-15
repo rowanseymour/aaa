@@ -1823,7 +1823,8 @@ fn fill<'a>(mesh: &mut Mesh, squares: &mut (impl Iterator<Item = &'a Square> + C
     use bevy::mesh::VertexAttributeValues as V;
     let n = squares.clone().count();
     // Each square's value at each of its corners, or a value for each
-    // corner of the empty triangle.
+    // corner of the empty triangle, then for each of the two vertices that
+    // centre the mesh's box.
     fn corners<'a, T: Copy>(
         v: &mut Vec<T>,
         squares: &(impl Iterator<Item = &'a Square> + Clone),
@@ -1835,6 +1836,7 @@ fn fill<'a>(mesh: &mut Mesh, squares: &mut (impl Iterator<Item = &'a Square> + C
         if v.is_empty() {
             v.extend([none; 3]);
         }
+        v.extend([none; 2]);
     }
     let (right, up) = (view.right, view.up);
     if let Some(V::Float32x3(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_POSITION) {
@@ -1847,6 +1849,15 @@ fn fill<'a>(mesh: &mut Mesh, squares: &mut (impl Iterator<Item = &'a Square> + C
             },
             [0.0; 3],
         );
+        // Bevy sorts a blended mesh by the middle of its box, not where it's
+        // placed, so two vertices no square uses put that middle at the
+        // camera.
+        let reach = v
+            .iter()
+            .fold(Vec3::ZERO, |r, &p| r.max(Vec3::from(p).abs()));
+        let last = v.len() - 1;
+        v[last - 1] = (-reach).to_array();
+        v[last] = reach.to_array();
     }
     if let Some(V::Float32x3(v)) = mesh.attribute_mut(Mesh::ATTRIBUTE_NORMAL) {
         corners(v, squares, |_| [(-view.forward).to_array(); 4], [0.0; 3]);
@@ -2350,5 +2361,62 @@ mod tests {
         for _ in 0..50 {
             assert!((random_axis(&mut rng).length() - 1.0).abs() < 1e-5);
         }
+    }
+
+    #[test]
+    fn mesh_box_centres_on_camera() {
+        let view = Eye {
+            at: Vec3::new(10.0, 50.0, 10.0),
+            forward: Vec3::NEG_Y,
+            right: Vec3::X,
+            up: Vec3::NEG_Z,
+        };
+        let square = |at| Square {
+            at,
+            half: 1.0,
+            colour: [1.0; 4],
+            look: [0.0; 2],
+            extra: [0.0; 4],
+        };
+        let squares = [
+            square(Vec3::new(30.0, 0.0, 5.0)),
+            square(Vec3::new(12.0, 2.0, 40.0)),
+        ];
+        let mut mesh = Mesh::new(
+            PrimitiveTopology::TriangleList,
+            RenderAssetUsages::default(),
+        )
+        .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+        .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, Vec::<[f32; 4]>::new())
+        .with_inserted_indices(Indices::U32(Vec::new()));
+        fill(&mut mesh, &mut squares.iter(), &view);
+        let positions = mesh
+            .attribute(Mesh::ATTRIBUTE_POSITION)
+            .unwrap()
+            .as_float3()
+            .unwrap();
+        let (low, high) = positions.iter().fold((Vec3::MAX, Vec3::MIN), |(l, h), &p| {
+            (l.min(p.into()), h.max(p.into()))
+        });
+        assert_eq!((low + high) / 2.0, Vec3::ZERO);
+        let colours = mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap().len();
+        assert_eq!(colours, positions.len());
+        // The padding isn't drawn.
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!()
+        };
+        assert!(indices.iter().all(|&i| (i as usize) < squares.len() * 4));
+
+        // With no squares, every attribute still matches the positions.
+        fill(&mut mesh, &mut [].iter(), &view);
+        let positions = mesh.attribute(Mesh::ATTRIBUTE_POSITION).unwrap().len();
+        assert_eq!(
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap().len(),
+            positions
+        );
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!()
+        };
+        assert_eq!(indices, &[0, 1, 2]);
     }
 }
