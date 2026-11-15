@@ -3,7 +3,7 @@ use std::io::Write;
 use std::process::ExitCode;
 
 use aaa_data::GameData;
-use tgi::de::Count;
+use tgi::Count;
 
 const USAGE: &str = "\
 usage:

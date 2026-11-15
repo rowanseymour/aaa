@@ -6,6 +6,14 @@ fn ok(text: &str) -> Block {
     p.root
 }
 
+fn first(block: &Block) -> &Block {
+    block.blocks().next().unwrap()
+}
+
+fn first_of<'a>(block: &'a Block, kind: &'a str) -> &'a Block {
+    block.blocks_of(kind).next().unwrap()
+}
+
 fn warnings(text: &str) -> Vec<String> {
     parse(text)
         .warnings
@@ -33,7 +41,7 @@ fn braced_and_ini_style_blocks() {
     }
 }
 ");
-    let thing = root.blocks().next().unwrap();
+    let thing = first(&root);
     assert_eq!(
         (thing.kind(), thing.attr("template"), thing.braced),
         (Some("Thing"), Some("BaseTank"), true)
@@ -43,19 +51,13 @@ fn braced_and_ini_style_blocks() {
 
     let kinds: Vec<_> = thing.blocks().map(|b| b.kind().unwrap()).collect();
     assert_eq!(kinds, ["Body", "Mover", "Abilities"]);
-    let body = thing.blocks_of("body").next().unwrap();
+    let body = first_of(thing, "body");
     assert_eq!(
         (body.value("health"), body.value("defense"), body.braced),
         (Some("200"), Some("1"), false)
     );
     assert_eq!(body.line, 6);
-    let gun = thing
-        .blocks_of("Abilities")
-        .next()
-        .unwrap()
-        .blocks()
-        .next()
-        .unwrap();
+    let gun = first(first_of(thing, "Abilities"));
     assert_eq!(gun.value("range"), Some("10"));
 }
 
@@ -74,7 +76,7 @@ fn schema_fields() {
     let root = ok(
         "[template Body]\n{\n\tfixed\thealth\n\tflag destructible = true\n\tstring icon = NULL\n\t[optional OnDeath template=Ability]\n}",
     );
-    let t = root.blocks().next().unwrap();
+    let t = first(&root);
     assert_eq!((t.kind(), t.name()), (Some("template"), Some("Body")));
     let f: Vec<_> = t
         .fields()
@@ -88,7 +90,7 @@ fn schema_fields() {
             (Some("string"), "icon", Some("NULL"))
         ]
     );
-    let opt = t.blocks().next().unwrap();
+    let opt = first(t);
     assert_eq!(
         (opt.header.words.as_slice(), opt.attr("Template")),
         (
@@ -119,7 +121,7 @@ fn comments() {
         "/* header\n   comment */[A] ; trailing\n;; whole line\nurl = http://example.com/x ; note\ntip = \"a;b\" ;\"old text\"\n[B]/* x */ ",
     );
     assert_eq!(root.blocks().count(), 2);
-    let a = root.blocks().next().unwrap();
+    let a = first(&root);
     assert_eq!(a.line, 2);
     assert_eq!(a.value("url"), Some("http://example.com/x"));
     assert_eq!(a.value("tip"), Some("a;b"));
@@ -127,7 +129,7 @@ fn comments() {
 
 #[test]
 fn header_attribute_spacing() {
-    let h = |s: &str| ok(s).blocks().next().unwrap().header.clone();
+    let h = |s: &str| first(&ok(s)).header.clone();
     let attrs = |s: &str| h(s).attrs;
     assert_eq!(
         attrs("[Set template = Chars]"),
@@ -185,7 +187,7 @@ fn lenient_with_warnings() {
     assert_eq!(warnings("{\n}"), ["1: '{' without a preceding header"]);
 
     let root = parse("[Thing template=X\n{\n a = 1\n}").root;
-    let t = root.blocks().next().unwrap();
+    let t = first(&root);
     assert_eq!((t.attr("template"), t.value("a")), (Some("X"), Some("1")));
 }
 
@@ -199,8 +201,8 @@ fn brace_after_section_fields_continues_section() {
             message: "'{' after the section's fields; continuing the section".into()
         }]
     );
-    let thing = p.root.blocks().next().unwrap();
-    let size = thing.blocks_of("Size").next().unwrap();
+    let thing = first(&p.root);
+    let size = first_of(thing, "Size");
     assert_eq!(
         (size.value("scale"), size.value("radius")),
         (Some("1"), Some("11"))
@@ -211,10 +213,7 @@ fn brace_after_section_fields_continues_section() {
 #[test]
 fn unbalanced_quote_kept_literally() {
     let root = ok("[A]\ntexture = a/b.tga\"");
-    assert_eq!(
-        root.blocks().next().unwrap().value("texture"),
-        Some("a/b.tga\"")
-    );
+    assert_eq!(first(&root).value("texture"), Some("a/b.tga\""));
 }
 
 #[test]
@@ -289,7 +288,7 @@ y = 1
     assert_eq!(size.len(), 1);
     assert_eq!(size[0].value("scale_min"), Some("3"));
 
-    let view = corps.blocks_of("View").next().unwrap();
+    let view = first_of(&corps, "View");
     assert_eq!(view.value("resource_prefix"), Some("Corps/Corps"));
     assert_eq!(view.blocks_of("TextureSearchPath").count(), 1);
     let normal: Vec<_> = view.blocks_of("AspectNormal").collect();
@@ -343,8 +342,8 @@ fn nested_block_naming_another_template() {
 }
 ");
     let templates = Templates::new([&schema, &files]);
-    let ability = templates.resolve(files.blocks_of("Ability").next().unwrap());
-    let definition = ability.blocks_of("Definition").next().unwrap();
+    let ability = templates.resolve(first_of(&files, "Ability"));
+    let definition = first_of(&ability, "Definition");
     // The block it merges into, then its own template, then its own fields.
     assert_eq!(definition.value("range"), Some("9"));
     assert_eq!(definition.value("recharge_time"), Some("15"));
@@ -377,10 +376,10 @@ fn template_cycle_through_nested_block() {
 }
 ");
     let templates = Templates::new([&files]);
-    let thing = templates.resolve(files.blocks_of("Thing").next().unwrap());
+    let thing = templates.resolve(first_of(&files, "Thing"));
     assert_eq!(thing.blocks_of("View").count(), 1);
     let t = templates.get("T").unwrap();
-    let nested = t.blocks_of("X").next().unwrap();
+    let nested = first_of(t, "X");
     assert_eq!(templates.resolve(nested).blocks_of("X").count(), 1);
 }
 
@@ -417,13 +416,13 @@ fn slot_declarations_are_kept_apart() {
             "optional OnBirth"
         ]
     );
-    assert_eq!(child.blocks().next().unwrap().value("x"), Some("1"));
+    assert_eq!(first(&child).value("x"), Some("1"));
 }
 
 #[test]
 fn block_comments_start_outside_quotes_and_line_comments() {
     let root = ok("[A]\nx = 1 ; was /* off\ny = 2\nz = \"/* kept */\"\n/* gone */ w = 3\n");
-    let a = root.blocks().next().unwrap();
+    let a = first(&root);
     assert_eq!(
         (a.value("x"), a.value("y"), a.value("z"), a.value("w")),
         (Some("1"), Some("2"), Some("/* kept */"), Some("3"))
@@ -433,7 +432,7 @@ fn block_comments_start_outside_quotes_and_line_comments() {
 #[test]
 fn block_comment_closes_from_its_star() {
     let root = ok("[A]\nx = 1\n/*/\ny = 2\nz = 3\n");
-    let a = root.blocks().next().unwrap();
+    let a = first(&root);
     assert_eq!(
         (a.value("x"), a.value("y"), a.value("z")),
         (Some("1"), Some("2"), Some("3"))
@@ -455,8 +454,8 @@ fn retemplated_block_keeps_inherited_attributes() {
 }
 ");
     let templates = Templates::new([&root]);
-    let thing = templates.resolve(root.blocks_of("Thing").next().unwrap());
-    let view = thing.blocks_of("View").next().unwrap();
+    let thing = templates.resolve(first_of(&root, "Thing"));
+    let view = first_of(&thing, "View");
     assert_eq!(view.header.attrs, [("Layer".to_string(), "3".to_string())]);
 }
 
@@ -472,7 +471,7 @@ fn templates_last_as_long_as_their_file() {
     let scoped = Templates::scoped([&schema, &unit, &other, &clash, &after]);
     let y = |i: usize, root: &Block| {
         let t = scoped[i].as_ref().unwrap();
-        let thing = t.resolve(root.blocks_of("Thing").next().unwrap());
+        let thing = t.resolve(first_of(root, "Thing"));
         (
             thing.value("x").map(str::to_string),
             thing.value("y").map(str::to_string),

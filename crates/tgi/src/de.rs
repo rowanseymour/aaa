@@ -68,6 +68,13 @@ impl de::Error for Error {
 }
 
 impl Error {
+    fn new(line: usize, message: String) -> Self {
+        Error {
+            line: Some(line),
+            message,
+        }
+    }
+
     /// Attributes an error without a line to `line`.
     fn at(mut self, line: usize) -> Self {
         self.line.get_or_insert(line);
@@ -119,8 +126,7 @@ impl Coverage {
 
     /// Counts every key of a block that nothing reads.
     pub fn skip(&mut self, block: &Block, templates: Option<&Templates>) {
-        let path = block.kind().unwrap_or("").to_ascii_lowercase();
-        self.unread(&path, block, templates);
+        self.unread(&path_of(block), block, templates);
     }
 
     /// `(path, key, count)` for every key seen, in order.
@@ -158,8 +164,13 @@ impl Coverage {
     }
 }
 
+/// A block's own part of a coverage path.
+fn path_of(block: &Block) -> String {
+    block.kind().unwrap_or("").to_ascii_lowercase()
+}
+
 fn child_path(path: &str, block: &Block) -> String {
-    format!("{path}/{}", block.kind().unwrap_or("").to_ascii_lowercase())
+    format!("{path}/{}", path_of(block))
 }
 
 /// What deserializing carries down into nested blocks.
@@ -181,7 +192,7 @@ impl<'a> Ctx<'a> {
         Ctx {
             templates,
             coverage,
-            path: block.kind().unwrap_or("").to_ascii_lowercase().into(),
+            path: path_of(block).into(),
         }
     }
 
@@ -275,10 +286,10 @@ impl<'a> Node<'a> {
                 line,
                 ..
             }) => Ok((v, *line)),
-            n => Err(Error {
-                line: Some(n.line()),
-                message: format!("expected {expected}, found {}", n.describe()),
-            }),
+            n => Err(Error::new(
+                n.line(),
+                format!("expected {expected}, found {}", n.describe()),
+            )),
         }
     }
 
@@ -307,10 +318,10 @@ impl<'a> Node<'a> {
         let (block, ctx) = match self.first() {
             Node::Block(b, ctx) => (b, ctx),
             n => {
-                return Err(Error {
-                    line: Some(n.line()),
-                    message: format!("expected a block, found {}", n.describe()),
-                });
+                return Err(Error::new(
+                    n.line(),
+                    format!("expected a block, found {}", n.describe()),
+                ));
             }
         };
         let block = &*resolved(ctx.templates, block);
@@ -477,10 +488,10 @@ impl<'de> de::Deserializer<'de> for Node<'_> {
         let (text, line) = self.text("a list")?;
         let parts: Vec<&str> = text.split(',').map(str::trim).collect();
         if parts.len() != len {
-            return Err(Error {
-                line: Some(line),
-                message: format!("expected {len} values, found {text:?}"),
-            });
+            return Err(Error::new(
+                line,
+                format!("expected {len} values, found {text:?}"),
+            ));
         }
         let mut seq = de::value::SeqDeserializer::new(parts.into_iter().map(Scalar));
         let value = visitor.visit_seq(&mut seq).map_err(|e| e.at(line))?;
@@ -696,6 +707,10 @@ mod tests {
         DeepWater,
     }
 
+    fn count(read: usize, unread: usize) -> Count {
+        Count { read, unread }
+    }
+
     fn first(text: &str) -> Block {
         parse(text).root.blocks().next().unwrap().clone()
     }
@@ -858,7 +873,6 @@ mod tests {
         let mut coverage = Coverage::default();
         coverage.read::<Terrain>(terrain, Some(&templates)).unwrap();
         coverage.skip(terrain, None);
-        let count = |read, unread| Count { read, unread };
         assert_eq!(
             coverage.keys().collect::<Vec<_>>(),
             vec![
@@ -900,7 +914,6 @@ mod tests {
         );
         let mut coverage = Coverage::default();
         coverage.read::<T>(&block, None).unwrap();
-        let count = |read, unread| Count { read, unread };
         assert_eq!(
             coverage.keys().collect::<Vec<_>>(),
             vec![

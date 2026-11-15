@@ -217,18 +217,14 @@ impl Scoped<'_> {
 /// What a block read as, or `None` with a warning: a block that doesn't
 /// read is left out, as the game leaves it out, but is most likely a type
 /// here that doesn't match the data.
-pub(crate) fn logged<T>(
-    file: &str,
-    block: &tgi::Block,
-    read: Result<T, tgi::de::Error>,
-) -> Option<T> {
+pub(crate) fn logged<T>(file: &str, block: &tgi::Block, read: Result<T, tgi::Error>) -> Option<T> {
     read.map_err(|e| log::warn!("{}", warning(file, block, &e)))
         .ok()
 }
 
 /// Where a block that doesn't read is, at the line it failed on if known,
 /// and why.
-fn warning(file: &str, block: &tgi::Block, e: &tgi::de::Error) -> String {
+fn warning(file: &str, block: &tgi::Block, e: &tgi::Error) -> String {
     let kind = block.kind().unwrap_or("");
     let line = e.line.unwrap_or(block.line);
     format!("{file}:{line}: {kind} block doesn't read: {}", e.message)
@@ -465,10 +461,10 @@ impl GameData {
     /// block is read as its definition, the way the methods above read it,
     /// or counted as unread where there is none. Templates count through the
     /// blocks that inherit from them.
-    pub fn coverage(&self) -> tgi::de::Coverage {
+    pub fn coverage(&self) -> tgi::Coverage {
         let files = self.parse_tgis(|_| true);
         let files = scoped(&files);
-        let mut coverage = tgi::de::Coverage::default();
+        let mut coverage = tgi::Coverage::default();
         for (block, t) in
             (files.iter()).flat_map(|f| f.root.blocks().map(|b| (b, Some(&f.templates))))
         {
