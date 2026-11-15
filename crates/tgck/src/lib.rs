@@ -368,7 +368,7 @@ pub(crate) mod tests {
     /// Builds a container from `(name, payload, compress)` triples.
     pub fn build_container(sections: &[(&str, &[u8], bool)]) -> Vec<u8> {
         let mut out = b"TGCK".to_vec();
-        out.extend(2u32.to_le_bytes());
+        out.extend(crate::container::VERSION.to_le_bytes());
         out.extend((sections.len() as u32).to_le_bytes());
         let mut table = Vec::new();
         for (name, payload, compress) in sections {

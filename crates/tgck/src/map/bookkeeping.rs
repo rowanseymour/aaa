@@ -69,6 +69,8 @@ pub struct Update {
 impl Updatables {
     /// The first world version whose UPDATABLES the game reads.
     const MIN_WORLD_VERSION: u32 = 11;
+    /// The first world version with the periodic queues.
+    const PERIODIC_WORLD_VERSION: u32 = 22;
 
     pub fn parse(data: &[u8], world_version: u32) -> Result<Self> {
         check_version(
@@ -81,7 +83,7 @@ impl Updatables {
         let updatables = Updatables {
             count: cur.u32()?,
             delayed: [UpdateQueue::parse(cur)?, UpdateQueue::parse(cur)?],
-            periodic: (world_version >= 22)
+            periodic: (world_version >= Self::PERIODIC_WORLD_VERSION)
                 .then(|| -> Result<_> {
                     Ok([
                         UpdateQueue::parse(cur)?,
@@ -105,7 +107,7 @@ impl Updatables {
         w.u32(self.count);
         self.delayed.iter().try_for_each(|q| q.write(&mut w))?;
         w.optional(
-            world_version >= 22,
+            world_version >= Self::PERIODIC_WORLD_VERSION,
             "periodic",
             self.periodic.as_ref(),
             |w, queues| queues.iter().try_for_each(|q| q.write(w)),

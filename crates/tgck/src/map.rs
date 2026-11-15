@@ -97,7 +97,7 @@ impl<R: Read + Seek> Map<R> {
         let world_version = self.world_version()?;
         let data = self.container.read_named("MOUNTAIN_HEIGHT_MAP")?;
         let (data, cutscene_mode) = match data.split_last() {
-            Some((&flag, rest)) if world_version >= 10 => {
+            Some((&flag, rest)) if world_version >= CUTSCENE_WORLD_VERSION => {
                 (rest, Some(Cursor::new(&[flag]).bool("cutscene mode")?))
             }
             _ => (&data[..], None),
@@ -351,14 +351,12 @@ pub struct Tile {
 }
 
 impl Terrain {
+    /// The newest version the game reads.
+    const MAX_VERSION: u32 = 7;
+
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
-        let version = cur.u32()?;
-        if version > 7 {
-            return Err(Error::Corrupt(format!(
-                "TERRAIN version {version} is newer than the game supports"
-            )));
-        }
+        let version = cur.version("TERRAIN", 0..=Self::MAX_VERSION)?;
         let resolution_bits = cur.u32()?;
         let biome = cur.string()?;
         let names = cur.strings()?;
@@ -609,6 +607,10 @@ pub struct Thing {
     pub detail: Detail,
 }
 
+/// The world version from which MOUNTAIN_HEIGHT_MAP ends with the
+/// cutscene-mode flag.
+pub(super) const CUTSCENE_WORLD_VERSION: u32 = 10;
+
 /// The [`Thing::class`] of plain scenery, such as rocks and street lights,
 /// whose record has no detail.
 pub const SCENERY: u32 = 2;
@@ -663,6 +665,9 @@ pub struct Camera {
 
 /// The version DYNAMIC_THINGS records are written in.
 const THINGS_VERSION: u32 = 11;
+const THING_VERSION: u32 = 2;
+const PLACEMENT_VERSION: u32 = 5;
+const AREA_ID_VERSION: u32 = 2;
 
 /// Reads a thing list from its `{name}_INDEX` and `{name}` sections.
 fn parse_things(name: &str, index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thing>> {
@@ -722,7 +727,7 @@ impl Head {
         let template = rec.string()?;
         let class = rec.u32()?;
         let id = rec.u32()?;
-        rec.expect("thing version", 2)?;
+        rec.expect("thing version", THING_VERSION)?;
         let name = rec.string()?;
         rec.expect("creation time", 0)?;
         Ok(Head {
@@ -740,7 +745,7 @@ impl Head {
         w.string(&self.template)?;
         w.u32(self.class);
         w.u32(self.id);
-        w.u32(2);
+        w.u32(THING_VERSION);
         w.string(&self.name)?;
         w.u32(0);
         w.f32s(&self.position);
@@ -786,7 +791,7 @@ impl Thing {
             facing,
             flags,
         } = head;
-        rec.expect("placement version", 5)?;
+        rec.expect("placement version", PLACEMENT_VERSION)?;
         let scale = rec.f32()?;
         let variation = rec.i32()?;
         rec.expect("placement's actor", 0)?;
@@ -830,7 +835,7 @@ impl Thing {
             flags: self.flags,
         }
         .write(w)?;
-        w.u32(5);
+        w.u32(PLACEMENT_VERSION);
         w.f32(self.scale);
         w.i32(self.variation);
         w.u32(0);
@@ -878,13 +883,13 @@ impl Detail {
                         return false;
                     };
                     let count = &data[38 + name_len..42 + name_len];
-                    b[..4] == 2u32.to_le_bytes()
+                    b[..4] == AREA_ID_VERSION.to_le_bytes()
                         && u32::from_le_bytes(count.try_into().unwrap()) as usize * 5 == list
                 });
                 let version = cur.u32()?;
                 let id = if has_id {
                     let id = cur.u32()?;
-                    cur.expect("area id version", 2)?;
+                    cur.expect("area id version", AREA_ID_VERSION)?;
                     Some(id)
                 } else {
                     None
@@ -921,7 +926,7 @@ impl Detail {
                 w.u32(a.version);
                 if let Some(id) = a.id {
                     w.u32(id);
-                    w.u32(2);
+                    w.u32(AREA_ID_VERSION);
                 }
                 w.string(&a.name)?;
                 w.u32(a.shape);
