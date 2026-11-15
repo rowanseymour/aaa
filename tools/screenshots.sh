@@ -107,6 +107,8 @@ editor() {
 }
 
 scenes() {
+    menus main-menu </dev/null
+
     game stalingrad allies03_stalingrad <<'EOF'
 select 2551
 destroyselected
@@ -141,6 +143,17 @@ EOF
 lookat 46 276
 zoom 0.5
 advance 3
+EOF
+
+    game pearl-harbor axis12_hawaii <<'EOF'
+lookat 312 155
+zoom 0.4
+pitch 30
+EOF
+
+    game okinawa allies12_okinawa <<'EOF'
+lookat 215 205
+zoom 0.7
 EOF
 
     # Each side's nation, then the list of the first side's generals.
