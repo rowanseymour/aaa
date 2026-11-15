@@ -11,8 +11,8 @@ use std::f32::consts::TAU;
 use std::sync::Arc;
 
 use aaa_data::{
-    Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, Shape, Vfx, VfxCue, VfxTint,
-    Weapon,
+    Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, OperationCues, Shape, Vfx,
+    VfxCue, VfxTint, Weapon,
 };
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
@@ -20,7 +20,7 @@ use aaa_render::decals::{DecalCache, decal_colour};
 use aaa_render::models::{Footprint, Models, Rate};
 use aaa_render::terrain::{map_point, world};
 use aaa_render::{MapAssets, MapObject};
-use aaa_sim::{Landing, State, Target, World};
+use aaa_sim::{Landing, Operated, State, Target, World};
 use bevy::prelude::*;
 use tgck::map::CELL_SIZE;
 
@@ -30,6 +30,8 @@ use crate::{BuildingView, Drawn, Loaded, Screen, Sim, UnitView};
 pub struct Effects {
     vfx: Arc<HashMap<Id, Vfx>>,
     objects: HashMap<Id, ObjectEffects>,
+    /// What plays as each special operation is used, by id.
+    operations: HashMap<Id, OperationCues>,
     /// The node names of the model points commands name, by id.
     bones: HashMap<Id, String>,
     /// What the pictures laid on the ground so far are drawn with.
@@ -43,6 +45,8 @@ pub struct Effects {
     shots: HashMap<(Target, usize), u32>,
     /// The tick of the last projectile landing seen.
     landed: Option<u64>,
+    /// The tick of the last special operation seen carried out.
+    operated: Option<u64>,
     /// How far up an attacker a hit on its target lands, as a share of
     /// the attacker's height.
     aim: f32,
@@ -62,7 +66,8 @@ struct Play {
     target: Option<Target>,
     /// The sim tick it happened on.
     tick: u64,
-    /// For a projectile, where it landed.
+    /// For a projectile, where it landed; for a special operation, its
+    /// centre.
     landed: Option<[f32; 2]>,
     /// For an attack, the index of the weapon among its attacker's.
     weapon: Option<usize>,
@@ -77,6 +82,8 @@ enum Source {
     Projectile(Target),
     /// A piece of the map's scenery, by its view.
     Scenery(Entity),
+    /// A special operation, on the ground at its centre.
+    Operation,
 }
 
 /// Something an effect plays on.
@@ -213,6 +220,7 @@ impl Effects {
     pub fn new(game: &GameData, map: &Map) -> Effects {
         let vfx = game.vfx();
         let objects = game.object_effects();
+        let operations = game.operation_cues();
         let bones = game.bones();
         let variations = game.terrain_variations();
         let terrain = &map.terrain;
@@ -235,6 +243,7 @@ impl Effects {
         Effects {
             vfx,
             objects,
+            operations,
             bones,
             decals: DecalCache::default(),
             groups,
@@ -242,6 +251,7 @@ impl Effects {
             queued: Vec::new(),
             shots: HashMap::new(),
             landed: None,
+            operated: None,
             aim: game.aim_heights().straight,
             detail: 1.0,
             night,
@@ -274,7 +284,7 @@ impl Effects {
                 source,
                 target,
                 tick: when.tick,
-                landed: None,
+                landed: when.landed,
                 weapon: when.weapon,
             };
             self.queued.push((when.at + f64::from(cue.delay), play));
@@ -289,19 +299,35 @@ impl Effects {
             at,
             tick: landing.tick,
             weapon: Some(landing.weapon),
+            landed: Some(landing.at),
         };
         let target = Some(landing.target);
         let landed = (weapon.projectile.as_ref())
             .and_then(|p| self.objects.get(p))
             .map(|o| o.destroyed.clone())
             .unwrap_or_default();
-        let from = self.queued.len();
         self.queue(when, &landed, Source::Projectile(landing.from), target);
-        for (_, p) in &mut self.queued[from..] {
-            p.landed = Some(landing.at);
-        }
         let per_target = weapon.effects.per_target.clone();
+        let when = When {
+            landed: None,
+            ..when
+        };
         self.queue(when, &per_target, Source::Thing(landing.from), target);
+    }
+
+    /// Queues what plays as a special operation is used, on the ground at
+    /// its centre.
+    fn operate(&mut self, operated: &Operated, at: f64) {
+        let when = When {
+            at,
+            tick: operated.tick,
+            weapon: None,
+            landed: operated.at,
+        };
+        let visuals = (self.operations.get(&operated.operation))
+            .map(|c| c.visuals.clone())
+            .unwrap_or_default();
+        self.queue(when, &visuals, Source::Operation, None);
     }
 
     /// Queues the commands a thing of `template` has for being created.
@@ -376,6 +402,9 @@ struct When {
     tick: u64,
     /// For an attack, the index of its weapon.
     weapon: Option<usize>,
+    /// For a projectile, where it landed; for a special operation, its
+    /// centre.
+    landed: Option<[f32; 2]>,
 }
 
 /// What a thing is doing now, to compare with what it was [`Seen`] doing.
@@ -537,6 +566,7 @@ fn notice(
         at: time.elapsed_secs_f64(),
         tick: sim.ticks,
         weapon: None,
+        landed: None,
     };
     let fresh = |l: &&Landing| effects.landed.is_none_or(|t| l.tick > t);
     let landings: Vec<Landing> = sim.landings.iter().filter(fresh).cloned().collect();
@@ -551,6 +581,20 @@ fn notice(
     }
     if let Some(l) = landings.last() {
         effects.landed = Some(l.tick);
+    }
+    let fresh = |o: &&Operated| effects.operated.is_none_or(|t| o.tick > t);
+    let operated: Vec<Operated> = sim.operated.iter().filter(fresh).cloned().collect();
+    for o in &operated {
+        effects.operate(o, at.at);
+        if let Some(cues) = effects.operations.get(&o.operation) {
+            match o.at {
+                Some(at) => sounds.shot(&time, &cues.sounds, at, at, o.player),
+                None => sounds.unplaced(&time, &cues.sounds, o.player),
+            }
+        }
+    }
+    if let Some(o) = operated.last() {
+        effects.operated = Some(o.tick);
     }
     for (e, view, seen) in &mut units {
         let unit = &sim.units[view.unit];
@@ -767,6 +811,7 @@ fn play(
             Source::Thing(t) => (Some(Subject::Thing(t)), Some(t)),
             Source::Projectile(t) => (None, Some(t)),
             Source::Scenery(e) => (Some(Subject::Scenery(e)), None),
+            Source::Operation => (None, None),
         };
         if cue.stop {
             for (e, effect, fades) in &playing {
@@ -1021,6 +1066,7 @@ impl Place<'_, '_> {
             Source::Thing(t) => (Some(Subject::Thing(t)), Some(Subject::Thing(t))),
             Source::Projectile(t) => (Some(Subject::Thing(t)), None),
             Source::Scenery(e) => (None, Some(Subject::Scenery(e))),
+            Source::Operation => (None, None),
         };
         match at {
             "MAP_CENTER" => {
@@ -1031,6 +1077,8 @@ impl Place<'_, '_> {
             "SELF" | "SOURCE_GROUND" if own.is_none() => {
                 return Some((on_ground((*landed)?), None));
             }
+            // An operation's others are on the ground at its centre.
+            _ if *source == Source::Operation => return Some((on_ground((*landed)?), None)),
             _ => {}
         }
         let subject = match at {
@@ -1504,6 +1552,7 @@ mod tests {
         Effects {
             vfx: Arc::default(),
             objects,
+            operations: HashMap::new(),
             bones: HashMap::new(),
             decals: DecalCache::default(),
             groups: Vec::new(),
@@ -1511,6 +1560,7 @@ mod tests {
             queued: Vec::new(),
             shots: HashMap::new(),
             landed: None,
+            operated: None,
             aim: 0.65,
             detail: 1.0,
             night: false,
@@ -1523,6 +1573,7 @@ mod tests {
             at: tick as f64,
             tick,
             weapon: None,
+            landed: None,
         }
     }
 

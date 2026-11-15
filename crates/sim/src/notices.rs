@@ -7,6 +7,13 @@ use crate::{Pause, Piece, World};
 /// Something a side is told.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Notice {
+    /// Chat, as [`Action::Chat`](crate::Action::Chat) gave it: everyone's
+    /// to tell, by who it reaches.
+    Chat {
+        from: Option<u32>,
+        to: crate::Channel,
+        words: String,
+    },
     /// Its stockpile has run out, its income `percent` short of its costs.
     Short { player: u32, percent: f32 },
     /// It's no longer short.

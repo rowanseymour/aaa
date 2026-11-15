@@ -437,7 +437,9 @@ fn water_depth(ground: &Ground, [x, y]: [f32; 2], height: f32) -> Option<f32> {
     (ground.water[i] && depth > 0.0).then_some(depth)
 }
 
-/// Redraws the markers and the camera's view over the ground.
+/// Redraws the markers and the camera's view over the ground. While the
+/// player's side has its minimap's fog lifted, as by Radar Scan, the
+/// ground has no fog and everything is marked as it is now.
 #[allow(clippy::too_many_arguments)]
 pub fn update(
     mut minimap: ResMut<Minimap>,
@@ -459,7 +461,11 @@ pub fn update(
     let Some(pixels) = image.data.as_mut() else {
         return;
     };
-    pixels.copy_from_slice(&minimap.fogged);
+    let revealed = local.0.is_some_and(|p| sim.0.revealed(p));
+    match revealed {
+        true => pixels.copy_from_slice(&minimap.base),
+        false => pixels.copy_from_slice(&minimap.fogged),
+    }
     let mut canvas = Canvas(pixels);
     let to_px = |p: [f32; 2]| to_image(minimap.size, p) * PIXELS as f32;
     // With nobody to play, there's no one to stand toward, so each side
@@ -494,6 +500,7 @@ pub fn update(
     for (b, building) in sim.0.buildings.iter().enumerate() {
         // Marked as last seen, gone or not.
         let shown = match fog.building(b) {
+            _ if revealed => !building.gone(),
             crate::fog::Look::Shown => !building.gone(),
             crate::fog::Look::Remembered => true,
             crate::fog::Look::Hidden => false,
@@ -524,7 +531,8 @@ pub fn update(
         canvas.square(to_px(building.position), 4.0, [0; 3]);
         canvas.square(to_px(building.position), 3.0, rgb);
     }
-    let shown = |(u, unit): &(usize, &aaa_sim::Unit)| unit.alive() && fog.shows_unit(*u);
+    let shown =
+        |(u, unit): &(usize, &aaa_sim::Unit)| unit.alive() && (revealed || fog.shows_unit(*u));
     for (_, unit) in sim.0.units.iter().enumerate().filter(shown) {
         let regiment = &sim.0.regiments[unit.regiment];
         let fighting = !regiment.engaged.is_empty() || unit.besieged.is_some();

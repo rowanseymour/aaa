@@ -3,9 +3,12 @@
 
 use std::collections::HashMap;
 
+use crate::audio::cues;
+use crate::effects::vfx_cues;
 use crate::properties::{Pace, fill, line, number};
 use crate::strings::localized;
 use crate::supply::is;
+use crate::{Cue, VfxCue};
 use crate::{GameData, Id, defs, scoped};
 
 /// A special operation as its button and tooltip show it.
@@ -41,6 +44,13 @@ pub struct Marker {
     pub vfx: Id,
     /// World units across, in place of the decal's own size.
     pub size: f32,
+}
+
+/// What plays as a special operation is used, on the ground at its centre.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OperationCues {
+    pub sounds: Vec<Cue>,
+    pub visuals: Vec<VfxCue>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -251,18 +261,24 @@ impl GameData {
             .collect()
     }
 
+    /// What plays as each special operation is used, by id.
+    pub fn operation_cues(&self) -> HashMap<Id, OperationCues> {
+        (self.definitions().abilities.iter())
+            .map(|(id, a)| {
+                let cues = OperationCues {
+                    sounds: cues(&a.when_do),
+                    visuals: vfx_cues(&a.when_do),
+                };
+                (id.clone(), cues)
+            })
+            .collect()
+    }
+
     /// How a side's experience starts and grows: the match's Starting
     /// Experience setting and the tuning's gain a second.
     pub fn experience_rules(&self) -> ExperienceRules {
-        let files =
-            self.parse_tgis(|n| n == "game/world_rules_aa.tgi" || n.starts_with("templates/"));
-        let starting = (scoped(&files).iter())
-            .flat_map(|f| f.read::<defs::WorldRule>("WorldRule").collect::<Vec<_>>())
-            .find(|r| {
-                (r.ids.as_ref())
-                    .is_some_and(|id| id.as_str().eq_ignore_ascii_case("StartingExperience"))
-            })
-            .and_then(|r| r.default?.trim().parse().ok());
+        let starting =
+            (self.world_rule("StartingExperience")).and_then(|r| r.default?.trim().parse().ok());
         let svars = self.svars();
         let per_second = svars
             .iter()
@@ -393,6 +409,34 @@ mod tests {
         let unnamed = "[AbilityDefinition]\n{\n\tIDS = bomb\n\tarea = 2\n}\n";
         let crosshair = Some(Id::from(CROSSHAIR));
         assert_eq!(marked(unnamed).map(|m| m.vfx), crosshair);
+    }
+
+    #[test]
+    fn an_operation_giving_no_minimap_fog_reveals_for_its_property_s_time() {
+        let scan = definition(
+            "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n\
+             \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tIDS = scanned\n\t\t\tduration = 10\n\
+             \t\t\t[Modifier]\n\t\t\t{\n\t\t\t\ttype = FLAG\n\t\t\t\tmodifier_flag = MINIMAP_NO_FOG\n\t\t\t}\n\t\t}\n\t}\n}\n",
+        );
+        assert_eq!(crate::supply::reveals(&scan, &HashMap::new()), Some(10.0));
+        let other = definition("[AbilityDefinition]\n{\n\tIDS = fear\n}\n");
+        assert_eq!(crate::supply::reveals(&other, &HashMap::new()), None);
+    }
+
+    #[test]
+    fn a_reveal_falls_back_to_its_shared_property_s_flag_and_time() {
+        let text = "[Property]\n{\n\tIDS = scanned\n\tduration = 12\n\
+                    \t[Modifier]\n\t{\n\t\ttype = FLAG\n\t\tmodifier_flag = MINIMAP_NO_FOG\n\t}\n}\n";
+        let parsed = tgi::parse(text);
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Property").next().unwrap();
+        let shared: defs::Property = templates.deserialize(block).unwrap();
+        let properties = HashMap::from([(Id::from("scanned"), shared)]);
+        let scan = definition(
+            "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n\
+             \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tIDS = scanned\n\t\t}\n\t}\n}\n",
+        );
+        assert_eq!(crate::supply::reveals(&scan, &properties), Some(12.0));
     }
 
     #[test]

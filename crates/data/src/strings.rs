@@ -134,7 +134,7 @@ impl PingLook {
 /// What the font's image of the glyph `id` is called: its display name
 /// run together, as `Faction Experience` is drawn from
 /// `FactionExperience.png`.
-fn glyph_image(glyphs: &[defs::Glyph], id: &Id) -> Option<String> {
+pub(crate) fn glyph_image(glyphs: &[defs::Glyph], id: &Id) -> Option<String> {
     let glyph = glyphs.iter().find(|g| g.ids.as_ref() == Some(id))?;
     Some(glyph.display_name.as_deref()?.replace(' ', ""))
 }
@@ -203,15 +203,6 @@ pub(crate) fn localized(strings: &Strings, name: Option<&str>) -> Option<String>
         Some(key) => strings.get(key).cloned(),
         None => Some(name.to_string()),
     }
-}
-
-/// What the game calls a resource, by its field name in the data, such as
-/// Money for `money`.
-pub fn resource_name(strings: &Strings, field: &str) -> String {
-    strings
-        .get(&format!("resources_{field}_name"))
-        .cloned()
-        .unwrap_or_else(|| field.to_string())
 }
 
 #[cfg(test)]

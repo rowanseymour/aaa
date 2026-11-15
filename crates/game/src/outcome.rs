@@ -18,6 +18,7 @@ pub struct Words {
     keep_playing: String,
     /// Not the game's words: there, another machine takes over as host.
     host_gone: String,
+    kicked: String,
 }
 
 impl Words {
@@ -29,6 +30,10 @@ impl Words {
             end: said("ui_mission_label_end_game", "End Mission"),
             keep_playing: said("ui_mission_label_keep_playing", "Keep Playing"),
             host_gone: "The host has left the game".into(),
+            kicked: said(
+                "networking_disconnect_kicked",
+                "You were kicked from the game",
+            ),
         }
     }
 }
@@ -101,7 +106,8 @@ fn tell(
 }
 
 /// Says that the match's host has gone, which leaves the match where it
-/// stood: to look over, or to end.
+/// stood: to look over, or to end. Or that the game was kicked out of the
+/// match, which leaves the game once that's taken in.
 fn tell_host_gone(
     mut commands: Commands,
     orders: Res<Orders>,
@@ -113,10 +119,15 @@ fn tell_host_gone(
         return;
     }
     told.host_gone = true;
+    let ok = confirm.ok.clone();
+    if orders.kicked() {
+        let asked = ask(&mut commands, Screen::Match, words.kicked.clone());
+        offer(&mut commands, asked, ok, "outcome.ok", menu::quit);
+        return;
+    }
     let asked = ask(&mut commands, Screen::Match, words.host_gone.clone());
     let end = words.end.clone();
     offer(&mut commands, asked, end, "outcome.end", ask_end);
-    let ok = confirm.ok.clone();
     offer(&mut commands, asked, ok, "outcome.ok", nothing);
 }
 
@@ -184,6 +195,26 @@ mod tests {
         app.world_mut().resource_mut::<Sim>().0.win(2);
         app.update();
         assert_eq!(shown(&mut app), ["End Mission", "Mission Lost"]);
+    }
+
+    #[test]
+    fn a_game_kicked_out_is_told_so_and_may_only_leave() {
+        let mut app = app();
+        let (mut host, mut orders, mut world) = crate::orders::testing::joined(&[1]);
+        // Kept, as those who leave take their votes with them.
+        let _others = [2, 3].map(|p| {
+            let (link, _) = crate::orders::testing::let_in(&mut host, &[p]);
+            let mut other = aaa_server::Client::new(link);
+            other.kick(orders.me(), true).unwrap();
+            other
+        });
+        host.turn();
+        for _ in 0..2 {
+            orders.step(&mut world);
+        }
+        app.insert_resource(orders);
+        app.update();
+        assert_eq!(shown(&mut app), ["Ok", "You were kicked from the game"]);
     }
 
     #[test]

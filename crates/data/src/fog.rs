@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{GameData, Id, defs, scoped};
+use crate::{GameData, Id, defs};
 
 /// How far a thing sees, in world units.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -88,17 +88,8 @@ impl GameData {
     /// The match's fog setting: the world rule's default, the game's own
     /// before the engine's, else the tuning value.
     pub fn fog_setting(&self) -> FogSetting {
-        let files =
-            self.parse_tgis(|n| n == "game/world_rules_aa.tgi" || n == "game/world_rules.tgi");
-        let mut files = scoped(&files);
-        files.sort_by_key(|f| !f.file.to_ascii_lowercase().ends_with("_aa.tgi"));
-        let rule = files
-            .iter()
-            .flat_map(|f| f.read::<defs::WorldRule>("WorldRule"))
-            .filter(|r| {
-                (r.ids.as_ref()).is_some_and(|id| id.as_str().eq_ignore_ascii_case("FogOfWar"))
-            })
-            .find_map(|r| FogSetting::named(r.default.as_deref()?));
+        let rule =
+            (self.world_rule("FogOfWar")).and_then(|r| FogSetting::named(r.default.as_deref()?));
         let tuned = || {
             let svars = self.svars();
             let value = svars.iter().find_map(|s| s.fog_of_war)?;

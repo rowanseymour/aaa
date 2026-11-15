@@ -10,7 +10,7 @@ use aaa_data::{GameEvent, Id, InterfaceVars};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::textures;
-use aaa_sim::{Notice, Pause, Piece, Relation, Seen, World};
+use aaa_sim::{Channel, Notice, Pause, Piece, Relation, Seen, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -163,6 +163,8 @@ pub struct Line {
     pub text: String,
     /// Where it names sides.
     pub marks: Vec<Mark>,
+    /// Where its words take a colour of their own.
+    pub inks: Vec<Ink>,
     pub place: Option<Place>,
     /// When it was posted, in seconds of the app's time.
     pub posted: f32,
@@ -177,18 +179,28 @@ pub struct Mark {
     pub rgb: [f32; 3],
 }
 
-/// A line's text, and where it names sides.
+/// Where a line's words change colour: from the byte of its text at
+/// `at`, to `rgb`, or back to the colour of its kind if none.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ink {
+    pub at: usize,
+    pub rgb: Option<[f32; 3]>,
+}
+
+/// A line's text, where it names sides, and where its words take a
+/// colour of their own.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Words {
     pub text: String,
     pub marks: Vec<Mark>,
+    pub inks: Vec<Ink>,
 }
 
 impl From<String> for Words {
     fn from(text: String) -> Words {
         Words {
             text,
-            marks: Vec::new(),
+            ..Default::default()
         }
     }
 }
@@ -199,14 +211,24 @@ pub struct Fill {
     words: String,
     /// The colour of the side the words name.
     side: Option<[f32; 3]>,
+    /// The colour the words are written in, if not the line's.
+    ink: Option<[f32; 3]>,
 }
 
 impl Fill {
+    /// Words written in the colour `rgb`.
+    fn inked(words: String, rgb: [f32; 3]) -> Fill {
+        Fill {
+            ink: Some(rgb),
+            ..Fill::from(words)
+        }
+    }
+
     /// The name of a side of colour `rgb`.
     fn side(name: String, rgb: [f32; 3]) -> Fill {
         Fill {
-            words: name,
             side: Some(rgb),
+            ..Fill::from(name)
         }
     }
 
@@ -222,7 +244,11 @@ impl Fill {
 
 impl From<String> for Fill {
     fn from(words: String) -> Fill {
-        Fill { words, side: None }
+        Fill {
+            words,
+            side: None,
+            ink: None,
+        }
     }
 }
 
@@ -279,13 +305,14 @@ impl MessageLog {
         if !self.look.shows(&kind) {
             return false;
         }
-        let Words { text, marks } = words.into();
+        let Words { text, marks, inks } = words.into();
         info!("{text}");
         self.lines.push_back(Line {
             serial: self.next,
             kind,
             text,
             marks,
+            inks,
             place,
             posted: now,
         });
@@ -294,6 +321,29 @@ impl MessageLog {
             self.lines.pop_front();
         }
         true
+    }
+
+    /// The map's own text, for the names it gives sides.
+    pub(crate) fn map_strings(&self) -> std::sync::Arc<aaa_data::Strings> {
+        self.look.map.clone()
+    }
+
+    /// Posts the warning line the string `key` says, or `stock` where the
+    /// strings don't, its placeholders filled with `with` in turn.
+    pub(crate) fn warn(&mut self, key: &str, stock: &str, with: &[String], now: f32) {
+        let said = self.look.said(key, stock);
+        self.post("GENERIC_WARNING", fill_all(&said, with), None, now);
+    }
+
+    /// Posts what the player here whispers to the person `to`, as they
+    /// send it.
+    pub(crate) fn whispering(&mut self, to: String, words: String, now: f32) {
+        let said = self
+            .look
+            .said("ui_lobby_whispering_to|ss", "Whispering to %s: %s");
+        let name = self.look.vars.rgb("UIChatPlayerColorNormal");
+        let with = [Fill::inked(to, name.unwrap_or([1.0; 3])), words.into()];
+        self.post("CHAT_PRIVATE", fill_all(&said, &with), None, now);
     }
 
     /// Posts a line of `kind`, heard as its kind sounds.
@@ -386,15 +436,29 @@ pub(crate) fn filled(text: &str, with: &[impl Into<Fill> + Clone]) -> String {
     fill_all(text, with).text
 }
 
-/// Fills the `%s`, `%d` and `%i` placeholders of a line in turn, and reads
-/// `%%` as `%`.
+/// Fills the `%s`, `%d` and `%i` placeholders of a line in turn, reads
+/// `%%` as `%`, and takes `<color=r,g,b>` as the colour of what follows.
 fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {
     let mut out = String::new();
     let mut marks = Vec::new();
+    let mut inks = Vec::new();
     let mut with = with.iter().cloned().map(Into::into);
     let mut rest = text;
-    while let Some(i) = rest.find('%') {
+    while let Some(i) = rest.find(['%', '<']) {
         out.push_str(&rest[..i]);
+        if let Some((rgb, after)) = colour_markup(&rest[i..]) {
+            inks.push(Ink {
+                at: out.len(),
+                rgb: Some(rgb),
+            });
+            rest = after;
+            continue;
+        }
+        if rest[i..].starts_with('<') {
+            out.push('<');
+            rest = &rest[i + 1..];
+            continue;
+        }
         let after = &rest[i + 1..];
         match after.chars().next() {
             Some('%') => {
@@ -402,11 +466,21 @@ fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {
                 rest = &after[1..];
             }
             Some('s' | 'd' | 'i') => {
-                if let Some(Fill { words, side }) = with.next() {
+                if let Some(Fill { words, side, ink }) = with.next() {
                     if let Some(rgb) = side {
                         marks.push(Mark { at: out.len(), rgb });
                     }
+                    if ink.is_some() {
+                        inks.push(Ink {
+                            at: out.len(),
+                            rgb: ink,
+                        });
+                    }
                     out.push_str(&words);
+                    if ink.is_some() {
+                        let at = out.len();
+                        inks.push(Ink { at, rgb: None });
+                    }
                 }
                 rest = &after[1..];
             }
@@ -417,7 +491,11 @@ fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {
         }
     }
     out.push_str(rest);
-    Words { text: out, marks }
+    Words {
+        text: out,
+        marks,
+        inks,
+    }
 }
 
 /// The log's box.
@@ -593,8 +671,9 @@ pub fn refuse(
 
 /// Posts a line once the host is leaving a match that's over, then one
 /// for each player whose machine has left the match since last time,
-/// whether by choice or by being lost, the host's among them. One that only watched gave no player's
-/// orders, and goes unremarked.
+/// whether by choice, by being lost or by being kicked out, the host's
+/// among them, and one for each kick vote cast or taken back. One that
+/// only watched gave no player's orders, and goes unremarked.
 pub fn tell_leaving(
     mut orders: ResMut<Orders>,
     sim: Res<Sim>,
@@ -611,16 +690,51 @@ pub fn tell_leaving(
         );
         log.say("GENERIC_EVENT", said, None, &time, &mut sounds);
     }
-    for (client, players) in orders.take_left() {
+    let side = |player: u32| {
+        let player = sim.0.sides.player(player)?;
+        let name = leaders.owner(player, local.0, &log.look.map);
+        Some(Fill::side_of(name, player))
+    };
+    // A client is named by the first side it plays.
+    let named = |orders: &Orders, client| orders.players_of(client).first().and_then(|&p| side(p));
+    let mut lines = Vec::new();
+    // The votes came before any kick they brought.
+    for kick in orders.take_kicking() {
+        let named = |client| named(&orders, client);
+        let (Some(voter), Some(target)) = (named(kick.voter), named(kick.target)) else {
+            continue;
+        };
+        let said = match kick.vote {
+            true => log.look.said(
+                "networking_vote_to_kick_player_voted_to_kick_player|ssdd",
+                "%s has voted to kick %s (%d/%d)",
+            ),
+            false => log.look.said(
+                "networking_vote_to_kick_player_has_retracted_vote_to_kick_player|ssdd",
+                "%s has retracted vote to kick %s (%d/%d)",
+            ),
+        };
+        let counts = [kick.votes, kick.needed].map(|n| Fill::from(n.to_string()));
+        lines.push(fill_all(&said, &[[voter, target], counts].concat()));
+    }
+    for gone in orders.take_left() {
+        let (client, players) = (gone.client, &gone.players);
         info!("client {client} has left the match, giving the orders of {players:?}");
-        for player in players.iter().filter_map(|&p| sim.0.sides.player(p)) {
-            let name = leaders.owner(player, local.0, &log.look.map);
-            let said = log
+        let said = match gone.kicked {
+            true => log.look.said(
+                "networking_player_kicked|s",
+                "Player %s was kicked from the game",
+            ),
+            false => log
                 .look
-                .said("networking_player_quit|s", "Player %s quit the game");
-            let words = fill_all(&said, &[Fill::side_of(name, player)]);
-            log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
+                .said("networking_player_quit|s", "Player %s quit the game"),
+        };
+        for name in players.iter().filter_map(|&p| side(p)) {
+            lines.push(fill_all(&said, &[name]));
         }
+    }
+    for words in lines {
+        log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
     }
 }
 
@@ -648,6 +762,15 @@ pub fn tell(
         let posted = match told(&sim.0, local.0, &leaders, &log.look, notice) {
             Some(Told::Event(event, with, place)) => log.event(event, &with, place, now),
             Some(Told::Line(kind, text, place)) => log.post(kind, text, place, now),
+            // Chat sounds whether or not its line shows, and as itself
+            // rather than as its line's kind.
+            Some(Told::Chat(kind, words)) => {
+                log.post(kind, words, None, now);
+                if log.look.vars.flag("UIEventFilterChatSound", true) {
+                    sounds.interface(&time, "chat_sfx");
+                }
+                false
+            }
             None => false,
         };
         if posted {
@@ -668,10 +791,64 @@ fn sound(notice: &Notice, local: Option<u32>) -> Option<&'static str> {
 
 /// What a notice tells the player.
 enum Told {
+    /// Chat, as a line of a kind of message.
+    Chat(&'static str, Words),
     /// A game event, with what fills its line.
     Event(&'static str, Vec<Fill>, Option<Place>),
     /// A line of a kind of message.
     Line(&'static str, String, Option<Place>),
+}
+
+/// The line chat from the person playing `from`, or watching for none,
+/// is posted as for `local`, the side here, with its kind, if it reaches
+/// them.
+fn chat(
+    sim: &World,
+    local: Option<u32>,
+    leaders: &Leaders,
+    look: &Look,
+    from: Option<u32>,
+    to: Channel,
+    words: String,
+) -> Option<(&'static str, Words)> {
+    let allied = |a: u32, b: u32| a == b || sim.sides.relation(a, b) == Relation::Ally;
+    let hears = match to {
+        Channel::All => true,
+        // Those watching talk among themselves.
+        Channel::Team => match (local, from) {
+            (Some(local), Some(from)) => allied(local, from),
+            (None, None) => true,
+            _ => false,
+        },
+        // Whoever whispers was shown it as they sent it.
+        Channel::To(side) => from.is_some_and(|from| local == Some(side) && from != side),
+    };
+    if !hears {
+        return None;
+    }
+    let (key, channel_ink) = match to {
+        Channel::All => ("public_chat|ss", ("ChatPublicColor", [1.0, 1.0, 0.0])),
+        Channel::Team => ("team_chat|ss", ("ChatTeamColor", [0.0, 1.0, 0.0])),
+        Channel::To(_) => ("private_chat|ss", ("ChatWhisperColor", [0.0, 0.9, 0.9])),
+    };
+    let ink = |(var, stock): (&str, [f32; 3])| look.vars.rgb(var).unwrap_or(stock);
+    let name = match from.and_then(|f| sim.sides.player(f)) {
+        Some(player) => leaders.owner(player, local, &look.map),
+        None => look.said("game_interface_KingdomDropDown_observer_text", "Observer"),
+    };
+    let with = [
+        Fill::inked(name, ink(("UIChatPlayerColorNormal", [1.0; 3]))),
+        Fill::inked(words, ink(channel_ink)),
+    ];
+    let friendly = from
+        .zip(local)
+        .is_some_and(|(from, local)| allied(from, local));
+    let kind = match (friendly, to) {
+        (true, _) => "GENERIC_EVENT",
+        (false, Channel::To(_)) => "CHAT_PRIVATE",
+        (false, _) => "CHAT_PUBLIC",
+    };
+    Some((kind, fill_all(&look.said(key, "%s: %s"), &with)))
 }
 
 /// What `notice` tells `local`, if it's for them.
@@ -697,6 +874,10 @@ fn told(
         look.map.get(name).unwrap_or(name).clone()
     };
     Some(match notice {
+        Notice::Chat { from, to, words } => {
+            let (kind, words) = chat(sim, local, leaders, look, from, to, words)?;
+            Told::Chat(kind, words)
+        }
         Notice::Short { player, percent } if ours(player) => {
             let percent = (percent as i64).to_string();
             Told::Event("kingdom_upkeep_shortage", vec![percent.into()], None)
@@ -1032,7 +1213,7 @@ fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
                 flex_basis: px(0),
                 ..default()
             };
-            if line.marks.is_empty() {
+            if line.marks.is_empty() && line.inks.is_empty() {
                 row.spawn((words(line.text.clone(), colour), rest));
                 return;
             }
@@ -1046,7 +1227,8 @@ fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
                 ..rest
             };
             row.spawn((rest, Pickable::IGNORE)).with_children(|parts| {
-                for Part { gem, word } in parts_of(line) {
+                for Part { gem, word, ink } in parts_of(line) {
+                    let colour = ink.map_or(colour, |[r, g, b]| Color::srgb(r, g, b));
                     let Some(rgb) = gem else {
                         parts.spawn(words(word, colour));
                         continue;
@@ -1083,15 +1265,22 @@ const GEM_GAP: f32 = 3.0;
 const WORD_GAP: f32 = 3.0;
 
 /// A word of a line as it's laid out, with the gem in a side's colour
-/// before it where it starts a side's name.
+/// before it where it starts a side's name, and its own colour if it has
+/// one.
 #[derive(Debug, PartialEq)]
 struct Part {
     gem: Option<[f32; 3]>,
     word: String,
+    ink: Option<[f32; 3]>,
 }
 
-/// A line's words, each that starts a side's name with its gem.
+/// A line's words, each that starts a side's name with its gem, and
+/// each in the colour its first byte is inked in.
 fn parts_of(line: &Line) -> Vec<Part> {
+    let ink = |at: usize| {
+        let before = line.inks.iter().rev().find(|i| i.at <= at);
+        before.and_then(|i| i.rgb)
+    };
     let mut parts = Vec::new();
     let mut cuts = line.marks.iter().map(|m| (m.at, Some(m.rgb))).peekable();
     let mut from = (0, None);
@@ -1099,18 +1288,25 @@ fn parts_of(line: &Line) -> Vec<Part> {
         let to = cuts.peek().map_or(line.text.len(), |&(at, _)| at);
         let segment = line.text.get(from.0..to).unwrap_or_default();
         let mut gem = from.1;
-        let mut words = segment.split_whitespace().peekable();
+        let words = segment.split_whitespace().map(|word| {
+            // Each word is a slice of the segment, so where it starts.
+            let at = from.0 + (word.as_ptr() as usize - segment.as_ptr() as usize);
+            (at, word)
+        });
+        let mut words = words.peekable();
         // A side with no name still has its gem.
         if gem.is_some() && words.peek().is_none() {
             parts.push(Part {
                 gem,
                 word: String::new(),
+                ink: ink(from.0),
             });
         }
-        for word in words {
+        for (at, word) in words {
             parts.push(Part {
                 gem: gem.take(),
                 word: word.to_string(),
+                ink: ink(at),
             });
         }
         match cuts.next() {
@@ -1119,6 +1315,15 @@ fn parts_of(line: &Line) -> Vec<Part> {
         }
     }
     parts
+}
+
+/// The colour `<color=r,g,b>` at the start of `text` sets, and what
+/// follows it.
+fn colour_markup(text: &str) -> Option<([f32; 3], &str)> {
+    let (inside, after) = text.strip_prefix("<color=")?.split_once('>')?;
+    let mut parts = inside.split(',').map(|p| p.trim().parse::<f32>().ok());
+    let rgb = [parts.next()??, parts.next()??, parts.next()??];
+    parts.next().is_none().then_some((rgb, after))
 }
 
 /// What looks at where a line happened.
@@ -1173,10 +1378,25 @@ pub fn cycle(
 }
 
 #[cfg(test)]
+pub(crate) mod testing {
+    use super::*;
+
+    /// A log of no kinds of line or events but those its tests know.
+    pub(crate) fn log() -> MessageLog {
+        MessageLog::new(super::tests::look(&[]))
+    }
+
+    /// The text of each line it holds, oldest first.
+    pub(crate) fn texts(log: &MessageLog) -> Vec<&str> {
+        log.lines.iter().map(|l| l.text.as_str()).collect()
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
-    fn look(vars: &[(&str, &str)]) -> Look {
+    pub(super) fn look(vars: &[(&str, &str)]) -> Look {
         let kind = |filter: Option<&str>| Kind {
             icon: None,
             colour: Color::WHITE,
@@ -1226,6 +1446,126 @@ mod tests {
 
     fn place(at: [f32; 2]) -> Option<Place> {
         Some(Place { about: None, at })
+    }
+
+    /// A match of sides 1 and 2, allies, and 3, their enemy.
+    fn allied_sides() -> World {
+        let mut players: Vec<_> = [1, 2, 3].map(crate::tests::player).into();
+        for p in &mut players {
+            p.relations = vec![aaa_map::Relation::Enemy; 3];
+        }
+        players[0].relations[1] = aaa_map::Relation::Ally;
+        players[1].relations[0] = aaa_map::Relation::Ally;
+        let sides = aaa_sim::Sides {
+            players,
+            teams: Vec::new(),
+        };
+        World::from_regiments(
+            sides,
+            aaa_map::Pathing::uniform(8, aaa_map::Domain::Land),
+            &[],
+        )
+    }
+
+    #[test]
+    fn chat_reaches_those_its_channel_does() {
+        let sim = allied_sides();
+        let look = look(&[]);
+        let leaders = Leaders::default();
+        let heard = |local, from, to| {
+            let said = chat(&sim, local, &leaders, &look, from, to, "hi".into());
+            said.map(|(kind, _)| kind)
+        };
+        // Everyone hears all, those watching too, and an enemy's in its
+        // own kind.
+        assert_eq!(heard(Some(2), Some(1), Channel::All), Some("GENERIC_EVENT"));
+        assert_eq!(heard(Some(3), Some(1), Channel::All), Some("CHAT_PUBLIC"));
+        assert_eq!(heard(None, Some(1), Channel::All), Some("CHAT_PUBLIC"));
+        // Team chat reaches the sender and allies, or those watching.
+        assert_eq!(
+            heard(Some(1), Some(1), Channel::Team),
+            Some("GENERIC_EVENT")
+        );
+        assert_eq!(
+            heard(Some(2), Some(1), Channel::Team),
+            Some("GENERIC_EVENT")
+        );
+        assert_eq!(heard(Some(3), Some(1), Channel::Team), None);
+        assert_eq!(heard(None, Some(1), Channel::Team), None);
+        assert_eq!(heard(None, None, Channel::Team), Some("CHAT_PUBLIC"));
+        assert_eq!(heard(Some(1), None, Channel::Team), None);
+        // A whisper, only where it's for, and not back to its sender.
+        assert_eq!(
+            heard(Some(3), Some(1), Channel::To(3)),
+            Some("CHAT_PRIVATE")
+        );
+        assert_eq!(heard(Some(2), Some(1), Channel::To(3)), None);
+        assert_eq!(heard(Some(1), Some(1), Channel::To(3)), None);
+        assert_eq!(heard(Some(3), None, Channel::To(3)), None);
+    }
+
+    #[test]
+    fn chat_shows_its_sender_and_words_in_their_colours() {
+        let sim = allied_sides();
+        let look = look(&[("point3 ChatTeamColor", "0,0.5,0")]);
+        let leaders = Leaders::default();
+        let said = chat(
+            &sim,
+            Some(2),
+            &leaders,
+            &look,
+            Some(1),
+            Channel::Team,
+            "go".into(),
+        );
+        let (_, words) = said.unwrap();
+        assert_eq!(words.text, "kingdom_1: go");
+        let ink = |at, rgb| Ink { at, rgb };
+        assert_eq!(
+            words.inks,
+            [
+                ink(0, Some([1.0; 3])),
+                ink(9, None),
+                ink(11, Some([0.0, 0.5, 0.0])),
+                ink(13, None),
+            ]
+        );
+        let said = chat(
+            &sim,
+            None,
+            &leaders,
+            &look,
+            None,
+            Channel::All,
+            "hello".into(),
+        );
+        assert_eq!(said.unwrap().1.text, "Observer: hello");
+    }
+
+    #[test]
+    fn a_line_takes_colours_its_text_marks() {
+        let words = fill_all("Whispering to %s: <color=1,1,1>%s", &["Bob", "hi <there>"]);
+        assert_eq!(words.text, "Whispering to Bob: hi <there>");
+        let white = Ink {
+            at: 19,
+            rgb: Some([1.0; 3]),
+        };
+        assert_eq!(words.inks, [white]);
+        let line = Line {
+            serial: 0,
+            kind: Id::from("CHAT_PRIVATE"),
+            text: words.text,
+            marks: Vec::new(),
+            inks: words.inks,
+            place: None,
+            posted: 0.0,
+        };
+        let inks: Vec<_> = parts_of(&line)
+            .into_iter()
+            .map(|p| (p.word, p.ink))
+            .collect();
+        assert_eq!(inks[2], ("Bob:".to_string(), None));
+        assert_eq!(inks[3], ("hi".to_string(), Some([1.0; 3])));
     }
 
     #[test]
@@ -1280,12 +1620,14 @@ mod tests {
             kind: Id::from("GENERIC_EVENT"),
             text: words.text,
             marks: words.marks,
+            inks: Vec::new(),
             place: None,
             posted: 0.0,
         };
         let part = |gem, word: &str| Part {
             gem,
             word: word.into(),
+            ink: None,
         };
         assert_eq!(
             parts_of(&line),

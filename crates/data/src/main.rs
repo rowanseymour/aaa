@@ -13,6 +13,7 @@ usage:
   aaa-data cues     <game dir> [filter] the audio object templates play, by what sets it off
   aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off
   aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post
+  aaa-data resources <game dir>         the resources, with what each is for and what a shortfall of it costs, and the resource bar's cells
   aaa-data generals <game dir>          each nation's generals, their computer players and their special operations as tooltips show them";
 
 /// Prints the library's warnings, such as data blocks that don't read.
@@ -57,6 +58,7 @@ fn main() -> ExitCode {
         ["effects", dir, filter] => effects(dir, filter),
         ["messages", dir] => messages(dir),
         ["generals", dir] => generals(dir),
+        ["resources", dir] => resources(dir),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -85,6 +87,29 @@ macro_rules! outln {
     ($($arg:tt)*) => {
         writeln!(std::io::stdout(), $($arg)*)?
     };
+}
+
+fn resources(dir: &str) -> Res {
+    let game = GameData::open(dir.as_ref())?;
+    for r in game.resources().iter() {
+        let mut line = format!("{} ({:?}) {}", r.id, r.role, r.name);
+        if let Some(by) = &r.limited_by {
+            line += &format!(", limited by {by}");
+        }
+        let cost: Vec<String> = (r.purchase_cost.nonzero())
+            .map(|(id, a)| format!("{a} {id}"))
+            .collect();
+        if !cost.is_empty() {
+            line += &format!(", bought at {}", cost.join(" + "));
+        }
+        if let Some(glyph) = &r.glyph {
+            line += &format!(", drawn as {glyph}");
+        }
+        outln!("{line}");
+    }
+    let bar: Vec<String> = game.economy_bar().iter().map(|id| id.to_string()).collect();
+    outln!("resource bar: {}", bar.join(", "));
+    Ok(())
 }
 
 fn coverage(dir: &str, kind: Option<&str>) -> Res {

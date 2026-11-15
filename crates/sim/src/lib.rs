@@ -46,7 +46,7 @@ pub use aaa_map::{Outcome, Player, Relation, Team};
 pub use attach::Hq;
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
-pub use experience::{Commander, SpecialOp};
+pub use experience::{Commander, Operated, SpecialOp};
 pub use fog::{Fog, Seen};
 use hash::{Digest, Hasher, digest};
 pub use notices::Notice;
@@ -56,7 +56,7 @@ pub use packing::unpack_site;
 pub use properties::Held;
 pub use research::{Lacking, Researchable};
 pub use rules::Rules;
-pub use schedule::{Action, Diverged, Given, Record, SPEEDS, Schedule};
+pub use schedule::{Action, CHAT_LONGEST, Channel, Diverged, Given, Record, SPEEDS, Schedule};
 use serde::{Deserialize, Serialize};
 pub use supply::{Bombarder, Supplying};
 
@@ -162,6 +162,11 @@ pub struct World {
     pub treasuries: BTreeMap<u32, Treasury>,
     /// The experience of each side with a general, by player id.
     pub commanders: BTreeMap<u32, Commander>,
+    /// The special operations carried out in the last [`LANDINGS_KEPT`]
+    /// ticks, oldest first, for what shows them to find.
+    pub operated: Vec<Operated>,
+    /// The tick each side whose minimap has its fog lifted has it until.
+    pub reveals: BTreeMap<u32, u64>,
     /// What sides have been told: see [`World::take_notices`].
     pub(crate) notices: Vec<Notice>,
     /// What each side sees of the map.
@@ -631,11 +636,11 @@ impl Commission {
 }
 
 /// Why a building's queue is held up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pause {
     /// Its owner hasn't room under a limit, such as `unit_limit_consumed`,
     /// for the first of the queue.
-    Limit(&'static str),
+    Limit(Id),
     Disabled,
     /// It passes supply on and has none.
     Supply,
@@ -1007,7 +1012,7 @@ impl Sides {
 
 digest!(World {
     regiments, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, treasuries, commanders, fog, ticks, loaded, flying, landings, numbers, next_id,
+    holdings, treasuries, commanders, operated, reveals, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng,
 } skip {
     // Fixed by the map and the game's data.
@@ -1165,8 +1170,8 @@ impl Digest for Work {
 
 impl Digest for Pause {
     fn digest(&self, h: &mut Hasher) {
-        match *self {
-            Pause::Limit(limit) => (0u8, limit).digest(h),
+        match self {
+            Pause::Limit(limit) => (0u8, limit.as_str()).digest(h),
             Pause::Disabled => 1u8.digest(h),
             Pause::Supply => 2u8.digest(h),
         }

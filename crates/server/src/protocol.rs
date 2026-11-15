@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 6;
+pub const PROTOCOL: u32 = 8;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -41,6 +41,8 @@ pub enum ToHost {
     Played(u64),
     /// Whether the client is for dropping those holding the match.
     Vote(bool),
+    /// Whether the client is for kicking `client` out of the match.
+    Kick { client: u32, vote: bool },
 }
 
 /// From the host to a client.
@@ -58,9 +60,11 @@ pub enum ToClient {
     /// dealt with: every step before this has those it carried out, and
     /// the rest it never will.
     Answered(u64),
-    /// Another client has gone, whether it left or was lost, with the
-    /// players it gave the orders of.
-    Left { client: u32, players: Vec<u32> },
+    /// A client has gone. The one kicked out hears it too, and then
+    /// nothing more.
+    Left(Gone),
+    /// A client is for kicking another out, or no longer is.
+    Kicking(KickVote),
     /// The host is leaving a match that's over; who leaves with it
     /// follows, then nothing more.
     Ended,
@@ -84,6 +88,8 @@ pub struct Status {
     /// The seconds, rounded up, before those holding the match can be
     /// dropped, while it's held by any.
     pub countdown: Option<u32>,
+    /// How many it takes to kick a client out.
+    pub kicks_needed: u32,
 }
 
 /// A client as the host sees it.
@@ -96,6 +102,8 @@ pub struct Seated {
     pub standing: Standing,
     /// Whether it's for dropping those holding the match.
     pub vote: bool,
+    /// The clients it's for kicking out.
+    pub kicking: Vec<u32>,
     /// How long, in whole milliseconds, a message takes the host to get to
     /// it and back, where the host measures that.
     pub ping: Option<u32>,
@@ -120,6 +128,27 @@ impl Standing {
     pub fn holds(self) -> bool {
         matches!(self, Standing::Disconnected | Standing::OutOfSync)
     }
+}
+
+/// A client that's gone, whether it left, was lost or was kicked out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Gone {
+    pub client: u32,
+    /// The players it gave the orders of.
+    pub players: Vec<u32>,
+    pub kicked: bool,
+}
+
+/// A vote for kicking a client out cast or taken back.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KickVote {
+    pub voter: u32,
+    pub target: u32,
+    /// Whether it was cast, rather than taken back.
+    pub vote: bool,
+    /// How many are then for kicking `target` out, and how many it takes.
+    pub votes: u32,
+    pub needed: u32,
 }
 
 /// What a client is told as it's let in.
@@ -172,6 +201,10 @@ mod tests {
             ToHost::Leave,
             ToHost::Played(12),
             ToHost::Vote(true),
+            ToHost::Kick {
+                client: 3,
+                vote: true,
+            },
             ToHost::Ask(order.clone()),
             ToHost::Check {
                 step: 10,
@@ -201,10 +234,18 @@ mod tests {
             },
             ToClient::Refused(Refusal::Protocol(PROTOCOL)),
             ToClient::Answered(3),
-            ToClient::Left {
+            ToClient::Left(Gone {
                 client: 2,
                 players: vec![1],
-            },
+                kicked: true,
+            }),
+            ToClient::Kicking(KickVote {
+                voter: 1,
+                target: 2,
+                vote: false,
+                votes: 1,
+                needed: 2,
+            }),
             ToClient::Ended,
             ToClient::Alive,
             ToClient::Status(Status {
@@ -214,12 +255,14 @@ mod tests {
                     host: false,
                     standing: Standing::Disconnected,
                     vote: true,
+                    kicking: vec![3],
                     ping: Some(80),
                 }],
                 held: true,
                 votes: 1,
                 needed: 2,
                 countdown: Some(9),
+                kicks_needed: 2,
             }),
         ];
         let join = Join {

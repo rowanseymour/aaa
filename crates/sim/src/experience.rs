@@ -1,9 +1,9 @@
 //! The experience a side's general earns, and spending it on the general's
 //! special operations.
 
-use aaa_map::Id;
+use aaa_map::{Id, Operation};
 
-use crate::{Refused, TICK, World};
+use crate::{LANDINGS_KEPT, Refused, SECOND, TICK, World};
 
 /// A side's general: their experience and special operations.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -13,6 +13,16 @@ pub struct Commander {
     pub max: Option<f32>,
     /// The general's special operations, in the order they list them.
     pub operations: Vec<SpecialOp>,
+}
+
+/// A special operation carried out, for what shows it to find.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Operated {
+    pub tick: u64,
+    pub player: u32,
+    pub operation: Id,
+    /// Its centre, for one aimed somewhere on the map.
+    pub at: Option<[f32; 2]>,
 }
 
 /// One of a general's special operations, and how far it's recharged.
@@ -118,7 +128,20 @@ impl World {
         op.left = op.recharge;
         let cost = op.cost;
         commander.set(commander.experience - cost);
+        // One used on the side itself is aimed nowhere.
+        let aimed = !matches!(self.rules.operations[&id], Operation::Reveal { .. });
+        self.operated.push(Operated {
+            tick: self.ticks,
+            player,
+            operation: id,
+            at: aimed.then_some(at),
+        });
         Ok(())
+    }
+
+    /// Whether `player`'s minimap has its fog lifted, as Radar Scan does.
+    pub fn revealed(&self, player: u32) -> bool {
+        self.reveals.contains_key(&player)
     }
 
     /// Credits every side with a general a tick's steady gain, and
@@ -131,9 +154,21 @@ impl World {
                 op.left = (op.left - TICK).max(0.0);
             }
         }
+        let ticks = self.ticks;
+        self.operated.retain(|o| o.tick + LANDINGS_KEPT > ticks);
+        // A side's property goes at its once-a-second look after its time.
+        if ticks.is_multiple_of(SECOND) {
+            self.reveals.retain(|_, until| *until > ticks);
+        }
     }
 }
 
+crate::hash::digest!(Operated {
+    tick,
+    player,
+    operation,
+    at
+});
 crate::hash::digest!(Commander {
     experience,
     max,
@@ -193,7 +228,7 @@ mod tests {
         w.rules.operations.insert(Id::from("resupply"), resupply);
         let ops = vec![
             SpecialOp::new(Id::from("resupply"), 200.0, 10.0),
-            SpecialOp::new(Id::from("radar_scan"), 0.0, 10.0),
+            SpecialOp::new(Id::from("code_breaker"), 0.0, 10.0),
         ];
         w.lead(1, experience, Some(5000.0), ops);
         w
@@ -242,5 +277,50 @@ mod tests {
         }
         assert_eq!(w.check(1, &operate(0)), Err(Refused::Unaffordable));
         assert_eq!(w.experience(1), Some(50.0));
+    }
+
+    #[test]
+    fn operations_carried_out_are_kept_a_while_for_what_shows_them() {
+        let mut w = operating(200.0);
+        w.apply(1, operate(0)).unwrap();
+        let carried_out = Operated {
+            tick: 0,
+            player: 1,
+            operation: Id::from("resupply"),
+            at: Some([4.0, 4.0]),
+        };
+        assert_eq!(w.operated, [carried_out]);
+        // One refused isn't.
+        assert!(w.apply(1, operate(0)).is_err());
+        assert_eq!(w.operated.len(), 1);
+        for _ in 0..LANDINGS_KEPT {
+            w.tick();
+        }
+        assert_eq!(w.operated.len(), 1);
+        w.tick();
+        assert!(w.operated.is_empty());
+    }
+
+    #[test]
+    fn radar_scan_lifts_the_minimap_fog_until_the_look_after_its_time() {
+        let mut w = world();
+        let reveal = aaa_map::Operation::Reveal { seconds: 10.0 };
+        w.rules.operations.insert(Id::from("radar_scan"), reveal);
+        let ops = vec![SpecialOp::new(Id::from("radar_scan"), 0.0, 300.0)];
+        w.lead(1, 0.0, None, ops);
+        // A tick into a second, so its time is up between looks.
+        w.tick();
+        w.apply(1, operate(0)).unwrap();
+        assert!(w.revealed(1) && !w.revealed(2));
+        assert_eq!(w.operated[0].at, None);
+        let ticks = |seconds: f32| (seconds / TICK).round() as usize;
+        for _ in 0..ticks(10.0) {
+            w.tick();
+        }
+        assert!(w.revealed(1));
+        for _ in 0..ticks(1.0) {
+            w.tick();
+        }
+        assert!(!w.revealed(1));
     }
 }
