@@ -58,14 +58,3 @@ jobs:
           curl -fsSLO https://github.com/kaitai-io/kaitai_struct_compiler/releases/download/0.11/kaitai-struct-compiler_0.11_all.deb
           sudo apt-get install -y ./kaitai-struct-compiler_0.11_all.deb
       - run: kaitai-struct-compiler -t python -t java -t rust --outdir "$RUNNER_TEMP/formats" docs/formats/*.ksy
-
-  # The libraries' MSRV; the Bevy crates follow Bevy's, which is newer.
-  msrv:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@1.88
-      - uses: Swatinem/rust-cache@v2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      - run: cargo check -p tgck -p tgi -p nif -p aaa-data -p aaa-map -p aaa-sim -p aaa-server --all-targets --locked

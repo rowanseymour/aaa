@@ -2,8 +2,7 @@
 name = "aaa-game"
 version = "0.1.0-alpha"
 edition.workspace = true
-# Bevy 0.20 needs a newer compiler than the libraries do.
-rust-version = "1.97.1"
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Plays Axis & Allies (2004) matches"

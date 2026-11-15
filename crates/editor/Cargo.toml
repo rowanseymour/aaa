@@ -2,8 +2,7 @@
 name = "aaa-editor"
 version.workspace = true
 edition.workspace = true
-# Bevy 0.20 needs a newer compiler than the libraries do.
-rust-version = "1.97.1"
+rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Map editor for Axis & Allies (2004), which views maps"
