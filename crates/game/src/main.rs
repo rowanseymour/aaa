@@ -311,9 +311,10 @@ impl Seed {
 struct Leaders(HashMap<u32, aaa_data::General>);
 
 impl Leaders {
-    /// What a side's things call their owner: the person's own side is the
-    /// player, the computer's its general, and one without a general by
-    /// the name the map gives it.
+    /// What a side is called, as its things' owner and in lines: the
+    /// person's own side is the player, the computer's after the computer
+    /// player of its general, such as `Kesselring AI`, and the rest by the
+    /// name the map gives them.
     fn owner(
         &self,
         player: &aaa_map::Player,
@@ -323,8 +324,9 @@ impl Leaders {
         if local == Some(player.id) {
             return "Player".into();
         }
-        if let Some(general) = self.0.get(&player.id) {
-            return general.name.clone();
+        let general = self.0.get(&player.id);
+        if let Some(name) = general.and_then(|g| g.computer_name.clone()) {
+            return name;
         }
         map.get(&player.name)
             .cloned()
@@ -2940,28 +2942,33 @@ mod tests {
     }
 
     #[test]
-    fn things_name_the_persons_side_the_player_and_the_computers_its_general() {
-        let general = |id: &str, name: &str| aaa_data::General {
+    fn sides_are_called_the_player_the_computer_player_or_as_the_map_has_it() {
+        let general = |id: &str, computer: Option<&str>| aaa_data::General {
             id: id.into(),
-            name: name.into(),
+            name: format!("General {id}"),
             short_name: id.into(),
             operations: Vec::new(),
             experience_max: None,
             public: true,
             portrait: None,
+            computer_name: computer.map(Into::into),
         };
         let leaders = Leaders(HashMap::from([
-            (1, general("patton", "General Patton")),
-            (2, general("rommel", "General Rommel")),
+            (1, general("patton", Some("Patton AI"))),
+            (2, general("rommel", Some("Rommel AI"))),
+            // No computer player plays as this one.
+            (3, general("patton_tutorial", None)),
         ]));
         let map: aaa_data::Strings = [("kingdom_4".into(), "Civilian (Aggressive)".into())]
             .into_iter()
             .collect();
         assert_eq!(leaders.owner(&player(1), Some(1), &map), "Player");
-        assert_eq!(leaders.owner(&player(2), Some(1), &map), "General Rommel");
+        // Never the general's own name.
+        assert_eq!(leaders.owner(&player(2), Some(1), &map), "Rommel AI");
         // Watching, every side is the computer's.
-        assert_eq!(leaders.owner(&player(1), None, &map), "General Patton");
-        // A side with no general goes by the map's name for it, if any.
+        assert_eq!(leaders.owner(&player(1), None, &map), "Patton AI");
+        // Without a computer player's name, a side goes by the map's name
+        // for it, if any.
         assert_eq!(leaders.owner(&player(3), Some(1), &map), "kingdom_3");
         assert_eq!(
             leaders.owner(&player(4), Some(1), &map),

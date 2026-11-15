@@ -46,7 +46,11 @@ impl GameData {
 
     fn read_strings(&self) -> Strings {
         let glyphs = self.glyph_chars();
-        let files = self.parse_tgis(|n| n.starts_with("localization/strings_"));
+        // The computer players' and random maps' tables too, which sit in
+        // folders of their own; the hotkeys' hold no text.
+        let files = self.parse_tgis(|n| {
+            n.starts_with("localization/") && !n.starts_with("localization/hotkeys/")
+        });
         let mut out = HashMap::new();
         let blocks = files.iter().flat_map(|(_, p)| p.root.blocks_of("Text"));
         for (key, text) in blocks.flat_map(text_strings) {

@@ -926,6 +926,23 @@ pub struct General {
     pub experience_max: Option<f32>,
 }
 
+/// A computer player's profile: how it plays, and whose side.
+#[derive(Debug, Clone, Deserialize)]
+pub struct Sai {
+    /// What the computer player is called, or the key of the string that
+    /// says.
+    pub name: Option<String>,
+    /// The generals it plays as, by id.
+    #[serde(default)]
+    pub faction: Vec<SaiFaction>,
+}
+
+/// A general a computer player's profile plays as.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaiFaction {
+    pub ids: Option<Id>,
+}
+
 /// A special operation a general gives their side.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GeneralAbility {

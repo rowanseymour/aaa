@@ -13,7 +13,7 @@ usage:
   aaa-data cues     <game dir> [filter] the audio object templates play, by what sets it off
   aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off
   aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post
-  aaa-data generals <game dir>          each nation's generals and their special operations as tooltips show them";
+  aaa-data generals <game dir>          each nation's generals, their computer players and their special operations as tooltips show them";
 
 /// Prints the library's warnings, such as data blocks that don't read.
 struct Stderr;
@@ -226,7 +226,13 @@ fn generals(dir: &str) -> Res {
             let max = g
                 .experience_max
                 .map_or("none".to_string(), |m| m.to_string());
-            outln!("{} {} (max {max}, public {})", nation.id, g.name, g.public);
+            let computer = g.computer_name.as_deref().unwrap_or("none");
+            outln!(
+                "{} {} (max {max}, public {}, computer {computer})",
+                nation.id,
+                g.name,
+                g.public
+            );
             for o in &g.operations {
                 let Some(op) = operations.get(&o.id) else {
                     outln!("  {} (cost {}): no definition", o.id, o.cost);
