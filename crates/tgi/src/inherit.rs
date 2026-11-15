@@ -68,7 +68,8 @@ impl<'a> Templates<'a> {
                 out.push(None);
                 continue;
             }
-            let only_templates = (root.blocks())
+            let only_templates = root
+                .blocks()
                 .all(|b| b.kind().is_some_and(|k| k.eq_ignore_ascii_case("Template")));
             if only_templates && !by_name.is_empty() {
                 let mut grown = (*shared).clone();
@@ -87,7 +88,8 @@ impl<'a> Templates<'a> {
     /// A template by name, case-insensitive.
     pub fn get(&self, name: &str) -> Option<&'a Block> {
         let name = name.to_ascii_lowercase();
-        (self.by_name.get(&name))
+        self.by_name
+            .get(&name)
             .or_else(|| self.shared.get(&name))
             .copied()
     }
@@ -145,16 +147,17 @@ impl<'a> Templates<'a> {
         // Only inherited items are overridden, so a block may repeat a key.
         let inherited = into.len();
         for item in items {
-            let existing = into[..inherited]
-                .iter()
-                .position(|e| self.overrides(item, e));
+            let existing = match self.is_list(item) {
+                true => None,
+                false => into[..inherited].iter().position(|e| overrides(item, e)),
+            };
             if existing.is_none() && shared && matches!(item, Item::Block(_)) && into.contains(item)
             {
                 continue;
             }
             match (existing.map(|i| &mut into[i]), item) {
                 (Some(Item::Block(e)), Item::Block(b))
-                    if self.retemplates(e, b) && !active.contains(&pair(e, b)) =>
+                    if retemplates(e, b) && !active.contains(&pair(e, b)) =>
                 {
                     active.push(pair(e, b));
                     let mut merged = self.resolve_in(e, active);
@@ -184,40 +187,43 @@ impl<'a> Templates<'a> {
         }
     }
 
-    /// Whether `child` names a template other than the one `inherited`
-    /// does.
-    fn retemplates(&self, inherited: &Block, child: &Block) -> bool {
-        match (template(inherited), template(child)) {
-            (_, None) => false,
-            (Some(a), Some(b)) => !a.eq_ignore_ascii_case(b),
-            (None, Some(_)) => true,
+    /// Whether `item` is a block of a kind declared as a list, which never
+    /// takes the place of an inherited block.
+    fn is_list(&self, item: &Item) -> bool {
+        match item {
+            Item::Block(b) => self
+                .lists
+                .contains(&b.kind().unwrap_or("").to_ascii_lowercase()),
+            Item::Field(_) => false,
         }
     }
+}
 
-    /// Whether `item` takes the place of the inherited `existing`.
-    fn overrides(&self, item: &Item, existing: &Item) -> bool {
-        match (item, existing) {
-            (Item::Field(f), Item::Field(e)) => f.key.eq_ignore_ascii_case(&e.key),
-            (Item::Block(b), Item::Block(e)) => {
-                // A slot's own kind is just `list` or `optional`, so that
-                // alone can't pair them.
-                let same_slot = match (b.slot(), e.slot()) {
-                    (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
-                    (a, b) => a.is_none() && b.is_none(),
-                };
-                let kind = b.kind().unwrap_or("").to_ascii_lowercase();
-                !self.lists.contains(&kind)
-                    && same_slot
-                    && e.kind().unwrap_or("").eq_ignore_ascii_case(&kind)
-            }
-            _ => false,
+/// Whether `item` takes the place of the inherited `existing`, unless it's a
+/// list block (see [`Templates::is_list`]).
+fn overrides(item: &Item, existing: &Item) -> bool {
+    match (item, existing) {
+        (Item::Field(f), Item::Field(e)) => f.key.eq_ignore_ascii_case(&e.key),
+        (Item::Block(b), Item::Block(e)) => {
+            // A slot's own kind is just `list` or `optional`, so that
+            // alone can't pair them.
+            let same_slot = match (b.slot(), e.slot()) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                (a, b) => a.is_none() && b.is_none(),
+            };
+            same_slot
+                && e.kind()
+                    .unwrap_or("")
+                    .eq_ignore_ascii_case(b.kind().unwrap_or(""))
         }
+        _ => false,
     }
 }
 
 /// A document's `[Template]` blocks, by lower-case name.
 fn templates_of(root: &Block) -> impl Iterator<Item = (String, &Block)> {
-    (root.blocks_of("Template")).filter_map(|b| Some((b.name()?.to_ascii_lowercase(), b)))
+    root.blocks_of("Template")
+        .filter_map(|b| Some((b.name()?.to_ascii_lowercase(), b)))
 }
 
 /// Adds the lower-case kinds `block` declares as lists, at any depth. Not
@@ -232,6 +238,15 @@ fn find_lists(block: &Block, lists: &mut HashSet<String>) {
     }
     for b in block.blocks() {
         find_lists(b, lists);
+    }
+}
+
+/// Whether `child` names a template other than the one `inherited` does.
+fn retemplates(inherited: &Block, child: &Block) -> bool {
+    match (template(inherited), template(child)) {
+        (_, None) => false,
+        (Some(a), Some(b)) => !a.eq_ignore_ascii_case(b),
+        (None, Some(_)) => true,
     }
 }
 
