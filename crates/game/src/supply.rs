@@ -135,7 +135,7 @@ pub struct OutOfSupply(f64);
 
 /// The steps a tint's strength moves in, so that a pulsing one recolours
 /// its materials a few times a second rather than every frame.
-const TINT_STEPS: f32 = 16.0;
+pub(crate) const TINT_STEPS: f32 = 16.0;
 
 /// Tints the buildings that are out of supply, pulsing for as long as they
 /// are and plain again at once when they're not.

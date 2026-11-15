@@ -454,6 +454,9 @@ pub struct Property {
     pub duration: Option<f32>,
     #[serde(default)]
     pub modifier: Vec<Modifier>,
+    /// Run on each thing as it gains it.
+    #[serde(default)]
+    pub when_added: Vec<Fxc>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1301,6 +1304,8 @@ pub struct Vfx {
     /// Seconds a tint takes to fall from full to none.
     pub fade_duration: Option<f32>,
     pub repeating: Option<bool>,
+    /// Of the tints on one thing, the highest shows.
+    pub priority: Option<i32>,
     #[serde(default)]
     pub flags: Vec<VfxFlags>,
     /// The picture one laid on the ground shows, relative to its file's

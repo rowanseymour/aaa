@@ -11,15 +11,15 @@ use std::f32::consts::TAU;
 use std::sync::Arc;
 
 use aaa_data::{
-    Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, OperationCues, Shape, Vfx,
-    VfxCue, VfxTint, Weapon,
+    Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, OperationCues, Shape, Targets,
+    Vfx, VfxCue, VfxTint, Weapon,
 };
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
 use aaa_render::decals::{DecalCache, decal_colour};
 use aaa_render::models::{Footprint, Models, Rate};
 use aaa_render::terrain::{map_point, world};
-use aaa_render::{MapAssets, MapObject};
+use aaa_render::{MapAssets, MapObject, Tint};
 use aaa_sim::{Landing, Operated, State, Target, World};
 use bevy::prelude::*;
 use tgck::map::CELL_SIZE;
@@ -32,6 +32,8 @@ pub struct Effects {
     objects: HashMap<Id, ObjectEffects>,
     /// What plays as each special operation is used, by id.
     operations: HashMap<Id, OperationCues>,
+    /// What each property shows on what gains it, by id.
+    properties: HashMap<Id, Vec<VfxCue>>,
     /// The node names of the model points commands name, by id.
     bones: HashMap<Id, String>,
     /// What the pictures laid on the ground so far are drawn with.
@@ -71,6 +73,9 @@ struct Play {
     landed: Option<[f32; 2]>,
     /// For an attack, the index of the weapon among its attacker's.
     weapon: Option<usize>,
+    /// The property it shows on what holds it, so that losing the property
+    /// stops only what it started.
+    holding: Option<Id>,
 }
 
 /// What set off an effect command.
@@ -106,6 +111,8 @@ struct Seen {
     states: Vec<&'static str>,
     /// As a building, it's been seen finished.
     finished: bool,
+    /// The properties it was seen holding that show effects.
+    held: Vec<Id>,
 }
 
 /// One of the effects playing.
@@ -114,6 +121,8 @@ struct Effect {
     vfx: Id,
     /// Whose command created it, for a stop command to find it by.
     by: Option<Subject>,
+    /// The property it shows, for one shown on what holds it.
+    holding: Option<Id>,
     /// When it ends, unless it lasts until stopped.
     ends: Option<f64>,
     /// It goes once its spot is off screen.
@@ -221,6 +230,7 @@ impl Effects {
         let vfx = game.vfx();
         let objects = game.object_effects();
         let operations = game.operation_cues();
+        let properties = game.property_cues();
         let bones = game.bones();
         let variations = game.terrain_variations();
         let terrain = &map.terrain;
@@ -244,6 +254,7 @@ impl Effects {
             vfx,
             objects,
             operations,
+            properties,
             bones,
             decals: DecalCache::default(),
             groups,
@@ -278,6 +289,17 @@ impl Effects {
     }
 
     fn queue(&mut self, when: When, cues: &[VfxCue], source: Source, target: Option<Target>) {
+        self.queue_holding(when, cues, source, target, None);
+    }
+
+    fn queue_holding(
+        &mut self,
+        when: When,
+        cues: &[VfxCue],
+        source: Source,
+        target: Option<Target>,
+        holding: Option<&Id>,
+    ) {
         for cue in cues {
             let play = Play {
                 cue: cue.clone(),
@@ -286,6 +308,7 @@ impl Effects {
                 tick: when.tick,
                 landed: when.landed,
                 weapon: when.weapon,
+                holding: holding.cloned(),
             };
             self.queued.push((when.at + f64::from(cue.delay), play));
         }
@@ -388,6 +411,26 @@ impl Effects {
             };
             self.queue(at, &attack, Source::Thing(me), now.target);
         }
+        // A property's effects are on what holds it, and go with it.
+        let source = Source::Thing(me);
+        for p in now.held.iter().filter(|p| !seen.held.contains(p)) {
+            let cues = self.properties.get(p).cloned().unwrap_or_default();
+            self.queue_holding(at, &cues, source, Some(me), Some(p));
+        }
+        for p in seen.held.iter().filter(|p| !now.held.contains(p)) {
+            // What hasn't started yet never will.
+            (self.queued).retain(|(_, q)| q.source != source || q.holding.as_ref() != Some(p));
+            let stops: Vec<VfxCue> = (self.properties.get(p).into_iter().flatten())
+                .filter(|c| !c.stop)
+                .map(|c| VfxCue {
+                    stop: true,
+                    delay: 0.0,
+                    ..c.clone()
+                })
+                .collect();
+            self.queue_holding(at, &stops, source, Some(me), Some(p));
+        }
+        seen.held = now.held;
         seen.shot = now.shot;
         seen.health = now.health;
         seen.states = now.states;
@@ -416,6 +459,7 @@ struct Now<'a> {
     target: Option<Target>,
     /// It's a building that's done going up and is still there.
     finished: bool,
+    held: Vec<Id>,
 }
 
 const DEAD: &str = "dead";
@@ -441,6 +485,14 @@ fn unit_states(u: &aaa_sim::Unit) -> Vec<&'static str> {
         (Some(_), _) => vec![DEAD],
         (None, Some(_)) => vec!["falling"],
         (None, None) => Vec::new(),
+    }
+}
+
+/// The properties a unit holds while it lives.
+fn held(sim: &World, unit: usize) -> Vec<Id> {
+    match sim.units[unit].alive() {
+        true => sim.lasting(unit).cloned().collect(),
+        false => Vec::new(),
     }
 }
 
@@ -536,7 +588,7 @@ impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (notice, play, follow, fade)
+            (notice, play, follow, fade, tint_units)
                 .chain()
                 .after(crate::show_packing)
                 .after(crate::show_units)
@@ -606,6 +658,7 @@ fn notice(
             weapon: unit.shot.and_then(|(_, w)| fighter?.weapons.get(w)),
             target: unit.target,
             finished: false,
+            held: held(sim, view.unit),
         };
         let me = Target::Unit(view.unit);
         see(
@@ -628,6 +681,7 @@ fn notice(
             weapon: b.shot.and_then(|(_, w)| b.fighter.weapons.get(w)),
             target: b.target,
             finished: b.unpacking.is_none() && !b.gone(),
+            held: Vec::new(),
         };
         let me = Target::Building(view.building);
         see(
@@ -688,6 +742,7 @@ fn see(
                 health: now.health,
                 states: Vec::new(),
                 finished: false,
+                held: Vec::new(),
             };
             effects.create(Source::Thing(me), template, at);
             effects.witness(me, template, &mut seen, now, at);
@@ -815,7 +870,8 @@ fn play(
         };
         if cue.stop {
             for (e, effect, fades) in &playing {
-                if effect.by == by && by.is_some() && effect.vfx == cue.vfx {
+                let ours = effect.by == by && effect.holding == p.holding;
+                if ours && by.is_some() && effect.vfx == cue.vfx {
                     // One that fades goes in its own time.
                     match fades {
                         true => drop(commands.entity(e).insert(Stopped)),
@@ -835,13 +891,8 @@ fn play(
         if vfx.night_only && !effects.night {
             continue;
         }
-        if !cue.targets.required.is_empty() || !cue.targets.excluded.is_empty() {
-            let (Some(fired_by), Some(t)) = (fired_by, p.target) else {
-                continue;
-            };
-            if !sim.matches(fired_by, &cue.targets, t) {
-                continue;
-            }
+        if !fits(sim, &cue.targets, fired_by, p.target) {
+            continue;
         }
         let place = Place {
             placed: &|t| placed(t, p.tick),
@@ -921,6 +972,7 @@ fn play(
                 Effect {
                     vfx: cue.vfx.clone(),
                     by,
+                    holding: p.holding.clone(),
                     ends: lasts.map(|s| now + f64::from(s + decal.fade[1])),
                     discard: false,
                 },
@@ -956,6 +1008,7 @@ fn play(
             Effect {
                 vfx: cue.vfx.clone(),
                 by,
+                holding: p.holding.clone(),
                 ends: lasts.map(|s| now + f64::from(s)),
                 discard,
             },
@@ -1320,6 +1373,103 @@ fn fade(
     }
 }
 
+/// Whether a command naming `targets` plays when `by` sets it off on `on`:
+/// any does that names no flags.
+fn fits(sim: &World, targets: &Targets, by: Option<Target>, on: Option<Target>) -> bool {
+    match (by, on) {
+        _ if targets.required.is_empty() && targets.excluded.is_empty() => true,
+        (Some(by), Some(on)) => sim.matches(by, targets, on),
+        _ => false,
+    }
+}
+
+/// A tint a property shows: its effect, its pulse, and whether it runs on
+/// the wall clock rather than game time.
+type Shown<'a> = (&'a Id, VfxTint, bool);
+
+impl Effects {
+    /// The tints the properties `held` show on `me`, in order.
+    fn tints(&self, sim: &World, me: Target, held: &[Id]) -> Vec<Shown<'_>> {
+        (held.iter())
+            .flat_map(|p| self.properties.get(p).into_iter().flatten())
+            .filter(|c| !c.stop && fits(sim, &c.targets, Some(me), Some(me)))
+            .filter_map(|c| {
+                let v = self.vfx.get(&c.vfx)?;
+                Some((&c.vfx, v.tint?, v.real_time))
+            })
+            .collect()
+    }
+}
+
+/// On a unit tinted for the properties it holds: when each of their tints
+/// began, on the clock it runs on, so that one a stronger tint hid carries
+/// on its pulse once that goes.
+#[derive(Component, Default)]
+struct Tinting {
+    since: HashMap<Id, f64>,
+}
+
+impl Tinting {
+    /// The colour of the first of `tints` with the highest priority, at
+    /// `clocks`' game and real times.
+    fn colour(&mut self, tints: &[Shown], [game, real]: [f64; 2]) -> Option<[f32; 3]> {
+        let now = |real_time| if real_time { real } else { game };
+        (self.since).retain(|id, _| tints.iter().any(|(t, ..)| *t == id));
+        for &(id, _, real_time) in tints {
+            self.since.entry(id.clone()).or_insert(now(real_time));
+        }
+        let &(id, pulse, real_time) = (tints.iter().rev()).max_by_key(|(_, t, _)| t.priority)?;
+        let steps = crate::supply::TINT_STEPS;
+        let age = (now(real_time) - self.since[id]) as f32;
+        let level = (pulse.level(age) * steps).round() / steps;
+        Some(pulse.colour(level))
+    }
+}
+
+/// Tints each unit for the properties it holds, and plain again at once
+/// when it holds none that tint.
+#[allow(clippy::type_complexity)]
+fn tint_units(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    effects: Res<Effects>,
+    real: Res<Time<Real>>,
+    mut views: Query<(
+        Entity,
+        &UnitView,
+        &Seen,
+        Option<&mut Tinting>,
+        Option<&Tint>,
+    )>,
+) {
+    let sim = &sim.0;
+    let clocks = [
+        sim.ticks as f64 * f64::from(aaa_sim::TICK),
+        real.elapsed_secs_f64(),
+    ];
+    for (e, view, seen, tinting, tint) in &mut views {
+        let tints = effects.tints(sim, Target::Unit(view.unit), &seen.held);
+        let tinted = tinting.is_some() || tint.is_some();
+        let colour = match tinting {
+            Some(mut t) => t.colour(&tints, clocks),
+            None => {
+                let mut t = Tinting::default();
+                let colour = t.colour(&tints, clocks);
+                if colour.is_some() {
+                    commands.entity(e).insert(t);
+                }
+                colour
+            }
+        };
+        match colour.map(Tint) {
+            Some(colour) if tint != Some(&colour) => drop(commands.entity(e).insert(colour)),
+            Some(_) => {}
+            None if tinted => drop(commands.entity(e).remove::<(Tinting, Tint)>()),
+            None => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1553,6 +1703,7 @@ mod tests {
             vfx: Arc::default(),
             objects,
             operations: HashMap::new(),
+            properties: HashMap::new(),
             bones: HashMap::new(),
             decals: DecalCache::default(),
             groups: Vec::new(),
@@ -1626,6 +1777,7 @@ mod tests {
             health: 1.0,
             states: Vec::new(),
             finished: false,
+            held: Vec::new(),
         };
         let shooting = |weapon: &Weapon, effects: &mut Effects, seen: &mut Seen, tick| {
             let now = Now {
@@ -1635,6 +1787,7 @@ mod tests {
                 weapon: Some(weapon),
                 target: Some(Target::Unit(1)),
                 finished: false,
+                held: Vec::new(),
             };
             effects.witness(me, "tank", seen, now, at(tick));
         };
@@ -1702,6 +1855,7 @@ mod tests {
             health: 1.0,
             states: Vec::new(),
             finished: false,
+            held: Vec::new(),
         };
         let me = Target::Building(0);
         let states = [
@@ -1719,6 +1873,7 @@ mod tests {
                 shot: None,
                 weapon: None,
                 target: None,
+                held: Vec::new(),
             };
             effects.witness(me, "depot", &mut seen, now, at(0));
         }
@@ -1726,6 +1881,78 @@ mod tests {
             .map(|(_, p)| p.cue.vfx.as_str())
             .collect();
         assert_eq!(queued, ["dust", "lights", "collapse"]);
+    }
+
+    #[test]
+    fn a_property_shows_its_effects_on_what_holds_it_until_it_goes() {
+        let mut effects = effects(HashMap::new());
+        let radiation = Id::from("radiation");
+        (effects.properties).insert(radiation.clone(), vec![cue("sparks")]);
+        let me = Target::Unit(0);
+        let mut seen = Seen {
+            shot: None,
+            health: 1.0,
+            states: Vec::new(),
+            finished: false,
+            held: Vec::new(),
+        };
+        let mut witness = |effects: &mut Effects, held| {
+            let now = Now {
+                states: Vec::new(),
+                health: 1.0,
+                shot: None,
+                weapon: None,
+                target: None,
+                finished: false,
+                held,
+            };
+            effects.witness(me, "tank", &mut seen, now, at(0));
+            (effects.queued.iter())
+                .map(|(_, p)| {
+                    (
+                        p.cue.vfx.to_string(),
+                        p.cue.stop,
+                        p.target,
+                        p.holding.clone(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let held = Some(radiation.clone());
+        let start = ("sparks".to_string(), false, Some(me), held.clone());
+        let stop = ("sparks".to_string(), true, Some(me), held);
+        assert_eq!(
+            witness(&mut effects, vec![radiation.clone()]),
+            std::slice::from_ref(&start)
+        );
+        assert_eq!(witness(&mut effects, vec![radiation]), [start]);
+        // Gone before its effects began, they never do.
+        assert_eq!(witness(&mut effects, vec![]), [stop]);
+    }
+
+    #[test]
+    fn the_strongest_tint_shows_and_one_it_hid_carries_on_after() {
+        let tint = |colour, rise, priority| VfxTint {
+            colour,
+            max: 1.0,
+            rise,
+            fall: 0.0,
+            repeating: false,
+            priority,
+        };
+        let (weak, strong, other) = (Id::from("weak"), Id::from("strong"), Id::from("other"));
+        let weak = (&weak, tint([0.0; 3], 2.0, 0), false);
+        let strong = (&strong, tint([0.5; 3], 0.0, 1), true);
+        let other = (&other, tint([0.25; 3], 0.0, 0), false);
+        let mut t = Tinting::default();
+        assert_eq!(t.colour(&[weak], [0.0, 50.0]), Some([1.0; 3]));
+        // The strong one runs on the wall clock, the weak on game time.
+        assert_eq!(t.colour(&[weak, strong], [1.0, 60.0]), Some([0.5; 3]));
+        assert_eq!(t.colour(&[weak], [1.5, 70.0]), Some([0.25; 3]));
+        assert_eq!(t.colour(&[], [2.0, 80.0]), None);
+        assert!(t.since.is_empty());
+        // Of equal ones, the first.
+        assert_eq!(t.colour(&[other, weak], [3.0, 90.0]), Some([0.25; 3]));
     }
 
     #[test]

@@ -81,6 +81,8 @@ pub struct VfxTint {
     pub fall: f32,
     /// It rises again once it's fallen to untinted, rather than staying so.
     pub repeating: bool,
+    /// Of the tints on one thing, only one with the highest shows.
+    pub priority: i32,
 }
 
 impl VfxTint {
@@ -304,6 +306,7 @@ fn vfx(v: defs::Vfx, model: Option<String>, texture: Option<String>) -> Vfx {
             rise: v.enhance_duration.unwrap_or(0.0),
             fall: v.fade_duration.unwrap_or(0.0),
             repeating: v.repeating.unwrap_or(false),
+            priority: v.priority.unwrap_or(0),
         }),
     }
 }
@@ -615,6 +618,7 @@ mod tests {
             rise: 1.0,
             fall: 0.8,
             repeating: true,
+            priority: 0,
         };
         let near = |a: f32, b: f32| (a - b).abs() < 1e-5;
         assert!(near(pulse.level(0.0), 0.0));

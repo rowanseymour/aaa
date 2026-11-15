@@ -84,23 +84,26 @@ fn tinted<M: Tintable>(plain: &M, Tint([r, g, b]): Tint) -> M {
 
 /// Draws the meshes under a [`Tint`] in copies of their materials,
 /// recoloured as the tint changes, and in their own again once it's gone.
-/// Meshes whose materials are animated keep them, as a copy would stand
-/// still.
+/// Meshes whose animations change their materials keep them, as a copy
+/// would stand still.
 #[allow(clippy::type_complexity)]
 pub(crate) fn tint<M: Tintable>(
     mut commands: Commands,
     roots: Query<(Entity, &Tint)>,
     children: Query<&Children>,
-    plain: Query<&MeshMaterial3d<M>, (Without<Tinted<M>>, Without<Animated>)>,
+    plain: Query<(&MeshMaterial3d<M>, Option<&Animated>), Without<Tinted<M>>>,
     mut drawn: Query<(Entity, &mut Tinted<M>, &MeshMaterial3d<M>)>,
     parents: Query<&ChildOf>,
     mut materials: ResMut<Assets<M>>,
 ) {
     for (root, &tint) in &roots {
         for e in children.iter_descendants(root) {
-            let Ok(material) = plain.get(e) else {
+            let Ok((material, animated)) = plain.get(e) else {
                 continue;
             };
+            if animated.is_some_and(Animated::paints) {
+                continue;
+            }
             let Some(copy) = materials.get(&material.0).map(|m| tinted(m, tint)) else {
                 continue;
             };

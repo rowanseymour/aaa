@@ -398,9 +398,12 @@ impl Source<'_> {
 
 /// How a shape with `alpha` and its material's `opacity` blends.
 fn alpha_mode(alpha: Option<&nif::Alpha>, opacity: f32) -> AlphaMode {
+    // An additive shape that tests alpha too, as flashes do, is still
+    // added: what its test would drop adds next to nothing. Other blends
+    // that test are cut out, which writes depth only where they show.
     match alpha {
-        Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
         Some(a) if a.blend() && a.adds() => AlphaMode::Add,
+        Some(a) if a.test() => AlphaMode::Mask(a.threshold as f32 / 255.0),
         Some(a) if a.blend() => AlphaMode::Blend,
         _ if opacity < 1.0 => AlphaMode::Blend,
         _ => AlphaMode::Opaque,
@@ -514,6 +517,18 @@ fn load_image(bytes: &[u8], name: &str, formats: CompressedImageFormats) -> Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn additive_shapes_add_even_when_they_test_alpha() {
+        let mode = |flags, threshold| alpha_mode(Some(&nif::Alpha { flags, threshold }), 1.0);
+        // Source alpha over one, tested: a flash.
+        assert_eq!(mode(0x120d, 0), AlphaMode::Add);
+        // Source alpha over one minus it, tested: foliage.
+        assert_eq!(mode(0x12ed, 128), AlphaMode::Mask(128.0 / 255.0));
+        assert_eq!(mode(0x00ed, 0), AlphaMode::Blend);
+        assert_eq!(mode(0x0200, 64), AlphaMode::Mask(64.0 / 255.0));
+        assert_eq!(alpha_mode(None, 1.0), AlphaMode::Opaque);
+    }
 
     #[test]
     fn meshes_take_vertex_colours_only_when_tinted() {

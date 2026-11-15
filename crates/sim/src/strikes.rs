@@ -152,6 +152,13 @@ impl World {
         self.afflict();
     }
 
+    /// The properties strikes have left on a unit that it still holds.
+    pub fn lasting(&self, unit: usize) -> impl Iterator<Item = &Id> {
+        (self.afflicted.iter())
+            .filter(move |a| a.unit == unit)
+            .map(|a| &a.property)
+    }
+
     /// Hurts each afflicted unit whose second has come, until it's taken
     /// all it has to.
     fn afflict(&mut self) {
