@@ -9,37 +9,40 @@ use crate::{Target, World};
 const MOBILE: &str = "mobile";
 
 impl World {
-    /// Looks at the terrain under every regiment that can move and under
-    /// its members. A regiment's is that under its leader, and a member
+    /// Looks at the terrain under every organization that can move and under
+    /// its members. An organization's is that under its leader, and a member
     /// with it shares that: only one straggling outside its control zone
-    /// has that of its own tile. What a regiment can't move for, such as
+    /// has that of its own tile. What an organization can't move for, such as
     /// being unpacked, keeps what it had.
     pub(crate) fn stand(&mut self) {
-        for r in 0..self.regiments.len() {
-            let regiment = &self.regiments[r];
-            if regiment.unpacked_into.is_some() || regiment.speed <= 0.0 || self.destroyed(r) {
+        for r in 0..self.organizations.len() {
+            let organization = &self.organizations[r];
+            if organization.unpacked_into.is_some()
+                || organization.speed <= 0.0
+                || self.destroyed(r)
+            {
                 continue;
             }
             let at = self.leader_position(r);
             let under = self.tile_terrains.at(at);
             // Again every time: who's left to qualify changes too.
             let gained = self.gained(r, under);
-            let regiment = &mut self.regiments[r];
-            regiment.terrain = under;
-            if regiment.terrain_properties != gained {
-                regiment.terrain_properties = gained;
+            let organization = &mut self.organizations[r];
+            organization.terrain = under;
+            if organization.terrain_properties != gained {
+                organization.terrain_properties = gained;
             }
             let mut zone: Option<Zone> = None;
-            for p in 0..self.regiments[r].units.len() {
-                let regiment = &self.regiments[r];
-                let u = regiment.units[p];
+            for p in 0..self.organizations[r].units.len() {
+                let organization = &self.organizations[r];
+                let u = organization.units[p];
                 if !self.units[u].alive() {
                     continue;
                 }
                 let position = self.units[u].position;
                 let own = self.tile_terrains.at(position);
-                let with = own == under || Some(p) == regiment.leader || {
-                    let reach = regiment.control(&self.rules.guard_rules);
+                let with = own == under || Some(p) == organization.leader || {
+                    let reach = organization.control(&self.rules.guard_rules);
                     let zone = zone.get_or_insert_with(|| self.pathing.zone(at, reach));
                     zone.holds(position)
                 };
@@ -48,15 +51,15 @@ impl World {
         }
     }
 
-    /// The properties a regiment gains from terrain: those any member
-    /// left, or the regiment itself, has what they need.
+    /// The properties an organization gains from terrain: those any member
+    /// left, or the organization itself, has what they need.
     fn gained(&self, r: usize, terrain: TerrainIndex) -> Vec<Id> {
         let listed = &self.tile_terrains.get(terrain).properties;
         if listed.is_empty() {
             return Vec::new();
         }
         let members = self.survivors(r).map(|u| &self.units[u].template);
-        let templates: Vec<&Id> = (members.chain([&self.regiments[r].template])).collect();
+        let templates: Vec<&Id> = (members.chain([&self.organizations[r].template])).collect();
         let gained = listed
             .iter()
             .filter(|p| templates.iter().any(|t| self.gains(t, p)));
@@ -78,14 +81,14 @@ impl World {
     }
 
     /// What the terrain properties a target holds do: for a unit, those it
-    /// has what they need of its regiment's terrain and its own.
+    /// has what they need of its organization's terrain and its own.
     pub(crate) fn terrain_effects(&self, t: Target) -> Vec<&TerrainEffect> {
         let Target::Unit(u) = t else {
             return Vec::new();
         };
         let unit = &self.units[u];
         let mut held: Vec<&Id> = Vec::new();
-        for terrain in [self.regiments[unit.regiment].terrain, unit.terrain] {
+        for terrain in [self.organizations[unit.organization].terrain, unit.terrain] {
             for p in &self.tile_terrains.get(terrain).properties {
                 if !held.contains(&p) && self.gains(&unit.template, p) {
                     held.push(p);
@@ -96,11 +99,11 @@ impl World {
         held.into_iter().filter_map(|p| effects.get(p)).collect()
     }
 
-    /// The fastest the terrain a unit is on lets it go, where it holds it
-    /// back at all: the limit of the last of the terrain's properties to
-    /// have one, whoever that property is for. None holds back a unit
-    /// whose template or regiment's is free of them, or whose regiment has,
-    /// for a time or by a technology on it, a property that frees it.
+    /// The fastest the terrain a unit is on lets it go, where it holds it back
+    /// at all: the limit of the last of the terrain's properties to have one,
+    /// whoever that property is for. None holds back a unit whose template or
+    /// organization's is free of them, or whose organization has, for a time or
+    /// by a technology on it, a property that frees it.
     pub(crate) fn speed_limit(&self, u: usize) -> Option<f32> {
         let unit = &self.units[u];
         let rules = &self.rules.terrain_rules;
@@ -112,12 +115,16 @@ impl World {
                 .filter_map(|p| rules.effects.get(p)?.speed_limit)
                 .next()?,
         };
-        let regiment = &self.regiments[unit.regiment];
-        let timed = regiment.properties.iter().map(|h| &h.property);
-        let technologies = self.technologies.get(&regiment.owner).into_iter().flatten();
-        let on = |p: &&Id| self.gains(&regiment.template, p) || self.gains(&unit.template, p);
+        let organization = &self.organizations[unit.organization];
+        let timed = organization.properties.iter().map(|h| &h.property);
+        let technologies = self
+            .technologies
+            .get(&organization.owner)
+            .into_iter()
+            .flatten();
+        let on = |p: &&Id| self.gains(&organization.template, p) || self.gains(&unit.template, p);
         let free = rules.free.contains(&unit.template)
-            || rules.free.contains(&regiment.template)
+            || rules.free.contains(&organization.template)
             || (timed.chain(technologies.filter(on))).any(|p| rules.unlimited.contains(p));
         (!free).then_some(limit.max(rules.slowest))
     }
@@ -174,7 +181,14 @@ mod tests {
             .kinds
             .insert(Id::from("soldier"), kind(&["infantry"]));
         let to = [10.0, 30.0];
-        w.apply(7, Command::Move { regiment: 0, to }).unwrap();
+        w.apply(
+            7,
+            Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
         run(&mut w, 1.0);
         // The vehicles' limit, though they're infantry.
         assert!(w.units.iter().all(|u| u.speed == 1.0));
@@ -191,14 +205,14 @@ mod tests {
             (aaa_map::TileTerrains::uniform(20, mountain), 0.5);
         run(&mut w, 0.2);
         assert!(w.units.iter().all(|u| u.speed == 0.5));
-        // Unless its regiment has, for a time, a property free of limits,
-        w.regiments[0].properties.push(Held {
+        // Unless its organization has, for a time, a property free of limits,
+        w.organizations[0].properties.push(Held {
             property: Id::from("trailblazing"),
             until: u64::MAX,
         });
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 2.0));
-        w.regiments[0].properties.clear();
+        w.organizations[0].properties.clear();
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 0.5));
         // its side a technology that is, on those it's for,
@@ -217,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn members_share_their_regiments_terrain_unless_they_straggle() {
+    fn members_share_their_organizations_terrain_unless_they_straggle() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         let (forest, rules) = forest();
         w.rules.terrain_rules = rules;
@@ -237,17 +251,17 @@ mod tests {
         }
         let raised = |u| (w.defense(Target::Unit(u))).map(|(now, plain)| now - plain);
         assert_eq!((raised(0), raised(1)), (Some(4.0), Some(0.0)));
-        assert!(w.regiments[0].terrain_properties.is_empty());
+        assert!(w.organizations[0].terrain_properties.is_empty());
         assert_eq!((w.speed_limit(0), w.speed_limit(1)), (Some(1.0), None));
-        w.regiments[0].control_range = 10.0;
+        w.organizations[0].control_range = 10.0;
         w.stand();
         assert_eq!((held(&w, 0), w.speed_limit(0)), (0, None));
-        // Under the regiment, which gains only what a member can.
+        // Under the organization, which gains only what a member can.
         w.tile_terrains.set(Tile::at(w.leader_position(0)), forest);
         w.stand();
         assert_eq!((held(&w, 0), held(&w, 1)), (1, 1));
         assert_eq!(
-            w.regiments[0].terrain_properties,
+            w.organizations[0].terrain_properties,
             [Id::from("forest_infantry")]
         );
         // Which follows who's left in it.
@@ -256,7 +270,7 @@ mod tests {
             .insert(Id::from("soldier"), kind(&["vehicle"]));
         w.stand();
         assert_eq!(
-            w.regiments[0].terrain_properties,
+            w.organizations[0].terrain_properties,
             [Id::from("forest_vehicles")]
         );
         w.rules
@@ -264,11 +278,11 @@ mod tests {
             .insert(Id::from("soldier"), kind(&["infantry"]));
         w.stand();
         // Unpacked, it keeps what it had wherever that leaves it.
-        w.regiments[0].unpacked_into = Some(0);
+        w.organizations[0].unpacked_into = Some(0);
         w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
         w.stand();
         assert_eq!(
-            w.regiments[0].terrain_properties,
+            w.organizations[0].terrain_properties,
             [Id::from("forest_infantry")]
         );
     }

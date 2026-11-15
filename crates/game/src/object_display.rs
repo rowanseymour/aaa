@@ -8,25 +8,25 @@
 //! - Simple actor, for a building or a unit on its own: its portrait over
 //!   its health, and what a building's been asked to commission, the first
 //!   with its progress; clicking one calls it off.
-//! - Company, for a regiment: its officer's portrait over the regiment's
-//!   health, a card per other unit with the unit's health, and its banner.
-//!   An HQ, packed or not, has instead of the cards a place for each
-//!   regiment it takes, with the regiment attached there or the one it's
-//!   been asked for.
+//! - Company, for an organization: its officer's portrait over the
+//!   organization's health, a card per other unit with the unit's health, and
+//!   its banner. An HQ, packed or not, has instead of the cards a place for
+//!   each organization it takes, with the organization attached there or the
+//!   one it's been asked for.
 //! - Group, for several: a card each, up to [`MAX_SELECTED`], with the
-//!   banner, the regiment's health and each unit's; clicking one selects
+//!   banner, the organization's health and each unit's; clicking one selects
 //!   it alone.
 //! - Settlement, for a settlement (see [`aaa_data::defs::CityComponent`]):
 //!   unused, since a city shows as a simple actor.
 //!
-//! Beside the title of a regiment or a building is an icon for each
+//! Beside the title of an organization or a building is an icon for each
 //! property it holds that has one, a building one unpacked into showing
-//! the regiment's. What the pointer's
+//! the organization's. What the pointer's
 //! on says what it is in a box above the display: a part that stands for
 //! a thing, such as a unit's card, says of that thing what [`Says`] has.
 //!
 //! The portrait of one thing is drawn from a model: the face its template
-//! names, a regiment's being its commanding officer's, its owner's faction
+//! names, an organization's being its commanding officer's, its owner's faction
 //! where its template says so, else all of its own model. Its flat picture
 //! stands in only where none of those can be drawn.
 
@@ -52,7 +52,7 @@ use crate::{
     Drawn, Leaders, Loaded, Local, Orders, Screen, Selected, SelectedBuilding, Sim, TINTS, tint,
 };
 
-/// How many regiments can be selected at once, as many as the group
+/// How many organizations can be selected at once, as many as the group
 /// display has cards for.
 pub const MAX_SELECTED: usize = 6;
 
@@ -99,11 +99,11 @@ const SLOT: Vec2 = Vec2::new(42.0, 50.0);
 /// display has room for.
 const SLOTS_ACROSS: usize = 3;
 const MAX_SLOTS: usize = 6;
-/// Within a place, where its regiment's banner goes and how big it is,
+/// Within a place, where its organization's banner goes and how big it is,
 /// and its health bar's box.
 const SLOT_BANNER: [f32; 3] = [2.0, 2.0, 38.0];
 const SLOT_HEALTH: [f32; 4] = [2.0, 47.0, 38.0, 2.0];
-/// The box of the bar a place held for a regiment in the queue has
+/// The box of the bar a place held for an organization in the queue has
 /// instead, of how far along it is.
 const SLOT_PROGRESS: [f32; 4] = [2.0, 44.0, 38.0, 5.0];
 
@@ -154,7 +154,7 @@ pub struct Showing(Option<(Mode, Detail)>);
 struct Detail {
     /// For an HQ, what's in each of its places.
     slots: Vec<Place>,
-    /// For each regiment whose banner shows, the badge it wears and
+    /// For each organization whose banner shows, the badge it wears and
     /// whether it's out of supply.
     banners: Vec<(usize, Option<banners::Worn>, bool)>,
     /// The properties whose icons show, those held longest first.
@@ -165,11 +165,11 @@ struct Detail {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Place {
     Empty,
-    /// The regiment attached there.
-    Regiment(usize),
+    /// The organization attached there.
+    Organization(usize),
     /// What the place is held for, by where it is in the HQ's queue.
     Queued(usize),
-    /// The aircraft bringing the regiment the place is held for, by index
+    /// The aircraft bringing the organization the place is held for, by index
     /// into the sim's deliveries.
     Flown(usize),
 }
@@ -180,12 +180,12 @@ enum Place {
 enum Mode {
     /// A building's, or that of a unit on its own, such as a truck.
     SimpleActor(Actor),
-    /// A regiment's, or an HQ's, packed or not.
+    /// An organization's, or an HQ's, packed or not.
     Company(Actor),
     /// A settlement's, which no AA thing is.
     #[allow(dead_code)]
     Settlement,
-    /// That of several regiments.
+    /// That of several organizations.
     Group(Vec<usize>),
 }
 
@@ -202,7 +202,7 @@ impl Mode {
 /// What a display of one thing shows.
 #[derive(Clone, PartialEq, Debug)]
 enum Actor {
-    Regiment(usize),
+    Organization(usize),
     /// With the templates of what it's commissioning.
     Building(usize, Vec<String>),
 }
@@ -212,8 +212,8 @@ enum Actor {
 pub enum Fill {
     /// A unit's health.
     Unit(usize),
-    /// A regiment's units' health, evened out over them.
-    Regiment(usize),
+    /// An organization's units' health, evened out over them.
+    Organization(usize),
     Building(usize),
     /// How far along a building's first commission is.
     Progress(usize),
@@ -228,7 +228,7 @@ pub enum Fill {
 pub enum Says {
     Unit(usize),
     Building(usize),
-    Regiment(usize),
+    Organization(usize),
     /// What a building is commissioning, by place in its queue, and
     /// whether it shows in an HQ's place, where one that waits still says
     /// how far along it is.
@@ -244,15 +244,15 @@ fn says(of: Says) -> impl Bundle {
     (of, Hint(String::new()))
 }
 
-/// The line saying what a regiment or building counts for in its side's
+/// The line saying what an organization or building counts for in its side's
 /// economy, with what it says now: see [`economy`].
 #[derive(Component, Default)]
 pub struct EconomyLine(Vec<(Id, String)>);
 
-/// The line saying what a regiment or building is doing.
+/// The line saying what an organization or building is doing.
 #[derive(Component, Clone, Copy)]
 pub enum Status {
-    Regiment(usize),
+    Organization(usize),
     Building(usize),
 }
 
@@ -287,7 +287,7 @@ pub struct PortraitBox;
 #[derive(Component)]
 pub struct UnitPicture(usize);
 
-/// A regiment's card, which selects it alone.
+/// An organization's card, which selects it alone.
 #[derive(Component)]
 pub struct Pick(usize);
 
@@ -311,7 +311,7 @@ pub struct Looks {
     /// How each property that has an icon shows, by id: the shared ones,
     /// and under ids of their own those of `formations`.
     properties: HashMap<Id, PropertyLook>,
-    /// The properties a regiment in each formation holds, by the
+    /// The properties an organization in each formation holds, by the
     /// formation's id.
     formations: HashMap<Id, Vec<Id>>,
     /// Each technology's research button icon, by id, for what's being
@@ -369,8 +369,8 @@ pub fn spawn(
     commands.insert_resource(stage);
     let game = &loaded.game;
     let layouts = game.layouts();
-    let organizations = game.organizations();
-    let primaries = organizations.iter().map(|(id, o)| {
+    let components = game.organization_components();
+    let primaries = components.iter().map(|(id, o)| {
         let slot = layouts.get(&o.layout).and_then(|l| l.primary);
         (id.clone(), slot.and_then(|s| o.slots.get(s)?.clone()))
     });
@@ -468,13 +468,13 @@ fn wanted(
             Actor::Building(b, queue.map(|c| c.template().to_string()).collect())
         }
         ([], None) => return None,
-        ([r], _) => Actor::Regiment(*r),
+        ([r], _) => Actor::Organization(*r),
         (rs, _) => {
             return Some(Mode::Group(rs.iter().take(MAX_SELECTED).copied().collect()));
         }
     };
     let company = match actor {
-        Actor::Regiment(r) => !lone(sim, r) || hq(sim, hqs, &actor).is_some(),
+        Actor::Organization(r) => !lone(sim, r) || hq(sim, hqs, &actor).is_some(),
         Actor::Building(..) => hq(sim, hqs, &actor).is_some(),
     };
     Some(match company {
@@ -487,7 +487,7 @@ fn wanted(
 fn hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], actor: &Actor) -> Option<&'a aaa_sim::Hq> {
     let id = match *actor {
         Actor::Building(b, _) => sim.hq_of(b)?,
-        Actor::Regiment(r) => sim.regiments[r].id,
+        Actor::Organization(r) => sim.organizations[r].id,
     };
     hqs.iter().find(|h| h.id == id)
 }
@@ -506,20 +506,20 @@ fn formation_property(formation: &Id, n: usize) -> Id {
     Id::from(format!("{formation}/{n}"))
 }
 
-/// Whose properties show: the regiment selected alone, the one that
+/// Whose properties show: the organization selected alone, the one that
 /// unpacked into the building, or else the building itself.
 fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
     Some(match *mode.actor()? {
-        Actor::Regiment(r) => Piece::Regiment(r),
+        Actor::Organization(r) => Piece::Organization(r),
         Actor::Building(b, _) => {
-            let unpacked = (sim.regiments.iter()).position(|r| r.unpacked_into == Some(b));
-            unpacked.map_or(Piece::Building(b), Piece::Regiment)
+            let unpacked = (sim.organizations.iter()).position(|r| r.unpacked_into == Some(b));
+            unpacked.map_or(Piece::Building(b), Piece::Organization)
         }
     })
 }
 
-/// The properties a regiment or building holds that have an icon: its
-/// template's own, then for a regiment its formation's, its terrain's
+/// The properties an organization or building holds that have an icon: its
+/// template's own, then for an organization its formation's, its terrain's
 /// and its stance's, then those it has for a time. Those in `shown` come
 /// first, as they stand there, so that icons keep the order their
 /// properties came in while their holder stays selected.
@@ -529,19 +529,21 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
         kind.into_iter().flat_map(|k| &k.properties).cloned()
     };
     let all: Vec<Id> = match holder {
-        Piece::Regiment(r) => {
-            let regiment = &sim.regiments[r];
+        Piece::Organization(r) => {
+            let organization = &sim.organizations[r];
             // One that's unpacked stands in no formation, and guards nothing.
-            let afield = regiment.unpacked_into.is_none();
-            let formation = regiment.formations.get(regiment.current_formation());
+            let afield = organization.unpacked_into.is_none();
+            let formation = organization
+                .formations
+                .get(organization.current_formation());
             let formation = formation
                 .filter(|_| afield)
                 .and_then(|f| looks.formations.get(&Id::from(f.id.as_str())));
-            let guarding = (afield && regiment.guarding()).then(|| Id::from(GUARDING));
-            let timed = regiment.properties.iter().map(|h| h.property.clone());
-            own(&regiment.template)
+            let guarding = (afield && organization.guarding()).then(|| Id::from(GUARDING));
+            let timed = organization.properties.iter().map(|h| h.property.clone());
+            own(&organization.template)
                 .chain(formation.into_iter().flatten().cloned())
-                .chain(regiment.terrain_properties.iter().cloned())
+                .chain(organization.terrain_properties.iter().cloned())
                 .chain(guarding)
                 .chain(timed)
                 .collect()
@@ -584,7 +586,7 @@ fn detail(
         _ => 0,
     };
     let slots: Vec<Place> = shown_hq(sim, hqs, mode).map_or(Vec::new(), |hq| {
-        let attached = sim.attached(hq.id).map(Place::Regiment);
+        let attached = sim.attached(hq.id).map(Place::Organization);
         let places = (hq.places as usize).min(MAX_SLOTS);
         attached
             .chain(sim.bound_for(hq.id).map(Place::Flown))
@@ -596,12 +598,12 @@ fn detail(
     let own: &[usize] = match mode {
         Mode::Group(rs) => rs,
         _ => match mode.actor() {
-            Some(Actor::Regiment(r)) => std::slice::from_ref(r),
+            Some(Actor::Organization(r)) => std::slice::from_ref(r),
             _ => &[],
         },
     };
     let attached = slots.iter().filter_map(|place| match place {
-        Place::Regiment(r) => Some(*r),
+        Place::Organization(r) => Some(*r),
         _ => None,
     });
     let flying = own.iter().copied().chain(attached);
@@ -725,9 +727,9 @@ impl Ui<'_> {
         self.looks.image(self.game, self.images, path.as_deref())
     }
 
-    fn regiment_name(&self, r: usize) -> String {
+    fn organization_name(&self, r: usize) -> String {
         let looks = &self.looks;
-        regiment_name(self.sim, &looks.names, &looks.strings, &looks.map, r)
+        organization_name(self.sim, &looks.names, &looks.strings, &looks.map, r)
     }
 
     /// The strip across the top: the name over the owner, and, where it
@@ -903,23 +905,24 @@ impl Ui<'_> {
         });
     }
 
-    /// A regiment's banner, as it flies over the regiment, filling `node`.
+    /// An organization's banner, as it flies over the organization, filling
+    /// `node`.
     fn banner(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
-        let regiment = &self.sim.regiments[r];
+        let organization = &self.sim.organizations[r];
         let [red, green, blue] = self
             .sim
             .sides
-            .player(regiment.owner)
+            .player(organization.owner)
             .map_or([1.0; 3], |p| p.rgb);
         let icon = self
             .banners
-            .icon(self.game, self.images, regiment.template.as_str());
-        let template = &regiment.template;
+            .icon(self.game, self.images, organization.template.as_str());
+        let template = &organization.template;
         let shown = self.detail.banners.iter().find(|(of, ..)| *of == r);
         let (wears, lacks) = shown.map_or((None, false), |&(_, wears, lacks)| (wears, lacks));
         let wears = wears.map(|(hq, _)| hq);
         let (badges, banners) = (self.badges, &mut *self.banners);
-        let faction = self.leaders.banner(regiment.owner);
+        let faction = self.leaders.banner(organization.owner);
         let looks = banners.layers(self.game, self.images, template.as_str(), faction);
         let badge = wears
             .and_then(|hq| badges.badge(banners, self.game, self.images, template.as_str(), hq));
@@ -956,7 +959,7 @@ impl Ui<'_> {
             });
     }
 
-    /// An HQ's places: each with the banner and health of the regiment in
+    /// An HQ's places: each with the banner and health of the organization in
     /// it, which a click selects, with the picture and progress of what
     /// `building`'s queue holds it for, which a click calls off, or empty.
     fn slots(&mut self, commands: &mut Commands, root: Entity, building: Option<usize>) {
@@ -968,14 +971,19 @@ impl Ui<'_> {
             let [left, top, side] = SLOT_BANNER;
             let inside = at(left, top, side, side);
             match (place, building) {
-                (Place::Regiment(r), _) => {
+                (Place::Organization(r), _) => {
                     let id = ui::called(format!("object.slot.{}", i + 1));
-                    card.insert((Button, id, Pick(r), says(Says::Regiment(r))));
+                    card.insert((Button, id, Pick(r), says(Says::Organization(r))));
                     card.observe(pick);
                     card.with_children(|card| {
                         self.banner(card, inside, r);
                         let [left, top, width, height] = SLOT_HEALTH;
-                        bar(card, at(left, top, width, height), Fill::Regiment(r), None);
+                        bar(
+                            card,
+                            at(left, top, width, height),
+                            Fill::Organization(r),
+                            None,
+                        );
                     });
                 }
                 (Place::Queued(n), Some(b)) => {
@@ -1020,16 +1028,16 @@ impl Ui<'_> {
     /// or a unit on its own.
     fn simple_actor(&mut self, commands: &mut Commands, root: Entity, actor: &Actor) {
         match *actor {
-            Actor::Regiment(r) => {
+            Actor::Organization(r) => {
                 self.heading(commands, root, r);
-                let regiment = &self.sim.regiments[r];
+                let organization = &self.sim.organizations[r];
                 let captain = captain(self.sim, self.looks, r);
                 let unit = self.sim.units[captain].template.clone();
                 self.defense(commands, root, Target::Unit(captain), &unit);
-                let says = [&regiment.template, &unit];
+                let says = [&organization.template, &unit];
                 let says = says.into_iter().find_map(|t| self.described(t));
                 self.description(commands, root, says);
-                self.status(commands, root, Status::Regiment(r));
+                self.status(commands, root, Status::Organization(r));
             }
             Actor::Building(b, ref queue) => {
                 self.structure(commands, root, b);
@@ -1100,11 +1108,11 @@ impl Ui<'_> {
         });
     }
 
-    /// The company display: a regiment with its units, or an HQ with its
+    /// The company display: an organization with its units, or an HQ with its
     /// places.
     fn company(&mut self, commands: &mut Commands, root: Entity, actor: &Actor) {
         match *actor {
-            Actor::Regiment(r) => self.regiment(commands, root, r),
+            Actor::Organization(r) => self.organization(commands, root, r),
             Actor::Building(b, _) => {
                 self.structure(commands, root, b);
                 // Its places show what it's been asked for.
@@ -1114,27 +1122,33 @@ impl Ui<'_> {
         }
     }
 
-    /// A regiment's name and owner, and its captain's portrait over the
+    /// An organization's name and owner, and its captain's portrait over the
     /// captain's health.
     fn heading(&mut self, commands: &mut Commands, root: Entity, r: usize) {
-        let regiment = &self.sim.regiments[r];
-        self.title(commands, root, self.regiment_name(r), regiment.owner, true);
+        let organization = &self.sim.organizations[r];
+        self.title(
+            commands,
+            root,
+            self.organization_name(r),
+            organization.owner,
+            true,
+        );
         let captain = captain(self.sim, self.looks, r);
         let template = self.sim.units[captain].template.clone();
         let (fill, of) = (Fill::Unit(captain), Says::Unit(captain));
         self.portrait(commands, root, template.as_str(), fill, of);
     }
 
-    fn regiment(&mut self, commands: &mut Commands, root: Entity, r: usize) {
+    fn organization(&mut self, commands: &mut Commands, root: Entity, r: usize) {
         self.heading(commands, root, r);
         let captain = captain(self.sim, self.looks, r);
-        // An HQ shows its places where a regiment shows its units.
+        // An HQ shows its places where an organization shows its units.
         let is_hq = !self.detail.slots.is_empty();
         if !lone(self.sim, r) && !is_hq {
             // Cards across, wrapping, as the game's has them,
             // for all but an officer, who has the portrait.
             let officer = is_officer(self.sim.units[captain].template.as_str());
-            let mut units = self.sim.regiments[r].units.clone();
+            let mut units = self.sim.organizations[r].units.clone();
             units.retain(|&u| !(officer && u == captain));
             let pictures: Vec<_> = units
                 .iter()
@@ -1191,7 +1205,10 @@ impl Ui<'_> {
         if !lone(self.sim, r) {
             commands.entity(root).with_children(|display| {
                 display
-                    .spawn((framed(at(366.0, 44.0, 63.0, 77.0)), says(Says::Regiment(r))))
+                    .spawn((
+                        framed(at(366.0, 44.0, 63.0, 77.0)),
+                        says(Says::Organization(r)),
+                    ))
                     .with_children(|card| {
                         self.banner(
                             card,
@@ -1209,34 +1226,37 @@ impl Ui<'_> {
             });
         }
         self.slots(commands, root, None);
-        self.status(commands, root, Status::Regiment(r));
+        self.status(commands, root, Status::Organization(r));
     }
 
-    /// The group display: a card per regiment.
+    /// The group display: a card per organization.
     fn group(&mut self, commands: &mut Commands, root: Entity, rs: &[usize]) {
         let first = rs[0];
         self.title(
             commands,
             root,
-            self.regiment_name(first),
-            self.sim.regiments[first].owner,
+            self.organization_name(first),
+            self.sim.organizations[first].owner,
             false,
         );
         const CARD: f32 = 66.0;
         for (i, &r) in rs.iter().enumerate() {
             let left = 8.0 + i as f32 * (CARD + 4.0);
-            let icon = self.picture(self.sim.regiments[r].template.as_str());
-            let units = self.sim.regiments[r].units.clone();
+            let icon = self.picture(self.sim.organizations[r].template.as_str());
+            let units = self.sim.organizations[r].units.clone();
             let captain = captain(self.sim, self.looks, r);
             // A thing on its own answers for itself.
             let of = match lone(self.sim, r) {
                 true => Says::Unit(captain),
-                false => Says::Regiment(r),
+                false => Says::Organization(r),
             };
             let mut card = commands.spawn((
                 framed(at(left, HEADER, CARD, 138.0)),
                 Button,
-                ui::called(format!("object.regiment.{}", self.sim.regiments[r].id)),
+                ui::called(format!(
+                    "object.organization.{}",
+                    self.sim.organizations[r].id
+                )),
                 Pick(r),
                 says(of),
                 ChildOf(root),
@@ -1334,8 +1354,8 @@ impl Ui<'_> {
 }
 
 /// The template whose portrait stands for what the display shows, and
-/// its owner: a building's own, or a regiment's primary slot's, which for
-/// an HQ is the building once it's unpacked. None for a regiment with no
+/// its owner: a building's own, or an organization's primary slot's, which for
+/// an HQ is the building once it's unpacked. None for an organization with no
 /// such slot, and for several things.
 fn portrayed<'a>(sim: &'a World, looks: &'a Looks, mode: &Mode) -> Option<(&'a str, u32)> {
     match mode.actor()? {
@@ -1343,17 +1363,17 @@ fn portrayed<'a>(sim: &'a World, looks: &'a Looks, mode: &Mode) -> Option<(&'a s
             let building = &sim.buildings[*b];
             Some((building.template.as_str(), building.owner))
         }
-        Actor::Regiment(r) => {
-            let regiment = &sim.regiments[*r];
-            let template = match regiment.unpacked_into {
+        Actor::Organization(r) => {
+            let organization = &sim.organizations[*r];
+            let template = match organization.unpacked_into {
                 Some(b) => sim.buildings[b].template.as_str(),
                 // A unit on its own is no organization.
-                None => match looks.primaries.get(&regiment.template) {
+                None => match looks.primaries.get(&organization.template) {
                     Some(primary) => primary.as_ref()?.as_str(),
-                    None => regiment.template.as_str(),
+                    None => organization.template.as_str(),
                 },
             };
-            Some((template, regiment.owner))
+            Some((template, organization.owner))
         }
     }
 }
@@ -1402,10 +1422,10 @@ pub fn portray(
     let wanted = mode.and_then(|mode| {
         let (template, owner) = portrayed(&sim.0, &looks, mode)?;
         // Each thing shown on its own gets a portrait afresh, where a
-        // regiment keeps one that's already up.
+        // organization keeps one that's already up.
         let alone = match mode {
             Mode::SimpleActor(Actor::Building(b, _)) => Some((true, *b)),
-            Mode::SimpleActor(Actor::Regiment(r)) => Some((false, *r)),
+            Mode::SimpleActor(Actor::Organization(r)) => Some((false, *r)),
             _ => None,
         };
         Some((sitter(&drawn, &leaders, template, owner), alone))
@@ -1473,7 +1493,9 @@ pub fn refresh(
         let share = match (*fill, full > 0.0) {
             (_, true) => now / full,
             // What has no health to lose shows whole.
-            (Fill::Unit(_) | Fill::Regiment(_) | Fill::Building(_) | Fill::Flight, false) => 1.0,
+            (Fill::Unit(_) | Fill::Organization(_) | Fill::Building(_) | Fill::Flight, false) => {
+                1.0
+            }
             (Fill::Progress(_) | Fill::Stockpile(_), false) => 0.0,
         };
         if meter.share != share {
@@ -1561,7 +1583,7 @@ pub fn refresh(
     }
     for (status, mut text) in &mut statuses {
         let ids = match *status {
-            Status::Regiment(r) => regiment_state(sim, r),
+            Status::Organization(r) => organization_state(sim, r),
             Status::Building(b) => building_state(sim, b),
         };
         let words = ids.map(|i| looks.state(i)).unwrap_or_default();
@@ -1571,17 +1593,17 @@ pub fn refresh(
     }
 }
 
-/// What a regiment's doing, as the game's actor state ids.
-fn regiment_state(sim: &World, r: usize) -> Option<&'static str> {
-    let regiment = &sim.regiments[r];
+/// What an organization's doing, as the game's actor state ids.
+fn organization_state(sim: &World, r: usize) -> Option<&'static str> {
+    let organization = &sim.organizations[r];
     if sim.destroyed(r) {
         return None;
     }
     Some(match () {
-        _ if !regiment.engaged.is_empty() => "mind_engaged",
-        _ if matches!(regiment.order, Order::Pursue(_)) => "mind_attacking",
-        _ if regiment.guarding() => "mind_guarding",
-        _ if sim.underway(r) || regiment.unpack_at.is_some() => match regiment.order {
+        _ if !organization.engaged.is_empty() => "mind_engaged",
+        _ if matches!(organization.order, Order::Pursue(_)) => "mind_attacking",
+        _ if organization.guarding() => "mind_guarding",
+        _ if sim.underway(r) || organization.unpack_at.is_some() => match organization.order {
             Order::Run => "mind_retreating",
             Order::Attack | Order::Pursue(_) => "mind_attacking",
             Order::Move => "mind_moving",
@@ -1627,8 +1649,8 @@ fn measure(sim: &World, fill: Fill) -> (f32, f32) {
     };
     match fill {
         Fill::Unit(u) => unit(u),
-        Fill::Regiment(r) => {
-            let units = sim.regiments[r].units.iter().map(|&u| unit(u));
+        Fill::Organization(r) => {
+            let units = sim.organizations[r].units.iter().map(|&u| unit(u));
             let shares: Vec<f32> = units
                 .filter(|&(_, full)| full > 0.0)
                 .map(|(now, full)| now / full)
@@ -1668,7 +1690,7 @@ struct Teller<'a> {
 impl Teller<'_> {
     /// The lines of a thing's tooltip: its template's name, then what
     /// applies to it of its health, its stockpile and its faction. A
-    /// regiment has no health of its own to give.
+    /// organization has no health of its own to give.
     fn tip(&self, says: Says) -> Vec<String> {
         let (sim, looks) = (self.sim, self.looks);
         let name = |template: &Id| template_name(&looks.names, template.as_str());
@@ -1684,7 +1706,7 @@ impl Teller<'_> {
                 }
                 // One that's dead says only what its template would.
                 if unit.alive() {
-                    let owner = sim.regiments[unit.regiment].owner;
+                    let owner = sim.organizations[unit.organization].owner;
                     lines.extend(self.faction(&unit.template, owner));
                 }
                 lines
@@ -1703,7 +1725,7 @@ impl Teller<'_> {
                 lines.extend(self.faction(&building.template, building.owner));
                 lines
             }
-            Says::Regiment(r) => vec![name(&sim.regiments[r].template)],
+            Says::Organization(r) => vec![name(&sim.organizations[r].template)],
             Says::Queued {
                 building: b,
                 place,
@@ -1778,13 +1800,13 @@ fn ours(sim: &World, local: Option<u32>, owner: u32) -> bool {
 fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
     let (owner, ledger) = match status {
         Status::Building(b) => (sim.buildings[b].owner, sim.building_ledger(b)),
-        Status::Regiment(r) => {
-            let regiment = &sim.regiments[r];
-            let ledger = match regiment.unpacked_into {
+        Status::Organization(r) => {
+            let organization = &sim.organizations[r];
+            let ledger = match organization.unpacked_into {
                 Some(b) => sim.building_ledger(b),
-                None => sim.regiment_ledger(r),
+                None => sim.organization_ledger(r),
             };
-            (regiment.owner, ledger)
+            (organization.owner, ledger)
         }
     };
     ours(sim, local, owner).then_some(ledger)
@@ -1811,29 +1833,29 @@ fn economy(ledger: &Ledger, resources: &[aaa_data::ResourceKind]) -> Vec<(Id, St
     entries.collect()
 }
 
-/// A regiment's name as the game gives it: the one its map gives it, else
+/// An organization's name as the game gives it: the one its map gives it, else
 /// its template's, numbered if it's one its side numbers. `names` are the
 /// templates' names, by template, `strings` the game's text, for the
 /// numbering, and `map` the map's own.
-pub(crate) fn regiment_name(
+pub(crate) fn organization_name(
     sim: &World,
     names: &HashMap<Id, String>,
     strings: &aaa_data::Strings,
     map: &aaa_data::Strings,
     r: usize,
 ) -> String {
-    let regiment = &sim.regiments[r];
-    if let Some(name) = map_name(map, regiment.id) {
+    let organization = &sim.organizations[r];
+    if let Some(name) = map_name(map, organization.id) {
         return name;
     }
     numbered(
         strings,
-        regiment.number,
-        template_name(names, regiment.template.as_str()),
+        organization.number,
+        template_name(names, organization.template.as_str()),
     )
 }
 
-/// A building's name, as [`regiment_name`]: numbered as the organization
+/// A building's name, as [`organization_name`]: numbered as the organization
 /// it stands in is. A city's buildings go by the name the map gives the
 /// city.
 pub(crate) fn building_name(
@@ -1889,27 +1911,27 @@ pub(crate) fn numbered(strings: &aaa_data::Strings, number: Option<u32>, name: S
     }
 }
 
-/// Whether a regiment is a unit on its own, such as a truck.
+/// Whether an organization is a unit on its own, such as a truck.
 pub(crate) fn lone(sim: &World, r: usize) -> bool {
-    let regiment = &sim.regiments[r];
-    matches!(&regiment.units[..], [u] if sim.units[*u].template == regiment.template)
+    let organization = &sim.organizations[r];
+    matches!(&organization.units[..], [u] if sim.units[*u].template == organization.template)
 }
 
-/// A regiment's captain, whose portrait stands for it: the unit in its
+/// An organization's captain, whose portrait stands for it: the unit in its
 /// primary slot, else its leader.
 fn captain(sim: &World, looks: &Looks, r: usize) -> usize {
-    let regiment = &sim.regiments[r];
-    let primary = (looks.primaries.get(&regiment.template)).and_then(|p| p.as_ref());
+    let organization = &sim.organizations[r];
+    let primary = (looks.primaries.get(&organization.template)).and_then(|p| p.as_ref());
     let unit = primary.and_then(|template| {
         let is = |&&u: &&usize| sim.units[u].template == *template;
-        regiment.units.iter().find(is).copied()
+        organization.units.iter().find(is).copied()
     });
     unit.unwrap_or_else(|| leader(sim, r))
 }
 
-/// A regiment's commanding officer, else its first unit.
+/// An organization's commanding officer, else its first unit.
 fn leader(sim: &World, r: usize) -> usize {
-    let units = &sim.regiments[r].units;
+    let units = &sim.organizations[r].units;
     let officer = units
         .iter()
         .copied()
@@ -1917,7 +1939,7 @@ fn leader(sim: &World, r: usize) -> usize {
     officer.unwrap_or(units[0])
 }
 
-/// Whether a unit template is a regiment's commanding officer, which the
+/// Whether a unit template is an organization's commanding officer, which the
 /// game names `..._co`.
 fn is_officer(template: &str) -> bool {
     template.to_ascii_lowercase().ends_with("_co")
@@ -1953,7 +1975,7 @@ fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill, of: Option<Say
     }
 }
 
-/// A regiment's card clicked: selects it alone, in place of any building.
+/// An organization's card clicked: selects it alone, in place of any building.
 fn pick(
     activate: On<Activate>,
     cards: Query<&Pick>,
@@ -2032,7 +2054,7 @@ mod tests {
             line.map(|(kind, figure)| format!("{kind} {figure}"))
                 .collect()
         };
-        // An HQ's truck: what it earns, the regiments it makes room for,
+        // An HQ's truck: what it earns, the organizations it makes room for,
         // and the building it counts as.
         let truck = ledger(
             &[("money", 12.0), ("ammo", 5.0), ("unit_limit_provided", 6.0)],
@@ -2047,7 +2069,7 @@ mod tests {
                 "building_limit_consumed 1"
             ]
         );
-        // A regiment: what it takes to keep, and the one it counts as.
+        // An organization: what it takes to keep, and the one it counts as.
         let tanks = ledger(
             &[("ammo", 2.5)],
             &[("ammo", 22.5), ("oil", 20.0), ("unit_limit_consumed", 1.0)],
@@ -2117,7 +2139,7 @@ mod tests {
     }
 
     #[test]
-    fn regiments_are_numbered_in_english() {
+    fn organizations_are_numbered_in_english() {
         let words: Vec<String> = [1, 2, 3, 4, 11, 12, 13, 21, 22, 101].map(ordinal).into();
         assert_eq!(
             words,

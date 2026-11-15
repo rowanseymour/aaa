@@ -1,25 +1,25 @@
-//! Getting rid of what a side owns: disbanding regiments and trucks, and
+//! Getting rid of what a side owns: disbanding organizations and trucks, and
 //! selling buildings.
 
 use crate::economy::money;
 use crate::{Left, Notice, Piece, Refused, State, World};
 
 impl World {
-    /// Whether a regiment is a lone unit rather than an organization, as a
-    /// depot's truck is.
-    pub fn lone(&self, regiment: usize) -> bool {
-        let r = &self.regiments[regiment];
+    /// Whether an organization is a lone unit, as a depot's truck is,
+    /// rather than one an organization template raises.
+    pub fn lone(&self, organization: usize) -> bool {
+        let r = &self.organizations[organization];
         matches!(&r.units[..], [u] if self.units[*u].template == r.template)
     }
 
-    /// Whether `player` may disband `regiment` now. A lone unit can be
-    /// disbanded even while it fights; an organization can't while it's
-    /// engaged or attached to an HQ.
-    pub fn may_disband(&self, player: u32, regiment: usize) -> Result<(), Refused> {
-        self.may_command(player, regiment)?;
-        let r = &self.regiments[regiment];
+    /// Whether `player` may disband `organization` now. A lone unit can be
+    /// disbanded even while it fights; any other organization can't while
+    /// it's engaged or attached to an HQ.
+    pub fn may_disband(&self, player: u32, organization: usize) -> Result<(), Refused> {
+        self.may_command(player, organization)?;
+        let r = &self.organizations[organization];
         let fighting = !r.engaged.is_empty() || r.hq.is_some();
-        if r.unpack_at.is_some() || (!self.lone(regiment) && fighting) {
+        if r.unpack_at.is_some() || (!self.lone(organization) && fighting) {
             return Err(Refused::Unable);
         }
         Ok(())
@@ -48,15 +48,15 @@ impl World {
         (cost.get(money(&self.rules.economy)) * self.rules.economy.sell_factor).round()
     }
 
-    /// Takes a regiment's members off the map at once, without their dying.
-    /// An organization's owner is told it's destroyed, as are enemies who
-    /// see it; a lone unit just goes.
-    pub(crate) fn disband(&mut self, regiment: usize) {
-        if let Some(hq) = self.packed_hq(regiment) {
+    /// Takes an organization's members off the map at once, without their
+    /// dying. A lone unit just goes; for any other organization, its owner
+    /// is told it's destroyed, as are enemies who see it.
+    pub(crate) fn disband(&mut self, organization: usize) {
+        if let Some(hq) = self.packed_hq(organization) {
             self.detach_all(hq);
         }
         let ticks = self.ticks;
-        for u in self.regiments[regiment].units.clone() {
+        for u in self.organizations[organization].units.clone() {
             let unit = &mut self.units[u];
             if unit.alive() {
                 unit.left = Some(Left::Disbanded(ticks));
@@ -66,13 +66,13 @@ impl World {
                 unit.speed = 0.0;
             }
         }
-        let r = &mut self.regiments[regiment];
+        let r = &mut self.organizations[organization];
         r.engaged.clear();
         r.guard = None;
         r.resume = None;
-        if !self.lone(regiment) {
-            let owner = self.regiments[regiment].owner;
-            let what = Piece::Regiment(regiment);
+        if !self.lone(organization) {
+            let owner = self.organizations[organization].owner;
+            let what = Piece::Organization(organization);
             self.notices.push(Notice::Destroyed { owner, what });
         }
     }
@@ -86,7 +86,7 @@ impl World {
 
     /// Takes a building off the map for good, leaving it as `state`: its
     /// ground free again, with nothing queued, aimed at or besieging it.
-    /// An HQ loses its regiments.
+    /// An HQ loses its organizations.
     pub(crate) fn remove(&mut self, building: usize, state: State) {
         if let Some(hq) = self.hq_of(building) {
             self.detach_all(hq);
@@ -135,30 +135,30 @@ mod tests {
     }
 
     #[test]
-    fn regiments_disband_unless_fighting_or_attached_and_lone_units_go_quietly() {
+    fn organizations_disband_unless_fighting_or_attached_and_lone_units_go_quietly() {
         let mut w = division();
-        let disband = |regiment| Command::Disband { regiment };
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        let disband = |organization| Command::Disband { organization };
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
         assert_eq!(w.check(1, &disband(1)), Err(Refused::Unable));
-        w.apply(1, Command::Detach { regiment: 1 }).unwrap();
-        w.regiments[1].engaged.push(Piece::Regiment(0));
+        w.apply(1, Command::Detach { organization: 1 }).unwrap();
+        w.organizations[1].engaged.push(Piece::Organization(0));
         assert_eq!(w.check(1, &disband(1)), Err(Refused::Unable));
         // A lone unit goes even while it fights.
-        w.regiments[0].engaged.push(Piece::Regiment(1));
+        w.organizations[0].engaged.push(Piece::Organization(1));
         assert_eq!(w.check(1, &disband(0)), Ok(()));
         assert_eq!(w.check(2, &disband(0)), Err(Refused::NotYours));
-        w.regiments[1].engaged.clear();
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
-        w.apply(1, Command::Detach { regiment: 1 }).unwrap();
+        w.organizations[1].engaged.clear();
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        w.apply(1, Command::Detach { organization: 1 }).unwrap();
         w.notices.clear();
         w.apply(1, disband(1)).unwrap();
         assert!(w.destroyed(1));
         // Gone, not killed, and its owner is told as for any loss.
-        let units = &w.regiments[1].units;
+        let units = &w.organizations[1].units;
         assert!(units.iter().all(|&u| w.units[u].died.is_none()));
         let lost = Notice::Destroyed {
             owner: 1,
-            what: Piece::Regiment(1),
+            what: Piece::Organization(1),
         };
         assert_eq!(w.notices, [lost]);
         assert_eq!(w.check(1, &disband(1)), Err(Refused::NotYours));
@@ -166,12 +166,12 @@ mod tests {
         let mut c = raised_company(&mut w, 1);
         c.renumber(80);
         c.place([26.0, 20.0], [0.0, 1.0]);
-        let r = w.add_regiment(&c);
-        w.apply(1, Command::Attach { regiment: r }).unwrap();
+        let r = w.add_organization(&c);
+        w.apply(1, Command::Attach { organization: r }).unwrap();
         w.notices.clear();
         w.apply(1, disband(0)).unwrap();
         assert!(w.destroyed(0));
-        assert_eq!(w.regiments[r].hq, None);
+        assert_eq!(w.organizations[r].hq, None);
         assert!(w.notices.is_empty());
     }
 
@@ -182,15 +182,15 @@ mod tests {
         t.owner = 1;
         t.renumber(30);
         t.place([30.0, 30.0], [0.0, 1.0]);
-        let r = w.add_regiment(&t);
+        let r = w.add_organization(&t);
         let unpack = Command::Unpack {
-            regiment: r,
+            organization: r,
             at: [30.0, 40.0],
             facing: NORTH,
         };
         w.apply(1, unpack).unwrap();
         assert_eq!(
-            w.check(1, &Command::Disband { regiment: r }),
+            w.check(1, &Command::Disband { organization: r }),
             Err(Refused::Unable)
         );
     }
@@ -236,32 +236,32 @@ mod tests {
     }
 
     #[test]
-    fn selling_an_hq_detaches_its_regiments_and_takes_its_regiment_too() {
+    fn selling_an_hq_detaches_its_organizations_and_takes_its_organization_too() {
         let mut w = division();
         w.rules.economies.get_mut(&Id::from("depot")).unwrap().cost = amounts(&[("money", 100.0)]);
         w.rules.sellable.insert(Id::from("depot"));
         w.rules.economy.sell_factor = 0.5;
-        w.apply(1, Command::Attach { regiment: 1 }).unwrap();
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
         let unpack = Command::Unpack {
-            regiment: 0,
+            organization: 0,
             at: [30.0, 40.0],
             facing: NORTH,
         };
         w.apply(1, unpack).unwrap();
         run(&mut w, 11.0);
-        let depot = w.regiments[0].unpacked_into.unwrap();
+        let depot = w.organizations[0].unpacked_into.unwrap();
         assert_eq!(w.hq_of(depot), Some(50));
-        assert_eq!(w.regiments[1].hq, Some(50));
+        assert_eq!(w.organizations[1].hq, Some(50));
         let before = w.stockpile(1);
         w.notices.clear();
         w.apply(1, Command::Sell { building: depot }).unwrap();
         assert_eq!(w.stockpile(1), before + 50.0);
-        assert_eq!(w.regiments[1].hq, None);
+        assert_eq!(w.organizations[1].hq, None);
         assert!(w.hqs().is_empty());
-        // Its regiment goes with it, telling no one it's destroyed.
+        // Its organization goes with it, telling no one it's destroyed.
         assert!(w.destroyed(0));
         assert_eq!(
-            w.check(1, &Command::Disband { regiment: 0 }),
+            w.check(1, &Command::Disband { organization: 0 }),
             Err(Refused::NotYours)
         );
         let sold = Notice::Sold {

@@ -1,5 +1,5 @@
-//! The banner over each regiment: a plate in its owner's colour showing
-//! what the regiment is and the badge of the HQ it's attached to, with
+//! The banner over each organization: a plate in its owner's colour showing
+//! what the organization is and the badge of the HQ it's attached to, with
 //! crossed rifles behind it while it's engaged, brackets around it while
 //! the cursor is on it, and a border while it's out of supply or its side
 //! can't pay its upkeep.
@@ -17,18 +17,18 @@ use bevy::ui::RelativeCursorPosition;
 
 use crate::{Drawn, Focus, Leaders, Loaded, Local, Screen, Sim, TINTS, tint};
 
-/// How high over the ground under its regiment a banner floats, in world
+/// How high over the ground under its organization a banner floats, in world
 /// units.
 const HEIGHT: f32 = 4.0;
 
 /// A banner's size, square, as a share of the view's height; the same
-/// however far away its regiment is.
+/// however far away its organization is.
 const SIZE: f32 = 0.075;
 
-/// The banner of the regiment at this index into the sim's regiments.
+/// The banner of the organization at this index into the sim's organizations.
 #[derive(Component)]
 pub struct Banner {
-    regiment: usize,
+    organization: usize,
     plate: Entity,
     engaged: Entity,
     focus: Entity,
@@ -111,7 +111,7 @@ impl Badges {
         self.0.get(&hq)?.side
     }
 
-    /// The badge a regiment of `template` wears when it's attached to, or
+    /// The badge an organization of `template` wears when it's attached to, or
     /// is, the HQ with this id. Any of a nation's templates finds its
     /// badges.
     pub fn badge(
@@ -134,28 +134,28 @@ impl Badges {
     }
 }
 
-/// The HQ whose badge the regiment at `r` wears: the one it's attached to,
+/// The HQ whose badge the organization at `r` wears: the one it's attached to,
 /// or the one it is.
 pub fn wears(sim: &aaa_sim::World, hqs: &[aaa_sim::Hq], r: usize) -> Option<u32> {
-    let regiment = &sim.regiments[r];
-    let is_hq = hqs.iter().any(|h| h.id == regiment.id);
-    regiment.hq.or(is_hq.then_some(regiment.id))
+    let organization = &sim.organizations[r];
+    let is_hq = hqs.iter().any(|h| h.id == organization.id);
+    organization.hq.or(is_hq.then_some(organization.id))
 }
 
 /// How long the upkeep shortage's border shows for, and then doesn't, in
 /// seconds.
 const FLASH: f32 = 0.5;
 
-/// The templates of regiments that fly no banner and that players can't
+/// The templates of organizations that fly no banner and that players can't
 /// focus or select, such as animal herds.
 #[derive(Resource)]
 pub struct Scenery(HashSet<Id>);
 
 impl Scenery {
-    /// Whether the regiment at this index into the sim's regiments is
+    /// Whether the organization at this index into the sim's organizations is
     /// scenery.
-    pub fn has(&self, sim: &aaa_sim::World, regiment: usize) -> bool {
-        self.0.contains(&sim.regiments[regiment].template)
+    pub fn has(&self, sim: &aaa_sim::World, organization: usize) -> bool {
+        self.0.contains(&sim.organizations[organization].template)
     }
 }
 
@@ -342,7 +342,7 @@ pub fn show_hq_banners(
         };
         *visibility = Visibility::Inherited;
         crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
-        // As near as a regiment's banner there, which flies lower, would be.
+        // As near as an organization's banner there, flying lower, would be.
         let low = over - Vec3::Y * (HQ_HEIGHT - HEIGHT);
         let near = camera.world_to_viewport(&global, low).map_or(p.y, |p| p.y);
         *z = ZIndex(near as i32);
@@ -366,7 +366,7 @@ pub fn show_hq_banners(
 }
 
 /// Spawns a banner, hidden until [`show_banners`] places it, for each
-/// regiment that has none yet: those the map starts with and any raised
+/// organization that has none yet: those the map starts with and any raised
 /// since.
 #[allow(clippy::too_many_arguments)]
 pub fn add_banners(
@@ -379,24 +379,24 @@ pub fn add_banners(
     mut images: ResMut<Assets<Image>>,
     mut have: bevy::prelude::Local<usize>,
 ) {
-    // Regiments are only ever added, at the end, until another match.
+    // Organizations are only ever added, at the end, until another match.
     if sim.is_added() {
         *have = 0;
     }
-    let new = sim.0.regiments.iter().enumerate().skip(*have);
-    *have = sim.0.regiments.len();
-    for (r, regiment) in new {
+    let new = sim.0.organizations.iter().enumerate().skip(*have);
+    *have = sim.0.organizations.len();
+    for (r, organization) in new {
         if scenery.has(&sim.0, r) {
             continue;
         }
         let [red, green, blue] = sim
             .0
             .sides
-            .player(regiment.owner)
+            .player(organization.owner)
             .map_or([1.0; 3], |p| p.rgb);
-        let icon = banners.icon(&loaded.game, &mut images, regiment.template.as_str());
-        let faction = leaders.banner(regiment.owner);
-        let template = regiment.template.as_str();
+        let icon = banners.icon(&loaded.game, &mut images, organization.template.as_str());
+        let faction = leaders.banner(organization.owner);
+        let template = organization.template.as_str();
         let looks = banners.layers(&loaded.game, &mut images, template, faction);
         // Only organization templates name a banner icon, so a unit outside
         // one, such as a supply truck, flies no banner.
@@ -441,7 +441,7 @@ pub fn add_banners(
             focus,
         ]);
         root.insert(Banner {
-            regiment: r,
+            organization: r,
             plate,
             engaged,
             focus,
@@ -450,12 +450,12 @@ pub fn add_banners(
             frame,
             badge,
             wears: None,
-            owner: regiment.owner,
+            owner: organization.owner,
         });
     }
 }
 
-/// Places each live regiment's banner over where its units stand, nearer
+/// Places each live organization's banner over where its units stand, nearer
 /// ones over farther, and shows its rifles and brackets as they apply.
 #[allow(clippy::too_many_arguments)]
 pub fn show_banners(
@@ -483,9 +483,9 @@ pub fn show_banners(
     // Whether each owner met so far can't pay its upkeep.
     let mut short: HashMap<u32, bool> = HashMap::new();
     for (banner, mut node, mut z, mut visibility) in &mut banners {
-        let regiment = &sim.0.regiments[banner.regiment];
+        let organization = &sim.0.organizations[banner.organization];
         let live = || {
-            regiment
+            organization
                 .units
                 .iter()
                 .map(|&u| &sim.0.units[u])
@@ -493,16 +493,16 @@ pub fn show_banners(
         };
         let count = live().count();
         // Unpacked, or on its way in or out, its building flies the banner.
-        let housed = regiment
+        let housed = organization
             .unpacked_into
             .is_some_and(|b| sim.0.hq_of(b).is_some());
         // One being dropped is where it'll form up, until all are down.
-        let awaited = (regiment.units.first())
-            .filter(|_| regiment.arriving)
+        let awaited = (organization.units.first())
+            .filter(|_| organization.arriving)
             .map(|&u| &sim.0.units[u]);
         let at = awaited.or(live().next()).filter(|_| !housed).map(|first| {
             let [x, y] = match awaited {
-                Some(_) => regiment.position,
+                Some(_) => organization.position,
                 None => {
                     let at = live().map(|u| Vec2::from(u.drawn_at(t)));
                     (at.sum::<Vec2>() / count as f32).to_array()
@@ -513,8 +513,8 @@ pub fn show_banners(
         });
         // With none down for the fog to show, as the ground there is.
         let dropping = awaited.is_some() && count == 0;
-        let seen = fog.shows_regiment(&sim.0, banner.regiment)
-            || dropping && fog.at(regiment.position) == aaa_sim::Seen::Visible;
+        let seen = fog.shows_organization(&sim.0, banner.organization)
+            || dropping && fog.at(organization.position) == aaa_sim::Seen::Visible;
         let at = at.filter(|_| seen);
         let Some(p) = at.and_then(|p| camera.world_to_viewport(&global, p).ok()) else {
             *visibility = Visibility::Hidden;
@@ -526,35 +526,35 @@ pub fn show_banners(
         *z = ZIndex(p.y as i32);
         // Its owner's colour, whoever that is now.
         if let Ok((mut image, _)) = layers.get_mut(banner.plate) {
-            let [r, g, b] = (sim.0.sides.player(regiment.owner)).map_or([1.0; 3], |p| p.rgb);
+            let [r, g, b] = (sim.0.sides.player(organization.owner)).map_or([1.0; 3], |p| p.rgb);
             let colour = Color::srgb(r, g, b);
             if image.color != colour {
                 image.color = colour;
             }
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.engaged) {
-            v.set_if_neq(show(!regiment.engaged.is_empty()));
+            v.set_if_neq(show(!organization.engaged.is_empty()));
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.out_of_supply) {
-            v.set_if_neq(show(sim.0.lacks_supply(banner.regiment)));
+            v.set_if_neq(show(sim.0.lacks_supply(banner.organization)));
         }
         if let Ok((_, mut v)) = layers.get_mut(banner.shortage) {
-            let owner = regiment.owner;
+            let owner = organization.owner;
             let short = *(short.entry(owner)).or_insert_with(|| sim.0.short(owner).is_some());
             v.set_if_neq(show(short && time.elapsed_secs() % (2.0 * FLASH) < FLASH));
         }
         if let Ok((mut image, mut v)) = layers.get_mut(banner.focus) {
-            let focused = *focus == Focus::Regiment(banner.regiment);
+            let focused = *focus == Focus::Organization(banner.organization);
             v.set_if_neq(show(focused));
             if focused {
-                image.color = TINTS[tint(&sim.0, local.0, regiment.owner)];
+                image.color = TINTS[tint(&sim.0, local.0, organization.owner)];
             }
         }
     }
 }
 
 /// Gives each HQ raised since the map's a badge, and each that's changed
-/// side another, and shows on each banner that of the HQ its regiment is
+/// side another, and shows on each banner that of the HQ its organization is
 /// attached to, or is, and the banner of the faction of the side it's now
 /// on.
 pub fn badge_banners(
@@ -578,7 +578,7 @@ pub fn badge_banners(
     };
     // How many badges a nation has, or that of an HQ's own template.
     let count = |hq: u32, nation: Option<&str>| {
-        let packed = sim.0.regiments.iter().find(|r| r.id == hq);
+        let packed = sim.0.organizations.iter().find(|r| r.id == hq);
         let unpacked = || (0..sim.0.buildings.len()).find(|&b| sim.0.hq_of(b) == Some(hq));
         let template = match packed {
             Some(r) => Some(r.template.as_str()),
@@ -591,12 +591,17 @@ pub fn badge_banners(
     };
     badges.settle(&hqs, nation, count);
     for mut banner in &mut banners {
-        let regiment = &sim.0.regiments[banner.regiment];
-        if banner.owner != regiment.owner {
-            banner.owner = regiment.owner;
+        let organization = &sim.0.organizations[banner.organization];
+        if banner.owner != organization.owner {
+            banner.owner = organization.owner;
             let (banners, assets) = (&mut *images.0, &mut *images.1);
-            let faction = leaders.banner(regiment.owner);
-            let looks = banners.layers(&loaded.game, assets, regiment.template.as_str(), faction);
+            let faction = leaders.banner(organization.owner);
+            let looks = banners.layers(
+                &loaded.game,
+                assets,
+                organization.template.as_str(),
+                faction,
+            );
             let drawn = [
                 (banner.frame, looks.frame),
                 (banner.engaged, looks.engaged),
@@ -609,13 +614,13 @@ pub fn badge_banners(
                 }
             }
         }
-        let wears = wears(&sim.0, &hqs, banner.regiment).map(|hq| (hq, badges.side(hq)));
+        let wears = wears(&sim.0, &hqs, banner.organization).map(|hq| (hq, badges.side(hq)));
         if banner.wears == wears {
             continue;
         }
         banner.wears = wears;
-        let regiment = &sim.0.regiments[banner.regiment];
-        let template = &regiment.template;
+        let organization = &sim.0.organizations[banner.organization];
+        let template = &organization.template;
         let (banners, assets) = (&mut *images.0, &mut *images.1);
         let Ok((mut image, mut visibility)) = layers.get_mut(banner.badge) else {
             continue;
@@ -638,10 +643,10 @@ pub type Pointed<B> = (
     &'static Visibility,
 );
 
-/// The regiment or HQ building whose banner the cursor is on: the nearest
-/// where they overlap, and a regiment's over an HQ's as near.
+/// The organization or HQ building whose banner the cursor is on: the nearest
+/// where they overlap, and an organization's over an HQ's as near.
 pub fn under_cursor(
-    regiments: &Query<Pointed<Banner>>,
+    organizations: &Query<Pointed<Banner>>,
     hqs: &Query<Pointed<HqBanner>>,
 ) -> Option<Focus> {
     let on = |cursor: &RelativeCursorPosition, visibility: &Visibility| {
@@ -650,11 +655,11 @@ pub fn under_cursor(
     let hqs = (hqs.iter())
         .filter(|(_, cursor, _, v)| on(cursor, v))
         .map(|(banner, _, z, _)| (Focus::Building(banner.building), z.0));
-    let regiments = (regiments.iter())
+    let organizations = (organizations.iter())
         .filter(|(_, cursor, _, v)| on(cursor, v))
-        .map(|(banner, _, z, _)| (Focus::Regiment(banner.regiment), z.0));
-    // Regiments come last, to win where they're as near.
-    nearest(hqs.chain(regiments))
+        .map(|(banner, _, z, _)| (Focus::Organization(banner.organization), z.0));
+    // Organizations come last, to win where they're as near.
+    nearest(hqs.chain(organizations))
 }
 
 /// The nearest drawn of what banners fly for, each given with how near, and
@@ -671,18 +676,18 @@ mod tests {
 
     #[test]
     fn nearest_banner_wins() {
-        let (regiment, building) = (Focus::Regiment(3), Focus::Building(1));
+        let (organization, building) = (Focus::Organization(3), Focus::Building(1));
         assert_eq!(nearest([].into_iter()), None);
         assert_eq!(nearest([(building, 9)].into_iter()), Some(building));
         // Whichever kind is nearer, whatever order they come in.
-        let banners = [(building, 5), (regiment, 2)];
+        let banners = [(building, 5), (organization, 2)];
         assert_eq!(nearest(banners.into_iter()), Some(building));
         assert_eq!(nearest(banners.into_iter().rev()), Some(building));
-        let banners = [(building, 2), (regiment, 5)];
-        assert_eq!(nearest(banners.into_iter()), Some(regiment));
+        let banners = [(building, 2), (organization, 5)];
+        assert_eq!(nearest(banners.into_iter()), Some(organization));
         // As near as each other, the later wins.
-        let banners = [(building, 4), (regiment, 4)];
-        assert_eq!(nearest(banners.into_iter()), Some(regiment));
+        let banners = [(building, 4), (organization, 4)];
+        assert_eq!(nearest(banners.into_iter()), Some(organization));
     }
 
     #[test]
@@ -748,8 +753,8 @@ mod tests {
             };
             (cursor, ZIndex(z), visibility)
         };
-        let regiment = |regiment: usize| Banner {
-            regiment,
+        let organization = |organization: usize| Banner {
+            organization,
             plate: none,
             engaged: none,
             focus: none,
@@ -769,20 +774,20 @@ mod tests {
             shortage: none,
         };
         let picked = |world: &mut World| {
-            let pick = |regiments: Query<Pointed<Banner>>, hqs: Query<Pointed<HqBanner>>| {
-                under_cursor(&regiments, &hqs)
+            let pick = |organizations: Query<Pointed<Banner>>, hqs: Query<Pointed<HqBanner>>| {
+                under_cursor(&organizations, &hqs)
             };
             world.run_system_once(pick).unwrap()
         };
         // Those the cursor is off, or that are hidden, don't count.
-        world.spawn((regiment(3), pointed(false, 9, Visibility::Inherited)));
+        world.spawn((organization(3), pointed(false, 9, Visibility::Inherited)));
         world.spawn((hq(4), pointed(true, 9, Visibility::Hidden)));
         assert_eq!(picked(&mut world), None);
         world.spawn((hq(1), pointed(true, 2, Visibility::Inherited)));
         assert_eq!(picked(&mut world), Some(Focus::Building(1)));
-        // A regiment's wins over an HQ's as near, and a nearer HQ's over it.
-        world.spawn((regiment(7), pointed(true, 2, Visibility::Inherited)));
-        assert_eq!(picked(&mut world), Some(Focus::Regiment(7)));
+        // An organization's wins over an HQ's as near; a nearer HQ's over it.
+        world.spawn((organization(7), pointed(true, 2, Visibility::Inherited)));
+        assert_eq!(picked(&mut world), Some(Focus::Organization(7)));
         world.spawn((hq(2), pointed(true, 5, Visibility::Inherited)));
         assert_eq!(picked(&mut world), Some(Focus::Building(2)));
     }

@@ -1,4 +1,4 @@
-//! Deliveries: regiments a building recruits to a place, flown in from
+//! Deliveries: organizations a building recruits to a place, flown in from
 //! the map's edge and dropped there by parachute.
 
 use std::f32::consts::FRAC_PI_4;
@@ -72,7 +72,7 @@ impl Ramp {
     }
 }
 
-/// An aircraft bringing a regiment onto the map.
+/// An aircraft bringing an organization onto the map.
 #[derive(Clone)]
 pub struct Delivery {
     /// Its object's id.
@@ -87,18 +87,18 @@ pub struct Delivery {
     pub facing: [f32; 2],
     /// How far above the ground it flies.
     pub height: f32,
-    /// Where it was sent to drop its regiment.
+    /// Where it was sent to drop its organization.
     pub target: [f32; 2],
-    /// The HQ whose place it holds for its regiment, by its
+    /// The HQ whose place it holds for its organization, by its
     /// organization's object id.
     pub hq: Option<u32>,
-    /// The regiment it's dropping, by index into [`World::regiments`],
+    /// The organization it's dropping, by index into [`World::organizations`],
     /// once its first member is out.
-    pub regiment: Option<usize>,
+    pub organization: Option<usize>,
     /// The tick it left the map on.
     pub left: Option<u64>,
     /// What it's yet to begin dropping.
-    cargo: Option<Box<aaa_map::Regiment>>,
+    cargo: Option<Box<aaa_map::Organization>>,
     airlift: Airlift,
     /// Where it came in, and goes out.
     entry: [f32; 2],
@@ -116,7 +116,7 @@ pub struct Delivery {
 }
 
 impl Delivery {
-    /// The template of the regiment it brings.
+    /// The template of the organization it brings.
     pub fn cargo(&self) -> Option<&Id> {
         self.cargo.as_ref().map(|c| &c.template)
     }
@@ -177,16 +177,16 @@ impl Descent {
 }
 
 impl World {
-    /// Whether a regiment of `template` could be delivered to `at` for
-    /// `player`: every member in its place there, and the regiment's own
+    /// Whether an organization of `template` could be delivered to `at` for
+    /// `player`: every member in its place there, and the organization's own
     /// spot, on ground the side has explored with room to stand. What
     /// stands on ground out of its sight doesn't count against it.
     pub fn room_to_land(&self, player: u32, template: &Id, at: [f32; 2]) -> bool {
-        let Some(mut regiment) = self.rules.raisable.get(template).cloned() else {
+        let Some(mut organization) = self.rules.raisable.get(template).cloned() else {
             return false;
         };
-        regiment.place(at, [0.0, -1.0]);
-        let members = regiment.members.iter().map(|m| (m.position, m.shape));
+        organization.place(at, [0.0, -1.0]);
+        let members = organization.members.iter().map(|m| (m.position, m.shape));
         members.chain([(at, None)]).all(|(position, shape)| {
             let spot = spot(position, [0.0, -1.0], shape);
             // As the least explored of the ground under it is.
@@ -232,7 +232,7 @@ impl World {
         }
     }
 
-    /// The deliveries holding a place at the HQ `hq` for a regiment
+    /// The deliveries holding a place at the HQ `hq` for an organization
     /// they've yet to begin dropping.
     pub fn bound_for(&self, hq: u32) -> impl Iterator<Item = usize> + '_ {
         (0..self.deliveries.len()).filter(move |&d| {
@@ -253,10 +253,15 @@ impl World {
         }
     }
 
-    /// Sends an aircraft in to drop `regiment`, which the building at `b`
-    /// recruited, at `to`; false for a regiment nothing flies.
-    pub(crate) fn dispatch(&mut self, b: usize, regiment: aaa_map::Regiment, to: [f32; 2]) -> bool {
-        let Some(airlift) = self.rules.airlifts.get(&regiment.template).cloned() else {
+    /// Sends an aircraft in to drop `organization`, which the building at `b`
+    /// recruited, at `to`; false for an organization nothing flies.
+    pub(crate) fn dispatch(
+        &mut self,
+        b: usize,
+        organization: aaa_map::Organization,
+        to: [f32; 2],
+    ) -> bool {
+        let Some(airlift) = self.rules.airlifts.get(&organization.template).cloned() else {
             return false;
         };
         let building = &self.buildings[b];
@@ -266,10 +271,10 @@ impl World {
         // The drop is centred on the target as if it were flown at half
         // speed throughout, one let go every `delay`.
         let pace = airlift.speed / 2.0;
-        let lead = (regiment.members.iter())
+        let lead = (organization.members.iter())
             .map(|m| self.carry(&m.template, airlift.height, pace))
             .fold(0.0, f32::max);
-        let before = (regiment.members.len().saturating_sub(1) / 2) as f32;
+        let before = (organization.members.len().saturating_sub(1) / 2) as f32;
         let (d, id, hq) = (self.deliveries.len(), self.take_ids(1), self.hq_of(b));
         let mark = distance(entry, to) - lead - airlift.delay * pace * before;
         self.deliveries.push(Delivery {
@@ -282,9 +287,9 @@ impl World {
             height: airlift.height,
             target: to,
             hq,
-            regiment: None,
+            organization: None,
             left: None,
-            cargo: Some(Box::new(regiment)),
+            cargo: Some(Box::new(organization)),
             entry,
             line,
             flown: 0.0,
@@ -344,23 +349,23 @@ impl World {
         self.descend();
         for d in 0..self.deliveries.len() {
             let delivery = &self.deliveries[d];
-            let Some(r) = delivery.regiment else {
+            let Some(r) = delivery.organization else {
                 continue;
             };
-            let regiment = &self.regiments[r];
-            let out = delivery.released == regiment.units.len();
-            let down = (regiment.units.iter()).all(|&u| self.units[u].descent.is_none());
-            if regiment.arriving && out && down {
-                self.regiments[r].arriving = false;
+            let organization = &self.organizations[r];
+            let out = delivery.released == organization.units.len();
+            let down = (organization.units.iter()).all(|&u| self.units[u].descent.is_none());
+            if organization.arriving && out && down {
+                self.organizations[r].arriving = false;
             }
         }
     }
 
     fn fly(&mut self, d: usize) {
         let delivery = &self.deliveries[d];
-        let members = match (&delivery.cargo, delivery.regiment) {
+        let members = match (&delivery.cargo, delivery.organization) {
             (Some(cargo), _) => cargo.members.len(),
-            (None, Some(r)) => self.regiments[r].units.len(),
+            (None, Some(r)) => self.organizations[r].units.len(),
             (None, None) => 0,
         };
         let speed = delivery.airlift.speed;
@@ -417,7 +422,7 @@ impl World {
     }
 
     /// Lets go the next of what the delivery at `d` brings, `past` short
-    /// of where the tick has it, putting its regiment on the map with the
+    /// of where the tick has it, putting its organization on the map with the
     /// first.
     fn release(&mut self, d: usize, past: f32) {
         if let Some(mut cargo) = self.deliveries[d].cargo.take() {
@@ -425,27 +430,27 @@ impl World {
             let (target, line, hq) = (delivery.target, delivery.line, delivery.hq);
             cargo.owner = delivery.owner;
             cargo.place(target, line);
-            let r = self.add_new_regiment(*cargo);
-            let regiment = &mut self.regiments[r];
-            (regiment.position, regiment.facing) = (target, line);
-            (regiment.hq, regiment.arriving) = (hq, true);
-            for u in regiment.units.clone() {
+            let r = self.add_new_organization(*cargo);
+            let organization = &mut self.organizations[r];
+            (organization.position, organization.facing) = (target, line);
+            (organization.hq, organization.arriving) = (hq, true);
+            for u in organization.units.clone() {
                 self.units[u].awaited = true;
             }
-            self.deliveries[d].regiment = Some(r);
+            self.deliveries[d].organization = Some(r);
             log::debug!(
                 "{} {} dropping from {} {}",
-                self.regiments[r].template,
-                self.regiments[r].id,
+                self.organizations[r].template,
+                self.organizations[r].id,
                 self.deliveries[d].template,
                 self.deliveries[d].id
             );
         }
         let delivery = &mut self.deliveries[d];
-        let Some(r) = delivery.regiment else {
+        let Some(r) = delivery.organization else {
             return;
         };
-        let u = self.regiments[r].units[delivery.released];
+        let u = self.organizations[r].units[delivery.released];
         let along = (delivery.flown - past).max(0.0);
         let (line, target) = (delivery.line, delivery.target);
         let at = [
@@ -475,16 +480,16 @@ impl World {
             start: at,
             lands,
         });
-        // Its regiment is where its leader is: from when he's let go,
+        // Its organization is where its leader is: from when he's let go,
         // formed around where he comes down, unless it's been sent on.
-        let regiment = &self.regiments[r];
-        let leads = regiment.leader.map(|p| regiment.units[p]) == Some(u);
-        if leads && regiment.position == target {
-            let offsets = &regiment.formations[regiment.current_formation()].offsets;
-            let p = regiment.leader.unwrap_or(0);
+        let organization = &self.organizations[r];
+        let leads = organization.leader.map(|p| organization.units[p]) == Some(u);
+        if leads && organization.position == target {
+            let offsets = &organization.formations[organization.current_formation()].offsets;
+            let p = organization.leader.unwrap_or(0);
             let [right, ahead] = offsets.get(p).copied().unwrap_or([0.0, 0.0]);
-            let around = aaa_map::from_local(lands, regiment.facing, [-right, -ahead]);
-            self.regiments[r].position = around;
+            let around = aaa_map::from_local(lands, organization.facing, [-right, -ahead]);
+            self.organizations[r].position = around;
             self.take_places(r);
         }
     }
@@ -505,7 +510,7 @@ impl World {
     }
 
     /// Brings down what's been dropped, straight from where it was let
-    /// go to where it lands, where it joins its regiment and makes for
+    /// go to where it lands, where it joins its organization and makes for
     /// its place in it.
     fn descend(&mut self) {
         let fallen = self.rules.gravity / GAME_TICKS * TICK;
@@ -529,13 +534,13 @@ impl World {
             unit.descent = None;
             unit.awaited = false;
             unit.health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
-            // Down, it makes for its place in its regiment's formation.
-            let regiment = &self.regiments[unit.regiment];
-            let p = regiment.units.iter().position(|&m| m == u).unwrap_or(0);
-            let offsets = &regiment.formations[regiment.current_formation()].offsets;
+            // Down, it makes for its place in its organization's formation.
+            let organization = &self.organizations[unit.organization];
+            let p = organization.units.iter().position(|&m| m == u).unwrap_or(0);
+            let offsets = &organization.formations[organization.current_formation()].offsets;
             let offset = offsets.get(p).copied().unwrap_or([0.0, 0.0]);
-            let facing = regiment.facing;
-            let place = aaa_map::from_local(regiment.position, facing, offset);
+            let facing = organization.facing;
+            let place = aaa_map::from_local(organization.position, facing, offset);
             self.take_place(u, place, facing, false);
         }
     }
@@ -560,7 +565,7 @@ crate::hash::digest!(Ramp {
 });
 
 crate::hash::digest!(Delivery {
-    id, template, owner, position, previous, facing, height, target, hq, regiment, left,
+    id, template, owner, position, previous, facing, height, target, hq, organization, left,
     entry, line, flown, mark, ramp, released, held,
 } skip {
     // Its template's.
@@ -641,12 +646,12 @@ mod tests {
         // It costs what it carries would, and nothing's out yet.
         let upkeep = w.ledger(1).upkeep;
         assert_eq!(upkeep.get("ammo"), 16.0);
-        assert!(w.regiments.is_empty());
-        // The regiment is there from the first one out, none yet down.
-        while w.deliveries[0].regiment.is_none() {
+        assert!(w.organizations.is_empty());
+        // The organization is there from the first one out, none yet down.
+        while w.deliveries[0].organization.is_none() {
             w.tick();
         }
-        let r = &w.regiments[0];
+        let r = &w.organizations[0];
         assert!(r.arriving && !w.destroyed(0) && !w.lacks_supply(0));
         assert_eq!((r.position, r.facing, w.centre(0)), (to, line, to));
         assert!(w.survivors(0).next().is_none());
@@ -683,7 +688,7 @@ mod tests {
         // Once down they form up around where their leader landed,
         // facing the way the plane flew.
         run(&mut w, 8.0);
-        let r = &w.regiments[0];
+        let r = &w.organizations[0];
         assert!(!r.arriving && r.facing == line);
         assert!(w.units.iter().all(|u| u.alive()));
         let led = aaa_map::from_local(to, line, landed[2]);
@@ -760,14 +765,25 @@ mod tests {
     }
 
     #[test]
-    fn those_still_falling_follow_a_regiment_sent_on() {
+    fn those_still_falling_follow_an_organization_sent_on() {
         let mut w = airfield();
         w.apply(1, deliver([40.0, 20.0])).unwrap();
-        while w.deliveries.first().is_none_or(|d| d.regiment.is_none()) {
+        while w
+            .deliveries
+            .first()
+            .is_none_or(|d| d.organization.is_none())
+        {
             w.tick();
         }
         let to = [40.0, 50.0];
-        w.apply(1, Command::Move { regiment: 0, to }).unwrap();
+        w.apply(
+            1,
+            Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
         run(&mut w, 45.0);
         let at: Vec<_> = w.units.iter().map(|u| (u.alive(), u.position)).collect();
         assert!(
@@ -780,13 +796,13 @@ mod tests {
     fn deliveries_on_their_way_hold_their_place_at_their_hq() {
         let mut w = division();
         let hq = Command::Unpack {
-            regiment: 0,
+            organization: 0,
             at: [30.0, 40.0],
             facing: NORTH,
         };
         w.apply(1, hq).unwrap();
         run(&mut w, 30.0);
-        let b = w.regiments[0].unpacked_into.expect("unpacked");
+        let b = w.organizations[0].unpacked_into.expect("unpacked");
         w.buildings[b].deploy = w.buildings[0].deploy;
         let company = raised_company(&mut w, 1);
         recruits(&mut w, "depot", company, 1.0);
@@ -807,8 +823,8 @@ mod tests {
         assert_eq!(w.bound_for(50).count(), 1);
         assert_eq!(w.free_places(&hqs[0]), free - 1);
         run(&mut w, 30.0);
-        let r = w.deliveries[0].regiment.expect("dropped");
-        assert_eq!(w.regiments[r].hq, Some(50));
+        let r = w.deliveries[0].organization.expect("dropped");
+        assert_eq!(w.organizations[r].hq, Some(50));
         assert_eq!(w.free_places(&hqs[0]), free - 1);
     }
 }

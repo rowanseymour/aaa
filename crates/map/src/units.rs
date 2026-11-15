@@ -1,10 +1,11 @@
-//! The sides in a map and the regiments they start with.
+//! The sides in a map and the organizations they start with.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use aaa_data::{
-    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges, Shape,
+    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, OrganizationComponent, Ranges,
+    Shape,
 };
 use tgck::map::{Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
 
@@ -228,7 +229,7 @@ pub fn owner(thing: &Thing) -> Option<u32> {
 
 /// A group of units that moves and fights together.
 #[derive(Debug, Clone)]
-pub struct Regiment {
+pub struct Organization {
     /// Its object's id, as in [`Map::things`](crate::Map::things).
     pub id: u32,
     pub template: Id,
@@ -247,7 +248,7 @@ pub struct Regiment {
     pub operational_range: Option<f32>,
     /// Its zone of control's radius.
     pub control_range: Option<f32>,
-    /// The member whose position is the regiment's; without one, the
+    /// The member whose position is the organization's; without one, the
     /// members' average position is.
     pub primary: Option<usize>,
     /// For a packed building, such as a supply truck, what it unpacks into.
@@ -256,7 +257,7 @@ pub struct Regiment {
     pub hq: Option<u32>,
 }
 
-impl Regiment {
+impl Organization {
     /// Stands the members in its formation around `position`, facing
     /// `facing`.
     pub fn place(&mut self, position: [f32; 2], facing: [f32; 2]) {
@@ -269,7 +270,7 @@ impl Regiment {
     }
 
     /// Gives it the id `id`, and its members the ones after it, or the
-    /// same one for a lone unit, which is its own regiment.
+    /// same one for a lone unit, which is its own organization.
     pub fn renumber(&mut self, id: u32) {
         self.id = id;
         let lone = self.lone();
@@ -305,7 +306,7 @@ pub struct Unpacks {
 pub struct Packs {
     /// The packed building, such as a truck, alone, standing anywhere and
     /// owned by nobody: it's placed and given ids as it's put out.
-    pub truck: Regiment,
+    pub truck: Organization,
     /// Where it stands from the building, in the map's axes, and the way
     /// it faces there.
     pub offset: [f32; 2],
@@ -346,7 +347,7 @@ pub struct Member {
     pub fighter: Option<Fighter>,
     /// Its health as a fraction of its fighter's.
     pub health: f32,
-    /// For one its regiment has lost and has yet to replace: the health
+    /// For one its organization has lost and has yet to replace: the health
     /// its replacement has built up so far.
     pub lost: Option<f32>,
 }
@@ -368,26 +369,25 @@ pub struct Trailer {
 #[derive(Debug, Clone)]
 pub struct Formation {
     /// E.g. `regiment_defensive`; empty for the arrangement the map placed
-    /// a regiment in, where its layout doesn't fit its members.
+    /// an organization in, where its layout doesn't fit its members.
     pub id: String,
-    /// Per member, where it stands from the regiment's position: x to its
+    /// Per member, where it stands from the organization's position: x to its
     /// right and y ahead.
     pub offsets: Vec<[f32; 2]>,
-    /// Whether a regiment standing or moving in it takes on enemies that
+    /// Whether an organization standing or moving in it takes on enemies that
     /// come within its operational range, or runs into.
     pub aggressive: bool,
 }
 
-/// The owned organizations whose members can all move, and the owned units
-/// that move on their own, such as trucks and ships, each a regiment of its
-/// own.
-pub(crate) fn regiments(
+/// The owned organizations whose members can all move, and the owned units that
+/// move on their own, such as trucks and ships, each an organization of one.
+pub(crate) fn organizations(
     things: &[Thing],
     bodies: &HashMap<Id, Body>,
     fighters: &HashMap<Id, Fighter>,
     layouts: &HashMap<Id, Layout>,
     ranges: &HashMap<Id, Ranges>,
-) -> Vec<Regiment> {
+) -> Vec<Organization> {
     let by_id: HashMap<u32, &Thing> = things.iter().map(|t| (t.id, t)).collect();
     // Trailers move but go with what tows them.
     let towed: HashSet<u32> = things
@@ -406,7 +406,7 @@ pub(crate) fn regiments(
         Some(member)
     };
     let ranges = |template: &str| ranges.get(&Id::from(template)).copied().unwrap_or_default();
-    // Ids no thing on the map has, for the members regiments have lost.
+    // Ids no thing on the map has, for the members organizations have lost.
     let members = things
         .iter()
         .flat_map(|t| t.organization().map_or(&[][..], |o| &o.members[..]));
@@ -421,19 +421,19 @@ pub(crate) fn regiments(
         .iter()
         .filter_map(|t| {
             let owner = owner(t)?;
-            let Some(organization) = t.organization() else {
+            let Some(stored) = t.organization() else {
                 if towed.contains(&t.id) {
                     return None;
                 }
                 return Some(lone(placed(t)?, owner, facing(t), ranges(&t.template)));
             };
-            let standing = organization
+            let standing = stored
                 .members
                 .iter()
                 .map(placed)
                 .collect::<Option<Vec<_>>>()?;
             let facing = facing(t);
-            let layout = layouts.get(&Id::from(organization.layout.as_str()));
+            let layout = layouts.get(&Id::from(stored.layout.as_str()));
             let count = standing.len().max(1) as f32;
             let sum = standing.iter().fold([0.0, 0.0], |[x, y], m| {
                 [x + m.position[0], y + m.position[1]]
@@ -446,18 +446,19 @@ pub(crate) fn regiments(
             // were, so that they can be replaced.
             let mut lost = |p: &tgck::map::Position| {
                 let template = p.template.as_ref().filter(|t| !t.is_empty())?;
-                // Among those standing, so the regiment is where they are.
+                // Among those standing, so the organization is where they are.
                 let mut member =
                     raw_member(spare.next()?, template, among, facing, bodies, fighters)?;
                 member.lost = Some(p.replenished.unwrap_or(0.0));
                 Some(member)
             };
-            let (members, held) = with_lost(organization, standing, &mut lost);
-            let places = layout.map(|l| stored_places(l, organization, &held));
+            let (members, held) = with_lost(stored, standing, &mut lost);
+            let places = layout.map(|l| stored_places(l, stored, &held));
             let ranges = ranges(&t.template);
-            let mut regiment = regiment(t.id, &t.template, owner, facing, members, places, ranges)?;
-            regiment.hq = organization.hq.filter(|&id| id != 0);
-            Some(regiment)
+            let mut organization =
+                organization(t.id, &t.template, owner, facing, members, places, ranges)?;
+            organization.hq = organization.hq.filter(|&id| id != 0);
+            Some(organization)
         })
         .collect()
 }
@@ -468,7 +469,7 @@ pub(crate) fn regiments(
 pub struct Division {
     /// The HQ's template, whose nation the badge is from.
     pub template: Id,
-    /// Which of that nation's badges its regiments wear.
+    /// Which of that nation's badges its organizations wear.
     pub badge: usize,
 }
 
@@ -529,7 +530,7 @@ fn raw_member(
     })
 }
 
-/// Which of a layout's places a regiment's members fill, and the formation
+/// Which of a layout's places an organization's members fill, and the formation
 /// it's in.
 struct Places<'a> {
     layout: &'a Layout,
@@ -540,7 +541,7 @@ struct Places<'a> {
     formation: usize,
 }
 
-/// The places a regiment of `slots`, each slot's element template or
+/// The places an organization of `slots`, each slot's element template or
 /// empty, fills when it's whole, in the layout's starting formation.
 fn whole<'a>(layout: &'a Layout, slots: &[String]) -> Places<'a> {
     let start = &layout.formations[layout.default];
@@ -583,7 +584,7 @@ fn with_lost(
 }
 
 /// The places a map's organization's members fill, `held` saying which of
-/// its positions has one, and the formation it records; a regiment that
+/// its positions has one, and the formation it records; an organization that
 /// has lost members still knows where the rest stand. Where the record doesn't fit the layout, as when
 /// the layout has changed since, it's taken as whole.
 fn stored_places<'a>(layout: &'a Layout, o: &tgck::map::Organization, held: &[bool]) -> Places<'a> {
@@ -600,9 +601,9 @@ fn stored_places<'a>(layout: &'a Layout, o: &tgck::map::Organization, held: &[bo
     places
 }
 
-/// A regiment of `members`, arranged by its layout and the places they fill
-/// where those account for them all, else as they stand.
-fn regiment(
+/// An organization of `members`, arranged by its layout and the places they
+/// fill where those account for them all, else as they stand.
+fn organization(
     id: u32,
     template: &str,
     owner: u32,
@@ -610,7 +611,7 @@ fn regiment(
     members: Vec<Member>,
     places: Option<Places>,
     ranges: Ranges,
-) -> Option<Regiment> {
+) -> Option<Organization> {
     if members.is_empty() {
         return None;
     }
@@ -621,7 +622,7 @@ fn regiment(
         Some((_, a)) => a,
         None => (vec![as_placed(&members, facing)], 0, None),
     };
-    Some(Regiment {
+    Some(Organization {
         id,
         template: Id::from(template),
         owner,
@@ -638,11 +639,11 @@ fn regiment(
     })
 }
 
-/// What placing a map's objects and raising regiments from their templates
+/// What placing a map's objects and raising organizations from their templates
 /// takes: what each template is made of, and what its members are. Reading
 /// it parses the game data's templates, so one serves a whole match.
 pub struct Recruits {
-    organizations: HashMap<Id, Organization>,
+    components: HashMap<Id, OrganizationComponent>,
     pub(crate) bodies: HashMap<Id, Body>,
     pub(crate) fighters: Arc<HashMap<Id, Fighter>>,
     pub(crate) layouts: Arc<HashMap<Id, Layout>>,
@@ -663,7 +664,7 @@ const BUILDING_PADDING: f32 = 2.0;
 impl Recruits {
     pub fn new(game: &GameData) -> Recruits {
         Recruits {
-            organizations: game.organizations(),
+            components: game.organization_components(),
             bodies: game.bodies(),
             fighters: game.fighters(),
             layouts: game.layouts(),
@@ -729,11 +730,11 @@ impl Recruits {
         out
     }
 
-    /// Gives a regiment of one packed building, such as a truck, what it
+    /// Gives an organization of one packed building, such as a truck, what it
     /// unpacks into.
-    pub(crate) fn give_unpacks(&self, regiment: &mut Regiment) {
-        if let [m] = &regiment.members[..] {
-            regiment.unpacks = self.unpacks(&m.template);
+    pub(crate) fn give_unpacks(&self, organization: &mut Organization) {
+        if let [m] = &organization.members[..] {
+            organization.unpacks = self.unpacks(&m.template);
         }
     }
 
@@ -791,7 +792,7 @@ impl Recruits {
     /// The templates [`Recruits::raise`] can raise, sorted.
     pub fn templates(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self
-            .organizations
+            .components
             .iter()
             .filter(|(_, o)| {
                 let mut filled = o.slots.iter().flatten().peekable();
@@ -804,10 +805,10 @@ impl Recruits {
         out
     }
 
-    /// Every regiment [`Recruits::raise`] can raise, by template, each
+    /// Every organization [`Recruits::raise`] can raise, by template, each
     /// standing anywhere and owned by nobody.
-    pub fn raisable(&self) -> HashMap<Id, Regiment> {
-        let templates = self.organizations.keys().chain(self.bodies.keys());
+    pub fn raisable(&self) -> HashMap<Id, Organization> {
+        let templates = self.components.keys().chain(self.bodies.keys());
         templates
             .filter_map(|t| {
                 let raised = self.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]);
@@ -816,7 +817,7 @@ impl Recruits {
             .collect()
     }
 
-    /// A regiment of `template` owned by `owner`, standing in its starting
+    /// An organization of `template` owned by `owner`, standing in its starting
     /// formation around `position` and facing `facing`. It takes the id `id`
     /// and its members the ones after it.
     pub fn raise(
@@ -826,15 +827,15 @@ impl Recruits {
         owner: u32,
         position: [f32; 2],
         facing: [f32; 2],
-    ) -> Result<Regiment, String> {
-        let Some(organization) = self.organizations.get(&Id::from(template)) else {
+    ) -> Result<Organization, String> {
+        let Some(component) = self.components.get(&Id::from(template)) else {
             return self.raise_lone(template, id, owner, position, facing);
         };
         let layout = self
             .layouts
-            .get(&organization.layout)
-            .ok_or_else(|| format!("{template} has no layout {}", organization.layout))?;
-        let slots: Vec<String> = organization
+            .get(&component.layout)
+            .ok_or_else(|| format!("{template} has no layout {}", component.layout))?;
+        let slots: Vec<String> = component
             .slots
             .iter()
             .map(|s| {
@@ -856,7 +857,7 @@ impl Recruits {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let ranges = self.ranges(template);
-        let mut regiment = regiment(
+        let mut organization = organization(
             id,
             template,
             owner,
@@ -866,13 +867,13 @@ impl Recruits {
             ranges,
         )
         .ok_or_else(|| format!("{template} has no members"))?;
-        regiment.place(position, facing);
-        self.give_unpacks(&mut regiment);
-        Ok(regiment)
+        organization.place(position, facing);
+        self.give_unpacks(&mut organization);
+        Ok(organization)
     }
 
     /// A unit that's no organization's member, such as a truck, raised as
-    /// a regiment of its own.
+    /// an organization of its own.
     fn raise_lone(
         &self,
         template: &str,
@@ -880,10 +881,10 @@ impl Recruits {
         owner: u32,
         position: [f32; 2],
         facing: [f32; 2],
-    ) -> Result<Regiment, String> {
+    ) -> Result<Organization, String> {
         let member = raw_member(id, template, position, facing, &self.bodies, &self.fighters)
-            .ok_or_else(|| format!("{template} isn't a regiment or a unit that can move"))?;
-        Ok(Regiment {
+            .ok_or_else(|| format!("{template} isn't an organization or a unit that can move"))?;
+        Ok(Organization {
             unpacks: self.unpacks(&member.template),
             ..lone(member, owner, facing, self.ranges(template))
         })
@@ -893,8 +894,8 @@ impl Recruits {
 /// The organization `t`, owned by `owner`, without its members, for a
 /// building standing in it to put a truck in when it packs: the truck
 /// stands where it's put.
-pub(crate) fn emptied(t: &Thing, owner: u32, ranges: Ranges) -> Regiment {
-    Regiment {
+pub(crate) fn emptied(t: &Thing, owner: u32, ranges: Ranges) -> Organization {
+    Organization {
         id: t.id,
         template: Id::from(t.template.as_str()),
         owner,
@@ -904,9 +905,9 @@ pub(crate) fn emptied(t: &Thing, owner: u32, ranges: Ranges) -> Regiment {
     }
 }
 
-/// A regiment of nothing, owned by nobody, in a formation of one place.
-fn one_place(ranges: Ranges) -> Regiment {
-    Regiment {
+/// An organization of nothing, owned by nobody, in a formation of one place.
+fn one_place(ranges: Ranges) -> Organization {
+    Organization {
         id: 0,
         template: Id::from(""),
         owner: 0,
@@ -927,10 +928,10 @@ fn one_place(ranges: Ranges) -> Regiment {
     }
 }
 
-/// A unit that's no organization's member as a regiment of its own, which
+/// A unit that's no organization's member as an organization of its own, which
 /// shares its id and template.
-fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Regiment {
-    Regiment {
+fn lone(member: Member, owner: u32, facing: [f32; 2], ranges: Ranges) -> Organization {
+    Organization {
         id: member.id,
         template: member.template.clone(),
         owner,
@@ -1036,13 +1037,13 @@ mod tests {
 
     /// A squad of `layout()` placed on a map, with a rifle in the front
     /// slot's first place and the captain, in formation `formation`.
-    fn squad(formation: i32, positions: &[i32]) -> Vec<Regiment> {
-        use crate::fixtures::{organization, placed};
+    fn squad(formation: i32, positions: &[i32]) -> Vec<Organization> {
+        use crate::fixtures::{placed, stored_organization};
         let members = vec![
             placed(2, "rifle", 0, None, None),
             placed(3, "captain", 0, None, None),
         ];
-        let mut o = organization("line", members);
+        let mut o = stored_organization("line", members);
         o.slots = vec!["rifle".into(), String::new(), "captain".into()];
         let place = o.positions[0].clone();
         o.positions = positions
@@ -1057,7 +1058,7 @@ mod tests {
             speed: Some(3.0),
             ..Body::default()
         };
-        regiments(
+        organizations(
             &[placed(1, "squad", 2, None, Some(o))],
             &HashMap::from([
                 (Id::from("rifle"), moves.clone()),
@@ -1070,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn regiments_that_lost_members_keep_their_places() {
+    fn organizations_that_lost_members_keep_their_places() {
         // The front's second rifle is gone.
         let [r] = &squad(1, &[0, -1, -1, 3])[..] else {
             panic!();
@@ -1082,13 +1083,13 @@ mod tests {
     }
 
     #[test]
-    fn regiments_keep_a_place_for_members_they_can_replace() {
-        use crate::fixtures::{organization, placed};
+    fn organizations_keep_a_place_for_members_they_can_replace() {
+        use crate::fixtures::{placed, stored_organization};
         let members = vec![
             placed(2, "rifle", 0, None, None),
             placed(3, "captain", 0, None, None),
         ];
-        let mut o = organization("line", members);
+        let mut o = stored_organization("line", members);
         o.slots = vec!["rifle".into(), String::new(), "captain".into()];
         let place = o.positions[0].clone();
         // The front's second rifle is gone, a fifth of the way back; what
@@ -1108,7 +1109,7 @@ mod tests {
             speed: Some(3.0),
             ..Body::default()
         };
-        let all = regiments(
+        let all = organizations(
             &[placed(1, "squad", 2, None, Some(o))],
             &HashMap::from([
                 (Id::from("rifle"), moves.clone()),
@@ -1131,7 +1132,7 @@ mod tests {
     }
 
     #[test]
-    fn regiments_start_in_the_formation_the_map_has_them_in() {
+    fn organizations_start_in_the_formation_the_map_has_them_in() {
         assert_eq!(squad(0, &[0, -1, -1, 3])[0].formation, 0);
         assert_eq!(squad(1, &[0, -1, -1, 3])[0].formation, 1);
         // One the layout doesn't have leaves them in its starting one.
@@ -1143,16 +1144,16 @@ mod tests {
     }
 
     #[test]
-    fn raises_regiments_in_their_starting_formation() {
+    fn raises_organizations_in_their_starting_formation() {
         let body = Body {
             blocking: None,
             speed: Some(3.0),
             ..Body::default()
         };
         let recruits = Recruits {
-            organizations: HashMap::from([(
+            components: HashMap::from([(
                 Id::from("squad"),
-                Organization {
+                OrganizationComponent {
                     layout: Id::from("line"),
                     slots: vec![Some(Id::from("rifle")), None, Some(Id::from("captain"))],
                 },
@@ -1207,7 +1208,7 @@ mod tests {
     #[test]
     fn trucks_raise_with_what_they_unpack_into() {
         let recruits = Recruits {
-            organizations: HashMap::new(),
+            components: HashMap::new(),
             bodies: HashMap::from([
                 (
                     Id::from("truck"),
@@ -1331,7 +1332,7 @@ mod tests {
 
         // A truck the map starts with unpacks too.
         let truck = crate::fixtures::placed(5, "truck", 2, None, None);
-        let mut placed = regiments(
+        let mut placed = organizations(
             &[truck],
             &recruits.bodies,
             &recruits.fighters,

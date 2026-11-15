@@ -101,10 +101,10 @@ const SHORTAGE_STEP: f32 = 5.0;
 
 /// Something that would change a side's economy, to preview.
 pub enum Change<'a> {
-    /// Commissioning a regiment as it's raised.
-    Commission(&'a aaa_map::Regiment),
+    /// Commissioning an organization as it's raised.
+    Commission(&'a aaa_map::Organization),
     Research(&'a aaa_map::Research),
-    /// A packed building, by index into [`World::regiments`], unpacking.
+    /// A packed building, by index into [`World::organizations`], unpacking.
     Unpack(usize),
 }
 
@@ -131,37 +131,37 @@ impl World {
         self.rules.economies.get(template).unwrap_or(&NONE)
     }
 
-    /// What a regiment adds to its owner's economy: its members'
+    /// What an organization adds to its owner's economy: its members'
     /// production, and its own upkeep and that of every place in it, the
     /// member there or not, but for those that have unpacked into
     /// buildings. Nothing once it's gone.
-    pub fn regiment_ledger(&self, regiment: usize) -> Ledger {
-        let r = &self.regiments[regiment];
-        if self.destroyed(regiment) {
+    pub fn organization_ledger(&self, organization: usize) -> Ledger {
+        let r = &self.organizations[organization];
+        if self.destroyed(organization) {
             return Ledger::default();
         }
         let kept = (r.units.iter())
             .filter(|&&u| !matches!(self.units[u].left, Some(crate::Left::Unpacked(_))));
         let templates = kept.map(|&u| &self.units[u].template).collect();
-        let mut ledger = self.organization_ledger(&r.template, templates);
+        let mut ledger = self.members_ledger(&r.template, templates);
         let earning = self
-            .survivors(regiment)
+            .survivors(organization)
             .map(|u| self.economy_of(&self.units[u].template));
         ledger.production = earning.fold(Amounts::default(), |sum, e| sum + &e.production);
         ledger
     }
 
-    /// What a regiment would add to its owner's economy once raised.
-    pub(crate) fn commission_ledger(&self, regiment: &aaa_map::Regiment) -> Ledger {
-        let members = regiment.members.iter().map(|m| &m.template);
-        self.organization_ledger(&regiment.template, members.collect())
+    /// What an organization would add to its owner's economy once raised.
+    pub(crate) fn commission_ledger(&self, organization: &aaa_map::Organization) -> Ledger {
+        let members = organization.members.iter().map(|m| &m.template);
+        self.members_ledger(&organization.template, members.collect())
     }
 
-    fn organization_ledger(&self, template: &Id, members: Vec<&Id>) -> Ledger {
+    fn members_ledger(&self, template: &Id, members: Vec<&Id>) -> Ledger {
         if members.is_empty() {
             return Ledger::default();
         }
-        // A lone unit is its own regiment, and counts once.
+        // A lone unit is its own organization, and counts once.
         let lone = matches!(&members[..], [m] if *m == template);
         let mut ledger = Ledger::default();
         if !lone {
@@ -191,7 +191,7 @@ impl World {
             .queue
             .iter()
             .filter(|c| c.held)
-            .filter_map(Commission::regiment)
+            .filter_map(Commission::organization)
         {
             let taken = self.commission_ledger(r).upkeep;
             for (consumed, _) in self.rules.economy.limits() {
@@ -223,8 +223,8 @@ impl World {
         let Some(first) = b.queue.front() else {
             return true;
         };
-        // A regiment needs somewhere to come out.
-        if first.regiment().is_some() && b.deploy.is_none() {
+        // An organization needs somewhere to come out.
+        if first.organization().is_some() && b.deploy.is_none() {
             return true;
         }
         let why = match b.state {
@@ -232,7 +232,9 @@ impl World {
             State::Standing if first.held => None,
             State::Standing => {
                 let balance = self.balance(b.owner);
-                let needs = first.regiment().map(|r| self.commission_ledger(r).upkeep);
+                let needs = first
+                    .organization()
+                    .map(|r| self.commission_ledger(r).upkeep);
                 let needs = needs.unwrap_or_default();
                 let full = balance.limits.iter().find(|l| {
                     let needed = needs.get(l.consumed.as_str());
@@ -266,8 +268,8 @@ impl World {
     /// Every side's ledger, by player id.
     pub fn ledgers(&self) -> BTreeMap<u32, Ledger> {
         let mut out: BTreeMap<u32, Ledger> = BTreeMap::new();
-        for r in 0..self.regiments.len() {
-            *out.entry(self.regiments[r].owner).or_default() += self.regiment_ledger(r);
+        for r in 0..self.organizations.len() {
+            *out.entry(self.organizations[r].owner).or_default() += self.organization_ledger(r);
         }
         for b in 0..self.buildings.len() {
             *out.entry(self.buildings[b].owner).or_default() += self.building_ledger(b);
@@ -309,12 +311,12 @@ impl World {
         self.treasuries.entry(player).or_default().stockpile = amount.clamp(0.0, max);
     }
 
-    /// The money commissioning `regiment` as raised takes: its own cost and
+    /// The money commissioning `organization` as raised takes: its own cost and
     /// its members'.
-    pub fn cost(&self, regiment: &aaa_map::Regiment) -> f32 {
+    pub fn cost(&self, organization: &aaa_map::Organization) -> f32 {
         let money = money(&self.rules.economy);
-        let members = regiment.members.iter().map(|m| &m.template);
-        let own = (!regiment.lone()).then_some(&regiment.template);
+        let members = organization.members.iter().map(|m| &m.template);
+        let own = (!organization.lone()).then_some(&organization.template);
         (members.chain(own))
             .map(|t| self.economy_of(t).cost.get(money))
             .sum()
@@ -330,14 +332,14 @@ impl World {
         let mut ledger = self.ledger(player);
         let mut stockpile = self.stockpile(player);
         match change {
-            Change::Commission(regiment) => {
-                stockpile -= self.cost(regiment);
-                ledger += self.commission_ledger(regiment);
+            Change::Commission(organization) => {
+                stockpile -= self.cost(organization);
+                ledger += self.commission_ledger(organization);
             }
             Change::Research(item) => stockpile -= self.research_cost(item),
             Change::Unpack(r) => {
-                ledger = ledger.without(&self.regiment_ledger(r));
-                if let Some(u) = &self.regiments[r].unpacks {
+                ledger = ledger.without(&self.organization_ledger(r));
+                if let Some(u) = &self.organizations[r].unpacks {
                     ledger += self.holding_ledger(&u.building.template);
                 }
             }
@@ -396,7 +398,7 @@ mod tests {
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
-        w.add_regiment(&t);
+        w.add_organization(&t);
         let r = company(&mut w, 1);
         company(&mut w, 2);
         let balance = w.balance(1);
@@ -419,8 +421,8 @@ mod tests {
                 },
             ]
         );
-        // A lost member's place costs as before, until the regiment's gone.
-        w.units[w.regiments[r].units[0]].die(0);
+        // A lost member's place costs as before, until the organization's gone.
+        w.units[w.organizations[r].units[0]].die(0);
         assert_eq!(w.balance(1).net.get("ammo"), 9.0);
         w.destroy(r);
         assert_eq!(w.balance(1).net.get("ammo"), 25.0);
@@ -515,7 +517,7 @@ mod tests {
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
-        let r = w.add_regiment(&t);
+        let r = w.add_organization(&t);
         // Unpacking swaps the truck's production for the depot's.
         let (stockpile, balance) = w.preview(1, Change::Unpack(r));
         assert_eq!(stockpile, 500.0);
@@ -565,7 +567,7 @@ mod tests {
         let mut t = truck();
         t.owner = 1;
         t.place([30.0, 30.0], [0.0, 1.0]);
-        w.add_regiment(&t);
+        w.add_organization(&t);
         w.tick();
         assert_eq!(w.buildings[0].paused, None);
         assert_eq!(w.balance(1).limits[0].used, 1.0);

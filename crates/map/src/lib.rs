@@ -27,7 +27,7 @@ pub use tgck::map::Relation;
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
 pub use units::{
-    Division, Formation, Member, Outcome, Packs, Player, Recruits, Regiment, Team, Trailer,
+    Division, Formation, Member, Organization, Outcome, Packs, Player, Recruits, Team, Trailer,
     UNPACKED_FACING, Unpacks, owner, relation,
 };
 
@@ -50,7 +50,7 @@ pub struct Map {
     pub sun: Sun,
     pub players: Vec<Player>,
     pub teams: Vec<Team>,
-    pub regiments: Vec<Regiment>,
+    pub organizations: Vec<Organization>,
     pub buildings: Vec<Building>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
@@ -166,14 +166,14 @@ impl Map {
             .filter(|(id, _)| !ids.contains(id))
             .map(|(_, o)| o)
             .collect();
-        let mut regiments = units::regiments(
+        let mut organizations = units::organizations(
             &standing,
             bodies,
             fighters,
             &recruits.layouts,
             &recruits.ranges,
         );
-        for r in &mut regiments {
+        for r in &mut organizations {
             recruits.give_unpacks(r);
         }
         // A map with no string table names nothing of its own.
@@ -188,7 +188,7 @@ impl Map {
             title: aaa_data::map_title(name).to_string(),
             strings: Arc::new(strings),
             ground,
-            regiments,
+            organizations,
             buildings,
             scenery,
             clearable,
@@ -209,7 +209,7 @@ impl Map {
 impl Map {
     /// The objects standing on the map, organizations' members among them:
     /// those of [`Map::things`] that aren't [`Map::crowded`], whose ids
-    /// those of regiments' lost members may repeat.
+    /// those of organizations' lost members may repeat.
     pub fn standing(&self) -> impl Iterator<Item = &Thing> {
         buildings::standing(&self.things)
             .map(|(t, _)| t)
@@ -220,7 +220,7 @@ impl Map {
     pub fn roles(&self) -> impl Iterator<Item = (&Thing, Role)> {
         roles(
             &self.things,
-            &self.regiments,
+            &self.organizations,
             &self.buildings,
             &self.crowded,
         )
@@ -241,7 +241,7 @@ impl Map {
         self.teams = teams;
         let owned_by_leaver = |t: &Thing| owner(t).is_some_and(|o| leaving.contains(&o));
         self.things.retain(|t| !owned_by_leaver(t));
-        self.regiments.retain(|r| !leaving.contains(&r.owner));
+        self.organizations.retain(|r| !leaving.contains(&r.owner));
         // A building whose own owner stays still goes with an organization
         // it stands in that leaves.
         let standing: HashSet<u32> = buildings::standing(&self.things)
@@ -256,20 +256,20 @@ impl Map {
 /// [`Map::roles`] of `things`, from what the map made of them.
 fn roles<'a>(
     things: &'a [Thing],
-    regiments: &[Regiment],
+    organizations: &[Organization],
     buildings: &[Building],
     crowded: &'a HashSet<u32>,
 ) -> impl Iterator<Item = (&'a Thing, Role)> {
-    let regiment_ids: HashSet<u32> = regiments.iter().map(|r| r.id).collect();
+    let organization_ids: HashSet<u32> = organizations.iter().map(|r| r.id).collect();
     let building_ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
-    let trailers: HashSet<u32> = (regiments.iter().flat_map(|r| &r.members))
+    let trailers: HashSet<u32> = (organizations.iter().flat_map(|r| &r.members))
         .filter_map(|m| Some(m.trailer.as_ref()?.placed?.0))
         .collect();
     things.iter().map(move |t| {
         let held = t.organization().map_or(&[][..], |o| &o.members[..]);
         let role = match t.id {
             id if crowded.contains(&id) => Role::Crowded,
-            id if regiment_ids.contains(&id) => Role::Regiment,
+            id if organization_ids.contains(&id) => Role::Organization,
             id if building_ids.contains(&id) => Role::Building,
             id if trailers.contains(&id) => Role::Trailer,
             _ if held.iter().any(|m| building_ids.contains(&m.id)) => Role::HoldsBuilding,
@@ -284,11 +284,11 @@ fn roles<'a>(
 pub enum Role {
     /// Without room where the map has it: see [`Map::crowded`].
     Crowded,
-    /// One of [`Map::regiments`].
-    Regiment,
+    /// One of [`Map::organizations`].
+    Organization,
     /// One of [`Map::buildings`].
     Building,
-    /// What a regiment's member tows, which goes with it.
+    /// What an organization's member tows, which goes with it.
     Trailer,
     /// An organization that one of [`Map::buildings`] stands in, as an
     /// unpacked Division HQ's does.
@@ -732,7 +732,7 @@ pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::{organization, placed};
+    use crate::fixtures::{placed, stored_organization};
 
     #[test]
     fn scenery_is_clearable_unless_it_blocks_is_an_actor_or_a_trigger_names_it() {
@@ -905,7 +905,7 @@ mod tests {
                 "squad",
                 0,
                 None,
-                Some(organization(
+                Some(stored_organization(
                     "line",
                     vec![at(9, "tank", [9.0, 9.0]), at(10, "hut", [5.0, 6.0])],
                 )),
@@ -916,7 +916,7 @@ mod tests {
                 "squad",
                 0,
                 None,
-                Some(organization(
+                Some(stored_organization(
                     "line",
                     vec![at(12, "tank", [5.0, 5.0]), at(13, "tank", [-1.0, 5.0])],
                 )),
@@ -961,13 +961,19 @@ mod tests {
         };
         let squad = |id, member| {
             let tank = at(member, "tank", [5.0, 5.0]);
-            placed(id, "squad", 0, None, Some(organization("line", vec![tank])))
+            placed(
+                id,
+                "squad",
+                0,
+                None,
+                Some(stored_organization("line", vec![tank])),
+            )
         };
         // The member's id is higher than the hut's, but its squad comes
         // first, so both stand; the squad stored after the hut doesn't.
         // A hut in an organization that goes is no obstacle to a hut
         // stored after it.
-        let camp = organization(
+        let camp = stored_organization(
             "line",
             vec![at(5, "hut", [12.0, 12.0]), at(6, "tank", [5.0, 5.0])],
         );
@@ -1037,7 +1043,7 @@ mod tests {
     }
 
     #[test]
-    fn owned_units_of_no_organization_are_regiments_of_their_own() {
+    fn owned_units_outside_organizations_stand_as_organizations_of_one() {
         let things = [
             placed(1, "truck", 2, Some(2), None),
             placed(2, "gun", 2, None, None),
@@ -1050,10 +1056,11 @@ mod tests {
             (Id::from("cow"), moves(None)),
         ]);
         let none = HashMap::new();
-        let regiments = units::regiments(&things, &bodies, &HashMap::new(), &none, &HashMap::new());
+        let organizations =
+            units::organizations(&things, &bodies, &HashMap::new(), &none, &HashMap::new());
         // The gun goes with the truck, and the cow is nobody's.
-        let [truck] = &regiments[..] else {
-            panic!("{regiments:?}");
+        let [truck] = &organizations[..] else {
+            panic!("{organizations:?}");
         };
         assert!(truck.lone());
         assert_eq!((truck.id, truck.owner, truck.primary), (1, 2, Some(0)));
@@ -1067,13 +1074,14 @@ mod tests {
         let things = [crate::fixtures::hurt(placed(1, "gun", 2, None, None), 0.4)];
         let bodies = HashMap::from([(Id::from("gun"), moves(None))]);
         let none = HashMap::new();
-        let regiments = units::regiments(&things, &bodies, &HashMap::new(), &none, &HashMap::new());
-        assert_eq!(regiments[0].members[0].health, 0.4);
+        let organizations =
+            units::organizations(&things, &bodies, &HashMap::new(), &none, &HashMap::new());
+        assert_eq!(organizations[0].members[0].health, 0.4);
     }
 
     #[test]
     fn things_are_told_apart_by_what_they_are_in_a_match() {
-        let hq = organization("regiment_hq", vec![placed(11, "hq", 0, None, None)]);
+        let hq = stored_organization("regiment_hq", vec![placed(11, "hq", 0, None, None)]);
         let things = [
             placed(1, "truck", 2, Some(2), None),
             placed(2, "gun", 2, None, None),
@@ -1087,10 +1095,10 @@ mod tests {
             (Id::from("gun"), moves(None)),
         ]);
         let fighters = HashMap::from(["hq", "hut"].map(|t| (Id::from(t), Fighter::default())));
-        // The last truck had no room, so neither regiment nor anything else.
+        // The last truck had no room, so it's no organization or anything else.
         let crowded = HashSet::from([40]);
         let standing = without(&things, &crowded);
-        let regiments = units::regiments(
+        let organizations = units::organizations(
             &standing,
             &bodies,
             &fighters,
@@ -1106,13 +1114,13 @@ mod tests {
             &HashMap::new(),
             &HashMap::new(),
         );
-        let found: Vec<(u32, Role)> = roles(&things, &regiments, &buildings, &crowded)
+        let found: Vec<(u32, Role)> = roles(&things, &organizations, &buildings, &crowded)
             .map(|(t, role)| (t.id, role))
             .collect();
         assert_eq!(
             found,
             [
-                (1, Role::Regiment),
+                (1, Role::Organization),
                 (2, Role::Trailer),
                 (10, Role::HoldsBuilding),
                 (20, Role::Building),
@@ -1131,7 +1139,7 @@ mod tests {
             "hq_unpacked",
             2,
             None,
-            Some(organization(
+            Some(stored_organization(
                 "regiment_hq",
                 vec![
                     placed(11, "hq", 0, None, None),
@@ -1182,7 +1190,7 @@ mod tests {
         assert!(o.members.is_empty());
         assert!(b.obstacle.is_some());
         assert!(
-            units::regiments(
+            units::organizations(
                 &things,
                 &bodies,
                 &fighters,

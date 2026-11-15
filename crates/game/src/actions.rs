@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use aaa_data::{GameData, Id};
-use aaa_map::Regiment;
+use aaa_map::Organization;
 use aaa_render::textures;
 use aaa_sim::{Lacking, Researchable};
 use bevy::ecs::system::SystemParam;
@@ -47,9 +47,9 @@ const fn span(n: usize) -> f32 {
     n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD
 }
 
-/// The orders a regiment has, by command id, and what each does here;
+/// The orders an organization has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
-/// The game leaves the rest of the commands off a regiment's grid.
+/// The game leaves the rest of the commands off an organization's grid.
 const ORDERS: [(&str, Option<Give>); 9] = [
     ("move", Some(Give::Aim(Aim::Move))),
     ("kill", Some(Give::Aim(Aim::Attack))),
@@ -74,7 +74,7 @@ const SELL: &str = "sell";
 /// The command that sets where what a building commissions moves on to.
 pub const RALLY: &str = "set_rally_point";
 
-/// Where the game puts an HQ's button that selects the regiments attached
+/// Where the game puts an HQ's button that selects the organizations attached
 /// to it, the image it shows, and its strings' keys.
 const COMMAND_ALL: usize = 4;
 const COMMAND_ALL_ICON: &str = "UI/Game/ActionButtons/IconCommandAll.png";
@@ -128,12 +128,12 @@ enum Give {
 }
 
 impl Give {
-    /// The order to attach, detach or disband `regiment`.
-    fn command(self, regiment: usize) -> aaa_sim::Command {
+    /// The order to attach, detach or disband `organization`.
+    fn command(self, organization: usize) -> aaa_sim::Command {
         match self {
-            Give::Attach => aaa_sim::Command::Attach { regiment },
-            Give::Disband => aaa_sim::Command::Disband { regiment },
-            _ => aaa_sim::Command::Detach { regiment },
+            Give::Attach => aaa_sim::Command::Attach { organization },
+            Give::Disband => aaa_sim::Command::Disband { organization },
+            _ => aaa_sim::Command::Detach { organization },
         }
     }
 }
@@ -222,7 +222,7 @@ pub enum Entry {
     Sell,
     /// Waits for a place to set the selected building's rally point.
     Rally,
-    /// Selects the regiments attached to the selected HQ.
+    /// Selects the organizations attached to the selected HQ.
     CommandAll,
 }
 
@@ -282,12 +282,12 @@ impl BuildingButtons<'_> {
 /// disbanded, unless it's attached to an HQ, which it can detach from
 /// instead, or on its way to unpack; while it fights it's greyed.
 fn offered(sim: &aaa_sim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
-    let packed = |&r: &usize| sim.regiments[r].unpacks.is_some();
+    let packed = |&r: &usize| sim.organizations[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
     let lone = selected.iter().all(|&r| sim.lone(r));
     let disband = match selected {
         &[r] => {
-            let r = &sim.regiments[r];
+            let r = &sim.organizations[r];
             r.hq.is_none() && r.unpack_at.is_none()
         }
         _ => false,
@@ -403,7 +403,7 @@ struct Recruit {
     /// Its cost, production and upkeep, for the tooltip.
     economy: Vec<Row>,
     /// What it raises; `None` for what can't be raised yet, shown dimmed.
-    regiment: Option<Regiment>,
+    organization: Option<Organization>,
 }
 
 /// One of the technologies a building researches, as its button shows.
@@ -466,11 +466,11 @@ impl Looks {
         sim: &aaa_sim::World,
         building: Option<usize>,
         page: Page,
-    ) -> Option<&aaa_map::Regiment> {
+    ) -> Option<&aaa_map::Organization> {
         let Page::Delivering(i) = page else {
             return None;
         };
-        self.menu(sim, building).get(i)?.regiment.as_ref()
+        self.menu(sim, building).get(i)?.organization.as_ref()
     }
 
     /// The research menu of the selected building, as its research list
@@ -700,7 +700,7 @@ pub fn spawn(
     let mut templates: Vec<String> = standing.collect();
     templates.extend(
         sim.0
-            .regiments
+            .organizations
             .iter()
             .filter_map(|r| Some(r.unpacks.as_ref()?.building.template.to_string())),
     );
@@ -713,7 +713,7 @@ pub fn spawn(
             .iter()
             .map(|id| {
                 let listing = listings.get(id);
-                let regiment = sim.0.rules().raisable.get(id).cloned();
+                let organization = sim.0.rules().raisable.get(id).cloned();
                 let economy = listing.map_or_else(Vec::new, |l| {
                     [
                         (&cost, &l.cost, false),
@@ -743,13 +743,13 @@ pub fn spawn(
                             .and_then(|p| image(game, p)),
                     },
                     economy,
-                    regiment,
+                    organization,
                 }
             })
             .collect();
         templates.extend(menu.iter().filter_map(|r| {
             Some(
-                r.regiment
+                r.organization
                     .as_ref()?
                     .unpacks
                     .as_ref()?
@@ -945,7 +945,12 @@ pub fn show(
     let nothing = !crate::selection::commanded(&sim.0, local.0, &selected.0, building);
     // What hovering, or aiming, the order would do to the economy.
     let unpacking = selected.0.first().copied().filter(|&r| {
-        selected.0.len() == 1 && sim.0.regiments.get(r).is_some_and(|r| r.unpacks.is_some())
+        selected.0.len() == 1
+            && sim
+                .0
+                .organizations
+                .get(r)
+                .is_some_and(|r| r.unpacks.is_some())
     });
     let mut previewed = match *page {
         Page::Aiming(Aim::Unpack) => unpacking.map(Previewed::Unpack),
@@ -969,8 +974,8 @@ pub fn show(
     let hq = shown_hq(&sim.0, &selected.0, building);
     let menu = looks.menu(&sim.0, building);
     let lacks: Vec<Lacking> = (menu.iter())
-        .map(|r| match (building, &r.regiment, local.0) {
-            (Some(b), Some(regiment), Some(player)) => sim.0.lacks(player, b, regiment),
+        .map(|r| match (building, &r.organization, local.0) {
+            (Some(b), Some(organization), Some(player)) => sim.0.lacks(player, b, organization),
             _ => Lacking::default(),
         })
         .collect();
@@ -1087,7 +1092,7 @@ pub fn show(
                 if !lacking.is_empty() {
                     why = Some(format!("{}: {}", looks.requires, lacking.join(", ")));
                 }
-                let ready = r.regiment.is_some() && lacking.is_empty();
+                let ready = r.organization.is_some() && lacking.is_empty();
                 (&r.look, ready, false)
             }
         };
@@ -1106,7 +1111,7 @@ pub fn show(
             match entry {
                 Entry::Recruit(i) => {
                     previewed = menu[i]
-                        .regiment
+                        .organization
                         .clone()
                         .map(|r| Previewed::Commission(Box::new(r)));
                 }
@@ -1121,7 +1126,7 @@ pub fn show(
             let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
             let unaffordable = match (entry, refused) {
                 (Entry::Recruit(i), Some(aaa_sim::Refused::Unaffordable)) => menu[i]
-                    .regiment
+                    .organization
                     .as_ref()
                     .map(|r| (&looks.affording, sim.0.cost(r))),
                 _ => None,
@@ -1397,20 +1402,20 @@ impl Presser<'_, '_> {
                 Some(Give::Stop) => {
                     let selected = &self.selected.0;
                     crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
-                    for &regiment in selected {
-                        let stop = aaa_sim::Command::Stop { regiment };
+                    for &organization in selected {
+                        let stop = aaa_sim::Command::Stop { organization };
                         let _ = self.orders.give(sim, player, stop);
                     }
                     *self.page = Page::Orders;
                 }
                 Some(give @ (Give::Attach | Give::Detach)) => {
-                    for &regiment in &self.selected.0 {
-                        let _ = self.orders.give(sim, player, give.command(regiment));
+                    for &organization in &self.selected.0 {
+                        let _ = self.orders.give(sim, player, give.command(organization));
                     }
                 }
                 Some(Give::Disband) => {
-                    if let &[regiment] = &self.selected.0[..] {
-                        self.ask(slot, player, Give::Disband.command(regiment));
+                    if let &[organization] = &self.selected.0[..] {
+                        self.ask(slot, player, Give::Disband.command(organization));
                     }
                 }
                 None => {}
@@ -1446,7 +1451,7 @@ impl Presser<'_, '_> {
                 let Some(recruit) = self.looks.menu(sim, Some(b)).get(i) else {
                     return;
                 };
-                if recruit.regiment.is_some() {
+                if recruit.organization.is_some() {
                     let template = aaa_map::Id::from(recruit.id.as_str());
                     let command = aaa_sim::Command::Commission {
                         building: b,
@@ -1584,7 +1589,7 @@ pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut pre
 }
 
 /// The HQ the selection is, by its id: the selected building, or the one
-/// selected regiment, packed.
+/// selected organization, packed.
 fn shown_hq(sim: &aaa_sim::World, selected: &[usize], building: Option<usize>) -> Option<u32> {
     match (selected, building) {
         ([], Some(b)) => sim.hq_of(b),
@@ -1651,12 +1656,12 @@ fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
 /// What an attack aimed at `focus` would strike.
 #[derive(Debug, PartialEq)]
 enum Struck {
-    /// The enemy regiment, to go after.
+    /// The enemy organization, to go after.
     Enemy(usize),
-    /// The player's own regiment or building, or an ally's, which Attack
+    /// The player's own organization or building, or an ally's, which Attack
     /// refuses.
     Friend(About),
-    /// A regiment or building that's nobody's enemy, so can't be attacked.
+    /// An organization or building that's nobody's enemy, so can't be attacked.
     Neutral(About),
     /// The ground, or an enemy building on it, to attack-move to.
     Ground,
@@ -1665,7 +1670,7 @@ enum Struck {
 fn attack_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Struck {
     let owner = match focus {
         crate::Focus::Nothing => None,
-        crate::Focus::Regiment(r) => Some(sim.regiments[r].owner),
+        crate::Focus::Organization(r) => Some(sim.organizations[r].owner),
         crate::Focus::Building(b) => Some(sim.buildings[b].owner),
     };
     struck(focus, owner.map(|o| sim.sides.relation(player, o)))
@@ -1676,30 +1681,30 @@ fn attack_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Struck {
 fn struck(focus: crate::Focus, toward: Option<aaa_sim::Relation>) -> Struck {
     match (focus, toward) {
         (crate::Focus::Nothing, _) => Struck::Ground,
-        (crate::Focus::Regiment(e), Some(aaa_sim::Relation::Enemy)) => Struck::Enemy(e),
+        (crate::Focus::Organization(e), Some(aaa_sim::Relation::Enemy)) => Struck::Enemy(e),
         (crate::Focus::Building(_), Some(aaa_sim::Relation::Enemy)) => Struck::Ground,
-        (crate::Focus::Regiment(r), Some(aaa_sim::Relation::Neutral)) => {
-            Struck::Neutral(About::Regiment(r))
+        (crate::Focus::Organization(r), Some(aaa_sim::Relation::Neutral)) => {
+            Struck::Neutral(About::Organization(r))
         }
         (crate::Focus::Building(b), Some(aaa_sim::Relation::Neutral)) => {
             Struck::Neutral(About::Building(b))
         }
-        (crate::Focus::Regiment(r), _) => Struck::Friend(About::Regiment(r)),
+        (crate::Focus::Organization(r), _) => Struck::Friend(About::Organization(r)),
         (crate::Focus::Building(b), _) => Struck::Friend(About::Building(b)),
     }
 }
 
-/// The enemy's regiment or building at `focus`, which Guard refuses.
+/// The enemy's organization or building at `focus`, which Guard refuses.
 fn enemy_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Option<About> {
     let (about, owner) = match focus {
         crate::Focus::Nothing => return None,
-        crate::Focus::Regiment(r) => (About::Regiment(r), sim.regiments[r].owner),
+        crate::Focus::Organization(r) => (About::Organization(r), sim.organizations[r].owner),
         crate::Focus::Building(b) => (About::Building(b), sim.buildings[b].owner),
     };
     (sim.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(about)
 }
 
-/// What a guard aimed at `focus` is posted beside: a regiment or building
+/// What a guard aimed at `focus` is posted beside: an organization or building
 /// that's no enemy's, and not one of the `selected` giving the guard, which
 /// guard where they are instead.
 fn guard_at(
@@ -1710,15 +1715,17 @@ fn guard_at(
 ) -> Option<aaa_sim::Piece> {
     let (thing, owner) = match focus {
         crate::Focus::Nothing => return None,
-        crate::Focus::Regiment(r) if selected.contains(&r) => return None,
-        crate::Focus::Regiment(r) => (aaa_sim::Piece::Regiment(r), sim.regiments[r].owner),
+        crate::Focus::Organization(r) if selected.contains(&r) => return None,
+        crate::Focus::Organization(r) => {
+            (aaa_sim::Piece::Organization(r), sim.organizations[r].owner)
+        }
         crate::Focus::Building(b) => (aaa_sim::Piece::Building(b), sim.buildings[b].owner),
     };
     (sim.sides.relation(player, owner) != aaa_sim::Relation::Enemy).then_some(thing)
 }
 
 /// While an order is aimed, a left click on the map or minimap gives it
-/// there and a right click calls it off. Attacking an enemy regiment, or
+/// there and a right click calls it off. Attacking an enemy organization, or
 /// its mark on the minimap, sends the selected after it instead, and
 /// guarding a friend posts them beside it. A click on something the order
 /// refuses tells the player so and calls the order off. Unpacking somewhere
@@ -1759,13 +1766,15 @@ pub fn aim(
     if let Page::Delivering(i) = *page {
         // Only the map aims one, and a place it can't land goes on
         // being aimed.
-        let regiment = menus.delivered(&sim.0, chosen.0, *page);
-        let (Some(b), Some(regiment), crate::Pointing::Ground(_)) = (chosen.0, regiment, at) else {
+        let organization = menus.delivered(&sim.0, chosen.0, *page);
+        let (Some(b), Some(organization), crate::Pointing::Ground(_)) =
+            (chosen.0, organization, at)
+        else {
             return;
         };
         let deliver = aaa_sim::Command::Deliver {
             building: b,
-            template: regiment.template.clone(),
+            template: organization.template.clone(),
             to: point,
         };
         match orders.give(&sim.0, player, deliver) {
@@ -1774,7 +1783,7 @@ pub fn aim(
             Err(aaa_sim::Refused::Unaffordable) => {
                 let listed = menus.menu(&sim.0, chosen.0).get(i);
                 let name = listed.map_or("", |r| r.look.name.as_str());
-                let cost = sim.0.cost(regiment).ceil().to_string();
+                let cost = sim.0.cost(organization).ceil().to_string();
                 let text = fill(&menus.affording, &[name, &cost]);
                 let about = About::Building(b);
                 failed.write(Failed {
@@ -1784,7 +1793,7 @@ pub fn aim(
                 *page = Page::Orders;
             }
             Err(e) => {
-                debug!("can't deliver {}: {e:?}", regiment.template);
+                debug!("can't deliver {}: {e:?}", organization.template);
                 *page = Page::Orders;
             }
             Ok(()) => *page = Page::Orders,
@@ -1796,12 +1805,12 @@ pub fn aim(
         // The minimap's marks are too close together to pick out friends,
         // so a click there is only ever on an enemy or the ground.
         crate::Pointing::Minimap(p) => {
-            crate::nearest_regiment(&sim.0, p, pointer.minimap.reach(), |r| {
+            crate::nearest_organization(&sim.0, p, pointer.minimap.reach(), |r| {
                 !scenery.has(&sim.0, r)
-                    && sim.0.sides.relation(player, sim.0.regiments[r].owner)
+                    && sim.0.sides.relation(player, sim.0.organizations[r].owner)
                         == aaa_sim::Relation::Enemy
             })
-            .map_or(crate::Focus::Nothing, crate::Focus::Regiment)
+            .map_or(crate::Focus::Nothing, crate::Focus::Organization)
         }
     };
     let Page::Aiming(aim) = *page else {
@@ -1840,13 +1849,13 @@ pub fn aim(
                 let (pursuing, rest) = crate::pursue(&sim.0, &mut orders, player, &selected.0, e);
                 // An enemy none of them can attack is no target either.
                 if pursuing.is_empty() {
-                    let about = About::Regiment(e);
+                    let about = About::Organization(e);
                     refused.write(Refused { about, by: None });
                     *page = Page::Orders;
                     return;
                 }
                 // Those with nothing to fire go there as they would anywhere.
-                let regiments = crate::send(
+                let organizations = crate::send(
                     &sim.0,
                     &mut orders,
                     player,
@@ -1859,12 +1868,12 @@ pub fn aim(
                 sent.write(crate::waypoints::Sent {
                     to: None,
                     aim,
-                    regiments: pursuing,
+                    organizations: pursuing,
                 });
                 sent.write(crate::waypoints::Sent {
                     to: Some(point),
                     aim,
-                    regiments,
+                    organizations,
                 });
                 *page = Page::Orders;
                 return;
@@ -1887,30 +1896,33 @@ pub fn aim(
     if aim == Aim::Guard
         && let Some(piece) = guard_at(&sim.0, player, &selected.0, focus)
     {
-        let guard = |regiment| aaa_sim::Command::GuardPiece { regiment, piece };
-        let regiments: Vec<(usize, [f32; 2])> = (selected.0.iter())
+        let guard = |organization| aaa_sim::Command::GuardPiece {
+            organization,
+            piece,
+        };
+        let organizations: Vec<(usize, [f32; 2])> = (selected.0.iter())
             .filter(|&&r| orders.give(&sim.0, player, guard(r)).is_ok())
             .map(|&r| (r, point))
             .collect();
-        if regiments.is_empty() {
+        if organizations.is_empty() {
             return;
         }
         crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
         sent.write(crate::waypoints::Sent {
             to: None,
             aim,
-            regiments,
+            organizations,
         });
         *page = Page::Orders;
         return;
     }
-    let regiments = match aim {
+    let organizations = match aim {
         Aim::Unpack => {
             let &[r] = &selected.0[..] else {
                 return;
             };
             let unpack = aaa_sim::Command::Unpack {
-                regiment: r,
+                organization: r,
                 at: point,
                 facing: UNPACK_FACING,
             };
@@ -1937,7 +1949,7 @@ pub fn aim(
     sent.write(crate::waypoints::Sent {
         to: Some(point),
         aim,
-        regiments,
+        organizations,
     });
     *page = Page::Orders;
 }
@@ -1969,29 +1981,29 @@ mod tests {
 
     #[test]
     fn attacks_strike_only_enemies() {
-        use crate::Focus::{Building, Nothing, Regiment};
+        use crate::Focus::{Building, Nothing, Organization};
         use aaa_sim::Relation::{Ally, Enemy, Itself, Neutral};
-        assert_eq!(struck(Regiment(3), Some(Enemy)), Struck::Enemy(3));
+        assert_eq!(struck(Organization(3), Some(Enemy)), Struck::Enemy(3));
         for friend in [Itself, Ally] {
             let refused = |about| Struck::Friend(about);
             assert_eq!(
-                struck(Regiment(3), Some(friend)),
-                refused(About::Regiment(3))
+                struck(Organization(3), Some(friend)),
+                refused(About::Organization(3))
             );
             assert_eq!(
                 struck(Building(3), Some(friend)),
                 refused(About::Building(3))
             );
         }
-        let neutral = Struck::Neutral(About::Regiment(3));
-        assert_eq!(struck(Regiment(3), Some(Neutral)), neutral);
+        let neutral = Struck::Neutral(About::Organization(3));
+        assert_eq!(struck(Organization(3), Some(Neutral)), neutral);
         assert_eq!(struck(Building(3), Some(Enemy)), Struck::Ground);
         assert_eq!(struck(Nothing, None), Struck::Ground);
     }
 
     #[test]
     fn orders_take_their_slots() {
-        // A regiment attached to an HQ, which can't be disbanded.
+        // An organization attached to an HQ, which can't be disbanded.
         let mut all = [true; 9];
         all[8] = false;
         let grid = layout(Page::Orders, &GAME, &all, None, false);
@@ -2012,7 +2024,7 @@ mod tests {
     }
 
     #[test]
-    fn hqs_have_a_button_for_their_regiments_where_nothing_else_is() {
+    fn hqs_have_a_button_for_their_organizations_where_nothing_else_is() {
         let truck = [true, false, false, true, false, false, false, true, true];
         let grid = layout(Page::Orders, &GAME, &truck, None, true);
         assert_eq!(grid[COMMAND_ALL], Some(Entry::CommandAll));
@@ -2111,7 +2123,7 @@ mod tests {
     #[test]
     fn what_a_transport_carries_has_a_menu_of_its_own() {
         use Offer::{Greyed, Hidden, Offered};
-        // An Infantry HQ: its amphibious regiment, last, hidden.
+        // An Infantry HQ: its amphibious organization, last, hidden.
         let infantry = [
             (Menu::Deploy, Offered),
             (Menu::Deploy, Greyed),
@@ -2144,7 +2156,7 @@ mod tests {
             menu[..3],
             [Some(Entry::Recruit(0)), Some(Entry::Recruit(1)), None]
         );
-        // A transported regiment and a truck: one in each menu, each at the
+        // A transported organization and a truck: one in each menu, each at the
         // front; a hidden one keeps its place.
         let mixed = [
             (Menu::Location, Offered),

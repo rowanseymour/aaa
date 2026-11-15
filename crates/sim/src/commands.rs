@@ -9,31 +9,39 @@ use crate::{
 };
 
 impl World {
-    /// Whether `player` may give `regiment` orders.
-    pub fn commands(&self, player: u32, regiment: usize) -> bool {
-        self.regiments
-            .get(regiment)
+    /// Whether `player` may give `organization` orders.
+    pub fn commands(&self, player: u32, organization: usize) -> bool {
+        self.organizations
+            .get(organization)
             .is_some_and(|r| r.owner == player)
-            && !self.destroyed(regiment)
+            && !self.destroyed(organization)
     }
 
     /// Whether `player` may give `command` now: what [`World::apply`]
     /// would refuse it for, without carrying it out.
     pub fn check(&self, player: u32, command: &Command) -> Result<(), Refused> {
         match *command {
-            Command::Move { regiment, .. }
-            | Command::Guard { regiment, .. }
-            | Command::Attack { regiment, .. }
-            | Command::Run { regiment, .. }
-            | Command::Stop { regiment }
-            | Command::Formation { regiment, .. } => Ok(self.may_command(player, regiment)?),
-            Command::Pursue { regiment, enemy } => self.may_pursue(player, regiment, enemy),
-            Command::GuardPiece { regiment, piece } => self.may_guard(player, regiment, piece),
+            Command::Move { organization, .. }
+            | Command::Guard { organization, .. }
+            | Command::Attack { organization, .. }
+            | Command::Run { organization, .. }
+            | Command::Stop { organization }
+            | Command::Formation { organization, .. } => {
+                Ok(self.may_command(player, organization)?)
+            }
+            Command::Pursue {
+                organization,
+                enemy,
+            } => self.may_pursue(player, organization, enemy),
+            Command::GuardPiece {
+                organization,
+                piece,
+            } => self.may_guard(player, organization, piece),
             Command::Unpack {
-                regiment,
+                organization,
                 at,
                 facing,
-            } => self.may_unpack(player, regiment, at, facing).map(drop),
+            } => self.may_unpack(player, organization, at, facing).map(drop),
             Command::Pack { building } => self.may_pack(player, building).map(drop),
             Command::Commission {
                 building,
@@ -53,9 +61,9 @@ impl World {
                 commission,
             } => self.may_cancel(player, building, commission).map(drop),
             Command::Rally { building, .. } => self.may_rally(player, building),
-            Command::Attach { regiment } => self.may_attach(player, regiment).map(drop),
-            Command::Detach { regiment } => self.may_detach(player, regiment),
-            Command::Disband { regiment } => self.may_disband(player, regiment),
+            Command::Attach { organization } => self.may_attach(player, organization).map(drop),
+            Command::Detach { organization } => self.may_detach(player, organization),
+            Command::Disband { organization } => self.may_disband(player, organization),
             Command::Sell { building } => self.may_sell(player, building),
             Command::Operate { operation, .. } => self.may_operate(player, operation),
         }
@@ -64,26 +72,30 @@ impl World {
     /// Carries out `command` from `player`, unless it's refused.
     pub fn apply(&mut self, player: u32, command: Command) -> Result<(), Refused> {
         match command {
-            Command::Move { regiment, to } => self.order_move(player, regiment, to)?,
-            Command::Attack { regiment, to } => self.order_attack(player, regiment, to)?,
-            Command::Run { regiment, to } => self.order_run(player, regiment, to)?,
-            Command::Pursue { regiment, enemy } => self.order_pursue(player, regiment, enemy)?,
-            Command::Stop { regiment } => self.order_stop(player, regiment)?,
-            Command::Guard { regiment, to } => self.order_guard(player, regiment, to)?,
-            Command::GuardPiece { regiment, piece } => {
-                self.order_guard_piece(player, regiment, piece)?
-            }
+            Command::Move { organization, to } => self.order_move(player, organization, to)?,
+            Command::Attack { organization, to } => self.order_attack(player, organization, to)?,
+            Command::Run { organization, to } => self.order_run(player, organization, to)?,
+            Command::Pursue {
+                organization,
+                enemy,
+            } => self.order_pursue(player, organization, enemy)?,
+            Command::Stop { organization } => self.order_stop(player, organization)?,
+            Command::Guard { organization, to } => self.order_guard(player, organization, to)?,
+            Command::GuardPiece {
+                organization,
+                piece,
+            } => self.order_guard_piece(player, organization, piece)?,
             Command::Unpack {
-                regiment,
+                organization,
                 at,
                 facing,
             } => {
-                self.order_unpack(player, regiment, at, facing)?;
+                self.order_unpack(player, organization, at, facing)?;
             }
             Command::Formation {
-                regiment,
+                organization,
                 formation,
-            } => self.set_formation(player, regiment, formation)?,
+            } => self.set_formation(player, organization, formation)?,
             Command::Pack { building } => self.order_pack(player, building)?,
             Command::Commission { building, template } => {
                 self.commission(player, building, &template, None)?
@@ -105,35 +117,35 @@ impl World {
                 commission,
             } => self.cancel_commission(player, building, commission)?,
             Command::Rally { building, at } => self.set_rally(player, building, at)?,
-            Command::Attach { regiment } => {
-                let hq = self.may_attach(player, regiment)?;
-                let left = self.regiments[regiment].hq.replace(hq);
+            Command::Attach { organization } => {
+                let hq = self.may_attach(player, organization)?;
+                let left = self.organizations[organization].hq.replace(hq);
                 let left = left.map(|hq| Notice::Detached {
                     player,
                     hq,
-                    regiment,
+                    organization,
                 });
                 self.notices.extend(left);
                 let joined = Notice::Attached {
                     player,
                     hq,
-                    regiment,
+                    organization,
                 };
                 self.notices.push(joined);
             }
-            Command::Detach { regiment } => {
-                self.may_detach(player, regiment)?;
-                let left = self.regiments[regiment].hq.take();
+            Command::Detach { organization } => {
+                self.may_detach(player, organization)?;
+                let left = self.organizations[organization].hq.take();
                 let left = left.map(|hq| Notice::Detached {
                     player,
                     hq,
-                    regiment,
+                    organization,
                 });
                 self.notices.extend(left);
             }
-            Command::Disband { regiment } => {
-                self.may_disband(player, regiment)?;
-                self.disband(regiment);
+            Command::Disband { organization } => {
+                self.may_disband(player, organization)?;
+                self.disband(organization);
             }
             Command::Sell { building } => {
                 self.may_sell(player, building)?;
@@ -146,8 +158,8 @@ impl World {
         Ok(())
     }
 
-    pub(crate) fn may_command(&self, player: u32, regiment: usize) -> Result<(), NotYours> {
-        match self.commands(player, regiment) {
+    pub(crate) fn may_command(&self, player: u32, organization: usize) -> Result<(), NotYours> {
+        match self.commands(player, organization) {
             true => Ok(()),
             false => Err(NotYours),
         }
@@ -161,21 +173,21 @@ impl World {
             .ok_or(Refused::NotYours)
     }
 
-    fn may_pursue(&self, player: u32, regiment: usize, enemy: usize) -> Result<(), Refused> {
-        self.may_command(player, regiment)?;
-        if !self.armed(regiment)
-            || enemy >= self.regiments.len()
+    fn may_pursue(&self, player: u32, organization: usize, enemy: usize) -> Result<(), Refused> {
+        self.may_command(player, organization)?;
+        if !self.armed(organization)
+            || enemy >= self.organizations.len()
             || self.destroyed(enemy)
-            || !self.hostile(regiment, Piece::Regiment(enemy))
+            || !self.hostile(organization, Piece::Organization(enemy))
         {
             return Err(Refused::Unable);
         }
         Ok(())
     }
 
-    /// Whether any of a regiment's members has something to fire.
-    pub(crate) fn armed(&self, regiment: usize) -> bool {
-        self.survivors(regiment).any(|u| {
+    /// Whether any of an organization's members has something to fire.
+    pub(crate) fn armed(&self, organization: usize) -> bool {
+        self.survivors(organization).any(|u| {
             self.units[u]
                 .fighter
                 .as_ref()
@@ -183,10 +195,10 @@ impl World {
         })
     }
 
-    fn may_guard(&self, player: u32, regiment: usize, piece: Piece) -> Result<(), Refused> {
-        self.may_command(player, regiment)?;
+    fn may_guard(&self, player: u32, organization: usize, piece: Piece) -> Result<(), Refused> {
+        self.may_command(player, organization)?;
         let there = match piece {
-            Piece::Regiment(g) => g != regiment && g < self.regiments.len(),
+            Piece::Organization(g) => g != organization && g < self.organizations.len(),
             Piece::Building(b) => b < self.buildings.len(),
         };
         match there && !self.left(piece) {
@@ -195,25 +207,25 @@ impl World {
         }
     }
 
-    /// Whether something a regiment could guard is no longer there to.
+    /// Whether something an organization could guard is no longer there to.
     pub(crate) fn left(&self, piece: Piece) -> bool {
         match piece {
-            Piece::Regiment(g) => self.destroyed(g),
+            Piece::Organization(g) => self.destroyed(g),
             Piece::Building(b) => self.buildings[b].gone(),
         }
     }
 
-    /// Where the regiment stops to unpack, relative to where it unpacks,
+    /// Where the organization stops to unpack, relative to where it unpacks,
     /// if it can there.
     fn may_unpack(
         &self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         at: [f32; 2],
         facing: [f32; 2],
     ) -> Result<[f32; 2], Refused> {
-        self.may_command(player, regiment)?;
-        let Some(unpacks) = &self.regiments[regiment].unpacks else {
+        self.may_command(player, organization)?;
+        let Some(unpacks) = &self.organizations[organization].unpacks else {
             return Err(Refused::Unable);
         };
         if !self.room_to_unpack(unpacks, unpack_site(at), facing) {
@@ -234,23 +246,23 @@ impl World {
         Ok((packs.seconds / TICK).round() as u64)
     }
 
-    /// The regiment of `template` the building would raise.
+    /// The organization of `template` the building would raise.
     pub(crate) fn may_commission(
         &self,
         player: u32,
         building: usize,
         template: &Id,
-    ) -> Result<&aaa_map::Regiment, Refused> {
+    ) -> Result<&aaa_map::Organization, Refused> {
         let b = self.standing_for(player, building)?;
         if b.deploy.is_none() || b.busy() {
             return Err(Refused::Unable);
         }
         let listed =
             (self.rules.recruit_lists.get(&b.template)).is_some_and(|l| l.contains(template));
-        let regiment = (self.rules.raisable.get(template))
+        let organization = (self.rules.raisable.get(template))
             .filter(|_| listed)
             .ok_or(Refused::Unable)?;
-        if !self.lacks(player, building, regiment).is_empty() {
+        if !self.lacks(player, building, organization).is_empty() {
             return Err(Refused::Lacking);
         }
         // What an HQ raises it takes on, queued or out.
@@ -259,10 +271,10 @@ impl World {
         if hq.is_some_and(|h| self.free_places(&h) == 0) {
             return Err(Refused::Full);
         }
-        if self.cost(regiment) > self.stockpile(player) {
+        if self.cost(organization) > self.stockpile(player) {
             return Err(Refused::Unaffordable);
         }
-        Ok(regiment)
+        Ok(organization)
     }
 
     fn may_rally(&self, player: u32, building: usize) -> Result<(), Refused> {
@@ -288,51 +300,51 @@ impl World {
     pub(crate) fn order_move(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
-        self.advance(player, regiment, target, Order::Move, None)
+        self.advance(player, organization, target, Order::Move, None)
     }
 
     fn order_attack(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
-        self.advance(player, regiment, target, Order::Attack, None)
+        self.advance(player, organization, target, Order::Attack, None)
     }
 
     pub(crate) fn order_pursue(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         enemy: usize,
     ) -> Result<(), Refused> {
-        self.may_pursue(player, regiment, enemy)?;
-        let r = &mut self.regiments[regiment];
+        self.may_pursue(player, organization, enemy)?;
+        let r = &mut self.organizations[organization];
         r.take_order(Order::Pursue(enemy));
         r.engaged.clear();
-        self.chase(regiment, enemy, true);
+        self.chase(organization, enemy, true);
         Ok(())
     }
 
     fn advance(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         target: [f32; 2],
         order: Order,
         unpack_at: Option<([f32; 2], [f32; 2])>,
     ) -> Result<(), NotYours> {
-        self.may_command(player, regiment)?;
-        let r = &mut self.regiments[regiment];
+        self.may_command(player, organization)?;
+        let r = &mut self.organizations[organization];
         r.take_order(order);
         r.unpack_at = unpack_at;
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
-            true => self.send(regiment, target, facing),
+            true => self.send(organization, target, facing),
             false => r.resume = Some((target, facing)),
         }
         Ok(())
@@ -341,27 +353,27 @@ impl World {
     fn order_run(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
-        self.may_command(player, regiment)?;
-        let r = &mut self.regiments[regiment];
+        self.may_command(player, organization)?;
+        let r = &mut self.organizations[organization];
         r.take_order(Order::Run);
         r.engaged.clear();
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
-        self.send(regiment, target, facing);
+        self.send(organization, target, facing);
         Ok(())
     }
 
-    pub(crate) fn order_stop(&mut self, player: u32, regiment: usize) -> Result<(), NotYours> {
-        self.may_command(player, regiment)?;
-        let here = self.centre(regiment);
-        let r = &mut self.regiments[regiment];
+    pub(crate) fn order_stop(&mut self, player: u32, organization: usize) -> Result<(), NotYours> {
+        self.may_command(player, organization)?;
+        let here = self.centre(organization);
+        let r = &mut self.organizations[organization];
         r.take_order(Order::Move);
         if r.engaged.is_empty() {
             let facing = r.facing;
-            self.send(regiment, here, facing);
+            self.send(organization, here, facing);
         }
         Ok(())
     }
@@ -369,47 +381,47 @@ impl World {
     fn order_guard(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         target: [f32; 2],
     ) -> Result<(), NotYours> {
-        self.may_command(player, regiment)?;
-        let kept = self.regiments[regiment].guard;
+        self.may_command(player, organization)?;
+        let kept = self.organizations[organization].guard;
         if kept.is_some_and(|g| g.of.is_none() && g.post == target) {
             return Ok(());
         }
-        let from = self.regiments[regiment].position;
+        let from = self.organizations[organization].position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]);
-        self.post(regiment, None, target, facing);
+        self.post(organization, None, target, facing);
         Ok(())
     }
 
     fn order_guard_piece(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         piece: Piece,
     ) -> Result<(), Refused> {
-        self.may_guard(player, regiment, piece)?;
-        if self.regiments[regiment].guard.and_then(|g| g.of) == Some(piece) {
+        self.may_guard(player, organization, piece)?;
+        if self.organizations[organization].guard.and_then(|g| g.of) == Some(piece) {
             return Ok(());
         }
-        let (post, facing) = self.beside(regiment, piece);
-        self.post(regiment, Some(piece), post, Some(facing));
+        let (post, facing) = self.beside(organization, piece);
+        self.post(organization, Some(piece), post, Some(facing));
         Ok(())
     }
 
     pub(crate) fn order_unpack(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         at: [f32; 2],
         facing: [f32; 2],
     ) -> Result<[f32; 2], Refused> {
-        let offset = self.may_unpack(player, regiment, at, facing)?;
+        let offset = self.may_unpack(player, organization, at, facing)?;
         let at = unpack_site(at);
         let stop = [at[0] + offset[0], at[1] + offset[1]];
         let unpack_at = Some((at, unpack_facing(facing)));
-        self.advance(player, regiment, stop, Order::Move, unpack_at)?;
+        self.advance(player, organization, stop, Order::Move, unpack_at)?;
         Ok(at)
     }
 
@@ -428,10 +440,10 @@ impl World {
         template: &Id,
         to: Option<[f32; 2]>,
     ) -> Result<(), Refused> {
-        let regiment = self.may_commission(player, building, template)?;
-        let paid = self.cost(regiment);
+        let organization = self.may_commission(player, building, template)?;
+        let paid = self.cost(organization);
         let seconds = self.rules.recruit_times.get(template).copied();
-        let work = Work::Raise(Box::new(regiment.clone()));
+        let work = Work::Raise(Box::new(organization.clone()));
         let mut commission = Commission::of(work, seconds.unwrap_or(0.0));
         commission.paid = paid;
         commission.to = to;
@@ -491,19 +503,19 @@ mod tests {
     use crate::{Command, NotYours, Notice, Piece, Refused};
 
     #[test]
-    fn a_new_order_forgets_what_the_regiment_was_told_before() {
+    fn a_new_order_forgets_what_the_organization_was_told_before() {
         let orders = [
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 20.0],
             },
             Command::Run {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 20.0],
             },
-            Command::Stop { regiment: 0 },
+            Command::Stop { organization: 0 },
             Command::Guard {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 20.0],
             },
         ];
@@ -512,18 +524,18 @@ mod tests {
             w.apply(
                 7,
                 Command::Guard {
-                    regiment: 0,
+                    organization: 0,
                     to: [5.0, 5.0],
                 },
             )
             .unwrap();
-            let r = &mut w.regiments[0];
+            let r = &mut w.organizations[0];
             r.rally = Some([1.0, 1.0]);
             r.unpack_at = Some(([2.0, 2.0], [0.0, 1.0]));
             r.unpack_again = Some(99);
             r.resume = Some(([3.0, 3.0], [0.0, 1.0]));
             w.apply(7, order.clone()).unwrap();
-            let r = &w.regiments[0];
+            let r = &w.organizations[0];
             let guarding = matches!(order, Command::Guard { .. });
             assert_eq!(r.guard.is_some(), guarding, "{order:?}");
             assert!(!r.guard.is_some_and(|g| g.post == [5.0, 5.0]), "{order:?}");
@@ -537,19 +549,19 @@ mod tests {
     }
 
     #[test]
-    fn regiments_only_take_orders_from_their_owner() {
+    fn organizations_only_take_orders_from_their_owner() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         assert_eq!(w.order_move(8, 0, [10.0, 20.0]), Err(NotYours));
         assert_eq!(w.set_formation(8, 0, 1), Err(NotYours));
         run(&mut w, 5.0);
         assert!(near(w.units[0].position, [9.0, 10.0]));
-        assert_eq!(w.regiments[0].formation, 0);
+        assert_eq!(w.organizations[0].formation, 0);
     }
 
     #[test]
-    fn regiments_added_later_take_orders_like_the_first() {
+    fn organizations_added_later_take_orders_like_the_first() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
-        let second = aaa_map::Regiment {
+        let second = aaa_map::Organization {
             hq: None,
             id: 4,
             template: "squad".into(),
@@ -568,12 +580,12 @@ mod tests {
             primary: None,
             unpacks: None,
         };
-        let r = w.add_regiment(&second);
-        assert_eq!((r, w.units[2].regiment), (1, 1));
+        let r = w.add_organization(&second);
+        assert_eq!((r, w.units[2].organization), (1, 1));
         w.apply(
             7,
             Command::Move {
-                regiment: r,
+                organization: r,
                 to: [20.0, 20.0],
             },
         )
@@ -584,14 +596,14 @@ mod tests {
     }
 
     #[test]
-    fn destroyed_regiments_take_no_more_orders() {
+    fn destroyed_organizations_take_no_more_orders() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         w.destroy(0);
         assert!(w.destroyed(0));
         assert!(!w.commands(7, 0));
         let lost = Notice::Destroyed {
-            owner: w.regiments[0].owner,
-            what: Piece::Regiment(0),
+            owner: w.organizations[0].owner,
+            what: Piece::Organization(0),
         };
         assert_eq!(w.notices, [lost]);
     }
@@ -618,7 +630,7 @@ mod tests {
                 Refused::Unable,
             ),
             // What isn't there is refused, not a panic.
-            (1, Command::Stop { regiment: 9 }, Refused::NotYours),
+            (1, Command::Stop { organization: 9 }, Refused::NotYours),
             (1, Command::Pack { building: 9 }, Refused::NotYours),
             // Only what the building recruits.
             (1, commission(0, "company"), Refused::Unable),

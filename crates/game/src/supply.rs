@@ -2,7 +2,7 @@
 //! player's side is supplied over, and a tint on buildings going without.
 //! A button on the minimap's rim, or its key, shows and hides the
 //! border, as the options do. Another over the minimap, or its key, steps
-//! through the player's regiments that have no HQ.
+//! through the player's organizations that have no HQ.
 
 use aaa_map::Tile;
 use aaa_render::camera::RtsCamera;
@@ -174,7 +174,7 @@ pub fn tint_buildings(
 }
 
 /// The button over the minimap that steps through the player's detached
-/// regiments, as F5 does; there only while there are some.
+/// organizations, as F5 does; there only while there are some.
 #[derive(Component)]
 pub struct CycleDetached;
 
@@ -200,7 +200,7 @@ const BORDER_NAME: &str = "control_panel_ButtonSupplyBorder_ToolTip";
 const BORDER_HELP: &str = "control_panel_ButtonSupplyBorder_tooltip_2";
 
 /// Loads how the border looks, and spawns the buttons that show and hide
-/// it and that cycle through detached regiments.
+/// it and that cycle through detached organizations.
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
@@ -316,7 +316,7 @@ pub fn mark_border(
     }
 }
 
-/// What stepping through the detached regiments reads and changes.
+/// What stepping through the detached organizations reads and changes.
 #[derive(SystemParam)]
 pub struct CycleParts<'w, 's> {
     sim: Res<'w, Sim>,
@@ -329,7 +329,7 @@ pub struct CycleParts<'w, 's> {
 }
 
 impl CycleParts<'_, '_> {
-    /// Selects the player's next detached regiment after the one selected,
+    /// Selects the player's next detached organization after the one selected,
     /// round to the first again, and looks at it.
     fn step(&mut self) {
         let Some(player) = self.local.0 else {
@@ -352,7 +352,7 @@ impl CycleParts<'_, '_> {
     }
 }
 
-/// Steps through the detached regiments on the key for it.
+/// Steps through the detached organizations on the key for it.
 pub fn cycle_detached(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
@@ -416,7 +416,7 @@ pub fn show_border_button(
     }
 }
 
-/// Shows the button that cycles through detached regiments while there's
+/// Shows the button that cycles through detached organizations while there's
 /// one that an HQ of the player's could take, places aside, though the
 /// cycle takes in those none could.
 pub fn show_cycle_button(

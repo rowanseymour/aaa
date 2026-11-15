@@ -5,7 +5,7 @@ use aaa_map::{Grant, Id, Research};
 
 use crate::{Held, Notice, Refused, World};
 
-/// What a recruiter would need to raise a regiment but hasn't, and so
+/// What a recruiter would need to raise an organization but hasn't, and so
 /// whether its menu offers it, greys it or leaves it out.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Lacking {
@@ -101,17 +101,22 @@ impl World {
         }
     }
 
-    /// What the building at `building` would need to raise `regiment` for
+    /// What the building at `building` would need to raise `organization` for
     /// `player`, checked member by member: a member missing a property it
-    /// hides for leaves the regiment out, and where members differ the
+    /// hides for leaves the organization out, and where members differ the
     /// later one decides.
-    pub fn lacks(&self, player: u32, building: usize, regiment: &aaa_map::Regiment) -> Lacking {
+    pub fn lacks(
+        &self,
+        player: u32,
+        building: usize,
+        organization: &aaa_map::Organization,
+    ) -> Lacking {
         let mut out = Lacking::default();
-        let members = regiment.members.iter().map(|m| &m.template);
-        let mut templates = std::iter::once(&regiment.template).chain(members);
+        let members = organization.members.iter().map(|m| &m.template);
+        let mut templates = std::iter::once(&organization.template).chain(members);
         out.barred = templates.any(|t| self.barred(player, t));
         out.hidden = out.barred;
-        for m in &regiment.members {
+        for m in &organization.members {
             let Some(r) = self.rules.requires.get(&m.template) else {
                 continue;
             };

@@ -5,18 +5,18 @@ use std::collections::{BTreeMap, VecDeque};
 use aaa_map::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
 
 use crate::{
-    Building, Fate, Fog, Order, Outcome, Regiment, Rules, Sides, State, Supplying, Trailer,
+    Building, Fate, Fog, Order, Organization, Outcome, Rules, Sides, State, Supplying, Trailer,
     Treasury, TurretAim, Unit, World, normalised, wrap,
 };
 
 /// [`World::holdings`] from each placed object's role, owner and template.
-/// Regiments and buildings count in their own right, and what the map
+/// Organizations and buildings count in their own right, and what the map
 /// left out for lack of room counts for nothing.
 pub(crate) fn holdings<'a>(
     things: impl IntoIterator<Item = (Role, Option<u32>, &'a str)>,
 ) -> Vec<(u32, Id)> {
     (things.into_iter())
-        .filter(|(role, ..)| !matches!(role, Role::Crowded | Role::Regiment | Role::Building))
+        .filter(|(role, ..)| !matches!(role, Role::Crowded | Role::Organization | Role::Building))
         .filter_map(|(_, owner, template)| Some((owner?, Id::from(template))))
         .collect()
 }
@@ -27,7 +27,7 @@ impl World {
             players: map.players.clone(),
             teams: map.teams.clone(),
         };
-        let mut world = World::build(sides, map.pathing.clone(), rules, &map.regiments);
+        let mut world = World::build(sides, map.pathing.clone(), rules, &map.organizations);
         world.add_buildings(&map.buildings);
         world.detach_from_missing();
         world.tile_terrains = map.tile_terrains.clone();
@@ -59,23 +59,23 @@ impl World {
         world
     }
 
-    /// A world of `regiments` played by the default [`Rules`].
-    pub fn from_regiments(
+    /// A world of `organizations` played by the default [`Rules`].
+    pub fn from_organizations(
         sides: Sides,
         pathing: Pathing,
-        regiments: &[aaa_map::Regiment],
+        organizations: &[aaa_map::Organization],
     ) -> World {
-        World::build(sides, pathing, Rules::default(), regiments)
+        World::build(sides, pathing, Rules::default(), organizations)
     }
 
-    /// As [`World::from_regiments`], played by `rules`.
-    pub fn from_regiments_by(
+    /// As [`World::from_organizations`], played by `rules`.
+    pub fn from_organizations_by(
         sides: Sides,
         pathing: Pathing,
         rules: Rules,
-        regiments: &[aaa_map::Regiment],
+        organizations: &[aaa_map::Organization],
     ) -> World {
-        World::build(sides, pathing, rules, regiments)
+        World::build(sides, pathing, rules, organizations)
     }
 
     /// What the match is played by, fixed once it's begun.
@@ -87,7 +87,7 @@ impl World {
         sides: Sides,
         pathing: Pathing,
         rules: Rules,
-        regiments: &[aaa_map::Regiment],
+        organizations: &[aaa_map::Organization],
     ) -> World {
         // Nothing's hidden until the match sets its fog.
         let fog = Fog::new(pathing.side, aaa_map::FogSetting::None);
@@ -107,7 +107,7 @@ impl World {
             pathing,
             rules,
             tile_terrains: aaa_map::TileTerrains::default(),
-            regiments: Vec::new(),
+            organizations: Vec::new(),
             units: Vec::new(),
             buildings: Vec::new(),
             deliveries: Vec::new(),
@@ -137,28 +137,28 @@ impl World {
             fog,
             numbers: BTreeMap::new(),
         };
-        for regiment in regiments {
-            world.add_regiment(regiment);
+        for organization in organizations {
+            world.add_organization(organization);
         }
         world
     }
 
-    /// Adds a regiment as the map has it, standing where its members do,
+    /// Adds an organization as the map has it, standing where its members do,
     /// returning its index.
-    pub fn add_regiment(&mut self, regiment: &aaa_map::Regiment) -> usize {
-        self.push_regiment(regiment, true)
+    pub fn add_organization(&mut self, organization: &aaa_map::Organization) -> usize {
+        self.push_organization(organization, true)
     }
 
-    /// Adds a regiment raised during the match, giving it and its members
+    /// Adds an organization raised during the match, giving it and its members
     /// ids no object has, returning its index.
-    pub fn add_new_regiment(&mut self, mut regiment: aaa_map::Regiment) -> usize {
-        // A lone unit is its own regiment, so takes one id.
-        let ids = regiment.members.len() as u32 + u32::from(!regiment.lone());
-        regiment.renumber(self.take_ids(ids));
-        self.add_regiment(&regiment)
+    pub fn add_new_organization(&mut self, mut organization: aaa_map::Organization) -> usize {
+        // A lone unit is its own organization, so takes one id.
+        let ids = organization.members.len() as u32 + u32::from(!organization.lone());
+        organization.renumber(self.take_ids(ids));
+        self.add_organization(&organization)
     }
 
-    /// Adds a regiment of `template`, one of [`Rules::raisable`], owned by
+    /// Adds an organization of `template`, one of [`Rules::raisable`], owned by
     /// `owner` and standing in its starting formation around `at` facing
     /// `facing`, returning its index. `None`, with nothing added, for a
     /// template that isn't, an owner the match hasn't got, a place off
@@ -174,17 +174,21 @@ impl World {
         let on_map = at.iter().all(|c| (0.0..=size).contains(c));
         let facing = normalised(facing).filter(|f| f.iter().all(|c| c.is_finite()))?;
         self.sides.player(owner).filter(|_| on_map)?;
-        let mut regiment = self.rules.raisable.get(template)?.clone();
-        regiment.owner = owner;
-        regiment.place(at, facing);
-        Some(self.add_new_regiment(regiment))
+        let mut organization = self.rules.raisable.get(template)?.clone();
+        organization.owner = owner;
+        organization.place(at, facing);
+        Some(self.add_new_organization(organization))
     }
 
-    /// Adds a regiment, numbering it if `numbered`.
-    pub(crate) fn push_regiment(&mut self, regiment: &aaa_map::Regiment, numbered: bool) -> usize {
-        let r = self.regiments.len();
+    /// Adds an organization, numbering it if `numbered`.
+    pub(crate) fn push_organization(
+        &mut self,
+        organization: &aaa_map::Organization,
+        numbered: bool,
+    ) -> usize {
+        let r = self.organizations.len();
         let first = self.units.len();
-        for m in &regiment.members {
+        for m in &organization.members {
             let [x, y] = m.position;
             let facing = normalised(m.facing).unwrap_or([0.0, -1.0]);
             let tile = Tile::at([x, y]);
@@ -207,13 +211,13 @@ impl World {
                 died: None,
                 besieged: None,
                 left: None,
-                // One its regiment has lost comes back as a recruit's do.
+                // One its organization has lost comes back as a recruit's do.
                 awaited: m.lost.is_some(),
                 descent: None,
                 terrain: TerrainIndex::default(),
                 id: m.id,
                 template: m.template.clone(),
-                regiment: r,
+                organization: r,
                 domain,
                 position: [x, y],
                 previous: [x, y],
@@ -239,46 +243,46 @@ impl World {
             });
         }
         let units: Vec<usize> = (first..self.units.len()).collect();
-        let position = match regiment.primary {
+        let position = match organization.primary {
             Some(p) => self.units[first + p].position,
             None => self.average(&units),
         };
-        let template = regiment.template.clone();
+        let template = organization.template.clone();
         let number = match numbered {
-            true => self.next_number(regiment.owner, &template),
+            true => self.next_number(organization.owner, &template),
             false => None,
         };
-        self.regiments.push(Regiment {
-            id: regiment.id,
+        self.organizations.push(Organization {
+            id: organization.id,
             template,
             number,
-            owner: regiment.owner,
+            owner: organization.owner,
             units,
-            speed: regiment
+            speed: organization
                 .members
                 .iter()
                 .map(|m| m.speed)
                 .fold(f32::INFINITY, f32::min),
             position,
-            facing: normalised(regiment.facing).unwrap_or([0.0, -1.0]),
-            formations: regiment.formations.clone(),
-            formation: regiment.formation,
-            combat: regiment.combat,
-            operational_range: regiment.operational_range.unwrap_or(0.0),
-            control_range: regiment.control_range.unwrap_or(0.0),
+            facing: normalised(organization.facing).unwrap_or([0.0, -1.0]),
+            formations: organization.formations.clone(),
+            formation: organization.formation,
+            combat: organization.combat,
+            operational_range: organization.operational_range.unwrap_or(0.0),
+            control_range: organization.control_range.unwrap_or(0.0),
             order: Order::Move,
             engaged: Vec::new(),
             resume: None,
-            unpacks: regiment.unpacks.clone(),
+            unpacks: organization.unpacks.clone(),
             unpack_at: None,
             unpack_again: None,
             unpacked_into: None,
             rally: None,
-            leader: regiment.primary,
-            hq: regiment.hq,
+            leader: organization.primary,
+            hq: organization.hq,
             // Until its first look, so it doesn't start out marked.
             in_supply: true,
-            replacing: (regiment.members.iter())
+            replacing: (organization.members.iter())
                 .map(|m| m.lost.unwrap_or(0.0))
                 .collect(),
             bombarding: false,
@@ -289,14 +293,14 @@ impl World {
             terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),
         });
-        let ids = regiment.members.iter().map(|m| m.id);
+        let ids = organization.members.iter().map(|m| m.id);
         self.next_id = ids
-            .chain([regiment.id])
+            .chain([organization.id])
             .fold(self.next_id, |n, id| n.max(id + 1));
         r
     }
 
-    /// The next number `owner` gives a regiment of `template`, if it's
+    /// The next number `owner` gives an organization of `template`, if it's
     /// numbered and a side's.
     fn next_number(&mut self, owner: u32, template: &Id) -> Option<u32> {
         if !self.rules.numbered.contains(template) || self.sides.player(owner).is_none() {
@@ -431,14 +435,14 @@ mod tests {
     }
 
     #[test]
-    fn numbered_regiments_count_per_side_and_template_never_reusing_one() {
+    fn numbered_organizations_count_per_side_and_template_never_reusing_one() {
         let mut w = headquarters();
         w.rules.numbered = HashSet::from([Id::from("truck"), Id::from("tank")]);
         let mut t = truck();
         let mut add = |w: &mut World, owner, template: &str| {
             (t.owner, t.template) = (owner, template.into());
-            let r = w.add_regiment(&t);
-            w.regiments[r].number
+            let r = w.add_organization(&t);
+            w.organizations[r].number
         };
         assert_eq!(add(&mut w, 1, "truck"), Some(1));
         assert_eq!(add(&mut w, 1, "truck"), Some(2));

@@ -3,7 +3,7 @@
 //! what the order under the cursor would make of them.
 
 use aaa_data::{Id, ResourceRole};
-use aaa_map::Regiment;
+use aaa_map::Organization;
 use aaa_render::textures;
 use aaa_sim::{Balance, Change};
 use bevy::image::CompressedImageFormatSupport;
@@ -25,10 +25,10 @@ pub struct Preview(pub Option<Previewed>);
 
 #[derive(Clone)]
 pub enum Previewed {
-    /// Commissioning this regiment.
-    Commission(Box<Regiment>),
+    /// Commissioning this organization.
+    Commission(Box<Organization>),
     Research(aaa_map::Research),
-    /// The packed building at this index into the sim's regiments
+    /// The packed building at this index into the sim's organizations
     /// unpacking.
     Unpack(usize),
 }
@@ -205,7 +205,7 @@ pub fn show(
         let change = match p {
             Previewed::Commission(r) => Change::Commission(r),
             Previewed::Research(r) => Change::Research(r),
-            Previewed::Unpack(r) if *r < sim.regiments.len() => Change::Unpack(*r),
+            Previewed::Unpack(r) if *r < sim.organizations.len() => Change::Unpack(*r),
             Previewed::Unpack(_) => return None,
         };
         Some(sim.preview(player, change))

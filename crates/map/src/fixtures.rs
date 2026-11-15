@@ -53,7 +53,7 @@ pub(crate) fn placed(
     }
 }
 
-pub(crate) fn organization(layout: &str, members: Vec<Thing>) -> tgck::map::Organization {
+pub(crate) fn stored_organization(layout: &str, members: Vec<Thing>) -> tgck::map::Organization {
     use tgck::map::{Organization, Position, Updatable};
     Organization {
         updatable: Updatable { version: 1, id: 0 },

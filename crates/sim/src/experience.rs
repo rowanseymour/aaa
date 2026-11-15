@@ -184,7 +184,7 @@ mod tests {
 
     fn world() -> World {
         let pathing = aaa_map::Pathing::uniform(8, aaa_map::Domain::Land);
-        World::from_regiments(crate::Sides::default(), pathing, &[])
+        World::from_organizations(crate::Sides::default(), pathing, &[])
     }
 
     #[test]

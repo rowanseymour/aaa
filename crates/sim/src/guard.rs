@@ -1,26 +1,26 @@
-//! Regiments keeping a post, at a place or beside what they guard.
+//! Organizations keeping a post, at a place or beside what they guard.
 
 use aaa_map::pathing::CELL_SIZE;
 
 use crate::{
-    Guard, Order, Piece, Regiment, Step, World, bounding_radius, distance, normalised, within,
+    Guard, Order, Organization, Piece, Step, World, bounding_radius, distance, normalised, within,
 };
 
-/// How far what a regiment guards moves its post before the regiment
+/// How far what an organization guards moves its post before the organization
 /// follows.
 const POST_DRIFT: f32 = 1.0;
 
 impl World {
-    /// Has a regiment guard `of` from `post`, setting off there unless
+    /// Has an organization guard `of` from `post`, setting off there unless
     /// it's engaged.
     pub(crate) fn post(
         &mut self,
-        regiment: usize,
+        organization: usize,
         of: Option<Piece>,
         post: [f32; 2],
         facing: Option<[f32; 2]>,
     ) {
-        let r = &mut self.regiments[regiment];
+        let r = &mut self.organizations[organization];
         let facing = facing.unwrap_or(r.facing);
         r.take_order(Order::Move);
         r.guard = Some(Guard {
@@ -31,34 +31,34 @@ impl World {
             unreachable: None,
         });
         match r.engaged.is_empty() {
-            true => self.go_to_post(regiment),
+            true => self.go_to_post(organization),
             // Where it's headed once done, as for a move.
             false => r.resume = Some((post, facing)),
         }
     }
 
-    /// The post of a regiment guarding `piece`, and the way it faces there:
-    /// off the piece's edge by half the regiment's control range, on the
-    /// side the regiment is, facing away.
-    pub(crate) fn beside(&self, regiment: usize, piece: Piece) -> ([f32; 2], [f32; 2]) {
-        let r = &self.regiments[regiment];
-        let here = self.centre(regiment);
+    /// The post of an organization guarding `piece`, and the way it faces
+    /// there: off the piece's edge by half the organization's control range, on
+    /// the side the organization is, facing away.
+    pub(crate) fn beside(&self, organization: usize, piece: Piece) -> ([f32; 2], [f32; 2]) {
+        let r = &self.organizations[organization];
+        let here = self.centre(organization);
         let there = self.middle(piece);
         let away = normalised([here[0] - there[0], here[1] - there[1]]).unwrap_or(r.facing);
-        (self.post_beside(regiment, piece, away), away)
+        (self.post_beside(organization, piece, away), away)
     }
 
-    /// The point `away` from `piece` that a regiment guarding it rests at,
+    /// The point `away` from `piece` that an organization guarding it rests at,
     /// kept on the map.
-    fn post_beside(&self, regiment: usize, piece: Piece, away: [f32; 2]) -> [f32; 2] {
+    fn post_beside(&self, organization: usize, piece: Piece, away: [f32; 2]) -> [f32; 2] {
         let radius = match piece {
-            Piece::Regiment(_) => 0.0,
+            Piece::Organization(_) => 0.0,
             Piece::Building(b) => {
                 let shape = self.buildings[b].obstacle.as_ref().map(|o| o.shape);
                 shape.map_or(0.0, bounding_radius)
             }
         };
-        let off = radius + self.regiments[regiment].control_range / 2.0;
+        let off = radius + self.organizations[organization].control_range / 2.0;
         let [x, y] = self.middle(piece);
         let size = self.pathing.side as f32 * CELL_SIZE;
         [
@@ -67,52 +67,52 @@ impl World {
         ]
     }
 
-    /// Where something a regiment can engage or guard is.
+    /// Where something an organization can engage or guard is.
     pub(crate) fn middle(&self, piece: Piece) -> [f32; 2] {
         match piece {
-            Piece::Regiment(e) => self.centre(e),
+            Piece::Organization(e) => self.centre(e),
             Piece::Building(b) => self.buildings[b].position,
         }
     }
 
-    /// Has each regiment keeping a guard that isn't engaged go after the
+    /// Has each organization keeping a guard that isn't engaged go after the
     /// nearest intruder, or else to its post, which follows what it
     /// guards; the guard ends once that's gone.
     pub(crate) fn keep_guard(&mut self) {
         // Who's engaged with what, looked up once for all that guard things.
-        let escorts = |r: &Regiment| r.guard.is_some_and(|g| g.of.is_some());
-        let engaging: Vec<(usize, Piece)> = match self.regiments.iter().any(escorts) {
-            true => (self.regiments.iter().enumerate())
+        let escorts = |r: &Organization| r.guard.is_some_and(|g| g.of.is_some());
+        let engaging: Vec<(usize, Piece)> = match self.organizations.iter().any(escorts) {
+            true => (self.organizations.iter().enumerate())
                 .flat_map(|(e, r)| r.engaged.iter().map(move |&with| (e, with)))
                 .collect(),
             false => Vec::new(),
         };
-        for r in 0..self.regiments.len() {
-            let Some(guard) = self.regiments[r].guard else {
+        for r in 0..self.organizations.len() {
+            let Some(guard) = self.organizations[r].guard else {
                 continue;
             };
             if self.destroyed(r) {
                 continue;
             }
             if guard.of.is_some_and(|of| self.left(of)) {
-                self.regiments[r].guard = None;
+                self.organizations[r].guard = None;
                 self.give_up(r);
                 continue;
             }
-            if !self.regiments[r].engaged.is_empty() {
+            if !self.organizations[r].engaged.is_empty() {
                 continue;
             }
-            let after = match self.regiments[r].order {
+            let after = match self.organizations[r].order {
                 Order::Pursue(e) => Some(e),
                 _ => None,
             };
             let intruder = self.intruder(r, guard, after, &engaging);
             if let Some(e) = intruder {
                 if after != Some(e) {
-                    let regiment = &mut self.regiments[r];
-                    regiment.order = Order::Pursue(e);
-                    regiment.resume = None;
-                    regiment.guard = Some(Guard {
+                    let organization = &mut self.organizations[r];
+                    organization.order = Order::Pursue(e);
+                    organization.resume = None;
+                    organization.guard = Some(Guard {
                         step: Step::Unsent,
                         ..guard
                     });
@@ -131,7 +131,7 @@ impl World {
     /// since it last fought or the post has moved, and has it rest once
     /// it's got as near as it can.
     fn go_to_post(&mut self, r: usize) {
-        let Some(mut guard) = self.regiments[r].guard else {
+        let Some(mut guard) = self.organizations[r].guard else {
             return;
         };
         let underway = self.underway(r);
@@ -157,21 +157,21 @@ impl World {
                 };
             }
         }
-        let before = self.regiments[r].current_formation();
+        let before = self.organizations[r].current_formation();
         if guard.step == Step::Unsent {
             guard.step = Step::Sent;
-            self.regiments[r].guard = Some(guard);
+            self.organizations[r].guard = Some(guard);
             self.send(r, guard.post, guard.facing);
         } else if guard.step == Step::Sent && !underway {
             guard.step = Step::Arrived;
-            self.regiments[r].guard = Some(guard);
-            if self.regiments[r].current_formation() != before {
+            self.organizations[r].guard = Some(guard);
+            if self.organizations[r].current_formation() != before {
                 self.take_places(r);
             }
         }
     }
 
-    /// The enemy regiment a guard goes after: the nearest of those
+    /// The enemy organization a guard goes after: the nearest of those
     /// `engaging` what it guards or, with none, the one that's engaged with
     /// first or fires on. The one it's `after` already counts as nearer, so
     /// the guard doesn't flit between two much the same way off.
@@ -189,7 +189,7 @@ impl World {
         let fair = |e: usize| {
             guard.unreachable != Some(e)
                 && !self.destroyed(e)
-                && self.hostile(r, Piece::Regiment(e))
+                && self.hostile(r, Piece::Organization(e))
         };
         let mut found: Vec<usize> = (engaging.iter())
             .filter(|&&(e, with)| with == of && fair(e))
@@ -197,10 +197,10 @@ impl World {
             .collect();
         if found.is_empty() {
             let fought = match of {
-                Piece::Regiment(g) => self.regiments[g].engaged.first().copied(),
+                Piece::Organization(g) => self.organizations[g].engaged.first().copied(),
                 Piece::Building(b) => self.buildings[b].target.map(|t| self.piece(t)),
             };
-            if let Some(Piece::Regiment(e)) = fought {
+            if let Some(Piece::Organization(e)) = fought {
                 found.extend(fair(e).then_some(e));
             }
         }
@@ -226,7 +226,7 @@ mod tests {
 
     use crate::{ARRIVAL_REACH, Command, Order, Piece, Refused, State, World, distance, within};
 
-    /// A guard of player 1's, an ally's regiment for it to guard and an
+    /// A guard of player 1's, an ally's organization for it to guard and an
     /// enemy out of range, 10 apart in a row, the guard noticing nothing
     /// for itself.
     fn escort() -> World {
@@ -239,10 +239,10 @@ mod tests {
             ],
             at_war(),
         );
-        w.regiments[0].control_range = 4.0;
+        w.organizations[0].control_range = 4.0;
         let guard = Command::GuardPiece {
-            regiment: 0,
-            piece: Piece::Regiment(1),
+            organization: 0,
+            piece: Piece::Organization(1),
         };
         w.apply(1, guard).unwrap();
         w
@@ -254,32 +254,35 @@ mod tests {
         // Unarmed, so it never fires on them to draw them in.
         w.units[1].fighter = Some(soldier(Vec::new()));
         let guard = Command::Guard {
-            regiment: 0,
+            organization: 0,
             to: [10.0, 12.0],
         };
         w.apply(1, guard.clone()).unwrap();
         // On the way it's as on a move.
-        assert_eq!(w.regiments[0].current_formation(), 0);
-        assert!(!w.regiments[0].guarding());
+        assert_eq!(w.organizations[0].current_formation(), 0);
+        assert!(!w.organizations[0].guarding());
         run(&mut w, 0.5);
-        assert!(w.regiments[0].engaged.is_empty());
+        assert!(w.organizations[0].engaged.is_empty());
         // Once there it's in its combat formation, and takes on the enemy
         // 18 off, further than its control range of 18 takes in.
         run(&mut w, 1.0);
-        assert_eq!(w.regiments[0].current_formation(), 1);
-        assert_eq!(w.regiments[0].engaged, [Piece::Regiment(1)]);
+        assert_eq!(w.organizations[0].current_formation(), 1);
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
         run(&mut w, 10.0);
         assert!(!w.units[1].alive());
         run(&mut w, 10.0);
         assert!(near(w.units[0].position, [10.0, 12.0]));
-        assert!(w.regiments[0].guarding());
-        assert_eq!(w.regiments[0].control(&w.rules.guard_rules), 18.0 * 1.25);
+        assert!(w.organizations[0].guarding());
+        assert_eq!(
+            w.organizations[0].control(&w.rules.guard_rules),
+            18.0 * 1.25
+        );
         // The same order again changes nothing; another ends it.
         w.apply(1, guard).unwrap();
-        assert!(w.regiments[0].guarding());
-        w.apply(1, Command::Stop { regiment: 0 }).unwrap();
-        assert_eq!(w.regiments[0].guard, None);
-        assert_eq!(w.regiments[0].current_formation(), 0);
+        assert!(w.organizations[0].guarding());
+        w.apply(1, Command::Stop { organization: 0 }).unwrap();
+        assert_eq!(w.organizations[0].guard, None);
+        assert_eq!(w.organizations[0].current_formation(), 0);
     }
 
     #[test]
@@ -289,22 +292,22 @@ mod tests {
         // Half its control range off, facing away.
         assert!(within(w.units[0].position, [10.0, 18.0], ARRIVAL_REACH));
         assert_eq!(w.units[0].facing, [0.0, -1.0]);
-        assert!(w.regiments[0].guarding());
+        assert!(w.organizations[0].guarding());
         // An enemy that's fighting nobody is left alone.
-        assert_eq!(w.regiments[0].order, Order::Move);
+        assert_eq!(w.organizations[0].order, Order::Move);
         w.apply(
             3,
             Command::Move {
-                regiment: 1,
+                organization: 1,
                 to: [30.0, 20.0],
             },
         )
         .unwrap();
         run(&mut w, 1.0);
-        assert!(!w.regiments[0].guarding());
+        assert!(!w.organizations[0].guarding());
         run(&mut w, 14.0);
         assert!(within(w.units[0].position, [30.0, 18.0], ARRIVAL_REACH));
-        assert!(w.regiments[0].guarding());
+        assert!(w.organizations[0].guarding());
     }
 
     #[test]
@@ -314,24 +317,27 @@ mod tests {
         w.apply(
             2,
             Command::Attack {
-                regiment: 2,
+                organization: 2,
                 to: [10.0, 20.0],
             },
         )
         .unwrap();
         w.tick();
-        assert!(w.regiments[2].engaged.contains(&Piece::Regiment(1)));
-        assert_eq!(w.regiments[0].order, Order::Pursue(2));
-        assert_eq!(w.regiments[0].guard.unwrap().of, Some(Piece::Regiment(1)));
+        assert!(w.organizations[2].engaged.contains(&Piece::Organization(1)));
+        assert_eq!(w.organizations[0].order, Order::Pursue(2));
+        assert_eq!(
+            w.organizations[0].guard.unwrap().of,
+            Some(Piece::Organization(1))
+        );
         run(&mut w, 10.0);
         assert!(w.destroyed(2));
         // Back beside it, on the side the fight left it.
         run(&mut w, 10.0);
         assert!(within(w.units[0].position, [10.0, 22.0], ARRIVAL_REACH));
-        assert!(w.regiments[0].guarding());
+        assert!(w.organizations[0].guarding());
         w.destroy(1);
         w.tick();
-        assert_eq!(w.regiments[0].guard, None);
+        assert_eq!(w.organizations[0].guard, None);
     }
 
     #[test]
@@ -341,19 +347,19 @@ mod tests {
         for x in 0..40 {
             w.pathing.set_blocked(Tile::new(x, 12));
         }
-        w.regiments[2].engaged.push(Piece::Regiment(1));
+        w.organizations[2].engaged.push(Piece::Organization(1));
         w.tick();
-        assert_eq!(w.regiments[0].order, Order::Pursue(2));
+        assert_eq!(w.organizations[0].order, Order::Pursue(2));
         // As far as it can get by 3s, then back.
         run(&mut w, 5.0);
-        assert_eq!(w.regiments[0].order, Order::Move);
-        assert!(w.regiments[2].engaged.contains(&Piece::Regiment(1)));
+        assert_eq!(w.organizations[0].order, Order::Move);
+        assert!(w.organizations[2].engaged.contains(&Piece::Organization(1)));
         // Back beside it, on the side that left it.
         run(&mut w, 5.0);
-        assert!(w.regiments[2].engaged.contains(&Piece::Regiment(1)));
-        assert_eq!(w.regiments[0].order, Order::Move);
+        assert!(w.organizations[2].engaged.contains(&Piece::Organization(1)));
+        assert_eq!(w.organizations[0].order, Order::Move);
         assert!(distance(w.units[0].position, w.centre(1)) < 2.0 + ARRIVAL_REACH);
-        assert!(w.regiments[0].guarding());
+        assert!(w.organizations[0].guarding());
     }
 
     #[test]
@@ -362,27 +368,30 @@ mod tests {
         let mut w = siege(&[building(20, 1, [10.0, 3.0])]);
         w.units[0].position = [10.0, 0.5];
         let guard = Command::GuardPiece {
-            regiment: 0,
+            organization: 0,
             piece: Piece::Building(0),
         };
         w.apply(1, guard.clone()).unwrap();
-        assert_eq!(w.regiments[0].guard.unwrap().post[1], 0.0);
+        assert_eq!(w.organizations[0].guard.unwrap().post[1], 0.0);
         w.buildings[0].state = State::Disabled;
         w.tick();
-        assert!(w.regiments[0].guard.is_some());
+        assert!(w.organizations[0].guard.is_some());
         assert!(w.check(1, &guard).is_ok());
     }
 
     #[test]
-    fn regiments_guard_anything_still_there_but_themselves() {
+    fn organizations_guard_anything_still_there_but_themselves() {
         let mut w = escort();
-        let guard = |regiment, piece| Command::GuardPiece { regiment, piece };
-        assert!(w.check(1, &guard(0, Piece::Regiment(2))).is_ok());
+        let guard = |organization, piece| Command::GuardPiece {
+            organization,
+            piece,
+        };
+        assert!(w.check(1, &guard(0, Piece::Organization(2))).is_ok());
         let unable = Err(Refused::Unable);
-        assert_eq!(w.check(1, &guard(0, Piece::Regiment(0))), unable);
-        assert_eq!(w.check(1, &guard(0, Piece::Regiment(9))), unable);
+        assert_eq!(w.check(1, &guard(0, Piece::Organization(0))), unable);
+        assert_eq!(w.check(1, &guard(0, Piece::Organization(9))), unable);
         assert_eq!(w.check(1, &guard(0, Piece::Building(0))), unable);
         w.destroy(2);
-        assert_eq!(w.check(1, &guard(0, Piece::Regiment(2))), unable);
+        assert_eq!(w.check(1, &guard(0, Piece::Organization(2))), unable);
     }
 }

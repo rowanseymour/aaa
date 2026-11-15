@@ -207,7 +207,7 @@ mod tests {
     fn messages_read_back_as_they_were_written() {
         let order = Action::Order {
             player: 2,
-            command: Command::Stop { regiment: 3 },
+            command: Command::Stop { organization: 3 },
         };
         let to_host = [
             ToHost::Ready,

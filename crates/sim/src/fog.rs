@@ -170,11 +170,11 @@ impl World {
     }
 
     /// Whether `player` sees the unit at `u`: its own and its allies'
-    /// always, others' while it's, or its regiment is, on ground it sees.
+    /// always, others' while it's, or its organization is, on ground it sees.
     pub fn sees_unit(&self, player: u32, u: usize) -> bool {
-        let r = self.units[u].regiment;
+        let r = self.units[u].organization;
         let members = self.members_seen(&self.sharing_sight(player), r);
-        let place = self.regiments[r].units.iter().position(|&m| m == u);
+        let place = self.organizations[r].units.iter().position(|&m| m == u);
         place.is_some_and(|i| members[i])
     }
 
@@ -182,33 +182,33 @@ impl World {
     pub fn sees_units(&self, player: u32) -> Vec<bool> {
         let allies = self.sharing_sight(player);
         let mut seen = vec![false; self.units.len()];
-        for r in 0..self.regiments.len() {
+        for r in 0..self.organizations.len() {
             let members = self.members_seen(&allies, r);
-            for (&u, shown) in self.regiments[r].units.iter().zip(members) {
+            for (&u, shown) in self.organizations[r].units.iter().zip(members) {
                 seen[u] = shown;
             }
         }
         seen
     }
 
-    /// Whether the sides `allies` see each member of the regiment at `r`,
+    /// Whether the sides `allies` see each member of the organization at `r`,
     /// in its order.
     fn members_seen(&self, allies: &[u32], r: usize) -> Vec<bool> {
-        let regiment = &self.regiments[r];
-        if self.fog.setting == FogSetting::None || allies.contains(&regiment.owner) {
-            return vec![true; regiment.units.len()];
+        let organization = &self.organizations[r];
+        if self.fog.setting == FogSetting::None || allies.contains(&organization.owner) {
+            return vec![true; organization.units.len()];
         }
         let from = self.leader_position(r);
-        let strayed: Vec<bool> = (regiment.units.iter())
+        let strayed: Vec<bool> = (organization.units.iter())
             .map(|&u| self.strays(r, u, from))
             .collect();
-        let visible: Vec<bool> = (regiment.units.iter())
+        let visible: Vec<bool> = (organization.units.iter())
             .map(|&u| {
                 let unit = &self.units[u];
                 unit.alive() && self.seen_with(allies, unit.position) == Seen::Visible
             })
             .collect();
-        // Those with the regiment show while any of them does.
+        // Those with the organization show while any of them does.
         let with = (strayed.iter().zip(&visible)).any(|(&strayed, &visible)| !strayed && visible);
         (strayed.iter().zip(&visible))
             .map(|(&strayed, &visible)| visible || (!strayed && with))
@@ -247,18 +247,18 @@ impl World {
     }
 
     /// Whether the unit at `u` has left the zone of control of its
-    /// regiment, at `r` and led `from`, and so sees, and is seen, on its
+    /// organization, at `r` and led `from`, and so sees, and is seen, on its
     /// own. Without a zone there's nothing to stray from.
     pub(crate) fn strays(&self, r: usize, u: usize, from: [f32; 2]) -> bool {
-        let regiment = &self.regiments[r];
-        let leader = regiment.leader.map(|p| regiment.units[p]);
-        if regiment.units.len() < 2
+        let organization = &self.organizations[r];
+        let leader = organization.leader.map(|p| organization.units[p]);
+        if organization.units.len() < 2
             || leader == Some(u)
-            || regiment.control(&self.rules.guard_rules) <= 0.0
+            || organization.control(&self.rules.guard_rules) <= 0.0
         {
             return false;
         }
-        distance(self.units[u].position, from) > regiment.control(&self.rules.guard_rules)
+        distance(self.units[u].position, from) > organization.control(&self.rules.guard_rules)
     }
 
     /// Lays each side's sight afresh from what its things see now.
@@ -275,23 +275,23 @@ impl World {
         }
         let mut discs: Vec<(u32, [f32; 2], f32)> = Vec::new();
         let mut remote: Vec<(u32, [f32; 2], f32)> = Vec::new();
-        for r in 0..self.regiments.len() {
+        for r in 0..self.organizations.len() {
             if self.destroyed(r) {
                 continue;
             }
-            let regiment = &self.regiments[r];
-            let owner = regiment.owner;
+            let organization = &self.organizations[r];
+            let owner = organization.owner;
             let at = self.leader_position(r);
             let present = |u: &&usize| self.units[**u].alive();
-            if !regiment.units.iter().any(|u| present(&u)) {
+            if !organization.units.iter().any(|u| present(&u)) {
                 continue;
             }
-            let sight = self.sight_of(&regiment.template);
+            let sight = self.sight_of(&organization.template);
             if let Some(s) = sight {
                 discs.push((owner, at, s.range));
             }
             // Those that have strayed from it see for themselves.
-            for &u in regiment.units.iter().filter(present) {
+            for &u in organization.units.iter().filter(present) {
                 if self.strays(r, u, at)
                     && let Some(s) = self.sight_of(&self.units[u].template)
                 {
@@ -299,7 +299,7 @@ impl World {
                 }
             }
             if let Some(s) = sight.filter(|s| s.remote > 0.0) {
-                for p in self.regiment_shown_to(r) {
+                for p in self.organization_shown_to(r) {
                     remote.push((p, at, s.remote));
                 }
             }
@@ -328,25 +328,28 @@ impl World {
         }
     }
 
-    /// The sides other than its own fighting the regiment at `r`: those
+    /// The sides other than its own fighting the organization at `r`: those
     /// engaging or bombarding it, and those it engages or fires on.
-    fn regiment_shown_to(&self, r: usize) -> BTreeSet<u32> {
-        let regiment = &self.regiments[r];
+    fn organization_shown_to(&self, r: usize) -> BTreeSet<u32> {
+        let organization = &self.organizations[r];
         let mut sides = BTreeSet::new();
         let engaging = self
-            .regiments
+            .organizations
             .iter()
-            .filter(|o| o.engaged.contains(&Piece::Regiment(r)));
+            .filter(|o| o.engaged.contains(&Piece::Organization(r)));
         sides.extend(engaging.map(|o| o.owner));
-        let bombarding = regiment
+        let bombarding = organization
             .bombarded
             .iter()
             .filter(|b| b.tick + b.length >= self.ticks);
         sides.extend(bombarding.map(|b| self.piece_owner(b.by)));
-        sides.extend(regiment.engaged.iter().map(|&e| self.piece_owner(e)));
-        let targets = regiment.units.iter().filter_map(|&u| self.units[u].target);
+        sides.extend(organization.engaged.iter().map(|&e| self.piece_owner(e)));
+        let targets = organization
+            .units
+            .iter()
+            .filter_map(|&u| self.units[u].target);
         sides.extend(targets.map(|t| self.owner(t)));
-        sides.remove(&regiment.owner);
+        sides.remove(&organization.owner);
         sides
     }
 
@@ -356,7 +359,7 @@ impl World {
         let building = &self.buildings[b];
         let mut sides = BTreeSet::new();
         let engaging = self
-            .regiments
+            .organizations
             .iter()
             .filter(|o| o.engaged.contains(&Piece::Building(b)));
         sides.extend(engaging.map(|o| o.owner));
@@ -492,7 +495,7 @@ mod tests {
             u.fighter = None;
             u.target = None;
         }
-        w.regiments.iter_mut().for_each(|r| r.engaged.clear());
+        w.organizations.iter_mut().for_each(|r| r.engaged.clear());
         w.tick();
         assert_eq!(w.seen(2, [10.0, 10.0]), Seen::Unexplored);
     }
@@ -503,7 +506,7 @@ mod tests {
         put(&mut w, 1, [60.0, 60.0]);
         let from = w.units[0].position;
         assert!(!w.strays(0, 1, from));
-        w.regiments[0].control_range = 10.0;
+        w.organizations[0].control_range = 10.0;
         assert!(w.strays(0, 1, from) && !w.strays(0, 0, from));
     }
 }

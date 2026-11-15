@@ -14,12 +14,12 @@ pub struct Held {
 }
 
 impl World {
-    /// Gives a regiment or building a property for `seconds` from now,
+    /// Gives an organization or building a property for `seconds` from now,
     /// unless it still has it.
     pub fn give(&mut self, to: Piece, property: Id, seconds: f32) {
         let until = self.ticks + (seconds / TICK).round() as u64;
         let held = match to {
-            Piece::Regiment(r) => &mut self.regiments[r].properties,
+            Piece::Organization(r) => &mut self.organizations[r].properties,
             Piece::Building(b) => &mut self.buildings[b].properties,
         };
         if !held.iter().any(|h| h.property == property) {

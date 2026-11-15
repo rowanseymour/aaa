@@ -88,10 +88,10 @@ impl World {
     }
 
     /// Whether `player`'s strike on `targets` can be given on `on`: on any
-    /// member of a regiment it hits.
+    /// member of an organization it hits.
     pub(crate) fn strikes_piece(&self, player: u32, targets: &aaa_map::Targets, on: Piece) -> bool {
         match on {
-            Piece::Regiment(r) => (self.regiments[r].units.iter())
+            Piece::Organization(r) => (self.organizations[r].units.iter())
                 .any(|&u| self.strikes(player, targets, Target::Unit(u))),
             Piece::Building(b) => self.strikes(player, targets, Target::Building(b)),
         }
@@ -100,7 +100,7 @@ impl World {
     /// Where `on` is now, while it's still there.
     fn whereabouts(&self, on: Piece) -> Option<[f32; 2]> {
         match on {
-            Piece::Regiment(r) => (!self.destroyed(r)).then(|| self.leader_position(r)),
+            Piece::Organization(r) => (!self.destroyed(r)).then(|| self.leader_position(r)),
             Piece::Building(b) => {
                 let b = &self.buildings[b];
                 (!b.gone()).then_some(b.position)
@@ -324,9 +324,9 @@ mod tests {
     }
 
     #[test]
-    fn a_strike_given_on_a_regiment_follows_it_to_where_it_is_last() {
+    fn a_strike_given_on_an_organization_follows_it_to_where_it_is_last() {
         let mut w = bombing();
-        let enemy = Some(Piece::Regiment(1));
+        let enemy = Some(Piece::Organization(1));
         w.apply(1, bomb([10.0, 20.0], enemy)).unwrap();
         w.units[1].position = [30.0, 20.0];
         run(&mut w, 3.1);
@@ -375,7 +375,7 @@ mod tests {
             w
         };
         assert!(
-            w.regiments
+            w.organizations
                 .iter()
                 .all(|r| r.bombarded.is_empty() && r.engaged.is_empty())
         );
@@ -408,7 +408,7 @@ mod tests {
     #[test]
     fn a_strike_given_on_what_it_no_longer_fits_does_nothing() {
         let mut w = bombing();
-        w.apply(1, bomb([10.0, 20.0], Some(Piece::Regiment(1))))
+        w.apply(1, bomb([10.0, 20.0], Some(Piece::Organization(1))))
             .unwrap();
         (w.units[1].fighter.as_mut().unwrap().flags).push(Id::from("air"));
         run(&mut w, 3.1);

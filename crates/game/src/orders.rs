@@ -57,7 +57,7 @@ impl Default for Orders {
     /// Those of no match at all, for tests of what only asks.
     fn default() -> Self {
         let pathing = aaa_map::Pathing::uniform(1, aaa_map::Domain::Land);
-        let world = World::from_regiments(Default::default(), pathing, &[]);
+        let world = World::from_organizations(Default::default(), pathing, &[]);
         Orders::hosting(Setup::default(), world, None)
     }
 }
@@ -414,15 +414,15 @@ fn said(events: Vec<Event>) {
 /// Matches hosted as though elsewhere, for tests of what plays in one.
 #[cfg(test)]
 pub(crate) mod testing {
-    use aaa_map::{Domain, Formation, Member, Pathing, Regiment};
+    use aaa_map::{Domain, Formation, Member, Organization, Pathing};
     use aaa_sim::Sides;
 
     use super::*;
 
-    /// A match of players 1 to 3, the first two each with a regiment of
-    /// one soldier: regiment 0 the first's and regiment 1 the second's.
+    /// A match of players 1 to 3, the first two each with an organization of
+    /// one soldier: organization 0 the first's and organization 1 the second's.
     pub(crate) fn fresh() -> World {
-        let regiment = |i: u32| Regiment {
+        let organization = |i: u32| Organization {
             hq: None,
             id: i * 2 + 1,
             template: "squad".into(),
@@ -459,7 +459,7 @@ pub(crate) mod testing {
             teams: Vec::new(),
         };
         let pathing = Pathing::uniform(40, Domain::Land);
-        World::from_regiments(sides, pathing, &[regiment(0), regiment(1)])
+        World::from_organizations(sides, pathing, &[organization(0), organization(1)])
     }
 
     /// Has `host` let in a client asking for `players`: its end of the
@@ -494,7 +494,7 @@ mod tests {
     use super::*;
 
     fn fresh() -> World {
-        World::from_regiments(Default::default(), Pathing::uniform(4, Domain::Land), &[])
+        World::from_organizations(Default::default(), Pathing::uniform(4, Domain::Land), &[])
     }
 
     impl Orders {
@@ -515,8 +515,8 @@ mod tests {
         (host, orders, world)
     }
 
-    fn stop(player: u32, regiment: usize) -> Action {
-        let command = Command::Stop { regiment };
+    fn stop(player: u32, organization: usize) -> Action {
+        let command = Command::Stop { organization };
         Action::Order { player, command }
     }
 
@@ -532,7 +532,7 @@ mod tests {
         // Until the match begins nothing is asked, as nothing would come
         // of it.
         assert!(orders.waiting() && !orders.may(&Action::Pause(true)));
-        let stop = Command::Stop { regiment: 0 };
+        let stop = Command::Stop { organization: 0 };
         assert_eq!(orders.give(&world, 1, stop), Err(Refused::NotYours));
         assert!(orders.joined_to());
         assert_eq!(orders.players(), Some(&[1][..]));
@@ -557,7 +557,7 @@ mod tests {
         assert_eq!(world.hash(), host.world().hash());
         // What it asks for is carried out when the host says, in both.
         assert_eq!(
-            orders.give(&world, 1, Command::Stop { regiment: 0 }),
+            orders.give(&world, 1, Command::Stop { organization: 0 }),
             Ok(())
         );
         orders.carry_out(&mut world);
@@ -625,7 +625,7 @@ mod tests {
     fn only_what_a_host_elsewhere_would_carry_out_is_asked_of_it() {
         let (mut host, mut orders, mut world) = begun(&[1]);
         // Another player's orders, and what's outside the match's rules.
-        let theirs = Command::Stop { regiment: 1 };
+        let theirs = Command::Stop { organization: 1 };
         assert_eq!(world.check(2, &theirs), Ok(()));
         assert_eq!(orders.give(&world, 2, theirs), Err(Refused::NotYours));
         for cheat in [Action::Win(1), Action::Lose(2), Action::Destroy(1)] {
@@ -641,7 +641,7 @@ mod tests {
         watching.act(Action::Pause(true));
         assert!(!watching.pausing());
         assert_eq!(
-            watching.give(&world, 1, Command::Stop { regiment: 0 }),
+            watching.give(&world, 1, Command::Stop { organization: 0 }),
             Err(Refused::NotYours)
         );
         host.turn();
@@ -673,7 +673,7 @@ mod tests {
         orders.act(Action::Pause(true));
         assert!(!orders.pausing() && !orders.may(&Action::Pause(true)));
         assert_eq!(
-            orders.give(&world, 1, Command::Stop { regiment: 0 }),
+            orders.give(&world, 1, Command::Stop { organization: 0 }),
             Err(Refused::NotYours)
         );
         orders.step(&mut world);
@@ -810,7 +810,7 @@ mod tests {
         assert_eq!(orders.record(), orders.host().schedule().record());
         assert_eq!(orders.record().checks.len(), 2);
         // An order the match refuses is said to be.
-        let stop = Command::Stop { regiment: 0 };
+        let stop = Command::Stop { organization: 0 };
         orders.act(Action::Order {
             player: 1,
             command: stop.clone(),

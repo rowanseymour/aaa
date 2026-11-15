@@ -9,7 +9,7 @@ use bevy::prelude::*;
 
 use crate::ui::Marked;
 
-/// Stepping through the player's regiments that have no HQ.
+/// Stepping through the player's organizations that have no HQ.
 pub const CYCLE_DETACHED: &str = "CycleSelection 2";
 /// Showing or hiding the supply border.
 pub const SUPPLY_BORDER: &str = "ButtonSupplyBorder";

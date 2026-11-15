@@ -828,7 +828,7 @@ impl<L: Link> Host<L> {
 
 #[cfg(test)]
 mod tests {
-    use aaa_map::{Domain, Formation, Member, Pathing, Regiment};
+    use aaa_map::{Domain, Formation, Member, Organization, Pathing};
     use aaa_sim::{Command, Refused, Sides};
 
     use super::*;
@@ -838,7 +838,7 @@ mod tests {
     /// A match of players 1 to 4, the first two each with a soldier, the
     /// first's at 10,10 and the second's 10 further along y.
     fn fresh() -> World {
-        let regiment = |i: u32| Regiment {
+        let organization = |i: u32| Organization {
             hq: None,
             id: i * 2 + 1,
             template: "squad".into(),
@@ -875,7 +875,7 @@ mod tests {
             teams: Vec::new(),
         };
         let pathing = Pathing::uniform(40, Domain::Land);
-        World::from_regiments(sides, pathing, &[regiment(0), regiment(1)])
+        World::from_organizations(sides, pathing, &[organization(0), organization(1)])
     }
 
     /// A client and the copy of the match it plays.
@@ -952,8 +952,8 @@ mod tests {
         }
     }
 
-    fn go(player: u32, regiment: usize, to: [f32; 2]) -> Action {
-        let command = Command::Move { regiment, to };
+    fn go(player: u32, organization: usize, to: [f32; 2]) -> Action {
+        let command = Command::Move { organization, to };
         Action::Order { player, command }
     }
 

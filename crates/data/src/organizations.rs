@@ -16,9 +16,10 @@ pub struct Ranges {
     pub control: Option<f32>,
 }
 
-/// What an organization template, such as a regiment, is made of.
+/// What an organization template, such as a regiment, is made of: its
+/// organization component.
 #[derive(Debug, Clone, PartialEq)]
-pub struct Organization {
+pub struct OrganizationComponent {
     /// The [`Layout`] its members are arranged by.
     pub layout: Id,
     /// The template filling each of the layout's slots; `None` for one left
@@ -66,10 +67,10 @@ impl GameData {
 
     /// What every organization template is made of, by template id,
     /// including the ids the game has since renamed.
-    pub fn organizations(&self) -> HashMap<Id, Organization> {
+    pub fn organization_components(&self) -> HashMap<Id, OrganizationComponent> {
         self.by_template(|t| {
             let o = t.organization_component.as_ref()?;
-            Some(Organization {
+            Some(OrganizationComponent {
                 layout: o.layout_ids.clone()?,
                 // Templates name an empty slot's element `null`.
                 slots: o

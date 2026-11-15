@@ -1,5 +1,5 @@
 //! Units moving: finding their way, driving each leg and keeping their
-//! places in their regiment's formation.
+//! places in their organization's formation.
 
 use std::f32::consts::FRAC_PI_4;
 
@@ -307,34 +307,34 @@ fn steer(facing: &mut [f32; 2], to: [f32; 2], most: f32) -> f32 {
 }
 
 impl World {
-    pub(crate) fn send(&mut self, regiment: usize, target: [f32; 2], facing: [f32; 2]) {
-        let r = &mut self.regiments[regiment];
+    pub(crate) fn send(&mut self, organization: usize, target: [f32; 2], facing: [f32; 2]) {
+        let r = &mut self.organizations[organization];
         r.position = target;
         r.facing = facing;
-        self.take_places(regiment);
+        self.take_places(organization);
     }
 
     pub(crate) fn set_formation(
         &mut self,
         player: u32,
-        regiment: usize,
+        organization: usize,
         formation: usize,
     ) -> Result<(), NotYours> {
-        self.may_command(player, regiment)?;
-        let r = &mut self.regiments[regiment];
+        self.may_command(player, organization)?;
+        let r = &mut self.organizations[organization];
         if formation < r.formations.len() && formation != r.formation {
             r.formation = formation;
-            // An engaged regiment keeps to its combat formation for now.
+            // An engaged organization keeps to its combat formation for now.
             if r.current_formation() == formation {
-                self.take_places(regiment);
+                self.take_places(organization);
             }
         }
         Ok(())
     }
 
-    /// Sends each of a regiment's members to its place in the formation.
-    pub(crate) fn take_places(&mut self, regiment: usize) {
-        let r = &self.regiments[regiment];
+    /// Sends each of an organization's members to its place in the formation.
+    pub(crate) fn take_places(&mut self, organization: usize) {
+        let r = &self.organizations[organization];
         let facing = r.facing;
         // A move to unpack has to end right there.
         let exact = r.unpack_at.is_some();
@@ -428,7 +428,7 @@ impl World {
             let limit = self.speed_limit(u).unwrap_or(f32::INFINITY);
             let unit = &mut self.units[u];
             unit.previous = unit.position;
-            unit.drive(self.regiments[unit.regiment].speed.min(limit));
+            unit.drive(self.organizations[unit.organization].speed.min(limit));
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {
                     true => EXACT_REACH,
@@ -475,7 +475,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 20.0],
             },
         )
@@ -496,12 +496,12 @@ mod tests {
     }
 
     #[test]
-    fn regiments_move_at_their_slowest_members_speed() {
+    fn organizations_move_at_their_slowest_members_speed() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 20.0],
             },
         )
@@ -523,7 +523,7 @@ mod tests {
             ..aaa_map::Fighter::default()
         });
         m.health = 0.25;
-        let regiment = aaa_map::Regiment {
+        let organization = aaa_map::Organization {
             hq: None,
             id: 2,
             template: "soldier".into(),
@@ -542,10 +542,10 @@ mod tests {
             primary: Some(0),
             unpacks: None,
         };
-        let w = World::from_regiments(
+        let w = World::from_organizations(
             Sides::default(),
             Pathing::uniform(20, Domain::Land),
-            &[regiment],
+            &[organization],
         );
         assert_eq!(w.units[0].health, 50.0);
     }
@@ -556,7 +556,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 30.0],
             },
         )
@@ -580,7 +580,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [20.0, 10.0],
             },
         )
@@ -616,7 +616,14 @@ mod tests {
             [4.0, 8.0],
         ] {
             let mut w = vehicle(0.0, 1.0, None);
-            w.apply(7, Command::Move { regiment: 0, to }).unwrap();
+            w.apply(
+                7,
+                Command::Move {
+                    organization: 0,
+                    to,
+                },
+            )
+            .unwrap();
             let mut ticks = 0;
             while w.units[0].moving() {
                 w.tick();
@@ -643,7 +650,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [20.0, 10.0],
             },
         )
@@ -669,7 +676,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [30.0, 10.0],
             },
         )
@@ -693,7 +700,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 20.0],
             },
         )
@@ -703,7 +710,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 30.0],
             },
         )
@@ -719,7 +726,7 @@ mod tests {
         w.apply(
             7,
             Command::Formation {
-                regiment: 0,
+                organization: 0,
                 formation: 1,
             },
         )
@@ -740,7 +747,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 30.0],
             },
         )
@@ -771,7 +778,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 30.0],
             },
         )
@@ -804,7 +811,7 @@ mod tests {
         w.apply(
             7,
             Command::Move {
-                regiment: 0,
+                organization: 0,
                 to: [10.0, 30.0],
             },
         )

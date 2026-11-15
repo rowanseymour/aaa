@@ -19,28 +19,28 @@ pub enum Notice {
     /// It's no longer short.
     Repaired { player: u32 },
     /// A building of its, by index into [`World::buildings`], has stopped
-    /// work on the regiment of `template` at the front of its queue.
+    /// work on the organization of `template` at the front of its queue.
     Paused {
         player: u32,
         building: usize,
         template: String,
         why: Pause,
     },
-    /// A packed building of its, by index into [`World::regiments`],
+    /// A packed building of its, by index into [`World::organizations`],
     /// couldn't unpack where it was sent.
-    CannotUnpack { player: u32, regiment: usize },
-    /// A regiment of its, by index into [`World::regiments`], was ordered
-    /// to the HQ with this id.
+    CannotUnpack { player: u32, organization: usize },
+    /// An organization of its, by index into [`World::organizations`], was
+    /// ordered to the HQ with this id.
     Attached {
         player: u32,
         hq: u32,
-        regiment: usize,
+        organization: usize,
     },
-    /// A regiment of its was ordered away from the HQ with this id.
+    /// An organization of its was ordered away from the HQ with this id.
     Detached {
         player: u32,
         hq: u32,
-        regiment: usize,
+        organization: usize,
     },
     /// A building of its, by index into [`World::buildings`], was taken by
     /// player `by`; for a city, its centre.
@@ -53,11 +53,11 @@ pub enum Notice {
     /// its centre.
     Captured { player: u32, building: usize },
     /// A building of its, by index into [`World::buildings`], has put out
-    /// the regiment at this index into [`World::regiments`].
+    /// the organization at this index into [`World::organizations`].
     PutOut {
         player: u32,
         building: usize,
-        regiment: usize,
+        organization: usize,
     },
     /// A building of its, by index into [`World::buildings`], has sent
     /// for the delivery at this index into [`World::deliveries`].

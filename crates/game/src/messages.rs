@@ -75,8 +75,8 @@ impl Look {
         (self.names.get(&Id::from(template)).cloned()).unwrap_or_else(|| template.to_string())
     }
 
-    fn regiment(&self, sim: &World, r: usize) -> String {
-        crate::object_display::regiment_name(sim, &self.names, &self.strings, &self.map, r)
+    fn organization(&self, sim: &World, r: usize) -> String {
+        crate::object_display::organization_name(sim, &self.names, &self.strings, &self.map, r)
     }
 
     fn building(&self, sim: &World, b: usize) -> String {
@@ -92,7 +92,7 @@ impl Look {
             return self.building(sim, b);
         }
         let number = sim
-            .regiments
+            .organizations
             .iter()
             .find(|r| r.id == hq.id)
             .and_then(|r| r.number);
@@ -114,7 +114,7 @@ impl Look {
 /// What a line is about, for looking at it.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum About {
-    Regiment(usize),
+    Organization(usize),
     Building(usize),
 }
 
@@ -129,7 +129,7 @@ pub struct Place {
 impl Place {
     fn of(sim: &World, about: About) -> Place {
         let at = match about {
-            About::Regiment(r) => sim.leader_position(r),
+            About::Organization(r) => sim.leader_position(r),
             About::Building(b) => sim.buildings[b].position,
         };
         Place {
@@ -141,7 +141,7 @@ impl Place {
     /// Where it is now, as `player` sees it.
     fn now(&self, sim: &World, player: Option<u32>) -> [f32; 2] {
         let now = match self.about {
-            Some(About::Regiment(r)) if r < sim.regiments.len() && !sim.destroyed(r) => {
+            Some(About::Organization(r)) if r < sim.organizations.len() && !sim.destroyed(r) => {
                 let sees = |p| sim.survivors(r).any(|u| sim.sees_unit(p, u));
                 player.is_none_or(sees).then(|| sim.leader_position(r))
             }
@@ -643,7 +643,7 @@ pub fn refuse(
 ) {
     for Refused { about, by } in refused.read() {
         let name = match *about {
-            About::Regiment(r) => log.look.regiment(&sim.0, r),
+            About::Organization(r) => log.look.organization(&sim.0, r),
             About::Building(b) => log.look.building(&sim.0, b),
         };
         let text = match by {
@@ -936,23 +936,26 @@ fn told(
             };
             Told::Line("GENERIC_ERROR", text, at(About::Building(building)))
         }
-        Notice::CannotUnpack { player, regiment } if ours(player) => {
+        Notice::CannotUnpack {
+            player,
+            organization,
+        } if ours(player) => {
             let said = look.said("tai_error_unpack|s", "Cannot unpack %s");
             let text = fill(
                 &said,
-                &[&look.name(sim.regiments[regiment].template.as_str())],
+                &[&look.name(sim.organizations[organization].template.as_str())],
             );
-            Told::Line("GENERIC_ERROR", text, at(About::Regiment(regiment)))
+            Told::Line("GENERIC_ERROR", text, at(About::Organization(organization)))
         }
         Notice::Attached {
             player,
             hq,
-            regiment,
+            organization,
         }
         | Notice::Detached {
             player,
             hq,
-            regiment,
+            organization,
         } if ours(player) => {
             let event = match notice {
                 Notice::Attached { .. } => "hq_attach",
@@ -961,31 +964,39 @@ fn told(
             let hqs = sim.hqs();
             let hq = hqs.iter().find(|h| h.id == hq);
             let hq = hq.map(|h| look.hq(sim, h)).unwrap_or_default();
-            let joining = look.regiment(sim, regiment);
+            let joining = look.organization(sim, organization);
             Told::Event(
                 event,
                 vec![hq.into(), joining.into()],
-                at(About::Regiment(regiment)),
+                at(About::Organization(organization)),
             )
         }
         Notice::PutOut {
-            player, regiment, ..
+            player,
+            organization,
+            ..
         } if ours(player) => {
-            // A regiment is commissioned, a unit on its own such as a truck
-            // recruited.
-            let event = match crate::object_display::lone(sim, regiment) {
+            // An organization is commissioned, a unit on its own such as a
+            // truck recruited.
+            let event = match crate::object_display::lone(sim, organization) {
                 true => "company_recruited",
                 false => "company_commissioned",
             };
-            let name = look.regiment(sim, regiment);
-            Told::Event(event, vec![name.into()], at(About::Regiment(regiment)))
+            let name = look.organization(sim, organization);
+            Told::Event(
+                event,
+                vec![name.into()],
+                at(About::Organization(organization)),
+            )
         }
         // Named by its template: it has no number until it's dropped.
         Notice::Recruited {
             player, delivery, ..
         } if ours(player) => {
             let delivery = &sim.deliveries[delivery];
-            let dropped = delivery.regiment.map(|r| &sim.regiments[r].template);
+            let dropped = delivery
+                .organization
+                .map(|r| &sim.organizations[r].template);
             let name = delivery.cargo().or(dropped).map(|t| look.name(t.as_str()));
             let place = Place {
                 about: None,
@@ -1040,9 +1051,9 @@ fn told(
         // it's destroyed, whoever did it. What's nobody's tells no one.
         Notice::Destroyed { owner, what } if sim.sides.player(owner).is_some() => {
             let (name, about, event) = match what {
-                Piece::Regiment(r) => (
-                    look.regiment(sim, r),
-                    About::Regiment(r),
+                Piece::Organization(r) => (
+                    look.organization(sim, r),
+                    About::Organization(r),
                     "mobile_actor_lost",
                 ),
                 Piece::Building(b) => (
@@ -1509,7 +1520,7 @@ mod tests {
             players,
             teams: Vec::new(),
         };
-        World::from_regiments(
+        World::from_organizations(
             sides,
             aaa_map::Pathing::uniform(8, aaa_map::Domain::Land),
             &[],
