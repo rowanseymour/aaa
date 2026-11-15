@@ -815,7 +815,7 @@ fn emitter_keys(r: &mut Reader) -> Result<EmitterKeys> {
 }
 
 /// The size of a particle info record, as laid out in the module docs.
-const PARTICLE_INFO_SIZE: usize = 40;
+pub(crate) const PARTICLE_INFO_SIZE: usize = 40;
 
 /// The fields every controller starts with, as a controller of a kind not
 /// read further.
