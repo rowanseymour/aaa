@@ -13,6 +13,8 @@ use std::path::Path;
 use crate::{Cursor, Error, Result, Writer, utf16_lossy};
 
 pub const MAGIC: &[u8; 4] = b"TGCK";
+/// The only container version the game reads.
+pub(crate) const VERSION: u32 = 2;
 const SECTION_RECORD_LEN: u64 = 0x60;
 const SECTION_NAME_LEN: usize = 0x40;
 /// The zlib level the game compresses sections with.
@@ -67,7 +69,7 @@ impl<R: Read + Seek> Container<R> {
             return Err(Error::BadMagic(magic));
         }
         let version = cur.u32()?;
-        if version != 2 {
+        if version != VERSION {
             return Err(Error::UnsupportedVersion(version));
         }
         let section_count = cur.u32()? as u64;
@@ -170,7 +172,7 @@ impl<R: Read + Seek> Container<R> {
 pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()> {
     let mut w = Writer::default();
     w.bytes(MAGIC);
-    w.u32(2);
+    w.u32(VERSION);
     w.u32(sections.len() as u32);
     let mut table = Writer::default();
     for (i, (section, payload)) in sections.iter().enumerate() {

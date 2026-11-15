@@ -5,8 +5,9 @@ use std::io::{Read, Seek};
 use std::path::Path;
 
 use super::{
-    HeightMap, IdManager, Kingdoms, Map, MapHeader, MiscData, Objectives, RestrictionGroups, Sun,
-    Team, Terrain, Thing, Triggers, Updatables, World, WorldRules, misc, players, write_things,
+    CUTSCENE_WORLD_VERSION, HeightMap, IdManager, Kingdoms, Map, MapHeader, MiscData, Objectives,
+    RestrictionGroups, Sun, Team, Terrain, Thing, Triggers, Updatables, World, WorldRules, misc,
+    players, write_things,
 };
 use crate::container::{self, Section};
 use crate::{Error, Result};
@@ -84,10 +85,10 @@ impl MapFile {
             "TERRAIN" => self.terrain.to_bytes()?,
             "HEIGHT_MAP" => self.height_map.to_bytes()?,
             "MOUNTAIN_HEIGHT_MAP" => {
-                if self.cutscene_mode.is_some() != (world_version >= 10) {
-                    return Err(Error::Unwritable(
-                        "cutscene mode must be set exactly from world version 10".into(),
-                    ));
+                if self.cutscene_mode.is_some() != (world_version >= CUTSCENE_WORLD_VERSION) {
+                    return Err(Error::Unwritable(format!(
+                        "cutscene mode must be set exactly from world version {CUTSCENE_WORLD_VERSION}"
+                    )));
                 }
                 super::write_mountain_height_map(&self.mountain_height_map, self.cutscene_mode)?
             }

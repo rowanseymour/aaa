@@ -97,7 +97,7 @@ impl<R: Read + Seek> Map<R> {
         let world_version = self.world_version()?;
         let data = self.container.read_named("MOUNTAIN_HEIGHT_MAP")?;
         let (data, cutscene_mode) = match data.split_last() {
-            Some((&flag, rest)) if world_version >= 10 => {
+            Some((&flag, rest)) if world_version >= CUTSCENE_WORLD_VERSION => {
                 (rest, Some(Cursor::new(&[flag]).bool("cutscene mode")?))
             }
             _ => (&data[..], None),
@@ -312,6 +312,10 @@ pub fn write_strings(text: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
+/// The world version from which MOUNTAIN_HEIGHT_MAP ends with the
+/// cutscene-mode flag.
+pub(super) const CUTSCENE_WORLD_VERSION: u32 = 10;
+
 /// The MOUNTAIN_HEIGHT_MAP section holding `mountain` and the flag
 /// [`Map::cutscene_mode`] reads.
 pub fn write_mountain_height_map(
@@ -351,14 +355,14 @@ pub struct Tile {
 }
 
 impl Terrain {
+    /// The newest version the game reads.
+    const MAX_VERSION: u32 = 7;
+    /// The first version whose tiles take 8 bytes.
+    const WIDE_TILE_VERSION: u32 = 7;
+
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
-        let version = cur.u32()?;
-        if version > 7 {
-            return Err(Error::Corrupt(format!(
-                "TERRAIN version {version} is newer than the game supports"
-            )));
-        }
+        let version = cur.version("TERRAIN", 0..=Self::MAX_VERSION)?;
         let resolution_bits = cur.u32()?;
         let biome = cur.string()?;
         let names = cur.strings()?;
@@ -384,7 +388,7 @@ impl Terrain {
                     t.get(o..o + 2)
                         .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
                 };
-                if version >= 7 {
+                if version >= Self::WIDE_TILE_VERSION {
                     Tile {
                         terrain: u16_at(0),
                         seen_by: u16_at(2),
@@ -448,7 +452,7 @@ impl Terrain {
         w.count("tiles", self.tiles.len())?;
         w.u32(size as u32);
         for t in &self.tiles {
-            if self.version >= 7 {
+            if self.version >= Self::WIDE_TILE_VERSION {
                 w.u16(t.terrain);
                 w.u16(t.seen_by);
                 w.bytes(&[t.water_body, t.padding, t.flags, t.unused]);
@@ -477,7 +481,7 @@ impl Terrain {
 /// Bytes per TERRAIN tile in a version.
 fn tile_size(version: u32) -> usize {
     match version {
-        7.. => 8,
+        Terrain::WIDE_TILE_VERSION.. => 8,
         5..=6 => 6,
         4 => 4,
         _ => 2,
@@ -663,6 +667,13 @@ pub struct Camera {
 
 /// The version DYNAMIC_THINGS records are written in.
 const THINGS_VERSION: u32 = 11;
+/// The version a thing record's head holds, unlike [`THINGS_VERSION`] for
+/// the whole list.
+const THING_RECORD_VERSION: u32 = 2;
+/// The version of a thing record's placement fields.
+const PLACEMENT_VERSION: u32 = 5;
+/// The version that follows an area's id.
+const AREA_ID_VERSION: u32 = 2;
 
 /// Reads a thing list from its `{name}_INDEX` and `{name}` sections.
 fn parse_things(name: &str, index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thing>> {
@@ -722,7 +733,7 @@ impl Head {
         let template = rec.string()?;
         let class = rec.u32()?;
         let id = rec.u32()?;
-        rec.expect("thing version", 2)?;
+        rec.expect("thing version", THING_RECORD_VERSION)?;
         let name = rec.string()?;
         rec.expect("creation time", 0)?;
         Ok(Head {
@@ -740,7 +751,7 @@ impl Head {
         w.string(&self.template)?;
         w.u32(self.class);
         w.u32(self.id);
-        w.u32(2);
+        w.u32(THING_RECORD_VERSION);
         w.string(&self.name)?;
         w.u32(0);
         w.f32s(&self.position);
@@ -786,7 +797,7 @@ impl Thing {
             facing,
             flags,
         } = head;
-        rec.expect("placement version", 5)?;
+        rec.expect("placement version", PLACEMENT_VERSION)?;
         let scale = rec.f32()?;
         let variation = rec.i32()?;
         rec.expect("placement's actor", 0)?;
@@ -830,7 +841,7 @@ impl Thing {
             flags: self.flags,
         }
         .write(w)?;
-        w.u32(5);
+        w.u32(PLACEMENT_VERSION);
         w.f32(self.scale);
         w.i32(self.variation);
         w.u32(0);
@@ -878,13 +889,13 @@ impl Detail {
                         return false;
                     };
                     let count = &data[38 + name_len..42 + name_len];
-                    b[..4] == 2u32.to_le_bytes()
+                    b[..4] == AREA_ID_VERSION.to_le_bytes()
                         && u32::from_le_bytes(count.try_into().unwrap()) as usize * 5 == list
                 });
                 let version = cur.u32()?;
                 let id = if has_id {
                     let id = cur.u32()?;
-                    cur.expect("area id version", 2)?;
+                    cur.expect("area id version", AREA_ID_VERSION)?;
                     Some(id)
                 } else {
                     None
@@ -921,7 +932,7 @@ impl Detail {
                 w.u32(a.version);
                 if let Some(id) = a.id {
                     w.u32(id);
-                    w.u32(2);
+                    w.u32(AREA_ID_VERSION);
                 }
                 w.string(&a.name)?;
                 w.u32(a.shape);
