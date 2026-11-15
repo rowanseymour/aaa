@@ -910,6 +910,10 @@ fn main() -> ExitCode {
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
+                messages::tell_leaving
+                    .after(carry_out)
+                    .before(messages::show)
+                    .run_if(resource_exists::<Orders>),
                 (ghost::show, ghost::land, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain().after(carry_out),
@@ -995,6 +999,7 @@ fn main() -> ExitCode {
             app.insert_state(Screen::MainMenu);
         }
     }
+    app.add_systems(Last, orders::leave_on_exit);
     match app.run() {
         AppExit::Success => ExitCode::SUCCESS,
         AppExit::Error(code) => ExitCode::from(code.get()),

@@ -78,7 +78,8 @@ pub enum Refusal {
 /// Something a turn brought that those running the host may want to know.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Event {
-    /// A client's link was lost, or it sent what isn't a message.
+    /// A client left, its link was lost, or it sent what isn't a
+    /// message.
     Left(u32),
     /// A client's copy of the match stopped standing as the host's does.
     Diverged { client: u32, step: u64 },
@@ -159,10 +160,20 @@ impl<L: Link> Host<L> {
         self.clients.len()
     }
 
-    /// Ends its part in the match, leaving its copy as it stands and the
-    /// record of what it was given. Its clients find their links lost
-    /// once they've had what it sent.
-    pub fn finish(self) -> (World, Record) {
+    /// Leaves the match, letting its clients go once they've had what it
+    /// sent. Only of a match that's [over](World::over) are they told it's
+    /// ended; of one still being played they find the host gone.
+    pub fn end(&mut self) {
+        if self.world.over {
+            self.tell(&ToClient::Ended);
+        }
+        self.clients.clear();
+    }
+
+    /// [Ends](Host::end) its part in the match, leaving its copy as it stands and the
+    /// record of what it was given.
+    pub fn finish(mut self) -> (World, Record) {
+        self.end();
         (self.world, self.schedule.record().clone())
     }
 
@@ -275,7 +286,11 @@ impl<L: Link> Host<L> {
                         match heard.flatten() {
                             Some(ToHost::Ask(_)) => seat.asked += 1,
                             Some(ToHost::Ready) => seat.ready = true,
+                            Some(ToHost::Leave) => seat.lost = true,
                             Some(ToHost::Check { .. }) | None => {}
+                        }
+                        if seat.lost {
+                            break;
                         }
                     }
                     Ok(None) => break,
@@ -287,8 +302,22 @@ impl<L: Link> Host<L> {
             }
         }
         self.answer();
-        let lost = self.clients.extract_if(.., |c| c.lost);
-        lost.map(|c| Event::Left(c.id)).collect()
+        self.part()
+    }
+
+    /// Lets go of the clients that have gone, telling those left of each.
+    fn part(&mut self) -> Vec<Event> {
+        let mut events = Vec::new();
+        // Telling those left may find more gone.
+        while self.clients.iter().any(|c| c.lost) {
+            let lost: Vec<_> = self.clients.extract_if(.., |c| c.lost).collect();
+            for seat in lost {
+                let (client, players) = (seat.id, seat.players);
+                events.push(Event::Left(client));
+                self.tell(&ToClient::Left { client, players });
+            }
+        }
+        events
     }
 
     /// Tells each client that's asked for more since it was last told
@@ -351,6 +380,10 @@ impl<L: Link> Host<L> {
                         }
                     }
                     Ok(Some(Some(ToHost::Ready))) => seat.ready = true,
+                    Ok(Some(Some(ToHost::Leave))) => {
+                        seat.lost = true;
+                        break;
+                    }
                     Ok(Some(Some(ToHost::Check { step, hash }))) => {
                         // The host has played every tick a client has.
                         let stands = checks.binary_search(&(step, hash)).is_ok();
@@ -386,8 +419,7 @@ impl<L: Link> Host<L> {
         }
         // Nobody reads them here, and they'd only mount up.
         self.world.take_notices();
-        let lost = self.clients.extract_if(.., |c| c.lost);
-        events.extend(lost.map(|c| Event::Left(c.id)));
+        events.extend(self.part());
         events
     }
 
@@ -762,6 +794,44 @@ mod tests {
         drop(host);
         assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
         assert_eq!(clients[0].ask(Action::Pause(true)), Err(crate::Lost));
+    }
+
+    #[test]
+    fn clients_are_told_who_leaves_and_when_the_match_ends() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[]]);
+        play(&mut host, &mut clients, 2);
+        // One says it's going, another just goes.
+        clients[1].leave().unwrap();
+        drop(clients.remove(2));
+        assert_eq!(host.turn(), [Event::Left(2), Event::Left(3)]);
+        assert_eq!(clients[1].advance(usize::MAX), Err(crate::Lost));
+        clients.remove(1);
+        let left = [(2, vec![2]), (3, vec![])];
+        // In step with what the host played before it heard.
+        let Copy { client, world } = &mut clients[0];
+        client.play(world, 0).unwrap();
+        assert_eq!(client.take_left(), []);
+        client.play(world, 1).unwrap();
+        assert_eq!((world.ticks, client.take_left()), (3, left.to_vec()));
+        assert!(!client.ended());
+        // Once the match is over, the host leaving it ends it.
+        host.trust(1);
+        clients[0].ask(Action::Win(1)).unwrap();
+        play(&mut host, &mut clients, 1);
+        assert!(host.world().over);
+        let (_, record) = host.finish();
+        assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
+        assert!(clients[0].ended());
+        assert_eq!(clients[0].world().ticks, record.steps);
+    }
+
+    #[test]
+    fn a_host_leaving_a_match_still_played_is_only_gone() {
+        let (mut host, mut clients) = hosted(&[&[1]]);
+        play(&mut host, &mut clients, 2);
+        host.finish();
+        assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
+        assert!(!clients[0].ended());
     }
 
     #[test]

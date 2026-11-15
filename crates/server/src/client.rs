@@ -79,6 +79,11 @@ pub struct Client<L> {
     /// How many of its record's hashes the host has been sent.
     checked: usize,
     diverged: Vec<(u32, u64)>,
+    /// The other clients its copy has heard have gone, with the players
+    /// each gave the orders of, since this was last asked.
+    left: Vec<(u32, Vec<u32>)>,
+    /// Whether its copy has heard the host end the match.
+    ended: bool,
     refused: Vec<(u32, Refused)>,
     /// How many actions it's asked the host for, and how many of those
     /// its copy has done all that will come of.
@@ -98,6 +103,8 @@ impl<L: Link> Client<L> {
             schedule: Schedule::default(),
             checked: 0,
             diverged: Vec::new(),
+            left: Vec::new(),
+            ended: false,
             refused: Vec::new(),
             asked: 0,
             answered: 0,
@@ -114,6 +121,24 @@ impl<L: Link> Client<L> {
     /// host's does, with the ticks each had played when it was found.
     pub fn diverged(&self) -> &[(u32, u64)] {
         &self.diverged
+    }
+
+    /// The other clients its copy of the match has heard have gone since
+    /// this was last asked, each with the players it gave the orders of.
+    pub fn take_left(&mut self) -> Vec<(u32, Vec<u32>)> {
+        std::mem::take(&mut self.left)
+    }
+
+    /// Whether its copy of the match has heard the host leave it once it
+    /// was over, rather than only finding the host gone.
+    pub fn ended(&self) -> bool {
+        self.ended
+    }
+
+    /// Tells the host it's leaving the match, which it should then do.
+    pub fn leave(&mut self) -> Result<(), Lost> {
+        self.lost = true;
+        self.link.send(encode(&ToHost::Leave))
     }
 
     /// Asks the host for `action`, which is carried out, if the host lets
@@ -178,9 +203,15 @@ impl<L: Link> Client<L> {
                     self.behind += usize::from(bundle.tick);
                     self.heard.push_back(ToClient::Step(bundle));
                 }
-                Ok(Some(Some(said @ (ToClient::Diverged { .. } | ToClient::Answered(_))))) => {
-                    self.heard.push_back(said)
+                Ok(Some(Some(ToClient::Ended))) => {
+                    self.heard.push_back(ToClient::Ended);
+                    self.lost = true;
                 }
+                Ok(Some(Some(
+                    said @ (ToClient::Diverged { .. }
+                    | ToClient::Answered(_)
+                    | ToClient::Left { .. }),
+                ))) => self.heard.push_back(said),
                 // It's already been let in.
                 Ok(Some(Some(ToClient::Start(_) | ToClient::Refused(_)))) => self.lost = true,
                 Ok(Some(None)) | Err(Lost) => self.lost = true,
@@ -224,6 +255,8 @@ impl<L: Link> Client<L> {
                     self.checked = checks.len();
                 }
                 Some(ToClient::Diverged { client, step }) => self.diverged.push((client, step)),
+                Some(ToClient::Left { client, players }) => self.left.push((client, players)),
+                Some(ToClient::Ended) => self.ended = true,
                 // Never more than it's asked, whatever the host says.
                 Some(ToClient::Answered(asked)) => {
                     self.answered = asked.clamp(self.answered, self.asked)

@@ -219,8 +219,17 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             client
                 .ready()
                 .map_err(|_| format!("{at}: the host has gone"))?;
-            while client.advance(&mut world, usize::MAX).is_ok() {
+            let mut played = Ok(());
+            while played.is_ok() {
+                played = client.advance(&mut world, usize::MAX);
+                for (gone, players) in client.take_left() {
+                    eprintln!("client {gone} left, giving the orders of {players:?}");
+                }
                 std::thread::sleep(IDLE);
+            }
+            match client.ended() {
+                true => eprintln!("the host ended the match"),
+                false => eprintln!("the host has gone"),
             }
             for (client, step) in client.diverged() {
                 eprintln!("client {client}'s copy stopped matching the host's by tick {step}");
