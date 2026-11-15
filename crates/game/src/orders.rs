@@ -112,6 +112,17 @@ impl Orders {
         self.gone
     }
 
+    /// Whether the host went by ending the match, rather than being lost.
+    pub(crate) fn ended(&self) -> bool {
+        self.gone && self.client.ended()
+    }
+
+    /// The other clients of the match found gone since this was last
+    /// asked, each with the players it gave the orders of.
+    pub(crate) fn take_left(&mut self) -> Vec<(u32, Vec<u32>)> {
+        self.client.take_left()
+    }
+
     /// Whether the host, being elsewhere, has yet to begin the match:
     /// it may hold it until every copy is set up, and carries out nothing
     /// asked of it before then.
@@ -242,12 +253,34 @@ impl Orders {
         }
         self.diverged = diverged.len();
         if lost && !self.gone {
-            warn!("the match's host has gone");
+            match self.client.ended() {
+                true => info!("the match's host has ended it"),
+                false => warn!("the match's host has gone"),
+            }
             self.gone = true;
             // Nothing asked comes back now.
             self.asked.clear();
         }
         self.client.take_refused()
+    }
+}
+
+impl Drop for Orders {
+    /// Has the game leave the match: ending it, if it's the host.
+    fn drop(&mut self) {
+        match &mut self.host {
+            Hosted::Here(host) => host.end(),
+            // Failing only where the host has already gone.
+            Hosted::Elsewhere { .. } => _ = self.client.leave(),
+        }
+    }
+}
+
+/// Leaves the match as the game exits, rather than trusting what tears
+/// the app down to drop it.
+pub(crate) fn leave_on_exit(mut commands: Commands, mut exit: MessageReader<AppExit>) {
+    if exit.read().count() > 0 {
+        commands.remove_resource::<Orders>();
     }
 }
 
@@ -523,6 +556,45 @@ mod tests {
         );
         orders.step(&mut world);
         assert_eq!(world.ticks, 4);
+    }
+
+    #[test]
+    fn a_joined_game_hears_who_leaves_and_that_the_host_ended_the_match() {
+        let (mut host, mut orders, mut world) = joined(&[1]);
+        let (link, _) = super::testing::let_in(&mut host, &[2]);
+        let mut other = aaa_server::Client::new(link);
+        host.turn();
+        orders.step(&mut world);
+        other.leave().unwrap();
+        host.turn();
+        orders.step(&mut world);
+        assert_eq!(orders.take_left(), [(2, vec![2])]);
+        assert_eq!(orders.take_left(), []);
+        assert!(!orders.gone() && !orders.ended());
+        host.finish();
+        orders.step(&mut world);
+        assert!(orders.gone() && orders.ended());
+    }
+
+    #[test]
+    fn a_game_leaving_a_match_it_hosts_ends_it() {
+        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh());
+        let Hosted::Here(host) = &mut orders.host else {
+            unreachable!()
+        };
+        let (link, _) = super::testing::let_in(host, &[2]);
+        let mut other = aaa_server::Client::new(link);
+        drop(orders);
+        let mut world = super::testing::fresh();
+        assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
+        assert!(other.ended());
+    }
+
+    #[test]
+    fn a_game_leaving_a_match_tells_its_host() {
+        let (mut host, orders, _) = begun(&[1]);
+        drop(orders);
+        assert_eq!(host.turn(), [Event::Left(1)]);
     }
 
     #[test]

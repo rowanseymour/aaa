@@ -18,6 +18,7 @@ pub struct Words {
     keep_playing: String,
     /// Not the game's words: there, another machine takes over as host.
     host_gone: String,
+    host_ended: String,
 }
 
 impl Words {
@@ -29,6 +30,10 @@ impl Words {
             end: said("ui_mission_label_end_game", "End Mission"),
             keep_playing: said("ui_mission_label_keep_playing", "Keep Playing"),
             host_gone: "The host has left the game".into(),
+            host_ended: said(
+                "ui_mission_message_host_has_ended_game",
+                "The host has ended the game.",
+            ),
         }
     }
 }
@@ -100,8 +105,8 @@ fn tell(
     }
 }
 
-/// Says that the match's host has gone, which leaves the match where it
-/// stood: to look over, or to end.
+/// Says that the match's host has gone, or ended it, which leaves the
+/// match where it stood: to look over, or to end.
 fn tell_host_gone(
     mut commands: Commands,
     orders: Res<Orders>,
@@ -113,7 +118,11 @@ fn tell_host_gone(
         return;
     }
     told.host_gone = true;
-    let asked = ask(&mut commands, Screen::Match, words.host_gone.clone());
+    let said = match orders.ended() {
+        true => &words.host_ended,
+        false => &words.host_gone,
+    };
+    let asked = ask(&mut commands, Screen::Match, said.clone());
     let end = words.end.clone();
     offer(&mut commands, asked, end, "outcome.end", ask_end);
     let ok = confirm.ok.clone();

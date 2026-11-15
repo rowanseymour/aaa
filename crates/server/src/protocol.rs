@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 3;
+pub const PROTOCOL: u32 = 4;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -34,6 +34,8 @@ pub enum ToHost {
     /// How the client's copy of the match stood once it had played
     /// `step` ticks.
     Check { step: u64, hash: u64 },
+    /// The client is leaving the match, and nothing more follows.
+    Leave,
 }
 
 /// From the host to a client.
@@ -51,6 +53,11 @@ pub enum ToClient {
     /// dealt with: every step before this has those it carried out, and
     /// the rest it never will.
     Answered(u64),
+    /// Another client has gone, whether it left or was lost, with the
+    /// players it gave the orders of.
+    Left { client: u32, players: Vec<u32> },
+    /// The host has ended the match, and nothing more follows.
+    Ended,
 }
 
 /// What a client is told as it's let in.
@@ -100,6 +107,7 @@ mod tests {
         };
         let to_host = [
             ToHost::Ready,
+            ToHost::Leave,
             ToHost::Ask(order.clone()),
             ToHost::Check {
                 step: 10,
@@ -129,6 +137,11 @@ mod tests {
             },
             ToClient::Refused(Refusal::Protocol(PROTOCOL)),
             ToClient::Answered(3),
+            ToClient::Left {
+                client: 2,
+                players: vec![1],
+            },
+            ToClient::Ended,
         ];
         let join = Join {
             protocol: PROTOCOL,

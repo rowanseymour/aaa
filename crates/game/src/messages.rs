@@ -21,7 +21,7 @@ use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
 use crate::keys::Bindings;
 use crate::sound::Sounds;
 use crate::ui::{Font, Hint, font};
-use crate::{Leaders, Loaded, Local, Screen, Sim};
+use crate::{Leaders, Loaded, Local, Orders, Screen, Sim};
 
 /// The key that steps the camera back through the lines.
 pub const CYCLE: &str = "CycleMessageLog";
@@ -493,6 +493,36 @@ pub fn refuse(
     for Failed { text, about } in failed.read() {
         let place = Some(Place::of(&sim.0, *about));
         log.say("GENERIC_ERROR", text.clone(), place, &time, &mut sounds);
+    }
+}
+
+/// Posts a line for each player whose machine has left the match since
+/// last time. One that only watched gave no player's orders, and goes
+/// unremarked.
+pub fn tell_left(
+    mut orders: ResMut<Orders>,
+    sim: Res<Sim>,
+    local: Res<Local>,
+    leaders: Res<Leaders>,
+    time: Res<Time>,
+    mut log: ResMut<MessageLog>,
+    mut sounds: ResMut<Sounds>,
+) {
+    for (client, players) in orders.take_left() {
+        info!("client {client} has left the match, giving the orders of {players:?}");
+        for player in players.iter().filter_map(|&p| sim.0.sides.player(p)) {
+            let name = leaders.owner(player, local.0, &log.look.map);
+            let said = log
+                .look
+                .said("networking_player_quit|s", "Player %s quit the game");
+            log.say(
+                "GENERIC_EVENT",
+                fill(&said, &[&name]),
+                None,
+                &time,
+                &mut sounds,
+            );
+        }
     }
 }
 
