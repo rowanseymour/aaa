@@ -1,9 +1,79 @@
 use super::*;
 
+/// Rows of a rotation that leaves things as they are.
+const UNROTATED: [f32; 9] = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0];
+
+/// The little-endian bytes of an object's fields, appended in order.
+#[derive(Clone, Default)]
+struct Bytes(Vec<u8>);
+
+impl Bytes {
+    fn new() -> Self {
+        Bytes::default()
+    }
+    fn raw(mut self, bytes: &[u8]) -> Self {
+        self.0.extend_from_slice(bytes);
+        self
+    }
+    fn then(self, more: Bytes) -> Self {
+        self.raw(&more.0)
+    }
+    fn zeros(self, n: usize) -> Self {
+        self.raw(&vec![0; n])
+    }
+    fn u8(self, v: u8) -> Self {
+        self.raw(&[v])
+    }
+    fn bool(self, v: bool) -> Self {
+        self.u8(v.into())
+    }
+    fn u16(self, v: u16) -> Self {
+        self.raw(&v.to_le_bytes())
+    }
+    fn u16s(self, v: &[u16]) -> Self {
+        v.iter().fold(self, |b, &v| b.u16(v))
+    }
+    fn u32(self, v: u32) -> Self {
+        self.raw(&v.to_le_bytes())
+    }
+    fn i32(self, v: i32) -> Self {
+        self.raw(&v.to_le_bytes())
+    }
+    fn floats(self, v: &[f32]) -> Self {
+        v.iter().fold(self, |b, &v| b.raw(&v.to_le_bytes()))
+    }
+    fn string(self, s: &str) -> Self {
+        self.u32(s.len() as u32).raw(s.as_bytes())
+    }
+    /// A reference to the object at `index`.
+    fn obj(self, index: usize) -> Self {
+        self.u32(index as u32)
+    }
+    /// A reference to no object.
+    fn no_obj(self) -> Self {
+        self.i32(-1)
+    }
+    fn maybe_obj(self, index: Option<usize>) -> Self {
+        match index {
+            Some(i) => self.obj(i),
+            None => self.no_obj(),
+        }
+    }
+    /// A key group of `n` linear keys, each a time and its value.
+    fn linear_keys(self, n: u32, keys: &[f32]) -> Self {
+        self.u32(n).u32(1).floats(keys)
+    }
+    /// A counted list of references.
+    fn objs(self, indices: &[usize]) -> Self {
+        let b = self.u32(indices.len() as u32);
+        indices.iter().fold(b, |b, &i| b.obj(i))
+    }
+}
+
 /// Writes a model the way the game's files are laid out.
 struct Builder {
     types: Vec<&'static str>,
-    objects: Vec<(u16, Vec<u8>)>,
+    objects: Vec<(u16, Bytes)>,
 }
 
 impl Builder {
@@ -14,7 +84,8 @@ impl Builder {
         }
     }
 
-    fn add(&mut self, kind: &'static str, body: Vec<u8>) -> i32 {
+    /// Adds an object, returning its index.
+    fn add(&mut self, kind: &'static str, body: Bytes) -> usize {
         let t = match self.types.iter().position(|&k| k == kind) {
             Some(t) => t,
             None => {
@@ -23,145 +94,212 @@ impl Builder {
             }
         };
         self.objects.push((t as u16, body));
-        self.objects.len() as i32 - 1
+        self.objects.len() - 1
     }
 
-    fn finish(&self, roots: &[i32]) -> Vec<u8> {
-        let mut out = b"Gamebryo File Format, Version 10.1.0.0\n".to_vec();
-        out.extend(VERSION.to_le_bytes());
-        out.extend(0u32.to_le_bytes());
-        out.extend((self.objects.len() as u32).to_le_bytes());
-        out.extend((self.types.len() as u16).to_le_bytes());
-        for t in &self.types {
-            out.extend(string(t));
-        }
-        for (t, _) in &self.objects {
-            out.extend(t.to_le_bytes());
-        }
-        out.extend(0u32.to_le_bytes());
-        for (_, body) in &self.objects {
-            out.extend(0u32.to_le_bytes());
-            out.extend(body);
-        }
-        out.extend(refs(roots));
-        out
+    fn finish(&self, roots: &[usize]) -> Vec<u8> {
+        self.finish_as(VERSION, roots)
     }
 
     /// Writes the model as version 10.0.1.0, which has no user version.
-    fn finish_old(&self, roots: &[i32]) -> Vec<u8> {
-        let mut bytes = self.finish(roots);
-        let at = bytes.iter().position(|&c| c == b'\n').unwrap() + 1;
-        bytes[at..at + 4].copy_from_slice(&OLD_VERSION.to_le_bytes());
-        bytes.drain(at + 4..at + 8);
-        bytes
+    fn finish_old(&self, roots: &[usize]) -> Vec<u8> {
+        self.finish_as(OLD_VERSION, roots)
+    }
+
+    fn finish_as(&self, version: u32, roots: &[usize]) -> Vec<u8> {
+        let mut out = Bytes::new()
+            .raw(b"Gamebryo File Format, Version 10.1.0.0\n")
+            .u32(version);
+        if version != OLD_VERSION {
+            out = out.u32(0); // user version
+        }
+        out = out
+            .u32(self.objects.len() as u32)
+            .u16(self.types.len() as u16);
+        for t in &self.types {
+            out = out.string(t);
+        }
+        for (t, _) in &self.objects {
+            out = out.u16(*t);
+        }
+        out = out.u32(0); // groups
+        for (_, body) in &self.objects {
+            out = out.u32(0).raw(&body.0);
+        }
+        out.objs(roots).0
     }
 
     /// Writes the model as version 4.2.2.0, which names each object's type
     /// in front of it instead of in a table.
-    fn finish_netimmerse(&self, roots: &[i32]) -> Vec<u8> {
-        let mut out = b"NetImmerse File Format, Version 4.2.2.0\n".to_vec();
-        out.extend(NETIMMERSE_VERSION.to_le_bytes());
-        out.extend((self.objects.len() as u32).to_le_bytes());
+    fn finish_netimmerse(&self, roots: &[usize]) -> Vec<u8> {
+        let mut out = Bytes::new()
+            .raw(b"NetImmerse File Format, Version 4.2.2.0\n")
+            .u32(NETIMMERSE_VERSION)
+            .u32(self.objects.len() as u32);
         for (t, body) in &self.objects {
-            out.extend(string(self.types[*t as usize]));
-            out.extend(body);
+            out = out.string(self.types[*t as usize]).raw(&body.0);
         }
-        out.extend(refs(roots));
-        out
+        out.objs(roots).0
     }
 }
 
-fn string(s: &str) -> Vec<u8> {
-    let mut v = (s.len() as u32).to_le_bytes().to_vec();
-    v.extend(s.as_bytes());
-    v
+/// The fields of a scene object, unnamed but for `name` and unmoved until
+/// set otherwise.
+#[derive(Clone)]
+struct Scene {
+    name: &'static str,
+    extra: Vec<usize>,
+    controller: Option<usize>,
+    flags: u16,
+    translation: [f32; 3],
+    scale: f32,
+    props: Vec<usize>,
 }
 
-fn floats(f: &[f32]) -> Vec<u8> {
-    f.iter().flat_map(|v| v.to_le_bytes()).collect()
+impl Scene {
+    fn new(name: &'static str) -> Self {
+        Scene {
+            name,
+            extra: Vec::new(),
+            controller: None,
+            flags: 0x10,
+            translation: [0.0; 3],
+            scale: 1.0,
+            props: Vec::new(),
+        }
+    }
+    fn extra(self, extra: &[usize]) -> Self {
+        Scene {
+            extra: extra.to_vec(),
+            ..self
+        }
+    }
+    fn controller(self, controller: usize) -> Self {
+        Scene {
+            controller: Some(controller),
+            ..self
+        }
+    }
+    fn flags(self, flags: u16) -> Self {
+        Scene { flags, ..self }
+    }
+    fn at(self, translation: [f32; 3]) -> Self {
+        Scene {
+            translation,
+            ..self
+        }
+    }
+    fn scale(self, scale: f32) -> Self {
+        Scene { scale, ..self }
+    }
+    fn props(self, props: &[usize]) -> Self {
+        Scene {
+            props: props.to_vec(),
+            ..self
+        }
+    }
+
+    fn bytes(&self) -> Bytes {
+        Bytes::new()
+            .string(self.name)
+            .objs(&self.extra)
+            .maybe_obj(self.controller)
+            .u16(self.flags)
+            .floats(&self.translation)
+            .floats(&UNROTATED)
+            .floats(&[self.scale])
+            .objs(&self.props)
+            .no_obj() // collision
+    }
+
+    /// The fields as 4.2.2.0 lays them out, up to the bounding volume: one
+    /// extra data link, and a velocity.
+    fn netimmerse(&self) -> Bytes {
+        Bytes::new()
+            .string(self.name)
+            .maybe_obj(self.extra.first().copied())
+            .maybe_obj(self.controller)
+            .u16(self.flags)
+            .floats(&self.translation)
+            .floats(&UNROTATED)
+            .floats(&[self.scale])
+            .floats(&[0.0; 3])
+            .objs(&self.props)
+    }
+
+    fn node(&self, children: &[usize]) -> Bytes {
+        self.bytes().objs(children).objs(&[])
+    }
+
+    /// A 4.2.2.0 node without a bounding volume.
+    fn netimmerse_node(&self, children: &[usize]) -> Bytes {
+        self.netimmerse().bool(false).objs(children).objs(&[])
+    }
+
+    fn shape(&self, data: usize) -> Bytes {
+        self.bytes().obj(data).no_obj().bool(false)
+    }
+
+    fn skinned_shape(&self, data: usize, skin: usize) -> Bytes {
+        self.bytes().obj(data).obj(skin).bool(false)
+    }
 }
 
-fn refs(r: &[i32]) -> Vec<u8> {
-    let mut v = (r.len() as u32).to_le_bytes().to_vec();
-    v.extend(r.iter().flat_map(|x| x.to_le_bytes()));
-    v
+/// The fields of an unnamed object without extra data.
+fn named(controller: Option<usize>) -> Bytes {
+    Bytes::new().string("").objs(&[]).maybe_obj(controller)
 }
 
-fn scene(name: &str, flags: u16, translation: [f32; 3], scale: f32, props: &[i32]) -> Vec<u8> {
-    let mut v = string(name);
-    v.extend(refs(&[]));
-    v.extend((-1i32).to_le_bytes());
-    v.extend(flags.to_le_bytes());
-    v.extend(floats(&translation));
-    v.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
-    v.extend(floats(&[scale]));
-    v.extend(refs(props));
-    v.extend((-1i32).to_le_bytes());
-    v
-}
-
-fn node(name: &str, translation: [f32; 3], scale: f32, children: &[i32]) -> Vec<u8> {
-    let mut v = scene(name, 0x10, translation, scale, &[]);
-    v.extend(refs(children));
-    v.extend(refs(&[]));
-    v
-}
-
-fn shape(name: &str, flags: u16, data: i32, props: &[i32]) -> Vec<u8> {
-    let mut v = scene(name, flags, [0.0; 3], 1.0, props);
-    v.extend(data.to_le_bytes());
-    v.extend((-1i32).to_le_bytes());
-    v.push(0);
-    v
+/// [`named`] as 4.2.2.0 lays it out.
+fn netimmerse_named(controller: Option<usize>) -> Bytes {
+    Bytes::new().string("").no_obj().maybe_obj(controller)
 }
 
 /// Geometry with one triangle, positions and one UV set.
-fn geometry(strips: bool) -> Vec<u8> {
-    let mut v = 3u16.to_le_bytes().to_vec();
-    v.extend([0, 0, 1]);
-    v.extend(floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
-    v.extend(1u16.to_le_bytes());
-    v.push(0); // no normals
-    v.extend(floats(&[0.0; 4]));
-    v.push(0); // no colours
-    v.extend(floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
-    v.extend(0u16.to_le_bytes());
-    v.extend(1u16.to_le_bytes());
+fn geometry(strips: bool) -> Bytes {
+    let v = Bytes::new()
+        .u16(3)
+        .u8(0) // keep
+        .u8(0) // compress
+        .bool(true)
+        .floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+        .u16(1)
+        .bool(false) // no normals
+        .floats(&[0.0; 4])
+        .bool(false) // no colours
+        .floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+        .u16(0)
+        .u16(1);
     if strips {
-        v.extend(1u16.to_le_bytes());
-        v.extend(3u16.to_le_bytes());
-        v.push(1);
-        v.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
+        v.u16(1).u16(3).bool(true).u16s(&[0, 1, 2])
     } else {
-        v.extend(3u32.to_le_bytes());
-        v.push(1);
-        v.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
-        v.extend(0u16.to_le_bytes());
+        v.u32(3).bool(true).u16s(&[0, 1, 2]).u16(0)
     }
-    v
 }
 
-fn texture(file: &str) -> Vec<u8> {
-    let mut v = string("");
-    v.extend(refs(&[]));
-    v.extend((-1i32).to_le_bytes());
-    v.push(1);
-    v.extend(string(file));
-    v.extend((-1i32).to_le_bytes());
-    v.extend([0; 13]);
-    v
+fn texture(file: &str) -> Bytes {
+    named(None).u8(1).string(file).no_obj().zeros(13)
 }
 
 #[test]
 fn reads_a_scene() {
     let mut b = Builder::new();
-    let root = b.add("NiNode", node("root", [10.0, 0.0, 0.0], 2.0, &[1, 2, 5]));
+    let root = b.add(
+        "NiNode",
+        Scene::new("root")
+            .at([10.0, 0.0, 0.0])
+            .scale(2.0)
+            .node(&[1, 2, 5]),
+    );
     assert_eq!(root, 0);
-    b.add("NiTriShape", shape("mesh", 0x10, 3, &[4]));
-    b.add("NiTriStrips", shape("strips", 0x10, 6, &[]));
+    b.add("NiTriShape", Scene::new("mesh").props(&[4]).shape(3));
+    b.add("NiTriStrips", Scene::new("strips").shape(6));
     b.add("NiTriShapeData", geometry(false));
     b.add("NiSourceTexture", texture("bark.dds"));
-    b.add("NiTriShape", shape("SelectionBox", 0x11, 3, &[]));
+    b.add(
+        "NiTriShape",
+        Scene::new("SelectionBox").flags(0x11).shape(3),
+    );
     b.add("NiTriStripsData", geometry(true));
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
@@ -184,18 +322,12 @@ fn reads_a_scene() {
 #[test]
 fn leaves_out_shadow_geometry() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 2]));
-    b.add("NiTriShape", shape("mesh", 0x10, 3, &[]));
+    b.add("NiNode", Scene::new("root").node(&[1, 2]));
+    b.add("NiTriShape", Scene::new("mesh").shape(3));
     // A shape whose extra data marks it as the mesh's shadow hull.
-    let mut hull = string("Sg");
-    hull.extend(refs(&[4]));
-    // The rest of a shape, after its empty name and extra data list.
-    hull.extend(&shape("", 0x10, 3, &[])[8..]);
-    b.add("NiTriShape", hull);
+    b.add("NiTriShape", Scene::new("Sg").extra(&[4]).shape(3));
     b.add("NiTriShapeData", geometry(false));
-    let mut sg = string("Sg");
-    sg.extend(1u32.to_le_bytes());
-    b.add("NiIntegerExtraData", sg);
+    b.add("NiIntegerExtraData", Bytes::new().string("Sg").u32(1));
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
 
@@ -210,8 +342,8 @@ fn leaves_out_shadow_geometry() {
 #[test]
 fn stops_at_unknown_types() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1]));
-    b.add("NiSomethingNew", vec![1, 2, 3]);
+    b.add("NiNode", Scene::new("root").node(&[1]));
+    b.add("NiSomethingNew", Bytes::new().raw(&[1, 2, 3]));
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert_eq!(nif.incomplete.as_deref(), Some("NiSomethingNew"));
     assert_eq!(nif.objects.len(), 1);
@@ -220,20 +352,22 @@ fn stops_at_unknown_types() {
 
 #[test]
 fn rejects_other_versions() {
-    let mut bytes = b"NetImmerse File Format, Version 4.0.0.2\n".to_vec();
-    bytes.extend(0x0400_0002u32.to_le_bytes());
+    let bytes = Bytes::new()
+        .raw(b"NetImmerse File Format, Version 4.0.0.2\n")
+        .u32(0x0400_0002);
     assert!(matches!(
-        Nif::parse(&bytes),
-        Err(Error::UnsupportedVersion(v)) if v == "4.0.0.2"
+        Nif::parse(&bytes.0),
+        Err(e @ Error::UnsupportedVersion { version: 0x0400_0002 }) if e.to_string().ends_with(" \"4.0.0.2\"")
     ));
     assert!(matches!(Nif::parse(b"hello"), Err(Error::NotNif)));
 
     // The error names the version checked, whatever the text says.
-    let mut bytes = b"Gamebryo File Format, Version 10.1.0.0\r\n".to_vec();
-    bytes.extend(0x1400_0004u32.to_le_bytes());
+    let bytes = Bytes::new()
+        .raw(b"Gamebryo File Format, Version 10.1.0.0\r\n")
+        .u32(0x1400_0004);
     assert!(matches!(
-        Nif::parse(&bytes),
-        Err(Error::UnsupportedVersion(v)) if v == "20.0.0.4"
+        Nif::parse(&bytes.0),
+        Err(e @ Error::UnsupportedVersion { version: 0x1400_0004 }) if e.to_string().ends_with(" \"20.0.0.4\"")
     ));
 }
 
@@ -246,7 +380,7 @@ fn strips_keep_winding() {
 #[test]
 fn reads_the_older_version() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[]));
+    b.add("NiNode", Scene::new("root").node(&[]));
     let nif = Nif::parse(&b.finish_old(&[0])).unwrap();
     assert!(matches!(&nif.objects[0], Object::Node(n) if n.av.name == "root"));
 }
@@ -254,21 +388,18 @@ fn reads_the_older_version() {
 #[test]
 fn reads_path_flags_from_older_controllers() {
     let mut b = Builder::new();
-    let mut path = (-1i32).to_le_bytes().to_vec();
-    path.extend(0x708u16.to_le_bytes());
-    path.extend(floats(&[1.0, 0.0, 0.0, 12.0]));
-    path.extend((-1i32).to_le_bytes());
-    path.extend(1i32.to_le_bytes());
-    path.extend(floats(&[0.5, 0.02]));
-    path.extend(0u16.to_le_bytes());
-    path.extend((-1i32).to_le_bytes());
-    path.extend((-1i32).to_le_bytes());
+    let path = Bytes::new()
+        .no_obj()
+        .u16(0x708)
+        .floats(&[1.0, 0.0, 0.0, 12.0])
+        .no_obj()
+        .i32(1)
+        .floats(&[0.5, 0.02])
+        .u16(0)
+        .no_obj()
+        .no_obj();
     b.add("NiPathController", path);
-    let mut bytes = b.finish(&[]);
-    let at = bytes.iter().position(|&c| c == b'\n').unwrap() + 1;
-    bytes[at..at + 4].copy_from_slice(&OLD_VERSION.to_le_bytes());
-    bytes.drain(at + 4..at + 8);
-    let nif = Nif::parse(&bytes).unwrap();
+    let nif = Nif::parse(&b.finish_old(&[])).unwrap();
     assert!(nif.incomplete.is_none());
     let Object::Controller(c) = &nif.objects[0] else {
         panic!("no controller");
@@ -281,52 +412,43 @@ fn reads_path_flags_from_older_controllers() {
 #[test]
 fn reads_skins() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 6]));
-    let mut skinned = shape("grass", 0x10, 2, &[]);
-    let at = skinned.len() - 5;
-    skinned[at..at + 4].copy_from_slice(&3i32.to_le_bytes());
-    b.add("NiTriShape", skinned);
+    b.add("NiNode", Scene::new("root").node(&[1, 6]));
+    b.add("NiTriShape", Scene::new("grass").skinned_shape(2, 3));
     b.add("NiTriShapeData", geometry(false));
-
-    let mut instance = 4i32.to_le_bytes().to_vec();
-    instance.extend(0i32.to_le_bytes());
-    instance.extend(refs(&[6]));
-    b.add("NiSkinInstance", instance);
+    b.add("NiSkinInstance", Bytes::new().obj(4).obj(0).objs(&[6]));
 
     let transform = |translation: [f32; 3], scale: f32| {
-        let mut v = floats(&[1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0]);
-        v.extend(floats(&translation));
-        v.extend(floats(&[scale]));
-        v
+        Bytes::new()
+            .floats(&[1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 1.0, 0.0])
+            .floats(&translation)
+            .floats(&[scale])
     };
-    let mut data = transform([1.0, 2.0, 3.0], 1.0);
-    data.extend(1u32.to_le_bytes());
-    data.extend(5i32.to_le_bytes());
-    data.push(1);
-    data.extend(transform([0.0, 0.0, -0.5], 2.0));
-    data.extend(floats(&[0.1, 0.2, 0.3, 0.4]));
-    data.extend(3u16.to_le_bytes());
+    let mut data = transform([1.0, 2.0, 3.0], 1.0)
+        .u32(1)
+        .obj(5)
+        .bool(true)
+        .then(transform([0.0, 0.0, -0.5], 2.0))
+        .floats(&[0.1, 0.2, 0.3, 0.4])
+        .u16(3);
     for i in 0..3u16 {
-        data.extend(i.to_le_bytes());
-        data.extend(floats(&[1.0 - f32::from(i) * 0.25]));
+        data = data.u16(i).floats(&[1.0 - f32::from(i) * 0.25]);
     }
     b.add("NiSkinData", data);
 
-    let mut partition = 1u32.to_le_bytes().to_vec();
-    for n in [3u16, 1, 1, 0, 1, 0] {
-        partition.extend(n.to_le_bytes()); // counts, then the bone
-    }
-    partition.push(1);
-    partition.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
-    partition.push(1);
-    partition.extend(floats(&[1.0; 3]));
-    partition.push(1);
-    partition.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
-    partition.push(1);
-    partition.extend([0u8; 3]);
+    let partition = Bytes::new()
+        .u32(1)
+        .u16s(&[3, 1, 1, 0, 1, 0]) // counts, then the bone
+        .bool(true)
+        .u16s(&[0, 1, 2])
+        .bool(true)
+        .floats(&[1.0; 3])
+        .bool(true)
+        .u16s(&[0, 1, 2])
+        .bool(true)
+        .zeros(3);
     b.add("NiSkinPartition", partition);
 
-    b.add("NiNode", node("bone", [0.0; 3], 1.0, &[]));
+    b.add("NiNode", Scene::new("bone").node(&[]));
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
     let shapes = nif.shapes();
@@ -352,15 +474,16 @@ fn reads_skins() {
 
 #[test]
 fn reads_skins_without_weights() {
-    let mut data = floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
-    data.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
-    data.extend(1u32.to_le_bytes());
-    data.extend((-1i32).to_le_bytes());
-    data.push(0);
-    data.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
-    data.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
-    data.extend(floats(&[0.0; 4]));
-    data.extend(7u16.to_le_bytes()); // vertices, with no weights stored
+    let data = Bytes::new()
+        .floats(&UNROTATED)
+        .floats(&[0.0, 0.0, 0.0, 1.0])
+        .u32(1)
+        .no_obj()
+        .bool(false)
+        .floats(&UNROTATED)
+        .floats(&[0.0, 0.0, 0.0, 1.0])
+        .floats(&[0.0; 4])
+        .u16(7); // vertices, with no weights stored
     let mut b = Builder::new();
     b.add("NiSkinData", data);
     let nif = Nif::parse(&b.finish(&[])).unwrap();
@@ -372,110 +495,75 @@ fn reads_skins_without_weights() {
 
 #[test]
 fn rejects_corrupt_skins() {
-    let mut data = floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
-    data.extend(floats(&[0.0, 0.0, 0.0, 1.0]));
-    data.extend(u32::MAX.to_le_bytes());
-    data.extend((-1i32).to_le_bytes());
-    data.push(1);
+    let data = Bytes::new()
+        .floats(&UNROTATED)
+        .floats(&[0.0, 0.0, 0.0, 1.0])
+        .u32(u32::MAX)
+        .no_obj()
+        .bool(true);
     let mut b = Builder::new();
     b.add("NiSkinData", data);
     assert!(Nif::parse(&b.finish(&[])).is_err());
 }
 
-/// 4.2.2.0 scene fields: one extra data link, a velocity, and a bounding
-/// volume in place of the collision object.
-fn netimmerse_scene(name: &str, extra: i32, translation: [f32; 3], props: &[i32]) -> Vec<u8> {
-    let mut v = string(name);
-    v.extend(extra.to_le_bytes());
-    v.extend((-1i32).to_le_bytes());
-    v.extend(0x10u16.to_le_bytes());
-    v.extend(floats(&translation));
-    v.extend(floats(&[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
-    v.extend(floats(&[1.0]));
-    v.extend(floats(&[0.0; 3]));
-    v.extend(refs(props));
-    v
-}
-
 #[test]
 fn reads_netimmerse_models() {
     let mut b = Builder::new();
-    let mut root = netimmerse_scene("Scene Root", 1, [0.0; 3], &[2]);
-    root.push(0); // no bounding volume
-    root.extend(refs(&[3]));
-    root.extend(refs(&[]));
-    b.add("NiNode", root);
+    let root = Scene::new("Scene Root").extra(&[1]).props(&[2]);
+    b.add("NiNode", root.netimmerse_node(&[3]));
+    b.add(
+        "NiStringExtraData",
+        Bytes::new().no_obj().u32(11).string("zMode10"),
+    );
+    b.add("NiZBufferProperty", netimmerse_named(None).u16(3).u32(3));
 
-    let mut extra = (-1i32).to_le_bytes().to_vec();
-    extra.extend(11u32.to_le_bytes());
-    extra.extend(string("zMode10"));
-    b.add("NiStringExtraData", extra);
-
-    let mut zbuffer = string("");
-    zbuffer.extend([0xff; 8]);
-    zbuffer.extend(3u16.to_le_bytes());
-    zbuffer.extend(3u32.to_le_bytes());
-    b.add("NiZBufferProperty", zbuffer);
-
-    let mut wave = netimmerse_scene("Wave", -1, [0.0, 5.0, 0.0], &[4, 6]);
-    wave.push(1);
-    wave.extend(4u32.to_le_bytes()); // a union of a sphere and a box
-    wave.extend(2u32.to_le_bytes());
-    wave.extend(0u32.to_le_bytes());
-    wave.extend(floats(&[0.0; 4]));
-    wave.extend(1u32.to_le_bytes());
-    wave.extend(floats(&[0.0; 15]));
-    wave.extend(8i32.to_le_bytes());
-    wave.extend((-1i32).to_le_bytes());
+    let wave = Scene::new("Wave")
+        .at([0.0, 5.0, 0.0])
+        .props(&[4, 6])
+        .netimmerse()
+        .bool(true)
+        .u32(4) // a union of a sphere and a box
+        .u32(2)
+        .u32(0)
+        .floats(&[0.0; 4])
+        .u32(1)
+        .floats(&[0.0; 15])
+        .obj(8)
+        .no_obj();
     b.add("NiTriStrips", wave);
 
-    let mut texturing = string("");
-    texturing.extend([0xff; 8]);
-    texturing.extend(0u16.to_le_bytes());
-    texturing.extend(2u32.to_le_bytes());
-    texturing.extend(1u32.to_le_bytes());
-    texturing.push(1);
-    texturing.extend(5i32.to_le_bytes());
-    texturing.extend([0; 3 * 4 + 4]);
-    texturing.extend([0; 4]); // the other slots
+    let texturing = netimmerse_named(None)
+        .u16(0)
+        .u32(2)
+        .u32(1)
+        .bool(true)
+        .obj(5)
+        .zeros(3 * 4 + 4)
+        .zeros(4); // the other slots
     b.add("NiTexturingProperty", texturing);
-    let mut source = string("");
-    source.extend([0xff; 8]);
-    source.push(1);
-    source.extend(string("foam.dds"));
-    source.extend([0; 13]);
+    let source = netimmerse_named(None).u8(1).string("foam.dds").zeros(13);
     b.add("NiSourceTexture", source);
 
-    let mut material = string("");
-    material.extend((-1i32).to_le_bytes());
-    material.extend(7i32.to_le_bytes());
-    material.extend(0u16.to_le_bytes());
-    material.extend(floats(&[0.5; 14]));
+    let material = netimmerse_named(Some(7)).u16(0).floats(&[0.5; 14]);
     b.add("NiMaterialProperty", material);
-    let mut fade = (-1i32).to_le_bytes().to_vec();
-    fade.extend(8u16.to_le_bytes());
-    fade.extend(floats(&[1.0, 0.0, 0.0, 2.0]));
-    fade.extend(3i32.to_le_bytes());
-    fade.extend(9i32.to_le_bytes());
-    b.add("NiAlphaController", fade);
+    b.add("NiAlphaController", time_controller(3).obj(9));
 
-    let mut data = 3u16.to_le_bytes().to_vec();
-    data.push(1);
-    data.extend(floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
-    data.push(0); // no normals
-    data.extend(floats(&[0.0; 4]));
-    data.push(0); // no colours
-    data.extend(1u16.to_le_bytes());
-    data.extend(floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0]));
-    data.extend(1u16.to_le_bytes());
-    data.extend(1u16.to_le_bytes());
-    data.extend(3u16.to_le_bytes());
-    data.extend([0u16, 1, 2].iter().flat_map(|x| x.to_le_bytes()));
+    let data = Bytes::new()
+        .u16(3)
+        .bool(true)
+        .floats(&[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0])
+        .bool(false) // no normals
+        .floats(&[0.0; 4])
+        .bool(false) // no colours
+        .u16(1)
+        .floats(&[0.0, 0.0, 1.0, 0.0, 0.0, 1.0])
+        .u16(1)
+        .u16(1)
+        .u16(3)
+        .u16s(&[0, 1, 2]);
     b.add("NiTriStripsData", data);
 
-    let mut keys = 2u32.to_le_bytes().to_vec();
-    keys.extend(1u32.to_le_bytes());
-    keys.extend(floats(&[0.0, 0.0, 2.0, 0.5]));
+    let keys = Bytes::new().linear_keys(2, &[0.0, 0.0, 2.0, 0.5]);
     b.add("NiFloatData", keys);
 
     let nif = Nif::parse(&b.finish_netimmerse(&[0])).unwrap();
@@ -774,41 +862,36 @@ fn cycles_controller_time() {
 }
 
 /// The fields every controller starts with.
-fn time_controller(target: i32) -> Vec<u8> {
-    let mut v = (-1i32).to_le_bytes().to_vec();
-    v.extend(8u16.to_le_bytes());
-    v.extend(floats(&[1.0, 0.0, 0.0, 2.0]));
-    v.extend(target.to_le_bytes());
-    v
+fn time_controller(target: usize) -> Bytes {
+    Bytes::new()
+        .no_obj()
+        .u16(8)
+        .floats(&[1.0, 0.0, 0.0, 2.0])
+        .obj(target)
 }
 
 /// Two particles with positions and, from 10.1.0.0, radii.
-fn particles_data(netimmerse: bool) -> Vec<u8> {
-    let mut v = 2u16.to_le_bytes().to_vec();
+fn particles_data(netimmerse: bool) -> Bytes {
+    let mut v = Bytes::new().u16(2);
     if !netimmerse {
-        v.extend([0, 0]);
+        v = v.u8(0).u8(0); // keep, compress
     }
-    v.push(1);
-    v.extend(floats(&[0.0; 6]));
+    v = v.bool(true).floats(&[0.0; 6]);
     if !netimmerse {
-        v.extend(0u16.to_le_bytes());
+        v = v.u16(0);
     }
-    v.push(0); // no normals
-    v.extend(floats(&[0.0; 4]));
-    v.push(0); // no colours
-    if netimmerse {
-        v.extend(0u16.to_le_bytes());
-        v.extend(floats(&[1.0])); // radius
+    v = v
+        .bool(false) // no normals
+        .floats(&[0.0; 4])
+        .bool(false); // no colours
+    v = if netimmerse {
+        v.u16(0).floats(&[1.0]) // radius
     } else {
-        v.extend(0u16.to_le_bytes());
-        v.push(1);
-        v.extend(floats(&[1.0, 1.0]));
-    }
-    v.extend(2u16.to_le_bytes());
-    v.push(1);
-    v.extend(floats(&[0.5, 0.5]));
+        v.u16(0).bool(true).floats(&[1.0, 1.0])
+    };
+    v = v.u16(2).bool(true).floats(&[0.5, 0.5]);
     if !netimmerse {
-        v.push(0); // no rotations
+        v = v.bool(false); // no rotations
     }
     v
 }
@@ -816,58 +899,45 @@ fn particles_data(netimmerse: bool) -> Vec<u8> {
 #[test]
 fn reads_particle_systems() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0, 0.0, 2.0], 1.0, &[1, 3]));
-    b.add("NiTriShape", shape("chimney", 0x10, 2, &[]));
+    b.add(
+        "NiNode",
+        Scene::new("root").at([0.0, 0.0, 2.0]).node(&[1, 3]),
+    );
+    b.add("NiTriShape", Scene::new("chimney").shape(2));
     b.add("NiTriShapeData", geometry(false));
 
-    let mut smoke = scene("smoke", 0x10, [0.0; 3], 1.0, &[]);
-    smoke[string("smoke").len() + 4..][..4].copy_from_slice(&7i32.to_le_bytes());
-    smoke.extend(4i32.to_le_bytes());
-    smoke.extend((-1i32).to_le_bytes());
-    smoke.push(0); // no shader
-    smoke.push(1); // world space
-    smoke.extend(refs(&[5, 6]));
+    let smoke = Scene::new("smoke")
+        .controller(7)
+        .shape(4)
+        .bool(true) // world space
+        .objs(&[5, 6]);
     b.add("NiParticleSystem", smoke);
 
-    let mut data = particles_data(false);
-    data.extend([0; 2 * 40]);
-    data.extend(2u16.to_le_bytes());
-    data.extend(0u16.to_le_bytes());
+    let data = particles_data(false)
+        .zeros(2 * crate::read::PARTICLE_INFO_SIZE)
+        .u16(2)
+        .u16(0);
     b.add("NiPSysData", data);
 
-    let modifier = |name| {
-        let mut v = string(name);
-        v.extend(0u32.to_le_bytes());
-        v.extend(3i32.to_le_bytes());
-        v.push(1);
-        v
-    };
-    let mut emitter = modifier("Box");
-    emitter.extend(floats(&[
-        1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.1, 0.2, 0.3, 0.4, 11.0, 12.0, 13.0,
-    ]));
-    emitter.extend(1i32.to_le_bytes());
-    emitter.extend(floats(&[1.0, 2.0, 3.0]));
+    let modifier = |name| Bytes::new().string(name).u32(0).obj(3).bool(true);
+    let emitter = modifier("Box")
+        .floats(&[
+            1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 0.1, 0.2, 0.3, 0.4, 11.0, 12.0, 13.0,
+        ])
+        .obj(1)
+        .floats(&[1.0, 2.0, 3.0]);
     b.add("NiPSysBoxEmitter", emitter);
-    let mut fade = modifier("Fade");
-    fade.extend(floats(&[1.0]));
-    fade.extend(0u16.to_le_bytes());
-    fade.extend(floats(&[1.0]));
-    fade.extend(0u16.to_le_bytes());
+    let fade = modifier("Fade").floats(&[1.0]).u16(0).floats(&[1.0]).u16(0);
     b.add("NiPSysGrowFadeModifier", fade);
 
-    let mut ctlr = time_controller(3);
-    ctlr.extend(string("Box"));
-    ctlr.extend(8i32.to_le_bytes());
-    b.add("NiPSysEmitterCtlr", ctlr);
-    let mut rate = 1u32.to_le_bytes().to_vec();
-    rate.extend(1u32.to_le_bytes());
-    rate.extend(floats(&[0.0, 10.0]));
-    rate.extend(2u32.to_le_bytes());
-    rate.extend(floats(&[0.0]));
-    rate.push(1);
-    rate.extend(floats(&[2.0]));
-    rate.push(0);
+    b.add("NiPSysEmitterCtlr", time_controller(3).string("Box").obj(8));
+    let rate = Bytes::new()
+        .linear_keys(1, &[0.0, 10.0])
+        .u32(2)
+        .floats(&[0.0])
+        .bool(true)
+        .floats(&[2.0])
+        .bool(false);
     b.add("NiPSysEmitterCtlrData", rate);
 
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
@@ -946,30 +1016,25 @@ fn reads_particle_systems() {
 #[test]
 fn reads_particle_modifiers_and_colliders() {
     let mut b = Builder::new();
-    let modifier = |name| {
-        let mut v = string(name);
-        v.extend(2000u32.to_le_bytes());
-        v.extend((-1i32).to_le_bytes());
-        v.push(0);
-        v
-    };
-    let mut gravity = modifier("Gravity");
-    gravity.extend(3i32.to_le_bytes());
-    gravity.extend(floats(&[0.0, 0.0, -1.0, 0.5, 9.8]));
-    gravity.extend(1u32.to_le_bytes());
-    gravity.extend(floats(&[0.02, 0.9]));
+    let modifier = |name| Bytes::new().string(name).u32(2000).no_obj().bool(false);
+    let gravity = modifier("Gravity")
+        .obj(3)
+        .floats(&[0.0, 0.0, -1.0, 0.5, 9.8])
+        .u32(1)
+        .floats(&[0.02, 0.9]);
     b.add("NiPSysGravityModifier", gravity);
-    let mut manager = modifier("Colliders");
-    manager.extend(2i32.to_le_bytes());
-    b.add("NiPSysColliderManager", manager);
-    let mut plane = floats(&[0.4]);
-    plane.extend([0, 1]);
-    for r in [-1i32, 1, -1, 3] {
-        plane.extend(r.to_le_bytes());
-    }
-    plane.extend(floats(&[10.0, 20.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]));
+    b.add("NiPSysColliderManager", modifier("Colliders").obj(2));
+    let plane = Bytes::new()
+        .floats(&[0.4])
+        .bool(false)
+        .bool(true)
+        .no_obj()
+        .obj(1)
+        .no_obj()
+        .obj(3)
+        .floats(&[10.0, 20.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0]);
     b.add("NiPSysPlanarCollider", plane);
-    b.add("NiNode", node("ground", [0.0; 3], 1.0, &[]));
+    b.add("NiNode", Scene::new("ground").node(&[]));
 
     let nif = Nif::parse(&b.finish(&[3])).unwrap();
     assert!(nif.incomplete.is_none());
@@ -1015,69 +1080,54 @@ fn reads_particle_modifiers_and_colliders() {
 #[test]
 fn reads_the_other_emitters_modifiers_and_controllers() {
     let mut b = Builder::new();
-    let header = |name| {
-        let mut v = string(name);
-        v.extend(0u32.to_le_bytes());
-        v.extend((-1i32).to_le_bytes());
-        v.push(1);
-        v
-    };
+    let header = |name| Bytes::new().string(name).u32(0).no_obj().bool(true);
     let base: Vec<f32> = (1..=13).map(|i| i as f32).collect();
-    let mut cylinder = header("Cylinder");
-    cylinder.extend(floats(&base));
-    cylinder.extend(9i32.to_le_bytes());
-    cylinder.extend(floats(&[2.0, 5.0]));
+    let cylinder = header("Cylinder").floats(&base).obj(9).floats(&[2.0, 5.0]);
     b.add("NiPSysCylinderEmitter", cylinder);
-    let mut sphere = header("Sphere");
-    sphere.extend(floats(&base));
-    sphere.extend(9i32.to_le_bytes());
-    sphere.extend(floats(&[3.0]));
+    let sphere = header("Sphere").floats(&base).obj(9).floats(&[3.0]);
     b.add("NiPSysSphereEmitter", sphere);
-    let mut mesh = header("Mesh");
-    mesh.extend(floats(&base));
-    mesh.extend(refs(&[9]));
-    mesh.extend(1u32.to_le_bytes());
-    mesh.extend(3u32.to_le_bytes());
-    mesh.extend(floats(&[0.0, 1.0, 0.0]));
+    let mesh = header("Mesh")
+        .floats(&base)
+        .objs(&[9])
+        .u32(1)
+        .u32(3)
+        .floats(&[0.0, 1.0, 0.0]);
     b.add("NiPSysMeshEmitter", mesh);
-    let mut spawn = header("Spawn");
-    spawn.extend(2u16.to_le_bytes());
-    spawn.extend(floats(&[0.5]));
-    spawn.extend(1u16.to_le_bytes());
-    spawn.extend(4u16.to_le_bytes());
-    spawn.extend(floats(&[0.1, 0.2, 3.0, 0.3]));
+    let spawn = header("Spawn")
+        .u16(2)
+        .floats(&[0.5])
+        .u16(1)
+        .u16(4)
+        .floats(&[0.1, 0.2, 3.0, 0.3]);
     b.add("NiPSysSpawnModifier", spawn);
-    let mut drag = header("Drag");
-    drag.extend(9i32.to_le_bytes());
-    drag.extend(floats(&[0.0, 0.0, 1.0, 0.5, 7.0, 8.0]));
+    let drag = header("Drag")
+        .obj(9)
+        .floats(&[0.0, 0.0, 1.0, 0.5, 7.0, 8.0]);
     b.add("NiPSysDragModifier", drag);
-    let mut rotation = header("Rotation");
-    rotation.extend(floats(&[0.25]));
-    rotation.push(1);
-    rotation.extend(floats(&[1.0, 0.0, 0.0]));
+    let rotation = header("Rotation")
+        .floats(&[0.25])
+        .bool(true)
+        .floats(&[1.0, 0.0, 0.0]);
     b.add("NiPSysRotationModifier", rotation);
-    let mut age = header("Age");
-    age.push(1);
-    age.extend(3i32.to_le_bytes());
-    b.add("NiPSysAgeDeathModifier", age);
-    let mut ball = floats(&[0.6]);
-    ball.extend([1, 0]);
-    for r in [3i32, -1, -1, 9] {
-        ball.extend(r.to_le_bytes());
-    }
-    ball.extend(floats(&[4.0]));
+    b.add("NiPSysAgeDeathModifier", header("Age").bool(true).obj(3));
+    let ball = Bytes::new()
+        .floats(&[0.6])
+        .bool(true)
+        .bool(false)
+        .obj(3)
+        .no_obj()
+        .no_obj()
+        .obj(9)
+        .floats(&[4.0]);
     b.add("NiPSysSphericalCollider", ball);
     b.add("NiPSysUpdateCtlr", time_controller(10));
-    b.add("NiNode", node("emitter", [0.0; 3], 1.0, &[]));
+    b.add("NiNode", Scene::new("emitter").node(&[]));
     for kind in [
         "NiPSysModifierActiveCtlr",
         "NiPSysEmitterSpeedCtlr",
         "NiPSysEmitterInitialRadiusCtlr",
     ] {
-        let mut c = time_controller(10);
-        c.extend(string("Drag"));
-        c.extend(9i32.to_le_bytes());
-        b.add(kind, c);
+        b.add(kind, time_controller(10).string("Drag").obj(9));
     }
 
     let nif = Nif::parse(&b.finish(&[9])).unwrap();
@@ -1187,57 +1237,37 @@ fn reads_the_other_emitters_modifiers_and_controllers() {
 #[test]
 fn steps_over_controllers() {
     let mut b = Builder::new();
-    let mut root = scene("root", 0x10, [0.0; 3], 1.0, &[]);
-    root[string("root").len() + 4..][..4].copy_from_slice(&2i32.to_le_bytes());
-    root.extend(refs(&[1]));
-    root.extend(refs(&[]));
-    b.add("NiNode", root);
-    b.add("NiNode", node("target", [0.0; 3], 1.0, &[]));
+    b.add("NiNode", Scene::new("root").controller(2).node(&[1]));
+    b.add("NiNode", Scene::new("target").node(&[]));
 
-    let mut look = time_controller(0);
-    look.extend(0u16.to_le_bytes());
-    look.extend(1i32.to_le_bytes());
-    b.add("NiLookAtController", look);
-
-    let mut path = time_controller(0);
-    path.extend(0x32u16.to_le_bytes());
-    path.extend(1i32.to_le_bytes());
-    path.extend(floats(&[0.5, 0.02]));
-    path.extend(2u16.to_le_bytes());
-    path.extend(4i32.to_le_bytes());
-    path.extend(5i32.to_le_bytes());
+    b.add("NiLookAtController", time_controller(0).u16(0).obj(1));
+    let path = time_controller(0)
+        .u16(0x32)
+        .i32(1)
+        .floats(&[0.5, 0.02])
+        .u16(2)
+        .obj(4)
+        .obj(5);
     b.add("NiPathController", path);
-    let mut positions = 2u32.to_le_bytes().to_vec();
-    positions.extend(1u32.to_le_bytes());
-    positions.extend(floats(&[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]));
+    let positions = Bytes::new().linear_keys(2, &[0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0]);
     b.add("NiPosData", positions);
-    b.add("NiFloatData", 0u32.to_le_bytes().to_vec());
+    b.add("NiFloatData", Bytes::new().u32(0));
 
-    let mut vis = time_controller(1);
-    vis.extend(7i32.to_le_bytes());
-    b.add("NiVisController", vis);
-    let mut on_off = 2u32.to_le_bytes().to_vec();
-    on_off.extend(floats(&[0.0]));
-    on_off.push(1);
-    on_off.extend(floats(&[1.0]));
-    on_off.push(0);
+    b.add("NiVisController", time_controller(1).obj(7));
+    let on_off = Bytes::new()
+        .u32(2)
+        .floats(&[0.0])
+        .bool(true)
+        .floats(&[1.0])
+        .bool(false);
     b.add("NiVisData", on_off);
 
-    let mut flip = time_controller(9);
-    flip.extend(0u32.to_le_bytes());
-    flip.extend(floats(&[0.0, 0.5]));
-    flip.extend(refs(&[10]));
+    let flip = time_controller(9).u32(0).floats(&[0.0, 0.5]).objs(&[10]);
     b.add("NiFlipController", flip);
-    b.add("NiTexturingProperty", {
-        let mut t = string("");
-        t.extend(refs(&[]));
-        t.extend(8i32.to_le_bytes());
-        t.extend(2u32.to_le_bytes());
-        t.extend(0u32.to_le_bytes());
-        t.extend([0; 5]);
-        t.extend(0u32.to_le_bytes());
-        t
-    });
+    b.add(
+        "NiTexturingProperty",
+        named(Some(8)).u32(2).u32(0).zeros(5).u32(0),
+    );
     b.add("NiSourceTexture", texture("frame.dds"));
 
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
@@ -1270,25 +1300,13 @@ fn steps_over_controllers() {
 #[test]
 fn reads_texture_controllers() {
     let mut b = Builder::new();
-    b.add("NiTexturingProperty", {
-        let mut t = string("");
-        t.extend(refs(&[]));
-        t.extend(1i32.to_le_bytes());
-        t.extend(2u32.to_le_bytes());
-        t.extend(0u32.to_le_bytes());
-        t.extend([0; 5]);
-        t.extend(0u32.to_le_bytes());
-        t
-    });
-    let mut scroll = time_controller(0);
-    scroll.push(0);
-    scroll.extend(0u32.to_le_bytes());
-    scroll.extend(1u32.to_le_bytes());
-    scroll.extend(2i32.to_le_bytes());
+    b.add(
+        "NiTexturingProperty",
+        named(Some(1)).u32(2).u32(0).zeros(5).u32(0),
+    );
+    let scroll = time_controller(0).bool(false).u32(0).u32(1).obj(2);
     b.add("NiTextureTransformController", scroll);
-    let mut keys = 2u32.to_le_bytes().to_vec();
-    keys.extend(1u32.to_le_bytes());
-    keys.extend(floats(&[0.0, 1.0, 2.0, -1.0]));
+    let keys = Bytes::new().linear_keys(2, &[0.0, 1.0, 2.0, -1.0]);
     b.add("NiFloatData", keys);
 
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
@@ -1314,82 +1332,75 @@ fn reads_texture_controllers() {
 
 /// An older-format particle controller emitting from `emitter`, with
 /// modifiers from `modifier` and one saved particle.
-fn old_particle_controller(target: i32, emitter: i32, modifier: i32) -> Vec<u8> {
-    let mut v = time_controller(target);
-    v.extend(floats(&[2.0, 0.5, 3.0, 0.1, 0.0, 6.0]));
-    v.extend(floats(&[1.0, 0.0, 0.0]));
-    v.extend(floats(&[1.0, 0.5, 0.25, 1.0]));
-    v.extend(floats(&[0.3, 0.0, 0.5]));
-    v.push(0); // no reset
-    v.extend(floats(&[60.0, 0.4, 0.1]));
-    v.extend([1, 0]);
-    v.extend(floats(&[0.7, 0.7, 0.2]));
-    v.extend(emitter.to_le_bytes());
-    v.extend(0u16.to_le_bytes());
-    v.extend(floats(&[1.0]));
-    v.extend(1u16.to_le_bytes());
-    v.extend(floats(&[0.0, 0.0]));
-    v.extend(1u16.to_le_bytes());
-    v.extend(1u16.to_le_bytes());
-    v.extend(floats(&[0.0, 0.0, 1.5, 0.0, 1.0, 0.0, 0.25, 0.4, 2.0]));
-    v.extend(0u16.to_le_bytes());
-    v.extend(1u16.to_le_bytes());
-    v.extend((-1i32).to_le_bytes());
-    v.extend(modifier.to_le_bytes());
-    v.extend((-1i32).to_le_bytes());
-    v.push(1);
-    v
+fn old_particle_controller(target: usize, emitter: usize, modifier: usize) -> Bytes {
+    time_controller(target)
+        .floats(&[2.0, 0.5, 3.0, 0.1, 0.0, 6.0])
+        .floats(&[1.0, 0.0, 0.0])
+        .floats(&[1.0, 0.5, 0.25, 1.0])
+        .floats(&[0.3, 0.0, 0.5])
+        .bool(false) // no reset
+        .floats(&[60.0, 0.4, 0.1])
+        .bool(true)
+        .bool(false)
+        .floats(&[0.7, 0.7, 0.2])
+        .obj(emitter)
+        .u16(0)
+        .floats(&[1.0])
+        .u16(1)
+        .floats(&[0.0, 0.0])
+        .u16(1)
+        .u16(1)
+        .floats(&[0.0, 0.0, 1.5, 0.0, 1.0, 0.0, 0.25, 0.4, 2.0])
+        .u16(0)
+        .u16(1)
+        .no_obj()
+        .obj(modifier)
+        .no_obj()
+        .bool(true)
 }
 
 /// The links every older-format modifier starts with.
-fn old_modifier(next: i32, controller: i32) -> Vec<u8> {
-    let mut v = next.to_le_bytes().to_vec();
-    v.extend(controller.to_le_bytes());
-    v
+fn old_modifier(next: Option<usize>, controller: usize) -> Bytes {
+    Bytes::new().maybe_obj(next).obj(controller)
 }
 
 #[test]
 fn reads_netimmerse_particles() {
     let mut b = Builder::new();
-    let mut root = netimmerse_scene("Scene Root", -1, [0.0; 3], &[]);
-    root.push(0);
-    root.extend(refs(&[1, 2]));
-    root.extend(refs(&[]));
-    b.add("NiNode", root);
-    let mut emitter = netimmerse_scene("sparks Emitter", -1, [0.0, 0.0, 1.0], &[]);
-    emitter.push(0);
-    emitter.extend(refs(&[]));
-    emitter.extend(refs(&[]));
-    b.add("NiNode", emitter);
+    b.add("NiNode", Scene::new("Scene Root").netimmerse_node(&[1, 2]));
+    b.add(
+        "NiNode",
+        Scene::new("sparks Emitter")
+            .at([0.0, 0.0, 1.0])
+            .netimmerse_node(&[]),
+    );
 
-    let mut sparks = netimmerse_scene("sparks", -1, [0.0; 3], &[]);
-    sparks[string("sparks").len() + 4..][..4].copy_from_slice(&4i32.to_le_bytes());
-    sparks.push(0);
-    sparks.extend(3i32.to_le_bytes());
-    sparks.extend((-1i32).to_le_bytes());
+    let sparks = Scene::new("sparks")
+        .controller(4)
+        .netimmerse()
+        .bool(false)
+        .obj(3)
+        .no_obj();
     b.add("NiRotatingParticles", sparks);
-    let mut data = particles_data(true);
-    data.push(1);
-    data.extend(floats(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]));
+    let data = particles_data(true)
+        .bool(true)
+        .floats(&[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0]);
     b.add("NiRotatingParticlesData", data);
 
     b.add(
         "NiParticleSystemController",
         old_particle_controller(2, 1, 5),
     );
-    let mut spin = old_modifier(6, 4);
-    spin.push(1);
-    spin.extend(floats(&[0.0, 1.0, 0.0, 18.0]));
+    let spin = old_modifier(Some(6), 4)
+        .bool(true)
+        .floats(&[0.0, 1.0, 0.0, 18.0]);
     b.add("NiParticleRotation", spin);
-    let mut color = old_modifier(7, 4);
-    color.extend(8i32.to_le_bytes());
-    b.add("NiParticleColorModifier", color);
-    let mut grow = old_modifier(-1, 4);
-    grow.extend(floats(&[0.1, 0.5]));
-    b.add("NiParticleGrowFade", grow);
-    let mut colors = 2u32.to_le_bytes().to_vec();
-    colors.extend(1u32.to_le_bytes());
-    colors.extend(floats(&[0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]));
+    b.add("NiParticleColorModifier", old_modifier(Some(7), 4).obj(8));
+    b.add(
+        "NiParticleGrowFade",
+        old_modifier(None, 4).floats(&[0.1, 0.5]),
+    );
+    let colors = Bytes::new().linear_keys(2, &[0.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0]);
     b.add("NiColorData", colors);
 
     let nif = Nif::parse(&b.finish_netimmerse(&[0])).unwrap();
@@ -1488,42 +1499,42 @@ fn reads_netimmerse_particles() {
 #[test]
 fn reads_older_particle_meshes() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 2]));
-    b.add("NiNode", node("mist Emitter", [0.0; 3], 1.0, &[]));
-    let mut mist = shape("mist", 0x10, 3, &[]);
-    mist[string("mist").len() + 4..][..4].copy_from_slice(&4i32.to_le_bytes());
-    b.add("NiParticleMeshes", mist);
+    b.add("NiNode", Scene::new("root").node(&[1, 2]));
+    b.add("NiNode", Scene::new("mist Emitter").node(&[]));
+    b.add(
+        "NiParticleMeshes",
+        Scene::new("mist").controller(4).shape(3),
+    );
 
     // 10.0.1.0 geometry: no keep or compress bytes, and one radius.
-    let mut data = 1u16.to_le_bytes().to_vec();
-    data.push(1);
-    data.extend(floats(&[0.0, 0.0, 1.0]));
-    data.extend(0u16.to_le_bytes());
-    data.push(0); // no normals
-    data.extend(floats(&[0.0; 4]));
-    data.push(0); // no colours
-    data.extend(0u16.to_le_bytes());
-    data.extend(floats(&[3.5]));
-    data.extend(1u16.to_le_bytes());
-    data.push(0); // no sizes
-    data.push(1);
-    data.extend(floats(&[1.0, 0.0, 0.0, 0.0]));
-    data.extend(7i32.to_le_bytes());
+    let data = Bytes::new()
+        .u16(1)
+        .bool(true)
+        .floats(&[0.0, 0.0, 1.0])
+        .u16(0)
+        .bool(false) // no normals
+        .floats(&[0.0; 4])
+        .bool(false) // no colours
+        .u16(0)
+        .floats(&[3.5])
+        .u16(1)
+        .bool(false) // no sizes
+        .bool(true)
+        .floats(&[1.0, 0.0, 0.0, 0.0])
+        .obj(7);
     b.add("NiParticleMeshesData", data);
 
     b.add(
         "NiParticleSystemController",
         old_particle_controller(2, 1, 5),
     );
-    let mut gravity = old_modifier(6, 4);
-    gravity.extend(floats(&[6.0, 0.9]));
-    gravity.extend(0u32.to_le_bytes());
-    gravity.extend(floats(&[0.0, 0.0, 1.0, 1.0, 0.0, 0.0]));
+    let gravity = old_modifier(Some(6), 4)
+        .floats(&[6.0, 0.9])
+        .u32(0)
+        .floats(&[0.0, 0.0, 1.0, 1.0, 0.0, 0.0]);
     b.add("NiGravity", gravity);
-    let mut meshes = old_modifier(-1, 4);
-    meshes.extend(refs(&[7]));
-    b.add("NiParticleMeshModifier", meshes);
-    b.add("NiNode", node("NewRoot", [0.0; 3], 1.0, &[]));
+    b.add("NiParticleMeshModifier", old_modifier(None, 4).objs(&[7]));
+    b.add("NiNode", Scene::new("NewRoot").node(&[]));
 
     let nif = Nif::parse(&b.finish_old(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
@@ -1559,28 +1570,20 @@ fn reads_older_particle_meshes() {
 #[test]
 fn places_older_particles_at_their_parent() {
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1]));
-    let mut smoke = scene("smoke", 0x10, [0.0, 0.0, 2.0], 1.0, &[]);
-    smoke.extend(refs(&[2]));
-    smoke.extend(refs(&[]));
-    b.add("NiNode", smoke);
+    b.add("NiNode", Scene::new("root").node(&[1]));
+    b.add("NiNode", Scene::new("smoke").at([0.0, 0.0, 2.0]).node(&[2]));
     // Hidden, moved and with a property of its own.
-    b.add("NiParticles", shape("Blizzard", 0x11, 3, &[4]));
+    let blizzard = Scene::new("Blizzard").flags(0x11).props(&[4]);
+    b.add("NiParticles", blizzard.shape(3));
     b.add("NiTriShapeData", geometry(false));
-    b.add("NiSpecularProperty", {
-        let mut v = string("");
-        v.extend(refs(&[]));
-        v.extend((-1i32).to_le_bytes());
-        v.extend(0u16.to_le_bytes());
-        v
-    });
+    b.add("NiSpecularProperty", named(None).u16(0));
     // A mesh outside the scene, its root moved.
-    b.add("NiNode", node("NewRoot", [5.0, 0.0, 0.0], 2.0, &[6]));
-    let mut quad = scene("quad", 0x10, [1.0, 0.0, 0.0], 1.0, &[]);
-    quad.extend(3i32.to_le_bytes());
-    quad.extend((-1i32).to_le_bytes());
-    quad.push(0);
-    b.add("NiTriShape", quad);
+    let new_root = Scene::new("NewRoot").at([5.0, 0.0, 0.0]).scale(2.0);
+    b.add("NiNode", new_root.node(&[6]));
+    b.add(
+        "NiTriShape",
+        Scene::new("quad").at([1.0, 0.0, 0.0]).shape(3),
+    );
 
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     let old = nif.old_particle_systems();
@@ -1613,38 +1616,38 @@ fn transforms_undo() {
 #[test]
 fn reads_animation_sequences() {
     let mut b = Builder::new();
-    let mut sequence = string("SoldierJog");
-    sequence.extend(string("Bip01"));
-    sequence.extend(1i32.to_le_bytes());
-    sequence.extend(2u32.to_le_bytes());
-    sequence.extend(string("Bip01"));
-    sequence.extend(2i32.to_le_bytes());
-    sequence.extend(string("Bip01 Head"));
-    sequence.extend((-1i32).to_le_bytes());
+    let sequence = Bytes::new()
+        .string("SoldierJog")
+        .string("Bip01")
+        .obj(1)
+        .u32(2)
+        .string("Bip01")
+        .obj(2)
+        .string("Bip01 Head")
+        .no_obj();
     b.add("NiControllerSequence", sequence);
 
-    let mut text = string("");
-    text.extend(2u32.to_le_bytes());
-    text.extend(floats(&[0.0]));
-    text.extend(string("start"));
-    text.extend(floats(&[1.5]));
-    text.extend(string("end"));
+    let text = Bytes::new()
+        .string("")
+        .u32(2)
+        .floats(&[0.0])
+        .string("start")
+        .floats(&[1.5])
+        .string("end");
     b.add("NiTextKeyExtraData", text);
 
     // No target: it is bound to the model's node of the block's name.
-    let mut ctlr = (-1i32).to_le_bytes().to_vec();
-    ctlr.extend(0x2cu16.to_le_bytes());
-    ctlr.extend(floats(&[1.0, 0.0, 0.0, 1.5]));
-    ctlr.extend((-1i32).to_le_bytes());
-    ctlr.extend(3i32.to_le_bytes());
+    let ctlr = Bytes::new()
+        .no_obj()
+        .u16(0x2c)
+        .floats(&[1.0, 0.0, 0.0, 1.5])
+        .no_obj()
+        .obj(3);
     b.add("NiKeyframeController", ctlr);
-    let mut data = 1u32.to_le_bytes().to_vec();
-    data.extend(1u32.to_le_bytes());
-    data.extend(floats(&[0.0, 1.0, 0.0, 0.0, 0.0]));
-    data.extend(2u32.to_le_bytes());
-    data.extend(1u32.to_le_bytes());
-    data.extend(floats(&[0.0, 0.0, 0.0, 0.0, 1.5, 3.0, 0.0, 0.0]));
-    data.extend(0u32.to_le_bytes());
+    let data = Bytes::new()
+        .linear_keys(1, &[0.0, 1.0, 0.0, 0.0, 0.0])
+        .linear_keys(2, &[0.0, 0.0, 0.0, 0.0, 1.5, 3.0, 0.0, 0.0])
+        .u32(0);
     b.add("NiKeyframeData", data);
 
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
@@ -1674,10 +1677,11 @@ fn reads_animation_sequences() {
 #[test]
 fn rejects_corrupt_sequences() {
     let mut b = Builder::new();
-    let mut sequence = string("Walk");
-    sequence.extend(string(""));
-    sequence.extend((-1i32).to_le_bytes());
-    sequence.extend(u32::MAX.to_le_bytes());
+    let sequence = Bytes::new()
+        .string("Walk")
+        .string("")
+        .no_obj()
+        .u32(u32::MAX);
     b.add("NiControllerSequence", sequence);
     assert!(matches!(
         Nif::parse(&b.finish(&[0])),
@@ -1689,35 +1693,37 @@ fn rejects_corrupt_sequences() {
 fn walks_a_cyclic_or_branching_graph_in_bounded_time() {
     // A node that is its own child, twice.
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[0, 0, 1]));
-    b.add("NiTriShape", shape("mesh", 0x10, 3, &[]));
+    b.add("NiNode", Scene::new("root").node(&[0, 0, 1]));
+    b.add("NiTriShape", Scene::new("mesh").shape(3));
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert_eq!(nif.shapes().len(), 1);
 
     // Each node lists the next one twice: 2^40 paths without a budget.
     let mut b = Builder::new();
     for i in 0..40 {
-        b.add("NiNode", node("n", [0.0; 3], 1.0, &[i + 1, i + 1]));
+        b.add("NiNode", Scene::new("n").node(&[i + 1, i + 1]));
     }
-    b.add("NiTriShape", shape("mesh", 0x10, 3, &[]));
+    b.add("NiTriShape", Scene::new("mesh").shape(3));
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
-    assert!(nif.shapes().len() <= 41 * 64);
+    assert!(nif.shapes().len() <= 41 * VISITS_PER_OBJECT);
 }
 
 #[test]
 fn reads_a_camera_and_what_follows_it() {
-    let mut camera = scene("PortraitCamera", 0x10, [0.0, -12.0, 1.0], 1.0, &[]);
-    camera.extend(0u16.to_le_bytes());
-    camera.extend(floats(&[-0.1, 0.1, 0.2, -0.2, 1.0, 5000.0]));
-    camera.push(0);
-    // Its viewport and level of detail, a reference and two unused numbers.
-    camera.extend(floats(&[0.0, 1.0, 1.0, 0.0, 1.0]));
-    camera.extend((-1i32).to_le_bytes());
-    camera.extend([0u8; 8]);
+    let camera = Scene::new("PortraitCamera")
+        .at([0.0, -12.0, 1.0])
+        .bytes()
+        .u16(0)
+        .floats(&[-0.1, 0.1, 0.2, -0.2, 1.0, 5000.0])
+        .bool(false)
+        // Its viewport and level of detail, a reference and two unused numbers.
+        .floats(&[0.0, 1.0, 1.0, 0.0, 1.0])
+        .no_obj()
+        .zeros(8);
     let mut b = Builder::new();
-    b.add("NiNode", node("root", [0.0; 3], 1.0, &[1, 2]));
+    b.add("NiNode", Scene::new("root").node(&[1, 2]));
     b.add("NiCamera", camera);
-    b.add("NiNode", node("after", [0.0; 3], 1.0, &[]));
+    b.add("NiNode", Scene::new("after").node(&[]));
     let nif = Nif::parse(&b.finish(&[0])).unwrap();
     assert!(nif.incomplete.is_none());
     let Object::Camera(camera) = &nif.objects[1] else {

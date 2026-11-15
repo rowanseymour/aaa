@@ -174,463 +174,53 @@ use crate::{Error, Reader, Ref, Result, Transform};
 impl Object {
     /// Reads an object of the named type, or `None` if the type is unknown.
     pub(crate) fn read(kind: &str, r: &mut Reader) -> Result<Option<Object>> {
-        let other = || Object::Other(kind.to_string());
         Ok(Some(match kind {
-            "NiNode" | "NiBillboardNode" => {
-                let av = scene(r)?;
-                let children = r.references()?;
-                r.references()?; // effects
-                let billboard = match kind {
-                    "NiBillboardNode" if !r.old() => Some(r.u16()?),
-                    "NiBillboardNode" => Some(0),
-                    _ => None,
-                };
-                Object::Node(Node {
-                    av,
-                    children,
-                    billboard,
-                })
-            }
+            "NiNode" | "NiBillboardNode" => Object::Node(node(kind, r)?),
             "NiTriShape" | "NiTriStrips" => Object::Shape(shape(r)?),
-            "NiTriShapeData" => {
-                let (_, mut g) = geometry(r)?;
-                let count = r.u16()? as usize;
-                r.u32()?;
-                if r.old() || r.bool()? {
-                    g.triangles = r.u16_array(count)?;
-                }
-                for _ in 0..r.u16()? {
-                    let n = r.u16()? as usize;
-                    r.skip(n * 2)?;
-                }
-                Object::Geometry(g)
-            }
-            "NiTriStripsData" => {
-                let (_, mut g) = geometry(r)?;
-                r.u16()?;
-                let strips = r.u16()? as usize;
-                let lengths = r.u16s(strips)?;
-                if r.old() || r.bool()? {
-                    for len in lengths {
-                        let points = r.u16s(len as usize)?;
-                        g.triangles.extend(strip_triangles(&points));
-                    }
-                }
-                Object::Geometry(g)
-            }
-            "NiTexturingProperty" => {
-                let (_, _, controller) = named(r)?;
-                if r.old() {
-                    r.u16()?;
-                }
-                let apply_mode = r.u32()?;
-                let count = r.u32()?;
-                let mut slot = || r.bool()?.then(|| texture_slot(r)).transpose();
-                let base = slot()?;
-                let dark = slot()?;
-                let detail = slot()?;
-                let gloss = slot()?;
-                let glow = slot()?;
-                if count > 5 && r.bool()? {
-                    texture_slot(r)?;
-                    r.floats::<6>()?;
-                }
-                for decal in 0..4 {
-                    if count > 6 + decal && r.bool()? {
-                        texture_slot(r)?;
-                    }
-                }
-                let shader_maps = if r.netimmerse() { 0 } else { r.u32()? };
-                for _ in 0..shader_maps {
-                    if r.bool()? {
-                        texture_slot(r)?;
-                        r.u32()?;
-                    }
-                }
-                Object::Texturing(Texturing {
-                    controller,
-                    apply_mode,
-                    base,
-                    dark,
-                    detail,
-                    gloss,
-                    glow,
-                })
-            }
-            "NiSourceTexture" => {
-                named(r)?;
-                let external = r.u8()? == 1;
-                let (file, pixels) = if !r.old() {
-                    (r.string()?, r.reference()?)
-                } else if external {
-                    (r.string()?, None)
-                } else if r.u8()? != 0 {
-                    (String::new(), r.reference()?)
-                } else {
-                    (String::new(), None)
-                };
-                r.skip(13)?;
-                Object::SourceTexture(SourceTexture {
-                    file: external.then_some(file),
-                    pixels,
-                })
-            }
-            "NiPixelData" => {
-                let format = r.u32()?;
-                r.skip(5 * 4 + 8)?;
-                if !r.old() {
-                    r.u32()?;
-                }
-                r.reference()?;
-                let count = r.u32()?;
-                r.u32()?;
-                let mipmaps = (0..count)
-                    .map(|_| Ok([r.u32()?, r.u32()?, r.u32()?]))
-                    .collect::<Result<_>>()?;
-                let n = r.u32()? as usize;
-                let data = r.bytes(n)?.to_vec();
-                Object::Pixels(Pixels {
-                    format,
-                    mipmaps,
-                    data,
-                })
-            }
-            "NiMaterialProperty" => {
-                let (_, _, controller) = named(r)?;
-                if r.old() {
-                    r.u16()?;
-                }
-                Object::Material(Material {
-                    controller,
-                    ambient: r.floats()?,
-                    diffuse: r.floats()?,
-                    specular: r.floats()?,
-                    emissive: r.floats()?,
-                    glossiness: r.f32()?,
-                    alpha: r.f32()?,
-                })
-            }
-            "NiAlphaProperty" => {
-                named(r)?;
-                Object::Alpha(Alpha {
-                    flags: r.u16()?,
-                    threshold: r.u8()?,
-                })
-            }
-            "NiStencilProperty" => {
-                named(r)?;
-                if r.old() {
-                    r.u16()?;
-                }
-                r.skip(1 + 6 * 4)?;
-                Object::Stencil(Stencil {
-                    draw_mode: r.u32()?,
-                })
-            }
-            "NiZBufferProperty" => {
-                named(r)?;
-                Object::ZBuffer(ZBuffer {
-                    flags: r.u16()?,
-                    function: r.u32()?,
-                })
-            }
-            "NiVertexColorProperty" => {
-                named(r)?;
-                r.skip(2)?;
-                Object::VertexColor(VertexColor {
-                    vertex_mode: r.u32()?,
-                    lighting: r.u32()?,
-                })
-            }
-            "NiSpecularProperty" => {
-                named(r)?;
-                r.skip(2)?;
-                other()
-            }
+            "NiTriShapeData" => Object::Geometry(tri_shape_data(r)?),
+            "NiTriStripsData" => Object::Geometry(tri_strips_data(r)?),
+            "NiTexturingProperty" => Object::Texturing(texturing(r)?),
+            "NiSourceTexture" => Object::SourceTexture(source_texture(r)?),
+            "NiPixelData" => Object::Pixels(pixels(r)?),
+            "NiMaterialProperty" => Object::Material(material(r)?),
+            "NiAlphaProperty" => Object::Alpha(alpha(r)?),
+            "NiStencilProperty" => Object::Stencil(stencil(r)?),
+            "NiZBufferProperty" => Object::ZBuffer(z_buffer(r)?),
+            "NiVertexColorProperty" => Object::VertexColor(vertex_color(r)?),
+            "NiSpecularProperty" | "NiDitherProperty" => flags_property(kind, r)?,
             "NiStringExtraData" | "NiIntegerExtraData" | "NiBooleanExtraData"
-            | "NiBinaryExtraData" | "NiStringsExtraData" => {
-                let name = extra_data_name(r)?;
-                let value = match kind {
-                    "NiStringExtraData" => {
-                        if r.netimmerse() {
-                            r.u32()?;
-                        }
-                        ExtraValue::String(r.string()?)
-                    }
-                    "NiIntegerExtraData" => ExtraValue::Integer(r.u32()?),
-                    "NiBooleanExtraData" => ExtraValue::Boolean(r.bool()?),
-                    "NiBinaryExtraData" => {
-                        let n = r.u32()? as usize;
-                        ExtraValue::Binary(r.bytes(n)?.to_vec())
-                    }
-                    _ => {
-                        let n = r.u32()?;
-                        ExtraValue::Strings((0..n).map(|_| r.string()).collect::<Result<_>>()?)
-                    }
-                };
-                Object::ExtraData(ExtraData { name, value })
-            }
-            "NiCamera" => {
-                let av = scene(r)?;
-                if !r.old() {
-                    r.skip(2)?;
-                }
-                let [left, right, top, bottom, near, far] = r.floats()?;
-                let orthographic = !r.old() && r.bool()?;
-                r.skip(5 * 4 + 4 + 4 + 4)?;
-                Object::Camera(Camera {
-                    av,
-                    left,
-                    right,
-                    top,
-                    bottom,
-                    near,
-                    far,
-                    orthographic,
-                })
-            }
-            "NiTextKeyExtraData" => {
-                let name = extra_data_name(r)?;
-                if r.netimmerse() {
-                    r.u32()?;
-                }
-                let n = r.u32()? as usize;
-                // Each key takes at least eight bytes.
-                r.ensure(n.saturating_mul(8))?;
-                let keys = (0..n)
-                    .map(|_| {
-                        Ok(TextKey {
-                            time: r.f32()?,
-                            text: r.string()?,
-                        })
-                    })
-                    .collect::<Result<_>>()?;
-                Object::TextKeys(TextKeys { name, keys })
-            }
-            "NiControllerSequence" => {
-                let name = r.string()?;
-                let accumulation_root = r.string()?;
-                let text_keys = r.reference()?;
-                let n = r.u32()? as usize;
-                r.ensure(n.saturating_mul(8))?;
-                let blocks = (0..n)
-                    .map(|_| {
-                        Ok(ControlledBlock {
-                            target: r.string()?,
-                            controller: r.reference()?,
-                        })
-                    })
-                    .collect::<Result<_>>()?;
-                Object::Sequence(Sequence {
-                    name,
-                    accumulation_root,
-                    text_keys,
-                    blocks,
-                })
-            }
+            | "NiBinaryExtraData" | "NiStringsExtraData" => Object::ExtraData(extra_data(kind, r)?),
+            "NiCamera" => Object::Camera(camera(r)?),
+            "NiTextKeyExtraData" => Object::TextKeys(text_keys(r)?),
+            "NiControllerSequence" => Object::Sequence(sequence(r)?),
             "NiKeyframeController" | "NiAlphaController" => {
-                let c = time_controller(r)?;
-                Object::Controller(Controller {
-                    kind: match kind {
-                        "NiKeyframeController" => ControllerKind::Keyframe,
-                        _ => ControllerKind::Alpha,
-                    },
-                    data: r.reference()?,
-                    ..c
-                })
+                Object::Controller(data_controller(kind, r)?)
             }
-            "NiKeyframeData" => {
-                let n = r.u32()? as usize;
-                let rotation = match n {
-                    0 => Rotation::default(),
-                    _ => match r.u32()? {
-                        4 => {
-                            r.f32()?;
-                            Rotation::Euler([key_group(r)?, key_group(r)?, key_group(r)?])
-                        }
-                        // Rotations have no tangents, only TCB values.
-                        kind => Rotation::Quaternion(keys(r, n, interpolation(kind)?, false)?),
-                    },
-                };
-                Object::Keyframes(Keyframes {
-                    rotation,
-                    translation: key_group(r)?,
-                    scale: key_group(r)?,
-                })
-            }
+            "NiKeyframeData" => Object::Keyframes(keyframes(r)?),
             "NiFloatData" => Object::Floats(key_group(r)?),
-            "NiSkinInstance" => Object::SkinInstance(SkinInstance {
-                data: r.reference()?,
-                skeleton_root: r.reference()?,
-                bones: r.references()?,
-            }),
-            "NiSkinData" => {
-                let transform = bone_transform(r)?;
-                let n = r.u32()? as usize;
-                let partition = r.reference()?;
-                let has_weights = r.bool()?;
-                // Each bone takes at least 70 bytes.
-                r.ensure(n.saturating_mul(70))?;
-                let bones = (0..n)
-                    .map(|_| {
-                        let transform = bone_transform(r)?;
-                        let bound = r.floats()?;
-                        let n = r.u16()? as usize;
-                        let weights = match has_weights {
-                            true => (0..n)
-                                .map(|_| Ok((r.u16()?, r.f32()?)))
-                                .collect::<Result<_>>()?,
-                            false => Vec::new(),
-                        };
-                        Ok(Bone {
-                            transform,
-                            bound,
-                            weights,
-                        })
-                    })
-                    .collect::<Result<_>>()?;
-                Object::SkinData(SkinData {
-                    transform,
-                    partition,
-                    bones,
-                })
-            }
-            "NiSkinPartition" => {
-                for _ in 0..r.u32()? {
-                    let [v, t, bones, strips, w] = r.u16_array::<5>(1)?[0].map(usize::from);
-                    r.skip(bones * 2)?;
-                    if r.old() || r.bool()? {
-                        r.skip(v * 2)?;
-                    }
-                    if r.old() || r.bool()? {
-                        r.skip(v * w * 4)?;
-                    }
-                    let lengths = r.u16s(strips)?;
-                    if r.old() || r.bool()? {
-                        let points = match strips {
-                            0 => t * 3,
-                            _ => lengths.iter().map(|&n| n as usize).sum(),
-                        };
-                        r.skip(points * 2)?;
-                    }
-                    if r.bool()? {
-                        r.skip(v * w)?;
-                    }
-                }
-                other()
-            }
-            "NiDitherProperty" => {
-                named(r)?;
-                r.u16()?;
-                other()
-            }
-            "NiAmbientLight" | "NiPointLight" => {
-                scene(r)?;
-                if !r.old() {
-                    r.references()?; // affected nodes
-                }
-                r.floats::<10>()?;
-                if kind == "NiPointLight" {
-                    r.floats::<3>()?;
-                }
-                other()
-            }
-            "NiVisController" => {
-                let c = time_controller(r)?;
-                r.reference()?;
-                Object::Controller(c)
-            }
-            "NiPSysUpdateCtlr" => Object::Controller(Controller {
-                kind: ControllerKind::ParticleUpdate,
-                ..time_controller(r)?
-            }),
+            "NiSkinInstance" => Object::SkinInstance(skin_instance(r)?),
+            "NiSkinData" => Object::SkinData(skin_data(r)?),
+            "NiSkinPartition" => skin_partition(kind, r)?,
+            "NiAmbientLight" | "NiPointLight" => light(kind, r)?,
+            "NiVisController" => Object::Controller(vis_controller(r)?),
+            "NiPSysUpdateCtlr" => Object::Controller(particle_update_controller(r)?),
             "NiLookAtController" | "NiMaterialColorController" | "NiLightColorController" => {
-                let c = time_controller(r)?;
-                if !r.old() {
-                    r.u16()?;
-                }
-                r.reference()?;
-                Object::Controller(c)
+                Object::Controller(flagged_controller(r)?)
             }
-            "NiPathController" => {
-                let (c, stored) = stored_time_controller(r)?;
-                let flags = if r.old() { stored >> 4 } else { r.u16()? };
-                let bank_direction = r.u32()? as i32;
-                let [max_bank, smoothing] = r.floats()?;
-                let follow_axis = r.u16()? as i16;
-                let positions = r.reference()?;
-                Object::Controller(Controller {
-                    kind: ControllerKind::Path(PathSettings {
-                        flags,
-                        bank_direction,
-                        max_bank,
-                        smoothing,
-                        follow_axis,
-                        positions,
-                    }),
-                    data: r.reference()?,
-                    ..c
-                })
-            }
-            "NiTextureTransformController" => {
-                let c = time_controller(r)?;
-                let shader_map = r.bool()?;
-                let slot = r.u32()?;
-                let change = match r.u32()? {
-                    0 => Some(TextureChange::OffsetU),
-                    1 => Some(TextureChange::OffsetV),
-                    2 => Some(TextureChange::Turn),
-                    3 => Some(TextureChange::ScaleU),
-                    4 => Some(TextureChange::ScaleV),
-                    _ => None,
-                };
-                let data = r.reference()?;
-                match change.filter(|_| !shader_map) {
-                    Some(change) => Object::Controller(Controller {
-                        kind: ControllerKind::Texture { slot, change },
-                        data,
-                        ..c
-                    }),
-                    None => Object::Controller(c),
-                }
-            }
-            "NiFlipController" => {
-                let c = time_controller(r)?;
-                r.skip(4 + 4 + 4)?;
-                r.references()?;
-                Object::Controller(c)
-            }
+            "NiPathController" => Object::Controller(path_controller(r)?),
+            "NiTextureTransformController" => Object::Controller(texture_controller(r)?),
+            "NiFlipController" => Object::Controller(flip_controller(r)?),
             "NiPosData" => Object::Positions(key_group(r)?),
             "NiColorData" => Object::Colors(key_group(r)?),
             "NiVisData" => Object::Visibility(bool_keys(r)?),
             "NiParticles" | "NiRotatingParticles" | "NiParticleMeshes" => {
                 Object::OldParticles(OldParticles { shape: shape(r)? })
             }
-            "NiParticleSystem" => Object::ParticleSystem(ParticleSystem {
-                shape: shape(r)?,
-                world_space: r.bool()?,
-                modifiers: r.references()?,
-            }),
+            "NiParticleSystem" => Object::ParticleSystem(particle_system(r)?),
             "NiParticlesData" | "NiRotatingParticlesData" | "NiParticleMeshesData" => {
-                let (n, mut data) = particles_data(r)?;
-                if kind == "NiRotatingParticlesData" && r.netimmerse() && r.bool()? {
-                    data.rotations = r.float_array(n)?;
-                }
-                let kind = match kind {
-                    "NiParticlesData" => OldParticleKind::Points,
-                    "NiRotatingParticlesData" => OldParticleKind::Rotating,
-                    _ => OldParticleKind::Meshes {
-                        node: r.reference()?,
-                    },
-                };
-                Object::OldParticleData(OldParticleData { kind, ..data })
+                Object::OldParticleData(old_particle_data(kind, r)?)
             }
-            "NiPSysData" => {
-                let (n, _) = particles_data(r)?;
-                r.skip(n * 40)?; // particle info
-                r.skip(2 + 2)?;
-                Object::ParticleData(ParticleData { capacity: n })
-            }
+            "NiPSysData" => Object::ParticleData(particle_data(r)?),
             "NiParticleSystemController" => {
                 Object::OldParticleController(old_particle_controller(r)?)
             }
@@ -638,34 +228,7 @@ impl Object {
             | "NiParticleColorModifier"
             | "NiParticleGrowFade"
             | "NiParticleRotation"
-            | "NiParticleMeshModifier" => Object::OldModifier(OldModifier {
-                next: r.reference()?,
-                controller: r.reference()?,
-                kind: match kind {
-                    "NiGravity" => OldModifierKind::Gravity {
-                        decay: r.f32()?,
-                        strength: r.f32()?,
-                        force: r.u32()?,
-                        position: r.floats()?,
-                        direction: r.floats()?,
-                    },
-                    "NiParticleColorModifier" => OldModifierKind::Color {
-                        data: r.reference()?,
-                    },
-                    "NiParticleGrowFade" => OldModifierKind::GrowFade {
-                        grow: r.f32()?,
-                        fade: r.f32()?,
-                    },
-                    "NiParticleRotation" => OldModifierKind::Rotation {
-                        random_axis: r.bool()?,
-                        axis: r.floats()?,
-                        speed: r.f32()?,
-                    },
-                    _ => OldModifierKind::Meshes {
-                        meshes: r.references()?,
-                    },
-                },
-            }),
+            | "NiParticleMeshModifier" => Object::OldModifier(old_modifier(kind, r)?),
             "NiPSysAgeDeathModifier"
             | "NiPSysBoundUpdateModifier"
             | "NiPSysColliderManager"
@@ -680,51 +243,579 @@ impl Object {
             | "NiPSysCylinderEmitter"
             | "NiPSysSphereEmitter"
             | "NiPSysMeshEmitter" => Object::Modifier(modifier(kind, r)?),
-            "NiPSysPlanarCollider" | "NiPSysSphericalCollider" => Object::Collider(Collider {
-                bounce: r.f32()?,
-                spawn_on_collide: r.bool()?,
-                die_on_collide: r.bool()?,
-                spawn: r.reference()?,
-                manager: r.reference()?,
-                next: r.reference()?,
-                object: r.reference()?,
-                shape: if kind == "NiPSysPlanarCollider" {
-                    ColliderShape::Plane {
-                        width: r.f32()?,
-                        height: r.f32()?,
-                        x_axis: r.floats()?,
-                        y_axis: r.floats()?,
-                    }
-                } else {
-                    ColliderShape::Sphere { radius: r.f32()? }
-                },
-            }),
+            "NiPSysPlanarCollider" | "NiPSysSphericalCollider" => {
+                Object::Collider(collider(kind, r)?)
+            }
             "NiPSysEmitterCtlr"
             | "NiPSysModifierActiveCtlr"
             | "NiPSysEmitterInitialRadiusCtlr"
-            | "NiPSysEmitterSpeedCtlr" => {
-                let kind = match kind {
-                    "NiPSysEmitterCtlr" => ControllerKind::Emitter,
-                    "NiPSysModifierActiveCtlr" => ControllerKind::ModifierActive,
-                    "NiPSysEmitterInitialRadiusCtlr" => ControllerKind::EmitterInitialRadius,
-                    _ => ControllerKind::EmitterSpeed,
-                };
-                let c = time_controller(r)?;
-                Object::Controller(Controller {
-                    kind,
-                    modifier: r.string()?,
-                    data: r.reference()?,
-                    ..c
-                })
-            }
-            "NiPSysEmitterCtlrData" => Object::EmitterKeys(EmitterKeys {
-                birth_rate: key_group(r)?,
-                active: bool_keys(r)?,
-            }),
+            | "NiPSysEmitterSpeedCtlr" => Object::Controller(particle_controller(kind, r)?),
+            "NiPSysEmitterCtlrData" => Object::EmitterKeys(emitter_keys(r)?),
             _ => return Ok(None),
         }))
     }
 }
+
+fn node(kind: &str, r: &mut Reader) -> Result<Node> {
+    let av = scene(r)?;
+    let children = r.references()?;
+    r.references()?; // effects
+    let billboard = match kind {
+        "NiBillboardNode" if !r.old() => Some(r.u16()?),
+        "NiBillboardNode" => Some(0),
+        _ => None,
+    };
+    Ok(Node {
+        av,
+        children,
+        billboard,
+    })
+}
+
+fn tri_shape_data(r: &mut Reader) -> Result<Geometry> {
+    let (_, mut g) = geometry(r)?;
+    let count = r.u16()? as usize;
+    r.u32()?;
+    if r.old() || r.bool()? {
+        g.triangles = r.u16_array(count)?;
+    }
+    for _ in 0..r.u16()? {
+        let n = r.u16()? as usize;
+        r.skip(n * 2)?;
+    }
+    Ok(g)
+}
+
+fn tri_strips_data(r: &mut Reader) -> Result<Geometry> {
+    let (_, mut g) = geometry(r)?;
+    r.u16()?;
+    let strips = r.u16()? as usize;
+    let lengths = r.u16s(strips)?;
+    if r.old() || r.bool()? {
+        for len in lengths {
+            let points = r.u16s(len as usize)?;
+            g.triangles.extend(strip_triangles(&points));
+        }
+    }
+    Ok(g)
+}
+
+fn texturing(r: &mut Reader) -> Result<Texturing> {
+    let (_, _, controller) = named(r)?;
+    if r.old() {
+        r.u16()?;
+    }
+    let apply_mode = r.u32()?;
+    let count = r.u32()?;
+    let mut slot = || r.bool()?.then(|| texture_slot(r)).transpose();
+    let base = slot()?;
+    let dark = slot()?;
+    let detail = slot()?;
+    let gloss = slot()?;
+    let glow = slot()?;
+    if count > 5 && r.bool()? {
+        texture_slot(r)?;
+        r.floats::<6>()?;
+    }
+    for decal in 0..4 {
+        if count > 6 + decal && r.bool()? {
+            texture_slot(r)?;
+        }
+    }
+    let shader_maps = if r.netimmerse() { 0 } else { r.u32()? };
+    for _ in 0..shader_maps {
+        if r.bool()? {
+            texture_slot(r)?;
+            r.u32()?;
+        }
+    }
+    Ok(Texturing {
+        controller,
+        apply_mode,
+        base,
+        dark,
+        detail,
+        gloss,
+        glow,
+    })
+}
+
+fn source_texture(r: &mut Reader) -> Result<SourceTexture> {
+    named(r)?;
+    let external = r.u8()? == 1;
+    let (file, pixels) = if !r.old() {
+        (r.string()?, r.reference()?)
+    } else if external {
+        (r.string()?, None)
+    } else if r.u8()? != 0 {
+        (String::new(), r.reference()?)
+    } else {
+        (String::new(), None)
+    };
+    r.skip(13)?;
+    Ok(SourceTexture {
+        file: external.then_some(file),
+        pixels,
+    })
+}
+
+fn pixels(r: &mut Reader) -> Result<Pixels> {
+    let format = r.u32()?;
+    r.skip(5 * 4 + 8)?;
+    if !r.old() {
+        r.u32()?;
+    }
+    r.reference()?;
+    let count = r.u32()?;
+    r.u32()?;
+    let mipmaps = (0..count)
+        .map(|_| Ok([r.u32()?, r.u32()?, r.u32()?]))
+        .collect::<Result<_>>()?;
+    let n = r.u32()? as usize;
+    let data = r.bytes(n)?.to_vec();
+    Ok(Pixels {
+        format,
+        mipmaps,
+        data,
+    })
+}
+
+fn material(r: &mut Reader) -> Result<Material> {
+    let (_, _, controller) = named(r)?;
+    if r.old() {
+        r.u16()?;
+    }
+    Ok(Material {
+        controller,
+        ambient: r.floats()?,
+        diffuse: r.floats()?,
+        specular: r.floats()?,
+        emissive: r.floats()?,
+        glossiness: r.f32()?,
+        alpha: r.f32()?,
+    })
+}
+
+fn alpha(r: &mut Reader) -> Result<Alpha> {
+    named(r)?;
+    Ok(Alpha {
+        flags: r.u16()?,
+        threshold: r.u8()?,
+    })
+}
+
+fn stencil(r: &mut Reader) -> Result<Stencil> {
+    named(r)?;
+    if r.old() {
+        r.u16()?;
+    }
+    r.skip(1 + 6 * 4)?;
+    Ok(Stencil {
+        draw_mode: r.u32()?,
+    })
+}
+
+fn z_buffer(r: &mut Reader) -> Result<ZBuffer> {
+    named(r)?;
+    Ok(ZBuffer {
+        flags: r.u16()?,
+        function: r.u32()?,
+    })
+}
+
+fn vertex_color(r: &mut Reader) -> Result<VertexColor> {
+    named(r)?;
+    r.skip(2)?;
+    Ok(VertexColor {
+        vertex_mode: r.u32()?,
+        lighting: r.u32()?,
+    })
+}
+
+/// Steps over a property that holds only flags.
+fn flags_property(kind: &str, r: &mut Reader) -> Result<Object> {
+    named(r)?;
+    r.u16()?;
+    Ok(Object::Other(kind.to_string()))
+}
+
+fn extra_data(kind: &str, r: &mut Reader) -> Result<ExtraData> {
+    let name = extra_data_name(r)?;
+    let value = match kind {
+        "NiStringExtraData" => {
+            if r.netimmerse() {
+                r.u32()?;
+            }
+            ExtraValue::String(r.string()?)
+        }
+        "NiIntegerExtraData" => ExtraValue::Integer(r.u32()?),
+        "NiBooleanExtraData" => ExtraValue::Boolean(r.bool()?),
+        "NiBinaryExtraData" => {
+            let n = r.u32()? as usize;
+            ExtraValue::Binary(r.bytes(n)?.to_vec())
+        }
+        _ => {
+            let n = r.u32()?;
+            ExtraValue::Strings((0..n).map(|_| r.string()).collect::<Result<_>>()?)
+        }
+    };
+    Ok(ExtraData { name, value })
+}
+
+fn camera(r: &mut Reader) -> Result<Camera> {
+    let av = scene(r)?;
+    if !r.old() {
+        r.skip(2)?;
+    }
+    let [left, right, top, bottom, near, far] = r.floats()?;
+    let orthographic = !r.old() && r.bool()?;
+    r.skip(5 * 4 + 4 + 4 + 4)?;
+    Ok(Camera {
+        av,
+        left,
+        right,
+        top,
+        bottom,
+        near,
+        far,
+        orthographic,
+    })
+}
+
+fn text_keys(r: &mut Reader) -> Result<TextKeys> {
+    let name = extra_data_name(r)?;
+    if r.netimmerse() {
+        r.u32()?;
+    }
+    let n = r.u32()? as usize;
+    // Each key takes at least eight bytes.
+    r.ensure(n.saturating_mul(8))?;
+    let keys = (0..n)
+        .map(|_| {
+            Ok(TextKey {
+                time: r.f32()?,
+                text: r.string()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(TextKeys { name, keys })
+}
+
+fn sequence(r: &mut Reader) -> Result<Sequence> {
+    let name = r.string()?;
+    let accumulation_root = r.string()?;
+    let text_keys = r.reference()?;
+    let n = r.u32()? as usize;
+    r.ensure(n.saturating_mul(8))?;
+    let blocks = (0..n)
+        .map(|_| {
+            Ok(ControlledBlock {
+                target: r.string()?,
+                controller: r.reference()?,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(Sequence {
+        name,
+        accumulation_root,
+        text_keys,
+        blocks,
+    })
+}
+
+/// A keyframe or alpha controller, which add only their data.
+fn data_controller(kind: &str, r: &mut Reader) -> Result<Controller> {
+    let c = time_controller(r)?;
+    Ok(Controller {
+        kind: match kind {
+            "NiKeyframeController" => ControllerKind::Keyframe,
+            _ => ControllerKind::Alpha,
+        },
+        data: r.reference()?,
+        ..c
+    })
+}
+
+fn keyframes(r: &mut Reader) -> Result<Keyframes> {
+    let n = r.u32()? as usize;
+    let rotation = match n {
+        0 => Rotation::default(),
+        _ => match r.u32()? {
+            4 => {
+                r.f32()?;
+                Rotation::Euler([key_group(r)?, key_group(r)?, key_group(r)?])
+            }
+            // Rotations have no tangents, only TCB values.
+            kind => Rotation::Quaternion(keys(r, n, interpolation(kind)?, false)?),
+        },
+    };
+    Ok(Keyframes {
+        rotation,
+        translation: key_group(r)?,
+        scale: key_group(r)?,
+    })
+}
+
+fn skin_instance(r: &mut Reader) -> Result<SkinInstance> {
+    Ok(SkinInstance {
+        data: r.reference()?,
+        skeleton_root: r.reference()?,
+        bones: r.references()?,
+    })
+}
+
+fn skin_data(r: &mut Reader) -> Result<SkinData> {
+    let transform = bone_transform(r)?;
+    let n = r.u32()? as usize;
+    let partition = r.reference()?;
+    let has_weights = r.bool()?;
+    // Each bone takes at least 70 bytes.
+    r.ensure(n.saturating_mul(70))?;
+    let bones = (0..n)
+        .map(|_| {
+            let transform = bone_transform(r)?;
+            let bound = r.floats()?;
+            let n = r.u16()? as usize;
+            let weights = match has_weights {
+                true => (0..n)
+                    .map(|_| Ok((r.u16()?, r.f32()?)))
+                    .collect::<Result<_>>()?,
+                false => Vec::new(),
+            };
+            Ok(Bone {
+                transform,
+                bound,
+                weights,
+            })
+        })
+        .collect::<Result<_>>()?;
+    Ok(SkinData {
+        transform,
+        partition,
+        bones,
+    })
+}
+
+fn skin_partition(kind: &str, r: &mut Reader) -> Result<Object> {
+    for _ in 0..r.u32()? {
+        let [v, t, bones, strips, w] = r.u16_array::<5>(1)?[0].map(usize::from);
+        r.skip(bones * 2)?;
+        if r.old() || r.bool()? {
+            r.skip(v * 2)?;
+        }
+        if r.old() || r.bool()? {
+            r.skip(v * w * 4)?;
+        }
+        let lengths = r.u16s(strips)?;
+        if r.old() || r.bool()? {
+            let points = match strips {
+                0 => t * 3,
+                _ => lengths.iter().map(|&n| n as usize).sum(),
+            };
+            r.skip(points * 2)?;
+        }
+        if r.bool()? {
+            r.skip(v * w)?;
+        }
+    }
+    Ok(Object::Other(kind.to_string()))
+}
+
+fn light(kind: &str, r: &mut Reader) -> Result<Object> {
+    scene(r)?;
+    if !r.old() {
+        r.references()?; // affected nodes
+    }
+    r.floats::<10>()?;
+    if kind == "NiPointLight" {
+        r.floats::<3>()?;
+    }
+    Ok(Object::Other(kind.to_string()))
+}
+
+fn vis_controller(r: &mut Reader) -> Result<Controller> {
+    let c = time_controller(r)?;
+    r.reference()?;
+    Ok(c)
+}
+
+fn particle_update_controller(r: &mut Reader) -> Result<Controller> {
+    Ok(Controller {
+        kind: ControllerKind::ParticleUpdate,
+        ..time_controller(r)?
+    })
+}
+
+/// A look-at, material colour or light colour controller.
+fn flagged_controller(r: &mut Reader) -> Result<Controller> {
+    let c = time_controller(r)?;
+    if !r.old() {
+        r.u16()?;
+    }
+    r.reference()?;
+    Ok(c)
+}
+
+fn path_controller(r: &mut Reader) -> Result<Controller> {
+    let (c, stored) = stored_time_controller(r)?;
+    let flags = if r.old() { stored >> 4 } else { r.u16()? };
+    let bank_direction = r.u32()? as i32;
+    let [max_bank, smoothing] = r.floats()?;
+    let follow_axis = r.u16()? as i16;
+    let positions = r.reference()?;
+    Ok(Controller {
+        kind: ControllerKind::Path(PathSettings {
+            flags,
+            bank_direction,
+            max_bank,
+            smoothing,
+            follow_axis,
+            positions,
+        }),
+        data: r.reference()?,
+        ..c
+    })
+}
+
+fn texture_controller(r: &mut Reader) -> Result<Controller> {
+    let c = time_controller(r)?;
+    let shader_map = r.bool()?;
+    let slot = r.u32()?;
+    let change = match r.u32()? {
+        0 => Some(TextureChange::OffsetU),
+        1 => Some(TextureChange::OffsetV),
+        2 => Some(TextureChange::Turn),
+        3 => Some(TextureChange::ScaleU),
+        4 => Some(TextureChange::ScaleV),
+        _ => None,
+    };
+    let data = r.reference()?;
+    Ok(match change.filter(|_| !shader_map) {
+        Some(change) => Controller {
+            kind: ControllerKind::Texture { slot, change },
+            data,
+            ..c
+        },
+        None => c,
+    })
+}
+
+fn flip_controller(r: &mut Reader) -> Result<Controller> {
+    let c = time_controller(r)?;
+    r.skip(4 + 4 + 4)?;
+    r.references()?;
+    Ok(c)
+}
+
+fn particle_system(r: &mut Reader) -> Result<ParticleSystem> {
+    Ok(ParticleSystem {
+        shape: shape(r)?,
+        world_space: r.bool()?,
+        modifiers: r.references()?,
+    })
+}
+
+fn old_particle_data(kind: &str, r: &mut Reader) -> Result<OldParticleData> {
+    let (n, mut data) = particles_data(r)?;
+    if kind == "NiRotatingParticlesData" && r.netimmerse() && r.bool()? {
+        data.rotations = r.float_array(n)?;
+    }
+    let kind = match kind {
+        "NiParticlesData" => OldParticleKind::Points,
+        "NiRotatingParticlesData" => OldParticleKind::Rotating,
+        _ => OldParticleKind::Meshes {
+            node: r.reference()?,
+        },
+    };
+    Ok(OldParticleData { kind, ..data })
+}
+
+fn particle_data(r: &mut Reader) -> Result<ParticleData> {
+    let (n, _) = particles_data(r)?;
+    r.skip(n * PARTICLE_INFO_SIZE)?;
+    r.skip(2 + 2)?;
+    Ok(ParticleData { capacity: n })
+}
+
+fn old_modifier(kind: &str, r: &mut Reader) -> Result<OldModifier> {
+    Ok(OldModifier {
+        next: r.reference()?,
+        controller: r.reference()?,
+        kind: match kind {
+            "NiGravity" => OldModifierKind::Gravity {
+                decay: r.f32()?,
+                strength: r.f32()?,
+                force: r.u32()?,
+                position: r.floats()?,
+                direction: r.floats()?,
+            },
+            "NiParticleColorModifier" => OldModifierKind::Color {
+                data: r.reference()?,
+            },
+            "NiParticleGrowFade" => OldModifierKind::GrowFade {
+                grow: r.f32()?,
+                fade: r.f32()?,
+            },
+            "NiParticleRotation" => OldModifierKind::Rotation {
+                random_axis: r.bool()?,
+                axis: r.floats()?,
+                speed: r.f32()?,
+            },
+            _ => OldModifierKind::Meshes {
+                meshes: r.references()?,
+            },
+        },
+    })
+}
+
+fn collider(kind: &str, r: &mut Reader) -> Result<Collider> {
+    Ok(Collider {
+        bounce: r.f32()?,
+        spawn_on_collide: r.bool()?,
+        die_on_collide: r.bool()?,
+        spawn: r.reference()?,
+        manager: r.reference()?,
+        next: r.reference()?,
+        object: r.reference()?,
+        shape: if kind == "NiPSysPlanarCollider" {
+            ColliderShape::Plane {
+                width: r.f32()?,
+                height: r.f32()?,
+                x_axis: r.floats()?,
+                y_axis: r.floats()?,
+            }
+        } else {
+            ColliderShape::Sphere { radius: r.f32()? }
+        },
+    })
+}
+
+/// A controller of a particle system's modifier.
+fn particle_controller(kind: &str, r: &mut Reader) -> Result<Controller> {
+    let kind = match kind {
+        "NiPSysEmitterCtlr" => ControllerKind::Emitter,
+        "NiPSysModifierActiveCtlr" => ControllerKind::ModifierActive,
+        "NiPSysEmitterInitialRadiusCtlr" => ControllerKind::EmitterInitialRadius,
+        _ => ControllerKind::EmitterSpeed,
+    };
+    let c = time_controller(r)?;
+    Ok(Controller {
+        kind,
+        modifier: r.string()?,
+        data: r.reference()?,
+        ..c
+    })
+}
+
+fn emitter_keys(r: &mut Reader) -> Result<EmitterKeys> {
+    Ok(EmitterKeys {
+        birth_rate: key_group(r)?,
+        active: bool_keys(r)?,
+    })
+}
+
+/// The size of a particle info record, as laid out in the module docs.
+pub(crate) const PARTICLE_INFO_SIZE: usize = 40;
 
 /// The fields every controller starts with, as a controller of a kind not
 /// read further.
@@ -794,7 +885,7 @@ fn old_particle_controller(r: &mut Reader) -> Result<OldParticleController> {
     let [spawn_speed_chaos, spawn_direction_chaos] = r.floats()?;
     let n = r.u16()? as usize;
     let valid = r.u16()?;
-    r.ensure(n * 40)?;
+    r.ensure(n * PARTICLE_INFO_SIZE)?;
     let particles = (0..n)
         .map(|_| {
             Ok(SavedParticle {
@@ -1065,17 +1156,24 @@ fn shape(r: &mut Reader) -> Result<Shape> {
     Ok(Shape { av, data, skin })
 }
 
+/// How deep bounding volumes may nest in a union, so a corrupt file can't
+/// overflow the stack; none of the game's files nest them at all.
+const MAX_BOUNDING_DEPTH: usize = 8;
+
 fn bounding_volume(r: &mut Reader, depth: usize) -> Result<()> {
     match r.u32()? {
         0 => r.skip(4 * 4),
         1 => r.skip(15 * 4),
         2 => r.skip(8 * 4),
-        4 if depth < 8 => {
+        4 if depth < MAX_BOUNDING_DEPTH => {
             for _ in 0..r.u32()? {
                 bounding_volume(r, depth + 1)?;
             }
             Ok(())
         }
+        4 => Err(Error::Corrupt(format!(
+            "bounding volumes nested over {MAX_BOUNDING_DEPTH} deep"
+        ))),
         5 => r.skip(7 * 4),
         kind => Err(Error::Corrupt(format!("unknown bounding volume {kind}"))),
     }
