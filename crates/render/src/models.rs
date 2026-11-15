@@ -451,7 +451,7 @@ enum Placed {
 /// Loads models and textures once each, however many objects use them.
 pub struct Models {
     /// What every model, texture and clip is read from.
-    game: Arc<GameData>,
+    pub(crate) game: Arc<GameData>,
     pub(crate) views: HashMap<Id, Option<View>>,
     /// The faces the object display shows, by id.
     pub(crate) portraits: HashMap<Id, Portrait>,
