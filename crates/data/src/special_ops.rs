@@ -226,8 +226,8 @@ impl GameData {
     /// How a side's experience starts and grows: the match's Starting
     /// Experience setting and the tuning's gain a second.
     pub fn experience_rules(&self) -> ExperienceRules {
-        let files =
-            self.parse_tgis(|n| n == "game/world_rules_aa.tgi" || n.starts_with("templates/"));
+        let own = self.own_version("Game/world_rules.tgi");
+        let files = self.parse_tgis(|n| own.as_deref() == Some(n) || n.starts_with("templates/"));
         let starting = (scoped(&files).iter())
             .flat_map(|f| f.read::<defs::WorldRule>("WorldRule").collect::<Vec<_>>())
             .find(|r| {

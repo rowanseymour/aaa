@@ -88,10 +88,11 @@ impl GameData {
     /// The match's fog setting: the world rule's default, the game's own
     /// before the engine's, else the tuning value.
     pub fn fog_setting(&self) -> FogSetting {
-        let files =
-            self.parse_tgis(|n| n == "game/world_rules_aa.tgi" || n == "game/world_rules.tgi");
+        let versions = self.versions("Game/world_rules.tgi");
+        let files = self.parse_tgis(|n| versions.iter().any(|v| v == n));
         let mut files = scoped(&files);
-        files.sort_by_key(|f| !f.file.to_ascii_lowercase().ends_with("_aa.tgi"));
+        let lower = |f: &str| f.to_ascii_lowercase();
+        files.sort_by_key(|f| versions.iter().position(|v| *v == lower(f.file)));
         let rule = files
             .iter()
             .flat_map(|f| f.read::<defs::WorldRule>("WorldRule"))

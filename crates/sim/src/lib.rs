@@ -631,11 +631,11 @@ impl Commission {
 }
 
 /// Why a building's queue is held up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Pause {
     /// Its owner hasn't room under a limit, such as `unit_limit_consumed`,
     /// for the first of the queue.
-    Limit(&'static str),
+    Limit(Id),
     Disabled,
     /// It passes supply on and has none.
     Supply,
@@ -1156,8 +1156,8 @@ impl Digest for Work {
 
 impl Digest for Pause {
     fn digest(&self, h: &mut Hasher) {
-        match *self {
-            Pause::Limit(limit) => (0u8, limit).digest(h),
+        match self {
+            Pause::Limit(limit) => (0u8, limit.as_str()).digest(h),
             Pause::Disabled => 1u8.digest(h),
             Pause::Supply => 2u8.digest(h),
         }

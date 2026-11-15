@@ -38,7 +38,7 @@ pub use audio::{
 pub use combat::{
     AimHeights, Body, Damage, Fighter, Flight, FlightKind, Shape, Targets, Turret, Weapon,
 };
-pub use economy::{Amounts, Economy, EconomyRules, Logistics, RESOURCES, Supply};
+pub use economy::{Amounts, Economy, EconomyRules, Logistics, ResourceKind, ResourceRole, Supply};
 pub use effects::{
     Decal, HealthCue, HealthTrigger, ObjectEffects, Vfx, VfxCue, VfxTint, WeaponEffects,
 };
@@ -57,7 +57,7 @@ pub use recruiting::{
 };
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, SpecialOperation};
-pub use strings::{PingLook, Strings, resource_name};
+pub use strings::{PingLook, Strings};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
@@ -85,6 +85,9 @@ pub struct GameData {
     /// The archive paths of the `.tgi` files the game loads, in the order
     /// it loads them.
     tgis: Vec<String>,
+    /// What the game's own versions of the files every game has are named
+    /// with, as [`game_tag`] finds it.
+    tag: Option<String>,
     /// Each `.tgi` file read, parsed, by lower-case path, kept as long as
     /// this is: tables are often built from the same files.
     parsed: Mutex<HashMap<String, Arc<tgi::Parsed>>>,
@@ -278,10 +281,12 @@ impl GameData {
             entries,
             paths,
             tgis: Vec::new(),
+            tag: None,
             parsed: Mutex::default(),
             tables: Mutex::default(),
         };
         let names: Vec<String> = game.entries().map(str::to_string).collect();
+        game.tag = game_tag(&names);
         let tgis = listed_tgis(&names, |name| game.read(name).map(|b| tgi::decode(&b)));
         game.tgis = tgis;
         Ok(game)
@@ -321,6 +326,25 @@ impl GameData {
         (names.into_iter())
             .filter_map(|n| Some((n.to_string(), self.parsed(n)?)))
             .collect()
+    }
+
+    /// A file every game has, lower-case, after the game's own version of
+    /// it, which takes precedence: `Game/SVars.tgi` gives
+    /// `game/svars_aa.tgi` then `game/svars.tgi` for AA.
+    pub(crate) fn versions(&self, file: &str) -> Vec<String> {
+        let file = file.to_ascii_lowercase();
+        let own = self.tag.as_ref().and_then(|tag| {
+            let (stem, ext) = file.rsplit_once('.')?;
+            Some(format!("{stem}_{tag}.{ext}"))
+        });
+        own.into_iter().chain([file]).collect()
+    }
+
+    /// The game's own version of a file every game has, lower-case, as
+    /// [`GameData::versions`] names it.
+    pub(crate) fn own_version(&self, file: &str) -> Option<String> {
+        let mut versions = self.versions(file);
+        (versions.len() > 1).then(|| versions.remove(0))
     }
 
     /// What `build` makes, made the first time `key` is asked for and kept.
@@ -586,6 +610,26 @@ pub(crate) fn renamed(renames: &HashMap<Id, Id>, id: &Id) -> Id {
 /// the `index*.lst` lists at the archive's root name, in turn, where a line
 /// naming another list takes in its files there and then. `entries` are the
 /// archive paths, `read` gives a list's text.
+/// What a game names its own versions of the files every game has with:
+/// the part after `index_` of the load list at the top of its archives,
+/// such as `aa` for `index_aa.lst`. None where there's no such list.
+fn game_tag(entries: &[String]) -> Option<String> {
+    let mut tags: Vec<String> = (entries.iter())
+        .filter(|n| !n.contains('/'))
+        .filter_map(|n| {
+            let lower = n.to_ascii_lowercase();
+            let tag = lower.strip_prefix("index_")?.strip_suffix(".lst")?;
+            (!tag.is_empty()).then(|| tag.to_string())
+        })
+        .collect();
+    tags.sort_unstable();
+    tags.dedup();
+    if tags.len() > 1 {
+        log::warn!("load lists for more than one game: {}", tags.join(", "));
+    }
+    tags.into_iter().next()
+}
+
 fn listed_tgis(entries: &[String], mut read: impl FnMut(&str) -> Option<String>) -> Vec<String> {
     let mut roots: Vec<&str> = entries
         .iter()
@@ -817,9 +861,34 @@ mod tests {
             entries: Vec::new(),
             paths: HashMap::new(),
             tgis: Vec::new(),
+            tag: None,
             parsed: Mutex::default(),
             tables: Mutex::default(),
         }
+    }
+
+    #[test]
+    fn a_games_own_files_are_named_by_its_load_list() {
+        let names = |of: &[&str]| of.iter().map(|n| n.to_string()).collect::<Vec<_>>();
+        let tag = game_tag(&names(&[
+            "Game/index_x.lst",
+            "templates.lst",
+            "INDEX_K2.lst",
+        ]));
+        assert_eq!(tag.as_deref(), Some("k2"));
+        assert_eq!(game_tag(&names(&["index.lst"])), None);
+        let mut game = empty();
+        assert_eq!(game.versions("Game/SVars.tgi"), ["game/svars.tgi"]);
+        assert_eq!(game.own_version("Game/SVars.tgi"), None);
+        game.tag = tag;
+        assert_eq!(
+            game.versions("Game/SVars.tgi"),
+            ["game/svars_k2.tgi", "game/svars.tgi"]
+        );
+        assert_eq!(
+            game.own_version("UVars.tgi").as_deref(),
+            Some("uvars_k2.tgi")
+        );
     }
 
     #[test]

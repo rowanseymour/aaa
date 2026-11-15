@@ -13,6 +13,7 @@ usage:
   aaa-data cues     <game dir> [filter] the audio object templates play, by what sets it off
   aaa-data effects  <game dir> [filter] the visual effects object templates show, by what sets them off
   aaa-data messages <game dir>          the kinds of message, then the game events and the lines they post
+  aaa-data resources <game dir>         the resources, with what each is for and what a shortfall of it costs
   aaa-data generals <game dir>          each nation's generals, their computer players and their special operations as tooltips show them";
 
 /// Prints the library's warnings, such as data blocks that don't read.
@@ -57,6 +58,7 @@ fn main() -> ExitCode {
         ["effects", dir, filter] => effects(dir, filter),
         ["messages", dir] => messages(dir),
         ["generals", dir] => generals(dir),
+        ["resources", dir] => resources(dir),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -85,6 +87,23 @@ macro_rules! outln {
     ($($arg:tt)*) => {
         writeln!(std::io::stdout(), $($arg)*)?
     };
+}
+
+fn resources(dir: &str) -> Res {
+    for r in GameData::open(dir.as_ref())?.resources().iter() {
+        let mut line = format!("{} ({:?}) {}", r.id, r.role, r.name);
+        if let Some(by) = &r.limited_by {
+            line += &format!(", limited by {by}");
+        }
+        let cost: Vec<String> = (r.purchase_cost.nonzero())
+            .map(|(id, a)| format!("{a} {id}"))
+            .collect();
+        if !cost.is_empty() {
+            line += &format!(", bought at {}", cost.join(" + "));
+        }
+        outln!("{line}");
+    }
+    Ok(())
 }
 
 fn coverage(dir: &str, kind: Option<&str>) -> Res {

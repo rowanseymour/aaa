@@ -11,7 +11,7 @@ pub use aaa_map::{Amounts, Economy, EconomyRules};
 use crate::{Commission, Notice, Pause, State, TICK, World};
 
 /// What a side, or one thing of it, earns and takes to keep, per minute.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Ledger {
     pub production: Amounts,
     pub upkeep: Amounts,
@@ -25,31 +25,36 @@ impl AddAssign for Ledger {
 }
 
 impl Ledger {
-    fn without(mut self, other: Ledger) -> Ledger {
-        self.production -= other.production;
-        self.upkeep -= other.upkeep;
+    fn without(mut self, other: &Ledger) -> Ledger {
+        self.production -= &other.production;
+        self.upkeep -= &other.upkeep;
         self
     }
 
     /// Where the ledger leaves a side under `rules`.
     pub fn balance(&self, rules: &EconomyRules) -> Balance {
         let money = money(rules);
-        let (production, upkeep) = (self.production, self.upkeep);
-        let mut net = production - upkeep;
-        // What's kept up beyond what's produced is bought with money.
-        let charged: f32 = (0..net.0.len())
-            .map(|i| (upkeep.0[i] - production.0[i]).max(0.0) * rules.purchase_cost.0[i])
-            .sum();
+        let (production, upkeep) = (&self.production, &self.upkeep);
+        let mut net = production.clone() - upkeep;
+        // What's kept up beyond what's produced is bought, at its price.
+        let mut charged = Amounts::default();
+        for r in &rules.resources {
+            let short = (upkeep.get(r.id.as_str()) - production.get(r.id.as_str())).max(0.0);
+            for (by, price) in r.purchase_cost.nonzero() {
+                charged.set(by.as_str(), charged.get(by.as_str()) + short * price);
+            }
+        }
+        for (by, amount) in charged.iter() {
+            net.set(by.as_str(), net.get(by.as_str()) - amount);
+        }
         let income = production.get(money);
-        let costs = upkeep.get(money) + charged;
-        net.set(money, income - costs);
+        let costs = upkeep.get(money) + charged.get(money);
         let limits = rules
-            .limits
-            .iter()
-            .map(|&(consumed, by)| Limit {
-                consumed,
-                used: upkeep.get(consumed),
-                provided: production.get(by).min(rules.limited_max),
+            .limits()
+            .map(|(consumed, by)| Limit {
+                consumed: consumed.clone(),
+                used: upkeep.get(consumed.as_str()),
+                provided: production.get(by.as_str()).min(rules.limited_max),
             })
             .collect();
         Balance {
@@ -74,10 +79,10 @@ pub struct Balance {
     pub limits: Vec<Limit>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Limit {
     /// The resource used up, such as `unit_limit_consumed`.
-    pub consumed: &'static str,
+    pub consumed: Id,
     pub used: f32,
     pub provided: f32,
 }
@@ -103,9 +108,10 @@ pub enum Change<'a> {
     Unpack(usize),
 }
 
-/// The resource stockpiled and spent, which makes up shortfalls.
-pub(crate) fn money(rules: &EconomyRules) -> &'static str {
-    rules.stockpiled.first().copied().unwrap_or("money")
+/// The resource stockpiled and spent, which makes up shortfalls: the first
+/// the data defines, as a side keeps one stockpile.
+pub(crate) fn money(rules: &EconomyRules) -> &str {
+    rules.stockpiled().next().map_or("", Id::as_str)
 }
 
 impl World {
@@ -121,7 +127,7 @@ impl World {
 
     /// A template's own economy, none for one that has none.
     pub(crate) fn economy_of(&self, template: &Id) -> Economy {
-        (self.rules.economies.get(template).copied()).unwrap_or_default()
+        (self.rules.economies.get(template).cloned()).unwrap_or_default()
     }
 
     /// What a regiment adds to its owner's economy: its members'
@@ -187,7 +193,8 @@ impl World {
             .filter_map(Commission::regiment)
         {
             let taken = self.commission_ledger(r).upkeep;
-            for &(consumed, _) in &self.rules.economy.limits {
+            for (consumed, _) in self.rules.economy.limits() {
+                let consumed = consumed.as_str();
                 upkeep.set(consumed, upkeep.get(consumed) + taken.get(consumed));
             }
         }
@@ -227,18 +234,19 @@ impl World {
                 let needs = first.regiment().map(|r| self.commission_ledger(r).upkeep);
                 let needs = needs.unwrap_or_default();
                 let full = balance.limits.iter().find(|l| {
-                    needs.get(l.consumed) > 0.0 && l.used + needs.get(l.consumed) > l.provided
+                    let needed = needs.get(l.consumed.as_str());
+                    needed > 0.0 && l.used + needed > l.provided
                 });
-                full.map(|l| Pause::Limit(l.consumed))
+                full.map(|l| Pause::Limit(l.consumed.clone()))
             }
             _ => Some(Pause::Disabled),
         };
         let (player, template) = (b.owner, first.template().to_string());
         let b = &mut self.buildings[building];
-        let told = b.paused;
-        b.paused = why;
+        let told = std::mem::replace(&mut b.paused, why.clone());
+        let held = why.is_some();
         match why {
-            Some(why) if told != Some(why) => self.notices.push(Notice::Paused {
+            Some(why) if told.as_ref() != Some(&why) => self.notices.push(Notice::Paused {
                 player,
                 building,
                 template,
@@ -251,7 +259,7 @@ impl World {
                 }
             }
         }
-        why.is_some()
+        held
     }
 
     /// Every side's ledger, by player id.
@@ -327,7 +335,7 @@ impl World {
             }
             Change::Research(item) => stockpile -= self.research_cost(item),
             Change::Unpack(r) => {
-                ledger = ledger.without(self.regiment_ledger(r));
+                ledger = ledger.without(&self.regiment_ledger(r));
                 if let Some(u) = &self.regiments[r].unpacks {
                     let e = self.economy_of(&u.building.template);
                     ledger += Ledger {
@@ -348,7 +356,7 @@ impl World {
         for (&player, treasury) in &mut self.treasuries {
             let balance = ledgers
                 .get(&player)
-                .copied()
+                .cloned()
                 .unwrap_or_default()
                 .balance(&self.rules.economy);
             let net = balance.net.get(money(&self.rules.economy));
@@ -403,12 +411,12 @@ mod tests {
             balance.limits,
             [
                 Limit {
-                    consumed: "unit_limit_consumed",
+                    consumed: "unit_limit_consumed".into(),
                     used: 1.0,
                     provided: 6.0
                 },
                 Limit {
-                    consumed: "building_limit_consumed",
+                    consumed: "building_limit_consumed".into(),
                     used: 2.0,
                     provided: 0.0
                 },
@@ -529,7 +537,7 @@ mod tests {
             },
         );
         w.holdings.push((1, "start_loc".into()));
-        let building = w.balance(1).limits[1];
+        let building = w.balance(1).limits[1].clone();
         assert_eq!((building.used, building.provided), (1.0, 20.0));
     }
 
@@ -547,7 +555,7 @@ mod tests {
         assert_eq!(w.buildings[0].progress, 0);
         assert_eq!(
             w.buildings[0].paused,
-            Some(Pause::Limit("unit_limit_consumed"))
+            Some(Pause::Limit("unit_limit_consumed".into()))
         );
         let paused = |w: &World| {
             w.notices
