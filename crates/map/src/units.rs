@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use aaa_data::{
-    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, Organization, Ranges, Shape,
+    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, OrganizationComponent, Ranges, Shape,
 };
 use tgck::map::{Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
 
@@ -642,7 +642,7 @@ fn regiment(
 /// takes: what each template is made of, and what its members are. Reading
 /// it parses the game data's templates, so one serves a whole match.
 pub struct Recruits {
-    organizations: HashMap<Id, Organization>,
+    components: HashMap<Id, OrganizationComponent>,
     pub(crate) bodies: HashMap<Id, Body>,
     pub(crate) fighters: Arc<HashMap<Id, Fighter>>,
     pub(crate) layouts: Arc<HashMap<Id, Layout>>,
@@ -663,7 +663,7 @@ const BUILDING_PADDING: f32 = 2.0;
 impl Recruits {
     pub fn new(game: &GameData) -> Recruits {
         Recruits {
-            organizations: game.organizations(),
+            components: game.organization_components(),
             bodies: game.bodies(),
             fighters: game.fighters(),
             layouts: game.layouts(),
@@ -791,7 +791,7 @@ impl Recruits {
     /// The templates [`Recruits::raise`] can raise, sorted.
     pub fn templates(&self) -> Vec<&str> {
         let mut out: Vec<&str> = self
-            .organizations
+            .components
             .iter()
             .filter(|(_, o)| {
                 let mut filled = o.slots.iter().flatten().peekable();
@@ -807,7 +807,7 @@ impl Recruits {
     /// Every regiment [`Recruits::raise`] can raise, by template, each
     /// standing anywhere and owned by nobody.
     pub fn raisable(&self) -> HashMap<Id, Regiment> {
-        let templates = self.organizations.keys().chain(self.bodies.keys());
+        let templates = self.components.keys().chain(self.bodies.keys());
         templates
             .filter_map(|t| {
                 let raised = self.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0]);
@@ -827,14 +827,14 @@ impl Recruits {
         position: [f32; 2],
         facing: [f32; 2],
     ) -> Result<Regiment, String> {
-        let Some(organization) = self.organizations.get(&Id::from(template)) else {
+        let Some(component) = self.components.get(&Id::from(template)) else {
             return self.raise_lone(template, id, owner, position, facing);
         };
         let layout = self
             .layouts
-            .get(&organization.layout)
-            .ok_or_else(|| format!("{template} has no layout {}", organization.layout))?;
-        let slots: Vec<String> = organization
+            .get(&component.layout)
+            .ok_or_else(|| format!("{template} has no layout {}", component.layout))?;
+        let slots: Vec<String> = component
             .slots
             .iter()
             .map(|s| {
@@ -1150,9 +1150,9 @@ mod tests {
             ..Body::default()
         };
         let recruits = Recruits {
-            organizations: HashMap::from([(
+            components: HashMap::from([(
                 Id::from("squad"),
-                Organization {
+                OrganizationComponent {
                     layout: Id::from("line"),
                     slots: vec![Some(Id::from("rifle")), None, Some(Id::from("captain"))],
                 },
@@ -1207,7 +1207,7 @@ mod tests {
     #[test]
     fn trucks_raise_with_what_they_unpack_into() {
         let recruits = Recruits {
-            organizations: HashMap::new(),
+            components: HashMap::new(),
             bodies: HashMap::from([
                 (
                     Id::from("truck"),

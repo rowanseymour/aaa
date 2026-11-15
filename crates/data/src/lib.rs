@@ -51,7 +51,7 @@ pub use interface::{Command, ConnectionLook, CursorLook, FormationLook, SupplyBo
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use nations::{BannerDecal, Banners, Faction, FactionOperation, Handicap, Nation};
 pub use objectives::{ObjectiveLook, ObjectiveLooks};
-pub use organizations::{Formation, Layout, Organization, Ranges};
+pub use organizations::{Formation, Layout, OrganizationComponent, Ranges};
 pub use properties::PropertyLook;
 pub use recruiting::{
     Airlift, Amount, DeployPoints, Deployment, Fall, Listing, Requires, Technology,

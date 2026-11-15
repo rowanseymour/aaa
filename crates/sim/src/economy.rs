@@ -143,7 +143,7 @@ impl World {
         let kept = (r.units.iter())
             .filter(|&&u| !matches!(self.units[u].left, Some(crate::Left::Unpacked(_))));
         let templates = kept.map(|&u| &self.units[u].template).collect();
-        let mut ledger = self.organization_ledger(&r.template, templates);
+        let mut ledger = self.members_ledger(&r.template, templates);
         let earning = self
             .survivors(regiment)
             .map(|u| self.economy_of(&self.units[u].template));
@@ -154,10 +154,10 @@ impl World {
     /// What a regiment would add to its owner's economy once raised.
     pub(crate) fn commission_ledger(&self, regiment: &aaa_map::Regiment) -> Ledger {
         let members = regiment.members.iter().map(|m| &m.template);
-        self.organization_ledger(&regiment.template, members.collect())
+        self.members_ledger(&regiment.template, members.collect())
     }
 
-    fn organization_ledger(&self, template: &Id, members: Vec<&Id>) -> Ledger {
+    fn members_ledger(&self, template: &Id, members: Vec<&Id>) -> Ledger {
         if members.is_empty() {
             return Ledger::default();
         }

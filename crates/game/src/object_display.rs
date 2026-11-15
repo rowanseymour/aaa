@@ -369,8 +369,8 @@ pub fn spawn(
     commands.insert_resource(stage);
     let game = &loaded.game;
     let layouts = game.layouts();
-    let organizations = game.organizations();
-    let primaries = organizations.iter().map(|(id, o)| {
+    let components = game.organization_components();
+    let primaries = components.iter().map(|(id, o)| {
         let slot = layouts.get(&o.layout).and_then(|l| l.primary);
         (id.clone(), slot.and_then(|s| o.slots.get(s)?.clone()))
     });
