@@ -742,15 +742,7 @@ impl Trailer {
             lists: (v >= 11)
                 .then(|| {
                     let lists = [cur.u32s()?, cur.u32s()?, cur.u32s()?];
-                    let n = cur.u32()?;
-                    let recent_attacks = bytes(cur, n, 12)?
-                        .chunks(12)
-                        .map(|c| {
-                            let [a, b, c] = [0, 4, 8]
-                                .map(|i| u32::from_le_bytes(c[i..i + 4].try_into().unwrap()));
-                            [a, b, c]
-                        })
-                        .collect();
+                    let recent_attacks = cur.list(|c| Ok([c.u32()?, c.u32()?, c.u32()?]))?;
                     Result::<_>::Ok(TrailerLists {
                         lists,
                         recent_attacks,
@@ -1317,9 +1309,10 @@ impl Actor {
             Component::Framed { bit: HQ, data } => Some(data),
             _ => None,
         })?;
-        // After the updatable header and the component's version.
-        let badge = data.get(12..16)?;
-        Some(i32::from_le_bytes(badge.try_into().ok()?))
+        let mut cur = Cursor::new(data);
+        Updatable::parse(&mut cur).ok()?;
+        let _version = cur.u32().ok()?;
+        cur.i32().ok()
     }
 
     pub fn body(&self) -> Option<&Body> {
@@ -1344,10 +1337,7 @@ impl Actor {
             Component::Framed {
                 bit: DEFENDER,
                 data,
-            } => Some(Updatable {
-                version: u32::from_le_bytes(data.get(0..4)?.try_into().ok()?),
-                id: i32::from_le_bytes(data.get(4..8)?.try_into().ok()?),
-            }),
+            } => Updatable::parse(&mut Cursor::new(data)).ok(),
             _ => None,
         })
     }
@@ -1670,6 +1660,19 @@ mod tests {
         let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
         assert_eq!(parsed.hq_badge(), Some(7));
         assert_eq!(actor(0, vec![]).hq_badge(), None);
+    }
+
+    #[test]
+    fn reads_a_defender() {
+        let mut defender = Writer::default();
+        Updatable { version: 1, id: 20 }.write(&mut defender);
+        defender.u32(0);
+        let w = hollow(1 << DEFENDER);
+        let trailer_at = 24;
+        let bytes = [&w.0[..trailer_at], &defender.0, &w.0[trailer_at..]].concat();
+        let parsed = Actor::parse(&mut Cursor::new(&bytes), WORLD).unwrap();
+        assert_eq!(parsed.defender(), Some(Updatable { version: 1, id: 20 }));
+        assert_eq!(actor(0, vec![]).defender(), None);
     }
 
     #[test]

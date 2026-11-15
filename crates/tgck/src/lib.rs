@@ -52,6 +52,7 @@ impl From<io::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bounds-checked little-endian reader over a section payload.
+#[derive(Clone)]
 pub(crate) struct Cursor<'a> {
     buf: &'a [u8],
     pos: usize,
@@ -373,12 +374,12 @@ pub(crate) mod tests {
         let mut table = Vec::new();
         for (name, payload, compress) in sections {
             let stored = if *compress {
-                miniz_oxide::deflate::compress_to_vec_zlib(payload, 6)
+                miniz_oxide::deflate::compress_to_vec_zlib(payload, crate::container::ZLIB_LEVEL)
             } else {
                 payload.to_vec()
             };
             let mut rec = utf16(name);
-            rec.resize(0x40, 0);
+            rec.resize(crate::container::SECTION_NAME_LEN, 0);
             rec.extend((out.len() as u64).to_le_bytes());
             rec.extend((stored.len() as u64).to_le_bytes());
             rec.extend((*compress as u64).to_le_bytes());
