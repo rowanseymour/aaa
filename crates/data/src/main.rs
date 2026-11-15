@@ -265,8 +265,10 @@ fn generals(dir: &str) -> Res {
                 };
                 let area = op.area.as_deref().unwrap_or("-");
                 let icon = op.icon.as_deref().unwrap_or("-");
+                let marker = (op.marker.as_ref())
+                    .map_or("-".to_string(), |m| format!("{} {}", m.vfx, m.size));
                 outln!(
-                    "  {} [{}] cost {}, recharge {}, area {area}, {icon}",
+                    "  {} [{}] cost {}, recharge {}, area {area}, marker {marker}, {icon}",
                     op.name,
                     o.id,
                     o.cost,

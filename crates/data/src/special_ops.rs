@@ -23,11 +23,27 @@ pub struct SpecialOperation {
     /// It's used on its user's own side as soon as it's pressed, with no
     /// aiming.
     pub on_self: bool,
+    /// What marks where it's aimed while it's being aimed, for one with an
+    /// area.
+    pub marker: Option<Marker>,
     /// The game's word for the size of the area it lands on, if it has one.
     pub area: Option<String>,
     /// What its effects do, a line each, with the lines of what an
     /// enchantment gives indented under it.
     pub effects: Vec<EffectLine>,
+}
+
+/// The marker of an operation with an area that doesn't name its own, as
+/// the special operations' template gives them.
+const CROSSHAIR: &str = "crosshair_decal_vfx";
+
+/// A ground decal under the cursor showing the area an operation would
+/// land on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marker {
+    pub vfx: Id,
+    /// World units across, in place of the decal's own size.
+    pub size: f32,
 }
 
 /// What plays as a special operation is used, on the ground at its centre.
@@ -301,6 +317,10 @@ fn operation(
         on_self: crate::Targets::parse(a.targets.as_deref().unwrap_or(""))
             .required
             .contains(&Id::from("self")),
+        marker: (a.area > 0.0).then(|| Marker {
+            vfx: (a.target_location_vfx.clone()).unwrap_or_else(|| Id::from(CROSSHAIR)),
+            size: 2.0 * a.area,
+        }),
         area,
         effects: a.effect.iter().flat_map(|e| words.effect(e)).collect(),
     }
@@ -375,6 +395,23 @@ mod tests {
     }
 
     #[test]
+    fn only_operations_with_an_area_are_marked_while_aimed_across_it() {
+        let marked = |text: &str| shown(&definition(text)).marker;
+        let area = "[AbilityDefinition]\n{\n\tIDS = fear\n\tarea = 15\n\ttarget_location_vfx = crosshair\n}\n";
+        let volley = "[AbilityDefinition]\n{\n\tIDS = drop\n\tvolley_area = 5\n\ttarget_location_vfx = crosshair\n\t[Flags]\n\ttarget_location = true\n}\n";
+        let marker = Marker {
+            vfx: Id::from("crosshair"),
+            size: 30.0,
+        };
+        assert_eq!(marked(area), Some(marker));
+        assert_eq!(marked(volley), None);
+        // One that names none has the crosshair.
+        let unnamed = "[AbilityDefinition]\n{\n\tIDS = bomb\n\tarea = 2\n}\n";
+        let crosshair = Some(Id::from(CROSSHAIR));
+        assert_eq!(marked(unnamed).map(|m| m.vfx), crosshair);
+    }
+
+    #[test]
     fn an_operation_giving_no_minimap_fog_reveals_for_its_property_s_time() {
         let scan = definition(
             "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n\
@@ -388,14 +425,16 @@ mod tests {
 
     #[test]
     fn a_reveal_falls_back_to_its_shared_property_s_flag_and_time() {
-        let text = "[Property]\n{\n\tIDS = scanned\n\tduration = 12\n                    \t[Modifier]\n\t{\n\t\ttype = FLAG\n\t\tmodifier_flag = MINIMAP_NO_FOG\n\t}\n}\n";
+        let text = "[Property]\n{\n\tIDS = scanned\n\tduration = 12\n\
+                    \t[Modifier]\n\t{\n\t\ttype = FLAG\n\t\tmodifier_flag = MINIMAP_NO_FOG\n\t}\n}\n";
         let parsed = tgi::parse(text);
         let templates = tgi::Templates::new([&parsed.root]);
         let block = parsed.root.blocks_of("Property").next().unwrap();
         let shared: defs::Property = templates.deserialize(block).unwrap();
         let properties = HashMap::from([(Id::from("scanned"), shared)]);
         let scan = definition(
-            "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n             \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tIDS = scanned\n\t\t}\n\t}\n}\n",
+            "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n\
+             \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tIDS = scanned\n\t\t}\n\t}\n}\n",
         );
         assert_eq!(crate::supply::reveals(&scan, &properties), Some(12.0));
     }

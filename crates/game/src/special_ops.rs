@@ -5,8 +5,10 @@
 
 use std::collections::HashMap;
 
-use aaa_data::SpecialOperation;
-use aaa_render::textures;
+use aaa_data::{Decal, SpecialOperation};
+use aaa_render::decals::DecalCache;
+use aaa_render::terrain::world;
+use aaa_render::{MapAssets, textures};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 
@@ -70,7 +72,7 @@ impl Plugin for SpecialOpsPlugin {
             })
             .add_systems(
                 Update,
-                (refresh, tips)
+                (refresh, tips, mark)
                     .run_if(in_state(Screen::Match))
                     .run_if(resource_exists::<Panel>),
             );
@@ -130,6 +132,9 @@ pub(crate) struct OperationButton {
     /// the tooltip's line saying how long it has left to recharge.
     tip: Entity,
     recharge_line: Entity,
+    /// What's laid on the ground at the cursor while it's armed, sized to
+    /// the area it would land on.
+    marker: Option<Decal>,
 }
 
 #[derive(Component)]
@@ -168,6 +173,7 @@ fn spawn(
     };
     let medal = image(game, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
     let operations = game.special_operations();
+    let vfx = game.vfx();
     let words = Words {
         title: said("game_interface_FactionExperience_ToolTip", "Experience"),
         general: said("ui_tooltip_item_general", "General"),
@@ -197,7 +203,14 @@ fn spawn(
             let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
             let name = bindings.marked(&action(n), &op.name);
             let figures = figures(op, o.cost, &cost, &area);
-            Some((n, icon, name, op.clone(), figures))
+            let marker = op.marker.as_ref().and_then(|m| {
+                let decal = vfx.get(&m.vfx)?.decal.clone()?;
+                Some(Decal {
+                    size: m.size,
+                    ..decal
+                })
+            });
+            Some((n, icon, name, op.clone(), figures, marker))
         })
         .collect();
     commands
@@ -266,7 +279,7 @@ fn spawn(
                     ),
                 ))
                 .with_children(|tray| {
-                    for (index, icon, name, op, figures) in buttons {
+                    for (index, icon, name, op, figures, marker) in buttons {
                         let (tip, recharge_line) = pane(tray, &name, &op, &figures);
                         tray.spawn((
                             OperationButton {
@@ -275,6 +288,7 @@ fn spawn(
                                 on_self: op.on_self,
                                 tip,
                                 recharge_line,
+                                marker,
                             },
                             Button,
                             ui::called(format!("special_op.{}", index + 1)),
@@ -607,6 +621,92 @@ fn clicked(
     })
 }
 
+/// The marker laid at the cursor while an operation is armed.
+#[derive(Component)]
+struct CursorMarker;
+
+/// What [`mark`] laid last: for which operation and where, and the
+/// pictures it's read.
+#[derive(Default)]
+struct Marking {
+    at: Option<(usize, [f32; 2])>,
+    cache: DecalCache,
+}
+
+/// Which operation's marker goes where: the armed one's, under the cursor,
+/// when it has a marker and the cursor's over the map itself.
+fn marked(
+    armed: Option<usize>,
+    buttons: &[&OperationButton],
+    at: Option<crate::Pointing>,
+) -> Option<(usize, [f32; 2])> {
+    let i = armed?;
+    buttons.iter().find(|b| b.index == i)?.marker.as_ref()?;
+    match at? {
+        crate::Pointing::Ground(p) => Some((i, p)),
+        crate::Pointing::Minimap(_) => None,
+    }
+}
+
+/// Lays the armed operation's marker on the ground under the cursor, while
+/// the cursor's over the map itself, its top toward the top of the map
+/// whatever's under it.
+#[allow(clippy::too_many_arguments)]
+fn mark(
+    mut commands: Commands,
+    armed: Res<Armed>,
+    buttons: Query<&OperationButton>,
+    pointer: crate::Pointer,
+    loaded: Res<Loaded>,
+    mut assets: MapAssets,
+    mut marking: bevy::prelude::Local<Marking>,
+    laid: Query<Entity, With<CursorMarker>>,
+) {
+    let ground = &loaded.map.ground;
+    let listed: Vec<&OperationButton> = buttons.iter().collect();
+    let at = marked(armed.0, &listed, pointer.at(ground));
+    // What was laid may have gone with the last match.
+    if at == marking.at && at.is_some() == !laid.is_empty() {
+        return;
+    }
+    marking.at = at;
+    let Some((i, [x, y])) = at else {
+        for e in &laid {
+            commands.entity(e).despawn();
+        }
+        return;
+    };
+    let Some(marker) = listed
+        .iter()
+        .find(|b| b.index == i)
+        .and_then(|b| b.marker.as_ref())
+    else {
+        return;
+    };
+    let placed = Transform::from_translation(world(x, y, ground.height_at([x, y])))
+        .looking_to(world(0.0, 1.0, 0.0), Vec3::Y);
+    let bundle = assets.decal(
+        &loaded.game,
+        &mut marking.cache,
+        ground,
+        marker,
+        &placed,
+        1.0,
+    );
+    let Some(bundle) = bundle else {
+        return;
+    };
+    // The one marker moves, rather than one being made for each place.
+    match laid.iter().next() {
+        Some(e) => {
+            commands.entity(e).insert(bundle);
+        }
+        None => {
+            commands.spawn((bundle, CursorMarker, DespawnOnExit(Screen::Match)));
+        }
+    }
+}
+
 /// "474/5000": the experience rounded, and the ceiling when there is one.
 fn experience_text(experience: i64, max: Option<f32>) -> String {
     match max {
@@ -711,6 +811,7 @@ mod tests {
             on_self: false,
             tip,
             recharge_line,
+            marker: None,
         }
     }
 
@@ -826,6 +927,29 @@ mod tests {
     }
 
     #[test]
+    fn the_armed_operations_marker_goes_under_the_cursor_on_the_map_only() {
+        let mut with = button(0, Entity::PLACEHOLDER, Entity::PLACEHOLDER);
+        with.marker = Some(Decal {
+            texture: "crosshair.dds".into(),
+            size: 30.0,
+            colour: [1.0; 3],
+            lit: false,
+            additive: false,
+            fade: [0.0; 2],
+            layer: 4,
+        });
+        let without = button(1, Entity::PLACEHOLDER, Entity::PLACEHOLDER);
+        let buttons = [&with, &without];
+        let ground = Some(crate::Pointing::Ground([3.0, 4.0]));
+        assert_eq!(marked(Some(0), &buttons, ground), Some((0, [3.0, 4.0])));
+        assert_eq!(marked(None, &buttons, ground), None);
+        assert_eq!(marked(Some(1), &buttons, ground), None);
+        let minimap = Some(crate::Pointing::Minimap([3.0, 4.0]));
+        assert_eq!(marked(Some(0), &buttons, minimap), None);
+        assert_eq!(marked(Some(0), &buttons, None), None);
+    }
+
+    #[test]
     fn recharge_time_shows_in_minutes_and_seconds_rounded_up() {
         let text = "Recharging (%d:%.2d left)";
         assert_eq!(recharging(text, 244.2), "Recharging (4:05 left)");
@@ -886,6 +1010,7 @@ mod tests {
             icon: None,
             recharge: 300.0,
             on_self: false,
+            marker: None,
             area: Some("Large".into()),
             effects: Vec::new(),
         };

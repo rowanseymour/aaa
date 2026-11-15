@@ -565,6 +565,8 @@ pub struct AbilityDefinition {
     pub attenuation_factor_max: Option<f32>,
     /// Comma separated flags, each `+` to require it or `-` to rule it out.
     pub targets: Option<String>,
+    /// The VFX that marks where it's aimed while it's being aimed.
+    pub target_location_vfx: Option<Id>,
     #[serde(default)]
     pub effect: Vec<Effect>,
     /// The projectile template a shot fires.
