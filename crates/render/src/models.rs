@@ -361,6 +361,11 @@ impl Animated {
         }
     }
 
+    /// Whether it changes its part's material, rather than only moving it.
+    pub(crate) fn paints(&self) -> bool {
+        self.animation.fade.is_some() || self.animation.texture.is_some()
+    }
+
     /// Paints its part at its time, and gives the part's transform then if
     /// it moves.
     pub(crate) fn pose(&self, materials: &mut PartMaterials) -> Option<Transform> {

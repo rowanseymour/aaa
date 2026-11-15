@@ -67,7 +67,11 @@ pub(crate) fn strike(
     let mains: Vec<&defs::Effect> = (a.effect.iter())
         .filter(|e| is(&e.kind, "MAIN_DAMAGE"))
         .collect();
-    if a.area <= 0.0 || mains.is_empty() || mains.iter().any(|e| e.targets.is_some()) {
+    let own = |e: &&defs::Effect| {
+        let targets = Targets::parse(e.targets.as_deref().unwrap_or(""));
+        targets != Targets::default()
+    };
+    if a.area <= 0.0 || mains.is_empty() || mains.iter().any(own) {
         return None;
     }
     let main = mains.into_iter().filter_map(damage).collect();
@@ -197,6 +201,10 @@ mod tests {
         assert!(!strikes(&only));
         assert!(strikes(&format!(
             "[AbilityDefinition]\n{{\n\tarea = 20\n{main}\t}}\n}}\n"
+        )));
+        // Templates give every effect targets of `null`, which is none.
+        assert!(strikes(&format!(
+            "[AbilityDefinition]\n{{\n\tarea = 20\n{main}\t\ttargets = null\n\t}}\n}}\n"
         )));
     }
 

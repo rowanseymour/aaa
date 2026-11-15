@@ -274,6 +274,19 @@ impl GameData {
             .collect()
     }
 
+    /// The effects each property shows on what gains it, by id: those of
+    /// the shared ones and of those abilities give.
+    pub fn property_cues(&self) -> HashMap<Id, Vec<VfxCue>> {
+        let definitions = self.definitions();
+        let given = (definitions.abilities.iter())
+            .flat_map(|(_, a)| &a.effect)
+            .filter_map(|e| e.enchantment_property.as_ref());
+        (definitions.properties.values().chain(given))
+            .filter_map(|p| Some((p.ids.clone()?, vfx_cues(&p.when_added))))
+            .filter(|(_, cues)| !cues.is_empty())
+            .collect()
+    }
+
     /// How a side's experience starts and grows: the match's Starting
     /// Experience setting and the tuning's gain a second.
     pub fn experience_rules(&self) -> ExperienceRules {

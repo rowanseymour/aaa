@@ -180,7 +180,8 @@ impl Targets {
                 Some(flag) => (&mut out.excluded, flag),
                 None => (&mut out.required, word.strip_prefix('+').unwrap_or(word)),
             };
-            if !flag.is_empty() {
+            // `null` is no restriction, as templates default to.
+            if !flag.is_empty() && !flag.eq_ignore_ascii_case("null") {
                 list.push(Id::from(flag));
             }
         }
