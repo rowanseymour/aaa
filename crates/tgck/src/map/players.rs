@@ -545,9 +545,7 @@ impl KingdomStats {
         Ok(KingdomStats {
             favorites: Favorites::parse(cur)?,
             totals: Totals::parse(cur)?,
-            snapshots: (0..cur.u32()?)
-                .map(|_| Snapshot::parse(cur))
-                .collect::<Result<_>>()?,
+            snapshots: cur.list(Snapshot::parse)?,
             time_since_snapshot: cur.f32()?,
         })
     }
@@ -555,12 +553,7 @@ impl KingdomStats {
     fn write(&self, w: &mut Writer) -> Result<()> {
         self.favorites.write(w)?;
         self.totals.write(w)?;
-        w.list("snapshots", &self.snapshots, |w, snapshot| {
-            w.u32(0);
-            snapshot.totals.write(w)?;
-            w.f32s(&snapshot.values);
-            Ok(())
-        })?;
+        w.list("snapshots", &self.snapshots, |w, s| s.write(w))?;
         w.f32(self.time_since_snapshot);
         Ok(())
     }
@@ -651,6 +644,13 @@ impl Snapshot {
             totals: Totals::parse(cur)?,
             values: cur.f32s()?,
         })
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        w.u32(0);
+        self.totals.write(w)?;
+        w.f32s(&self.values);
+        Ok(())
     }
 }
 
