@@ -24,6 +24,7 @@ mod actions;
 mod backdrop;
 mod banners;
 mod confirm;
+mod connection;
 mod console;
 mod deliveries;
 mod displays;
@@ -144,9 +145,9 @@ struct Pending {
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
     from_menu: bool,
-    /// The link to its host and what the host let the game in with, where
-    /// the match is hosted elsewhere.
-    joined: Option<(orders::Line, Welcome)>,
+    /// The link to its host, what the host let the game in with, and
+    /// where the host is, where the match is hosted elsewhere.
+    joined: Option<(orders::Line, Welcome, String)>,
 }
 
 /// The loading screen, which stays over the match while it's set up.
@@ -634,11 +635,11 @@ const ANSWERED: Duration = Duration::from_secs(10);
 
 /// Asks the host at `at` to let the game in to its match to give the
 /// orders of `players`: the link to it, and what it let the game in with.
-fn join(at: SocketAddr, players: Vec<u32>) -> Result<(orders::Line, Welcome), String> {
+fn join(at: SocketAddr, players: Vec<u32>) -> Result<(orders::Line, Welcome, String), String> {
     let mut link = aaa_server::quic::connect(at)?;
     let welcome = aaa_server::enter(&mut link, players, ANSWERED)
         .map_err(|e| format!("{at}: not let in: {e:?}"))?;
-    Ok((Box::new(link), welcome))
+    Ok((Box::new(link), welcome, at.to_string()))
 }
 
 fn main() -> ExitCode {
@@ -820,6 +821,7 @@ fn main() -> ExitCode {
             technologies::TechnologyPlugin,
             objectives::ObjectivesPlugin,
             outcome::OutcomePlugin,
+            connection::ConnectionPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(OnEnter(Screen::Loading), loading)
@@ -970,6 +972,8 @@ fn main() -> ExitCode {
         .insert_resource(lobby::Leaving::of(&strings))
         .insert_resource(confirm::Words::of(&strings))
         .insert_resource(outcome::Words::of(&strings))
+        .insert_resource(connection::Words::of(&strings))
+        .insert_resource(pause::Words::of(&strings))
         .insert_resource(StageWords::of(&strings))
         .insert_resource(options::Options::new(&game))
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
@@ -977,9 +981,9 @@ fn main() -> ExitCode {
         .insert_resource(volumes)
         .insert_resource(Data(Arc::new(game)))
         .init_resource::<ui::Gem>()
-        .add_systems(Startup, ui::load_gem);
+        .add_systems(Startup, (ui::load_gem, connection::load));
     let setup = match &joined {
-        Some((_, welcome)) => Some(welcome.setup.clone()),
+        Some((_, welcome, _)) => Some(welcome.setup.clone()),
         None => map.map(|name| aaa_server::Setup {
             map: name,
             seed: Seed(seed).get(),
@@ -1049,7 +1053,7 @@ fn prepare(
     let leaders = Leaders(generals);
     let person = match (&joined, from_menu) {
         // Its host says who the game plays.
-        (Some((_, welcome)), _) => welcome.players.first().copied(),
+        (Some((_, welcome, _)), _) => welcome.players.first().copied(),
         (None, true) => person,
         (None, false) => lobby::default_person(&map.players, side),
     };
@@ -1066,7 +1070,7 @@ fn prepare(
     Ok(Prepared {
         loaded: Loaded { game, map },
         orders: match joined {
-            Some((link, welcome)) => Orders::joined(link, welcome),
+            Some((link, welcome, at)) => Orders::joined(link, welcome, at),
             // The host's copy, made here to keep it off the window's thread.
             None => Orders::hosting(setup, sim.clone(), person),
         },

@@ -457,6 +457,7 @@ impl<L: Link> Host<L> {
         self.begun = true;
         let mut events = Vec::new();
         let mut actions = Vec::new();
+        let mut votes_changed = false;
         // Each client's first action taken this turn, by how many it had
         // asked for before it.
         let mut first_taken = Vec::new();
@@ -490,7 +491,10 @@ impl<L: Link> Host<L> {
                     }
                     Ok(Some(Some(ToHost::Ready))) => seat.ready = true,
                     Ok(Some(Some(ToHost::Played(played)))) => seat.played = seat.played.max(played),
-                    Ok(Some(Some(ToHost::Vote(vote)))) => seat.vote = vote,
+                    Ok(Some(Some(ToHost::Vote(vote)))) => {
+                        votes_changed |= seat.vote != vote;
+                        seat.vote = vote;
+                    }
                     Ok(Some(Some(ToHost::Leave))) => {
                         seat.lost = true;
                         break;
@@ -552,9 +556,10 @@ impl<L: Link> Host<L> {
         if self.held != was_held {
             events.push(Event::Held(self.held));
         }
-        // Everyone hears at once that the match is held or let go.
+        // Everyone hears at once that the match is held or let go, and
+        // how the vote stands, which a voter sees its own vote by.
         let due = self.told.is_none_or(|t| self.now >= t + TOLD);
-        if due || self.held != was_held {
+        if due || self.held != was_held || votes_changed {
             self.told = Some(self.now);
             self.tell(&ToClient::Status(self.status()));
         }
@@ -644,6 +649,7 @@ impl<L: Link> Host<L> {
                 host: c.trusted,
                 standing: self.standing(c),
                 vote: c.vote,
+                ping: (c.link.round_trip()).map(|t| t.as_millis().min(u32::MAX as u128) as u32),
             })
             .collect();
         let (votes, needed) = self.votes();
@@ -919,7 +925,9 @@ mod tests {
             client: 2,
             step: 20,
         };
-        assert_eq!(events, [found]);
+        // It holds the match, which waits on it to be dropped.
+        assert_eq!(events, [found, Event::Held(true)]);
+        assert_eq!(host.world().ticks, 20);
         for c in &clients {
             assert_eq!(c.diverged(), [(2, 20)]);
         }

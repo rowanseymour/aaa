@@ -46,7 +46,7 @@ pub use fog::{FogSetting, Sight};
 pub use guard::{GUARDING, GuardRules};
 pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
-pub use interface::{Command, CursorLook, FormationLook, SupplyBorder};
+pub use interface::{Command, ConnectionLook, CursorLook, FormationLook, SupplyBorder};
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use nations::{General, GeneralOperation, Handicap, Nation, NationBanners};
 pub use objectives::{ObjectiveLook, ObjectiveLooks};
@@ -57,7 +57,7 @@ pub use recruiting::{
 };
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, SpecialOperation};
-pub use strings::{Strings, resource_name};
+pub use strings::{PingLook, Strings, resource_name};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,

@@ -3,6 +3,7 @@
 
 use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::time::Duration;
 
 /// The other end has gone, and nothing more will come from or reach it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,6 +17,12 @@ pub trait Link {
 
     /// The next message from the other end, if one has come.
     fn receive(&mut self) -> Result<Option<Vec<u8>>, Lost>;
+
+    /// How long a message takes to get to the other end and back, as far
+    /// as it's been measured, where it's worth measuring.
+    fn round_trip(&self) -> Option<Duration> {
+        None
+    }
 }
 
 impl<L: Link + ?Sized> Link for Box<L> {
@@ -25,6 +32,10 @@ impl<L: Link + ?Sized> Link for Box<L> {
 
     fn receive(&mut self) -> Result<Option<Vec<u8>>, Lost> {
         (**self).receive()
+    }
+
+    fn round_trip(&self) -> Option<Duration> {
+        (**self).round_trip()
     }
 }
 

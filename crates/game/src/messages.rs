@@ -381,6 +381,11 @@ impl MessageLog {
     }
 }
 
+/// [`fill_all`]'s words alone, for text shown outside the message log.
+pub(crate) fn filled(text: &str, with: &[impl Into<Fill> + Clone]) -> String {
+    fill_all(text, with).text
+}
+
 /// Fills the `%s`, `%d` and `%i` placeholders of a line in turn, and reads
 /// `%%` as `%`.
 fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {

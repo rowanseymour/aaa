@@ -22,6 +22,26 @@ pub struct PauseMenu {
 #[derive(Component)]
 struct Overlay;
 
+/// What the menu says that the game's data has words for.
+#[derive(Resource)]
+pub struct Words {
+    connection: String,
+}
+
+impl Words {
+    pub fn of(strings: &aaa_data::Strings) -> Self {
+        Words {
+            connection: crate::connection::Words::menu_entry(strings),
+        }
+    }
+}
+
+impl Default for Words {
+    fn default() -> Self {
+        Words::of(&aaa_data::Strings::default())
+    }
+}
+
 /// Opening and closing the menu on Escape, which what else Escape closes
 /// goes after, so as not to have the same press open the menu.
 #[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
@@ -32,6 +52,8 @@ pub struct PausePlugin;
 impl Plugin for PausePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
+            .init_resource::<Words>()
+            .init_resource::<crate::connection::Dialog>()
             .add_systems(OnEnter(Screen::Match), reset)
             .add_systems(
                 Update,
@@ -40,7 +62,9 @@ impl Plugin for PausePlugin {
                     .before(crate::actions::back_out)
                     .run_if(in_state(Screen::Match))
                     .run_if(console::closed)
-                    .run_if(crate::displays::closed),
+                    .run_if(crate::displays::closed)
+                    // It goes over the menu, which would open unseen.
+                    .run_if(crate::connection::closed),
             );
     }
 }
@@ -58,6 +82,7 @@ fn reset(mut menu: ResMut<PauseMenu>) {
 /// action page or the loading screen is still up.
 #[allow(clippy::too_many_arguments)]
 fn toggle(
+    words: Res<Words>,
     keys: Res<ButtonInput<KeyCode>>,
     page: Res<Page>,
     loading: Query<(), With<LoadingScreen>>,
@@ -78,11 +103,16 @@ fn toggle(
         // under the menu, as nothing updates it while it's open.
         focus.set_if_neq(Focus::Nothing);
         boxes.iter_mut().for_each(|mut v| *v = Visibility::Hidden);
-        open(&mut commands, menu, orders);
+        open(&mut commands, &words, menu, orders);
     }
 }
 
-fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut orders: ResMut<Orders>) {
+fn open(
+    commands: &mut Commands,
+    words: &Words,
+    mut menu: ResMut<PauseMenu>,
+    mut orders: ResMut<Orders>,
+) {
     menu.open = true;
     // A match hosted elsewhere is other people's too, and plays on.
     menu.was_paused = orders.pausing() || orders.joined_to();
@@ -105,6 +135,19 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut orders: ResMut
             ChildOf(column),
         ))
         .observe(options);
+    let connection = words.connection.clone();
+    // Greyed where there's nobody else to be connected to.
+    if crate::connection::openable(&orders) {
+        commands
+            .spawn((
+                ui::button(connection, Font::Large),
+                ui::called("pause.connection"),
+                ChildOf(column),
+            ))
+            .observe(connection_status);
+    } else {
+        commands.spawn((ui::disabled(connection, Font::Large), ChildOf(column)));
+    }
     commands
         .spawn((
             ui::button("Quit to Desktop", Font::Large),
@@ -119,6 +162,11 @@ fn open(commands: &mut Commands, mut menu: ResMut<PauseMenu>, mut orders: ResMut
             ChildOf(column),
         ))
         .observe(resume);
+}
+
+/// Opens the connection dialog over the menu.
+fn connection_status(_: On<Activate>, mut dialog: ResMut<crate::connection::Dialog>) {
+    crate::connection::open(&mut dialog);
 }
 
 /// Asks whether to exit the game, and does if so.
