@@ -56,7 +56,7 @@ pub enum ToClient {
     /// Another client has gone, whether it left or was lost, with the
     /// players it gave the orders of.
     Left { client: u32, players: Vec<u32> },
-    /// The host has ended the match, and nothing more follows.
+    /// The host has left a match that's over, and nothing more follows.
     Ended,
 }
 

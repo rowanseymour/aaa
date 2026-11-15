@@ -910,7 +910,7 @@ fn main() -> ExitCode {
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
-                messages::tell_left
+                messages::tell_leaving
                     .after(carry_out)
                     .before(messages::show)
                     .run_if(resource_exists::<Orders>),

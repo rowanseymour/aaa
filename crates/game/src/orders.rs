@@ -30,6 +30,8 @@ pub(crate) struct Orders {
     /// How many copies of the match are known to have gone their own way.
     diverged: usize,
     gone: bool,
+    /// Whether the game has taken that the host ended the match.
+    ended_taken: bool,
 }
 
 /// Where the match's host is.
@@ -81,6 +83,7 @@ impl Orders {
             asked: VecDeque::new(),
             diverged: 0,
             gone: false,
+            ended_taken: false,
         }
     }
 
@@ -112,9 +115,12 @@ impl Orders {
         self.gone
     }
 
-    /// Whether the host went by ending the match, rather than being lost.
-    pub(crate) fn ended(&self) -> bool {
-        self.gone && self.client.ended()
+    /// Whether the host has been found to have left the match once it
+    /// was over, the first time this is asked after it has.
+    pub(crate) fn take_ended(&mut self) -> bool {
+        let ended = self.gone && self.client.ended() && !self.ended_taken;
+        self.ended_taken |= ended;
+        ended
     }
 
     /// The other clients of the match found gone since this was last
@@ -563,6 +569,9 @@ mod tests {
         let (mut host, mut orders, mut world) = joined(&[1]);
         let (link, _) = super::testing::let_in(&mut host, &[2]);
         let mut other = aaa_server::Client::new(link);
+        let (link, judge) = super::testing::let_in(&mut host, &[]);
+        let mut judge_client = aaa_server::Client::new(link);
+        host.trust(judge.client);
         host.turn();
         orders.step(&mut world);
         other.leave().unwrap();
@@ -570,10 +579,17 @@ mod tests {
         orders.step(&mut world);
         assert_eq!(orders.take_left(), [(2, vec![2])]);
         assert_eq!(orders.take_left(), []);
-        assert!(!orders.gone() && !orders.ended());
+        assert!(!orders.gone() && !orders.take_ended());
+        // The host leaves the match once it's over.
+        judge_client.ask(Action::Win(1)).unwrap();
+        host.turn();
+        assert!(host.world().over);
         host.finish();
-        orders.step(&mut world);
-        assert!(orders.gone() && orders.ended());
+        for _ in 0..3 {
+            orders.step(&mut world);
+        }
+        assert!(orders.take_ended());
+        assert!(!orders.take_ended());
     }
 
     #[test]
@@ -584,6 +600,10 @@ mod tests {
         };
         let (link, _) = super::testing::let_in(host, &[2]);
         let mut other = aaa_server::Client::new(link);
+        let mut ours = super::testing::fresh();
+        orders.act(Action::Win(1));
+        orders.carry_out(&mut ours);
+        assert!(ours.over);
         drop(orders);
         let mut world = super::testing::fresh();
         assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));

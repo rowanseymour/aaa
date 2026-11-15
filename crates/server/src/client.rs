@@ -129,8 +129,8 @@ impl<L: Link> Client<L> {
         std::mem::take(&mut self.left)
     }
 
-    /// Whether its copy of the match has heard the host end it, rather
-    /// than only finding the host gone.
+    /// Whether its copy of the match has heard the host leave it once it
+    /// was over, rather than only finding the host gone.
     pub fn ended(&self) -> bool {
         self.ended
     }

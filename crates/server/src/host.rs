@@ -160,14 +160,17 @@ impl<L: Link> Host<L> {
         self.clients.len()
     }
 
-    /// Ends the match for its clients, which are told so once they've
-    /// had what it sent before, and lets them go.
+    /// Leaves the match, letting its clients go once they've had what it
+    /// sent. Only of a match that's [over](World::over) are they told it's
+    /// ended; of one still being played they find the host gone.
     pub fn end(&mut self) {
-        self.tell(&ToClient::Ended);
+        if self.world.over {
+            self.tell(&ToClient::Ended);
+        }
         self.clients.clear();
     }
 
-    /// [Ends](Host::end) the match, leaving its copy as it stands and the
+    /// [Ends](Host::end) its part in the match, leaving its copy as it stands and the
     /// record of what it was given.
     pub fn finish(mut self) -> (World, Record) {
         self.end();
@@ -811,11 +814,24 @@ mod tests {
         client.play(world, 1).unwrap();
         assert_eq!((world.ticks, client.take_left()), (3, left.to_vec()));
         assert!(!client.ended());
-        // The host ending the match isn't only its going.
+        // Once the match is over, the host leaving it ends it.
+        host.trust(1);
+        clients[0].ask(Action::Win(1)).unwrap();
+        play(&mut host, &mut clients, 1);
+        assert!(host.world().over);
         let (_, record) = host.finish();
         assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
         assert!(clients[0].ended());
         assert_eq!(clients[0].world().ticks, record.steps);
+    }
+
+    #[test]
+    fn a_host_leaving_a_match_still_played_is_only_gone() {
+        let (mut host, mut clients) = hosted(&[&[1]]);
+        play(&mut host, &mut clients, 2);
+        host.finish();
+        assert_eq!(clients[0].advance(usize::MAX), Err(crate::Lost));
+        assert!(!clients[0].ended());
     }
 
     #[test]

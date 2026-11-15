@@ -497,9 +497,10 @@ pub fn refuse(
 }
 
 /// Posts a line for each player whose machine has left the match since
-/// last time. One that only watched gave no player's orders, and goes
-/// unremarked.
-pub fn tell_left(
+/// last time, whether by choice or by being lost, and one once the host
+/// has left a match that's over. One that only watched gave no player's
+/// orders, and goes unremarked.
+pub fn tell_leaving(
     mut orders: ResMut<Orders>,
     sim: Res<Sim>,
     local: Res<Local>,
@@ -523,6 +524,13 @@ pub fn tell_left(
                 &mut sounds,
             );
         }
+    }
+    if orders.take_ended() {
+        let said = log.look.said(
+            "ui_mission_message_host_has_ended_game",
+            "The host has ended the game.",
+        );
+        log.say("GENERIC_EVENT", said, None, &time, &mut sounds);
     }
 }
 
