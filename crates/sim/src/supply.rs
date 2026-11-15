@@ -161,6 +161,10 @@ impl World {
                 // Its zone waits for its own beat.
                 self.buildings[b].supply.judged = true;
             }
+            Some(Operation::Reveal { seconds }) => {
+                let until = self.ticks + (seconds / TICK).round() as u64;
+                self.reveals.insert(player, until);
+            }
             None => return Err(Refused::Unable),
         }
         Ok(())
@@ -196,7 +200,7 @@ impl World {
             }
             (Operation::Enchant { area, .. }, None) => (*area > 0.0).then_some(at),
             (Operation::Drop(_), None) => Some(at),
-            (_, Some(_)) => None,
+            (Operation::Reveal { .. }, _) | (_, Some(_)) => None,
         }
     }
 

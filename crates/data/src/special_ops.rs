@@ -3,9 +3,12 @@
 
 use std::collections::HashMap;
 
+use crate::audio::cues;
+use crate::effects::vfx_cues;
 use crate::properties::{Pace, fill, line, number};
 use crate::strings::localized;
 use crate::supply::is;
+use crate::{Cue, VfxCue};
 use crate::{GameData, Id, defs, scoped};
 
 /// A special operation as its button and tooltip show it.
@@ -25,6 +28,13 @@ pub struct SpecialOperation {
     /// What its effects do, a line each, with the lines of what an
     /// enchantment gives indented under it.
     pub effects: Vec<EffectLine>,
+}
+
+/// What plays as a special operation is used, on the ground at its centre.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OperationCues {
+    pub sounds: Vec<Cue>,
+    pub visuals: Vec<VfxCue>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -235,6 +245,19 @@ impl GameData {
             .collect()
     }
 
+    /// What plays as each special operation is used, by id.
+    pub fn operation_cues(&self) -> HashMap<Id, OperationCues> {
+        (self.definitions().abilities.iter())
+            .map(|(id, a)| {
+                let cues = OperationCues {
+                    sounds: cues(&a.when_do),
+                    visuals: vfx_cues(&a.when_do),
+                };
+                (id.clone(), cues)
+            })
+            .collect()
+    }
+
     /// How a side's experience starts and grows: the match's Starting
     /// Experience setting and the tuning's gain a second.
     pub fn experience_rules(&self) -> ExperienceRules {
@@ -356,6 +379,18 @@ mod tests {
         );
         let drop = definition("[AbilityDefinition]\n{\n\tIDS = supply_drop\n\ttargets = NULL\n}\n");
         assert_eq!((shown(&scan).on_self, shown(&drop).on_self), (true, false));
+    }
+
+    #[test]
+    fn an_operation_giving_no_minimap_fog_reveals_for_its_property_s_time() {
+        let scan = definition(
+            "[AbilityDefinition]\n{\n\tIDS = radar_scan\n\t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n\
+             \t\t[EnchantmentProperty]\n\t\t{\n\t\t\tIDS = scanned\n\t\t\tduration = 10\n\
+             \t\t\t[Modifier]\n\t\t\t{\n\t\t\t\ttype = FLAG\n\t\t\t\tmodifier_flag = MINIMAP_NO_FOG\n\t\t\t}\n\t\t}\n\t}\n}\n",
+        );
+        assert_eq!(crate::supply::reveals(&scan), Some(10.0));
+        let other = definition("[AbilityDefinition]\n{\n\tIDS = fear\n}\n");
+        assert_eq!(crate::supply::reveals(&other), None);
     }
 
     #[test]

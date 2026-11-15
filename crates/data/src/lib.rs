@@ -56,7 +56,7 @@ pub use recruiting::{
     Airlift, Amount, DeployPoints, Deployment, Fall, Listing, Requires, Technology,
 };
 pub use research::{Grant, Research};
-pub use special_ops::{EffectLine, ExperienceRules, SpecialOperation};
+pub use special_ops::{EffectLine, ExperienceRules, OperationCues, SpecialOperation};
 pub use strings::{PingLook, Strings, resource_name};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{

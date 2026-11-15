@@ -128,6 +128,8 @@ impl World {
             holdings: Vec::new(),
             treasuries: BTreeMap::new(),
             commanders: BTreeMap::new(),
+            operated: Vec::new(),
+            reveals: BTreeMap::new(),
             notices: Vec::new(),
             fog,
             numbers: BTreeMap::new(),

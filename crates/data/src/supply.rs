@@ -57,7 +57,8 @@ pub struct Kind {
     pub soft: Shape,
 }
 
-/// A special operation that bears on supply, as far as it does.
+/// What a special operation does in play, for those the match carries
+/// out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
     /// Gives regiments around where it's aimed a property for a time.
@@ -74,6 +75,21 @@ pub enum Operation {
     /// Drops something of this template that gives supply where it's
     /// aimed.
     Drop(Id),
+    /// Lifts the fog from its user's minimap for a time.
+    Reveal { seconds: f32 },
+}
+
+/// How long an operation lifts the fog from its user's minimap, for one
+/// that gives a property doing that.
+pub(crate) fn reveals(a: &defs::AbilityDefinition) -> Option<f32> {
+    a.effect.iter().find_map(|e| {
+        let p = e.enchantment_property.as_ref()?;
+        let flag = |m: &defs::Modifier| is(&m.modifier_flag, "MINIMAP_NO_FOG");
+        p.modifier
+            .iter()
+            .any(flag)
+            .then(|| p.duration.unwrap_or(0.0))
+    })
 }
 
 /// The ids a comma separated list names.
@@ -201,7 +217,7 @@ impl GameData {
         })
     }
 
-    /// The special operations that bear on supply, by id.
+    /// The special operations the match carries out, by id.
     pub fn operations(&self) -> HashMap<Id, Operation> {
         let definitions = self.definitions();
         let effects = self.supply_effects();
@@ -224,7 +240,10 @@ impl GameData {
                     seconds,
                 },
                 (None, Some(template)) => Operation::Drop(template),
-                (None, None) => continue,
+                (None, None) => match reveals(a) {
+                    Some(seconds) => Operation::Reveal { seconds },
+                    None => continue,
+                },
             };
             out.insert(id.clone(), operation);
         }
