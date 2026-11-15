@@ -627,8 +627,8 @@ impl Totals {
             return Err(Error::Unwritable(format!(
                 "totals version {} have {} values, not {}",
                 self.version,
-                Self::count(self.version),
-                self.values.len()
+                self.values.len(),
+                Self::count(self.version)
             )));
         }
         w.u32(self.version);

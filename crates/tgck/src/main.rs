@@ -210,8 +210,7 @@ fn unpack(path: &str, out_dir: &str) -> Res {
     Ok(())
 }
 
-/// Runs `each` on every map, going on past ones that fail, and reports each
-/// failure on stdout with the map's other output.
+/// Runs `each` on every map, going on past ones that fail.
 fn each_map(paths: &[&str], failing: &str, mut each: impl FnMut(&str) -> Res) -> Res {
     let mut failed = 0;
     for path in paths {
@@ -219,7 +218,7 @@ fn each_map(paths: &[&str], failing: &str, mut each: impl FnMut(&str) -> Res) ->
             if is_broken_pipe(e.as_ref()) {
                 return Err(e);
             }
-            outln!("{path}: {e}");
+            eprintln!("{path}: {e}");
             failed += 1;
         }
     }
@@ -229,7 +228,6 @@ fn each_map(paths: &[&str], failing: &str, mut each: impl FnMut(&str) -> Res) ->
     }
 }
 
-/// Summarises a map.
 fn map(path: &str) -> Res {
     let mut m = Map::open(path)?;
     let header = m.header()?;

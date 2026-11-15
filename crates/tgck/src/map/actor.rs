@@ -1310,7 +1310,7 @@ impl Actor {
             _ => None,
         })?;
         let mut cur = Cursor::new(data);
-        framed_updatable(&mut cur)?;
+        Updatable::parse(&mut cur).ok()?;
         let _version = cur.u32().ok()?;
         cur.i32().ok()
     }
@@ -1337,19 +1337,10 @@ impl Actor {
             Component::Framed {
                 bit: DEFENDER,
                 data,
-            } => framed_updatable(&mut Cursor::new(data)),
+            } => Updatable::parse(&mut Cursor::new(data)).ok(),
             _ => None,
         })
     }
-}
-
-/// The updatable header a framed component's data starts with, read
-/// without checking its version.
-fn framed_updatable(cur: &mut Cursor) -> Option<Updatable> {
-    Some(Updatable {
-        version: cur.u32().ok()?,
-        id: cur.i32().ok()?,
-    })
 }
 
 #[cfg(test)]

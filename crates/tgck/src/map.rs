@@ -685,6 +685,10 @@ const THING_RECORD_VERSION: u32 = 2;
 const PLACEMENT_VERSION: u32 = 5;
 /// The version that follows an area's id.
 const AREA_ID_VERSION: u32 = 2;
+/// The bytes of an area's `shape`, `radius` and `bounds`.
+const AREA_OUTLINE_LEN: usize = 24;
+/// The bytes of an `area_occupant`.
+const AREA_OCCUPANT_LEN: usize = 5;
 
 /// Reads a thing list from its `{name}_INDEX` and `{name}` sections.
 fn parse_things(name: &str, index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thing>> {
@@ -961,7 +965,7 @@ impl Area {
             shape: cur.u32()?,
             radius: cur.f32()?,
             bounds: cur.f32s()?,
-            inside: Self::parse_inside(cur)?,
+            inside: cur.list(|c| Ok((c.u32()?, c.u8()?)))?,
         })
     }
 
@@ -970,24 +974,20 @@ impl Area {
     /// length without it.
     fn has_id(mut cur: Cursor) -> bool {
         let mut fits = || -> Result<bool> {
-            // The version and the id.
-            cur.bytes(8)?;
+            let _version = cur.u32()?;
+            let _id = cur.u32()?;
             if cur.u32()? != AREA_ID_VERSION {
                 return Ok(false);
             }
+            // Skipped rather than decoded, so that a name that isn't valid
+            // UTF-16 still tells the layouts apart.
             let name_len = cur.u16()?;
             cur.bytes(usize::from(name_len) * 2)?;
-            cur.u32()?;
-            cur.f32()?;
-            cur.f32s::<4>()?;
-            Self::parse_inside(&mut cur)?;
-            Ok(cur.at_end())
+            cur.bytes(AREA_OUTLINE_LEN)?;
+            let inside = cur.u32()? as usize;
+            Ok(inside.checked_mul(AREA_OCCUPANT_LEN) == Some(cur.remaining()))
         };
         fits().unwrap_or(false)
-    }
-
-    fn parse_inside(cur: &mut Cursor) -> Result<Vec<(u32, u8)>> {
-        cur.list(|c| Ok((c.u32()?, c.u8()?)))
     }
 
     fn write(&self, w: &mut Writer) -> Result<()> {
