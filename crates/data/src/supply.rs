@@ -57,7 +57,8 @@ pub struct Kind {
     pub soft: Shape,
 }
 
-/// A special operation that bears on supply, as far as it does.
+/// What a special operation does in play, for those the match carries
+/// out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
     /// Gives regiments around where it's aimed a property for a time.
@@ -74,6 +75,28 @@ pub enum Operation {
     /// Drops something of this template that gives supply where it's
     /// aimed.
     Drop(Id),
+    /// Lifts the fog from its user's minimap for a time.
+    Reveal { seconds: f32 },
+}
+
+/// How long an operation lifts the fog from its user's minimap, for one
+/// that gives a property doing that: the property as the operation gives
+/// it, else as it's defined on its own.
+pub(crate) fn reveals(
+    a: &defs::AbilityDefinition,
+    properties: &HashMap<Id, defs::Property>,
+) -> Option<f32> {
+    a.effect.iter().find_map(|e| {
+        let p = e.enchantment_property.as_ref()?;
+        let shared = p.ids.as_ref().and_then(|id| properties.get(id));
+        let modifiers = match p.modifier.is_empty() {
+            true => shared.map_or(&p.modifier, |s| &s.modifier),
+            false => &p.modifier,
+        };
+        let flag = |m: &defs::Modifier| is(&m.modifier_flag, "MINIMAP_NO_FOG");
+        let seconds = p.duration.or_else(|| shared?.duration).unwrap_or(0.0);
+        modifiers.iter().any(flag).then_some(seconds)
+    })
 }
 
 /// The ids a comma separated list names.
@@ -201,7 +224,7 @@ impl GameData {
         })
     }
 
-    /// The special operations that bear on supply, by id.
+    /// The special operations the match carries out, by id.
     pub fn operations(&self) -> HashMap<Id, Operation> {
         let definitions = self.definitions();
         let effects = self.supply_effects();
@@ -224,7 +247,10 @@ impl GameData {
                     seconds,
                 },
                 (None, Some(template)) => Operation::Drop(template),
-                (None, None) => continue,
+                (None, None) => match reveals(a, &definitions.properties) {
+                    Some(seconds) => Operation::Reveal { seconds },
+                    None => continue,
+                },
             };
             out.insert(id.clone(), operation);
         }

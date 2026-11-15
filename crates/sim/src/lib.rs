@@ -46,7 +46,7 @@ pub use aaa_map::{Outcome, Player, Relation, Team};
 pub use attach::Hq;
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
-pub use experience::{Commander, SpecialOp};
+pub use experience::{Commander, Operated, SpecialOp};
 pub use fog::{Fog, Seen};
 use hash::{Digest, Hasher, digest};
 pub use notices::Notice;
@@ -162,6 +162,11 @@ pub struct World {
     pub treasuries: BTreeMap<u32, Treasury>,
     /// The experience of each side with a general, by player id.
     pub commanders: BTreeMap<u32, Commander>,
+    /// The special operations carried out in the last [`LANDINGS_KEPT`]
+    /// ticks, oldest first, for what shows them to find.
+    pub operated: Vec<Operated>,
+    /// The tick each side whose minimap has its fog lifted has it until.
+    pub reveals: BTreeMap<u32, u64>,
     /// What sides have been told: see [`World::take_notices`].
     pub(crate) notices: Vec<Notice>,
     /// What each side sees of the map.
@@ -1007,7 +1012,7 @@ impl Sides {
 
 digest!(World {
     regiments, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, treasuries, commanders, fog, ticks, loaded, flying, landings, numbers, next_id,
+    holdings, treasuries, commanders, operated, reveals, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng,
 } skip {
     // Fixed by the map and the game's data.

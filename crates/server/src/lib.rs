@@ -86,7 +86,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     let operations = game.operations();
     let dropped = operations.values().filter_map(|o| match o {
         aaa_map::Operation::Drop(template) => Some(template.clone()),
-        aaa_map::Operation::Enchant { .. } => None,
+        aaa_map::Operation::Enchant { .. } | aaa_map::Operation::Reveal { .. } => None,
     });
     let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
     let recruit_lists = game.recruit_lists();

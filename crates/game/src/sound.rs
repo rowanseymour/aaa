@@ -212,7 +212,7 @@ impl Sounds {
             Some(o) => event(o).clone(),
             None => return,
         };
-        self.play(time, &cues, |_| at, owner);
+        self.play(time, &cues, |_| Some(at), owner);
     }
 
     /// Queues `owner`'s object's reply to being selected or ordered, unless
@@ -247,19 +247,31 @@ impl Sounds {
             true => to,
             false => from,
         };
-        self.play(time, cues, at, owner);
+        self.play(time, cues, |c| Some(at(c)), owner);
+    }
+
+    /// Queues cues set off by `owner` nowhere on the map, heard only if
+    /// they're heard from anywhere.
+    pub fn unplaced(&mut self, time: &Time, cues: &[Cue], owner: u32) {
+        self.play(time, cues, |_| None, owner);
     }
 
     /// Queues cues set off by `owner`'s object, each played where `at` says;
     /// those that play only some of the times they're set off may not.
-    fn play(&mut self, time: &Time, cues: &[Cue], at: impl Fn(&Cue) -> [f32; 2], owner: u32) {
+    fn play(
+        &mut self,
+        time: &Time,
+        cues: &[Cue],
+        at: impl Fn(&Cue) -> Option<[f32; 2]>,
+        owner: u32,
+    ) {
         for cue in cues {
             if self.random() * cue.every as f32 >= 1.0 {
                 continue;
             }
             let request = Request {
                 audio: cue.audio.clone(),
-                at: Some(at(cue)),
+                at: at(cue),
                 owner: Some(owner),
             };
             let due = time.elapsed_secs_f64() + f64::from(cue.delay);
