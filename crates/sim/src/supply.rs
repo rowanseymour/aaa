@@ -181,7 +181,7 @@ impl World {
         targets.allow(flags.chain([&organization, &side]))
     }
 
-    /// Where a click gives `player`'s general's `i`th operation, if
+    /// Where a click gives `player`'s faction's `i`th operation, if
     /// anywhere: on `on`, what's under the cursor, when the operation works
     /// on it, else at `at` on the ground for one that's aimed at a place.
     /// A click on something it doesn't work on gives nothing.

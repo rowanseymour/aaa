@@ -317,7 +317,7 @@ pub(crate) fn player(
         outcome: Default::default(),
         won_by_cities: false,
         nation: None,
-        general: None,
+        faction: None,
         relations: stored(relations),
         team_relations: stored(team_relations),
         stockpile: 0.0,

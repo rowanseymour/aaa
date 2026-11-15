@@ -160,7 +160,7 @@ pub struct World {
     pub holdings: Vec<(u32, Id)>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
-    /// The experience of each side with a general, by player id.
+    /// The experience of each side with a faction, by player id.
     pub commanders: BTreeMap<u32, Commander>,
     /// The special operations carried out in the last [`LANDINGS_KEPT`]
     /// ticks, oldest first, for what shows them to find.
@@ -762,7 +762,7 @@ pub enum Command {
     /// Refused for one whose template can't be sold, one unpacking or
     /// packing, and one under siege where the rules say so.
     Sell { building: usize },
-    /// Uses the `operation`th of the player's general's special
+    /// Uses the `operation`th of the player's faction's special
     /// operations, aimed at `at`. Refused while it's recharging, when the
     /// side hasn't the experience for it, and for one the match can't
     /// carry out.
