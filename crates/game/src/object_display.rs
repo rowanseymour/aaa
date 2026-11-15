@@ -919,18 +919,15 @@ impl Ui<'_> {
         let (wears, lacks) = shown.map_or((None, false), |&(_, wears, lacks)| (wears, lacks));
         let wears = wears.map(|(hq, _)| hq);
         let (badges, banners) = (self.badges, &mut *self.banners);
-        // An HQ's own frame goes with its badge.
-        let frame = match wears.filter(|&hq| hq == regiment.id) {
-            Some(hq) => badges.frame(banners, self.game, self.images, template.as_str(), hq),
-            None => banners.frame(self.game, self.images, template.as_str()),
-        };
+        let faction = self.leaders.banner(regiment.owner);
+        let looks = banners.layers(self.game, self.images, template.as_str(), faction);
         let badge = wears
             .and_then(|hq| badges.badge(banners, self.game, self.images, template.as_str(), hq));
-        let out_of_supply = self.banners.out_of_supply.clone().filter(|_| lacks);
+        let out_of_supply = looks.out_of_supply.filter(|_| lacks);
         let layers = [
             (self.banners.plate.clone(), Color::srgb(red, green, blue)),
             (icon, Color::WHITE),
-            (frame, Color::WHITE),
+            (looks.frame, Color::WHITE),
             (out_of_supply, Color::WHITE),
             (badge, Color::WHITE),
         ];

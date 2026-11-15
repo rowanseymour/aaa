@@ -727,6 +727,11 @@ pub struct View {
     pub icon: Option<String>,
     /// The image on an organization's banner.
     pub banner_icon: Option<String>,
+    /// The [`Banner`] its organizations fly.
+    pub banner_ids: Option<Id>,
+    /// Whether they fly their side's faction's banner instead, where the
+    /// faction names one.
+    pub use_faction_banner: Option<bool>,
     /// The image marking it on the minimap, white to take its owner's
     /// colour, drawn square to the map's sides.
     pub minimap_icon: Option<String>,
@@ -868,12 +873,37 @@ pub struct Sun {
     pub specular: [f32; 3],
 }
 
-/// How a nation's banners look.
+/// A banner an organization flies.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Banner {
     pub ids: Option<Id>,
-    /// What its own images' paths start with, under the banners' folder.
+    /// Substituted for `%s` in its images' paths, which are under the
+    /// banners' folder.
     pub resource_prefix: Option<String>,
+    #[serde(default)]
+    pub plane: Vec<BannerPlane>,
+}
+
+/// One of a banner's planes, drawn with decals.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BannerPlane {
+    #[serde(default)]
+    pub decal: Vec<BannerDecal>,
+}
+
+/// An image a banner's plane shows.
+#[derive(Debug, Clone, Deserialize)]
+pub struct BannerDecal {
+    /// When it shows: `NONE` for always, otherwise by the organization's
+    /// state.
+    pub function: Option<String>,
+    #[serde(default)]
+    pub texture: Vec<BannerTexture>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BannerTexture {
+    pub texture: Option<String>,
 }
 
 /// A nation players can play.
@@ -922,6 +952,9 @@ pub struct Faction {
     pub ability: Vec<FactionAbility>,
     /// The most experience their side can hold; negative for no ceiling.
     pub experience_max: Option<f32>,
+    /// The [`Banner`] their side's organizations fly, where their
+    /// templates say to.
+    pub banner_ids: Option<Id>,
 }
 
 /// A computer player's profile: how it plays, and whose side.

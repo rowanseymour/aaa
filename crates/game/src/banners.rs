@@ -15,7 +15,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 
-use crate::{Drawn, Focus, Loaded, Local, Screen, Sim, TINTS, tint};
+use crate::{Drawn, Focus, Leaders, Loaded, Local, Screen, Sim, TINTS, tint};
 
 /// How high over the ground under its regiment a banner floats, in world
 /// units.
@@ -37,6 +37,8 @@ pub struct Banner {
     frame: Entity,
     badge: Entity,
     wears: Option<Worn>,
+    /// The side whose faction's banner it shows, drawn again on a change.
+    owner: u32,
 }
 
 /// The HQ whose badge a banner shows, by its id, and the side that HQ
@@ -128,22 +130,6 @@ impl Badges {
                 let template = Id::from(template);
                 banners.badge(game, images, &Division { template, badge })
             }
-        }
-    }
-
-    /// The frame round the banner of the HQ with this id, of `template`:
-    /// that of the nation its badge is from.
-    pub fn frame(
-        &self,
-        banners: &mut BannerImages,
-        game: &GameData,
-        images: &mut Assets<Image>,
-        template: &str,
-        hq: u32,
-    ) -> Option<Handle<Image>> {
-        match self.0.get(&hq).and_then(|held| held.nation.as_deref()) {
-            Some(nation) => banners.nation_frame(game, images, nation),
-            None => banners.frame(game, images, template),
         }
     }
 }
@@ -242,7 +228,7 @@ pub fn add_hq_banners(
     mut commands: Commands,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
-    badges: Res<Badges>,
+    (badges, leaders): (Res<Badges>, Res<Leaders>),
     mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
     flying: Query<&HqBanner>,
     mut bare: bevy::prelude::Local<HashSet<usize>>,
@@ -268,7 +254,7 @@ pub fn add_hq_banners(
         }
         let (banners, assets) = (&mut *images.0, &mut *images.1);
         let icon = banners.icon(&loaded.game, assets, template);
-        let frame = badges.frame(banners, &loaded.game, assets, template, hq);
+        let looks = banners.layers(&loaded.game, assets, template, leaders.banner(owner));
         let badge = badges.badge(banners, &loaded.game, assets, template, hq);
         // Its template names none, and never will.
         if icon.is_none() {
@@ -289,14 +275,14 @@ pub fn add_hq_banners(
             .commands()
             .spawn(layer(&banners.plate, Color::WHITE))
             .id();
-        let shortage = (layer(&banners.shortage, Color::WHITE), Visibility::Hidden);
+        let shortage = (layer(&looks.shortage, Color::WHITE), Visibility::Hidden);
         let shortage = root.commands().spawn(shortage).id();
         let focus = (layer(&banners.focus, Color::WHITE), Visibility::Hidden);
         let focus = root.commands().spawn(focus).id();
         root.add_child(plate);
         root.with_children(|banner| {
             banner.spawn(layer(&icon, Color::WHITE));
-            banner.spawn(layer(&frame, Color::WHITE));
+            banner.spawn(layer(&looks.frame, Color::WHITE));
             banner.spawn(layer(&badge, Color::WHITE));
         });
         root.add_children(&[shortage, focus]);
@@ -388,6 +374,7 @@ pub fn add_banners(
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     scenery: Res<Scenery>,
+    leaders: Res<Leaders>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
     mut have: bevy::prelude::Local<usize>,
@@ -408,7 +395,9 @@ pub fn add_banners(
             .player(regiment.owner)
             .map_or([1.0; 3], |p| p.rgb);
         let icon = banners.icon(&loaded.game, &mut images, regiment.template.as_str());
-        let frame = banners.frame(&loaded.game, &mut images, regiment.template.as_str());
+        let faction = leaders.banner(regiment.owner);
+        let template = regiment.template.as_str();
+        let looks = banners.layers(&loaded.game, &mut images, template, faction);
         // Only organization templates name a banner icon, so a unit outside
         // one, such as a supply truck, flies no banner.
         if icon.is_none() {
@@ -428,16 +417,19 @@ pub fn add_banners(
             let layer = (layer(image, Color::WHITE), Visibility::Hidden);
             root.commands().spawn(layer).id()
         };
-        let engaged = hidden(&banners.engaged);
+        let engaged = hidden(&looks.engaged);
         let focus = hidden(&banners.focus);
-        let out_of_supply = hidden(&banners.out_of_supply);
-        let shortage = hidden(&banners.shortage);
+        let out_of_supply = hidden(&looks.out_of_supply);
+        let shortage = hidden(&looks.shortage);
         // Over the frame's lower edge.
         let badge = hidden(&None);
         let plate = layer(&banners.plate, Color::srgb(red, green, blue));
         let plate = root.commands().spawn(plate).id();
         let icon = root.commands().spawn(layer(&icon, Color::WHITE)).id();
-        let frame = root.commands().spawn(layer(&frame, Color::WHITE)).id();
+        let frame = root
+            .commands()
+            .spawn(layer(&looks.frame, Color::WHITE))
+            .id();
         root.add_children(&[
             engaged,
             plate,
@@ -458,6 +450,7 @@ pub fn add_banners(
             frame,
             badge,
             wears: None,
+            owner: regiment.owner,
         });
     }
 }
@@ -562,10 +555,12 @@ pub fn show_banners(
 
 /// Gives each HQ raised since the map's a badge, and each that's changed
 /// side another, and shows on each banner that of the HQ its regiment is
-/// attached to, or is.
+/// attached to, or is, and the banner of the faction of the side it's now
+/// on.
 pub fn badge_banners(
     loaded: Res<Loaded>,
     sim: Res<Sim>,
+    leaders: Res<Leaders>,
     mut badges: ResMut<Badges>,
     mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
     mut banners: Query<&mut Banner>,
@@ -596,6 +591,24 @@ pub fn badge_banners(
     };
     badges.settle(&hqs, nation, count);
     for mut banner in &mut banners {
+        let regiment = &sim.0.regiments[banner.regiment];
+        if banner.owner != regiment.owner {
+            banner.owner = regiment.owner;
+            let (banners, assets) = (&mut *images.0, &mut *images.1);
+            let faction = leaders.banner(regiment.owner);
+            let looks = banners.layers(&loaded.game, assets, regiment.template.as_str(), faction);
+            let drawn = [
+                (banner.frame, looks.frame),
+                (banner.engaged, looks.engaged),
+                (banner.out_of_supply, looks.out_of_supply),
+                (banner.shortage, looks.shortage),
+            ];
+            for (layer, image) in drawn {
+                if let Ok((mut node, _)) = layers.get_mut(layer) {
+                    node.image = image.unwrap_or_default();
+                }
+            }
+        }
         let wears = wears(&sim.0, &hqs, banner.regiment).map(|hq| (hq, badges.side(hq)));
         if banner.wears == wears {
             continue;
@@ -604,13 +617,6 @@ pub fn badge_banners(
         let regiment = &sim.0.regiments[banner.regiment];
         let template = &regiment.template;
         let (banners, assets) = (&mut *images.0, &mut *images.1);
-        // An HQ's own frame goes with its badge.
-        if let (Some((hq, _)), Ok((mut image, _))) = (wears, layers.get_mut(banner.frame))
-            && hq == regiment.id
-        {
-            let frame = badges.frame(banners, &loaded.game, assets, template.as_str(), hq);
-            image.image = frame.unwrap_or_default();
-        }
         let Ok((mut image, mut visibility)) = layers.get_mut(banner.badge) else {
             continue;
         };
@@ -752,6 +758,7 @@ mod tests {
             frame: none,
             badge: none,
             wears: None,
+            owner: 0,
         };
         let hq = |building: usize| HqBanner {
             building,

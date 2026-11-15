@@ -315,6 +315,7 @@ mod tests {
             public: id != "patton_tutorial",
             portrait: None,
             computer_name: None,
+            banner: None,
         };
         let nation = |id: &str, factions: &[&str]| Nation {
             id: Id::from(id),
