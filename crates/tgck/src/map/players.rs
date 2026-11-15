@@ -3,7 +3,7 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::{Actor, Detail, Head, Property, ReadAs, Thing};
+use super::{Actor, Detail, Head, KINGDOM, Property, ReadAs, TEAM, Thing};
 use crate::{Cursor, Error, Result, Writer};
 
 /// The GWORLD section, the `gworld` of `rmp.ksy`.
@@ -156,33 +156,17 @@ pub struct Team {
     pub restriction_group: Option<String>,
 }
 
-const TEAM: u32 = 5;
-const KINGDOM: u32 = 4;
-
 pub(super) fn parse_teams(data: &[u8]) -> Result<Vec<Option<Team>>> {
     let mut cur = Cursor::new(data);
-    let count = cur.u32()?;
-    let teams = (0..count)
-        .map(|index| {
-            cur.bool("presence byte")?
-                .then(|| Team::parse(&mut cur, index))
-                .transpose()
-        })
-        .collect::<Result<_>>()?;
+    let teams = cur.slots("team presence", Team::parse)?;
     cur.finish("TEAMS")?;
     Ok(teams)
 }
 
 /// The TEAMS section holding `teams`.
-pub fn write_teams(teams: &[Option<Team>]) -> Result<Vec<u8>> {
+pub(super) fn write_teams(teams: &[Option<Team>]) -> Result<Vec<u8>> {
     let mut w = Writer::default();
-    w.count("teams", teams.len())?;
-    for (index, team) in teams.iter().enumerate() {
-        w.u8(team.is_some().into());
-        if let Some(team) = team {
-            team.write(&mut w, index as u32)?;
-        }
-    }
+    w.slots("teams", teams, |w, team, index| team.write(w, index))?;
     Ok(w.0)
 }
 
@@ -232,14 +216,14 @@ impl Team {
 }
 
 /// The KINGDOMS section, the `kingdoms` of `rmp.ksy`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Kingdoms {
     pub majors: u32,
     pub kingdoms: Vec<Option<Kingdom>>,
 }
 
 /// A present `kingdom` of `rmp.ksy`, less its index.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Kingdom {
     /// The shared fields; the detail is the kingdom's [`Actor`].
     pub thing: Thing,
@@ -368,14 +352,9 @@ impl Kingdoms {
     pub(super) fn parse(data: &[u8], world_version: u32) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let majors = cur.u32()?;
-        let count = cur.u32()?;
-        let kingdoms = (0..count)
-            .map(|index| {
-                cur.bool("presence byte")?
-                    .then(|| Kingdom::parse(&mut cur, world_version, index))
-                    .transpose()
-            })
-            .collect::<Result<_>>()?;
+        let kingdoms = cur.slots("kingdom presence", |cur, index| {
+            Kingdom::parse(cur, world_version, index)
+        })?;
         cur.finish("KINGDOMS")?;
         Ok(Kingdoms { majors, kingdoms })
     }
@@ -383,13 +362,9 @@ impl Kingdoms {
     pub fn to_bytes(&self, world_version: u32) -> Result<Vec<u8>> {
         let mut w = Writer::default();
         w.u32(self.majors);
-        w.count("kingdoms", self.kingdoms.len())?;
-        for (index, kingdom) in self.kingdoms.iter().enumerate() {
-            w.u8(kingdom.is_some().into());
-            if let Some(kingdom) = kingdom {
-                kingdom.write(&mut w, world_version, index as u32)?;
-            }
-        }
+        w.slots("kingdoms", &self.kingdoms, |w, kingdom, index| {
+            kingdom.write(w, world_version, index)
+        })?;
         Ok(w.0)
     }
 }
@@ -433,9 +408,7 @@ impl Kingdom {
         let objectives = cur.pairs(Cursor::u32)?;
         let outcome = cur.u32()?;
         let start_technologies = (v >= 14).then(|| cur.strings()).transpose()?;
-        let properties = (0..cur.u32()?)
-            .map(|_| Property::parse(cur, 0))
-            .collect::<Result<_>>()?;
+        let properties = cur.list(|cur| Property::parse(cur, 0))?;
         let required = cur.bool("required")?;
         let playable = cur.bool("playable")?;
         let ai_profile = cur.string()?;
@@ -443,9 +416,7 @@ impl Kingdom {
         let stats = (independent == 0)
             .then(|| KingdomStats::parse(cur))
             .transpose()?;
-        let saved_groups = (0..cur.u32()?)
-            .map(|_| SavedGroup::parse(cur))
-            .collect::<Result<_>>()?;
+        let saved_groups = cur.list(SavedGroup::parse)?;
         let flag = |cur: &mut Cursor, from: u32, what: &str| {
             (v >= from).then(|| cur.bool(what)).transpose()
         };
@@ -486,34 +457,17 @@ impl Kingdom {
 
     fn write(&self, w: &mut Writer, world_version: u32, index: u32) -> Result<()> {
         let v = self.version;
-        let has = [
-            (self.start_technologies.is_some(), v >= 14),
-            (self.stats.is_some(), self.independent == 0),
-            (self.instance_numbers.is_some(), v >= 15),
-            (self.used_badges.is_some(), v >= 16),
-            (self.default_victory_condition.is_some(), v >= 17),
-            (self.resigned.is_some(), v >= 18),
-            (self.city_ratio_victory.is_some(), v >= 19),
-            (self.bonus_stockpile.is_some(), v >= 20),
-        ];
-        if has.iter().any(|(set, wanted)| set != wanted) {
-            return Err(Error::Unwritable(format!(
-                "kingdom {index}'s fields don't suit its version {v}"
-            )));
-        }
         self.thing.write(w, ReadAs::Actor(KINGDOM))?;
-        match (&self.updatable, world_version >= UPDATABLE_WORLD_VERSION) {
-            (Some(id), true) => {
+        let has_updatable = world_version >= UPDATABLE_WORLD_VERSION;
+        w.optional_plain(
+            has_updatable,
+            "kingdom's updatable id",
+            self.updatable,
+            |w, id| {
                 w.u32(1);
-                w.i32(*id);
-            }
-            (None, false) => {}
-            _ => {
-                return Err(Error::Unwritable(format!(
-                    "kingdom {index}'s updatable id doesn't suit world version {world_version}"
-                )));
-            }
-        }
+                w.i32(id);
+            },
+        )?;
         w.u32(v);
         w.u32(index);
         w.i32(self.major_index);
@@ -535,9 +489,10 @@ impl Kingdom {
         w.string(&self.nation)?;
         w.pairs("objectives", &self.objectives, Writer::u32)?;
         w.u32(self.outcome);
-        if let Some(technologies) = &self.start_technologies {
-            w.strings("technologies", technologies)?;
-        }
+        let technologies = self.start_technologies.as_deref();
+        w.optional(v >= 14, "start technologies", technologies, |w, ts| {
+            w.strings("start technologies", ts)
+        })?;
         if self.properties.iter().any(|p| p.class != 0) {
             return Err(Error::Unwritable(format!(
                 "kingdom {index} has a property of a class other than 0"
@@ -548,29 +503,39 @@ impl Kingdom {
         w.u8(self.playable.into());
         w.string(&self.ai_profile)?;
         w.string(&self.restriction_group)?;
-        if let Some(stats) = &self.stats {
-            stats.write(w)?;
-        }
+        let independent = self.independent != 0;
+        w.optional(
+            !independent,
+            "kingdom's stats",
+            self.stats.as_ref(),
+            |w, stats| stats.write(w),
+        )?;
         w.list("saved groups", &self.saved_groups, |w, g| g.write(w))?;
-        if let Some(numbers) = &self.instance_numbers {
-            w.pairs("instance numbers", numbers, Writer::u32)?;
+        let numbers = self.instance_numbers.as_deref();
+        w.optional(v >= 15, "instance numbers", numbers, |w, ns| {
+            w.pairs("instance numbers", ns, Writer::u32)
+        })?;
+        w.optional(
+            v >= 16,
+            "used badges",
+            self.used_badges.as_deref(),
+            |w, bs| w.u32s("used badges", bs),
+        )?;
+        for (from, what, flag) in [
+            (
+                17,
+                "default victory condition",
+                self.default_victory_condition,
+            ),
+            (18, "resigned", self.resigned),
+            (19, "city ratio victory", self.city_ratio_victory),
+        ] {
+            w.optional_plain(v >= from, what, flag, |w, f| w.u8(f.into()))?;
         }
-        if let Some(badges) = &self.used_badges {
-            w.u32s("badges", badges)?;
-        }
-        for flag in [
-            self.default_victory_condition,
-            self.resigned,
-            self.city_ratio_victory,
-        ]
-        .into_iter()
-        .flatten()
-        {
-            w.u8(flag.into());
-        }
-        if let Some(bonus) = &self.bonus_stockpile {
-            w.pairs("bonus stockpile", bonus, Writer::f32)?;
-        }
+        let bonus = self.bonus_stockpile.as_deref();
+        w.optional(v >= 20, "bonus stockpile", bonus, |w, bs| {
+            w.pairs("bonus stockpile", bs, Writer::f32)
+        })?;
         Ok(())
     }
 }
@@ -1091,6 +1056,7 @@ pub(super) mod tests {
         assert!(last.stats.is_none(), "independents have no stats");
         assert_eq!(last.instance_numbers.as_ref().unwrap()[0].1, 3);
         assert_eq!(kingdoms.to_bytes(28).unwrap(), w.0);
+        assert_eq!(Kingdoms::parse(&w.0, 28).unwrap(), kingdoms);
         assert!(
             kingdoms.to_bytes(21).is_err(),
             "updatable ids need world 22"

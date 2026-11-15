@@ -122,6 +122,18 @@ impl<'a> Cursor<'a> {
         }
         Ok(items)
     }
+    /// A `u32` count, then that many slots, each a presence flag and, if
+    /// set, an item read knowing its slot's index.
+    pub(crate) fn slots<T>(
+        &mut self,
+        what: &str,
+        mut item: impl FnMut(&mut Cursor<'a>, u32) -> Result<T>,
+    ) -> Result<Vec<Option<T>>> {
+        let n = self.u32()?;
+        (0..n)
+            .map(|index| self.bool(what)?.then(|| item(self, index)).transpose())
+            .collect()
+    }
     pub(crate) fn u32s(&mut self) -> Result<Vec<u32>> {
         self.list(Cursor::u32)
     }
@@ -236,6 +248,22 @@ impl Writer {
     ) -> Result<()> {
         self.count(what, items.len())?;
         items.iter().try_for_each(|i| item(self, i))
+    }
+    /// The inverse of [`Cursor::slots`].
+    pub(crate) fn slots<T>(
+        &mut self,
+        what: &str,
+        slots: &[Option<T>],
+        mut item: impl FnMut(&mut Writer, &T, u32) -> Result<()>,
+    ) -> Result<()> {
+        self.count(what, slots.len())?;
+        for (index, slot) in (0..).zip(slots) {
+            self.u8(slot.is_some().into());
+            if let Some(slot) = slot {
+                item(self, slot, index)?;
+            }
+        }
+        Ok(())
     }
     /// The inverse of [`Cursor::u32s`].
     pub(crate) fn u32s(&mut self, what: &str, vs: &[u32]) -> Result<()> {

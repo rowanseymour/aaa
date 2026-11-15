@@ -762,65 +762,39 @@ impl Trailer {
     }
 
     fn write(&self, w: &mut Writer, v: u32) -> Result<()> {
-        let has = |field: bool, from: bool| -> Result<()> {
-            match field == from {
-                true => Ok(()),
-                false => Err(Error::Unwritable(format!(
-                    "actor trailer fields don't suit version {v}"
-                ))),
-            }
-        };
-        has(self.required_object.is_some(), v >= 2)?;
-        has(self.old_stance.is_some(), (3..12).contains(&v))?;
-        has(self.saved_group.is_some(), v >= 4)?;
-        has(self.group.is_some(), v >= 5)?;
-        has(self.map_string.is_some(), v >= 6)?;
-        has(self.towing.is_some(), v >= 8)?;
-        has(self.number.is_some(), v >= 10)?;
-        has(self.lists.is_some(), v >= 11)?;
-        has(self.num_deploying.is_some(), v >= 13)?;
         w.i32(self.main_component);
-        for v in [self.required_object, self.old_stance]
-            .into_iter()
-            .flatten()
-        {
-            w.u32(v);
-        }
-        if let Some(s) = &self.saved_group {
+        w.optional_plain(v >= 2, "required object", self.required_object, Writer::u32)?;
+        let old = (3..12).contains(&v);
+        w.optional_plain(old, "old stance", self.old_stance, Writer::u32)?;
+        let saved_group = self.saved_group.as_ref().map(Option::as_deref);
+        w.optional(v >= 4, "saved group", saved_group, |w, s| {
             w.u8(s.is_some().into());
-            if let Some(s) = s {
-                w.string(s)?;
+            s.map_or(Ok(()), |s| w.string(s))
+        })?;
+        w.optional_plain(v >= 5, "group", self.group, |w, g| {
+            w.u8(g.is_some().into());
+            g.into_iter().for_each(|g| w.u32(g));
+        })?;
+        w.optional(
+            v >= 6,
+            "map string",
+            self.map_string.as_deref(),
+            Writer::string,
+        )?;
+        w.optional_plain(v >= 8, "towing", self.towing, |w, t| {
+            t.iter().for_each(|&id| w.u32(id));
+        })?;
+        w.optional_plain(v >= 10, "number", self.number, Writer::u32)?;
+        w.optional(v >= 11, "trailer lists", self.lists.as_ref(), |w, lists| {
+            for l in &lists.lists {
+                w.u32s("trailer list", l)?;
             }
-        }
-        if let Some(v) = self.group {
-            w.u8(v.is_some().into());
-            if let Some(v) = v {
-                w.u32(v);
-            }
-        }
-        if let Some(s) = &self.map_string {
-            w.string(s)?;
-        }
-        if let Some(vs) = self.towing {
-            vs.iter().for_each(|&v| w.u32(v));
-        }
-        if let Some(v) = self.number {
-            w.u32(v);
-        }
-        if let Some(lists) = &self.lists {
-            lists
-                .lists
-                .iter()
-                .try_for_each(|l| w.u32s("trailer list", l))?;
             w.list("recent attacks", &lists.recent_attacks, |w, attack| {
                 attack.iter().for_each(|&v| w.u32(v));
                 Ok(())
-            })?;
-        }
-        if let Some(v) = self.num_deploying {
-            w.u32(v);
-        }
-        Ok(())
+            })
+        })?;
+        w.optional_plain(v >= 13, "num deploying", self.num_deploying, Writer::u32)
     }
 }
 
