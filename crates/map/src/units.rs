@@ -4,7 +4,8 @@ use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use aaa_data::{
-    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, OrganizationComponent, Ranges, Shape,
+    Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, OrganizationComponent, Ranges,
+    Shape,
 };
 use tgck::map::{Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
 
@@ -1037,12 +1038,12 @@ mod tests {
     /// A squad of `layout()` placed on a map, with a rifle in the front
     /// slot's first place and the captain, in formation `formation`.
     fn squad(formation: i32, positions: &[i32]) -> Vec<Regiment> {
-        use crate::fixtures::{organization, placed};
+        use crate::fixtures::{placed, stored_organization};
         let members = vec![
             placed(2, "rifle", 0, None, None),
             placed(3, "captain", 0, None, None),
         ];
-        let mut o = organization("line", members);
+        let mut o = stored_organization("line", members);
         o.slots = vec!["rifle".into(), String::new(), "captain".into()];
         let place = o.positions[0].clone();
         o.positions = positions
@@ -1083,12 +1084,12 @@ mod tests {
 
     #[test]
     fn regiments_keep_a_place_for_members_they_can_replace() {
-        use crate::fixtures::{organization, placed};
+        use crate::fixtures::{placed, stored_organization};
         let members = vec![
             placed(2, "rifle", 0, None, None),
             placed(3, "captain", 0, None, None),
         ];
-        let mut o = organization("line", members);
+        let mut o = stored_organization("line", members);
         o.slots = vec!["rifle".into(), String::new(), "captain".into()];
         let place = o.positions[0].clone();
         // The front's second rifle is gone, a fifth of the way back; what

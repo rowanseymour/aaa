@@ -732,7 +732,7 @@ pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fixtures::{organization, placed};
+    use crate::fixtures::{placed, stored_organization};
 
     #[test]
     fn scenery_is_clearable_unless_it_blocks_is_an_actor_or_a_trigger_names_it() {
@@ -905,7 +905,7 @@ mod tests {
                 "squad",
                 0,
                 None,
-                Some(organization(
+                Some(stored_organization(
                     "line",
                     vec![at(9, "tank", [9.0, 9.0]), at(10, "hut", [5.0, 6.0])],
                 )),
@@ -916,7 +916,7 @@ mod tests {
                 "squad",
                 0,
                 None,
-                Some(organization(
+                Some(stored_organization(
                     "line",
                     vec![at(12, "tank", [5.0, 5.0]), at(13, "tank", [-1.0, 5.0])],
                 )),
@@ -961,13 +961,19 @@ mod tests {
         };
         let squad = |id, member| {
             let tank = at(member, "tank", [5.0, 5.0]);
-            placed(id, "squad", 0, None, Some(organization("line", vec![tank])))
+            placed(
+                id,
+                "squad",
+                0,
+                None,
+                Some(stored_organization("line", vec![tank])),
+            )
         };
         // The member's id is higher than the hut's, but its squad comes
         // first, so both stand; the squad stored after the hut doesn't.
         // A hut in an organization that goes is no obstacle to a hut
         // stored after it.
-        let camp = organization(
+        let camp = stored_organization(
             "line",
             vec![at(5, "hut", [12.0, 12.0]), at(6, "tank", [5.0, 5.0])],
         );
@@ -1073,7 +1079,7 @@ mod tests {
 
     #[test]
     fn things_are_told_apart_by_what_they_are_in_a_match() {
-        let hq = organization("regiment_hq", vec![placed(11, "hq", 0, None, None)]);
+        let hq = stored_organization("regiment_hq", vec![placed(11, "hq", 0, None, None)]);
         let things = [
             placed(1, "truck", 2, Some(2), None),
             placed(2, "gun", 2, None, None),
@@ -1131,7 +1137,7 @@ mod tests {
             "hq_unpacked",
             2,
             None,
-            Some(organization(
+            Some(stored_organization(
                 "regiment_hq",
                 vec![
                     placed(11, "hq", 0, None, None),
