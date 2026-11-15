@@ -433,6 +433,22 @@ pub(crate) fn amounts(of: &[(&str, f32)]) -> aaa_map::Amounts {
 /// like a Division HQ's and the depot they unpack into earning twice
 /// theirs, with the game's limits and shortfall prices, and player 1
 /// holding 500.
+/// AA's resources: money bought with, ammo and oil kept up, and the
+/// regiment and building limits.
+pub(crate) fn aa_resources() -> Vec<aaa_map::ResourceKind> {
+    use aaa_map::ResourceKind as R;
+    let free = || amounts(&[("money", 0.0)]);
+    vec![
+        R::stockpiled("money"),
+        R::upkeep("ammo", amounts(&[("money", 2.0)])),
+        R::upkeep("oil", amounts(&[("money", 3.0)])),
+        R::upkeep("unit_limit_provided", free()),
+        R::limited("unit_limit_consumed", "unit_limit_provided"),
+        R::upkeep("building_limit_provided", free()),
+        R::limited("building_limit_consumed", "building_limit_provided"),
+    ]
+}
+
 pub(crate) fn economy() -> World {
     let mut w = headquarters();
     let economy = |cost, production, upkeep| aaa_map::Economy {
@@ -476,11 +492,7 @@ pub(crate) fn economy() -> World {
         ),
     );
     w.rules.economy = aaa_map::EconomyRules {
-        purchase_cost: amounts(&[("ammo", 2.0), ("oil", 3.0)]),
-        limits: vec![
-            ("unit_limit_consumed", "unit_limit_provided"),
-            ("building_limit_consumed", "building_limit_provided"),
-        ],
+        resources: aa_resources(),
         limited_max: 20.0,
         stockpile_max: 99999.0,
         ..Default::default()

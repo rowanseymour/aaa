@@ -6,7 +6,9 @@ use std::time::{Duration, Instant};
 
 use aaa_sim::{Action, Refused, Schedule, World};
 
-use crate::protocol::{Join, PROTOCOL, Status, ToClient, ToHost, Welcome, decode, encode};
+use crate::protocol::{
+    Gone, Join, KickVote, PROTOCOL, Status, ToClient, ToHost, Welcome, decode, encode,
+};
 use crate::{Clock, Link, Lost, Refusal};
 
 /// Why a client hasn't joined a match.
@@ -90,7 +92,10 @@ pub struct Client<L> {
     diverged: Vec<(u32, u64)>,
     /// The other clients its copy has heard have gone, with the players
     /// each gave the orders of, since this was last asked.
-    left: Vec<(u32, Vec<u32>)>,
+    left: Vec<Gone>,
+    /// The kick votes its copy has heard cast or taken back since this
+    /// was last asked.
+    kicking: Vec<KickVote>,
     /// Whether its copy has heard the host end the match.
     ended: bool,
     refused: Vec<(u32, Refused)>,
@@ -127,6 +132,7 @@ impl<L: Link> Client<L> {
             checked: 0,
             diverged: Vec::new(),
             left: Vec::new(),
+            kicking: Vec::new(),
             ended: false,
             refused: Vec::new(),
             asked: 0,
@@ -162,10 +168,21 @@ impl<L: Link> Client<L> {
         &self.diverged
     }
 
-    /// The other clients its copy of the match has heard have gone since
-    /// this was last asked, each with the players it gave the orders of.
-    pub fn take_left(&mut self) -> Vec<(u32, Vec<u32>)> {
+    /// The clients its copy of the match has heard have gone since this
+    /// was last asked: this one too, if it's been kicked out.
+    pub fn take_left(&mut self) -> Vec<Gone> {
         std::mem::take(&mut self.left)
+    }
+
+    /// The kick votes its copy of the match has heard cast or taken back
+    /// since this was last asked.
+    pub fn take_kicking(&mut self) -> Vec<KickVote> {
+        std::mem::take(&mut self.kicking)
+    }
+
+    /// Tells the host whether it's for kicking `client` out.
+    pub fn kick(&mut self, client: u32, vote: bool) -> Result<(), Lost> {
+        self.link.send(encode(&ToHost::Kick { client, vote }))
     }
 
     /// Whether its copy of the match has heard the host leave it once it
@@ -254,7 +271,8 @@ impl<L: Link> Client<L> {
                 Ok(Some(Some(
                     said @ (ToClient::Diverged { .. }
                     | ToClient::Answered(_)
-                    | ToClient::Left { .. }
+                    | ToClient::Left(_)
+                    | ToClient::Kicking(_)
                     | ToClient::Ended
                     | ToClient::Status(_)),
                 ))) => self.heard.push_back(said),
@@ -301,7 +319,8 @@ impl<L: Link> Client<L> {
                     self.checked = checks.len();
                 }
                 Some(ToClient::Diverged { client, step }) => self.diverged.push((client, step)),
-                Some(ToClient::Left { client, players }) => self.left.push((client, players)),
+                Some(ToClient::Left(gone)) => self.left.push(gone),
+                Some(ToClient::Kicking(vote)) => self.kicking.push(vote),
                 Some(ToClient::Ended) => self.ended = true,
                 // As things stood once what came before it was done.
                 Some(ToClient::Status(status)) => self.status = Some(status),

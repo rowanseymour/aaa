@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::{
-    GameData, Id, Layout, add_renames, defs, icon_beside, renamed, renames, resource_name,
+    Amounts, GameData, Id, Layout, ResourceKind, add_renames, defs, icon_beside, renamed, renames,
     strings::localized, supply, ui_path,
 };
 
@@ -28,8 +28,8 @@ pub struct Listing {
 /// So much of a resource.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Amount {
-    /// The resource's field name in the data, such as `money`.
-    pub kind: &'static str,
+    /// The resource's id, such as `money`.
+    pub kind: Id,
     /// Its localized name, such as Money.
     pub resource: String,
     pub amount: f32,
@@ -335,6 +335,7 @@ impl GameData {
 
     fn read_listings(&self) -> HashMap<Id, Listing> {
         let strings = self.strings();
+        let resources = self.resources();
         let layouts = self.layouts();
         let definitions = self.definitions();
         let mut things: HashMap<&Id, &defs::Thing> = definitions
@@ -366,7 +367,7 @@ impl GameData {
                 .filter_map(|t| t.economy_component.as_ref())
                 .collect();
             let economy = |of: fn(&defs::EconomyComponent) -> Option<&defs::Resources>| {
-                amounts(&strings, economies.iter().filter_map(|&e| of(e)))
+                amounts(&resources, economies.iter().filter_map(|&e| of(e)))
             };
             let members = members(t, &things, &layouts);
             Some(Listing {
@@ -380,32 +381,28 @@ impl GameData {
                     .filter(|i| i.to_ascii_lowercase().starts_with("/ui/"))
                     .and_then(ui_path),
                 cost: economy(|e| e.cost.as_ref()),
-                production: amounts(&strings, production(t, &members)),
-                upkeep: amounts(&strings, upkeep(t, &members)),
+                production: amounts(&resources, production(t, &members)),
+                upkeep: amounts(&resources, upkeep(t, &members)),
             })
         })
     }
 }
 
-/// The resources given, totalled, with their localized names; those the
-/// strings don't name keep their field name.
+/// The resources given, totalled, with their names, in the order the data
+/// defines the resources.
 fn amounts<'a>(
-    strings: &crate::Strings,
+    resources: &[ResourceKind],
     of: impl Iterator<Item = &'a defs::Resources>,
 ) -> Vec<Amount> {
-    let mut totals: Vec<(&str, f32)> = Vec::new();
-    for (field, amount) in of.flat_map(defs::Resources::amounts) {
-        match totals.iter_mut().find(|(f, _)| *f == field) {
-            Some((_, total)) => *total += amount,
-            None => totals.push((field, amount)),
-        }
-    }
-    totals
-        .into_iter()
+    let totals = of
+        .map(Amounts::from)
+        .fold(Amounts::default(), |sum, a| sum + a);
+    (resources.iter())
+        .map(|r| (r, totals.get(r.id.as_str())))
         .filter(|&(_, amount)| amount != 0.0)
-        .map(|(field, amount)| Amount {
-            kind: field,
-            resource: resource_name(strings, field),
+        .map(|(r, amount)| Amount {
+            kind: r.id.clone(),
+            resource: r.name.clone(),
             amount,
         })
         .collect()
@@ -465,6 +462,20 @@ mod tests {
     use super::*;
     use crate::Formation;
 
+    /// AA's resources, in its order.
+    fn test_resources() -> Vec<ResourceKind> {
+        vec![
+            ResourceKind::stockpiled("money"),
+            ResourceKind::upkeep("ammo", Amounts::default()),
+            ResourceKind::upkeep("unit_limit_provided", Amounts::default()),
+            ResourceKind::limited("unit_limit_consumed", "unit_limit_provided"),
+        ]
+    }
+
+    fn owned(of: &[(&str, f32)]) -> Vec<(String, f32)> {
+        of.iter().map(|&(k, v)| (k.to_string(), v)).collect()
+    }
+
     #[test]
     fn production_is_the_templates_own_or_its_members() {
         let parsed = tgi::parse(
@@ -484,21 +495,21 @@ mod tests {
             .map(|(b, id)| (Id::from(id), tgi::from_block(b).unwrap()))
             .collect();
         let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
-        let earned = |id: &str| -> Vec<(&str, f32)> {
+        let earned = |id: &str| -> Vec<(String, f32)> {
             let t = by_id[&Id::from(id)];
             let members = members(t, &by_id, &HashMap::new());
-            amounts(&crate::Strings::default(), production(t, &members))
+            amounts(&test_resources(), production(t, &members))
                 .into_iter()
-                .map(|a| (a.kind, a.amount))
+                .map(|a| (a.kind.to_string(), a.amount))
                 .collect()
         };
         assert_eq!(
             earned("truck"),
-            [("money", 12.0), ("unit_limit_provided", 5.0)]
+            owned(&[("money", 12.0), ("unit_limit_provided", 5.0)])
         );
         assert_eq!(
             earned("regiment"),
-            [("money", 24.0), ("unit_limit_provided", 10.0)]
+            owned(&[("money", 24.0), ("unit_limit_provided", 10.0)])
         );
     }
 
@@ -522,14 +533,15 @@ mod tests {
             .collect();
         let by_id: HashMap<&Id, &defs::Thing> = things.iter().map(|(i, t)| (i, t)).collect();
         let regiment = by_id[&Id::from("regiment")];
-        let kept = |layouts: &HashMap<Id, Layout>| -> Vec<(&str, f32)> {
+        let kept = |layouts: &HashMap<Id, Layout>| -> Vec<(String, f32)> {
             let members = members(regiment, &by_id, layouts);
-            amounts(&crate::Strings::default(), upkeep(regiment, &members))
+            amounts(&test_resources(), upkeep(regiment, &members))
                 .into_iter()
-                .map(|a| (a.kind, a.amount))
+                .map(|a| (a.kind.to_string(), a.amount))
                 .collect()
         };
-        let whole = [("unit_limit_consumed", 1.0), ("ammo", 3.0)];
+        // In the order the resources are defined, not named.
+        let whole = owned(&[("ammo", 3.0), ("unit_limit_consumed", 1.0)]);
         assert_eq!(kept(&HashMap::new()), whole);
         // A slot's member counts for each place its layout gives the slot.
         let line = Layout {
@@ -544,7 +556,7 @@ mod tests {
         };
         assert_eq!(
             kept(&HashMap::from([(Id::from("line"), line)])),
-            [("unit_limit_consumed", 1.0), ("ammo", 5.0)]
+            owned(&[("ammo", 5.0), ("unit_limit_consumed", 1.0)])
         );
     }
 }

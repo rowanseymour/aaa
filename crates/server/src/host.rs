@@ -8,7 +8,8 @@ use aaa_sim::{Action, Record, Schedule, World};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
-    Bundle, Join, PROTOCOL, Seated, Standing, Status, ToClient, ToHost, Welcome, decode, encode,
+    Bundle, Gone, Join, KickVote, PROTOCOL, Seated, Standing, Status, ToClient, ToHost, Welcome,
+    decode, encode,
 };
 use crate::{Clock, Link, Setup};
 
@@ -76,6 +77,9 @@ pub struct Host<L> {
     holding: bool,
     /// How many ticks it's had every copy of the match play.
     issued: u64,
+    /// Whether anyone has left since the kick votes were last counted,
+    /// which can bring the count needed down to the votes already cast.
+    parted: bool,
 }
 
 /// A client as the host has it.
@@ -105,6 +109,10 @@ struct Seat<L> {
     /// How many it had asked for before the first of its actions put off
     /// while the match is held.
     put_off_from: Option<u64>,
+    /// The clients it's for kicking out.
+    kicking: Vec<u32>,
+    /// Whether it's been kicked out, and is to be told so as it goes.
+    kicked: bool,
 }
 
 /// Why a client wasn't let in.
@@ -170,6 +178,7 @@ impl<L: Link> Host<L> {
             put_off: Vec::new(),
             holding: false,
             issued: 0,
+            parted: false,
             setup,
             world,
             schedule: Schedule::default(),
@@ -294,6 +303,8 @@ impl<L: Link> Host<L> {
             allowance: ALLOWANCE,
             vote: false,
             put_off_from: None,
+            kicking: Vec::new(),
+            kicked: false,
         });
         Ok(id)
     }
@@ -375,7 +386,12 @@ impl<L: Link> Host<L> {
                             Some(ToHost::Ask(_)) => seat.asked += 1,
                             Some(ToHost::Ready) => seat.ready = true,
                             Some(ToHost::Leave) => seat.lost = true,
-                            Some(ToHost::Check { .. } | ToHost::Played(_) | ToHost::Vote(_))
+                            Some(
+                                ToHost::Check { .. }
+                                | ToHost::Played(_)
+                                | ToHost::Vote(_)
+                                | ToHost::Kick { .. },
+                            )
                             | None => {}
                         }
                         if seat.lost {
@@ -401,10 +417,22 @@ impl<L: Link> Host<L> {
         // Telling those left may find more gone.
         while self.clients.iter().any(|c| c.lost) {
             let lost: Vec<_> = self.clients.extract_if(.., |c| c.lost).collect();
-            for seat in lost {
-                let (client, players) = (seat.id, seat.players);
+            for mut seat in lost {
+                let (client, kicked) = (seat.id, seat.kicked);
+                for other in &mut self.clients {
+                    other.kicking.retain(|&c| c != client);
+                }
+                let left = ToClient::Left(Gone {
+                    client,
+                    players: seat.players,
+                    kicked,
+                });
+                if kicked {
+                    let _ = seat.link.send(encode(&left));
+                }
                 events.push(Event::Left(client));
-                self.tell(&ToClient::Left { client, players });
+                self.parted = true;
+                self.tell(&left);
             }
         }
         events
@@ -458,6 +486,8 @@ impl<L: Link> Host<L> {
         let mut events = Vec::new();
         let mut actions = Vec::new();
         let mut votes_changed = false;
+        // Each kick vote cast or taken back, by whom.
+        let mut kicks = Vec::new();
         // Each client's first action taken this turn, by how many it had
         // asked for before it.
         let mut first_taken = Vec::new();
@@ -495,6 +525,9 @@ impl<L: Link> Host<L> {
                         votes_changed |= seat.vote != vote;
                         seat.vote = vote;
                     }
+                    Ok(Some(Some(ToHost::Kick { client, vote }))) => {
+                        kicks.push((seat.id, client, vote));
+                    }
                     Ok(Some(Some(ToHost::Leave))) => {
                         seat.lost = true;
                         break;
@@ -520,6 +553,7 @@ impl<L: Link> Host<L> {
                 self.tell(&ToClient::Diverged { client, step });
             }
         }
+        votes_changed |= self.kick(kicks);
         let was_held = self.held;
         self.judge();
         if self.held {
@@ -556,16 +590,92 @@ impl<L: Link> Host<L> {
         if self.held != was_held {
             events.push(Event::Held(self.held));
         }
-        // Everyone hears at once that the match is held or let go, and
-        // how the vote stands, which a voter sees its own vote by.
+        let parted = self.part();
+        // Everyone hears at once that the match is held or let go, how
+        // the votes stand, which a voter sees its own by, and who's gone.
         let due = self.told.is_none_or(|t| self.now >= t + TOLD);
-        if due || self.held != was_held || votes_changed {
+        if due || self.held != was_held || votes_changed || !parted.is_empty() {
             self.told = Some(self.now);
             self.tell(&ToClient::Status(self.status()));
         }
+        events.extend(parted);
         events.extend(self.part());
         self.keep_up();
         events
+    }
+
+    /// Casts or takes back each of `kicks`, a voter's vote for kicking a
+    /// target out, telling everyone of each that changes anything; then,
+    /// if any did or anyone has left since, kicks out those enough are
+    /// for kicking out. Whether any vote changed.
+    fn kick(&mut self, kicks: Vec<(u32, u32, bool)>) -> bool {
+        let mut changed = false;
+        let needed = self.kicks_needed();
+        for (voter, target, vote) in kicks {
+            let sided = |id| {
+                let mut sided = self
+                    .clients
+                    .iter()
+                    .filter(|c| !c.lost && !c.players.is_empty());
+                sided.find(|c| c.id == id)
+            };
+            // Whoever runs the host is there for good: kicking it would
+            // leave everyone else's match with nobody to play it on.
+            let can = voter != target
+                && sided(voter).is_some()
+                && sided(target).is_some_and(|t| !t.trusted);
+            let Some(seat) = self.clients.iter_mut().find(|c| c.id == voter && can) else {
+                continue;
+            };
+            if seat.kicking.contains(&target) == vote {
+                continue;
+            }
+            match vote {
+                true => seat.kicking.push(target),
+                false => seat.kicking.retain(|&c| c != target),
+            }
+            changed = true;
+            let votes = self.kicks_against(target);
+            self.tell(&ToClient::Kicking(KickVote {
+                voter,
+                target,
+                vote,
+                votes,
+                needed,
+            }));
+        }
+        if !changed && !std::mem::take(&mut self.parted) {
+            return false;
+        }
+        // Those already going go as they would have.
+        let out: Vec<u32> = (self.clients.iter())
+            .filter(|c| !c.lost && self.kicks_against(c.id) >= needed)
+            .map(|c| c.id)
+            .collect();
+        for seat in &mut self.clients {
+            seat.kicked |= out.contains(&seat.id);
+            seat.lost |= seat.kicked;
+        }
+        changed
+    }
+
+    /// How many of those staying are for kicking `client` out.
+    fn kicks_against(&self, client: u32) -> u32 {
+        let voters = self
+            .clients
+            .iter()
+            .filter(|c| !c.lost && c.kicking.contains(&client));
+        voters.count() as u32
+    }
+
+    /// How many it takes to kick a client out: more than half of those
+    /// staying that give any player's orders, the one kicked among them.
+    fn kicks_needed(&self) -> u32 {
+        let sided = self
+            .clients
+            .iter()
+            .filter(|c| !c.lost && !c.players.is_empty());
+        sided.count() as u32 / 2 + 1
     }
 
     /// How `seat` stands at this turn.
@@ -649,6 +759,7 @@ impl<L: Link> Host<L> {
                 host: c.trusted,
                 standing: self.standing(c),
                 vote: c.vote,
+                kicking: c.kicking.clone(),
                 ping: (c.link.round_trip()).map(|t| t.as_millis().min(u32::MAX as u128) as u32),
             })
             .collect();
@@ -662,6 +773,7 @@ impl<L: Link> Host<L> {
             votes,
             needed,
             countdown,
+            kicks_needed: self.kicks_needed(),
         }
     }
 
@@ -696,8 +808,8 @@ mod tests {
     use crate::testing::player;
     use crate::{Client, Link, Local, NotJoined, pair, welcome};
 
-    /// A match of players 1 and 2, each with a soldier, the first's at
-    /// 10,10 and the second's 10 further along y.
+    /// A match of players 1 to 4, the first two each with a soldier, the
+    /// first's at 10,10 and the second's 10 further along y.
     fn fresh() -> World {
         let regiment = |i: u32| Regiment {
             hq: None,
@@ -732,7 +844,7 @@ mod tests {
             unpacks: None,
         };
         let sides = Sides {
-            players: vec![player(1, false, true), player(2, false, true)],
+            players: (1..=4).map(|id| player(id, false, true)).collect(),
             teams: Vec::new(),
         };
         let pathing = Pathing::uniform(40, Domain::Land);
@@ -802,6 +914,15 @@ mod tests {
         });
         let clients = clients.collect();
         (host, clients)
+    }
+
+    fn gone(client: u32, players: &[u32]) -> Gone {
+        let players = players.to_vec();
+        Gone {
+            client,
+            players,
+            kicked: false,
+        }
     }
 
     fn go(player: u32, regiment: usize, to: [f32; 2]) -> Action {
@@ -907,6 +1028,76 @@ mod tests {
     }
 
     #[test]
+    fn a_client_is_kicked_out_once_more_than_half_those_with_players_vote_for_it() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[3], &[]]);
+        play(&mut host, &mut clients, 2);
+        let vote = |voter, vote, votes| KickVote {
+            voter,
+            target: 3,
+            vote,
+            votes,
+            needed: 2,
+        };
+        // Only those with players vote, and not for kicking themselves.
+        clients[3].kick(3, true).unwrap();
+        clients[2].kick(3, true).unwrap();
+        clients[0].kick(3, true).unwrap();
+        clients[0].kick(3, true).unwrap();
+        clients[0].kick(3, false).unwrap();
+        play(&mut host, &mut clients, 1);
+        for c in &mut clients {
+            assert_eq!(c.take_kicking(), [vote(1, true, 1), vote(1, false, 0)]);
+        }
+        clients[0].kick(3, true).unwrap();
+        clients[1].kick(3, true).unwrap();
+        assert_eq!(host.turn(), [Event::Left(3)]);
+        let kicked = Gone {
+            kicked: true,
+            ..gone(3, &[3])
+        };
+        // The one kicked out hears it, then nothing more.
+        assert_eq!(clients[2].advance(usize::MAX), Err(crate::Lost));
+        assert_eq!(clients[2].take_left(), std::slice::from_ref(&kicked));
+        for i in [0, 1, 3] {
+            clients[i].advance(usize::MAX).unwrap();
+            assert_eq!(
+                clients[i].take_kicking(),
+                [vote(1, true, 1), vote(2, true, 2)]
+            );
+            assert_eq!(clients[i].take_left(), std::slice::from_ref(&kicked));
+        }
+        let status = host.status();
+        assert!(status.seats.iter().all(|s| s.kicking.is_empty()));
+        assert_eq!(status.kicks_needed, 2);
+    }
+
+    #[test]
+    fn votes_cast_kick_out_once_those_leaving_bring_the_count_needed_down() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[3], &[4]]);
+        clients[0].kick(4, true).unwrap();
+        clients[1].kick(4, true).unwrap();
+        // The third would make it, but leaves, taking its vote with it.
+        clients[2].kick(4, true).unwrap();
+        clients[2].leave().unwrap();
+        // Two of the three left are then enough.
+        assert_eq!(host.turn(), [Event::Left(3), Event::Left(4)]);
+        clients[0].advance(usize::MAX).unwrap();
+        let kicked: Vec<_> = clients[0].take_left().iter().map(|g| g.kicked).collect();
+        assert_eq!(kicked, [false, true]);
+    }
+
+    #[test]
+    fn whoever_runs_the_host_is_not_kicked_out() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[3]]);
+        host.trust(1);
+        clients[1].kick(1, true).unwrap();
+        clients[2].kick(1, true).unwrap();
+        play(&mut host, &mut clients, 1);
+        assert_eq!(host.clients(), 3);
+        assert_eq!(clients[0].take_kicking(), []);
+    }
+
+    #[test]
     fn a_copy_that_stops_matching_is_found_and_everyone_told() {
         let (mut host, mut clients) = hosted(&[&[1], &[2]]);
         play(&mut host, &mut clients, 12);
@@ -1007,7 +1198,7 @@ mod tests {
         let events = wait_out(&clock, &mut host, &mut clients, 2, 2);
         assert_eq!(events, [Event::Left(3), Event::Held(false)]);
         assert_eq!(host.clients(), 2);
-        assert_eq!(clients[0].take_left(), [(3, vec![])]);
+        assert_eq!(clients[0].take_left(), [gone(3, &[])]);
         // The votes go with the drop.
         let status = clients[0].status().unwrap();
         assert_eq!(status.votes, 0);
@@ -1210,7 +1401,7 @@ mod tests {
         assert_eq!(host.turn(), [Event::Left(2), Event::Left(3)]);
         assert_eq!(clients[1].advance(usize::MAX), Err(crate::Lost));
         clients.remove(1);
-        let left = [(2, vec![2]), (3, vec![])];
+        let left = [gone(2, &[2]), gone(3, &[])];
         // In step with what the host played before it heard.
         let Copy { client, world } = &mut clients[0];
         client.play(world, 0).unwrap();
@@ -1239,7 +1430,7 @@ mod tests {
         let theirs = &mut clients[1];
         assert_eq!(theirs.advance(usize::MAX), Err(crate::Lost));
         assert!(!theirs.ended());
-        assert_eq!(theirs.take_left(), [(1, vec![1])]);
+        assert_eq!(theirs.take_left(), [gone(1, &[1])]);
     }
 
     #[test]
@@ -1252,7 +1443,7 @@ mod tests {
         let theirs = &mut clients[1];
         assert_eq!(theirs.advance(usize::MAX), Err(crate::Lost));
         assert!(theirs.ended());
-        assert_eq!(theirs.take_left(), [(1, vec![1])]);
+        assert_eq!(theirs.take_left(), [gone(1, &[1])]);
     }
 
     #[test]

@@ -3,9 +3,9 @@
 //! the host. The host is in the same program, with a copy of its own, or
 //! elsewhere, when the game has joined its match.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 
-use aaa_server::protocol::{Status, Welcome};
+use aaa_server::protocol::{Gone, KickVote, Status, Welcome};
 use aaa_server::{Client, Event, Host, Link, Local, Setup};
 use aaa_sim::{Action, Command, Record, Refused, SPEEDS, World};
 use bevy::prelude::*;
@@ -34,6 +34,13 @@ pub(crate) struct Orders {
     ended_taken: bool,
     /// What the host knows the game's client as.
     me: u32,
+    /// The clients found gone since the game last asked, but for the
+    /// game's own, and whether that was kicked out.
+    left: Vec<Gone>,
+    kicked: bool,
+    /// The players each client the host has said of gives the orders of,
+    /// kept once it's gone, for what's said of it after.
+    seen: HashMap<u32, Vec<u32>>,
 }
 
 /// Where the match's host is.
@@ -91,6 +98,9 @@ impl Orders {
             gone: false,
             ended_taken: false,
             me,
+            left: Vec::new(),
+            kicked: false,
+            seen: HashMap::new(),
         }
     }
 
@@ -131,6 +141,41 @@ impl Orders {
         seats.any(|s| s.client == self.me && s.vote)
     }
 
+    /// What the host knows the game's client as.
+    pub(crate) fn me(&self) -> u32 {
+        self.me
+    }
+
+    /// The players `client` gave the orders of, as the host last said of
+    /// it, if it ever did.
+    pub(crate) fn players_of(&self, client: u32) -> &[u32] {
+        self.seen.get(&client).map_or(&[], Vec::as_slice)
+    }
+
+    /// Whether the game is for kicking `client` out, as the host last
+    /// said.
+    pub(crate) fn kicking(&self, client: u32) -> bool {
+        let status = self.status().map(|s| s.seats.iter());
+        let mut seats = status.into_iter().flatten();
+        seats.any(|s| s.client == self.me && s.kicking.contains(&client))
+    }
+
+    /// Tells the host whether the game is for kicking `client` out.
+    pub(crate) fn kick(&mut self, client: u32, vote: bool) {
+        // A host that's gone is found so as the match is next played.
+        let _ = self.client.kick(client, vote);
+    }
+
+    /// The kick votes cast or taken back since this was last asked.
+    pub(crate) fn take_kicking(&mut self) -> Vec<KickVote> {
+        self.client.take_kicking()
+    }
+
+    /// Whether the game has been kicked out of the match.
+    pub(crate) fn kicked(&self) -> bool {
+        self.kicked
+    }
+
     /// Tells the host whether the game is for dropping those holding the
     /// match.
     pub(crate) fn vote(&mut self, drop: bool) {
@@ -165,9 +210,9 @@ impl Orders {
     }
 
     /// The other clients of the match found gone since this was last
-    /// asked, each with the players it gave the orders of.
-    pub(crate) fn take_left(&mut self) -> Vec<(u32, Vec<u32>)> {
-        self.client.take_left()
+    /// asked.
+    pub(crate) fn take_left(&mut self) -> Vec<Gone> {
+        std::mem::take(&mut self.left)
     }
 
     /// Whether the host, being elsewhere, has yet to begin the match:
@@ -299,6 +344,16 @@ impl Orders {
             warn!("client {client}'s copy of the match stopped matching its host's by tick {step}");
         }
         self.diverged = diverged.len();
+        for seat in self.client.status().into_iter().flat_map(|s| &s.seats) {
+            let players = || seat.players.clone();
+            self.seen.entry(seat.client).or_insert_with(players);
+        }
+        for gone in self.client.take_left() {
+            match gone.client == self.me {
+                true => self.kicked |= gone.kicked,
+                false => self.left.push(gone),
+            }
+        }
         if lost && !self.gone {
             match self.client.ended() {
                 true => info!("the match's host has ended it"),
@@ -352,8 +407,8 @@ pub(crate) mod testing {
 
     use super::*;
 
-    /// A match of players 1 and 2, each with a regiment of one soldier:
-    /// regiment 0 the first's and regiment 1 the second's.
+    /// A match of players 1 to 3, the first two each with a regiment of
+    /// one soldier: regiment 0 the first's and regiment 1 the second's.
     pub(crate) fn fresh() -> World {
         let regiment = |i: u32| Regiment {
             hq: None,
@@ -388,7 +443,7 @@ pub(crate) mod testing {
             unpacks: None,
         };
         let sides = Sides {
-            players: [1, 2].map(crate::tests::player).into(),
+            players: [1, 2, 3].map(crate::tests::player).into(),
             teams: Vec::new(),
         };
         let pathing = Pathing::uniform(40, Domain::Land);
@@ -626,7 +681,8 @@ mod tests {
         other.leave().unwrap();
         host.turn();
         orders.step(&mut world);
-        assert_eq!(orders.take_left(), [(2, vec![2])]);
+        let left: Vec<_> = orders.take_left().into_iter().map(|g| g.client).collect();
+        assert_eq!(left, [2]);
         assert_eq!(orders.take_left(), []);
         assert!(!orders.gone() && !orders.take_ended());
         // The host leaves the match once it's over.
@@ -639,6 +695,29 @@ mod tests {
         }
         assert!(orders.take_ended());
         assert!(!orders.take_ended());
+    }
+
+    #[test]
+    fn a_joined_game_hears_it_was_kicked_out() {
+        let (mut host, mut orders, mut world) = joined(&[1]);
+        let mut others = [2, 3].map(|p| {
+            let (link, _) = super::testing::let_in(&mut host, &[p]);
+            aaa_server::Client::new(link)
+        });
+        host.turn();
+        orders.step(&mut world);
+        for other in &mut others {
+            other.kick(orders.me(), true).unwrap();
+        }
+        host.turn();
+        for _ in 0..2 {
+            orders.step(&mut world);
+        }
+        assert!(orders.gone() && orders.kicked());
+        // Its own going isn't another's.
+        assert_eq!(orders.take_left(), []);
+        let votes: Vec<_> = orders.take_kicking().iter().map(|v| v.votes).collect();
+        assert_eq!(votes, [1, 2]);
     }
 
     #[test]
@@ -671,7 +750,8 @@ mod tests {
         let mut world = super::testing::fresh();
         assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
         assert!(!other.ended());
-        assert_eq!(other.take_left(), [(1, vec![1])]);
+        let left = other.take_left();
+        assert_eq!((left[0].client, &left[0].players[..]), (1, &[1][..]));
     }
 
     #[test]

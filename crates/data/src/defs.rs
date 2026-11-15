@@ -1,6 +1,8 @@
 //! Typed forms of the game's `.tgi` blocks, named after the block kinds they
 //! read. Each holds only the keys something uses so far.
 
+use std::collections::BTreeMap;
+
 use serde::Deserialize;
 
 use crate::Id;
@@ -330,33 +332,27 @@ pub struct SupplyComponent {
     pub stockpile_max: Option<f32>,
 }
 
-/// Amounts of the resources the data's costs, upkeeps and production name, each
-/// called `resources_<field>_name` in the localized strings.
-#[derive(Debug, Clone, Deserialize)]
-pub struct Resources {
-    pub money: Option<f32>,
-    pub ammo: Option<f32>,
-    pub oil: Option<f32>,
-    pub unit_limit_consumed: Option<f32>,
-    pub building_limit_consumed: Option<f32>,
-    pub unit_limit_provided: Option<f32>,
-    pub building_limit_provided: Option<f32>,
-}
+/// Amounts of resources, as costs, upkeeps and production give them: one
+/// field per resource, named by its id.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(transparent)]
+pub struct Resources(BTreeMap<Id, Amount>);
 
 impl Resources {
-    /// Each resource given, by field name.
-    pub fn amounts(&self) -> impl Iterator<Item = (&'static str, f32)> {
-        [
-            ("money", self.money),
-            ("ammo", self.ammo),
-            ("oil", self.oil),
-            ("unit_limit_consumed", self.unit_limit_consumed),
-            ("building_limit_consumed", self.building_limit_consumed),
-            ("unit_limit_provided", self.unit_limit_provided),
-            ("building_limit_provided", self.building_limit_provided),
-        ]
-        .into_iter()
-        .filter_map(|(k, v)| Some((k, v?)))
+    /// Each resource given, by id.
+    pub fn amounts(&self) -> impl Iterator<Item = (&Id, f32)> {
+        (self.0.iter()).filter_map(|(k, v)| Some((k, v.0?)))
+    }
+}
+
+/// A field of [`Resources`]: none where it isn't a number, which is passed
+/// over as any field nothing reads is, rather than failing the block.
+#[derive(Debug, Clone, Copy, Default)]
+struct Amount(Option<f32>);
+
+impl<'de> Deserialize<'de> for Amount {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Amount(f32::deserialize(d).ok()))
     }
 }
 
@@ -1211,10 +1207,26 @@ pub struct Interface {
 #[derive(Debug, Clone, Deserialize)]
 pub struct Resource {
     pub ids: Option<Id>,
+    #[serde(rename = "type")]
+    pub kind: Option<ResourceRole>,
     /// The resource that caps how much of it can be used.
     pub limited_by: Option<Id>,
     /// What a unit of it costs, for those that can be bought.
     pub purchase_cost: Option<Resources>,
+    pub name: Option<String>,
+    /// The glyph it's drawn with.
+    pub icon: Option<String>,
+}
+
+/// What a resource is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum ResourceRole {
+    /// Kept from one minute to the next, and spent on what's bought.
+    Stockpiled,
+    /// Produced and used up as it goes, never kept.
+    Upkeep,
+    /// Used up against what's produced of the resource it's `limited_by`.
+    LimitedConsumed,
 }
 
 /// A setting a match is played under, which the lobby can change.

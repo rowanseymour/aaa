@@ -147,8 +147,8 @@ impl GameData {
     /// The interface's settings, the game's own over the engine's.
     pub fn interface_vars(&self) -> InterfaceVars {
         let mut out = InterfaceVars::default();
-        for name in ["UVars_AA.tgi", "UVars.tgi"] {
-            if let Some(parsed) = self.parsed(name) {
+        for name in self.versions("UVars.tgi") {
+            if let Some(parsed) = self.parsed(&name) {
                 out.read(&parsed);
             }
         }

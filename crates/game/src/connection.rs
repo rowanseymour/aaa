@@ -1,7 +1,7 @@
 //! The connection dialog: how everyone in a match stands as its host sees
 //! them. It opens by itself once the match has been held for a moment and
 //! closes when it goes on, and it's where players vote to drop those
-//! holding it.
+//! holding it or to kick a player out.
 
 use std::collections::HashMap;
 
@@ -174,6 +174,13 @@ impl Drawn {
                 .zip(&status.seats)
                 .all(|(d, s)| same(d, s))
     }
+
+    /// Whether players are offered the vote to kick one out: never while
+    /// the match is held, nor with two or fewer playing sides, where it
+    /// could never pass without the one kicked.
+    fn kicks(&self) -> bool {
+        !self.held && self.seats.iter().filter(|(_, p, _)| !p.is_empty()).count() > 2
+    }
 }
 
 /// A client's ping, its glyph and its standing's mark, by the client.
@@ -183,6 +190,12 @@ struct PingOf(u32);
 struct PingGlyphOf(u32);
 #[derive(Component)]
 struct StandingOf(u32);
+
+/// The vote to kick a client out, and how it stands, by the client.
+#[derive(Component)]
+struct KickOf(u32);
+#[derive(Component)]
+struct KicksOf(u32);
 
 /// The vote to drop those holding the match, how it stands, and the
 /// countdown.
@@ -362,8 +375,20 @@ fn draw(
         ChildOf(heading),
         ui::label(words.ping.clone(), Font::Body, Ink::Muted),
     ));
+    let kicks = (dialog.drawn.as_ref()).is_some_and(Drawn::kicks);
+    let me = orders.me();
+    // Only those who play a side vote.
+    let voter = status
+        .seats
+        .iter()
+        .any(|s| s.client == me && !s.players.is_empty());
     for seat in &status.seats {
-        slot(&mut commands, panel, seat, &words, &look, &naming);
+        let line = slot(&mut commands, panel, seat, &words, &look, &naming);
+        if kicks && !seat.players.is_empty() {
+            // Whoever runs the host is there for good.
+            let toggle = seat.client != me && !seat.host;
+            kick_vote(&mut commands, line, seat, &words, toggle, voter);
+        }
     }
     if status.held {
         lower_panel(&mut commands, panel, &words);
@@ -412,12 +437,12 @@ fn fill_in(
     words: Res<Words>,
     look: Res<Look>,
     mut texts: Query<
-        (&mut Text, Option<&PingOf>, Has<Votes>),
-        Or<(With<PingOf>, With<Votes>, With<Countdown>)>,
+        (&mut Text, Option<&PingOf>, Option<&KicksOf>, Has<Votes>),
+        Or<(With<PingOf>, With<KicksOf>, With<Votes>, With<Countdown>)>,
     >,
     mut glyphs: Query<(&mut ImageNode, &PingGlyphOf), Without<StandingOf>>,
     mut marks: Query<(&mut ImageNode, &mut ui::Hint, &StandingOf)>,
-    mut kick: Query<&mut ui::Chosen, With<Kick>>,
+    mut kick: Query<(&mut ui::Chosen, Option<&KickOf>), Or<(With<Kick>, With<KickOf>)>>,
 ) {
     let Some(status) = orders.status().filter(|_| dialog.opened.is_some()) else {
         return;
@@ -425,17 +450,25 @@ fn fill_in(
     let seat = |client: u32| status.seats.iter().find(|s| s.client == client);
     let left = status.countdown.filter(|&left| left > 0);
     let left = left.filter(|_| status.votes >= status.needed);
-    for (mut text, ping, votes) in &mut texts {
-        let said = match (ping, votes) {
-            (Some(PingOf(client)), _) => {
+    let against = |client: u32| {
+        let voters = status.seats.iter().filter(|s| s.kicking.contains(&client));
+        voters.count() as u32
+    };
+    for (mut text, ping, kicks, votes) in &mut texts {
+        let said = match (ping, kicks, votes) {
+            (Some(PingOf(client)), ..) => {
                 let ms = seat(*client).and_then(|s| s.ping);
                 ms.map(|ms| ms.to_string()).unwrap_or_default()
             }
-            (None, true) => {
+            (None, Some(KicksOf(client)), _) => {
+                let counts = [against(*client), status.kicks_needed].map(|n| n.to_string());
+                messages::filled(&words.votes, &counts)
+            }
+            (None, None, true) => {
                 let counts = [status.votes, status.needed].map(|n| n.to_string());
                 messages::filled(&words.votes, &counts)
             }
-            (None, false) => match left {
+            (None, None, false) => match left {
                 Some(left) => messages::filled(&words.disconnecting, &[left.to_string()]),
                 None => String::new(),
             },
@@ -463,8 +496,11 @@ fn fill_in(
             hint.0 = said;
         }
     }
-    let voted = orders.voted();
-    for mut chosen in &mut kick {
+    for (mut chosen, of) in &mut kick {
+        let voted = match of {
+            Some(KickOf(client)) => orders.kicking(*client),
+            None => orders.voted(),
+        };
         if chosen.0 != voted {
             chosen.0 = voted;
         }
@@ -509,7 +545,7 @@ fn slot(
     words: &Words,
     look: &Look,
     naming: &Naming,
-) {
+) -> Entity {
     let line = commands.spawn((ChildOf(panel), row())).id();
     let host = look.host.as_ref().filter(|_| seat.host);
     commands.spawn((ChildOf(line), icon(host)));
@@ -548,6 +584,42 @@ fn slot(
     }
     commands.spawn((ChildOf(line), icon(None), PingGlyphOf(seat.client)));
     commands.spawn((ChildOf(line), ui::text("", Font::Body), PingOf(seat.client)));
+    line
+}
+
+/// The vote to kick `seat`'s client out, on its line: the toggle, but on
+/// the player's own line, and how the vote stands, filled in by
+/// [`fill_in`]. The toggle only works for a `voter`.
+fn kick_vote(
+    commands: &mut Commands,
+    line: Entity,
+    seat: &Seated,
+    words: &Words,
+    toggle: bool,
+    voter: bool,
+) {
+    let client = seat.client;
+    if toggle && voter {
+        commands
+            .spawn((
+                ChildOf(line),
+                ui::toggle(words.kick.clone(), Font::Body),
+                ui::called(format!("connection.kick.{client}")),
+                KickOf(client),
+            ))
+            .observe(move |_: On<Activate>, mut orders: ResMut<Orders>| {
+                let voted = orders.kicking(client);
+                orders.kick(client, !voted);
+            });
+    } else {
+        let mut toggle_room =
+            commands.spawn((ChildOf(line), ui::disabled(words.kick.clone(), Font::Body)));
+        // On the player's own line it only keeps the columns in line.
+        if !toggle {
+            toggle_room.insert(Visibility::Hidden);
+        }
+    }
+    commands.spawn((ChildOf(line), ui::text("", Font::Body), KicksOf(client)));
 }
 
 /// What shows while the match is held: the vote to drop those holding it,
@@ -616,16 +688,30 @@ mod tests {
         host: Host<Linked>,
         other: aaa_server::Client<Linked>,
         other_world: aaa_sim::World,
+        /// Clients that only ever keep up, playing these sides.
+        more: Vec<(aaa_server::Client<Linked>, aaa_sim::World)>,
         clock: Clock,
     }
 
     impl Match {
         fn new() -> Match {
+            Match::with(&[])
+        }
+
+        /// As [`Match::new`], with a client more for each of `more`.
+        fn with(more: &[u32]) -> Match {
             let clock = Clock::stopped();
             let mut host = Host::new(aaa_server::Setup::default(), fresh());
             host.clock(clock.clone());
             let (ours, welcome) = let_in(&mut host, &[1]);
             let (theirs, _) = let_in(&mut host, &[2]);
+            let more = (more.iter())
+                .map(|&p| {
+                    let mut client = aaa_server::Client::new(let_in(&mut host, &[p]).0);
+                    client.clock(clock.clone());
+                    (client, fresh())
+                })
+                .collect();
             let mut orders = Orders::joined(Box::new(ours), welcome, "10.0.0.1:4000".into());
             orders.clock(clock.clone());
             let mut other = aaa_server::Client::new(theirs);
@@ -653,6 +739,7 @@ mod tests {
                 host,
                 other,
                 other_world: fresh(),
+                more,
                 clock,
             }
         }
@@ -666,6 +753,9 @@ mod tests {
                 self.other
                     .advance(&mut self.other_world, usize::MAX)
                     .unwrap();
+            }
+            for (client, world) in &mut self.more {
+                client.advance(world, usize::MAX).unwrap();
             }
             let world = self.app.world_mut();
             let mut sim = world.remove_resource::<Sim>().unwrap();
@@ -683,6 +773,16 @@ mod tests {
             let mut shown: Vec<String> = shown.filter(|t| !t.is_empty()).collect();
             shown.sort();
             shown
+        }
+
+        /// Presses the button [`ui::called`] `id`.
+        fn press_called(&mut self, id: &str) {
+            let world = self.app.world_mut();
+            let mut buttons = world.query::<(Entity, &ui::ButtonId)>();
+            let found = buttons.iter(world).find(|(_, b)| b.0 == id);
+            let entity = found.expect("no such button").0;
+            world.trigger(Activate { entity });
+            self.app.update();
         }
 
         fn press(&mut self, words: &str) {
@@ -783,6 +883,41 @@ mod tests {
         let world = app.world_mut();
         let mut texts = world.query::<&Text>();
         assert_eq!(texts.iter(world).count(), 0);
+    }
+
+    #[test]
+    fn with_more_than_two_sides_players_vote_to_kick_others() {
+        let mut m = Match::with(&[3]);
+        m.second(false);
+        open(&mut m.app.world_mut().resource_mut::<Dialog>());
+        m.second(false);
+        // Not on the game's own line.
+        let kicks = |m: &mut Match| {
+            let world = m.app.world_mut();
+            world.query::<&KickOf>().iter(world).count()
+        };
+        assert_eq!(kicks(&mut m), 2);
+        assert_eq!(m.shown().iter().filter(|s| *s == "0/2 Votes").count(), 3);
+        m.press_called("connection.kick.2");
+        m.second(false);
+        assert!(m.app.world().resource::<Orders>().kicking(2));
+        assert!(m.shown().contains(&"1/2 Votes".to_string()));
+        // The other side with it kicks it out.
+        let target = m.app.world().resource::<Orders>().status().unwrap().seats[1].client;
+        m.more[0].0.kick(target, true).unwrap();
+        // It's gone, so it isn't heard from.
+        m.second(true);
+        assert_eq!(m.host.clients(), 2);
+        assert_eq!(kicks(&mut m), 0);
+    }
+
+    #[test]
+    fn with_two_sides_there_is_no_vote_to_kick() {
+        let mut m = Match::new();
+        m.second(false);
+        open(&mut m.app.world_mut().resource_mut::<Dialog>());
+        m.second(false);
+        assert!(!m.shown().contains(&"Kick".to_string()));
     }
 
     #[test]

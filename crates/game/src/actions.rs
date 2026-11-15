@@ -644,7 +644,7 @@ pub fn spawn(
         amounts
             .iter()
             .map(|a| Quantity {
-                glyph: glyphs.get(a.kind).cloned(),
+                glyph: glyphs.get(a.kind.as_str()).cloned(),
                 amount: a.amount,
                 earned,
                 resource: a.resource.clone(),
@@ -652,6 +652,7 @@ pub fn spawn(
             .collect()
     };
     let technologies = game.technologies();
+    let resources = game.resources();
     let researches = (sim.0.rules().research_lists.iter())
         .map(|(template, list)| {
             let topics = list.iter().map(|item| {
@@ -659,8 +660,10 @@ pub fn spawn(
                 let technology = technologies.get(id);
                 let cost: Vec<aaa_data::Amount> = (item.cost.nonzero())
                     .map(|(kind, amount)| aaa_data::Amount {
-                        kind,
-                        resource: aaa_data::resource_name(&strings, kind),
+                        kind: kind.clone(),
+                        resource: (resources.iter())
+                            .find(|r| &r.id == kind)
+                            .map_or_else(|| kind.to_string(), |r| r.name.clone()),
                         amount,
                     })
                     .collect();

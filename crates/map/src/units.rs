@@ -104,13 +104,15 @@ pub fn relation(players: &[Player], teams: &[Team], from: u32, to: u32) -> Relat
 }
 
 /// The players and teams, with their relations by index rather than by
-/// their positions in the stored sections, which can have gaps.
+/// their positions in the stored sections, which can have gaps. A player's
+/// stockpile is what the map gives it of `stockpiled`.
 pub(crate) fn players_and_teams(
     kingdoms: &Kingdoms,
     teams: &[Option<StoredTeam>],
     groups: &RestrictionGroups,
     colors: &HashMap<Id, [f32; 3]>,
     default_stockpile: f32,
+    stockpiled: &str,
     handicaps: &HashMap<String, Id>,
 ) -> (Vec<Player>, Vec<Team>) {
     // Only what a group selects bars anything; its other lists are what it
@@ -125,7 +127,7 @@ pub(crate) fn players_and_teams(
     let money = |stockpiles: &[(String, f32)]| {
         stockpiles
             .iter()
-            .find(|(id, _)| id.eq_ignore_ascii_case("money"))
+            .find(|(id, _)| id.eq_ignore_ascii_case(stockpiled))
             .map_or(0.0, |&(_, amount)| amount)
     };
     let kingdom_slots: Vec<bool> = kingdoms.kingdoms.iter().map(Option::is_some).collect();
