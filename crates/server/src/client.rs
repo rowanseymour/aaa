@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use aaa_sim::{Action, Refused, Schedule, World};
 
 use crate::protocol::{
-    Gone, Join, KickVote, PROTOCOL, Status, ToClient, ToHost, Welcome, decode, encode,
+    Gone, Join, KickVote, PROTOCOL, Said, Status, ToClient, ToHost, Welcome, decode, encode,
 };
 use crate::{Clock, Link, Lost, Refusal};
 
@@ -46,6 +46,9 @@ pub fn welcome(link: &mut impl Link) -> Result<Option<Welcome>, NotJoined> {
 /// takes in, leaving the rest to its link, which holds the host up in the
 /// end rather than keep ever more.
 const TAKEN_IN: usize = 256;
+
+/// The most of what's been said for everyone kept until it's asked for.
+const SAID_KEPT: usize = 64;
 
 /// How long the host goes unheard from before it's taken as lost: longer
 /// than it takes the host to find a client lost, so that it's the host
@@ -96,6 +99,8 @@ pub struct Client<L> {
     /// The kick votes its copy has heard cast or taken back since this
     /// was last asked.
     kicking: Vec<KickVote>,
+    /// What's been said for everyone since it was last asked.
+    said: Vec<Said>,
     /// Whether its copy has heard the host end the match.
     ended: bool,
     refused: Vec<(u32, Refused)>,
@@ -133,6 +138,7 @@ impl<L: Link> Client<L> {
             diverged: Vec::new(),
             left: Vec::new(),
             kicking: Vec::new(),
+            said: Vec::new(),
             ended: false,
             refused: Vec::new(),
             asked: 0,
@@ -178,6 +184,17 @@ impl<L: Link> Client<L> {
     /// since this was last asked.
     pub fn take_kicking(&mut self) -> Vec<KickVote> {
         std::mem::take(&mut self.kicking)
+    }
+
+    /// What's been said for everyone since this was last asked, as soon as
+    /// it's heard: it waits for no step.
+    pub fn take_said(&mut self) -> Vec<Said> {
+        std::mem::take(&mut self.said)
+    }
+
+    /// Asks the host to pass `words` on to everyone at once.
+    pub fn say(&mut self, words: String) -> Result<(), Lost> {
+        self.link.send(encode(&ToHost::Say(words)))
     }
 
     /// Tells the host whether it's for kicking `client` out.
@@ -264,6 +281,13 @@ impl<L: Link> Client<L> {
                     break;
                 }
                 Ok(Some(Some(ToClient::Alive))) => {}
+                Ok(Some(Some(ToClient::Said(said)))) => {
+                    // Only the latest are kept for one that never asks.
+                    if self.said.len() == SAID_KEPT {
+                        self.said.remove(0);
+                    }
+                    self.said.push(said);
+                }
                 Ok(Some(Some(ToClient::Step(bundle)))) => {
                     self.behind += usize::from(bundle.tick);
                     self.heard.push_back(ToClient::Step(bundle));
@@ -286,6 +310,9 @@ impl<L: Link> Client<L> {
     /// Has `world` do what the host has said, up to `steps` steps of it
     /// of which `ticks` play a tick.
     fn run(&mut self, world: &mut World, mut steps: usize, mut ticks: usize) -> Result<(), Lost> {
+        // Taking in what's come, as far as there's room, finds what's said
+        // for everyone behind steps still to play.
+        self.hear();
         loop {
             if self.heard.is_empty() {
                 self.hear();
@@ -328,7 +355,10 @@ impl<L: Link> Client<L> {
                 Some(ToClient::Answered(asked)) => {
                     self.answered = asked.clamp(self.answered, self.asked)
                 }
-                Some(ToClient::Start(_) | ToClient::Refused(_) | ToClient::Alive) | None => {}
+                Some(
+                    ToClient::Start(_) | ToClient::Refused(_) | ToClient::Alive | ToClient::Said(_),
+                )
+                | None => {}
             }
         }
         self.keep_up();

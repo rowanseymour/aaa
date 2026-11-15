@@ -55,8 +55,7 @@ impl Plugin for ConsolePlugin {
             .add_systems(
                 Update,
                 (
-                    keys.run_if(crate::pause::closed)
-                        .run_if(crate::chat::closed),
+                    keys.run_if(crate::pause::closed).run_if(crate::keys_free),
                     run,
                     show,
                 )

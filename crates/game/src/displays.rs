@@ -150,7 +150,7 @@ impl Plugin for DisplaysPlugin {
                     .after(crate::pause::Toggle)
                     .run_if(in_state(Screen::Match))
                     .run_if(crate::console::closed)
-                    .run_if(crate::chat::closed)
+                    .run_if(crate::keys_free)
                     .run_if(crate::pause::closed)
                     .run_if(loaded),
             )

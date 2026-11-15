@@ -101,11 +101,15 @@ impl Plugin for ChatPlugin {
             .add_systems(
                 Update,
                 (
-                    (draw, fill_in).chain().run_if(resource_exists::<Orders>),
-                    hold_camera_keys.before(camera::Controls),
+                    (draw, fill_in)
+                        .chain()
+                        .run_if(resource_exists::<Orders>)
+                        .run_if(resource_changed::<Chat>),
+                    (give_way, hold_camera_keys)
+                        .chain()
+                        .before(camera::Controls),
                 )
-                    .run_if(in_state(Screen::Match))
-                    .run_if(resource_changed::<Chat>),
+                    .run_if(in_state(Screen::Match)),
             );
     }
 }
@@ -227,12 +231,18 @@ pub fn keys(
             }
         }
     }
+    type_into(&mut chat.input, &mut presses);
+}
+
+/// Types what's been pressed into `input`, as far as a line of chat
+/// holds; Backspace takes the last character back.
+pub(crate) fn type_into(input: &mut String, presses: &mut MessageReader<KeyboardInput>) {
     for press in presses.read() {
         if press.state != ButtonState::Pressed {
             continue;
         }
         if press.key_code == KeyCode::Backspace {
-            chat.input.pop();
+            input.pop();
             continue;
         }
         let typed = match &press.logical_key {
@@ -240,13 +250,13 @@ pub fn keys(
             Key::Space => " ",
             _ => continue,
         };
-        let room = aaa_sim::CHAT_LONGEST.saturating_sub(chat.input.chars().count());
+        let room = aaa_sim::CHAT_LONGEST.saturating_sub(input.chars().count());
         let typed: String = typed
             .chars()
             .filter(|c| !c.is_control())
             .take(room)
             .collect();
-        chat.input.push_str(&typed);
+        input.push_str(&typed);
     }
 }
 
@@ -319,11 +329,27 @@ fn send(
     });
 }
 
-/// Keeps the camera off the keyboard while the bar has it; the mouse
-/// still moves it.
-fn hold_camera_keys(chat: Res<Chat>, mut cameras: Query<&mut RtsCamera>) {
+/// Closes the bar, keeping what's typed, once the connection dialog
+/// opens, whose own chat then has the keyboard.
+fn give_way(mut chat: ResMut<Chat>, dialog: Option<Res<crate::connection::Dialog>>) {
+    if chat.open && dialog.is_some_and(|d| !crate::connection::closed(d)) {
+        chat.open = false;
+        chat.recall = None;
+    }
+}
+
+/// Keeps the camera off the keyboard while the bar or the connection
+/// dialog's chat has it; the mouse still moves it.
+fn hold_camera_keys(
+    chat: Option<Res<Chat>>,
+    dialog: Option<Res<crate::connection::Dialog>>,
+    mut cameras: Query<&mut RtsCamera>,
+) {
+    let keys = crate::keys_free(chat, dialog);
     for mut camera in &mut cameras {
-        camera.keys = !chat.open;
+        if camera.keys != keys {
+            camera.keys = keys;
+        }
     }
 }
 
@@ -540,6 +566,19 @@ mod tests {
         press(&mut app, "a");
         press(&mut app, "enter");
         assert!(keys(&app));
+    }
+
+    #[test]
+    fn the_bar_gives_way_to_the_connection_dialog_keeping_what_is_typed() {
+        let mut app = app();
+        app.init_resource::<crate::connection::Dialog>();
+        press(&mut app, "enter");
+        press(&mut app, "a");
+        crate::connection::open(&mut app.world_mut().resource_mut());
+        app.update();
+        let chat = app.world().resource::<Chat>();
+        assert!(!chat.is_open());
+        assert_eq!(chat.input, "a");
     }
 
     #[test]
