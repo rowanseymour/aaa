@@ -6,8 +6,8 @@ use std::time::{Duration, Instant};
 
 use aaa_sim::{Action, Refused, Schedule, World};
 
-use crate::protocol::{Join, PROTOCOL, ToClient, ToHost, Welcome, decode, encode};
-use crate::{Link, Lost, Refusal};
+use crate::protocol::{Join, PROTOCOL, Status, ToClient, ToHost, Welcome, decode, encode};
+use crate::{Clock, Link, Lost, Refusal};
 
 /// Why a client hasn't joined a match.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,15 @@ pub fn welcome(link: &mut impl Link) -> Result<Option<Welcome>, NotJoined> {
 /// takes in, leaving the rest to its link, which holds the host up in the
 /// end rather than keep ever more.
 const TAKEN_IN: usize = 256;
+
+/// How long the host goes unheard from before it's taken as lost: longer
+/// than it takes the host to find a client lost, so that it's the host
+/// that holds the match for one cut off rather than the client giving up.
+const UNHEARD: Duration = Duration::from_secs(3);
+
+/// The longest the host goes without hearing from a client, so that it
+/// knows the client is there.
+const QUIET: Duration = Duration::from_millis(100);
 
 /// How often [`enter`] looks for the host's answer.
 const LOOKS: Duration = Duration::from_millis(10);
@@ -89,13 +98,27 @@ pub struct Client<L> {
     /// its copy has done all that will come of.
     asked: u64,
     answered: u64,
+    clock: Clock,
+    /// When the host was last heard from, and last told how many ticks
+    /// its copy has played, which was this many.
+    heard_at: Instant,
+    sent: Instant,
+    played: u64,
+    status: Option<Status>,
 }
 
 impl<L: Link> Client<L> {
     /// A client with its host at the other end of `link`, to play a copy
     /// of the match its [`welcome`] set up.
     pub fn new(link: L) -> Client<L> {
+        let clock = Clock::default();
+        let now = clock.now();
         Client {
+            clock,
+            heard_at: now,
+            sent: now,
+            played: 0,
+            status: None,
             link,
             heard: VecDeque::new(),
             behind: 0,
@@ -109,6 +132,22 @@ impl<L: Link> Client<L> {
             asked: 0,
             answered: 0,
         }
+    }
+
+    /// Has it tell the time by `clock`.
+    pub fn clock(&mut self, clock: Clock) {
+        (self.heard_at, self.sent) = (clock.now(), clock.now());
+        self.clock = clock;
+    }
+
+    /// How everyone stood when the host last said, once it has.
+    pub fn status(&self) -> Option<&Status> {
+        self.status.as_ref()
+    }
+
+    /// Tells the host whether it's for dropping those holding the match.
+    pub fn vote(&mut self, drop: bool) -> Result<(), Lost> {
+        self.link.send(encode(&ToHost::Vote(drop)))
     }
 
     /// What its copy of the match has been given, and the pause and speed
@@ -196,9 +235,18 @@ impl<L: Link> Client<L> {
 
     /// Takes in what the host has sent.
     fn hear(&mut self) {
+        let now = self.clock.now();
         while !self.lost && self.heard.len() < TAKEN_IN {
-            match self.link.receive().map(|m| m.map(|m| decode(&m))) {
-                Ok(None) => break,
+            let heard = self.link.receive().map(|m| m.map(|m| decode(&m)));
+            if let Ok(Some(_)) = heard {
+                self.heard_at = now;
+            }
+            match heard {
+                Ok(None) => {
+                    self.lost |= now >= self.heard_at + UNHEARD;
+                    break;
+                }
+                Ok(Some(Some(ToClient::Alive))) => {}
                 Ok(Some(Some(ToClient::Step(bundle)))) => {
                     self.behind += usize::from(bundle.tick);
                     self.heard.push_back(ToClient::Step(bundle));
@@ -207,7 +255,8 @@ impl<L: Link> Client<L> {
                     said @ (ToClient::Diverged { .. }
                     | ToClient::Answered(_)
                     | ToClient::Left { .. }
-                    | ToClient::Ended),
+                    | ToClient::Ended
+                    | ToClient::Status(_)),
                 ))) => self.heard.push_back(said),
                 // It's already been let in.
                 Ok(Some(Some(ToClient::Start(_) | ToClient::Refused(_)))) => self.lost = true,
@@ -254,14 +303,28 @@ impl<L: Link> Client<L> {
                 Some(ToClient::Diverged { client, step }) => self.diverged.push((client, step)),
                 Some(ToClient::Left { client, players }) => self.left.push((client, players)),
                 Some(ToClient::Ended) => self.ended = true,
+                // As things stood once what came before it was done.
+                Some(ToClient::Status(status)) => self.status = Some(status),
                 // Never more than it's asked, whatever the host says.
                 Some(ToClient::Answered(asked)) => {
                     self.answered = asked.clamp(self.answered, self.asked)
                 }
-                Some(ToClient::Start(_) | ToClient::Refused(_)) | None => {}
+                Some(ToClient::Start(_) | ToClient::Refused(_) | ToClient::Alive) | None => {}
             }
         }
+        self.keep_up();
         Ok(())
+    }
+
+    /// Tells the host how many ticks its copy has played, when that's
+    /// changed or it's said nothing for a while.
+    fn keep_up(&mut self) {
+        let (now, played) = (self.clock.now(), self.schedule.record().steps);
+        if played != self.played || now >= self.sent + QUIET {
+            (self.sent, self.played) = (now, played);
+            // A host that's gone is found so as what it said is done.
+            let _ = self.link.send(encode(&ToHost::Played(played)));
+        }
     }
 }
 

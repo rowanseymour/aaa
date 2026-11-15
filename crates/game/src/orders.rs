@@ -296,9 +296,13 @@ pub(crate) fn leave_on_exit(mut commands: Commands, mut exit: MessageReader<AppE
 /// Logs what a turn of a host here brought.
 fn said(events: Vec<Event>) {
     for event in events {
-        // With both copies here, only by the match not playing out the
-        // same way twice.
-        warn!("the match's host says: {event:?}");
+        match event {
+            Event::Held(true) => info!("the match is held"),
+            Event::Held(false) => info!("the match goes on"),
+            // With both copies here, only by the match not playing out
+            // the same way twice.
+            _ => warn!("the match's host says: {event:?}"),
+        }
     }
 }
 

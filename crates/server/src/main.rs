@@ -161,17 +161,23 @@ fn host(
         Event::Diverged { client, step } => {
             eprintln!("client {client}'s copy stopped matching by tick {step}")
         }
+        Event::Held(true) => eprintln!("the match is held"),
+        Event::Held(false) => eprintln!("the match goes on"),
     };
     while host.waiting() {
         greet(&mut host);
         host.wait().into_iter().for_each(said);
         std::thread::sleep(IDLE);
     }
-    let (began, mut due) = (Instant::now(), Duration::ZERO);
+    let (mut began, mut due) = (Instant::now(), Duration::ZERO);
     while host.world().ticks < ticks && host.clients() > 0 {
         host.turn().into_iter().for_each(said);
         // Only to tell those that come now that they're too late.
         greet(&mut host);
+        if host.held() {
+            // The ticks a hold put off aren't made up for.
+            (began, due) = (Instant::now(), Duration::ZERO);
+        }
         due += Duration::from_secs_f32(TICK / host.schedule().speed());
         std::thread::sleep(due.saturating_sub(began.elapsed()));
     }
