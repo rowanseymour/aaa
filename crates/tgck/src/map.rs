@@ -312,6 +312,10 @@ pub fn write_strings(text: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
+/// The world version from which MOUNTAIN_HEIGHT_MAP ends with the
+/// cutscene-mode flag.
+pub(super) const CUTSCENE_WORLD_VERSION: u32 = 10;
+
 /// The MOUNTAIN_HEIGHT_MAP section holding `mountain` and the flag
 /// [`Map::cutscene_mode`] reads.
 pub fn write_mountain_height_map(
@@ -353,6 +357,8 @@ pub struct Tile {
 impl Terrain {
     /// The newest version the game reads.
     const MAX_VERSION: u32 = 7;
+    /// The first version whose tiles take 8 bytes.
+    const WIDE_TILE_VERSION: u32 = 7;
 
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
@@ -382,7 +388,7 @@ impl Terrain {
                     t.get(o..o + 2)
                         .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))
                 };
-                if version >= 7 {
+                if version >= Self::WIDE_TILE_VERSION {
                     Tile {
                         terrain: u16_at(0),
                         seen_by: u16_at(2),
@@ -446,7 +452,7 @@ impl Terrain {
         w.count("tiles", self.tiles.len())?;
         w.u32(size as u32);
         for t in &self.tiles {
-            if self.version >= 7 {
+            if self.version >= Self::WIDE_TILE_VERSION {
                 w.u16(t.terrain);
                 w.u16(t.seen_by);
                 w.bytes(&[t.water_body, t.padding, t.flags, t.unused]);
@@ -475,7 +481,7 @@ impl Terrain {
 /// Bytes per TERRAIN tile in a version.
 fn tile_size(version: u32) -> usize {
     match version {
-        7.. => 8,
+        Terrain::WIDE_TILE_VERSION.. => 8,
         5..=6 => 6,
         4 => 4,
         _ => 2,
@@ -607,10 +613,6 @@ pub struct Thing {
     pub detail: Detail,
 }
 
-/// The world version from which MOUNTAIN_HEIGHT_MAP ends with the
-/// cutscene-mode flag.
-pub(super) const CUTSCENE_WORLD_VERSION: u32 = 10;
-
 /// The [`Thing::class`] of plain scenery, such as rocks and street lights,
 /// whose record has no detail.
 pub const SCENERY: u32 = 2;
@@ -665,8 +667,12 @@ pub struct Camera {
 
 /// The version DYNAMIC_THINGS records are written in.
 const THINGS_VERSION: u32 = 11;
-const THING_VERSION: u32 = 2;
+/// The version a thing record's head holds, unlike [`THINGS_VERSION`] for
+/// the whole list.
+const THING_RECORD_VERSION: u32 = 2;
+/// The version of a thing record's placement fields.
 const PLACEMENT_VERSION: u32 = 5;
+/// The version that follows an area's id.
 const AREA_ID_VERSION: u32 = 2;
 
 /// Reads a thing list from its `{name}_INDEX` and `{name}` sections.
@@ -727,7 +733,7 @@ impl Head {
         let template = rec.string()?;
         let class = rec.u32()?;
         let id = rec.u32()?;
-        rec.expect("thing version", THING_VERSION)?;
+        rec.expect("thing version", THING_RECORD_VERSION)?;
         let name = rec.string()?;
         rec.expect("creation time", 0)?;
         Ok(Head {
@@ -745,7 +751,7 @@ impl Head {
         w.string(&self.template)?;
         w.u32(self.class);
         w.u32(self.id);
-        w.u32(THING_VERSION);
+        w.u32(THING_RECORD_VERSION);
         w.string(&self.name)?;
         w.u32(0);
         w.f32s(&self.position);

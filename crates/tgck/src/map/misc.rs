@@ -164,18 +164,21 @@ pub(super) mod tests {
         }
     }
 
+    const LISTENS: u32 = MiscData::UI_SCRIPT_LISTENS_WORLD_VERSION;
+    const COUNTER: u32 = MiscData::GAME_COUNTER_WORLD_VERSION;
+
     #[test]
     fn round_trips_misc_data() {
-        for world_version in [21, 24, 28] {
+        for world_version in [LISTENS - 1, LISTENS, COUNTER] {
             let misc = misc(world_version);
             let bytes = misc.to_bytes(world_version).unwrap();
             assert_eq!(MiscData::parse(&bytes, world_version).unwrap(), misc);
         }
-        let mut no_counter = misc(28);
+        let mut no_counter = misc(COUNTER);
         no_counter.game_counter = Some(None);
-        let bytes = no_counter.to_bytes(28).unwrap();
+        let bytes = no_counter.to_bytes(COUNTER).unwrap();
         assert_eq!(bytes.last(), Some(&0));
-        assert_eq!(MiscData::parse(&bytes, 28).unwrap(), no_counter);
+        assert_eq!(MiscData::parse(&bytes, COUNTER).unwrap(), no_counter);
     }
 
     #[test]
@@ -193,10 +196,10 @@ pub(super) mod tests {
 
     #[test]
     fn refuses_what_the_version_lacks() {
-        assert!(misc(28).to_bytes(27).is_err());
-        assert!(misc(21).to_bytes(24).is_err());
-        let bytes = misc(21).to_bytes(21).unwrap();
-        assert!(MiscData::parse(&bytes, 24).is_err(), "too short");
+        assert!(misc(COUNTER).to_bytes(COUNTER - 1).is_err());
+        assert!(misc(LISTENS - 1).to_bytes(LISTENS).is_err());
+        let bytes = misc(LISTENS - 1).to_bytes(LISTENS - 1).unwrap();
+        assert!(MiscData::parse(&bytes, LISTENS).is_err(), "too short");
         assert!(
             MiscData::parse(&bytes, 17).is_err(),
             "not read from MISC_DATA"

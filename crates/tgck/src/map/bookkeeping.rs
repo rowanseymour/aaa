@@ -195,7 +195,11 @@ mod tests {
             );
             assert!(
                 updatables
-                    .to_bytes(if world_version < 22 { 22 } else { 21 })
+                    .to_bytes(if world_version < Updatables::PERIODIC_WORLD_VERSION {
+                        Updatables::PERIODIC_WORLD_VERSION
+                    } else {
+                        Updatables::PERIODIC_WORLD_VERSION - 1
+                    })
                     .is_err()
             );
         }
