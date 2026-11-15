@@ -14,7 +14,7 @@ mod testing;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
-use aaa_data::{GameData, General, Handicap, Id, Nation};
+use aaa_data::{Faction, GameData, Handicap, Id, Nation};
 use aaa_map::{FogSetting, Map, Player, Recruits};
 use aaa_sim::World;
 use log::{debug, warn};
@@ -41,9 +41,9 @@ pub struct Setup {
     /// The nation chosen for each side, by player id; one at random where
     /// the map fixes none and none is chosen.
     pub nations: BTreeMap<u32, Id>,
-    /// The general chosen for each side, by player id; one of its nation's
+    /// The faction chosen for each side, by player id; one of its nation's
     /// at random where none is.
-    pub generals: BTreeMap<u32, Id>,
+    pub factions: BTreeMap<u32, Id>,
     /// The handicap given each side, by player id, in place of the map's.
     pub handicaps: BTreeMap<u32, Id>,
     /// How much of the map the fog of war hides, if not as the game's
@@ -57,8 +57,8 @@ pub struct Started {
     /// What raises the regiments and buildings the match adds.
     pub raising: Recruits,
     pub world: World,
-    /// The general who leads each side with one, by player id.
-    pub generals: HashMap<u32, General>,
+    /// The faction that leads each side with one, by player id.
+    pub factions: HashMap<u32, Faction>,
 }
 
 /// Sets up the match `setup` describes from the game's data, calling
@@ -78,7 +78,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     for w in &map.warnings {
         warn!("{name}: {w}");
     }
-    let generals = generals(&map.players, &chosen, &setup.generals, seed);
+    let factions = factions(&map.players, &chosen, &setup.factions, seed);
     if let Some(teams) = &setup.teams {
         map.arrange(teams);
     }
@@ -140,14 +140,14 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     let mut world = World::new(&map, rules);
     world.set_fog(setup.fog.unwrap_or_else(|| game.fog_setting()));
     let recharges = game.operation_recharges();
-    for (&player, general) in &generals {
-        let ops = (general.operations.iter())
+    for (&player, faction) in &factions {
+        let ops = (faction.operations.iter())
             .map(|o| {
                 let recharge = recharges.get(&o.id).copied().unwrap_or(0.0);
                 aaa_sim::SpecialOp::new(o.id.clone(), o.cost, recharge)
             })
             .collect();
-        world.lead(player, experience.starting, general.experience_max, ops);
+        world.lead(player, experience.starting, faction.experience_max, ops);
     }
     let given = handicap_technologies(&map.players, &setup.handicaps, &game.handicaps());
     for (player, technology) in given {
@@ -157,7 +157,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         map,
         raising,
         world,
-        generals,
+        factions,
     })
 }
 
@@ -207,7 +207,7 @@ pub fn fresh_seed() -> u64 {
 #[derive(Clone, Copy)]
 enum Pick {
     Nation = 1,
-    General = 2,
+    Faction = 2,
 }
 
 /// One of `items` for `player`, at random but the same wherever the match
@@ -222,29 +222,29 @@ fn pick_at_random<T>(seed: u64, pick: Pick, player: u32, items: &[T]) -> Option<
     items.get(roll % items.len().max(1))
 }
 
-/// The general who leads each side with a nation, by player id: the one the
+/// The faction that leads each side with a nation, by player id: the one the
 /// map fixes, else the one `chosen` where they lead its nation, else one of
 /// those the lobby offers at random.
-pub fn generals(
+pub fn factions(
     players: &[Player],
     nations: &HashMap<u32, Nation>,
     chosen: &BTreeMap<u32, Id>,
     seed: u64,
-) -> HashMap<u32, General> {
+) -> HashMap<u32, Faction> {
     nations
         .iter()
         .filter_map(|(&p, nation)| {
-            let all = &nation.generals;
+            let all = &nation.factions;
             let find = |id: &Id| all.iter().find(|g| g.id == *id);
             let player = players.iter().find(|q| q.id == p);
-            let fixed = player.and_then(|q| q.general.as_deref());
-            let general = (fixed.and_then(|id| find(&Id::from(id))))
+            let fixed = player.and_then(|q| q.faction.as_deref());
+            let faction = (fixed.and_then(|id| find(&Id::from(id))))
                 .or_else(|| chosen.get(&p).and_then(find).filter(|g| g.public))
                 .or_else(|| {
-                    let offered: Vec<&General> = all.iter().filter(|g| g.public).collect();
-                    pick_at_random(seed, Pick::General, p, &offered).copied()
+                    let offered: Vec<&Faction> = all.iter().filter(|g| g.public).collect();
+                    pick_at_random(seed, Pick::Faction, p, &offered).copied()
                 });
-            Some((p, general?.clone()))
+            Some((p, faction?.clone()))
         })
         .collect()
 }
@@ -269,7 +269,7 @@ mod tests {
             id: Id::from(id),
             name: id.to_uppercase(),
             placeholders: HashMap::new(),
-            generals: Vec::new(),
+            factions: Vec::new(),
             flag: None,
             music: None,
         };
@@ -294,19 +294,19 @@ mod tests {
                 .map(|p| *pick_at_random(seed, pick, p, &items).unwrap())
                 .collect()
         };
-        for pick in [Pick::Nation, Pick::General] {
+        for pick in [Pick::Nation, Pick::Faction] {
             assert_eq!(picked(7, pick), picked(7, pick));
             assert_ne!(picked(7, pick), picked(8, pick));
             // Each side's is its own.
             assert!(picked(7, pick).iter().any(|&n| n != picked(7, pick)[0]));
         }
-        assert_ne!(picked(7, Pick::Nation), picked(7, Pick::General));
+        assert_ne!(picked(7, Pick::Nation), picked(7, Pick::Faction));
         assert!(pick_at_random::<i32>(7, Pick::Nation, 1, &[]).is_none());
     }
 
     #[test]
-    fn sides_are_led_by_the_chosen_general_of_their_nation_else_any() {
-        let general = |id: &str| General {
+    fn sides_are_led_by_the_chosen_faction_of_their_nation_else_any() {
+        let faction = |id: &str| Faction {
             id: Id::from(id),
             name: format!("General {id}"),
             short_name: id.into(),
@@ -316,11 +316,11 @@ mod tests {
             portrait: None,
             computer_name: None,
         };
-        let nation = |id: &str, generals: &[&str]| Nation {
+        let nation = |id: &str, factions: &[&str]| Nation {
             id: Id::from(id),
             name: id.into(),
             placeholders: HashMap::new(),
-            generals: generals.iter().map(|g| general(g)).collect(),
+            factions: factions.iter().map(|g| faction(g)).collect(),
             flag: None,
             music: None,
         };
@@ -335,24 +335,24 @@ mod tests {
             (7, usa),
         ]);
         let mut players: Vec<Player> = (1..=7).map(|id| player(id, false, true)).collect();
-        players[5].general = Some("patton_tutorial".into());
+        players[5].faction = Some("patton_tutorial".into());
         let chosen = BTreeMap::from([
             (1, Id::from("Nimitz")),
             (2, Id::from("rommel")),
             (6, Id::from("nimitz")),
             (7, Id::from("patton_tutorial")),
         ]);
-        let generals = generals(&players, &nations, &chosen, 7);
-        let id = |p| generals[&p].id.as_str();
+        let factions = factions(&players, &nations, &chosen, 7);
+        let id = |p| factions[&p].id.as_str();
         assert_eq!(id(1), "nimitz");
-        // A general of another nation's leads none of this one's sides, and
+        // A faction of another nation's leads none of this one's sides, and
         // the lobby offers none of those only scenarios use.
         for p in [2, 3, 7] {
             assert!(["patton", "nimitz"].contains(&id(p)));
         }
         assert_eq!(id(4), "rommel");
-        assert!(!generals.contains_key(&5));
-        // The map's own general leads over the one chosen, offered or not.
+        assert!(!factions.contains_key(&5));
+        // The map's own faction leads over the one chosen, offered or not.
         assert_eq!(id(6), "patton_tutorial");
     }
 }

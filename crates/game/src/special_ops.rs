@@ -1,5 +1,5 @@
 //! The special operations panel in the top left corner: the player's
-//! side's experience, and a button for each of its general's special
+//! side's experience, and a button for each of its faction's special
 //! operations, greyed out while it can't be used. Pressing one, or its key,
 //! arms the cursor with it, and the next left click in the world gives it.
 
@@ -44,7 +44,7 @@ const CLEAR: Vec2 = Vec2::new(
 );
 
 /// Where what shares the top left corner starts: clear of the panel,
-/// which only a side with a general has.
+/// which only a side with a faction has.
 pub fn corner(local: &Local, leaders: &Leaders) -> Vec2 {
     let led = local.0.is_some_and(|p| leaders.0.contains_key(&p));
     match led {
@@ -80,7 +80,7 @@ impl Plugin for SpecialOpsPlugin {
 }
 
 /// The special operation the cursor's armed with, by its place in the
-/// general's list: the next left click in the world gives it.
+/// faction's list: the next left click in the world gives it.
 #[derive(Resource, Default, Debug, PartialEq)]
 pub struct Armed(pub Option<usize>);
 
@@ -88,11 +88,11 @@ pub fn armed(armed: Res<Armed>) -> bool {
     armed.0.is_some()
 }
 
-/// What the panel shows of the player's side, which has a general.
+/// What the panel shows of the player's side, which has a faction.
 #[derive(Resource)]
 pub(crate) struct Panel {
     player: u32,
-    general: String,
+    faction: String,
     max: Option<f32>,
     words: Words,
     /// What the experience was last shown as, to redo only on a change.
@@ -102,7 +102,7 @@ pub(crate) struct Panel {
 /// The tooltips' and messages' words from the game's strings.
 pub(crate) struct Words {
     title: String,
-    general: String,
+    faction: String,
     experience: String,
     help: String,
     /// "Special Operation %s has not yet recharged".
@@ -123,7 +123,7 @@ struct ExperienceBox;
 /// An operation's button.
 #[derive(Component)]
 pub(crate) struct OperationButton {
-    /// Its operation's place in the general's list.
+    /// Its operation's place in the faction's list.
     index: usize,
     name: String,
     /// It's used as soon as it's pressed, with no aiming.
@@ -156,7 +156,7 @@ fn spawn(
     let Some(player) = local.0 else {
         return;
     };
-    let Some(general) = leaders.0.get(&player) else {
+    let Some(faction) = leaders.0.get(&player) else {
         return;
     };
     let game = &loaded.game;
@@ -176,7 +176,7 @@ fn spawn(
     let vfx = game.vfx();
     let words = Words {
         title: said("game_interface_FactionExperience_ToolTip", "Experience"),
-        general: said("ui_tooltip_item_general", "General"),
+        faction: said("ui_tooltip_item_general", "General"),
         experience: said("ui_tooltip_item_experience", "Experience"),
         help: said(
             "game_interface_FactionExperience_ToolTip_2",
@@ -197,7 +197,7 @@ fn spawn(
     };
     let cost = said("ui_tooltip_item_title_cost", "Cost");
     let area = said("ui_tooltip_item_title_area", "Area");
-    let buttons: Vec<_> = (general.operations.iter().enumerate())
+    let buttons: Vec<_> = (faction.operations.iter().enumerate())
         .filter_map(|(n, o)| {
             let op = operations.get(&o.id)?;
             let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
@@ -342,8 +342,8 @@ fn spawn(
         });
     commands.insert_resource(Panel {
         player,
-        general: general.name.clone(),
-        max: general.experience_max,
+        faction: faction.name.clone(),
+        max: faction.experience_max,
         words,
         shown: None,
     });
@@ -775,8 +775,8 @@ fn refresh(
     }
     let w = &panel.words;
     let mut said = Vec::new();
-    if !panel.general.trim().is_empty() {
-        said.push(format!("{}  {}", w.general, panel.general));
+    if !panel.faction.trim().is_empty() {
+        said.push(format!("{}  {}", w.faction, panel.faction));
     }
     said.push(format!("{}  {rounded}", w.experience));
     let hint = format!("{}\n\n{}", said.join("\n"), w.help);
@@ -795,7 +795,7 @@ mod tests {
     fn words() -> Words {
         Words {
             title: "Experience".into(),
-            general: "General".into(),
+            faction: "General".into(),
             experience: "Experience".into(),
             help: String::new(),
             unready: "Special Operation %s has not yet recharged".into(),
@@ -837,7 +837,7 @@ mod tests {
     fn panel() -> Panel {
         Panel {
             player: 1,
-            general: "Marshal Zhukov".into(),
+            faction: "Marshal Zhukov".into(),
             max: Some(5000.0),
             words: words(),
             shown: None,

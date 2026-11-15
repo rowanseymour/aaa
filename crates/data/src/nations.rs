@@ -1,4 +1,4 @@
-//! The nations sides play as, their generals and banners, and the
+//! The nations sides play as, their factions and banners, and the
 //! lobby's handicaps.
 
 use std::collections::HashMap;
@@ -16,7 +16,7 @@ pub struct Nation {
     /// placeholder id: its Corps HQ for `placeholder_corpsunpacked`.
     pub placeholders: HashMap<Id, Id>,
     /// Those who may lead its sides.
-    pub generals: Vec<General>,
+    pub factions: Vec<Faction>,
     /// The archive path of the flag the lobby shows for it.
     pub flag: Option<String>,
     /// The music its player hears in a match.
@@ -39,9 +39,9 @@ pub struct Handicap {
     pub property: Option<Id>,
 }
 
-/// A general who leads a side.
+/// A faction that leads a side.
 #[derive(Debug, Clone, PartialEq)]
-pub struct General {
+pub struct Faction {
     /// E.g. `patton`.
     pub id: Id,
     /// E.g. `General Patton`.
@@ -50,7 +50,7 @@ pub struct General {
     pub short_name: String,
     /// The special operations they give their side, in the order the
     /// panel shows them.
-    pub operations: Vec<GeneralOperation>,
+    pub operations: Vec<FactionOperation>,
     /// The most experience their side can hold, if there's a ceiling.
     pub experience_max: Option<f32>,
     /// Whether the lobby offers them, as it doesn't those only scenarios
@@ -64,9 +64,9 @@ pub struct General {
     pub computer_name: Option<String>,
 }
 
-/// A special operation as a general gives it.
+/// A special operation as a faction gives it.
 #[derive(Debug, Clone, PartialEq)]
-pub struct GeneralOperation {
+pub struct FactionOperation {
     pub id: Id,
     /// The side's experience using it takes.
     pub cost: f32,
@@ -130,7 +130,7 @@ impl GameData {
     /// The nations sides can play as, by name.
     pub fn nations(&self) -> Vec<Nation> {
         let strings = self.strings();
-        let generals = self.generals(&strings);
+        let factions = self.factions(&strings);
         let files = self.parse_tgis(|n| n.starts_with("nations/"));
         let files = scoped(&files);
         let mut nations: Vec<Nation> = files
@@ -145,8 +145,8 @@ impl GameData {
                     placeholders: placeholders
                         .filter_map(|p| Some((p.placeholder_ids?, p.thing_ids?)))
                         .collect(),
-                    generals: (n.factions.as_deref().unwrap_or("").split(','))
-                        .filter_map(|id| generals.get(&Id::from(id.trim())).cloned())
+                    factions: (n.factions.as_deref().unwrap_or("").split(','))
+                        .filter_map(|id| factions.get(&Id::from(id.trim())).cloned())
                         .collect(),
                     flag: n.flag_icon.as_deref().and_then(ui_path),
                     music: n
@@ -197,21 +197,21 @@ impl GameData {
         nation.value("flag_icon").and_then(ui_path)
     }
 
-    /// The generals who may lead a side, by id.
-    fn generals(&self, strings: &crate::Strings) -> HashMap<Id, General> {
+    /// The factions that may lead a side, by id.
+    fn factions(&self, strings: &crate::Strings) -> HashMap<Id, Faction> {
         let computer_names = self.computer_names(strings);
         let definitions = self.definitions();
-        (definitions.generals.iter())
+        (definitions.factions.iter())
             .filter_map(|g| {
                 let id = g.ids.clone()?;
                 let name = localized(strings, g.name.as_deref()).unwrap_or_else(|| id.to_string());
-                let general = General {
+                let faction = Faction {
                     short_name: localized(strings, g.staging_name.as_deref())
                         .unwrap_or_else(|| name.clone()),
                     name,
                     operations: (g.ability.iter())
                         .filter_map(|a| {
-                            Some(GeneralOperation {
+                            Some(FactionOperation {
                                 id: a.ability_ids.clone()?,
                                 cost: a.cost_faction_experience.unwrap_or(0.0),
                             })
@@ -223,29 +223,29 @@ impl GameData {
                     computer_name: computer_names.get(&id).cloned(),
                     id: id.clone(),
                 };
-                Some((id, general))
+                Some((id, faction))
             })
             .collect()
     }
 
-    /// What the computer player of each general is called, by the
-    /// general's id: the name of the profile made for them, rather than
-    /// one a campaign plays as several of a nation's generals.
+    /// What the computer player of each faction is called, by the
+    /// faction's id: the name of the profile made for them, rather than
+    /// one a campaign plays as several of a nation's factions.
     fn computer_names(&self, strings: &crate::Strings) -> HashMap<Id, String> {
         let files = self.parse_tgis(|n| n.starts_with("sai/"));
         let files = scoped(&files);
-        // Each general's name so far, with how many generals its profile
+        // Each faction's name so far, with how many factions its profile
         // plays as.
         let mut names: HashMap<Id, (usize, String)> = HashMap::new();
         for profile in files.iter().flat_map(|f| f.read::<defs::Sai>("SAI")) {
             let Some(name) = localized(strings, profile.name.as_deref()) else {
                 continue;
             };
-            let generals: Vec<Id> = profile.faction.into_iter().filter_map(|f| f.ids).collect();
-            for general in &generals {
-                let better = (names.get(general)).is_none_or(|(many, _)| generals.len() < *many);
+            let factions: Vec<Id> = profile.faction.into_iter().filter_map(|f| f.ids).collect();
+            for faction in &factions {
+                let better = (names.get(faction)).is_none_or(|(many, _)| factions.len() < *many);
                 if better {
-                    names.insert(general.clone(), (generals.len(), name.clone()));
+                    names.insert(faction.clone(), (factions.len(), name.clone()));
                 }
             }
         }

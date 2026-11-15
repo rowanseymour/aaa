@@ -202,7 +202,7 @@ impl Models {
         self.view(template)?.portrait.as_ref()
     }
 
-    /// Whether a template's things show their owner's general's portrait
+    /// Whether a template's things show their owner's faction's portrait
     /// rather than their own.
     pub fn shows_faction_portrait(&self, template: &str) -> bool {
         self.view(template).is_some_and(|v| v.faction_portrait)

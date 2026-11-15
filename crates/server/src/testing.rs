@@ -15,7 +15,7 @@ pub(crate) fn player(id: u32, independent: bool, playable: bool) -> Player {
         outcome: Default::default(),
         won_by_cities: false,
         nation: None,
-        general: None,
+        faction: None,
         relations: vec![Relation::Neutral; 4],
         team_relations: Vec::new(),
         stockpile: 0.0,

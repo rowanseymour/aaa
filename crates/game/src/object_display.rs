@@ -26,7 +26,7 @@
 //! a thing, such as a unit's card, says of that thing what [`Says`] has.
 //!
 //! The portrait of one thing is drawn from a model: the face its template
-//! names, a regiment's being its commanding officer's, its owner's general
+//! names, a regiment's being its commanding officer's, its owner's faction
 //! where its template says so, else all of its own model. Its flat picture
 //! stands in only where none of those can be drawn.
 
@@ -1362,14 +1362,14 @@ fn portrayed<'a>(sim: &'a World, looks: &'a Looks, mode: &Mode) -> Option<(&'a s
 }
 
 /// Who the portrait of `template`, owned by `owner`, is of: its owner's
-/// general where it says so and there is one, else the face it names, and
+/// faction where it says so and there is one, else the face it names, and
 /// failing either its own model.
 fn sitter(drawn: &Drawn, leaders: &Leaders, template: &str, owner: u32) -> Sitter {
-    let general = (drawn.0.shows_faction_portrait(template))
+    let faction = (drawn.0.shows_faction_portrait(template))
         .then(|| leaders.0.get(&owner))
         .flatten();
-    let face = match general {
-        Some(general) => general.portrait.clone(),
+    let face = match faction {
+        Some(faction) => faction.portrait.clone(),
         None => drawn.0.portrait(template).cloned(),
     };
     face.map_or_else(
@@ -1670,7 +1670,7 @@ struct Teller<'a> {
 
 impl Teller<'_> {
     /// The lines of a thing's tooltip: its template's name, then what
-    /// applies to it of its health, its stockpile and its general. A
+    /// applies to it of its health, its stockpile and its faction. A
     /// regiment has no health of its own to give.
     fn tip(&self, says: Says) -> Vec<String> {
         let (sim, looks) = (self.sim, self.looks);
@@ -1688,7 +1688,7 @@ impl Teller<'_> {
                 // One that's dead says only what its template would.
                 if unit.alive() {
                     let owner = sim.regiments[unit.regiment].owner;
-                    lines.extend(self.general(&unit.template, owner));
+                    lines.extend(self.faction(&unit.template, owner));
                 }
                 lines
             }
@@ -1703,7 +1703,7 @@ impl Teller<'_> {
                     let stockpile = of(measure(sim, Fill::Stockpile(b)));
                     lines.push(row("ui_tooltip_item_title_supply_stockpile", stockpile));
                 }
-                lines.extend(self.general(&building.template, building.owner));
+                lines.extend(self.faction(&building.template, building.owner));
                 lines
             }
             Says::Regiment(r) => vec![name(&sim.regiments[r].template)],
@@ -1741,16 +1741,16 @@ impl Teller<'_> {
         }
     }
 
-    /// What a template that shows its owner's general says of them: who,
+    /// What a template that shows its owner's faction says of them: who,
     /// and to their own side and its allies, their experience.
-    fn general(&self, template: &Id, owner: u32) -> Vec<String> {
-        let general = (self.drawn.0.shows_faction_portrait(template.as_str()))
+    fn faction(&self, template: &Id, owner: u32) -> Vec<String> {
+        let faction = (self.drawn.0.shows_faction_portrait(template.as_str()))
             .then(|| self.leaders.0.get(&owner))
             .flatten();
-        let Some(general) = general else {
+        let Some(faction) = faction else {
             return Vec::new();
         };
-        let mut lines = vec![self.row("ui_tooltip_item_general", general.name.clone())];
+        let mut lines = vec![self.row("ui_tooltip_item_general", faction.name.clone())];
         if let (true, Some(experience)) = (
             ours(self.sim, self.local, owner),
             self.sim.experience(owner),

@@ -1,17 +1,17 @@
-//! The experience a side's general earns, and spending it on the general's
+//! The experience a side's faction earns, and spending it on the faction's
 //! special operations.
 
 use aaa_map::{Id, Operation};
 
 use crate::{LANDINGS_KEPT, Refused, SECOND, TICK, World};
 
-/// A side's general: their experience and special operations.
+/// A side's faction: their experience and special operations.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Commander {
     pub experience: f32,
     /// The most it can hold, if there's a ceiling.
     pub max: Option<f32>,
-    /// The general's special operations, in the order they list them.
+    /// The faction's special operations, in the order they list them.
     pub operations: Vec<SpecialOp>,
 }
 
@@ -25,7 +25,7 @@ pub struct Operated {
     pub at: Option<[f32; 2]>,
 }
 
-/// One of a general's special operations, and how far it's recharged.
+/// One of a faction's special operations, and how far it's recharged.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SpecialOp {
     pub id: Id,
@@ -65,7 +65,7 @@ impl Commander {
 }
 
 impl World {
-    /// Gives `player` a general whose side holds at most `max`, starting
+    /// Gives `player` a faction whose side holds at most `max`, starting
     /// with `experience`, with `operations` to spend it on.
     pub fn lead(
         &mut self,
@@ -83,17 +83,17 @@ impl World {
         self.commanders.insert(player, commander);
     }
 
-    /// `player`'s experience, for a side with a general.
+    /// `player`'s experience, for a side with a faction.
     pub fn experience(&self, player: u32) -> Option<f32> {
         self.commanders.get(&player).map(|c| c.experience)
     }
 
-    /// `player`'s general's `i`th special operation.
+    /// `player`'s faction's `i`th special operation.
     pub fn special_op(&self, player: u32, i: usize) -> Option<&SpecialOp> {
         self.commanders.get(&player)?.operations.get(i)
     }
 
-    /// Whether `player` may use their general's `i`th special operation
+    /// Whether `player` may use their faction's `i`th special operation
     /// now: it's one the match can carry out, it has recharged, and the
     /// side has the experience for it.
     pub(crate) fn may_operate(&self, player: u32, i: usize) -> Result<(), Refused> {
@@ -111,7 +111,7 @@ impl World {
         Ok(())
     }
 
-    /// Uses `player`'s general's `i`th special operation, aimed at `at`,
+    /// Uses `player`'s faction's `i`th special operation, aimed at `at`,
     /// spending its cost and starting it recharging only once it's been
     /// carried out.
     pub(crate) fn special_operation(
@@ -144,7 +144,7 @@ impl World {
         self.reveals.contains_key(&player)
     }
 
-    /// Credits every side with a general a tick's steady gain, and
+    /// Credits every side with a faction a tick's steady gain, and
     /// recharges their operations a tick's worth.
     pub(crate) fn lead_sides(&mut self) {
         let gain = self.rules.experience_per_second * TICK;
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn sides_with_a_general_gain_experience_up_to_its_ceiling() {
+    fn sides_with_a_faction_gain_experience_up_to_its_ceiling() {
         let mut w = world();
         w.rules.experience_per_second = 1.0;
         w.lead(1, 200.0, Some(5000.0), Vec::new());
@@ -199,7 +199,7 @@ mod tests {
         assert!((w.experience(1).unwrap() - 201.0).abs() < 1e-3);
         assert_eq!(w.experience(2), Some(5000.0));
         assert!((w.experience(3).unwrap() - 9001.0).abs() < 1e-2);
-        // A side without a general has none.
+        // A side without a faction has none.
         assert_eq!(w.experience(4), None);
     }
 
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(w.special_op(1, 0).unwrap().charged(), 0.0);
         // One the match can't carry out spends nothing.
         assert_eq!(w.apply(1, operate(1)), Err(Refused::Unable));
-        // Nor one the side hasn't, nor one for a side with no general.
+        // Nor one the side hasn't, nor one for a side with no faction.
         assert_eq!(w.check(1, &operate(2)), Err(Refused::NotYours));
         assert_eq!(w.check(2, &operate(0)), Err(Refused::NotYours));
     }

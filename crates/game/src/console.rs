@@ -298,7 +298,7 @@ const VERBS: &[Verb] = &[
     verb(
         "usefactionability",
         "n x y",
-        "uses the nth of the general's special operations, from 0 as the panel lists them, on the ground at x y",
+        "uses the nth of the faction's special operations, from 0 as the panel lists them, on the ground at x y",
     ),
     verb("pack", "", "packs up the selected building"),
     verb("sell", "", "sells the selected building"),
@@ -1233,11 +1233,11 @@ fn use_faction_ability(world: &mut World, args: &[&str]) -> Reply {
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
     let sim = &world.resource::<Sim>().0;
     if sim.experience(player).is_none() {
-        return Err("no general leads this side".into());
+        return Err("no faction leads this side".into());
     }
     let op = sim
         .special_op(player, i)
-        .ok_or(format!("the general has no operation {i}"))?;
+        .ok_or(format!("the faction has no operation {i}"))?;
     let given = sim.operation_aim(player, i, None, at);
     let at = given.ok_or(format!("{} isn't given on the ground", op.id))?;
     let operation = aaa_sim::Command::Operate { operation: i, at };

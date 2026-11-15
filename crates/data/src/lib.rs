@@ -48,7 +48,7 @@ pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use interface::{Command, ConnectionLook, CursorLook, FormationLook, SupplyBorder};
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
-pub use nations::{General, GeneralOperation, Handicap, Nation, NationBanners};
+pub use nations::{Faction, FactionOperation, Handicap, Nation, NationBanners};
 pub use objectives::{ObjectiveLook, ObjectiveLooks};
 pub use organizations::{Formation, Layout, Organization, Ranges};
 pub use properties::PropertyLook;
@@ -114,9 +114,9 @@ struct Definitions {
     /// The abilities defined on their own, such as special operations,
     /// in the order they load, the first kept of those defined twice.
     abilities: Vec<(Id, defs::AbilityDefinition)>,
-    /// The generals, in the order they load, the first kept of those
+    /// The factions, in the order they load, the first kept of those
     /// defined twice.
-    generals: Vec<defs::General>,
+    factions: Vec<defs::Faction>,
     /// The game's words for ranges of figures, in the order they load.
     descriptions: Vec<defs::Description>,
 }
@@ -138,7 +138,7 @@ impl Definitions {
         let mut properties = HashMap::new();
         let mut property_files = HashMap::new();
         let mut abilities: Vec<(Id, defs::AbilityDefinition)> = Vec::new();
-        let mut generals: Vec<defs::General> = Vec::new();
+        let mut factions: Vec<defs::Faction> = Vec::new();
         let mut descriptions: Vec<defs::Description> = Vec::new();
         for scope in scoped(files) {
             let file = scope.file;
@@ -172,11 +172,11 @@ impl Definitions {
                 {
                     abilities.push((id, a));
                 } else if kind.eq_ignore_ascii_case("Faction")
-                    && let Some(g) = scope.deserialize::<defs::General>(block)
+                    && let Some(g) = scope.deserialize::<defs::Faction>(block)
                     && let Some(id) = &g.ids
-                    && !generals.iter().any(|known| known.ids.as_ref() == Some(id))
+                    && !factions.iter().any(|known| known.ids.as_ref() == Some(id))
                 {
-                    generals.push(g);
+                    factions.push(g);
                 } else if kind.eq_ignore_ascii_case("Description")
                     && let Some(d) = scope.deserialize::<defs::Description>(block)
                 {
@@ -189,7 +189,7 @@ impl Definitions {
             properties,
             property_files,
             abilities,
-            generals,
+            factions,
             descriptions,
         }
     }

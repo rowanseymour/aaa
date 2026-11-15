@@ -36,9 +36,9 @@ pub struct Player {
     /// The nation it plays as, e.g. `nation_usa`, where the map fixes one or
     /// it was loaded with one.
     pub nation: Option<String>,
-    /// The general who leads it, e.g. `montgomery`, where the map fixes one
+    /// The faction that leads it, e.g. `montgomery`, where the map fixes one
     /// along with its nation.
-    pub general: Option<String>,
+    pub faction: Option<String>,
     /// How it stands toward each player, by index in
     /// [`Map::players`](crate::Map::players).
     pub relations: Vec<Relation>,
@@ -160,9 +160,9 @@ pub(crate) fn players_and_teams(
             },
             won_by_cities: k.city_ratio_victory.unwrap_or(false),
             nation: (!k.nation.is_empty()).then(|| k.nation.clone()),
-            // Maps whose nation the lobby chooses can still name a general,
+            // Maps whose nation the lobby chooses can still name a faction,
             // which the lobby's choice replaces.
-            general: (k.faction.as_ref())
+            faction: (k.faction.as_ref())
                 .map(|f| f.name.clone())
                 .filter(|n| !n.is_empty() && !k.nation.is_empty()),
             relations: by_player(&k.relations),
