@@ -1,7 +1,7 @@
 //! Weapons: what they fire on, turrets, projectiles and the damage they
 //! do.
 
-use aaa_map::{Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon};
+use aaa_map::{Damage, Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon};
 
 use crate::{
     Footing, LANDINGS_KEPT, Landing, Order, Piece, Projectile, Relation, State, TICK, Target,
@@ -29,48 +29,72 @@ fn besiege(besieged: &mut Option<u64>, until: u64) {
 }
 
 /// Damage a shot does to what it lands on, for the side that fired it.
-struct Hit {
+pub(crate) struct Hit {
     target: Target,
     amount: f32,
-    /// What fired it.
-    from: Target,
+    /// What fired it, unless it's a special operation's.
+    from: Option<Target>,
     by: u32,
     /// For bombardment, its weapon's seconds between shots.
     bombard: Option<f32>,
+}
+
+impl Hit {
+    /// A hit of `by`'s special operation: the side's as a whole, so neither
+    /// bombardment nor drawing fire.
+    pub(crate) fn strike(target: Target, amount: f32, by: u32) -> Hit {
+        Hit {
+            target,
+            amount,
+            from: None,
+            by,
+            bombard: None,
+        }
+    }
 }
 
 /// The fraction of an area shot's damage that reaches `d` from where it
 /// lands: full within [`Weapon::full_within`], falling
 /// evenly to [`Weapon::edge_damage`] at the edge.
 fn falloff(weapon: &Weapon, d: f32) -> f32 {
-    let full = weapon.full_within.min(weapon.area);
-    if d <= full || weapon.area <= full {
-        return 1.0;
-    }
-    let along = (d - full) / (weapon.area - full);
-    1.0 + (weapon.edge_damage - 1.0) * along
+    attenuated([weapon.full_within, weapon.area], weapon.edge_damage, d)
 }
 
-/// Health a shot of `weapon` takes from `target`, its damage scaled by
+/// The fraction of damage that reaches `d` from the middle of an area
+/// `[full, area]`: full within `full`, falling evenly to `edge` at `area`.
+pub(crate) fn attenuated([full, area]: [f32; 2], edge: f32, d: f32) -> f32 {
+    let full = full.min(area);
+    if d <= full || area <= full {
+        return 1.0;
+    }
+    let along = (d - full) / (area - full);
+    1.0 + (edge - 1.0) * along
+}
+
+/// The share of damage of `kind` that resistance takes off `target`, with
+/// what the terrain properties it holds, `ground`, add.
+pub(crate) fn resistance(target: &Fighter, ground: &[&TerrainEffect], kind: &Id) -> f32 {
+    let grounds = ground.iter().flat_map(|e| &e.resists);
+    target.resists.get(kind).copied().unwrap_or(0.0)
+        + (grounds.filter(|(k, _)| k == kind))
+            .map(|(_, amount)| amount)
+            .sum::<f32>()
+}
+
+/// Health a hit of `kinds` of damage takes from `target`, scaled by
 /// `scale`: defence comes off first, then resistance takes its share, and
 /// every hit does at least 1. `ground` is what the terrain properties the
 /// target holds add to both.
 pub(crate) fn damage(
-    weapon: &Weapon,
+    kinds: &[Damage],
     target: &Fighter,
     ground: &[&TerrainEffect],
     scale: f32,
 ) -> f32 {
     let defense = target.defense + ground.iter().map(|e| e.defense).sum::<f32>();
-    weapon
-        .damage
-        .iter()
+    (kinds.iter())
         .map(|d| {
-            let grounds = ground.iter().flat_map(|e| &e.resists);
-            let resist = target.resists.get(&d.kind).copied().unwrap_or(0.0)
-                + (grounds.filter(|(kind, _)| *kind == d.kind))
-                    .map(|(_, amount)| amount)
-                    .sum::<f32>();
+            let resist = resistance(target, ground, &d.kind);
             ((d.amount * scale - defense.max(0.0)) * (1.0 - resist)).max(1.0)
         })
         .sum()
@@ -254,16 +278,18 @@ impl World {
                 at: p.at,
             });
         }
+        self.land_strikes(&mut hits);
         let mut fired_on = Vec::new();
         for hit in hits {
             if let Target::Unit(u) = hit.target {
                 let r = self.units[u].regiment;
-                match hit.bombard {
+                let alive = self.units[u].alive();
+                match (hit.bombard, hit.from) {
                     // Bombardment keeps what it hurts out of supply rather
                     // than drawing its fire.
-                    Some(recharge) if self.units[u].alive() => self.shell(r, hit.from, recharge),
-                    Some(_) => {}
-                    None => fired_on.push((r, hit.from)),
+                    (Some(recharge), Some(from)) if alive => self.shell(r, from, recharge),
+                    (None, Some(from)) => fired_on.push((r, from)),
+                    _ => {}
                 }
             }
             self.land(hit);
@@ -347,8 +373,9 @@ impl World {
             Target::Building(b) => {
                 let building = &mut self.buildings[b];
                 // Nothing a side fires hurts its own, such as what it took
-                // over earlier in the tick.
-                if !building.standing() || building.owner == hit.by {
+                // over earlier in the tick; its special operations do.
+                let own = building.owner == hit.by && hit.from.is_some();
+                if !building.standing() || own {
                     return;
                 }
                 if self.sides.relation(hit.by, building.owner) == Relation::Enemy
@@ -364,7 +391,10 @@ impl World {
                 }
                 building.health -= hit.amount;
                 if building.health <= 0.0 {
-                    self.fall(b, Some(hit.by));
+                    match hit.from {
+                        Some(_) => self.fall(b, Some(hit.by)),
+                        None => self.fall_unclaimed(b),
+                    }
                 }
             }
         }
@@ -692,8 +722,8 @@ impl World {
             if let Some(f) = self.fighter(t) {
                 hits.push(Hit {
                     target: t,
-                    amount: damage(weapon, f, &self.terrain_effects(t), 1.0),
-                    from,
+                    amount: damage(&weapon.damage, f, &self.terrain_effects(t), 1.0),
+                    from: Some(from),
                     by,
                     bombard,
                 });
@@ -713,7 +743,7 @@ impl World {
             reached.push((
                 middle,
                 target,
-                damage(weapon, f, &ground, falloff(weapon, d)),
+                damage(&weapon.damage, f, &ground, falloff(weapon, d)),
             ));
         }
         // Those nearest by their middles, where there's a most it hits.
@@ -724,7 +754,7 @@ impl World {
         hits.extend(reached.into_iter().map(|(_, target, amount)| Hit {
             target,
             amount,
-            from,
+            from: Some(from),
             by,
             bombard,
         }));
@@ -897,9 +927,9 @@ mod tests {
         tank.defense = 6.0;
         tank.resists = [(Id::from("gunfire"), 0.6)].into();
         // (12 - 6) * 0.4
-        assert!((damage(&rifle(12.0, 12.0), &tank, &[], 1.0) - 2.4).abs() < 1e-5);
-        assert_eq!(damage(&rifle(12.0, 5.0), &tank, &[], 1.0), 1.0);
-        assert!((damage(&rifle(12.0, 50.0), &tank, &[], 0.5) - 7.6).abs() < 1e-5);
+        assert!((damage(&rifle(12.0, 12.0).damage, &tank, &[], 1.0) - 2.4).abs() < 1e-5);
+        assert_eq!(damage(&rifle(12.0, 5.0).damage, &tank, &[], 1.0), 1.0);
+        assert!((damage(&rifle(12.0, 50.0).damage, &tank, &[], 0.5) - 7.6).abs() < 1e-5);
     }
 
     #[test]

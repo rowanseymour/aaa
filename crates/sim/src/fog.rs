@@ -319,6 +319,7 @@ impl World {
                 }
             }
         }
+        discs.extend(self.watches.iter().map(|w| (w.player, w.at, w.range)));
         for (p, at, radius) in discs {
             self.fog.stamp(p, at, radius, false);
         }

@@ -33,6 +33,20 @@ impl World {
         }
     }
 
+    /// Brings down a building a special operation took to no health:
+    /// nothing captures it, so one that could be captured is left disabled
+    /// with 1 health instead.
+    pub(crate) fn fall_unclaimed(&mut self, b: usize) {
+        let building = &mut self.buildings[b];
+        if building.fighter.capturable && building.zone.is_none() {
+            building.health = 1.0;
+            building.target = None;
+            building.state = State::Disabled;
+        } else {
+            self.fall(b, None);
+        }
+    }
+
     /// The centre of the city the building at `b` belongs to, if it's one
     /// of a city's buildings but not its centre.
     pub fn city_of(&self, b: usize) -> Option<usize> {

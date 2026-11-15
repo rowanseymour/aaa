@@ -4,7 +4,8 @@
 use std::collections::HashMap;
 
 use crate::combat::soft_shape;
-use crate::{GameData, Id, Shape, Targets, defs};
+use crate::strikes::strike;
+use crate::{GameData, Id, Shape, Strike, Targets, defs};
 
 /// The settings supply runs by.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -77,6 +78,8 @@ pub enum Operation {
     Drop(Id),
     /// Lifts the fog from its user's minimap for a time.
     Reveal { seconds: f32 },
+    /// Does damage round where it's aimed, once it lands.
+    Strike(Box<Strike>),
 }
 
 /// How long an operation lifts the fog from its user's minimap, for one
@@ -229,8 +232,14 @@ impl GameData {
         let definitions = self.definitions();
         let effects = self.supply_effects();
         let supplies = self.supplies();
+        let flights = self.flights();
+        let lookouts = self.lookouts();
         let mut out = HashMap::new();
         for (id, a) in &definitions.abilities {
+            if let Some(s) = strike(a, &flights, &lookouts) {
+                out.insert(id.clone(), Operation::Strike(Box::new(s)));
+                continue;
+            }
             let gives = a.effect.iter().find_map(|e| {
                 let p = e.enchantment_property.as_ref()?;
                 let property = p.ids.clone().filter(|id| effects.contains_key(id))?;

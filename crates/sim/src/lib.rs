@@ -29,6 +29,7 @@ mod research;
 mod rules;
 mod schedule;
 mod setup;
+mod strikes;
 mod supply;
 mod terrain;
 #[cfg(test)]
@@ -58,6 +59,7 @@ pub use research::{Lacking, Researchable};
 pub use rules::Rules;
 pub use schedule::{Action, CHAT_LONGEST, Channel, Diverged, Given, Record, SPEEDS, Schedule};
 use serde::{Deserialize, Serialize};
+pub use strikes::{Afflicted, Incoming, Watch};
 pub use supply::{Bombarder, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
@@ -167,6 +169,12 @@ pub struct World {
     pub operated: Vec<Operated>,
     /// The tick each side whose minimap has its fog lifted has it until.
     pub reveals: BTreeMap<u32, u64>,
+    /// Strikes on their way.
+    pub incoming: Vec<Incoming>,
+    /// Ground sides are shown for a while.
+    pub watches: Vec<Watch>,
+    /// Units hurt each second by what strikes left on them.
+    pub afflicted: Vec<Afflicted>,
     /// What sides have been told: see [`World::take_notices`].
     pub(crate) notices: Vec<Notice>,
     /// What each side sees of the map.
@@ -763,10 +771,14 @@ pub enum Command {
     /// packing, and one under siege where the rules say so.
     Sell { building: usize },
     /// Uses the `operation`th of the player's general's special
-    /// operations, aimed at `at`. Refused while it's recharging, when the
-    /// side hasn't the experience for it, and for one the match can't
-    /// carry out.
-    Operate { operation: usize, at: [f32; 2] },
+    /// operations, aimed at `at`, or given on `on` there. Refused while
+    /// it's recharging, when the side hasn't the experience for it, and for
+    /// one the match can't carry out.
+    Operate {
+        operation: usize,
+        at: [f32; 2],
+        on: Option<Piece>,
+    },
 }
 
 impl Building {
@@ -1012,7 +1024,7 @@ impl Sides {
 
 digest!(World {
     regiments, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, treasuries, commanders, operated, reveals, fog, ticks, loaded, flying, landings, numbers, next_id,
+    holdings, treasuries, commanders, operated, reveals, incoming, watches, afflicted, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng,
 } skip {
     // Fixed by the map and the game's data.
