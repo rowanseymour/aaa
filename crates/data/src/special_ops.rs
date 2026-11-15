@@ -20,11 +20,27 @@ pub struct SpecialOperation {
     /// It's used on its user's own side as soon as it's pressed, with no
     /// aiming.
     pub on_self: bool,
+    /// What marks where it's aimed while it's being aimed, for one with an
+    /// area.
+    pub marker: Option<Marker>,
     /// The game's word for the size of the area it lands on, if it has one.
     pub area: Option<String>,
     /// What its effects do, a line each, with the lines of what an
     /// enchantment gives indented under it.
     pub effects: Vec<EffectLine>,
+}
+
+/// The marker of an operation with an area that doesn't name its own, as
+/// the special operations' template gives them.
+const CROSSHAIR: &str = "crosshair_decal_vfx";
+
+/// A ground decal under the cursor showing the area an operation would
+/// land on.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Marker {
+    pub vfx: Id,
+    /// World units across, in place of the decal's own size.
+    pub size: f32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -285,6 +301,10 @@ fn operation(
         on_self: crate::Targets::parse(a.targets.as_deref().unwrap_or(""))
             .required
             .contains(&Id::from("self")),
+        marker: (a.area > 0.0).then(|| Marker {
+            vfx: (a.target_location_vfx.clone()).unwrap_or_else(|| Id::from(CROSSHAIR)),
+            size: 2.0 * a.area,
+        }),
         area,
         effects: a.effect.iter().flat_map(|e| words.effect(e)).collect(),
     }
@@ -356,6 +376,23 @@ mod tests {
         );
         let drop = definition("[AbilityDefinition]\n{\n\tIDS = supply_drop\n\ttargets = NULL\n}\n");
         assert_eq!((shown(&scan).on_self, shown(&drop).on_self), (true, false));
+    }
+
+    #[test]
+    fn only_operations_with_an_area_are_marked_while_aimed_across_it() {
+        let marked = |text: &str| shown(&definition(text)).marker;
+        let area = "[AbilityDefinition]\n{\n\tIDS = fear\n\tarea = 15\n\ttarget_location_vfx = crosshair\n}\n";
+        let volley = "[AbilityDefinition]\n{\n\tIDS = drop\n\tvolley_area = 5\n\ttarget_location_vfx = crosshair\n\t[Flags]\n\ttarget_location = true\n}\n";
+        let marker = Marker {
+            vfx: Id::from("crosshair"),
+            size: 30.0,
+        };
+        assert_eq!(marked(area), Some(marker));
+        assert_eq!(marked(volley), None);
+        // One that names none has the crosshair.
+        let unnamed = "[AbilityDefinition]\n{\n\tIDS = bomb\n\tarea = 2\n}\n";
+        let crosshair = Some(Id::from(CROSSHAIR));
+        assert_eq!(marked(unnamed).map(|m| m.vfx), crosshair);
     }
 
     #[test]
