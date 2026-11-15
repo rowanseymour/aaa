@@ -94,14 +94,18 @@ impl Path {
         }
     }
 
+    /// Whether the object is placed by distance along the curve rather than
+    /// by the positions' key times.
     pub fn constant_speed(&self) -> bool {
         self.settings.flags & 0x10 != 0
     }
 
+    /// Whether the object is turned to face along the curve.
     pub fn follows(&self) -> bool {
         self.settings.flags & 0x20 != 0
     }
 
+    /// Whether a following object faces back along the curve.
     pub fn flips(&self) -> bool {
         self.settings.flags & 0x40 != 0
     }
@@ -151,7 +155,7 @@ impl Path {
 
     /// Rows of a rotation pointing the follow axis along the curve at key
     /// time `t` and laying another level beside it, turned half about the
-    /// third for the flip flag (0x40); none where the curve doesn't move.
+    /// third if it [flips](Path::flips); none where the curve doesn't move.
     /// Running straight up or down, only the follow axis is left, so the
     /// node is squashed onto the line of travel.
     fn facing(&self, t: f32) -> Option<[[f32; 3]; 3]> {

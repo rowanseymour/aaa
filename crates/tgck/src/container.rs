@@ -166,8 +166,7 @@ impl<R: Read + Seek> Container<R> {
 }
 
 /// Writes a container of `(section, payload)` pairs, laid out as the game
-/// does. Each section gives its name and flags, which say whether to
-/// compress; its offset and sizes are recomputed from the payload.
+/// does. Each section's offset and sizes are recomputed from its payload.
 pub fn write(out: &mut impl Write, sections: &[(&Section, &[u8])]) -> Result<()> {
     let mut w = Writer::default();
     w.bytes(MAGIC);

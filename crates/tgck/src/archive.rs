@@ -9,11 +9,11 @@ use std::path::{Component, Path, PathBuf};
 use crate::container::{Container, Section};
 use crate::{Cursor, Error, Result};
 
+/// An `entry` of the directory in `rwd.ksy`.
 #[derive(Debug, Clone)]
 pub struct Entry {
-    /// Path inside the archive, '/'-separated, e.g. `Audio/Music/WinInterface.mp3`.
     pub name: String,
-    /// Absolute offset of the file data within the archive.
+    /// From the start of the archive, not of the `Files` section.
     pub offset: u64,
     pub size: u64,
     pub unknown: u32,
@@ -38,13 +38,13 @@ impl Entry {
     }
 }
 
-/// The archive's `Header` section, which the game reads but doesn't use.
+/// The archive's `Header` section, which the game reads but doesn't use;
+/// `unknown2` is `None` when its version lacks it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Header {
     pub version: u32,
     pub product: String,
     pub unknown: [String; 2],
-    /// From version 2 on.
     pub unknown2: Option<u32>,
 }
 

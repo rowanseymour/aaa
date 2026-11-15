@@ -7,14 +7,10 @@ use super::expect;
 use super::header::{check_version, optional};
 use crate::{Cursor, Result, Writer};
 
-/// The game's ids for objects (GTIDs): a 16-bit slot, with the slot's
-/// generation in the top 16 bits so a reused slot gets a fresh id.
+/// The IDMGR section, the `id_manager` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct IdManager {
-    /// Where the search for a free slot starts.
     pub next_slot: u32,
-    /// Each slot's generation, up to the highest slot ever used; it goes up
-    /// when the slot's object is removed.
     pub generations: Vec<u16>,
 }
 
@@ -49,28 +45,26 @@ impl IdManager {
     }
 }
 
-/// The queues that schedule objects' updates.
+/// The UPDATABLES section, the `updatables` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Updatables {
-    /// How many updatables the world has; ids run up to it.
     pub count: u32,
-    /// Ring buffers of ticks, each slot holding the updates due then.
     pub delayed: [UpdateQueue; 2],
-    /// One slot per tick of a period of 1, 16 and 80 ticks; from world
-    /// version 22 on.
     pub periodic: Option<[UpdateQueue; 3]>,
 }
 
+/// An `update_queue` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UpdateQueue {
     pub current_slot: u32,
+    /// Each `update_slot`'s updates.
     pub slots: Vec<Vec<Update>>,
 }
 
+/// An `update` of `rmp.ksy`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Update {
     pub updatable_id: i32,
-    /// Passed to the updatable when the update runs.
     pub argument: u32,
 }
 

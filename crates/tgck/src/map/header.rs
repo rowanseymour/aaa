@@ -5,73 +5,57 @@
 
 use crate::{Cursor, Error, Result, Writer};
 
+/// The MAP_HEADER section, the `map_header` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MapHeader {
     pub version: u32,
     pub rules: WorldRules,
     pub parameters: WorldParameters,
-    /// The version again, so that it travels with the header.
     pub header_version: u32,
-    /// 0 in a saved map; the game fills it in when it launches one.
     pub checksum: u32,
-    /// A string id, defined in MAPSTRINGS.
     pub name: String,
-    /// A string id, defined in MAPSTRINGS.
     pub description: String,
-    /// Width and height in world units; from version 7 on.
     pub size: Option<[f32; 2]>,
-    /// The build number of the game that saved it.
     pub build: f32,
-    /// [`MapHeader::app_version`] as a number, two decimal digits a part:
-    /// 30100 for 0.3.1.0.
     pub version_number: u32,
-    /// The version of the game that saved it, e.g. `0.3.1.0`.
     pub app_version: String,
-    /// The game the map is for; the game refuses maps for another.
     pub app_id: String,
-    /// The edition of the game that saved it, e.g. `North America AA Dev`.
     pub edition: String,
-    /// Kept and saved again, but never read.
     pub unused: u8,
-    /// The map's path when it was saved.
     pub path: String,
-    /// The campaign a saved game belongs to; empty for none.
     pub campaign: String,
-    /// The mission's index in that campaign, or -1; from version 6 on.
     pub campaign_mission: Option<i32>,
-    /// When the map was saved, as a Windows FILETIME.
     pub saved: u64,
     pub players: Vec<Player>,
     pub creator: WorldCreator,
 }
 
-/// The game options a map is played with.
+/// A `world_rules` of `rmp.ksy`, as the RULES section and the headers hold.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldRules {
-    /// An index into the game's map types; 0 in every shipped map.
     pub map_type: u32,
     pub game_type: String,
     pub rules: Vec<Rule>,
 }
 
+/// A `rule` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Rule {
     pub name: String,
-    /// The map fixes it, so players can't change it.
     pub locked: bool,
     pub value: RuleValue,
 }
 
+/// A [`Rule`]'s value, as its type decides.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RuleValue {
     Bool(bool),
     Int(i32),
     Float(f32),
-    /// The index of one of the rule's choices.
     Choice(u32),
 }
 
-/// The sides a map is set up with.
+/// A `world_parameters` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldParameters {
     pub version: u32,
@@ -79,12 +63,14 @@ pub struct WorldParameters {
     pub kingdoms: Vec<KingdomSetup>,
 }
 
+/// A `team_setup` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TeamSetup {
     pub name: String,
     pub display_name: String,
 }
 
+/// A `kingdom_setup` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KingdomSetup {
     pub name: String,
@@ -94,48 +80,36 @@ pub struct KingdomSetup {
     pub color: String,
     pub handicap: String,
     pub display_name: String,
-    /// Text markup in the kingdom's colour; from version 12 on.
     pub color_markup: Option<String>,
-    /// The strategic AI that plays it, if set.
     pub ai: String,
-    /// It must be in the game.
     pub required: bool,
-    /// A human may play it.
     pub playable: bool,
     pub team: String,
     pub objectives: Vec<String>,
-    /// Technologies it starts with.
     pub technologies: Vec<String>,
-    /// The kingdom it merges into; empty for none.
     pub merge_into: String,
-    /// Actor templates it starts with besides the map's.
     pub actors: Vec<String>,
-    /// It's removed when the game starts.
     pub removed: bool,
-    /// The strategic AI plays it until a human takes it.
     pub ai_controlled: bool,
-    /// Bonus stockpiles; from version 13 on.
     pub resources: Option<Vec<(String, f32)>>,
 }
 
+/// A present `player` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Player {
-    /// The computer plays it.
     pub ai: bool,
     pub kingdom: String,
     pub name: String,
-    /// It's the player on the machine that saved the map; from version 5 on.
     pub local: Option<bool>,
 }
 
-/// What the editor generated the map from.
+/// The `world_creator` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct WorldCreator {
     pub rules: WorldRules,
     pub parameters: WorldParameters,
     pub size: [f32; 2],
     pub biome: String,
-    /// Empty for none.
     pub weather: String,
     pub seed: u32,
 }

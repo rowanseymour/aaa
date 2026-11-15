@@ -7,52 +7,36 @@ use super::header::{bool, check_version, optional, optional_plain};
 use super::{Actor, Detail, Head, Property, ReadAs, Thing, expect};
 use crate::{Cursor, Error, Result, Writer};
 
-/// The game's world state as a map saves it.
+/// The GWORLD section, the `gworld` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct World {
-    /// The version of the game state, which decides the layout of this and
-    /// several other sections.
     pub version: u32,
     pub rng_seed: u32,
-    /// Ticks the game has run; 0 in every shipped map, as none has started.
     pub game_ticks: u32,
-    /// The game time at the start and end of the last tick.
     pub game_time_begin: f32,
     pub game_time_end: f32,
-    /// Seconds of game time per tick.
     pub game_time_per_tick: f32,
     pub next_player_id: u32,
-    /// The numbers the editor gives the next camera and area it names
-    /// (`camera_3`, `area_4`); from version 4 on.
     pub next_camera_id: Option<u32>,
     pub next_area_id: Option<u32>,
-    /// For the items queued at structures; from version 27 on.
     pub next_structure_queue_item_id: Option<u32>,
-    /// 0 unverified, 1 repaired, 2 verified; a mission only starts on a
-    /// verified map. From version 5 on.
     pub map_status: Option<u32>,
-    /// 0 not started, 1 running, 2 won; from version 7 on.
     pub mission_state: Option<u32>,
 }
 
-/// What the teams set to a group may build and research, as set in the
-/// editor.
+/// The RESTRICTION_GROUPS section, the `restriction_groups` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestrictionGroups {
-    /// What the editor numbers the next group it creates.
     pub next_number: u32,
     pub groups: Vec<RestrictionGroup>,
 }
 
+/// A `restriction_group` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct RestrictionGroup {
-    /// E.g. `restriction_group_0003`, by which teams refer to it.
     pub name: String,
-    /// The number in its name.
     pub number: u32,
-    /// A string id; the same as the name in every shipped map.
     pub display_name: String,
-    /// Actor templates.
     pub allowed_actors: Vec<String>,
     pub allowed_technologies: Vec<String>,
     pub required_actors: Vec<String>,
@@ -163,16 +147,16 @@ impl World {
     }
 }
 
-/// A side kingdoms join, sharing victory.
+/// A present `team` of `rmp.ksy`, less its index.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Team {
     pub head: Head,
     pub version: u32,
-    /// Its name as shown, a string id.
     pub display_name: String,
+    /// Each a [`Relation`].
     pub kingdom_relations: Vec<u32>,
+    /// Each a [`Relation`].
     pub team_relations: Vec<u32>,
-    /// From version 1 on.
     pub restriction_group: Option<String>,
 }
 
@@ -248,84 +232,57 @@ impl Team {
     }
 }
 
-/// The KINGDOMS section.
+/// The KINGDOMS section, the `kingdoms` of `rmp.ksy`.
 #[derive(Debug, Clone)]
 pub struct Kingdoms {
-    /// How many kingdoms are major, that is not independent.
     pub majors: u32,
     pub kingdoms: Vec<Option<Kingdom>>,
 }
 
-/// A player, human or AI, or an independent power such as neutral civilians.
+/// A present `kingdom` of `rmp.ksy`, less its index.
 #[derive(Debug, Clone)]
 pub struct Kingdom {
     /// The shared fields; the detail is the kingdom's [`Actor`].
     pub thing: Thing,
-    /// Present in maps saved from world version 22 on.
+    /// The `updatable_id`.
     pub updatable: Option<i32>,
     pub version: u32,
-    /// Its position among the major kingdoms; -1 if independent.
     pub major_index: i32,
-    /// 1 if independent.
     pub independent: u32,
     pub name: String,
     pub color: String,
-    /// Its [`Relation`] to each kingdom, by position.
+    /// Each a [`Relation`].
     pub relations: Vec<u32>,
-    /// Stockpiles by resource id, e.g. `money` or `ammo`.
     pub resources: Vec<(String, f32)>,
-    /// The [`Team`]'s head id; 0 for none.
+    /// The [`Team`]'s `head.id`; 0 for none.
     pub team: u32,
-    /// Its [`Relation`] to each team, by position.
+    /// Each a [`Relation`].
     pub team_relations: Vec<u32>,
-    /// Whether the mission's start replaces the stockpiles with the game's
-    /// default amount.
     pub use_default_stockpile: bool,
-    /// The recruit being worked on; -1 for none.
     pub current_recruit: i32,
-    /// The commander, set on campaign maps and chosen in the lobby otherwise.
+    /// `None` where the map leaves it to the lobby.
     pub faction: Option<Faction>,
-    /// The nation id, e.g. `nation_gbr`; empty when chosen in the lobby.
     pub nation: String,
-    /// Its objectives' states by objective name: 0 active, 1 completed,
-    /// 2 failed.
     pub objectives: Vec<(String, u32)>,
-    /// 0 still playing, 1 won, 2 lost.
     pub outcome: u32,
-    /// Technologies it's given when the mission starts; from version 14 on.
     pub start_technologies: Option<Vec<String>>,
-    /// Shared properties it has, such as technologies.
     pub properties: Vec<Property>,
-    /// It must be in the game.
     pub required: bool,
-    /// A human may play it.
     pub playable: bool,
-    /// The strategic AI that plays it, e.g. `ger_sai`; empty for none.
     pub ai_profile: String,
-    /// The [`RestrictionGroup`] it's in; empty for none.
     pub restriction_group: String,
-    /// What its score is drawn from; independent kingdoms have none.
+    /// `None` for an independent kingdom.
     pub stats: Option<KingdomStats>,
-    /// The player's saved selections of units.
     pub saved_groups: Vec<SavedGroup>,
-    /// The next instance number by actor template; from version 15 on.
     pub instance_numbers: Option<Vec<(String, u32)>>,
-    /// From version 16 on.
     pub used_badges: Option<Vec<u32>>,
-    /// Whether the usual victory check applies, which triggers can turn off;
-    /// from version 17 on.
     pub default_victory_condition: Option<bool>,
-    /// From version 18 on.
     pub resigned: Option<bool>,
-    /// Its team won by holding the share of cities the rules require; from
-    /// version 19 on.
     pub city_ratio_victory: Option<bool>,
-    /// Amounts added to the stockpiles when the mission starts; from version
-    /// 20 on.
     pub bonus_stockpile: Option<Vec<(String, f32)>>,
 }
 
-/// How a kingdom stands toward another kingdom or a team.
+/// A `relation` of `rmp.ksy`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Relation {
     Itself = 0,
@@ -342,88 +299,66 @@ impl Relation {
     }
 }
 
-/// A kingdom's statistics, which the score screen and graph show.
+/// A `kingdom_stats` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KingdomStats {
     pub favorites: Favorites,
     pub totals: Totals,
-    /// Taken every 60 seconds of game time, for the score graph.
     pub snapshots: Vec<Snapshot>,
-    /// Seconds toward the next snapshot.
     pub time_since_snapshot: f32,
 }
 
-/// Tallies from which the game picks the kingdom's favourite unit, hero,
-/// building, enemy and, from version 2, organization.
+/// The `favorites` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Favorites {
     pub version: u32,
-    /// By template, a list per category. Version 0 stores u32s, which the
-    /// game ignores, kept here by their bits.
+    /// A list per category; version 0's `u32`s are kept as `f32`s of the
+    /// same bits.
     pub by_template: Vec<Vec<(String, f32)>>,
-    /// By thing id, a list per category; empty for version 0.
+    /// A list per category; empty for version 0.
     pub by_id: Vec<Vec<(u32, f32)>>,
 }
 
-/// Running totals: each resource's total production, ten slots in the
-/// game's resource order, then a counter per statistic in the order of the
-/// game's `Scoring/Scoring.tgi` ids (`TRIBUTE_GIVEN`, `TRIBUTE_RECEIVED`,
-/// ...). The slots of the counts the game works out live (`..._OWNED`)
-/// hold leftover memory.
+/// A `totals` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Totals {
     pub version: u32,
-    /// 66 values, or 60 in version 0, which leaves out a few statistics.
     pub values: Vec<f32>,
 }
 
-/// A sample for the score graph.
+/// A `snapshot` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Snapshot {
     pub totals: Totals,
-    /// Each resource's rate, ten slots; the hero inventory's size; then the
-    /// scores.
     pub values: [f32; 21],
 }
 
-/// A selection of units the player saved, to recall with a key.
+/// A `saved_group` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SavedGroup {
-    /// Its digits are the group's number.
     pub name: String,
-    /// The name it's shown by, "Group N" in the player's language.
     pub display_name: String,
-    /// The actors' thing ids.
     pub ids: Vec<u32>,
-    /// Whether the units move together as one group.
     pub grouped: bool,
-    /// The thing that leads them when they do.
     pub group_thing: u32,
 }
 
-/// A kingdom's commander and the state of their abilities.
+/// A `faction` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Faction {
-    /// The faction id, e.g. `montgomery`.
     pub name: String,
-    /// The commander's experience, which abilities cost.
     pub experience: f32,
     pub abilities: Vec<Ability>,
 }
 
-/// The state of an ability a commander or an actor has.
+/// An `ability` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Ability {
     pub version: u32,
     pub use_count: u32,
-    /// The game time it was last used; -1000 or the lowest f32 for never.
     pub last_used: f32,
-    /// Never used.
     pub unused1: u32,
-    /// Whether the actor may use it now: 0 while it lacks a required property
-    /// or is outside the required experience levels.
     pub usable: u8,
-    /// The things it's acting on; from version 1 on.
     pub active_targets: Option<Vec<u32>>,
 }
 

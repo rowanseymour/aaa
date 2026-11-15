@@ -6,74 +6,66 @@
 use super::expect;
 use crate::{Cursor, Result, Writer};
 
-/// The map cut into rectangular blocks of tiles, grouped into regions for
-/// the AI's path finding. The game can rebuild it.
+/// The `ai_map` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiMap {
-    /// None when the map holds no analysis.
+    /// `None` where `has_data` is clear.
     pub data: Option<AiData>,
 }
 
+/// An `ai_map`'s regions and blocks.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiData {
     pub regions: Vec<AiRegion>,
-    /// They cover every tile once.
     pub blocks: Vec<AiBlock>,
 }
 
+/// An `ai_region` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiRegion {
-    /// In world units.
     pub center: [f32; 2],
-    /// The regions whose blocks touch this one's, and the distance between
-    /// the two centers.
+    /// Each `ai_neighbor`'s region and distance.
     pub neighbors: Vec<(u32, f32)>,
 }
 
+/// An `ai_block` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiBlock {
-    /// The index of the region it belongs to.
+    /// Index into [`AiData::regions`].
     pub region: u32,
-    /// The connected stretch of land or water it's in; every block of a
-    /// region shares it.
     pub area: u32,
-    /// Top, right, bottom and left.
     pub sides: [AiBlockSide; 4],
 }
 
+/// An `ai_block_side` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiBlockSide {
-    /// The block's first or last row or column on this side, inclusive.
     pub bound: u16,
-    /// The blocks across this side.
     pub links: Vec<AiBlockLink>,
 }
 
+/// An `ai_block_link` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AiBlockLink {
-    /// The span of this block's edge tiles that the other block touches,
-    /// inclusive: min x, max x, min y, max y.
+    /// `min_x`, `max_x`, `min_y`, `max_y`.
     pub span: [u16; 4],
-    /// The index of the other block.
+    /// Index into [`AiData::blocks`].
     pub block: u32,
 }
 
-/// Triangles over the tiles along the water's edge, where the ground
-/// crosses the water level; empty in most shipped maps.
+/// The `shore_mesh` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ShoreMesh {
-    /// In world units.
     pub points: Vec<[f32; 2]>,
-    /// Indices into the points, three per triangle.
     pub corners: Vec<u32>,
     pub tiles: Vec<ShoreTile>,
 }
 
+/// A `shore_tile` of `rmp.ksy`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct ShoreTile {
     pub x: u32,
     pub y: u32,
-    /// The tile's triangles' corners, `first..=last`.
     pub first_corner: u32,
     pub last_corner: u32,
 }

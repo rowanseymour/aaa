@@ -205,7 +205,8 @@ impl Writer {
     }
 }
 
-/// A fixed-size, NUL-padded name, such as a section's.
+/// Decodes UTF-16LE up to the first NUL, replacing invalid units, as for a
+/// fixed-size padded name like a section's.
 pub(crate) fn utf16_lossy(bytes: &[u8]) -> String {
     let units: Vec<u16> = bytes
         .as_chunks::<2>()
@@ -230,8 +231,7 @@ pub(crate) mod tests {
         b
     }
 
-    /// Builds a container the way the game lays them out: sections from 0x0C,
-    /// then the section table. `(name, payload, compress)`.
+    /// Builds a container from `(name, payload, compress)` triples.
     pub fn build_container(sections: &[(&str, &[u8], bool)]) -> Vec<u8> {
         let mut out = b"TGCK".to_vec();
         out.extend(2u32.to_le_bytes());

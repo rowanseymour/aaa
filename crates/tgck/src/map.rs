@@ -3,6 +3,10 @@
 //! [`Map`] reads each section into a type that writes itself back, and
 //! [`MapFile`] holds them all and saves the whole map.
 //!
+//! A type that mirrors a type of the spec names it, and its fields mean what
+//! the spec says. An `Option` field is `None` exactly when the record's
+//! version, or the world version, lacks it, unless its doc says otherwise.
+//!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use std::fs::File;
@@ -129,10 +133,8 @@ impl<R: Read + Seek> Map<R> {
         parse_things("USED_REQUIRED_OBJECTS", &index, &data, world_version).map(Some)
     }
 
-    /// The version of the game state the map was saved with, which decides
-    /// the layout of some sections.
-    /// Checked as [`World::parse`] checks it, as it decides how other
-    /// sections are read.
+    /// The world version, which decides the layout of some sections;
+    /// range-checked as [`World::parse`] does.
     pub fn world_version(&mut self) -> Result<u32> {
         let version = Cursor::new(&self.container.read_named("GWORLD")?).u32()?;
         header::check_version("world", version, 0..=World::MAX_VERSION)
@@ -199,12 +201,12 @@ impl<R: Read + Seek> Map<R> {
         Sun::parse(&self.container.read_named("SUN")?)
     }
 
-    /// The map's string table as stored, in .tgi syntax.
+    /// The MAPSTRINGS section's bytes.
     pub fn string_table(&mut self) -> Result<Vec<u8>> {
         self.container.read_named("MAPSTRINGS")
     }
 
-    /// The map's string table, in .tgi text syntax.
+    /// The map's string table as text.
     pub fn strings(&mut self) -> Result<String> {
         let bytes = self.string_table()?;
         // Windows-1252 in practice; Latin-1 is identical for everything but 0x80..0x9F.
@@ -228,20 +230,17 @@ impl<R: Read + Seek> Map<R> {
     }
 }
 
+/// A `height_map` of `rmp.ksy`, less MOUNTAIN_HEIGHT_MAP's cutscene flag.
 #[derive(Debug, Clone)]
 pub struct HeightMap {
     pub version: u32,
     pub min: f32,
     pub max: f32,
     pub default: f32,
-    /// The vertex spacing it was made with, as a power of two: 1 for 2 world
-    /// units. The game refuses a map made with another spacing than its own.
     pub resolution_bits: u32,
     /// Vertices per side.
     pub side: usize,
-    /// Row-major heights, `side * side` entries.
     pub heights: Vec<f32>,
-    /// One byte per vertex; in HEIGHT_MAP non-zero marks water.
     pub layer: Vec<u8>,
 }
 
@@ -315,8 +314,8 @@ pub fn write_strings(text: &str) -> Result<Vec<u8>> {
         .collect()
 }
 
-/// The MOUNTAIN_HEIGHT_MAP section holding `mountain` and the world's
-/// cutscene-mode flag, which is None exactly before world version 10.
+/// The MOUNTAIN_HEIGHT_MAP section holding `mountain` and the flag
+/// [`Map::cutscene_mode`] reads.
 pub fn write_mountain_height_map(
     mountain: &HeightMap,
     cutscene_mode: Option<bool>,
@@ -326,39 +325,30 @@ pub fn write_mountain_height_map(
     Ok(data)
 }
 
+/// The TERRAIN section, the `terrain` of `rmp.ksy`.
 #[derive(Debug, Clone)]
 pub struct Terrain {
     pub version: u32,
-    /// The tile size it was made with, as a power of two: 1 for 2 world
-    /// units square. The game refuses a map made with another size than its
-    /// own.
     pub resolution_bits: u32,
     pub biome: String,
-    /// Terrain type ids, e.g. `temperate_grass03`; tiles index into this.
     pub names: Vec<String>,
     /// Tiles per side.
     pub side: usize,
-    /// Row-major, `side * side` entries.
     pub tiles: Vec<Tile>,
-    /// From version 2 on.
     pub ai_map: Option<AiMap>,
-    /// From version 6 on.
     pub shore_mesh: Option<ShoreMesh>,
 }
 
+/// A `tile` of `rmp.ksy`, whatever its version; a field the version lacks
+/// is 0. `padding` and `unused` are kept only so the tile saves unchanged.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tile {
     /// Index into [`Terrain::names`].
     pub terrain: u16,
-    /// Water body id (0 = dry land); matches the height map's vertex layer.
     pub water_body: u8,
-    /// Bits 0-3 are stored; the game recomputes bits 4-6 from the terrain's group.
     pub flags: u8,
-    /// The kingdoms that have explored it, a bit per kingdom slot.
     pub seen_by: u16,
-    /// Never read; kept because some version 6 maps hold leftover bytes here.
     pub padding: u8,
-    /// A version 7 tile's last byte, never read; kept so it saves unchanged.
     pub unused: u8,
 }
 
@@ -500,40 +490,33 @@ fn tile_size(version: u32) -> usize {
     }
 }
 
+/// The SUN section, the `sun` of `rmp.ksy`.
 #[derive(Debug, Clone)]
 pub struct Sun {
     pub version: u32,
-    /// Registered only while a fade runs; -1 otherwise.
     pub updatable: Updatable,
-    /// Unit vector the light travels along, in map coordinates (z up).
+    /// In map coordinates, z up.
     pub direction: [f32; 3],
     pub diffuse: [f32; 3],
     pub ambient: [f32; 3],
     pub specular: [f32; 3],
-    /// The colours the current ones fade toward.
     pub target_diffuse: [f32; 3],
     pub target_ambient: [f32; 3],
     pub target_specular: [f32; 3],
-    /// Seconds left in the colour fade.
     pub color_fade_time: f32,
-    /// A brightness multiplier.
     pub dimmer: f32,
     pub target_dimmer: f32,
     pub dimmer_fade_time: f32,
-    /// The game time of the last fade step; -1 before any.
     pub last_update_time: f32,
-    /// The cinematic letterbox and the screen fade; from version 1 on.
+    /// The letterbox, then the screen fade.
     pub overlays: Option<[Overlay; 2]>,
 }
 
-/// A script-driven screen effect, such as the letterbox.
+/// An `overlay` of `rmp.ksy`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Overlay {
     pub on: bool,
-    /// The game time it was turned on or off at; the game ignores it in
-    /// version 1.
     pub start: f32,
-    /// Seconds it takes to come or go; the game ignores it in version 1.
     pub duration: f32,
 }
 
@@ -616,26 +599,19 @@ impl Overlay {
     }
 }
 
+/// A `thing` record of `rmp.ksy`: its head, placement and detail.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Thing {
-    /// Template name, e.g. `temperate_trees`, `start_loc`.
     pub template: String,
-    /// The kind of object the record holds, which decides its [`Detail`]:
-    /// one for scenery, another for units and buildings, and so on.
+    /// Decides the [`Detail`].
     pub class: u32,
     pub id: u32,
-    /// The name scripts refer to it by; empty for most.
     pub name: String,
     pub position: [f32; 3],
-    /// Direction the object faces, a unit vector in x and y; cameras add
-    /// their tilt in z.
     pub facing: [f32; 3],
     pub flags: u32,
-    /// Size relative to the template's.
     pub scale: f32,
-    /// Which of the template's model variations it shows; -1 when none is set.
     pub variation: i32,
-    /// The kingdoms that have seen it, a bit per kingdom slot.
     pub seen_by: u16,
     pub detail: Detail,
 }
@@ -666,25 +642,21 @@ pub enum Detail {
     Raw(Vec<u8>),
 }
 
-/// A region scripts and triggers test units against.
+/// The `area` detail of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Area {
     pub version: u32,
-    /// Left out by some maps, such as the cutscenes.
+    /// `None` where the record leaves the id out, whatever its version.
     pub id: Option<u32>,
-    /// The name the map's objectives and triggers use.
     pub name: String,
-    /// 1 for a circle, 3 for a box.
     pub shape: u32,
     pub radius: f32,
-    /// The box about the position: min x, min y, max x, max y.
     pub bounds: [f32; 4],
-    /// The thing ids of what's inside it now, each with a byte the game uses
-    /// while checking (0 when saved); empty in a map saved from the editor.
+    /// Each `area_occupant`'s thing id and scratch byte.
     pub inside: Vec<(u32, u8)>,
 }
 
-/// A camera position for cutscenes and scripted views.
+/// The `camera` detail of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Camera {
     pub version: u32,
@@ -736,8 +708,8 @@ pub fn write_things(things: &[Thing]) -> Result<(Vec<u8>, Vec<u8>)> {
     Ok((index.0, data.0))
 }
 
-/// Reads a `u32` that every known file has the same value in, so that
-/// writing the value back reproduces the file.
+/// Reads a `u32` that has only one valid value, so that writing that value
+/// back reproduces the file.
 fn expect(cur: &mut Cursor, what: &str, want: u32) -> Result<()> {
     match cur.u32()? {
         v if v == want => Ok(()),
@@ -745,7 +717,7 @@ fn expect(cur: &mut Cursor, what: &str, want: u32) -> Result<()> {
     }
 }
 
-/// What every saved object's record starts with, things or not.
+/// A `thing_head` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Head {
     pub template: String,
@@ -910,9 +882,8 @@ impl Detail {
         let detail = match class {
             ACTOR => Detail::Actor(Actor::parse_whole(&mut cur, world_version)?),
             AREA => {
-                // Records without the id are 8 bytes shorter. Testing for the
-                // id's layout, rather than for its absence, matters: an id's
-                // low half can pass for the name's length of the shorter one.
+                // Test for the id's layout rather than its absence, as an id's
+                // low half can pass for the name's length without it.
                 let has_id = data.get(8..14).is_some_and(|b| {
                     let name_len = u16::from_le_bytes([b[4], b[5]]) as usize * 2;
                     let Some(list) = data.len().checked_sub(42 + name_len) else {

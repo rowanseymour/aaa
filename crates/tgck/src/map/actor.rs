@@ -3,8 +3,6 @@
 //!
 //! Components with a [`Component`] variant of their own decode into types;
 //! the others are read to their end and kept as bytes ([`Component::Framed`]).
-//! A record whose state doesn't decode to its exact end is kept whole
-//! ([`State::Raw`]), which only a record of known size allows.
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
@@ -13,18 +11,15 @@ use super::header::{bool, check_version, optional, optional_plain};
 use super::organization::{ElementState, Organization};
 use crate::{Cursor, Error, Result, Writer};
 
-/// A thing made of components, such as a unit or building.
+/// The `actor` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Actor {
     pub version: u32,
-    /// The owning [`Kingdom`](super::Kingdom)'s [`Thing::id`](super::Thing::id); 0 for none.
+    /// The owning [`Kingdom`](super::Kingdom)'s [`Thing::id`](super::Thing::id).
     pub kingdom: u32,
-    /// The states it's in, a bit each (see `actor_state` in `rmp.ksy`).
     pub states: u64,
-    /// The components its template gives it, a bit each as in [`COMPONENTS`].
+    /// A bit per entry of [`COMPONENTS`].
     pub template_components: u32,
-    /// The components the record holds state for: the template's, plus any
-    /// the game adds, such as a mind.
     pub components: u32,
     pub state: State,
 }
@@ -37,8 +32,8 @@ pub enum State {
         components: Vec<Component>,
         trailer: Trailer,
     },
-    /// Kept whole when a component's layout isn't one the game writes in
-    /// the maps known.
+    /// The state and trailer as bytes, where `Actor::parse_whole` can't
+    /// decode them.
     Raw(Vec<u8>),
 }
 
@@ -119,102 +114,81 @@ const DECODED: [u32; 7] = [
     CITY,
 ];
 
-/// Its id among the world's updatable objects.
+/// An `updatable` of `rmp.ksy`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Updatable {
     pub version: u32,
     pub id: i32,
 }
 
-/// A building's construction or upgrade progress.
+/// The Construction component, the `construction` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Construction {
     pub updatable: Updatable,
     pub version: u32,
     pub progress: Vec<f32>,
-    /// From version 1 on.
     pub upgrade: Option<Upgrade>,
-    /// Before version 1: an upgrade under the old rules, which the game
-    /// refuses unless both are 0.
     pub old_upgrade: Option<[u32; 2]>,
 }
 
+/// A [`Construction`]'s `upgrade_progress` and `upgrade_template`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Upgrade {
     pub progress: Vec<f32>,
-    /// The template being upgraded to; empty for none.
     pub template: String,
 }
 
+/// The Body component, the `body` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
     pub version: u32,
-    /// From version 2 on.
     pub updatable: Option<Updatable>,
-    /// From version 1 on: when it died; -1 while alive.
     pub death_time: Option<f32>,
-    /// Its health as a fraction of the template's `health`.
     pub health: f32,
-    /// From version 3 on: how long its remains take to sink, set when it dies.
     pub sink_time: Option<f32>,
-    /// From version 4 on: when it last took damage.
     pub last_damage_time: Option<f32>,
 }
 
+/// The Mover component, the `mover` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Mover {
     pub updatable: Updatable,
     pub version: u32,
     pub destination: [f32; 3],
     pub speed: f32,
-    /// The speed it's accelerating or braking towards.
     pub target_speed: f32,
-    /// From version 8 on: its top speed as a fraction of the template's
-    /// `speed_max`.
     pub max_speed: Option<f32>,
-    /// Before version 4, and ignored.
     pub old: Option<[f32; 3]>,
-    /// The thing id of an actor it's following.
     pub follow: u32,
-    /// How close it keeps to the actor it follows; junk when it follows none.
     pub follow_distance: f32,
-    /// Versions 1 to 6.
     pub old_flag: Option<u8>,
-    /// From version 2 on: whether it snaps to its target facing.
     pub turn_instantly: Option<u8>,
-    /// From version 3 on.
     pub target_facing: Option<[f32; 3]>,
-    /// From version 3 on: a factor on how far it moves for its speed.
     pub speed_scale: Option<f32>,
-    /// From version 5 on: whether it's falling or sliding along a set
-    /// course (marked in the actor's flags, too), and the fall's drag.
+    /// `falling`, then `fall_drag`.
     pub falling: Option<(u8, f32)>,
-    /// From version 6 on.
     pub fall: Option<MoverFall>,
 }
 
-/// The course of a fall.
+/// A [`Mover`]'s fields from `fall_turns` to `landing_offset`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MoverFall {
-    /// Whether it turns to face the way it falls.
     pub turns: u8,
     pub direction: [f32; 3],
-    /// Whether the fall ends at `landing`.
     pub has_landing: u8,
     pub landing: [f32; 3],
-    /// From where the fall started to `landing`.
     pub landing_offset: [f32; 3],
 }
 
-/// A city's centre, which stands for the buildings around it.
+/// The City component, the `city` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct City {
     pub updatable: Updatable,
     pub version: u32,
-    /// From version 1 on: the thing ids of the buildings that make it up.
     pub buildings: Option<Vec<u32>>,
 }
 
+/// The Properties component, the `properties` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Properties {
     pub updatable: Updatable,
@@ -223,68 +197,49 @@ pub struct Properties {
     pub properties: Vec<Option<Property>>,
 }
 
-/// A shared property, such as a nation's technology, the actor has.
+/// A `property` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Property {
-    /// 0, or 1 for the kind with an extra value.
     pub class: u32,
     pub version: u32,
-    /// The game time the actor gained it.
     pub gained_at: f32,
-    /// From version 1 on: where it came from, e.g. 1 an ability's effect, 2
-    /// granted kingdom-wide (technology and the like), 5 the terrain the
-    /// actor stands on, 9 its stance.
     pub source: Option<u32>,
-    /// The shared property data's id.
     pub id: String,
-    /// From version 2 on: set when the actor already held it from the same
-    /// source, so this copy adds nothing.
     pub duplicate: Option<u8>,
-    /// From version 2 on: the thing id of the actor it came from; 0 for none.
     pub from_actor: Option<u32>,
-    /// Class 1 from version 3 on: a second actor's thing id, set when an
-    /// ability hands the property over.
+    /// Also `None` unless `class` is 1.
     pub extra: Option<u32>,
 }
 
-/// What follows an actor's components. Thing ids are 0 for none.
+/// An `actor_trailer` of `rmp.ksy`. `saved_group` and `group` are
+/// `Some(None)` where the version has them but their flag is clear.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trailer {
-    /// The bit of the component that's in charge, or -1.
     pub main_component: i32,
-    /// From version 2 on: the object it needs alongside it.
     pub required_object: Option<u32>,
-    /// Versions 3 to 11, which the game ignores.
     pub old_stance: Option<u32>,
-    /// From version 4 on: the name of its kingdom's saved group it's in.
     pub saved_group: Option<Option<String>>,
-    /// From version 5 on: the group thing moving it with others.
     pub group: Option<Option<u32>>,
-    /// From version 6 on: the MAPSTRINGS key of its own name.
     pub map_string: Option<String>,
-    /// From version 8 on: the trailer it tows and what tows it.
+    /// `towing`, then `towed_by`.
     pub towing: Option<[u32; 2]>,
-    /// From version 10 on: the ordinal in its name, as in 3rd Infantry.
     pub number: Option<u32>,
-    /// From version 11 on.
     pub lists: Option<TrailerLists>,
-    /// From version 13 on: how many units are deploying onto it.
     pub num_deploying: Option<u32>,
 }
 
+/// A [`Trailer`]'s fields from `engaged_by` to `recent_attacks`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct TrailerLists {
-    /// The organizations engaging it, the units moving to it and the
-    /// actors that have attacked it.
+    /// `engaged_by`, `approached_by` and `attacked_by`.
     pub lists: [Vec<u32>; 3],
-    /// Recent attacks: the attacker, then the time of its latest hit and
-    /// how long that counts, as `f32` bits.
+    /// Each `recent_attack`, its times as `f32` bits.
     pub recent_attacks: Vec<[u32; 3]>,
 }
 
 impl Actor {
-    /// The first version that writes the states in 64 bits; the layout of
-    /// earlier ones is unconfirmed.
+    /// The first version that writes the states in 64 bits; earlier ones
+    /// aren't decoded.
     const MIN_VERSION: u32 = 9;
     /// The newest version the game reads.
     const MAX_VERSION: u32 = 14;

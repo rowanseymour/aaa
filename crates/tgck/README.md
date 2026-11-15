@@ -1,25 +1,19 @@
 # tgck
 
-A Rust library and command-line tool for reading the data files of
-**Axis & Allies (2004)**, the real-time strategy game. The game stores its
-files in a container format with the magic bytes `TGCK`:
-
-- **`.rwd` archives**: textures, models, sounds, videos and game data
-- **`.rmp` maps**: terrain, heights, water and placed objects
+A Rust library and command-line tool for reading the TGCK containers of
+**Axis & Allies (2004)**, the real-time strategy game: its `.rwd` archives
+and `.rmp` maps ([the files](../../docs/formats/README.md#the-files)).
 
 You need your own copy of the game. This project contains no game code or data.
 
 ## Command line
 
+Running `tgck` with no arguments prints its usage. For example:
+
 ```sh
-tgck list     Data.rwd [filter]          # list files (filter: case-insensitive substring)
-tgck stats    Data.rwd Music.rwd ...     # file counts and sizes by extension
-tgck extract  Data.rwd out/ [filter]     # extract files
-tgck cat      Data.rwd Units/USA/usa_battleship.tgi
-tgck sections Maps/Kursk.RMP             # list the sections of any TGCK file
-tgck unpack   Maps/Kursk.RMP out/        # write each section, decompressed, as <name>.bin
-tgck map      Maps/*.RMP                 # summarise maps
-tgck check    Maps/*.RMP                 # load maps whole, save them again and compare
+tgck list    Data.rwd Maps/
+tgck cat     Data.rwd Units/USA/usa_battleship.tgi
+tgck check   Maps/*.RMP
 ```
 
 ```text
@@ -70,12 +64,9 @@ map.save("Kursk_treeless.RMP")?;
 ## Formats
 
 The byte layouts, and what's undecoded, are specified in
-[`docs/formats`](../../docs/formats). All 80 maps that ship with the game
-parse fully, and every decoded section writes back byte for byte. Whole
-files differ only in their zlib streams, as the game's zlib and
-`miniz_oxide` compress differently.
-
-This repository contains only original code.
+[`docs/formats`](../../docs/formats). Every decoded section writes back byte
+for byte; whole files differ only in their zlib streams, as the game's zlib
+and `miniz_oxide` compress differently.
 
 ## Building
 
@@ -84,9 +75,7 @@ cargo build --release
 cargo test
 ```
 
-Requires Rust 1.88 or newer. The only dependency is
-[`miniz_oxide`](https://crates.io/crates/miniz_oxide), a pure-Rust zlib, so no C
-toolchain is needed.
+Zlib comes from a pure-Rust crate, so no C toolchain is needed.
 
 ## Legal
 

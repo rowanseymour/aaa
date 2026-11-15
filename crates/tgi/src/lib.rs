@@ -17,10 +17,14 @@
 //! `//` is not a comment (it appears in URLs). The parser is lenient like the
 //! game: malformed input produces [`Warning`]s rather than errors.
 //!
+//! Schema files declare the nested blocks a kind may hold with slots: headers
+//! whose first word is `list` or `optional`, followed by the kind, as in
+//! `[list Property]` or `[optional OnDeath]`.
+//!
 //! [`Templates`] resolves template inheritance (`Template=`, `Inherit=`) on
 //! request; the tree itself is left as written.
 //!
-//! With the `serde` feature, [`from_block`] reads a block into a typed struct.
+//! With the `serde` feature, `from_block` reads a block into a typed struct.
 
 #[cfg(feature = "serde")]
 pub mod de;
@@ -44,6 +48,7 @@ pub struct Block {
     pub line: usize,
 }
 
+/// What's between a block's `[ ]`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Header {
     /// Bare words, e.g. `["Template", "AAUSABattleShip"]` or `["optional", "OnDeathAbility"]`.
@@ -52,30 +57,36 @@ pub struct Header {
     pub attrs: Vec<(String, String)>,
 }
 
+/// A block's content, in the order written.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Item {
     Field(Field),
     Block(Block),
 }
 
+/// A `key = value` line, or a schema declaration.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Field {
-    /// Type in schema files: `fixed`, `string`, `flag`, `int`, `float`, `bool`, `localized`.
+    /// Type in schema files, e.g. `fixed`.
     pub ty: Option<String>,
     pub key: String,
     /// `None` for declarations without `=`.
     pub value: Option<String>,
     /// Whether the value was written in double quotes.
     pub quoted: bool,
+    /// Line, numbered as [`Block::line`].
     pub line: usize,
 }
 
+/// A problem the parser read past.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Warning {
+    /// Line, numbered as [`Block::line`].
     pub line: usize,
     pub message: String,
 }
 
+/// A parsed document.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parsed {
     pub root: Block,
@@ -103,6 +114,7 @@ impl Block {
         Some(v)
     }
 
+    /// The fields directly in this block.
     pub fn fields(&self) -> impl Iterator<Item = &Field> {
         self.items.iter().filter_map(|i| match i {
             Item::Field(f) => Some(f),
@@ -110,6 +122,7 @@ impl Block {
         })
     }
 
+    /// The blocks directly in this block.
     pub fn blocks(&self) -> impl Iterator<Item = &Block> {
         self.items.iter().filter_map(|i| match i {
             Item::Block(b) => Some(b),
@@ -152,6 +165,7 @@ pub fn parse_bytes(bytes: &[u8]) -> Parsed {
     parse(&decode(bytes))
 }
 
+/// Parses a file's text.
 pub fn parse(text: &str) -> Parsed {
     let mut p = Parser {
         warnings: Vec::new(),

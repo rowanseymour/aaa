@@ -1,15 +1,12 @@
 //! The small sections: MAP, DENIZEN_GROUPS and MISC_DATA, laid out as
 //! [`rmp.ksy`] specifies.
 //!
-//! A denizen group's layout isn't decoded, so DENIZEN_GROUPS is only checked to
-//! hold none.
-//!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
 use super::header::{bool, check_version, optional};
 use crate::{Cursor, Error, Result, Writer};
 
-/// Reads MAP, the map resource's data version.
+/// Reads the MAP section.
 pub(super) fn parse_data_version(data: &[u8]) -> Result<u32> {
     let mut cur = Cursor::new(data);
     let version = check_version("map data", cur.u32()?, 0..=0)?;
@@ -17,7 +14,7 @@ pub(super) fn parse_data_version(data: &[u8]) -> Result<u32> {
     Ok(version)
 }
 
-/// Checks DENIZEN_GROUPS holds no groups, the only kind decoded.
+/// Reads DENIZEN_GROUPS as [`super::Map::denizen_groups`] describes.
 pub(super) fn parse_denizen_groups(data: &[u8]) -> Result<()> {
     let mut cur = Cursor::new(data);
     match cur.u32()? {
@@ -33,35 +30,30 @@ pub fn write_denizen_groups() -> Vec<u8> {
     0u32.to_le_bytes().to_vec()
 }
 
-/// World state that didn't fit elsewhere.
+/// The MISC_DATA section, the `misc_data` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiscData {
     pub used_names: Vec<UsedName>,
-    /// The speed to go back to when a cutscene ends.
     pub pre_cutscene_game_speed: f32,
-    /// Empty for none.
     pub active_weather: String,
-    /// The UI script events triggers listen for (the
-    /// `effect_ui_script_listen` effect); from world version 24 on.
+    /// Set by the `effect_ui_script_listen` effect.
     pub ui_script_listens: Option<Vec<String>>,
-    /// From world version 28 on.
+    /// `Some(None)` where the world version has a counter but none is set.
     pub game_counter: Option<Option<GameCounter>>,
 }
 
-/// A name the game has given out from one of its name lists, so it isn't
-/// given twice.
+/// One of MISC_DATA's `used_names`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UsedName {
     pub name_list: String,
     pub index: u32,
 }
 
-/// The countdown a trigger shows on screen (`game_counter_show`).
+/// The `game_counter` of `rmp.ksy`, which the `game_counter_show` effect
+/// shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct GameCounter {
-    /// The game time it was started at.
     pub start_time: f32,
-    /// Seconds it counts down from.
     pub duration: f32,
 }
 

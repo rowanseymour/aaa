@@ -1,6 +1,4 @@
-//! TRIGGERS: the map's scripting, laid out as [`rmp.ksy`] specifies. Each
-//! trigger waits for any of its events, checks its conditions and then runs its
-//! effects.
+//! TRIGGERS, the map's scripting, laid out as [`rmp.ksy`] specifies.
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
@@ -8,74 +6,61 @@ use super::expect;
 use super::header::{bool, check_version, optional};
 use crate::{Cursor, Error, Result, Writer};
 
+/// The TRIGGERS section, the `triggers` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Triggers {
     pub version: u32,
-    /// The id the next new trigger gets.
     pub next_id: u32,
     pub triggers: Vec<Trigger>,
-    /// Named values that triggers can set and compare.
     pub variables: Vec<(String, f32)>,
-    /// Version 4 only.
+    /// `legacy_string`, then `legacy_value`.
     pub legacy: Option<(String, u32)>,
-    /// From version 5 on; kept and saved again, but never read.
     pub unused_strings: Option<Vec<String>>,
 }
 
+/// A `trigger` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Trigger {
-    /// By which `mi_trigger` parameters refer to it.
     pub id: u32,
-    /// Whether every condition must hold for its effects to run, rather than
-    /// any one.
     pub all_conditions: bool,
-    /// Whether it starts out listening for its events.
     pub active: bool,
-    /// Whether it stays active after running its effects.
     pub repeats: bool,
-    /// Game time when it was last activated.
     pub activation_time: f32,
     pub name: String,
-    /// The map author's note.
     pub comment: String,
-    /// The id the trigger's next new element gets.
     pub next_element: u32,
     pub events: Vec<Element>,
     pub conditions: Vec<Element>,
     pub effects: Vec<Element>,
 }
 
+/// A `trigger_element` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Element {
     pub version: u32,
-    /// The template's name, e.g. `actor_enters_area`.
     pub name: String,
-    /// Unique within its trigger.
     pub id: u32,
     pub parameters: Vec<Parameter>,
 }
 
+/// A `parameter` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Parameter {
-    /// What it is, e.g. `ma_actor`.
     pub kind: String,
-    /// Where its value comes from, e.g. `mi_actor_named`, which decides the
-    /// [`Value`]'s variant.
+    /// Decides the [`Value`]'s variant.
     pub source: String,
-    /// Whether a value was given; unset parameters show a placeholder in the
-    /// editor.
     pub set: bool,
     pub value: Value,
 }
 
+/// A [`Parameter`]'s value.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// For a source the game doesn't know.
     None,
-    /// An integer, or the id or index of what the source names.
     Int(u32),
     Float(f32),
     Location([f32; 3]),
-    /// A name or string id.
     String(String),
 }
 

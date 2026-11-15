@@ -4,12 +4,12 @@
 //!
 //! A child's field replaces the inherited field with the same key. A child's
 //! block merges into the inherited block of the same kind, recursively,
-//! except for kinds the schema files declare as lists (`[list Property]`),
-//! whose blocks are added after the inherited ones. Blocks nested in the
-//! result keep their own `Template=`, to be resolved in turn if needed,
-//! except where a child's block names a different template from the block it
-//! merges into: then its template's fields override the inherited block's,
-//! so both are resolved first.
+//! except for kinds the schema files declare as lists, whose blocks are
+//! added after the inherited ones. Blocks nested in the result keep their
+//! own `Template=`, to be resolved in turn if needed, except where a child's
+//! block names a different template from the block it merges into: then its
+//! template's fields override the inherited block's, so both are resolved
+//! first.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -47,11 +47,10 @@ impl<'a> Templates<'a> {
         }
     }
 
-    /// The templates each of a sequence of files, in the order they load,
-    /// sees as the game reads them: its own, and those of the files before
-    /// it that hold nothing but templates; a file that holds anything else
-    /// lets its templates go once read. `None` for a file that defines a
-    /// template already seen, which fails to load whole.
+    /// For each file in load order, the templates it can see, as the game
+    /// reads them: its own, plus those of earlier files that hold only
+    /// templates. `None` for a file that redefines a template it can see, or
+    /// defines one twice, which the game rejects whole.
     pub fn scoped(roots: impl IntoIterator<Item = &'a Block>) -> Vec<Option<Self>> {
         let roots: Vec<&Block> = roots.into_iter().collect();
         let mut lists = HashSet::new();
@@ -232,8 +231,8 @@ fn template(block: &Block) -> Option<&str> {
     block.attr("Template").or_else(|| block.attr("Inherit"))
 }
 
-/// What a schema's slot declaration (`[list Property]`, `[optional OnDeath]`)
-/// declares; every one has the same kind, so the kind alone can't pair them.
+/// The kind a schema slot declares, or `""` for any other block. A slot's
+/// own kind is just `list` or `optional`, so that alone can't pair them.
 fn slot(block: &Block) -> &str {
     match block.kind() {
         Some(k) if k.eq_ignore_ascii_case("list") || k.eq_ignore_ascii_case("optional") => {
