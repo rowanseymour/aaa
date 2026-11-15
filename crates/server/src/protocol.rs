@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 5;
+pub const PROTOCOL: u32 = 6;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -96,27 +96,29 @@ pub struct Seated {
     pub standing: Standing,
     /// Whether it's for dropping those holding the match.
     pub vote: bool,
+    /// How long, in whole milliseconds, a message takes the host to get to
+    /// it and back, where the host measures that.
+    pub ping: Option<u32>,
 }
 
 /// What's become of a client's part in the match.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Standing {
     #[default]
     Ok,
     /// Unheard from for long enough to hold the match.
     Disconnected,
-    /// Its copy of the match stopped standing as the host's does.
+    /// Its copy of the match stopped standing as the host's does, which
+    /// holds the match too.
     OutOfSync,
     /// Behind on a match let go after being held, which waits for it.
     CatchingUp,
 }
 
 impl Standing {
-    /// Whether it holds the match. Being out of sync doesn't, though the
-    /// original holds for it, while there's no way for players to vote one
-    /// out: it would hold the match for good.
+    /// Whether it holds the match.
     pub fn holds(self) -> bool {
-        self == Standing::Disconnected
+        matches!(self, Standing::Disconnected | Standing::OutOfSync)
     }
 }
 
@@ -212,6 +214,7 @@ mod tests {
                     host: false,
                     standing: Standing::Disconnected,
                     vote: true,
+                    ping: Some(80),
                 }],
                 held: true,
                 votes: 1,

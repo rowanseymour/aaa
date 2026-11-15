@@ -1185,6 +1185,19 @@ pub struct AVars {
     /// The glyph that marks a side, drawn in its colour, by [`Glyph`] id.
     #[serde(rename = "KingdomGlyphInfo")]
     pub kingdom_glyph_info: Option<Id>,
+    /// The glyphs drawn before a ping, by how good it is, by [`Glyph`] id;
+    /// a ping is good below the low cutoff and middling below the medium,
+    /// in milliseconds.
+    #[serde(rename = "PingIconGreenGlyphInfo")]
+    pub ping_icon_green_glyph_info: Option<Id>,
+    #[serde(rename = "PingIconYellowGlyphInfo")]
+    pub ping_icon_yellow_glyph_info: Option<Id>,
+    #[serde(rename = "PingIconRedGlyphInfo")]
+    pub ping_icon_red_glyph_info: Option<Id>,
+    #[serde(rename = "ServerBrowserLowPingCutoff")]
+    pub server_browser_low_ping_cutoff: Option<u32>,
+    #[serde(rename = "ServerBrowserMediumPingCutoff")]
+    pub server_browser_medium_ping_cutoff: Option<u32>,
 }
 
 /// A screen of the interface.

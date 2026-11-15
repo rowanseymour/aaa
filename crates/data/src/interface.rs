@@ -30,6 +30,16 @@ pub struct Command {
     pub group_offset: bool,
 }
 
+/// The images the connection dialog draws, by archive path.
+#[derive(Debug, Clone, Default)]
+pub struct ConnectionLook {
+    /// What marks the host's slot.
+    pub host_icon: Option<String>,
+    /// What marks a player's slot by their status, by the status's name
+    /// as the layout has it, e.g. `out_of_sync`.
+    pub status_icons: HashMap<String, String>,
+}
+
 /// A mouse cursor's frames, which loop.
 #[derive(Debug, Clone, PartialEq)]
 pub struct CursorLook {
@@ -111,6 +121,33 @@ impl GameData {
     /// What colours the key for something where its name is shown.
     pub fn highlight_colour(&self) -> Option<[f32; 3]> {
         self.interface_setting(|v| v.ui_color_highlight)
+    }
+
+    /// The images the connection dialog draws, as its layout names them.
+    pub fn connection_look(&self) -> ConnectionLook {
+        // Not in the load lists.
+        let files = self.parse_named(["UI/Game/connection_status_dialog.tgi"]);
+        let dialog = (files.iter())
+            .flat_map(|(_, f)| f.root.blocks_of("ConnectionStatusDialog"))
+            .next();
+        let Some(dialog) = dialog else {
+            return ConnectionLook::default();
+        };
+        let status_icons = (dialog.fields())
+            .filter_map(|f| {
+                let status = f.key.to_ascii_lowercase();
+                let status = status.strip_prefix("status_icon_")?.to_string();
+                Some((status, crate::ui_path(f.value.as_deref()?)?))
+            })
+            .collect();
+        let host_icon = (dialog.blocks_of("ClientSlotWidget"))
+            .flat_map(|slot| slot.blocks_of("HostIcon"))
+            .flat_map(|icon| icon.blocks_of("Decal"))
+            .find_map(|decal| crate::ui_path(decal.field("texture")?.value.as_deref()?));
+        ConnectionLook {
+            host_icon,
+            status_icons,
+        }
     }
 
     /// One of the interface's settings.

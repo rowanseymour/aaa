@@ -5,7 +5,7 @@
 
 use std::collections::VecDeque;
 
-use aaa_server::protocol::Welcome;
+use aaa_server::protocol::{Status, Welcome};
 use aaa_server::{Client, Event, Host, Link, Local, Setup};
 use aaa_sim::{Action, Command, Record, Refused, SPEEDS, World};
 use bevy::prelude::*;
@@ -32,15 +32,17 @@ pub(crate) struct Orders {
     gone: bool,
     /// Whether the game has taken that the host ended the match.
     ended_taken: bool,
+    /// What the host knows the game's client as.
+    me: u32,
 }
 
 /// Where the match's host is.
 enum Hosted {
     /// Here, doing whatever it's asked.
     Here(Box<Host<Local>>),
-    /// Elsewhere, taking from here only the orders of these players, and
-    /// of the rest only what it takes from anyone who plays.
-    Elsewhere { players: Vec<u32> },
+    /// Elsewhere, at `at`, taking from here only the orders of these
+    /// players, and of the rest only what it takes from anyone who plays.
+    Elsewhere { players: Vec<u32>, at: String },
 }
 
 #[cfg(test)]
@@ -63,22 +65,23 @@ impl Orders {
         let mut host = Host::new(setup.clone(), world);
         let (ours, mut theirs) = aaa_server::pair();
         // Whoever runs the host may give any side's orders, and cheat.
-        let admitted = host.admit(ours, players.into_iter().collect());
-        host.trust(admitted.expect("a host lets in the first to ask"));
+        let me = host.admit(ours, players.into_iter().collect());
+        let me = me.expect("a host lets in the first to ask");
+        host.trust(me);
         // The game set the match up itself.
         let welcome = aaa_server::welcome(&mut theirs);
         debug_assert!(matches!(welcome, Ok(Some(_))));
-        Orders::of(Hosted::Here(Box::new(host)), Box::new(theirs), setup)
+        Orders::of(Hosted::Here(Box::new(host)), Box::new(theirs), setup, me)
     }
 
     /// Those of a match whose host, at the other end of `link`, let the
     /// game in with `welcome`.
-    pub(crate) fn joined(link: Line, welcome: Welcome) -> Orders {
-        let players = welcome.players;
-        Orders::of(Hosted::Elsewhere { players }, link, welcome.setup)
+    pub(crate) fn joined(link: Line, welcome: Welcome, at: String) -> Orders {
+        let (players, me) = (welcome.players, welcome.client);
+        Orders::of(Hosted::Elsewhere { players, at }, link, welcome.setup, me)
     }
 
-    fn of(host: Hosted, link: Line, setup: Setup) -> Orders {
+    fn of(host: Hosted, link: Line, setup: Setup, me: u32) -> Orders {
         Orders {
             host,
             client: Client::new(link),
@@ -87,6 +90,7 @@ impl Orders {
             diverged: 0,
             gone: false,
             ended_taken: false,
+            me,
         }
     }
 
@@ -96,8 +100,42 @@ impl Orders {
     pub(crate) fn players(&self) -> Option<&[u32]> {
         match &self.host {
             Hosted::Here(_) => None,
-            Hosted::Elsewhere { players } => Some(players),
+            Hosted::Elsewhere { players, .. } => Some(players),
         }
+    }
+
+    /// Has the game's client tell the time by `clock`.
+    #[cfg(test)]
+    pub(crate) fn clock(&mut self, clock: aaa_server::Clock) {
+        self.client.clock(clock);
+    }
+
+    /// Where the match's host is, if it's elsewhere.
+    pub(crate) fn host_at(&self) -> Option<&str> {
+        match &self.host {
+            Hosted::Here(_) => None,
+            Hosted::Elsewhere { at, .. } => Some(at),
+        }
+    }
+
+    /// How everyone in the match stood when the host last said.
+    pub(crate) fn status(&self) -> Option<&Status> {
+        self.client.status()
+    }
+
+    /// Whether the game is for dropping those holding the match, as the
+    /// host last said: it clears every vote as it drops them.
+    pub(crate) fn voted(&self) -> bool {
+        let status = self.status().map(|s| s.seats.iter());
+        let mut seats = status.into_iter().flatten();
+        seats.any(|s| s.client == self.me && s.vote)
+    }
+
+    /// Tells the host whether the game is for dropping those holding the
+    /// match.
+    pub(crate) fn vote(&mut self, drop: bool) {
+        // A host that's gone is found so as the match is next played.
+        let _ = self.client.vote(drop);
     }
 
     /// Whether the match's host is elsewhere, and so the match isn't the
@@ -373,7 +411,11 @@ pub(crate) mod testing {
     pub(crate) fn joined(players: &[u32]) -> (Host<Local>, Orders, World) {
         let mut host = Host::new(Setup::default(), fresh());
         let (link, welcome) = let_in(&mut host, players);
-        (host, Orders::joined(Box::new(link), welcome), fresh())
+        (
+            host,
+            Orders::joined(Box::new(link), welcome, "host".into()),
+            fresh(),
+        )
     }
 }
 

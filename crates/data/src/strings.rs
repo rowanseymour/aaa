@@ -76,6 +76,27 @@ impl GameData {
         glyph_image(&self.glyphs(), &id)
     }
 
+    /// How a ping is shown: the font's images of the glyphs drawn before
+    /// it, by how good it is, and where good gives way to middling and
+    /// middling to bad.
+    pub fn ping_look(&self) -> PingLook {
+        let avars = self.avars();
+        let glyphs = self.glyphs();
+        let glyph = |of: fn(&defs::AVars) -> Option<Id>| {
+            let id = avars.iter().find_map(of)?;
+            glyph_image(&glyphs, &id)
+        };
+        let cutoff =
+            |of: fn(&defs::AVars) -> Option<u32>, stock| avars.iter().find_map(of).unwrap_or(stock);
+        PingLook {
+            good: glyph(|v| v.ping_icon_green_glyph_info.clone()),
+            middling: glyph(|v| v.ping_icon_yellow_glyph_info.clone()),
+            bad: glyph(|v| v.ping_icon_red_glyph_info.clone()),
+            low: cutoff(|v| v.server_browser_low_ping_cutoff, 200),
+            medium: cutoff(|v| v.server_browser_medium_ping_cutoff, 500),
+        }
+    }
+
     fn read_glyphs(&self) -> Vec<defs::Glyph> {
         let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
         let files = scoped(&files);
@@ -83,6 +104,30 @@ impl GameData {
             .iter()
             .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
             .collect()
+    }
+}
+
+/// How a ping is shown, as [`GameData::ping_look`] reads it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PingLook {
+    pub good: Option<String>,
+    pub middling: Option<String>,
+    pub bad: Option<String>,
+    /// In milliseconds: a ping below `low` is good, below `medium`
+    /// middling, and otherwise bad.
+    pub low: u32,
+    pub medium: u32,
+}
+
+impl PingLook {
+    /// The image of the glyph drawn before a ping of `ms` milliseconds.
+    pub fn glyph(&self, ms: u32) -> Option<&str> {
+        let glyph = match ms {
+            ms if ms < self.low => &self.good,
+            ms if ms < self.medium => &self.middling,
+            _ => &self.bad,
+        };
+        glyph.as_deref()
     }
 }
 

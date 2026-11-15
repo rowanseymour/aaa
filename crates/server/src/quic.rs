@@ -62,6 +62,7 @@ pub struct Remote {
     /// For an end that connected: what keeps its connection, and what's
     /// sending for it.
     own: Option<(Runtime, JoinHandle<()>)>,
+    connection: Connection,
 }
 
 impl Link for Remote {
@@ -80,6 +81,10 @@ impl Link for Remote {
             Err(TryRecvError::Empty) => Ok(None),
             Err(TryRecvError::Disconnected) => Err(Lost),
         }
+    }
+
+    fn round_trip(&self) -> Option<Duration> {
+        Some(self.connection.rtt())
     }
 }
 
@@ -107,12 +112,13 @@ fn carry(connection: Connection, send: SendStream, recv: RecvStream) -> (Remote,
         receiving(recv, incoming).await;
         ended.store(true, Ordering::Relaxed);
     });
-    let sending = tokio::spawn(sending(connection, send, outgoing));
+    let sending = tokio::spawn(sending(connection.clone(), send, outgoing));
     let remote = Remote {
         to: Some(to),
         from,
         lost,
         own: None,
+        connection,
     };
     (remote, sending)
 }
