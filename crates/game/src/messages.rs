@@ -593,8 +593,9 @@ pub fn refuse(
 
 /// Posts a line once the host is leaving a match that's over, then one
 /// for each player whose machine has left the match since last time,
-/// whether by choice or by being lost, the host's among them. One that only watched gave no player's
-/// orders, and goes unremarked.
+/// whether by choice, by being lost or by being kicked out, the host's
+/// among them, and one for each kick vote cast or taken back. One that
+/// only watched gave no player's orders, and goes unremarked.
 pub fn tell_leaving(
     mut orders: ResMut<Orders>,
     sim: Res<Sim>,
@@ -611,16 +612,51 @@ pub fn tell_leaving(
         );
         log.say("GENERIC_EVENT", said, None, &time, &mut sounds);
     }
-    for (client, players) in orders.take_left() {
+    let side = |player: u32| {
+        let player = sim.0.sides.player(player)?;
+        let name = leaders.owner(player, local.0, &log.look.map);
+        Some(Fill::side_of(name, player))
+    };
+    // A client is named by the first side it plays.
+    let named = |orders: &Orders, client| orders.players_of(client).first().and_then(|&p| side(p));
+    let mut lines = Vec::new();
+    // The votes came before any kick they brought.
+    for kick in orders.take_kicking() {
+        let named = |client| named(&orders, client);
+        let (Some(voter), Some(target)) = (named(kick.voter), named(kick.target)) else {
+            continue;
+        };
+        let said = match kick.vote {
+            true => log.look.said(
+                "networking_vote_to_kick_player_voted_to_kick_player|ssdd",
+                "%s has voted to kick %s (%d/%d)",
+            ),
+            false => log.look.said(
+                "networking_vote_to_kick_player_has_retracted_vote_to_kick_player|ssdd",
+                "%s has retracted vote to kick %s (%d/%d)",
+            ),
+        };
+        let counts = [kick.votes, kick.needed].map(|n| Fill::from(n.to_string()));
+        lines.push(fill_all(&said, &[[voter, target], counts].concat()));
+    }
+    for gone in orders.take_left() {
+        let (client, players) = (gone.client, &gone.players);
         info!("client {client} has left the match, giving the orders of {players:?}");
-        for player in players.iter().filter_map(|&p| sim.0.sides.player(p)) {
-            let name = leaders.owner(player, local.0, &log.look.map);
-            let said = log
+        let said = match gone.kicked {
+            true => log.look.said(
+                "networking_player_kicked|s",
+                "Player %s was kicked from the game",
+            ),
+            false => log
                 .look
-                .said("networking_player_quit|s", "Player %s quit the game");
-            let words = fill_all(&said, &[Fill::side_of(name, player)]);
-            log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
+                .said("networking_player_quit|s", "Player %s quit the game"),
+        };
+        for name in players.iter().filter_map(|&p| side(p)) {
+            lines.push(fill_all(&said, &[name]));
         }
+    }
+    for words in lines {
+        log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
     }
 }
 

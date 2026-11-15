@@ -228,8 +228,10 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             let mut played = Ok(());
             while played.is_ok() {
                 played = client.advance(&mut world, usize::MAX);
-                for (gone, players) in client.take_left() {
-                    eprintln!("client {gone} left, giving the orders of {players:?}");
+                for gone in client.take_left() {
+                    let (id, players) = (gone.client, gone.players);
+                    let how = if gone.kicked { "was kicked" } else { "left" };
+                    eprintln!("client {id} {how}, giving the orders of {players:?}");
                 }
                 std::thread::sleep(IDLE);
             }
