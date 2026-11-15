@@ -199,9 +199,15 @@ impl<'a> Templates<'a> {
         match (item, existing) {
             (Item::Field(f), Item::Field(e)) => f.key.eq_ignore_ascii_case(&e.key),
             (Item::Block(b), Item::Block(e)) => {
+                // A slot's own kind is just `list` or `optional`, so that
+                // alone can't pair them.
+                let same_slot = match (b.slot(), e.slot()) {
+                    (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                    (a, b) => a.is_none() && b.is_none(),
+                };
                 let kind = b.kind().unwrap_or("").to_ascii_lowercase();
                 !self.lists.contains(&kind)
-                    && slot(b).eq_ignore_ascii_case(slot(e))
+                    && same_slot
                     && e.kind().unwrap_or("").eq_ignore_ascii_case(&kind)
             }
             _ => false,
@@ -214,7 +220,9 @@ fn templates_of(root: &Block) -> impl Iterator<Item = (String, &Block)> {
     (root.blocks_of("Template")).filter_map(|b| Some((b.name()?.to_ascii_lowercase(), b)))
 }
 
-/// Adds the lower-case kinds `block` declares as lists, at any depth.
+/// Adds the lower-case kinds `block` declares as lists, at any depth. Not
+/// just slots whose kind is `list`: an optional one can be a list too, as
+/// in `[optional list Action]`.
 fn find_lists(block: &Block, lists: &mut HashSet<String>) {
     let words = &block.header.words;
     if let Some(i) = words.iter().position(|w| w.eq_ignore_ascii_case("list"))
@@ -229,17 +237,6 @@ fn find_lists(block: &Block, lists: &mut HashSet<String>) {
 
 fn template(block: &Block) -> Option<&str> {
     block.attr("Template").or_else(|| block.attr("Inherit"))
-}
-
-/// The kind a schema slot declares, or `""` for any other block. A slot's
-/// own kind is just `list` or `optional`, so that alone can't pair them.
-fn slot(block: &Block) -> &str {
-    match block.kind() {
-        Some(k) if k.eq_ignore_ascii_case("list") || k.eq_ignore_ascii_case("optional") => {
-            block.name().unwrap_or("")
-        }
-        _ => "",
-    }
 }
 
 /// The templates an inherited block and the child block over it name.

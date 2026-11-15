@@ -145,12 +145,17 @@ impl Block {
         self.value(key)?.trim().parse().ok()
     }
 
-    /// Whether the first field with this key is `true` (in any case) or `1`,
-    /// as the game reads flags.
+    /// Whether the first field with this key is true, as the game reads
+    /// flags: `true` in any case, or `1`.
     pub fn flag(&self, key: &str) -> bool {
-        self.value(key)
-            .map(str::trim)
-            .is_some_and(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        self.value(key).map(str::trim).and_then(parse_bool) == Some(true)
+    }
+
+    /// For a schema slot, the kind it declares (`""` if it names none).
+    pub(crate) fn slot(&self) -> Option<&str> {
+        let k = self.kind()?;
+        let slot = k.eq_ignore_ascii_case("list") || k.eq_ignore_ascii_case("optional");
+        slot.then(|| self.name().unwrap_or(""))
     }
 
     /// Child blocks whose first header word matches, case-insensitive.
@@ -264,8 +269,8 @@ impl Parser {
         }
     }
 
-    fn line(&mut self, line: &str, n: usize) {
-        let mut rest = line;
+    fn line(&mut self, text: &str, line: usize) {
+        let mut rest = text;
         loop {
             rest = rest.trim_start();
             let Some(c) = rest.chars().next() else { return };
@@ -276,18 +281,21 @@ impl Parser {
                         // Normally right after the header; after fields it still
                         // most plausibly continues the same section.
                         if !self.top().awaiting_brace {
-                            self.warn(n, "'{' after the section's fields; continuing the section");
+                            self.warn(
+                                line,
+                                "'{' after the section's fields; continuing the section",
+                            );
                         }
                         let top = self.top();
                         top.block.braced = true;
                         top.awaiting_brace = false;
                     } else {
-                        self.warn(n, "'{' without a preceding header");
+                        self.warn(line, "'{' without a preceding header");
                         self.close_section();
                         self.stack.push(Frame {
                             block: Block {
                                 braced: true,
-                                line: n,
+                                line,
                                 ..Block::default()
                             },
                             awaiting_brace: false,
@@ -300,7 +308,7 @@ impl Parser {
                     if self.stack.len() > 1 {
                         self.pop();
                     } else {
-                        self.warn(n, "unmatched '}'");
+                        self.warn(line, "unmatched '}'");
                     }
                     rest = &rest[1..];
                 }
@@ -308,16 +316,16 @@ impl Parser {
                     let (inner, after) = match rest[1..].find(']') {
                         Some(end) => (&rest[1..1 + end], &rest[end + 2..]),
                         None => {
-                            self.warn(n, "header missing ']'");
+                            self.warn(line, "header missing ']'");
                             (strip_comment(&rest[1..]), "")
                         }
                     };
-                    let header = self.header(inner, n);
+                    let header = self.header(inner, line);
                     self.close_section();
                     self.stack.push(Frame {
                         block: Block {
                             header,
-                            line: n,
+                            line,
                             ..Block::default()
                         },
                         awaiting_brace: true,
@@ -325,14 +333,14 @@ impl Parser {
                     rest = after.trim_start();
                     if !rest.is_empty() && !rest.starts_with(['{', '}', '[', ';']) {
                         self.warn(
-                            n,
+                            line,
                             format!("ignoring text after header: {:?}", rest.trim_end()),
                         );
                         return;
                     }
                 }
                 _ => {
-                    let field = self.field(strip_comment(rest), n);
+                    let field = self.field(strip_comment(rest), line);
                     let top = self.top();
                     top.awaiting_brace = false;
                     top.block.items.push(Item::Field(field));
@@ -342,7 +350,7 @@ impl Parser {
         }
     }
 
-    fn header(&mut self, inner: &str, n: usize) -> Header {
+    fn header(&mut self, inner: &str, line: usize) -> Header {
         let tokens: Vec<&str> = inner.split_whitespace().collect();
         let mut h = Header::default();
         let mut i = 0;
@@ -351,7 +359,7 @@ impl Parser {
             let next = tokens.get(i + 1).copied();
             let after = tokens.get(i + 2).copied();
             if t == "=" {
-                self.warn(n, "stray '=' in header");
+                self.warn(line, "stray '=' in header");
                 i += 1;
             } else if let Some((k, v)) = t.split_once('=') {
                 // `key=value`, or `key= value`
@@ -384,18 +392,18 @@ impl Parser {
         h
     }
 
-    fn field(&mut self, text: &str, n: usize) -> Field {
+    fn field(&mut self, text: &str, line: usize) -> Field {
         let (lhs, value) = match text.split_once('=') {
             Some((l, v)) => (l.trim(), Some(v.trim())),
             None => (text.trim(), None),
         };
         let mut words: Vec<&str> = lhs.split_whitespace().collect();
         if words.is_empty() {
-            self.warn(n, "field without a key");
+            self.warn(line, "field without a key");
             words.push("");
         }
         if words.len() > 2 {
-            self.warn(n, format!("unexpected words before key: {lhs:?}"));
+            self.warn(line, format!("unexpected words before key: {lhs:?}"));
         }
         let key = words.pop().unwrap().to_string();
         let ty = (!words.is_empty()).then(|| words.join(" "));
@@ -410,7 +418,7 @@ impl Parser {
             key,
             value,
             quoted,
-            line: n,
+            line,
         }
     }
 
@@ -426,6 +434,15 @@ impl Parser {
             root: self.stack.pop().unwrap().block,
             warnings: self.warnings,
         }
+    }
+}
+
+/// `true` or `false`, in any case, or `1` or `0`, already trimmed.
+fn parse_bool(text: &str) -> Option<bool> {
+    match text {
+        t if t == "1" || t.eq_ignore_ascii_case("true") => Some(true),
+        t if t == "0" || t.eq_ignore_ascii_case("false") => Some(false),
+        _ => None,
     }
 }
 
