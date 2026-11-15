@@ -2,8 +2,30 @@
 
 use crate::{Ref, Transform};
 
-#[derive(Debug, Clone)]
-pub enum Object {
+/// Defines [`Object`] and, for each variant not marked `=> by_hand`, the
+/// [`ObjectType`] impl that picks it out.
+macro_rules! objects {
+    ($($(#[$attr:meta])* $variant:ident($ty:ty) $(=> $by_hand:ident)?,)*) => {
+        #[derive(Debug, Clone)]
+        pub enum Object {
+            $($(#[$attr])* $variant($ty),)*
+        }
+        $(objects!(@type $variant($ty) $($by_hand)?);)*
+    };
+    (@type $variant:ident($ty:ty)) => {
+        impl ObjectType for $ty {
+            fn of(object: &Object) -> Option<&Self> {
+                match object {
+                    Object::$variant(v) => Some(v),
+                    _ => None,
+                }
+            }
+        }
+    };
+    (@type $variant:ident($ty:ty) by_hand) => {};
+}
+
+objects! {
     Node(Node),
     Shape(Shape),
     Camera(Camera),
@@ -17,7 +39,7 @@ pub enum Object {
     ZBuffer(ZBuffer),
     VertexColor(VertexColor),
     ExtraData(ExtraData),
-    Controller(Controller),
+    Controller(Controller) => by_hand,
     Keyframes(Keyframes),
     Floats(Keys<f32>),
     Positions(Keys<[f32; 3]>),
@@ -37,7 +59,7 @@ pub enum Object {
     OldParticleController(OldParticleController),
     OldModifier(OldModifier),
     /// A type read only so it can be stepped over; its name.
-    Other(String),
+    Other(String) => by_hand,
 }
 
 impl Object {
@@ -58,53 +80,6 @@ impl Object {
 pub trait ObjectType {
     fn of(object: &Object) -> Option<&Self>;
 }
-
-macro_rules! object_types {
-    ($($variant:ident($ty:ty)),* $(,)?) => {$(
-        impl ObjectType for $ty {
-            fn of(object: &Object) -> Option<&Self> {
-                match object {
-                    Object::$variant(v) => Some(v),
-                    _ => None,
-                }
-            }
-        }
-    )*};
-}
-
-object_types!(
-    Node(Node),
-    Shape(Shape),
-    Camera(Camera),
-    Geometry(Geometry),
-    Texturing(Texturing),
-    SourceTexture(SourceTexture),
-    Pixels(Pixels),
-    Material(Material),
-    Alpha(Alpha),
-    Stencil(Stencil),
-    ZBuffer(ZBuffer),
-    VertexColor(VertexColor),
-    ExtraData(ExtraData),
-    Keyframes(Keyframes),
-    Floats(Keys<f32>),
-    Positions(Keys<[f32; 3]>),
-    Sequence(Sequence),
-    TextKeys(TextKeys),
-    SkinInstance(SkinInstance),
-    SkinData(SkinData),
-    ParticleSystem(ParticleSystem),
-    ParticleData(ParticleData),
-    Modifier(Modifier),
-    Collider(Collider),
-    EmitterKeys(EmitterKeys),
-    Colors(Keys<[f32; 4]>),
-    Visibility(BoolKeys),
-    OldParticles(OldParticles),
-    OldParticleData(OldParticleData),
-    OldParticleController(OldParticleController),
-    OldModifier(OldModifier),
-);
 
 /// An [`OldParticleController`] is a controller too, so it can be found in
 /// a chain of controllers.
