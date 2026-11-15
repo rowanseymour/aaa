@@ -69,9 +69,7 @@ impl GameData {
             .avars()
             .iter()
             .find_map(|v| v.kingdom_glyph_info.clone())?;
-        let glyphs = self.glyphs();
-        let glyph = glyphs.iter().find(|g| g.ids.as_ref() == Some(&id))?;
-        glyph.display_name.clone()
+        glyph_image(&self.glyphs(), &id)
     }
 
     fn read_glyphs(&self) -> Vec<defs::Glyph> {
@@ -82,6 +80,14 @@ impl GameData {
             .flat_map(|f| f.read::<defs::Glyph>("Glyph"))
             .collect()
     }
+}
+
+/// What the font's image of the glyph `id` is called: its display name
+/// run together, as `Faction Experience` is drawn from
+/// `FactionExperience.png`.
+fn glyph_image(glyphs: &[defs::Glyph], id: &Id) -> Option<String> {
+    let glyph = glyphs.iter().find(|g| g.ids.as_ref() == Some(id))?;
+    Some(glyph.display_name.as_deref()?.replace(' ', ""))
 }
 
 /// The strings of a table's `Text` blocks, the first text of a key kept.
@@ -196,6 +202,25 @@ mod tests {
             Some("UI/Game/ActionButtons/IconMove.png")
         );
         assert_eq!(ui_path("NULL"), None);
+    }
+
+    #[test]
+    fn a_glyph_is_drawn_from_the_image_its_display_name_names() {
+        let glyph = |ids: &str, name: &str| defs::Glyph {
+            ids: Some(Id::from(ids)),
+            index: Some(132),
+            display_name: Some(name.into()),
+        };
+        let glyphs = [glyph("ch_gem", "Gem"), glyph("ch_xp", "Faction Experience")];
+        assert_eq!(
+            glyph_image(&glyphs, &Id::from("CH_GEM")).as_deref(),
+            Some("Gem")
+        );
+        assert_eq!(
+            glyph_image(&glyphs, &Id::from("ch_xp")).as_deref(),
+            Some("FactionExperience")
+        );
+        assert_eq!(glyph_image(&glyphs, &Id::from("ch_none")), None);
     }
 
     #[test]

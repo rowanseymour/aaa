@@ -66,7 +66,7 @@ struct Look {
     /// What an icon that looks somewhere says.
     to_location: String,
     /// What marks a side named in a line.
-    gem: Option<Handle<Image>>,
+    gem: crate::ui::Gem,
 }
 
 impl Look {
@@ -495,7 +495,7 @@ pub fn spawn(
         vars: game.interface_vars(),
         to_location: (strings.get("ui_tooltip_message_location").cloned())
             .unwrap_or_else(|| "Move camera to message location".into()),
-        gem: gem.0.clone(),
+        gem: gem.clone(),
         strings,
         map: loaded.map.strings.clone(),
         names: (game.listings().iter())
@@ -897,7 +897,7 @@ pub fn show(
         return;
     }
     for (&row, &(_, opacity)) in children.iter().zip(&shown) {
-        // The icon, the text, and the text's runs.
+        // A line naming a side has its words and gems further down.
         for part in tree.iter_descendants(row) {
             let Ok((Faded(colour), text, shadow, image)) = faded.get_mut(part) else {
                 continue;
@@ -1023,63 +1023,88 @@ fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
                 return;
             }
             // Text can't hold a picture, so a line naming a side is laid
-            // out in pieces, wrapping between them.
+            // out a word at a time, wrapping between words, each gem kept
+            // with the first word of the name it marks.
             let rest = Node {
                 flex_wrap: FlexWrap::Wrap,
                 align_items: AlignItems::Center,
+                column_gap: px(WORD_GAP),
                 ..rest
             };
-            row.spawn((rest, Pickable::IGNORE)).with_children(|pieces| {
-                for part in parts_of(line) {
-                    match part {
-                        Part::Words(text) => _ = pieces.spawn(words(text, colour)),
-                        Part::Side(rgb) => {
-                            let gem = crate::ui::Gem(look.gem.clone());
-                            let mark = Node {
-                                width: px(GEM),
-                                height: px(GEM),
-                                margin: UiRect::right(px(GEM_GAP)),
-                                ..default()
-                            };
-                            let [red, green, blue] = rgb;
-                            pieces.spawn((
+            row.spawn((rest, Pickable::IGNORE)).with_children(|parts| {
+                for Part { gem, word } in parts_of(line) {
+                    let Some(rgb) = gem else {
+                        parts.spawn(words(word, colour));
+                        continue;
+                    };
+                    let mark = Node {
+                        width: px(LINE_GEM),
+                        height: px(LINE_GEM),
+                        margin: UiRect::right(px(GEM_GAP)),
+                        ..default()
+                    };
+                    let [red, green, blue] = rgb;
+                    let together = Node {
+                        align_items: AlignItems::Center,
+                        ..default()
+                    };
+                    parts
+                        .spawn((together, Pickable::IGNORE))
+                        .with_children(|together| {
+                            together.spawn((
                                 Faded(Color::srgb(red, green, blue)),
-                                crate::ui::side_mark(&gem, rgb, mark),
+                                crate::ui::side_mark(&look.gem, rgb, mark),
                             ));
-                        }
-                    }
+                            together.spawn(words(word, colour));
+                        });
                 }
             });
         });
 }
 
-/// How big a side's gem is in a line, and the space after it.
-const GEM: f32 = 15.0;
+/// How big a side's gem is in a line, the space after it, and the space
+/// between a line's words where it's laid out a word at a time.
+const LINE_GEM: f32 = 15.0;
 const GEM_GAP: f32 = 3.0;
+const WORD_GAP: f32 = 3.0;
 
-/// A part of a line as it's laid out.
+/// A word of a line as it's laid out, with the gem in a side's colour
+/// before it where it starts a side's name.
 #[derive(Debug, PartialEq)]
-enum Part {
-    Words(String),
-    /// The gem before a side's name, in the side's colour.
-    Side([f32; 3]),
+struct Part {
+    gem: Option<[f32; 3]>,
+    word: String,
 }
 
-/// A line's text in pieces, with a gem before each side it names.
+/// A line's words, each that starts a side's name with its gem.
 fn parts_of(line: &Line) -> Vec<Part> {
-    let mut pieces = Vec::new();
-    let mut from = 0;
-    for mark in &line.marks {
-        let Some(before) = line.text.get(from..mark.at) else {
-            continue;
-        };
-        pieces.push(Part::Words(before.to_string()));
-        pieces.push(Part::Side(mark.rgb));
-        from = mark.at;
+    let mut parts = Vec::new();
+    let mut cuts = line.marks.iter().map(|m| (m.at, Some(m.rgb))).peekable();
+    let mut from = (0, None);
+    loop {
+        let to = cuts.peek().map_or(line.text.len(), |&(at, _)| at);
+        let segment = line.text.get(from.0..to).unwrap_or_default();
+        let mut gem = from.1;
+        let mut words = segment.split_whitespace().peekable();
+        // A side with no name still has its gem.
+        if gem.is_some() && words.peek().is_none() {
+            parts.push(Part {
+                gem,
+                word: String::new(),
+            });
+        }
+        for word in words {
+            parts.push(Part {
+                gem: gem.take(),
+                word: word.to_string(),
+            });
+        }
+        match cuts.next() {
+            Some(cut) => from = cut,
+            None => break,
+        }
     }
-    pieces.push(Part::Words(line.text[from..].to_string()));
-    pieces.retain(|p| *p != Part::Words(String::new()));
-    pieces
+    parts
 }
 
 /// What looks at where a line happened.
@@ -1176,7 +1201,7 @@ mod tests {
             names: HashMap::new(),
             map: Default::default(),
             to_location: String::new(),
-            gem: None,
+            gem: Default::default(),
         }
     }
 
@@ -1244,16 +1269,36 @@ mod tests {
             place: None,
             posted: 0.0,
         };
+        let part = |gem, word: &str| Part {
+            gem,
+            word: word.into(),
+        };
         assert_eq!(
             parts_of(&line),
             [
-                Part::Side(red),
-                Part::Words("Germany's Tank destroyed".into()),
+                part(Some(red), "Germany's"),
+                part(None, "Tank"),
+                part(None, "destroyed"),
             ]
         );
         // And mid-line, only where the side is.
         let words = fill_all("Player %s quit the game", &[Fill::side("Bob".into(), red)]);
         assert_eq!(words.marks, [Mark { at: 7, rgb: red }]);
+        let line = Line {
+            text: words.text,
+            marks: words.marks,
+            ..line
+        };
+        let parts = parts_of(&line);
+        assert_eq!(parts[..2], [part(None, "Player"), part(Some(red), "Bob")]);
+        // A side with no name still shows its gem, at the end too.
+        let words = fill_all("captured by %s", &[Fill::side(String::new(), red)]);
+        let line = Line {
+            text: words.text,
+            marks: words.marks,
+            ..line
+        };
+        assert_eq!(parts_of(&line).last(), Some(&part(Some(red), "")));
     }
 
     #[test]

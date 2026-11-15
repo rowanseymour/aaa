@@ -680,7 +680,7 @@ fn launch(
 }
 
 /// A side's gem in its colour, as the lobby marks it.
-fn swatch(gem: &crate::ui::Gem, player: &Player) -> impl Bundle {
+fn side_mark(gem: &crate::ui::Gem, player: &Player) -> impl Bundle {
     let node = Node {
         width: px(crate::ui::GEM),
         height: px(crate::ui::GEM),
@@ -771,7 +771,7 @@ fn show_slots(
                         ..default()
                     },
                     children![
-                        swatch(&gem, player),
+                        side_mark(&gem, player),
                         (
                             text(format!("Side {}", i + 1), Font::Body),
                             Node {
@@ -1006,7 +1006,7 @@ fn show_about(
                 ..default()
             },
             children![
-                swatch(&gem, player),
+                side_mark(&gem, player),
                 text(format!("Side {}", i + 1), Font::Body)
             ],
         ));

@@ -380,7 +380,7 @@ pub fn text(words: impl Into<String>, size: Font) -> impl Bundle {
 
 /// The glyph that marks a side wherever it's named, as the game's font
 /// draws it: a grey image, drawn in the side's colour.
-#[derive(Resource, Default)]
+#[derive(Resource, Clone, Default)]
 pub struct Gem(pub Option<Handle<Image>>);
 
 /// How big the font draws the [`Gem`].
