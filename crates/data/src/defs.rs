@@ -336,12 +336,23 @@ pub struct SupplyComponent {
 /// field per resource, named by its id.
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(transparent)]
-pub struct Resources(pub BTreeMap<Id, f32>);
+pub struct Resources(BTreeMap<Id, Amount>);
 
 impl Resources {
     /// Each resource given, by id.
     pub fn amounts(&self) -> impl Iterator<Item = (&Id, f32)> {
-        self.0.iter().map(|(k, &v)| (k, v))
+        (self.0.iter()).filter_map(|(k, v)| Some((k, v.0?)))
+    }
+}
+
+/// A field of [`Resources`]: none where it isn't a number, which is passed
+/// over as any field nothing reads is, rather than failing the block.
+#[derive(Debug, Clone, Copy, Default)]
+struct Amount(Option<f32>);
+
+impl<'de> Deserialize<'de> for Amount {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        Ok(Amount(f32::deserialize(d).ok()))
     }
 }
 

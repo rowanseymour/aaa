@@ -120,14 +120,15 @@ impl World {
     fn holding_ledger(&self, template: &Id) -> Ledger {
         let e = self.economy_of(template);
         Ledger {
-            production: e.production,
-            upkeep: e.upkeep,
+            production: e.production.clone(),
+            upkeep: e.upkeep.clone(),
         }
     }
 
     /// A template's own economy, none for one that has none.
-    pub(crate) fn economy_of(&self, template: &Id) -> Economy {
-        (self.rules.economies.get(template).cloned()).unwrap_or_default()
+    pub(crate) fn economy_of(&self, template: &Id) -> &Economy {
+        static NONE: std::sync::LazyLock<Economy> = std::sync::LazyLock::new(Economy::default);
+        self.rules.economies.get(template).unwrap_or(&NONE)
     }
 
     /// What a regiment adds to its owner's economy: its members'
@@ -146,7 +147,7 @@ impl World {
         let earning = self
             .survivors(regiment)
             .map(|u| self.economy_of(&self.units[u].template));
-        ledger.production = earning.fold(Amounts::default(), |sum, e| sum + e.production);
+        ledger.production = earning.fold(Amounts::default(), |sum, e| sum + &e.production);
         ledger
     }
 
@@ -164,12 +165,12 @@ impl World {
         let lone = matches!(&members[..], [m] if *m == template);
         let mut ledger = Ledger::default();
         if !lone {
-            ledger.upkeep = self.economy_of(template).upkeep;
+            ledger.upkeep = self.economy_of(template).upkeep.clone();
         }
         for m in members {
             let e = self.economy_of(m);
-            ledger.production += e.production;
-            ledger.upkeep += e.upkeep;
+            ledger.production += &e.production;
+            ledger.upkeep += &e.upkeep;
         }
         ledger
     }
@@ -185,7 +186,7 @@ impl World {
             return Ledger::default();
         }
         let e = self.economy_of(&b.template);
-        let mut upkeep = e.upkeep;
+        let mut upkeep = e.upkeep.clone();
         for r in b
             .queue
             .iter()
@@ -202,10 +203,10 @@ impl World {
         let working = b.state == State::Standing;
         let production = match self.rules.packing.get(&b.template) {
             _ if !working => Amounts::default(),
-            _ if !self.out_of_supply(building) => e.production,
+            _ if !self.out_of_supply(building) => e.production.clone(),
             Some(packs) => self.commission_ledger(&packs.truck).production,
             None if e.supply_required => Amounts::default(),
-            None => e.production,
+            None => e.production.clone(),
         };
         Ledger { production, upkeep }
     }
@@ -337,11 +338,7 @@ impl World {
             Change::Unpack(r) => {
                 ledger = ledger.without(&self.regiment_ledger(r));
                 if let Some(u) = &self.regiments[r].unpacks {
-                    let e = self.economy_of(&u.building.template);
-                    ledger += Ledger {
-                        production: e.production,
-                        upkeep: e.upkeep,
-                    };
+                    ledger += self.holding_ledger(&u.building.template);
                 }
             }
         }

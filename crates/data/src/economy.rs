@@ -111,7 +111,8 @@ impl PartialEq for Amounts {
 impl From<&defs::Resources> for Amounts {
     fn from(r: &defs::Resources) -> Self {
         let mut out = Amounts::default();
-        for (kind, amount) in r.amounts() {
+        // The lists every cost starts from give each resource a 0.
+        for (kind, amount) in r.amounts().filter(|&(_, a)| a != 0.0) {
             out.credit(kind, amount);
         }
         out
@@ -268,11 +269,24 @@ impl EconomyRules {
 
 impl GameData {
     /// Each template's own [`Economy`], for those that have one, by
-    /// template id.
+    /// template id. A resource the data doesn't define is an error in the
+    /// data, logged once and left out.
     pub fn economies(&self) -> HashMap<Id, Economy> {
+        let resources = self.resources();
+        let undefined = std::sync::Mutex::new(HashSet::new());
+        let of = |r: Option<&defs::Resources>| {
+            let mut out = Amounts::default();
+            for (id, amount) in r.into_iter().flat_map(defs::Resources::amounts) {
+                if resources.iter().any(|k| &k.id == id) {
+                    out.credit(id, amount);
+                } else if crate::locked(&undefined).insert(id.clone()) {
+                    log::warn!("{id} is named as a resource, which no [Resource] defines");
+                }
+            }
+            out
+        };
         self.by_template(|t| {
             let e = t.economy_component.as_ref()?;
-            let of = |r: Option<&defs::Resources>| r.map(Amounts::from).unwrap_or_default();
             Some(Economy {
                 cost: of(e.cost.as_ref()),
                 production: of(e.production.as_ref()),
@@ -342,9 +356,6 @@ impl GameData {
 
     /// The resources' and the tuning settings' bounds on economies.
     pub fn economy_rules(&self) -> EconomyRules {
-        let own = self.own_version("Game/world_rules.tgi");
-        let files = self.parse_tgis(|n| own.as_deref() == Some(n) || n.starts_with("templates/"));
-        let files = scoped(&files);
         let mut rules = EconomyRules {
             resources: self.resources().to_vec(),
             ..EconomyRules::default()
@@ -364,15 +375,8 @@ impl GameData {
             rules.sell_under_siege = v;
         }
         // The match's setting stands in for the tuning one.
-        let rule = files
-            .iter()
-            .flat_map(|f| f.read::<defs::WorldRule>("WorldRule"))
-            .find(|r| {
-                r.ids
-                    .as_ref()
-                    .is_some_and(|id| id.as_str().eq_ignore_ascii_case("ResourceStockpileDefault"))
-            })
-            .and_then(|r| r.default?.parse().ok());
+        let rule =
+            (self.world_rule("ResourceStockpileDefault")).and_then(|r| r.default?.parse().ok());
         if let Some(v) = rule.or_else(|| first(|s| s.resource_stockpile_default)) {
             rules.stockpile_default = v;
         }
@@ -471,6 +475,18 @@ mod tests {
         c.set("oil", 0.0);
         assert_eq!(a, c);
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn amounts_read_only_the_numbers_a_block_gives() {
+        let parsed = tgi::parse(
+            "[Cost]\n{\n\tmoney = 5\n\toil = 0\n\tnote = cheap\n\t[Nested]\n\t{\n\t\tammo = 1\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("Cost").next().unwrap();
+        let read: defs::Resources = tgi::from_block(block).unwrap();
+        let amounts = Amounts::from(&read);
+        let named: Vec<_> = amounts.iter().map(|(k, v)| (k.as_str(), v)).collect();
+        assert_eq!(named, [("money", 5.0)]);
     }
 
     /// The templates resources are defined with, as AA and Kohan II have

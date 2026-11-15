@@ -340,11 +340,20 @@ impl GameData {
         own.into_iter().chain([file]).collect()
     }
 
-    /// The game's own version of a file every game has, lower-case, as
-    /// [`GameData::versions`] names it.
-    pub(crate) fn own_version(&self, file: &str) -> Option<String> {
-        let mut versions = self.versions(file);
-        (versions.len() > 1).then(|| versions.remove(0))
+    /// The world rule `ids`, from the game's own world rules before the
+    /// ones every game has.
+    pub(crate) fn world_rule(&self, ids: &str) -> Option<defs::WorldRule> {
+        let versions = self.versions("Game/world_rules.tgi");
+        let at = |n: &str| versions.iter().position(|v| v.eq_ignore_ascii_case(n));
+        // The templates are there for the rules to inherit from.
+        let files = self.parse_tgis(|n| at(n).is_some() || n.starts_with("templates/"));
+        let mut files: Vec<_> = (scoped(&files).into_iter())
+            .filter_map(|f| Some((at(f.file)?, f)))
+            .collect();
+        files.sort_by_key(|&(at, _)| at);
+        (files.iter())
+            .flat_map(|(_, f)| f.read::<defs::WorldRule>("WorldRule"))
+            .find(|r| (r.ids.as_ref()).is_some_and(|id| id.as_str().eq_ignore_ascii_case(ids)))
     }
 
     /// What `build` makes, made the first time `key` is asked for and kept.
@@ -606,13 +615,11 @@ pub(crate) fn renamed(renames: &HashMap<Id, Id>, id: &Id) -> Id {
     renames.get(id).unwrap_or(id).clone()
 }
 
-/// The `.tgi` files the game loads, by archive path, in its order: those
-/// the `index*.lst` lists at the archive's root name, in turn, where a line
-/// naming another list takes in its files there and then. `entries` are the
-/// archive paths, `read` gives a list's text.
 /// What a game names its own versions of the files every game has with:
-/// the part after `index_` of the load list at the top of its archives,
-/// such as `aa` for `index_aa.lst`. None where there's no such list.
+/// the part after `index_` of a load list at the top of its archives, such
+/// as `aa` for `index_aa.lst`. Where there are several such lists, the one
+/// whose tag the game's own tuning file carries. None where there's no such
+/// list.
 fn game_tag(entries: &[String]) -> Option<String> {
     let mut tags: Vec<String> = (entries.iter())
         .filter(|n| !n.contains('/'))
@@ -625,11 +632,25 @@ fn game_tag(entries: &[String]) -> Option<String> {
     tags.sort_unstable();
     tags.dedup();
     if tags.len() > 1 {
-        log::warn!("load lists for more than one game: {}", tags.join(", "));
+        let own = |tag: &String| {
+            let svars = format!("game/svars_{tag}.tgi");
+            entries.iter().any(|n| n.eq_ignore_ascii_case(&svars))
+        };
+        let owned: Vec<String> = tags.iter().filter(|t| own(t)).cloned().collect();
+        if !owned.is_empty() {
+            tags = owned;
+        }
+        if tags.len() > 1 {
+            log::warn!("load lists for more than one game: {}", tags.join(", "));
+        }
     }
     tags.into_iter().next()
 }
 
+/// The `.tgi` files the game loads, by archive path, in its order: those
+/// the `index*.lst` lists at the archive's root name, in turn, where a line
+/// naming another list takes in its files there and then. `entries` are the
+/// archive paths, `read` gives a list's text.
 fn listed_tgis(entries: &[String], mut read: impl FnMut(&str) -> Option<String>) -> Vec<String> {
     let mut roots: Vec<&str> = entries
         .iter()
@@ -877,17 +898,15 @@ mod tests {
         ]));
         assert_eq!(tag.as_deref(), Some("k2"));
         assert_eq!(game_tag(&names(&["index.lst"])), None);
+        // Another list beside the game's own doesn't take its place.
+        let beside = names(&["index_addon.lst", "index_zz.lst", "Game/SVars_ZZ.tgi"]);
+        assert_eq!(game_tag(&beside).as_deref(), Some("zz"));
         let mut game = empty();
         assert_eq!(game.versions("Game/SVars.tgi"), ["game/svars.tgi"]);
-        assert_eq!(game.own_version("Game/SVars.tgi"), None);
         game.tag = tag;
         assert_eq!(
             game.versions("Game/SVars.tgi"),
             ["game/svars_k2.tgi", "game/svars.tgi"]
-        );
-        assert_eq!(
-            game.own_version("UVars.tgi").as_deref(),
-            Some("uvars_k2.tgi")
         );
     }
 
