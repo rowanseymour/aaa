@@ -25,7 +25,7 @@ pub(super) fn parse_denizen_groups(data: &[u8]) -> Result<()> {
 }
 
 /// The DENIZEN_GROUPS section holding no groups.
-pub fn write_denizen_groups() -> Vec<u8> {
+pub(super) fn write_denizen_groups() -> Vec<u8> {
     0u32.to_le_bytes().to_vec()
 }
 

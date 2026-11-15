@@ -36,12 +36,12 @@ pub use header::{
     KingdomSetup, MapHeader, Player, Rule, RuleValue, TeamSetup, WorldCreator, WorldParameters,
     WorldRules,
 };
-pub use misc::{GameCounter, MiscData, UsedName, write_denizen_groups};
+pub use misc::{GameCounter, MiscData, UsedName};
 pub use objectives::{Objective, Objectives};
 pub use organization::{Damage, DamageTail, ElementState, Fighting, Organization, Position};
 pub use players::{
     Ability, Faction, Favorites, Kingdom, KingdomStats, Kingdoms, Relation, RestrictionGroup,
-    RestrictionGroups, SavedGroup, Snapshot, Team, Totals, World, write_teams,
+    RestrictionGroups, SavedGroup, Snapshot, Team, Totals, World,
 };
 pub use scenery::{ReactiveScenery, Topple, ToppleState};
 pub use triggers::{Element, Parameter, Trigger, Triggers, Value};
@@ -615,6 +615,10 @@ pub const SCENERY: u32 = 2;
 /// The [`Thing::class`] of actors: units, buildings, herds, roads and other
 /// things made of components.
 pub const ACTOR: u32 = 3;
+/// The [`Thing::class`] of kingdoms.
+pub const KINGDOM: u32 = 4;
+/// The [`Thing::class`] of teams.
+pub const TEAM: u32 = 5;
 /// The [`Thing::class`] of areas.
 pub const AREA: u32 = 6;
 /// The [`Thing::class`] of cameras.
