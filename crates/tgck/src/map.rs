@@ -57,6 +57,9 @@ pub const RESOLUTION_BITS: u32 = 1;
 
 pub struct Map<R> {
     container: Container<R>,
+    /// [`Map::world_version`] once read, so the accessors that need it
+    /// don't each inflate GWORLD.
+    world_version: Option<u32>,
 }
 
 impl Map<BufReader<File>> {
@@ -69,7 +72,10 @@ impl<R: Read + Seek> Map<R> {
     pub fn new(reader: R) -> Result<Self> {
         let container = Container::new(reader)?;
         container.require("MAP_HEADER")?;
-        Ok(Map { container })
+        Ok(Map {
+            container,
+            world_version: None,
+        })
     }
 
     pub fn sections(&self) -> &[Section] {
@@ -135,8 +141,13 @@ impl<R: Read + Seek> Map<R> {
     /// The world version, which decides the layout of some sections;
     /// range-checked as [`World::parse`] does.
     pub fn world_version(&mut self) -> Result<u32> {
+        if let Some(version) = self.world_version {
+            return Ok(version);
+        }
         let version = Cursor::new(&self.container.read_named("GWORLD")?).u32()?;
-        crate::check_version("world", version, 0..=World::MAX_VERSION)
+        let version = crate::check_version("world", version, 0..=World::MAX_VERSION)?;
+        self.world_version = Some(version);
+        Ok(version)
     }
 
     pub fn world(&mut self) -> Result<World> {
