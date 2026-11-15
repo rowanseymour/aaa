@@ -97,10 +97,9 @@ impl<R: Read + Seek> Map<R> {
         let world_version = self.world_version()?;
         let data = self.container.read_named("MOUNTAIN_HEIGHT_MAP")?;
         let (data, cutscene_mode) = match data.split_last() {
-            Some((&flag, rest)) if world_version >= 10 => (
-                rest,
-                Some(header::bool(&mut Cursor::new(&[flag]), "cutscene mode")?),
-            ),
+            Some((&flag, rest)) if world_version >= 10 => {
+                (rest, Some(Cursor::new(&[flag]).bool("cutscene mode")?))
+            }
             _ => (&data[..], None),
         };
         Ok((HeightMap::parse(data)?, cutscene_mode))
@@ -137,7 +136,7 @@ impl<R: Read + Seek> Map<R> {
     /// range-checked as [`World::parse`] does.
     pub fn world_version(&mut self) -> Result<u32> {
         let version = Cursor::new(&self.container.read_named("GWORLD")?).u32()?;
-        header::check_version("world", version, 0..=World::MAX_VERSION)
+        crate::check_version("world", version, 0..=World::MAX_VERSION)
     }
 
     pub fn world(&mut self) -> Result<World> {
@@ -299,8 +298,7 @@ impl HeightMap {
         w.f32(self.max);
         w.f32(self.default);
         w.u32(self.resolution_bits);
-        w.u32(self.heights.len() as u32);
-        w.f32s(&self.heights);
+        w.f32_list("heights", &self.heights)?;
         w.bytes(&self.layer);
         Ok(w.0)
     }
@@ -445,9 +443,9 @@ impl Terrain {
         w.u32(self.version);
         w.u32(self.resolution_bits);
         w.string(&self.biome)?;
-        w.strings(&self.names)?;
+        w.strings("names", &self.names)?;
         let size = tile_size(self.version);
-        w.u32(self.tiles.len() as u32);
+        w.count("tiles", self.tiles.len())?;
         w.u32(size as u32);
         for t in &self.tiles {
             if self.version >= 7 {
@@ -463,18 +461,14 @@ impl Terrain {
             tile[2..4].copy_from_slice(&t.seen_by.to_le_bytes());
             w.bytes(&tile[..size]);
         }
-        header::optional(self.version >= 2, "AI map", self.ai_map.as_ref(), |m| {
-            m.write(&mut w);
-            Ok(())
+        w.optional(self.version >= 2, "AI map", self.ai_map.as_ref(), |w, m| {
+            m.write(w)
         })?;
-        header::optional(
+        w.optional(
             self.version >= 6,
             "shore mesh",
             self.shore_mesh.as_ref(),
-            |m| {
-                m.write(&mut w);
-                Ok(())
-            },
+            |w, m| m.write(w),
         )?;
         Ok(w.0)
     }
@@ -526,7 +520,7 @@ impl Sun {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        let version = header::check_version("sun", cur.u32()?, 0..=Self::MAX_VERSION)?;
+        let version = cur.version("sun", 0..=Self::MAX_VERSION)?;
         let sun = Sun {
             version,
             updatable: Updatable::parse(cur)?,
@@ -572,17 +566,16 @@ impl Sun {
             self.dimmer_fade_time,
             self.last_update_time,
         ]);
-        header::optional(
+        w.optional_plain(
             self.version >= 1,
             "sun overlays",
             self.overlays,
-            |overlays| {
+            |w, overlays| {
                 for o in overlays {
                     w.u8(o.on.into());
                     w.f32(o.start);
                     w.f32(o.duration);
                 }
-                Ok(())
             },
         )?;
         Ok(w.0)
@@ -592,7 +585,7 @@ impl Sun {
 impl Overlay {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         Ok(Overlay {
-            on: header::bool(cur, "overlay flag")?,
+            on: cur.bool("overlay flag")?,
             start: cur.f32()?,
             duration: cur.f32()?,
         })
@@ -671,11 +664,11 @@ const THINGS_VERSION: u32 = 11;
 fn parse_things(name: &str, index: &[u8], data: &[u8], world_version: u32) -> Result<Vec<Thing>> {
     let index_name = format!("{name}_INDEX");
     let mut idx = Cursor::new(index);
-    expect(&mut idx, &format!("{index_name} data version"), 0)?;
+    idx.expect(&format!("{index_name} data version"), 0)?;
     let count = idx.u32()?;
     let mut cur = Cursor::new(data);
-    expect(&mut cur, &format!("{name} data version"), 0)?;
-    expect(&mut cur, &format!("{name} version"), THINGS_VERSION)?;
+    cur.expect(&format!("{name} data version"), 0)?;
+    cur.expect(&format!("{name} version"), THINGS_VERSION)?;
     // Each thing has its size in the index.
     let mut things = Vec::with_capacity((count as usize).min(idx.remaining() / 4));
     for i in 0..count {
@@ -708,15 +701,6 @@ pub fn write_things(things: &[Thing]) -> Result<(Vec<u8>, Vec<u8>)> {
     Ok((index.0, data.0))
 }
 
-/// Reads a `u32` that has only one valid value, so that writing that value
-/// back reproduces the file.
-fn expect(cur: &mut Cursor, what: &str, want: u32) -> Result<()> {
-    match cur.u32()? {
-        v if v == want => Ok(()),
-        v => Err(Error::Corrupt(format!("{what} is {v}, expected {want}"))),
-    }
-}
-
 /// A `thing_head` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Head {
@@ -734,9 +718,9 @@ impl Head {
         let template = rec.string()?;
         let class = rec.u32()?;
         let id = rec.u32()?;
-        expect(rec, "thing version", 2)?;
+        rec.expect("thing version", 2)?;
         let name = rec.string()?;
-        expect(rec, "creation time", 0)?;
+        rec.expect("creation time", 0)?;
         Ok(Head {
             template,
             class,
@@ -798,12 +782,12 @@ impl Thing {
             facing,
             flags,
         } = head;
-        expect(rec, "placement version", 5)?;
+        rec.expect("placement version", 5)?;
         let scale = rec.f32()?;
         let variation = rec.i32()?;
-        expect(rec, "placement's actor", 0)?;
+        rec.expect("placement's actor", 0)?;
         let seen_by = rec.u16()?;
-        expect(rec, "remembered views", 0)?;
+        rec.expect("remembered views", 0)?;
         Ok(Thing {
             template,
             class,
@@ -896,7 +880,7 @@ impl Detail {
                 let version = cur.u32()?;
                 let id = if has_id {
                     let id = cur.u32()?;
-                    expect(&mut cur, "area id version", 2)?;
+                    cur.expect("area id version", 2)?;
                     Some(id)
                 } else {
                     None
@@ -914,7 +898,7 @@ impl Detail {
             }
             CAMERA => Detail::Camera(Camera {
                 // Version 0 holds other fields; no shipped map has one.
-                version: header::check_version("camera", cur.u32()?, 1..=2)?,
+                version: cur.version("camera", 1..=2)?,
                 name: cur.string()?,
                 zoom: cur.f32()?,
             }),
@@ -939,11 +923,11 @@ impl Detail {
                 w.u32(a.shape);
                 w.f32(a.radius);
                 w.f32s(&a.bounds);
-                w.u32(a.inside.len() as u32);
-                for &(thing, scratch) in &a.inside {
+                w.list("inside", &a.inside, |w, &(thing, scratch)| {
                     w.u32(thing);
                     w.u8(scratch);
-                }
+                    Ok(())
+                })?;
             }
             Detail::Camera(c) => {
                 w.u32(c.version);

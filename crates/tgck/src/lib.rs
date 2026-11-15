@@ -7,6 +7,7 @@
 
 use std::fmt;
 use std::io;
+use std::ops::RangeInclusive;
 
 pub mod archive;
 pub mod container;
@@ -127,6 +128,33 @@ impl<'a> Cursor<'a> {
     pub(crate) fn strings(&mut self) -> Result<Vec<String>> {
         self.list(Cursor::string)
     }
+    /// A list of `(string, value)` pairs.
+    pub(crate) fn pairs<T>(
+        &mut self,
+        mut value: impl FnMut(&mut Cursor<'a>) -> Result<T>,
+    ) -> Result<Vec<(String, T)>> {
+        self.list(|cur| Ok((cur.string()?, value(cur)?)))
+    }
+    /// A byte that must be 0 or 1.
+    pub(crate) fn bool(&mut self, what: &str) -> Result<bool> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            b => Err(Error::Corrupt(format!("{what} is {b}"))),
+        }
+    }
+    /// A `u32` version, checked with [`check_version`].
+    pub(crate) fn version(&mut self, what: &str, versions: RangeInclusive<u32>) -> Result<u32> {
+        check_version(what, self.u32()?, versions)
+    }
+    /// A `u32` that has only one valid value, so that writing that value
+    /// back reproduces the file.
+    pub(crate) fn expect(&mut self, what: &str, want: u32) -> Result<()> {
+        match self.u32()? {
+            v if v == want => Ok(()),
+            v => Err(Error::Corrupt(format!("{what} is {v}, expected {want}"))),
+        }
+    }
     pub(crate) fn pos(&self) -> usize {
         self.pos
     }
@@ -193,15 +221,93 @@ impl Writer {
         units.iter().for_each(|&u| self.u16(u));
         Ok(())
     }
+    /// A list's `u32` count; `what` names the list if it's too long.
+    pub(crate) fn count(&mut self, what: &str, n: usize) -> Result<()> {
+        let n = u32::try_from(n).map_err(|_| Error::Unwritable(format!("{n} {what}")))?;
+        self.u32(n);
+        Ok(())
+    }
+    /// The inverse of [`Cursor::list`].
+    pub(crate) fn list<T>(
+        &mut self,
+        what: &str,
+        items: &[T],
+        mut item: impl FnMut(&mut Writer, &T) -> Result<()>,
+    ) -> Result<()> {
+        self.count(what, items.len())?;
+        items.iter().try_for_each(|i| item(self, i))
+    }
     /// The inverse of [`Cursor::u32s`].
-    pub(crate) fn u32s(&mut self, vs: &[u32]) {
-        self.u32(vs.len() as u32);
+    pub(crate) fn u32s(&mut self, what: &str, vs: &[u32]) -> Result<()> {
+        self.count(what, vs.len())?;
         vs.iter().for_each(|&v| self.u32(v));
+        Ok(())
+    }
+    /// The inverse of `Cursor::list(Cursor::f32)`.
+    pub(crate) fn f32_list(&mut self, what: &str, vs: &[f32]) -> Result<()> {
+        self.count(what, vs.len())?;
+        self.f32s(vs);
+        Ok(())
     }
     /// The inverse of [`Cursor::strings`].
-    pub(crate) fn strings(&mut self, vs: &[String]) -> Result<()> {
-        self.u32(vs.len() as u32);
-        vs.iter().try_for_each(|s| self.string(s))
+    pub(crate) fn strings(&mut self, what: &str, vs: &[String]) -> Result<()> {
+        self.list(what, vs, |w, s| w.string(s))
+    }
+    /// The inverse of [`Cursor::pairs`].
+    pub(crate) fn pairs<T: Copy>(
+        &mut self,
+        what: &str,
+        pairs: &[(String, T)],
+        mut value: impl FnMut(&mut Writer, T),
+    ) -> Result<()> {
+        self.list(what, pairs, |w, (s, v)| {
+            w.string(s)?;
+            value(w, *v);
+            Ok(())
+        })
+    }
+    /// Writes `value` with `write` if the version has it, checking that it's
+    /// set exactly when it does.
+    pub(crate) fn optional<T>(
+        &mut self,
+        has: bool,
+        what: &str,
+        value: Option<T>,
+        write: impl FnOnce(&mut Writer, T) -> Result<()>,
+    ) -> Result<()> {
+        match (has, value) {
+            (true, Some(v)) => write(self, v),
+            (false, None) => Ok(()),
+            _ => Err(Error::Unwritable(format!(
+                "{what} must be set exactly when its version has it"
+            ))),
+        }
+    }
+    /// [`Writer::optional`] for a value written by a call that can't fail.
+    pub(crate) fn optional_plain<T>(
+        &mut self,
+        has: bool,
+        what: &str,
+        value: Option<T>,
+        write: impl FnOnce(&mut Writer, T),
+    ) -> Result<()> {
+        self.optional(has, what, value, |w, v| {
+            write(w, v);
+            Ok(())
+        })
+    }
+}
+
+/// `version`, if it's one of `versions`.
+pub(crate) fn check_version(
+    what: &str,
+    version: u32,
+    versions: RangeInclusive<u32>,
+) -> Result<u32> {
+    if versions.contains(&version) {
+        Ok(version)
+    } else {
+        Err(Error::Corrupt(format!("{what} version {version}")))
     }
 }
 

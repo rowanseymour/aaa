@@ -2,8 +2,6 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::expect;
-use super::header::{bool, check_version, optional};
 use crate::{Cursor, Error, Result, Writer};
 
 /// The TRIGGERS section, the `triggers` of `rmp.ksy`.
@@ -151,10 +149,10 @@ impl Triggers {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        let version = check_version("triggers", cur.u32()?, 4..=5)?;
+        let version = cur.version("triggers", 4..=5)?;
         let next_id = cur.u32()?;
         let triggers = cur.list(Trigger::parse)?;
-        let variables = cur.list(|cur| Ok((cur.string()?, cur.f32()?)))?;
+        let variables = cur.pairs(Cursor::f32)?;
         let triggers = Triggers {
             version,
             next_id,
@@ -174,36 +172,30 @@ impl Triggers {
         let version = self.version;
         w.u32(version);
         w.u32(self.next_id);
-        w.u32(self.triggers.len() as u32);
-        self.triggers.iter().try_for_each(|t| t.write(&mut w))?;
-        w.u32(self.variables.len() as u32);
-        for (name, value) in &self.variables {
-            w.string(name)?;
-            w.f32(*value);
-        }
-        optional(version == 4, "legacy", self.legacy.as_ref(), |(s, v)| {
+        w.list("triggers", &self.triggers, |w, t| t.write(w))?;
+        w.pairs("variables", &self.variables, Writer::f32)?;
+        w.optional(version == 4, "legacy", self.legacy.as_ref(), |w, (s, v)| {
             w.string(s)?;
             w.u32(*v);
             Ok(())
         })?;
-        optional(
+        w.optional(
             version >= 5,
             "unused_strings",
-            self.unused_strings.as_ref(),
-            |ss| w.strings(ss),
+            self.unused_strings.as_deref(),
+            |w, v| w.strings("unused strings", v),
         )?;
         Ok(w.0)
     }
 }
 
 fn write_elements(w: &mut Writer, elements: &[Element]) -> Result<()> {
-    w.u32(elements.len() as u32);
-    elements.iter().try_for_each(|e| e.write(w))
+    w.list("elements", elements, |w, e| e.write(w))
 }
 
 impl Trigger {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "trigger version", TRIGGER_VERSION)?;
+        cur.expect("trigger version", TRIGGER_VERSION)?;
         Ok(Trigger {
             id: cur.u32()?,
             all_conditions: match cur.u32()? {
@@ -211,8 +203,8 @@ impl Trigger {
                 1 => true,
                 v => return Err(Error::Corrupt(format!("trigger condition mode is {v}"))),
             },
-            active: bool(cur, "trigger active")?,
-            repeats: bool(cur, "trigger repeats")?,
+            active: cur.bool("trigger active")?,
+            repeats: cur.bool("trigger repeats")?,
             activation_time: cur.f32()?,
             name: cur.string()?,
             comment: cur.string()?,
@@ -242,7 +234,7 @@ impl Trigger {
 impl Element {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         Ok(Element {
-            version: check_version("trigger element", cur.u32()?, 2..=3)?,
+            version: cur.version("trigger element", 2..=3)?,
             name: cur.string()?,
             id: cur.u32()?,
             parameters: cur.list(Parameter::parse)?,
@@ -253,17 +245,16 @@ impl Element {
         w.u32(self.version);
         w.string(&self.name)?;
         w.u32(self.id);
-        w.u32(self.parameters.len() as u32);
-        self.parameters.iter().try_for_each(|p| p.write(w))
+        w.list("parameters", &self.parameters, |w, p| p.write(w))
     }
 }
 
 impl Parameter {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "trigger parameter version", PARAMETER_VERSION)?;
+        cur.expect("trigger parameter version", PARAMETER_VERSION)?;
         let kind = cur.string()?;
         let source = cur.string()?;
-        let set = bool(cur, "trigger parameter set")?;
+        let set = cur.bool("trigger parameter set")?;
         let value = match value_kind(&source) {
             ValueKind::None => Value::None,
             ValueKind::Int => Value::Int(cur.u32()?),

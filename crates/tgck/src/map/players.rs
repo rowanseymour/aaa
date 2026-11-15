@@ -3,8 +3,7 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::header::{bool, check_version, optional, optional_plain};
-use super::{Actor, Detail, Head, Property, ReadAs, Thing, expect};
+use super::{Actor, Detail, Head, Property, ReadAs, Thing};
 use crate::{Cursor, Error, Result, Writer};
 
 /// The GWORLD section, the `gworld` of `rmp.ksy`.
@@ -47,24 +46,21 @@ impl RestrictionGroups {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        expect(cur, "restriction groups version", 0)?;
+        cur.expect("restriction groups version", 0)?;
         let next_number = cur.u32()?;
-        let n = cur.u32()?;
-        let groups = (0..n)
-            .map(|_| {
-                // Older groups are laid out differently.
-                expect(cur, "restriction group version", RestrictionGroup::VERSION)?;
-                Ok(RestrictionGroup {
-                    name: cur.string()?,
-                    number: cur.u32()?,
-                    display_name: cur.string()?,
-                    allowed_actors: cur.strings()?,
-                    allowed_technologies: cur.strings()?,
-                    required_actors: cur.strings()?,
-                    required_technologies: cur.strings()?,
-                })
+        let groups = cur.list(|cur| {
+            // Older groups are laid out differently.
+            cur.expect("restriction group version", RestrictionGroup::VERSION)?;
+            Ok(RestrictionGroup {
+                name: cur.string()?,
+                number: cur.u32()?,
+                display_name: cur.string()?,
+                allowed_actors: cur.strings()?,
+                allowed_technologies: cur.strings()?,
+                required_actors: cur.strings()?,
+                required_technologies: cur.strings()?,
             })
-            .collect::<Result<_>>()?;
+        })?;
         cur.finish("RESTRICTION_GROUPS")?;
         Ok(RestrictionGroups {
             next_number,
@@ -76,17 +72,17 @@ impl RestrictionGroups {
         let mut w = Writer::default();
         w.u32(0);
         w.u32(self.next_number);
-        w.u32(self.groups.len() as u32);
-        for group in &self.groups {
+        w.list("groups", &self.groups, |w, group| {
             w.u32(RestrictionGroup::VERSION);
             w.string(&group.name)?;
             w.u32(group.number);
             w.string(&group.display_name)?;
-            w.strings(&group.allowed_actors)?;
-            w.strings(&group.allowed_technologies)?;
-            w.strings(&group.required_actors)?;
-            w.strings(&group.required_technologies)?;
-        }
+            w.strings("allowed actors", &group.allowed_actors)?;
+            w.strings("allowed technologies", &group.allowed_technologies)?;
+            w.strings("required actors", &group.required_actors)?;
+            w.strings("required technologies", &group.required_technologies)?;
+            Ok(())
+        })?;
         Ok(w.0)
     }
 }
@@ -101,7 +97,7 @@ impl World {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        let version = check_version("world", cur.u32()?, 0..=Self::MAX_VERSION)?;
+        let version = cur.version("world", 0..=Self::MAX_VERSION)?;
         let world = World {
             version,
             rng_seed: cur.u32()?,
@@ -141,7 +137,7 @@ impl World {
             (v >= 5, "map_status", self.map_status),
             (v >= 7, "mission_state", self.mission_state),
         ] {
-            optional_plain(has, what, value, |value| w.u32(value))?;
+            w.optional_plain(has, what, value, Writer::u32)?;
         }
         Ok(w.0)
     }
@@ -168,7 +164,7 @@ pub(super) fn parse_teams(data: &[u8]) -> Result<Vec<Option<Team>>> {
     let count = cur.u32()?;
     let teams = (0..count)
         .map(|index| {
-            bool(&mut cur, "presence byte")?
+            cur.bool("presence byte")?
                 .then(|| Team::parse(&mut cur, index))
                 .transpose()
         })
@@ -180,7 +176,7 @@ pub(super) fn parse_teams(data: &[u8]) -> Result<Vec<Option<Team>>> {
 /// The TEAMS section holding `teams`.
 pub fn write_teams(teams: &[Option<Team>]) -> Result<Vec<u8>> {
     let mut w = Writer::default();
-    w.u32(teams.len() as u32);
+    w.count("teams", teams.len())?;
     for (index, team) in teams.iter().enumerate() {
         w.u8(team.is_some().into());
         if let Some(team) = team {
@@ -206,8 +202,8 @@ impl Team {
 
     fn parse(cur: &mut Cursor, index: u32) -> Result<Self> {
         let head = parse_head(cur, TEAM)?;
-        let version = check_version("team", cur.u32()?, 0..=Self::MAX_VERSION)?;
-        expect(cur, "team index", index)?;
+        let version = cur.version("team", 0..=Self::MAX_VERSION)?;
+        cur.expect("team index", index)?;
         Ok(Team {
             head,
             version,
@@ -223,12 +219,15 @@ impl Team {
         w.u32(self.version);
         w.u32(index);
         w.string(&self.display_name)?;
-        w.u32s(&self.kingdom_relations);
-        w.u32s(&self.team_relations);
+        w.u32s("kingdom relations", &self.kingdom_relations)?;
+        w.u32s("team relations", &self.team_relations)?;
         let group = self.restriction_group.as_deref();
-        optional(self.version >= 1, "team's restriction group", group, |g| {
-            w.string(g)
-        })
+        w.optional(
+            self.version >= 1,
+            "team's restriction group",
+            group,
+            Writer::string,
+        )
     }
 }
 
@@ -372,7 +371,7 @@ impl Kingdoms {
         let count = cur.u32()?;
         let kingdoms = (0..count)
             .map(|index| {
-                bool(&mut cur, "presence byte")?
+                cur.bool("presence byte")?
                     .then(|| Kingdom::parse(&mut cur, world_version, index))
                     .transpose()
             })
@@ -384,7 +383,7 @@ impl Kingdoms {
     pub fn to_bytes(&self, world_version: u32) -> Result<Vec<u8>> {
         let mut w = Writer::default();
         w.u32(self.majors);
-        w.u32(self.kingdoms.len() as u32);
+        w.count("kingdoms", self.kingdoms.len())?;
         for (index, kingdom) in self.kingdoms.iter().enumerate() {
             w.u8(kingdom.is_some().into());
             if let Some(kingdom) = kingdom {
@@ -406,38 +405,39 @@ impl Kingdom {
 
         let updatable = (world_version >= UPDATABLE_WORLD_VERSION)
             .then(|| {
-                expect(cur, "kingdom updatable version", 1)?;
+                cur.expect("kingdom updatable version", 1)?;
                 cur.i32()
             })
             .transpose()?;
         let versions = Self::MIN_VERSION..=Self::MAX_VERSION;
-        let version = check_version("kingdom", cur.u32()?, versions)?;
+        let version = cur.version("kingdom", versions)?;
         let v = version;
-        expect(cur, "kingdom index", index)?;
+        cur.expect("kingdom index", index)?;
         let major_index = cur.i32()?;
         let independent = cur.u32()?;
         let name = cur.string()?;
         let color = cur.string()?;
         let relations = cur.u32s()?;
-        let resources = pairs(cur, Cursor::f32)?;
+        let resources = cur.pairs(Cursor::f32)?;
         let team = cur.u32()?;
         let team_relations = cur.u32s()?;
-        let use_default_stockpile = bool(cur, "use default stockpile")?;
-        expect(cur, "recruits version", 1)?;
-        expect(cur, "recruit count", 0)?;
+        let use_default_stockpile = cur.bool("use default stockpile")?;
+        cur.expect("recruits version", 1)?;
+        cur.expect("recruit count", 0)?;
         let current_recruit = cur.i32()?;
-        let faction = bool(cur, "faction flag")?
+        let faction = cur
+            .bool("faction flag")?
             .then(|| Faction::parse(cur))
             .transpose()?;
         let nation = cur.string()?;
-        let objectives = pairs(cur, Cursor::u32)?;
+        let objectives = cur.pairs(Cursor::u32)?;
         let outcome = cur.u32()?;
         let start_technologies = (v >= 14).then(|| cur.strings()).transpose()?;
         let properties = (0..cur.u32()?)
             .map(|_| Property::parse(cur, 0))
             .collect::<Result<_>>()?;
-        let required = bool(cur, "required")?;
-        let playable = bool(cur, "playable")?;
+        let required = cur.bool("required")?;
+        let playable = cur.bool("playable")?;
         let ai_profile = cur.string()?;
         let restriction_group = cur.string()?;
         let stats = (independent == 0)
@@ -447,7 +447,7 @@ impl Kingdom {
             .map(|_| SavedGroup::parse(cur))
             .collect::<Result<_>>()?;
         let flag = |cur: &mut Cursor, from: u32, what: &str| {
-            (v >= from).then(|| bool(cur, what)).transpose()
+            (v >= from).then(|| cur.bool(what)).transpose()
         };
         Ok(Kingdom {
             thing,
@@ -475,12 +475,12 @@ impl Kingdom {
             restriction_group,
             stats,
             saved_groups,
-            instance_numbers: (v >= 15).then(|| pairs(cur, Cursor::u32)).transpose()?,
+            instance_numbers: (v >= 15).then(|| cur.pairs(Cursor::u32)).transpose()?,
             used_badges: (v >= 16).then(|| cur.u32s()).transpose()?,
             default_victory_condition: flag(cur, 17, "default victory condition")?,
             resigned: flag(cur, 18, "resigned")?,
             city_ratio_victory: flag(cur, 19, "city ratio victory")?,
-            bonus_stockpile: (v >= 20).then(|| pairs(cur, Cursor::f32)).transpose()?,
+            bonus_stockpile: (v >= 20).then(|| cur.pairs(Cursor::f32)).transpose()?,
         })
     }
 
@@ -520,10 +520,10 @@ impl Kingdom {
         w.u32(self.independent);
         w.string(&self.name)?;
         w.string(&self.color)?;
-        w.u32s(&self.relations);
-        write_pairs(w, &self.resources, Writer::f32)?;
+        w.u32s("relations", &self.relations)?;
+        w.pairs("resources", &self.resources, Writer::f32)?;
         w.u32(self.team);
-        w.u32s(&self.team_relations);
+        w.u32s("team relations", &self.team_relations)?;
         w.u8(self.use_default_stockpile.into());
         w.u32(1);
         w.u32(0);
@@ -533,18 +533,17 @@ impl Kingdom {
             faction.write(w)?;
         }
         w.string(&self.nation)?;
-        write_pairs(w, &self.objectives, Writer::u32)?;
+        w.pairs("objectives", &self.objectives, Writer::u32)?;
         w.u32(self.outcome);
         if let Some(technologies) = &self.start_technologies {
-            w.strings(technologies)?;
+            w.strings("technologies", technologies)?;
         }
         if self.properties.iter().any(|p| p.class != 0) {
             return Err(Error::Unwritable(format!(
                 "kingdom {index} has a property of a class other than 0"
             )));
         }
-        w.u32(self.properties.len() as u32);
-        self.properties.iter().try_for_each(|p| p.write_body(w))?;
+        w.list("properties", &self.properties, |w, p| p.write_body(w))?;
         w.u8(self.required.into());
         w.u8(self.playable.into());
         w.string(&self.ai_profile)?;
@@ -552,13 +551,12 @@ impl Kingdom {
         if let Some(stats) = &self.stats {
             stats.write(w)?;
         }
-        w.u32(self.saved_groups.len() as u32);
-        self.saved_groups.iter().try_for_each(|g| g.write(w))?;
+        w.list("saved groups", &self.saved_groups, |w, g| g.write(w))?;
         if let Some(numbers) = &self.instance_numbers {
-            write_pairs(w, numbers, Writer::u32)?;
+            w.pairs("instance numbers", numbers, Writer::u32)?;
         }
         if let Some(badges) = &self.used_badges {
-            w.u32s(badges);
+            w.u32s("badges", badges)?;
         }
         for flag in [
             self.default_victory_condition,
@@ -571,32 +569,10 @@ impl Kingdom {
             w.u8(flag.into());
         }
         if let Some(bonus) = &self.bonus_stockpile {
-            write_pairs(w, bonus, Writer::f32)?;
+            w.pairs("bonus stockpile", bonus, Writer::f32)?;
         }
         Ok(())
     }
-}
-
-/// `u32 n`, then `(string, value)[n]`.
-fn pairs<'a, T>(
-    cur: &mut Cursor<'a>,
-    value: impl Fn(&mut Cursor<'a>) -> Result<T>,
-) -> Result<Vec<(String, T)>> {
-    let n = cur.u32()?;
-    (0..n).map(|_| Ok((cur.string()?, value(cur)?))).collect()
-}
-
-fn write_pairs<T: Copy>(
-    w: &mut Writer,
-    pairs: &[(String, T)],
-    value: impl Fn(&mut Writer, T),
-) -> Result<()> {
-    w.u32(pairs.len() as u32);
-    for (s, v) in pairs {
-        w.string(s)?;
-        value(w, *v);
-    }
-    Ok(())
 }
 
 impl KingdomStats {
@@ -614,12 +590,12 @@ impl KingdomStats {
     fn write(&self, w: &mut Writer) -> Result<()> {
         self.favorites.write(w)?;
         self.totals.write(w)?;
-        w.u32(self.snapshots.len() as u32);
-        for snapshot in &self.snapshots {
+        w.list("snapshots", &self.snapshots, |w, snapshot| {
             w.u32(0);
             snapshot.totals.write(w)?;
             w.f32s(&snapshot.values);
-        }
+            Ok(())
+        })?;
         w.f32(self.time_since_snapshot);
         Ok(())
     }
@@ -631,19 +607,16 @@ impl Favorites {
     }
 
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        let version = check_version("favorites", cur.u32()?, 0..=2)?;
+        let version = cur.version("favorites", 0..=2)?;
         let lists = Self::lists(version);
         let by_template = (0..lists)
             .map(|_| match version {
-                0 => pairs(cur, |c| c.u32().map(f32::from_bits)),
-                _ => pairs(cur, Cursor::f32),
+                0 => cur.pairs(|c| c.u32().map(f32::from_bits)),
+                _ => cur.pairs(Cursor::f32),
             })
             .collect::<Result<_>>()?;
         let by_id = (0..if version >= 1 { lists } else { 0 })
-            .map(|_| {
-                let n = cur.u32()?;
-                (0..n).map(|_| Ok((cur.u32()?, cur.f32()?))).collect()
-            })
+            .map(|_| cur.list(|cur| Ok((cur.u32()?, cur.f32()?))))
             .collect::<Result<_>>()?;
         Ok(Favorites {
             version,
@@ -665,14 +638,14 @@ impl Favorites {
         }
         w.u32(self.version);
         for list in &self.by_template {
-            write_pairs(w, list, |w, v| w.u32(v.to_bits()))?;
+            w.pairs("favorites by template", list, |w, v| w.u32(v.to_bits()))?;
         }
         for list in &self.by_id {
-            w.u32(list.len() as u32);
-            for &(id, v) in list {
+            w.list("favorites by id", list, |w, &(id, v)| {
                 w.u32(id);
                 w.f32(v);
-            }
+                Ok(())
+            })?;
         }
         Ok(())
     }
@@ -684,7 +657,7 @@ impl Totals {
     }
 
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        let version = check_version("totals", cur.u32()?, 0..=1)?;
+        let version = cur.version("totals", 0..=1)?;
         let values = (0..Self::count(version))
             .map(|_| cur.f32())
             .collect::<Result<_>>()?;
@@ -708,7 +681,7 @@ impl Totals {
 
 impl Snapshot {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "snapshot version", 0)?;
+        cur.expect("snapshot version", 0)?;
         Ok(Snapshot {
             totals: Totals::parse(cur)?,
             values: cur.f32s()?,
@@ -718,12 +691,12 @@ impl Snapshot {
 
 impl SavedGroup {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "saved group version", 0)?;
+        cur.expect("saved group version", 0)?;
         Ok(SavedGroup {
             name: cur.string()?,
             display_name: cur.string()?,
             ids: cur.u32s()?,
-            grouped: bool(cur, "grouped")?,
+            grouped: cur.bool("grouped")?,
             group_thing: cur.u32()?,
         })
     }
@@ -732,7 +705,7 @@ impl SavedGroup {
         w.u32(0);
         w.string(&self.name)?;
         w.string(&self.display_name)?;
-        w.u32s(&self.ids);
+        w.u32s("ids", &self.ids)?;
         w.u8(self.grouped.into());
         w.u32(self.group_thing);
         Ok(())
@@ -742,10 +715,9 @@ impl SavedGroup {
 impl Faction {
     fn parse(cur: &mut Cursor) -> Result<Self> {
         let name = cur.string()?;
-        expect(cur, "faction version", 0)?;
+        cur.expect("faction version", 0)?;
         let experience = cur.f32()?;
-        let n = cur.u32()?;
-        let abilities = (0..n).map(|_| Ability::parse(cur)).collect::<Result<_>>()?;
+        let abilities = cur.list(Ability::parse)?;
         Ok(Faction {
             name,
             experience,
@@ -757,14 +729,13 @@ impl Faction {
         w.string(&self.name)?;
         w.u32(0);
         w.f32(self.experience);
-        w.u32(self.abilities.len() as u32);
-        self.abilities.iter().try_for_each(|a| a.write(w))
+        w.list("abilities", &self.abilities, |w, a| a.write(w))
     }
 }
 
 impl Ability {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        let version = check_version("ability", cur.u32()?, 0..=1)?;
+        let version = cur.version("ability", 0..=1)?;
         Ok(Ability {
             version,
             use_count: cur.u32()?,
@@ -782,8 +753,8 @@ impl Ability {
         w.u32(self.unused1);
         w.u8(self.usable);
         let targets = self.active_targets.as_deref();
-        optional_plain(self.version >= 1, "ability's targets", targets, |t| {
-            w.u32s(t)
+        w.optional(self.version >= 1, "ability's targets", targets, |w, v| {
+            w.u32s("active targets", v)
         })
     }
 }
@@ -881,8 +852,8 @@ pub(super) mod tests {
         w.u32(1);
         w.u32(0);
         w.string("team_0").unwrap();
-        w.u32s(&[3, 2]);
-        w.u32s(&[1, 3]);
+        w.u32s("test", &[3, 2]).unwrap();
+        w.u32s("test", &[1, 3]).unwrap();
         w.string("restriction_group_0000").unwrap();
         w.u8(0);
         let teams = parse_teams(&w.0).unwrap();
@@ -943,12 +914,12 @@ pub(super) mod tests {
         w.u32(faction.is_none().into());
         w.string(&format!("kingdom_{index}")).unwrap();
         w.string("blue").unwrap();
-        w.u32s(&[0, 3, 3]);
+        w.u32s("test", &[0, 3, 3]).unwrap();
         w.u32(1);
         w.string("money").unwrap();
         w.f32(500.0);
         w.u32(30);
-        w.u32s(&[1]);
+        w.u32s("test", &[1]).unwrap();
         w.u8(1);
         w.u32(1);
         w.u32(0);
@@ -974,7 +945,8 @@ pub(super) mod tests {
             .unwrap();
         // Objectives, the outcome, start technologies, properties, two
         // flags, the AI profile and the restriction group.
-        write_pairs(w, &[("objective_0".to_string(), 1)], Writer::u32).unwrap();
+        w.pairs("test", &[("objective_0".to_string(), 1)], Writer::u32)
+            .unwrap();
         w.u32(0);
         w.u32(1);
         w.string("tech_usa_gyrostabilizers").unwrap();
@@ -1019,13 +991,15 @@ pub(super) mod tests {
         w.u32(0);
         w.string("entry").unwrap();
         w.string("").unwrap();
-        w.u32s(&[4]);
+        w.u32s("test", &[4]).unwrap();
         w.u8(1);
         w.u32(5);
-        write_pairs(w, &[("ger_tank".to_string(), 3)], Writer::u32).unwrap();
-        w.u32s(&[6]);
+        w.pairs("test", &[("ger_tank".to_string(), 3)], Writer::u32)
+            .unwrap();
+        w.u32s("test", &[6]).unwrap();
         w.bytes(&[0, 1, 0]);
-        write_pairs(w, &[("ammo".to_string(), 10.0)], Writer::f32).unwrap();
+        w.pairs("test", &[("ammo".to_string(), 10.0)], Writer::f32)
+            .unwrap();
     }
 
     #[test]

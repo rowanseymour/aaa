@@ -91,7 +91,7 @@ impl MapFile {
                 }
                 super::write_mountain_height_map(&self.mountain_height_map, self.cutscene_mode)?
             }
-            "IDMGR" => self.ids.to_bytes(),
+            "IDMGR" => self.ids.to_bytes()?,
             "RESTRICTION_GROUPS" => self.restriction_groups.to_bytes()?,
             "TEAMS" => players::write_teams(&self.teams)?,
             "OBJECTIVES" => self.objectives.to_bytes()?,
@@ -240,7 +240,8 @@ mod tests {
                     next_slot: 1,
                     generations: vec![0],
                 }
-                .to_bytes(),
+                .to_bytes()
+                .unwrap(),
                 true,
             ),
             ("RESTRICTION_GROUPS", vec![0; 12], true),

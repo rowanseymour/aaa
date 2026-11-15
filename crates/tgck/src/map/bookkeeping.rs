@@ -3,9 +3,7 @@
 //!
 //! [`rmp.ksy`]: https://github.com/rowanseymour/aaa/blob/main/docs/formats/rmp.ksy
 
-use super::expect;
-use super::header::{check_version, optional};
-use crate::{Cursor, Result, Writer};
+use crate::{Cursor, Result, Writer, check_version};
 
 /// The IDMGR section, the `id_manager` of `rmp.ksy`.
 #[derive(Debug, Clone, PartialEq)]
@@ -20,10 +18,10 @@ impl IdManager {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        expect(cur, "IDMGR version", 0)?;
+        cur.expect("IDMGR version", 0)?;
         let next_slot = cur.u32()?;
         let highest_slot = cur.u32()?;
-        expect(cur, "IDMGR capacity", Self::CAPACITY)?;
+        cur.expect("IDMGR capacity", Self::CAPACITY)?;
         let generations = (0..highest_slot)
             .map(|_| cur.u16())
             .collect::<Result<_>>()?;
@@ -34,14 +32,14 @@ impl IdManager {
         })
     }
 
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>> {
         let mut w = Writer::default();
         w.u32(0);
         w.u32(self.next_slot);
-        w.u32(self.generations.len() as u32);
+        w.count("generations", self.generations.len())?;
         w.u32(Self::CAPACITY);
         self.generations.iter().for_each(|&g| w.u16(g));
-        w.0
+        Ok(w.0)
     }
 }
 
@@ -105,15 +103,12 @@ impl Updatables {
         )?;
         let mut w = Writer::default();
         w.u32(self.count);
-        self.delayed.iter().for_each(|q| q.write(&mut w));
-        optional(
+        self.delayed.iter().try_for_each(|q| q.write(&mut w))?;
+        w.optional(
             world_version >= 22,
             "periodic",
             self.periodic.as_ref(),
-            |queues| {
-                queues.iter().for_each(|q| q.write(&mut w));
-                Ok(())
-            },
+            |w, queues| queues.iter().try_for_each(|q| q.write(w)),
         )?;
         Ok(w.0)
     }
@@ -121,39 +116,32 @@ impl Updatables {
 
 impl UpdateQueue {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        expect(cur, "update queue version", 0)?;
+        cur.expect("update queue version", 0)?;
         let current_slot = cur.u32()?;
-        let n = cur.u32()?;
-        let slots = (0..n)
-            .map(|_| {
-                let n = cur.u32()?;
-                (0..n)
-                    .map(|_| {
-                        Ok(Update {
-                            updatable_id: cur.i32()?,
-                            argument: cur.u32()?,
-                        })
-                    })
-                    .collect()
+        let slots = cur.list(|cur| {
+            cur.list(|cur| {
+                Ok(Update {
+                    updatable_id: cur.i32()?,
+                    argument: cur.u32()?,
+                })
             })
-            .collect::<Result<_>>()?;
+        })?;
         Ok(UpdateQueue {
             current_slot,
             slots,
         })
     }
 
-    fn write(&self, w: &mut Writer) {
+    fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(0);
         w.u32(self.current_slot);
-        w.u32(self.slots.len() as u32);
-        for slot in &self.slots {
-            w.u32(slot.len() as u32);
-            for update in slot {
+        w.list("slots", &self.slots, |w, slot| {
+            w.list("updates", slot, |w, update| {
                 w.i32(update.updatable_id);
                 w.u32(update.argument);
-            }
-        }
+                Ok(())
+            })
+        })
     }
 }
 
@@ -167,7 +155,7 @@ mod tests {
             next_slot: 4,
             generations: vec![0, 1, 2],
         };
-        let bytes = ids.to_bytes();
+        let bytes = ids.to_bytes().unwrap();
         assert_eq!(bytes.len(), 16 + 6);
         assert_eq!(&bytes[8..16], &[3, 0, 0, 0, 0, 0, 1, 0]);
         assert_eq!(IdManager::parse(&bytes).unwrap(), ids);
@@ -214,7 +202,7 @@ mod tests {
     #[test]
     fn lays_out_update_queues() {
         let mut w = Writer::default();
-        queue(2).write(&mut w);
+        queue(2).write(&mut w).unwrap();
         let want = [0u32, 0, 2, 1, 50, 0, 0];
         assert_eq!(w.0, want.map(u32::to_le_bytes).concat());
     }

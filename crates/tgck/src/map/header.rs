@@ -116,31 +116,11 @@ pub struct WorldCreator {
 
 const CREATOR_CLASS: &str = "KKC_WorldCreator";
 
-pub(super) fn check_version(
-    what: &str,
-    version: u32,
-    versions: std::ops::RangeInclusive<u32>,
-) -> Result<u32> {
-    if versions.contains(&version) {
-        Ok(version)
-    } else {
-        Err(Error::Corrupt(format!("{what} version {version}")))
-    }
-}
-
-pub(super) fn bool(cur: &mut Cursor, what: &str) -> Result<bool> {
-    match cur.u8()? {
-        0 => Ok(false),
-        1 => Ok(true),
-        b => Err(Error::Corrupt(format!("{what} is {b}"))),
-    }
-}
-
 impl MapHeader {
     pub fn parse(data: &[u8]) -> Result<Self> {
         let mut cur = Cursor::new(data);
         let cur = &mut cur;
-        let version = check_version("map header", cur.u32()?, 4..=7)?;
+        let version = cur.version("map header", 4..=7)?;
         let header = MapHeader {
             version,
             rules: WorldRules::read(cur)?,
@@ -162,13 +142,13 @@ impl MapHeader {
             saved: cur.u64()?,
             players: {
                 let mut players = Vec::new();
-                while bool(cur, "player presence")? {
+                while cur.bool("player presence")? {
                     players.push(Player {
-                        ai: bool(cur, "player ai")?,
+                        ai: cur.bool("player ai")?,
                         kingdom: cur.string()?,
                         name: cur.string()?,
                         local: (version >= 5)
-                            .then(|| bool(cur, "player local"))
+                            .then(|| cur.bool("player local"))
                             .transpose()?,
                     });
                 }
@@ -190,7 +170,7 @@ impl MapHeader {
         w.u32(self.checksum);
         w.string(&self.name)?;
         w.string(&self.description)?;
-        optional_plain(version >= 7, "size", self.size, |size| w.f32s(&size))?;
+        w.optional_plain(version >= 7, "size", self.size, |w, size| w.f32s(&size))?;
         w.f32(self.build);
         w.u32(self.version_number);
         w.string(&self.app_version)?;
@@ -199,14 +179,11 @@ impl MapHeader {
         w.u8(self.unused);
         w.string(&self.path)?;
         w.string(&self.campaign)?;
-        optional(
+        w.optional_plain(
             version >= 6,
             "campaign_mission",
             self.campaign_mission,
-            |v| {
-                w.i32(v);
-                Ok(())
-            },
+            Writer::i32,
         )?;
         w.u64(self.saved);
         for player in &self.players {
@@ -214,7 +191,7 @@ impl MapHeader {
             w.u8(player.ai.into());
             w.string(&player.kingdom)?;
             w.string(&player.name)?;
-            optional_plain(version >= 5, "player local", player.local, |v| {
+            w.optional_plain(version >= 5, "player local", player.local, |w, v| {
                 w.u8(v.into())
             })?;
         }
@@ -222,36 +199,6 @@ impl MapHeader {
         self.creator.write(&mut w)?;
         Ok(w.0)
     }
-}
-
-/// Writes `value` with `write` if the version has it, checking that it's set
-/// exactly when it does.
-pub(super) fn optional<T>(
-    has: bool,
-    what: &str,
-    value: Option<T>,
-    write: impl FnOnce(T) -> Result<()>,
-) -> Result<()> {
-    match (has, value) {
-        (true, Some(v)) => write(v),
-        (false, None) => Ok(()),
-        _ => Err(Error::Unwritable(format!(
-            "{what} must be set exactly when its version has it"
-        ))),
-    }
-}
-
-/// [`optional`] for a value written by a call that can't fail.
-pub(super) fn optional_plain<T>(
-    has: bool,
-    what: &str,
-    value: Option<T>,
-    write: impl FnOnce(T),
-) -> Result<()> {
-    optional(has, what, value, |v| {
-        write(v);
-        Ok(())
-    })
 }
 
 impl WorldRules {
@@ -272,28 +219,25 @@ impl WorldRules {
     }
 
     fn read(cur: &mut Cursor) -> Result<Self> {
-        check_version("world rules", cur.u32()?, Self::VERSION..=Self::VERSION)?;
+        cur.expect("world rules version", Self::VERSION)?;
         let map_type = cur.u32()?;
         let game_type = cur.string()?;
-        let n = cur.u32()?;
-        let rules = (0..n)
-            .map(|_| {
-                let name = cur.string()?;
-                let locked = bool(cur, "rule locked")?;
-                let value = match cur.u32()? {
-                    0 => RuleValue::Bool(bool(cur, "rule value")?),
-                    1 => RuleValue::Int(cur.i32()?),
-                    2 => RuleValue::Float(cur.f32()?),
-                    3 => RuleValue::Choice(cur.u32()?),
-                    t => return Err(Error::Corrupt(format!("rule {name:?} has type {t}"))),
-                };
-                Ok(Rule {
-                    name,
-                    locked,
-                    value,
-                })
+        let rules = cur.list(|cur| {
+            let name = cur.string()?;
+            let locked = cur.bool("rule locked")?;
+            let value = match cur.u32()? {
+                0 => RuleValue::Bool(cur.bool("rule value")?),
+                1 => RuleValue::Int(cur.i32()?),
+                2 => RuleValue::Float(cur.f32()?),
+                3 => RuleValue::Choice(cur.u32()?),
+                t => return Err(Error::Corrupt(format!("rule {name:?} has type {t}"))),
+            };
+            Ok(Rule {
+                name,
+                locked,
+                value,
             })
-            .collect::<Result<_>>()?;
+        })?;
         Ok(WorldRules {
             map_type,
             game_type,
@@ -305,8 +249,7 @@ impl WorldRules {
         w.u32(Self::VERSION);
         w.u32(self.map_type);
         w.string(&self.game_type)?;
-        w.u32(self.rules.len() as u32);
-        for rule in &self.rules {
+        w.list("rules", &self.rules, |w, rule| {
             w.string(&rule.name)?;
             w.u8(rule.locked.into());
             match rule.value {
@@ -327,14 +270,15 @@ impl WorldRules {
                     w.u32(v);
                 }
             }
-        }
+            Ok(())
+        })?;
         Ok(())
     }
 }
 
 impl WorldParameters {
     fn parse(cur: &mut Cursor) -> Result<Self> {
-        let version = check_version("world parameters", cur.u32()?, 11..=13)?;
+        let version = cur.version("world parameters", 11..=13)?;
         let teams = (0..cur.u32()?)
             .map(|_| {
                 Ok(TeamSetup {
@@ -355,15 +299,12 @@ impl WorldParameters {
 
     fn write(&self, w: &mut Writer) -> Result<()> {
         w.u32(self.version);
-        w.u32(self.teams.len() as u32);
-        for team in &self.teams {
+        w.list("teams", &self.teams, |w, team| {
             w.string(&team.name)?;
             w.string(&team.display_name)?;
-        }
-        w.u32(self.kingdoms.len() as u32);
-        self.kingdoms
-            .iter()
-            .try_for_each(|k| k.write(w, self.version))
+            Ok(())
+        })?;
+        w.list("kingdoms", &self.kingdoms, |w, k| k.write(w, self.version))
     }
 }
 
@@ -371,7 +312,7 @@ impl KingdomSetup {
     fn parse(cur: &mut Cursor, version: u32) -> Result<Self> {
         Ok(KingdomSetup {
             name: cur.string()?,
-            independent: bool(cur, "independent")?,
+            independent: cur.bool("independent")?,
             nation: cur.string()?,
             faction: cur.string()?,
             color: cur.string()?,
@@ -379,22 +320,17 @@ impl KingdomSetup {
             display_name: cur.string()?,
             color_markup: (version >= 12).then(|| cur.string()).transpose()?,
             ai: cur.string()?,
-            required: bool(cur, "required")?,
-            playable: bool(cur, "playable")?,
+            required: cur.bool("required")?,
+            playable: cur.bool("playable")?,
             team: cur.string()?,
             objectives: cur.strings()?,
             technologies: cur.strings()?,
             merge_into: cur.string()?,
             actors: cur.strings()?,
-            removed: bool(cur, "removed")?,
-            ai_controlled: bool(cur, "ai controlled")?,
+            removed: cur.bool("removed")?,
+            ai_controlled: cur.bool("ai controlled")?,
             resources: (version >= 13)
-                .then(|| {
-                    let n = cur.u32()?;
-                    (0..n)
-                        .map(|_| Ok((cur.string()?, cur.f32()?)))
-                        .collect::<Result<_>>()
-                })
+                .then(|| cur.pairs(Cursor::f32))
                 .transpose()?,
         })
     }
@@ -411,30 +347,28 @@ impl KingdomSetup {
         ] {
             w.string(s)?;
         }
-        optional(
+        w.optional(
             version >= 12,
             "color_markup",
-            self.color_markup.as_ref(),
-            |s| w.string(s),
+            self.color_markup.as_deref(),
+            Writer::string,
         )?;
         w.string(&self.ai)?;
         w.u8(self.required.into());
         w.u8(self.playable.into());
         w.string(&self.team)?;
-        w.strings(&self.objectives)?;
-        w.strings(&self.technologies)?;
+        w.strings("objectives", &self.objectives)?;
+        w.strings("technologies", &self.technologies)?;
         w.string(&self.merge_into)?;
-        w.strings(&self.actors)?;
+        w.strings("actors", &self.actors)?;
         w.u8(self.removed.into());
         w.u8(self.ai_controlled.into());
-        optional(version >= 13, "resources", self.resources.as_ref(), |rs| {
-            w.u32(rs.len() as u32);
-            rs.iter().try_for_each(|(name, amount)| {
-                w.string(name)?;
-                w.f32(*amount);
-                Ok(())
-            })
-        })
+        w.optional(
+            version >= 13,
+            "resources",
+            self.resources.as_deref(),
+            |w, rs| w.pairs("resources", rs, Writer::f32),
+        )
     }
 }
 
@@ -446,7 +380,7 @@ impl WorldCreator {
         if class != CREATOR_CLASS {
             return Err(Error::Corrupt(format!("world creator class {class:?}")));
         }
-        check_version("world creator", cur.u32()?, Self::VERSION..=Self::VERSION)?;
+        cur.expect("world creator version", Self::VERSION)?;
         Ok(WorldCreator {
             rules: WorldRules::read(cur)?,
             parameters: WorldParameters::parse(cur)?,
