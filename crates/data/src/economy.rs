@@ -6,7 +6,13 @@ use std::collections::{HashMap, HashSet};
 use std::ops::{Add, AddAssign, Sub, SubAssign};
 use std::sync::Arc;
 
-use crate::{GameData, Id, Strings, defs, not_null, scoped, strings::localized};
+use crate::strings::{glyph_image, localized};
+use crate::{GameData, Id, Strings, defs, not_null, scoped};
+
+/// The interface layout that places the resource bar's cells.
+const BAR_LAYOUT: &str = "UI/Game/template_game.tgi";
+/// The resource bar's template in [`BAR_LAYOUT`].
+const BAR: &str = "EconomyBarWidget";
 
 pub use defs::ResourceRole;
 
@@ -25,6 +31,8 @@ pub struct ResourceKind {
     pub name: String,
     /// The glyph it's drawn with, by the glyph's id.
     pub icon: Option<String>,
+    /// What the font's image of that glyph is called, e.g. `MONEY`.
+    pub glyph: Option<String>,
 }
 
 impl ResourceKind {
@@ -36,6 +44,7 @@ impl ResourceKind {
             purchase_cost: Amounts::default(),
             name: id.to_string(),
             icon: None,
+            glyph: None,
         }
     }
 
@@ -351,7 +360,22 @@ impl GameData {
     }
 
     fn read_resources(&self) -> Vec<ResourceKind> {
-        resource_kinds(&self.parse_tgis(|_| true), &self.strings())
+        resource_kinds(&self.parse_tgis(|_| true), &self.strings(), &self.glyphs())
+    }
+
+    /// The resources the resource bar has a cell for, left to right: all
+    /// but those that only provide room for another, where the bar's
+    /// layout places each. Those it doesn't place come last, in the order
+    /// they're defined.
+    pub fn economy_bar(&self) -> Vec<Id> {
+        // Not in the load lists.
+        let parsed = self.parsed(BAR_LAYOUT);
+        let bar = (parsed.as_ref()).and_then(|p| {
+            p.root
+                .blocks_of("Template")
+                .find(|t| t.name().is_some_and(|n| Id::from(n) == Id::from(BAR)))
+        });
+        bar_cells(&self.resources(), bar)
     }
 
     /// The resources' and the tuning settings' bounds on economies.
@@ -406,12 +430,41 @@ impl GameData {
     }
 }
 
+/// The resources with a cell on the resource bar, in the order `bar`, the
+/// bar's layout, places them, as [`GameData::economy_bar`] has them.
+fn bar_cells(resources: &[ResourceKind], bar: Option<&tgi::Block>) -> Vec<Id> {
+    let offset = |id: &Id| -> Option<f32> {
+        let cell = bar?
+            .blocks()
+            .find(|b| b.kind().is_some_and(|k| Id::from(k) == *id))?;
+        cell.blocks_of("View")
+            .next()?
+            .value("L")?
+            .trim()
+            .parse()
+            .ok()
+    };
+    let providing: HashSet<&Id> = (resources.iter())
+        .filter_map(|r| r.limited_by.as_ref())
+        .collect();
+    let mut cells: Vec<(Option<f32>, &Id)> = (resources.iter())
+        .filter(|r| !providing.contains(&r.id))
+        .map(|r| (offset(&r.id), &r.id))
+        .collect();
+    cells.sort_by(|(a, _), (b, _)| match (a, b) {
+        (Some(a), Some(b)) => a.total_cmp(b),
+        _ => b.is_some().cmp(&a.is_some()),
+    });
+    cells.into_iter().map(|(_, id)| id.clone()).collect()
+}
+
 /// The `[Resource]` definitions of `files`, in order, the first kept of any
 /// defined twice. One without a type, or naming a resource none of them
-/// define, is an error in the data.
+/// define, is an error in the data. Icons are looked up in `glyphs`.
 fn resource_kinds<P: Borrow<tgi::Parsed>>(
     files: &[(String, P)],
     strings: &Strings,
+    glyphs: &[defs::Glyph],
 ) -> Vec<ResourceKind> {
     let mut out: Vec<ResourceKind> = Vec::new();
     for f in &scoped(files) {
@@ -432,6 +485,7 @@ fn resource_kinds<P: Borrow<tgi::Parsed>>(
                 purchase_cost: (r.purchase_cost.as_ref())
                     .map(Amounts::from)
                     .unwrap_or_default(),
+                glyph: (r.icon.as_deref()).and_then(|i| glyph_image(glyphs, &Id::from(i))),
                 icon: r.icon,
                 id,
             });
@@ -508,7 +562,12 @@ mod tests {
         let strings: Strings = [("resources_gold_name".to_string(), "Gold".to_string())]
             .into_iter()
             .collect();
-        resource_kinds(&files, &strings)
+        let glyphs = [defs::Glyph {
+            ids: Some("ch_treasure_chest".into()),
+            index: None,
+            display_name: Some("Treasure Chest".into()),
+        }];
+        resource_kinds(&files, &strings, &glyphs)
     }
 
     #[test]
@@ -525,6 +584,7 @@ mod tests {
         let mut gold = ResourceKind::stockpiled("gold");
         gold.name = "Gold".into();
         gold.icon = Some("ch_treasure_chest".into());
+        gold.glyph = Some("TreasureChest".into());
         assert_eq!(
             found,
             [
@@ -545,6 +605,55 @@ mod tests {
             .map(|(a, b)| (a.as_str(), b.as_str()))
             .collect();
         assert_eq!(limits, [("food_consumed", "food_provided")]);
+    }
+
+    #[test]
+    fn the_bar_places_all_but_the_provided_limits_where_its_layout_says() {
+        let resources = [
+            ResourceKind::stockpiled("money"),
+            ResourceKind::upkeep("oil", Amounts::default()),
+            ResourceKind::upkeep("unit_limit_provided", Amounts::default()),
+            ResourceKind::limited("unit_limit_consumed", "unit_limit_provided"),
+            ResourceKind::upkeep("building_limit_provided", Amounts::default()),
+            ResourceKind::limited("building_limit_consumed", "building_limit_provided"),
+            ResourceKind::upkeep("mana", Amounts::default()),
+        ];
+        let layout = tgi::parse(
+            "[Template EconomyBarWidget]\n{\n\
+             \t[Money]\n\t{\n\t\t[View]\n\t\tL = 6\n\t}\n\
+             \t[Oil]\n\t{\n\t\t[View]\n\t\tL = 224\n\t}\n\
+             \t[Building_Limit_Consumed]\n\t{\n\t\t[View]\n\t\tL = 306\n\t}\n\
+             \t[Unit_Limit_Provided]\n\t{\n\t\t[View]\n\t\tL = 100%\n\t}\n\
+             \t[Unit_Limit_Consumed]\n\t{\n\t\t[View]\n\t\tL = 381\n\t}\n\
+             }\n",
+        );
+        let bar = layout.root.blocks_of("Template").next();
+        let cells: Vec<String> = bar_cells(&resources, bar)
+            .iter()
+            .map(Id::to_string)
+            .collect();
+        // Mana, which the layout doesn't place, comes last.
+        let placed = [
+            "money",
+            "oil",
+            "building_limit_consumed",
+            "unit_limit_consumed",
+            "mana",
+        ];
+        assert_eq!(cells, placed);
+        // Without a layout, in the order they're defined.
+        let unplaced: Vec<String> = bar_cells(&resources, None)
+            .iter()
+            .map(Id::to_string)
+            .collect();
+        let defined = [
+            "money",
+            "oil",
+            "unit_limit_consumed",
+            "building_limit_consumed",
+            "mana",
+        ];
+        assert_eq!(unplaced, defined);
     }
 
     #[test]
