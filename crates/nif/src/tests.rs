@@ -224,7 +224,7 @@ fn rejects_other_versions() {
     bytes.extend(0x0400_0002u32.to_le_bytes());
     assert!(matches!(
         Nif::parse(&bytes),
-        Err(Error::UnsupportedVersion(v)) if v == "4.0.0.2"
+        Err(e @ Error::UnsupportedVersion { version: 0x0400_0002 }) if e.to_string().ends_with(" \"4.0.0.2\"")
     ));
     assert!(matches!(Nif::parse(b"hello"), Err(Error::NotNif)));
 
@@ -233,7 +233,7 @@ fn rejects_other_versions() {
     bytes.extend(0x1400_0004u32.to_le_bytes());
     assert!(matches!(
         Nif::parse(&bytes),
-        Err(Error::UnsupportedVersion(v)) if v == "20.0.0.4"
+        Err(e @ Error::UnsupportedVersion { version: 0x1400_0004 }) if e.to_string().ends_with(" \"20.0.0.4\"")
     ));
 }
 

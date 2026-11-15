@@ -732,7 +732,7 @@ fn old_particle_data(kind: &str, r: &mut Reader) -> Result<OldParticleData> {
 
 fn particle_data(r: &mut Reader) -> Result<ParticleData> {
     let (n, _) = particles_data(r)?;
-    r.skip(n * 40)?; // particle info
+    r.skip(n * PARTICLE_INFO_SIZE)?;
     r.skip(2 + 2)?;
     Ok(ParticleData { capacity: n })
 }
@@ -814,6 +814,9 @@ fn emitter_keys(r: &mut Reader) -> Result<EmitterKeys> {
     })
 }
 
+/// The size of a particle info record, as laid out in the module docs.
+const PARTICLE_INFO_SIZE: usize = 40;
+
 /// The fields every controller starts with, as a controller of a kind not
 /// read further.
 fn time_controller(r: &mut Reader) -> Result<Controller> {
@@ -882,7 +885,7 @@ fn old_particle_controller(r: &mut Reader) -> Result<OldParticleController> {
     let [spawn_speed_chaos, spawn_direction_chaos] = r.floats()?;
     let n = r.u16()? as usize;
     let valid = r.u16()?;
-    r.ensure(n * 40)?;
+    r.ensure(n * PARTICLE_INFO_SIZE)?;
     let particles = (0..n)
         .map(|_| {
             Ok(SavedParticle {
@@ -1153,17 +1156,24 @@ fn shape(r: &mut Reader) -> Result<Shape> {
     Ok(Shape { av, data, skin })
 }
 
+/// How deep bounding volumes may nest in a union, so a corrupt file can't
+/// overflow the stack; none of the game's files nest them at all.
+const MAX_BOUNDING_DEPTH: usize = 8;
+
 fn bounding_volume(r: &mut Reader, depth: usize) -> Result<()> {
     match r.u32()? {
         0 => r.skip(4 * 4),
         1 => r.skip(15 * 4),
         2 => r.skip(8 * 4),
-        4 if depth < 8 => {
+        4 if depth < MAX_BOUNDING_DEPTH => {
             for _ in 0..r.u32()? {
                 bounding_volume(r, depth + 1)?;
             }
             Ok(())
         }
+        4 => Err(Error::Corrupt(format!(
+            "bounding volumes nested over {MAX_BOUNDING_DEPTH} deep"
+        ))),
         5 => r.skip(7 * 4),
         kind => Err(Error::Corrupt(format!("unknown bounding volume {kind}"))),
     }

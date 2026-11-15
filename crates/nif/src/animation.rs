@@ -268,7 +268,7 @@ impl<T: Value> Keys<T> {
 
 impl Keys<[f32; 4]> {
     /// The rotation at `time`, eased along the shorter arc.
-    pub fn sample_rotation(&self, time: f32) -> Option<[f32; 4]> {
+    fn sample_rotation(&self, time: f32) -> Option<[f32; 4]> {
         let (a, b, u) = self.around(time)?;
         let dot: f32 = (0..4).map(|i| a.value[i] * b.value[i]).sum();
         let b = if dot < 0.0 {

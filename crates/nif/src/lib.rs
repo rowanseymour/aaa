@@ -33,14 +33,32 @@ mod read;
 pub use animation::*;
 pub use objects::*;
 
-pub const VERSION: u32 = 0x0A01_0000;
-pub const OLD_VERSION: u32 = 0x0A00_0100;
-pub const NETIMMERSE_VERSION: u32 = 0x0402_0200;
+const VERSION: u32 = 0x0A01_0000;
+const OLD_VERSION: u32 = 0x0A00_0100;
+const NETIMMERSE_VERSION: u32 = 0x0402_0200;
+
+/// The bits of an object's type index that pick its type. The top bit is no
+/// part of the index, and none of the game's files set it.
+const TYPE_INDEX_MASK: u16 = 0x7fff;
+
+/// How many times over a walk of the scene graph may visit each object.
+/// Shared children make the graph a DAG that a corrupt file can make
+/// exponentially wide; real models visit each object about once.
+const VISITS_PER_OBJECT: usize = 64;
+
+/// How many levels below its root a walk of the scene graph goes, so a
+/// corrupt file can't nest nodes deep enough to overflow the stack. The
+/// game's models nest 11 deep at most.
+const MAX_SCENE_DEPTH: usize = 64;
 
 #[derive(Debug)]
 pub enum Error {
     NotNif,
-    UnsupportedVersion(String),
+    /// A version this reader doesn't know: the header's number, not its
+    /// text.
+    UnsupportedVersion {
+        version: u32,
+    },
     Corrupt(String),
 }
 
@@ -48,7 +66,10 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Error::NotNif => write!(f, "not a model file"),
-            Error::UnsupportedVersion(v) => write!(f, "unsupported model version {v:?}"),
+            Error::UnsupportedVersion { version } => {
+                let [a, b, c, d] = version.to_be_bytes();
+                write!(f, "unsupported model version \"{a}.{b}.{c}.{d}\"")
+            }
             Error::Corrupt(s) => write!(f, "corrupt model: {s}"),
         }
     }
@@ -84,9 +105,7 @@ impl Nif {
         let mut r = Reader::new(&bytes[line_end + 1..]);
         r.version = r.u32()?;
         if ![VERSION, OLD_VERSION, NETIMMERSE_VERSION].contains(&r.version) {
-            // The version that was checked, not the header's text of it.
-            let [a, b, c, d] = r.version.to_be_bytes();
-            return Err(Error::UnsupportedVersion(format!("{a}.{b}.{c}.{d}")));
+            return Err(Error::UnsupportedVersion { version: r.version });
         }
         if !r.old() {
             r.u32()?; // user version
@@ -115,7 +134,7 @@ impl Nif {
                 None => r.string()?,
                 Some(t) => {
                     let name = types
-                        .get(t as usize & 0x7fff)
+                        .get((t & TYPE_INDEX_MASK) as usize)
                         .ok_or_else(|| Error::Corrupt(format!("type index {t} out of range")))?;
                     if r.u32()? != 0 {
                         return Err(Error::Corrupt(format!("no separator before object {i}")));
@@ -169,10 +188,7 @@ impl Nif {
     /// relative to the model and the properties in effect for it: its own,
     /// then those inherited from its parents, nearest first.
     pub fn shapes(&self) -> Vec<Placed<'_>> {
-        self.placed(&self.roots, true, |object, av, place| match object {
-            Object::Shape(shape) if !self.casts_shadow_only(av) => Some(place.of(shape)),
-            _ => None,
-        })
+        self.placed(&self.roots, true, |o, av, p| self.drawn_shape(o, av, p))
     }
 
     /// Every visible particle system reachable from the roots, placed as
@@ -218,10 +234,20 @@ impl Nif {
     /// Every visible triangle mesh at or below the scene object `r`, placed
     /// relative to `r` as if `r` had no transform of its own.
     pub fn shapes_below(&self, r: Ref) -> Vec<Placed<'_>> {
-        self.placed(&[r], false, |object, av, place| match object {
+        self.placed(&[r], false, |o, av, p| self.drawn_shape(o, av, p))
+    }
+
+    /// `object` placed at `place`, if it's a mesh that's drawn.
+    fn drawn_shape<'a>(
+        &self,
+        object: &'a Object,
+        av: &SceneObject,
+        place: Place<'_>,
+    ) -> Option<Placed<'a>> {
+        match object {
             Object::Shape(shape) if !self.casts_shadow_only(av) => Some(place.of(shape)),
             _ => None,
-        })
+        }
     }
 
     /// What `pick` makes of each visible scene object reachable from
@@ -233,9 +259,7 @@ impl Nif {
         pick: impl Fn(&'a Object, &'a SceneObject, Place<'_>) -> Option<T>,
     ) -> Vec<T> {
         let mut out = Vec::new();
-        // Shared children make the graph a DAG that a corrupt file can make
-        // exponentially wide; real models visit each object about once.
-        let mut budget = self.objects.len().saturating_mul(64);
+        let mut budget = self.objects.len().saturating_mul(VISITS_PER_OBJECT);
         for &root in roots {
             let mut walk = Walk {
                 props: Vec::new(),
@@ -259,7 +283,9 @@ impl Nif {
         pick: &impl Fn(&'a Object, &'a SceneObject, Place<'_>) -> Option<T>,
         out: &mut Vec<T>,
     ) {
-        let Some(index) = r.filter(|i| walk.path.len() <= 64 && !walk.path.contains(i)) else {
+        let Some(index) =
+            r.filter(|i| walk.path.len() <= MAX_SCENE_DEPTH && !walk.path.contains(i))
+        else {
             return;
         };
         let Some(left) = walk.budget.checked_sub(1) else {
@@ -400,7 +426,7 @@ impl Transform {
 }
 
 /// Bounds-checked little-endian reader.
-pub(crate) struct Reader<'a> {
+struct Reader<'a> {
     buf: &'a [u8],
     pos: usize,
     version: u32,
@@ -415,25 +441,25 @@ impl<'a> Reader<'a> {
         }
     }
     /// Whether this is a 10.0.1.0 or 4.2.2.0 file.
-    pub(crate) fn old(&self) -> bool {
+    fn old(&self) -> bool {
         self.version < VERSION
     }
     /// Whether this is a 4.2.2.0 file.
-    pub(crate) fn netimmerse(&self) -> bool {
+    fn netimmerse(&self) -> bool {
         self.version == NETIMMERSE_VERSION
     }
-    pub(crate) fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
+    fn bytes(&mut self, n: usize) -> Result<&'a [u8]> {
         self.ensure(n)?;
         let s = &self.buf[self.pos..self.pos + n];
         self.pos += n;
         Ok(s)
     }
-    pub(crate) fn skip(&mut self, n: usize) -> Result<()> {
+    fn skip(&mut self, n: usize) -> Result<()> {
         self.bytes(n).map(drop)
     }
     /// Fails unless `n` more bytes remain, so a corrupt count fails at once
     /// rather than after reading that many items.
-    pub(crate) fn ensure(&self, n: usize) -> Result<()> {
+    fn ensure(&self, n: usize) -> Result<()> {
         if n > self.remaining() {
             return Err(Error::Corrupt(format!(
                 "truncated at byte {} (+{n})",
@@ -445,22 +471,22 @@ impl<'a> Reader<'a> {
     fn remaining(&self) -> usize {
         self.buf.len() - self.pos
     }
-    pub(crate) fn u8(&mut self) -> Result<u8> {
+    fn u8(&mut self) -> Result<u8> {
         Ok(self.bytes(1)?[0])
     }
-    pub(crate) fn bool(&mut self) -> Result<bool> {
+    fn bool(&mut self) -> Result<bool> {
         Ok(self.u8()? != 0)
     }
-    pub(crate) fn u16(&mut self) -> Result<u16> {
+    fn u16(&mut self) -> Result<u16> {
         Ok(u16::from_le_bytes(self.bytes(2)?.try_into().unwrap()))
     }
-    pub(crate) fn u32(&mut self) -> Result<u32> {
+    fn u32(&mut self) -> Result<u32> {
         Ok(u32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
-    pub(crate) fn f32(&mut self) -> Result<f32> {
+    fn f32(&mut self) -> Result<f32> {
         Ok(f32::from_le_bytes(self.bytes(4)?.try_into().unwrap()))
     }
-    pub(crate) fn floats<const N: usize>(&mut self) -> Result<[f32; N]> {
+    fn floats<const N: usize>(&mut self) -> Result<[f32; N]> {
         let mut out = [0.0; N];
         for v in &mut out {
             *v = self.f32()?;
@@ -468,7 +494,7 @@ impl<'a> Reader<'a> {
         Ok(out)
     }
     /// `n` items of `N` floats each.
-    pub(crate) fn float_array<const N: usize>(&mut self, n: usize) -> Result<Vec<[f32; N]>> {
+    fn float_array<const N: usize>(&mut self, n: usize) -> Result<Vec<[f32; N]>> {
         // Check the length up front so a corrupt count cannot allocate much.
         let bytes = self.bytes(n.saturating_mul(N * 4))?;
         Ok(bytes
@@ -481,7 +507,7 @@ impl<'a> Reader<'a> {
             .collect())
     }
     /// `n` items of `N` u16s each.
-    pub(crate) fn u16_array<const N: usize>(&mut self, n: usize) -> Result<Vec<[u16; N]>> {
+    fn u16_array<const N: usize>(&mut self, n: usize) -> Result<Vec<[u16; N]>> {
         let bytes = self.bytes(n.saturating_mul(N * 2))?;
         Ok(bytes
             .as_chunks::<2>()
@@ -493,23 +519,23 @@ impl<'a> Reader<'a> {
             .collect())
     }
     /// `n` f32s.
-    pub(crate) fn f32s(&mut self, n: usize) -> Result<Vec<f32>> {
+    fn f32s(&mut self, n: usize) -> Result<Vec<f32>> {
         Ok(self.float_array::<1>(n)?.into_iter().map(|[v]| v).collect())
     }
     /// `n` u16s.
-    pub(crate) fn u16s(&mut self, n: usize) -> Result<Vec<u16>> {
+    fn u16s(&mut self, n: usize) -> Result<Vec<u16>> {
         Ok(self.u16_array::<1>(n)?.into_iter().map(|[v]| v).collect())
     }
-    pub(crate) fn reference(&mut self) -> Result<Ref> {
+    fn reference(&mut self) -> Result<Ref> {
         let v = self.u32()? as i32;
         Ok(usize::try_from(v).ok())
     }
-    pub(crate) fn references(&mut self) -> Result<Vec<Ref>> {
+    fn references(&mut self) -> Result<Vec<Ref>> {
         let n = self.u32()? as usize;
         self.ensure(n.saturating_mul(4))?;
         (0..n).map(|_| self.reference()).collect()
     }
-    pub(crate) fn string(&mut self) -> Result<String> {
+    fn string(&mut self) -> Result<String> {
         let n = self.u32()? as usize;
         Ok(self.bytes(n)?.iter().map(|&b| b as char).collect())
     }
