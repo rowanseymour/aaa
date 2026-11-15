@@ -153,6 +153,17 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
     match action {
         Action::Order { player, .. } => players.contains(player),
         Action::Pause(_) | Action::Speed(_) => !players.is_empty(),
+        // Chat is from the client's own side, or from none if it only
+        // watches, and no longer than the chat bar lets anyone type.
+        Action::Chat { from, words, .. } => {
+            let speaker = match from {
+                Some(player) => players.contains(player),
+                None => players.is_empty(),
+            };
+            let typed = words.chars().count() <= aaa_sim::CHAT_LONGEST
+                && !words.chars().any(char::is_control);
+            speaker && typed
+        }
         Action::Win(_) | Action::Lose(_) | Action::Raise { .. } | Action::Destroy(_) => false,
     }
 }
@@ -1084,6 +1095,29 @@ mod tests {
         clients[0].advance(usize::MAX).unwrap();
         let kicked: Vec<_> = clients[0].take_left().iter().map(|g| g.kicked).collect();
         assert_eq!(kicked, [false, true]);
+    }
+
+    #[test]
+    fn a_client_chats_only_as_itself() {
+        let chat = |from| Action::Chat {
+            from,
+            to: aaa_sim::Channel::All,
+            words: "hi".into(),
+        };
+        assert!(allows(&[1], &chat(Some(1))));
+        assert!(!allows(&[1], &chat(Some(2))));
+        assert!(!allows(&[1], &chat(None)));
+        // One that watches speaks as one watching.
+        assert!(allows(&[], &chat(None)));
+        assert!(!allows(&[], &chat(Some(1))));
+        let said = |words: String| Action::Chat {
+            from: Some(1),
+            to: aaa_sim::Channel::All,
+            words,
+        };
+        assert!(allows(&[1], &said("a".repeat(aaa_sim::CHAT_LONGEST))));
+        assert!(!allows(&[1], &said("a".repeat(aaa_sim::CHAT_LONGEST + 1))));
+        assert!(!allows(&[1], &said("a\nb".into())));
     }
 
     #[test]

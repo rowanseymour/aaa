@@ -41,6 +41,9 @@ pub struct RtsCamera {
     /// Whether the letter keys move it as the arrows do and turn it;
     /// off where they're bound to other things.
     pub letter_keys: bool,
+    /// Whether the keyboard moves it at all; off while something else
+    /// takes the keys, the mouse still moving it.
+    pub keys: bool,
 }
 
 /// The game camera's distance from its focus at zoom 1.
@@ -63,6 +66,7 @@ impl RtsCamera {
             freeable: false,
             zoom: GAME_ZOOM,
             letter_keys: true,
+            keys: true,
         }
     }
 
@@ -76,6 +80,7 @@ impl RtsCamera {
     pub fn default_angles(&mut self) {
         *self = RtsCamera {
             letter_keys: self.letter_keys,
+            keys: self.keys,
             freeable: self.freeable,
             ..RtsCamera::new(self.focus)
         };
@@ -138,7 +143,7 @@ pub fn update(
 ) {
     let dt = time.delta_secs();
     for (mut cam, mut transform, mut projection) in &mut cameras {
-        if cam.freeable && keys.just_pressed(KeyCode::Tab) {
+        if cam.freeable && cam.keys && keys.just_pressed(KeyCode::Tab) {
             cam.free = !cam.free;
             if !cam.free {
                 cam.yaw = GAME_YAW;
@@ -147,10 +152,11 @@ pub fn update(
             *projection = cam.projection();
         }
 
-        let letters = cam.letter_keys;
+        let on = cam.keys;
+        let letters = on && cam.letter_keys;
         let letter = |code: KeyCode| letters && keys.pressed(code);
         let either = |code: KeyCode, arrow: KeyCode| {
-            let down = letter(code) || keys.pressed(arrow);
+            let down = letter(code) || (on && keys.pressed(arrow));
             down as i32 as f32
         };
         let mut pan = Vec2::new(

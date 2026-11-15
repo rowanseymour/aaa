@@ -23,6 +23,7 @@
 mod actions;
 mod backdrop;
 mod banners;
+mod chat;
 mod confirm;
 mod connection;
 mod console;
@@ -822,6 +823,7 @@ fn main() -> ExitCode {
             objectives::ObjectivesPlugin,
             outcome::OutcomePlugin,
             connection::ConnectionPlugin,
+            chat::ChatPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(OnEnter(Screen::Loading), loading)
@@ -914,6 +916,10 @@ fn main() -> ExitCode {
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
+                chat::keys
+                    .run_if(takes_input)
+                    .run_if(resource_exists::<Orders>)
+                    .before(carry_out),
                 messages::tell_leaving
                     .after(carry_out)
                     .before(messages::show)
@@ -942,13 +948,16 @@ fn main() -> ExitCode {
                     special_ops::give,
                 )
                     .chain(),
-                choose_formation,
-                actions::hotkeys,
-                special_ops::hotkeys,
-                supply::cycle_detached,
-                messages::cycle,
-                supply::toggle_border,
-                fog::cheat,
+                (
+                    choose_formation,
+                    actions::hotkeys,
+                    special_ops::hotkeys,
+                    supply::cycle_detached,
+                    messages::cycle,
+                    supply::toggle_border,
+                    fog::cheat,
+                )
+                    .run_if(chat::closed),
             )
                 .run_if(in_state(Screen::Match))
                 .run_if(takes_input)
@@ -977,6 +986,7 @@ fn main() -> ExitCode {
         .insert_resource(outcome::Words::of(&strings))
         .insert_resource(connection::Words::of(&strings))
         .insert_resource(pause::Words::of(&strings))
+        .insert_resource(chat::Words::of(&strings))
         .insert_resource(StageWords::of(&strings))
         .insert_resource(options::Options::new(&game))
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
@@ -1018,7 +1028,8 @@ fn main() -> ExitCode {
 }
 
 /// Whether none of the console, the pause menu and the loading screen is
-/// up, so the match takes the keyboard and mouse.
+/// up, so the match takes the keyboard and mouse. The chat bar takes only
+/// the keyboard, so what reads keys checks it as well.
 fn takes_input(
     console: Res<console::Console>,
     menu: Res<pause::PauseMenu>,

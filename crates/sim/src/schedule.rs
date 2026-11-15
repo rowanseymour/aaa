@@ -38,6 +38,28 @@ pub enum Action {
     /// Kills the regiment at this index into [`World::regiments`]
     /// outright.
     Destroy(usize),
+    /// Words from the person playing side `from`, or from one watching
+    /// for none, to those `to` reaches.
+    Chat {
+        from: Option<u32>,
+        to: Channel,
+        words: String,
+    },
+}
+
+/// The most characters a line of chat holds.
+pub const CHAT_LONGEST: usize = 128;
+
+/// Who chat is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Channel {
+    /// Everyone, those watching too.
+    All,
+    /// The sender's side and its allies, or, from one watching, those
+    /// watching.
+    Team,
+    /// The person playing this side alone.
+    To(u32),
 }
 
 impl Action {
@@ -70,6 +92,9 @@ impl Action {
                 world.destroy(regiment)
             }
             Action::Destroy(_) => {}
+            Action::Chat { from, to, words } => {
+                world.notices.push(crate::Notice::Chat { from, to, words })
+            }
         }
         Ok(())
     }
