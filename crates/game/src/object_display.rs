@@ -128,8 +128,7 @@ const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrg
 /// clear of it, and how far its contents are in from its sides.
 const HEADER: f32 = 40.0;
 const HEADER_IN: f32 = 8.0;
-/// The owner's colour beside their name, and the gap between them.
-const OWNER_BAND: f32 = 4.0;
+/// The gap between the owner's gem and their name.
 const OWNER_GAP: f32 = 6.0;
 /// Each property's icon in the strip, and the gap between them.
 const PROPERTY: f32 = 24.0;
@@ -625,6 +624,7 @@ pub fn lay_out(
     sim: Res<Sim>,
     local: Res<Local>,
     leaders: Res<Leaders>,
+    gem: Res<ui::Gem>,
     drawn: Res<Drawn>,
     badges: Res<Badges>,
     mut showing: ResMut<Showing>,
@@ -681,6 +681,7 @@ pub fn lay_out(
         sim: &sim.0,
         local: local.0,
         leaders: &leaders,
+        gem: &gem,
         drawn: &drawn,
         badges: &badges,
         detail: &detail,
@@ -706,6 +707,7 @@ struct Ui<'a> {
     sim: &'a World,
     local: Option<u32>,
     leaders: &'a Leaders,
+    gem: &'a ui::Gem,
     drawn: &'a Drawn,
     badges: &'a Badges,
     detail: &'a Detail,
@@ -782,15 +784,18 @@ impl Ui<'_> {
                                 ..default()
                             };
                             lines.spawn((line, Pickable::IGNORE)).with_children(|line| {
-                                // The owner's own colour, whoever's looking, as the lobby
-                                // marks it, as tall as the line. An independent side's
-                                // things show none.
+                                // The owner's gem in its own colour, whoever's looking,
+                                // as the lobby marks it. An independent side's things
+                                // show none.
                                 if !p.independent {
-                                    let band = Node {
-                                        width: px(OWNER_BAND * SCALE),
+                                    let size = px(ui::GEM * SCALE);
+                                    let mark = Node {
+                                        width: size,
+                                        height: size,
+                                        align_self: AlignSelf::Center,
                                         ..default()
                                     };
-                                    line.spawn(ui::swatch(p.rgb, band));
+                                    line.spawn(ui::side_mark(self.gem, p.rgb, mark));
                                 }
                                 let owner = self.leaders.owner(p, self.local, &self.looks.map);
                                 line.spawn((ui::coloured(owner, Font::Hud, colour), unwrapped()));

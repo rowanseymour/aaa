@@ -1165,6 +1165,9 @@ pub struct AVars {
     /// The match music of someone watching rather than playing.
     #[serde(rename = "ObserverGameMusic")]
     pub observer_game_music: Option<Id>,
+    /// The glyph that marks a side, drawn in its colour, by [`Glyph`] id.
+    #[serde(rename = "KingdomGlyphInfo")]
+    pub kingdom_glyph_info: Option<Id>,
 }
 
 /// A screen of the interface.

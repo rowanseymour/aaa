@@ -973,7 +973,9 @@ fn main() -> ExitCode {
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
         .insert_resource(music::Music::new(&game))
         .insert_resource(volumes)
-        .insert_resource(Data(Arc::new(game)));
+        .insert_resource(Data(Arc::new(game)))
+        .init_resource::<ui::Gem>()
+        .add_systems(Startup, ui::load_gem);
     let setup = match &joined {
         Some((_, welcome)) => Some(welcome.setup.clone()),
         None => map.map(|name| aaa_server::Setup {

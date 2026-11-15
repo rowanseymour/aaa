@@ -62,6 +62,18 @@ impl GameData {
         self.kept("glyphs", || self.read_glyphs())
     }
 
+    /// What the font's image of the glyph that marks a side is called,
+    /// e.g. `Gem`: drawn in the side's colour wherever a side is named.
+    pub fn side_glyph(&self) -> Option<String> {
+        let id = self
+            .avars()
+            .iter()
+            .find_map(|v| v.kingdom_glyph_info.clone())?;
+        let glyphs = self.glyphs();
+        let glyph = glyphs.iter().find(|g| g.ids.as_ref() == Some(&id))?;
+        glyph.display_name.clone()
+    }
+
     fn read_glyphs(&self) -> Vec<defs::Glyph> {
         let files = self.parse_tgis(|n| n.starts_with("fonts/special_glyphs"));
         let files = scoped(&files);

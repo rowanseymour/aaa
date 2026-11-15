@@ -65,6 +65,8 @@ struct Look {
     map: Arc<aaa_data::Strings>,
     /// What an icon that looks somewhere says.
     to_location: String,
+    /// What marks a side named in a line.
+    gem: Option<Handle<Image>>,
 }
 
 impl Look {
@@ -159,9 +161,66 @@ pub struct Line {
     pub serial: u64,
     pub kind: Id,
     pub text: String,
+    /// Where it names sides.
+    pub marks: Vec<Mark>,
     pub place: Option<Place>,
     /// When it was posted, in seconds of the app's time.
     pub posted: f32,
+}
+
+/// Where a line names a side: the byte of its text the name starts at,
+/// and the side's colour, which the side's gem before the name is drawn
+/// in.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mark {
+    pub at: usize,
+    pub rgb: [f32; 3],
+}
+
+/// A line's text, and where it names sides.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Words {
+    pub text: String,
+    pub marks: Vec<Mark>,
+}
+
+impl From<String> for Words {
+    fn from(text: String) -> Words {
+        Words {
+            text,
+            marks: Vec::new(),
+        }
+    }
+}
+
+/// What fills one of a line's placeholders: words, or a side's name.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Fill {
+    words: String,
+    /// The colour of the side the words name.
+    side: Option<[f32; 3]>,
+}
+
+impl Fill {
+    /// The name of a side of colour `rgb`.
+    fn side(name: String, rgb: [f32; 3]) -> Fill {
+        Fill {
+            words: name,
+            side: Some(rgb),
+        }
+    }
+}
+
+impl From<String> for Fill {
+    fn from(words: String) -> Fill {
+        Fill { words, side: None }
+    }
+}
+
+impl From<&str> for Fill {
+    fn from(words: &str) -> Fill {
+        Fill::from(words.to_string())
+    }
 }
 
 /// Every line the player has been told, oldest first, as many as the
@@ -200,16 +259,24 @@ impl MessageLog {
 
     /// Posts a line of `kind`, unless its filter hides that kind; whether
     /// it did.
-    pub fn post(&mut self, kind: &str, text: String, place: Option<Place>, now: f32) -> bool {
+    pub fn post(
+        &mut self,
+        kind: &str,
+        words: impl Into<Words>,
+        place: Option<Place>,
+        now: f32,
+    ) -> bool {
         let kind = Id::from(kind);
         if !self.look.shows(&kind) {
             return false;
         }
+        let Words { text, marks } = words.into();
         info!("{text}");
         self.lines.push_back(Line {
             serial: self.next,
             kind,
             text,
+            marks,
             place,
             posted: now,
         });
@@ -224,12 +291,12 @@ impl MessageLog {
     fn say(
         &mut self,
         kind: &str,
-        text: String,
+        words: impl Into<Words>,
         place: Option<Place>,
         time: &Time,
         to: &mut Sounds,
     ) {
-        if self.post(kind, text, place, time.elapsed_secs()) {
+        if self.post(kind, words, place, time.elapsed_secs()) {
             self.sound(time, to);
         }
     }
@@ -245,7 +312,13 @@ impl MessageLog {
     /// Posts the line of the game event `event`, its placeholders filled
     /// with `with` in turn, unless the event's filters or its kind's drop
     /// it.
-    pub fn event(&mut self, event: &str, with: &[&str], place: Option<Place>, now: f32) -> bool {
+    pub fn event(
+        &mut self,
+        event: &str,
+        with: &[impl Into<Fill> + Clone],
+        place: Option<Place>,
+        now: f32,
+    ) -> bool {
         let Some(e) = self.look.events.get(&Id::from(event)) else {
             return false;
         };
@@ -301,9 +374,10 @@ impl MessageLog {
 
 /// Fills the `%s`, `%d` and `%i` placeholders of a line in turn, and reads
 /// `%%` as `%`.
-fn fill_all(text: &str, with: &[&str]) -> String {
+fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {
     let mut out = String::new();
-    let mut with = with.iter();
+    let mut marks = Vec::new();
+    let mut with = with.iter().cloned().map(Into::into);
     let mut rest = text;
     while let Some(i) = rest.find('%') {
         out.push_str(&rest[..i]);
@@ -314,7 +388,12 @@ fn fill_all(text: &str, with: &[&str]) -> String {
                 rest = &after[1..];
             }
             Some('s' | 'd' | 'i') => {
-                out.push_str(with.next().copied().unwrap_or_default());
+                if let Some(Fill { words, side }) = with.next() {
+                    if let Some(rgb) = side {
+                        marks.push(Mark { at: out.len(), rgb });
+                    }
+                    out.push_str(&words);
+                }
                 rest = &after[1..];
             }
             _ => {
@@ -324,7 +403,7 @@ fn fill_all(text: &str, with: &[&str]) -> String {
         }
     }
     out.push_str(rest);
-    out
+    Words { text: out, marks }
 }
 
 /// The log's box.
@@ -361,6 +440,7 @@ pub fn spawn(
     leaders: Res<Leaders>,
     bindings: Res<Bindings>,
     mut icons: ResMut<displays::Icons>,
+    gem: Res<crate::ui::Gem>,
 ) {
     let corner = crate::special_ops::corner(&local, &leaders);
     let game = &loaded.game;
@@ -415,6 +495,7 @@ pub fn spawn(
         vars: game.interface_vars(),
         to_location: (strings.get("ui_tooltip_message_location").cloned())
             .unwrap_or_else(|| "Move camera to message location".into()),
+        gem: gem.0.clone(),
         strings,
         map: loaded.map.strings.clone(),
         names: (game.listings().iter())
@@ -516,13 +597,8 @@ pub fn tell_leaving(
             let said = log
                 .look
                 .said("networking_player_quit|s", "Player %s quit the game");
-            log.say(
-                "GENERIC_EVENT",
-                fill(&said, &[&name]),
-                None,
-                &time,
-                &mut sounds,
-            );
+            let words = fill_all(&said, &[Fill::side(name, player.rgb)]);
+            log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
         }
     }
     if orders.take_ended() {
@@ -556,10 +632,7 @@ pub fn tell(
             sounds.interface(&time, sound);
         }
         let posted = match told(&sim.0, local.0, &leaders, &log.look, notice) {
-            Some(Told::Event(event, with, place)) => {
-                let with: Vec<&str> = with.iter().map(String::as_str).collect();
-                log.event(event, &with, place, now)
-            }
+            Some(Told::Event(event, with, place)) => log.event(event, &with, place, now),
             Some(Told::Line(kind, text, place)) => log.post(kind, text, place, now),
             None => false,
         };
@@ -582,7 +655,7 @@ fn sound(notice: &Notice, local: Option<u32>) -> Option<&'static str> {
 /// What a notice tells the player.
 enum Told {
     /// A game event, with what fills its line.
-    Event(&'static str, Vec<String>, Option<Place>),
+    Event(&'static str, Vec<Fill>, Option<Place>),
     /// A line of a kind of message.
     Line(&'static str, String, Option<Place>),
 }
@@ -601,9 +674,9 @@ fn told(
     let sees = |owner: u32, place: &Place| {
         ours(owner) || local.is_some_and(|p| sim.seen(p, place.at) == Seen::Visible)
     };
-    let side = |id: u32| {
-        let player = sim.sides.player(id);
-        player.map_or_else(String::new, |p| leaders.owner(p, local, &look.map))
+    let side = |id: u32| match sim.sides.player(id) {
+        Some(p) => Fill::side(leaders.owner(p, local, &look.map), p.rgb),
+        None => Fill::from(String::new()),
     };
     let team_name = |team: usize| {
         let name = &sim.sides.teams[team].name;
@@ -612,7 +685,7 @@ fn told(
     Some(match notice {
         Notice::Short { player, percent } if ours(player) => {
             let percent = (percent as i64).to_string();
-            Told::Event("kingdom_upkeep_shortage", vec![percent], None)
+            Told::Event("kingdom_upkeep_shortage", vec![percent.into()], None)
         }
         Notice::Repaired { player } if ours(player) => {
             Told::Event("kingdom_upkeep_repaired", vec![], None)
@@ -673,7 +746,11 @@ fn told(
             let hq = hqs.iter().find(|h| h.id == hq);
             let hq = hq.map(|h| look.hq(sim, h)).unwrap_or_default();
             let joining = look.regiment(sim, regiment);
-            Told::Event(event, vec![hq, joining], at(About::Regiment(regiment)))
+            Told::Event(
+                event,
+                vec![hq.into(), joining.into()],
+                at(About::Regiment(regiment)),
+            )
         }
         Notice::PutOut {
             player, regiment, ..
@@ -685,7 +762,7 @@ fn told(
                 false => "company_commissioned",
             };
             let name = look.regiment(sim, regiment);
-            Told::Event(event, vec![name], at(About::Regiment(regiment)))
+            Told::Event(event, vec![name.into()], at(About::Regiment(regiment)))
         }
         // Named by its template: it has no number until it's dropped.
         Notice::Recruited {
@@ -698,19 +775,23 @@ fn told(
                 about: None,
                 at: delivery.position,
             };
-            Told::Event("company_recruited", name.into_iter().collect(), Some(place))
+            Told::Event(
+                "company_recruited",
+                name.into_iter().map(Fill::from).collect(),
+                Some(place),
+            )
         }
         Notice::Researched {
             player,
             building,
             technology,
         } if ours(player) => {
-            let with = vec![look.name(technology.as_str())];
+            let with = vec![look.name(technology.as_str()).into()];
             Told::Event("research_complete", with, at(About::Building(building)))
         }
         Notice::Gained { player, technology } if ours(player) => Told::Event(
             "technology_gained",
-            vec![look.name(technology.as_str())],
+            vec![look.name(technology.as_str()).into()],
             None,
         ),
         // A side always sees its own, so is always told: the loser while
@@ -720,7 +801,7 @@ fn told(
             building,
             by,
         } if ours(player) => {
-            let with = vec![look.building(sim, building), side(by)];
+            let with = vec![look.building(sim, building).into(), side(by)];
             Told::Event(
                 "actor_captured_by_enemy",
                 with,
@@ -728,7 +809,7 @@ fn told(
             )
         }
         Notice::Captured { player, building } if ours(player) => {
-            let with = vec![look.building(sim, building)];
+            let with = vec![look.building(sim, building).into()];
             Told::Event("actor_captured", with, at(About::Building(building)))
         }
         Notice::Sold {
@@ -736,7 +817,7 @@ fn told(
             building,
             paid,
         } if ours(player) => {
-            let with = vec![look.building(sim, building), paid.to_string()];
+            let with = vec![look.building(sim, building).into(), paid.to_string().into()];
             Told::Event("building_sold", with, at(About::Building(building)))
         }
         // Its owner is told it's lost, and its enemies who see it go that
@@ -757,22 +838,32 @@ fn told(
             let place = Place::of(sim, about);
             let enemy = local.is_some_and(|p| sim.sides.relation(p, owner) == Relation::Enemy);
             match ours(owner) {
-                true => Told::Event(event, vec![name], Some(place)),
-                false if enemy && sees(owner, &place) => {
-                    Told::Event("actor_destroyed", vec![side(owner), name], Some(place))
-                }
+                true => Told::Event(event, vec![name.into()], Some(place)),
+                false if enemy && sees(owner, &place) => Told::Event(
+                    "actor_destroyed",
+                    vec![side(owner), name.into()],
+                    Some(place),
+                ),
                 false => return None,
             }
         }
         // How the match comes out is told to everyone.
         Notice::Defeated { player } => Told::Event("kingdom_defeated", vec![side(player)], None),
         Notice::Victorious { player } => Told::Event("kingdom_victory", vec![side(player)], None),
-        Notice::TeamDefeated { team } => Told::Event("team_defeated", vec![team_name(team)], None),
-        Notice::TeamVictorious { team } => Told::Event("team_victory", vec![team_name(team)], None),
+        Notice::TeamDefeated { team } => {
+            Told::Event("team_defeated", vec![team_name(team).into()], None)
+        }
+        Notice::TeamVictorious { team } => {
+            Told::Event("team_victory", vec![team_name(team).into()], None)
+        }
         Notice::CitiesHeld { player, cities } => {
             let team = sim.sides.player(player).and_then(|p| p.team);
-            let name = team.map_or_else(|| side(player), team_name);
-            Told::Event("city_ratio_victory", vec![name, cities.to_string()], None)
+            let name = team.map_or_else(|| side(player), |t| team_name(t).into());
+            Told::Event(
+                "city_ratio_victory",
+                vec![name, cities.to_string().into()],
+                None,
+            )
         }
         _ => return None,
     })
@@ -785,6 +876,7 @@ pub fn show(
     log: Res<MessageLog>,
     root: Single<(Entity, Option<&Children>), With<LogBox>>,
     rows: Query<(&Row, &Children)>,
+    tree: Query<&Children>,
     mut faded: Query<Parts>,
 ) {
     let now = time.elapsed_secs();
@@ -805,10 +897,8 @@ pub fn show(
         return;
     }
     for (&row, &(_, opacity)) in children.iter().zip(&shown) {
-        let Ok((_, parts)) = rows.get(row) else {
-            continue;
-        };
-        for &part in parts {
+        // The icon, the text, and the text's runs.
+        for part in tree.iter_descendants(row) {
             let Ok((Faded(colour), text, shadow, image)) = faded.get_mut(part) else {
                 continue;
             };
@@ -912,21 +1002,84 @@ fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
                     icon.insert(Pickable::IGNORE);
                 }
             }
-            row.spawn((
-                Faded(colour),
-                Text::new(line.text.clone()),
-                font(Font::Hud),
-                TextColor(colour),
-                SHADOW,
-                // The rest of the row, wrapping only at the log's edge.
-                Node {
-                    flex_grow: 1.0,
-                    flex_basis: px(0),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
+            let words = |words: String, colour: Color| {
+                (
+                    Faded(colour),
+                    Text::new(words),
+                    font(Font::Hud),
+                    TextColor(colour),
+                    SHADOW,
+                    Pickable::IGNORE,
+                )
+            };
+            // The rest of the row, wrapping only at the log's edge.
+            let rest = Node {
+                flex_grow: 1.0,
+                flex_basis: px(0),
+                ..default()
+            };
+            if line.marks.is_empty() {
+                row.spawn((words(line.text.clone(), colour), rest));
+                return;
+            }
+            // Text can't hold a picture, so a line naming a side is laid
+            // out in pieces, wrapping between them.
+            let rest = Node {
+                flex_wrap: FlexWrap::Wrap,
+                align_items: AlignItems::Center,
+                ..rest
+            };
+            row.spawn((rest, Pickable::IGNORE)).with_children(|pieces| {
+                for part in parts_of(line) {
+                    match part {
+                        Part::Words(text) => _ = pieces.spawn(words(text, colour)),
+                        Part::Side(rgb) => {
+                            let gem = crate::ui::Gem(look.gem.clone());
+                            let mark = Node {
+                                width: px(GEM),
+                                height: px(GEM),
+                                margin: UiRect::right(px(GEM_GAP)),
+                                ..default()
+                            };
+                            let [red, green, blue] = rgb;
+                            pieces.spawn((
+                                Faded(Color::srgb(red, green, blue)),
+                                crate::ui::side_mark(&gem, rgb, mark),
+                            ));
+                        }
+                    }
+                }
+            });
         });
+}
+
+/// How big a side's gem is in a line, and the space after it.
+const GEM: f32 = 15.0;
+const GEM_GAP: f32 = 3.0;
+
+/// A part of a line as it's laid out.
+#[derive(Debug, PartialEq)]
+enum Part {
+    Words(String),
+    /// The gem before a side's name, in the side's colour.
+    Side([f32; 3]),
+}
+
+/// A line's text in pieces, with a gem before each side it names.
+fn parts_of(line: &Line) -> Vec<Part> {
+    let mut pieces = Vec::new();
+    let mut from = 0;
+    for mark in &line.marks {
+        let Some(before) = line.text.get(from..mark.at) else {
+            continue;
+        };
+        pieces.push(Part::Words(before.to_string()));
+        pieces.push(Part::Side(mark.rgb));
+        from = mark.at;
+    }
+    pieces.push(Part::Words(line.text[from..].to_string()));
+    pieces.retain(|p| *p != Part::Words(String::new()));
+    pieces
 }
 
 /// What looks at where a line happened.
@@ -1023,6 +1176,7 @@ mod tests {
             names: HashMap::new(),
             map: Default::default(),
             to_location: String::new(),
+            gem: None,
         }
     }
 
@@ -1061,18 +1215,45 @@ mod tests {
     #[test]
     fn placeholders_fill_in_turn() {
         assert_eq!(
-            fill_all("%s: attaching %s", &["1st HQ", "2nd Regiment"]),
+            fill_all("%s: attaching %s", &["1st HQ", "2nd Regiment"]).text,
             "1st HQ: attaching 2nd Regiment"
         );
         assert_eq!(
-            fill_all("Your production is %d%% short", &["40"]),
+            fill_all("Your production is %d%% short", &["40"]).text,
             "Your production is 40% short"
         );
         assert_eq!(
-            fill_all("%i%s given to %s", &["50", "$", "Bob"]),
+            fill_all("%i%s given to %s", &["50", "$", "Bob"]).text,
             "50$ given to Bob"
         );
-        assert_eq!(fill_all("100% %x", &[]), "100% %x");
+        assert_eq!(fill_all("100% %x", &[] as &[&str]).text, "100% %x");
+    }
+
+    #[test]
+    fn a_side_named_in_a_line_is_marked_by_its_gem() {
+        let red = [1.0, 0.0, 0.0];
+        let with = [Fill::side("Germany".into(), red), "Tank".into()];
+        let words = fill_all("%s's %s destroyed", &with);
+        assert_eq!(words.text, "Germany's Tank destroyed");
+        assert_eq!(words.marks, [Mark { at: 0, rgb: red }]);
+        let line = Line {
+            serial: 0,
+            kind: Id::from("GENERIC_EVENT"),
+            text: words.text,
+            marks: words.marks,
+            place: None,
+            posted: 0.0,
+        };
+        assert_eq!(
+            parts_of(&line),
+            [
+                Part::Side(red),
+                Part::Words("Germany's Tank destroyed".into()),
+            ]
+        );
+        // And mid-line, only where the side is.
+        let words = fill_all("Player %s quit the game", &[Fill::side("Bob".into(), red)]);
+        assert_eq!(words.marks, [Mark { at: 7, rgb: red }]);
     }
 
     #[test]
@@ -1081,7 +1262,7 @@ mod tests {
         assert!(log.event("hq_attach", &["HQ", "Regiment"], None, 0.0));
         // An event filter the files don't set is off.
         assert!(!log.event("engaged", &["Regiment"], None, 0.0));
-        assert!(!log.event("unknown", &[], None, 0.0));
+        assert!(!log.event("unknown", &[] as &[&str], None, 0.0));
         let texts: Vec<&str> = log.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(texts, ["HQ: attaching Regiment"]);
 
@@ -1090,7 +1271,7 @@ mod tests {
             ("UIEventFilterEngagement", "true"),
         ]));
         assert!(!log.event("engaged", &["Regiment"], None, 0.0));
-        assert!(log.post("GENERIC_ERROR", "Cannot unpack".into(), None, 0.0));
+        assert!(log.post("GENERIC_ERROR", "Cannot unpack".to_string(), None, 0.0));
     }
 
     #[test]
@@ -1120,9 +1301,9 @@ mod tests {
     #[test]
     fn the_key_steps_back_through_placed_lines_and_round() {
         let mut log = MessageLog::new(look(&[("UIMessageLogCycleTimeout", "1.0")]));
-        log.post("GENERIC_ERROR", "a".into(), place([1.0, 0.0]), 0.0);
-        log.post("GENERIC_ERROR", "unplaced".into(), None, 0.0);
-        log.post("GENERIC_ERROR", "b".into(), place([2.0, 0.0]), 0.0);
+        log.post("GENERIC_ERROR", "a".to_string(), place([1.0, 0.0]), 0.0);
+        log.post("GENERIC_ERROR", "unplaced".to_string(), None, 0.0);
+        log.post("GENERIC_ERROR", "b".to_string(), place([2.0, 0.0]), 0.0);
         let mut at = |now| log.cycle(now).map(|l| l.text.clone());
         assert_eq!(at(10.0).as_deref(), Some("b"));
         assert_eq!(at(10.5).as_deref(), Some("a"));
