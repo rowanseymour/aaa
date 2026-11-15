@@ -1,5 +1,5 @@
 //! A map as the editor and the game work with it, built from the stored form
-//! that [`tgck::Map`] reads and the definitions in [`aaa_data`].
+//! that [`tgck::Map`] reads and the definitions in [`tgdata`].
 
 mod buildings;
 #[cfg(test)]
@@ -12,18 +12,18 @@ mod tile;
 mod tile_terrains;
 mod units;
 
-pub use aaa_data::{
-    Affliction, Airlift, Amounts, Damage, DeployPoints, Economy, EconomyRules, Fall, Fighter,
-    Flight, FlightKind, FogSetting, Grant, GuardRules, Id, Kind, Logistics, Lookout, Operation,
-    Requires, Research, ResourceKind, Shape, Sight, Strike, Supply, SupplyEffect, SupplyRules,
-    Targets, TerrainEffect, TerrainRules, Turret, Weapon,
-};
 pub use buildings::Building;
 pub use ground::{Ground, Tilt};
 pub use obstacle::Obstacle;
 pub use outline::Outline;
 pub use pathing::{Domain, Pathing, Zone};
 pub use tgck::map::Relation;
+pub use tgdata::{
+    Affliction, Airlift, Amounts, Damage, DeployPoints, Economy, EconomyRules, Fall, Fighter,
+    Flight, FlightKind, FogSetting, Grant, GuardRules, Id, Kind, Logistics, Lookout, Operation,
+    Requires, Research, ResourceKind, Shape, Sight, Strike, Supply, SupplyEffect, SupplyRules,
+    Targets, TerrainEffect, TerrainRules, Turret, Weapon,
+};
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
 pub use units::{
@@ -34,14 +34,14 @@ pub use units::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use aaa_data::{GameData, Nation};
 use tgck::map::{Sun, Terrain, Thing, Triggers, Value};
+use tgdata::{GameData, Nation};
 
 pub struct Map {
     /// The file name without its extension, e.g. `(2v2)Berlin`.
     pub title: String,
     /// The map's own text, such as the names it gives its cities and sides.
-    pub strings: Arc<aaa_data::Strings>,
+    pub strings: Arc<tgdata::Strings>,
     pub ground: Ground,
     pub terrain: Terrain,
     pub things: Vec<Thing>,
@@ -185,7 +185,7 @@ impl Map {
             }
         };
         Ok(Map {
-            title: aaa_data::map_title(name).to_string(),
+            title: tgdata::map_title(name).to_string(),
             strings: Arc::new(strings),
             ground,
             organizations,
@@ -316,7 +316,7 @@ fn take_buildings(
 }
 
 /// Moves a thing whose template keeps it to the half-tile grid onto it.
-fn snap(thing: &mut Thing, bodies: &HashMap<Id, aaa_data::Body>) {
+fn snap(thing: &mut Thing, bodies: &HashMap<Id, tgdata::Body>) {
     if bodies
         .get(&Id::from(thing.template.as_str()))
         .is_some_and(|b| b.tile_locked)
@@ -379,7 +379,7 @@ struct Placed {
 /// placed before them. Things that don't block, and ethereal ones, need
 /// only be on the map. An organization's members are placed with it, and
 /// one without room takes the organization and all its members with it.
-fn placed(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>, pathing: &Pathing) -> Placed {
+fn placed(things: &[Thing], bodies: &HashMap<Id, tgdata::Body>, pathing: &Pathing) -> Placed {
     enum Fit {
         Room,
         OffMap,
@@ -480,7 +480,7 @@ fn placed(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>, pathing: &Path
 
 /// What blocks the ground, by id, of the objects standing on the map:
 /// those that never move.
-fn obstacles(things: &[Thing], bodies: &HashMap<Id, aaa_data::Body>) -> Vec<(u32, Obstacle)> {
+fn obstacles(things: &[Thing], bodies: &HashMap<Id, tgdata::Body>) -> Vec<(u32, Obstacle)> {
     buildings::standing(things)
         .filter_map(|(t, _)| {
             let body = bodies.get(&Id::from(t.template.as_str()))?;
@@ -531,7 +531,7 @@ impl Named {
 /// The [`Map::clearable`] scenery among the objects standing on the map.
 fn clearable(
     things: &[Thing],
-    bodies: &HashMap<Id, aaa_data::Body>,
+    bodies: &HashMap<Id, tgdata::Body>,
     named: &Named,
 ) -> Vec<(u32, Obstacle)> {
     let scenery = [tgck::map::SCENERY, tgck::map::REACTIVE_SCENERY];
@@ -652,7 +652,7 @@ impl Brief {
             name: map
                 .string(&header.name)
                 .map_err(err)?
-                .unwrap_or_else(|| aaa_data::map_title(name).to_string()),
+                .unwrap_or_else(|| tgdata::map_title(name).to_string()),
             description: map
                 .string(&header.description)
                 .map_err(err)?
@@ -758,14 +758,14 @@ mod tests {
         let bodies = HashMap::from([
             (
                 Id::from("tree"),
-                aaa_data::Body {
+                tgdata::Body {
                     shape: trunk,
                     ..Default::default()
                 },
             ),
             (
                 Id::from("rock"),
-                aaa_data::Body {
+                tgdata::Body {
                     blocking: Some(trunk),
                     fixed: true,
                     ..Default::default()
@@ -859,23 +859,23 @@ mod tests {
         (players, teams)
     }
 
-    fn moves(trailer: Option<&str>) -> aaa_data::Body {
-        aaa_data::Body {
+    fn moves(trailer: Option<&str>) -> tgdata::Body {
+        tgdata::Body {
             speed: Some(3.0),
             trailer: trailer.map(Id::from),
-            ..aaa_data::Body::default()
+            ..tgdata::Body::default()
         }
     }
 
     #[test]
     fn things_without_room_are_crowded_out_as_the_map_loads() {
         let circle = |radius| Shape::Circle { radius };
-        let body = |blocking: bool, fixed: bool| aaa_data::Body {
+        let body = |blocking: bool, fixed: bool| tgdata::Body {
             blocking: blocking.then_some(circle(1.0)),
             shape: circle(1.0),
             soft: circle(1.0),
             fixed,
-            ..aaa_data::Body::default()
+            ..tgdata::Body::default()
         };
         let bodies = HashMap::from([
             (Id::from("hut"), body(true, true)),
@@ -943,12 +943,12 @@ mod tests {
     #[test]
     fn members_are_placed_when_their_organization_is() {
         let circle = Shape::Circle { radius: 1.0 };
-        let body = |fixed| aaa_data::Body {
+        let body = |fixed| tgdata::Body {
             blocking: Some(circle),
             shape: circle,
             soft: circle,
             fixed,
-            ..aaa_data::Body::default()
+            ..tgdata::Body::default()
         };
         let bodies = HashMap::from([
             (Id::from("hut"), body(true)),
@@ -996,12 +996,12 @@ mod tests {
             width: 4.0,
             height: 2.0,
         };
-        let bunker = aaa_data::Body {
+        let bunker = tgdata::Body {
             blocking: Some(rect),
             shape: rect,
             soft: rect,
             fixed: true,
-            ..aaa_data::Body::default()
+            ..tgdata::Body::default()
         };
         let bodies = HashMap::from([(Id::from("bunker"), bunker)]);
         // Turned 45°, each spans two tiles below its centre tile and one
@@ -1026,9 +1026,9 @@ mod tests {
 
     #[test]
     fn tile_locked_things_snap_to_the_half_tile_grid() {
-        let locked = aaa_data::Body {
+        let locked = tgdata::Body {
             tile_locked: true,
-            ..aaa_data::Body::default()
+            ..tgdata::Body::default()
         };
         let bodies = HashMap::from([(Id::from("wall"), locked)]);
         let at = |template, [x, y]: [f32; 2]| {
@@ -1150,13 +1150,13 @@ mod tests {
         let things = [hq];
         let bodies = HashMap::from([(
             Id::from("hq"),
-            aaa_data::Body {
+            tgdata::Body {
                 blocking: Some(Shape::Rect {
                     width: 8.0,
                     height: 8.0,
                 }),
                 fixed: true,
-                ..aaa_data::Body::default()
+                ..tgdata::Body::default()
             },
         )]);
         let obstacles = obstacles(&things, &bodies);

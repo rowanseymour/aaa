@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aaa_data::{Audio, AudioCategory, AudioWho, Cue, GameData, Id, ObjectAudio, SoundSwitches};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::map_point;
 use aaa_sim::Relation;
 use bevy::audio::Volume;
 use bevy::prelude::*;
+use tgdata::{Audio, AudioCategory, AudioWho, Cue, GameData, Id, ObjectAudio, SoundSwitches};
 
 use crate::{Data, Loaded, Local, Sim};
 
@@ -45,15 +45,15 @@ struct Request {
 /// How loud each kind of audio plays, as the options set it.
 #[derive(Resource, Clone, Copy, PartialEq, Debug)]
 pub struct Volumes {
-    levels: aaa_data::Volumes,
+    levels: tgdata::Volumes,
     /// Nothing is heard whatever the levels, which stay as the options show
     /// them.
     /// What would play is still picked, so that it can be logged.
     muted: bool,
 }
 
-impl From<aaa_data::Volumes> for Volumes {
-    fn from(levels: aaa_data::Volumes) -> Volumes {
+impl From<tgdata::Volumes> for Volumes {
+    fn from(levels: tgdata::Volumes) -> Volumes {
         Volumes {
             levels,
             muted: false,
@@ -509,7 +509,7 @@ mod tests {
 
     #[test]
     fn each_category_plays_at_its_volume_under_the_main() {
-        let mut volumes = Volumes::from(aaa_data::Volumes {
+        let mut volumes = Volumes::from(tgdata::Volumes {
             main: 0.5,
             fx: 0.8,
             speech: 1.0,
@@ -524,7 +524,7 @@ mod tests {
 
     #[test]
     fn muted_nothing_is_heard_though_the_levels_stay() {
-        let volumes = Volumes::from(aaa_data::Volumes {
+        let volumes = Volumes::from(tgdata::Volumes {
             main: 0.5,
             fx: 0.8,
             speech: 1.0,
@@ -552,7 +552,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, SoundPlugin))
             .init_resource::<Assets<AudioSource>>()
             .insert_resource(
-                Volumes::from(aaa_data::Volumes {
+                Volumes::from(tgdata::Volumes {
                     main: 1.0,
                     fx,
                     speech: 1.0,

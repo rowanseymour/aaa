@@ -1,7 +1,7 @@
 //! What keeps movers off the ground under it: an object's shapes, where
 //! it stands and the way it faces.
 
-use aaa_data::Shape;
+use tgdata::Shape;
 
 use crate::pathing::{covered, spanned};
 use crate::tile::Tile;

@@ -64,7 +64,6 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aaa_data::{Footing, GameData};
 use aaa_map::{Ground, Map, Recruits, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
@@ -84,6 +83,7 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
 use orders::Orders;
 use tgck::map::{Detail, Thing};
+use tgdata::{Footing, GameData};
 
 const USAGE: &str = "\
 usage:
@@ -173,7 +173,7 @@ enum Stage {
 struct StageWords([String; 4]);
 
 impl StageWords {
-    fn of(strings: &aaa_data::Strings) -> Self {
+    fn of(strings: &tgdata::Strings) -> Self {
         let said = ui::said(strings);
         StageWords([
             said("app_status_loading_data", "Loading Data"),
@@ -310,11 +310,11 @@ impl Seed {
 /// The faction that leads each side, by player id; none for sides without a
 /// nation.
 #[derive(Resource, Default)]
-struct Leaders(HashMap<u32, aaa_data::Faction>);
+struct Leaders(HashMap<u32, tgdata::Faction>);
 
 impl Leaders {
     /// The banner, by id, the faction leading `player`'s side flies.
-    fn banner(&self, player: u32) -> Option<&aaa_data::Id> {
+    fn banner(&self, player: u32) -> Option<&tgdata::Id> {
         self.0.get(&player)?.banner.as_ref()
     }
 
@@ -322,12 +322,7 @@ impl Leaders {
     /// person's own side is the player, the computer's after the computer
     /// player of its faction, such as `Kesselring AI`, and the rest by the
     /// name the map gives them.
-    fn owner(
-        &self,
-        player: &aaa_map::Player,
-        local: Option<u32>,
-        map: &aaa_data::Strings,
-    ) -> String {
+    fn owner(&self, player: &aaa_map::Player, local: Option<u32>, map: &tgdata::Strings) -> String {
         if local == Some(player.id) {
             return "Player".into();
         }
@@ -1014,7 +1009,7 @@ fn main() -> ExitCode {
     match setup {
         Some(setup) => {
             app.insert_resource(Pending {
-                title: aaa_data::map_title(&setup.map).to_string(),
+                title: tgdata::map_title(&setup.map).to_string(),
                 description: String::new(),
                 person: None,
                 from_menu: false,
@@ -1898,7 +1893,7 @@ fn show_units(
         );
         if unit.alive() && unit.moving() != view.moving {
             view.moving = unit.moving();
-            let event: fn(&aaa_data::ObjectAudio) -> &Vec<_> = match view.moving {
+            let event: fn(&tgdata::ObjectAudio) -> &Vec<_> = match view.moving {
                 true => |a| &a.start_moving,
                 false => |a| &a.stop_moving,
             };
@@ -2975,7 +2970,7 @@ mod tests {
 
     #[test]
     fn sides_are_called_the_player_the_computer_player_or_as_the_map_has_it() {
-        let faction = |id: &str, computer: Option<&str>| aaa_data::Faction {
+        let faction = |id: &str, computer: Option<&str>| tgdata::Faction {
             id: id.into(),
             name: format!("General {id}"),
             short_name: id.into(),
@@ -2992,7 +2987,7 @@ mod tests {
             // No computer player plays as this one.
             (3, faction("patton_tutorial", None)),
         ]));
-        let map: aaa_data::Strings = [("kingdom_4".into(), "Civilian (Aggressive)".into())]
+        let map: tgdata::Strings = [("kingdom_4".into(), "Civilian (Aggressive)".into())]
             .into_iter()
             .collect();
         assert_eq!(leaders.owner(&player(1), Some(1), &map), "Player");

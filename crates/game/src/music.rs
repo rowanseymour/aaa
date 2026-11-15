@@ -5,9 +5,9 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Audio, AudioCategory, GameData, Id, MusicSettings};
 use bevy::audio::Volume;
 use bevy::prelude::*;
+use tgdata::{Audio, AudioCategory, GameData, Id, MusicSettings};
 
 use crate::sound::{Fades, Sounds, Volumes};
 use crate::{Data, Loaded, Local, Screen, Sim, lobby};
@@ -446,12 +446,12 @@ pub(crate) mod tests {
 
     pub(crate) fn silent() -> Audio {
         Audio {
-            category: aaa_data::AudioCategory::Music,
+            category: tgdata::AudioCategory::Music,
             leadin: Vec::new(),
             files: Vec::new(),
             fallout: Vec::new(),
             missing: Vec::new(),
-            priority: aaa_data::AudioPriority::Medium,
+            priority: tgdata::AudioPriority::Medium,
             control: Default::default(),
             world: Default::default(),
             who: Default::default(),
@@ -510,7 +510,7 @@ pub(crate) mod tests {
         app.add_plugins(MinimalPlugins)
             .init_resource::<Assets<AudioSource>>()
             .insert_resource(Sounds::of(Default::default(), &[]))
-            .insert_resource(Volumes::from(aaa_data::Volumes {
+            .insert_resource(Volumes::from(tgdata::Volumes {
                 main: 1.0,
                 fx: 1.0,
                 speech: 1.0,

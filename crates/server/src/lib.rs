@@ -14,11 +14,11 @@ mod testing;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
-use aaa_data::{Faction, GameData, Handicap, Id, Nation};
 use aaa_map::{FogSetting, Map, Player, Recruits};
 use aaa_sim::World;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
+use tgdata::{Faction, GameData, Handicap, Id, Nation};
 
 pub use client::{Client, NotJoined, enter, join, welcome};
 pub use clock::Clock;

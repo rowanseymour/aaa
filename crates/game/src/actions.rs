@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{GameData, Id};
 use aaa_map::Organization;
 use aaa_render::textures;
 use aaa_sim::{Lacking, Researchable};
@@ -24,6 +23,7 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
+use tgdata::{GameData, Id};
 
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
@@ -577,7 +577,7 @@ pub fn spawn(
         let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
         Some(images.add(image))
     };
-    let commands_by_id: HashMap<Id, aaa_data::Command> = game
+    let commands_by_id: HashMap<Id, tgdata::Command> = game
         .commands()
         .into_iter()
         .map(|c| (c.ids.clone(), c))
@@ -640,7 +640,7 @@ pub fn spawn(
     );
     let research_requires = title("research_error_missing_requirements|ss", "%s required: %s");
     let research_refused = title("research_error_generic|s", "Could not research %s");
-    let quantities = |amounts: &[aaa_data::Amount], earned: bool| -> Vec<Quantity> {
+    let quantities = |amounts: &[tgdata::Amount], earned: bool| -> Vec<Quantity> {
         amounts
             .iter()
             .map(|a| Quantity {
@@ -658,8 +658,8 @@ pub fn spawn(
             let topics = list.iter().map(|item| {
                 let id = &item.technology;
                 let technology = technologies.get(id);
-                let cost: Vec<aaa_data::Amount> = (item.cost.nonzero())
-                    .map(|(kind, amount)| aaa_data::Amount {
+                let cost: Vec<tgdata::Amount> = (item.cost.nonzero())
+                    .map(|(kind, amount)| tgdata::Amount {
                         kind: kind.clone(),
                         resource: (resources.iter())
                             .find(|r| &r.id == kind)

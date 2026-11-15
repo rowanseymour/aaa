@@ -9,7 +9,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aaa_data::{GameData, Id};
 use aaa_map::{Ground, Map, Tile};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::{map_point, world};
@@ -19,6 +18,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::RelativeCursorPosition;
+use tgdata::{GameData, Id};
 
 use crate::{Loaded, Sim, TINTS};
 use aaa_sim::{Relation, State};

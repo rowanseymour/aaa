@@ -3,31 +3,20 @@
 version = 4
 
 [[package]]
-name = "aaa-data"
-version = "0.1.0"
-dependencies = [
- "log",
- "serde",
- "tgck",
- "tgi",
-]
-
-[[package]]
 name = "aaa-editor"
 version = "0.1.0"
 dependencies = [
- "aaa-data",
  "aaa-map",
  "aaa-render",
  "bevy",
  "bevy_egui",
+ "tgdata",
 ]
 
 [[package]]
 name = "aaa-game"
 version = "0.1.0-alpha"
 dependencies = [
- "aaa-data",
  "aaa-map",
  "aaa-render",
  "aaa-server",
@@ -35,33 +24,33 @@ dependencies = [
  "bevy",
  "raw-window-handle",
  "tgck",
+ "tgdata",
 ]
 
 [[package]]
 name = "aaa-map"
 version = "0.1.0"
 dependencies = [
- "aaa-data",
  "libm",
  "tgck",
+ "tgdata",
 ]
 
 [[package]]
 name = "aaa-render"
 version = "0.1.0"
 dependencies = [
- "aaa-data",
  "aaa-map",
  "bevy",
  "nif",
  "tgck",
+ "tgdata",
 ]
 
 [[package]]
 name = "aaa-server"
 version = "0.1.0"
 dependencies = [
- "aaa-data",
  "aaa-map",
  "aaa-sim",
  "log",
@@ -70,6 +59,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "serde",
+ "tgdata",
  "tokio",
 ]
 
@@ -5827,6 +5817,16 @@ name = "tgck"
 version = "0.2.0"
 dependencies = [
  "miniz_oxide 0.8.9",
+]
+
+[[package]]
+name = "tgdata"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "serde",
+ "tgck",
+ "tgi",
 ]
 
 [[package]]

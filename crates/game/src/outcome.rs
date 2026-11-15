@@ -22,7 +22,7 @@ pub struct Words {
 }
 
 impl Words {
-    pub fn of(strings: &aaa_data::Strings) -> Self {
+    pub fn of(strings: &tgdata::Strings) -> Self {
         let said = crate::ui::said(strings);
         Words {
             won: said("ui_mission_message_won", "Mission Won"),
@@ -40,7 +40,7 @@ impl Words {
 
 impl Default for Words {
     fn default() -> Self {
-        Words::of(&aaa_data::Strings::default())
+        Words::of(&tgdata::Strings::default())
     }
 }
 

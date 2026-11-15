@@ -1,11 +1,11 @@
 [package]
-name = "aaa-data"
+name = "tgdata"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "The game data of Axis & Allies (2004): archive access and definitions built from its files"
+description = "The data of games on TimeGate's engine, such as Axis & Allies (2004) and Kohan II: archive access and definitions built from their files"
 publish = false
 
 [dependencies]

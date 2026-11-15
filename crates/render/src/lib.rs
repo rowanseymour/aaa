@@ -25,7 +25,6 @@ pub use rig::Playing;
 
 use std::sync::Arc;
 
-use aaa_data::GameData;
 use aaa_map::Map;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::Exposure;
@@ -35,6 +34,7 @@ use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
 use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use tgck::map::Sun;
+use tgdata::GameData;
 
 use blend::GroundMaterial;
 use glow::GlowMaterial;

@@ -9,6 +9,6 @@ description = "Axis & Allies (2004) maps as loaded: the ground, objects and play
 publish = false
 
 [dependencies]
-aaa-data = { path = "../data" }
+tgdata = { path = "../tgdata" }
 libm = "0.2.16"
 tgck = { path = "../tgck" }

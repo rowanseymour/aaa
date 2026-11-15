@@ -4,12 +4,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use aaa_data::{Faction, Handicap, Id, Nation};
 use aaa_map::{Brief, Player};
 use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
+use tgdata::{Faction, Handicap, Id, Nation};
 
 use crate::actions::GLYPH_DIR;
 use crate::menu::{MenuPage, open};
@@ -80,7 +80,7 @@ pub fn default_person(players: &[Player], asked: Side) -> Option<u32> {
 pub struct Leaving(String);
 
 impl Leaving {
-    pub fn of(strings: &aaa_data::Strings) -> Self {
+    pub fn of(strings: &tgdata::Strings) -> Self {
         let question = strings.get("ui_staging_confirm_exit");
         Leaving(question.map_or("Exit Staging?", String::as_str).to_string())
     }
@@ -503,13 +503,13 @@ fn spawn(mut commands: Commands, data: Res<Data>) {
     commands.spawn((ChildOf(list), text("Scenario Maps", Font::Body)));
     for name in scenarios(&data) {
         let label = Brief::load(&data.0, &name)
-            .map_or_else(|_| aaa_data::map_title(&name).to_string(), |b| b.name);
+            .map_or_else(|_| tgdata::map_title(&name).to_string(), |b| b.name);
         commands
             .spawn((
                 ChildOf(list),
                 switch(padded()),
                 children![text(label, Font::Body)],
-                called(format!("lobby.map.{}", slug(aaa_data::map_title(&name)))),
+                called(format!("lobby.map.{}", slug(tgdata::map_title(&name)))),
                 MapChoice(name),
             ))
             .observe(choose_map);
@@ -983,7 +983,7 @@ fn show_about(
     let Ok(brief) = &lobby.brief else {
         commands.spawn((
             ChildOf(about),
-            text(aaa_data::map_title(&lobby.map), Font::Large),
+            text(tgdata::map_title(&lobby.map), Font::Large),
         ));
         return;
     };
@@ -1046,7 +1046,7 @@ mod tests {
             .insert_state(Screen::Lobby)
             .add_sub_state::<MenuPage>()
             .insert_resource(confirm::Words::default())
-            .insert_resource(Leaving::of(&aaa_data::Strings::default()))
+            .insert_resource(Leaving::of(&tgdata::Strings::default()))
             .init_resource::<ButtonInput<KeyCode>>()
             .init_resource::<crate::console::Console>();
         app.world_mut()

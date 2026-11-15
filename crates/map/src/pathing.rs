@@ -6,8 +6,8 @@ use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
 
-use aaa_data::{Id, Shape, Variation};
 use tgck::map::Terrain;
+use tgdata::{Id, Shape, Variation};
 
 pub use tgck::map::CELL_SIZE;
 
@@ -466,7 +466,7 @@ mod tests {
             priority: 0,
             land: true,
             naval: false,
-            kind: aaa_data::TerrainKind::Land,
+            kind: tgdata::TerrainKind::Land,
             group: None,
             properties: Vec::new(),
         };

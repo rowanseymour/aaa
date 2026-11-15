@@ -5,12 +5,12 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Decal, SpecialOperation};
 use aaa_render::decals::DecalCache;
 use aaa_render::terrain::world;
 use aaa_render::{MapAssets, textures};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
+use tgdata::{Decal, SpecialOperation};
 
 use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
@@ -163,7 +163,7 @@ fn spawn(
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     let mut cache: HashMap<String, Option<Handle<Image>>> = HashMap::new();
-    let mut image = |game: &aaa_data::GameData, path: &str| {
+    let mut image = |game: &tgdata::GameData, path: &str| {
         (cache.entry(path.to_string()))
             .or_insert_with(|| {
                 let decoded = textures::decode(&game.read(path)?, path, formats.0, true)?;
@@ -792,7 +792,7 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
-    use aaa_data::Id;
+    use tgdata::Id;
 
     fn words() -> Words {
         Words {

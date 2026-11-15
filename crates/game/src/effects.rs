@@ -10,10 +10,6 @@ use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use aaa_data::{
-    Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, OperationCues, Shape, Targets,
-    Vfx, VfxCue, VfxTint, Weapon,
-};
 use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
 use aaa_render::decals::{DecalCache, decal_colour};
@@ -23,6 +19,10 @@ use aaa_render::{MapAssets, MapObject, Tint};
 use aaa_sim::{Landing, Operated, State, Target, World};
 use bevy::prelude::*;
 use tgck::map::CELL_SIZE;
+use tgdata::{
+    Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, OperationCues, Shape, Targets,
+    Vfx, VfxCue, VfxTint, Weapon,
+};
 
 use crate::{BuildingView, Drawn, Loaded, Screen, Sim, UnitView};
 
@@ -713,7 +713,7 @@ fn owner(sim: &World, t: Target) -> u32 {
 }
 
 /// What a target is, whether it's living or not.
-fn fighter(sim: &World, t: Target) -> Option<&aaa_data::Fighter> {
+fn fighter(sim: &World, t: Target) -> Option<&tgdata::Fighter> {
     match t {
         Target::Unit(u) => sim.units[u].fighter.as_ref(),
         Target::Building(b) => Some(&sim.buildings[b].fighter),
@@ -768,7 +768,7 @@ struct Placed<'a> {
     /// It was alive when the event happened.
     living: bool,
     /// What it's armed with, if it fights.
-    fighter: Option<&'a aaa_data::Fighter>,
+    fighter: Option<&'a tgdata::Fighter>,
 }
 
 /// Plays the queued commands that are due.
@@ -1473,7 +1473,7 @@ fn tint_units(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_data::Targets;
+    use tgdata::Targets;
 
     fn cue(vfx: &str) -> VfxCue {
         VfxCue {
@@ -1728,7 +1728,7 @@ mod tests {
         }
     }
 
-    fn gun(effects: aaa_data::WeaponEffects, flight: bool) -> Weapon {
+    fn gun(effects: tgdata::WeaponEffects, flight: bool) -> Weapon {
         Weapon {
             range: 10.0,
             min_range: 0.0,
@@ -1747,8 +1747,8 @@ mod tests {
             sounds: Vec::new(),
             effects,
             projectile: Some(Id::from("shell")),
-            flight: flight.then_some(aaa_data::Flight {
-                kind: aaa_data::FlightKind::Straight,
+            flight: flight.then_some(tgdata::Flight {
+                kind: tgdata::FlightKind::Straight,
                 speed: 50.0,
                 life: 0.0,
             }),
@@ -1763,7 +1763,7 @@ mod tests {
             ..ObjectEffects::default()
         };
         let mut effects = effects(HashMap::from([(Id::from("shell"), shell)]));
-        let mut weapon_effects = aaa_data::WeaponEffects::default();
+        let mut weapon_effects = tgdata::WeaponEffects::default();
         weapon_effects.start.push(cue("muzzle"));
         weapon_effects.shot.push(VfxCue {
             every: 2,

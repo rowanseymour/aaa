@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 
-use aaa_data::Id;
 use aaa_render::MapAssets;
 use aaa_render::terrain::world;
 use aaa_render::textures;
@@ -14,6 +13,7 @@ use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow, SystemCursorIcon};
+use tgdata::Id;
 
 use crate::actions::{self, Aim, Page};
 use crate::{Drawn, Loaded, Pointer, Screen, SelectedBuilding, Sim};
@@ -97,7 +97,7 @@ pub fn load(
     formats: Res<CompressedImageFormatSupport>,
 ) {
     let game = &loaded.game;
-    let by_id: HashMap<Id, aaa_data::Command> = game
+    let by_id: HashMap<Id, tgdata::Command> = game
         .commands()
         .into_iter()
         .map(|c| (c.ids.clone(), c))
@@ -110,7 +110,7 @@ pub fn load(
         rally: models.get(&Id::from(RALLY_MARKER)).cloned(),
         ..default()
     };
-    let mut frames_of = |c: &aaa_data::Command| {
+    let mut frames_of = |c: &tgdata::Command| {
         let cursor = c.cursor.as_ref().and_then(|c| cursors.get(c))?;
         let frames: Vec<Handle<Image>> = cursor
             .frames

@@ -3,11 +3,11 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use aaa_data::{
+use tgck::map::{Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
+use tgdata::{
     Body, DeployPoints, Deployment, Fighter, GameData, Id, Layout, OrganizationComponent, Ranges,
     Shape,
 };
-use tgck::map::{Kingdoms, Relation, RestrictionGroups, Team as StoredTeam, Thing};
 
 use crate::buildings::Building;
 use crate::obstacle::Obstacle;
@@ -997,7 +997,7 @@ fn as_placed(members: &[Member], facing: [f32; 2]) -> Formation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_data::Formation as LayoutFormation;
+    use tgdata::Formation as LayoutFormation;
 
     fn layout() -> Layout {
         // A front slot of two, an optional flank and the captain.
@@ -1221,11 +1221,11 @@ mod tests {
                 (
                     Id::from("depot"),
                     Body {
-                        blocking: Some(aaa_data::Shape::Rect {
+                        blocking: Some(tgdata::Shape::Rect {
                             width: 8.0,
                             height: 8.0,
                         }),
-                        shape: aaa_data::Shape::Rect {
+                        shape: tgdata::Shape::Rect {
                             width: 8.0,
                             height: 8.0,
                         },
@@ -1289,7 +1289,7 @@ mod tests {
         assert!(unpacks.building.obstacle.is_some());
         assert_eq!(
             unpacks.room,
-            aaa_data::Shape::Rect {
+            tgdata::Shape::Rect {
                 width: 12.0,
                 height: 12.0
             }

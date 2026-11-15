@@ -29,7 +29,7 @@ pub struct Words {
 }
 
 impl Words {
-    pub fn of(strings: &aaa_data::Strings) -> Self {
+    pub fn of(strings: &tgdata::Strings) -> Self {
         Words {
             connection: crate::connection::Words::menu_entry(strings),
         }
@@ -38,7 +38,7 @@ impl Words {
 
 impl Default for Words {
     fn default() -> Self {
-        Words::of(&aaa_data::Strings::default())
+        Words::of(&tgdata::Strings::default())
     }
 }
 
@@ -237,7 +237,7 @@ mod tests {
         .init_resource::<crate::special_ops::Armed>()
         .init_resource::<Focus>()
         .init_resource::<Orders>()
-        .insert_resource(Options::of(Vec::new(), None, &aaa_data::Strings::default()));
+        .insert_resource(Options::of(Vec::new(), None, &tgdata::Strings::default()));
         app.update();
         app
     }

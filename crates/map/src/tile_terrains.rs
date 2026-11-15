@@ -2,8 +2,8 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Id, TerrainKind, Variation};
 use tgck::map::Terrain;
+use tgdata::{Id, TerrainKind, Variation};
 
 use crate::tile::Tile;
 

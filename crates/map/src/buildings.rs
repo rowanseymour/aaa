@@ -3,8 +3,8 @@
 
 use std::collections::HashMap;
 
-use aaa_data::{Body, DeployPoints, Fighter, Id, Ranges};
 use tgck::map::Thing;
+use tgdata::{Body, DeployPoints, Fighter, Id, Ranges};
 
 use crate::obstacle::Obstacle;
 use crate::units::{Organization, emptied, facing, owner};
