@@ -378,12 +378,39 @@ pub fn text(words: impl Into<String>, size: Font) -> impl Bundle {
     label(words, size, Ink::Body)
 }
 
-/// A side's colour, laid out as `node`; where that leaves its height
-/// unset, it's as tall as the row it's in.
-pub fn swatch([red, green, blue]: [f32; 3], node: Node) -> impl Bundle {
+/// The glyph that marks a side wherever it's named, as the game's font
+/// draws it: a grey image, drawn in the side's colour.
+#[derive(Resource, Clone, Default)]
+pub struct Gem(pub Option<Handle<Image>>);
+
+/// How big the font draws the [`Gem`].
+pub const GEM: f32 = 17.0;
+
+/// Loads the [`Gem`].
+pub fn load_gem(
+    data: Res<crate::Data>,
+    formats: Option<Res<bevy::image::CompressedImageFormatSupport>>,
+    mut images: ResMut<Assets<Image>>,
+    mut gem: ResMut<Gem>,
+) {
+    let formats = formats.map(|f| f.0).unwrap_or_default();
+    let image = data.0.side_glyph().and_then(|name| {
+        let path = format!("{}/{name}.png", crate::actions::GLYPH_DIR);
+        aaa_render::textures::decode(&data.0.read(&path)?, &path, formats, true)
+    });
+    gem.0 = image.map(|i| images.add(i));
+}
+
+/// A side's mark: the [`Gem`] in its colour, laid out as `node`, or a
+/// block of the colour where the game has no gem.
+pub fn side_mark(gem: &Gem, [red, green, blue]: [f32; 3], node: Node) -> impl Bundle {
     (
         node,
-        BackgroundColor(Color::srgb(red, green, blue)),
+        ImageNode {
+            image: gem.0.clone().unwrap_or_default(),
+            color: Color::srgb(red, green, blue),
+            ..default()
+        },
         Pickable::IGNORE,
     )
 }

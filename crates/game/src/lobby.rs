@@ -679,14 +679,14 @@ fn launch(
     next.set(Screen::Loading);
 }
 
-/// A side's colour, as the lobby marks it.
-fn swatch(player: &Player) -> impl Bundle {
+/// A side's gem in its colour, as the lobby marks it.
+fn side_mark(gem: &crate::ui::Gem, player: &Player) -> impl Bundle {
     let node = Node {
-        width: px(6),
-        height: px(20),
+        width: px(crate::ui::GEM),
+        height: px(crate::ui::GEM),
         ..default()
     };
-    crate::ui::swatch(player.rgb, node)
+    crate::ui::side_mark(gem, player.rgb, node)
 }
 
 /// Shows the preset, and the others the map can be played as while picking.
@@ -731,6 +731,7 @@ fn show_slots(
     all: Res<Nations>,
     flags: Res<Flags>,
     handicaps: Res<Handicaps>,
+    gem: Res<crate::ui::Gem>,
     slots: Single<Entity, With<Slots>>,
 ) {
     let slots = *slots;
@@ -770,7 +771,7 @@ fn show_slots(
                         ..default()
                     },
                     children![
-                        swatch(player),
+                        side_mark(&gem, player),
                         (
                             text(format!("Side {}", i + 1), Font::Body),
                             Node {
@@ -971,7 +972,12 @@ fn general_list(
 }
 
 /// Describes the chosen map: its name, size and sides.
-fn show_about(mut commands: Commands, lobby: Res<Lobby>, about: Single<Entity, With<About>>) {
+fn show_about(
+    mut commands: Commands,
+    lobby: Res<Lobby>,
+    gem: Res<crate::ui::Gem>,
+    about: Single<Entity, With<About>>,
+) {
     let about = *about;
     commands.entity(about).despawn_children();
     let Ok(brief) = &lobby.brief else {
@@ -999,7 +1005,10 @@ fn show_about(mut commands: Commands, lobby: Res<Lobby>, about: Single<Entity, W
                 align_items: AlignItems::Center,
                 ..default()
             },
-            children![swatch(player), text(format!("Side {}", i + 1), Font::Body)],
+            children![
+                side_mark(&gem, player),
+                text(format!("Side {}", i + 1), Font::Body)
+            ],
         ));
     }
 }
