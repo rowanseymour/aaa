@@ -248,12 +248,19 @@ impl GameData {
 
     fn read_fighters(&self) -> HashMap<Id, Fighter> {
         let definitions = self.definitions();
-        let flights = self.by_template(|t| flight(t.projectile_component.as_ref()?));
+        let flights = self.flights();
         let mut out = self.by_template(|t| fighter(t, &definitions.properties));
         for w in out.values_mut().flat_map(|f| &mut f.weapons) {
             w.flight = w.projectile.as_ref().and_then(|p| flights.get(p)).copied();
         }
         out
+    }
+
+    /// How each projectile template's projectiles fly, by template id.
+    pub(crate) fn flights(&self) -> Arc<HashMap<Id, Flight>> {
+        self.kept("flights", || {
+            self.by_template(|t| flight(t.projectile_component.as_ref()?))
+        })
     }
 
     /// How far up their targets projectiles aim.

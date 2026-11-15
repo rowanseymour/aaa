@@ -105,10 +105,16 @@ impl World {
         (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
     }
 
-    /// Carries out what the special operation `operation` does to supply
-    /// for `player`, aimed at `at`. What using one takes is left to
+    /// Carries out the special operation `operation` for `player`, aimed
+    /// at `at`, or given on `on` there. What using one takes is left to
     /// whoever asks.
-    pub fn operate(&mut self, player: u32, operation: &Id, at: [f32; 2]) -> Result<(), Refused> {
+    pub fn operate(
+        &mut self,
+        player: u32,
+        operation: &Id,
+        at: [f32; 2],
+        on: Option<Piece>,
+    ) -> Result<(), Refused> {
         match self.rules.operations.get(operation).cloned() {
             Some(Operation::Enchant {
                 targets,
@@ -165,6 +171,17 @@ impl World {
                 let until = self.ticks + (seconds / TICK).round() as u64;
                 self.reveals.insert(player, until);
             }
+            Some(Operation::Strike(strike)) => {
+                let exists = |on: Piece| match on {
+                    Piece::Regiment(r) => r < self.regiments.len(),
+                    Piece::Building(b) => b < self.buildings.len(),
+                };
+                let on = on.filter(|&on| exists(on));
+                if on.is_some_and(|on| !self.strikes_piece(player, &strike.targets, on)) {
+                    return Err(Refused::Unable);
+                }
+                self.launch_strike(player, operation, &strike, at, on);
+            }
             None => return Err(Refused::Unable),
         }
         Ok(())
@@ -199,6 +216,14 @@ impl World {
                 fits.then(|| self.leader_position(r))
             }
             (Operation::Enchant { area, .. }, None) => (*area > 0.0).then_some(at),
+            (Operation::Strike(s), Some(on)) => {
+                let fits = self.strikes_piece(player, &s.targets, on);
+                fits.then(|| match on {
+                    Piece::Regiment(r) => self.leader_position(r),
+                    Piece::Building(b) => self.buildings[b].position,
+                })
+            }
+            (Operation::Strike(_), None) => Some(at),
             (Operation::Drop(_), None) => Some(at),
             (Operation::Reveal { .. }, _) | (_, Some(_)) => None,
         }
@@ -1211,25 +1236,25 @@ mod tests {
             w.regiments.iter().map(has).collect()
         };
         assert_eq!(
-            w.operate(1, &Id::from("retreat"), [26.0, 21.0]),
+            w.operate(1, &Id::from("retreat"), [26.0, 21.0], None),
             Err(Refused::Unable)
         );
         // Not on what's out of reach, to the edge of its soft shape, nor
         // for an enemy.
-        w.operate(1, &resupply, [26.0, 44.5]).unwrap();
-        w.operate(2, &resupply, [26.0, 21.0]).unwrap();
+        w.operate(1, &resupply, [26.0, 44.5], None).unwrap();
+        w.operate(2, &resupply, [26.0, 21.0], None).unwrap();
         assert_eq!(given(&w), [false, false, false]);
         // The HQ's truck is nearest but no infantry, and it only works on
         // so many. An ally's works as one's own.
-        w.operate(3, &resupply, [26.0, 44.0]).unwrap();
+        w.operate(3, &resupply, [26.0, 44.0], None).unwrap();
         assert_eq!(given(&w), [false, false, true]);
         // One that still has it gets no more of it, but takes a place.
         run(&mut w, 1.0);
         let held = w.regiments[2].properties.clone();
-        w.operate(1, &resupply, [29.0, 28.0]).unwrap();
+        w.operate(1, &resupply, [29.0, 28.0], None).unwrap();
         assert_eq!(given(&w), [false, false, true]);
         assert_eq!(w.regiments[2].properties, held);
-        w.operate(1, &resupply, [26.0, 21.0]).unwrap();
+        w.operate(1, &resupply, [26.0, 21.0], None).unwrap();
         assert_eq!(given(&w), [false, true, true]);
     }
 
@@ -1261,7 +1286,7 @@ mod tests {
         run(&mut w, 1.0);
         assert!(!w.regiments[1].in_supply);
         // Detached, it resupplies, and a quarter faster.
-        w.operate(1, &resupply, [26.0, 21.0]).unwrap();
+        w.operate(1, &resupply, [26.0, 21.0], None).unwrap();
         run(&mut w, 1.0);
         assert!(w.regiments[1].in_supply && w.regiments[1].hq.is_none());
         assert_eq!(w.units[a].health, 72.5);
@@ -1313,12 +1338,15 @@ mod tests {
             aaa_map::Operation::Drop(Id::from("tank")),
         );
         assert_eq!(
-            w.operate(1, &Id::from("airlift"), [64.0, 64.0]),
+            w.operate(1, &Id::from("airlift"), [64.0, 64.0], None),
             Err(Refused::Unable)
         );
-        assert_eq!(w.operate(1, &drop, [64.0, 90.0]), Err(Refused::NoRoom));
+        assert_eq!(
+            w.operate(1, &drop, [64.0, 90.0], None),
+            Err(Refused::NoRoom)
+        );
         // A source of its side's and its allies' from its first look.
-        w.operate(1, &drop, [64.0, 64.0]).unwrap();
+        w.operate(1, &drop, [64.0, 64.0], None).unwrap();
         let b = w.buildings.len() - 1;
         assert_eq!(w.buildings[b].owner, 1);
         assert!(w.buildings[b].supply.zone.is_none());

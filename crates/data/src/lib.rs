@@ -26,6 +26,7 @@ mod properties;
 mod recruiting;
 mod research;
 mod special_ops;
+mod strikes;
 mod strings;
 mod supply;
 mod terrain;
@@ -57,6 +58,7 @@ pub use recruiting::{
 };
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, Marker, OperationCues, SpecialOperation};
+pub use strikes::{Affliction, Lookout, Strike};
 pub use strings::{PingLook, Strings};
 pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
 pub use terrain::{

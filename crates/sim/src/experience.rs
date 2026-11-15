@@ -3,7 +3,7 @@
 
 use aaa_map::{Id, Operation};
 
-use crate::{LANDINGS_KEPT, Refused, SECOND, TICK, World};
+use crate::{LANDINGS_KEPT, Piece, Refused, SECOND, TICK, World};
 
 /// A side's faction: their experience and special operations.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -111,18 +111,19 @@ impl World {
         Ok(())
     }
 
-    /// Uses `player`'s faction's `i`th special operation, aimed at `at`,
-    /// spending its cost and starting it recharging only once it's been
-    /// carried out.
+    /// Uses `player`'s faction's `i`th special operation, aimed at `at` or
+    /// given on `on`, spending its cost and starting it recharging only
+    /// once it's been carried out.
     pub(crate) fn special_operation(
         &mut self,
         player: u32,
         i: usize,
         at: [f32; 2],
+        on: Option<Piece>,
     ) -> Result<(), Refused> {
         self.may_operate(player, i)?;
         let id = self.commanders[&player].operations[i].id.clone();
-        self.operate(player, &id, at)?;
+        self.operate(player, &id, at, on)?;
         let commander = self.commanders.get_mut(&player).expect("checked");
         let op = &mut commander.operations[i];
         op.left = op.recharge;
@@ -238,6 +239,7 @@ mod tests {
         Command::Operate {
             operation: i,
             at: [4.0, 4.0],
+            on: None,
         }
     }
 

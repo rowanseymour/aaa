@@ -469,6 +469,7 @@ fn probe(i: usize) -> aaa_sim::Command {
     aaa_sim::Command::Operate {
         operation: i,
         at: [0.0; 2],
+        on: None,
     }
 }
 
@@ -618,6 +619,7 @@ fn clicked(
     Some(aaa_sim::Command::Operate {
         operation: i,
         at: to,
+        on,
     })
 }
 
@@ -876,6 +878,7 @@ mod tests {
         let used = aaa_sim::Command::Operate {
             operation: 0,
             at: [4.0, 4.0],
+            on: None,
         };
         app.world_mut()
             .resource_mut::<Sim>()
@@ -909,7 +912,13 @@ mod tests {
         let op = aaa_sim::SpecialOp::new(Id::from("resupply"), 0.0, 0.0);
         sim.lead(1, 0.0, None, vec![op]);
         let ground = crate::Pointing::Ground([3.0, 4.0]);
-        let operate = |at| Some(aaa_sim::Command::Operate { operation: 0, at });
+        let operate = |at| {
+            Some(aaa_sim::Command::Operate {
+                operation: 0,
+                at,
+                on: None,
+            })
+        };
         assert_eq!(
             clicked(&sim, 1, 0, ground, crate::Focus::Nothing),
             operate([3.0, 4.0])

@@ -139,7 +139,9 @@ impl World {
                 self.may_sell(player, building)?;
                 self.sell(building);
             }
-            Command::Operate { operation, at } => self.special_operation(player, operation, at)?,
+            Command::Operate { operation, at, on } => {
+                self.special_operation(player, operation, at, on)?
+            }
         }
         Ok(())
     }

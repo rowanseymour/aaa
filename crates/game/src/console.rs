@@ -1239,7 +1239,11 @@ fn use_faction_ability(world: &mut World, args: &[&str]) -> Reply {
         .ok_or(format!("the faction has no operation {i}"))?;
     let given = sim.operation_aim(player, i, None, at);
     let at = given.ok_or(format!("{} isn't given on the ground", op.id))?;
-    let operation = aaa_sim::Command::Operate { operation: i, at };
+    let operation = aaa_sim::Command::Operate {
+        operation: i,
+        at,
+        on: None,
+    };
     give(world, player, operation)?;
     Ok(String::new())
 }

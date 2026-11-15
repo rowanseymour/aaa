@@ -277,8 +277,9 @@ mod tests {
     fn terrain_properties_add_to_defence_and_resistance() {
         let (_, rules) = forest();
         let effect = |id: &str| &rules.effects[&Id::from(id)];
-        let hit =
-            |ground: &[&TerrainEffect]| damage(&rifle(12.0, 12.0), &soldier(vec![]), ground, 1.0);
+        let hit = |ground: &[&TerrainEffect]| {
+            damage(&rifle(12.0, 12.0).damage, &soldier(vec![]), ground, 1.0)
+        };
         assert_eq!(hit(&[]), 12.0);
         assert!((hit(&[effect("forest_infantry")]) - 4.0).abs() < 1e-5);
         assert!((hit(&[effect("forest_vehicles")]) - 14.4).abs() < 1e-5);
