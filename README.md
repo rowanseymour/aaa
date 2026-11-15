@@ -17,10 +17,13 @@ It's a work in progress, playable in parts. Name is pronounced _aaaaahh_.
 > here is written from those specs, the data files and the game itself, played.
 
 <p>
-<a href="docs/screenshots/normandy.jpg"><img src="docs/screenshots/normandy.jpg" width="32%" alt="A match on the Normandy map"></a>
+<a href="docs/screenshots/main-menu.jpg"><img src="docs/screenshots/main-menu.jpg" width="32%" alt="The main menu"></a>
 <a href="docs/screenshots/stalingrad.jpg"><img src="docs/screenshots/stalingrad.jpg" width="32%" alt="A match on the Stalingrad map"></a>
 <a href="docs/screenshots/el-alamein.jpg"><img src="docs/screenshots/el-alamein.jpg" width="32%" alt="Tanks fighting on the El Alamein map"></a>
 <a href="docs/screenshots/guadalcanal.jpg"><img src="docs/screenshots/guadalcanal.jpg" width="32%" alt="A match on the Guadalcanal map"></a>
+<a href="docs/screenshots/normandy.jpg"><img src="docs/screenshots/normandy.jpg" width="32%" alt="A match on the Normandy map"></a>
+<a href="docs/screenshots/pearl-harbor.jpg"><img src="docs/screenshots/pearl-harbor.jpg" width="32%" alt="Battleships and a carrier in Pearl Harbor"></a>
+<a href="docs/screenshots/okinawa.jpg"><img src="docs/screenshots/okinawa.jpg" width="32%" alt="A town on the Okinawa map"></a>
 <a href="docs/screenshots/lobby.jpg"><img src="docs/screenshots/lobby.jpg" width="32%" alt="A custom game's lobby, with each side's nation chosen"></a>
 <a href="docs/screenshots/berlin-editor.jpg"><img src="docs/screenshots/berlin-editor.jpg" width="32%" alt="The Berlin map in aaa-editor, with a window open on an object"></a>
 </p>
