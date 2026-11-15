@@ -52,6 +52,7 @@ impl From<io::Error> for Error {
 pub type Result<T> = std::result::Result<T, Error>;
 
 /// Bounds-checked little-endian reader over a section payload.
+#[derive(Clone)]
 pub(crate) struct Cursor<'a> {
     buf: &'a [u8],
     pos: usize,

@@ -887,43 +887,8 @@ impl Detail {
         let mut cur = Cursor::new(data);
         let detail = match class {
             ACTOR => Detail::Actor(Actor::parse_whole(&mut cur, world_version)?),
-            AREA => {
-                // Test for the id's layout rather than its absence, as an id's
-                // low half can pass for the name's length without it.
-                let has_id = data.get(8..14).is_some_and(|b| {
-                    let name_len = u16::from_le_bytes([b[4], b[5]]) as usize * 2;
-                    let Some(list) = data.len().checked_sub(42 + name_len) else {
-                        return false;
-                    };
-                    let count = &data[38 + name_len..42 + name_len];
-                    b[..4] == AREA_ID_VERSION.to_le_bytes()
-                        && u32::from_le_bytes(count.try_into().unwrap()) as usize * 5 == list
-                });
-                let version = cur.u32()?;
-                let id = if has_id {
-                    let id = cur.u32()?;
-                    cur.expect("area id version", AREA_ID_VERSION)?;
-                    Some(id)
-                } else {
-                    None
-                };
-                let area = Area {
-                    version,
-                    id,
-                    name: cur.string()?,
-                    shape: cur.u32()?,
-                    radius: cur.f32()?,
-                    bounds: cur.f32s()?,
-                    inside: cur.list(|c| Ok((c.u32()?, c.u8()?)))?,
-                };
-                Detail::Area(area)
-            }
-            CAMERA => Detail::Camera(Camera {
-                // Version 0 holds other fields; no shipped map has one.
-                version: cur.version("camera", 1..=2)?,
-                name: cur.string()?,
-                zoom: cur.f32()?,
-            }),
+            AREA => Detail::Area(Area::parse(&mut cur)?),
+            CAMERA => Detail::Camera(Camera::parse(&mut cur)?),
             SCENERY => Detail::None,
             REACTIVE_SCENERY => Detail::ReactiveScenery(ReactiveScenery::parse(&mut cur)?),
             _ => Detail::Raw(cur.rest().to_vec()),
@@ -935,27 +900,8 @@ impl Detail {
     fn write(&self, w: &mut Writer) -> Result<()> {
         match self {
             Detail::Actor(a) => a.write(w)?,
-            Detail::Area(a) => {
-                w.u32(a.version);
-                if let Some(id) = a.id {
-                    w.u32(id);
-                    w.u32(AREA_ID_VERSION);
-                }
-                w.string(&a.name)?;
-                w.u32(a.shape);
-                w.f32(a.radius);
-                w.f32s(&a.bounds);
-                w.list("inside", &a.inside, |w, &(thing, scratch)| {
-                    w.u32(thing);
-                    w.u8(scratch);
-                    Ok(())
-                })?;
-            }
-            Detail::Camera(c) => {
-                w.u32(c.version);
-                w.string(&c.name)?;
-                w.f32(c.zoom);
-            }
+            Detail::Area(a) => a.write(w)?,
+            Detail::Camera(c) => c.write(w)?,
             Detail::ReactiveScenery(s) => s.write(w)?,
             Detail::None => {}
             Detail::Raw(raw) => w.bytes(raw),
@@ -985,6 +931,89 @@ impl Detail {
 
 /// The classes [`Detail::parse`] decodes a detail for.
 const DECODED_CLASSES: [u32; 5] = [ACTOR, AREA, CAMERA, SCENERY, REACTIVE_SCENERY];
+
+impl Area {
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        let has_id = Self::has_id(cur.clone());
+        let version = cur.u32()?;
+        let id = if has_id {
+            let id = cur.u32()?;
+            cur.expect("area id version", AREA_ID_VERSION)?;
+            Some(id)
+        } else {
+            None
+        };
+        Ok(Area {
+            version,
+            id,
+            name: cur.string()?,
+            shape: cur.u32()?,
+            radius: cur.f32()?,
+            bounds: cur.f32s()?,
+            inside: Self::parse_inside(cur)?,
+        })
+    }
+
+    /// Whether the record at `cur` holds an id. Tests for the id's layout
+    /// rather than its absence, as an id's low half can pass for the name's
+    /// length without it.
+    fn has_id(mut cur: Cursor) -> bool {
+        let mut fits = || -> Result<bool> {
+            // The version and the id.
+            cur.bytes(8)?;
+            if cur.u32()? != AREA_ID_VERSION {
+                return Ok(false);
+            }
+            let name_len = cur.u16()?;
+            cur.bytes(usize::from(name_len) * 2)?;
+            cur.u32()?;
+            cur.f32()?;
+            cur.f32s::<4>()?;
+            Self::parse_inside(&mut cur)?;
+            Ok(cur.at_end())
+        };
+        fits().unwrap_or(false)
+    }
+
+    fn parse_inside(cur: &mut Cursor) -> Result<Vec<(u32, u8)>> {
+        cur.list(|c| Ok((c.u32()?, c.u8()?)))
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        w.u32(self.version);
+        if let Some(id) = self.id {
+            w.u32(id);
+            w.u32(AREA_ID_VERSION);
+        }
+        w.string(&self.name)?;
+        w.u32(self.shape);
+        w.f32(self.radius);
+        w.f32s(&self.bounds);
+        w.list("inside", &self.inside, |w, &(thing, scratch)| {
+            w.u32(thing);
+            w.u8(scratch);
+            Ok(())
+        })
+    }
+}
+
+impl Camera {
+    fn parse(cur: &mut Cursor) -> Result<Self> {
+        Ok(Camera {
+            // Version 0 holds other fields; no shipped map has one.
+            version: cur.version("camera", 1..=2)?,
+            name: cur.string()?,
+            zoom: cur.f32()?,
+        })
+    }
+
+    fn write(&self, w: &mut Writer) -> Result<()> {
+        w.u32(self.version);
+        w.string(&self.name)?;
+        w.f32(self.zoom);
+        Ok(())
+    }
+}
 
 /// What reads a thing's record back, which decides what its detail must be.
 #[derive(Debug, Clone, Copy)]
