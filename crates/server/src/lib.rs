@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 pub use client::{Client, NotJoined, enter, join, welcome};
 pub use clock::Clock;
 pub use film::{Film, NotFilm};
-pub use host::{Event, Host, Refusal, allows};
+pub use host::{Event, Host, Refusal, allows, sayable};
 pub use link::{Link, Local, Lost, pair};
 
 /// What a match is played on and by, as its lobby leaves it: all that

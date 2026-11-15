@@ -8,8 +8,8 @@ use aaa_sim::{Action, Record, Schedule, World};
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::{
-    Bundle, Gone, Join, KickVote, PROTOCOL, Seated, Standing, Status, ToClient, ToHost, Welcome,
-    decode, encode,
+    Bundle, Gone, Join, KickVote, PROTOCOL, Said, Seated, Standing, Status, ToClient, ToHost,
+    Welcome, decode, encode,
 };
 use crate::{Clock, Link, Setup};
 
@@ -147,6 +147,12 @@ pub enum Event {
     Held(bool),
 }
 
+/// Whether `words` are fit to pass on as chat: no longer than a chat
+/// line holds, and nothing but what can be typed.
+pub fn sayable(words: &str) -> bool {
+    words.chars().count() <= aaa_sim::CHAT_LONGEST && !words.chars().any(char::is_control)
+}
+
 /// Whether a host carries out `action` for a client it doesn't trust
 /// that gives the orders of `players`.
 pub fn allows(players: &[u32], action: &Action) -> bool {
@@ -154,15 +160,13 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
         Action::Order { player, .. } => players.contains(player),
         Action::Pause(_) | Action::Speed(_) => !players.is_empty(),
         // Chat is from the client's own side, or from none if it only
-        // watches, and no longer than the chat bar lets anyone type.
+        // watches.
         Action::Chat { from, words, .. } => {
             let speaker = match from {
                 Some(player) => players.contains(player),
                 None => players.is_empty(),
             };
-            let typed = words.chars().count() <= aaa_sim::CHAT_LONGEST
-                && !words.chars().any(char::is_control);
-            speaker && typed
+            speaker && sayable(words)
         }
         Action::Win(_) | Action::Lose(_) | Action::Raise { .. } | Action::Destroy(_) => false,
     }
@@ -401,7 +405,8 @@ impl<L: Link> Host<L> {
                                 ToHost::Check { .. }
                                 | ToHost::Played(_)
                                 | ToHost::Vote(_)
-                                | ToHost::Kick { .. },
+                                | ToHost::Kick { .. }
+                                | ToHost::Say(_),
                             )
                             | None => {}
                         }
@@ -499,6 +504,8 @@ impl<L: Link> Host<L> {
         let mut votes_changed = false;
         // Each kick vote cast or taken back, by whom.
         let mut kicks = Vec::new();
+        // What's said for everyone, to pass on at once.
+        let mut said = Vec::new();
         // Each client's first action taken this turn, by how many it had
         // asked for before it.
         let mut first_taken = Vec::new();
@@ -539,6 +546,12 @@ impl<L: Link> Host<L> {
                     Ok(Some(Some(ToHost::Kick { client, vote }))) => {
                         kicks.push((seat.id, client, vote));
                     }
+                    Ok(Some(Some(ToHost::Say(words)))) => {
+                        if sayable(&words) && !words.trim().is_empty() {
+                            let from = seat.players.first().copied();
+                            said.push(Said { from, words });
+                        }
+                    }
                     Ok(Some(Some(ToHost::Leave))) => {
                         seat.lost = true;
                         break;
@@ -563,6 +576,9 @@ impl<L: Link> Host<L> {
             if let Event::Diverged { client, step } = event {
                 self.tell(&ToClient::Diverged { client, step });
             }
+        }
+        for said in said {
+            self.tell(&ToClient::Said(said));
         }
         votes_changed |= self.kick(kicks);
         let was_held = self.held;
@@ -1281,6 +1297,34 @@ mod tests {
         assert_eq!(given, [first, then]);
         clients[0].advance(usize::MAX).unwrap();
         assert_eq!(clients[0].answered(), 2);
+    }
+
+    #[test]
+    fn what_is_said_for_everyone_is_passed_on_at_once_held_or_not() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2], &[]]);
+        play(&mut host, &mut clients, 5);
+        wait_out(&clock, &mut host, &mut clients, 1, 3);
+        assert!(host.held());
+        clients[0].say("wait for me".into()).unwrap();
+        clients[2].say("hi".into()).unwrap();
+        // Too long, or nothing at all, isn't passed on.
+        clients[0]
+            .say("a".repeat(aaa_sim::CHAT_LONGEST + 1))
+            .unwrap();
+        clients[0].say(" ".into()).unwrap();
+        host.turn();
+        clients[0].advance(usize::MAX).unwrap();
+        let said = |from, words: &str| Said {
+            from,
+            words: words.into(),
+        };
+        assert_eq!(
+            clients[0].take_said(),
+            [said(Some(1), "wait for me"), said(None, "hi")]
+        );
+        // Nor is any of it in a step.
+        assert!(host.schedule().record().given.is_empty());
     }
 
     #[test]

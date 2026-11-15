@@ -916,8 +916,10 @@ fn main() -> ExitCode {
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
+                messages::relist.after(messages::tell_leaving),
                 chat::keys
                     .run_if(takes_input)
+                    .run_if(connection::closed)
                     .run_if(resource_exists::<Orders>)
                     .before(carry_out),
                 messages::tell_leaving
@@ -957,7 +959,7 @@ fn main() -> ExitCode {
                     supply::toggle_border,
                     fog::cheat,
                 )
-                    .run_if(chat::closed),
+                    .run_if(keys_free),
             )
                 .run_if(in_state(Screen::Match))
                 .run_if(takes_input)
@@ -1040,6 +1042,12 @@ fn takes_input(
         && pause::closed(menu)
         && displays::closed(Some(displays))
         && loading.is_empty()
+}
+
+/// Whether the match has the keyboard: neither the chat bar nor the
+/// connection dialog, which both take what's typed, has it.
+pub fn keys_free(chat: Option<Res<chat::Chat>>, dialog: Option<Res<connection::Dialog>>) -> bool {
+    chat::closed(chat) && dialog.is_none_or(connection::closed)
 }
 
 /// Loads a map and sets up the sim and recruits for a match on it.

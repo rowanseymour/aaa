@@ -10,6 +10,7 @@ use aaa_data::{GameEvent, Id, InterfaceVars};
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::textures;
+use aaa_server::protocol::Said;
 use aaa_sim::{Channel, Notice, Pause, Piece, Relation, Seen, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
@@ -736,6 +737,26 @@ pub fn tell_leaving(
     for words in lines {
         log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
     }
+    // What's said in the connection dialog makes no sound.
+    for said in orders.take_said() {
+        let words = said_line(&sim.0, local.0, &leaders, &log.look, said);
+        log.post("GENERIC_EVENT", words, None, time.elapsed_secs());
+    }
+}
+
+/// The line for what's said in the connection dialog, as `local`, the side
+/// here, sees it: plain, in none of the chat bar's colours.
+fn said_line(sim: &World, local: Option<u32>, leaders: &Leaders, look: &Look, said: Said) -> Words {
+    let name = match said.from.and_then(|p| sim.sides.player(p)) {
+        Some(player) => leaders.owner(player, local, &look.map),
+        None => observer(look),
+    };
+    fill_all(&look.said("public_chat|ss", "%s: %s"), &[name, said.words])
+}
+
+/// What one who only watches is called.
+fn observer(look: &Look) -> String {
+    look.said("game_interface_KingdomDropDown_observer_text", "Observer")
 }
 
 /// Posts a line for each thing the sim has told the player since last
@@ -834,7 +855,7 @@ fn chat(
     let ink = |(var, stock): (&str, [f32; 3])| look.vars.rgb(var).unwrap_or(stock);
     let name = match from.and_then(|f| sim.sides.player(f)) {
         Some(player) => leaders.owner(player, local, &look.map),
-        None => look.said("game_interface_KingdomDropDown_observer_text", "Observer"),
+        None => observer(look),
     };
     let with = [
         Fill::inked(name, ink(("UIChatPlayerColorNormal", [1.0; 3]))),
@@ -1146,13 +1167,41 @@ pub fn list(
     else {
         return;
     };
+    list_all(&mut commands, list, &log, &mut scroll);
+    listed.0 = Some(span);
+}
+
+/// A list of the whole log, oldest first and unfaded, kept scrolled to
+/// the newest, by the serials of the oldest and newest it shows once it
+/// shows any.
+#[derive(Component, Default)]
+pub struct WholeLog(Option<Option<(u64, u64)>>);
+
+/// Keeps each [`WholeLog`] up with the log.
+pub fn relist(
+    mut commands: Commands,
+    log: Res<MessageLog>,
+    mut lists: Query<(Entity, &mut WholeLog, &mut ScrollPosition)>,
+) {
+    let span = (log.lines.front())
+        .zip(log.lines.back())
+        .map(|(a, b)| (a.serial, b.serial));
+    for (list, mut shown, mut scroll) in &mut lists {
+        if shown.0 != Some(span) {
+            list_all(&mut commands, list, &log, &mut scroll);
+            shown.0 = Some(span);
+        }
+    }
+}
+
+/// Lists every line of the log in `list`, scrolled to the newest.
+fn list_all(commands: &mut Commands, list: Entity, log: &MessageLog, scroll: &mut ScrollPosition) {
     commands.entity(list).despawn_children();
     for line in &log.lines {
-        spawn_row(&mut commands, list, &log.look, line);
+        spawn_row(commands, list, &log.look, line);
     }
     // Layout holds it to the bottom of the list.
     scroll.y = f32::MAX;
-    listed.0 = Some(span);
 }
 
 fn spawn_row(commands: &mut Commands, root: Entity, look: &Look, line: &Line) {
@@ -1540,6 +1589,21 @@ mod tests {
             "hello".into(),
         );
         assert_eq!(said.unwrap().1.text, "Observer: hello");
+    }
+
+    #[test]
+    fn what_is_said_in_the_connection_dialog_is_plain() {
+        let sim = allied_sides();
+        let (look, leaders) = (look(&[]), Leaders::default());
+        let said = |from| Said {
+            from,
+            words: "wait".into(),
+        };
+        let line = said_line(&sim, Some(2), &leaders, &look, said(Some(1)));
+        assert_eq!(line.text, "kingdom_1: wait");
+        assert!(line.inks.is_empty() && line.marks.is_empty());
+        let line = said_line(&sim, Some(2), &leaders, &look, said(None));
+        assert_eq!(line.text, "Observer: wait");
     }
 
     #[test]

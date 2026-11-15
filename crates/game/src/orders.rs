@@ -5,7 +5,7 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use aaa_server::protocol::{Gone, KickVote, Status, Welcome};
+use aaa_server::protocol::{Gone, KickVote, Said, Status, Welcome};
 use aaa_server::{Client, Event, Host, Link, Local, Setup};
 use aaa_sim::{Action, Command, Record, Refused, SPEEDS, World};
 use bevy::prelude::*;
@@ -169,6 +169,18 @@ impl Orders {
     /// The kick votes cast or taken back since this was last asked.
     pub(crate) fn take_kicking(&mut self) -> Vec<KickVote> {
         self.client.take_kicking()
+    }
+
+    /// Has the host pass `words` on to everyone at once, outside the
+    /// steps, so that they get through while the match is held.
+    pub(crate) fn say(&mut self, words: String) {
+        // A host that's gone is found so as the match is next played.
+        let _ = self.client.say(words);
+    }
+
+    /// What's been said for everyone since this was last asked.
+    pub(crate) fn take_said(&mut self) -> Vec<Said> {
+        self.client.take_said()
     }
 
     /// Whether the game has been kicked out of the match.
