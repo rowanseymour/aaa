@@ -134,13 +134,14 @@ enum Give {
 
 impl Give {
     /// The order to attach, detach or disband `organization`, or detach
-    /// its hero.
-    fn command(self, organization: usize) -> tgsim::Command {
+    /// its hero; none for what waits on a place or a choice first.
+    fn command(self, organization: usize) -> Option<tgsim::Command> {
         match self {
-            Give::Attach => tgsim::Command::Attach { organization },
-            Give::Disband => tgsim::Command::Disband { organization },
-            Give::DetachHero => tgsim::Command::DetachHero { organization },
-            _ => tgsim::Command::Detach { organization },
+            Give::Attach => Some(tgsim::Command::Attach { organization }),
+            Give::Detach => Some(tgsim::Command::Detach { organization }),
+            Give::Disband => Some(tgsim::Command::Disband { organization }),
+            Give::DetachHero => Some(tgsim::Command::DetachHero { organization }),
+            Give::Aim(_) | Give::Stop | Give::AttachHero => None,
         }
     }
 }
@@ -290,7 +291,7 @@ impl BuildingButtons<'_> {
 /// instead, or on its way to unpack; while it fights it's greyed. Only
 /// where the game has HQs can organizations attach to them, and only where
 /// it has heroes can one company selected alone take one on or let it go.
-fn offered(sim: &tgsim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
+fn offered(sim: &tgsim::World, selected: &[usize], has: GameHas) -> [bool; ORDERS.len()] {
     let packed = |&r: &usize| sim.organizations[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
     let lone = selected.iter().all(|&r| sim.lone(r));
@@ -301,21 +302,40 @@ fn offered(sim: &tgsim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
         }
         _ => false,
     };
-    let hqs = (sim.rules().logistics.values()).any(|l| l.attachments.is_some_and(|n| n > 0));
+    // A company leads with its captain, whose place a hero takes.
     let led = match selected {
-        &[r] => !sim.rules().heroes.is_empty() && !sim.lone(r) && !all_packed,
+        &[r] => has.heroes && sim.organizations[r].leader.is_some() && !sim.lone(r) && !all_packed,
         _ => false,
     };
     ORDERS.map(|(ids, _)| match ids {
         "unpack" => all_packed && selected.len() == 1,
         "kill" => !all_packed,
-        "hq_attach" => hqs && !all_packed,
-        "hq_detach" => hqs && !all_packed && !disband,
+        "hq_attach" => has.hqs && !all_packed,
+        "hq_detach" => has.hqs && !all_packed && !disband,
         "retreat" | "guard" => !all_packed || !lone,
         "disband" => disband,
         "attach" | "detach" => led,
         _ => true,
     })
+}
+
+/// What the game's data has that some orders need, which a match can't
+/// change.
+#[derive(Clone, Copy, Debug, Default)]
+struct GameHas {
+    /// Templates that take attachments, as HQs.
+    hqs: bool,
+    heroes: bool,
+}
+
+impl GameHas {
+    fn of(rules: &tgsim::Rules) -> GameHas {
+        let attaching = |l: &tgmap::Logistics| l.attachments.is_some_and(|n| n > 0);
+        GameHas {
+            hqs: rules.logistics.values().any(attaching),
+            heroes: !rules.heroes.is_empty(),
+        }
+    }
 }
 
 /// The buttons a page has, by slot, given each of [`ORDERS`]' slot and
@@ -459,6 +479,7 @@ pub struct Looks {
     research_requires: String,
     /// What Attach Hero says pressed with no hero chosen.
     choose_hero: String,
+    has: GameHas,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
@@ -799,6 +820,7 @@ pub fn spawn(
         research_affording,
         research_refused,
         choose_hero,
+        has: GameHas::of(sim.0.rules()),
         research_requires,
         menus,
         researches,
@@ -1020,7 +1042,7 @@ pub fn show(
     shown.0 = layout(
         *page,
         &order_slots,
-        &offered(&sim.0, &selected.0),
+        &offered(&sim.0, &selected.0, looks.has),
         building.map(|b| BuildingButtons {
             deploy: looks.deploy.0,
             location: looks.location.0,
@@ -1078,7 +1100,9 @@ pub fn show(
                         ),
                         Some(player),
                     ) => {
-                        let can = |&r: &usize| sim.0.check(player, &give.command(r)).is_ok();
+                        let can = |&r: &usize| {
+                            (give.command(r)).is_some_and(|c| sim.0.check(player, &c).is_ok())
+                        };
                         selected.0.iter().any(can)
                     }
                     (give, _) => give.is_some(),
@@ -1440,9 +1464,13 @@ impl Presser<'_, '_> {
                 }
                 Some(give @ (Give::Attach | Give::Detach | Give::DetachHero)) => {
                     for &organization in &self.selected.0 {
-                        let _ = self.orders.give(sim, player, give.command(organization));
+                        if let Some(command) = give.command(organization) {
+                            let _ = self.orders.give(sim, player, command);
+                        }
                     }
                 }
+                // A side with no heroes is refused without a word.
+                Some(Give::AttachHero) if sim.heroes(player).is_empty() => {}
                 // Heroes are chosen from their own menu, so a press here
                 // alone only says one is wanted.
                 Some(Give::AttachHero) => {
@@ -1452,7 +1480,8 @@ impl Presser<'_, '_> {
                 }
                 Some(Give::Disband) => {
                     if let &[organization] = &self.selected.0[..] {
-                        self.ask(slot, player, Give::Disband.command(organization));
+                        let disband = tgsim::Command::Disband { organization };
+                        self.ask(slot, player, disband);
                     }
                 }
                 None => {}
@@ -2054,6 +2083,30 @@ mod tests {
         assert_eq!(struck(Organization(3), Some(Neutral)), neutral);
         assert_eq!(struck(Building(3), Some(Enemy)), Struck::Ground);
         assert_eq!(struck(Nothing, None), Struck::Ground);
+    }
+
+    #[test]
+    fn hq_and_hero_orders_are_offered_only_where_the_game_has_them() {
+        let mut w = crate::orders::testing::fresh();
+        let ids = |offered: [bool; ORDERS.len()]| -> Vec<&str> {
+            (ORDERS.iter().zip(offered))
+                .filter(|&(_, o)| o)
+                .map(|((ids, _), _)| *ids)
+                .filter(|ids| ids.contains("attach") || ids.contains("detach"))
+                .collect()
+        };
+        let both = GameHas {
+            hqs: true,
+            heroes: true,
+        };
+        assert!(ids(offered(&w, &[0], GameHas::default())).is_empty());
+        // A hero takes a captain's place, which this has none of.
+        assert_eq!(ids(offered(&w, &[0], both)), ["hq_attach"]);
+        w.organizations[0].leader = Some(0);
+        let led = ["hq_attach", "attach", "detach"];
+        assert_eq!(ids(offered(&w, &[0], both)), led);
+        // One company at a time.
+        assert_eq!(ids(offered(&w, &[0, 1], both)), ["hq_attach", "hq_detach"]);
     }
 
     #[test]
