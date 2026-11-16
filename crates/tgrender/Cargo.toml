@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Draws Axis & Allies (2004) maps with Bevy"
+description = "Draws a game's maps with Bevy"
 publish = false
 
 [dependencies]

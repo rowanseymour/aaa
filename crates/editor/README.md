@@ -1,7 +1,7 @@
 # aaa-editor
 
 A map editor for Axis & Allies (2004), built with [Bevy](https://bevy.org). It
-views maps, drawn by [`tgrender`](../render), reading them straight from the
+views maps, drawn by [`tgrender`](../tgrender), reading them straight from the
 game's installed `Data.rwd`; nothing needs extracting.
 
 ```sh
