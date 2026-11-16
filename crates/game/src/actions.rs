@@ -14,7 +14,6 @@
 
 use std::collections::HashMap;
 
-use aaa_map::Organization;
 use aaa_render::textures;
 use aaa_sim::{Lacking, Researchable};
 use bevy::ecs::system::SystemParam;
@@ -24,6 +23,7 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GameData, Id};
+use tgmap::Organization;
 
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
@@ -140,7 +140,7 @@ impl Give {
 
 /// The way buildings the player unpacks face, for the order and its
 /// preview alike.
-pub const UNPACK_FACING: [f32; 2] = aaa_map::UNPACKED_FACING;
+pub const UNPACK_FACING: [f32; 2] = tgmap::UNPACKED_FACING;
 
 /// An order given at a place.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -466,7 +466,7 @@ impl Looks {
         sim: &aaa_sim::World,
         building: Option<usize>,
         page: Page,
-    ) -> Option<&aaa_map::Organization> {
+    ) -> Option<&tgmap::Organization> {
         let Page::Delivering(i) = page else {
             return None;
         };
@@ -1341,7 +1341,7 @@ fn bound(
     slot: usize,
     page: Page,
     menu: &[Recruit],
-    researches: &[aaa_map::Research],
+    researches: &[tgmap::Research],
 ) -> Vec<String> {
     let command = |ids: &str| format!("ActorCommand {ids}");
     let mut names = match entry {
@@ -1452,7 +1452,7 @@ impl Presser<'_, '_> {
                     return;
                 };
                 if recruit.organization.is_some() {
-                    let template = aaa_map::Id::from(recruit.id.as_str());
+                    let template = tgmap::Id::from(recruit.id.as_str());
                     let command = aaa_sim::Command::Commission {
                         building: b,
                         template: template.clone(),

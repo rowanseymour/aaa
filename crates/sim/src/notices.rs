@@ -1,6 +1,6 @@
 //! What the match tells its sides as it's played.
 
-use aaa_map::Id;
+use tgmap::Id;
 
 use crate::{Pause, Piece, World};
 

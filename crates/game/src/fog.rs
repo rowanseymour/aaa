@@ -66,7 +66,7 @@ impl Fog {
         if self.tiles.is_empty() {
             return Seen::Visible;
         }
-        let index = aaa_map::Tile::at(at).index(self.side);
+        let index = tgmap::Tile::at(at).index(self.side);
         index.map_or(Seen::Unexplored, |i| self.tiles[i])
     }
 
@@ -134,7 +134,7 @@ pub fn look(mut fog: ResMut<Fog>, sim: Res<Sim>, local: Res<Local>) {
     fog.taken = Some((sim.ticks, fog.lifted));
     let fog = &mut *fog;
     let player = local.0.filter(|_| !fog.lifted);
-    let hidden = player.filter(|_| sim.fog.setting != aaa_map::FogSetting::None);
+    let hidden = player.filter(|_| sim.fog.setting != tgmap::FogSetting::None);
     let Some(p) = hidden else {
         fog.tiles.clear();
         fog.units.clear();

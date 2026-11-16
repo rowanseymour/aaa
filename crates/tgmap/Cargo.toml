@@ -1,11 +1,11 @@
 [package]
-name = "aaa-map"
+name = "tgmap"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Axis & Allies (2004) maps as loaded: the ground, objects and players, independent of how they are shown or played"
+description = "Maps of games on TimeGate's engine, such as Axis & Allies (2004) and Kohan II, as loaded: the ground, objects and players, independent of how they are shown or played"
 publish = false
 
 [dependencies]

@@ -11,6 +11,6 @@ publish = false
 [dependencies]
 nif = { path = "../nif" }
 tgdata = { path = "../tgdata" }
-aaa-map = { path = "../map" }
+tgmap = { path = "../tgmap" }
 tgck = { path = "../tgck" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds"] }

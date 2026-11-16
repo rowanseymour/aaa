@@ -235,7 +235,7 @@ impl Fill {
 
     /// The name of `player`'s side, marked unless it's independent, as
     /// the selection panel marks an owner.
-    fn side_of(name: String, player: &aaa_map::Player) -> Fill {
+    fn side_of(name: String, player: &tgmap::Player) -> Fill {
         match player.independent {
             true => Fill::from(name),
             false => Fill::side(name, player.rgb),
@@ -1517,19 +1517,15 @@ mod tests {
     fn allied_sides() -> World {
         let mut players: Vec<_> = [1, 2, 3].map(crate::tests::player).into();
         for p in &mut players {
-            p.relations = vec![aaa_map::Relation::Enemy; 3];
+            p.relations = vec![tgmap::Relation::Enemy; 3];
         }
-        players[0].relations[1] = aaa_map::Relation::Ally;
-        players[1].relations[0] = aaa_map::Relation::Ally;
+        players[0].relations[1] = tgmap::Relation::Ally;
+        players[1].relations[0] = tgmap::Relation::Ally;
         let sides = aaa_sim::Sides {
             players,
             teams: Vec::new(),
         };
-        World::from_organizations(
-            sides,
-            aaa_map::Pathing::uniform(8, aaa_map::Domain::Land),
-            &[],
-        )
+        World::from_organizations(sides, tgmap::Pathing::uniform(8, tgmap::Domain::Land), &[])
     }
 
     #[test]

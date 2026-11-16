@@ -10,7 +10,6 @@ use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use aaa_map::{Ground, Map};
 use aaa_render::camera::RtsCamera;
 use aaa_render::decals::{DecalCache, decal_colour};
 use aaa_render::models::{Footprint, Models, Rate};
@@ -23,6 +22,7 @@ use tgdata::{
     Decal, GameData, HealthCue, HealthTrigger, Id, ObjectEffects, OperationCues, Shape, Targets,
     Vfx, VfxCue, VfxTint, Weapon,
 };
+use tgmap::{Ground, Map};
 
 use crate::{BuildingView, Drawn, Loaded, Screen, Sim, UnitView};
 

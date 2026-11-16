@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use aaa_map::{Id, Tile};
+use tgmap::{Id, Tile};
 
 use crate::World;
 

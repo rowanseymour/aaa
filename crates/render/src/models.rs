@@ -7,7 +7,6 @@ use std::f32::consts::FRAC_PI_2;
 use std::hash::Hash;
 use std::sync::Arc;
 
-use aaa_map::{Ground, Player, owner};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormats;
 use bevy::light::NotShadowCaster;
@@ -19,6 +18,7 @@ use nif::{
 };
 use tgck::map::Thing;
 use tgdata::{AnimationKind, Footing, GameData, Id, Portrait, Shape, View};
+use tgmap::{Ground, Player, owner};
 
 use crate::MapObject;
 use crate::glow::GlowMaterial;

@@ -4,12 +4,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use aaa_map::{Brief, Player};
 use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
 use tgdata::{Faction, Handicap, Id, Nation};
+use tgmap::{Brief, Player};
 
 use crate::actions::GLYPH_DIR;
 use crate::menu::{MenuPage, open};
@@ -36,7 +36,7 @@ impl Lineup {
     /// the rest.
     pub fn new(players: &[Player], person: Option<u32>) -> Lineup {
         let mut lineup = Lineup(
-            aaa_map::sides(players)
+            tgmap::sides(players)
                 .map(|p| (p.id, Control::Computer))
                 .collect(),
         );
@@ -67,7 +67,7 @@ impl Lineup {
 /// The player a person plays unless they choose another: the side asked for
 /// on the command line, else the first a person may play.
 pub fn default_person(players: &[Player], asked: Side) -> Option<u32> {
-    let mut sides = aaa_map::sides(players);
+    let mut sides = tgmap::sides(players);
     let side = match asked.0 {
         Some(n) => sides.nth(n - 1),
         None => sides.find(|p| p.playable),
@@ -1035,8 +1035,8 @@ fn mark_chosen(lobby: Res<Lobby>, mut buttons: Query<Choice>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_map::Relation;
     use bevy::state::app::StatesPlugin;
+    use tgmap::Relation;
 
     /// A lobby with only its Exit button, which `answer` is pressed on
     /// once its question is up.

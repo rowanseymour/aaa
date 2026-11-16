@@ -5,10 +5,10 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aaa_map::Ground;
 use bevy::prelude::*;
 use tgck::map::Thing;
 use tgdata::Id;
+use tgmap::Ground;
 
 use crate::terrain::world;
 use crate::{MapObject, Models};
@@ -33,7 +33,7 @@ fn kind(thing: &Thing, organizations: &HashSet<Id>, should_have_model: bool) -> 
     if thing.template.to_ascii_lowercase().contains("start_loc") {
         Kind::Start
     } else if organizations.contains(&Id::from(thing.template.as_str())) {
-        Kind::Organization(aaa_map::owner(thing).unwrap_or(0))
+        Kind::Organization(tgmap::owner(thing).unwrap_or(0))
     } else if should_have_model {
         Kind::Missing
     } else {

@@ -64,7 +64,6 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aaa_map::{Ground, Map, Recruits, Shape};
 use aaa_render::MapObject;
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::models::{Footprint, ModelAssets, Models, pose};
@@ -84,6 +83,7 @@ use bevy::window::PrimaryWindow;
 use orders::Orders;
 use tgck::map::{Detail, Thing};
 use tgdata::{Footing, GameData};
+use tgmap::{Ground, Map, Recruits, Shape};
 
 const USAGE: &str = "\
 usage:
@@ -322,7 +322,7 @@ impl Leaders {
     /// person's own side is the player, the computer's after the computer
     /// player of its faction, such as `Kesselring AI`, and the rest by the
     /// name the map gives them.
-    fn owner(&self, player: &aaa_map::Player, local: Option<u32>, map: &tgdata::Strings) -> String {
+    fn owner(&self, player: &tgmap::Player, local: Option<u32>, map: &tgdata::Strings) -> String {
         if local == Some(player.id) {
             return "Player".into();
         }
@@ -551,7 +551,7 @@ struct Options {
     shot_after: f64,
     headless: bool,
     ui_scale: f32,
-    fog: Option<aaa_map::FogSetting>,
+    fog: Option<tgmap::FogSetting>,
     seed: Option<u64>,
     log: Option<String>,
     /// Where the match to play in is hosted, and the players to ask its
@@ -590,7 +590,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         None => 1.0,
     };
     let fog = match take_option(args, "--fog")? {
-        Some(f) => Some(aaa_map::FogSetting::named(&f)?),
+        Some(f) => Some(tgmap::FogSetting::named(&f)?),
         None => None,
     };
     let seed = match take_option(args, "--seed")? {
@@ -1391,7 +1391,7 @@ fn setup(
     // tows them; what else a Division HQ holds would be left standing when
     // it packs.
     let leave_out: HashSet<u32> = (map.roles())
-        .filter(|(_, role)| *role != aaa_map::Role::Other)
+        .filter(|(_, role)| *role != tgmap::Role::Other)
         .map(|(t, _)| t.id)
         .collect();
     let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
@@ -1449,7 +1449,7 @@ fn setup(
             &mut commands,
             &mut assets.models(),
             thing,
-            aaa_map::owner(thing),
+            tgmap::owner(thing),
         ) {
             Some(e) => {
                 let [x, y, z] = thing.position;
@@ -1480,8 +1480,7 @@ fn setup(
     };
     let start = || {
         let mut things = map.things.iter();
-        let start =
-            things.find(|t| t.template == "start_loc" && aaa_map::owner(t).is_some_and(own));
+        let start = things.find(|t| t.template == "start_loc" && tgmap::owner(t).is_some_and(own));
         start.map(|t| [t.position[0], t.position[1]])
     };
     let cam = match organization.or_else(building).or_else(start) {
@@ -2815,7 +2814,7 @@ mod tests {
 
     #[test]
     fn the_clock_follows_the_pause_and_speed_the_match_is_given() {
-        let pathing = aaa_map::Pathing::uniform(4, aaa_map::Domain::Land);
+        let pathing = tgmap::Pathing::uniform(4, tgmap::Domain::Land);
         let sim = World::from_organizations(Default::default(), pathing, &[]);
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
@@ -2945,8 +2944,8 @@ mod tests {
     }
 
     /// A side a person may play, on no team.
-    pub(crate) fn player(id: u32) -> aaa_map::Player {
-        aaa_map::Player {
+    pub(crate) fn player(id: u32) -> tgmap::Player {
+        tgmap::Player {
             id,
             name: format!("kingdom_{id}"),
             color: "blue".into(),

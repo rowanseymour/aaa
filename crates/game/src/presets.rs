@@ -1,7 +1,7 @@
 //! The ways a lobby can arrange a map's sides into teams: as the map has
 //! them, so many equal teams, or everyone for themselves.
 
-use aaa_map::Player;
+use tgmap::Player;
 
 /// The most sides a match has.
 const MOST: usize = 8;
@@ -48,7 +48,7 @@ impl Preset {
     /// sides, unless some side is the computer's alone, as in a mission,
     /// which is played only as made.
     pub fn offered(players: &[Player]) -> Vec<Preset> {
-        let sides: Vec<_> = aaa_map::sides(players).collect();
+        let sides: Vec<_> = tgmap::sides(players).collect();
         let fixed = sides.iter().any(|p| !p.playable);
         Preset::all()
             .filter(|p| match p.sides() {
@@ -68,7 +68,7 @@ impl Preset {
             size,
         };
         let even = groups.iter().all(|g| g.len() == size);
-        let teamed = aaa_map::sides(players).all(|p| p.team.is_some());
+        let teamed = tgmap::sides(players).all(|p| p.team.is_some());
         match teamed && even && Preset::offered(players).contains(&made) {
             true => made,
             false => Preset::Custom,
@@ -81,7 +81,7 @@ impl Preset {
     /// locations are laid out for them.
     pub fn arrange(self, players: &[Player]) -> Option<Vec<Vec<u32>>> {
         let groups = groups(players);
-        let loners = aaa_map::sides(players).filter(|p| p.team.is_none());
+        let loners = tgmap::sides(players).filter(|p| p.team.is_none());
         let loners: Vec<u32> = loners.map(|p| p.id).collect();
         let arranged: Vec<Vec<u32>> = match self {
             Preset::Custom => return None,
@@ -122,7 +122,7 @@ fn groups(players: &[Player]) -> Vec<Vec<u32>> {
         .map_or(0, |t| t + 1);
     (0..teams)
         .map(|t| {
-            let members = aaa_map::sides(players).filter(|p| p.team == Some(t));
+            let members = tgmap::sides(players).filter(|p| p.team == Some(t));
             members.map(|p| p.id).collect::<Vec<_>>()
         })
         .filter(|g| !g.is_empty())
@@ -132,7 +132,7 @@ fn groups(players: &[Player]) -> Vec<Vec<u32>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_map::Relation;
+    use tgmap::Relation;
 
     fn side(id: u32, team: Option<usize>) -> Player {
         Player {

@@ -1,7 +1,7 @@
 //! Special operations that do damage round where they land, what they
 //! leave on what they hit, and the ground they show their user meanwhile.
 
-use aaa_map::{Id, Operation, Strike};
+use tgmap::{Id, Operation, Strike};
 
 use crate::combat::{Hit, attenuated, damage, resistance};
 use crate::{Piece, SECOND, TICK, Target, World, bounding_radius, distance};
@@ -78,7 +78,7 @@ impl World {
 
     /// Whether `player`'s strike on `targets` can be given on, and hits,
     /// what `t` is.
-    pub(crate) fn strikes(&self, player: u32, targets: &aaa_map::Targets, t: Target) -> bool {
+    pub(crate) fn strikes(&self, player: u32, targets: &tgmap::Targets, t: Target) -> bool {
         let Some(fighter) = self.fighter(t) else {
             return false;
         };
@@ -89,7 +89,7 @@ impl World {
 
     /// Whether `player`'s strike on `targets` can be given on `on`: on any
     /// member of an organization it hits.
-    pub(crate) fn strikes_piece(&self, player: u32, targets: &aaa_map::Targets, on: Piece) -> bool {
+    pub(crate) fn strikes_piece(&self, player: u32, targets: &tgmap::Targets, on: Piece) -> bool {
         match on {
             Piece::Organization(r) => (self.organizations[r].units.iter())
                 .any(|&u| self.strikes(player, targets, Target::Unit(u))),
@@ -241,7 +241,7 @@ mod tests {
     use super::*;
     use crate::testing::*;
 
-    use aaa_map::{Damage, Fighter, Lookout, Targets};
+    use tgmap::{Damage, Fighter, Lookout, Targets};
 
     use crate::{Command, SpecialOp};
 
@@ -345,7 +345,7 @@ mod tests {
     #[test]
     fn a_strike_with_no_flight_lands_as_its_used_and_its_sight_shows_meanwhile() {
         let mut w = bombing();
-        w.set_fog(aaa_map::FogSetting::Full);
+        w.set_fog(tgmap::FogSetting::Full);
         let far = [30.0, 60.0];
         assert_ne!(w.seen(1, far), crate::Seen::Visible);
         if let Some(Operation::Strike(s)) = w.rules.operations.get_mut(&Id::from("bomb")) {
@@ -392,7 +392,7 @@ mod tests {
     fn radiation_hurts_each_unit_hit_each_second_for_its_time_and_isnt_renewed() {
         let mut w = bombing();
         if let Some(Operation::Strike(s)) = w.rules.operations.get_mut(&Id::from("bomb")) {
-            s.affliction = Some(aaa_map::Affliction {
+            s.affliction = Some(tgmap::Affliction {
                 property: Id::from("radiation"),
                 damage: Damage {
                     kind: Id::from("flame"),

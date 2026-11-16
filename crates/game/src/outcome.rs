@@ -140,9 +140,9 @@ fn ask_end(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_map::{Domain, Pathing};
     use aaa_sim::{Sides, World};
     use bevy::state::app::StatesPlugin;
+    use tgmap::{Domain, Pathing};
 
     /// A match of sides 1 and 2, the player as 1.
     fn app() -> App {

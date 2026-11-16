@@ -119,7 +119,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::{Domain, Id, Tile};
+    use tgmap::{Domain, Id, Tile};
 
     use crate::{Command, Notice, Piece, Refused, State, World};
 

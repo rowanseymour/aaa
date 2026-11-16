@@ -28,8 +28,8 @@ use crate::remote::Remote;
 use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::waypoints::Sent;
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
-use aaa_map::Id;
 use aaa_sim::Action;
+use tgmap::Id;
 
 /// Lines kept for scrolling back through.
 const SCROLLBACK: usize = 200;
@@ -792,7 +792,7 @@ fn game_pause(world: &mut World, args: &[&str]) -> Reply {
 /// which otherwise would, wait while the console is open.
 fn with_camera(
     world: &mut World,
-    f: impl FnOnce(&mut RtsCamera, &aaa_map::Ground) -> Reply,
+    f: impl FnOnce(&mut RtsCamera, &tgmap::Ground) -> Reply,
 ) -> Reply {
     world.resource_scope(|world, loaded: Mut<Loaded>| {
         let mut cameras = world.query::<(&mut RtsCamera, &mut Transform, &mut Projection)>();
@@ -806,7 +806,7 @@ fn with_camera(
 }
 
 /// A place on the map, kept within it.
-fn place(ground: &aaa_map::Ground, x: &str, y: &str) -> Result<[f32; 2], String> {
+fn place(ground: &tgmap::Ground, x: &str, y: &str) -> Result<[f32; 2], String> {
     let (x, y) = (number(x)?, number(y)?);
     let size = ground.size();
     if !(0.0..=size).contains(&x) || !(0.0..=size).contains(&y) {

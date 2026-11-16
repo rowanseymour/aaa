@@ -6,7 +6,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aaa_map::Division;
 use aaa_render::camera::RtsCamera;
 use aaa_render::overlay::BannerImages;
 use aaa_render::terrain::world;
@@ -14,6 +13,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use tgdata::{GameData, Id};
+use tgmap::Division;
 
 use crate::{Drawn, Focus, Leaders, Loaded, Local, Screen, Sim, TINTS, tint};
 

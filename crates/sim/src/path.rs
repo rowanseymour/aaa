@@ -4,8 +4,8 @@
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 
-use aaa_map::pathing::CELL_SIZE;
-use aaa_map::{Domain, Pathing, Tile};
+use tgmap::pathing::CELL_SIZE;
+use tgmap::{Domain, Pathing, Tile};
 
 /// Waypoints from `from` towards `to`, not including `from`. Where `to`
 /// can't be reached the way ends at the reachable tile nearest it.
