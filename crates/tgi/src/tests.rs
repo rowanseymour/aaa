@@ -482,3 +482,25 @@ fn templates_last_as_long_as_their_file() {
     assert!(scoped[3].is_none());
     assert_eq!(y(4, &after), (None, None));
 }
+
+#[test]
+fn a_blocks_lineage_is_the_templates_it_inherits_from_nearest_first() {
+    let files = ok("[Template Unit]\n\
+         [Template Hero Inherit=Unit]\n\
+         [Template K2Hero template=Hero]\n\
+         [Template Loop1 Template=Loop2]\n\
+         [Template Loop2 Template=Loop1]\n\
+         [Unit Template=K2Hero]\n\
+         [Thing Template=Loop1]\n\
+         [Thing Template=Missing]\n\
+         [Thing]\n");
+    let templates = Templates::new([&files]);
+    let things: Vec<&Block> = (files.blocks())
+        .filter(|b| !b.kind().unwrap_or("").eq_ignore_ascii_case("template"))
+        .collect();
+    let lineage = |i: usize| templates.lineage(things[i]);
+    assert_eq!(lineage(0), ["k2hero", "hero", "unit"]);
+    assert_eq!(lineage(1), ["loop1", "loop2"]);
+    assert_eq!(lineage(2), ["missing"]);
+    assert!(lineage(3).is_empty());
+}

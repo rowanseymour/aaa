@@ -18,14 +18,20 @@ pub use obstacle::Obstacle;
 pub use outline::Outline;
 pub use pathing::{Domain, Pathing, Zone};
 pub use tgck::map::Relation;
+
+/// A map's triggers, as its file holds them.
+pub mod triggers {
+    pub use tgck::map::{Element, Parameter, Trigger, Triggers, Value};
+}
 pub use tgdata::{
     Affliction, Airlift, Amounts, Damage, DeployPoints, Economy, EconomyRules, Fall, Fighter,
-    Flight, FlightKind, FogSetting, Grant, GuardRules, Id, Kind, Logistics, Lookout, Operation,
-    Requires, Research, ResourceKind, Shape, Sight, Strike, Summon, Supply, SupplyEffect,
-    SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
+    Flight, FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Logistics, Lookout,
+    Operation, Requires, Research, ResourceKind, Shape, Sight, Strike, Summon, Supply,
+    SupplyEffect, SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
 };
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
+pub use triggers::Triggers;
 pub use units::{
     Division, Formation, Member, Organization, Outcome, Packs, Player, Recruits, Team, Trailer,
     UNPACKED_FACING, Unpacks, owner, relation,
@@ -34,7 +40,7 @@ pub use units::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tgck::map::{Sun, Terrain, Thing, Triggers, Value};
+use tgck::map::{Sun, Terrain, Thing, Value};
 use tgdata::{GameData, Nation};
 
 pub struct Map {
@@ -70,6 +76,8 @@ pub struct Map {
     pub crowded: HashSet<u32>,
     /// What the map holds that the game can't place, as it loads.
     pub warnings: Vec<String>,
+    /// The map's scripting, where it could be read.
+    pub triggers: Option<Triggers>,
 }
 
 impl Map {
@@ -122,13 +130,14 @@ impl Map {
         let mut warnings = Vec::new();
         // Without the triggers there's no telling what they need kept, so
         // nothing is cleared.
-        let named = match map.triggers() {
-            Ok(triggers) => Some(Named::new(&triggers)),
+        let triggers = match map.triggers() {
+            Ok(triggers) => Some(triggers),
             Err(e) => {
                 warnings.push(format!("triggers: {e}"));
                 None
             }
         };
+        let named = triggers.as_ref().map(Named::new);
         let bodies = &recruits.bodies;
         let defined = |t: &Thing| bodies.contains_key(&Id::from(t.template.as_str()));
         retain(&mut things, |t| {
@@ -220,6 +229,7 @@ impl Map {
             sun: map.sun().map_err(err)?,
             crowded,
             warnings,
+            triggers,
         })
     }
 }

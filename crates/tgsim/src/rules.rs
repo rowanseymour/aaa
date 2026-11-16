@@ -55,6 +55,11 @@ pub struct Rules {
     /// The organization templates each building template recruits, which are
     /// those that can attach to it as an HQ.
     pub recruit_lists: HashMap<Id, Vec<Id>>,
+    /// Every hero a side could hold, in the order they're defined.
+    pub heroes: Vec<tgmap::Hero>,
+    /// The group of each faction's templates, by faction id, which tells
+    /// which heroes are theirs.
+    pub faction_groups: HashMap<Id, Id>,
     /// What those organization templates raise, by template, each standing
     /// anywhere and owned by nobody.
     pub raisable: HashMap<Id, tgmap::Organization>,
@@ -111,6 +116,8 @@ impl Default for Rules {
             logistics: HashMap::new(),
             resupply_rates: HashMap::new(),
             recruit_lists: HashMap::new(),
+            heroes: Vec::new(),
+            faction_groups: HashMap::new(),
             raisable: HashMap::new(),
             airlifts: HashMap::new(),
             falls: HashMap::new(),

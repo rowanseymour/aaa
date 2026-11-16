@@ -208,7 +208,10 @@ impl GameData {
     /// out.
     pub fn views(&self) -> HashMap<Id, Option<View>> {
         let mut out = HashMap::new();
-        for Template { file, id, thing } in &self.definitions().things {
+        for Template {
+            file, id, thing, ..
+        } in &self.definitions().things
+        {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             let invisible = thing.flags.iter().any(|f| f.invisible);
             let view = match &thing.view {
@@ -233,7 +236,10 @@ impl GameData {
             (definitions.factions.iter()).filter_map(|g| not_null(g.portrait_ids.clone()));
         let named: HashSet<Id> = of_views.chain(of_factions).collect();
         let mut out = HashMap::new();
-        for Template { file, id, thing } in &definitions.things {
+        for Template {
+            file, id, thing, ..
+        } in &definitions.things
+        {
             let dir = file.rsplit_once('/').map_or("", |(d, _)| d);
             let Some(view) = thing.view.as_ref().filter(|_| named.contains(id)) else {
                 continue;

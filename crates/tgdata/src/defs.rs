@@ -380,6 +380,8 @@ pub struct ElementComponent {
     /// Comma separated properties the recruiter, or for a technology its
     /// side, needs to recruit it.
     pub required_properties: Option<String>,
+    /// For a hero, whether a side may be given it at random.
+    pub random_hero: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1019,6 +1021,9 @@ pub struct Faction {
     /// The [`Banner`] their side's organizations fly, where their
     /// templates say to.
     pub banner_ids: Option<Id>,
+    /// The group of the templates that are theirs, e.g.
+    /// `group_faction_ceyah`.
+    pub placement_group_ids: Option<Id>,
 }
 
 /// A computer player's profile: how it plays, and whose side.

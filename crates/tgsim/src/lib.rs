@@ -18,6 +18,7 @@ mod experience;
 mod fog;
 mod guard;
 mod hash;
+mod heroes;
 mod movement;
 mod notices;
 mod objectives;
@@ -36,6 +37,7 @@ mod supply;
 mod terrain;
 #[cfg(test)]
 mod testing;
+mod triggers;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::{PI, TAU};
@@ -51,6 +53,7 @@ pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::{Commander, Operated, SpecialOp};
 pub use fog::{Fog, Seen};
 use hash::{Digest, Hasher, digest};
+pub use heroes::Pooled;
 pub use notices::Notice;
 pub use objectives::{Objective, Objectives, Standing};
 pub use outcome::Fate;
@@ -64,6 +67,7 @@ pub use strikes::{Afflicted, Incoming, Watch};
 pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
 pub use tgmap::{Outcome, Player, Relation, Team};
+pub use triggers::{Switch, Triggers};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
@@ -154,6 +158,10 @@ pub struct World {
     pub technologies: BTreeMap<u32, Vec<Id>>,
     /// The objectives each side holds, by player id.
     pub objectives: BTreeMap<u32, Objectives>,
+    /// The heroes each side holds, by player id.
+    pub pools: BTreeMap<u32, Vec<heroes::Pooled>>,
+    /// The map's triggers, and where each stands.
+    pub triggers: Triggers,
     /// Where each side stands in the match, by player id.
     pub fates: BTreeMap<u32, Fate>,
     /// Whether the match is over: every side's outcome is decided, though
@@ -983,6 +991,7 @@ impl World {
         self.lead_sides();
         self.look();
         self.ticks += 1;
+        self.run_triggers();
         self.settle_outcomes();
     }
 }
@@ -1052,7 +1061,7 @@ impl Sides {
 
 digest!(World {
     organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, settlements, treasuries, commanders, operated, reveals, incoming, watches, afflicted, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
+    holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, afflicted, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng,
 } skip {
     // Fixed by the map and the game's data.

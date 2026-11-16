@@ -79,6 +79,12 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         warn!("{name}: {w}");
     }
     let factions = factions(&map.players, &chosen, &setup.factions, seed);
+    // What the match goes by, such as which heroes are a side's.
+    for player in &mut map.players {
+        if let Some(faction) = factions.get(&player.id) {
+            player.faction = Some(faction.id.to_string());
+        }
+    }
     if let Some(teams) = &setup.teams {
         map.arrange(teams);
     }
@@ -130,6 +136,8 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         supply_effects: game.supply_effects(),
         kinds: game.kinds(),
         sort_objectives: game.sort_objectives(),
+        heroes: game.heroes(),
+        faction_groups: game.faction_groups(),
         operations,
         drops,
         decays: game.decays(),

@@ -38,6 +38,7 @@ impl World {
                 .map(|(t, role)| (role, tgmap::owner(t), t.template.as_str())),
         );
         world.settlements = map.settlements.clone();
+        world.triggers = crate::Triggers::new(map.triggers.as_ref());
         for p in &map.players {
             for t in &p.technologies {
                 world.grant(p.id, t.clone());
@@ -117,6 +118,8 @@ impl World {
             landings: Vec::new(),
             technologies: BTreeMap::new(),
             objectives: BTreeMap::new(),
+            pools: BTreeMap::new(),
+            triggers: crate::Triggers::default(),
             fates,
             over,
             rng,
