@@ -86,11 +86,10 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     let mut operations = game.operations();
     let raisable = raising.raisable();
     let airlifts = game.airlifts();
-    // Only summons of regiments and units put down where they're aimed
-    // can be carried out: a thing with a transport is flown in instead.
+    // Only summons of regiments and units can be carried out.
     operations.retain(|id, o| match o {
         tgmap::Operation::Summon(s) => {
-            let kept = raisable.contains_key(&s.template) && !airlifts.contains_key(&s.template);
+            let kept = raisable.contains_key(&s.template);
             if !kept {
                 debug!("can't carry out {id}: can't summon {}", s.template);
             }

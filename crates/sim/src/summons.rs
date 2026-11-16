@@ -1,5 +1,5 @@
 //! Special operations that bring something new onto the map for their
-//! user, put down where they're aimed.
+//! user, put down where they're aimed or flown in there.
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
@@ -11,7 +11,7 @@ use crate::delivery::spot;
 use crate::{Notice, Piece, Refused, World, bounding_radius};
 
 /// The way what's summoned faces.
-const FACING: [f32; 2] = [0.0, -1.0];
+pub(crate) const FACING: [f32; 2] = [0.0, -1.0];
 
 /// How far from where a single thing is aimed a clear spot is looked for,
 /// in rings a world unit apart of [`RING`] spots each.
@@ -186,16 +186,31 @@ impl World {
             .clone();
         organization.owner = player;
         organization.place(at, FACING);
-        let r = match organization.members.len() {
-            1 => {
+        let (lone, flown) = (
+            organization.lone(),
+            self.rules.airlifts.contains_key(template),
+        );
+        // A regiment looks for room member by member, as it comes down if
+        // it's flown in.
+        let to = match lone {
+            true => {
                 let shape = organization.members[0].shape;
-                let found = self.first_clear(rings(at, 1.0, RINGS), shape, &self.blocking());
-                found.map(|p| {
-                    organization.place(p, FACING);
-                    self.add_new_organization(organization)
-                })
+                self.first_clear(rings(at, 1.0, RINGS), shape, &self.blocking())
             }
-            _ => self.summon_regiment(organization, at),
+            false => Some(at),
+        };
+        let r = match (to, flown) {
+            (None, _) => None,
+            // What's flown in never holds the operation back.
+            (Some(to), true) => match self.fly_in(player, organization, to) {
+                true => return Ok(()),
+                false => None,
+            },
+            (Some(to), false) if lone => {
+                organization.place(to, FACING);
+                Some(self.add_new_organization(organization))
+            }
+            (Some(_), false) => self.summon_regiment(organization, at),
         };
         match r {
             Some(r) => self.summoned.push(Summoned {
@@ -480,6 +495,74 @@ mod tests {
         let before = w.organizations.len();
         w.apply(1, summon(AT)).unwrap();
         assert_eq!(w.organizations.len(), before);
+        assert_eq!(w.experience(1), Some(900.0));
+        let failed = Notice::SummonFailed {
+            player: 1,
+            template: Id::from("truck"),
+        };
+        assert_eq!(w.take_notices(), [failed]);
+    }
+
+    /// Has what's summoned flown in by a plane.
+    fn flown(w: &mut World, template: &str) {
+        let airlift = tgmap::Airlift {
+            transport: "plane".into(),
+            speed: 7.0,
+            turn_radius: 18.0,
+            height: 17.0,
+            delay: 0.4,
+        };
+        w.rules.airlifts.insert(Id::from(template), airlift);
+    }
+
+    #[test]
+    fn regiments_with_a_transport_are_flown_straight_to_where_theyre_aimed() {
+        let mut w = with_buildings(summoning(true, None), &[building(9, 2, AT)]);
+        let company = crate::testing::raised_company(&mut w, 0);
+        w.rules.raisable.insert(Id::from("company"), company);
+        if let Some(Operation::Summon(s)) = w.rules.operations.get_mut(&Id::from("reorganization"))
+        {
+            s.template = Id::from("company");
+        }
+        flown(&mut w, "company");
+        // The house there is no reason to look elsewhere.
+        w.apply(1, summon(AT)).unwrap();
+        assert_eq!(w.experience(1), Some(900.0));
+        let plane = &w.deliveries[0];
+        assert_eq!((plane.owner, plane.target, plane.hq), (1, AT, None));
+        assert!(w.organizations.is_empty() && w.take_notices().is_empty());
+        // Nothing waits on it, though the operation is one at a time.
+        assert!(w.summoned.is_empty());
+        // It comes down beside the house.
+        for _ in 0..400 {
+            w.tick();
+        }
+        let r = w.organizations.len() - 1;
+        assert_eq!(w.organizations[r].owner, 1);
+        assert!(!w.organizations[r].arriving);
+        assert!(crate::distance(w.leader_position(r), AT) < 6.0);
+        // In along x from the far edge, x = 0 being nearer.
+        let to = [10.0, AT[1]];
+        w.apply(1, summon(to)).unwrap();
+        let plane = &w.deliveries[1];
+        let size = w.pathing.size();
+        assert_eq!(plane.position, [(size - CELL_SIZE).next_down(), to[1]]);
+        assert_eq!(plane.facing, [-1.0, 0.0]);
+    }
+
+    #[test]
+    fn single_things_with_a_transport_are_flown_to_the_nearest_clear_spot() {
+        let mut w = with_buildings(summoning(false, None), &[building(9, 2, AT)]);
+        flown(&mut w, "truck");
+        w.apply(1, summon(AT)).unwrap();
+        assert_eq!(w.deliveries[0].target, [AT[0], AT[1] - 4.0]);
+        assert!(w.organizations.is_empty());
+        // With nowhere to go, no plane is sent.
+        let mut w = summoning(false, None);
+        w.pathing = Pathing::uniform(32, Domain::Naval);
+        flown(&mut w, "truck");
+        w.apply(1, summon(AT)).unwrap();
+        assert!(w.deliveries.is_empty());
         assert_eq!(w.experience(1), Some(900.0));
         let failed = Notice::SummonFailed {
             player: 1,

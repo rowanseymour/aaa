@@ -1,5 +1,5 @@
-//! Deliveries: organizations a building recruits to a place, flown in from
-//! the map's edge and dropped there by parachute.
+//! Deliveries: organizations a building recruits or an operation summons to a
+//! place, flown in from the map's edge and dropped there by parachute.
 
 use std::f32::consts::FRAC_PI_4;
 
@@ -261,13 +261,47 @@ impl World {
         organization: tgmap::Organization,
         to: [f32; 2],
     ) -> bool {
-        let Some(airlift) = self.rules.airlifts.get(&organization.template).cloned() else {
+        let building = &self.buildings[b];
+        let (player, from, facing) = (building.owner, building.position, building.facing);
+        let (entry, hq) = (self.entry(from, to), self.hq_of(b));
+        let Some(d) = self.airlift(player, organization, entry, to, facing, hq) else {
             return false;
         };
-        let building = &self.buildings[b];
-        let (owner, from) = (building.owner, building.position);
-        let entry = self.entry(from, to);
-        let line = normalised([to[0] - entry[0], to[1] - entry[1]]).unwrap_or(building.facing);
+        self.notices.push(Notice::Recruited {
+            player,
+            building: b,
+            delivery: d,
+        });
+        true
+    }
+
+    /// Sends an aircraft in to drop `organization` at `to` for `player`
+    /// with no building behind it, coming in from the edge farthest from
+    /// there; false for an organization nothing flies.
+    pub(crate) fn fly_in(
+        &mut self,
+        player: u32,
+        organization: tgmap::Organization,
+        to: [f32; 2],
+    ) -> bool {
+        let entry = self.farthest_edge(to);
+        let facing = crate::summons::FACING;
+        (self.airlift(player, organization, entry, to, facing, None)).is_some()
+    }
+
+    /// Sends an aircraft in from `entry` to drop `organization` at `to`,
+    /// holding a place for it at `hq`, returning its index.
+    fn airlift(
+        &mut self,
+        owner: u32,
+        organization: tgmap::Organization,
+        entry: [f32; 2],
+        to: [f32; 2],
+        facing: [f32; 2],
+        hq: Option<u32>,
+    ) -> Option<usize> {
+        let airlift = self.rules.airlifts.get(&organization.template).cloned()?;
+        let line = normalised([to[0] - entry[0], to[1] - entry[1]]).unwrap_or(facing);
         // The drop is centred on the target as if it were flown at half
         // speed throughout, one let go every `delay`.
         let pace = airlift.speed / 2.0;
@@ -275,7 +309,7 @@ impl World {
             .map(|m| self.carry(&m.template, airlift.height, pace))
             .fold(0.0, f32::max);
         let before = (organization.members.len().saturating_sub(1) / 2) as f32;
-        let (d, id, hq) = (self.deliveries.len(), self.take_ids(1), self.hq_of(b));
+        let (d, id) = (self.deliveries.len(), self.take_ids(1));
         let mark = distance(entry, to) - lead - airlift.delay * pace * before;
         self.deliveries.push(Delivery {
             id,
@@ -300,12 +334,22 @@ impl World {
             held: None,
             airlift,
         });
-        self.notices.push(Notice::Recruited {
-            player: owner,
-            building: b,
-            delivery: d,
-        });
-        true
+        Some(d)
+    }
+
+    /// Where on the map's edge an aircraft with nothing to fly in over
+    /// comes in to `to`: straight along whichever axis has the farther
+    /// edge from it, from that edge.
+    fn farthest_edge(&self, to: [f32; 2]) -> [f32; 2] {
+        let size = self.pathing.size();
+        let [x, y] = to;
+        let (dx, dy) = (x.max(size - x), y.max(size - y));
+        let edge = |c: f32| if c > size - c { 0.0 } else { size };
+        let entry = match dx > dy {
+            true => [edge(x), y],
+            false => [x, edge(y)],
+        };
+        self.pathing.inside(entry)
     }
 
     /// Where on the map's edge an aircraft sent from `from` to `to` comes
