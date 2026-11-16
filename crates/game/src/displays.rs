@@ -204,6 +204,7 @@ pub fn spawn_button(
                 Panel::MessageLog => "panel.messages",
             }),
             PanelButton { panel, name },
+            crate::widgets::Ours,
             rim.node(),
             Surface::Clear,
             Edge::Border,

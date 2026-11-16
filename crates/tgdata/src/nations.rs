@@ -21,6 +21,9 @@ pub struct Nation {
     pub flag: Option<String>,
     /// The music its player hears in a match.
     pub music: Option<Id>,
+    /// Where its interface's skin is, as paths in the install, which
+    /// [`GameData::skin`] opens.
+    pub skin: Vec<String>,
 }
 
 /// A bonus or penalty the lobby can give a side the computer plays.
@@ -274,6 +277,11 @@ impl GameData {
                     music: n
                         .game_music
                         .filter(|m| !m.as_str().eq_ignore_ascii_case("null")),
+                    skin: (n.depot_name.as_deref().unwrap_or("").split(','))
+                        .map(str::trim)
+                        .filter(|d| !d.is_empty() && !d.eq_ignore_ascii_case("null"))
+                        .map(str::to_string)
+                        .collect(),
                 })
             })
             .collect();

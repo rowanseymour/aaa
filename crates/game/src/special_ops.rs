@@ -92,6 +92,8 @@ pub fn armed(armed: Res<Armed>) -> bool {
 #[derive(Resource)]
 pub(crate) struct Panel {
     player: u32,
+    /// The operations the player's faction has, in its list's order.
+    operations: Vec<Operation>,
     faction: String,
     max: Option<f32>,
     words: Words,
@@ -124,16 +126,30 @@ struct ExperienceText;
 #[derive(Component)]
 struct ExperienceBox;
 
-/// An operation's button.
-#[derive(Component)]
-pub(crate) struct OperationButton {
-    /// Its operation's place in the faction's list.
+impl Panel {
+    fn operation(&self, index: usize) -> Option<&Operation> {
+        self.operations.iter().find(|o| o.index == index)
+    }
+}
+
+/// One of the operations a player's faction has, which its key or its
+/// button uses, whichever interface draws the button.
+#[derive(Clone, Debug)]
+pub(crate) struct Operation {
+    /// Its place in the faction's list.
     index: usize,
     name: String,
     /// The name of what it summons, for one that does.
     summons: Option<String>,
     /// It's used as soon as it's pressed, with no aiming.
     on_self: bool,
+}
+
+/// An operation's button.
+#[derive(Component)]
+pub(crate) struct OperationButton {
+    /// Its operation's place in the faction's list.
+    index: usize,
     /// Its tooltip, beside the tray while the pointer's on the button, and
     /// the tooltip's line saying how long it has left to recharge.
     tip: Entity,
@@ -227,8 +243,17 @@ fn spawn(
             Some((n, icon, name, op.clone(), figures, marker))
         })
         .collect();
+    let listed = (buttons.iter())
+        .map(|(index, _, _, op, ..)| Operation {
+            index: *index,
+            name: op.name.clone(),
+            summons: op.summons.clone(),
+            on_self: op.on_self,
+        })
+        .collect();
     commands
         .spawn((
+            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 top: px(crate::MARGIN),
@@ -298,9 +323,6 @@ fn spawn(
                         tray.spawn((
                             OperationButton {
                                 index,
-                                name: op.name.clone(),
-                                summons: op.summons.clone(),
-                                on_self: op.on_self,
                                 tip,
                                 recharge_line,
                                 marker,
@@ -357,6 +379,7 @@ fn spawn(
         });
     commands.insert_resource(Panel {
         player,
+        operations: listed,
         faction: faction.name.clone(),
         max: faction.experience_max,
         words,
@@ -501,37 +524,43 @@ pub(crate) struct User<'w> {
 }
 
 impl User<'_> {
-    /// Arms the cursor with `button`'s operation, or uses one that needs no
-    /// aiming at once, unless it can't be used now.
-    fn press(&mut self, button: &OperationButton) {
+    /// Arms the cursor with the `index`th operation, or uses one that needs
+    /// no aiming at once, unless it can't be used now.
+    fn press(&mut self, index: usize) {
         let Some(panel) = &self.panel else {
             return;
         };
         let player = panel.player;
-        match self.sim.0.check(player, &probe(button.index)) {
-            Ok(()) if button.on_self => {
-                let given = (self.orders.as_mut())
-                    .map(|o| o.give(&self.sim.0, player, probe(button.index)));
+        let Some(on_self) = panel.operation(index).map(|o| o.on_self) else {
+            return;
+        };
+        match self.sim.0.check(player, &probe(index)) {
+            Ok(()) if on_self => {
+                let given =
+                    (self.orders.as_mut()).map(|o| o.give(&self.sim.0, player, probe(index)));
                 if let Some(Err(e)) = given {
-                    self.refuse(button, e);
+                    self.refuse(index, e);
                 }
             }
             Ok(()) => {
-                self.armed.0 = Some(button.index);
+                self.armed.0 = Some(index);
                 // Not aiming an order too.
                 self.page.set_if_neq(Page::Orders);
             }
-            Err(e) => self.refuse(button, e),
+            Err(e) => self.refuse(index, e),
         }
     }
 
-    /// Tells the player why `button`'s operation can't be used.
-    fn refuse(&mut self, button: &OperationButton, refused: tgsim::Refused) {
+    /// Tells the player why the `index`th operation can't be used.
+    fn refuse(&mut self, index: usize, refused: tgsim::Refused) {
         let Some(panel) = &self.panel else {
             return;
         };
-        let name = button.name.as_str();
-        let summons = button.summons.as_deref().unwrap_or_default();
+        let Some(operation) = panel.operation(index) else {
+            return;
+        };
+        let name = operation.name.as_str();
+        let summons = operation.summons.as_deref().unwrap_or_default();
         let said = match refused {
             tgsim::Refused::Recharging => &panel.words.unready,
             tgsim::Refused::Unaffordable => &panel.words.short,
@@ -550,25 +579,22 @@ impl User<'_> {
 /// An operation's button clicked.
 fn press(activate: On<Activate>, buttons: Query<&OperationButton>, mut user: User) {
     if let Ok(button) = buttons.get(activate.entity) {
-        user.press(button);
+        user.press(button.index);
     }
 }
 
-/// Presses the operation a key just pressed is bound to.
-pub fn hotkeys(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<Bindings>,
-    buttons: Query<&OperationButton>,
-    mut user: User,
-) {
+/// Uses the operation a key just pressed is bound to.
+pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut user: User) {
     if keys.get_just_pressed().next().is_none() {
         return;
     }
-    let pressed = buttons
-        .iter()
-        .find(|b| bindings.pressed(&keys, &action(b.index)));
-    if let Some(button) = pressed {
-        user.press(button);
+    let pressed = (user.panel.as_ref()).and_then(|panel| {
+        (panel.operations.iter())
+            .find(|o| bindings.pressed(&keys, &action(o.index)))
+            .map(|o| o.index)
+    });
+    if let Some(index) = pressed {
+        user.press(index);
     }
 }
 
@@ -583,7 +609,6 @@ pub fn give(
     pointer: crate::Pointer,
     loaded: Res<Loaded>,
     focus: Res<crate::Focus>,
-    named: Query<&OperationButton>,
     mut user: User,
 ) {
     let Some(i) = user.armed.0 else {
@@ -609,10 +634,8 @@ pub fn give(
     };
     let given = (user.orders.as_mut()).map(|o| o.give(&user.sim.0, player, command));
     // What can be used may have changed since it was armed.
-    if let Some(Err(e)) = given
-        && let Some(button) = named.iter().find(|b| b.index == i)
-    {
-        user.refuse(button, e);
+    if let Some(Err(e)) = given {
+        user.refuse(i, e);
     }
 }
 
@@ -829,9 +852,6 @@ mod tests {
     fn button(index: usize, tip: Entity, recharge_line: Entity) -> OperationButton {
         OperationButton {
             index,
-            name: "Resupply".into(),
-            summons: None,
-            on_self: false,
             tip,
             recharge_line,
             marker: None,
@@ -861,6 +881,12 @@ mod tests {
     fn panel() -> Panel {
         Panel {
             player: 1,
+            operations: vec![Operation {
+                index: 0,
+                name: "Resupply".into(),
+                summons: None,
+                on_self: false,
+            }],
             faction: "Marshal Zhukov".into(),
             max: Some(5000.0),
             words: words(),
@@ -987,8 +1013,8 @@ mod tests {
         assert_eq!(recharging(text, 0.5), "Recharging (0:01 left)");
     }
 
-    /// An app with the operation armed or refused by a press of its
-    /// button, and the messages it posted.
+    /// An app with the operation armed or refused by a press of its key or
+    /// button, and the messages it posted. It has no button to press.
     fn pressed(experience: f32) -> (App, Vec<String>) {
         let mut app = App::new();
         app.add_message::<Failed>()
@@ -996,14 +1022,8 @@ mod tests {
             .init_resource::<Page>()
             .insert_resource(Sim(operating(experience)))
             .insert_resource(panel());
-        let b = app
-            .world_mut()
-            .spawn(button(0, Entity::PLACEHOLDER, Entity::PLACEHOLDER))
-            .id();
         app.world_mut()
-            .run_system_once(move |buttons: Query<&OperationButton>, mut user: User| {
-                user.press(buttons.get(b).unwrap());
-            })
+            .run_system_once(|mut user: User| user.press(0))
             .unwrap();
         let said = app
             .world_mut()

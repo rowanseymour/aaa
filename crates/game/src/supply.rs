@@ -231,6 +231,7 @@ pub fn spawn(
     let what = said(BORDER_HELP, "Toggles the supply border off/on.");
     commands
         .spawn((
+            crate::widgets::Ours,
             BorderButton {
                 shown,
                 pressed: false,
@@ -281,6 +282,7 @@ pub fn spawn(
     commands
         .spawn((
             CycleDetached,
+            crate::widgets::Ours,
             Blocks,
             Button,
             crate::ui::called("supply.detached"),

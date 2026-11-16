@@ -55,6 +55,7 @@ mod supply;
 mod technologies;
 mod ui;
 mod waypoints;
+mod widgets;
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
@@ -109,6 +110,8 @@ options:
                             drive and take screenshots of
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it
+  --original-hud            draw the original game's in-match interface in place
+                            of this project's
   --fog <setting>           none, explored or full: how much of the map the fog
                             of war hides, rather than the game's default
   --seed <number>           what the match's chances are drawn from, to play one
@@ -549,6 +552,7 @@ struct Options {
     shot_after: f64,
     headless: bool,
     ui_scale: f32,
+    hud: widgets::Hud,
     fog: Option<tgmap::FogSetting>,
     seed: Option<u64>,
     log: Option<String>,
@@ -587,6 +591,13 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
         None => 1.0,
     };
+    let hud = match args.iter().position(|a| a == "--original-hud") {
+        Some(at) => {
+            args.remove(at);
+            widgets::Hud::Original
+        }
+        None => widgets::Hud::Ours,
+    };
     let fog = match take_option(args, "--fog")? {
         Some(f) => Some(tgmap::FogSetting::named(&f)?),
         None => None,
@@ -621,6 +632,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         shot_after,
         headless,
         ui_scale,
+        hud,
         fog,
         seed,
         log,
@@ -651,6 +663,7 @@ fn main() -> ExitCode {
         shot_after,
         headless,
         ui_scale,
+        hud,
         fog,
         seed,
         log,
@@ -785,6 +798,7 @@ fn main() -> ExitCode {
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
+        .insert_resource(hud)
         .add_systems(PreUpdate, fit_ui)
         // The menu's backdrop has a camera too, which stays put.
         .configure_sets(
@@ -839,6 +853,7 @@ fn main() -> ExitCode {
                 actions::spawn,
                 object_display::spawn,
                 resource_bar::spawn,
+                widgets::spawn.run_if(widgets::original),
                 messages::spawn,
                 supply::spawn,
                 waypoints::load,
@@ -854,6 +869,12 @@ fn main() -> ExitCode {
                 supply::mark_border.run_if(resource_exists_and_changed::<keys::Bindings>),
             )
                 .chain()
+                .run_if(in_state(Screen::Match)),
+        )
+        .add_systems(
+            PostUpdate,
+            widgets::remove_ours
+                .run_if(widgets::original)
                 .run_if(in_state(Screen::Match)),
         )
         .add_plugins(HoldFirstTick)
@@ -905,7 +926,7 @@ fn main() -> ExitCode {
                     .run_if(takes_input),
                 minimap::update.after(camera::Controls).after(fog::look),
                 minimap::tint,
-                (actions::back_out, actions::show).chain(),
+                (actions::back_out, actions::fill_slots, actions::show).chain(),
                 (
                     object_display::lay_out,
                     (object_display::refresh, object_display::portray),

@@ -436,6 +436,7 @@ pub fn spawn(
         .id();
     commands
         .spawn((
+            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0),

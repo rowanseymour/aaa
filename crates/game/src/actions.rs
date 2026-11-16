@@ -593,9 +593,17 @@ impl Looks {
     }
 }
 
-/// What each slot holds now.
-#[derive(Resource, Default)]
-pub struct Shown([Option<Entry>; SLOTS]);
+/// What the grid holds now, as [`fill_slots`] works it out for the keys
+/// and whichever interface draws it.
+#[derive(Resource, Default, PartialEq)]
+pub struct Shown {
+    /// What each slot holds.
+    entries: [Option<Entry>; SLOTS],
+    /// What the player lacks for each recruit the menu offers, and how
+    /// each research it lists stands.
+    lacks: Vec<Lacking>,
+    researches: Vec<Researchable>,
+}
 
 /// The slot whose press was just refused and why, said while the cursor
 /// stays on it.
@@ -835,6 +843,7 @@ pub fn spawn(
     commands
         .spawn((
             Panel,
+            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 right: px(crate::MARGIN),
@@ -966,8 +975,90 @@ type SlotParts<'a> = (
     &'a mut Pickable,
 );
 
-/// Fills the grid's slots for the page and the selection, and says what's
-/// under the cursor.
+/// What the grid holds for the page and the selection, whichever
+/// interface draws it.
+fn contents(
+    page: Page,
+    sim: &tgsim::World,
+    looks: &Looks,
+    selected: &[usize],
+    building: Option<usize>,
+    local: Option<u32>,
+) -> Shown {
+    let hq = shown_hq(sim, selected, building);
+    let menu = looks.menu(sim, building);
+    let lacks: Vec<Lacking> = (menu.iter())
+        .map(|r| match (building, &r.organization, local) {
+            (Some(b), Some(organization), Some(player)) => sim.lacks(player, b, organization),
+            _ => Lacking::default(),
+        })
+        .collect();
+    let recruits: Vec<(Menu, Offer)> = (menu.iter().zip(&lacks))
+        .map(|(r, lacking)| (r.menu, Offer::from(lacking)))
+        .collect();
+    let topics = looks.topics(sim, building);
+    let list = building.map_or(&[][..], |b| sim.research_list(b));
+    // Only what has a look, should the two ever differ.
+    let list = &list[..list.len().min(topics.len())];
+    let mut researches: Vec<Researchable> = match (building, local) {
+        (Some(b), Some(player)) => sim.researchables(player, b),
+        _ => vec![Researchable::Hidden; list.len()],
+    };
+    researches.truncate(list.len());
+    let order_slots: Vec<Option<Place>> = looks.orders.iter().map(|(s, _)| *s).collect();
+    let entries = layout(
+        page,
+        &order_slots,
+        &offered(sim, selected, looks.has),
+        building.map(|b| BuildingButtons {
+            deploy: looks.deploy.0,
+            location: looks.location.0,
+            recruits: &recruits,
+            research: looks.research.0,
+            researches: &researches,
+            // Where what it raises goes matters whether or not any of it
+            // can be raised now.
+            rally: looks.rally.0.filter(|_| !menu.is_empty()),
+            pack: looks
+                .pack
+                .0
+                .filter(|_| sim.rules().packing.contains_key(&sim.buildings[b].template)),
+            sell: looks
+                .sell
+                .0
+                .filter(|_| local.is_some_and(|p| sim.check(p, &sell_command(b)).is_ok())),
+        }),
+        hq.is_some(),
+    );
+    Shown {
+        entries,
+        lacks,
+        researches,
+    }
+}
+
+/// Fills the grid's slots for the page and the selection, for its keys
+/// and whichever interface draws it.
+pub fn fill_slots(
+    page: Res<Page>,
+    selected: Res<Selected>,
+    chosen: Res<SelectedBuilding>,
+    sim: Res<Sim>,
+    looks: Res<Looks>,
+    local: Res<Local>,
+    mut shown: ResMut<Shown>,
+) {
+    let building = chosen.0.filter(|_| selected.0.is_empty());
+    // Others' things have no buttons, nor anything for a key to press.
+    let now = match crate::selection::commanded(&sim.0, local.0, &selected.0, building) {
+        true => contents(*page, &sim.0, &looks, &selected.0, building, local.0),
+        false => Shown::default(),
+    };
+    shown.set_if_neq(now);
+}
+
+/// Draws the grid's slots as [`fill_slots`] filled them, and says what's under
+/// the cursor.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     page: Res<Page>,
@@ -975,7 +1066,7 @@ pub fn show(
     chosen: Res<SelectedBuilding>,
     sim: Res<Sim>,
     looks: Res<Looks>,
-    mut shown: ResMut<Shown>,
+    shown: Res<Shown>,
     mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
     mut slots: Query<SlotParts, Without<SlotIcon>>,
     mut icons: Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
@@ -1010,65 +1101,22 @@ pub fn show(
         true => Visibility::Hidden,
     });
     if nothing {
-        // Nor is anything left for a key to press.
-        shown.0 = [None; SLOTS];
         // What was under the cursor went with the selection.
         if preview.0.is_some() {
             preview.0 = None;
         }
         return;
     }
-    let hq = shown_hq(&sim.0, &selected.0, building);
+    let Shown {
+        lacks, researches, ..
+    } = &*shown;
     let menu = looks.menu(&sim.0, building);
-    let lacks: Vec<Lacking> = (menu.iter())
-        .map(|r| match (building, &r.organization, local.0) {
-            (Some(b), Some(organization), Some(player)) => sim.0.lacks(player, b, organization),
-            _ => Lacking::default(),
-        })
-        .collect();
-    let recruits: Vec<(Menu, Offer)> = (menu.iter().zip(&lacks))
-        .map(|(r, lacking)| (r.menu, Offer::from(lacking)))
-        .collect();
     let topics = looks.topics(&sim.0, building);
     let list = building.map_or(&[][..], |b| sim.0.research_list(b));
-    // Only what has a look, should the two ever differ.
     let list = &list[..list.len().min(topics.len())];
-    let mut researches: Vec<Researchable> = match (building, local.0) {
-        (Some(b), Some(player)) => sim.0.researchables(player, b),
-        _ => vec![Researchable::Hidden; list.len()],
-    };
-    researches.truncate(list.len());
-    let order_slots: Vec<Option<Place>> = looks.orders.iter().map(|(s, _)| *s).collect();
-    shown.0 = layout(
-        *page,
-        &order_slots,
-        &offered(&sim.0, &selected.0, looks.has),
-        building.map(|b| BuildingButtons {
-            deploy: looks.deploy.0,
-            location: looks.location.0,
-            recruits: &recruits,
-            research: looks.research.0,
-            researches: &researches,
-            // Where what it raises goes matters whether or not any of it
-            // can be raised now.
-            rally: looks.rally.0.filter(|_| !menu.is_empty()),
-            pack: looks.pack.0.filter(|_| {
-                sim.0
-                    .rules()
-                    .packing
-                    .contains_key(&sim.0.buildings[b].template)
-            }),
-            sell: looks.sell.0.filter(|_| {
-                local
-                    .0
-                    .is_some_and(|p| sim.0.check(p, &sell_command(b)).is_ok())
-            }),
-        }),
-        hq.is_some(),
-    );
     let mut hovered = None;
     for (id, clicks, slot, hover, children, mut border, mut pickable) in &mut slots {
-        let entry = shown.0[slot.0];
+        let entry = shown.entries[slot.0];
         // Empty slots are just boxes, which nothing should hear clicks on.
         let want = match entry {
             Some(_) => Pickable::default(),
@@ -1446,7 +1494,7 @@ impl Presser<'_, '_> {
     /// Presses the button in `slot`: gives its order, aims it, opens or
     /// works the commission menu, or cancels.
     fn press(&mut self, slot: usize) {
-        let (Some(entry), Some(player)) = (self.shown.0[slot], self.local.0) else {
+        let (Some(entry), Some(player)) = (self.shown.entries[slot], self.local.0) else {
             return;
         };
         let sim = &self.sim.0;
@@ -1639,7 +1687,7 @@ pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut pre
     let list = building.map_or(&[][..], |b| presser.sim.0.research_list(b));
     let page = *presser.page;
     let slot = (0..SLOTS).find(|&slot| {
-        let names = presser.shown.0[slot]
+        let names = presser.shown.entries[slot]
             .filter(|e| !matches!(e, Entry::Recruit(i) if *i >= menu.len()))
             .filter(|e| !matches!(e, Entry::Research(i) if *i >= list.len()))
             .map_or(Vec::new(), |e| bound(e, slot, page, menu, list));

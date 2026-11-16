@@ -131,6 +131,7 @@ pub fn spawn(
     };
     commands
         .spawn((
+            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 top: px(crate::MARGIN),
