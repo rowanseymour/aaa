@@ -79,6 +79,13 @@ pub enum Notice {
     /// A company of `template` it recruited had nowhere to come out, so
     /// wasn't made.
     NotCreated { player: u32, template: Id },
+    /// Its hero `hero` died leading the company at this index into
+    /// [`World::organizations`].
+    HeroKilled {
+        player: u32,
+        hero: Id,
+        organization: usize,
+    },
     /// It holds a technology it didn't.
     Gained { player: u32, technology: Id },
     /// Something of `owner`'s is destroyed, by whatever cause.

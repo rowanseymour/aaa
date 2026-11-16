@@ -491,6 +491,9 @@ pub enum Left {
     Unpacked(u64),
     /// For good.
     Disbanded(u64),
+    /// Its place in its organization given to another, such as a hero
+    /// joining as captain.
+    Replaced(u64),
 }
 
 /// What a unit tows, dragged after the point it's coupled to so that it
@@ -701,6 +704,15 @@ pub enum Refused {
     /// It would take its owner over a limit, such as
     /// `unit_limit_consumed`.
     OverLimit,
+    /// It's a company that can't take or let go of a hero while it's
+    /// marked out of supply.
+    Unsettled,
+    /// It's a company out of supply, which can't take or let go of a hero.
+    OutOfSupply,
+    /// It's a company too small to take or let go of a hero.
+    Understrength,
+    /// It's a hero that's dead, until it's healed in its side's pool.
+    Dead,
 }
 
 impl From<NotYours> for Refused {
@@ -767,8 +779,16 @@ pub enum Command {
     /// into [`World::settlements`], at once and paid for there and then.
     /// Refused for one the settlement doesn't list or lacks what it needs,
     /// while its centre is under siege, and for one its side can't pay for
-    /// or hasn't room for under its limits.
-    Recruit { settlement: usize, template: Id },
+    /// or hasn't room for under its limits. With a `hero`, the company
+    /// is led by that hero from its side's pool in place of its own
+    /// captain, and is refused unless the hero is
+    /// [available](World::hero_available).
+    Recruit {
+        settlement: usize,
+        template: Id,
+        #[serde(default)]
+        hero: Option<Id>,
+    },
     /// As [`Command::Commission`], for an organization that's flown in and
     /// dropped at `to`. Refused for one nothing flies, or where it
     /// hasn't [room to land](World::room_to_land).
@@ -798,6 +818,14 @@ pub enum Command {
     Attach { organization: usize },
     /// Detaches an organization from its HQ.
     Detach { organization: usize },
+    /// Puts `hero`, from its side's pool, in a company's captain's place,
+    /// taking it from any company it leads. Refused while either company
+    /// can't [change captains](World::may_change_captain), and for a hero
+    /// that's dead.
+    AttachHero { organization: usize, hero: Id },
+    /// Sends the hero leading a company back to its side's pool. Refused
+    /// while the company can't [change captains](World::may_change_captain).
+    DetachHero { organization: usize },
     /// Takes an organization, or a lone unit such as a depot's truck, off the
     /// map for good, for nothing. Refused for an organization that's engaged or
     /// attached to an HQ, or anything on its way to unpack.
@@ -983,6 +1011,7 @@ impl World {
         self.lift_sieges();
         self.supply();
         self.resupply();
+        self.tend_heroes();
         self.produce();
         self.deliver();
         self.rally();
@@ -1199,6 +1228,7 @@ impl Digest for Left {
         match *self {
             Left::Unpacked(tick) => (0u8, tick).digest(h),
             Left::Disbanded(tick) => (1u8, tick).digest(h),
+            Left::Replaced(tick) => (2u8, tick).digest(h),
         }
     }
 }

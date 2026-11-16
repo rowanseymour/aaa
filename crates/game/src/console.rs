@@ -282,7 +282,7 @@ const VERBS: &[Verb] = &[
     verb(
         "heroes",
         "[kingdom]",
-        "lists the heroes a kingdom, by name or id, holds; without one, the kingdom played",
+        "lists the heroes a kingdom, by name or id, holds, and what each is doing; without one, the kingdom played",
     ),
     verb(
         "settlements",
@@ -296,8 +296,8 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "commission",
-        "template [x y]",
-        "asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there",
+        "template [x y | hero]",
+        "asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there; a settlement's company can be led by a hero from the pool",
     ),
     verb(
         "research",
@@ -325,6 +325,16 @@ const VERBS: &[Verb] = &[
         "detach",
         "organization",
         "detaches an organization, by its id, from its HQ",
+    ),
+    verb(
+        "attachhero",
+        "organization hero",
+        "puts a hero from its side's pool at the head of a company, by the company's id",
+    ),
+    verb(
+        "detachhero",
+        "organization",
+        "sends the hero leading a company, by its id, back to its side's pool",
     ),
     verb(
         "unpack",
@@ -517,6 +527,8 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "disband" => disband(world, &args),
                 "attach" => attach(world, &args, true),
                 "detach" => attach(world, &args, false),
+                "attachhero" => attach_hero(world, &args),
+                "detachhero" => detach_hero(world, &args),
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
                 "record" => record(world, &args),
@@ -961,7 +973,17 @@ fn heroes(world: &World, args: &[&str]) -> Reply {
         _ => return Err(usage("heroes")),
     };
     let held: Vec<String> = (sim.heroes(player).iter())
-        .map(|h| format!("{} at {:.0}% health", h.hero, h.health * 100.0))
+        .map(|h| {
+            let status = match h.unit {
+                Some(u) => {
+                    let r = sim.units[u].organization;
+                    format!("leading {}", sim.organizations[r].id)
+                }
+                None if h.fallen => "fallen".into(),
+                None => format!("at {:.0}% health", h.health * 100.0),
+            };
+            format!("{} {status}", h.hero)
+        })
         .collect();
     Ok(match held.is_empty() {
         true => "no heroes".into(),
@@ -1247,15 +1269,17 @@ fn select(world: &mut World, args: &[&str]) -> Reply {
 }
 
 fn commission(world: &mut World, args: &[&str]) -> Reply {
-    let (template, to) = match args {
-        [template] => (template, None),
+    let (template, to, hero) = match args {
+        [template] => (template, None, None),
+        [template, hero] => (template, None, Some(hero)),
         [template, x, y] => {
             let to = place(&world.resource::<Loaded>().map.ground, x, y)?;
-            (template, Some(to))
+            (template, Some(to), None)
         }
         _ => return Err(usage("commission")),
     };
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
+    let hero = (hero.map(|h| held_hero(&world.resource::<Sim>().0, player, h))).transpose()?;
     let b = selected_building(world)?;
     let raising = &world.resource::<Raising>().0;
     let hq = &world.resource::<Sim>().0.buildings[b].template;
@@ -1278,7 +1302,9 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         (None, Some(settlement)) => tgsim::Command::Recruit {
             settlement,
             template,
+            hero,
         },
+        (None, None) if hero.is_some() => return Err("only settlements recruit heroes".into()),
         (None, None) => tgsim::Command::Commission { building, template },
     };
     if let (Err(tgsim::Refused::Lacking), Some(l)) = (sim.check(player, &command), lacking) {
@@ -1371,6 +1397,42 @@ fn attach(world: &mut World, args: &[&str], attach: bool) -> Reply {
     };
     give(world, owner, command)?;
     Ok(String::new())
+}
+
+fn attach_hero(world: &mut World, args: &[&str]) -> Reply {
+    let [id, hero] = args else {
+        return Err(usage("attachhero"));
+    };
+    let sim = &world.resource::<Sim>().0;
+    let organization = organization_by_id(sim, id)?;
+    let owner = sim.organizations[organization].owner;
+    let hero = held_hero(sim, owner, hero)?;
+    give(
+        world,
+        owner,
+        tgsim::Command::AttachHero { organization, hero },
+    )?;
+    Ok(String::new())
+}
+
+fn detach_hero(world: &mut World, args: &[&str]) -> Reply {
+    let [id] = args else {
+        return Err(usage("detachhero"));
+    };
+    let sim = &world.resource::<Sim>().0;
+    let organization = organization_by_id(sim, id)?;
+    let owner = sim.organizations[organization].owner;
+    give(world, owner, tgsim::Command::DetachHero { organization })?;
+    Ok(String::new())
+}
+
+/// The hero in `player`'s pool named `word`, ignoring case.
+fn held_hero(sim: &tgsim::World, player: u32, word: &str) -> Result<Id, String> {
+    (sim.heroes(player).iter())
+        .map(|h| &h.hero)
+        .find(|h| h.as_str().eq_ignore_ascii_case(word))
+        .cloned()
+        .ok_or_else(|| format!("kingdom {player} holds no hero {word}"))
 }
 
 fn unpack(world: &mut World, args: &[&str]) -> Reply {
