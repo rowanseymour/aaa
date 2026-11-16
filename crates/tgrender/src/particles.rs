@@ -1494,11 +1494,11 @@ pub struct ParticleTextures {
 
 impl MaterialExtension for ParticleTextures {
     fn vertex_shader() -> ShaderRef {
-        "embedded://aaa_render/particles.wesl".into()
+        "embedded://tgrender/particles.wesl".into()
     }
 
     fn fragment_shader() -> ShaderRef {
-        "embedded://aaa_render/particles.wesl".into()
+        "embedded://tgrender/particles.wesl".into()
     }
 }
 

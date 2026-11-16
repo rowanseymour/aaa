@@ -3,11 +3,11 @@
 
 use std::collections::HashMap;
 
-use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use tgdata::Id;
+use tgrender::textures;
 
 use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
 use crate::keys::Bindings;

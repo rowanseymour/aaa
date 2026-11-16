@@ -6,14 +6,14 @@
 
 use std::collections::HashMap;
 
-use aaa_render::MapAssets;
-use aaa_render::terrain::world;
-use aaa_render::textures;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::window::{CursorIcon, CustomCursor, CustomCursorImage, PrimaryWindow, SystemCursorIcon};
 use tgdata::Id;
+use tgrender::MapAssets;
+use tgrender::terrain::world;
+use tgrender::textures;
 
 use crate::actions::{self, Aim, Page};
 use crate::{Drawn, Loaded, Pointer, Screen, SelectedBuilding, Sim};
@@ -75,7 +75,7 @@ struct Marking {
 pub struct Waypoint(Spots);
 
 /// The marker on a building's rally point, by index into
-/// [`aaa_sim::World::buildings`].
+/// [`tgsim::World::buildings`].
 #[derive(Component)]
 pub struct RallyMarker(usize, [f32; 2]);
 
@@ -300,7 +300,7 @@ pub fn clear(mut commands: Commands, sim: Res<Sim>, waypoints: Query<(Entity, &W
 }
 
 /// Whether an organization is still on its way to `to`.
-fn headed(sim: &aaa_sim::World, organization: usize, [x, y]: [f32; 2]) -> bool {
+fn headed(sim: &tgsim::World, organization: usize, [x, y]: [f32; 2]) -> bool {
     let [dx, dy] = sim.destination(organization);
     !sim.destroyed(organization) && sim.underway(organization) && (dx - x).hypot(dy - y) < 0.5
 }

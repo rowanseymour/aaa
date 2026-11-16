@@ -7,8 +7,8 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use aaa_server::{Client, Event, Film, Host, Setup, quic};
-use aaa_sim::{Record, Schedule, TICK, World};
 use tgdata::GameData;
+use tgsim::{Record, Schedule, TICK, World};
 
 const USAGE: &str = "\
 usage:

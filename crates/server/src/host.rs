@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use aaa_sim::{Action, Record, Schedule, World};
+use tgsim::{Action, Record, Schedule, World};
 
 use serde::{Deserialize, Serialize};
 
@@ -150,7 +150,7 @@ pub enum Event {
 /// Whether `words` are fit to pass on as chat: no longer than a chat
 /// line holds, and nothing but what can be typed.
 pub fn sayable(words: &str) -> bool {
-    words.chars().count() <= aaa_sim::CHAT_LONGEST && !words.chars().any(char::is_control)
+    words.chars().count() <= tgsim::CHAT_LONGEST && !words.chars().any(char::is_control)
 }
 
 /// Whether a host carries out `action` for a client it doesn't trust
@@ -828,8 +828,8 @@ impl<L: Link> Host<L> {
 
 #[cfg(test)]
 mod tests {
-    use aaa_sim::{Command, Refused, Sides};
     use tgmap::{Domain, Formation, Member, Organization, Pathing};
+    use tgsim::{Command, Refused, Sides};
 
     use super::*;
     use crate::testing::player;
@@ -1117,7 +1117,7 @@ mod tests {
     fn a_client_chats_only_as_itself() {
         let chat = |from| Action::Chat {
             from,
-            to: aaa_sim::Channel::All,
+            to: tgsim::Channel::All,
             words: "hi".into(),
         };
         assert!(allows(&[1], &chat(Some(1))));
@@ -1128,11 +1128,11 @@ mod tests {
         assert!(!allows(&[], &chat(Some(1))));
         let said = |words: String| Action::Chat {
             from: Some(1),
-            to: aaa_sim::Channel::All,
+            to: tgsim::Channel::All,
             words,
         };
-        assert!(allows(&[1], &said("a".repeat(aaa_sim::CHAT_LONGEST))));
-        assert!(!allows(&[1], &said("a".repeat(aaa_sim::CHAT_LONGEST + 1))));
+        assert!(allows(&[1], &said("a".repeat(tgsim::CHAT_LONGEST))));
+        assert!(!allows(&[1], &said("a".repeat(tgsim::CHAT_LONGEST + 1))));
         assert!(!allows(&[1], &said("a\nb".into())));
     }
 
@@ -1309,9 +1309,7 @@ mod tests {
         clients[0].say("wait for me".into()).unwrap();
         clients[2].say("hi".into()).unwrap();
         // Too long, or nothing at all, isn't passed on.
-        clients[0]
-            .say("a".repeat(aaa_sim::CHAT_LONGEST + 1))
-            .unwrap();
+        clients[0].say("a".repeat(tgsim::CHAT_LONGEST + 1)).unwrap();
         clients[0].say(" ".into()).unwrap();
         host.turn();
         clients[0].advance(usize::MAX).unwrap();

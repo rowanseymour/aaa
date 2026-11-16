@@ -22,7 +22,7 @@ differences in what you can see or do are.
   screens. We keep the window's true aspect, with the same vertical view as the
   original, so a wider window sees more of the map to each side rather than stretching
   it. At the same zoom this reads as being zoomed out further. See
-  [camera.rs](../crates/render/src/camera.rs).
+  [camera.rs](../crates/tgrender/src/camera.rs).
 
 ## New options
 

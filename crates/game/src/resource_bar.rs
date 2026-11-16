@@ -2,12 +2,12 @@
 //! they net of each resource a minute, and a second bar under it previewing
 //! what the order under the cursor would make of them.
 
-use aaa_render::textures;
-use aaa_sim::{Balance, Change};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use tgdata::{Id, ResourceRole};
 use tgmap::Organization;
+use tgrender::textures;
+use tgsim::{Balance, Change};
 
 use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};
@@ -299,8 +299,8 @@ fn cell_parts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_sim::{Ledger, economy::EconomyRules};
     use tgmap::ResourceKind;
+    use tgsim::{Ledger, economy::EconomyRules};
 
     fn resources() -> Vec<ResourceKind> {
         vec![

@@ -11,7 +11,7 @@ publish = false
 [dependencies]
 tgdata = { path = "../tgdata" }
 tgmap = { path = "../tgmap" }
-aaa-sim = { path = "../sim" }
+tgsim = { path = "../tgsim" }
 log = "0.4"
 postcard = { version = "1.1", default-features = false, features = ["use-std"] }
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls-ring"] }

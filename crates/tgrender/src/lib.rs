@@ -1,4 +1,4 @@
-//! Draws Axis & Allies (2004) maps with Bevy: the ground and water, placed
+//! Draws a game's maps with Bevy: the ground and water, placed
 //! objects with the game's models, and an RTS camera to look at them with.
 
 pub mod blend;

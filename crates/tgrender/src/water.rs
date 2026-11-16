@@ -20,6 +20,6 @@ pub struct Water {
 
 impl MaterialExtension for Water {
     fn fragment_shader() -> ShaderRef {
-        "embedded://aaa_render/water.wesl".into()
+        "embedded://tgrender/water.wesl".into()
     }
 }

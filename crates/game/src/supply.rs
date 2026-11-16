@@ -4,9 +4,6 @@
 //! border, as the options do. Another over the minimap, or its key, steps
 //! through the player's organizations that have no HQ.
 
-use aaa_render::camera::RtsCamera;
-use aaa_render::terrain::world;
-use aaa_render::{Tint, overlay, textures};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::NotShadowCaster;
@@ -15,6 +12,9 @@ use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 use tgmap::Tile;
+use tgrender::camera::RtsCamera;
+use tgrender::terrain::world;
+use tgrender::{Tint, overlay, textures};
 
 use crate::actions::Blocks;
 use crate::displays::{self, Rim};

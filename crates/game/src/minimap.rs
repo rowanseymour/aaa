@@ -9,9 +9,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aaa_render::camera::RtsCamera;
-use aaa_render::terrain::{map_point, world};
-use aaa_render::textures;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -19,9 +16,12 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::ui::RelativeCursorPosition;
 use tgdata::{GameData, Id};
 use tgmap::{Ground, Map, Tile};
+use tgrender::camera::RtsCamera;
+use tgrender::terrain::{map_point, world};
+use tgrender::textures;
 
 use crate::{Loaded, Sim, TINTS};
-use aaa_sim::{Relation, State};
+use tgsim::{Relation, State};
 
 /// Width of the disc on screen, in logical pixels, which the diamond's
 /// corners touch.
@@ -56,7 +56,7 @@ pub struct Minimap {
     /// Where each pixel on the map takes its fog from.
     samples: Vec<Sample>,
     /// The fog `fogged` was drawn under.
-    fog: Vec<aaa_sim::Seen>,
+    fog: Vec<tgsim::Seen>,
     /// The map's width, in world units.
     size: f32,
     /// The icons buildings are marked with, by template id.
@@ -413,7 +413,7 @@ fn fog_ground(minimap: &mut Minimap, fog: &crate::fog::Fog) {
         return;
     }
     let light: Vec<f32> = tiles.iter().map(|&s| crate::fog::brightness(s)).collect();
-    let off_map = crate::fog::brightness(aaa_sim::Seen::Unexplored);
+    let off_map = crate::fog::brightness(tgsim::Seen::Unexplored);
     let at = |t: Tile| t.index(side).map_or(off_map, |i| light[i]);
     for s in &minimap.samples {
         let t = s.tile;
@@ -532,7 +532,7 @@ pub fn update(
         canvas.square(to_px(building.position), 3.0, rgb);
     }
     let shown =
-        |(u, unit): &(usize, &aaa_sim::Unit)| unit.alive() && (revealed || fog.shows_unit(*u));
+        |(u, unit): &(usize, &tgsim::Unit)| unit.alive() && (revealed || fog.shows_unit(*u));
     for (_, unit) in sim.0.units.iter().enumerate().filter(shown) {
         let organization = &sim.0.organizations[unit.organization];
         let fighting = !organization.engaged.is_empty() || unit.besieged.is_some();

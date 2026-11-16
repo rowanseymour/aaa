@@ -14,11 +14,11 @@ mod testing;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
-use aaa_sim::World;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use tgdata::{Faction, GameData, Handicap, Id, Nation};
 use tgmap::{FogSetting, Map, Player, Recruits};
+use tgsim::World;
 
 pub use client::{Client, NotJoined, enter, join, welcome};
 pub use clock::Clock;
@@ -116,7 +116,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         }
     }
     let experience = game.experience_rules();
-    let mut rules = aaa_sim::Rules {
+    let mut rules = tgsim::Rules {
         seed,
         terrain_rules: game.terrain_rules(),
         packing: raising.packings(),
@@ -161,7 +161,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         let ops = (faction.operations.iter())
             .map(|o| {
                 let recharge = recharges.get(&o.id).copied().unwrap_or(0.0);
-                aaa_sim::SpecialOp::new(o.id.clone(), o.cost, recharge)
+                tgsim::SpecialOp::new(o.id.clone(), o.cost, recharge)
             })
             .collect();
         world.lead(player, experience.starting, faction.experience_max, ops);

@@ -14,8 +14,6 @@
 
 use std::collections::HashMap;
 
-use aaa_render::textures;
-use aaa_sim::{Lacking, Researchable};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
@@ -24,6 +22,8 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GameData, Id};
 use tgmap::Organization;
+use tgrender::textures;
+use tgsim::{Lacking, Researchable};
 
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
@@ -129,11 +129,11 @@ enum Give {
 
 impl Give {
     /// The order to attach, detach or disband `organization`.
-    fn command(self, organization: usize) -> aaa_sim::Command {
+    fn command(self, organization: usize) -> tgsim::Command {
         match self {
-            Give::Attach => aaa_sim::Command::Attach { organization },
-            Give::Disband => aaa_sim::Command::Disband { organization },
-            _ => aaa_sim::Command::Detach { organization },
+            Give::Attach => tgsim::Command::Attach { organization },
+            Give::Disband => tgsim::Command::Disband { organization },
+            _ => tgsim::Command::Detach { organization },
         }
     }
 }
@@ -281,7 +281,7 @@ impl BuildingButtons<'_> {
 /// guard; anything else has the rest. One thing selected alone can be
 /// disbanded, unless it's attached to an HQ, which it can detach from
 /// instead, or on its way to unpack; while it fights it's greyed.
-fn offered(sim: &aaa_sim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
+fn offered(sim: &tgsim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
     let packed = |&r: &usize| sim.organizations[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
     let lone = selected.iter().all(|&r| sim.lone(r));
@@ -453,7 +453,7 @@ pub struct Looks {
 
 impl Looks {
     /// The menu of what the selected building commissions.
-    fn menu(&self, sim: &aaa_sim::World, building: Option<usize>) -> &[Recruit] {
+    fn menu(&self, sim: &tgsim::World, building: Option<usize>) -> &[Recruit] {
         building
             .and_then(|b| self.menus.get(sim.buildings[b].template.as_str()))
             .map_or(&[], Vec::as_slice)
@@ -463,7 +463,7 @@ impl Looks {
     /// is aiming it.
     pub fn delivered(
         &self,
-        sim: &aaa_sim::World,
+        sim: &tgsim::World,
         building: Option<usize>,
         page: Page,
     ) -> Option<&tgmap::Organization> {
@@ -475,7 +475,7 @@ impl Looks {
 
     /// The research menu of the selected building, as its research list
     /// has it.
-    fn topics(&self, sim: &aaa_sim::World, building: Option<usize>) -> &[Topic] {
+    fn topics(&self, sim: &tgsim::World, building: Option<usize>) -> &[Topic] {
         building
             .and_then(|b| self.researches.get(&sim.buildings[b].template))
             .map_or(&[], Vec::as_slice)
@@ -561,7 +561,7 @@ pub struct Shown([Option<Entry>; SLOTS]);
 /// The slot whose press was just refused and why, said while the cursor
 /// stays on it.
 #[derive(Resource, Default)]
-pub struct Refusal(Option<(usize, aaa_sim::Refused)>);
+pub struct Refusal(Option<(usize, tgsim::Refused)>);
 
 pub fn spawn(
     mut commands: Commands,
@@ -1125,7 +1125,7 @@ pub fn show(
             }
             let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
             let unaffordable = match (entry, refused) {
-                (Entry::Recruit(i), Some(aaa_sim::Refused::Unaffordable)) => menu[i]
+                (Entry::Recruit(i), Some(tgsim::Refused::Unaffordable)) => menu[i]
                     .organization
                     .as_ref()
                     .map(|r| (&looks.affording, sim.0.cost(r))),
@@ -1403,7 +1403,7 @@ impl Presser<'_, '_> {
                     let selected = &self.selected.0;
                     crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
                     for &organization in selected {
-                        let stop = aaa_sim::Command::Stop { organization };
+                        let stop = tgsim::Command::Stop { organization };
                         let _ = self.orders.give(sim, player, stop);
                     }
                     *self.page = Page::Orders;
@@ -1439,7 +1439,7 @@ impl Presser<'_, '_> {
             Entry::Pack => {
                 if let Some(b) = self.chosen.0
                     && let Err(e) =
-                        (self.orders).give(sim, player, aaa_sim::Command::Pack { building: b })
+                        (self.orders).give(sim, player, tgsim::Command::Pack { building: b })
                 {
                     debug!("can't pack {}: {e:?}", sim.buildings[b].template);
                 }
@@ -1455,11 +1455,11 @@ impl Presser<'_, '_> {
                     let template = tgmap::Id::from(recruit.id.as_str());
                     let settlement = sim.settlement_of(b);
                     let command = match settlement {
-                        Some(settlement) => aaa_sim::Command::Recruit {
+                        Some(settlement) => tgsim::Command::Recruit {
                             settlement,
                             template: template.clone(),
                         },
-                        None => aaa_sim::Command::Commission {
+                        None => tgsim::Command::Commission {
                             building: b,
                             template: template.clone(),
                         },
@@ -1477,7 +1477,7 @@ impl Presser<'_, '_> {
                         debug!("can't commission {template}: {e:?}");
                         // As the game does, it says nothing for what's not
                         // offered.
-                        if e != aaa_sim::Refused::Lacking {
+                        if e != tgsim::Refused::Lacking {
                             self.refusal.0 = Some((slot, e));
                         }
                     }
@@ -1494,7 +1494,7 @@ impl Presser<'_, '_> {
                 let Some(item) = sim.research_list(b).get(i) else {
                     return;
                 };
-                let command = aaa_sim::Command::Research {
+                let command = tgsim::Command::Research {
                     building: b,
                     technology: item.technology.clone(),
                 };
@@ -1513,7 +1513,7 @@ impl Presser<'_, '_> {
     /// Asks the player whether they're sure, then gives `command` if it
     /// can still be given. What can't be given now is refused at once, and
     /// a press while a question's up is ignored.
-    fn ask(&mut self, slot: usize, player: u32, command: aaa_sim::Command) {
+    fn ask(&mut self, slot: usize, player: u32, command: tgsim::Command) {
         if !self.questions.is_empty() {
             return;
         }
@@ -1532,7 +1532,7 @@ impl Presser<'_, '_> {
 
     /// Tells the player the selected building at `building` won't research
     /// the `i`th item it lists, and why.
-    fn refuse_research(&mut self, building: usize, i: usize, refused: aaa_sim::Refused) {
+    fn refuse_research(&mut self, building: usize, i: usize, refused: tgsim::Refused) {
         let sim = &self.sim.0;
         let Some(item) = sim.research_list(building).get(i) else {
             return;
@@ -1541,7 +1541,7 @@ impl Presser<'_, '_> {
         let name = (looks.topics(sim, Some(building)).get(i))
             .map_or(item.technology.as_str(), |t| t.look.name.as_str());
         let text = match refused {
-            aaa_sim::Refused::Unaffordable => {
+            tgsim::Refused::Unaffordable => {
                 let cost = sim.research_cost(item).ceil().to_string();
                 fill(&looks.research_affording, &[name, &cost])
             }
@@ -1593,13 +1593,13 @@ pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut pre
         bindings.pressed(&keys, &action) && sim.researchable(player, b, item) == Researchable::Taken
     });
     if let Some((i, _)) = taken {
-        presser.refuse_research(b, i, aaa_sim::Refused::Unable);
+        presser.refuse_research(b, i, tgsim::Refused::Unable);
     }
 }
 
 /// The HQ the selection is, by its id: the selected building, or the one
 /// selected organization, packed.
-fn shown_hq(sim: &aaa_sim::World, selected: &[usize], building: Option<usize>) -> Option<u32> {
+fn shown_hq(sim: &tgsim::World, selected: &[usize], building: Option<usize>) -> Option<u32> {
     match (selected, building) {
         ([], Some(b)) => sim.hq_of(b),
         ([r], _) => sim.packed_hq(*r),
@@ -1609,7 +1609,7 @@ fn shown_hq(sim: &aaa_sim::World, selected: &[usize], building: Option<usize>) -
 
 /// The page after a press of a recruit in the commission menu: as the
 /// game does, back to the building's own buttons once it's been given.
-fn commissioned(page: Page, given: Result<(), aaa_sim::Refused>) -> Page {
+fn commissioned(page: Page, given: Result<(), tgsim::Refused>) -> Page {
     match given {
         Ok(()) => Page::Orders,
         Err(_) => page,
@@ -1633,30 +1633,30 @@ pub(crate) fn fill(text: &str, with: &[&str]) -> String {
 }
 
 /// Why an order was refused, for the tooltip.
-fn refused_why(refused: aaa_sim::Refused) -> &'static str {
+fn refused_why(refused: tgsim::Refused) -> &'static str {
     match refused {
-        aaa_sim::Refused::NotYours => "Not yours",
-        aaa_sim::Refused::Unable => "Can't now",
-        aaa_sim::Refused::NoRoom => "No room",
-        aaa_sim::Refused::Lacking => "Lacks a building or technology it needs",
-        aaa_sim::Refused::Unaffordable => "Not enough money",
-        aaa_sim::Refused::Full => "HQ is full",
-        aaa_sim::Refused::Recharging => "Recharging",
-        aaa_sim::Refused::Summoned => "Waiting on what it summoned",
-        aaa_sim::Refused::Misplaced => "Can't be aimed there",
-        aaa_sim::Refused::Besieged => "Under siege",
-        aaa_sim::Refused::OverLimit => "Over a limit",
+        tgsim::Refused::NotYours => "Not yours",
+        tgsim::Refused::Unable => "Can't now",
+        tgsim::Refused::NoRoom => "No room",
+        tgsim::Refused::Lacking => "Lacks a building or technology it needs",
+        tgsim::Refused::Unaffordable => "Not enough money",
+        tgsim::Refused::Full => "HQ is full",
+        tgsim::Refused::Recharging => "Recharging",
+        tgsim::Refused::Summoned => "Waiting on what it summoned",
+        tgsim::Refused::Misplaced => "Can't be aimed there",
+        tgsim::Refused::Besieged => "Under siege",
+        tgsim::Refused::OverLimit => "Over a limit",
     }
 }
 
 /// The order to sell the building at `building`.
-fn sell_command(building: usize) -> aaa_sim::Command {
-    aaa_sim::Command::Sell { building }
+fn sell_command(building: usize) -> tgsim::Command {
+    tgsim::Command::Sell { building }
 }
 
 /// Whether a building can pack now: not while it's packing or unpacking,
 /// nor when it's too hurt.
-fn can_pack(sim: &aaa_sim::World, building: usize) -> bool {
+fn can_pack(sim: &tgsim::World, building: usize) -> bool {
     let b = &sim.buildings[building];
     let floor = sim
         .rules()
@@ -1680,7 +1680,7 @@ enum Struck {
     Ground,
 }
 
-fn attack_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Struck {
+fn attack_at(sim: &tgsim::World, player: u32, focus: crate::Focus) -> Struck {
     let owner = match focus {
         crate::Focus::Nothing => None,
         crate::Focus::Organization(r) => Some(sim.organizations[r].owner),
@@ -1691,15 +1691,15 @@ fn attack_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Struck {
 
 /// What an attack strikes at `focus`, toward whose owner `player` stands
 /// as `toward`.
-fn struck(focus: crate::Focus, toward: Option<aaa_sim::Relation>) -> Struck {
+fn struck(focus: crate::Focus, toward: Option<tgsim::Relation>) -> Struck {
     match (focus, toward) {
         (crate::Focus::Nothing, _) => Struck::Ground,
-        (crate::Focus::Organization(e), Some(aaa_sim::Relation::Enemy)) => Struck::Enemy(e),
-        (crate::Focus::Building(_), Some(aaa_sim::Relation::Enemy)) => Struck::Ground,
-        (crate::Focus::Organization(r), Some(aaa_sim::Relation::Neutral)) => {
+        (crate::Focus::Organization(e), Some(tgsim::Relation::Enemy)) => Struck::Enemy(e),
+        (crate::Focus::Building(_), Some(tgsim::Relation::Enemy)) => Struck::Ground,
+        (crate::Focus::Organization(r), Some(tgsim::Relation::Neutral)) => {
             Struck::Neutral(About::Organization(r))
         }
-        (crate::Focus::Building(b), Some(aaa_sim::Relation::Neutral)) => {
+        (crate::Focus::Building(b), Some(tgsim::Relation::Neutral)) => {
             Struck::Neutral(About::Building(b))
         }
         (crate::Focus::Organization(r), _) => Struck::Friend(About::Organization(r)),
@@ -1708,33 +1708,33 @@ fn struck(focus: crate::Focus, toward: Option<aaa_sim::Relation>) -> Struck {
 }
 
 /// The enemy's organization or building at `focus`, which Guard refuses.
-fn enemy_at(sim: &aaa_sim::World, player: u32, focus: crate::Focus) -> Option<About> {
+fn enemy_at(sim: &tgsim::World, player: u32, focus: crate::Focus) -> Option<About> {
     let (about, owner) = match focus {
         crate::Focus::Nothing => return None,
         crate::Focus::Organization(r) => (About::Organization(r), sim.organizations[r].owner),
         crate::Focus::Building(b) => (About::Building(b), sim.buildings[b].owner),
     };
-    (sim.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(about)
+    (sim.sides.relation(player, owner) == tgsim::Relation::Enemy).then_some(about)
 }
 
 /// What a guard aimed at `focus` is posted beside: an organization or building
 /// that's no enemy's, and not one of the `selected` giving the guard, which
 /// guard where they are instead.
 fn guard_at(
-    sim: &aaa_sim::World,
+    sim: &tgsim::World,
     player: u32,
     selected: &[usize],
     focus: crate::Focus,
-) -> Option<aaa_sim::Piece> {
+) -> Option<tgsim::Piece> {
     let (thing, owner) = match focus {
         crate::Focus::Nothing => return None,
         crate::Focus::Organization(r) if selected.contains(&r) => return None,
         crate::Focus::Organization(r) => {
-            (aaa_sim::Piece::Organization(r), sim.organizations[r].owner)
+            (tgsim::Piece::Organization(r), sim.organizations[r].owner)
         }
-        crate::Focus::Building(b) => (aaa_sim::Piece::Building(b), sim.buildings[b].owner),
+        crate::Focus::Building(b) => (tgsim::Piece::Building(b), sim.buildings[b].owner),
     };
-    (sim.sides.relation(player, owner) != aaa_sim::Relation::Enemy).then_some(thing)
+    (sim.sides.relation(player, owner) != tgsim::Relation::Enemy).then_some(thing)
 }
 
 /// While an order is aimed, a left click on the map or minimap gives it
@@ -1785,15 +1785,15 @@ pub fn aim(
         else {
             return;
         };
-        let deliver = aaa_sim::Command::Deliver {
+        let deliver = tgsim::Command::Deliver {
             building: b,
             template: organization.template.clone(),
             to: point,
         };
         match orders.give(&sim.0, player, deliver) {
-            Err(aaa_sim::Refused::NoRoom) => {}
+            Err(tgsim::Refused::NoRoom) => {}
             // The money may have gone since it was aimed.
-            Err(aaa_sim::Refused::Unaffordable) => {
+            Err(tgsim::Refused::Unaffordable) => {
                 let listed = menus.menu(&sim.0, chosen.0).get(i);
                 let name = listed.map_or("", |r| r.look.name.as_str());
                 let cost = sim.0.cost(organization).ceil().to_string();
@@ -1821,7 +1821,7 @@ pub fn aim(
             crate::nearest_organization(&sim.0, p, pointer.minimap.reach(), |r| {
                 !scenery.has(&sim.0, r)
                     && sim.0.sides.relation(player, sim.0.organizations[r].owner)
-                        == aaa_sim::Relation::Enemy
+                        == tgsim::Relation::Enemy
             })
             .map_or(crate::Focus::Nothing, crate::Focus::Organization)
         }
@@ -1831,7 +1831,7 @@ pub fn aim(
             && let Err(e) = orders.give(
                 &sim.0,
                 player,
-                aaa_sim::Command::Rally {
+                tgsim::Command::Rally {
                     building: b,
                     at: Some(point),
                 },
@@ -1909,7 +1909,7 @@ pub fn aim(
     if aim == Aim::Guard
         && let Some(piece) = guard_at(&sim.0, player, &selected.0, focus)
     {
-        let guard = |organization| aaa_sim::Command::GuardPiece {
+        let guard = |organization| tgsim::Command::GuardPiece {
             organization,
             piece,
         };
@@ -1934,7 +1934,7 @@ pub fn aim(
             let &[r] = &selected.0[..] else {
                 return;
             };
-            let unpack = aaa_sim::Command::Unpack {
+            let unpack = tgsim::Command::Unpack {
                 organization: r,
                 at: point,
                 facing: UNPACK_FACING,
@@ -1942,7 +1942,7 @@ pub fn aim(
             if orders.give(&sim.0, player, unpack).is_err() {
                 return;
             }
-            let at = aaa_sim::unpack_site(point);
+            let at = tgsim::unpack_site(point);
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             vec![(r, at)]
         }
@@ -1995,7 +1995,7 @@ mod tests {
     #[test]
     fn attacks_strike_only_enemies() {
         use crate::Focus::{Building, Nothing, Organization};
-        use aaa_sim::Relation::{Ally, Enemy, Itself, Neutral};
+        use tgsim::Relation::{Ally, Enemy, Itself, Neutral};
         assert_eq!(struck(Organization(3), Some(Enemy)), Struck::Enemy(3));
         for friend in [Itself, Ally] {
             let refused = |about| Struck::Friend(about);
@@ -2090,7 +2090,7 @@ mod tests {
     fn commissioning_goes_back_to_the_buildings_buttons() {
         let menu = Page::Menu(Menu::Deploy);
         assert_eq!(commissioned(menu, Ok(())), Page::Orders);
-        assert_eq!(commissioned(menu, Err(aaa_sim::Refused::Unable)), menu);
+        assert_eq!(commissioned(menu, Err(tgsim::Refused::Unable)), menu);
     }
 
     #[test]

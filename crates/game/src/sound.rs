@@ -7,12 +7,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use aaa_render::camera::RtsCamera;
-use aaa_render::terrain::map_point;
-use aaa_sim::Relation;
 use bevy::audio::Volume;
 use bevy::prelude::*;
 use tgdata::{Audio, AudioCategory, AudioWho, Cue, GameData, Id, ObjectAudio, SoundSwitches};
+use tgrender::camera::RtsCamera;
+use tgrender::terrain::map_point;
+use tgsim::Relation;
 
 use crate::{Data, Loaded, Local, Sim};
 

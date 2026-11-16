@@ -9,7 +9,7 @@ use crate::options::Options;
 use crate::ui::{self, Font};
 use crate::{Focus, LoadingScreen, Orders, Screen, SelectionBox, console};
 use crate::{confirm, menu};
-use aaa_sim::Action;
+use tgsim::Action;
 
 /// Whether the menu is up, and whether the match was already paused
 /// before it went up, as the console can leave it.

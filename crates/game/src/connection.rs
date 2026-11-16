@@ -249,7 +249,7 @@ pub fn load(
 ) {
     let formats = formats.map(|f| f.0).unwrap_or_default();
     let mut image = |path: &str| {
-        let image = aaa_render::textures::decode(&data.0.read(path)?, path, formats, true)?;
+        let image = tgrender::textures::decode(&data.0.read(path)?, path, formats, true)?;
         Some(images.add(image))
     };
     let connection = data.0.connection_look();
@@ -783,9 +783,9 @@ mod tests {
         app: App,
         host: Host<Linked>,
         other: aaa_server::Client<Linked>,
-        other_world: aaa_sim::World,
+        other_world: tgsim::World,
         /// Clients that only ever keep up, playing these sides.
-        more: Vec<(aaa_server::Client<Linked>, aaa_sim::World)>,
+        more: Vec<(aaa_server::Client<Linked>, tgsim::World)>,
         clock: Clock,
     }
 

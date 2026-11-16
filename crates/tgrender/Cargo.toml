@@ -1,5 +1,5 @@
 [package]
-name = "aaa-render"
+name = "tgrender"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

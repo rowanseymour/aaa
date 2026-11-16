@@ -33,17 +33,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use aaa_render::MapAssets;
-use aaa_render::overlay::BannerImages;
-use aaa_render::portrait::{Sitter, Stage};
-use aaa_render::textures;
-use aaa_sim::{Ledger, Order, Pause, Piece, Relation, State, Target, World};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GUARDING, GameData, Id, PropertyLook};
+use tgrender::MapAssets;
+use tgrender::overlay::BannerImages;
+use tgrender::portrait::{Sitter, Stage};
+use tgrender::textures;
+use tgsim::{Ledger, Order, Pause, Piece, Relation, State, Target, World};
 
 use crate::actions::Blocks;
 use crate::banners::{self, Badges};
@@ -455,7 +455,7 @@ pub fn spawn(
 /// The mode the selection calls for the display to show in.
 fn wanted(
     sim: &World,
-    hqs: &[aaa_sim::Hq],
+    hqs: &[tgsim::Hq],
     local: Option<u32>,
     selected: &[usize],
     chosen: Option<usize>,
@@ -484,7 +484,7 @@ fn wanted(
 }
 
 /// The HQ `actor` is, if it's one: a Division HQ's building, or its truck.
-fn hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], actor: &Actor) -> Option<&'a aaa_sim::Hq> {
+fn hq<'a>(sim: &World, hqs: &'a [tgsim::Hq], actor: &Actor) -> Option<&'a tgsim::Hq> {
     let id = match *actor {
         Actor::Building(b, _) => sim.hq_of(b)?,
         Actor::Organization(r) => sim.organizations[r].id,
@@ -493,7 +493,7 @@ fn hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], actor: &Actor) -> Option<&'a aaa_
 }
 
 /// The HQ the display shows, if it shows one.
-fn shown_hq<'a>(sim: &World, hqs: &'a [aaa_sim::Hq], mode: &Mode) -> Option<&'a aaa_sim::Hq> {
+fn shown_hq<'a>(sim: &World, hqs: &'a [tgsim::Hq], mode: &Mode) -> Option<&'a tgsim::Hq> {
     match mode {
         Mode::Company(actor) => hq(sim, hqs, actor),
         _ => None,
@@ -575,7 +575,7 @@ fn ordered(now: Vec<Id>, shown: &[Id]) -> Vec<Id> {
 
 fn detail(
     sim: &World,
-    hqs: &[aaa_sim::Hq],
+    hqs: &[tgsim::Hq],
     badges: &Badges,
     looks: &Looks,
     mode: &Mode,
@@ -1454,7 +1454,7 @@ pub fn portray(
     };
     // A fitted model's picture keeps its shape, in a band across the box.
     let height = match fitted {
-        true => PORTRAIT.x / aaa_render::portrait::FIT_ASPECT,
+        true => PORTRAIT.x / tgrender::portrait::FIT_ASPECT,
         false => PORTRAIT.y,
     };
     let top = PORTRAIT_BOX[1] + PORTRAIT_IN[1] + (PORTRAIT.y - height) / 2.0;
@@ -1621,8 +1621,8 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     // A queue outweighs being out of supply, which outweighs disabled,
     // even while either holds the queue up.
     let queue = match building.queue.front().map(|c| &c.work) {
-        Some(aaa_sim::Work::Research(_)) => Some("structure_researching"),
-        Some(aaa_sim::Work::Raise(_)) => Some("structure_recruiting"),
+        Some(tgsim::Work::Research(_)) => Some("structure_researching"),
+        Some(tgsim::Work::Raise(_)) => Some("structure_recruiting"),
         None => None,
     };
     match () {
@@ -2000,7 +2000,7 @@ fn cancel(
     if let (Ok(place), Some(b), Some(player)) = (places.get(activate.entity), chosen.0, local.0) {
         // By id, as what's at that place may change before it's carried out.
         if let Some(c) = sim.0.buildings[b].queue.get(place.0) {
-            let cancel = aaa_sim::Command::CancelCommission {
+            let cancel = tgsim::Command::CancelCommission {
                 building: b,
                 commission: c.id,
             };

@@ -5,8 +5,8 @@
 //! what it wants done; the host alone decides what's done and when, and
 //! tells every client the same, so they all play the same match.
 
-use aaa_sim::Action;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use tgsim::Action;
 
 use crate::{Refusal, Setup};
 
@@ -199,7 +199,7 @@ pub(crate) fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Option<T> {
 
 #[cfg(test)]
 mod tests {
-    use aaa_sim::Command;
+    use tgsim::Command;
 
     use super::*;
 

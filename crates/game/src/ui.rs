@@ -396,7 +396,7 @@ pub fn load_gem(
     let formats = formats.map(|f| f.0).unwrap_or_default();
     let image = data.0.side_glyph().and_then(|name| {
         let path = format!("{}/{name}.png", crate::actions::GLYPH_DIR);
-        aaa_render::textures::decode(&data.0.read(&path)?, &path, formats, true)
+        tgrender::textures::decode(&data.0.read(&path)?, &path, formats, true)
     });
     gem.0 = image.map(|i| images.add(i));
 }

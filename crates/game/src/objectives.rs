@@ -2,11 +2,11 @@
 //! each behind a box showing how it stands, one of the [display
 //! panels](crate::displays). `spec/objectives.md` is what it's built to.
 
-use aaa_render::textures;
-use aaa_sim::{Objective, Standing};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::ScrollArea;
+use tgrender::textures;
+use tgsim::{Objective, Standing};
 
 use crate::displays::{self, Displays, Panel, Rim, Window};
 use crate::keys::Bindings;

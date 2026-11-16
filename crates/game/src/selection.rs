@@ -3,8 +3,8 @@
 //! either joins the selection, replaces it or is passed over. Only a
 //! selection of the player's own things takes orders.
 
-use aaa_sim::{Relation, World};
 use bevy::math::Vec2;
+use tgsim::{Relation, World};
 
 use crate::object_display::MAX_SELECTED;
 
