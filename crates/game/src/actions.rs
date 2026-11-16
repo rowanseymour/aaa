@@ -50,7 +50,7 @@ const fn span(n: usize) -> f32 {
 /// The orders an organization has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
 /// The game leaves the rest of the commands off an organization's grid.
-const ORDERS: [(&str, Option<Give>); 9] = [
+const ORDERS: [(&str, Option<Give>); 11] = [
     ("move", Some(Give::Aim(Aim::Move))),
     ("kill", Some(Give::Aim(Aim::Attack))),
     ("retreat", Some(Give::Aim(Aim::Run))),
@@ -60,6 +60,8 @@ const ORDERS: [(&str, Option<Give>); 9] = [
     ("hq_detach", Some(Give::Detach)),
     ("unpack", Some(Give::Aim(Aim::Unpack))),
     ("disband", Some(Give::Disband)),
+    ("attach", Some(Give::AttachHero)),
+    ("detach", Some(Give::DetachHero)),
 ];
 
 /// The commands whose buttons open a recruiter's two menus.
@@ -125,14 +127,19 @@ enum Give {
     Detach,
     /// Asks first.
     Disband,
+    /// Needs a hero chosen first.
+    AttachHero,
+    DetachHero,
 }
 
 impl Give {
-    /// The order to attach, detach or disband `organization`.
+    /// The order to attach, detach or disband `organization`, or detach
+    /// its hero.
     fn command(self, organization: usize) -> tgsim::Command {
         match self {
             Give::Attach => tgsim::Command::Attach { organization },
             Give::Disband => tgsim::Command::Disband { organization },
+            Give::DetachHero => tgsim::Command::DetachHero { organization },
             _ => tgsim::Command::Detach { organization },
         }
     }
@@ -280,7 +287,9 @@ impl BuildingButtons<'_> {
 /// one at a time, unpack; organizations of them can also retreat and
 /// guard; anything else has the rest. One thing selected alone can be
 /// disbanded, unless it's attached to an HQ, which it can detach from
-/// instead, or on its way to unpack; while it fights it's greyed.
+/// instead, or on its way to unpack; while it fights it's greyed. Only
+/// where the game has HQs can organizations attach to them, and only where
+/// it has heroes can one company selected alone take one on or let it go.
 fn offered(sim: &tgsim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
     let packed = |&r: &usize| sim.organizations[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
@@ -292,12 +301,19 @@ fn offered(sim: &tgsim::World, selected: &[usize]) -> [bool; ORDERS.len()] {
         }
         _ => false,
     };
+    let hqs = (sim.rules().logistics.values()).any(|l| l.attachments.is_some_and(|n| n > 0));
+    let led = match selected {
+        &[r] => !sim.rules().heroes.is_empty() && !sim.lone(r) && !all_packed,
+        _ => false,
+    };
     ORDERS.map(|(ids, _)| match ids {
         "unpack" => all_packed && selected.len() == 1,
-        "kill" | "hq_attach" => !all_packed,
-        "hq_detach" => !all_packed && !disband,
+        "kill" => !all_packed,
+        "hq_attach" => hqs && !all_packed,
+        "hq_detach" => hqs && !all_packed && !disband,
         "retreat" | "guard" => !all_packed || !lone,
         "disband" => disband,
+        "attach" | "detach" => led,
         _ => true,
     })
 }
@@ -441,6 +457,8 @@ pub struct Looks {
     /// What a technology that wants buildings says, given its name and
     /// theirs.
     research_requires: String,
+    /// What Attach Hero says pressed with no hero chosen.
+    choose_hero: String,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
@@ -640,6 +658,10 @@ pub fn spawn(
     );
     let research_requires = title("research_error_missing_requirements|ss", "%s required: %s");
     let research_refused = title("research_error_generic|s", "Could not research %s");
+    let choose_hero = title(
+        "ui_error_missing_single_recruit_item",
+        "Must select a hero to attach",
+    );
     let quantities = |amounts: &[tgdata::Amount], earned: bool| -> Vec<Quantity> {
         amounts
             .iter()
@@ -776,6 +798,7 @@ pub fn spawn(
         affording,
         research_affording,
         research_refused,
+        choose_hero,
         research_requires,
         menus,
         researches,
@@ -1049,7 +1072,12 @@ pub fn show(
         let (look, ready, lit) = match entry {
             Entry::Order(i) => {
                 let ready = match (ORDERS[i].1, local.0) {
-                    (Some(give @ (Give::Attach | Give::Detach | Give::Disband)), Some(player)) => {
+                    (
+                        Some(
+                            give @ (Give::Attach | Give::Detach | Give::Disband | Give::DetachHero),
+                        ),
+                        Some(player),
+                    ) => {
                         let can = |&r: &usize| sim.0.check(player, &give.command(r)).is_ok();
                         selected.0.iter().any(can)
                     }
@@ -1410,10 +1438,17 @@ impl Presser<'_, '_> {
                     }
                     *self.page = Page::Orders;
                 }
-                Some(give @ (Give::Attach | Give::Detach)) => {
+                Some(give @ (Give::Attach | Give::Detach | Give::DetachHero)) => {
                     for &organization in &self.selected.0 {
                         let _ = self.orders.give(sim, player, give.command(organization));
                     }
+                }
+                // Heroes are chosen from their own menu, so a press here
+                // alone only says one is wanted.
+                Some(Give::AttachHero) => {
+                    let about = self.selected.0.first().map(|&r| About::Organization(r));
+                    let text = self.looks.choose_hero.clone();
+                    self.failed.write(Failed { text, about });
                 }
                 Some(Give::Disband) => {
                     if let &[organization] = &self.selected.0[..] {
