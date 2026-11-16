@@ -25,7 +25,7 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
 <a href="docs/screenshots/pearl-harbor.jpg"><img src="docs/screenshots/pearl-harbor.jpg" width="32%" alt="Battleships and a carrier in Pearl Harbor"></a>
 <a href="docs/screenshots/okinawa.jpg"><img src="docs/screenshots/okinawa.jpg" width="32%" alt="A town on the Okinawa map"></a>
 <a href="docs/screenshots/lobby.jpg"><img src="docs/screenshots/lobby.jpg" width="32%" alt="A custom game's lobby, with each side's nation chosen"></a>
-<a href="docs/screenshots/berlin-editor.jpg"><img src="docs/screenshots/berlin-editor.jpg" width="32%" alt="The Berlin map in aaa-editor, with a window open on an object"></a>
+<a href="docs/screenshots/berlin-editor.jpg"><img src="docs/screenshots/berlin-editor.jpg" width="32%" alt="The Berlin map in tgeditor, with a window open on an object"></a>
 </p>
 
 ## Goals
@@ -54,7 +54,7 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
 ## Running
 
 You need Rust, and on Linux the system packages listed in the
-[editor's README](crates/editor/README.md). `aaa.sh` builds and runs the game or the
+[editor's README](crates/tgeditor/README.md). `aaa.sh` builds and runs the game or the
 map editor, given the folder your copy of the game is installed in:
 
 ```sh

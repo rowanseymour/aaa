@@ -1,12 +1,14 @@
-# aaa-editor
+# tgeditor
 
-A map editor for Axis & Allies (2004), built with [Bevy](https://bevy.org). It
-views maps, drawn by [`tgrender`](../tgrender), reading them straight from the
-game's installed `Data.rwd`; nothing needs extracting.
+A map editor for games on TimeGate's engine, such as Axis & Allies (2004) and
+Kohan II, built with [Bevy](https://bevy.org). It views maps, drawn by
+[`tgrender`](../tgrender), reading them straight from the game's installed
+archives; nothing needs extracting.
 
 ```sh
-cargo run --release -p aaa-editor -- "/path/to/Axis and Allies 2004"                  # list maps
-cargo run --release -p aaa-editor -- "/path/to/Axis and Allies 2004" "(2v2)Berlin"    # view one
+cargo run --release -p tgeditor -- "/path/to/Axis and Allies 2004"                  # list maps
+cargo run --release -p tgeditor -- "/path/to/Axis and Allies 2004" "(2v2)Berlin"    # view one
+cargo run --release -p tgeditor -- "/path/to/Kohan II" "(1v1)Battleground"
 ```
 
 A map can be named by file name without extension or by its full archive path

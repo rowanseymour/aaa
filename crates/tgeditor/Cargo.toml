@@ -1,11 +1,11 @@
 [package]
-name = "aaa-editor"
+name = "tgeditor"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Map editor for Axis & Allies (2004), which views maps"
+description = "Map editor for games on TimeGate's engine, such as Axis & Allies (2004) and Kohan II, which views maps"
 publish = false
 
 [dependencies]
