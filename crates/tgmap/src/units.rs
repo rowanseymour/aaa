@@ -665,18 +665,33 @@ const BUILDING_PADDING: f32 = 2.0;
 
 impl Recruits {
     pub fn new(game: &GameData) -> Recruits {
+        let settlements = game.settlements();
+        let mut lists = game.recruit_lists();
+        // A centre's buttons recruit for its settlement too.
+        let companies = game.settlement_recruits();
+        for (centre, settlement) in &settlements {
+            if let Some(list) = companies.get(settlement) {
+                let own = lists.entry(centre.clone()).or_default();
+                own.extend(
+                    list.iter()
+                        .filter(|t| !own.contains(t))
+                        .cloned()
+                        .collect::<Vec<_>>(),
+                );
+            }
+        }
         Recruits {
             components: game.organization_components(),
             bodies: game.bodies(),
             fighters: game.fighters(),
             layouts: game.layouts(),
             ranges: game.organization_ranges(),
-            lists: game.recruit_lists(),
+            lists,
             deployments: game.deployments(),
             deploy_points: game.deploy_points(),
             recruit_times: game.recruit_times(),
             packs_into: game.packs_into(),
-            settlements: game.settlements(),
+            settlements,
             padding: game.building_padding().unwrap_or(BUILDING_PADDING),
         }
     }

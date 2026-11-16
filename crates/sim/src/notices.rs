@@ -76,6 +76,9 @@ pub enum Notice {
     /// What a special operation of its would summon, of `template`, had
     /// nowhere to go.
     SummonFailed { player: u32, template: Id },
+    /// A company of `template` it recruited had nowhere to come out, so
+    /// wasn't made.
+    NotCreated { player: u32, template: Id },
     /// It holds a technology it didn't.
     Gained { player: u32, technology: Id },
     /// Something of `owner`'s is destroyed, by whatever cause.

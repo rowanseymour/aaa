@@ -1,9 +1,11 @@
 //! What a side has unlocked: the technologies it holds and researches, and
 //! what they and its buildings let a recruiter offer.
 
+use std::collections::HashSet;
+
 use tgmap::{Grant, Id, Research};
 
-use crate::{Held, Notice, Refused, World};
+use crate::{Building, Held, Notice, Refused, World};
 
 /// What a recruiter would need to raise an organization but hasn't, and so
 /// whether its menu offers it, greys it or leaves it out.
@@ -81,18 +83,24 @@ impl World {
     }
 
     /// Whether `player` has a building of one of `ids` standing: done
-    /// unpacking, and its own rather than an ally's.
-    fn stands(&self, player: u32, ids: &[Id]) -> bool {
-        self.buildings
-            .iter()
-            .any(|b| b.owner == player && b.standing() && !b.busy() && ids.contains(&b.template))
+    /// unpacking, and its own rather than an ally's. For a settlement's
+    /// centre at `building`, only its own settlement's count, and those
+    /// in none.
+    fn stands(&self, player: u32, building: usize, ids: &[Id]) -> bool {
+        let centres: HashSet<u32> = self.settlements.iter().map(|s| s.centre).collect();
+        let own = self.buildings.get(building).map(|b| b.id);
+        let settled = own.is_some_and(|id| centres.contains(&id));
+        let counts = |b: &Building| !settled || Some(b.id) == own || !centres.contains(&b.id);
+        (self.buildings.iter()).any(|b| {
+            b.owner == player && b.standing() && !b.busy() && ids.contains(&b.template) && counts(b)
+        })
     }
 
     /// Of `structures`, each building by every id it goes by, the first id
     /// of each `player` lacks: none where `any` and one stands.
-    fn missing(&self, player: u32, structures: &[Vec<Id>], any: bool) -> Vec<Id> {
+    fn missing(&self, player: u32, building: usize, structures: &[Vec<Id>], any: bool) -> Vec<Id> {
         let missing: Vec<Id> = (structures.iter())
-            .filter(|ids| !self.stands(player, ids))
+            .filter(|ids| !self.stands(player, building, ids))
             .map(|ids| ids[0].clone())
             .collect();
         match any && missing.len() < structures.len() {
@@ -120,7 +128,7 @@ impl World {
             let Some(r) = self.rules.requires.get(&m.template) else {
                 continue;
             };
-            let structures = self.missing(player, &r.structures, r.any);
+            let structures = self.missing(player, building, &r.structures, r.any);
             let properties: Vec<&Id> = (r.properties.iter())
                 .filter(|p| !self.carries(building, p) && !self.holds(player, p))
                 .collect();
@@ -211,7 +219,7 @@ impl World {
         if !properties {
             return Researchable::Hidden;
         }
-        match self.missing(player, &item.structures, item.structures_any) {
+        match self.missing(player, building, &item.structures, item.structures_any) {
             missing if missing.is_empty() => Researchable::Ready,
             missing => Researchable::Lacking(missing),
         }

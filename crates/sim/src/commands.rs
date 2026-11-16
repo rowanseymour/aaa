@@ -47,6 +47,10 @@ impl World {
                 building,
                 ref template,
             } => self.may_commission(player, building, template).map(drop),
+            Command::Recruit {
+                settlement,
+                ref template,
+            } => self.may_recruit(player, settlement, template).map(drop),
             Command::Deliver {
                 building,
                 ref template,
@@ -100,6 +104,10 @@ impl World {
             Command::Commission { building, template } => {
                 self.commission(player, building, &template, None)?
             }
+            Command::Recruit {
+                settlement,
+                template,
+            } => self.recruit(player, settlement, &template)?,
             Command::Deliver {
                 building,
                 template,

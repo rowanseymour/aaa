@@ -231,16 +231,8 @@ impl World {
             State::Standing if self.out_of_supply(building) => Some(Pause::Supply),
             State::Standing if first.held => None,
             State::Standing => {
-                let balance = self.balance(b.owner);
-                let needs = first
-                    .organization()
-                    .map(|r| self.commission_ledger(r).upkeep);
-                let needs = needs.unwrap_or_default();
-                let full = balance.limits.iter().find(|l| {
-                    let needed = needs.get(l.consumed.as_str());
-                    needed > 0.0 && l.used + needed > l.provided
-                });
-                full.map(|l| Pause::Limit(l.consumed.clone()))
+                let full = (first.organization()).and_then(|r| self.over_limit(b.owner, r));
+                full.map(Pause::Limit)
             }
             _ => Some(Pause::Disabled),
         };
@@ -309,6 +301,18 @@ impl World {
     pub fn set_stockpile(&mut self, player: u32, amount: f32) {
         let max = self.rules.economy.stockpile_max;
         self.treasuries.entry(player).or_default().stockpile = amount.clamp(0.0, max);
+    }
+
+    /// The limit, such as `unit_limit_consumed`, that `organization` would
+    /// take `player` over, if any.
+    pub(crate) fn over_limit(&self, player: u32, organization: &tgmap::Organization) -> Option<Id> {
+        let needs = self.commission_ledger(organization).upkeep;
+        let balance = self.balance(player);
+        let full = balance.limits.iter().find(|l| {
+            let needed = needs.get(l.consumed.as_str());
+            needed > 0.0 && l.used + needed > l.provided
+        });
+        full.map(|l| l.consumed.clone())
     }
 
     /// The money commissioning `organization` as raised takes: its own cost and
