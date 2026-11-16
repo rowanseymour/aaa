@@ -62,7 +62,7 @@ map editor, given the folder your copy of the game is installed in:
 ./aaa.sh editor --data="/path/to/Axis and Allies"
 ```
 
-Set `AAA_INSTALL` to that folder to leave `--data` off. Run `./aaa.sh --help` for
+Set `AA_INSTALL` to that folder to leave `--data` off. Run `./aaa.sh --help` for
 usage.
 
 ## Development
