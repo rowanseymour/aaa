@@ -80,6 +80,21 @@ pub enum Operation {
     Reveal { seconds: f32 },
     /// Does damage round where it's aimed, once it lands.
     Strike(Box<Strike>),
+    /// Brings something new onto the map for its user.
+    Summon(Summon),
+}
+
+/// What a summoning operation brings, and what holds it back.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Summon {
+    /// The template of what it brings.
+    pub template: Id,
+    /// It's aimed only on the map's main land.
+    pub main_land: bool,
+    /// It isn't ready while anything it put down is still there.
+    pub one_at_a_time: bool,
+    /// It isn't ready while its user owns anything with this flag.
+    pub unique: Option<Id>,
 }
 
 /// How long an operation lifts the fog from its user's minimap, for one
@@ -108,6 +123,23 @@ pub(crate) fn listed(list: Option<&str>) -> Vec<Id> {
     ids.filter(|id| !id.is_empty() && !id.eq_ignore_ascii_case("null"))
         .map(Id::from)
         .collect()
+}
+
+/// What an operation summons, for one that does: the first thing its
+/// tooltip names, past the likes of smoke marking where it lands.
+fn summon(a: &defs::AbilityDefinition) -> Option<Summon> {
+    let e = a
+        .effect
+        .iter()
+        .find(|e| is(&e.kind, "SUMMON") && !e.hide_from_tooltip)?;
+    let flag = |f: fn(&defs::AbilityFlags) -> bool| a.flags.iter().any(f);
+    let unique = flag(|f| f.summon_unique).then(|| e.unique_target_flags.clone());
+    Some(Summon {
+        template: e.object_ids.clone()?,
+        main_land: flag(|f| f.primary_island_only),
+        one_at_a_time: !flag(|f| f.summon_multiple),
+        unique: unique.flatten(),
+    })
 }
 
 /// Whether a modifier's field names `what`.
@@ -256,13 +288,67 @@ impl GameData {
                     seconds,
                 },
                 (None, Some(template)) => Operation::Drop(template),
-                (None, None) => match reveals(a, &definitions.properties) {
-                    Some(seconds) => Operation::Reveal { seconds },
-                    None => continue,
+                (None, None) => match (reveals(a, &definitions.properties), summon(a)) {
+                    (Some(seconds), _) => Operation::Reveal { seconds },
+                    (None, Some(summon)) => Operation::Summon(summon),
+                    (None, None) => continue,
                 },
             };
             out.insert(id.clone(), operation);
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn definition(text: &str) -> defs::AbilityDefinition {
+        let parsed = tgi::parse(text);
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("AbilityDefinition").next().unwrap();
+        templates.deserialize(block).unwrap()
+    }
+
+    #[test]
+    fn summons_say_what_they_bring_and_what_holds_them_back() {
+        let reorganization = definition(
+            "[AbilityDefinition]\n{\n\tIDS = reorganization\n\
+             \t[Flags]\n\tsummon_unique = true\n\tprimary_island_only = true\n\
+             \t[Effect]\n\t{\n\t\ttype = SUMMON\n\t\tobject_ids = truck_corps\n\
+             \t\tunique_target_flags = provides_corps\n\t}\n}\n",
+        );
+        let summon = |template: &str, main_land, one_at_a_time, unique: Option<&str>| Summon {
+            template: Id::from(template),
+            main_land,
+            one_at_a_time,
+            unique: unique.map(Id::from),
+        };
+        assert_eq!(
+            super::summon(&reorganization),
+            Some(summon("truck_corps", true, true, Some("provides_corps")))
+        );
+        // What's hidden from its tooltip isn't what it brings.
+        let aid = definition(
+            "[AbilityDefinition]\n{\n\tIDS = aid\n\
+             \t[Effect]\n\t{\n\t\ttype = SUMMON\n\t\tobject_ids = smoke\n\t\thide_from_tooltip = true\n\t}\n\
+             \t[Effect]\n\t{\n\t\ttype = SUMMON\n\t\tobject_ids = crate\n\t}\n}\n",
+        );
+        assert_eq!(
+            super::summon(&aid).map(|s| s.template),
+            Some(Id::from("crate"))
+        );
+        // A flag only counts with summon_unique.
+        let maskirovka = definition(
+            "[AbilityDefinition]\n{\n\tIDS = maskirovka\n\
+             \t[Flags]\n\tsummon_multiple = true\n\
+             \t[Effect]\n\t{\n\t\ttype = SUMMON\n\t\tobject_ids = decoys\n\
+             \t\tunique_target_flags = provides_corps\n\t}\n}\n",
+        );
+        assert_eq!(
+            super::summon(&maskirovka),
+            Some(summon("decoys", false, false, None))
+        );
     }
 }

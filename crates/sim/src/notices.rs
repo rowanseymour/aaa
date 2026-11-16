@@ -73,6 +73,9 @@ pub enum Notice {
         building: usize,
         technology: Id,
     },
+    /// What a special operation of its would summon, of `template`, had
+    /// nowhere to go.
+    SummonFailed { player: u32, template: Id },
     /// It holds a technology it didn't.
     Gained { player: u32, technology: Id },
     /// Something of `owner`'s is destroyed, by whatever cause.

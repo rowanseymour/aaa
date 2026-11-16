@@ -133,6 +133,8 @@ impl World {
             incoming: Vec::new(),
             watches: Vec::new(),
             afflicted: Vec::new(),
+            summoned: Vec::new(),
+            main_land: std::sync::OnceLock::new(),
             notices: Vec::new(),
             fog,
             numbers: BTreeMap::new(),

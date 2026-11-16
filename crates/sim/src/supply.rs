@@ -182,6 +182,7 @@ impl World {
                 }
                 self.launch_strike(player, operation, &strike, at, on);
             }
+            Some(Operation::Summon(summon)) => self.summon(player, operation, &summon, at)?,
             None => return Err(Refused::Unable),
         }
         Ok(())
@@ -225,6 +226,8 @@ impl World {
             }
             (Operation::Strike(_), None) => Some(at),
             (Operation::Drop(_), None) => Some(at),
+            // Wherever it's clicked, a summon goes to the ground there.
+            (Operation::Summon(_), _) => Some(at),
             (Operation::Reveal { .. }, _) | (_, Some(_)) => None,
         }
     }
@@ -584,21 +587,12 @@ impl World {
     /// full health: out of a building near the organization that recruits its
     /// kind, by the way its recruits leave it, if there is one, else in
     /// its place, and on its way to where the organization's going.
-    fn arrive(&mut self, r: usize, p: usize) {
+    pub(crate) fn arrive(&mut self, r: usize, p: usize) {
         let organization = &self.organizations[r];
         let (at, facing) = (self.leader_position(r), organization.facing);
         let offsets = &organization.formations[organization.current_formation()].offsets;
         let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
-        let recruits = |b: &&Building| {
-            let list = self.rules.recruit_lists.get(&b.template);
-            b.standing()
-                && !b.busy()
-                && self.shares_supply(organization.owner, b.owner)
-                && list.is_some_and(|l| l.contains(&organization.template))
-                && distance(at, b.position) < organization.control(&self.rules.guard_rules)
-        };
-        let nearest = (self.buildings.iter().filter(recruits))
-            .min_by(|a, b| distance(at, a.position).total_cmp(&distance(at, b.position)));
+        let nearest = self.recruiter(r);
         // Out of a building it comes as a recruit does: made at one point
         // and by way of another.
         let points = nearest.and_then(|b| {
@@ -631,6 +625,23 @@ impl World {
             }
             None => self.take_place(u, place, facing, false),
         }
+    }
+
+    /// The nearest building near the organization at `r` that recruits its
+    /// kind and could send it a member now.
+    pub(crate) fn recruiter(&self, r: usize) -> Option<&Building> {
+        let organization = &self.organizations[r];
+        let at = self.leader_position(r);
+        let recruits = |b: &&Building| {
+            let list = self.rules.recruit_lists.get(&b.template);
+            b.standing()
+                && !b.busy()
+                && self.shares_supply(organization.owner, b.owner)
+                && list.is_some_and(|l| l.contains(&organization.template))
+                && distance(at, b.position) < organization.control(&self.rules.guard_rules)
+        };
+        (self.buildings.iter().filter(recruits))
+            .min_by(|a, b| distance(at, a.position).total_cmp(&distance(at, b.position)))
     }
 
     /// A second of going without for the organization at `r`: each member

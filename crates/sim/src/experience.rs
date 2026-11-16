@@ -108,7 +108,10 @@ impl World {
         if commander.experience < op.cost {
             return Err(Refused::Unaffordable);
         }
-        Ok(())
+        match &self.rules.operations[&op.id] {
+            Operation::Summon(summon) => self.may_summon(player, &op.id, summon),
+            _ => Ok(()),
+        }
     }
 
     /// Uses `player`'s faction's `i`th special operation, aimed at `at` or

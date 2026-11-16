@@ -603,6 +603,9 @@ pub struct Effect {
     pub targets: Option<String>,
     #[serde(default)]
     pub hide_from_tooltip: bool,
+    /// For a summon held to one at a time, the flag whatever its side owns
+    /// mustn't have.
+    pub unique_target_flags: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -610,6 +613,14 @@ pub struct AbilityFlags {
     /// An order to bombard can use it.
     #[serde(default)]
     pub bombard: bool,
+    /// It needn't wait for what it summoned to go before summoning again.
+    #[serde(default)]
+    pub summon_multiple: bool,
+    #[serde(default)]
+    pub summon_unique: bool,
+    /// It's aimed only on the map's main land.
+    #[serde(default)]
+    pub primary_island_only: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]

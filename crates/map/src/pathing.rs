@@ -135,14 +135,26 @@ impl Pathing {
         }
     }
 
+    /// Makes one tile `domain`'s, for tests and tools.
+    pub fn set(&mut self, tile: Tile, domain: Domain) {
+        if let Some(i) = tile.index(self.side) {
+            self.tiles[i] = bits(domain);
+        }
+    }
+
     /// Whether a mover on `domain` can enter the tile; off the map it can't.
     pub fn passable(&self, tile: Tile, domain: Domain) -> bool {
         tile.index(self.side)
             .is_some_and(|i| self.blockers[i] == 0 && self.tiles[i] & bits(domain) != 0)
     }
 
+    /// Tiles per side.
+    pub fn side(&self) -> usize {
+        self.side
+    }
+
     /// Whether the tile's terrain is `domain`'s, whatever stands on it.
-    fn crossable(&self, tile: Tile, domain: Domain) -> bool {
+    pub fn crossable(&self, tile: Tile, domain: Domain) -> bool {
         tile.index(self.side)
             .is_some_and(|i| self.tiles[i] & bits(domain) != 0)
     }

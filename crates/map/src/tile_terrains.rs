@@ -13,6 +13,7 @@ pub struct TileTerrain {
     /// The properties it gives, in the order it lists them.
     pub properties: Vec<Id>,
     pub mountain: bool,
+    pub water: bool,
 }
 
 /// Which of a [`TileTerrains`]' terrains a tile has, as
@@ -47,6 +48,7 @@ impl TileTerrains {
             v.map_or_else(TileTerrain::default, |v| TileTerrain {
                 properties: v.properties.clone(),
                 mountain: matches!(v.kind, TerrainKind::Mountain { .. }),
+                water: matches!(v.kind, TerrainKind::Water),
             })
         });
         let terrains: Vec<TileTerrain> = std::iter::once(TileTerrain::default())
@@ -110,6 +112,7 @@ mod tests {
         let forest = TileTerrain {
             properties: vec![Id::from("forest")],
             mountain: false,
+            water: false,
         };
         let mut terrains = TileTerrains::uniform(4, TileTerrain::default());
         terrains.set(Tile::new(2, 1), forest.clone());

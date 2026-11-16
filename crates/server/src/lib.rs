@@ -83,16 +83,30 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         map.arrange(teams);
     }
     mapped();
-    let operations = game.operations();
+    let mut operations = game.operations();
+    let raisable = raising.raisable();
+    let airlifts = game.airlifts();
+    // Only summons of regiments and units put down where they're aimed
+    // can be carried out: a thing with a transport is flown in instead.
+    operations.retain(|id, o| match o {
+        aaa_map::Operation::Summon(s) => {
+            let kept = raisable.contains_key(&s.template) && !airlifts.contains_key(&s.template);
+            if !kept {
+                debug!("can't carry out {id}: can't summon {}", s.template);
+            }
+            kept
+        }
+        _ => true,
+    });
     let dropped = operations.values().filter_map(|o| match o {
-        aaa_map::Operation::Drop(template) => Some(template.clone()),
+        aaa_map::Operation::Drop(template) => Some(template),
         aaa_map::Operation::Enchant { .. }
         | aaa_map::Operation::Reveal { .. }
-        | aaa_map::Operation::Strike(_) => None,
+        | aaa_map::Operation::Strike(_)
+        | aaa_map::Operation::Summon(_) => None,
     });
-    let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(&t)?)))).collect();
+    let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(t)?)))).collect();
     let recruit_lists = game.recruit_lists();
-    let raisable = raising.raisable();
     for t in recruit_lists.values().flatten() {
         if !raisable.contains_key(t)
             && let Err(e) = raising.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])
@@ -122,7 +136,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         resupply_rates: game.resupply_rates(),
         recruit_lists,
         raisable,
-        airlifts: game.airlifts(),
+        airlifts,
         falls: game.falls(),
         recruit_times: game.recruit_times(),
         research_lists: game.research_lists(),

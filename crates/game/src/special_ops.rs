@@ -109,6 +109,10 @@ pub(crate) struct Words {
     unready: String,
     /// "Insufficient experience to use Special Operation %s".
     short: String,
+    /// "Special Operation %s can not summon an additional %s".
+    summoned: String,
+    /// "Invalid location for %s".
+    misplaced: String,
     /// "Recharging (%d:%.2d left)".
     recharging: String,
 }
@@ -126,6 +130,8 @@ pub(crate) struct OperationButton {
     /// Its operation's place in the faction's list.
     index: usize,
     name: String,
+    /// The name of what it summons, for one that does.
+    summons: Option<String>,
     /// It's used as soon as it's pressed, with no aiming.
     on_self: bool,
     /// Its tooltip, beside the tray while the pointer's on the button, and
@@ -189,6 +195,14 @@ fn spawn(
         short: said(
             "ui_error_faction_ability_cost|s",
             "Insufficient experience to use Special Operation %s",
+        ),
+        summoned: said(
+            "ui_error_faction_ability_already_summoned|ss",
+            "Special Operation %s can not summon an additional %s",
+        ),
+        misplaced: said(
+            "ability_effect_invalid_location|s",
+            "Invalid location for %s",
         ),
         recharging: said(
             "ui_floater_ability_recharge_time|dd",
@@ -285,6 +299,7 @@ fn spawn(
                             OperationButton {
                                 index,
                                 name: op.name.clone(),
+                                summons: op.summons.clone(),
                                 on_self: op.on_self,
                                 tip,
                                 recharge_line,
@@ -498,7 +513,7 @@ impl User<'_> {
                 let given = (self.orders.as_mut())
                     .map(|o| o.give(&self.sim.0, player, probe(button.index)));
                 if let Some(Err(e)) = given {
-                    self.refuse(&button.name, e);
+                    self.refuse(button, e);
                 }
             }
             Ok(()) => {
@@ -506,24 +521,28 @@ impl User<'_> {
                 // Not aiming an order too.
                 self.page.set_if_neq(Page::Orders);
             }
-            Err(e) => self.refuse(&button.name, e),
+            Err(e) => self.refuse(button, e),
         }
     }
 
-    /// Tells the player why the operation `name` can't be used.
-    fn refuse(&mut self, name: &str, refused: aaa_sim::Refused) {
+    /// Tells the player why `button`'s operation can't be used.
+    fn refuse(&mut self, button: &OperationButton, refused: aaa_sim::Refused) {
         let Some(panel) = &self.panel else {
             return;
         };
+        let name = button.name.as_str();
+        let summons = button.summons.as_deref().unwrap_or_default();
         let said = match refused {
             aaa_sim::Refused::Recharging => &panel.words.unready,
             aaa_sim::Refused::Unaffordable => &panel.words.short,
+            aaa_sim::Refused::Summoned => &panel.words.summoned,
+            aaa_sim::Refused::Misplaced => &panel.words.misplaced,
             e => {
                 debug!("can't use {name}: {e:?}");
                 return;
             }
         };
-        let text = fill(said, &[name]);
+        let text = fill(said, &[name, summons]);
         self.failed.write(Failed { text, about: None });
     }
 }
@@ -590,9 +609,10 @@ pub fn give(
     };
     let given = (user.orders.as_mut()).map(|o| o.give(&user.sim.0, player, command));
     // What can be used may have changed since it was armed.
-    if let Some(Err(e)) = given {
-        let name = named.iter().find(|b| b.index == i).map(|b| b.name.clone());
-        user.refuse(&name.unwrap_or_default(), e);
+    if let Some(Err(e)) = given
+        && let Some(button) = named.iter().find(|b| b.index == i)
+    {
+        user.refuse(button, e);
     }
 }
 
@@ -802,6 +822,8 @@ mod tests {
             help: String::new(),
             unready: "Special Operation %s has not yet recharged".into(),
             short: "Insufficient experience to use Special Operation %s".into(),
+            summoned: "Special Operation %s can not summon an additional %s".into(),
+            misplaced: "Invalid location for %s".into(),
             recharging: "Recharging (%d:%.2d left)".into(),
         }
     }
@@ -810,6 +832,7 @@ mod tests {
         OperationButton {
             index,
             name: "Resupply".into(),
+            summons: None,
             on_self: false,
             tip,
             recharge_line,
@@ -1024,6 +1047,7 @@ mod tests {
             marker: None,
             area: Some("Large".into()),
             effects: Vec::new(),
+            summons: None,
         };
         let row = |a: &str, b: &str| (a.to_string(), b.to_string());
         assert_eq!(
