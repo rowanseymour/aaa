@@ -1,11 +1,11 @@
 //! A map's triggers: tested every tick in the map's order, each running
 //! its effects when its events and conditions allow.
 //!
-//! Events, and the conditions and effects no shipped multiplayer map uses,
-//! aren't carried out yet: a trigger waiting on an event never goes
-//! ahead, and an element this doesn't know fails.
+//! Events aren't carried out, so a trigger waiting on one never goes
+//! ahead; a condition or effect not handled here fails.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use tgmap::Id;
 use tgmap::triggers::{Element, Parameter, Trigger, Value};
@@ -26,7 +26,7 @@ crate::hash::digest!(Switch { active, activated });
 #[derive(Debug, Clone, Default)]
 pub struct Triggers {
     /// As the map has them, in its order.
-    pub(crate) list: Vec<Trigger>,
+    pub(crate) list: Arc<[Trigger]>,
     /// One for each of `list`.
     pub switches: Vec<Switch>,
     pub variables: BTreeMap<String, f32>,
@@ -41,8 +41,14 @@ impl Triggers {
             active: t.active,
             activated: (t.activation_time.max(0.0) / TICK).round() as u64,
         };
+        for trigger in &t.triggers {
+            let elements = trigger.conditions.iter().chain(&trigger.effects);
+            for e in elements.filter(|e| !HANDLED.contains(&e.name.as_str())) {
+                log::debug!("trigger {}: {} isn't carried out", trigger.name, e.name);
+            }
+        }
         Triggers {
-            list: t.triggers.clone(),
+            list: t.triggers.clone().into(),
             switches: t.triggers.iter().map(switch).collect(),
             variables: t.variables.iter().cloned().collect(),
         }
@@ -56,6 +62,22 @@ impl crate::hash::Digest for Triggers {
         self.variables.digest(h);
     }
 }
+
+/// The conditions and effects carried out.
+const HANDLED: &[&str] = &[
+    "true",
+    "activation_time",
+    "value_compare_value",
+    "kingdom_has_compare_value_primary_resource",
+    "kingdom_gains_hero",
+    "kingdom_loses_hero",
+    "kingdom_mission_won",
+    "set_variable",
+    "incr_variable",
+    "decr_variable",
+    "trigger_active",
+    "trigger_deactive",
+];
 
 /// How two numbers are compared, by the game's numbering.
 fn compare(how: u32, a: f32, b: f32) -> bool {
@@ -93,15 +115,10 @@ impl World {
             if !ahead {
                 continue;
             }
-            let effects = trigger.effects.clone();
-            for effect in &effects {
-                if !self.carry_out(effect) {
-                    log::debug!(
-                        "trigger {}: {} did nothing",
-                        self.triggers.list[t].name,
-                        effect.name
-                    );
-                }
+            // Effects that fail do nothing, and the rest still run.
+            let list = Arc::clone(&self.triggers.list);
+            for effect in &list[t].effects {
+                self.carry_out(effect);
             }
             let ticks = self.ticks;
             let repeats = self.triggers.list[t].repeats;
@@ -443,5 +460,68 @@ mod tests {
         assert_eq!(w.outcome(2), Outcome::Playing);
         run(&mut w, 0.5);
         assert_eq!(w.outcome(2), Outcome::Won);
+    }
+
+    #[test]
+    fn variables_go_down_and_need_a_name_to_be_set() {
+        let set = |n: &str| element("set_variable", vec![variable(n), int(5)]);
+        let decr = element("decr_variable", vec![variable("n"), int(2)]);
+        let effects = vec![set("n"), set(""), decr];
+        let mut w = with(
+            pool(),
+            vec![trigger(1, true, false, Vec::new(), effects)],
+            &[],
+        );
+        w.tick();
+        assert_eq!(count(&w, "n"), 3.0);
+        assert_eq!(count(&w, ""), -1.0);
+    }
+
+    #[test]
+    fn comparisons_go_by_the_games_numbering() {
+        let cases = [
+            (0, 1.0, 2.0, true),
+            (1, 2.0, 2.0, true),
+            (2, 2.0, 3.0, false),
+            (4, 2.0, 2.0, false),
+            (5, 1.0, 2.0, true),
+            (9, 2.0, 2.0, true),
+        ];
+        for (how, a, b, want) in cases {
+            assert_eq!(super::compare(how, a, b), want, "{how} {a} {b}");
+        }
+    }
+
+    #[test]
+    fn a_trigger_switched_off_is_no_longer_tested() {
+        let id = |n| parameter("ma_trigger", "mi_trigger", Value::Int(n));
+        let off = element("trigger_deactive", vec![id(2)]);
+        let first = trigger(1, true, false, vec![after(1)], vec![off]);
+        let second = trigger(2, true, true, Vec::new(), vec![incr("n")]);
+        let mut w = with(pool(), vec![first, second], &[("n", 0.0)]);
+        run(&mut w, 2.0);
+        // On every tick until the one that switched it off.
+        assert_eq!(count(&w, "n"), 9.0);
+        assert!(!w.triggers.switches[1].active);
+    }
+
+    #[test]
+    fn a_side_loses_a_named_or_random_hero_from_its_pool() {
+        let named = parameter("ma_hero", "mi_hero_named", Value::String("andyr".into()));
+        let random = parameter("ma_hero", "mi_hero_random", Value::Int(0));
+        let loses = |h: Parameter| element("kingdom_loses_hero", vec![kingdom(1), h]);
+        let effects = vec![loses(named.clone()), loses(random.clone()), loses(random)];
+        let mut w = with(
+            pool(),
+            vec![trigger(1, true, false, Vec::new(), effects)],
+            &[],
+        );
+        for h in ["andyr", "arossa", "cutscene"] {
+            w.gain_hero(1, &tgmap::Id::from(h));
+        }
+        w.tick();
+        // The hero for scenarios alone isn't taken at random.
+        let left: Vec<String> = w.heroes(1).iter().map(|h| h.hero.to_string()).collect();
+        assert_eq!(left, ["cutscene"]);
     }
 }

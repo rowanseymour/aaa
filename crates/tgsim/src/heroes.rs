@@ -60,6 +60,9 @@ impl World {
             .filter(|h| h.random && fits(h) && !self.holds_hero(player, &h.id))
             .map(|h| h.id.clone())
             .collect();
+        if candidates.is_empty() {
+            return false;
+        }
         match pick(self.chance(), &candidates) {
             Some(hero) => self.gain_hero(player, &hero),
             None => false,
@@ -85,6 +88,9 @@ impl World {
             .filter(|h| random(&h.hero))
             .map(|h| h.hero.clone())
             .collect();
+        if candidates.is_empty() {
+            return false;
+        }
         match pick(self.chance(), &candidates) {
             Some(hero) => self.lose_hero(player, &hero),
             None => false,
