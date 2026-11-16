@@ -6,11 +6,11 @@
 
 use std::collections::HashMap;
 
-use aaa_server::protocol::{Seated, Standing, Status};
 use bevy::input::keyboard::KeyboardInput;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 use tgdata::PingLook;
+use tgserver::protocol::{Seated, Standing, Status};
 
 use crate::ui::{self, Font, Ink};
 use crate::{Leaders, Loaded, Local, Orders, Screen, Sim, confirm, menu, messages};
@@ -770,9 +770,9 @@ fn ask_leave(
 
 #[cfg(test)]
 mod tests {
-    use aaa_server::{Clock, Host, Local as Linked};
     use bevy::state::app::StatesPlugin;
     use std::time::Duration;
+    use tgserver::{Clock, Host, Local as Linked};
 
     use super::*;
     use crate::orders::testing::{fresh, let_in};
@@ -782,10 +782,10 @@ mod tests {
     struct Match {
         app: App,
         host: Host<Linked>,
-        other: aaa_server::Client<Linked>,
+        other: tgserver::Client<Linked>,
         other_world: tgsim::World,
         /// Clients that only ever keep up, playing these sides.
-        more: Vec<(aaa_server::Client<Linked>, tgsim::World)>,
+        more: Vec<(tgserver::Client<Linked>, tgsim::World)>,
         clock: Clock,
     }
 
@@ -797,20 +797,20 @@ mod tests {
         /// As [`Match::new`], with a client more for each of `more`.
         fn with(more: &[u32]) -> Match {
             let clock = Clock::stopped();
-            let mut host = Host::new(aaa_server::Setup::default(), fresh());
+            let mut host = Host::new(tgserver::Setup::default(), fresh());
             host.clock(clock.clone());
             let (ours, welcome) = let_in(&mut host, &[1]);
             let (theirs, _) = let_in(&mut host, &[2]);
             let more = (more.iter())
                 .map(|&p| {
-                    let mut client = aaa_server::Client::new(let_in(&mut host, &[p]).0);
+                    let mut client = tgserver::Client::new(let_in(&mut host, &[p]).0);
                     client.clock(clock.clone());
                     (client, fresh())
                 })
                 .collect();
             let mut orders = Orders::joined(Box::new(ours), welcome, "10.0.0.1:4000".into());
             orders.clock(clock.clone());
-            let mut other = aaa_server::Client::new(theirs);
+            let mut other = tgserver::Client::new(theirs);
             other.clock(clock.clone());
             let mut app = App::new();
             app.add_plugins((
