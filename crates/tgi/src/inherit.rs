@@ -99,6 +99,24 @@ impl<'a> Templates<'a> {
         self.get(template(block)?)
     }
 
+    /// The lower-case names of the templates a block inherits from, nearest
+    /// first, as far as the chain goes: to a missing template or one already
+    /// visited.
+    pub fn lineage(&self, block: &Block) -> Vec<String> {
+        let mut out: Vec<String> = Vec::new();
+        let mut at = block;
+        while let Some(name) = template(at).map(str::to_ascii_lowercase)
+            && !out.contains(&name)
+        {
+            out.push(name);
+            match self.parent(at) {
+                Some(parent) => at = parent,
+                None => break,
+            }
+        }
+        out
+    }
+
     /// The block with everything it inherits merged in. The chain stops at a
     /// missing template or one already visited.
     pub fn resolve(&self, block: &Block) -> Block {

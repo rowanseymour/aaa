@@ -280,6 +280,11 @@ const VERBS: &[Verb] = &[
         "posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight",
     ),
     verb(
+        "heroes",
+        "[kingdom]",
+        "lists the heroes a kingdom, by name or id, holds; without one, the kingdom played",
+    ),
+    verb(
         "settlements",
         "",
         "lists the settlements, with each one's side and the id of its centre",
@@ -496,6 +501,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "move" => order(world, &args, Aim::Move),
                 "attack" => order(world, &args, Aim::Attack),
                 "guard" => order(world, &args, Aim::Guard),
+                "heroes" => heroes(world, &args),
                 "settlements" => no_args(&args).map(|_| settlements(&world.resource::<Sim>().0)),
                 "select" => select(world, &args),
                 "usefactionability" => use_faction_ability(world, &args),
@@ -945,6 +951,22 @@ fn outcome(sim: &tgsim::World) -> String {
     let sides: Vec<String> = sides.collect();
     let state = if sim.over { "over" } else { "running" };
     format!("match {state}: {}", sides.join(", "))
+}
+
+fn heroes(world: &World, args: &[&str]) -> Reply {
+    let sim = &world.resource::<Sim>().0;
+    let player = match args {
+        [] => world.resource::<Local>().0.ok_or("nobody to play")?,
+        [word] => kingdom(sim, word)?,
+        _ => return Err(usage("heroes")),
+    };
+    let held: Vec<String> = (sim.heroes(player).iter())
+        .map(|h| format!("{} at {:.0}% health", h.hero, h.health * 100.0))
+        .collect();
+    Ok(match held.is_empty() {
+        true => "no heroes".into(),
+        false => held.join("\n"),
+    })
 }
 
 fn settlements(sim: &tgsim::World) -> String {

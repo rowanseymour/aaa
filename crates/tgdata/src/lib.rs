@@ -16,6 +16,7 @@ mod economy;
 mod effects;
 mod fog;
 mod guard;
+mod heroes;
 mod hotkeys;
 mod id;
 mod interface;
@@ -49,6 +50,7 @@ pub use effects::{
 };
 pub use fog::{FogSetting, Sight};
 pub use guard::{GUARDING, GuardRules};
+pub use heroes::Hero;
 pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
 pub use interface::{Command, ConnectionLook, CursorLook, FormationLook, SupplyBorder};
@@ -134,6 +136,9 @@ pub(crate) struct Template {
     file: String,
     id: Id,
     thing: defs::Thing,
+    /// The lower-case names of the templates it inherits from, nearest
+    /// first.
+    lineage: Vec<String>,
 }
 
 /// Whether a block of `kind` defines a thing: `Unit` and `Projectile` are
@@ -172,6 +177,7 @@ impl Definitions {
                             file: file.to_string(),
                             id,
                             thing,
+                            lineage: scope.templates.lineage(block),
                         });
                     }
                 } else if kind.eq_ignore_ascii_case("Property")
