@@ -1,6 +1,6 @@
 # aaa-render
 
-Draws Axis & Allies (2004) maps, as loaded by [`aaa-map`](../map), with
+Draws Axis & Allies (2004) maps, as loaded by [`tgmap`](../tgmap), with
 [Bevy](https://bevy.org): Bevy plugins and spawning functions that the editor
 and the game can share.
 

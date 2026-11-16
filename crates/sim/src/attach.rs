@@ -1,7 +1,7 @@
 //! HQs and the organizations attached to them, which is what lets an
 //! organization be in supply.
 
-use aaa_map::{Id, Logistics};
+use tgmap::{Id, Logistics};
 
 use crate::{Refused, World, distance};
 
@@ -249,7 +249,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::Id;
+    use tgmap::Id;
 
     use crate::{Command, Notice, Refused};
 

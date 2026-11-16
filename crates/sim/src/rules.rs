@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aaa_map::{Id, Packs, Requires};
+use tgmap::{Id, Packs, Requires};
 
 /// The game's rules for one match. Each table left empty leaves what it
 /// covers out of play, so a test sets only those it exercises.
@@ -12,43 +12,43 @@ pub struct Rules {
     /// What the match's chances are drawn from: every copy of a match is
     /// given the same one.
     pub seed: u64,
-    pub terrain_rules: aaa_map::TerrainRules,
+    pub terrain_rules: tgmap::TerrainRules,
     /// What each building template packs into, for those that can.
     pub packing: HashMap<Id, Packs>,
     /// The buildings a player needs to commission an organization with a member
     /// of each template, by template.
     pub requires: HashMap<Id, Requires>,
     /// Each template's own cost, production and upkeep, by template.
-    pub economies: HashMap<Id, aaa_map::Economy>,
+    pub economies: HashMap<Id, tgmap::Economy>,
     /// The building templates whose buildings their owner can sell.
     pub sellable: HashSet<Id>,
-    pub economy: aaa_map::EconomyRules,
+    pub economy: tgmap::EconomyRules,
     /// How each template gives supply, for those that do, by template.
-    pub supplies: HashMap<Id, aaa_map::Supply>,
+    pub supplies: HashMap<Id, tgmap::Supply>,
     /// The settings supply runs by.
-    pub supply_rules: aaa_map::SupplyRules,
-    pub guard_rules: aaa_map::GuardRules,
+    pub supply_rules: tgmap::SupplyRules,
+    pub guard_rules: tgmap::GuardRules,
     /// Seconds an enemy's damage keeps what it hurt under siege.
     pub siege_seconds: f32,
     /// What each property does to supply, for those that do anything to
     /// it, by its id.
-    pub supply_effects: HashMap<Id, aaa_map::SupplyEffect>,
+    pub supply_effects: HashMap<Id, tgmap::SupplyEffect>,
     /// What each template's things are, by template, for the technologies
     /// and operations that work only on some.
-    pub kinds: HashMap<Id, aaa_map::Kind>,
+    pub kinds: HashMap<Id, tgmap::Kind>,
     /// Whether sides' objectives are kept in order of their text.
     pub sort_objectives: bool,
     /// The special operations that bear on supply, by id.
-    pub operations: HashMap<Id, aaa_map::Operation>,
+    pub operations: HashMap<Id, tgmap::Operation>,
     /// What those operations drop, by template, each standing anywhere and
     /// owned by nobody.
-    pub drops: HashMap<Id, aaa_map::Building>,
+    pub drops: HashMap<Id, tgmap::Building>,
     /// The health each template's buildings lose a second from when
     /// they're put on the map, by template.
     pub decays: HashMap<Id, f32>,
     /// How each organization template stands with supply, by template.
     /// Organizations of those without it are never in or out of supply.
-    pub logistics: HashMap<Id, aaa_map::Logistics>,
+    pub logistics: HashMap<Id, tgmap::Logistics>,
     /// The share of its health each template gets back a second in
     /// supply, by template.
     pub resupply_rates: HashMap<Id, f32>,
@@ -57,12 +57,12 @@ pub struct Rules {
     pub recruit_lists: HashMap<Id, Vec<Id>>,
     /// What those organization templates raise, by template, each standing
     /// anywhere and owned by nobody.
-    pub raisable: HashMap<Id, aaa_map::Organization>,
+    pub raisable: HashMap<Id, tgmap::Organization>,
     /// The aircraft that flies in each organization template that's
     /// delivered, by template.
-    pub airlifts: HashMap<Id, aaa_map::Airlift>,
+    pub airlifts: HashMap<Id, tgmap::Airlift>,
     /// How each template falls when it's dropped, by template.
-    pub falls: HashMap<Id, aaa_map::Fall>,
+    pub falls: HashMap<Id, tgmap::Fall>,
     /// World units a second each second that what falls gains.
     pub gravity: f32,
     /// Seconds commissioning an organization of each template takes, by
@@ -70,11 +70,11 @@ pub struct Rules {
     pub recruit_times: HashMap<Id, f32>,
     /// What each template that researches lists, in its menu's order, by
     /// template id.
-    pub research_lists: HashMap<Id, Vec<aaa_map::Research>>,
+    pub research_lists: HashMap<Id, Vec<tgmap::Research>>,
     /// The experience every side with a faction gains a second.
     pub experience_per_second: f32,
     /// How far each template sees, by template.
-    pub sights: HashMap<Id, aaa_map::Sight>,
+    pub sights: HashMap<Id, tgmap::Sight>,
     /// The templates whose organizations are numbered, as are the buildings
     /// standing in their organizations.
     pub numbered: HashSet<Id>,

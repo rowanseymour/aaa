@@ -128,7 +128,7 @@ impl World {
             if unit.awaited {
                 continue;
             }
-            unit.take(vec![aaa_map::from_local(to, facing, offset)], false);
+            unit.take(vec![tgmap::from_local(to, facing, offset)], false);
             unit.end_facing = facing;
         }
     }
@@ -139,7 +139,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::{Id, Requires};
+    use tgmap::{Id, Requires};
 
     use crate::{Command, Notice, Refused, State, World};
 
@@ -252,9 +252,9 @@ mod tests {
         // What the recruiter carries itself counts only for it.
         w.rules.kinds.insert(
             Id::from("hq"),
-            aaa_map::Kind {
+            tgmap::Kind {
                 properties: vec![Id::from("boat")],
-                ..aaa_map::Kind::default()
+                ..tgmap::Kind::default()
             },
         );
         let lacking = w.lacks(1, 0, &organization);

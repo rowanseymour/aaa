@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use aaa_map::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
+use tgmap::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, Zone};
 
 use crate::{
     Building, Held, Order, Piece, Refused, Relation, SECOND, State, TICK, Target, World,
@@ -190,7 +190,7 @@ impl World {
 
     /// Whether an operation `player` uses on `targets` can work on the
     /// organization at `r`, judged from `player`'s side.
-    fn enchants(&self, player: u32, targets: &aaa_map::Targets, r: usize) -> bool {
+    fn enchants(&self, player: u32, targets: &tgmap::Targets, r: usize) -> bool {
         let organization = &self.organizations[r];
         let kind = self.rules.kinds.get(&organization.template);
         let side = self.standing_flag(player, organization.owner);
@@ -603,8 +603,8 @@ impl World {
         // Where it stands from the leader, as in the formation.
         let [lx, ly] = organization.leader.map_or([0.0, 0.0], offset);
         let [x, y] = offset(p);
-        let stand = out.unwrap_or(aaa_map::from_local(at, facing, [x - lx, y - ly]));
-        let place = aaa_map::from_local(organization.position, facing, offset(p));
+        let stand = out.unwrap_or(tgmap::from_local(at, facing, [x - lx, y - ly]));
+        let place = tgmap::from_local(organization.position, facing, offset(p));
         let u = organization.units[p];
         let unit = &mut self.units[u];
         unit.died = None;
@@ -681,7 +681,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::{DeployPoints, Domain, Id, Pathing, Shape, Weapon};
+    use tgmap::{DeployPoints, Domain, Id, Pathing, Shape, Weapon};
 
     use crate::{
         Command, Ledger, Notice, Organization, Pause, Piece, Refused, Relation, State, Supplying,
@@ -719,7 +719,7 @@ mod tests {
         c.renumber(80);
         c.place([26.0, 28.0], [0.0, 1.0]);
         w.add_organization(&c);
-        let kind = aaa_map::Kind {
+        let kind = tgmap::Kind {
             properties: Vec::new(),
             flags: vec![Id::from("org_infantry")],
             soft: Shape::Circle { radius: 1.0 },
@@ -728,8 +728,8 @@ mod tests {
         w.rules
             .supply_effects
             .insert(Id::from("resupplied"), effect(0.0, 0.25, true, &[]));
-        let operation = aaa_map::Operation::Enchant {
-            targets: aaa_map::Targets {
+        let operation = tgmap::Operation::Enchant {
+            targets: tgmap::Targets {
                 required: ["FRIEND", "ORGANIZATION", "ORG_INFANTRY"]
                     .map(Id::from)
                     .to_vec(),
@@ -850,7 +850,7 @@ mod tests {
         w.rules
             .supplies
             .insert(Id::from("depot"), supply(20.0, true, 2.0));
-        let room = aaa_map::Economy {
+        let room = tgmap::Economy {
             production: amounts(&[("building_limit_provided", 20.0)]),
             ..Default::default()
         };
@@ -924,7 +924,7 @@ mod tests {
         assert_eq!(w.units[c].health, 100.0);
         assert_eq!(w.organizations[1].replacing[2], 0.0);
         let place = w.organizations[1].formations[0].offsets[2];
-        let place = aaa_map::from_local(w.organizations[1].position, [0.0, 1.0], place);
+        let place = tgmap::from_local(w.organizations[1].position, [0.0, 1.0], place);
         run(&mut w, 2.0);
         assert!(near(w.units[c].position, place));
         // Outside every zone it gets nothing.
@@ -1231,7 +1231,7 @@ mod tests {
         // Only on those with the properties a technology needs.
         w.grant(1, Id::from("foraging"));
         assert_eq!(w.resupply_multiplier(1), 1.0);
-        let kind = aaa_map::Kind {
+        let kind = tgmap::Kind {
             properties: vec![Id::from("org_unit")],
             ..Default::default()
         };
@@ -1359,11 +1359,11 @@ mod tests {
             .insert(Id::from("provisions"), supply(10.0, false, 0.0));
         w.rules.decays.insert(Id::from("provisions"), 10.0);
         let drop = Id::from("drop");
-        let dropped = aaa_map::Operation::Drop(Id::from("provisions"));
+        let dropped = tgmap::Operation::Drop(Id::from("provisions"));
         w.rules.operations.insert(drop.clone(), dropped);
         w.rules.operations.insert(
             Id::from("airlift"),
-            aaa_map::Operation::Drop(Id::from("tank")),
+            tgmap::Operation::Drop(Id::from("tank")),
         );
         assert_eq!(
             w.operate(1, &Id::from("airlift"), [64.0, 64.0], None),

@@ -1,7 +1,7 @@
 //! What a side has unlocked: the technologies it holds and researches, and
 //! what they and its buildings let a recruiter offer.
 
-use aaa_map::{Grant, Id, Research};
+use tgmap::{Grant, Id, Research};
 
 use crate::{Held, Notice, Refused, World};
 
@@ -109,7 +109,7 @@ impl World {
         &self,
         player: u32,
         building: usize,
-        organization: &aaa_map::Organization,
+        organization: &tgmap::Organization,
     ) -> Lacking {
         let mut out = Lacking::default();
         let members = organization.members.iter().map(|m| &m.template);
@@ -283,7 +283,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::Id;
+    use tgmap::Id;
 
     use crate::{Command, Notice, Refused, Researchable, World};
 
@@ -291,9 +291,9 @@ mod tests {
     /// money, the second needing the first and a depot.
     fn laboratory() -> World {
         let mut w = economy();
-        let item = |technology: &str, money| aaa_map::Research {
+        let item = |technology: &str, money| tgmap::Research {
             technology: Id::from(technology),
-            grant: aaa_map::Grant::Side,
+            grant: tgmap::Grant::Side,
             seconds: 1.0,
             cost: amounts(&[("money", money)]),
             structures: Vec::new(),
@@ -409,7 +409,7 @@ mod tests {
         let mut w = laboratory();
         w.buildings[0].deploy = None;
         let list = w.rules.research_lists.get_mut(&Id::from("house")).unwrap();
-        list[0].grant = aaa_map::Grant::Building;
+        list[0].grant = tgmap::Grant::Building;
         w.apply(1, research("tech_heavy")).unwrap();
         for _ in 0..10 {
             w.tick();
@@ -447,7 +447,7 @@ mod tests {
     fn research_for_a_settlement_goes_nowhere_and_can_be_had_again() {
         let mut w = laboratory();
         let list = w.rules.research_lists.get_mut(&Id::from("house")).unwrap();
-        list[0].grant = aaa_map::Grant::Settlement;
+        list[0].grant = tgmap::Grant::Settlement;
         let heavy = list[0].clone();
         w.apply(1, research("tech_heavy")).unwrap();
         assert_eq!(w.researchable(1, 0, &heavy), Researchable::Taken);

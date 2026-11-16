@@ -237,7 +237,7 @@ mod tests {
     use crate::testing::*;
     use crate::{Player, Sides};
     use Outcome::*;
-    use aaa_map::{Domain, Id, Pathing};
+    use tgmap::{Domain, Id, Pathing};
 
     /// Sides 1 and 2 on one team and 3 and 4 on another, each with a
     /// company, and an independent 9 with nothing whose loss decides
@@ -366,7 +366,7 @@ mod tests {
     fn only_organizations_and_sustaining_templates_keep_a_side_in() {
         let mut w = free_for_all();
         let depot = building(50, 1, [20.0, 20.0]);
-        let hq = aaa_map::Building {
+        let hq = tgmap::Building {
             template: Id::from("hq"),
             ..building(51, 2, [40.0, 20.0])
         };
@@ -528,7 +528,7 @@ mod tests {
     #[test]
     fn holding_the_share_of_cities_wins_for_the_team() {
         let mut w = teams();
-        let centre = |id, owner, x| aaa_map::Building {
+        let centre = |id, owner, x| tgmap::Building {
             zone: Some(10.0),
             ..building(id, owner, [x, 60.0])
         };

@@ -168,7 +168,7 @@ impl World {
 mod tests {
     use crate::testing::*;
 
-    use aaa_map::{Domain, Tile};
+    use tgmap::{Domain, Tile};
 
     use crate::{Command, Notice, Piece, State, World};
 

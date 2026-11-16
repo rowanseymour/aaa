@@ -56,7 +56,7 @@ enum Hosted {
 impl Default for Orders {
     /// Those of no match at all, for tests of what only asks.
     fn default() -> Self {
-        let pathing = aaa_map::Pathing::uniform(1, aaa_map::Domain::Land);
+        let pathing = tgmap::Pathing::uniform(1, tgmap::Domain::Land);
         let world = World::from_organizations(Default::default(), pathing, &[]);
         Orders::hosting(Setup::default(), world, None)
     }
@@ -414,8 +414,8 @@ fn said(events: Vec<Event>) {
 /// Matches hosted as though elsewhere, for tests of what plays in one.
 #[cfg(test)]
 pub(crate) mod testing {
-    use aaa_map::{Domain, Formation, Member, Organization, Pathing};
     use aaa_sim::Sides;
+    use tgmap::{Domain, Formation, Member, Organization, Pathing};
 
     use super::*;
 
@@ -488,7 +488,7 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
-    use aaa_map::{Domain, Pathing};
+    use tgmap::{Domain, Pathing};
 
     use super::testing::joined;
     use super::*;

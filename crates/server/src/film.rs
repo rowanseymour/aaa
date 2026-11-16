@@ -109,7 +109,7 @@ mod tests {
                 seed: u64::MAX,
                 teams: Some(vec![vec![1, 2], vec![3]]),
                 nations: [(1, "nation_usa".into())].into(),
-                fog: Some(aaa_map::FogSetting::Explored),
+                fog: Some(tgmap::FogSetting::Explored),
                 ..Default::default()
             },
             record: Record {

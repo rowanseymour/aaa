@@ -1,7 +1,7 @@
 //! The experience a side's faction earns, and spending it on the faction's
 //! special operations.
 
-use aaa_map::{Id, Operation};
+use tgmap::{Id, Operation};
 
 use crate::{LANDINGS_KEPT, Piece, Refused, SECOND, TICK, World};
 
@@ -186,7 +186,7 @@ mod tests {
     use crate::Command;
 
     fn world() -> World {
-        let pathing = aaa_map::Pathing::uniform(8, aaa_map::Domain::Land);
+        let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
         World::from_organizations(crate::Sides::default(), pathing, &[])
     }
 
@@ -222,8 +222,8 @@ mod tests {
     /// seconds to recharge, and an operation the match can't carry out.
     fn operating(experience: f32) -> World {
         let mut w = world();
-        let resupply = aaa_map::Operation::Enchant {
-            targets: aaa_map::Targets::default(),
+        let resupply = tgmap::Operation::Enchant {
+            targets: tgmap::Targets::default(),
             area: 15.0,
             max_targets: 4,
             property: Id::from("property_resupply"),
@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn radar_scan_lifts_the_minimap_fog_until_the_look_after_its_time() {
         let mut w = world();
-        let reveal = aaa_map::Operation::Reveal { seconds: 10.0 };
+        let reveal = tgmap::Operation::Reveal { seconds: 10.0 };
         w.rules.operations.insert(Id::from("radar_scan"), reveal);
         let ops = vec![SpecialOp::new(Id::from("radar_scan"), 0.0, 300.0)];
         w.lead(1, 0.0, None, ops);

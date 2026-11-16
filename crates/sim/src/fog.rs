@@ -3,7 +3,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use aaa_map::{FogSetting, Id, Relation, Tile};
+use tgmap::{FogSetting, Id, Relation, Tile};
 
 use crate::{Piece, World, distance};
 
@@ -60,7 +60,7 @@ impl SideFog {
 /// A radius pushed out to a quarter tile past the whole tiles it spans,
 /// unless it's already that far past them.
 fn padded(radius: f32) -> f32 {
-    const TILE: f32 = aaa_map::pathing::CELL_SIZE;
+    const TILE: f32 = tgmap::pathing::CELL_SIZE;
     let tiles = radius / TILE;
     match tiles.fract() < 0.25 {
         true => (tiles.floor() + 0.25) * TILE,
@@ -88,7 +88,7 @@ impl Fog {
     /// Marks the tiles whose centres lie within `radius` of the centre of
     /// the tile under `at`, in `layer` of `player`'s view.
     fn stamp(&mut self, player: u32, at: [f32; 2], radius: f32, remote: bool) {
-        const TILE: f32 = aaa_map::pathing::CELL_SIZE;
+        const TILE: f32 = tgmap::pathing::CELL_SIZE;
         let reach = padded(radius) / TILE;
         let centre = Tile::at(at);
         let n = reach.floor() as i32;
@@ -242,7 +242,7 @@ impl World {
             .unwrap_or(Seen::Unexplored)
     }
 
-    fn sight_of(&self, template: &Id) -> Option<&aaa_map::Sight> {
+    fn sight_of(&self, template: &Id) -> Option<&tgmap::Sight> {
         self.rules.sights.get(template)
     }
 
@@ -398,15 +398,15 @@ mod tests {
     use super::*;
     use crate::testing::*;
 
-    use aaa_map::{Domain, Fighter, Pathing};
+    use tgmap::{Domain, Fighter, Pathing};
 
     /// Players 1 and 2 at war, as `battle` has them, seeing `range` round
     /// themselves and showing those fighting them `remote` round them.
-    fn sighted(fighters: Vec<Fighter>, range: f32, remote: f32, fog: aaa_map::FogSetting) -> World {
+    fn sighted(fighters: Vec<Fighter>, range: f32, remote: f32, fog: tgmap::FogSetting) -> World {
         let mut w = battle(&[1, 2], fighters, at_war());
         w.rules
             .sights
-            .insert(Id::from("squad"), aaa_map::Sight { range, remote });
+            .insert(Id::from("squad"), tgmap::Sight { range, remote });
         w.set_fog(fog);
         w
     }
@@ -431,7 +431,7 @@ mod tests {
             vec![soldier(vec![]), soldier(vec![])],
             6.0,
             3.0,
-            aaa_map::FogSetting::Full,
+            tgmap::FogSetting::Full,
         );
         put(&mut w, 1, [70.0, 70.0]);
         w.tick();
@@ -460,7 +460,7 @@ mod tests {
             vec![soldier(vec![]), soldier(vec![])],
             6.0,
             3.0,
-            aaa_map::FogSetting::Explored,
+            tgmap::FogSetting::Explored,
         );
         assert_eq!(w.seen(1, [10.0, 10.0]), Seen::Visible);
         assert_eq!(w.seen(1, [70.0, 70.0]), Seen::Explored);
@@ -468,7 +468,7 @@ mod tests {
             vec![soldier(vec![]), soldier(vec![])],
             6.0,
             3.0,
-            aaa_map::FogSetting::None,
+            tgmap::FogSetting::None,
         );
         assert_eq!(w.seen(2, [70.0, 70.0]), Seen::Visible);
         assert!(w.sees_unit(2, 0));
@@ -485,7 +485,7 @@ mod tests {
             ],
             2.0,
             3.0,
-            aaa_map::FogSetting::Full,
+            tgmap::FogSetting::Full,
         );
         assert!(!w.sees_unit(2, 0));
         w.tick();

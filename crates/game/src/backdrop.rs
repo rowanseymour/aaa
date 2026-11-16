@@ -8,12 +8,12 @@
 use std::collections::HashSet;
 use std::thread::JoinHandle;
 
-use aaa_map::{Map, Recruits, Role};
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::terrain::{self, Prepared};
 use aaa_render::{Edge, MapAssets};
 use bevy::prelude::*;
 use tgck::map::Thing;
+use tgmap::{Map, Recruits, Role};
 
 use crate::{Data, Screen};
 

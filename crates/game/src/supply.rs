@@ -4,7 +4,6 @@
 //! border, as the options do. Another over the minimap, or its key, steps
 //! through the player's organizations that have no HQ.
 
-use aaa_map::Tile;
 use aaa_render::camera::RtsCamera;
 use aaa_render::terrain::world;
 use aaa_render::{Tint, overlay, textures};
@@ -15,6 +14,7 @@ use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button};
+use tgmap::Tile;
 
 use crate::actions::Blocks;
 use crate::displays::{self, Rim};
@@ -65,7 +65,7 @@ pub struct BorderLine;
 #[derive(Default)]
 pub struct Traced {
     giving: Vec<(usize, Tile, f32)>,
-    outline: aaa_map::Outline,
+    outline: tgmap::Outline,
 }
 
 /// Draws the border round the zones of the player's side and its allies,

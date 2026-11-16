@@ -1,4 +1,4 @@
-# aaa-map
+# tgmap
 
 A map as the editor and the game work with it: its ground, placed objects and
 other contents, built from the stored form that [`tgck`](../tgck) reads and

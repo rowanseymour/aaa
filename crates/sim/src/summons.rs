@@ -3,9 +3,9 @@
 
 use std::f32::consts::{FRAC_PI_2, TAU};
 
-use aaa_map::pathing::CELL_SIZE;
-use aaa_map::{Domain, Id, Obstacle, Shape, Summon, Tile};
 use serde::{Deserialize, Serialize};
+use tgmap::pathing::CELL_SIZE;
+use tgmap::{Domain, Id, Obstacle, Shape, Summon, Tile};
 
 use crate::delivery::spot;
 use crate::{Notice, Piece, Refused, World, bounding_radius};
@@ -231,7 +231,7 @@ impl World {
     /// index; none if its leader finds none.
     fn summon_regiment(
         &mut self,
-        mut organization: aaa_map::Organization,
+        mut organization: tgmap::Organization,
         at: [f32; 2],
     ) -> Option<usize> {
         let leader = organization.primary.unwrap_or(0);
@@ -310,7 +310,7 @@ crate::hash::digest!(Summoned {
 
 #[cfg(test)]
 mod tests {
-    use aaa_map::{Domain, Operation, Pathing, Shape};
+    use tgmap::{Domain, Operation, Pathing, Shape};
 
     use super::*;
     use crate::testing::{building, kind, truck, with_buildings};
@@ -369,7 +369,7 @@ mod tests {
         tanks.unpacks = None;
         tanks.primary = Some(0);
         tanks.control_range = Some(30.0);
-        let tank = |i: u32| aaa_map::Member {
+        let tank = |i: u32| tgmap::Member {
             shape: Some(Shape::Circle { radius: 1.0 }),
             ..crate::testing::member(i, [0.0, 0.0], 3.0)
         };
@@ -386,7 +386,7 @@ mod tests {
     fn a_regiments_members_come_out_of_a_building_near_that_recruits_them() {
         let mut factory = building(9, 1, [AT[0], AT[1] + 20.0]);
         factory.template = Id::from("factory");
-        factory.deploy = Some(aaa_map::DeployPoints {
+        factory.deploy = Some(tgmap::DeployPoints {
             creation: [0.0, 4.0],
             deployment: [0.0, 8.0],
         });
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn a_unique_summon_waits_while_its_side_owns_the_like() {
         let mut w = summoning(false, Some("provides_corps"));
-        let corps = aaa_map::Kind {
+        let corps = tgmap::Kind {
             flags: vec![Id::from("provides_corps")],
             ..kind(&[])
         };
@@ -505,7 +505,7 @@ mod tests {
 
     /// Has what's summoned flown in by a plane.
     fn flown(w: &mut World, template: &str) {
-        let airlift = aaa_map::Airlift {
+        let airlift = tgmap::Airlift {
             transport: "plane".into(),
             speed: 7.0,
             turn_radius: 18.0,
