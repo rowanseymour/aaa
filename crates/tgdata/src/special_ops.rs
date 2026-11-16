@@ -31,6 +31,8 @@ pub struct SpecialOperation {
     /// What its effects do, a line each, with the lines of what an
     /// enchantment gives indented under it.
     pub effects: Vec<EffectLine>,
+    /// The name of what it summons, for one that does.
+    pub summons: Option<String>,
 }
 
 /// The marker of an operation with an area that doesn't name its own, as
@@ -336,6 +338,9 @@ fn operation(
         }),
         area,
         effects: a.effect.iter().flat_map(|e| words.effect(e)).collect(),
+        summons: (a.effect.iter())
+            .filter(|e| is(&e.kind, "SUMMON"))
+            .find_map(|e| words.things.get(e.object_ids.as_ref()?).cloned()),
     }
 }
 

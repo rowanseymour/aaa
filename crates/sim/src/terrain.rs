@@ -147,6 +147,7 @@ mod tests {
         let forest = aaa_map::TileTerrain {
             properties: vec![Id::from("forest_infantry"), Id::from("forest_vehicles")],
             mountain: false,
+            water: false,
         };
         let infantry = TerrainEffect {
             requires: vec![Id::from("infantry")],
@@ -200,6 +201,7 @@ mod tests {
         let mountain = aaa_map::TileTerrain {
             properties: Vec::new(),
             mountain: true,
+            water: false,
         };
         (w.tile_terrains, w.rules.terrain_rules.slowest) =
             (aaa_map::TileTerrains::uniform(20, mountain), 0.5);

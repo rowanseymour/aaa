@@ -30,6 +30,7 @@ mod rules;
 mod schedule;
 mod setup;
 mod strikes;
+mod summons;
 mod supply;
 mod terrain;
 #[cfg(test)]
@@ -60,6 +61,7 @@ pub use rules::Rules;
 pub use schedule::{Action, CHAT_LONGEST, Channel, Diverged, Given, Record, SPEEDS, Schedule};
 use serde::{Deserialize, Serialize};
 pub use strikes::{Afflicted, Incoming, Watch};
+pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
 
 /// Seconds of play one [`World::tick`] advances.
@@ -175,6 +177,8 @@ pub struct World {
     pub watches: Vec<Watch>,
     /// Units hurt each second by what strikes left on them.
     pub afflicted: Vec<Afflicted>,
+    /// What special operations have put on the map.
+    pub summoned: Vec<Summoned>,
     /// What sides have been told: see [`World::take_notices`].
     pub(crate) notices: Vec<Notice>,
     /// What each side sees of the map.
@@ -674,6 +678,11 @@ pub enum Refused {
     /// It's a special operation that hasn't recharged since it was last
     /// used.
     Recharging,
+    /// It's a special operation waiting on what it, or the like of it,
+    /// put on the map.
+    Summoned,
+    /// It's a special operation that can't be aimed there.
+    Misplaced,
 }
 
 impl From<NotYours> for Refused {
@@ -1027,7 +1036,7 @@ impl Sides {
 
 digest!(World {
     organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, treasuries, commanders, operated, reveals, incoming, watches, afflicted, fog, ticks, loaded, flying, landings, numbers, next_id,
+    holdings, treasuries, commanders, operated, reveals, incoming, watches, afflicted, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng,
 } skip {
     // Fixed by the map and the game's data.

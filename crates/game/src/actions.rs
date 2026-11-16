@@ -1633,6 +1633,8 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::Unaffordable => "Not enough money",
         aaa_sim::Refused::Full => "HQ is full",
         aaa_sim::Refused::Recharging => "Recharging",
+        aaa_sim::Refused::Summoned => "Waiting on what it summoned",
+        aaa_sim::Refused::Misplaced => "Can't be aimed there",
     }
 }
 

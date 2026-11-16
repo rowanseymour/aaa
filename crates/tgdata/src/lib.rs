@@ -60,7 +60,7 @@ pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, Marker, OperationCues, SpecialOperation};
 pub use strikes::{Affliction, Lookout, Strike};
 pub use strings::{PingLook, Strings};
-pub use supply::{Kind, Operation, SupplyEffect, SupplyRules};
+pub use supply::{Kind, Operation, Summon, SupplyEffect, SupplyRules};
 pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
 };

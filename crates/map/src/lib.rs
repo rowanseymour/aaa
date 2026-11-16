@@ -21,8 +21,8 @@ pub use tgck::map::Relation;
 pub use tgdata::{
     Affliction, Airlift, Amounts, Damage, DeployPoints, Economy, EconomyRules, Fall, Fighter,
     Flight, FlightKind, FogSetting, Grant, GuardRules, Id, Kind, Logistics, Lookout, Operation,
-    Requires, Research, ResourceKind, Shape, Sight, Strike, Supply, SupplyEffect, SupplyRules,
-    Targets, TerrainEffect, TerrainRules, Turret, Weapon,
+    Requires, Research, ResourceKind, Shape, Sight, Strike, Summon, Supply, SupplyEffect,
+    SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
 };
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};

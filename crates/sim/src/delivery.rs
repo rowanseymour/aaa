@@ -208,7 +208,7 @@ impl World {
 
     /// Whether `spot` is on the map, on land, and clear of everything
     /// that blocks.
-    fn clear(&self, spot: &Obstacle) -> bool {
+    pub(crate) fn clear(&self, spot: &Obstacle) -> bool {
         let standing = self.buildings.iter().filter(|b| !b.gone());
         let others = standing.filter_map(|b| b.obstacle.as_ref());
         self.pathing
@@ -547,7 +547,7 @@ impl World {
 }
 
 /// The ground something of `shape` takes up standing at `at`.
-fn spot(at: [f32; 2], facing: [f32; 2], shape: Option<Shape>) -> Obstacle {
+pub(crate) fn spot(at: [f32; 2], facing: [f32; 2], shape: Option<Shape>) -> Obstacle {
     let shape = shape.unwrap_or(Shape::Point);
     Obstacle {
         position: at,
