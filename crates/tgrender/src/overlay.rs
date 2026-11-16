@@ -273,7 +273,8 @@ impl BannerImages {
 }
 
 /// The archive path of the image the shape named `shape` in the model at
-/// `model` shows, beside the model; logged where there's none.
+/// `model` shows, beside the model; logged where there's none or it
+/// isn't there.
 fn plate_image(game: &GameData, model: &str, shape: &str) -> Option<String> {
     let found = || {
         let nif = Nif::parse(&game.read(model)?).ok()?;
@@ -285,10 +286,11 @@ fn plate_image(game: &GameData, model: &str, shape: &str) -> Option<String> {
             }
             _ => None,
         })?;
-        Some(match model.rsplit_once('/') {
+        let path = match model.rsplit_once('/') {
             Some((dir, _)) => format!("{dir}/{file}"),
             None => file,
-        })
+        };
+        game.exists(&path).then_some(path)
     };
     let path = found();
     if path.is_none() {

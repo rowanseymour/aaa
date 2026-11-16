@@ -1245,9 +1245,7 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
     let (building, template) = (b, template.clone());
     let sim = &world.resource::<Sim>().0;
     // Said when it's refused for it.
-    let lacking = (sim.rules().raisable.get(&template))
-        .map(|o| sim.lacks(player, b, o))
-        .filter(|l| !l.is_empty());
+    let lacking = (sim.rules().raisable.get(&template)).map(|o| sim.lacks(player, b, o));
     let settlement = sim.settlement_of(b);
     let command = match (to, settlement) {
         (Some(to), _) => tgsim::Command::Deliver {
@@ -1261,13 +1259,14 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         },
         (None, None) => tgsim::Command::Commission { building, template },
     };
-    give(world, player, command).map_err(|e| match lacking {
-        Some(l) => {
-            let ids = l.structures.iter().chain(&l.properties).map(|i| i.as_str());
-            format!("{e}, for {}", ids.collect::<Vec<_>>().join(" "))
-        }
-        None => e,
-    })?;
+    if let (Err(tgsim::Refused::Lacking), Some(l)) = (sim.check(player, &command), lacking) {
+        let ids = l.structures.iter().chain(&l.properties).map(|i| i.as_str());
+        return Err(format!(
+            "refused: Lacking, for {}",
+            ids.collect::<Vec<_>>().join(" ")
+        ));
+    }
+    give(world, player, command)?;
     Ok(String::new())
 }
 

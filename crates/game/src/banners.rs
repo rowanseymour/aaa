@@ -348,7 +348,10 @@ pub fn show_hq_banners(
         let low = over - Vec3::Y * (HQ_HEIGHT - HEIGHT);
         let near = camera.world_to_viewport(&global, low).map_or(p.y, |p| p.y);
         *z = ZIndex(near as i32);
-        if let Ok((mut image, _)) = layers.get_mut(banner.plate) {
+        // A plate with no image stays clear.
+        if let Ok((mut image, _)) = layers.get_mut(banner.plate)
+            && image.color != Color::NONE
+        {
             let [r, g, b] = (sim.0.sides.player(building.owner)).map_or([1.0; 3], |p| p.rgb);
             image.color = Color::srgb(r, g, b);
         }
@@ -527,10 +530,11 @@ pub fn show_banners(
         // Lower on the screen is nearer the camera.
         *z = ZIndex(p.y as i32);
         // Its owner's colour, whoever that is now.
+        // A plate with no image stays clear.
         if let Ok((mut image, _)) = layers.get_mut(banner.plate) {
             let [r, g, b] = (sim.0.sides.player(organization.owner)).map_or([1.0; 3], |p| p.rgb);
             let colour = Color::srgb(r, g, b);
-            if image.color != colour {
+            if image.color != colour && image.color != Color::NONE {
                 image.color = colour;
             }
         }
@@ -604,21 +608,18 @@ pub fn badge_banners(
                 organization.template.as_str(),
                 faction,
             );
+            let [red, green, blue] =
+                (sim.0.sides.player(organization.owner)).map_or([1.0; 3], |p| p.rgb);
             let drawn = [
-                (banner.plate, looks.plate),
-                (banner.frame, looks.frame),
-                (banner.engaged, looks.engaged),
-                (banner.out_of_supply, looks.out_of_supply),
-                (banner.shortage, looks.shortage),
+                (banner.plate, looks.plate, Color::srgb(red, green, blue)),
+                (banner.frame, looks.frame, Color::WHITE),
+                (banner.engaged, looks.engaged, Color::WHITE),
+                (banner.out_of_supply, looks.out_of_supply, Color::WHITE),
+                (banner.shortage, looks.shortage, Color::WHITE),
             ];
-            for (layer, image) in drawn {
+            for (layer, image, colour) in drawn {
                 if let Ok((mut node, _)) = layers.get_mut(layer) {
-                    // The plate's tinted again below.
-                    node.color = if image.is_some() {
-                        Color::WHITE
-                    } else {
-                        Color::NONE
-                    };
+                    node.color = if image.is_some() { colour } else { Color::NONE };
                     node.image = image.unwrap_or_default();
                 }
             }
