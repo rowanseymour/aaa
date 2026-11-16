@@ -4,12 +4,12 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, ScrollArea};
 use tgdata::{Faction, Handicap, Id, Nation};
 use tgmap::{Brief, Player};
+use tgrender::textures;
 
 use crate::actions::GLYPH_DIR;
 use crate::menu::{MenuPage, open};

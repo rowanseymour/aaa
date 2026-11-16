@@ -1,7 +1,6 @@
 //! The options, a page over the whole screen that the main menu and the
 //! menu over a match both open, and what's chosen in them.
 
-use aaa_render::camera::RtsCamera;
 use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
 use bevy::ecs::observer::IntoEntityObserver;
@@ -16,6 +15,7 @@ use bevy::window::{
 use bevy::winit::WINIT_WINDOWS;
 use raw_window_handle::RawDisplayHandle;
 use tgdata::{GameData, HotkeyConfiguration, Id, SoundSwitches};
+use tgrender::camera::RtsCamera;
 
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;

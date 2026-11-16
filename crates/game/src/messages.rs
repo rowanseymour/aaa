@@ -6,16 +6,16 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use aaa_render::camera::RtsCamera;
-use aaa_render::terrain::world;
-use aaa_render::textures;
 use aaa_server::protocol::Said;
-use aaa_sim::{Channel, Notice, Pause, Piece, Relation, Seen, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GameEvent, Id, InterfaceVars};
+use tgrender::camera::RtsCamera;
+use tgrender::terrain::world;
+use tgrender::textures;
+use tgsim::{Channel, Notice, Pause, Piece, Relation, Seen, World};
 
 use crate::actions::{self, Aim, fill};
 use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
@@ -85,7 +85,7 @@ impl Look {
 
     /// An HQ's name: its building's, numbered as its organization is,
     /// packed or not.
-    fn hq(&self, sim: &World, hq: &aaa_sim::Hq) -> String {
+    fn hq(&self, sim: &World, hq: &tgsim::Hq) -> String {
         let standing = (sim.buildings.iter())
             .position(|b| !b.gone() && b.organization.as_ref().is_some_and(|o| o.id == hq.id));
         if let Some(b) = standing {
@@ -1526,7 +1526,7 @@ mod tests {
         }
         players[0].relations[1] = tgmap::Relation::Ally;
         players[1].relations[0] = tgmap::Relation::Ally;
-        let sides = aaa_sim::Sides {
+        let sides = tgsim::Sides {
             players,
             teams: Vec::new(),
         };

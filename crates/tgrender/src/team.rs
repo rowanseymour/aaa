@@ -28,7 +28,7 @@ impl Team {
 
 impl MaterialExtension for Team {
     fn fragment_shader() -> ShaderRef {
-        "embedded://aaa_render/team.wesl".into()
+        "embedded://tgrender/team.wesl".into()
     }
 }
 

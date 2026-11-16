@@ -1,6 +1,6 @@
-# aaa-sim
+# tgsim
 
-The rules of Axis & Allies (2004): matches played out on a map loaded by
+A game's rules: matches played out on a map loaded by
 [`tgmap`](../tgmap), with no rendering so that they can run headless and be
 tested.
 

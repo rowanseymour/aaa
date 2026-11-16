@@ -64,17 +64,7 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aaa_render::MapObject;
-use aaa_render::camera::{self, RtsCamera};
-use aaa_render::models::{Footprint, ModelAssets, Models, pose};
-use aaa_render::overlay::{
-    self, BUILDING_HEALTH_BAR, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET,
-};
-use aaa_render::shot::{self, ShotPlugin};
-use aaa_render::terrain::{map_point, world};
-use aaa_render::{Edge, MapAssets, MapRenderPlugin, Playing};
 use aaa_server::protocol::Welcome;
-use aaa_sim::{Relation, State, TICK, Target, World};
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -84,6 +74,14 @@ use orders::Orders;
 use tgck::map::{Detail, Thing};
 use tgdata::{Footing, GameData};
 use tgmap::{Ground, Map, Recruits, Shape};
+use tgrender::MapObject;
+use tgrender::camera::{self, RtsCamera};
+use tgrender::models::{Footprint, ModelAssets, Models, pose};
+use tgrender::overlay::{self, BUILDING_HEALTH_BAR, HEALTH_BAR, Mark, OverlayImages, SQUARE_INSET};
+use tgrender::shot::{self, ShotPlugin};
+use tgrender::terrain::{map_point, world};
+use tgrender::{Edge, MapAssets, MapRenderPlugin, Playing};
+use tgsim::{Relation, State, TICK, Target, World};
 
 const USAGE: &str = "\
 usage:
@@ -254,7 +252,7 @@ struct Prepared {
 struct Sim(World);
 
 /// Says which of the orders carried out were refused.
-fn log_refused(refused: Vec<(u32, aaa_sim::Refused)>) {
+fn log_refused(refused: Vec<(u32, tgsim::Refused)>) {
     for (player, e) in refused {
         info!("player {player}'s order refused: {e:?}");
     }
@@ -430,7 +428,7 @@ fn spawn_unit_view(
     ground: &Ground,
     thing: &Thing,
     speed: f32,
-    trailer: Option<&aaa_sim::Trailer>,
+    trailer: Option<&tgsim::Trailer>,
     owner: u32,
     unit: usize,
 ) -> bool {
@@ -662,7 +660,7 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    let log = match aaa_render::log::plugin(log.as_deref()) {
+    let log = match tgrender::log::plugin(log.as_deref()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("aaa-game: {e}");
@@ -871,7 +869,7 @@ fn main() -> ExitCode {
                     (fog::shade_ground, fog::hide_scenery),
                     spawn_views,
                     (show_units, show_trailers, show_buildings, show_packing)
-                        .before(aaa_render::Animate),
+                        .before(tgrender::Animate),
                     deliveries::show,
                     fog::hide_buildings,
                 )
@@ -1394,7 +1392,7 @@ fn setup(
         .filter(|(_, role)| *role != tgmap::Role::Other)
         .map(|(t, _)| t.id)
         .collect();
-    let mut models = aaa_render::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
+    let mut models = tgrender::spawn_map(&mut commands, &mut assets, game, map, false, |t| {
         leave_out.contains(&t.id)
     });
     // Units are drawn as the map stores them, with its variations and
@@ -2304,7 +2302,7 @@ fn command(
     if selected.0.is_empty() {
         // Buildings that don't commission have no rally point to set.
         if let Some(b) = chosen.0 {
-            let rally = aaa_sim::Command::Rally {
+            let rally = tgsim::Command::Rally {
                 building: b,
                 at: Some(point),
             };
@@ -2345,7 +2343,7 @@ fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
         return None;
     };
     let owner = sim.organizations[e].owner;
-    (sim.sides.relation(player, owner) == aaa_sim::Relation::Enemy).then_some(e)
+    (sim.sides.relation(player, owner) == tgsim::Relation::Enemy).then_some(e)
 }
 
 /// Sends organizations after the enemy organization `e`. Returns those that went,
@@ -2359,7 +2357,7 @@ fn pursue(
 ) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
     let there = sim.centre(e);
     let (went, rest): (Vec<usize>, Vec<usize>) = organizations.iter().partition(|&&r| {
-        let command = aaa_sim::Command::Pursue {
+        let command = tgsim::Command::Pursue {
             organization: r,
             enemy: e,
         };
@@ -2416,11 +2414,11 @@ fn send(
         };
         let (organization, to) = (r, target);
         let command = match aim {
-            actions::Aim::Move => aaa_sim::Command::Move { organization, to },
-            actions::Aim::Attack => aaa_sim::Command::Attack { organization, to },
-            actions::Aim::Run => aaa_sim::Command::Run { organization, to },
-            actions::Aim::Guard => aaa_sim::Command::Guard { organization, to },
-            actions::Aim::Unpack => aaa_sim::Command::Unpack {
+            actions::Aim::Move => tgsim::Command::Move { organization, to },
+            actions::Aim::Attack => tgsim::Command::Attack { organization, to },
+            actions::Aim::Run => tgsim::Command::Run { organization, to },
+            actions::Aim::Guard => tgsim::Command::Guard { organization, to },
+            actions::Aim::Unpack => tgsim::Command::Unpack {
                 organization,
                 at: to,
                 facing: actions::UNPACK_FACING,
@@ -2459,7 +2457,7 @@ fn choose_formation(
         let Some(formation) = organization.formations.get(f) else {
             continue;
         };
-        let command = aaa_sim::Command::Formation {
+        let command = tgsim::Command::Formation {
             organization: r,
             formation: f,
         };
@@ -2673,7 +2671,7 @@ fn show_focus(
 
 /// The ground a building's template claims, which takes in its pad and
 /// yard; the model's own box is about its walls.
-fn claimed_size(building: &aaa_sim::Building, footprint: Option<&Footprint>) -> Vec2 {
+fn claimed_size(building: &tgsim::Building, footprint: Option<&Footprint>) -> Vec2 {
     let claimed = match building.obstacle.as_ref().map(|o| o.shape) {
         Some(Shape::Rect { width, height }) => Some(Vec2::new(width, height)),
         Some(Shape::Circle { radius }) => Some(Vec2::splat(2.0 * radius)),
@@ -2828,14 +2826,14 @@ mod tests {
         app.update();
         assert_eq!(clock(&app), (false, 1.0));
         let mut orders = app.world_mut().resource_mut::<Orders>();
-        orders.act(aaa_sim::Action::Pause(true));
-        orders.act(aaa_sim::Action::Speed(2.0));
+        orders.act(tgsim::Action::Pause(true));
+        orders.act(tgsim::Action::Speed(2.0));
         app.update();
         assert_eq!(clock(&app), (true, 2.0));
         assert_eq!(app.world().resource::<Orders>().record().given.len(), 2);
         // While the loading screen is up the clock is its to hold.
         let loading = app.world_mut().spawn(LoadingScreen).id();
-        (app.world_mut().resource_mut::<Orders>()).act(aaa_sim::Action::Pause(false));
+        (app.world_mut().resource_mut::<Orders>()).act(tgsim::Action::Pause(false));
         app.update();
         assert!(clock(&app).0);
         app.world_mut().despawn(loading);

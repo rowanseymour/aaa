@@ -2,12 +2,12 @@
 //! to one other person, while the match goes on. It's hidden until opened.
 //! What's said travels as an order, and the message log shows it.
 
-use aaa_render::camera::{self, RtsCamera};
-use aaa_sim::{Action, Channel, Relation, World};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
+use tgrender::camera::{self, RtsCamera};
+use tgsim::{Action, Channel, Relation, World};
 
 use crate::keys::Bindings;
 use crate::messages::MessageLog;
@@ -250,7 +250,7 @@ pub(crate) fn type_into(input: &mut String, presses: &mut MessageReader<Keyboard
             Key::Space => " ",
             _ => continue,
         };
-        let room = aaa_sim::CHAT_LONGEST.saturating_sub(input.chars().count());
+        let room = tgsim::CHAT_LONGEST.saturating_sub(input.chars().count());
         let typed: String = typed
             .chars()
             .filter(|c| !c.is_control())

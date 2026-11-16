@@ -39,6 +39,6 @@ impl Glow {
 
 impl MaterialExtension for Glow {
     fn fragment_shader() -> ShaderRef {
-        "embedded://aaa_render/glow.wesl".into()
+        "embedded://tgrender/glow.wesl".into()
     }
 }

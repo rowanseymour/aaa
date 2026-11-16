@@ -6,43 +6,31 @@ version = 4
 name = "aaa-editor"
 version = "0.1.0"
 dependencies = [
- "aaa-render",
  "bevy",
  "bevy_egui",
  "tgdata",
  "tgmap",
+ "tgrender",
 ]
 
 [[package]]
 name = "aaa-game"
 version = "0.1.0-alpha"
 dependencies = [
- "aaa-render",
  "aaa-server",
- "aaa-sim",
  "bevy",
  "raw-window-handle",
  "tgck",
  "tgdata",
  "tgmap",
-]
-
-[[package]]
-name = "aaa-render"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "nif",
- "tgck",
- "tgdata",
- "tgmap",
+ "tgrender",
+ "tgsim",
 ]
 
 [[package]]
 name = "aaa-server"
 version = "0.1.0"
 dependencies = [
- "aaa-sim",
  "log",
  "postcard",
  "quinn",
@@ -51,17 +39,8 @@ dependencies = [
  "serde",
  "tgdata",
  "tgmap",
+ "tgsim",
  "tokio",
-]
-
-[[package]]
-name = "aaa-sim"
-version = "0.1.0"
-dependencies = [
- "libm",
- "log",
- "serde",
- "tgmap",
 ]
 
 [[package]]
@@ -5834,6 +5813,27 @@ dependencies = [
  "libm",
  "tgck",
  "tgdata",
+]
+
+[[package]]
+name = "tgrender"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "nif",
+ "tgck",
+ "tgdata",
+ "tgmap",
+]
+
+[[package]]
+name = "tgsim"
+version = "0.1.0"
+dependencies = [
+ "libm",
+ "log",
+ "serde",
+ "tgmap",
 ]
 
 [[package]]

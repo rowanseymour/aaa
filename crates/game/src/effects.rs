@@ -10,12 +10,6 @@ use std::collections::HashMap;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use aaa_render::camera::RtsCamera;
-use aaa_render::decals::{DecalCache, decal_colour};
-use aaa_render::models::{Footprint, Models, Rate};
-use aaa_render::terrain::{map_point, world};
-use aaa_render::{MapAssets, MapObject, Tint};
-use aaa_sim::{Landing, Operated, State, Target, World};
 use bevy::prelude::*;
 use tgck::map::CELL_SIZE;
 use tgdata::{
@@ -23,6 +17,12 @@ use tgdata::{
     Vfx, VfxCue, VfxTint, Weapon,
 };
 use tgmap::{Ground, Map};
+use tgrender::camera::RtsCamera;
+use tgrender::decals::{DecalCache, decal_colour};
+use tgrender::models::{Footprint, Models, Rate};
+use tgrender::terrain::{map_point, world};
+use tgrender::{MapAssets, MapObject, Tint};
+use tgsim::{Landing, Operated, State, Target, World};
 
 use crate::{BuildingView, Drawn, Loaded, Screen, Sim, UnitView};
 
@@ -465,7 +465,7 @@ struct Now<'a> {
 const DEAD: &str = "dead";
 
 /// The states a building is in, as effect commands name them.
-fn building_states(b: &aaa_sim::Building) -> Vec<&'static str> {
+fn building_states(b: &tgsim::Building) -> Vec<&'static str> {
     let mut states = Vec::new();
     if b.packing.is_some() {
         states.push("structure_packing");
@@ -479,7 +479,7 @@ fn building_states(b: &aaa_sim::Building) -> Vec<&'static str> {
     states
 }
 
-fn unit_states(u: &aaa_sim::Unit) -> Vec<&'static str> {
+fn unit_states(u: &tgsim::Unit) -> Vec<&'static str> {
     // Not one that left the map by unpacking, which is no death.
     match (u.died, u.descent) {
         (Some(_), _) => vec![DEAD],
@@ -922,7 +922,7 @@ fn play(
         if discard && !on_screen(camera, transform.translation) {
             continue;
         }
-        let fogged = fog.at(map_point(transform.translation)) != aaa_sim::Seen::Visible;
+        let fogged = fog.at(map_point(transform.translation)) != tgsim::Seen::Visible;
         if lasts.is_some() && fogged {
             continue;
         }
@@ -1444,7 +1444,7 @@ fn tint_units(
 ) {
     let sim = &sim.0;
     let clocks = [
-        sim.ticks as f64 * f64::from(aaa_sim::TICK),
+        sim.ticks as f64 * f64::from(tgsim::TICK),
         real.elapsed_secs_f64(),
     ];
     for (e, view, seen, tinting, tint) in &mut views {

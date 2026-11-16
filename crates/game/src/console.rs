@@ -12,15 +12,15 @@ use std::collections::VecDeque;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::mpsc::SyncSender;
 
-use aaa_render::camera::RtsCamera;
-use aaa_render::shot::Taken;
-use aaa_render::terrain::{map_point, world as point};
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
 use bevy::render::view::screenshot::{Screenshot, ScreenshotCaptured};
 use bevy::time::Real;
 use bevy::window::PrimaryWindow;
+use tgrender::camera::RtsCamera;
+use tgrender::shot::Taken;
+use tgrender::terrain::{map_point, world as point};
 
 use crate::actions::Aim;
 use crate::lobby::Lineup;
@@ -28,8 +28,8 @@ use crate::remote::Remote;
 use crate::ui::{Font, Ink, Surface, backed, label};
 use crate::waypoints::Sent;
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
-use aaa_sim::Action;
 use tgmap::Id;
+use tgsim::Action;
 
 /// Lines kept for scrolling back through.
 const SCROLLBACK: usize = 200;
@@ -497,10 +497,10 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "research" => research(world, &args),
                 "unpack" => unpack(world, &args),
                 "pack" => {
-                    building_order(world, &args, |building| aaa_sim::Command::Pack { building })
+                    building_order(world, &args, |building| tgsim::Command::Pack { building })
                 }
                 "sell" => {
-                    building_order(world, &args, |building| aaa_sim::Command::Sell { building })
+                    building_order(world, &args, |building| tgsim::Command::Sell { building })
                 }
                 "disband" => disband(world, &args),
                 "attach" => attach(world, &args, true),
@@ -611,10 +611,10 @@ fn screenshot(world: &mut World, args: &[&str]) -> Reply {
     };
     let path = std::path::PathBuf::from(path);
     // A windowless run draws to an image, which is saved once it's settled.
-    if !aaa_render::shot::take(world, path.clone()) {
+    if !tgrender::shot::take(world, path.clone()) {
         world.spawn(Screenshot::primary_window()).observe(
             move |captured: On<ScreenshotCaptured>, mut commands: Commands| {
-                let saved = aaa_render::shot::save(&captured.image, &path)
+                let saved = tgrender::shot::save(&captured.image, &path)
                     .map(|_| path.clone())
                     .map_err(|e| format!("{}: {e}", path.display()));
                 commands.trigger(Taken(saved));
@@ -697,8 +697,8 @@ fn game_speed(world: &mut World, args: &[&str]) -> Reply {
         [] => Ok(format!("{}", orders.speeding())),
         [speed] => {
             let speed = number(speed)?;
-            if !aaa_sim::SPEEDS.contains(&speed) {
-                let (slowest, fastest) = aaa_sim::SPEEDS.into_inner();
+            if !tgsim::SPEEDS.contains(&speed) {
+                let (slowest, fastest) = tgsim::SPEEDS.into_inner();
                 return Err(format!("takes {slowest} to {fastest}"));
             }
             barred(&orders, &Action::Speed(speed))?;
@@ -903,7 +903,7 @@ fn pitch(world: &mut World, args: &[&str]) -> Reply {
 }
 
 /// The player a word names, by name or id.
-fn kingdom(sim: &aaa_sim::World, word: &str) -> Result<u32, String> {
+fn kingdom(sim: &tgsim::World, word: &str) -> Result<u32, String> {
     let players = &sim.sides.players;
     players
         .iter()
@@ -913,7 +913,7 @@ fn kingdom(sim: &aaa_sim::World, word: &str) -> Result<u32, String> {
 }
 
 /// The map's kingdoms, marking `current`.
-fn kingdoms(sim: &aaa_sim::World, current: Option<u32>) -> String {
+fn kingdoms(sim: &tgsim::World, current: Option<u32>) -> String {
     let names: Vec<String> = sim
         .sides
         .players
@@ -927,12 +927,12 @@ fn kingdoms(sim: &aaa_sim::World, current: Option<u32>) -> String {
 }
 
 /// Whether the match is over, and how it's come out for each side.
-fn outcome(sim: &aaa_sim::World) -> String {
+fn outcome(sim: &tgsim::World) -> String {
     let sides = sim.sides.players.iter().map(|p| {
         let outcome = match sim.outcome(p.id) {
-            aaa_sim::Outcome::Playing => "playing",
-            aaa_sim::Outcome::Won => "won",
-            aaa_sim::Outcome::Lost => "lost",
+            tgsim::Outcome::Playing => "playing",
+            tgsim::Outcome::Won => "won",
+            tgsim::Outcome::Lost => "lost",
         };
         format!("\"{}\" ({}) {outcome}", p.name, p.id)
     });
@@ -1064,11 +1064,11 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     let owner = sim.organizations[r].owner;
     let (organization, to) = (r, point);
     let command = match aim {
-        Aim::Move => aaa_sim::Command::Move { organization, to },
-        Aim::Attack => aaa_sim::Command::Attack { organization, to },
-        Aim::Run => aaa_sim::Command::Run { organization, to },
-        Aim::Guard => aaa_sim::Command::Guard { organization, to },
-        Aim::Unpack => aaa_sim::Command::Unpack {
+        Aim::Move => tgsim::Command::Move { organization, to },
+        Aim::Attack => tgsim::Command::Attack { organization, to },
+        Aim::Run => tgsim::Command::Run { organization, to },
+        Aim::Guard => tgsim::Command::Guard { organization, to },
+        Aim::Unpack => tgsim::Command::Unpack {
             organization,
             at: to,
             facing: crate::actions::UNPACK_FACING,
@@ -1100,11 +1100,11 @@ fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let there = sim.centre(e);
     let owner = sim.organizations[r].owner;
     let command = match aim {
-        Aim::Guard => aaa_sim::Command::GuardPiece {
+        Aim::Guard => tgsim::Command::GuardPiece {
             organization: r,
-            piece: aaa_sim::Piece::Organization(e),
+            piece: tgsim::Piece::Organization(e),
         },
-        _ => aaa_sim::Command::Pursue {
+        _ => tgsim::Command::Pursue {
             organization: r,
             enemy: e,
         },
@@ -1219,16 +1219,16 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
     let (building, template) = (b, template.clone());
     let settlement = world.resource::<Sim>().0.settlement_of(b);
     let command = match (to, settlement) {
-        (Some(to), _) => aaa_sim::Command::Deliver {
+        (Some(to), _) => tgsim::Command::Deliver {
             building,
             template,
             to,
         },
-        (None, Some(settlement)) => aaa_sim::Command::Recruit {
+        (None, Some(settlement)) => tgsim::Command::Recruit {
             settlement,
             template,
         },
-        (None, None) => aaa_sim::Command::Commission { building, template },
+        (None, None) => tgsim::Command::Commission { building, template },
     };
     give(world, player, command)?;
     Ok(String::new())
@@ -1250,7 +1250,7 @@ fn use_faction_ability(world: &mut World, args: &[&str]) -> Reply {
         .ok_or(format!("the faction has no operation {i}"))?;
     let given = sim.operation_aim(player, i, None, at);
     let at = given.ok_or(format!("{} isn't given on the ground", op.id))?;
-    let operation = aaa_sim::Command::Operate {
+    let operation = tgsim::Command::Operate {
         operation: i,
         at,
         on: None,
@@ -1272,7 +1272,7 @@ fn research(world: &mut World, args: &[&str]) -> Reply {
         let template = &sim.buildings[b].template;
         return Err(format!("{template} doesn't research {technology}"));
     };
-    let command = aaa_sim::Command::Research {
+    let command = tgsim::Command::Research {
         building: b,
         technology: item.technology.clone(),
     };
@@ -1281,7 +1281,7 @@ fn research(world: &mut World, args: &[&str]) -> Reply {
 }
 
 /// Gives the selected building the order `order` makes for it.
-fn building_order(world: &mut World, args: &[&str], order: fn(usize) -> aaa_sim::Command) -> Reply {
+fn building_order(world: &mut World, args: &[&str], order: fn(usize) -> tgsim::Command) -> Reply {
     no_args(args)?;
     let player = world.resource::<Local>().0.ok_or("nobody to play")?;
     let b = selected_building(world)?;
@@ -1296,7 +1296,7 @@ fn disband(world: &mut World, args: &[&str]) -> Reply {
     let sim = &world.resource::<Sim>().0;
     let organization = organization_by_id(sim, id)?;
     let owner = sim.organizations[organization].owner;
-    give(world, owner, aaa_sim::Command::Disband { organization })?;
+    give(world, owner, tgsim::Command::Disband { organization })?;
     Ok(String::new())
 }
 
@@ -1308,8 +1308,8 @@ fn attach(world: &mut World, args: &[&str], attach: bool) -> Reply {
     let organization = organization_by_id(sim, id)?;
     let owner = sim.organizations[organization].owner;
     let command = match attach {
-        true => aaa_sim::Command::Attach { organization },
-        false => aaa_sim::Command::Detach { organization },
+        true => tgsim::Command::Attach { organization },
+        false => tgsim::Command::Detach { organization },
     };
     give(world, owner, command)?;
     Ok(String::new())
@@ -1329,13 +1329,13 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
     let &[r] = &world.resource::<Selected>().0[..] else {
         return Err("select one packed building".into());
     };
-    let command = aaa_sim::Command::Unpack {
+    let command = tgsim::Command::Unpack {
         organization: r,
         at: point,
         facing,
     };
     give(world, player, command)?;
-    let at = aaa_sim::unpack_site(point);
+    let at = tgsim::unpack_site(point);
     world.write_message(crate::waypoints::Sent {
         to: Some(at),
         aim: crate::actions::Aim::Unpack,
@@ -1346,7 +1346,7 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
 
 /// Queues `command` from `player` for the next tick, as a click would.
 /// The organization with object id `id`, by index.
-fn organization_by_id(sim: &aaa_sim::World, id: &str) -> Result<usize, String> {
+fn organization_by_id(sim: &tgsim::World, id: &str) -> Result<usize, String> {
     (sim.organizations.iter())
         .position(|r| r.id.to_string() == id)
         .ok_or_else(|| format!("no organization {id}"))
@@ -1390,7 +1390,7 @@ fn act(world: &mut World, action: Action) -> Result<(), String> {
     })
 }
 
-fn give(world: &mut World, player: u32, command: aaa_sim::Command) -> Result<(), String> {
+fn give(world: &mut World, player: u32, command: tgsim::Command) -> Result<(), String> {
     world.resource_scope(|world, mut orders: Mut<Orders>| {
         let sim = &world.resource::<Sim>().0;
         let refused = |e| format!("refused: {e:?}");
@@ -1420,7 +1420,7 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
     let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
     let mut chosen = world.resource::<SelectedBuilding>().0;
     let sim = &mut world.resource_mut::<Sim>().0;
-    for _ in 0..(seconds / aaa_sim::TICK).round() as u32 {
+    for _ in 0..(seconds / tgsim::TICK).round() as u32 {
         crate::step_world(sim, &mut orders, &mut selected, &mut chosen);
     }
     world.insert_resource(orders);

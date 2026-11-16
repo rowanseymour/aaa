@@ -2,10 +2,10 @@
 //! follows the cursor where it would stand, on the map or through the
 //! minimap, drawn all in red where it wouldn't fit.
 
-use aaa_render::MapAssets;
-use aaa_render::models::repaint;
-use aaa_render::terrain::world;
 use bevy::prelude::*;
+use tgrender::MapAssets;
+use tgrender::models::repaint;
+use tgrender::terrain::world;
 
 use crate::actions::{self, Aim, Page};
 use crate::{Drawn, Loaded, Local, Pointer, Pointing, Screen, Selected, Sim, thing_at};

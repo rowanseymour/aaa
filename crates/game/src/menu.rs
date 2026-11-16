@@ -1,10 +1,10 @@
 //! The menus before a match: the main menu and the kinds of new game, which
 //! open over the same screen, as the game has them.
 
-use aaa_render::textures;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
+use tgrender::textures;
 
 use crate::ui::{Font, Ink, Surface, backed, button, called, disabled, label, panel};
 use crate::{Screen, confirm};

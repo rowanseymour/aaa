@@ -4,18 +4,18 @@
 
 use std::collections::HashMap;
 
-use aaa_render::textures;
 use bevy::image::CompressedImageFormats;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::{Activate, Button, ScrollArea};
+use tgrender::textures;
 
 use crate::actions::Blocks;
 use crate::keys::Bindings;
 use crate::ui::{self, Click, Edge, Font, Hint, Ink, Marked, Surface, Theme, label};
 use crate::{Orders, Screen, minimap};
-use aaa_sim::Action;
+use tgsim::Action;
 
 /// What the key that closes whichever panel is up is bound to.
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";

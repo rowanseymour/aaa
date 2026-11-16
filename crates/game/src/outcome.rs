@@ -1,8 +1,8 @@
 //! Telling the player how the match has come out for their side, the
 //! moment it's decided, or that it's ended with its host going.
 
-use aaa_sim::Outcome;
 use bevy::prelude::*;
+use tgsim::Outcome;
 
 use bevy::ui_widgets::Activate;
 
@@ -140,9 +140,9 @@ fn ask_end(_: On<Activate>, mut commands: Commands, words: Res<confirm::Words>) 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_sim::{Sides, World};
     use bevy::state::app::StatesPlugin;
     use tgmap::{Domain, Pathing};
+    use tgsim::{Sides, World};
 
     /// A match of sides 1 and 2, the player as 1.
     fn app() -> App {

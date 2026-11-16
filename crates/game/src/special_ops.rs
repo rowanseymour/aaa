@@ -5,12 +5,12 @@
 
 use std::collections::HashMap;
 
-use aaa_render::decals::DecalCache;
-use aaa_render::terrain::world;
-use aaa_render::{MapAssets, textures};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use tgdata::{Decal, SpecialOperation};
+use tgrender::decals::DecalCache;
+use tgrender::terrain::world;
+use tgrender::{MapAssets, textures};
 
 use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
@@ -480,8 +480,8 @@ fn recharging(text: &str, left: f32) -> String {
 
 /// The order to use the `i`th operation, where it's aimed being no part of
 /// whether it can be used.
-fn probe(i: usize) -> aaa_sim::Command {
-    aaa_sim::Command::Operate {
+fn probe(i: usize) -> tgsim::Command {
+    tgsim::Command::Operate {
         operation: i,
         at: [0.0; 2],
         on: None,
@@ -526,17 +526,17 @@ impl User<'_> {
     }
 
     /// Tells the player why `button`'s operation can't be used.
-    fn refuse(&mut self, button: &OperationButton, refused: aaa_sim::Refused) {
+    fn refuse(&mut self, button: &OperationButton, refused: tgsim::Refused) {
         let Some(panel) = &self.panel else {
             return;
         };
         let name = button.name.as_str();
         let summons = button.summons.as_deref().unwrap_or_default();
         let said = match refused {
-            aaa_sim::Refused::Recharging => &panel.words.unready,
-            aaa_sim::Refused::Unaffordable => &panel.words.short,
-            aaa_sim::Refused::Summoned => &panel.words.summoned,
-            aaa_sim::Refused::Misplaced => &panel.words.misplaced,
+            tgsim::Refused::Recharging => &panel.words.unready,
+            tgsim::Refused::Unaffordable => &panel.words.short,
+            tgsim::Refused::Summoned => &panel.words.summoned,
+            tgsim::Refused::Misplaced => &panel.words.misplaced,
             e => {
                 debug!("can't use {name}: {e:?}");
                 return;
@@ -620,23 +620,21 @@ pub fn give(
 /// `focus` under the cursor, if it gives one. Only a click on the map
 /// itself is on what's under the cursor.
 fn clicked(
-    sim: &aaa_sim::World,
+    sim: &tgsim::World,
     player: u32,
     i: usize,
     at: crate::Pointing,
     focus: crate::Focus,
-) -> Option<aaa_sim::Command> {
+) -> Option<tgsim::Command> {
     let on = match (at, focus) {
         (crate::Pointing::Ground(_), crate::Focus::Organization(r)) => {
-            Some(aaa_sim::Piece::Organization(r))
+            Some(tgsim::Piece::Organization(r))
         }
-        (crate::Pointing::Ground(_), crate::Focus::Building(b)) => {
-            Some(aaa_sim::Piece::Building(b))
-        }
+        (crate::Pointing::Ground(_), crate::Focus::Building(b)) => Some(tgsim::Piece::Building(b)),
         _ => None,
     };
     let to = sim.operation_aim(player, i, on, at.point())?;
-    Some(aaa_sim::Command::Operate {
+    Some(tgsim::Command::Operate {
         operation: i,
         at: to,
         on,
@@ -842,7 +840,7 @@ mod tests {
 
     /// A side of `experience` whose one operation, a resupply, costs 200
     /// and recharges in 10 seconds.
-    fn operating(experience: f32) -> aaa_sim::World {
+    fn operating(experience: f32) -> tgsim::World {
         let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
         let resupply = tgmap::Operation::Enchant {
             targets: Default::default(),
@@ -851,11 +849,11 @@ mod tests {
             property: Id::from("property_resupply"),
             seconds: 30.0,
         };
-        let mut rules = aaa_sim::Rules::default();
+        let mut rules = tgsim::Rules::default();
         rules.operations.insert(Id::from("resupply"), resupply);
         let mut world =
-            aaa_sim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
-        let op = aaa_sim::SpecialOp::new(Id::from("resupply"), 200.0, 10.0);
+            tgsim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
+        let op = tgsim::SpecialOp::new(Id::from("resupply"), 200.0, 10.0);
         world.lead(1, experience, Some(5000.0), vec![op]);
         world
     }
@@ -899,7 +897,7 @@ mod tests {
         assert_eq!(app.world().get::<Shade>(icon), Some(&Shade::Full));
         // Used, it greys out and its bar empties, its tooltip saying how
         // long it has left.
-        let used = aaa_sim::Command::Operate {
+        let used = tgsim::Command::Operate {
             operation: 0,
             at: [4.0, 4.0],
             on: None,
@@ -920,7 +918,7 @@ mod tests {
     #[test]
     fn a_click_gives_the_operation_on_the_ground_but_not_on_what_it_cant_work_on() {
         let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
-        let mut rules = aaa_sim::Rules::default();
+        let mut rules = tgsim::Rules::default();
         let resupply = tgmap::Operation::Enchant {
             targets: tgmap::Targets {
                 required: vec![Id::from("organization")],
@@ -932,13 +930,12 @@ mod tests {
             seconds: 30.0,
         };
         rules.operations.insert(Id::from("resupply"), resupply);
-        let mut sim =
-            aaa_sim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
-        let op = aaa_sim::SpecialOp::new(Id::from("resupply"), 0.0, 0.0);
+        let mut sim = tgsim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
+        let op = tgsim::SpecialOp::new(Id::from("resupply"), 0.0, 0.0);
         sim.lead(1, 0.0, None, vec![op]);
         let ground = crate::Pointing::Ground([3.0, 4.0]);
         let operate = |at| {
-            Some(aaa_sim::Command::Operate {
+            Some(tgsim::Command::Operate {
                 operation: 0,
                 at,
                 on: None,

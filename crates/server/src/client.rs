@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use aaa_sim::{Action, Refused, Schedule, World};
+use tgsim::{Action, Refused, Schedule, World};
 
 use crate::protocol::{
     Gone, Join, KickVote, PROTOCOL, Said, Status, ToClient, ToHost, Welcome, decode, encode,

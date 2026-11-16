@@ -7,8 +7,8 @@
 use std::fmt;
 use std::path::Path;
 
-use aaa_sim::Record;
 use serde::{Deserialize, Serialize};
+use tgsim::Record;
 
 use crate::Setup;
 
@@ -82,7 +82,7 @@ impl Film {
 
 #[cfg(test)]
 mod tests {
-    use aaa_sim::{Action, Command, Given, Piece};
+    use tgsim::{Action, Command, Given, Piece};
 
     use super::*;
 

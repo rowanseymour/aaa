@@ -1,7 +1,7 @@
 # aaa-game
 
-Plays Axis & Allies (2004) matches, drawn by [`aaa-render`](../render), as a
-way to try the rules in [`aaa-sim`](../sim) as they arrive. It opens on menus
+Plays Axis & Allies (2004) matches, drawn by [`tgrender`](../tgrender), as a
+way to try the rules in [`tgsim`](../tgsim) as they arrive. It opens on menus
 leading to a custom game's lobby, where you pick a map, how its sides team
 up and the side you play, the computer taking the rest, or starts straight
 away on a map it's given:

@@ -36,10 +36,10 @@ mod tests {
     #[test]
     fn refuses_a_bad_level() {
         assert!(
-            plugin(Some("aaa_sim=loud"))
+            plugin(Some("tgsim=loud"))
                 .err()
                 .unwrap()
-                .contains("aaa_sim=loud")
+                .contains("tgsim=loud")
         );
     }
 }

@@ -3,11 +3,11 @@
 
 use std::collections::HashMap;
 
-use aaa_render::MapAssets;
-use aaa_render::models::pose;
-use aaa_sim::Seen;
 use bevy::prelude::*;
 use tgdata::Footing;
+use tgrender::MapAssets;
+use tgrender::models::pose;
+use tgsim::Seen;
 
 use crate::{Drawn, Loaded, Local, Screen, Sim, fog, thing_at};
 
@@ -57,7 +57,7 @@ pub fn show(
             visibility.set_if_neq(shown);
         }
     };
-    let done = |d: &aaa_sim::Delivery| {
+    let done = |d: &tgsim::Delivery| {
         d.left.is_some()
             && d.organization
                 .is_none_or(|r| !sim.0.organizations[r].arriving)

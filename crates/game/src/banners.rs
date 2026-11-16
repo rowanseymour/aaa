@@ -6,14 +6,14 @@
 
 use std::collections::{HashMap, HashSet};
 
-use aaa_render::camera::RtsCamera;
-use aaa_render::overlay::BannerImages;
-use aaa_render::terrain::world;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use tgdata::{GameData, Id};
 use tgmap::Division;
+use tgrender::camera::RtsCamera;
+use tgrender::overlay::BannerImages;
+use tgrender::terrain::world;
 
 use crate::{Drawn, Focus, Leaders, Loaded, Local, Screen, Sim, TINTS, tint};
 
@@ -70,7 +70,7 @@ impl Badges {
     /// to pick from: that nation's, or its own template's for none.
     fn settle(
         &mut self,
-        hqs: &[aaa_sim::Hq],
+        hqs: &[tgsim::Hq],
         nation: impl Fn(u32) -> Option<String>,
         count: impl Fn(u32, Option<&str>) -> usize,
     ) {
@@ -136,7 +136,7 @@ impl Badges {
 
 /// The HQ whose badge the organization at `r` wears: the one it's attached to,
 /// or the one it is.
-pub fn wears(sim: &aaa_sim::World, hqs: &[aaa_sim::Hq], r: usize) -> Option<u32> {
+pub fn wears(sim: &tgsim::World, hqs: &[tgsim::Hq], r: usize) -> Option<u32> {
     let organization = &sim.organizations[r];
     let is_hq = hqs.iter().any(|h| h.id == organization.id);
     organization.hq.or(is_hq.then_some(organization.id))
@@ -154,7 +154,7 @@ pub struct Scenery(HashSet<Id>);
 impl Scenery {
     /// Whether the organization at this index into the sim's organizations is
     /// scenery.
-    pub fn has(&self, sim: &aaa_sim::World, organization: usize) -> bool {
+    pub fn has(&self, sim: &tgsim::World, organization: usize) -> bool {
         self.0.contains(&sim.organizations[organization].template)
     }
 }
@@ -514,7 +514,7 @@ pub fn show_banners(
         // With none down for the fog to show, as the ground there is.
         let dropping = awaited.is_some() && count == 0;
         let seen = fog.shows_organization(&sim.0, banner.organization)
-            || dropping && fog.at(organization.position) == aaa_sim::Seen::Visible;
+            || dropping && fog.at(organization.position) == tgsim::Seen::Visible;
         let at = at.filter(|_| seen);
         let Some(p) = at.and_then(|p| camera.world_to_viewport(&global, p).ok()) else {
             *visibility = Visibility::Hidden;
@@ -692,7 +692,7 @@ mod tests {
 
     #[test]
     fn hqs_that_change_side_pick_their_badges_again() {
-        let hq = |id: u32, owner: u32| aaa_sim::Hq {
+        let hq = |id: u32, owner: u32| tgsim::Hq {
             id,
             owner,
             building: Id::from(""),

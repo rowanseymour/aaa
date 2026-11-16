@@ -7,8 +7,8 @@ use std::collections::{HashMap, VecDeque};
 
 use aaa_server::protocol::{Gone, KickVote, Said, Status, Welcome};
 use aaa_server::{Client, Event, Host, Link, Local, Setup};
-use aaa_sim::{Action, Command, Record, Refused, SPEEDS, World};
 use bevy::prelude::*;
+use tgsim::{Action, Command, Record, Refused, SPEEDS, World};
 
 /// The most ticks a joined match plays as one falls due: more than one
 /// only to catch its host up, a part at a time so the window keeps
@@ -436,8 +436,8 @@ fn said(events: Vec<Event>) {
 /// Matches hosted as though elsewhere, for tests of what plays in one.
 #[cfg(test)]
 pub(crate) mod testing {
-    use aaa_sim::Sides;
     use tgmap::{Domain, Formation, Member, Organization, Pathing};
+    use tgsim::Sides;
 
     use super::*;
 

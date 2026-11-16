@@ -11,8 +11,8 @@ publish = false
 [dependencies]
 tgdata = { path = "../tgdata" }
 tgmap = { path = "../tgmap" }
-aaa-render = { path = "../render" }
-aaa-sim = { path = "../sim" }
+tgrender = { path = "../tgrender" }
+tgsim = { path = "../tgsim" }
 aaa-server = { path = "../server" }
 tgck = { path = "../tgck" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds", "bevy_audio", "wav", "mp3", "custom_cursor"] }

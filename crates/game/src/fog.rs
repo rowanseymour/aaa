@@ -4,11 +4,11 @@
 
 use std::collections::HashSet;
 
-use aaa_render::GroundFog;
-use aaa_render::blend::{self, GroundMaterial};
-use aaa_sim::{Seen, World};
 use bevy::prelude::*;
 use tgdata::Id;
+use tgrender::GroundFog;
+use tgrender::blend::{self, GroundMaterial};
+use tgsim::{Seen, World};
 
 use crate::{BuildingView, Loaded, Local, Sim, UnitView, keys};
 
@@ -197,13 +197,13 @@ pub type IsScenery = (
     Without<BuildingView>,
     Without<crate::TrailerView>,
     // Placeholders stay hidden as they were spawned.
-    Without<aaa_render::objects::Marker>,
+    Without<tgrender::objects::Marker>,
 );
 
 /// Hides the map's own scenery on ground never seen.
 pub fn hide_scenery(
     fog: Res<Fog>,
-    mut things: Query<(&aaa_render::MapObject, &mut Visibility), IsScenery>,
+    mut things: Query<(&tgrender::MapObject, &mut Visibility), IsScenery>,
 ) {
     if !fog.fresh() {
         return;

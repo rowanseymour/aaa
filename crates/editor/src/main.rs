@@ -13,9 +13,9 @@ use bevy_egui::{
 use tgdata::GameData;
 use tgmap::Map;
 
-use aaa_render::camera::{self, RtsCamera};
-use aaa_render::shot::{self, ShotPlugin};
-use aaa_render::{Edge, MapAssets, MapObject, MapRenderPlugin, objects, terrain};
+use tgrender::camera::{self, RtsCamera};
+use tgrender::shot::{self, ShotPlugin};
+use tgrender::{Edge, MapAssets, MapObject, MapRenderPlugin, objects, terrain};
 
 const USAGE: &str = "\
 usage:
@@ -30,7 +30,7 @@ options:
   --screenshot <file.png>        save a frame to a file and exit, without a
                                  window, help text or placeholder markers
   --log <filter>                 what to log, as for RUST_LOG, e.g. \"debug\" or
-                                 \"aaa_render=debug\"; RUST_LOG still applies
+                                 \"tgrender=debug\"; RUST_LOG still applies
                                  on top";
 
 const HELP: &str = "click: inspect   WASD/arrows/middle drag: pan   wheel: zoom   Tab: free camera \
@@ -120,7 +120,7 @@ fn main() -> ExitCode {
         eprintln!("{USAGE}");
         return ExitCode::from(2);
     };
-    let log = match aaa_render::log::plugin(log.as_deref()) {
+    let log = match tgrender::log::plugin(log.as_deref()) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("aaa-editor: {e}");
@@ -258,7 +258,7 @@ fn setup(
     shooting: Res<Shooting>,
 ) {
     let Loaded { game, map } = &*loaded;
-    aaa_render::spawn_map(&mut commands, &mut assets, game, map, !shooting.0, |_| {
+    tgrender::spawn_map(&mut commands, &mut assets, game, map, !shooting.0, |_| {
         false
     });
 
@@ -314,7 +314,7 @@ fn cycle_lighting(
     }
     lighting.current = (lighting.current + 1) % lighting.presets.len();
     let (name, diffuse, ambient_color) = &lighting.presets[lighting.current];
-    aaa_render::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
+    tgrender::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
     for mut t in &mut text {
         t.0 = help(name);
     }

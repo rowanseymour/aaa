@@ -8,12 +8,12 @@
 use std::collections::HashSet;
 use std::thread::JoinHandle;
 
-use aaa_render::camera::{self, RtsCamera};
-use aaa_render::terrain::{self, Prepared};
-use aaa_render::{Edge, MapAssets};
 use bevy::prelude::*;
 use tgck::map::Thing;
 use tgmap::{Map, Recruits, Role};
+use tgrender::camera::{self, RtsCamera};
+use tgrender::terrain::{self, Prepared};
+use tgrender::{Edge, MapAssets};
 
 use crate::{Data, Screen};
 
@@ -139,7 +139,7 @@ fn arrive(
     };
     let size = map.ground.size();
     let sun = &map.sun;
-    aaa_render::spawn_land(&mut commands, &mut assets, prepared, sun, size, Backdrop);
+    tgrender::spawn_land(&mut commands, &mut assets, prepared, sun, size, Backdrop);
     // Buildings and scenery, but no units: there's no sim to move them.
     let still: HashSet<u32> = (map.roles())
         .filter(|(_, role)| matches!(role, Role::Building | Role::Other))
@@ -151,7 +151,7 @@ fn arrive(
     };
     let which = |t: &Thing| still.contains(&t.id) && near(t);
     let (assets, game) = (&mut assets, &data.0);
-    aaa_render::spawn_objects(&mut commands, assets, game, &map, false, which, Backdrop);
+    tgrender::spawn_objects(&mut commands, assets, game, &map, false, which, Backdrop);
     let [x, y] = FOCUS;
     let focus = terrain::world(x, y, map.ground.height_at(FOCUS));
     for (mut cam, mut transform) in &mut cameras {
