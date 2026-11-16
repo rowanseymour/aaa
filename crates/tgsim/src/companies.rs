@@ -1,6 +1,8 @@
 //! Companies recruited at settlements: made at once, at the settlement,
 //! with only their captain, the rest coming as resupply brings them.
 
+use std::borrow::Cow;
+
 use tgmap::Id;
 
 use crate::summons::rings_round;
@@ -33,14 +35,16 @@ impl World {
             .map_or(&[], Vec::as_slice)
     }
 
-    /// What recruiting a company of `template` at the settlement at
-    /// `settlement` would recruit for `player`, unless it's refused.
+    /// What recruiting a company of `template`, led by `hero` if one is
+    /// named, at the settlement at `settlement` would recruit for
+    /// `player`, unless it's refused.
     pub(crate) fn may_recruit(
         &self,
         player: u32,
         settlement: usize,
         template: &Id,
-    ) -> Result<&tgmap::Organization, Refused> {
+        hero: Option<&Id>,
+    ) -> Result<Cow<'_, tgmap::Organization>, Refused> {
         (self.settlements.get(settlement))
             .filter(|s| s.owner == player)
             .ok_or(NotYours)?;
@@ -49,19 +53,46 @@ impl World {
         let organization = (self.rules.raisable.get(template))
             .filter(|_| listed)
             .ok_or(Refused::Unable)?;
-        if !self.lacks(player, centre, organization).is_empty() {
+        let organization = match hero {
+            Some(hero) => Cow::Owned(self.led_by_hero(player, organization, hero)?),
+            None => Cow::Borrowed(organization),
+        };
+        if !self.lacks(player, centre, &organization).is_empty() {
             return Err(Refused::Lacking);
         }
         if self.buildings[centre].besieged.is_some() {
             return Err(Refused::Besieged);
         }
-        if self.cost(organization) > self.stockpile(player) {
+        if self.cost(&organization) > self.stockpile(player) {
             return Err(Refused::Unaffordable);
         }
-        if self.over_limit(player, organization).is_some() {
+        if self.over_limit(player, &organization).is_some() {
             return Err(Refused::OverLimit);
         }
         Ok(organization)
+    }
+
+    /// `organization` with `player`'s hero `hero` in its captain's place,
+    /// refused unless the hero is available.
+    fn led_by_hero(
+        &self,
+        player: u32,
+        organization: &tgmap::Organization,
+        hero: &Id,
+    ) -> Result<tgmap::Organization, Refused> {
+        if !self.hero_available(player, hero) {
+            return Err(Refused::Unable);
+        }
+        let place = organization.primary.ok_or(Refused::Unable)?;
+        let mut led = organization.clone();
+        let captain = led.members.get_mut(place).ok_or(Refused::Unable)?;
+        let mut member = self.hero_member(hero).ok_or(Refused::Unable)?;
+        let health = self.heroes(player).iter().find(|h| h.hero == *hero);
+        member.health = health.map_or(1.0, |h| h.health);
+        (member.id, member.position, member.facing) =
+            (captain.id, captain.position, captain.facing);
+        *captain = member;
+        Ok(led)
     }
 
     /// Recruits a company of `template` at the settlement at `settlement`
@@ -72,8 +103,11 @@ impl World {
         player: u32,
         settlement: usize,
         template: &Id,
+        hero: Option<&Id>,
     ) -> Result<(), Refused> {
-        let mut organization = self.may_recruit(player, settlement, template)?.clone();
+        let mut organization = self
+            .may_recruit(player, settlement, template, hero)?
+            .into_owned();
         let centre = self.centre_of(settlement).ok_or(NotYours)?;
         let paid = self.cost(&organization);
         let left = self.stockpile(player) - paid;
@@ -87,6 +121,13 @@ impl World {
             });
             return Ok(());
         };
+        if let Some(hero) = hero {
+            let organization = &self.organizations[r];
+            let captain = organization.leader.map(|p| organization.units[p]);
+            if let Some(pooled) = self.pooled_mut(player, hero) {
+                pooled.unit = captain;
+            }
+        }
         log::debug!(
             "{} {} recruited at {} {}",
             self.organizations[r].template,
@@ -156,7 +197,7 @@ fn company_radius(organization: &tgmap::Organization) -> f32 {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crate::testing::*;
 
     use tgmap::{Domain, Id, Obstacle, Pathing, Requires, Shape};
@@ -166,7 +207,7 @@ mod tests {
     /// Player 1's village centre at 20,20 with its settlement, recruiting
     /// a company of two pikemen and a captain for 8 a pikeman, with room
     /// under the village's limit for two companies, and 500 to spend.
-    fn village() -> World {
+    pub(crate) fn village() -> World {
         let mut centre = building(50, 1, [20.0, 20.0]);
         centre.template = "village".into();
         let mut w = with_buildings(
@@ -230,10 +271,11 @@ mod tests {
         w
     }
 
-    fn recruit(template: &str) -> Command {
+    pub(crate) fn recruit(template: &str) -> Command {
         Command::Recruit {
             settlement: 0,
             template: Id::from(template),
+            hero: None,
         }
     }
 

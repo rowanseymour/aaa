@@ -50,7 +50,8 @@ impl World {
             Command::Recruit {
                 settlement,
                 ref template,
-            } => self.may_recruit(player, settlement, template).map(drop),
+                ref hero,
+            } => (self.may_recruit(player, settlement, template, hero.as_ref())).map(drop),
             Command::Deliver {
                 building,
                 ref template,
@@ -67,6 +68,11 @@ impl World {
             Command::Rally { building, .. } => self.may_rally(player, building),
             Command::Attach { organization } => self.may_attach(player, organization).map(drop),
             Command::Detach { organization } => self.may_detach(player, organization),
+            Command::AttachHero {
+                organization,
+                ref hero,
+            } => self.may_attach_hero(player, organization, hero).map(drop),
+            Command::DetachHero { organization } => self.may_detach_hero(player, organization),
             Command::Disband { organization } => self.may_disband(player, organization),
             Command::Sell { building } => self.may_sell(player, building),
             Command::Operate { operation, .. } => self.may_operate(player, operation),
@@ -107,7 +113,12 @@ impl World {
             Command::Recruit {
                 settlement,
                 template,
-            } => self.recruit(player, settlement, &template)?,
+                hero,
+            } => self.recruit(player, settlement, &template, hero.as_ref())?,
+            Command::AttachHero { organization, hero } => {
+                self.attach_hero(player, organization, &hero)?
+            }
+            Command::DetachHero { organization } => self.detach_hero(player, organization)?,
             Command::Deliver {
                 building,
                 template,

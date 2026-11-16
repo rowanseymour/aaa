@@ -941,6 +941,15 @@ fn told(
             let text = fill(&said, &[&look.name(template.as_str())]);
             Told::Line("GENERIC_ERROR", text, None)
         }
+        Notice::HeroKilled {
+            player,
+            hero,
+            organization,
+        } if ours(player) => Told::Event(
+            "hero_killed",
+            vec![look.name(hero.as_str()).into()],
+            at(About::Organization(organization)),
+        ),
         Notice::SummonFailed { player, template } if ours(player) => {
             let said = look.said("ability_effect_summon_failed|s", "Failed to summon %s");
             let text = fill(&said, &[&look.name(template.as_str())]);

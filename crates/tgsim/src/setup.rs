@@ -190,58 +190,8 @@ impl World {
         let r = self.organizations.len();
         let first = self.units.len();
         for m in &organization.members {
-            let [x, y] = m.position;
-            let facing = normalised(m.facing).unwrap_or([0.0, -1.0]);
-            let tile = Tile::at([x, y]);
-            // Units start on what they travel on.
-            let domain = match self.pathing.passable(tile, Domain::Land)
-                || !self.pathing.passable(tile, Domain::Naval)
-            {
-                true => Domain::Land,
-                false => Domain::Naval,
-            };
-            let fighter = m.fighter.clone();
-            self.units.push(Unit {
-                health: fighter.as_ref().map_or(0.0, |f| f.health * m.health),
-                reloads: fighter
-                    .as_ref()
-                    .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),
-                fighter,
-                target: None,
-                shot: None,
-                died: None,
-                besieged: None,
-                left: None,
-                // One its organization has lost comes back as a recruit's do.
-                awaited: m.lost.is_some(),
-                descent: None,
-                terrain: TerrainIndex::default(),
-                id: m.id,
-                template: m.template.clone(),
-                organization: r,
-                domain,
-                position: [x, y],
-                previous: [x, y],
-                facing,
-                shape: m.shape,
-                end_facing: facing,
-                path: Vec::new(),
-                from: [x, y],
-                leg: None,
-                goal: None,
-                exact: false,
-                ways: 0,
-                look: 0,
-                turn_radius: match m.turn_rate > 0.0 {
-                    true => m.speed / m.turn_rate,
-                    false => 0.0,
-                },
-                speed: 0.0,
-                acceleration: m.acceleration,
-                turn_rate: m.turn_rate,
-                trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
-                closing: false,
-            });
+            let unit = self.new_unit(m, r);
+            self.units.push(unit);
         }
         let units: Vec<usize> = (first..self.units.len()).collect();
         let position = match organization.primary {
@@ -317,6 +267,62 @@ impl World {
         let building = &self.buildings[b];
         let template = building.organization.as_ref()?.template.clone();
         self.next_number(building.owner, &template)
+    }
+
+    /// A unit of the organization at `r`, standing as `m` does.
+    pub(crate) fn new_unit(&self, m: &tgmap::Member, r: usize) -> Unit {
+        let [x, y] = m.position;
+        let facing = normalised(m.facing).unwrap_or([0.0, -1.0]);
+        let tile = Tile::at([x, y]);
+        // Units start on what they travel on.
+        let domain = match self.pathing.passable(tile, Domain::Land)
+            || !self.pathing.passable(tile, Domain::Naval)
+        {
+            true => Domain::Land,
+            false => Domain::Naval,
+        };
+        let fighter = m.fighter.clone();
+        Unit {
+            health: fighter.as_ref().map_or(0.0, |f| f.health * m.health),
+            reloads: fighter
+                .as_ref()
+                .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),
+            fighter,
+            target: None,
+            shot: None,
+            died: None,
+            besieged: None,
+            left: None,
+            // One its organization has lost comes back as a recruit's do.
+            awaited: m.lost.is_some(),
+            descent: None,
+            terrain: TerrainIndex::default(),
+            id: m.id,
+            template: m.template.clone(),
+            organization: r,
+            domain,
+            position: [x, y],
+            previous: [x, y],
+            facing,
+            shape: m.shape,
+            end_facing: facing,
+            path: Vec::new(),
+            from: [x, y],
+            leg: None,
+            goal: None,
+            exact: false,
+            ways: 0,
+            look: 0,
+            turn_radius: match m.turn_rate > 0.0 {
+                true => m.speed / m.turn_rate,
+                false => 0.0,
+            },
+            speed: 0.0,
+            acceleration: m.acceleration,
+            turn_rate: m.turn_rate,
+            trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
+            closing: false,
+        }
     }
 
     /// Takes `n` ids no object has, returning the first.

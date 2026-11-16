@@ -1460,6 +1460,7 @@ impl Presser<'_, '_> {
                         Some(settlement) => tgsim::Command::Recruit {
                             settlement,
                             template: template.clone(),
+                            hero: None,
                         },
                         None => tgsim::Command::Commission {
                             building: b,
@@ -1648,6 +1649,10 @@ fn refused_why(refused: tgsim::Refused) -> &'static str {
         tgsim::Refused::Misplaced => "Can't be aimed there",
         tgsim::Refused::Besieged => "Under siege",
         tgsim::Refused::OverLimit => "Over a limit",
+        tgsim::Refused::Unsettled => "Can't change heroes now",
+        tgsim::Refused::OutOfSupply => "Out of supply",
+        tgsim::Refused::Understrength => "Needs at least two units",
+        tgsim::Refused::Dead => "Not alive",
     }
 }
 
