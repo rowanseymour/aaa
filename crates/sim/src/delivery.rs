@@ -3,7 +3,7 @@
 
 use std::f32::consts::FRAC_PI_4;
 
-use aaa_map::{Airlift, Domain, Id, Obstacle, Shape};
+use tgmap::{Airlift, Domain, Id, Obstacle, Shape};
 
 use crate::{Notice, Refused, Seen, TICK, World, distance, normalised, within};
 
@@ -98,7 +98,7 @@ pub struct Delivery {
     /// The tick it left the map on.
     pub left: Option<u64>,
     /// What it's yet to begin dropping.
-    cargo: Option<Box<aaa_map::Organization>>,
+    cargo: Option<Box<tgmap::Organization>>,
     airlift: Airlift,
     /// Where it came in, and goes out.
     entry: [f32; 2],
@@ -258,7 +258,7 @@ impl World {
     pub(crate) fn dispatch(
         &mut self,
         b: usize,
-        organization: aaa_map::Organization,
+        organization: tgmap::Organization,
         to: [f32; 2],
     ) -> bool {
         let Some(airlift) = self.rules.airlifts.get(&organization.template).cloned() else {
@@ -406,7 +406,7 @@ impl World {
             return;
         }
         let [fx, fy] = delivery.facing;
-        let [right, ahead] = aaa_map::to_local(delivery.position, delivery.facing, entry);
+        let [right, ahead] = tgmap::to_local(delivery.position, delivery.facing, entry);
         let off = libm::atan2f(right, ahead);
         let most = match delivery.airlift.turn_radius > 0.0 {
             true => step / delivery.airlift.turn_radius,
@@ -488,7 +488,7 @@ impl World {
             let offsets = &organization.formations[organization.current_formation()].offsets;
             let p = organization.leader.unwrap_or(0);
             let [right, ahead] = offsets.get(p).copied().unwrap_or([0.0, 0.0]);
-            let around = aaa_map::from_local(lands, organization.facing, [-right, -ahead]);
+            let around = tgmap::from_local(lands, organization.facing, [-right, -ahead]);
             self.organizations[r].position = around;
             self.take_places(r);
         }
@@ -504,7 +504,7 @@ impl World {
         let around = rings.map(|(radius, i)| {
             let angle = i * FRAC_PI_4;
             let offset = [radius * libm::sinf(angle), radius * libm::cosf(angle)];
-            aaa_map::from_local(aimed, line, offset)
+            tgmap::from_local(aimed, line, offset)
         });
         clear(aimed).or_else(|| around.into_iter().find_map(clear))
     }
@@ -540,7 +540,7 @@ impl World {
             let offsets = &organization.formations[organization.current_formation()].offsets;
             let offset = offsets.get(p).copied().unwrap_or([0.0, 0.0]);
             let facing = organization.facing;
-            let place = aaa_map::from_local(organization.position, facing, offset);
+            let place = tgmap::from_local(organization.position, facing, offset);
             self.take_place(u, place, facing, false);
         }
     }
@@ -582,7 +582,7 @@ crate::hash::digest!(Descent {
 
 #[cfg(test)]
 mod tests {
-    use aaa_map::{Airlift, Fall, Id};
+    use tgmap::{Airlift, Fall, Id};
 
     use crate::testing::*;
     use crate::{Command, Notice, Refused, World, distance};
@@ -667,7 +667,7 @@ mod tests {
             w.tick();
             for (u, unit) in w.units.iter().enumerate() {
                 if let Some(d) = unit.descent {
-                    landed[u] = aaa_map::to_local(to, line, d.lands());
+                    landed[u] = tgmap::to_local(to, line, d.lands());
                 }
             }
         }
@@ -691,13 +691,10 @@ mod tests {
         let r = &w.organizations[0];
         assert!(!r.arriving && r.facing == line);
         assert!(w.units.iter().all(|u| u.alive()));
-        let led = aaa_map::from_local(to, line, landed[2]);
-        assert!(near(
-            r.position,
-            aaa_map::from_local(led, line, [-1.0, 0.0])
-        ));
+        let led = tgmap::from_local(to, line, landed[2]);
+        assert!(near(r.position, tgmap::from_local(led, line, [-1.0, 0.0])));
         for (u, right) in [(0, -1.0), (1, 0.0), (2, 1.0)] {
-            let place = aaa_map::from_local(r.position, line, [right, 0.0]);
+            let place = tgmap::from_local(r.position, line, [right, 0.0]);
             let unit = &w.units[u];
             assert!(distance(unit.position, place) < 0.6 && unit.facing == line);
         }
@@ -736,7 +733,7 @@ mod tests {
         assert_eq!(w.check(1, &deliver([20.0, 20.0])), Err(Refused::NoRoom));
         assert_eq!(w.check(1, &deliver([90.0, 20.0])), Err(Refused::NoRoom));
         assert_eq!(w.check(1, &deliver([40.0, 20.0])), Ok(()));
-        w.set_fog(aaa_map::FogSetting::Full);
+        w.set_fog(tgmap::FogSetting::Full);
         assert_eq!(w.check(1, &deliver([70.0, 70.0])), Err(Refused::NoRoom));
         assert!(w.buildings[0].queue.is_empty());
     }

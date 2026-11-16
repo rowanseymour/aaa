@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 
-use aaa_map::Ground;
 use bevy::asset::RenderAssetUsages;
 use bevy::image::CompressedImageFormats;
 use bevy::mesh::{Indices, PrimitiveTopology};
@@ -10,6 +9,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use tgck::map::{CELL_SIZE, Terrain};
 use tgdata::{DepthColor, GameData, Id, TextureAnimation};
+use tgmap::Ground;
 
 use crate::blend::{self, Blend, GroundMaterial};
 use crate::textures;

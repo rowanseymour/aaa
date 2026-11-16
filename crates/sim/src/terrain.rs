@@ -1,7 +1,7 @@
 //! What the terrain things stand on does to them: the properties it gives
 //! them and the speed it holds them to.
 
-use aaa_map::{Id, TerrainEffect, TerrainIndex, Zone};
+use tgmap::{Id, TerrainEffect, TerrainIndex, Zone};
 
 use crate::{Target, World};
 
@@ -137,14 +137,14 @@ mod tests {
     use crate::testing::*;
     use std::collections::HashMap;
 
-    use aaa_map::{Domain, Id, Pathing, TerrainEffect, Tile};
+    use tgmap::{Domain, Id, Pathing, TerrainEffect, Tile};
 
     use crate::{Command, Held, Target, World};
 
     /// Forest, whose first property is for infantry and whose second for
     /// vehicles, and the rules those properties work by.
-    fn forest() -> (aaa_map::TileTerrain, aaa_map::TerrainRules) {
-        let forest = aaa_map::TileTerrain {
+    fn forest() -> (tgmap::TileTerrain, tgmap::TerrainRules) {
+        let forest = tgmap::TileTerrain {
             properties: vec![Id::from("forest_infantry"), Id::from("forest_vehicles")],
             mountain: false,
             water: false,
@@ -161,13 +161,13 @@ mod tests {
             resists: vec![(Id::from("gunfire"), -0.2)],
             speed_limit: Some(1.0),
         };
-        let rules = aaa_map::TerrainRules {
+        let rules = tgmap::TerrainRules {
             effects: HashMap::from([
                 (Id::from("forest_infantry"), infantry),
                 (Id::from("forest_vehicles"), vehicles),
             ]),
             unlimited: vec![Id::from("trailblazing")],
-            ..aaa_map::TerrainRules::default()
+            ..tgmap::TerrainRules::default()
         };
         (forest, rules)
     }
@@ -177,7 +177,7 @@ mod tests {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         let (forest, rules) = forest();
         (w.tile_terrains, w.rules.terrain_rules) =
-            (aaa_map::TileTerrains::uniform(20, forest), rules);
+            (tgmap::TileTerrains::uniform(20, forest), rules);
         w.rules
             .kinds
             .insert(Id::from("soldier"), kind(&["infantry"]));
@@ -198,13 +198,13 @@ mod tests {
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 1.25));
         // A mountain's is the lowest there is.
-        let mountain = aaa_map::TileTerrain {
+        let mountain = tgmap::TileTerrain {
             properties: Vec::new(),
             mountain: true,
             water: false,
         };
         (w.tile_terrains, w.rules.terrain_rules.slowest) =
-            (aaa_map::TileTerrains::uniform(20, mountain), 0.5);
+            (tgmap::TileTerrains::uniform(20, mountain), 0.5);
         run(&mut w, 0.2);
         assert!(w.units.iter().all(|u| u.speed == 0.5));
         // Unless its organization has, for a time, a property free of limits,
@@ -237,7 +237,7 @@ mod tests {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         let (forest, rules) = forest();
         w.rules.terrain_rules = rules;
-        w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
+        w.tile_terrains = tgmap::TileTerrains::uniform(20, tgmap::TileTerrain::default());
         w.rules
             .kinds
             .insert(Id::from("soldier"), kind(&["infantry"]));
@@ -281,7 +281,7 @@ mod tests {
         w.stand();
         // Unpacked, it keeps what it had wherever that leaves it.
         w.organizations[0].unpacked_into = Some(0);
-        w.tile_terrains = aaa_map::TileTerrains::uniform(20, aaa_map::TileTerrain::default());
+        w.tile_terrains = tgmap::TileTerrains::uniform(20, tgmap::TileTerrain::default());
         w.stand();
         assert_eq!(
             w.organizations[0].terrain_properties,

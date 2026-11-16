@@ -1,7 +1,7 @@
 //! Organizations taking on enemies: engaging, closing in, pursuing and
 //! breaking off.
 
-use aaa_map::Zone;
+use tgmap::Zone;
 
 use crate::{
     CONTACT, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Relation, Step, Target, World, normalised,
@@ -364,7 +364,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::{Domain, Fighter, Id, Pathing, Tile};
+    use tgmap::{Domain, Fighter, Id, Pathing, Tile};
 
     use crate::{CONTACT, Command, Order, Piece, Refused, State, Target, Unit, distance};
 

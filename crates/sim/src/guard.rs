@@ -1,6 +1,6 @@
 //! Organizations keeping a post, at a place or beside what they guard.
 
-use aaa_map::pathing::CELL_SIZE;
+use tgmap::pathing::CELL_SIZE;
 
 use crate::{
     Guard, Order, Organization, Piece, Step, World, bounding_radius, distance, normalised, within,
@@ -222,7 +222,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::Tile;
+    use tgmap::Tile;
 
     use crate::{ARRIVAL_REACH, Command, Order, Piece, Refused, State, World, distance, within};
 

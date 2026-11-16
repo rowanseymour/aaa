@@ -9,7 +9,7 @@ description = "The rules of Axis & Allies (2004): matches played on a map, indep
 publish = false
 
 [dependencies]
-aaa-map = { path = "../map" }
+tgmap = { path = "../tgmap" }
 libm = "0.2.16"
 log = "0.4"
 serde = { version = "1", features = ["derive"] }

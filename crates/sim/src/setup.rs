@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, VecDeque};
 
-use aaa_map::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
+use tgmap::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
 
 use crate::{
     Building, Fate, Fog, Order, Organization, Outcome, Rules, Sides, State, Supplying, Trailer,
@@ -35,7 +35,7 @@ impl World {
         world.clearable = map.clearable.clone();
         world.holdings = holdings(
             map.roles()
-                .map(|(t, role)| (role, aaa_map::owner(t), t.template.as_str())),
+                .map(|(t, role)| (role, tgmap::owner(t), t.template.as_str())),
         );
         for p in &map.players {
             for t in &p.technologies {
@@ -63,7 +63,7 @@ impl World {
     pub fn from_organizations(
         sides: Sides,
         pathing: Pathing,
-        organizations: &[aaa_map::Organization],
+        organizations: &[tgmap::Organization],
     ) -> World {
         World::build(sides, pathing, Rules::default(), organizations)
     }
@@ -73,7 +73,7 @@ impl World {
         sides: Sides,
         pathing: Pathing,
         rules: Rules,
-        organizations: &[aaa_map::Organization],
+        organizations: &[tgmap::Organization],
     ) -> World {
         World::build(sides, pathing, rules, organizations)
     }
@@ -87,11 +87,11 @@ impl World {
         sides: Sides,
         pathing: Pathing,
         rules: Rules,
-        organizations: &[aaa_map::Organization],
+        organizations: &[tgmap::Organization],
     ) -> World {
         // Nothing's hidden until the match sets its fog.
-        let fog = Fog::new(pathing.side, aaa_map::FogSetting::None);
-        let fate = |p: &aaa_map::Player| Fate {
+        let fog = Fog::new(pathing.side, tgmap::FogSetting::None);
+        let fate = |p: &tgmap::Player| Fate {
             outcome: p.outcome,
             default_defeat: p.default_defeat,
             by_cities: p.won_by_cities,
@@ -106,7 +106,7 @@ impl World {
             sides,
             pathing,
             rules,
-            tile_terrains: aaa_map::TileTerrains::default(),
+            tile_terrains: tgmap::TileTerrains::default(),
             organizations: Vec::new(),
             units: Vec::new(),
             buildings: Vec::new(),
@@ -147,13 +147,13 @@ impl World {
 
     /// Adds an organization as the map has it, standing where its members do,
     /// returning its index.
-    pub fn add_organization(&mut self, organization: &aaa_map::Organization) -> usize {
+    pub fn add_organization(&mut self, organization: &tgmap::Organization) -> usize {
         self.push_organization(organization, true)
     }
 
     /// Adds an organization raised during the match, giving it and its members
     /// ids no object has, returning its index.
-    pub fn add_new_organization(&mut self, mut organization: aaa_map::Organization) -> usize {
+    pub fn add_new_organization(&mut self, mut organization: tgmap::Organization) -> usize {
         // A lone unit is its own organization, so takes one id.
         let ids = organization.members.len() as u32 + u32::from(!organization.lone());
         organization.renumber(self.take_ids(ids));
@@ -185,7 +185,7 @@ impl World {
     /// Adds an organization, numbering it if `numbered`.
     pub(crate) fn push_organization(
         &mut self,
-        organization: &aaa_map::Organization,
+        organization: &tgmap::Organization,
         numbered: bool,
     ) -> usize {
         let r = self.organizations.len();
@@ -329,12 +329,12 @@ impl World {
 
     /// Adds buildings as the map has them, those out of health already
     /// disabled. Their ground is taken to be blocked already.
-    pub fn add_buildings(&mut self, buildings: &[aaa_map::Building]) {
+    pub fn add_buildings(&mut self, buildings: &[tgmap::Building]) {
         self.push_buildings(buildings, true);
     }
 
     /// Adds buildings, numbering them if `numbered`.
-    pub(crate) fn push_buildings(&mut self, buildings: &[aaa_map::Building], numbered: bool) {
+    pub(crate) fn push_buildings(&mut self, buildings: &[tgmap::Building], numbered: bool) {
         for b in buildings {
             let health = b.fighter.health * b.health;
             self.buildings.push(Building {
@@ -420,7 +420,7 @@ mod tests {
         let mut w = economy();
         w.rules.economies.insert(
             Id::from("start_loc"),
-            aaa_map::Economy {
+            tgmap::Economy {
                 production: amounts(&[("building_limit_provided", 20.0)]),
                 ..Default::default()
             },

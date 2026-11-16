@@ -1,6 +1,6 @@
 //! The properties things hold for a time.
 
-use aaa_map::Id;
+use tgmap::Id;
 
 use crate::{Piece, TICK, World};
 

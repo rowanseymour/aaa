@@ -843,8 +843,8 @@ mod tests {
     /// A side of `experience` whose one operation, a resupply, costs 200
     /// and recharges in 10 seconds.
     fn operating(experience: f32) -> aaa_sim::World {
-        let pathing = aaa_map::Pathing::uniform(8, aaa_map::Domain::Land);
-        let resupply = aaa_map::Operation::Enchant {
+        let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
+        let resupply = tgmap::Operation::Enchant {
             targets: Default::default(),
             area: 15.0,
             max_targets: 4,
@@ -919,10 +919,10 @@ mod tests {
 
     #[test]
     fn a_click_gives_the_operation_on_the_ground_but_not_on_what_it_cant_work_on() {
-        let pathing = aaa_map::Pathing::uniform(8, aaa_map::Domain::Land);
+        let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
         let mut rules = aaa_sim::Rules::default();
-        let resupply = aaa_map::Operation::Enchant {
-            targets: aaa_map::Targets {
+        let resupply = tgmap::Operation::Enchant {
+            targets: tgmap::Targets {
                 required: vec![Id::from("organization")],
                 excluded: Vec::new(),
             },

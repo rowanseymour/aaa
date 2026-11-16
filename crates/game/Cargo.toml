@@ -10,7 +10,7 @@ publish = false
 
 [dependencies]
 tgdata = { path = "../tgdata" }
-aaa-map = { path = "../map" }
+tgmap = { path = "../tgmap" }
 aaa-render = { path = "../render" }
 aaa-sim = { path = "../sim" }
 aaa-server = { path = "../server" }

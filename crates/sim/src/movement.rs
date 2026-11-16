@@ -3,7 +3,7 @@
 
 use std::f32::consts::FRAC_PI_4;
 
-use aaa_map::{Obstacle, Tile};
+use tgmap::{Obstacle, Tile};
 
 use crate::{
     ARRIVAL_REACH, EXACT_REACH, LOOK, Leg, NotYours, TICK, Trailer, Unit, World, normalised, path,
@@ -27,14 +27,14 @@ const OFF_LINE: f32 = 1.0;
 const LOOK_SNAPPED: u32 = 5;
 
 impl Trailer {
-    pub(crate) fn new(trailer: &aaa_map::Trailer, position: [f32; 2], facing: [f32; 2]) -> Trailer {
+    pub(crate) fn new(trailer: &tgmap::Trailer, position: [f32; 2], facing: [f32; 2]) -> Trailer {
         let (position, facing) = match trailer.placed {
             Some((_, at, way)) => (at, normalised(way).unwrap_or(facing)),
             None => {
                 // Straight behind it.
-                let hitch = aaa_map::from_local(position, facing, trailer.hitch);
+                let hitch = tgmap::from_local(position, facing, trailer.hitch);
                 let [x, y] = trailer.coupling;
-                (aaa_map::from_local(hitch, facing, [-x, -y]), facing)
+                (tgmap::from_local(hitch, facing, [-x, -y]), facing)
             }
         };
         Trailer {
@@ -49,9 +49,9 @@ impl Trailer {
 
     /// Stands it straight behind its unit.
     pub(crate) fn behind(&mut self, position: [f32; 2], facing: [f32; 2]) {
-        let hitch = aaa_map::from_local(position, facing, self.hitch);
+        let hitch = tgmap::from_local(position, facing, self.hitch);
         let [x, y] = self.coupling;
-        self.position = aaa_map::from_local(hitch, facing, [-x, -y]);
+        self.position = tgmap::from_local(hitch, facing, [-x, -y]);
         self.previous = self.position;
         self.facing = facing;
     }
@@ -59,11 +59,11 @@ impl Trailer {
     /// Turns to point at its unit's hitch, and moves so that its coupling
     /// meets it.
     fn follow(&mut self, position: [f32; 2], facing: [f32; 2]) {
-        let hitch = aaa_map::from_local(position, facing, self.hitch);
+        let hitch = tgmap::from_local(position, facing, self.hitch);
         let to = [hitch[0] - self.position[0], hitch[1] - self.position[1]];
         self.facing = normalised(to).unwrap_or(self.facing);
         let [x, y] = self.coupling;
-        self.position = aaa_map::from_local(hitch, self.facing, [-x, -y]);
+        self.position = tgmap::from_local(hitch, self.facing, [-x, -y]);
     }
 
     /// Where to draw it, as [`Unit::drawn_at`].
@@ -343,7 +343,7 @@ impl World {
             .units
             .iter()
             .zip(offsets)
-            .map(|(&u, &offset)| (u, aaa_map::from_local(r.position, facing, offset)))
+            .map(|(&u, &offset)| (u, tgmap::from_local(r.position, facing, offset)))
             .collect();
         for (u, place) in places {
             if !self.units[u].alive() {
@@ -465,7 +465,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::{Domain, Obstacle, Pathing, Shape, Tile};
+    use tgmap::{Domain, Obstacle, Pathing, Shape, Tile};
 
     use crate::{ARRIVAL_REACH, Command, Sides, Unit, World, within};
 
@@ -518,19 +518,19 @@ mod tests {
     #[test]
     fn units_start_as_hurt_as_the_map_has_them() {
         let mut m = member(2, [10.0, 10.0], 2.0);
-        m.fighter = Some(aaa_map::Fighter {
+        m.fighter = Some(tgmap::Fighter {
             health: 200.0,
-            ..aaa_map::Fighter::default()
+            ..tgmap::Fighter::default()
         });
         m.health = 0.25;
-        let organization = aaa_map::Organization {
+        let organization = tgmap::Organization {
             hq: None,
             id: 2,
             template: "soldier".into(),
             owner: 7,
             facing: [0.0, 1.0],
             members: vec![m],
-            formations: vec![aaa_map::Formation {
+            formations: vec![tgmap::Formation {
                 id: String::new(),
                 offsets: vec![[0.0, 0.0]],
                 aggressive: false,
@@ -637,7 +637,7 @@ mod tests {
 
     #[test]
     fn trailers_follow_their_hitch_round_corners() {
-        let trailer = aaa_map::Trailer {
+        let trailer = tgmap::Trailer {
             template: "gun".into(),
             hitch: [0.0, -2.0],
             coupling: [0.0, 1.0],
@@ -660,7 +660,7 @@ mod tests {
         // behind it to 8.2,10 and the trailer swings round after it.
         let t = w.units[0].trailer.as_ref().unwrap();
         let hitch = [8.2, 10.0];
-        let coupled = aaa_map::from_local(t.position, t.facing, [0.0, 1.0]);
+        let coupled = tgmap::from_local(t.position, t.facing, [0.0, 1.0]);
         assert!(near(coupled, hitch), "{coupled:?}");
         assert!(t.facing[0] < 0.0 && t.facing[1] > 0.0, "{:?}", t.facing);
         run(&mut w, 10.0);

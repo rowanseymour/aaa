@@ -1,7 +1,7 @@
 //! Packed buildings unpacking where they're sent, and buildings packing
 //! back up.
 
-use aaa_map::{Domain, Obstacle, Unpacks};
+use tgmap::{Domain, Obstacle, Unpacks};
 
 use crate::{ARRIVAL_REACH, LOOK, Left, Notice, Order, State, TICK, World, normalised, within};
 
@@ -14,7 +14,7 @@ pub fn unpack_site(at: [f32; 2]) -> [f32; 2] {
 /// The way a building ordered to unpack facing `facing` faces, as a unit
 /// vector.
 pub(crate) fn unpack_facing(facing: [f32; 2]) -> [f32; 2] {
-    normalised(facing).unwrap_or(aaa_map::UNPACKED_FACING)
+    normalised(facing).unwrap_or(tgmap::UNPACKED_FACING)
 }
 
 impl World {
@@ -243,7 +243,7 @@ impl World {
                 continue;
             }
             unit.left = None;
-            unit.stand_at(aaa_map::from_local(position, facing, offset), facing);
+            unit.stand_at(tgmap::from_local(position, facing, offset), facing);
         }
     }
 }
@@ -254,13 +254,13 @@ mod tests {
     use crate::testing::*;
     use std::collections::HashSet;
 
-    use aaa_map::{Domain, Id, Obstacle, Pathing, Shape, Tile};
+    use tgmap::{Domain, Id, Obstacle, Pathing, Shape, Tile};
 
     use crate::{Command, Notice, Refused, State, World};
 
     /// An organization of one truck.
-    fn convoy() -> aaa_map::Organization {
-        aaa_map::Organization {
+    fn convoy() -> tgmap::Organization {
+        tgmap::Organization {
             hq: None,
             template: "convoy".into(),
             ..truck()
@@ -541,7 +541,7 @@ mod tests {
         // One standing in an organization, with another member beside it,
         // and one on its own.
         let mut within = depot(41, 30.0);
-        within.organization = Some(Box::new(aaa_map::Organization {
+        within.organization = Some(Box::new(tgmap::Organization {
             hq: None,
             id: 40,
             template: "hq_unpacked".into(),

@@ -14,11 +14,11 @@ mod testing;
 use std::collections::{BTreeMap, HashMap};
 use std::hash::{BuildHasher, RandomState};
 
-use aaa_map::{FogSetting, Map, Player, Recruits};
 use aaa_sim::World;
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
 use tgdata::{Faction, GameData, Handicap, Id, Nation};
+use tgmap::{FogSetting, Map, Player, Recruits};
 
 pub use client::{Client, NotJoined, enter, join, welcome};
 pub use clock::Clock;
@@ -66,7 +66,7 @@ pub struct Started {
 pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<Started, String> {
     let (name, seed) = (&setup.map, setup.seed);
     let all = game.nations();
-    let chosen = aaa_map::Brief::load(game, name).map_or_else(
+    let chosen = tgmap::Brief::load(game, name).map_or_else(
         |e| {
             warn!("{name}: sides play as no nation: {e}");
             HashMap::new()
@@ -89,7 +89,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     // Only summons of regiments and units put down where they're aimed
     // can be carried out: a thing with a transport is flown in instead.
     operations.retain(|id, o| match o {
-        aaa_map::Operation::Summon(s) => {
+        tgmap::Operation::Summon(s) => {
             let kept = raisable.contains_key(&s.template) && !airlifts.contains_key(&s.template);
             if !kept {
                 debug!("can't carry out {id}: can't summon {}", s.template);
@@ -99,11 +99,11 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         _ => true,
     });
     let dropped = operations.values().filter_map(|o| match o {
-        aaa_map::Operation::Drop(template) => Some(template),
-        aaa_map::Operation::Enchant { .. }
-        | aaa_map::Operation::Reveal { .. }
-        | aaa_map::Operation::Strike(_)
-        | aaa_map::Operation::Summon(_) => None,
+        tgmap::Operation::Drop(template) => Some(template),
+        tgmap::Operation::Enchant { .. }
+        | tgmap::Operation::Reveal { .. }
+        | tgmap::Operation::Strike(_)
+        | tgmap::Operation::Summon(_) => None,
     });
     let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(t)?)))).collect();
     let recruit_lists = game.recruit_lists();
@@ -184,7 +184,7 @@ pub fn handicap_technologies(
     chosen: &BTreeMap<u32, Id>,
     all: &[Handicap],
 ) -> HashMap<u32, Id> {
-    aaa_map::sides(players)
+    tgmap::sides(players)
         .filter_map(|p| {
             let id = chosen.get(&p.id).or(p.handicap.as_ref())?;
             let handicap = all.iter().find(|h| h.id == *id)?;
@@ -202,7 +202,7 @@ pub fn nations(
     seed: u64,
 ) -> HashMap<u32, Nation> {
     let find = |id: &str| nations.iter().find(|n| n.id.as_str() == id);
-    aaa_map::sides(players)
+    tgmap::sides(players)
         .filter_map(|p| {
             let nation = match (&p.nation, chosen.get(&p.id)) {
                 (Some(fixed), _) => find(fixed),

@@ -109,7 +109,7 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
         None => Some(60.0),
     };
     let fog = match take_option(&mut args, "--fog")? {
-        Some(f) => Some(aaa_map::FogSetting::named(&f).ok_or(())?),
+        Some(f) => Some(tgmap::FogSetting::named(&f).ok_or(())?),
         None => None,
     };
     let film = take_option(&mut args, "--film")?;

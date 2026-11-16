@@ -25,7 +25,6 @@ pub use rig::Playing;
 
 use std::sync::Arc;
 
-use aaa_map::Map;
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::Exposure;
 use bevy::ecs::system::SystemParam;
@@ -35,6 +34,7 @@ use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
 use bevy::prelude::*;
 use tgck::map::Sun;
 use tgdata::GameData;
+use tgmap::Map;
 
 use blend::GroundMaterial;
 use glow::GlowMaterial;
@@ -217,7 +217,7 @@ pub fn spawn_objects(
         biome,
     );
     let holding: std::collections::HashSet<u32> = (map.roles())
-        .filter(|(_, role)| *role == aaa_map::Role::HoldsBuilding)
+        .filter(|(_, role)| *role == tgmap::Role::HoldsBuilding)
         .map(|(t, _)| t.id)
         .collect();
     let (mut spawned, rest) = models.spawn(

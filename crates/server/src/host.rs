@@ -828,8 +828,8 @@ impl<L: Link> Host<L> {
 
 #[cfg(test)]
 mod tests {
-    use aaa_map::{Domain, Formation, Member, Organization, Pathing};
     use aaa_sim::{Command, Refused, Sides};
+    use tgmap::{Domain, Formation, Member, Organization, Pathing};
 
     use super::*;
     use crate::testing::player;

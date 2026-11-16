@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 
-use aaa_map::{
+use tgmap::{
     DeployPoints, Domain, Fighter, Id, Obstacle, Packs, Pathing, Shape, SupplyEffect, Unpacks,
     Weapon,
 };
 
 use crate::{Command, Notice, Player, Relation, Sides, TICK, World, distance};
 
-pub(crate) fn member(id: u32, position: [f32; 2], speed: f32) -> aaa_map::Member {
-    aaa_map::Member {
+pub(crate) fn member(id: u32, position: [f32; 2], speed: f32) -> tgmap::Member {
+    tgmap::Member {
         id,
         template: "soldier".into(),
         position,
@@ -29,12 +29,12 @@ pub(crate) fn member(id: u32, position: [f32; 2], speed: f32) -> aaa_map::Member
 /// Two soldiers side by side facing +y, the slower one on the right,
 /// who can also line up one behind the other.
 pub(crate) fn world(pathing: Pathing) -> World {
-    let formation = |id: &str, offsets| aaa_map::Formation {
+    let formation = |id: &str, offsets| tgmap::Formation {
         id: id.into(),
         offsets,
         aggressive: false,
     };
-    let organization = aaa_map::Organization {
+    let organization = tgmap::Organization {
         hq: None,
         id: 1,
         template: "squad".into(),
@@ -66,21 +66,17 @@ pub(crate) fn near(a: [f32; 2], b: [f32; 2]) -> bool {
 }
 
 /// A lone vehicle at 10,10 facing +y.
-pub(crate) fn vehicle(
-    acceleration: f32,
-    turn_rate: f32,
-    trailer: Option<aaa_map::Trailer>,
-) -> World {
+pub(crate) fn vehicle(acceleration: f32, turn_rate: f32, trailer: Option<tgmap::Trailer>) -> World {
     let mut m = member(2, [10.0, 10.0], 2.0);
     (m.acceleration, m.turn_rate, m.trailer) = (acceleration, turn_rate, trailer);
-    let organization = aaa_map::Organization {
+    let organization = tgmap::Organization {
         hq: None,
         id: 1,
         template: "tank".into(),
         owner: 7,
         facing: [0.0, 1.0],
         members: vec![m],
-        formations: vec![aaa_map::Formation {
+        formations: vec![tgmap::Formation {
             id: "lone".into(),
             offsets: vec![[0.0, 0.0]],
             aggressive: false,
@@ -108,11 +104,11 @@ pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
         max_targets: 0,
         full_within: 1.0,
         edge_damage: 1.0,
-        targets: aaa_map::Targets {
+        targets: tgmap::Targets {
             required: vec![Id::from("enemy")],
             excluded: vec![Id::from("tank")],
         },
-        damage: vec![aaa_map::Damage {
+        damage: vec![tgmap::Damage {
             kind: Id::from("gunfire"),
             amount,
         }],
@@ -157,14 +153,14 @@ pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> Wo
         .map(|(i, (&owner, fighter))| {
             let mut m = member(i as u32 * 2 + 2, [10.0, 10.0 + 10.0 * i as f32], 2.0);
             m.fighter = Some(fighter);
-            aaa_map::Organization {
+            tgmap::Organization {
                 hq: None,
                 id: i as u32 * 2 + 1,
                 template: "squad".into(),
                 owner,
                 facing: [0.0, 1.0],
                 members: vec![m],
-                formations: vec![aaa_map::Formation {
+                formations: vec![tgmap::Formation {
                     id: "line".into(),
                     offsets: vec![[0.0, 0.0]],
                     aggressive: false,
@@ -211,7 +207,7 @@ pub(crate) fn skirmish() -> World {
     );
     w.units[1].position = [10.0, 30.0];
     let r = &mut w.organizations[0];
-    r.formations.push(aaa_map::Formation {
+    r.formations.push(tgmap::Formation {
         id: "wide".into(),
         offsets: vec![[0.0, 0.0]],
         aggressive: false,
@@ -222,8 +218,8 @@ pub(crate) fn skirmish() -> World {
 
 /// An unarmed building of `owner`'s with 100 health, 6 across and
 /// square to the axes, at `position`.
-pub(crate) fn building(id: u32, owner: u32, position: [f32; 2]) -> aaa_map::Building {
-    aaa_map::Building {
+pub(crate) fn building(id: u32, owner: u32, position: [f32; 2]) -> tgmap::Building {
+    tgmap::Building {
         id,
         template: "house".into(),
         owner,
@@ -264,13 +260,13 @@ pub(crate) fn building(id: u32, owner: u32, position: [f32; 2]) -> aaa_map::Buil
 }
 
 /// Player 1's rifleman at 10,10 and whatever buildings, on open ground.
-pub(crate) fn siege(buildings: &[aaa_map::Building]) -> World {
+pub(crate) fn siege(buildings: &[tgmap::Building]) -> World {
     let w = battle(&[1], vec![soldier(vec![rifle(12.0, 30.0)])], at_war());
     with_buildings(w, buildings)
 }
 
 /// `w` with `buildings` added, their ground blocked.
-pub(crate) fn with_buildings(mut w: World, buildings: &[aaa_map::Building]) -> World {
+pub(crate) fn with_buildings(mut w: World, buildings: &[tgmap::Building]) -> World {
     for b in buildings {
         if let Some(o) = &b.obstacle {
             w.pathing.block(o);
@@ -290,7 +286,7 @@ pub(crate) fn lost(building: usize, player: u32, by: u32) -> Notice {
 
 /// Player 2's city centred at 40,10 with a zone of 15 and a house of
 /// its own, out of the rifleman's reach.
-pub(crate) fn city() -> [aaa_map::Building; 2] {
+pub(crate) fn city() -> [tgmap::Building; 2] {
     let mut centre = building(30, 2, [40.0, 10.0]);
     centre.fighter.capturable = true;
     centre.zone = Some(15.0);
@@ -352,7 +348,7 @@ pub(crate) fn headquarters() -> World {
 pub(crate) fn recruits(
     w: &mut World,
     building: &str,
-    organization: aaa_map::Organization,
+    organization: tgmap::Organization,
     seconds: f32,
 ) {
     let template = organization.template.clone();
@@ -373,10 +369,10 @@ pub(crate) fn commission(building: usize, template: &str) -> Command {
 }
 
 /// The way buildings face unless told otherwise.
-pub(crate) const NORTH: [f32; 2] = aaa_map::UNPACKED_FACING;
+pub(crate) const NORTH: [f32; 2] = tgmap::UNPACKED_FACING;
 
 /// A truck that unpacks into an 8-wide depot, standing at the origin.
-pub(crate) fn truck() -> aaa_map::Organization {
+pub(crate) fn truck() -> tgmap::Organization {
     let mut depot = building(0, 0, [0.0, 0.0]);
     depot.template = "depot".into();
     depot.obstacle.as_mut().unwrap().shape = Shape::Rect {
@@ -386,14 +382,14 @@ pub(crate) fn truck() -> aaa_map::Organization {
     let mut m = member(0, [0.0, 0.0], 3.0);
     m.template = "truck".into();
     m.fighter = Some(soldier(Vec::new()));
-    aaa_map::Organization {
+    tgmap::Organization {
         hq: None,
         id: 0,
         template: "truck".into(),
         owner: 0,
         facing: [0.0, 1.0],
         members: vec![m],
-        formations: vec![aaa_map::Formation {
+        formations: vec![tgmap::Formation {
             id: String::new(),
             offsets: vec![[0.0, 0.0]],
             aggressive: false,
@@ -426,8 +422,8 @@ pub(crate) fn packs() -> Packs {
     }
 }
 
-pub(crate) fn amounts(of: &[(&str, f32)]) -> aaa_map::Amounts {
-    let mut a = aaa_map::Amounts::default();
+pub(crate) fn amounts(of: &[(&str, f32)]) -> tgmap::Amounts {
+    let mut a = tgmap::Amounts::default();
     for &(kind, amount) in of {
         a.set(kind, amount);
     }
@@ -440,8 +436,8 @@ pub(crate) fn amounts(of: &[(&str, f32)]) -> aaa_map::Amounts {
 /// holding 500.
 /// AA's resources: money bought with, ammo and oil kept up, and the
 /// organization and building limits.
-pub(crate) fn aa_resources() -> Vec<aaa_map::ResourceKind> {
-    use aaa_map::ResourceKind as R;
+pub(crate) fn aa_resources() -> Vec<tgmap::ResourceKind> {
+    use tgmap::ResourceKind as R;
     let free = || amounts(&[("money", 0.0)]);
     vec![
         R::stockpiled("money"),
@@ -456,7 +452,7 @@ pub(crate) fn aa_resources() -> Vec<aaa_map::ResourceKind> {
 
 pub(crate) fn economy() -> World {
     let mut w = headquarters();
-    let economy = |cost, production, upkeep| aaa_map::Economy {
+    let economy = |cost, production, upkeep| tgmap::Economy {
         cost: amounts(cost),
         production: amounts(production),
         upkeep: amounts(upkeep),
@@ -496,7 +492,7 @@ pub(crate) fn economy() -> World {
             &[("building_limit_consumed", 1.0)],
         ),
     );
-    w.rules.economy = aaa_map::EconomyRules {
+    w.rules.economy = tgmap::EconomyRules {
         resources: aa_resources(),
         limited_max: 20.0,
         stockpile_max: 99999.0,
@@ -515,7 +511,7 @@ pub(crate) fn company(w: &mut World, owner: u32) -> usize {
 
 /// A [`company`] yet to be put on the map, taking a place under the
 /// organization limit.
-pub(crate) fn raised_company(w: &mut World, owner: u32) -> aaa_map::Organization {
+pub(crate) fn raised_company(w: &mut World, owner: u32) -> tgmap::Organization {
     let members = (0..3).map(|i| member(20 + i, [5.0 + i as f32, 5.0], 1.0));
     let mut organization = truck();
     organization.template = "company".into();
@@ -524,7 +520,7 @@ pub(crate) fn raised_company(w: &mut World, owner: u32) -> aaa_map::Organization
     organization.unpacks = None;
     organization.primary = None;
     organization.formations[0].offsets = vec![[0.0, 0.0]; 3];
-    let economy = |upkeep| aaa_map::Economy {
+    let economy = |upkeep| tgmap::Economy {
         upkeep: amounts(upkeep),
         ..Default::default()
     };
@@ -538,16 +534,16 @@ pub(crate) fn raised_company(w: &mut World, owner: u32) -> aaa_map::Organization
     organization
 }
 
-pub(crate) fn supply(range: f32, relay: bool, stockpile_max: f32) -> aaa_map::Supply {
-    aaa_map::Supply {
+pub(crate) fn supply(range: f32, relay: bool, stockpile_max: f32) -> tgmap::Supply {
+    tgmap::Supply {
         range,
         relay,
         stockpile_max,
     }
 }
 
-pub(crate) fn logistics(attachments: Option<u32>) -> aaa_map::Logistics {
-    aaa_map::Logistics {
+pub(crate) fn logistics(attachments: Option<u32>) -> tgmap::Logistics {
+    tgmap::Logistics {
         supply_used: attachments.is_none(),
         detached: false,
         shortfall_damage: 0.01,
@@ -612,9 +608,9 @@ pub(crate) fn effect(range: f32, resupply: f32, supplied: bool, requires: &[&str
     }
 }
 
-pub(crate) fn kind(properties: &[&str]) -> aaa_map::Kind {
-    aaa_map::Kind {
+pub(crate) fn kind(properties: &[&str]) -> tgmap::Kind {
+    tgmap::Kind {
         properties: properties.iter().map(|&p| Id::from(p)).collect(),
-        ..aaa_map::Kind::default()
+        ..tgmap::Kind::default()
     }
 }

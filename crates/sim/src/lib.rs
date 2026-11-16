@@ -39,12 +39,11 @@ mod testing;
 use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::{PI, TAU};
 
-use aaa_map::{
+use tgmap::{
     DeployPoints, Domain, Fighter, Id, Obstacle, Pathing, Shape, TerrainIndex, Tile, Turret,
     Unpacks, Weapon,
 };
 
-pub use aaa_map::{Outcome, Player, Relation, Team};
 pub use attach::Hq;
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
@@ -63,6 +62,7 @@ use serde::{Deserialize, Serialize};
 pub use strikes::{Afflicted, Incoming, Watch};
 pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
+pub use tgmap::{Outcome, Player, Relation, Team};
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
@@ -135,7 +135,7 @@ pub struct World {
     /// What the match is played by: see [`World::rules`].
     pub(crate) rules: Rules,
     /// The terrain under each tile, for what it does to those on it.
-    pub tile_terrains: aaa_map::TileTerrains,
+    pub tile_terrains: tgmap::TileTerrains,
     pub organizations: Vec<Organization>,
     pub units: Vec<Unit>,
     pub buildings: Vec<Building>,
@@ -144,7 +144,7 @@ pub struct World {
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
     /// The scenery still standing that a building going up clears away,
-    /// as [`aaa_map::Map::clearable`] has it.
+    /// as [`tgmap::Map::clearable`] has it.
     pub clearable: Vec<(u32, Obstacle)>,
     /// The ids of the scenery buildings have cleared away, in the order
     /// they went.
@@ -225,7 +225,7 @@ pub struct Organization {
     pub position: [f32; 2],
     /// The way it faces, or will once there.
     pub facing: [f32; 2],
-    pub formations: Vec<aaa_map::Formation>,
+    pub formations: Vec<tgmap::Formation>,
     /// Index into `formations` of the one it's been put in.
     pub formation: usize,
     /// Index into `formations` of the one it fights in once engaged.
@@ -275,7 +275,7 @@ pub struct Organization {
     /// Whether it's still being dropped: some of it yet to be let go, or
     /// to land.
     pub arriving: bool,
-    /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it.
+    /// The terrain it's on, as [`tgmap::TileTerrains::get`] takes it.
     pub terrain: TerrainIndex,
     /// The properties that terrain gives it.
     pub terrain_properties: Vec<Id>,
@@ -325,7 +325,7 @@ impl Organization {
     }
 
     /// Its zone of control's radius now.
-    pub fn control(&self, rules: &aaa_map::GuardRules) -> f32 {
+    pub fn control(&self, rules: &tgmap::GuardRules) -> f32 {
         match self.guarding() {
             true => self.control_range * rules.control,
             false => self.control_range,
@@ -467,7 +467,7 @@ pub struct Unit {
     /// Its fall, for one coming down by parachute, which is awaited
     /// until it lands.
     pub descent: Option<Descent>,
-    /// The terrain it's on, as [`aaa_map::TileTerrains::get`] takes it: its
+    /// The terrain it's on, as [`tgmap::TileTerrains::get`] takes it: its
     /// organization's, or its own tile's while it straggles.
     pub terrain: TerrainIndex,
 }
@@ -551,7 +551,7 @@ pub struct Building {
     pub deploy: Option<DeployPoints>,
     /// The organization the map has it standing in, without its members:
     /// packing puts its truck in the building's place there.
-    pub organization: Option<Box<aaa_map::Organization>>,
+    pub organization: Option<Box<tgmap::Organization>>,
     /// Where what it commissions moves on to once out, if set.
     pub rally: Option<[f32; 2]>,
     /// The tick it last changed hands on.
@@ -615,8 +615,8 @@ pub struct Commission {
 pub enum Work {
     /// An organization, standing anywhere: it's placed and given ids once it's
     /// done.
-    Raise(Box<aaa_map::Organization>),
-    Research(aaa_map::Research),
+    Raise(Box<tgmap::Organization>),
+    Research(tgmap::Research),
 }
 
 impl Commission {
@@ -632,7 +632,7 @@ impl Commission {
     }
 
     /// The organization it raises, if it raises one.
-    pub fn organization(&self) -> Option<&aaa_map::Organization> {
+    pub fn organization(&self) -> Option<&tgmap::Organization> {
         match &self.work {
             Work::Raise(r) => Some(r),
             Work::Research(_) => None,
@@ -826,8 +826,8 @@ impl Building {
     /// turret stands; `None` from right there.
     fn yaw_to(&self, turret: &Turret, at: [f32; 2]) -> Option<f32> {
         let [ahead, left] = turret.offset;
-        let spot = aaa_map::from_local(self.position, self.facing, [-left, ahead]);
-        let [right, ahead] = aaa_map::to_local(spot, self.facing, at);
+        let spot = tgmap::from_local(self.position, self.facing, [-left, ahead]);
+        let [right, ahead] = tgmap::to_local(spot, self.facing, at);
         (right != 0.0 || ahead != 0.0).then(|| libm::atan2f(-right, ahead))
     }
 
@@ -976,7 +976,7 @@ impl World {
 /// Where a deployment offset from a building standing at `position`
 /// facing `facing` lies.
 fn deploy_point(position: [f32; 2], facing: [f32; 2], offset: [f32; 2]) -> [f32; 2] {
-    aaa_map::from_local(position, facing, offset)
+    tgmap::from_local(position, facing, offset)
 }
 
 /// The radius of the circle round a shape: through a rectangle's corners.
@@ -1027,7 +1027,7 @@ impl Sides {
     /// How the player `from` stands toward the player `to`, by their ids;
     /// neutral toward a player the match doesn't have.
     pub fn relation(&self, from: u32, to: u32) -> Relation {
-        aaa_map::relation(&self.players, &self.teams, from, to)
+        tgmap::relation(&self.players, &self.teams, from, to)
     }
 
     /// The player a person plays by default: the first a person may.
@@ -1399,7 +1399,7 @@ mod tests {
             |w| w.treasuries.entry(1).or_default().stockpile += 1.0
         ));
         assert!(differs(|w| w.grant(1, Id::from("radar"))));
-        assert!(differs(|w| w.set_fog(aaa_map::FogSetting::Full)));
+        assert!(differs(|w| w.set_fog(tgmap::FogSetting::Full)));
         assert!(differs(
             |w| w.fates.get_mut(&1).unwrap().default_defeat ^= true
         ));
@@ -1433,7 +1433,7 @@ mod tests {
     /// is then updated to the new one.
     #[test]
     fn matches_play_out_the_same_on_every_platform() {
-        let trailer = aaa_map::Trailer {
+        let trailer = tgmap::Trailer {
             template: "gun".into(),
             hitch: [0.0, -2.0],
             coupling: [0.0, 1.0],
@@ -1473,7 +1473,7 @@ mod tests {
 
     #[test]
     fn the_sim_and_map_forbid_the_same_float_functions() {
-        let map = include_str!("../../map/clippy.toml");
+        let map = include_str!("../../tgmap/clippy.toml");
         assert_eq!(include_str!("../clippy.toml"), map);
     }
 }

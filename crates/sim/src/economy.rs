@@ -4,9 +4,9 @@
 use std::collections::BTreeMap;
 use std::ops::AddAssign;
 
-use aaa_map::Id;
+use tgmap::Id;
 
-pub use aaa_map::{Amounts, Economy, EconomyRules};
+pub use tgmap::{Amounts, Economy, EconomyRules};
 
 use crate::{Commission, Notice, Pause, State, TICK, World};
 
@@ -102,8 +102,8 @@ const SHORTAGE_STEP: f32 = 5.0;
 /// Something that would change a side's economy, to preview.
 pub enum Change<'a> {
     /// Commissioning an organization as it's raised.
-    Commission(&'a aaa_map::Organization),
-    Research(&'a aaa_map::Research),
+    Commission(&'a tgmap::Organization),
+    Research(&'a tgmap::Research),
     /// A packed building, by index into [`World::organizations`], unpacking.
     Unpack(usize),
 }
@@ -152,7 +152,7 @@ impl World {
     }
 
     /// What an organization would add to its owner's economy once raised.
-    pub(crate) fn commission_ledger(&self, organization: &aaa_map::Organization) -> Ledger {
+    pub(crate) fn commission_ledger(&self, organization: &tgmap::Organization) -> Ledger {
         let members = organization.members.iter().map(|m| &m.template);
         self.members_ledger(&organization.template, members.collect())
     }
@@ -313,7 +313,7 @@ impl World {
 
     /// The money commissioning `organization` as raised takes: its own cost and
     /// its members'.
-    pub fn cost(&self, organization: &aaa_map::Organization) -> f32 {
+    pub fn cost(&self, organization: &tgmap::Organization) -> f32 {
         let money = money(&self.rules.economy);
         let members = organization.members.iter().map(|m| &m.template);
         let own = (!organization.lone()).then_some(&organization.template);
@@ -323,7 +323,7 @@ impl World {
     }
 
     /// What researching `item` costs, in the one resource stockpiled.
-    pub fn research_cost(&self, item: &aaa_map::Research) -> f32 {
+    pub fn research_cost(&self, item: &tgmap::Research) -> f32 {
         item.cost.get(money(&self.rules.economy))
     }
 
@@ -388,7 +388,7 @@ mod tests {
 
     use crate::testing::*;
 
-    use aaa_map::Id;
+    use tgmap::Id;
 
     use crate::{Change, Command, Limit, Notice, Pause, Refused, State, World};
 
@@ -530,7 +530,7 @@ mod tests {
         let mut w = economy();
         w.rules.economies.insert(
             Id::from("start_loc"),
-            aaa_map::Economy {
+            tgmap::Economy {
                 production: amounts(&[("building_limit_provided", 20.0)]),
                 ..Default::default()
             },

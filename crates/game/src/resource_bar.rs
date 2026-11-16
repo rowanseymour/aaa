@@ -2,12 +2,12 @@
 //! they net of each resource a minute, and a second bar under it previewing
 //! what the order under the cursor would make of them.
 
-use aaa_map::Organization;
 use aaa_render::textures;
 use aaa_sim::{Balance, Change};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use tgdata::{Id, ResourceRole};
+use tgmap::Organization;
 
 use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
 use crate::{Loaded, Local, Screen, Sim};
@@ -27,7 +27,7 @@ pub struct Preview(pub Option<Previewed>);
 pub enum Previewed {
     /// Commissioning this organization.
     Commission(Box<Organization>),
-    Research(aaa_map::Research),
+    Research(tgmap::Research),
     /// The packed building at this index into the sim's organizations
     /// unpacking.
     Unpack(usize),
@@ -299,8 +299,8 @@ fn cell_parts(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aaa_map::ResourceKind;
     use aaa_sim::{Ledger, economy::EconomyRules};
+    use tgmap::ResourceKind;
 
     fn resources() -> Vec<ResourceKind> {
         vec![

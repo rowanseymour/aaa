@@ -1,6 +1,6 @@
 //! Players' orders: whether each may be given, and carrying it out.
 
-use aaa_map::Id;
+use tgmap::Id;
 
 use crate::packing::unpack_facing;
 use crate::{
@@ -252,7 +252,7 @@ impl World {
         player: u32,
         building: usize,
         template: &Id,
-    ) -> Result<&aaa_map::Organization, Refused> {
+    ) -> Result<&tgmap::Organization, Refused> {
         let b = self.standing_for(player, building)?;
         if b.deploy.is_none() || b.busy() {
             return Err(Refused::Unable);
@@ -498,7 +498,7 @@ impl World {
 mod tests {
     use crate::testing::*;
 
-    use aaa_map::{Domain, Pathing};
+    use tgmap::{Domain, Pathing};
 
     use crate::{Command, NotYours, Notice, Piece, Refused};
 
@@ -561,14 +561,14 @@ mod tests {
     #[test]
     fn organizations_added_later_take_orders_like_the_first() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
-        let second = aaa_map::Organization {
+        let second = tgmap::Organization {
             hq: None,
             id: 4,
             template: "squad".into(),
             owner: 7,
             facing: [0.0, 1.0],
             members: vec![member(5, [20.0, 10.0], 2.0)],
-            formations: vec![aaa_map::Formation {
+            formations: vec![tgmap::Formation {
                 id: "line".into(),
                 offsets: vec![[0.0, 0.0]],
                 aggressive: false,

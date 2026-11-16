@@ -5,13 +5,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use aaa_map::Map;
 use bevy::picking::mesh_picking::MeshPickingPlugin;
 use bevy::prelude::*;
 use bevy_egui::{
     EguiContexts, EguiPlugin, EguiPrimaryContextPass, egui, input::egui_wants_any_pointer_input,
 };
 use tgdata::GameData;
+use tgmap::Map;
 
 use aaa_render::camera::{self, RtsCamera};
 use aaa_render::shot::{self, ShotPlugin};
@@ -171,7 +171,7 @@ fn main() -> ExitCode {
         let name = game
             .find_map(map)
             .ok_or_else(|| format!("no map named {map:?}; run without a map name to list them"))?;
-        let recruits = aaa_map::Recruits::new(&game);
+        let recruits = tgmap::Recruits::new(&game);
         Map::load(&game, &recruits, &name).map(|map| {
             Some(Loaded {
                 game: Arc::new(game),

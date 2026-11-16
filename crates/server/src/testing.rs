@@ -1,6 +1,6 @@
 //! What the crate's tests build their matches from.
 
-use aaa_map::{Player, Relation};
+use tgmap::{Player, Relation};
 
 pub(crate) fn player(id: u32, independent: bool, playable: bool) -> Player {
     Player {

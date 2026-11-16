@@ -1,7 +1,7 @@
 //! Weapons: what they fire on, turrets, projectiles and the damage they
 //! do.
 
-use aaa_map::{Damage, Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon};
+use tgmap::{Damage, Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon};
 
 use crate::{
     Footing, LANDINGS_KEPT, Landing, Order, Piece, Projectile, Relation, State, TICK, Target,
@@ -319,7 +319,7 @@ impl World {
         by: u32,
         w: usize,
         weapon: &Weapon,
-        flight: aaa_map::Flight,
+        flight: tgmap::Flight,
         t: Target,
     ) -> Projectile {
         let aim = self.position(t);
@@ -676,13 +676,13 @@ impl World {
     /// Whether what `t` is, a fighter with its flags and its side's
     /// standing toward `s`'s, has the flags `targets` asks for, alive or
     /// not.
-    pub fn matches(&self, s: Target, targets: &aaa_map::Targets, t: Target) -> bool {
+    pub fn matches(&self, s: Target, targets: &tgmap::Targets, t: Target) -> bool {
         self.fits(self.owner(s), targets, t)
     }
 
     /// As [`World::matches`], for something of player `by`'s, which a shot
     /// in flight stays whatever becomes of what fired it.
-    fn fits(&self, by: u32, targets: &aaa_map::Targets, t: Target) -> bool {
+    fn fits(&self, by: u32, targets: &tgmap::Targets, t: Target) -> bool {
         let fighter = match t {
             Target::Unit(u) => self.units[u].fighter.as_ref(),
             Target::Building(b) => Some(&self.buildings[b].fighter),
@@ -694,7 +694,7 @@ impl World {
         targets.allow(fighter.flags.iter().chain(std::iter::once(&side)))
     }
 
-    /// The flag something of `owner`'s has for [`aaa_map::Targets`] of
+    /// The flag something of `owner`'s has for [`tgmap::Targets`] of
     /// `by`'s to match, by how the sides stand.
     pub(crate) fn standing_flag(&self, by: u32, owner: u32) -> Id {
         Id::from(match self.sides.relation(by, owner) {
@@ -838,8 +838,8 @@ mod tests {
     fn projectiles_hit_when_their_flight_ends() {
         // 10 apart at 25 a second takes 0.4s; a life overrides the speed.
         let gun = |life| Weapon {
-            flight: Some(aaa_map::Flight {
-                kind: aaa_map::FlightKind::Straight,
+            flight: Some(tgmap::Flight {
+                kind: tgmap::FlightKind::Straight,
                 speed: 25.0,
                 life,
             }),
