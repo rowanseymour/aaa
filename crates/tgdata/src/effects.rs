@@ -217,7 +217,8 @@ impl GameData {
             // thing is tried as an effect to find them, so one that doesn't
             // read as an effect is no fault in the data.
             let effects = (scope.root.blocks_of("VFX")).filter_map(|b| scope.deserialize(b));
-            let things = (scope.root.blocks_of("Thing"))
+            let things = (scope.root.blocks())
+                .filter(|b| b.kind().is_some_and(crate::is_thing))
                 .filter_map(|b| crate::reads::decode::<defs::Vfx>(b, Some(&scope.templates)).ok());
             for v in effects.chain(things) {
                 let is_vfx = v

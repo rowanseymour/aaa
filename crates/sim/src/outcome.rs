@@ -110,7 +110,7 @@ impl World {
     }
 
     /// The sides that own something that keeps a side in the match: a
-    /// organization, or a building or holding of a
+    /// organization, or a building, holding or settlement of a
     /// [sustaining](crate::Rules::sustaining) template.
     fn sustained(&self) -> BTreeSet<u32> {
         let sustaining = &self.rules.sustaining;
@@ -125,7 +125,15 @@ impl World {
         let held = (self.holdings.iter())
             .filter(|(_, template)| sustaining.contains(template))
             .map(|&(owner, _)| owner);
-        organizations.chain(buildings).chain(held).collect()
+        let standing = |id| self.buildings.iter().any(|b| b.id == id && !b.gone());
+        let settled = (self.settlements.iter())
+            .filter(|s| sustaining.contains(&s.template) && standing(s.centre))
+            .map(|s| s.owner);
+        organizations
+            .chain(buildings)
+            .chain(held)
+            .chain(settled)
+            .collect()
     }
 
     /// Whether a side is kept in the match by what the `sustained` sides
@@ -383,6 +391,28 @@ mod tests {
         rout(&mut w, 3);
         w.tick();
         assert_eq!(outcomes(&w), [Lost, Playing, Playing]);
+    }
+
+    #[test]
+    fn a_settlement_keeps_its_side_in_until_its_centre_goes() {
+        let mut w = free_for_all();
+        let centre = building(50, 1, [20.0, 20.0]);
+        w = with_buildings(w, &[centre]);
+        w.rules.sustaining.insert(Id::from("settlement"));
+        w.settlements.push(tgmap::Settlement {
+            id: 60,
+            template: Id::from("settlement"),
+            owner: 1,
+            centre: 50,
+        });
+        rout(&mut w, 1);
+        rout(&mut w, 2);
+        run(&mut w, 1.0);
+        assert_eq!(outcomes(&w), [Playing, Lost, Playing]);
+        let b = (w.buildings.iter()).position(|b| b.id == 50).unwrap();
+        w.buildings[b].state = State::Destroyed(w.ticks);
+        w.tick();
+        assert_eq!(outcomes(&w), [Lost, Lost, Won]);
     }
 
     #[test]

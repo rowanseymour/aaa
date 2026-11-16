@@ -124,6 +124,7 @@ pub struct Thing {
     #[serde(rename = "HQComponent")]
     pub hq_component: Option<HqComponent>,
     pub denizen_component: Option<DenizenComponent>,
+    pub settlement_component: Option<SettlementComponent>,
     pub element_component: Option<ElementComponent>,
     pub detection_component: Option<DetectionComponent>,
     pub construction_component: Option<ConstructionComponent>,
@@ -211,8 +212,7 @@ pub struct BodyComponent {
 }
 
 /// What makes a building a city centre, claiming a zone of the map. A city
-/// isn't a settlement: that's a Kohan II town, a template with a
-/// `SettlementComponent`, which no AA template or map has.
+/// isn't a settlement: see [`SettlementComponent`].
 #[derive(Debug, Clone, Deserialize)]
 pub struct CityComponent {
     pub zone_radius: Option<f32>,
@@ -376,6 +376,26 @@ pub struct DenizenComponent {
     pub deployment_info: Option<DeploymentInfo>,
     pub guard_range: Option<f32>,
     pub guard_operational_range: Option<f32>,
+}
+
+/// What makes a thing a settlement: the invisible thing that groups a
+/// Kohan II centre building with the rest of its town.
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettlementComponent {
+    pub levels: Option<SettlementLevels>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettlementLevels {
+    /// From the first, a village, up.
+    #[serde(default)]
+    pub level: Vec<SettlementLevel>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SettlementLevel {
+    /// The centre building of a settlement at this level.
+    pub settlement_center_ids: Option<Id>,
 }
 
 /// How far a thing sees, in world units.

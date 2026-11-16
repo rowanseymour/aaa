@@ -37,6 +37,7 @@ impl World {
             map.roles()
                 .map(|(t, role)| (role, tgmap::owner(t), t.template.as_str())),
         );
+        world.settlements = map.settlements.clone();
         for p in &map.players {
             for t in &p.technologies {
                 world.grant(p.id, t.clone());
@@ -49,13 +50,7 @@ impl World {
                 },
             );
         }
-        let members = map
-            .things
-            .iter()
-            .flat_map(|t| t.organization())
-            .flat_map(|o| &o.members);
-        let ids = map.things.iter().chain(members).map(|t| t.id);
-        world.next_id = world.next_id.max(ids.max().map_or(1, |id| id + 1));
+        world.next_id = world.next_id.max(map.next_id());
         world
     }
 
@@ -126,6 +121,7 @@ impl World {
             over,
             rng,
             holdings: Vec::new(),
+            settlements: Vec::new(),
             treasuries: BTreeMap::new(),
             commanders: BTreeMap::new(),
             operated: Vec::new(),

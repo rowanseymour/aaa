@@ -26,6 +26,7 @@ mod properties;
 mod reads;
 mod recruiting;
 mod research;
+mod settlements;
 mod special_ops;
 mod strikes;
 mod strings;
@@ -133,6 +134,14 @@ pub(crate) struct Template {
     thing: defs::Thing,
 }
 
+/// Whether a block of `kind` defines a thing: `Unit` and `Projectile` are
+/// other names for `Thing`, sharing its ids and fields.
+pub(crate) fn is_thing(kind: &str) -> bool {
+    ["Thing", "Unit", "Projectile"]
+        .iter()
+        .any(|k| k.eq_ignore_ascii_case(kind))
+}
+
 impl Definitions {
     /// Defining a Thing id again is an error that ends the reading of its
     /// file there, the blocks before it kept.
@@ -148,7 +157,7 @@ impl Definitions {
             let file = scope.file;
             for block in scope.root.blocks() {
                 let kind = block.kind().unwrap_or("");
-                if kind.eq_ignore_ascii_case("Thing") {
+                if is_thing(kind) {
                     let Some(id) = block.value("ids").map(Id::from) else {
                         continue;
                     };
@@ -1080,5 +1089,17 @@ mod tests {
             [("a/a.tgi", "jeep", Some(50.0)), ("b/b.tgi", "tank", None),]
         );
         assert!(definitions.properties.contains_key(&Id::from("vehicle")));
+    }
+
+    #[test]
+    fn units_and_projectiles_are_things() {
+        let a = tgi::parse(
+            "[Unit]\n{\n\tIDS = bowman\n}\n[Projectile]\n{\n\tIDS = arrow\n}\n\
+             [Unit]\n{\n\tIDS = bowman\n}\n",
+        );
+        let files = [("a/a.tgi".to_string(), a)];
+        let definitions = Definitions::new(&files);
+        let found: Vec<_> = definitions.things.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(found, ["bowman", "arrow"]);
     }
 }
