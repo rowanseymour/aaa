@@ -30,6 +30,9 @@ pub(crate) struct Orders {
     /// How many copies of the match are known to have gone their own way.
     diverged: usize,
     gone: bool,
+    /// Whether the game has left the match, after which there's nothing
+    /// more of it to play.
+    quit: bool,
     /// Whether the game has taken that the host ended the match.
     ended_taken: bool,
     /// What the host knows the game's client as.
@@ -96,6 +99,7 @@ impl Orders {
             asked: VecDeque::new(),
             diverged: 0,
             gone: false,
+            quit: false,
             ended_taken: false,
             me,
             left: Vec::new(),
@@ -314,6 +318,9 @@ impl Orders {
     /// A host elsewhere carries it out when it hears of it, and so in
     /// `world` some time later.
     pub(crate) fn carry_out(&mut self, world: &mut World) -> Vec<(u32, Refused)> {
+        if self.quit {
+            return Vec::new();
+        }
         let played = match &mut self.host {
             Hosted::Here(host) => {
                 said(host.relay());
@@ -333,6 +340,9 @@ impl Orders {
     /// says when the match plays one: `world` plays the next it's said
     /// to, if it's heard of any, and more where it has fallen behind.
     pub(crate) fn step(&mut self, world: &mut World) -> Vec<(u32, Refused)> {
+        if self.quit {
+            return Vec::new();
+        }
         let played = match &mut self.host {
             Hosted::Here(host) => {
                 said(host.tick());
@@ -379,9 +389,12 @@ impl Orders {
     }
 }
 
-impl Drop for Orders {
-    /// Has the game leave the match: ending it, if it's the host.
-    fn drop(&mut self) {
+impl Orders {
+    /// Has the game leave the match, once: ending it, if it's the host.
+    pub(crate) fn leave(&mut self) {
+        if std::mem::replace(&mut self.quit, true) {
+            return;
+        }
         match &mut self.host {
             Hosted::Here(host) => host.end(),
             // Failing only where the host has already gone.
@@ -390,11 +403,20 @@ impl Drop for Orders {
     }
 }
 
+impl Drop for Orders {
+    fn drop(&mut self) {
+        self.leave();
+    }
+}
+
 /// Leaves the match as the game exits, rather than trusting what tears
-/// the app down to drop it.
-pub(crate) fn leave_on_exit(mut commands: Commands, mut exit: MessageReader<AppExit>) {
-    if exit.read().count() > 0 {
-        commands.remove_resource::<Orders>();
+/// the app down to drop it. The orders stay, as the app may run another
+/// frame whose systems still ask for them.
+pub(crate) fn leave_on_exit(mut exit: MessageReader<AppExit>, orders: Option<ResMut<Orders>>) {
+    if exit.read().count() > 0
+        && let Some(mut orders) = orders
+    {
+        orders.leave();
     }
 }
 
@@ -748,6 +770,32 @@ mod tests {
         let mut world = super::testing::fresh();
         assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
         assert!(other.ended());
+    }
+
+    #[test]
+    fn a_game_exiting_leaves_the_match_but_keeps_its_orders() {
+        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), None);
+        let Hosted::Here(host) = &mut orders.host else {
+            unreachable!()
+        };
+        let (link, _) = super::testing::let_in(host, &[2]);
+        let mut other = aaa_server::Client::new(link);
+        let mut app = App::new();
+        app.add_message::<AppExit>()
+            .insert_resource(orders)
+            .add_systems(Last, leave_on_exit);
+        app.world_mut().write_message(AppExit::Success);
+        app.update();
+        let mut world = super::testing::fresh();
+        assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
+        // What runs in the frames before the app stops finds the orders,
+        // with nothing more to play.
+        let mut orders = app.world_mut().resource_mut::<Orders>();
+        let mut ours = super::testing::fresh();
+        orders.act(Action::Win(1));
+        orders.carry_out(&mut ours);
+        orders.step(&mut ours);
+        assert!(!ours.over);
     }
 
     #[test]
