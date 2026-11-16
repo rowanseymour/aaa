@@ -1,5 +1,5 @@
 #!/bin/bash
-# Builds and runs aaa-game or aaa-editor from whichever checkout or worktree
+# Builds and runs aaa-game or tgeditor from whichever checkout or worktree
 # it's run in.
 set -e
 root=$(git rev-parse --show-toplevel)
@@ -11,9 +11,10 @@ usage() {
     exit 2
 }
 
-app=game
+app=aaa-game
 case $1 in
-game | editor) app=$1; shift ;;
+game) shift ;;
+editor) app=tgeditor; shift ;;
 -h | --help) usage ;;
 esac
 
@@ -30,5 +31,5 @@ done
 data=$(cd "$data" && pwd)
 
 cd "$root"
-cargo build --release -p "aaa-$app"
-exec "target/release/aaa-$app" "$data" "${args[@]}"
+cargo build --release -p "$app"
+exec "target/release/$app" "$data" "${args[@]}"

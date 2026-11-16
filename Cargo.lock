@@ -3,17 +3,6 @@
 version = 4
 
 [[package]]
-name = "aaa-editor"
-version = "0.1.0"
-dependencies = [
- "bevy",
- "bevy_egui",
- "tgdata",
- "tgmap",
- "tgrender",
-]
-
-[[package]]
 name = "aaa-game"
 version = "0.1.0-alpha"
 dependencies = [
@@ -5797,6 +5786,17 @@ dependencies = [
  "serde",
  "tgck",
  "tgi",
+]
+
+[[package]]
+name = "tgeditor"
+version = "0.1.0"
+dependencies = [
+ "bevy",
+ "bevy_egui",
+ "tgdata",
+ "tgmap",
+ "tgrender",
 ]
 
 [[package]]

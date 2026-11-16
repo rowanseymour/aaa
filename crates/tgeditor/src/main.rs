@@ -1,5 +1,5 @@
-//! Map editor for Axis & Allies (2004), which views maps, reading straight
-//! from the game's installed data files.
+//! Map editor for games on TimeGate's engine, which views maps, reading
+//! straight from a game's installed data files.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -19,8 +19,8 @@ use tgrender::{Edge, MapAssets, MapObject, MapRenderPlugin, objects, terrain};
 
 const USAGE: &str = "\
 usage:
-  aaa-editor <game dir>          list the maps
-  aaa-editor <game dir> <map>    view a map, e.g. \"(2v2)Berlin\"
+  tgeditor <game dir>            list the maps
+  tgeditor <game dir> <map>      view a map, e.g. \"(2v2)Berlin\"
 
 options:
   --camera <x,y,dist,yaw,pitch>  start the free camera looking at x,y (fractions
@@ -123,7 +123,7 @@ fn main() -> ExitCode {
     let log = match tgrender::log::plugin(log.as_deref()) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("aaa-editor: {e}");
+            eprintln!("tgeditor: {e}");
             return ExitCode::from(2);
         }
     };
@@ -182,13 +182,13 @@ fn main() -> ExitCode {
     let loaded = match loaded {
         Ok(Some(l)) => {
             for w in &l.map.warnings {
-                eprintln!("aaa-editor: {w}");
+                eprintln!("tgeditor: {w}");
             }
             l
         }
         Ok(None) => return ExitCode::SUCCESS,
         Err(e) => {
-            eprintln!("aaa-editor: {e}");
+            eprintln!("tgeditor: {e}");
             return ExitCode::FAILURE;
         }
     };
@@ -208,7 +208,7 @@ fn main() -> ExitCode {
     };
 
     let mut app = App::new();
-    let title = format!("{} - aaa-editor", loaded.map.title);
+    let title = format!("{} - tgeditor", loaded.map.title);
     app.add_plugins(
         DefaultPlugins
             .set(shot::window(title, screenshot.is_some()))
@@ -340,7 +340,7 @@ fn start_inspecting(
         }
     }
     for id in ids {
-        eprintln!("aaa-editor: no object with id {id} to inspect");
+        eprintln!("tgeditor: no object with id {id} to inspect");
     }
 }
 

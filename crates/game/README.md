@@ -14,6 +14,6 @@ The key left of 1 opens a console of script commands in the game's own style;
 `help` lists them. Run it without arguments for the options, such as running a
 file of them or taking them from a socket.
 
-It has the same system requirements on Linux as [`aaa-editor`](../editor).
+It has the same system requirements on Linux as [`tgeditor`](../tgeditor).
 
 Licensed under the [GNU GPL v3 or later](../../LICENSE).

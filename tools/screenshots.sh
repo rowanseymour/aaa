@@ -102,7 +102,7 @@ menus() {
 # editor <name> <map> <camera> <ids to inspect>
 editor() {
     wanted "$1" || return 0
-    shoot "$1" "$bin/aaa-editor" "$game" "$2" --camera "$3" --inspect "$4" \
+    shoot "$1" "$editor" "$game" "$2" --camera "$3" --inspect "$4" \
         --screenshot "$work/$1.png"
 }
 
@@ -174,7 +174,13 @@ EOF
 build() {
     checkout=$1
     shift
-    cargo build --release -p aaa-game -p aaa-editor --manifest-path "$checkout/Cargo.toml" "$@"
+    cargo build --release -p aaa-game -p "$(editor_in "$checkout")" --manifest-path "$checkout/Cargo.toml" "$@"
+}
+
+# The editor's package in a checkout, which has a different name in a ref from
+# before its rename.
+editor_in() {
+    if [ -d "$1/crates/tgeditor" ]; then echo tgeditor; else echo aaa-editor; fi
 }
 
 # Stops if any scene couldn't be shot, saying which and from what.
@@ -188,6 +194,7 @@ check() {
 if [ -z "$ref" ]; then
     build "$root"
     bin=$root/target/release
+    editor=$bin/tgeditor
     mkdir -p "$root/docs/screenshots"
     scenes
     check "this checkout"
@@ -219,9 +226,10 @@ git -C "$root" worktree add --quiet --detach "$work/base" "$ref"
 build "$work/base" --target-dir "$root/target/compare-base"
 for side in new base; do
     case $side in
-    new) bin=$root/target/release ;;
-    base) bin=$root/target/compare-base/release ;;
+    new) bin=$root/target/release checkout=$root ;;
+    base) bin=$root/target/compare-base/release checkout=$work/base ;;
     esac
+    editor=$bin/$(editor_in "$checkout")
     take=1
     while [ "$take" -le "$takes" ]; do
         log=$out/$side-$take.log
