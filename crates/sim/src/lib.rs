@@ -179,6 +179,8 @@ pub struct World {
     pub afflicted: Vec<Afflicted>,
     /// What special operations have put on the map.
     pub summoned: Vec<Summoned>,
+    /// Which tiles are of the map's main land, once first asked.
+    pub(crate) main_land: std::sync::OnceLock<Vec<bool>>,
     /// What sides have been told: see [`World::take_notices`].
     pub(crate) notices: Vec<Notice>,
     /// What each side sees of the map.
@@ -1041,8 +1043,9 @@ digest!(World {
 } skip {
     // Fixed by the map and the game's data.
     sides, rules, tile_terrains, scenery,
-    // Follow from the buildings standing and the scenery cleared.
-    pathing, clearable,
+    // Follow from the buildings standing and the scenery cleared, or from
+    // the terrain alone.
+    pathing, clearable, main_land,
     // Taken by whatever shows them, whenever it does.
     notices,
 });

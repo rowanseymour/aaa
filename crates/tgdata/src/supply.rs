@@ -125,10 +125,13 @@ pub(crate) fn listed(list: Option<&str>) -> Vec<Id> {
         .collect()
 }
 
-/// Whether a modifier's field names `what`.
-/// What an operation summons, for one that does.
+/// What an operation summons, for one that does: the first thing its
+/// tooltip names, past the likes of smoke marking where it lands.
 fn summon(a: &defs::AbilityDefinition) -> Option<Summon> {
-    let e = a.effect.iter().find(|e| is(&e.kind, "SUMMON"))?;
+    let e = a
+        .effect
+        .iter()
+        .find(|e| is(&e.kind, "SUMMON") && !e.hide_from_tooltip)?;
     let flag = |f: fn(&defs::AbilityFlags) -> bool| a.flags.iter().any(f);
     let unique = flag(|f| f.summon_unique).then(|| e.unique_target_flags.clone());
     Some(Summon {
@@ -139,6 +142,7 @@ fn summon(a: &defs::AbilityDefinition) -> Option<Summon> {
     })
 }
 
+/// Whether a modifier's field names `what`.
 pub(crate) fn is(name: &Option<String>, what: &str) -> bool {
     name.as_deref()
         .is_some_and(|n| n.eq_ignore_ascii_case(what))
@@ -324,6 +328,16 @@ mod tests {
         assert_eq!(
             super::summon(&reorganization),
             Some(summon("truck_corps", true, true, Some("provides_corps")))
+        );
+        // What's hidden from its tooltip isn't what it brings.
+        let aid = definition(
+            "[AbilityDefinition]\n{\n\tIDS = aid\n\
+             \t[Effect]\n\t{\n\t\ttype = SUMMON\n\t\tobject_ids = smoke\n\t\thide_from_tooltip = true\n\t}\n\
+             \t[Effect]\n\t{\n\t\ttype = SUMMON\n\t\tobject_ids = crate\n\t}\n}\n",
+        );
+        assert_eq!(
+            super::summon(&aid).map(|s| s.template),
+            Some(Id::from("crate"))
         );
         // A flag only counts with summon_unique.
         let maskirovka = definition(

@@ -339,7 +339,7 @@ fn operation(
         area,
         effects: a.effect.iter().flat_map(|e| words.effect(e)).collect(),
         summons: (a.effect.iter())
-            .filter(|e| is(&e.kind, "SUMMON"))
+            .filter(|e| is(&e.kind, "SUMMON") && !e.hide_from_tooltip)
             .find_map(|e| words.things.get(e.object_ids.as_ref()?).cloned()),
     }
 }

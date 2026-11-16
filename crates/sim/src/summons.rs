@@ -68,13 +68,12 @@ impl World {
             let kind = self.rules.kinds.get(template);
             kind.is_some_and(|k| k.flags.contains(flag))
         };
-        let organizations = (0..self.organizations.len()).filter(|&r| {
+        let organization = |r: usize| {
             let o = &self.organizations[r];
             o.owner == player && !self.destroyed(r) && flagged(&o.template)
-        });
-        let buildings = (self.buildings.iter())
-            .filter(|b| b.owner == player && !b.gone() && flagged(&b.template));
-        organizations.count() + buildings.count() > 0
+        };
+        let building = |b: &crate::Building| b.owner == player && !b.gone() && flagged(&b.template);
+        (0..self.organizations.len()).any(organization) || self.buildings.iter().any(building)
     }
 
     /// Whether a summon can be aimed at `at`: anywhere, or for one held
@@ -82,13 +81,14 @@ impl World {
     pub(crate) fn summons_to(&self, summon: &Summon, at: [f32; 2]) -> bool {
         let side = self.pathing.side();
         let tile = Tile::at(at).index(side);
-        !summon.main_land || tile.is_some_and(|t| self.main_land()[t])
+        let main_land = self.main_land.get_or_init(|| self.find_main_land());
+        !summon.main_land || tile.is_some_and(|t| main_land[t])
     }
 
     /// Which tiles, row by row, are of the map's main land: the body of
     /// land tiles, joined along their sides, with the most tiles, the first
     /// found of the largest.
-    fn main_land(&self) -> Vec<bool> {
+    fn find_main_land(&self) -> Vec<bool> {
         let side = self.pathing.side();
         let tile = |i: usize| Tile {
             x: (i % side) as i32,
@@ -143,18 +143,29 @@ impl World {
         }
     }
 
-    /// Whether `spot` has room to stand: on the map, on land, and clear
-    /// of everything that blocks, units among it.
-    fn room(&self, at: &Obstacle) -> bool {
-        let units: Vec<Obstacle> = (self.units.iter())
+    /// Everything that blocks a summon: buildings, scenery and units.
+    fn blocking(&self) -> Vec<Obstacle> {
+        let units = (self.units.iter())
             .filter(|u| u.alive())
-            .filter_map(|u| Some(spot(u.position, u.facing, Some(u.shape?))))
-            .collect();
+            .filter_map(|u| Some(spot(u.position, u.facing, Some(u.shape?))));
         let buildings = (self.buildings.iter())
             .filter(|b| !b.gone())
-            .filter_map(|b| b.obstacle.as_ref());
-        let others = buildings.chain(&self.scenery).chain(&units);
-        self.pathing.room_for(at, Domain::Land, others)
+            .filter_map(|b| b.obstacle.clone());
+        buildings
+            .chain(self.scenery.iter().cloned())
+            .chain(units)
+            .collect()
+    }
+
+    /// The first of `spots` with room to stand for something of `shape`:
+    /// on the map, on land, and clear of `blocking`.
+    fn first_clear(
+        &self,
+        mut spots: impl Iterator<Item = [f32; 2]>,
+        shape: Option<Shape>,
+        blocking: &[Obstacle],
+    ) -> Option<[f32; 2]> {
+        spots.find(|&p| (self.pathing).room_for(&spot(p, FACING, shape), Domain::Land, blocking))
     }
 
     /// Puts down what `operation` summons for `player` at the clear spot
@@ -178,7 +189,7 @@ impl World {
         let r = match organization.members.len() {
             1 => {
                 let shape = organization.members[0].shape;
-                let found = rings(at, 1.0, RINGS).find(|&p| self.room(&spot(p, FACING, shape)));
+                let found = self.first_clear(rings(at, 1.0, RINGS), shape, &self.blocking());
                 found.map(|p| {
                     organization.place(p, FACING);
                     self.add_new_organization(organization)
@@ -210,8 +221,9 @@ impl World {
     ) -> Option<usize> {
         let leader = organization.primary.unwrap_or(0);
         let shape = organization.members[leader].shape;
-        let found =
-            rings(at, step(shape), REGIMENT_RINGS).find(|&p| self.room(&spot(p, FACING, shape)))?;
+        let mut blocking = self.blocking();
+        let found = self.first_clear(rings(at, step(shape), REGIMENT_RINGS), shape, &blocking)?;
+        blocking.push(spot(found, FACING, shape));
         let [x, y] = organization.members[leader].position;
         for m in &mut organization.members {
             m.position = [m.position[0] + found[0] - x, m.position[1] + found[1] - y];
@@ -230,10 +242,13 @@ impl World {
                 continue;
             }
             let (place, shape) = (self.units[u].position, self.units[u].shape);
-            let found = rings(place, step(shape), REGIMENT_RINGS)
-                .find(|&p| self.room(&spot(p, FACING, shape)));
+            let found =
+                self.first_clear(rings(place, step(shape), REGIMENT_RINGS), shape, &blocking);
             // One with nowhere to stand is refilled as if lost.
             if let Some(p) = found {
+                if shape.is_some() {
+                    blocking.push(spot(p, FACING, shape));
+                }
                 let unit = &mut self.units[u];
                 unit.awaited = false;
                 unit.stand_at(p, FACING);
@@ -331,13 +346,14 @@ mod tests {
         assert_eq!(w.summoned, [summoned]);
     }
 
-    #[test]
-    fn a_regiments_leader_finds_room_then_each_other_member() {
-        let mut w = with_buildings(summoning(false, None), &[building(9, 2, AT)]);
+    /// `w` with its operation summoning three tanks a row, 3 apart, led by
+    /// the first.
+    fn summons_tanks(w: &mut World) {
         let mut tanks = truck();
         tanks.template = Id::from("tanks");
         tanks.unpacks = None;
         tanks.primary = Some(0);
+        tanks.control_range = Some(30.0);
         let tank = |i: u32| aaa_map::Member {
             shape: Some(Shape::Circle { radius: 1.0 }),
             ..crate::testing::member(i, [0.0, 0.0], 3.0)
@@ -349,6 +365,34 @@ mod tests {
         {
             s.template = Id::from("tanks");
         }
+    }
+
+    #[test]
+    fn a_regiments_members_come_out_of_a_building_near_that_recruits_them() {
+        let mut factory = building(9, 1, [AT[0], AT[1] + 20.0]);
+        factory.template = Id::from("factory");
+        factory.deploy = Some(aaa_map::DeployPoints {
+            creation: [0.0, 4.0],
+            deployment: [0.0, 8.0],
+        });
+        let mut w = with_buildings(summoning(false, None), &[factory.clone()]);
+        summons_tanks(&mut w);
+        (w.rules.recruit_lists).insert(Id::from("factory"), vec![Id::from("tanks")]);
+        w.apply(1, summon(AT)).unwrap();
+        let r = w.organizations.len() - 1;
+        let units = w.organizations[r].units.clone();
+        assert_eq!(w.units[units[0]].position, AT);
+        let out = crate::deploy_point(factory.position, factory.facing, [0.0, 4.0]);
+        for &u in &units[1..] {
+            assert!(w.units[u].alive());
+            assert_eq!(w.units[u].position, out);
+        }
+    }
+
+    #[test]
+    fn a_regiments_leader_finds_room_then_each_other_member() {
+        let mut w = with_buildings(summoning(false, None), &[building(9, 2, AT)]);
+        summons_tanks(&mut w);
         w.apply(1, summon(AT)).unwrap();
         let r = w.organizations.len() - 1;
         let units = w.organizations[r].units.clone();
