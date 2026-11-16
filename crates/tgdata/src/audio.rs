@@ -216,7 +216,7 @@ impl GameData {
             logged(
                 "UI/Menus/main.tgi",
                 block,
-                tgi::from_block::<defs::Interface>(block),
+                crate::reads::decode::<defs::Interface>(block, None),
             )?
             .interface_music
         });

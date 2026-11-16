@@ -127,7 +127,11 @@ fn coverage(dir: &str, kind: Option<&str>) -> Res {
             kinds.sort_by_key(|(k, c)| (std::cmp::Reverse(c.read + c.unread), *k));
             outln!("{:>8} {:>8} {:>5}  kind", "read", "fields", "");
             for (kind, c) in kinds {
-                outln!("{}  {kind}", row(c));
+                let note = match tgdata::READ_BY_HAND.contains(&kind) {
+                    true => "  (some fields read by hand, not counted)",
+                    false => "",
+                };
+                outln!("{}  {kind}{note}", row(c));
             }
             outln!("{}  (all)", row(total));
         }

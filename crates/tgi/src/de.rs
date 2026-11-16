@@ -129,6 +129,31 @@ impl Coverage {
         self.unread(&path_of(block), block, templates);
     }
 
+    /// Adds what `other` counted to this.
+    pub fn add(&mut self, other: Coverage) {
+        for (key, c) in other.keys {
+            let count = self.keys.entry(key).or_default();
+            count.read += c.read;
+            count.unread += c.unread;
+        }
+    }
+
+    /// The coverage of a block read as several types, each having counted
+    /// it into one of `readings`: a key is read as often as the type that
+    /// reads it most.
+    pub fn union(readings: impl IntoIterator<Item = Coverage>) -> Coverage {
+        let mut out = Coverage::default();
+        for reading in readings {
+            for (key, c) in reading.keys {
+                let count = out.keys.entry(key).or_default();
+                let seen = (count.read + count.unread).max(c.read + c.unread);
+                count.read = count.read.max(c.read);
+                count.unread = seen - count.read;
+            }
+        }
+        out
+    }
+
     /// `(path, key, count)` for every key seen, in order.
     pub fn keys(&self) -> impl Iterator<Item = (&str, &str, Count)> {
         self.keys
@@ -881,6 +906,39 @@ mod tests {
                 ("terrain/sound", "file", count(0, 2)),
                 ("terrain/variation", "shine", count(0, 1)),
                 ("terrain/variation", "texture", count(1, 0)),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_block_read_as_two_types_counts_each_key_once() {
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct A {
+            ids: String,
+        }
+        #[derive(Deserialize)]
+        #[allow(dead_code)]
+        struct B {
+            ids: String,
+            kind: String,
+        }
+        let block = first("[T]\n{\nids = a\nkind = b\nextra = c\n}");
+        let reading = |read: fn(&mut Coverage, &Block)| {
+            let mut c = Coverage::default();
+            read(&mut c, &block);
+            c
+        };
+        let a = reading(|c, b| drop(c.read::<A>(b, None)));
+        let b = reading(|c, b| drop(c.read::<B>(b, None)));
+        let mut total = Coverage::default();
+        total.add(Coverage::union([a, b]));
+        assert_eq!(
+            total.keys().collect::<Vec<_>>(),
+            vec![
+                ("t", "extra", count(0, 1)),
+                ("t", "ids", count(1, 0)),
+                ("t", "kind", count(1, 0)),
             ]
         );
     }

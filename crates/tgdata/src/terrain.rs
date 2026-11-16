@@ -252,7 +252,7 @@ impl GameData {
         let file = format!("{DIR}transition_sets.tgi");
         let Some(prefix) = self.parsed(&file).and_then(|parsed| {
             let set = parsed.root.blocks_of("TransitionSet").next()?;
-            let set: defs::TransitionSet = logged(&file, set, tgi::from_block(set))?;
+            let set: defs::TransitionSet = logged(&file, set, crate::reads::decode(set, None))?;
             set.path_prefix.map(|p| format!("{DIR}{p}"))
         }) else {
             return Vec::new();
