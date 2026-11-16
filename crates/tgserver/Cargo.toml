@@ -1,11 +1,11 @@
 [package]
-name = "aaa-server"
+name = "tgserver"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Sets matches of Axis & Allies (2004) up from the game's data and plays them with no window"
+description = "Sets matches up from a game's data and plays them with no window"
 publish = false
 
 [dependencies]

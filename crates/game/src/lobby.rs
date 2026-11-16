@@ -666,7 +666,7 @@ fn launch(
         person: lobby.person,
         from_menu: true,
         joined: None,
-        setup: aaa_server::Setup {
+        setup: tgserver::Setup {
             map: lobby.map.clone(),
             seed: seed.get(),
             teams: lobby.preset.arrange(&brief.players),
@@ -1170,7 +1170,7 @@ mod tests {
         // The lobby offers the person's side none.
         let chosen = computer_handicaps(&players, Some(12), &chosen);
         assert_eq!(chosen, BTreeMap::from([(10, hard.clone())]));
-        let given = aaa_server::handicap_technologies(&players, &chosen, &handicaps.all);
+        let given = tgserver::handicap_technologies(&players, &chosen, &handicaps.all);
         // The independent player gets none, even from the map.
         let bonus_and_penalty = [(10, Id::from("bonus")), (13, Id::from("penalty"))];
         assert_eq!(given, HashMap::from(bonus_and_penalty));

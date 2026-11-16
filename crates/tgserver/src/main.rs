@@ -6,18 +6,19 @@ use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
-use aaa_server::{Client, Event, Film, Host, Setup, quic};
 use tgdata::GameData;
+use tgserver::{Client, Event, Film, Host, Setup, quic};
 use tgsim::{Record, Schedule, TICK, World};
 
 const USAGE: &str = "\
 usage:
-  aaa-server <game dir> <map> [options]    play a map, e.g. \"allies10_berlin\"
-  aaa-server <game dir> --replay <file>    play a film again, checking that it
-                                           plays out as it did
-  aaa-server <game dir> --join <address>   play a copy of the match hosted at
-                                           an address, e.g. 127.0.0.1:4000,
-                                           until its host goes
+  tgserver <game dir> <map> [options]    play a map, by its name in the
+                                         game's data
+  tgserver <game dir> --replay <file>    play a film again, checking that it
+                                         plays out as it did
+  tgserver <game dir> --join <address>   play a copy of the match hosted at
+                                         an address, e.g. 127.0.0.1:4000,
+                                         until its host goes
 
 options:
   --seed <number>     what the match's chances are drawn from, rather than
@@ -102,7 +103,7 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
     };
     let seed = match take_option(&mut args, "--seed")? {
         Some(n) => n.parse().map_err(|_| ())?,
-        None => aaa_server::fresh_seed(),
+        None => tgserver::fresh_seed(),
     };
     let seconds = match take_option(&mut args, "--seconds")? {
         Some(s) => s.parse().ok().filter(|s| (0.0..=LONGEST).contains(s)),
@@ -197,7 +198,7 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             let found = game.find_map(&setup.map);
             let map = found.ok_or_else(|| format!("no map \"{}\"", setup.map))?;
             let setup = Setup { map, ..setup };
-            let world = aaa_server::start(&game, &setup, || {})?.world;
+            let world = tgserver::start(&game, &setup, || {})?.world;
             let ticks = (seconds / TICK).round() as u64;
             let (world, record) = match hosting {
                 Some(hosting) => host(setup.clone(), world, ticks, hosting)?,
@@ -217,10 +218,10 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
         }
         Asked::Join(at, players) => {
             let mut link = quic::connect(at)?;
-            let welcome = aaa_server::enter(&mut link, players, ANSWERED)
+            let welcome = tgserver::enter(&mut link, players, ANSWERED)
                 .map_err(|e| format!("{at}: not let in: {e:?}"))?;
             eprintln!("joined as client {}", welcome.client);
-            let mut world = aaa_server::start(&game, &welcome.setup, || {})?.world;
+            let mut world = tgserver::start(&game, &welcome.setup, || {})?.world;
             let mut client = Client::new(link);
             client
                 .ready()
@@ -250,7 +251,7 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             if steps > (LONGEST / TICK) as u64 {
                 return Err(format!("{path}: {steps} ticks is too long a film"));
             }
-            let mut world = aaa_server::start(&game, &film.setup, || {})?.world;
+            let mut world = tgserver::start(&game, &film.setup, || {})?.world;
             let replayed = film.record.replay(&mut world);
             replayed.map_err(|d| format!("{path}: plays out another way from step {}", d.step))?;
             Ok((world, film.setup.seed))
@@ -286,7 +287,7 @@ fn main() -> ExitCode {
     let (world, seed) = match run(&dir, asked) {
         Ok(played) => played,
         Err(e) => {
-            eprintln!("aaa-server: {e}");
+            eprintln!("tgserver: {e}");
             return ExitCode::FAILURE;
         }
     };

@@ -5,9 +5,9 @@
 
 use std::collections::{HashMap, VecDeque};
 
-use aaa_server::protocol::{Gone, KickVote, Said, Status, Welcome};
-use aaa_server::{Client, Event, Host, Link, Local, Setup};
 use bevy::prelude::*;
+use tgserver::protocol::{Gone, KickVote, Said, Status, Welcome};
+use tgserver::{Client, Event, Host, Link, Local, Setup};
 use tgsim::{Action, Command, Record, Refused, SPEEDS, World};
 
 /// The most ticks a joined match plays as one falls due: more than one
@@ -73,13 +73,13 @@ impl Orders {
         // early.
         let players = person.filter(|&p| world.sides.player(p).is_some());
         let mut host = Host::new(setup.clone(), world);
-        let (ours, mut theirs) = aaa_server::pair();
+        let (ours, mut theirs) = tgserver::pair();
         // Whoever runs the host may give any side's orders, and cheat.
         let me = host.admit(ours, players.into_iter().collect());
         let me = me.expect("a host lets in the first to ask");
         host.trust(me);
         // The game set the match up itself.
-        let welcome = aaa_server::welcome(&mut theirs);
+        let welcome = tgserver::welcome(&mut theirs);
         debug_assert!(matches!(welcome, Ok(Some(_))));
         Orders::of(Hosted::Here(Box::new(host)), Box::new(theirs), setup, me)
     }
@@ -120,7 +120,7 @@ impl Orders {
 
     /// Has the game's client tell the time by `clock`.
     #[cfg(test)]
-    pub(crate) fn clock(&mut self, clock: aaa_server::Clock) {
+    pub(crate) fn clock(&mut self, clock: tgserver::Clock) {
         self.client.clock(clock);
     }
 
@@ -241,7 +241,7 @@ impl Orders {
 
     /// Whether the host would carry `action` out if asked.
     pub(crate) fn may(&self, action: &Action) -> bool {
-        let allowed = |players| aaa_server::allows(players, action);
+        let allowed = |players| tgserver::allows(players, action);
         !self.gone && !self.waiting() && self.players().is_none_or(allowed)
     }
 
@@ -487,11 +487,11 @@ pub(crate) mod testing {
     /// Has `host` let in a client asking for `players`: its end of the
     /// link, and what it was let in with.
     pub(crate) fn let_in(host: &mut Host<Local>, players: &[u32]) -> (Local, Welcome) {
-        let (ours, mut theirs) = aaa_server::pair();
-        aaa_server::join(&mut theirs, players.to_vec()).unwrap();
+        let (ours, mut theirs) = tgserver::pair();
+        tgserver::join(&mut theirs, players.to_vec()).unwrap();
         host.greet(ours);
         assert!(matches!(host.seat()[..], [Ok(_)]));
-        let welcome = aaa_server::welcome(&mut theirs).unwrap().unwrap();
+        let welcome = tgserver::welcome(&mut theirs).unwrap().unwrap();
         (theirs, welcome)
     }
 
@@ -706,9 +706,9 @@ mod tests {
     fn a_joined_game_hears_who_leaves_and_that_the_host_ended_the_match() {
         let (mut host, mut orders, mut world) = joined(&[1]);
         let (link, _) = super::testing::let_in(&mut host, &[2]);
-        let mut other = aaa_server::Client::new(link);
+        let mut other = tgserver::Client::new(link);
         let (link, judge) = super::testing::let_in(&mut host, &[]);
-        let mut judge_client = aaa_server::Client::new(link);
+        let mut judge_client = tgserver::Client::new(link);
         host.trust(judge.client);
         host.turn();
         orders.step(&mut world);
@@ -736,7 +736,7 @@ mod tests {
         let (mut host, mut orders, mut world) = joined(&[1]);
         let mut others = [2, 3].map(|p| {
             let (link, _) = super::testing::let_in(&mut host, &[p]);
-            aaa_server::Client::new(link)
+            tgserver::Client::new(link)
         });
         host.turn();
         orders.step(&mut world);
@@ -761,14 +761,14 @@ mod tests {
             unreachable!()
         };
         let (link, _) = super::testing::let_in(host, &[2]);
-        let mut other = aaa_server::Client::new(link);
+        let mut other = tgserver::Client::new(link);
         let mut ours = super::testing::fresh();
         orders.act(Action::Win(1));
         orders.carry_out(&mut ours);
         assert!(ours.over);
         drop(orders);
         let mut world = super::testing::fresh();
-        assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
+        assert_eq!(other.advance(&mut world, usize::MAX), Err(tgserver::Lost));
         assert!(other.ended());
     }
 
@@ -779,7 +779,7 @@ mod tests {
             unreachable!()
         };
         let (link, _) = super::testing::let_in(host, &[2]);
-        let mut other = aaa_server::Client::new(link);
+        let mut other = tgserver::Client::new(link);
         let mut app = App::new();
         app.add_message::<AppExit>()
             .insert_resource(orders)
@@ -787,7 +787,7 @@ mod tests {
         app.world_mut().write_message(AppExit::Success);
         app.update();
         let mut world = super::testing::fresh();
-        assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
+        assert_eq!(other.advance(&mut world, usize::MAX), Err(tgserver::Lost));
         // What runs in the frames before the app stops finds the orders,
         // with nothing more to play.
         let mut orders = app.world_mut().resource_mut::<Orders>();
@@ -805,10 +805,10 @@ mod tests {
             unreachable!()
         };
         let (link, _) = super::testing::let_in(host, &[2]);
-        let mut other = aaa_server::Client::new(link);
+        let mut other = tgserver::Client::new(link);
         drop(orders);
         let mut world = super::testing::fresh();
-        assert_eq!(other.advance(&mut world, usize::MAX), Err(aaa_server::Lost));
+        assert_eq!(other.advance(&mut world, usize::MAX), Err(tgserver::Lost));
         assert!(!other.ended());
         let left = other.take_left();
         assert_eq!((left[0].client, &left[0].players[..]), (1, &[1][..]));

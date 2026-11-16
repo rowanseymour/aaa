@@ -350,7 +350,7 @@ const VERBS: &[Verb] = &[
     verb(
         "record",
         "[file]",
-        "says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for aaa-server to play again",
+        "says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for tgserver to play again",
     ),
     verb(
         "fog",
@@ -569,7 +569,7 @@ fn record(world: &mut World, args: &[&str]) -> Reply {
     match args {
         [] => Ok(said),
         [file] => {
-            let film = aaa_server::Film {
+            let film = tgserver::Film {
                 setup: given.setup().clone(),
                 record: record.clone(),
             };

@@ -204,7 +204,7 @@ mod tests {
         // Kept, as those who leave take their votes with them.
         let _others = [2, 3].map(|p| {
             let (link, _) = crate::orders::testing::let_in(&mut host, &[p]);
-            let mut other = aaa_server::Client::new(link);
+            let mut other = tgserver::Client::new(link);
             other.kick(orders.me(), true).unwrap();
             other
         });

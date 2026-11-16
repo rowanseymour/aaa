@@ -6,30 +6,14 @@ version = 4
 name = "aaa-game"
 version = "0.1.0-alpha"
 dependencies = [
- "aaa-server",
  "bevy",
  "raw-window-handle",
  "tgck",
  "tgdata",
  "tgmap",
  "tgrender",
+ "tgserver",
  "tgsim",
-]
-
-[[package]]
-name = "aaa-server"
-version = "0.1.0"
-dependencies = [
- "log",
- "postcard",
- "quinn",
- "rcgen",
- "rustls",
- "serde",
- "tgdata",
- "tgmap",
- "tgsim",
- "tokio",
 ]
 
 [[package]]
@@ -5824,6 +5808,22 @@ dependencies = [
  "tgck",
  "tgdata",
  "tgmap",
+]
+
+[[package]]
+name = "tgserver"
+version = "0.1.0"
+dependencies = [
+ "log",
+ "postcard",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "serde",
+ "tgdata",
+ "tgmap",
+ "tgsim",
+ "tokio",
 ]
 
 [[package]]

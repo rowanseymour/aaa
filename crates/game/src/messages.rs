@@ -6,7 +6,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
-use aaa_server::protocol::Said;
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -15,6 +14,7 @@ use tgdata::{GameEvent, Id, InterfaceVars};
 use tgrender::camera::RtsCamera;
 use tgrender::terrain::world;
 use tgrender::textures;
+use tgserver::protocol::Said;
 use tgsim::{Channel, Notice, Pause, Piece, Relation, Seen, World};
 
 use crate::actions::{self, Aim, fill};

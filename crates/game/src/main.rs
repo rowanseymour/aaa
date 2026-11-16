@@ -65,7 +65,6 @@ use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use aaa_server::protocol::Welcome;
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
@@ -82,6 +81,7 @@ use tgrender::overlay::{self, BUILDING_HEALTH_BAR, HEALTH_BAR, Mark, OverlayImag
 use tgrender::shot::{self, ShotPlugin};
 use tgrender::terrain::{map_point, world};
 use tgrender::{Edge, MapAssets, MapRenderPlugin, Playing};
+use tgserver::protocol::Welcome;
 use tgsim::{Relation, State, TICK, Target, World};
 
 const USAGE: &str = "\
@@ -135,7 +135,7 @@ struct Data(Arc<GameData>);
 /// The map to play, which [`load`] sets up off the main thread.
 #[derive(Resource)]
 struct Pending {
-    setup: aaa_server::Setup,
+    setup: tgserver::Setup,
     /// What the loading screen calls it.
     title: String,
     /// What the loading screen says of it.
@@ -304,7 +304,7 @@ struct Seed(Option<u64>);
 impl Seed {
     /// The one asked for, else one no match has had.
     fn get(self) -> u64 {
-        self.0.unwrap_or_else(aaa_server::fresh_seed)
+        self.0.unwrap_or_else(tgserver::fresh_seed)
     }
 }
 
@@ -647,8 +647,8 @@ const ANSWERED: Duration = Duration::from_secs(10);
 /// Asks the host at `at` to let the game in to its match to give the
 /// orders of `players`: the link to it, and what it let the game in with.
 fn join(at: SocketAddr, players: Vec<u32>) -> Result<(orders::Line, Welcome, String), String> {
-    let mut link = aaa_server::quic::connect(at)?;
-    let welcome = aaa_server::enter(&mut link, players, ANSWERED)
+    let mut link = tgserver::quic::connect(at)?;
+    let welcome = tgserver::enter(&mut link, players, ANSWERED)
         .map_err(|e| format!("{at}: not let in: {e:?}"))?;
     Ok((Box::new(link), welcome, at.to_string()))
 }
@@ -1018,7 +1018,7 @@ fn main() -> ExitCode {
         .add_systems(Startup, (ui::load_gem, connection::load));
     let setup = match &joined {
         Some((_, welcome, _)) => Some(welcome.setup.clone()),
-        None => map.map(|name| aaa_server::Setup {
+        None => map.map(|name| tgserver::Setup {
             map: name,
             seed: Seed(seed).get(),
             fog,
@@ -1085,12 +1085,12 @@ fn prepare(
         ..
     } = pending;
     info!("seed {}", setup.seed);
-    let aaa_server::Started {
+    let tgserver::Started {
         map,
         raising,
         world: sim,
         factions,
-    } = aaa_server::start(&game, &setup, || reached(Stage::Objects))?;
+    } = tgserver::start(&game, &setup, || reached(Stage::Objects))?;
     let leaders = Leaders(factions);
     let person = match (&joined, from_menu) {
         // Its host says who the game plays.
