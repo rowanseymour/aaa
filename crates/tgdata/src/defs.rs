@@ -938,6 +938,8 @@ pub struct Banner {
     /// Substituted for `%s` in its images' paths, which are under the
     /// banners' folder.
     pub resource_prefix: Option<String>,
+    /// Its model, the same way, by default `%sBanner.nif`.
+    pub model: Option<String>,
     #[serde(default)]
     pub plane: Vec<BannerPlane>,
 }
@@ -945,6 +947,10 @@ pub struct Banner {
 /// One of a banner's planes, drawn with decals.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BannerPlane {
+    /// When it shows, as a decal's `function`.
+    pub function: Option<String>,
+    /// The model's shape it is.
+    pub name: Option<String>,
     #[serde(default)]
     pub decal: Vec<BannerDecal>,
 }

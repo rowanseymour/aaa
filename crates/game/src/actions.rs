@@ -693,6 +693,8 @@ pub fn spawn(
         })
         .collect();
     let listings = game.listings();
+    // Kohan II's companies have no icon of their own.
+    let banner_icons = game.banner_icons();
     // Buildings unpacked during the match need menus too: those of the
     // map's trucks, and of what any menu commissions.
     let mut menus = HashMap::new();
@@ -738,8 +740,8 @@ pub fn spawn(
                         name: listing.map_or_else(|| id.to_string(), |l| l.name.clone()),
                         help: None,
                         disabled: None,
-                        icon: listing
-                            .and_then(|l| l.icon.as_deref())
+                        icon: (listing.and_then(|l| l.icon.as_deref()))
+                            .or_else(|| banner_icons.get(id).map(String::as_str))
                             .and_then(|p| image(game, p)),
                     },
                     economy,

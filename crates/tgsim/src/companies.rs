@@ -361,4 +361,34 @@ mod tests {
         };
         assert!(w.notices.contains(&failed));
     }
+
+    #[test]
+    fn a_new_companys_members_arrive_one_about_every_ten_seconds_in_supply() {
+        let mut w = village();
+        (w.rules.supplies).insert(Id::from("village"), supply(30.0, false, 0.0));
+        // A company needs no HQ to be in supply.
+        let detached = tgmap::Logistics {
+            detached: true,
+            ..logistics(None)
+        };
+        (w.rules.logistics).insert(Id::from("company_pikeman"), detached);
+        let company = (w.rules.raisable.get_mut(&Id::from("company_pikeman"))).unwrap();
+        for m in &mut company.members {
+            m.fighter = Some(soldier(Vec::new()));
+        }
+        w.apply(1, recruit("company_pikeman")).unwrap();
+        let arrived = |w: &World| {
+            let r = &w.organizations[0];
+            r.units.iter().filter(|&&u| w.units[u].alive()).count()
+        };
+        run(&mut w, 2.0);
+        assert!(w.organizations[0].in_supply);
+        assert_eq!(arrived(&w), 1);
+        // At 0.1 of its health a second, each comes ten seconds after the
+        // one before.
+        run(&mut w, 9.5);
+        assert_eq!(arrived(&w), 2);
+        run(&mut w, 10.0);
+        assert_eq!(arrived(&w), 3);
+    }
 }

@@ -113,6 +113,8 @@ fn bar_frame(frames: &[Handle<Image>], share: f32) -> Option<&Handle<Image>> {
 /// drawn the banner's size.
 #[derive(Default)]
 pub struct BannerLayers {
+    /// Under it all, grey to be tinted in the owner's colour.
+    pub plate: Option<Handle<Image>>,
     /// Round it, always.
     pub frame: Option<Handle<Image>>,
     /// Behind it while the organization is engaged.
@@ -127,8 +129,6 @@ pub struct BannerLayers {
 /// image drawn the same size, one over another.
 #[derive(Resource)]
 pub struct BannerImages {
-    /// The plate, grey to be tinted in the owner's colour.
-    pub plate: Option<Handle<Image>>,
     /// Corner brackets around it while the cursor is on the organization, white
     /// to be tinted.
     pub focus: Option<Handle<Image>>,
@@ -137,6 +137,9 @@ pub struct BannerImages {
     /// Which banner each organization template flies, each banner's
     /// frame, and each nation's division badges.
     banners: tgdata::Banners,
+    /// The archive path of each banner's plate image, by banner id, once
+    /// its model's been read.
+    plates: HashMap<Id, Option<String>>,
     /// Images loaded so far, by path.
     loaded: HashMap<String, Option<Handle<Image>>>,
     formats: CompressedImageFormats,
@@ -152,13 +155,12 @@ impl BannerImages {
             let image = textures::decode(&game.read(name)?, name, formats, true)?;
             Some(images.add(image))
         };
-        let plate = add("Organizations/Banners/Shared/BannerPlayerColor.png");
         let focus = add("Effects/Selection/BannerFocusBase.tga");
         BannerImages {
-            plate,
             focus,
             icon_paths: game.banner_icons(),
             banners: game.banners(),
+            plates: HashMap::new(),
             loaded: HashMap::new(),
             formats,
         }
@@ -193,11 +195,22 @@ impl BannerImages {
         faction: Option<&Id>,
     ) -> BannerLayers {
         let banner = self.banners.banner(&Id::from(template), faction).cloned();
+        let plate = banner.as_ref().and_then(|b| {
+            let banners = &self.banners;
+            let path = (self.plates.entry(b.clone()))
+                .or_insert_with(|| {
+                    let (model, shape) = banners.plate(b)?;
+                    plate_image(game, model, shape)
+                })
+                .clone()?;
+            self.image(game, images, path)
+        });
         let mut decal = |when| {
             let path = self.banners.decal(banner.as_ref()?, when)?.to_string();
             self.image(game, images, path)
         };
         BannerLayers {
+            plate,
             frame: decal(BannerDecal::Always),
             engaged: decal(BannerDecal::Engaged),
             out_of_supply: decal(BannerDecal::OutOfSupply),
@@ -257,6 +270,33 @@ impl BannerImages {
             textures::decode(&game.read(&path)?, &path, formats, true).map(|i| images.add(i))
         })
     }
+}
+
+/// The archive path of the image the shape named `shape` in the model at
+/// `model` shows, beside the model; logged where there's none or it
+/// isn't there.
+fn plate_image(game: &GameData, model: &str, shape: &str) -> Option<String> {
+    let found = || {
+        let nif = Nif::parse(&game.read(model)?).ok()?;
+        let file = nif.objects.iter().find_map(|o| match o {
+            Object::Shape(s) if s.av.name.eq_ignore_ascii_case(shape) => {
+                let texturing = nif.property::<nif::Texturing>(&s.av.properties)?;
+                let source = nif.get_as::<nif::SourceTexture>(texturing.base.as_ref()?.source)?;
+                source.file.clone()
+            }
+            _ => None,
+        })?;
+        let path = match model.rsplit_once('/') {
+            Some((dir, _)) => format!("{dir}/{file}"),
+            None => file,
+        };
+        game.exists(&path).then_some(path)
+    };
+    let path = found();
+    if path.is_none() {
+        warn!("banner model {model} has no image for its plate, {shape}");
+    }
+    path
 }
 
 /// A flip book's frames, in the order the model holds them.
