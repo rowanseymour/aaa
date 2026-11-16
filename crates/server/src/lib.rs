@@ -297,6 +297,7 @@ mod tests {
             factions: Vec::new(),
             flag: None,
             music: None,
+            skin: Vec::new(),
         };
         let all = [nation("nation_usa"), nation("nation_ger")];
         let mut players = players();
@@ -349,6 +350,7 @@ mod tests {
             factions: factions.iter().map(|g| faction(g)).collect(),
             flag: None,
             music: None,
+            skin: Vec::new(),
         };
         let usa = nation("nation_usa", &["patton", "patton_tutorial", "nimitz"]);
         let nations = HashMap::from([

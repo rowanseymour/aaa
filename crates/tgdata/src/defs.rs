@@ -990,6 +990,8 @@ pub struct Nation {
     pub flag_icon: Option<String>,
     /// The music its player hears in a match.
     pub game_music: Option<Id>,
+    /// Where its interface's skin is, comma-separated.
+    pub depot_name: Option<String>,
 }
 
 /// A bonus or penalty the lobby can give a side the computer plays.
@@ -1254,6 +1256,17 @@ pub struct HotkeyConfiguration {
 /// The settings for how the game looks.
 #[derive(Debug, Clone, Deserialize)]
 pub struct AVars {
+    /// Which of the in-match interface's optional parts it has.
+    #[serde(rename = "UIUseSidePanel")]
+    pub ui_use_side_panel: Option<bool>,
+    #[serde(rename = "UIUseEconomicImpact")]
+    pub ui_use_economic_impact: Option<bool>,
+    #[serde(rename = "UIUseRecruitItemFloater")]
+    pub ui_use_recruit_item_floater: Option<bool>,
+    #[serde(rename = "UIUsePauseButton")]
+    pub ui_use_pause_button: Option<bool>,
+    #[serde(rename = "UIShowFactionExperience")]
+    pub ui_show_faction_experience: Option<bool>,
     /// The supply border's width in world units, its colour, and the image
     /// drawn along it, by its archive path.
     #[serde(rename = "ViewZoneFriendlySupplyWidth")]

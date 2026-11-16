@@ -213,6 +213,7 @@ pub fn spawn(
     });
     let backdrop = images.add(silhouette(BACKDROP_TEXELS, backdrop_shape));
     commands.spawn((
+        crate::widgets::Ours,
         Node {
             position_type: PositionType::Absolute,
             left: px(crate::MARGIN),

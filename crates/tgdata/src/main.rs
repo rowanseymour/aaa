@@ -14,7 +14,8 @@ usage:
   tgdata effects  <game dir> [filter] the visual effects object templates show, by what sets them off
   tgdata messages <game dir>          the kinds of message, then the game events and the lines they post
   tgdata resources <game dir>         the resources, with what each is for and what a shortfall of it costs, and the resource bar's cells
-  tgdata factions <game dir>          each nation's factions, their computer players and their special operations as tooltips show them";
+  tgdata factions <game dir>          each nation's factions, their computer players and their special operations as tooltips show them
+  tgdata widgets  <game dir> [name]   the in-match interface's widgets, or one by name, as trees with their bounds on the screen";
 
 /// Prints the library's warnings, such as data blocks that don't read.
 struct Stderr;
@@ -59,6 +60,8 @@ fn main() -> ExitCode {
         ["messages", dir] => messages(dir),
         ["factions", dir] => factions(dir),
         ["resources", dir] => resources(dir),
+        ["widgets", dir] => widgets(dir, None),
+        ["widgets", dir, name] => widgets(dir, Some(name)),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);
@@ -109,6 +112,68 @@ fn resources(dir: &str) -> Res {
     }
     let bar: Vec<String> = game.economy_bar().iter().map(|id| id.to_string()).collect();
     outln!("resource bar: {}", bar.join(", "));
+    Ok(())
+}
+
+fn widgets(dir: &str, name: Option<&str>) -> Res {
+    use tgdata::widgets::{Rect, SCREEN, ViewElement, Widget};
+    fn rect(r: Rect) -> String {
+        format!("({}, {})-({}, {})", r.left, r.top, r.right, r.bottom)
+    }
+    fn element(v: &ViewElement, within: Rect, depth: usize) -> Res {
+        let at = v.bounds.place(within);
+        let mut line = format!(
+            "{:depth$}{} {}",
+            "",
+            v.name,
+            v.kind.as_deref().unwrap_or("?")
+        );
+        line += &format!(" {}", rect(at));
+        if !v.when.is_empty() {
+            line += &format!(" when {}", v.when.join("+"));
+        }
+        if let Some(t) = &v.texture {
+            line += &format!(" {t}");
+        }
+        if let Some(t) = &v.text {
+            line += &format!(" {t:?}");
+        }
+        outln!("{line}");
+        for c in &v.children {
+            element(c, at, depth + 2)?;
+        }
+        Ok(())
+    }
+    fn widget(w: &Widget, within: Rect, depth: usize) -> Res {
+        let at = w.bounds(within);
+        let hidden = if w.visible { "" } else { " hidden" };
+        let kind = w.kind.as_deref().unwrap_or("?");
+        outln!("{:depth$}[{}] {kind}{hidden} {}", "", w.name, rect(at));
+        if let Some(v) = &w.view {
+            element(v, within, depth + 2)?;
+        }
+        for v in &w.parts {
+            element(v, at, depth + 2)?;
+        }
+        for c in &w.children {
+            widget(c, at, depth + 2)?;
+        }
+        Ok(())
+    }
+    let game = GameData::open(dir.as_ref())?;
+    let screen = Rect {
+        left: 0.0,
+        top: 0.0,
+        right: SCREEN[0],
+        bottom: SCREEN[1],
+    };
+    let widgets = game.game_widgets();
+    let picked = widgets
+        .iter()
+        .filter(|w| name.is_none_or(|n| w.name.eq_ignore_ascii_case(n)));
+    for w in picked {
+        widget(w, screen, 0)?;
+    }
     Ok(())
 }
 

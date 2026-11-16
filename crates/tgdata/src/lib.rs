@@ -36,6 +36,7 @@ mod strings;
 mod supply;
 mod terrain;
 mod views;
+pub mod widgets;
 
 pub use audio::{
     AnimationAudio, Audio, AudioCategory, AudioControl, AudioPriority, AudioWho, AudioWorld, Cue,
@@ -84,6 +85,8 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use tgck::{Archive, Entry, Map};
 
 pub struct GameData {
+    /// The install's folder.
+    dir: PathBuf,
     /// Each behind a lock of its own, as reading one moves its place in
     /// the file.
     archives: Vec<Mutex<Archive<BufReader<File>>>>,
@@ -279,6 +282,40 @@ pub(crate) fn scoped<P: Borrow<tgi::Parsed>>(files: &[(String, P)]) -> Vec<Scope
 /// An entry of one of [`GameData`]'s archives: `(archive, entry)` indices.
 type EntryRef = (usize, usize);
 
+/// A nation's skin, from [`GameData::skin`]: its depots, in the order
+/// given.
+pub struct Skin(Vec<Depot>);
+
+/// Where a skin's files are: an archive, or a folder of loose files.
+enum Depot {
+    Archive(Mutex<Archive<BufReader<File>>>),
+    Folder(PathBuf),
+}
+
+impl Skin {
+    /// The skin's own version of a file, if it has one: the first depot's
+    /// that has it.
+    pub fn read(&self, name: &str) -> Option<Vec<u8>> {
+        self.0.iter().find_map(|depot| match depot {
+            Depot::Archive(archive) => {
+                let mut archive = locked(archive);
+                let entry = archive.find(name)?.clone();
+                archive.read(&entry).ok()
+            }
+            Depot::Folder(dir) => std::fs::read(find_path(dir, name)?).ok(),
+        })
+    }
+}
+
+/// A path under `dir`, each of its parts matched without regard to case.
+fn find_path(dir: &Path, path: &str) -> Option<PathBuf> {
+    (path.split(['/', '\\']))
+        .filter(|part| !part.is_empty())
+        .try_fold(dir.to_path_buf(), |at, part| {
+            find_case_insensitive(&at, part)
+        })
+}
+
 /// The archives besides `Data.rwd` that are opened when present, in the
 /// order their paths are looked up.
 const EXTRA_ARCHIVES: [&str; 2] = ["Music.rwd", "Speech.rwd"];
@@ -305,6 +342,7 @@ impl GameData {
             }
         }
         let mut game = GameData {
+            dir: dir.to_path_buf(),
             archives: archives.into_iter().map(Mutex::new).collect(),
             entries,
             paths,
@@ -318,6 +356,29 @@ impl GameData {
         let tgis = listed_tgis(&names, |name| game.read(name).map(|b| tgi::decode(&b)));
         game.tgis = tgis;
         Ok(game)
+    }
+
+    /// A nation's skin, from its depots ([`Nation::skin`]), paths in the
+    /// install of archives (`.rwd`) or folders: the interface's images as
+    /// that nation's player sees them, in place of those of the same paths
+    /// in the game's own archives. `None` if none of them are there.
+    pub fn skin(&self, depots: &[String]) -> Option<Skin> {
+        let depots: Vec<Depot> = (depots.iter())
+            .filter_map(|d| {
+                let path = find_path(&self.dir, d)?;
+                if path.is_dir() {
+                    return Some(Depot::Folder(path));
+                }
+                match Archive::open(&path) {
+                    Ok(archive) => Some(Depot::Archive(Mutex::new(archive))),
+                    Err(e) => {
+                        log::warn!("{}: {e}", path.display());
+                        None
+                    }
+                }
+            })
+            .collect();
+        (!depots.is_empty()).then_some(Skin(depots))
     }
 
     pub fn read(&self, name: &str) -> Option<Vec<u8>> {
@@ -876,6 +937,7 @@ mod tests {
     /// Game data with no archives, for what doesn't read any.
     fn empty() -> GameData {
         GameData {
+            dir: PathBuf::new(),
             archives: Vec::new(),
             entries: Vec::new(),
             paths: HashMap::new(),
