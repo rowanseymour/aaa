@@ -162,6 +162,8 @@ pub struct World {
     /// still add to their economy, such as where they start: each owner
     /// and template.
     pub holdings: Vec<(u32, Id)>,
+    /// The settlements, which stay for as long as their centres do.
+    pub settlements: Vec<tgmap::Settlement>,
     /// Each side's money, by player id.
     pub treasuries: BTreeMap<u32, Treasury>,
     /// The experience of each side with a faction, by player id.
@@ -1038,7 +1040,7 @@ impl Sides {
 
 digest!(World {
     organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, treasuries, commanders, operated, reveals, incoming, watches, afflicted, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
+    holdings, settlements, treasuries, commanders, operated, reveals, incoming, watches, afflicted, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng,
 } skip {
     // Fixed by the map and the game's data.
@@ -1127,6 +1129,13 @@ digest!(Landing {
     weapon,
     target,
     at
+});
+
+digest!(tgmap::Settlement {
+    id,
+    template,
+    owner,
+    centre
 });
 
 impl Digest for Step {

@@ -52,6 +52,9 @@ pub struct Map {
     pub teams: Vec<Team>,
     pub organizations: Vec<Organization>,
     pub buildings: Vec<Building>,
+    /// The settlements that came with the centres put in place of
+    /// placeholders. Being invisible, they aren't among [`Map::things`].
+    pub settlements: Vec<Settlement>,
     /// The obstacles that aren't buildings, such as trees and rocks.
     pub scenery: Vec<Obstacle>,
     /// The scenery a building going up in play clears from under it, by
@@ -94,11 +97,25 @@ impl Map {
         let ground = Ground::new(&hm, &mountain, &terrain, &variations)
             .map_err(|e| format!("{name}: {e}"))?;
         let mut things = map.things().map_err(err)?;
+        // Past every id the map has, kept or not, since triggers name things
+        // by id.
+        let next = next_id(&things);
+        let (mut players, teams) = read_sides(game, &mut map).map_err(err)?;
+        let independent: HashSet<u32> = (players.iter())
+            .filter(|p| p.independent)
+            .map(|p| p.id)
+            .collect();
+        // The centres that bring their settlements, by id.
+        let mut centres = Vec::new();
         for thing in &mut things {
-            let nation = owner(thing).and_then(|o| nations.get(&o));
+            let owner = owner(thing).filter(|o| !independent.contains(o));
+            let nation = owner.and_then(|o| nations.get(&o));
             let template = Id::from(thing.template.as_str());
             if let Some(t) = nation.and_then(|n| n.placeholders.get(&template)) {
                 thing.template = t.to_string();
+                if let Some(settlement) = recruits.settlements.get(t) {
+                    centres.push((thing.id, settlement.clone()));
+                }
             }
         }
         let world_version = map.world_version().map_err(err)?;
@@ -145,7 +162,6 @@ impl Map {
             pathing.block(o);
         }
         let fighters = &recruits.fighters;
-        let (mut players, teams) = read_sides(game, &mut map).map_err(err)?;
         for player in &mut players {
             if let Some(n) = nations.get(&player.id) {
                 player.nation = Some(n.id.to_string());
@@ -160,6 +176,7 @@ impl Map {
             &recruits.deploy_points,
             &recruits.ranges,
         );
+        let settlements = founded(&centres, &buildings, next);
         let ids: HashSet<u32> = buildings.iter().map(|b| b.id).collect();
         let scenery = obstacles
             .into_iter()
@@ -190,6 +207,7 @@ impl Map {
             ground,
             organizations,
             buildings,
+            settlements,
             scenery,
             clearable,
             players,
@@ -207,6 +225,13 @@ impl Map {
 }
 
 impl Map {
+    /// The id after every one the map has given out, for what's added to
+    /// it.
+    pub fn next_id(&self) -> u32 {
+        let settlements = self.settlements.iter().map(|s| s.id + 1);
+        next_id(&self.things).max(settlements.max().unwrap_or(1))
+    }
+
     /// The objects standing on the map, organizations' members among them:
     /// those of [`Map::things`] that aren't [`Map::crowded`], whose ids
     /// those of organizations' lost members may repeat.
@@ -242,6 +267,7 @@ impl Map {
         let owned_by_leaver = |t: &Thing| owner(t).is_some_and(|o| leaving.contains(&o));
         self.things.retain(|t| !owned_by_leaver(t));
         self.organizations.retain(|r| !leaving.contains(&r.owner));
+        self.settlements.retain(|s| !leaving.contains(&s.owner));
         // A building whose own owner stays still goes with an organization
         // it stands in that leaves.
         let standing: HashSet<u32> = buildings::standing(&self.things)
@@ -251,6 +277,42 @@ impl Map {
             leaving.contains(&b.owner) || !standing.contains(&b.id)
         });
     }
+}
+
+/// A settlement, grouping its centre building with the rest of its town.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Settlement {
+    pub id: u32,
+    pub template: Id,
+    pub owner: u32,
+    /// Its centre's id, among [`Map::buildings`].
+    pub centre: u32,
+}
+
+/// The settlements of `centres`, each a centre's id with its settlement's
+/// template, numbered from `next`. A centre that wasn't placed brings none.
+fn founded(centres: &[(u32, Id)], buildings: &[Building], next: u32) -> Vec<Settlement> {
+    let placed: HashMap<u32, u32> = buildings.iter().map(|b| (b.id, b.owner)).collect();
+    (centres.iter())
+        .filter_map(|(centre, template)| Some((*centre, template, *placed.get(centre)?)))
+        .zip(next..)
+        .map(|((centre, template, owner), id)| Settlement {
+            id,
+            template: template.clone(),
+            owner,
+            centre,
+        })
+        .collect()
+}
+
+/// The id after the highest of `things` and their organizations' members.
+fn next_id(things: &[Thing]) -> u32 {
+    let members = things
+        .iter()
+        .flat_map(|t| t.organization())
+        .flat_map(|o| &o.members);
+    let ids = things.iter().chain(members).map(|t| t.id);
+    ids.max().map_or(1, |id| id + 1)
 }
 
 /// [`Map::roles`] of `things`, from what the map made of them.
@@ -1199,6 +1261,35 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn placed_centres_bring_their_settlements_numbered_after_the_map() {
+        let centre = |id, owner| Building {
+            id,
+            template: "human_center_village".into(),
+            owner,
+            position: [0.0, 0.0],
+            facing: [0.0, -1.0],
+            fighter: Fighter::default(),
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle: None,
+            deploy: None,
+            organization: None,
+            awake: false,
+        };
+        let settlement = Id::from("human_settlement");
+        // The centre at 9 had no room, so wasn't placed.
+        let centres = [
+            (4, settlement.clone()),
+            (9, settlement.clone()),
+            (6, settlement.clone()),
+        ];
+        let found = founded(&centres, &[centre(4, 1), centre(6, 2)], 20);
+        let found: Vec<_> = found.iter().map(|s| (s.id, s.owner, s.centre)).collect();
+        assert_eq!(found, [(20, 1, 4), (21, 2, 6)]);
     }
 
     #[test]

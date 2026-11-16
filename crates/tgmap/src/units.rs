@@ -654,6 +654,8 @@ pub struct Recruits {
     recruit_times: HashMap<Id, f32>,
     /// The packed building each building packs into.
     packs_into: HashMap<Id, Id>,
+    /// The settlement each centre building goes with.
+    pub(crate) settlements: HashMap<Id, Id>,
     /// How far beyond its footprint a building needs clear ground.
     padding: f32,
 }
@@ -674,6 +676,7 @@ impl Recruits {
             deploy_points: game.deploy_points(),
             recruit_times: game.recruit_times(),
             packs_into: game.packs_into(),
+            settlements: game.settlements(),
             padding: game.building_padding().unwrap_or(BUILDING_PADDING),
         }
     }
@@ -1170,6 +1173,7 @@ mod tests {
             deploy_points: HashMap::new(),
             recruit_times: HashMap::new(),
             packs_into: HashMap::new(),
+            settlements: HashMap::new(),
             padding: BUILDING_PADDING,
         };
         assert_eq!(recruits.templates(), ["squad"]);
@@ -1278,6 +1282,7 @@ mod tests {
             )]),
             recruit_times: HashMap::new(),
             packs_into: HashMap::new(),
+            settlements: HashMap::new(),
             padding: BUILDING_PADDING,
         };
         let mut truck = recruits
