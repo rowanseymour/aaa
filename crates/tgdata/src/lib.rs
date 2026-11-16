@@ -23,6 +23,7 @@ mod objectives;
 mod organizations;
 mod outcome;
 mod properties;
+mod reads;
 mod recruiting;
 mod research;
 mod special_ops;
@@ -53,6 +54,7 @@ pub use nations::{BannerDecal, Banners, Faction, FactionOperation, Handicap, Nat
 pub use objectives::{ObjectiveLook, ObjectiveLooks};
 pub use organizations::{Formation, Layout, OrganizationComponent, Ranges};
 pub use properties::PropertyLook;
+pub use reads::BY_HAND as READ_BY_HAND;
 pub use recruiting::{
     Airlift, Amount, DeployPoints, Deployment, Fall, Listing, Requires, Technology,
 };
@@ -206,7 +208,7 @@ pub(crate) struct Scoped<'a> {
 
 impl Scoped<'_> {
     /// Its blocks of `kind` that read as `T`.
-    fn read<'s, T: serde::de::DeserializeOwned>(
+    fn read<'s, T: serde::de::DeserializeOwned + 'static>(
         &'s self,
         kind: &'s str,
     ) -> impl Iterator<Item = T> + 's {
@@ -214,8 +216,15 @@ impl Scoped<'_> {
     }
 
     /// One of its blocks as `T`, resolved against its templates.
-    fn deserialize<T: serde::de::DeserializeOwned>(&self, block: &tgi::Block) -> Option<T> {
-        logged(self.file, block, self.templates.deserialize(block))
+    fn deserialize<T: serde::de::DeserializeOwned + 'static>(
+        &self,
+        block: &tgi::Block,
+    ) -> Option<T> {
+        logged(
+            self.file,
+            block,
+            reads::decode(block, Some(&self.templates)),
+        )
     }
 }
 
@@ -493,9 +502,9 @@ impl GameData {
     }
 
     /// How much of the `.tgi` data the definitions read: each top-level
-    /// block is read as its definition, the way the methods above read it,
-    /// or counted as unread where there is none. Templates count through the
-    /// blocks that inherit from them.
+    /// block is read as every type its kind is read as, or counted as unread
+    /// where there is none. Templates count through the blocks that inherit
+    /// from them.
     pub fn coverage(&self) -> tgi::Coverage {
         let files = self.parse_tgis(|_| true);
         let files = scoped(&files);
@@ -503,39 +512,9 @@ impl GameData {
         for (block, t) in
             (files.iter()).flat_map(|f| f.root.blocks().map(|b| (b, Some(&f.templates))))
         {
-            // Blocks that don't deserialize still count what they read.
-            let _ = match block.kind().unwrap_or("").to_ascii_lowercase().as_str() {
-                "template" => continue,
-                "thing" => coverage.read::<defs::Thing>(block, t).map(drop),
-                "terrain" => coverage.read::<defs::Terrain>(block, t).map(drop),
-                "biome" => coverage.read::<defs::Biome>(block, t).map(drop),
-                "translate" => coverage.read::<defs::Translate>(block, None).map(drop),
-                "transitionset" => coverage.read::<defs::TransitionSet>(block, None).map(drop),
-                "sun" => coverage.read::<defs::Sun>(block, t).map(drop),
-                "property" => coverage.read::<defs::Property>(block, t).map(drop),
-                "organizationlayout" => coverage
-                    .read::<defs::OrganizationLayout>(block, t)
-                    .map(drop),
-                "nation" => coverage.read::<defs::Nation>(block, t).map(drop),
-                "kingdomcolor" => coverage.read::<defs::KingdomColor>(block, t).map(drop),
-                "actorcommand" => coverage.read::<defs::ActorCommand>(block, t).map(drop),
-                "formation" => coverage.read::<defs::Formation>(block, t).map(drop),
-                "audio" => coverage.read::<defs::Audio>(block, t).map(drop),
-                "vfx" => coverage.read::<defs::Vfx>(block, t).map(drop),
-                "cursor" => coverage.read::<defs::Cursor>(block, t).map(drop),
-                "glyph" => coverage.read::<defs::Glyph>(block, t).map(drop),
-                "handicap" => coverage.read::<defs::Handicap>(block, t).map(drop),
-                "svars" => coverage.read::<defs::SVars>(block, t).map(drop),
-                "resource" => coverage.read::<defs::Resource>(block, t).map(drop),
-                // A string table, read whole.
-                "text" => coverage
-                    .read::<HashMap<String, String>>(block, None)
-                    .map(drop),
-                _ => {
-                    coverage.skip(block, t);
-                    continue;
-                }
-            };
+            if !block.kind().unwrap_or("").eq_ignore_ascii_case("template") {
+                reads::count(&mut coverage, block, t);
+            }
         }
         coverage
     }
@@ -589,7 +568,7 @@ pub(crate) fn add_renames<T: Clone>(
 /// The renames a `translate.tgi` text lists.
 fn translations(text: &str) -> Vec<defs::Translate> {
     (tgi::parse(text).root.blocks_of("Translate"))
-        .filter_map(|t| logged("translate.tgi", t, tgi::from_block(t)))
+        .filter_map(|t| logged("translate.tgi", t, reads::decode(t, None)))
         .collect()
 }
 
