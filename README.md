@@ -65,6 +65,16 @@ map editor, given the folder your copy of the game is installed in:
 Set `AA_INSTALL` to that folder to leave `--data` off. Run `./aaa.sh --help` for
 usage.
 
+`./aaa.sh server` runs `tgserver`, which hosts a match with no window for games to
+join, for example:
+
+```sh
+./aaa.sh server "(2v2)Berlin" --host 0.0.0.0:4000
+./aaa.sh --join 127.0.0.1:4000
+```
+
+Run `./aaa.sh server` with no map for its options.
+
 ## Development
 
 The code is a workspace of crates in [`crates/`](crates), from readers for the game's

@@ -1,12 +1,12 @@
 #!/bin/bash
-# Builds and runs aaa-game or tgeditor from whichever checkout or worktree
+# Builds and runs aaa-game, tgeditor or tgserver from whichever checkout or worktree
 # it's run in.
 set -e
 root=$(git rev-parse --show-toplevel)
 data=$AA_INSTALL
 
 usage() {
-    echo "usage: $0 [game|editor] [map] [--data=dir] [app options...]" >&2
+    echo "usage: $0 [game|editor|server] [map] [--data=dir] [app options...]" >&2
     echo "  --data=dir  path to your legally owned copy of the game (default: \$AA_INSTALL)" >&2
     exit 2
 }
@@ -15,6 +15,7 @@ app=aaa-game
 case $1 in
 game) shift ;;
 editor) app=tgeditor; shift ;;
+server) app=tgserver; shift ;;
 -h | --help) usage ;;
 esac
 
