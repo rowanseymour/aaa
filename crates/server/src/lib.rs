@@ -105,7 +105,9 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         | tgmap::Operation::Summon(_) => None,
     });
     let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(t)?)))).collect();
-    let recruit_lists = game.recruit_lists();
+    let mut recruit_lists = game.recruit_lists();
+    // A settlement recruits its companies itself.
+    recruit_lists.extend(game.settlement_recruits());
     for t in recruit_lists.values().flatten() {
         if !raisable.contains_key(t)
             && let Err(e) = raising.raise(t.as_str(), 0, 0, [0.0, 0.0], [0.0, -1.0])

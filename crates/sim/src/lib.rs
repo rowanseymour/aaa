@@ -9,6 +9,7 @@ mod attach;
 mod capture;
 mod combat;
 mod commands;
+mod companies;
 mod delivery;
 mod disposal;
 pub mod economy;
@@ -687,6 +688,11 @@ pub enum Refused {
     Summoned,
     /// It's a special operation that can't be aimed there.
     Misplaced,
+    /// What would recruit it is under siege.
+    Besieged,
+    /// It would take its owner over a limit, such as
+    /// `unit_limit_consumed`.
+    OverLimit,
 }
 
 impl From<NotYours> for Refused {
@@ -749,6 +755,12 @@ pub enum Command {
     /// done with what it was asked for before. Refused for one it doesn't
     /// recruit.
     Commission { building: usize, template: Id },
+    /// Recruits a company of `template` at the settlement at this index
+    /// into [`World::settlements`], at once and paid for there and then.
+    /// Refused for one the settlement doesn't list or lacks what it needs,
+    /// while its centre is under siege, and for one its side can't pay for
+    /// or hasn't room for under its limits.
+    Recruit { settlement: usize, template: Id },
     /// As [`Command::Commission`], for an organization that's flown in and
     /// dropped at `to`. Refused for one nothing flies, or where it
     /// hasn't [room to land](World::room_to_land).

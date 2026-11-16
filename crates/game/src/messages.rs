@@ -936,6 +936,11 @@ fn told(
             };
             Told::Line("GENERIC_ERROR", text, at(About::Building(building)))
         }
+        Notice::NotCreated { player, template } if ours(player) => {
+            let said = look.said("recruit_error_creating|s", "Could not create %s");
+            let text = fill(&said, &[&look.name(template.as_str())]);
+            Told::Line("GENERIC_ERROR", text, None)
+        }
         Notice::SummonFailed { player, template } if ours(player) => {
             let said = look.said("ability_effect_summon_failed|s", "Failed to summon %s");
             let text = fill(&said, &[&look.name(template.as_str())]);

@@ -1453,13 +1453,22 @@ impl Presser<'_, '_> {
                 };
                 if recruit.organization.is_some() {
                     let template = tgmap::Id::from(recruit.id.as_str());
-                    let command = aaa_sim::Command::Commission {
-                        building: b,
-                        template: template.clone(),
+                    let settlement = sim.settlement_of(b);
+                    let command = match settlement {
+                        Some(settlement) => aaa_sim::Command::Recruit {
+                            settlement,
+                            template: template.clone(),
+                        },
+                        None => aaa_sim::Command::Commission {
+                            building: b,
+                            template: template.clone(),
+                        },
                     };
                     // What's flown in is aimed first, and ordered where
                     // it's aimed.
-                    let flown = sim.rules().airlifts.contains_key(&template);
+                    // A settlement's companies come out of it.
+                    let flown =
+                        settlement.is_none() && sim.rules().airlifts.contains_key(&template);
                     let given = match flown {
                         true => sim.check(player, &command),
                         false => self.orders.give(sim, player, command),
@@ -1635,6 +1644,8 @@ fn refused_why(refused: aaa_sim::Refused) -> &'static str {
         aaa_sim::Refused::Recharging => "Recharging",
         aaa_sim::Refused::Summoned => "Waiting on what it summoned",
         aaa_sim::Refused::Misplaced => "Can't be aimed there",
+        aaa_sim::Refused::Besieged => "Under siege",
+        aaa_sim::Refused::OverLimit => "Over a limit",
     }
 }
 

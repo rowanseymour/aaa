@@ -8,7 +8,9 @@
 //! share what it keeps: a table read on one is there for the others.
 
 mod audio;
+
 mod combat;
+mod companies;
 pub mod defs;
 mod economy;
 mod effects;

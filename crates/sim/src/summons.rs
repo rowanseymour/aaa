@@ -1,7 +1,7 @@
 //! Special operations that bring something new onto the map for their
 //! user, put down where they're aimed or flown in there.
 
-use std::f32::consts::{FRAC_PI_2, TAU};
+use std::f32::consts::TAU;
 
 use serde::{Deserialize, Serialize};
 use tgmap::pathing::CELL_SIZE;
@@ -144,28 +144,34 @@ impl World {
     }
 
     /// Everything that blocks a summon: buildings, scenery and units.
-    fn blocking(&self) -> Vec<Obstacle> {
+    pub(crate) fn blocking(&self) -> Vec<Obstacle> {
+        self.blocking_but(None)
+    }
+
+    /// As [`World::blocking`], but for the building at `except`.
+    pub(crate) fn blocking_but(&self, except: Option<usize>) -> Vec<Obstacle> {
         let units = (self.units.iter())
             .filter(|u| u.alive())
             .filter_map(|u| Some(spot(u.position, u.facing, Some(u.shape?))));
-        let buildings = (self.buildings.iter())
-            .filter(|b| !b.gone())
-            .filter_map(|b| b.obstacle.clone());
+        let buildings = (self.buildings.iter().enumerate())
+            .filter(|&(i, b)| !b.gone() && Some(i) != except)
+            .filter_map(|(_, b)| b.obstacle.clone());
         buildings
             .chain(self.scenery.iter().cloned())
             .chain(units)
             .collect()
     }
 
-    /// The first of `spots` with room to stand for something of `shape`:
-    /// on the map, on land, and clear of `blocking`.
-    fn first_clear(
+    /// The first of `spots` with room to stand for something of `shape`
+    /// facing `facing`: on the map, on land, and clear of `blocking`.
+    pub(crate) fn first_clear(
         &self,
         mut spots: impl Iterator<Item = [f32; 2]>,
+        facing: [f32; 2],
         shape: Option<Shape>,
         blocking: &[Obstacle],
     ) -> Option<[f32; 2]> {
-        spots.find(|&p| (self.pathing).room_for(&spot(p, FACING, shape), Domain::Land, blocking))
+        spots.find(|&p| (self.pathing).room_for(&spot(p, facing, shape), Domain::Land, blocking))
     }
 
     /// Puts down what `operation` summons for `player` at the clear spot
@@ -195,7 +201,7 @@ impl World {
         let to = match lone {
             true => {
                 let shape = organization.members[0].shape;
-                self.first_clear(rings(at, 1.0, RINGS), shape, &self.blocking())
+                self.first_clear(rings(at, 1.0, RINGS), FACING, shape, &self.blocking())
             }
             false => Some(at),
         };
@@ -237,7 +243,12 @@ impl World {
         let leader = organization.primary.unwrap_or(0);
         let shape = organization.members[leader].shape;
         let mut blocking = self.blocking();
-        let found = self.first_clear(rings(at, step(shape), REGIMENT_RINGS), shape, &blocking)?;
+        let found = self.first_clear(
+            rings(at, step(shape), REGIMENT_RINGS),
+            FACING,
+            shape,
+            &blocking,
+        )?;
         blocking.push(spot(found, FACING, shape));
         let [x, y] = organization.members[leader].position;
         for m in &mut organization.members {
@@ -257,8 +268,12 @@ impl World {
                 continue;
             }
             let (place, shape) = (self.units[u].position, self.units[u].shape);
-            let found =
-                self.first_clear(rings(place, step(shape), REGIMENT_RINGS), shape, &blocking);
+            let found = self.first_clear(
+                rings(place, step(shape), REGIMENT_RINGS),
+                FACING,
+                shape,
+                &blocking,
+            );
             // One with nowhere to stand is refilled as if lost.
             if let Some(p) = found {
                 if shape.is_some() {
@@ -289,17 +304,28 @@ fn step(shape: Option<Shape>) -> f32 {
 }
 
 /// The spots tried for a summon aimed at `at`, nearest first: there,
-/// then `rings` rings round it `step` apart, each starting straight out
-/// the way summons face and turning an eighth at a time.
+/// then `rings` rings round it `step` apart.
 fn rings(at: [f32; 2], step: f32, rings: u32) -> impl Iterator<Item = [f32; 2]> {
-    let around = (1..=rings).flat_map(move |ring| {
+    std::iter::once(at).chain(rings_round(at, FACING, step, rings))
+}
+
+/// `rings` rings of [`RING`] points round `at`, nearest first and `step`
+/// apart, each starting straight out the way `facing` points and turning
+/// an eighth at a time clockwise seen from above.
+pub(crate) fn rings_round(
+    at: [f32; 2],
+    facing: [f32; 2],
+    step: f32,
+    rings: u32,
+) -> impl Iterator<Item = [f32; 2]> {
+    let start = libm::atan2f(facing[1], facing[0]);
+    (1..=rings).flat_map(move |ring| {
         (0..RING).map(move |i| {
-            let angle = -FRAC_PI_2 - TAU * i as f32 / RING as f32;
+            let angle = start - TAU * i as f32 / RING as f32;
             let r = ring as f32 * step;
             [at[0] + r * libm::cosf(angle), at[1] + r * libm::sinf(angle)]
         })
-    });
-    std::iter::once(at).chain(around)
+    })
 }
 
 crate::hash::digest!(Summoned {

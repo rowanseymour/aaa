@@ -1217,13 +1217,18 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         .find(|t| t.as_str().eq_ignore_ascii_case(template));
     let template = listed.ok_or_else(|| format!("{hq} doesn't commission {template}"))?;
     let (building, template) = (b, template.clone());
-    let command = match to {
-        Some(to) => aaa_sim::Command::Deliver {
+    let settlement = world.resource::<Sim>().0.settlement_of(b);
+    let command = match (to, settlement) {
+        (Some(to), _) => aaa_sim::Command::Deliver {
             building,
             template,
             to,
         },
-        None => aaa_sim::Command::Commission { building, template },
+        (None, Some(settlement)) => aaa_sim::Command::Recruit {
+            settlement,
+            template,
+        },
+        (None, None) => aaa_sim::Command::Commission { building, template },
     };
     give(world, player, command)?;
     Ok(String::new())

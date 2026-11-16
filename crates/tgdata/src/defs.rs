@@ -97,6 +97,9 @@ pub struct Thing {
     /// Whether a recruiter hides it, rather than greys it, while the
     /// properties it needs are missing.
     pub hide_if_missing_properties: Option<bool>,
+    /// Whether it can be recruited: `YES`, `NO`, or for an organization
+    /// `WITH_PRIMARY`, when its layout has a primary slot. Any case.
+    pub recruitable: Option<String>,
     /// How much nearer it lands to where it's dropped from than its fall
     /// alone would carry it.
     pub fall_drag: Option<f32>,
@@ -251,6 +254,14 @@ pub struct OrganizationComponent {
 pub struct ConstructionComponent {
     /// Whether its owner can sell it.
     pub can_sell: Option<bool>,
+    /// What it can be upgraded into.
+    #[serde(default)]
+    pub upgrade: Vec<Upgrade>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct Upgrade {
+    pub ids: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -383,6 +394,19 @@ pub struct DenizenComponent {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SettlementComponent {
     pub levels: Option<SettlementLevels>,
+    /// The structures it can build besides its centres.
+    pub available_structures: Option<AvailableStructures>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AvailableStructures {
+    #[serde(default)]
+    pub structure: Vec<AvailableStructure>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AvailableStructure {
+    pub structure_ids: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
