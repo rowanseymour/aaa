@@ -88,6 +88,10 @@ pub struct Banners {
     /// Each banner's decals, by banner id: when each shows, and the
     /// archive path of its first image, in the order the banner lists them.
     pub decals: HashMap<Id, Vec<(BannerDecal, String)>>,
+    /// Each banner's plate, by banner id: the archive path of its model
+    /// and the name of the shape in it that's always shown with no decals
+    /// over it, whose own image is tinted in the owner's colour.
+    pub plates: HashMap<Id, (String, String)>,
     /// The archive paths of the badges a nation's divisions wear, in the
     /// order HQs number them.
     pub badges: HashMap<Id, Vec<String>>,
@@ -132,6 +136,13 @@ impl Banners {
         }
     }
 
+    /// The archive path of `banner`'s model and the name of its plate's
+    /// shape in it.
+    pub fn plate(&self, banner: &Id) -> Option<(&str, &str)> {
+        let (model, shape) = self.plates.get(banner)?;
+        Some((model, shape))
+    }
+
     /// The archive path of the first image `banner` shows `when`.
     pub fn decal(&self, banner: &Id, when: BannerDecal) -> Option<&str> {
         let decals = self.decals.get(banner)?;
@@ -156,6 +167,20 @@ fn decals(file: &str, banner: &defs::Banner) -> Vec<(BannerDecal, String)> {
         .collect()
 }
 
+/// The archive path of `banner`'s model, relative to `file`'s folder with
+/// `%s` its prefix, and the name of the first of its planes that's always
+/// shown and carries no decals: the plate.
+fn plate(file: &str, banner: &defs::Banner) -> Option<(String, String)> {
+    let prefix = banner.resource_prefix.as_deref().unwrap_or("");
+    let model = banner.model.as_deref().unwrap_or("%sBanner.nif");
+    let always = |p: &&defs::BannerPlane| {
+        let function = p.function.as_deref().map(str::trim);
+        function.is_some_and(|f| f.eq_ignore_ascii_case("NONE")) && p.decal.is_empty()
+    };
+    let shape = banner.plane.iter().find(always)?.name.clone()?;
+    Some((beside(file, &model.trim().replace("%s", prefix)), shape))
+}
+
 impl GameData {
     /// What organizations' banners are drawn with, and which nation each
     /// organization template is of. A template or faction naming a banner
@@ -171,6 +196,9 @@ impl GameData {
         for f in &files {
             for b in f.read::<defs::Banner>("Banner") {
                 if let Some(id) = b.ids.clone() {
+                    if let Some(plate) = plate(f.file, &b) {
+                        out.plates.entry(id.clone()).or_insert(plate);
+                    }
                     out.decals.entry(id).or_insert_with(|| decals(f.file, &b));
                 }
             }
@@ -432,5 +460,29 @@ mod tests {
             Some("default_banner")
         );
         assert_eq!(flies("unknown", None), None);
+    }
+
+    #[test]
+    fn a_banners_plate_is_its_models_plane_shown_always_with_no_decals() {
+        let read = |text: &str| {
+            let files = [("organizations/banners/b.tgi".to_string(), tgi::parse(text))];
+            let files = scoped(&files);
+            let banner = files[0].read::<defs::Banner>("Banner").next().unwrap();
+            plate(files[0].file, &banner)
+        };
+        let planes = "\t[Plane]\n\t{\n\t\tfunction = NONE\n\t\tname = DecalPlane\n\
+                      \t\t[Decal]\n\t\t{\n\t\t\tfunction = NONE\n\t\t}\n\t}\n\
+                      \t[Plane]\n\t{\n\t\tfunction = ENTRENCHED\n\t\tname = EntrenchedPlane\n\t}\n\
+                      \t[Plane]\n\t{\n\t\tfunction = NONE\n\t\tname = PlayerColorPlane\n\t}\n";
+        let k2 =
+            format!("[Banner]\n{{\n\tids = b\n\tresource_prefix = Default/Default\n{planes}}}\n");
+        let want = |model: &str| Some((model.to_string(), "PlayerColorPlane".to_string()));
+        assert_eq!(
+            read(&k2),
+            want("organizations/banners/Default/DefaultBanner.nif")
+        );
+        let aa = format!("[Banner]\n{{\n\tids = b\n\tmodel = Shared/Banner.nif\n{planes}}}\n");
+        assert_eq!(read(&aa), want("organizations/banners/Shared/Banner.nif"));
+        assert_eq!(read("[Banner]\n{\n\tids = b\n}\n"), None);
     }
 }

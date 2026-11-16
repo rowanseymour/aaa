@@ -280,6 +280,11 @@ const VERBS: &[Verb] = &[
         "posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight",
     ),
     verb(
+        "settlements",
+        "",
+        "lists the settlements, with each one's side and the id of its centre",
+    ),
+    verb(
         "select",
         "[id ...]",
         "selects organizations, or one building, of any side by their ids; without any, says what's selected",
@@ -491,6 +496,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "move" => order(world, &args, Aim::Move),
                 "attack" => order(world, &args, Aim::Attack),
                 "guard" => order(world, &args, Aim::Guard),
+                "settlements" => no_args(&args).map(|_| settlements(&world.resource::<Sim>().0)),
                 "select" => select(world, &args),
                 "usefactionability" => use_faction_ability(world, &args),
                 "commission" => commission(world, &args),
@@ -941,6 +947,26 @@ fn outcome(sim: &tgsim::World) -> String {
     format!("match {state}: {}", sides.join(", "))
 }
 
+fn settlements(sim: &tgsim::World) -> String {
+    let lines = sim.settlements.iter().enumerate().map(|(s, settlement)| {
+        let centre = match sim.centre_of(s) {
+            Some(b) => {
+                let b = &sim.buildings[b];
+                let [x, y] = b.position;
+                format!("centre {} {} at {x:.0} {y:.0}", b.template, b.id)
+            }
+            None => "no centre".into(),
+        };
+        let (template, id, owner) = (&settlement.template, settlement.id, settlement.owner);
+        format!("{template} {id} of kingdom {owner}: {centre}")
+    });
+    let lines: Vec<String> = lines.collect();
+    match lines.is_empty() {
+        true => "no settlements".into(),
+        false => lines.join("\n"),
+    }
+}
+
 /// Has a kingdom win or lose the match, as a map's triggers can.
 fn decide(world: &mut World, args: &[&str], won: bool) -> Reply {
     let [word] = args else {
@@ -1217,7 +1243,12 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         .find(|t| t.as_str().eq_ignore_ascii_case(template));
     let template = listed.ok_or_else(|| format!("{hq} doesn't commission {template}"))?;
     let (building, template) = (b, template.clone());
-    let settlement = world.resource::<Sim>().0.settlement_of(b);
+    let sim = &world.resource::<Sim>().0;
+    // Said when it's refused for it.
+    let lacking = (sim.rules().raisable.get(&template))
+        .map(|o| sim.lacks(player, b, o))
+        .filter(|l| !l.is_empty());
+    let settlement = sim.settlement_of(b);
     let command = match (to, settlement) {
         (Some(to), _) => tgsim::Command::Deliver {
             building,
@@ -1230,7 +1261,13 @@ fn commission(world: &mut World, args: &[&str]) -> Reply {
         },
         (None, None) => tgsim::Command::Commission { building, template },
     };
-    give(world, player, command)?;
+    give(world, player, command).map_err(|e| match lacking {
+        Some(l) => {
+            let ids = l.structures.iter().chain(&l.properties).map(|i| i.as_str());
+            format!("{e}, for {}", ids.collect::<Vec<_>>().join(" "))
+        }
+        None => e,
+    })?;
     Ok(String::new())
 }
 

@@ -928,7 +928,7 @@ impl Ui<'_> {
             .and_then(|hq| badges.badge(banners, self.game, self.images, template.as_str(), hq));
         let out_of_supply = looks.out_of_supply.filter(|_| lacks);
         let layers = [
-            (self.banners.plate.clone(), Color::srgb(red, green, blue)),
+            (looks.plate.clone(), Color::srgb(red, green, blue)),
             (icon, Color::WHITE),
             (looks.frame, Color::WHITE),
             (out_of_supply, Color::WHITE),

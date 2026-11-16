@@ -180,8 +180,10 @@ pub fn setup_banners(
     commands.insert_resource(Scenery(loaded.game.scenery()));
 }
 
-/// One of a banner's images, filling it.
+/// One of a banner's images, filling it; clear where there's none, as
+/// for a banner with no frame.
 fn layer(image: &Option<Handle<Image>>, colour: Color) -> impl Bundle {
+    let colour = if image.is_some() { colour } else { Color::NONE };
     (
         Node {
             position_type: PositionType::Absolute,
@@ -273,7 +275,7 @@ pub fn add_hq_banners(
         ));
         let plate = root
             .commands()
-            .spawn(layer(&banners.plate, Color::WHITE))
+            .spawn(layer(&looks.plate, Color::WHITE))
             .id();
         let shortage = (layer(&looks.shortage, Color::WHITE), Visibility::Hidden);
         let shortage = root.commands().spawn(shortage).id();
@@ -423,7 +425,7 @@ pub fn add_banners(
         let shortage = hidden(&looks.shortage);
         // Over the frame's lower edge.
         let badge = hidden(&None);
-        let plate = layer(&banners.plate, Color::srgb(red, green, blue));
+        let plate = layer(&looks.plate, Color::srgb(red, green, blue));
         let plate = root.commands().spawn(plate).id();
         let icon = root.commands().spawn(layer(&icon, Color::WHITE)).id();
         let frame = root
@@ -603,6 +605,7 @@ pub fn badge_banners(
                 faction,
             );
             let drawn = [
+                (banner.plate, looks.plate),
                 (banner.frame, looks.frame),
                 (banner.engaged, looks.engaged),
                 (banner.out_of_supply, looks.out_of_supply),
@@ -610,6 +613,12 @@ pub fn badge_banners(
             ];
             for (layer, image) in drawn {
                 if let Ok((mut node, _)) = layers.get_mut(layer) {
+                    // The plate's tinted again below.
+                    node.color = if image.is_some() {
+                        Color::WHITE
+                    } else {
+                        Color::NONE
+                    };
                     node.image = image.unwrap_or_default();
                 }
             }

@@ -28,6 +28,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `move organization x y`: sends an organization, by its id, to x y
 - `attack organization (x y | enemy)`: sends an organization, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy organization, by its id
 - `guard organization (x y | other)`: posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight
+- `settlements`: lists the settlements, with each one's side and the id of its centre
 - `select [id ...]`: selects organizations, or one building, of any side by their ids; without any, says what's selected
 - `commission template [x y]`: asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there
 - `research technology`: asks the selected building to research a technology it lists
