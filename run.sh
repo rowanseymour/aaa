@@ -1,23 +1,29 @@
 #!/bin/bash
-# Builds and runs aaa-game, tgeditor or tgserver from whichever checkout or worktree
-# it's run in.
+# Builds and runs one of the programs from whichever checkout or worktree it's run in.
 set -e
 root=$(git rev-parse --show-toplevel)
-data=$AA_INSTALL
 
 usage() {
-    echo "usage: $0 [game|editor|server] [map] [--data=dir] [app options...]" >&2
-    echo "  --data=dir  path to your legally owned copy of the game (default: \$AA_INSTALL)" >&2
+    echo "usage: $0 aa|k2|server|editor [map] [--data=dir] [app options...]" >&2
+    echo "  aa          play AA (aaa-game)" >&2
+    echo "  k2          play K2 (k2-game)" >&2
+    echo "  server      host or play a match with no window (tgserver)" >&2
+    echo "  editor      view maps (tgeditor)" >&2
+    echo "  --data=dir  path to your legally owned copy of the game" >&2
+    echo "              (default: \$K2_INSTALL for k2, else \$AA_INSTALL)" >&2
     exit 2
 }
 
-app=aaa-game
+install=AA_INSTALL
 case $1 in
-game) shift ;;
-editor) app=tgeditor; shift ;;
-server) app=tgserver; shift ;;
--h | --help) usage ;;
+aa) app=aaa-game ;;
+k2) app=k2-game; install=K2_INSTALL ;;
+server) app=tgserver ;;
+editor) app=tgeditor ;;
+*) usage ;;
 esac
+data=${!install}
+shift
 
 args=()
 while (($#)); do
@@ -28,7 +34,12 @@ while (($#)); do
     esac
     shift
 done
-[[ -n $data ]] || usage
+if [[ -z $data ]]; then
+    echo "$0: no game folder: set $install or give --data" >&2
+    exit 2
+fi
+# A ~ left unexpanded, as an environment variable can hold it.
+data=${data/#\~/$HOME}
 data=$(cd "$data" && pwd)
 
 cd "$root"

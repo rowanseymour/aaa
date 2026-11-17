@@ -1,8 +1,8 @@
 # Console commands
 
-<!-- Written from the verbs in crates/game/src/console.rs by its docs_list_the_verbs test; run it with UPDATE_DOCS=1 to rewrite. -->
+<!-- Written from the verbs in crates/tgclient/src/console.rs by its docs_list_the_verbs test; run it with UPDATE_DOCS=1 to rewrite. -->
 
-How lines are written, and how scripts and a port feed them in, is in [console.rs](../crates/game/src/console.rs). Words in [brackets] are optional, and (a | b) means either.
+How lines are written, and how scripts and a port feed them in, is in [console.rs](../crates/tgclient/src/console.rs). Words in [brackets] are optional, and (a | b) means either.
 
 - `help [verb]`: lists the verbs, or says how to use one; also ?
 - `echo text`: prints the text

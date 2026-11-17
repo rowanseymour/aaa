@@ -1,0 +1,12 @@
+[package]
+name = "aaa-game"
+version = "0.1.0-alpha"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Plays Axis & Allies (2004) matches"
+publish = false
+
+[dependencies]
+tgclient = { path = "../tgclient" }

@@ -1998,10 +1998,10 @@ mod tests {
     fn docs_list_the_verbs() {
         let mut page = String::from(
             "# Console commands\n\n\
-             <!-- Written from the verbs in crates/game/src/console.rs by its \
+             <!-- Written from the verbs in crates/tgclient/src/console.rs by its \
              docs_list_the_verbs test; run it with UPDATE_DOCS=1 to rewrite. -->\n\n\
              How lines are written, and how scripts and a port feed them in, is in \
-             [console.rs](../crates/game/src/console.rs). Words in [brackets] are \
+             [console.rs](../crates/tgclient/src/console.rs). Words in [brackets] are \
              optional, and (a | b) means either.\n\n",
         );
         for v in VERBS {

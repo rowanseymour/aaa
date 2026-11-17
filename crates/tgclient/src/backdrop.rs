@@ -1,6 +1,7 @@
-//! What the main menu stands over: a stretch of a map's coast with its
-//! defences, in the game's own view, loaded and built off the main thread,
-//! then faded in. It has no units, as there's no sim behind it.
+//! What the main menu stands over: a stretch of one of the game's maps,
+//! as its [`View`] says, with its buildings and scenery, in the game's own
+//! view, loaded and built off the main thread, then faded in. It has no
+//! units, as there's no sim behind it.
 //!
 //! It's kept while the screens the menu opens are up, its camera off, so
 //! coming back shows it at once; it goes when a match starts loading.
@@ -15,17 +16,22 @@ use tgrender::camera::{self, RtsCamera};
 use tgrender::terrain::{self, Prepared};
 use tgrender::{Edge, MapAssets};
 
-use crate::{Data, Screen};
+use crate::{Data, Program, Screen};
 
-/// The map whose coast it shows.
-const MAP: &str = "allies06_normandy";
-/// Where on [`MAP`] the camera looks, in map units: the beach a match on it
-/// starts on, a little to the right for the menu's column.
-const FOCUS: [f32; 2] = [341.0, 233.0];
+/// Which stretch of which map the backdrop shows.
+#[derive(Clone, Copy, Debug)]
+pub struct View {
+    /// The map, as [`tgdata::GameData::find_map`] takes its name.
+    pub map: &'static str,
+    /// Where on it the camera looks, in map units, a little to the right of
+    /// what's to be seen, for the menu's column.
+    pub focus: [f32; 2],
+}
+
 /// How much further back than the game's camera it stands, at the game's
 /// angle, to take in a little more.
 const ZOOM: f32 = 1.25;
-/// How far from [`FOCUS`] objects are drawn: past the edge of the view,
+/// How far from the focus objects are drawn: past the edge of the view,
 /// even in the widest windows.
 const REACH: f32 = 90.0;
 /// Seconds the land stays covered once it's spawned, for its materials to
@@ -73,6 +79,7 @@ fn show(
     mut commands: Commands,
     data: Res<Data>,
     edge: Res<Edge>,
+    program: Res<Program>,
     mut cameras: Query<&mut Camera, With<Backdrop>>,
 ) {
     if !cameras.is_empty() {
@@ -91,10 +98,11 @@ fn show(
     commands.entity(camera).insert((Backdrop, below));
     let game = data.0.clone();
     let fade = edge.fade();
+    let map = program.backdrop.map;
     let thread = std::thread::spawn(move || {
         let name = game
-            .find_map(MAP)
-            .ok_or_else(|| format!("{MAP}: no such map"))?;
+            .find_map(map)
+            .ok_or_else(|| format!("{map}: no such map"))?;
         let map = Map::load(&game, &Recruits::new(&game), &name)?;
         let prepared = terrain::prepare(&game, &map.ground, &map.terrain, fade);
         Ok((map, prepared))
@@ -122,6 +130,7 @@ fn arrive(
     mut commands: Commands,
     mut building: Option<ResMut<Building>>,
     data: Res<Data>,
+    program: Res<Program>,
     mut assets: MapAssets,
     mut cameras: Query<(&mut RtsCamera, &mut Transform), With<Backdrop>>,
 ) {
@@ -137,6 +146,7 @@ fn arrive(
         Ok(Err(e)) => return warn!("menu backdrop: {e}"),
         Err(_) => return warn!("menu backdrop: building it panicked"),
     };
+    let at = program.backdrop.focus;
     let size = map.ground.size();
     let sun = &map.sun;
     tgrender::spawn_land(&mut commands, &mut assets, prepared, sun, size, Backdrop);
@@ -147,13 +157,13 @@ fn arrive(
         .collect();
     let near = |t: &Thing| {
         let [x, y, _] = t.position;
-        Vec2::new(x, y).distance(Vec2::from(FOCUS)) < REACH
+        Vec2::new(x, y).distance(Vec2::from(at)) < REACH
     };
     let which = |t: &Thing| still.contains(&t.id) && near(t);
     let (assets, game) = (&mut assets, &data.0);
     tgrender::spawn_objects(&mut commands, assets, game, &map, false, which, Backdrop);
-    let [x, y] = FOCUS;
-    let focus = terrain::world(x, y, map.ground.height_at(FOCUS));
+    let [x, y] = at;
+    let focus = terrain::world(x, y, map.ground.height_at(at));
     for (mut cam, mut transform) in &mut cameras {
         cam.focus = focus;
         *transform = cam.transform();

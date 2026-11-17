@@ -6,14 +6,7 @@ version = 4
 name = "aaa-game"
 version = "0.1.0-alpha"
 dependencies = [
- "bevy",
- "raw-window-handle",
- "tgck",
- "tgdata",
- "tgmap",
- "tgrender",
- "tgserver",
- "tgsim",
+ "tgclient",
 ]
 
 [[package]]
@@ -3709,6 +3702,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "k2-game"
+version = "0.1.0-alpha"
+dependencies = [
+ "tgclient",
+]
+
+[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5760,6 +5760,20 @@ name = "tgck"
 version = "0.2.0"
 dependencies = [
  "miniz_oxide 0.8.9",
+]
+
+[[package]]
+name = "tgclient"
+version = "0.1.0-alpha"
+dependencies = [
+ "bevy",
+ "raw-window-handle",
+ "tgck",
+ "tgdata",
+ "tgmap",
+ "tgrender",
+ "tgserver",
+ "tgsim",
 ]
 
 [[package]]
