@@ -230,6 +230,12 @@ impl<L: Link> Host<L> {
         self.pauses.get_or_insert_default();
     }
 
+    /// Has it play the match `speed` times as fast from its next turn on,
+    /// as only whoever hosts may have it.
+    pub fn speed(&mut self, speed: f32) {
+        self.put_off.push((None, Action::Speed(speed)));
+    }
+
     /// Has it number a name that's taken by `numbered`, as
     /// [`crate::unique`] takes it, rather than by [`crate::NUMBERED`].
     pub fn number_names(&mut self, numbered: String) {
@@ -693,7 +699,8 @@ impl<L: Link> Host<L> {
     /// What `asked`, each with the client that asked if one did, has every
     /// copy of the match given, by the rules for pausing it.
     fn rule(&mut self, asked: Vec<(Option<u32>, Action)>) -> Vec<Action> {
-        let Some(pauses) = &mut self.pauses else {
+        let pausing = |(_, a): &(_, Action)| matches!(a, Action::Pause(_));
+        let Some(pauses) = (self.pauses.as_mut()).filter(|_| asked.iter().any(pausing)) else {
             return asked.into_iter().map(|(_, action)| action).collect();
         };
         let people: Vec<_> = (self.clients.iter())
@@ -1132,6 +1139,15 @@ mod tests {
             assert_eq!((c.schedule().paused(), c.schedule().speed()), (false, 2.0));
             assert_eq!(c.schedule().record(), host.schedule().record());
         }
+    }
+
+    #[test]
+    fn the_speed_it_is_given_is_every_copy_s_from_its_next_turn() {
+        let (mut host, mut clients) = hosted(&[&[1]]);
+        host.speed(2.0);
+        play(&mut host, &mut clients, 1);
+        assert_eq!(host.schedule().speed(), 2.0);
+        assert_eq!(clients[0].schedule().speed(), 2.0);
     }
 
     #[test]

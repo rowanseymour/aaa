@@ -23,25 +23,39 @@ pub fn keys(mut intents: MessageReader<Intent>, mut orders: ResMut<Orders>, load
         return;
     }
     let speeds = loaded.game.game_speeds();
-    let now = orders.speeding().log2();
-    let mut wanted = Vec::new();
-    if asked.wants(PAUSE) {
-        wanted.push(Action::Pause(!orders.pausing()));
-    }
-    for (name, to) in [
-        (SPEED_UP, stepped(now, 0.5, &speeds)),
-        (SPEED_DOWN, stepped(now, -0.5, &speeds)),
-        (SPEED, 0.0f32.clamp(*speeds.start(), *speeds.end())),
-    ] {
-        if asked.wants(name) {
-            wanted.push(Action::Speed(to.exp2()));
-        }
-    }
-    for action in wanted {
+    // Pausing goes by the match as it is, not as asked, so that pressing
+    // again before the host answers flips a vote back as each press does.
+    let (paused, speed) = (orders.paused(), orders.speeding());
+    for action in wanted(|name| asked.wants(name), paused, speed, &speeds) {
         if orders.may(&action) {
             orders.act(action);
         }
     }
+}
+
+/// What the keys `wants` names were pressed for ask of a match `paused`
+/// or not and played `speed` times as fast, within `speeds`.
+fn wanted(
+    wants: impl Fn(&str) -> bool,
+    paused: bool,
+    speed: f32,
+    speeds: &RangeInclusive<f32>,
+) -> Vec<Action> {
+    let now = speed.log2();
+    let mut wanted = Vec::new();
+    if wants(PAUSE) {
+        wanted.push(Action::Pause(!paused));
+    }
+    for (name, to) in [
+        (SPEED_UP, stepped(now, 0.5, speeds)),
+        (SPEED_DOWN, stepped(now, -0.5, speeds)),
+        (SPEED, 0.0f32.clamp(*speeds.start(), *speeds.end())),
+    ] {
+        if wants(name) {
+            wanted.push(Action::Speed(to.exp2()));
+        }
+    }
+    wanted
 }
 
 /// The speed, as a power of two, a step `by` from `now` comes to: from
@@ -54,6 +68,21 @@ fn stepped(now: f32, by: f32, speeds: &RangeInclusive<f32>) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_key_asks_for_its_pause_or_speed() {
+        let speeds = -2.0..=2.0;
+        let pressed = |key: &'static str| move |name: &str| name == key;
+        let asks = |key, paused, speed| wanted(pressed(key), paused, speed, &speeds);
+        assert_eq!(asks(PAUSE, false, 1.0), [Action::Pause(true)]);
+        // Paused, pressing again asks to unpause, which for anyone but the
+        // pauser is a vote, however soon after.
+        assert_eq!(asks(PAUSE, true, 1.0), [Action::Pause(false)]);
+        assert_eq!(asks(SPEED_UP, false, 1.0), [Action::Speed(2f32.sqrt())]);
+        assert_eq!(asks(SPEED_DOWN, false, 2.0), [Action::Speed(2f32.sqrt())]);
+        assert_eq!(asks(SPEED, true, 4.0), [Action::Speed(1.0)]);
+        assert_eq!(asks("ActorCommand stop", false, 1.0), []);
+    }
 
     #[test]
     fn a_step_goes_from_the_nearest_half_and_stays_within_the_speeds() {
