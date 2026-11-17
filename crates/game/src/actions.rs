@@ -9,8 +9,8 @@
 //! sets the rally point what it recruits moves on to. One that researches
 //! has Research, opening a menu of the technologies it lists. A building that
 //! packs, into a truck say, has Pack, dimmed while it can't. Each button
-//! answers to the keys the game binds what it does to, and its tooltip
-//! marks the letter.
+//! answers to the [`Intent`]s naming what it does or its slot's widget,
+//! whatever sends them; its tooltip marks the letter of its key.
 
 use std::collections::HashMap;
 
@@ -25,15 +25,19 @@ use tgmap::Organization;
 use tgrender::textures;
 use tgsim::{Lacking, Researchable};
 
+use crate::intent::Intent;
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
 use crate::resource_bar::{Preview, Previewed};
 use crate::ui::{self, Click, Edge, Font, Ink, Marked, Shade, Surface, label, panel, tooltip};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
-const COLUMNS: usize = 4;
-const ROWS: usize = 3;
-const SLOTS: usize = COLUMNS * ROWS;
+pub const COLUMNS: usize = 4;
+pub const ROWS: usize = 3;
+pub const SLOTS: usize = COLUMNS * ROWS;
+/// The original's widget for a grid button, repeated once per slot and
+/// named by it in the hotkey files, e.g. `ActionButtonsButton_3`.
+pub const WIDGET: &str = "ActionButtonsButton";
 /// A button's side, in logical pixels; the icons are drawn 42 across.
 pub(crate) const BUTTON: f32 = 56.0;
 pub(crate) const GAP: f32 = 4.0;
@@ -521,9 +525,9 @@ impl Looks {
     }
 }
 
-/// The grid's buttons, at this slot.
+/// A grid button, of either interface, at this slot.
 #[derive(Component)]
-pub struct Slot(usize);
+pub struct Slot(pub usize);
 
 #[derive(Component)]
 pub struct SlotIcon;
@@ -586,6 +590,24 @@ impl Quantity {
 pub struct Blocks;
 
 impl Looks {
+    /// Every icon a button can show.
+    pub fn icons(&self) -> impl Iterator<Item = &Handle<Image>> {
+        let places = [
+            &self.deploy,
+            &self.location,
+            &self.research,
+            &self.rally,
+            &self.pack,
+            &self.sell,
+        ];
+        let looks = (self.orders.iter().chain(places))
+            .map(|(_, look)| look)
+            .chain([&self.cancel, &self.command_all])
+            .chain(self.menus.values().flatten().map(|r| &r.look))
+            .chain(self.researches.values().flatten().map(|t| &t.look));
+        looks.filter_map(|look| look.icon.as_ref())
+    }
+
     /// The name of the order that aims `aim`.
     pub fn order(&self, aim: Aim) -> &str {
         let i = ORDERS.iter().position(|(_, g)| *g == Some(Give::Aim(aim)));
@@ -599,10 +621,20 @@ impl Looks {
 pub struct Shown {
     /// What each slot holds.
     entries: [Option<Entry>; SLOTS],
+    /// How each slot's button shows.
+    pub faces: [Option<Face>; SLOTS],
     /// What the player lacks for each recruit the menu offers, and how
     /// each research it lists stands.
     lacks: Vec<Lacking>,
     researches: Vec<Researchable>,
+}
+
+/// How a slot's button shows, whichever interface draws it.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Face {
+    pub icon: Option<Handle<Image>>,
+    /// Whether pressing it can do anything now; its icon's greyed if not.
+    pub ready: bool,
 }
 
 /// The slot whose press was just refused and why, said while the cursor
@@ -975,6 +1007,75 @@ type SlotParts<'a> = (
     &'a mut Pickable,
 );
 
+/// The look of the button for `entry`.
+fn look_of<'a>(
+    entry: Entry,
+    sim: &tgsim::World,
+    looks: &'a Looks,
+    building: Option<usize>,
+) -> &'a Look {
+    match entry {
+        Entry::Order(i) => &looks.orders[i].1,
+        Entry::Cancel => &looks.cancel,
+        Entry::Open(Menu::Deploy) => &looks.deploy.1,
+        Entry::Open(Menu::Location) => &looks.location.1,
+        Entry::Open(Menu::Research) => &looks.research.1,
+        Entry::Research(i) => &looks.topics(sim, building)[i].look,
+        Entry::Rally => &looks.rally.1,
+        Entry::CommandAll => &looks.command_all,
+        Entry::Pack => &looks.pack.1,
+        Entry::Sell => &looks.sell.1,
+        Entry::Recruit(i) => &looks.menu(sim, building)[i].look,
+    }
+}
+
+/// Whether pressing the button for `entry` can do anything now.
+#[allow(clippy::too_many_arguments)]
+fn ready(
+    entry: Entry,
+    sim: &tgsim::World,
+    looks: &Looks,
+    selected: &[usize],
+    building: Option<usize>,
+    local: Option<u32>,
+    lacks: &[Lacking],
+    researches: &[Researchable],
+) -> bool {
+    match entry {
+        Entry::Order(i) => match (ORDERS[i].1, local) {
+            (
+                Some(give @ (Give::Attach | Give::Detach | Give::Disband | Give::DetachHero)),
+                Some(player),
+            ) => {
+                let can =
+                    |&r: &usize| (give.command(r)).is_some_and(|c| sim.check(player, &c).is_ok());
+                selected.iter().any(can)
+            }
+            (give, _) => give.is_some(),
+        },
+        Entry::Research(i) => researches[i] == Researchable::Ready,
+        Entry::Pack => building.is_some_and(|b| can_pack(sim, b)),
+        Entry::Recruit(i) => {
+            let lacking = &lacks[i];
+            looks.menu(sim, building)[i].organization.is_some()
+                && lacking.properties.is_empty()
+                && lacking.structures.is_empty()
+        }
+        Entry::Cancel | Entry::Open(_) | Entry::Rally | Entry::CommandAll | Entry::Sell => true,
+    }
+}
+
+/// Whether the button for `entry` is lit for the page it's opened.
+fn lit(entry: Entry, page: Page) -> bool {
+    match entry {
+        Entry::Order(i) => {
+            matches!((page, ORDERS[i].1), (Page::Aiming(a), Some(Give::Aim(b))) if a == b)
+        }
+        Entry::Rally => page == Page::Rally,
+        _ => false,
+    }
+}
+
 /// What the grid holds for the page and the selection, whichever
 /// interface draws it.
 fn contents(
@@ -1030,8 +1131,24 @@ fn contents(
         }),
         hq.is_some(),
     );
+    let faces = entries.map(|entry| {
+        entry.map(|e| Face {
+            icon: look_of(e, sim, looks, building).icon.clone(),
+            ready: ready(
+                e,
+                sim,
+                looks,
+                selected,
+                building,
+                local,
+                &lacks,
+                &researches,
+            ),
+        })
+    });
     Shown {
         entries,
+        faces,
         lacks,
         researches,
     }
@@ -1057,6 +1174,90 @@ pub fn fill_slots(
     shown.set_if_neq(now);
 }
 
+/// Previews on the resource bar what the order being aimed, or the
+/// button under the cursor, would do to the economy, and forgets a
+/// refusal once the cursor's left its button, whichever interface draws
+/// the grid.
+#[allow(clippy::too_many_arguments)]
+pub fn hover(
+    page: Res<Page>,
+    selected: Res<Selected>,
+    chosen: Res<SelectedBuilding>,
+    sim: Res<Sim>,
+    looks: Res<Looks>,
+    shown: Res<Shown>,
+    local: Res<Local>,
+    slots: Query<(&Slot, &Hovered)>,
+    mut refusal: ResMut<Refusal>,
+    mut preview: ResMut<Preview>,
+) {
+    for (slot, hover) in &slots {
+        if !hover.get() && refusal.0.is_some_and(|(s, _)| s == slot.0) {
+            refusal.0 = None;
+        }
+    }
+    let building = chosen.0.filter(|_| selected.0.is_empty());
+    // What was under the cursor goes with the selection.
+    let previewed = match crate::selection::commanded(&sim.0, local.0, &selected.0, building) {
+        true => previewed(*page, &sim.0, &looks, &shown, &selected.0, building, &slots),
+        false => None,
+    };
+    let changed = match (&preview.0, &previewed) {
+        (None, None) => false,
+        (Some(Previewed::Unpack(a)), Some(Previewed::Unpack(b))) => a != b,
+        (Some(Previewed::Commission(a)), Some(Previewed::Commission(b))) => {
+            a.template != b.template
+        }
+        (Some(Previewed::Research(a)), Some(Previewed::Research(b))) => a != b,
+        _ => true,
+    };
+    if changed {
+        preview.0 = previewed;
+    }
+}
+
+/// What the button under the cursor would do to the economy, or else the
+/// order being aimed.
+fn previewed(
+    page: Page,
+    sim: &tgsim::World,
+    looks: &Looks,
+    shown: &Shown,
+    selected: &[usize],
+    building: Option<usize>,
+    slots: &Query<(&Slot, &Hovered)>,
+) -> Option<Previewed> {
+    let unpacking = match selected {
+        &[r] => Some(r).filter(|&r| {
+            sim.organizations
+                .get(r)
+                .is_some_and(|r| r.unpacks.is_some())
+        }),
+        _ => None,
+    };
+    let hovered = (slots.iter())
+        .filter(|(_, hover)| hover.get())
+        .find_map(|(slot, _)| shown.entries[slot.0]);
+    match hovered {
+        Some(Entry::Recruit(i)) => (looks.menu(sim, building).get(i))
+            .and_then(|r| r.organization.clone())
+            .map(|r| Previewed::Commission(Box::new(r))),
+        Some(Entry::Research(i)) => {
+            let list = building.map_or(&[][..], |b| sim.research_list(b));
+            list.get(i).cloned().map(Previewed::Research)
+        }
+        Some(Entry::Order(i)) if ORDERS[i].1 == Some(Give::Aim(Aim::Unpack)) => {
+            unpacking.map(Previewed::Unpack)
+        }
+        _ => match page {
+            Page::Aiming(Aim::Unpack) => unpacking.map(Previewed::Unpack),
+            Page::Delivering(_) => (looks.delivered(sim, building, page))
+                .map(|r| Previewed::Commission(Box::new(r.clone()))),
+            _ => None,
+        },
+    }
+}
+
 /// Draws the grid's slots as [`fill_slots`] filled them, and says what's under
 /// the cursor.
 #[allow(clippy::too_many_arguments)]
@@ -1073,38 +1274,18 @@ pub fn show(
     mut tooltip: TipParts,
     local: Res<Local>,
     focus: Res<crate::Focus>,
-    mut refusal: ResMut<Refusal>,
-    mut preview: ResMut<Preview>,
+    refusal: Res<Refusal>,
     bindings: Res<Bindings>,
     mut commands: Commands,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
     // Others' things have no buttons.
     let nothing = !crate::selection::commanded(&sim.0, local.0, &selected.0, building);
-    // What hovering, or aiming, the order would do to the economy.
-    let unpacking = selected.0.first().copied().filter(|&r| {
-        selected.0.len() == 1
-            && sim
-                .0
-                .organizations
-                .get(r)
-                .is_some_and(|r| r.unpacks.is_some())
-    });
-    let mut previewed = match *page {
-        Page::Aiming(Aim::Unpack) => unpacking.map(Previewed::Unpack),
-        Page::Delivering(_) => (looks.delivered(&sim.0, building, *page))
-            .map(|r| Previewed::Commission(Box::new(r.clone()))),
-        _ => None,
-    };
     panel.set_if_neq(match nothing {
         false => Visibility::Inherited,
         true => Visibility::Hidden,
     });
     if nothing {
-        // What was under the cursor went with the selection.
-        if preview.0.is_some() {
-            preview.0 = None;
-        }
         return;
     }
     let Shown {
@@ -1125,9 +1306,6 @@ pub fn show(
         if *pickable != want {
             *pickable = want;
         }
-        if !hover.get() && refusal.0.is_some_and(|(s, _)| s == slot.0) {
-            refusal.0 = None;
-        }
         let Some(entry) = entry else {
             border.set_if_neq(Edge::Clear);
             set_icon(children, &mut icons, None);
@@ -1139,30 +1317,10 @@ pub fn show(
         let mut notes = Vec::new();
         // A greyed technology's tooltip says only what it wants.
         let mut only = None;
-        let (look, ready, lit) = match entry {
-            Entry::Order(i) => {
-                let ready = match (ORDERS[i].1, local.0) {
-                    (
-                        Some(
-                            give @ (Give::Attach | Give::Detach | Give::Disband | Give::DetachHero),
-                        ),
-                        Some(player),
-                    ) => {
-                        let can = |&r: &usize| {
-                            (give.command(r)).is_some_and(|c| sim.0.check(player, &c).is_ok())
-                        };
-                        selected.0.iter().any(can)
-                    }
-                    (give, _) => give.is_some(),
-                };
-                let lit =
-                    matches!((*page, ORDERS[i].1), (Page::Aiming(a), Some(Give::Aim(b))) if a == b);
-                (&looks.orders[i].1, ready, lit)
-            }
-            Entry::Cancel => (&looks.cancel, true, false),
-            Entry::Open(Menu::Deploy) => (&looks.deploy.1, true, false),
-            Entry::Open(Menu::Location) => (&looks.location.1, true, false),
-            Entry::Open(Menu::Research) => (&looks.research.1, true, false),
+        let look = look_of(entry, &sim.0, &looks, building);
+        let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
+        let lit = lit(entry, *page);
+        match entry {
             Entry::Research(i) => {
                 let topic = &topics[i];
                 table.extend(topic.economy.iter().cloned());
@@ -1174,19 +1332,9 @@ pub fn show(
                     let with = [topic.look.name.as_str(), &names.join(", ")];
                     only = Some(fill(&looks.research_requires, &with));
                 }
-                let ready = researches[i] == Researchable::Ready;
-                (&topic.look, ready, false)
             }
-            Entry::Rally => (&looks.rally.1, true, *page == Page::Rally),
-            Entry::CommandAll => (&looks.command_all, true, false),
-            Entry::Pack => {
-                let ready = building.is_some_and(|b| can_pack(&sim.0, b));
-                (&looks.pack.1, ready, false)
-            }
-            Entry::Sell => (&looks.sell.1, true, false),
             Entry::Recruit(i) => {
-                let r = &menu[i];
-                table.extend(r.economy.iter().cloned());
+                table.extend(menu[i].economy.iter().cloned());
                 let lacking: Vec<String> = (lacks[i].properties.iter())
                     .chain(&lacks[i].structures)
                     .map(|id| looks.names.get(id).map_or(id.to_string(), Clone::clone))
@@ -1194,10 +1342,9 @@ pub fn show(
                 if !lacking.is_empty() {
                     why = Some(format!("{}: {}", looks.requires, lacking.join(", ")));
                 }
-                let ready = r.organization.is_some() && lacking.is_empty();
-                (&r.look, ready, false)
             }
-        };
+            _ => {}
+        }
         let icon = look.icon.clone();
         // Only a press that can do something sounds like it.
         match (ready, clicks) {
@@ -1210,21 +1357,6 @@ pub fn show(
             _ => {}
         }
         if hover.get() {
-            match entry {
-                Entry::Recruit(i) => {
-                    previewed = menu[i]
-                        .organization
-                        .clone()
-                        .map(|r| Previewed::Commission(Box::new(r)));
-                }
-                Entry::Research(i) => {
-                    previewed = list.get(i).cloned().map(Previewed::Research);
-                }
-                Entry::Order(i) if ORDERS[i].1 == Some(Give::Aim(Aim::Unpack)) => {
-                    previewed = unpacking.map(Previewed::Unpack);
-                }
-                _ => {}
-            }
             let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
             let unaffordable = match (entry, refused) {
                 (Entry::Recruit(i), Some(tgsim::Refused::Unaffordable)) => menu[i]
@@ -1297,18 +1429,6 @@ pub fn show(
         (None, _) => None,
     };
     tooltip.say(tip);
-    let changed = match (&preview.0, &previewed) {
-        (None, None) => false,
-        (Some(Previewed::Unpack(a)), Some(Previewed::Unpack(b))) => a != b,
-        (Some(Previewed::Commission(a)), Some(Previewed::Commission(b))) => {
-            a.template != b.template
-        }
-        (Some(Previewed::Research(a)), Some(Previewed::Research(b))) => a != b,
-        _ => true,
-    };
-    if changed {
-        preview.0 = previewed;
-    }
 }
 
 /// The tooltip's node, not the slots'.
@@ -1437,7 +1557,7 @@ fn set_icon(
 }
 
 /// What the game's hotkeys call what a button does, and the button
-/// itself by its slot, for [`Bindings`].
+/// itself by its slot: the [`Intent`]s that press it.
 fn bound(
     entry: Entry,
     slot: usize,
@@ -1466,7 +1586,7 @@ fn bound(
         Entry::Rally => vec![command(RALLY)],
         Entry::CommandAll => vec!["CommandAll".into()],
     };
-    names.push(format!("ActionButtonsButton_{slot}"));
+    names.push(widget(slot));
     names
 }
 
@@ -1670,18 +1790,27 @@ impl Presser<'_, '_> {
     }
 }
 
-/// A button clicked.
-fn press(activate: On<Activate>, slots: Query<&Slot>, mut presser: Presser) {
+/// A button clicked, of either interface's grid, asks for the widget the
+/// original draws in its slot.
+pub fn press(activate: On<Activate>, slots: Query<&Slot>, mut intents: MessageWriter<Intent>) {
     if let Ok(slot) = slots.get(activate.entity) {
-        presser.press(slot.0);
+        intents.write(Intent(widget(slot.0)));
     }
 }
 
-/// Presses the button a key just pressed is bound to, if it's showing.
-pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut presser: Presser) {
-    if keys.get_just_pressed().next().is_none() {
+/// The original's widget for the button in `slot`.
+fn widget(slot: usize) -> String {
+    format!("{WIDGET}_{slot}")
+}
+
+/// Presses the button an intent asks for, by what it does or by its
+/// widget, if it's showing.
+pub fn act(mut asked: MessageReader<Intent>, mut presser: Presser) {
+    let asked: Vec<Intent> = asked.read().cloned().collect();
+    if asked.is_empty() {
         return;
     }
+    let wanted = |name: &str| asked.iter().any(|a| a.is(name));
     let building = presser.chosen.0.filter(|_| presser.selected.0.is_empty());
     let menu = presser.looks.menu(&presser.sim.0, building);
     let list = building.map_or(&[][..], |b| presser.sim.0.research_list(b));
@@ -1691,21 +1820,21 @@ pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut pre
             .filter(|e| !matches!(e, Entry::Recruit(i) if *i >= menu.len()))
             .filter(|e| !matches!(e, Entry::Research(i) if *i >= list.len()))
             .map_or(Vec::new(), |e| bound(e, slot, page, menu, list));
-        names.iter().any(|action| bindings.pressed(&keys, action))
+        names.iter().any(|name| wanted(name))
     });
     if let Some(slot) = slot {
         presser.press(slot);
         return;
     }
-    // The key of what's done or under way, its slot left empty, is refused.
+    // What's done or under way, its slot left empty, is refused.
     let (Page::Menu(Menu::Research), Some(b), Some(player)) = (page, building, presser.local.0)
     else {
         return;
     };
     let sim = &presser.sim.0;
     let taken = (sim.research_list(b).iter().enumerate()).find(|(_, item)| {
-        let action = format!("PropertyDataSelectCommand {}", item.technology);
-        bindings.pressed(&keys, &action) && sim.researchable(player, b, item) == Researchable::Taken
+        wanted(&format!("PropertyDataSelectCommand {}", item.technology))
+            && sim.researchable(player, b, item) == Researchable::Taken
     });
     if let Some((i, _)) = taken {
         presser.refuse_research(b, i, tgsim::Refused::Unable);

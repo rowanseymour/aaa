@@ -200,6 +200,11 @@ const VERBS: &[Verb] = &[
         "presses a key as a hotkey file writes it, e.g. esc, f1 or ctrl-s",
     ),
     verb(
+        "ask",
+        "intent",
+        "asks for what a hotkey file names, as its key would, e.g. ActorCommand stop",
+    ),
+    verb(
         "wait",
         "seconds",
         "lets that long go by before the next command",
@@ -472,6 +477,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
         "ui" => no_args(&args).map(|_| ui(world)),
         "click" => click(world, &args),
         "press" => press(world, &args),
+        "ask" => ask(world, &args),
         "wait" => wait(world, &args),
         "gamespeed" => game_speed(world, &args),
         "gamepause" => game_pause(world, &args),
@@ -692,6 +698,15 @@ fn press(world: &mut World, args: &[&str]) -> Reply {
     let mut console = world.resource_mut::<Console>();
     console.held = held;
     console.settling = SETTLE_FRAMES;
+    Ok(String::new())
+}
+
+fn ask(world: &mut World, args: &[&str]) -> Reply {
+    if args.is_empty() {
+        return Err(usage("ask"));
+    }
+    world.write_message(crate::intent::Intent(args.join(" ")));
+    world.resource_mut::<Console>().settling = SETTLE_FRAMES;
     Ok(String::new())
 }
 

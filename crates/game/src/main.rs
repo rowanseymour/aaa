@@ -33,6 +33,7 @@ mod drive;
 mod effects;
 mod fog;
 mod ghost;
+mod intent;
 mod keys;
 mod lobby;
 mod menu;
@@ -808,6 +809,7 @@ fn main() -> ExitCode {
                 .run_if(takes_input),
         )
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
+        .add_message::<intent::Intent>()
         .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
         .add_message::<messages::Failed>()
@@ -926,7 +928,15 @@ fn main() -> ExitCode {
                     .run_if(takes_input),
                 minimap::update.after(camera::Controls).after(fog::look),
                 minimap::tint,
-                (actions::back_out, actions::fill_slots, actions::show).chain(),
+                (
+                    actions::act.after(keys::send),
+                    actions::back_out,
+                    actions::fill_slots,
+                    actions::hover,
+                    actions::show,
+                    widgets::show_grid.run_if(widgets::original),
+                )
+                    .chain(),
                 (
                     object_display::lay_out,
                     (object_display::refresh, object_display::portray),
@@ -971,7 +981,7 @@ fn main() -> ExitCode {
                     .chain(),
                 (
                     choose_formation,
-                    actions::hotkeys,
+                    keys::send,
                     special_ops::hotkeys,
                     supply::cycle_detached,
                     messages::cycle,

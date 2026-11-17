@@ -1,6 +1,8 @@
 //! The original interface's in-match panels, drawn from its layouts (see
 //! [`tgdata::widgets`]) in place of ours: their pictures as they look at
-//! rest.
+//! rest, and the command grid's buttons, which show what
+//! [`actions::Shown`](crate::actions::Shown) holds and ask for their
+//! widget by name when pressed.
 
 use std::collections::HashMap;
 
@@ -10,7 +12,11 @@ use bevy::ui::RelativeCursorPosition;
 use tgdata::widgets::{Bounds, InterfaceFlags, RESTING, Rect, SCREEN, ViewElement, Widget};
 use tgrender::textures;
 
-use crate::actions::Blocks;
+use bevy::picking::hover::Hovered;
+use bevy::render::render_resource::TextureFormat;
+use bevy::ui_widgets::Button;
+
+use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
 use crate::{Loaded, Local, Screen, Sim};
 
 /// Which interface a match is played with.
@@ -68,7 +74,16 @@ const OPTIONAL: [(&str, Flag); 2] = [
 /// The widgets the interface repeats once for each entry a panel lists,
 /// such as a group or a command: templates, not shown themselves, and
 /// with nothing listed at rest.
-const ENTRIES: [&str; 3] = ["Item", "GroupButton", "ActionButtonsButton"];
+const ENTRIES: [&str; 3] = ["Item", "GroupButton", crate::actions::WIDGET];
+
+/// The command grid.
+const GRID: &str = "ActionButtons";
+/// The part of a grid button its command's icon is drawn in.
+const GRID_ICON: &str = "ActionButtonsButtonDecal";
+/// The fields giving how far in from each edge of a grid button its icon
+/// is drawn, normally and while it's held down.
+const ICON_INSET: &str = "action_button_unpressed_client_";
+const ICON_INSET_PRESSED: &str = "action_button_pressed_client_";
 
 /// One step from the screen to a picture: into a child's bounds, or moved
 /// by an offset.
@@ -93,6 +108,7 @@ pub fn spawn(
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     local: Res<Local>,
+    looks: Res<crate::actions::Looks>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
@@ -120,6 +136,7 @@ pub fn spawn(
         flags: game.interface_flags(),
         drawn: Vec::new(),
     };
+    let mut grid = None;
     if let Some(top) = named(GAME).and_then(|g| g.find(ON_GAME)) {
         drawer.widget(top, &[]);
     }
@@ -129,6 +146,14 @@ pub fn spawn(
         for name in UNDER_BUTTONS {
             match named(name) {
                 Some(w) if name == OBJECT_DISPLAY => _ = drawer.own(w, &chain),
+                Some(w) if name == GRID => {
+                    if let Some(within) = drawer.own(w, &chain) {
+                        for child in &w.children {
+                            drawer.widget(child, &within);
+                        }
+                        grid = w.find(crate::actions::WIDGET).map(|b| (reach(&within), b));
+                    }
+                }
                 Some(w) => drawer.widget(w, &chain),
                 None => {}
             }
@@ -154,6 +179,16 @@ pub fn spawn(
             .map(Step::By);
         drawer.widget(widget, &Vec::from_iter(offset));
     }
+    // Icons keep their pixels only until they're first drawn.
+    let mut greyed = Greyed::default();
+    let images = &mut drawer.pictures.images;
+    for icon in looks.icons() {
+        if let Some(grey) = images.get(icon).and_then(grey) {
+            greyed.0.insert(icon.id(), images.add(grey));
+        }
+    }
+    commands.insert_resource(greyed);
+    let buttons = grid.map(|(area, button)| grid_buttons(area, button, &mut drawer.pictures));
     let drawn = drawer.drawn;
     // The layouts' screen at its own shape, as tall as the window and
     // centred in it: its pictures only line up at that shape, and the
@@ -177,6 +212,9 @@ pub fn spawn(
                     RelativeCursorPosition::default(),
                 ));
             }
+            for button in buttons.into_iter().flatten() {
+                button.spawn(screen);
+            }
         })
         .id();
     commands
@@ -195,15 +233,15 @@ pub fn spawn(
         .add_child(screen);
 }
 
-/// A picture's node, given the steps from the screen to it.
-fn placed(chain: &[Step]) -> Node {
+/// Where on the layouts' screen the steps from it lead.
+fn reach(chain: &[Step]) -> Rect {
     let screen = Rect {
         left: 0.0,
         top: 0.0,
         right: SCREEN[0],
         bottom: SCREEN[1],
     };
-    let at = chain.iter().fold(screen, |within, step| match *step {
+    chain.iter().fold(screen, |within, step| match *step {
         Step::Into(b) => b.place(within),
         Step::By([x, y]) => Rect {
             left: within.left + x,
@@ -211,7 +249,16 @@ fn placed(chain: &[Step]) -> Node {
             right: within.right + x,
             bottom: within.bottom + y,
         },
-    });
+    })
+}
+
+/// A picture's node, given the steps from the screen to it.
+fn placed(chain: &[Step]) -> Node {
+    on_screen(reach(chain))
+}
+
+/// The node covering `at`, a rectangle of the layouts' screen.
+fn on_screen(at: Rect) -> Node {
     let percent = |v: f32, of: f32| Val::Percent(100.0 * v / of);
     Node {
         position_type: PositionType::Absolute,
@@ -306,4 +353,256 @@ impl Drawer<'_> {
             self.element(child, &chain);
         }
     }
+}
+
+/// One of the command grid's buttons, and the mouse buttons that went
+/// down on it and are still down, which hold it down.
+#[derive(Component, Default)]
+pub struct GridButton(Vec<MouseButton>);
+
+/// A picture of a grid button's that's drawn only in the states it names.
+#[derive(Component)]
+pub struct Shows(ViewElement);
+
+/// A grid button's command icon, and how far in from each edge of the
+/// button it's drawn, as a fraction of the button's size, normally and
+/// while held down.
+#[derive(Component)]
+pub struct GridIcon {
+    inset: [f32; 4],
+    pressed: [f32; 4],
+}
+
+/// A grid button ready to spawn.
+struct Built {
+    slot: usize,
+    at: Rect,
+    /// Its frame's pictures, each with when it's drawn.
+    frame: Vec<(ViewElement, Handle<Image>)>,
+    icon: GridIcon,
+}
+
+impl Built {
+    fn spawn(self, screen: &mut bevy::ecs::hierarchy::ChildSpawnerCommands) {
+        let slot = self.slot;
+        let fill = Node {
+            position_type: PositionType::Absolute,
+            width: Val::Percent(100.0),
+            height: Val::Percent(100.0),
+            ..default()
+        };
+        screen
+            .spawn((
+                GridButton::default(),
+                Slot(slot),
+                on_screen(self.at),
+                Button,
+                // As ours are, so a script works with either.
+                crate::ui::called(format!("action.{}", slot + 1)),
+                Hovered::default(),
+                Visibility::Hidden,
+                Blocks,
+                RelativeCursorPosition::default(),
+            ))
+            .with_children(|button| {
+                for (element, image) in self.frame {
+                    button.spawn((
+                        fill.clone(),
+                        ImageNode::new(image).with_mode(NodeImageMode::Stretch),
+                        Shows(element),
+                        Pickable::IGNORE,
+                    ));
+                }
+                button.spawn((
+                    fill.clone(),
+                    ImageNode::default().with_mode(NodeImageMode::Stretch),
+                    self.icon,
+                    Pickable::IGNORE,
+                ));
+            })
+            .observe(crate::actions::press)
+            .observe(hold);
+    }
+}
+
+/// The grid's buttons: `button`'s layout repeated in each cell of
+/// `area`, centred, as the interface spec's command grid lays them out.
+fn grid_buttons(area: Rect, button: &Widget, pictures: &mut Pictures) -> Vec<Built> {
+    let [columns, rows] = [COLUMNS, ROWS];
+    let cell = [
+        (area.width() / columns as f32).floor(),
+        (area.height() / rows as f32).floor(),
+    ];
+    let origin = Rect {
+        left: 0.0,
+        top: 0.0,
+        right: cell[0],
+        bottom: cell[1],
+    };
+    let size = button.bounds(origin);
+    let gap = [
+        ((cell[0] - size.width()) / 2.0).floor(),
+        ((cell[1] - size.height()) / 2.0).floor(),
+    ];
+    let frame: Vec<(ViewElement, Handle<Image>)> = (button.view.iter())
+        .flat_map(|v| &v.children)
+        .filter_map(|e| Some((e.clone(), pictures.get(e.texture.as_deref()?)?)))
+        .collect();
+    let inset = |prefix: &str, side: &str, of: f32| {
+        let key = format!("{prefix}{side}");
+        button
+            .value(&key)
+            .and_then(|v| v.parse::<f32>().ok())
+            .unwrap_or(0.0)
+            / of
+    };
+    let insets = |prefix: &str| {
+        [
+            inset(prefix, "L", size.width()),
+            inset(prefix, "T", size.height()),
+            inset(prefix, "R", size.width()),
+            inset(prefix, "B", size.height()),
+        ]
+    };
+    // Only buttons that draw their command's icon have a place for it.
+    let has_icon = button
+        .parts
+        .iter()
+        .any(|p| p.name.eq_ignore_ascii_case(GRID_ICON));
+    (0..columns * rows)
+        .filter(|_| has_icon)
+        .map(|slot| {
+            let left = area.left + (slot % columns) as f32 * cell[0] + gap[0];
+            let top = area.top + (slot / columns) as f32 * cell[1] + gap[1];
+            Built {
+                slot,
+                at: Rect {
+                    left,
+                    top,
+                    right: left + size.width(),
+                    bottom: top + size.height(),
+                },
+                frame: frame.clone(),
+                icon: GridIcon {
+                    inset: insets(ICON_INSET),
+                    pressed: insets(ICON_INSET_PRESSED),
+                },
+            }
+        })
+        .collect()
+}
+
+/// A mouse button going down on a grid button, which holds it down while
+/// it stays down.
+fn hold(press: On<PointerPress>, mut buttons: Query<&mut GridButton>) {
+    let held = match press.button {
+        PointerButton::Primary => MouseButton::Left,
+        PointerButton::Secondary => MouseButton::Right,
+        PointerButton::Middle => return,
+    };
+    if let Ok(mut button) = buttons.get_mut(press.entity)
+        && !button.0.contains(&held)
+    {
+        button.0.push(held);
+    }
+}
+
+/// Greyed copies of the grid's icons, by the icon's.
+#[derive(Resource, Default)]
+pub struct Greyed(HashMap<AssetId<Image>, Handle<Image>>);
+
+/// Shows each grid button as its slot holds, in the states the mouse
+/// puts it in.
+#[allow(clippy::type_complexity)]
+pub fn show_grid(
+    shown: Res<Shown>,
+    mouse: Res<ButtonInput<MouseButton>>,
+    mut buttons: Query<(&mut GridButton, &Slot, &Hovered, &Children, &mut Visibility)>,
+    mut frames: Query<(&Shows, &mut Visibility), Without<GridButton>>,
+    mut icons: Query<(&GridIcon, &mut ImageNode, &mut Node), Without<Shows>>,
+    greyed: Res<Greyed>,
+) {
+    for (mut button, slot, hovered, children, mut visibility) in &mut buttons {
+        if button.0.iter().any(|&b| !mouse.pressed(b)) {
+            button.0.retain(|&b| mouse.pressed(b));
+        }
+        let pressed = !button.0.is_empty();
+        let face = shown.faces[slot.0].as_ref();
+        // An empty slot has no button, only the panel's picture.
+        visibility.set_if_neq(match face {
+            Some(_) => Visibility::Inherited,
+            None => Visibility::Hidden,
+        });
+        let Some(face) = face else {
+            continue;
+        };
+        // A grid button is never disabled, nor anything but toggled off.
+        let holding = [
+            "ENABLED",
+            if hovered.get() {
+                "FOCUSED"
+            } else {
+                "UNFOCUSED"
+            },
+            if pressed { "PRESSED" } else { "UNPRESSED" },
+            "UNSELECTED",
+            "UNTARGETED",
+            "CLOSED",
+        ];
+        let icon = match (&face.icon, face.ready) {
+            (Some(icon), true) => Some(icon.clone()),
+            (Some(icon), false) => greyed.0.get(&icon.id()).cloned(),
+            (None, _) => None,
+        };
+        for &child in children {
+            if let Ok((shows, mut shown)) = frames.get_mut(child) {
+                shown.set_if_neq(match shows.0.shown(&holding) {
+                    true => Visibility::Inherited,
+                    false => Visibility::Hidden,
+                });
+            }
+            if let Ok((inset, mut image, mut node)) = icons.get_mut(child) {
+                let [l, t, r, b] = match pressed {
+                    true => inset.pressed,
+                    false => inset.inset,
+                };
+                let at = Node {
+                    left: Val::Percent(100.0 * l),
+                    top: Val::Percent(100.0 * t),
+                    width: Val::Percent(100.0 * (1.0 - l - r)),
+                    height: Val::Percent(100.0 * (1.0 - t - b)),
+                    ..node.clone()
+                };
+                let at = Node {
+                    display: match icon {
+                        Some(_) => Display::Flex,
+                        None => Display::None,
+                    },
+                    ..at
+                };
+                node.set_if_neq(at);
+                if let Some(handle) = &icon
+                    && image.image != *handle
+                {
+                    image.image = handle.clone();
+                }
+            }
+        }
+    }
+}
+
+/// An icon as the original greys it: each pixel's colour mixed down to one
+/// grey, darkened to under half.
+fn grey(icon: &Image) -> Option<Image> {
+    let mut out = match icon.texture_descriptor.format {
+        TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => icon.clone(),
+        _ => icon.convert(TextureFormat::Rgba8UnormSrgb)?,
+    };
+    for pixel in out.data.as_mut()?.as_chunks_mut::<4>().0 {
+        let [r, g, b] = [pixel[0], pixel[1], pixel[2]].map(f32::from);
+        #[allow(clippy::approx_constant, reason = "the original's weight, not 1/π")]
+        let grey = (0.114 * r + 0.318 * g + 0.043 * b).round() as u8;
+        pixel[..3].fill(grey);
+    }
+    Some(out)
 }
