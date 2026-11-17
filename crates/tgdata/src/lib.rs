@@ -503,6 +503,19 @@ impl GameData {
             .map(str::to_string)
     }
 
+    /// Which game the data is of, by its own name for itself, as
+    /// [`game_tag`] finds it, such as `aa`.
+    pub fn tag(&self) -> Option<&str> {
+        self.tag.as_deref()
+    }
+
+    /// Whether this is the data of the game tagged `tag`: whether it has
+    /// that game's load list, whatever else, such as a mod's, it has too.
+    pub fn is_of(&self, tag: &str) -> bool {
+        let list = format!("index_{}.lst", tag.to_ascii_lowercase());
+        self.paths.contains_key(&list)
+    }
+
     pub fn open_map(&self, name: &str) -> Result<Map<Cursor<Vec<u8>>>, String> {
         let bytes = self
             .read(name)
@@ -968,6 +981,17 @@ mod tests {
             game.versions("Game/SVars.tgi"),
             ["game/svars_k2.tgi", "game/svars.tgi"]
         );
+    }
+
+    #[test]
+    fn data_is_of_each_game_whose_load_list_it_has() {
+        let mut game = empty();
+        for list in ["index_aa.lst", "index_addon.lst", "game/index_k2.lst"] {
+            game.paths.insert(list.into(), (0, 0));
+        }
+        assert!(game.is_of("aa") && game.is_of("AA") && game.is_of("addon"));
+        // Only a list at the top of the archives counts.
+        assert!(!game.is_of("k2"));
     }
 
     #[test]

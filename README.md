@@ -54,31 +54,36 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
 ## Running
 
 You need Rust, and on Linux the system packages listed in the
-[editor's README](crates/tgeditor/README.md). `aaa.sh` builds and runs the game or the
+[editor's README](crates/tgeditor/README.md). `run.sh` builds and runs the game or the
 map editor, given the folder your copy of the game is installed in:
 
 ```sh
-./aaa.sh --data="/path/to/Axis and Allies"
-./aaa.sh editor --data="/path/to/Axis and Allies"
+./run.sh aa --data="/path/to/Axis and Allies"
+./run.sh editor --data="/path/to/Axis and Allies"
 ```
 
-Set `AA_INSTALL` to that folder to leave `--data` off. Run `./aaa.sh --help` for
+Set `AA_INSTALL` to that folder to leave `--data` off. Run `./run.sh` alone for
 usage.
 
-`./aaa.sh server` runs `tgserver`, which hosts a match with no window for games to
+`./run.sh server` runs `tgserver`, which hosts a match with no window for games to
 join, for example:
 
 ```sh
-./aaa.sh server "(2v2)Berlin" --host 0.0.0.0:4000
-./aaa.sh --join 127.0.0.1:4000
+./run.sh server "(2v2)Berlin" --host 0.0.0.0:4000
+./run.sh aa --join 127.0.0.1:4000
 ```
 
-Run `./aaa.sh server` with no map for its options.
+Run `./run.sh server` with no map for its options.
+
+`./run.sh k2` runs the same engine on K2's data instead, from `K2_INSTALL`
+or `--data`. It's there to keep the engine honest about what's
+AA's own.
 
 ## Development
 
 The code is a workspace of crates in [`crates/`](crates), from readers for the game's
-file formats up to the game itself.
+file formats up to [`tgclient`](crates/tgclient), which plays matches, and each
+game's program on top of it.
 
 ```sh
 cargo build --release

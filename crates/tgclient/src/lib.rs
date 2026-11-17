@@ -1,5 +1,7 @@
-//! Plays Axis & Allies (2004) matches, set up in a custom game's lobby or on
-//! a map given on the command line, or hosted elsewhere and joined.
+//! Plays the matches of a game on TimeGate's engine, set up in a custom
+//! game's lobby or on a map given on the command line, or hosted elsewhere
+//! and joined. Everything comes from the game's data but what a [`Program`]
+//! gives: each game's own program is a [`run`] with its own.
 //!
 //! You play one of the map's sides, or watch, and the computer plays the rest. Click one of your units or its
 //! banner to select its organization, Shift+click to add an organization to the
@@ -58,6 +60,12 @@ mod ui;
 mod waypoints;
 mod widgets;
 
+pub use backdrop::View;
+pub use ui::Palette;
+
+/// For a [`Palette`]'s colours.
+pub use bevy::color::Color;
+
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
@@ -85,13 +93,19 @@ use tgrender::{Edge, MapAssets, MapRenderPlugin, Playing};
 use tgserver::protocol::Welcome;
 use tgsim::{Relation, State, TICK, Target, World};
 
-const USAGE: &str = "\
+fn usage(program: &Program) -> String {
+    let Program {
+        name, example_map, ..
+    } = program;
+    format!(
+        "\
 usage:
-  aaa-game <game dir> [options]          set up a game from the menus
-  aaa-game <game dir> <map> [options]    play a map, e.g. \"allies10_berlin\"
-  aaa-game <game dir> --join <address> [options]
-                                         play in the match hosted at an
-                                         address, e.g. 127.0.0.1:4000
+  {name} <game dir> [options]
+      set up a game from the menus
+  {name} <game dir> <map> [options]
+      play a map, e.g. \"{example_map}\"
+  {name} <game dir> --join <address> [options]
+      play in the match hosted at an address, e.g. 127.0.0.1:4000
 
 options:
   --players <ids>           with --join, the players to give the orders of, by
@@ -118,7 +132,30 @@ options:
   --seed <number>           what the match's chances are drawn from, to play one
                             out the same way again, rather than a new one
   --log <filter>            what to log, as for RUST_LOG, e.g. \"debug\" or
-                            \"aaa_game=debug\"; RUST_LOG still applies on top";
+                            \"tgclient=debug\"; RUST_LOG still applies on top"
+    )
+}
+
+/// What a game's program says of it that its data doesn't.
+#[derive(Resource, Clone)]
+pub struct Program {
+    /// The program's name, for its window, usage and errors.
+    pub name: &'static str,
+    /// What the game's data calls the game, as [`GameData::is_of`] takes
+    /// it: the program plays only data of its own game.
+    pub tag: &'static str,
+    /// A map of the game's to name in the usage.
+    pub example_map: &'static str,
+    /// Our emblem for the game, as a PNG, crowning the main menu; without
+    /// one that can be read, the menu is headed by [`Program::title`].
+    pub logo: Option<&'static [u8]>,
+    /// What the game is called on the main menu without a logo.
+    pub title: &'static str,
+    /// The colours the interface is drawn in.
+    pub palette: Palette,
+    /// What the main menu stands over.
+    pub backdrop: View,
+}
 
 #[derive(States, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum Screen {
@@ -654,7 +691,17 @@ fn join(at: SocketAddr, players: Vec<u32>) -> Result<(orders::Line, Welcome, Str
     Ok((Box::new(link), welcome, at.to_string()))
 }
 
-fn main() -> ExitCode {
+/// Whether `game` is the data of the game tagged `tag`.
+fn own_game(game: &GameData, tag: &str) -> Result<(), String> {
+    match game.tag() {
+        _ if game.is_of(tag) => Ok(()),
+        Some(t) => Err(format!("the data of {t}, not {tag}")),
+        None => Err(format!("no game named in the data, not {tag}")),
+    }
+}
+
+/// Plays the game `program` is of, as its command line asks.
+pub fn run(program: Program) -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let Some(Options {
         side,
@@ -671,20 +718,20 @@ fn main() -> ExitCode {
         join: joining,
     }) = options(&mut args)
     else {
-        eprintln!("{USAGE}");
+        eprintln!("{}", usage(&program));
         return ExitCode::from(2);
     };
     let log = match tgrender::log::plugin(log.as_deref()) {
         Ok(l) => l,
         Err(e) => {
-            eprintln!("aaa-game: {e}");
+            eprintln!("{}: {e}", program.name);
             return ExitCode::from(2);
         }
     };
     let remote = match console.map(remote::Remote::listen).transpose() {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("aaa-game: {e}");
+            eprintln!("{}: {e}", program.name);
             return ExitCode::FAILURE;
         }
     };
@@ -697,11 +744,12 @@ fn main() -> ExitCode {
         [dir] => (dir, None),
         [dir, map] if joining.is_none() => (dir, Some(map)),
         _ => {
-            eprintln!("{USAGE}");
+            eprintln!("{}", usage(&program));
             return ExitCode::from(2);
         }
     };
     let opened = GameData::open(&PathBuf::from(dir)).and_then(|game| {
+        own_game(&game, program.tag).map_err(|e| format!("{dir}: {e}"))?;
         let Some(map) = map else {
             return Ok((game, None));
         };
@@ -713,7 +761,7 @@ fn main() -> ExitCode {
     let (game, map) = match opened {
         Ok(o) => o,
         Err(e) => {
-            eprintln!("aaa-game: {e}");
+            eprintln!("{}: {e}", program.name);
             return ExitCode::FAILURE;
         }
     };
@@ -722,13 +770,13 @@ fn main() -> ExitCode {
     let joined = match joining.map(|(at, players)| join(at, players)).transpose() {
         Ok(j) => j,
         Err(e) => {
-            eprintln!("aaa-game: {e}");
+            eprintln!("{}: {e}", program.name);
             return ExitCode::FAILURE;
         }
     };
 
     let mut app = App::new();
-    let mut window = shot::window("aaa-game".into(), screenshot.is_some());
+    let mut window = shot::window(program.name.into(), screenshot.is_some());
     // Its size, and whether it fills the screen, are chosen in the options.
     if let Some(window) = &mut window.primary_window {
         window.resizable = false;
@@ -799,6 +847,7 @@ fn main() -> ExitCode {
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
+        .insert_resource(ui::Theme::from(program.palette))
         .insert_resource(hud)
         .add_systems(PreUpdate, fit_ui)
         // The menu's backdrop has a camera too, which stays put.
@@ -847,6 +896,7 @@ fn main() -> ExitCode {
             OnEnter(Screen::Match),
             (
                 setup,
+                title_window,
                 deliveries::reset,
                 fog::setup,
                 setup_overlays,
@@ -1063,7 +1113,8 @@ fn main() -> ExitCode {
             app.insert_state(Screen::MainMenu);
         }
     }
-    app.add_systems(Last, orders::leave_on_exit);
+    app.add_systems(Last, orders::leave_on_exit)
+        .insert_resource(program);
     match app.run() {
         AppExit::Success => ExitCode::SUCCESS,
         AppExit::Error(code) => ExitCode::from(code.get()),
@@ -1421,6 +1472,17 @@ fn setup_overlays(
     ));
 }
 
+/// Names the match's map in the window's title.
+fn title_window(
+    loaded: Res<Loaded>,
+    program: Res<Program>,
+    mut window: Option<Single<&mut Window, With<PrimaryWindow>>>,
+) {
+    if let Some(window) = &mut window {
+        window.title = format!("{} - {}", loaded.map.title, program.name);
+    }
+}
+
 fn setup(
     mut commands: Commands,
     loaded: Res<Loaded>,
@@ -1428,12 +1490,8 @@ fn setup(
     local: Res<Local>,
     mut assets: MapAssets,
     mut sounds: ResMut<sound::Sounds>,
-    mut window: Option<Single<&mut Window, With<PrimaryWindow>>>,
 ) {
     let Loaded { game, map } = &*loaded;
-    if let Some(window) = &mut window {
-        window.title = format!("{} - aaa-game", map.title);
-    }
     // The sim's units and buildings are drawn below, trailers with what
     // tows them; what else a Division HQ holds would be left standing when
     // it packs.

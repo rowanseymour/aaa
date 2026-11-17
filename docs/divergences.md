@@ -19,7 +19,7 @@ differences in what you can see or do are.
 The original's own in-match interface can be drawn instead, from its layouts and its
 nations' skins (`--original-hud`). Its 4:3 layout is kept at its own shape, as tall as
 the window and centred, where the original stretches it to fill a wider screen. See
-[widgets.rs](../crates/game/src/widgets.rs).
+[widgets.rs](../crates/tgclient/src/widgets.rs).
 
 ## View
 

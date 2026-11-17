@@ -54,11 +54,37 @@ pub struct Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        // A dark olive and a cream, to go with the logo.
+        Theme::from(Palette {
+            tint: Color::srgb_u8(0x14, 0x14, 0x14),
+            light: Color::srgb_u8(0xdc, 0xdc, 0xdc),
+            accent: Color::srgb(0.6, 0.6, 0.6),
+        })
+    }
+}
+
+/// The colours a [`Theme`] is made from that a game's program chooses.
+#[derive(Clone, Copy, Debug)]
+pub struct Palette {
+    /// The theme's [`Theme::tint`].
+    pub tint: Color,
+    /// The theme's [`Theme::light`].
+    pub light: Color,
+    /// The theme's [`Theme::accent`].
+    pub accent: Color,
+}
+
+impl From<Palette> for Theme {
+    fn from(
+        Palette {
+            tint,
+            light,
+            accent,
+        }: Palette,
+    ) -> Self {
         Theme {
-            tint: Color::srgb_u8(0x0f, 0x14, 0x0c),
-            light: Color::srgb_u8(0xdc, 0xd9, 0xc6),
-            accent: Color::srgb(0.75, 0.6, 0.3),
+            tint,
+            light,
+            accent,
             lit: crate::OWN,
             short: None,
             key: None,
@@ -1148,12 +1174,14 @@ mod tests {
     }
 
     #[test]
-    fn the_default_panel_is_the_logos_olive() {
-        let [r, g, b, _] = Theme::default()
-            .surface(Surface::Panel)
-            .to_srgba()
-            .to_u8_array();
-        // The logo's ground, 0x1d2219, give or take rounding.
+    fn a_panel_is_its_tint_lit_a_little() {
+        let theme = Theme::from(Palette {
+            tint: Color::srgb_u8(0x0f, 0x14, 0x0c),
+            light: Color::srgb_u8(0xdc, 0xd9, 0xc6),
+            accent: Color::WHITE,
+        });
+        let [r, g, b, _] = theme.surface(Surface::Panel).to_srgba().to_u8_array();
+        // AA's logo's ground, from its tint, give or take rounding.
         assert!(r.abs_diff(0x1d) <= 1 && g.abs_diff(0x22) <= 1 && b.abs_diff(0x19) <= 1);
     }
 

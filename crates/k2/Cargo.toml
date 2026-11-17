@@ -1,0 +1,12 @@
+[package]
+name = "k2-game"
+version = "0.1.0-alpha"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Plays Kohan II matches"
+publish = false
+
+[dependencies]
+tgclient = { path = "../tgclient" }

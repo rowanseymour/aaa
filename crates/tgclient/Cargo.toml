@@ -1,11 +1,11 @@
 [package]
-name = "aaa-game"
+name = "tgclient"
 version = "0.1.0-alpha"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Plays Axis & Allies (2004) matches"
+description = "Plays the matches of games on TimeGate's engine, such as Axis & Allies (2004) and Kohan II, for each game's own program to run"
 publish = false
 
 [dependencies]
