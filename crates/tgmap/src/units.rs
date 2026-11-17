@@ -34,6 +34,8 @@ pub struct Player {
     pub outcome: Outcome,
     /// Whether it won by the share of the map's cities its team held.
     pub won_by_cities: bool,
+    /// Whether it had resigned.
+    pub resigned: bool,
     /// The nation it plays as, e.g. `nation_usa`, where the map fixes one or
     /// it was loaded with one.
     pub nation: Option<String>,
@@ -160,6 +162,7 @@ pub(crate) fn players_and_teams(
                 _ => Outcome::Playing,
             },
             won_by_cities: k.city_ratio_victory.unwrap_or(false),
+            resigned: k.resigned.unwrap_or(false),
             nation: (!k.nation.is_empty()).then(|| k.nation.clone()),
             // Maps whose nation the lobby chooses can still name a faction,
             // which the lobby's choice replaces.

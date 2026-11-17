@@ -49,6 +49,8 @@ pub enum Action {
     Name { player: u32, name: String },
     /// Tells everyone what came of someone asking to pause or unpause.
     Pausing(Pausing),
+    /// Has the person playing a side resign it, as [`World::resign`].
+    Resign(u32),
 }
 
 /// What came of a person asking to pause or unpause a match played
@@ -130,6 +132,7 @@ impl Action {
             }
             Action::Name { .. } => {}
             Action::Pausing(pausing) => world.notices.push(crate::Notice::Pausing(pausing)),
+            Action::Resign(player) => world.resign(player),
         }
         Ok(())
     }

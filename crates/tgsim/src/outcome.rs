@@ -18,6 +18,11 @@ pub struct Fate {
     pub default_defeat: bool,
     /// Whether it won by the share of the map's cities its team held.
     pub by_cities: bool,
+    /// Whether it resigned, which leaves nobody playing it and has its
+    /// things go.
+    pub resigned: bool,
+    /// Whether whoever plays it has voted for its team to resign.
+    pub resigning: bool,
 }
 
 impl World {
@@ -39,6 +44,76 @@ impl World {
     /// whose outcome is decided.
     pub fn lose(&mut self, player: u32) {
         self.decide(player, false, true);
+    }
+
+    /// Whether a side has resigned.
+    pub fn resigned(&self, player: u32) -> bool {
+        self.fates.get(&player).is_some_and(|f| f.resigned)
+    }
+
+    /// Whether a person plays a side: one named after them that hasn't
+    /// resigned.
+    pub fn held(&self, player: u32) -> bool {
+        self.sides.names.contains_key(&player) && !self.resigned(player)
+    }
+
+    /// Has the person playing a side resign it while the match goes on:
+    /// at once if it stands alone, or else as their vote for its team to,
+    /// which it does once everyone playing one of its sides has voted.
+    pub fn resign(&mut self, player: u32) {
+        let voted = self.fates.get(&player).map(|f| f.resigning);
+        if self.over || !self.held(player) || voted.is_none_or(|v| v) {
+            return;
+        }
+        let Some(team) = self.shared_team(player) else {
+            self.notices.push(Notice::Resigned { player });
+            self.concede(player);
+            return;
+        };
+        self.fates.get_mut(&player).expect("voted").resigning = true;
+        let members = self.sides.players.iter().filter(|p| p.team == Some(team));
+        let held: Vec<u32> = members.map(|p| p.id).filter(|&p| self.held(p)).collect();
+        // Votes stand for the rest of the match.
+        if held
+            .iter()
+            .any(|p| !self.fates.get(p).is_some_and(|f| f.resigning))
+        {
+            self.notices.push(Notice::ResignVote { player, team });
+            return;
+        }
+        self.notices.push(Notice::TeamResigned { team });
+        for player in held {
+            self.concede(player);
+        }
+    }
+
+    /// Takes a side from whoever plays it, losing it the match.
+    fn concede(&mut self, player: u32) {
+        if let Some(fate) = self.fates.get_mut(&player) {
+            fate.resigned = true;
+        }
+        self.decide(player, false, true);
+    }
+
+    /// Has what resigned sides still have go, once a second: each
+    /// organization disbanded once it can be and each building sold once
+    /// it can be. What can be neither stays.
+    pub(crate) fn clear_out_resigned(&mut self) {
+        if !self.ticks.is_multiple_of(SECOND) || !self.fates.values().any(|f| f.resigned) {
+            return;
+        }
+        for r in 0..self.organizations.len() {
+            let owner = self.organizations[r].owner;
+            if self.resigned(owner) && self.may_disband(owner, r).is_ok() {
+                self.disband(r);
+            }
+        }
+        for b in 0..self.buildings.len() {
+            let owner = self.buildings[b].owner;
+            if self.resigned(owner) && self.may_sell(owner, b).is_ok() {
+                self.sell(b);
+            }
+        }
     }
 
     /// Sets whether having nothing left defeats a side.
@@ -173,11 +248,13 @@ impl World {
             return;
         }
         fate.outcome = if won { Outcome::Won } else { Outcome::Lost };
+        let resigned = fate.resigned;
         if self.shared_team(player).is_none() {
             match won {
                 true => self.notices.push(Notice::Victorious { player }),
-                // Those who lose to another's win aren't told of one by one.
-                false if !self.over => self.notices.push(Notice::Defeated { player }),
+                // Those who lose to another's win aren't told of one by
+                // one, nor is one that resigned told of again.
+                false if !self.over && !resigned => self.notices.push(Notice::Defeated { player }),
                 false => {}
             }
         }
@@ -215,7 +292,7 @@ impl World {
                 return;
             };
             let mut members = self.sides.players.iter().filter(|p| p.team == Some(team));
-            if members.all(|p| self.outcome(p.id) == Outcome::Lost) {
+            if !self.resigned(player) && members.all(|p| self.outcome(p.id) == Outcome::Lost) {
                 self.notices.push(Notice::TeamDefeated { team });
             }
             return;
@@ -236,14 +313,16 @@ impl World {
 crate::hash::digest!(Fate {
     outcome,
     default_defeat,
-    by_cities
+    by_cities,
+    resigned,
+    resigning
 });
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::testing::*;
-    use crate::{Player, Sides};
+    use crate::{Command, Player, Sides};
     use Outcome::*;
     use tgmap::{Domain, Id, Pathing};
 
@@ -322,9 +401,102 @@ mod tests {
                     | Notice::TeamDefeated { .. }
                     | Notice::TeamVictorious { .. }
                     | Notice::CitiesHeld { .. }
+                    | Notice::Resigned { .. }
+                    | Notice::ResignVote { .. }
+                    | Notice::TeamResigned { .. }
             )
         };
         w.take_notices().into_iter().filter(judged).collect()
+    }
+
+    /// Has people play `sides`, named after them.
+    fn played(w: &mut World, sides: &[u32]) {
+        for &side in sides {
+            w.sides.names.insert(side, format!("Person {side}"));
+        }
+    }
+
+    #[test]
+    fn a_side_alone_resigns_at_once_and_is_not_told_defeated() {
+        let mut w = free_for_all();
+        played(&mut w, &[1, 2]);
+        run(&mut w, 2.0);
+        w.resign(1);
+        assert_eq!(outcomes(&w), [Lost, Playing, Playing]);
+        assert!(w.resigned(1) && !w.held(1));
+        assert_eq!(told(&mut w), [Notice::Resigned { player: 1 }]);
+        // Nothing for a side nobody plays, one resigned already, or once
+        // the match is over.
+        w.resign(3);
+        w.resign(1);
+        assert_eq!(told(&mut w), []);
+        w.resign(2);
+        assert!(w.over);
+        assert_eq!(outcomes(&w), [Lost, Lost, Won]);
+        let events = [
+            Notice::Resigned { player: 2 },
+            Notice::Victorious { player: 3 },
+        ];
+        assert_eq!(told(&mut w), events);
+    }
+
+    #[test]
+    fn a_team_resigns_once_everyone_playing_it_has_voted() {
+        let mut w = teams();
+        played(&mut w, &[1, 2, 3]);
+        w.resign(1);
+        assert_eq!(outcomes(&w)[..2], [Playing, Playing]);
+        let vote = Notice::ResignVote { player: 1, team: 0 };
+        assert_eq!(told(&mut w), [vote]);
+        // A vote stands, once.
+        w.resign(1);
+        assert_eq!(told(&mut w), []);
+        w.resign(2);
+        assert_eq!(outcomes(&w)[..2], [Lost, Lost]);
+        assert!(w.resigned(1) && w.resigned(2));
+        assert_eq!(told(&mut w), [Notice::TeamResigned { team: 0 }]);
+        assert!(!w.over);
+        // A side nobody plays has no vote, and doesn't resign with the
+        // team.
+        w.resign(3);
+        assert_eq!(outcomes(&w), [Lost, Lost, Lost, Playing, Playing]);
+        assert!(!w.resigned(4));
+        assert_eq!(told(&mut w), [Notice::TeamResigned { team: 1 }]);
+    }
+
+    #[test]
+    fn without_team_victory_a_side_on_a_team_resigns_alone() {
+        let mut w = teams();
+        w.rules.team_victory = false;
+        played(&mut w, &[1, 2]);
+        w.resign(1);
+        assert_eq!(outcomes(&w)[..2], [Lost, Playing]);
+        assert_eq!(told(&mut w), [Notice::Resigned { player: 1 }]);
+    }
+
+    #[test]
+    fn a_resigned_side_takes_no_orders_and_its_things_go() {
+        let mut w = free_for_all();
+        let unsold = tgmap::Building {
+            template: Id::from("bunker"),
+            ..building(51, 1, [40.0, 20.0])
+        };
+        w = with_buildings(w, &[building(50, 1, [20.0, 20.0]), unsold]);
+        w.rules.sellable.insert(Id::from("house"));
+        played(&mut w, &[1]);
+        run(&mut w, 2.0);
+        w.tick();
+        w.resign(1);
+        let stop = Command::Stop { organization: 0 };
+        assert_eq!(w.check(1, &stop), Err(crate::Refused::NotYours));
+        assert_eq!(w.apply(1, stop), Err(crate::Refused::NotYours));
+        // It goes on the next whole second.
+        run(&mut w, 0.5);
+        assert!(!w.destroyed(0));
+        run(&mut w, 1.0);
+        assert!(w.destroyed(0));
+        assert!(matches!(w.buildings[0].state, State::Sold(_)));
+        assert_eq!(w.buildings[1].state, State::Standing);
     }
 
     #[test]

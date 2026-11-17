@@ -1170,6 +1170,18 @@ fn told(
         // How the match comes out is told to everyone.
         Notice::Defeated { player } => Told::Event("kingdom_defeated", vec![side(player)], None),
         Notice::Victorious { player } => Told::Event("kingdom_victory", vec![side(player)], None),
+        Notice::Resigned { player } => Told::Event("kingdom_resigned", vec![side(player)], None),
+        Notice::TeamResigned { team } => {
+            Told::Event("team_resigned", vec![team_name(team).into()], None)
+        }
+        Notice::ResignVote { player, team } => {
+            let said = look.said(
+                "networking_player_voted_to_resign_team|ss",
+                "%s voted for %s to resign",
+            );
+            let with = [side(player), team_name(team).into()];
+            Told::Words("GENERIC_EVENT", fill_all(&said, &with))
+        }
         Notice::TeamDefeated { team } => {
             Told::Event("team_defeated", vec![team_name(team).into()], None)
         }
@@ -1713,6 +1725,33 @@ mod tests {
         assert!(line.inks.is_empty() && line.marks.is_empty());
         // One who watches is named all the same.
         assert_eq!(said_line(&look, said(None)).text, "Bob: wait");
+    }
+
+    #[test]
+    fn a_vote_to_resign_names_the_voter_and_their_team() {
+        let mut sim = allied_sides();
+        sim.sides.teams.push(tgsim::Team {
+            id: 10,
+            name: "Allies".into(),
+            relations: Vec::new(),
+            team_relations: Vec::new(),
+        });
+        sim.sides.names.insert(1, "Bob".into());
+        let (look, leaders) = (look(&[]), Leaders::default());
+        let told = |notice| told(&sim, Some(3), &leaders, &look, notice);
+        let vote = told(Notice::ResignVote { player: 1, team: 0 });
+        let Some(Told::Words(kind, words)) = vote else {
+            panic!("a vote is a line of its own");
+        };
+        assert_eq!(kind, "GENERIC_EVENT");
+        assert_eq!(words.text, "Bob voted for Allies to resign");
+        let resigned = told(Notice::TeamResigned { team: 0 });
+        assert!(matches!(resigned, Some(Told::Event("team_resigned", ..))));
+        let resigned = told(Notice::Resigned { player: 1 });
+        assert!(matches!(
+            resigned,
+            Some(Told::Event("kingdom_resigned", ..))
+        ));
     }
 
     #[test]

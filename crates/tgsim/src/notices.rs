@@ -105,6 +105,16 @@ pub enum Notice {
     Defeated { player: u32 },
     /// It's won the match.
     Victorious { player: u32 },
+    /// It's resigned on its own, and lost the match.
+    Resigned { player: u32 },
+    /// Whoever plays it has voted for its team, at this index into
+    /// [`Sides::teams`](crate::Sides::teams), to resign, which others
+    /// playing the team's sides have yet to.
+    ResignVote { player: u32, team: usize },
+    /// Everyone playing a side of the team at this index into
+    /// [`Sides::teams`](crate::Sides::teams) has voted to resign, and
+    /// those sides resign.
+    TeamResigned { team: usize },
     /// Every side of the team at this index into
     /// [`Sides::teams`](crate::Sides::teams) has lost the match, which
     /// goes on.

@@ -7,7 +7,7 @@ use bevy::ui_widgets::Activate;
 use crate::actions::Page;
 use crate::options::Options;
 use crate::ui::{self, Font};
-use crate::{Focus, LoadingScreen, Orders, Screen, SelectionBox, console};
+use crate::{Focus, LoadingScreen, Local, Orders, Screen, SelectionBox, Sim, console};
 use crate::{confirm, menu};
 use tgsim::Action;
 
@@ -95,6 +95,8 @@ fn toggle(
     overlays: Query<Entity, With<Overlay>>,
     mut focus: ResMut<Focus>,
     mut boxes: Query<&mut Visibility, With<SelectionBox>>,
+    sim: Option<Res<Sim>>,
+    local: Option<Res<Local>>,
 ) {
     if !keys.just_pressed(KeyCode::Escape) || !loading.is_empty() {
         return;
@@ -108,15 +110,21 @@ fn toggle(
         // under the menu, as nothing updates it while it's open.
         focus.set_if_neq(Focus::Nothing);
         boxes.iter_mut().for_each(|mut v| *v = Visibility::Hidden);
-        open(&mut commands, &words, menu, orders);
+        // A side of the player's own that's still in a match going on.
+        let playing = |&side: &u32| sim.is_some_and(|s| !s.0.over && s.0.held(side));
+        let side = local.and_then(|l| l.0).filter(playing);
+        let side = side.filter(|&side| orders.may(&Action::Resign(side)));
+        open(&mut commands, &words, menu, orders, side);
     }
 }
 
+/// Puts the menu up, offering to resign `side` if it's the player's to.
 fn open(
     commands: &mut Commands,
     words: &Words,
     mut menu: ResMut<PauseMenu>,
     mut orders: ResMut<Orders>,
+    side: Option<u32>,
 ) {
     menu.open = true;
     // A match hosted elsewhere is other people's too, and plays on.
@@ -153,6 +161,15 @@ fn open(
     } else {
         commands.spawn((ui::disabled(connection, Font::Large), ChildOf(column)));
     }
+    if let Some(side) = side {
+        commands
+            .spawn((
+                ui::button("Resign", Font::Large),
+                ui::called("pause.resign"),
+                ChildOf(column),
+            ))
+            .observe(ask_resign(side));
+    }
     commands
         .spawn((
             ui::button("Quit to Desktop", Font::Large),
@@ -172,6 +189,22 @@ fn open(
 /// Opens the connection dialog over the menu.
 fn connection_status(_: On<Activate>, mut dialog: ResMut<crate::connection::Dialog>) {
     crate::connection::open(&mut dialog);
+}
+
+/// Asks whether to resign `side`, and does if so, closing the menu.
+fn ask_resign(side: u32) -> impl Fn(On<Activate>, Commands, Res<confirm::Words>) {
+    move |_, mut commands, words| {
+        let resign = move |_: On<Activate>,
+                           mut commands: Commands,
+                           menu: ResMut<PauseMenu>,
+                           mut orders: ResMut<Orders>,
+                           overlays: Query<Entity, With<Overlay>>| {
+            orders.act(Action::Resign(side));
+            close(&mut commands, menu, orders, &overlays);
+        };
+        let question = words.sure.clone();
+        confirm::confirm(&mut commands, &words, Screen::Match, question, resign);
+    }
 }
 
 /// Asks whether to exit the game, and does if so.
@@ -351,5 +384,50 @@ mod tests {
         escape(&mut app);
         assert_eq!(pages(&mut app), 0);
         assert!(!open(&app) && !paused(&app));
+    }
+
+    /// [`app`] with a match hosted here, played as side 1 if `local`
+    /// says so, past its first step.
+    fn playing(local: Option<u32>) -> App {
+        let mut app = app();
+        let mut world = crate::orders::testing::fresh();
+        let mut orders = Orders::hosting(Default::default(), world.clone(), local, "Player");
+        // Until its first step the side goes by nobody's name, and so
+        // isn't one a person can resign.
+        orders.carry_out(&mut world);
+        app.insert_resource(orders)
+            .insert_resource(Sim(world))
+            .insert_resource(Local(local));
+        app
+    }
+
+    fn labels(app: &mut App) -> Vec<String> {
+        let world = app.world_mut();
+        let mut texts = world.query::<&Text>();
+        texts.iter(world).map(|t| t.0.clone()).collect()
+    }
+
+    #[test]
+    fn resigning_asks_first_then_resigns_the_player_s_side() {
+        let mut app = playing(Some(1));
+        escape(&mut app);
+        press(&mut app, "Resign");
+        assert!(asking(&mut app) && open(&app));
+        press(&mut app, "Ok");
+        assert!(!open(&app));
+        let world = app.world_mut();
+        let mut sim = world.remove_resource::<Sim>().unwrap();
+        world.resource_mut::<Orders>().carry_out(&mut sim.0);
+        let asked = crate::orders::testing::asked(world.resource::<Orders>().record());
+        assert!(asked.contains(&Action::Resign(1)));
+        assert!(sim.0.resigned(1));
+        world.insert_resource(sim);
+        // Once it has, there's nothing to resign.
+        escape(&mut app);
+        assert!(!labels(&mut app).contains(&"Resign".to_string()));
+        // Nor for one who only watches.
+        let mut app = playing(None);
+        escape(&mut app);
+        assert!(!labels(&mut app).contains(&"Resign".to_string()));
     }
 }

@@ -3094,6 +3094,7 @@ mod tests {
             default_defeat: true,
             outcome: Default::default(),
             won_by_cities: false,
+            resigned: false,
             nation: None,
             faction: None,
             relations: Vec::new(),

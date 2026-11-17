@@ -371,6 +371,13 @@ impl Orders {
         for seat in self.client.status().into_iter().flat_map(|s| &s.seats) {
             let seen = || (seat.players.clone(), seat.name.clone());
             self.seen.entry(seat.client).or_insert_with(seen);
+            // A side resigned is taken from whoever played it.
+            if let Hosted::Elsewhere { players, .. } = &mut self.host
+                && seat.client == self.me
+                && *players != seat.players
+            {
+                players.clone_from(&seat.players);
+            }
         }
         for gone in self.client.take_left() {
             match gone.client == self.me {
