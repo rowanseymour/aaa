@@ -782,12 +782,13 @@ impl<L: Link> Host<L> {
         changed
     }
 
-    /// How many of those staying are for kicking `client` out.
+    /// How many of those staying with a side are for kicking `client`
+    /// out: a vote cast before its voter's side resigned no longer counts.
     fn kicks_against(&self, client: u32) -> u32 {
         let voters = self
             .clients
             .iter()
-            .filter(|c| !c.lost && c.kicking.contains(&client));
+            .filter(|c| !c.lost && !c.players.is_empty() && c.kicking.contains(&client));
         voters.count() as u32
     }
 
@@ -1224,6 +1225,19 @@ mod tests {
         play(&mut host, &mut clients, 2);
         assert_eq!(asked(host.schedule().record()).len(), 1);
         assert!(!host.schedule().paused());
+    }
+
+    #[test]
+    fn a_kick_vote_counts_only_while_its_voter_has_a_side() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[3]]);
+        play(&mut host, &mut clients, 2);
+        clients[1].kick(3, true).unwrap();
+        clients[1].ask(Action::Resign(2)).unwrap();
+        play(&mut host, &mut clients, 2);
+        // With two sides left two votes are needed, and the first is gone.
+        clients[0].kick(3, true).unwrap();
+        play(&mut host, &mut clients, 2);
+        assert_eq!(host.clients(), 3);
     }
 
     #[test]

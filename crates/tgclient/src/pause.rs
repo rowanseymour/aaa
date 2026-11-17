@@ -111,7 +111,7 @@ fn toggle(
         focus.set_if_neq(Focus::Nothing);
         boxes.iter_mut().for_each(|mut v| *v = Visibility::Hidden);
         // A side of the player's own that's still in a match going on.
-        let playing = |&side: &u32| sim.is_some_and(|s| !s.0.over && !s.0.resigned(side));
+        let playing = |&side: &u32| sim.is_some_and(|s| !s.0.over && s.0.held(side));
         let side = local.and_then(|l| l.0).filter(playing);
         let side = side.filter(|&side| orders.may(&Action::Resign(side)));
         open(&mut commands, &words, menu, orders, side);
@@ -387,11 +387,14 @@ mod tests {
     }
 
     /// [`app`] with a match hosted here, played as side 1 if `local`
-    /// says so.
+    /// says so, past its first step.
     fn playing(local: Option<u32>) -> App {
         let mut app = app();
-        let world = crate::orders::testing::fresh();
-        let orders = Orders::hosting(Default::default(), world.clone(), local, "Player");
+        let mut world = crate::orders::testing::fresh();
+        let mut orders = Orders::hosting(Default::default(), world.clone(), local, "Player");
+        // Until its first step the side goes by nobody's name, and so
+        // isn't one a person can resign.
+        orders.carry_out(&mut world);
         app.insert_resource(orders)
             .insert_resource(Sim(world))
             .insert_resource(Local(local));

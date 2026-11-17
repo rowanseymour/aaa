@@ -374,6 +374,7 @@ impl Orders {
             // A side resigned is taken from whoever played it.
             if let Hosted::Elsewhere { players, .. } = &mut self.host
                 && seat.client == self.me
+                && *players != seat.players
             {
                 players.clone_from(&seat.players);
             }

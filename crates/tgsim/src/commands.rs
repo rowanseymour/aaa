@@ -17,13 +17,19 @@ impl World {
             && !self.destroyed(organization)
     }
 
+    /// Whether anyone may give `player`'s orders: nobody plays a side
+    /// that's resigned.
+    fn playable(&self, player: u32) -> Result<(), Refused> {
+        match self.resigned(player) {
+            true => Err(Refused::NotYours),
+            false => Ok(()),
+        }
+    }
+
     /// Whether `player` may give `command` now: what [`World::apply`]
     /// would refuse it for, without carrying it out.
     pub fn check(&self, player: u32, command: &Command) -> Result<(), Refused> {
-        // Nobody plays a side that's resigned.
-        if self.resigned(player) {
-            return Err(Refused::NotYours);
-        }
+        self.playable(player)?;
         match *command {
             Command::Move { organization, .. }
             | Command::Guard { organization, .. }
@@ -85,6 +91,7 @@ impl World {
 
     /// Carries out `command` from `player`, unless it's refused.
     pub fn apply(&mut self, player: u32, command: Command) -> Result<(), Refused> {
+        self.playable(player)?;
         match command {
             Command::Move { organization, to } => self.order_move(player, organization, to)?,
             Command::Attack { organization, to } => self.order_attack(player, organization, to)?,

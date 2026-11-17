@@ -99,19 +99,18 @@ impl World {
     /// organization disbanded once it can be and each building sold once
     /// it can be. What can be neither stays.
     pub(crate) fn clear_out_resigned(&mut self) {
-        let resigned = |w: &World, owner| w.fates.get(&owner).is_some_and(|f| f.resigned);
         if !self.ticks.is_multiple_of(SECOND) || !self.fates.values().any(|f| f.resigned) {
             return;
         }
         for r in 0..self.organizations.len() {
             let owner = self.organizations[r].owner;
-            if resigned(self, owner) && self.may_disband(owner, r).is_ok() {
+            if self.resigned(owner) && self.may_disband(owner, r).is_ok() {
                 self.disband(r);
             }
         }
         for b in 0..self.buildings.len() {
             let owner = self.buildings[b].owner;
-            if resigned(self, owner) && self.may_sell(owner, b).is_ok() {
+            if self.resigned(owner) && self.may_sell(owner, b).is_ok() {
                 self.sell(b);
             }
         }
@@ -490,6 +489,7 @@ mod tests {
         w.resign(1);
         let stop = Command::Stop { organization: 0 };
         assert_eq!(w.check(1, &stop), Err(crate::Refused::NotYours));
+        assert_eq!(w.apply(1, stop), Err(crate::Refused::NotYours));
         // It goes on the next whole second.
         run(&mut w, 0.5);
         assert!(!w.destroyed(0));
