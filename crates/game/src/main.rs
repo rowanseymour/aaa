@@ -810,6 +810,7 @@ fn main() -> ExitCode {
         )
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<intent::Intent>()
+        .add_observer(intent::send)
         .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
         .add_message::<messages::Failed>()
@@ -947,6 +948,7 @@ fn main() -> ExitCode {
                 messages::list.after(messages::tell).after(displays::Keys),
                 messages::relist.after(messages::tell_leaving),
                 chat::keys
+                    .after(keys::send)
                     .run_if(takes_input)
                     .run_if(connection::closed)
                     .run_if(resource_exists::<Orders>)
@@ -979,19 +981,27 @@ fn main() -> ExitCode {
                     special_ops::give,
                 )
                     .chain(),
+                choose_formation.run_if(keys_free),
+            )
+                .run_if(in_state(Screen::Match))
+                .run_if(takes_input)
+                .before(carry_out),
+        )
+        .add_systems(
+            Update,
+            (
+                keys::send.run_if(keys_free).run_if(keys_heard),
                 (
-                    choose_formation,
-                    keys::send,
-                    special_ops::hotkeys,
+                    special_ops::act,
                     supply::cycle_detached,
                     messages::cycle,
                     supply::toggle_border,
                     fog::cheat,
                 )
-                    .run_if(keys_free),
+                    .after(keys::send),
             )
                 .run_if(in_state(Screen::Match))
-                .run_if(takes_input)
+                .run_if(resource_exists::<Orders>)
                 .before(carry_out),
         )
         .add_systems(
@@ -1071,6 +1081,17 @@ fn takes_input(
         && pause::closed(menu)
         && displays::closed(Some(displays))
         && loading.is_empty()
+}
+
+/// Whether keys reach the match's hotkeys: neither the console nor the
+/// pause menu is up, and the match has loaded. A display panel that's up
+/// hears only its own, as [`displays::Displays::hears`] has it.
+fn keys_heard(
+    console: Res<console::Console>,
+    menu: Res<pause::PauseMenu>,
+    loading: Query<(), With<LoadingScreen>>,
+) -> bool {
+    console::closed(console) && pause::closed(menu) && loading.is_empty()
 }
 
 /// Whether the match has the keyboard: neither the chat bar nor the

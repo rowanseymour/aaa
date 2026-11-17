@@ -10,7 +10,7 @@ use tgrender::GroundFog;
 use tgrender::blend::{self, GroundMaterial};
 use tgsim::{Seen, World};
 
-use crate::{BuildingView, Loaded, Local, Sim, UnitView, keys};
+use crate::{BuildingView, Loaded, Local, Sim, UnitView};
 
 /// How bright ground explored but not seen now looks, of its full
 /// brightness.
@@ -218,16 +218,15 @@ pub fn hide_scenery(
     }
 }
 
-/// Lifts or lays the fog over the screen on the developer key, where
-/// cheats are allowed.
+/// Lifts or lays the fog over the screen when asked, as the developer key
+/// does, where cheats are allowed.
 pub fn cheat(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<keys::Bindings>,
+    mut intents: MessageReader<crate::intent::Intent>,
     orders: Res<crate::Orders>,
     mut fog: ResMut<Fog>,
 ) {
     // A match hosted elsewhere isn't the game's to cheat at.
-    if bindings.pressed(&keys, "Fog") && !orders.joined_to() {
+    if crate::intent::asked(&mut intents, "Fog") && !orders.joined_to() {
         fog.lifted = !fog.lifted;
     }
 }

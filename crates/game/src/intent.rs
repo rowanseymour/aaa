@@ -21,3 +21,29 @@ impl From<&str> for Intent {
         Intent(name.to_string())
     }
 }
+
+/// A button that, pressed, asks for this.
+#[derive(Component, Clone, Debug)]
+pub struct Asks(pub String);
+
+impl Asks {
+    pub fn new(name: impl Into<String>) -> Self {
+        Asks(name.into())
+    }
+}
+
+/// Sends what a pressed button asks for.
+pub fn send(
+    activate: On<bevy::ui_widgets::Activate>,
+    asks: Query<&Asks>,
+    mut intents: MessageWriter<Intent>,
+) {
+    if let Ok(asks) = asks.get(activate.entity) {
+        intents.write(Intent(asks.0.clone()));
+    }
+}
+
+/// Whether any of `intents` asks for `name`, reading them all.
+pub fn asked(intents: &mut MessageReader<Intent>, name: &str) -> bool {
+    intents.read().fold(false, |any, i| any | i.is(name))
+}

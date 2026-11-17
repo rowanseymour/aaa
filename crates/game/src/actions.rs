@@ -25,7 +25,7 @@ use tgmap::Organization;
 use tgrender::textures;
 use tgsim::{Lacking, Researchable};
 
-use crate::intent::Intent;
+use crate::intent::{Asks, Intent};
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
 use crate::resource_bar::{Preview, Previewed};
@@ -925,6 +925,7 @@ pub fn spawn(
                         Slot(s),
                         Button,
                         ui::called(format!("action.{}", s + 1)),
+                        Asks::new(widget(s)),
                         Hovered::default(),
                         Pickable::default(),
                         Click::COMMAND,
@@ -944,8 +945,7 @@ pub fn spawn(
                             },
                             Pickable::IGNORE,
                         )],
-                    ))
-                    .observe(press);
+                    ));
                 }
             });
         });
@@ -1790,16 +1790,9 @@ impl Presser<'_, '_> {
     }
 }
 
-/// A button clicked, of either interface's grid, asks for the widget the
-/// original draws in its slot.
-pub fn press(activate: On<Activate>, slots: Query<&Slot>, mut intents: MessageWriter<Intent>) {
-    if let Ok(slot) = slots.get(activate.entity) {
-        intents.write(Intent(widget(slot.0)));
-    }
-}
-
-/// The original's widget for the button in `slot`.
-fn widget(slot: usize) -> String {
+/// The original's widget for the button in `slot`, which either
+/// interface's button there asks for.
+pub fn widget(slot: usize) -> String {
     format!("{WIDGET}_{slot}")
 }
 

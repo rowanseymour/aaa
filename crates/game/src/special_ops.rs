@@ -14,9 +14,10 @@ use tgrender::{MapAssets, textures};
 
 use bevy::ecs::system::SystemParam;
 use bevy::picking::hover::Hovered;
-use bevy::ui_widgets::{Activate, Button};
+use bevy::ui_widgets::Button;
 
 use crate::actions::{self, BUTTON, Blocks, GAP, GLYPH_DIR, PAD, Page, fill};
+use crate::intent::{Asks, Intent};
 use crate::keys::Bindings;
 use crate::messages::Failed;
 use crate::orders::Orders;
@@ -329,6 +330,7 @@ fn spawn(
                             },
                             Button,
                             ui::called(format!("special_op.{}", index + 1)),
+                            Asks::new(action(index)),
                             Click::COMMAND,
                             Hovered::default(),
                             Pickable::default(),
@@ -372,8 +374,7 @@ fn spawn(
                                 ..default()
                             };
                             button.spawn((meter(bar, Gauge::Recharge), RechargeBar));
-                        })
-                        .observe(press);
+                        });
                     }
                 });
         });
@@ -577,20 +578,15 @@ impl User<'_> {
 }
 
 /// An operation's button clicked.
-fn press(activate: On<Activate>, buttons: Query<&OperationButton>, mut user: User) {
-    if let Ok(button) = buttons.get(activate.entity) {
-        user.press(button.index);
-    }
-}
-
-/// Uses the operation a key just pressed is bound to.
-pub fn hotkeys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut user: User) {
-    if keys.get_just_pressed().next().is_none() {
+/// Uses the operation asked for, by its button or its key.
+pub fn act(mut intents: MessageReader<Intent>, mut user: User) {
+    let asked: Vec<Intent> = intents.read().cloned().collect();
+    if asked.is_empty() {
         return;
     }
     let pressed = (user.panel.as_ref()).and_then(|panel| {
         (panel.operations.iter())
-            .find(|o| bindings.pressed(&keys, &action(o.index)))
+            .find(|o| asked.iter().any(|i| i.is(&action(o.index))))
             .map(|o| o.index)
     });
     if let Some(index) = pressed {

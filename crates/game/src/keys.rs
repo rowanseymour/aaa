@@ -277,16 +277,19 @@ impl Bindings {
     }
 }
 
-/// Asks for what each key just pressed gives.
+/// Asks for what each key just pressed gives, of what's heard while a
+/// display panel's up.
 pub fn send(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
+    displays: Res<crate::displays::Displays>,
     mut intents: MessageWriter<Intent>,
 ) {
     if keys.get_just_pressed().next().is_none() {
         return;
     }
-    intents.write_batch(bindings.just_pressed(&keys).map(Intent::from));
+    let heard = bindings.just_pressed(&keys).filter(|a| displays.hears(a));
+    intents.write_batch(heard.map(Intent::from));
 }
 
 /// Reads the hotkeys chosen in the options, and how the game marks them.
