@@ -7,6 +7,7 @@ mod film;
 mod host;
 mod link;
 mod names;
+mod pausing;
 pub mod protocol;
 pub mod quic;
 #[cfg(test)]

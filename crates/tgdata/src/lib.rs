@@ -31,6 +31,7 @@ mod recruiting;
 mod research;
 mod settlements;
 mod special_ops;
+mod speed;
 mod strikes;
 mod strings;
 mod supply;

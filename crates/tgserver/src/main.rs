@@ -153,6 +153,7 @@ fn host(
     eprintln!("hosting at {}", listener.at()?);
     let mut host = Host::new(setup, world);
     host.number_names(numbered);
+    host.multiplayer();
     host.want(hosting.clients);
     let mut greet = |host: &mut Host<quic::Remote>| {
         while let Some(link) = listener.accept() {

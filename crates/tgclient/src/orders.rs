@@ -618,42 +618,38 @@ mod tests {
         host.turn();
         orders.step(&mut world);
         orders.act(Action::Pause(true));
+        // Nor is what its host wouldn't carry out for it.
         orders.act(Action::Speed(2.0));
         // However long the host takes to hear of it.
         for _ in 0..3 {
             orders.carry_out(&mut world);
             assert!(orders.pausing() && !orders.paused());
-            assert_eq!((orders.speeding(), orders.speed()), (2.0, 1.0));
+            assert_eq!(orders.speeding(), 1.0);
         }
         host.turn();
         // A match held still plays what it's given without a tick due.
         orders.carry_out(&mut world);
         assert!(orders.pausing() && orders.paused());
-        assert_eq!((orders.speeding(), orders.speed()), (2.0, 2.0));
         // Another's asking the same isn't its own coming back: the host
         // hears only so much from a client in a turn.
-        for _ in 0..64 {
-            orders.act(Action::Speed(2.0));
+        for _ in 0..32 {
+            orders.act(Action::Pause(false));
+            orders.act(Action::Pause(true));
         }
-        orders.act(Action::Speed(0.5));
-        other.ask(Action::Speed(0.5)).unwrap();
-        other.ask(Action::Speed(8.0)).unwrap();
-        host.turn();
-        orders.carry_out(&mut world);
-        assert_eq!((orders.speeding(), orders.speed()), (0.5, 8.0));
-        host.turn();
-        orders.carry_out(&mut world);
-        assert_eq!((orders.speeding(), orders.speed()), (0.5, 0.5));
-        orders.act(Action::Speed(2.0));
-        host.turn();
-        orders.carry_out(&mut world);
-        // Having come back, it's no longer what's coming.
+        orders.act(Action::Pause(false));
         other.ask(Action::Pause(false)).unwrap();
-        other.ask(Action::Speed(4.0)).unwrap();
+        other.ask(Action::Pause(true)).unwrap();
         host.turn();
         orders.carry_out(&mut world);
-        assert!(!orders.pausing() && !orders.paused());
-        assert_eq!((orders.speeding(), orders.speed()), (4.0, 4.0));
+        assert_eq!((orders.pausing(), orders.paused()), (false, true));
+        host.turn();
+        orders.carry_out(&mut world);
+        assert_eq!((orders.pausing(), orders.paused()), (false, false));
+        // Having come back, it's no longer what's coming.
+        other.ask(Action::Pause(true)).unwrap();
+        host.turn();
+        orders.carry_out(&mut world);
+        assert!(orders.pausing() && orders.paused());
         // The tick the match went on with came with it.
         other.advance(&mut theirs, usize::MAX).unwrap();
         assert_eq!((world.ticks, world.hash()), (2, theirs.hash()));
@@ -698,8 +694,8 @@ mod tests {
             host.turn();
         }
         let hash = host.world().hash();
-        orders.act(Action::Speed(2.0));
-        assert_eq!(orders.speeding(), 2.0);
+        orders.act(Action::Pause(true));
+        assert!(orders.pausing());
         drop(host);
         orders.carry_out(&mut world);
         assert!(!orders.gone());
@@ -707,7 +703,7 @@ mod tests {
         assert_eq!((world.ticks, world.hash()), (4, hash));
         assert!(orders.gone());
         // Nothing asked is coming now, and nothing more is asked.
-        assert_eq!(orders.speeding(), 1.0);
+        assert!(!orders.pausing());
         orders.act(Action::Pause(true));
         assert!(!orders.pausing() && !orders.may(&Action::Pause(true)));
         assert_eq!(

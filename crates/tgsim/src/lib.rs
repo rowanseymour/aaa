@@ -61,7 +61,9 @@ pub use packing::unpack_site;
 pub use properties::Held;
 pub use research::{Lacking, Researchable};
 pub use rules::Rules;
-pub use schedule::{Action, CHAT_LONGEST, Channel, Diverged, Given, Record, SPEEDS, Schedule};
+pub use schedule::{
+    Action, CHAT_LONGEST, Channel, Diverged, Given, Pausing, Record, SPEEDS, Schedule, Votes,
+};
 use serde::{Deserialize, Serialize};
 pub use strikes::{Afflicted, Incoming, Watch};
 pub use summons::Summoned;

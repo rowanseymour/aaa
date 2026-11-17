@@ -14,6 +14,10 @@ pub enum Notice {
         to: crate::Channel,
         words: String,
     },
+    /// What came of someone asking to pause or unpause: everyone's to tell.
+    Pausing(crate::Pausing),
+    /// The match is now played this many times as fast: everyone's to tell.
+    Speed(f32),
     /// Its stockpile has run out, its income `percent` short of its costs.
     Short { player: u32, percent: f32 },
     /// It's no longer short.
