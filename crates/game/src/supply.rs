@@ -19,6 +19,7 @@ use tgrender::{Tint, overlay, textures};
 use crate::actions::Blocks;
 use crate::displays::{self, Rim};
 use crate::effects::Effects;
+use crate::intent::{Asks, Intent, asked};
 use crate::keys::{self, Bindings};
 use crate::sound::Sounds;
 use crate::ui::{Click, Edge, Hint, Marked, Surface, Theme};
@@ -241,7 +242,7 @@ pub fn spawn(
             Click::TOGGLE,
             RelativeCursorPosition::default(),
             bindings.marked(keys::SUPPLY_BORDER, &name),
-            Hint(what),
+            (Asks::new(keys::SUPPLY_BORDER), Hint(what)),
             crate::ui::called("supply.border"),
             // Top left on the minimap's rim, about where the game's control
             // panel has it.
@@ -262,10 +263,7 @@ pub fn spawn(
             )],
         ))
         .observe(
-            |activate: On<Activate>,
-             mut border: ResMut<Border>,
-             mut buttons: Query<&mut BorderButton>| {
-                border.0 = !border.0;
+            |activate: On<Activate>, mut buttons: Query<&mut BorderButton>| {
                 if let Ok(mut button) = buttons.get_mut(activate.entity) {
                     button.pressed = true;
                 }
@@ -279,31 +277,28 @@ pub fn spawn(
         material,
     });
     let help = strings.get(CYCLE_HELP).cloned();
-    commands
-        .spawn((
-            CycleDetached,
-            crate::widgets::Ours,
-            Blocks,
-            Button,
-            crate::ui::called("supply.detached"),
-            RelativeCursorPosition::default(),
-            Hint(help.unwrap_or_else(|| "Cycles through all detached regiments.".into())),
-            ImageNode::new(icon.unwrap_or_default()),
-            Node {
-                position_type: PositionType::Absolute,
-                display: Display::None,
-                left: px(crate::MARGIN),
-                bottom: px(crate::MARGIN + minimap::DISC + crate::MARGIN),
-                width: px(CYCLE_SIZE),
-                height: px(CYCLE_SIZE),
-                ..default()
-            },
-            GlobalZIndex(1),
-            DespawnOnExit(Screen::Match),
-        ))
-        .observe(|_: On<Activate>, mut cycle: CycleParts| {
-            cycle.step();
-        });
+    commands.spawn((
+        CycleDetached,
+        crate::widgets::Ours,
+        Blocks,
+        Button,
+        crate::ui::called("supply.detached"),
+        Asks::new(keys::CYCLE_DETACHED),
+        RelativeCursorPosition::default(),
+        Hint(help.unwrap_or_else(|| "Cycles through all detached regiments.".into())),
+        ImageNode::new(icon.unwrap_or_default()),
+        Node {
+            position_type: PositionType::Absolute,
+            display: Display::None,
+            left: px(crate::MARGIN),
+            bottom: px(crate::MARGIN + minimap::DISC + crate::MARGIN),
+            width: px(CYCLE_SIZE),
+            height: px(CYCLE_SIZE),
+            ..default()
+        },
+        GlobalZIndex(1),
+        DespawnOnExit(Screen::Match),
+    ));
 }
 
 /// The border button's name with its key marked.
@@ -354,24 +349,16 @@ impl CycleParts<'_, '_> {
     }
 }
 
-/// Steps through the detached organizations on the key for it.
-pub fn cycle_detached(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<Bindings>,
-    mut cycle: CycleParts,
-) {
-    if bindings.pressed(&keys, keys::CYCLE_DETACHED) {
+/// Steps through the detached organizations when asked.
+pub fn cycle_detached(mut intents: MessageReader<Intent>, mut cycle: CycleParts) {
+    if asked(&mut intents, keys::CYCLE_DETACHED) {
         cycle.step();
     }
 }
 
-/// Shows or hides the border on the key for it.
-pub fn toggle_border(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<Bindings>,
-    mut border: ResMut<Border>,
-) {
-    if bindings.pressed(&keys, keys::SUPPLY_BORDER) {
+/// Shows or hides the border when asked.
+pub fn toggle_border(mut intents: MessageReader<Intent>, mut border: ResMut<Border>) {
+    if asked(&mut intents, keys::SUPPLY_BORDER) {
         border.0 = !border.0;
     }
 }

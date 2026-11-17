@@ -1440,15 +1440,14 @@ fn look_at(
     }
 }
 
-/// Looks at the next line back on the key for it.
+/// Looks at the next line back when asked.
 pub fn cycle(
-    keys: Res<ButtonInput<KeyCode>>,
-    bindings: Res<Bindings>,
+    mut intents: MessageReader<crate::intent::Intent>,
     time: Res<Time>,
     mut log: ResMut<MessageLog>,
     mut viewer: Viewer,
 ) {
-    if !bindings.pressed(&keys, CYCLE) {
+    if !crate::intent::asked(&mut intents, CYCLE) {
         return;
     }
     if let Some(place) = log.cycle(time.elapsed_secs()).and_then(|l| l.place) {

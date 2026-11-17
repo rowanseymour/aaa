@@ -17,6 +17,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::ui_widgets::Button;
 
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
+use crate::intent::Asks;
 use crate::{Loaded, Local, Screen, Sim};
 
 /// Which interface a match is played with.
@@ -395,6 +396,7 @@ impl Built {
             .spawn((
                 GridButton::default(),
                 Slot(slot),
+                Asks::new(crate::actions::widget(slot)),
                 on_screen(self.at),
                 Button,
                 // As ours are, so a script works with either.
@@ -420,7 +422,6 @@ impl Built {
                     Pickable::IGNORE,
                 ));
             })
-            .observe(crate::actions::press)
             .observe(hold);
     }
 }

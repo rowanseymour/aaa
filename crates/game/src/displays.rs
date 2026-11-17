@@ -8,10 +8,11 @@ use bevy::image::CompressedImageFormats;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
-use bevy::ui_widgets::{Activate, Button, ScrollArea};
+use bevy::ui_widgets::{Button, ScrollArea};
 use tgrender::textures;
 
 use crate::actions::Blocks;
+use crate::intent::{Asked, Asks, Intent};
 use crate::keys::Bindings;
 use crate::ui::{self, Click, Edge, Font, Hint, Ink, Marked, Surface, Theme, label};
 use crate::{Orders, Screen, minimap};
@@ -19,6 +20,8 @@ use tgsim::Action;
 
 /// What the key that closes whichever panel is up is bound to.
 const CLOSE_ALL: &str = "CloseSideOrDisplayPanel";
+
+const PANELS: [Panel; 3] = [Panel::Objectives, Panel::Technologies, Panel::MessageLog];
 
 /// A glyph's size on its button.
 pub const GLYPH_SIZE: f32 = 22.0;
@@ -43,6 +46,16 @@ impl Panel {
             Panel::MessageLog => ("ButtonMessageLog", "MessageLogToggle"),
         }
     }
+
+    /// The window the original shows it in, where the hotkey files bind
+    /// its keys.
+    fn window(self) -> &'static str {
+        match self {
+            Panel::Objectives => "ObjectivesDisplay",
+            Panel::Technologies => "TechnologyDisplay",
+            Panel::MessageLog => "SideMessageLogPanel",
+        }
+    }
 }
 
 /// Which panel's up, and whether opening it paused the match.
@@ -55,6 +68,20 @@ pub struct Displays {
 impl Displays {
     pub fn is_open(&self, panel: Panel) -> bool {
         self.open == Some(panel)
+    }
+
+    /// The window of the panel that's up, whose keys are heard while it
+    /// is.
+    pub fn window(&self) -> Option<&'static str> {
+        self.open.map(Panel::window)
+    }
+
+    /// Whether a key pressing `widget` is heard while a panel's up: only
+    /// the panels' own buttons, which put another in its place.
+    pub fn passes(&self, widget: &str) -> bool {
+        PANELS
+            .iter()
+            .any(|p| p.keys().0.eq_ignore_ascii_case(widget))
     }
 
     /// Keeps the match paused when the panel closes, as a pause asked for
@@ -148,10 +175,8 @@ impl Plugin for DisplaysPlugin {
                 Update,
                 keys.in_set(Keys)
                     .after(crate::pause::Toggle)
+                    .after(crate::keys::send)
                     .run_if(in_state(Screen::Match))
-                    .run_if(crate::console::closed)
-                    .run_if(crate::keys_free)
-                    .run_if(crate::pause::closed)
                     .run_if(loaded),
             )
             .add_systems(
@@ -172,7 +197,7 @@ impl Plugin for DisplaysPlugin {
 pub struct Keys;
 
 /// Whether the loading screen has gone, so the match is up to look at.
-fn loaded(loading: Query<(), With<crate::LoadingScreen>>) -> bool {
+pub fn loaded(loading: Query<(), With<crate::LoadingScreen>>) -> bool {
     loading.is_empty()
 }
 
@@ -190,38 +215,36 @@ pub fn spawn_button(
     name: String,
     help: String,
 ) {
-    commands
-        .spawn((
-            Blocks,
-            Button,
-            Click::PUSH,
-            RelativeCursorPosition::default(),
-            bindings.marked(panel.keys().0, &name),
-            Hint(help),
-            ui::called(match panel {
-                Panel::Objectives => "panel.objectives",
-                Panel::Technologies => "panel.technologies",
-                Panel::MessageLog => "panel.messages",
-            }),
-            PanelButton { panel, name },
-            crate::widgets::Ours,
-            rim.node(),
-            Surface::Clear,
-            Edge::Border,
-            GlobalZIndex(2),
-            DespawnOnExit(Screen::Match),
-            children![(
-                Glyph,
-                ImageNode::new(glyph),
-                Node {
-                    width: px(GLYPH_SIZE),
-                    height: px(GLYPH_SIZE),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            )],
-        ))
-        .observe(move |_: On<Activate>, mut toggling: Toggling| toggling.toggle(panel));
+    commands.spawn((
+        Blocks,
+        Button,
+        Click::PUSH,
+        RelativeCursorPosition::default(),
+        bindings.marked(panel.keys().0, &name),
+        (Asks::new(panel.keys().0), Hint(help)),
+        ui::called(match panel {
+            Panel::Objectives => "panel.objectives",
+            Panel::Technologies => "panel.technologies",
+            Panel::MessageLog => "panel.messages",
+        }),
+        PanelButton { panel, name },
+        crate::widgets::Ours,
+        rim.node(),
+        Surface::Clear,
+        Edge::Border,
+        GlobalZIndex(2),
+        DespawnOnExit(Screen::Match),
+        children![(
+            Glyph,
+            ImageNode::new(glyph),
+            Node {
+                width: px(GLYPH_SIZE),
+                height: px(GLYPH_SIZE),
+                ..default()
+            },
+            Pickable::IGNORE,
+        )],
+    ));
 }
 
 /// Spawns a panel's window, hidden: its title, the box it shows its
@@ -283,8 +306,11 @@ pub fn spawn_window(commands: &mut Commands, window: Window) -> Entity {
                     ..default()
                 })
                 .with_children(|row| {
-                    row.spawn((ui::button("Close", Font::Hud), ui::called("panel.close")))
-                        .observe(|_: On<Activate>, mut toggling: Toggling| toggling.close());
+                    row.spawn((
+                        ui::button("Close", Font::Hud),
+                        ui::called("panel.close"),
+                        Asks::new(CLOSE_ALL),
+                    ));
                 });
         });
     contents
@@ -357,21 +383,20 @@ impl Toggling<'_, '_> {
     }
 }
 
-/// Opens or closes the panels on their keys.
-fn keys(keys: Res<ButtonInput<KeyCode>>, bindings: Res<Bindings>, mut toggling: Toggling) {
-    if let Some(open) = toggling.displays.open {
-        let close = [open.keys().1, CLOSE_ALL];
-        if close.iter().any(|action| bindings.pressed(&keys, action)) {
-            toggling.close();
-            return;
-        }
+/// Opens or closes the panels as asked: a panel's own close, or closing
+/// whatever's up, closes it, and a panel's button opens it or, up, closes
+/// it.
+fn keys(mut intents: MessageReader<Intent>, mut toggling: Toggling) {
+    let asked = Asked::read(&mut intents);
+    let wants = |name: &str| asked.wants(name);
+    if let Some(open) = toggling.displays.open
+        && (wants(open.keys().1) || wants(CLOSE_ALL))
+    {
+        toggling.close();
+        return;
     }
-    let panels = [Panel::Objectives, Panel::Technologies, Panel::MessageLog];
-    let pressed = panels
-        .into_iter()
-        .find(|p| bindings.pressed(&keys, p.keys().0));
-    if let Some(panel) = pressed.filter(|&p| !toggling.displays.is_open(p)) {
-        toggling.open(panel);
+    if let Some(&panel) = PANELS.iter().find(|p| wants(p.keys().0)) {
+        toggling.toggle(panel);
     }
 }
 
@@ -497,6 +522,7 @@ mod tests {
             hotkey("f3", "SideMessageLogPanel", Some("MessageLogToggle")),
             hotkey("esc", "TechnologyDisplay", Some("TechnologyDisplayClose")),
             hotkey("backspace", "TechnologyDisplay|1", Some(CLOSE_ALL)),
+            hotkey("m", "game|action|verify", Some(MOVE)),
         ];
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, PausePlugin))
@@ -509,7 +535,15 @@ mod tests {
             .init_resource::<Displays>()
             .init_resource::<Orders>()
             .insert_resource(Bindings::new(&hotkeys, &tgdata::Strings::default()))
-            .add_systems(Update, keys.after(pause::Toggle).run_if(pause::closed));
+            .add_message::<Intent>()
+            .init_resource::<Sent>()
+            .add_observer(crate::intent::send)
+            .add_systems(
+                Update,
+                (crate::keys::send.run_if(crate::keys_heard), (keys, record))
+                    .chain()
+                    .after(pause::Toggle),
+            );
         for panel in [Panel::Technologies, Panel::MessageLog] {
             app.world_mut().spawn((PanelWindow(panel), Node::default()));
         }
@@ -528,6 +562,58 @@ mod tests {
 
     fn open(app: &App) -> Option<Panel> {
         app.world().resource::<Displays>().open
+    }
+
+    const MOVE: &str = "ActorCommand move";
+
+    /// Every intent sent so far.
+    #[derive(Resource, Default)]
+    struct Sent(Vec<String>);
+
+    fn record(mut intents: MessageReader<Intent>, mut sent: ResMut<Sent>) {
+        sent.0.extend(intents.read().map(|i| i.0.clone()));
+    }
+
+    fn sent(app: &App, name: &str) -> bool {
+        app.world().resource::<Sent>().0.iter().any(|s| s == name)
+    }
+
+    #[test]
+    fn a_panel_keeps_the_match_keys_to_itself() {
+        let mut app = app();
+        press(&mut app, KeyCode::F2);
+        press(&mut app, KeyCode::KeyM);
+        assert!(!sent(&app, MOVE));
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::KeyM);
+        assert!(sent(&app, MOVE));
+    }
+
+    #[test]
+    fn a_panels_own_keys_go_unheard_while_it_is_down() {
+        let mut app = app();
+        press(&mut app, KeyCode::Backspace);
+        assert!(!sent(&app, CLOSE_ALL));
+    }
+
+    #[test]
+    fn the_pause_menu_keeps_the_keys() {
+        let mut app = app();
+        press(&mut app, KeyCode::Escape);
+        assert!(!app.world_mut().run_system_cached(pause::closed).unwrap());
+        press(&mut app, KeyCode::KeyM);
+        press(&mut app, KeyCode::F2);
+        assert!(!sent(&app, MOVE) && open(&app).is_none());
+    }
+
+    #[test]
+    fn its_button_asks_as_its_key_does() {
+        let mut app = app();
+        let button = app.world_mut().spawn(Asks::new("ButtonTechnology")).id();
+        app.world_mut()
+            .trigger(bevy::ui_widgets::Activate { entity: button });
+        app.update();
+        assert!(open(&app) == Some(Panel::Technologies));
     }
 
     fn paused(app: &App) -> bool {

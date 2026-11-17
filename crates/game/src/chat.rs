@@ -18,6 +18,8 @@ use crate::{Leaders, Local, Orders, Screen, Sim};
 /// 1024 by 768.
 const AT: Vec2 = Vec2::new(318.0, 496.0);
 const WIDTH: f32 = 461.0;
+/// What opens the bar, as the hotkey files name it.
+const ACTIVATE: &str = "ChatActivate";
 
 /// What the bar says.
 #[derive(Resource, Clone)]
@@ -163,11 +165,12 @@ fn first(sim: &World, local: Option<u32>) -> Filter {
 }
 
 /// Takes the keyboard while the bar is open: what's typed, sending, and
-/// stepping through who it's for and what was sent before. Opens it on its
-/// key while the match has the keyboard, `free` being whether it has.
+/// stepping through who it's for and what was sent before. Opens it when
+/// asked, as its key does while the match has the keyboard.
 #[allow(clippy::too_many_arguments)]
 pub fn keys(
     mut presses: MessageReader<KeyboardInput>,
+    mut intents: MessageReader<crate::intent::Intent>,
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
     mut chat: ResMut<Chat>,
@@ -178,9 +181,10 @@ pub fn keys(
     mut log: ResMut<MessageLog>,
     time: Res<Time>,
 ) {
+    let activate = crate::intent::asked(&mut intents, ACTIVATE);
     if !chat.open {
         presses.clear();
-        if bindings.pressed(&keys, "ChatActivate") {
+        if activate {
             open(&mut chat, &orders, &sim.0, local.0);
         }
         return;
@@ -513,7 +517,12 @@ mod tests {
             .insert_resource(Bindings::new(&hotkeys, &Default::default()))
             .insert_resource(crate::messages::testing::log())
             .init_resource::<Leaders>()
-            .add_systems(Update, keys);
+            .init_resource::<crate::displays::Displays>()
+            .add_message::<crate::intent::Intent>()
+            .add_systems(
+                Update,
+                (crate::keys::send.run_if(crate::keys_free), keys).chain(),
+            );
         app.update();
         app
     }
