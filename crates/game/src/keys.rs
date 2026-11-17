@@ -1,12 +1,14 @@
 //! The keys the match answers to. What the player can do by key is named
 //! as the game's hotkey files name it, such as `ActorCommand move`, and
-//! [`Bindings`] says which keys give it, so the rest of the interface asks
-//! for actions and never for keys. The bindings are the game's own;
+//! [`Bindings`] says which keys give it, and [`send`] sends each as an
+//! [`Intent`], so the rest of the interface asks for actions and never
+//! for keys. The bindings are the game's own;
 //! another set would be read into the same place.
 
 use bevy::prelude::*;
 use tgdata::Hotkey;
 
+use crate::intent::Intent;
 use crate::ui::Marked;
 
 /// Stepping through the player's organizations that have no HQ.
@@ -250,6 +252,16 @@ impl Bindings {
         self.bound(action).any(|(chord, ..)| chord.pressed(keys))
     }
 
+    /// The actions whose keys have just been pressed, in the order bound.
+    pub fn just_pressed<'a>(
+        &'a self,
+        keys: &'a ButtonInput<KeyCode>,
+    ) -> impl Iterator<Item = &'a str> {
+        (self.0.iter())
+            .filter(|(chord, ..)| chord.pressed(keys))
+            .map(|(_, action, _)| action.as_str())
+    }
+
     /// How the key that gives `action` shows, if one does.
     pub fn key(&self, action: &str) -> Option<&KeyName> {
         let bound = self.0.iter().find(|(_, a, _)| a == action);
@@ -263,6 +275,18 @@ impl Bindings {
             None => Marked::plain(name),
         }
     }
+}
+
+/// Asks for what each key just pressed gives.
+pub fn send(
+    keys: Res<ButtonInput<KeyCode>>,
+    bindings: Res<Bindings>,
+    mut intents: MessageWriter<Intent>,
+) {
+    if keys.get_just_pressed().next().is_none() {
+        return;
+    }
+    intents.write_batch(bindings.just_pressed(&keys).map(Intent::from));
 }
 
 /// Reads the hotkeys chosen in the options, and how the game marks them.

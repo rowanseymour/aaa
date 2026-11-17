@@ -12,6 +12,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `ui`: lists the ids of the buttons on screen that can be pressed, and which are chosen
 - `click button`: presses a button, by its id; ui lists them
 - `press key`: presses a key as a hotkey file writes it, e.g. esc, f1 or ctrl-s
+- `ask intent`: asks for what a hotkey file names, as its key would, e.g. ActorCommand stop
 - `wait seconds`: lets that long go by before the next command
 - `lookat [x y]`: points the camera at a place on the map, in metres; without one, says where it points
 - `camera x y [height] [pitch]`: points the camera at x y from a height above the ground in metres, looking a pitch in degrees down
