@@ -1069,6 +1069,9 @@ pub struct NotYours;
 pub struct Sides {
     pub players: Vec<Player>,
     pub teams: Vec<Team>,
+    /// What each side a person plays goes by, by player id: the person's
+    /// own name, where they have one in the match.
+    pub names: BTreeMap<u32, String>,
 }
 
 impl Sides {
@@ -1382,6 +1385,7 @@ mod tests {
         // Two players a team, at odds with each other as they're stored,
         // and civilians neutral to everyone.
         let sides = Sides {
+            names: Default::default(),
             players: vec![
                 player(1, Some(0), &[0, 3, 3, 3], &[3, 3]),
                 player(2, Some(0), &[3, 0, 3, 3], &[3, 3]),
@@ -1405,6 +1409,7 @@ mod tests {
     #[test]
     fn players_without_teams_keep_their_own_relations() {
         let sides = Sides {
+            names: Default::default(),
             players: vec![
                 player(1, None, &[0, 1, 3], &[]),
                 player(2, None, &[1, 0, 3], &[]),

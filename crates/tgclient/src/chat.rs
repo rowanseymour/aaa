@@ -235,12 +235,16 @@ pub fn keys(
             }
         }
     }
-    type_into(&mut chat.input, &mut presses);
+    type_into(&mut chat.input, tgsim::CHAT_LONGEST, &mut presses);
 }
 
-/// Types what's been pressed into `input`, as far as a line of chat
-/// holds; Backspace takes the last character back.
-pub(crate) fn type_into(input: &mut String, presses: &mut MessageReader<KeyboardInput>) {
+/// Types what's been pressed into `input`, as far as `longest`
+/// characters; Backspace takes the last character back.
+pub(crate) fn type_into(
+    input: &mut String,
+    longest: usize,
+    presses: &mut MessageReader<KeyboardInput>,
+) {
     for press in presses.read() {
         if press.state != ButtonState::Pressed {
             continue;
@@ -254,7 +258,7 @@ pub(crate) fn type_into(input: &mut String, presses: &mut MessageReader<Keyboard
             Key::Space => " ",
             _ => continue,
         };
-        let room = tgsim::CHAT_LONGEST.saturating_sub(input.chars().count());
+        let room = longest.saturating_sub(input.chars().count());
         let typed: String = typed
             .chars()
             .filter(|c| !c.is_control())
@@ -314,7 +318,7 @@ fn send(
             );
             return;
         };
-        let name = leaders.owner(player, local, &log.map_strings());
+        let name = leaders.owner(player, &sim.sides, &log.map_strings());
         if !people(orders, local).contains(&side) {
             log.warn(
                 "private_chat_warning_bad_kingdom|s",
@@ -424,7 +428,6 @@ fn fill_in(
     chat: Res<Chat>,
     words: Res<Words>,
     sim: Res<Sim>,
-    local: Res<Local>,
     leaders: Res<Leaders>,
     log: Res<MessageLog>,
     mut typed: Query<&mut Text, With<Typed>>,
@@ -445,7 +448,7 @@ fn fill_in(
         Some(Filter::Allies) => words.allies.clone(),
         Some(Filter::Observers) => words.observers.clone(),
         Some(Filter::To(side)) => match sim.0.sides.player(side) {
-            Some(player) => leaders.owner(player, local.0, &log.map_strings()),
+            Some(player) => leaders.owner(player, &sim.0.sides, &log.map_strings()),
             None => String::new(),
         },
     };
@@ -497,7 +500,7 @@ mod tests {
     /// bar's keys bound as the game's files bind them.
     fn app() -> App {
         let world = crate::orders::testing::fresh();
-        let orders = Orders::hosting(Default::default(), world.clone(), Some(1));
+        let orders = Orders::hosting(Default::default(), world.clone(), Some(1), "Player");
         let hotkeys = [
             ("vworld", "ChatActivate"),
             ("GameChatPanel|editbox", "ChatSend"),
@@ -540,8 +543,7 @@ mod tests {
         let mut sim = world.remove_resource::<Sim>().unwrap();
         world.resource_mut::<Orders>().carry_out(&mut sim.0);
         world.insert_resource(sim);
-        let given = &world.resource::<Orders>().record().given;
-        given.iter().map(|g| g.action.clone()).collect()
+        crate::orders::testing::asked(world.resource::<Orders>().record())
     }
 
     #[test]

@@ -45,6 +45,8 @@ pub enum Action {
         to: Channel,
         words: String,
     },
+    /// Has side `player` go by the name of the person playing it.
+    Name { player: u32, name: String },
 }
 
 /// The most characters a line of chat holds.
@@ -95,6 +97,10 @@ impl Action {
             Action::Chat { from, to, words } => {
                 world.notices.push(crate::Notice::Chat { from, to, words })
             }
+            Action::Name { player, name } if world.sides.player(player).is_some() => {
+                world.sides.names.insert(player, name);
+            }
+            Action::Name { .. } => {}
         }
         Ok(())
     }
@@ -443,6 +449,23 @@ mod tests {
         let mut again = fresh();
         assert_eq!(s.record().replay(&mut again), Ok(()));
         assert_eq!(again.hash(), w.hash());
+    }
+
+    #[test]
+    fn a_side_goes_by_the_name_it_is_given() {
+        let (mut w, mut s) = (fresh(), Schedule::default());
+        let player = w.sides.players[0].id;
+        s.act(Action::Name {
+            player,
+            name: "Bob".into(),
+        });
+        // One the match hasn't got is passed over.
+        s.act(Action::Name {
+            player: 99,
+            name: "Nobody".into(),
+        });
+        s.carry_out(&mut w);
+        assert_eq!(w.sides.names, [(player, "Bob".to_string())].into());
     }
 
     #[test]

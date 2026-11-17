@@ -80,6 +80,8 @@ pub struct Host<L> {
     /// Whether anyone has left since the kick votes were last counted,
     /// which can bring the count needed down to the votes already cast.
     parted: bool,
+    /// How a name that's taken is numbered, as [`crate::unique`] takes it.
+    numbered: String,
 }
 
 /// A client as the host has it.
@@ -87,6 +89,8 @@ struct Seat<L> {
     id: u32,
     link: L,
     players: Vec<u32>,
+    /// What the person at it goes by, unlike anyone else in the match.
+    name: String,
     /// Whether it's let do anything.
     trusted: bool,
     diverged: bool,
@@ -168,7 +172,12 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
             };
             speaker && sayable(words)
         }
-        Action::Win(_) | Action::Lose(_) | Action::Raise { .. } | Action::Destroy(_) => false,
+        // Names are the host's to give.
+        Action::Win(_)
+        | Action::Lose(_)
+        | Action::Raise { .. }
+        | Action::Destroy(_)
+        | Action::Name { .. } => false,
     }
 }
 
@@ -202,7 +211,14 @@ impl<L: Link> Host<L> {
             next: 1,
             wanted: None,
             begun: false,
+            numbered: crate::NUMBERED.into(),
         }
+    }
+
+    /// Has it number a name that's taken by `numbered`, as
+    /// [`crate::unique`] takes it, rather than by [`crate::NUMBERED`].
+    pub fn number_names(&mut self, numbered: String) {
+        self.numbered = numbered;
     }
 
     /// Has it tell the time by `clock`.
@@ -282,30 +298,44 @@ impl<L: Link> Host<L> {
     }
 
     /// Lets in a client at the other end of `link` to give the orders of
-    /// `players`, or only to watch if there are none, returning what it's
-    /// known as. One that isn't let in is told why.
-    pub fn admit(&mut self, mut link: L, mut players: Vec<u32>) -> Result<u32, Refusal> {
+    /// `players`, or only to watch if there are none, for a person going
+    /// by `name`, numbered if anyone in the match does already. Returns
+    /// what it's known as; one that isn't let in is told why.
+    pub fn admit(
+        &mut self,
+        mut link: L,
+        mut players: Vec<u32>,
+        name: &str,
+    ) -> Result<u32, Refusal> {
         players.sort_unstable();
         players.dedup();
-        let refused = self.refuses(&players).or_else(|| {
-            let welcome = Welcome {
-                client: self.next,
-                setup: self.setup.clone(),
-                players: players.clone(),
-            };
-            let sent = link.send(encode(&ToClient::Start(welcome)));
-            sent.err().map(|_| Refusal::Lost)
-        });
+        let taken = |name: &str| self.clients.iter().any(|c| c.name == name);
+        let name = crate::name(name).map(|n| crate::unique(&n, &self.numbered, taken));
+        // Its name is what it asked with, so it didn't ask with a message.
+        let refused = (self.refuses(&players))
+            .or_else(|| name.is_none().then_some(Refusal::Lost))
+            .or_else(|| {
+                let welcome = Welcome {
+                    client: self.next,
+                    setup: self.setup.clone(),
+                    players: players.clone(),
+                    name: name.clone().unwrap_or_default(),
+                };
+                let sent = link.send(encode(&ToClient::Start(welcome)));
+                sent.err().map(|_| Refusal::Lost)
+            });
         if let Some(refusal) = refused {
             let _ = link.send(encode(&ToClient::Refused(refusal)));
             return Err(refusal);
         }
         let id = self.next;
         self.next += 1;
+        let name = name.expect("a client is let in with a name");
         self.clients.push(Seat {
             id,
             link,
             players,
+            name,
             trusted: false,
             diverged: false,
             lost: false,
@@ -366,17 +396,17 @@ impl<L: Link> Host<L> {
                     continue;
                 }
                 // Too late to ask, as it's told on not being let in.
-                Ok(None) => Ok(Vec::new()),
+                Ok(None) => Ok((Vec::new(), String::new())),
                 Ok(Some(message)) if message.len() > LONGEST_HEARD => Err(Refusal::Lost),
                 Ok(Some(message)) => match decode::<Join>(&message) {
-                    Some(join) if join.protocol == PROTOCOL => Ok(join.players),
+                    Some(join) if join.protocol == PROTOCOL => Ok((join.players, join.name)),
                     Some(_) => Err(Refusal::Protocol(PROTOCOL)),
                     None => Err(Refusal::Lost),
                 },
                 Err(_) => Err(Refusal::Lost),
             };
             seated.push(match asked {
-                Ok(players) => self.admit(link, players),
+                Ok((players, name)) => self.admit(link, players, &name),
                 Err(refusal) => {
                     let _ = link.send(encode(&ToClient::Refused(refusal)));
                     Err(refusal)
@@ -441,6 +471,7 @@ impl<L: Link> Host<L> {
                 let left = ToClient::Left(Gone {
                     client,
                     players: seat.players,
+                    name: seat.name,
                     kicked,
                 });
                 if kicked {
@@ -492,15 +523,22 @@ impl<L: Link> Host<L> {
     /// held still if it doesn't.
     fn go(&mut self, tick: Option<bool>) -> Vec<Event> {
         self.now = self.clock.now();
+        let mut actions = Vec::new();
         if !self.begun {
             // Setting a copy of the match up is no time to be heard from.
             for seat in &mut self.clients {
                 seat.heard = self.now;
             }
+            // Every side a person plays goes by their name from the first.
+            for seat in &self.clients {
+                actions.extend(seat.players.iter().map(|&player| Action::Name {
+                    player,
+                    name: seat.name.clone(),
+                }));
+            }
         }
         self.begun = true;
         let mut events = Vec::new();
-        let mut actions = Vec::new();
         let mut votes_changed = false;
         // Each kick vote cast or taken back, by whom.
         let mut kicks = Vec::new();
@@ -549,7 +587,8 @@ impl<L: Link> Host<L> {
                     Ok(Some(Some(ToHost::Say(words)))) => {
                         if sayable(&words) && !words.trim().is_empty() {
                             let from = seat.players.first().copied();
-                            said.push(Said { from, words });
+                            let name = seat.name.clone();
+                            said.push(Said { from, name, words });
                         }
                     }
                     Ok(Some(Some(ToHost::Leave))) => {
@@ -783,6 +822,7 @@ impl<L: Link> Host<L> {
             .map(|c| Seated {
                 client: c.id,
                 players: c.players.clone(),
+                name: c.name.clone(),
                 host: c.trusted,
                 standing: self.standing(c),
                 vote: c.vote,
@@ -829,7 +869,7 @@ impl<L: Link> Host<L> {
 #[cfg(test)]
 mod tests {
     use tgmap::{Domain, Formation, Member, Organization, Pathing};
-    use tgsim::{Command, Refused, Sides};
+    use tgsim::{Command, Given, Record, Refused, Sides};
 
     use super::*;
     use crate::testing::player;
@@ -871,6 +911,7 @@ mod tests {
             unpacks: None,
         };
         let sides = Sides {
+            names: Default::default(),
             players: (1..=4).map(|id| player(id, false, true)).collect(),
             teams: Vec::new(),
         };
@@ -926,9 +967,10 @@ mod tests {
     fn hosted_by(clock: &Clock, seats: &[&[u32]]) -> (Host<Local>, Vec<Copy>) {
         let mut host = Host::new(setup(), fresh());
         host.clock(clock.clone());
-        let clients = seats.iter().map(|players| {
+        let clients = seats.iter().enumerate().map(|(seat, players)| {
             let (ours, mut theirs) = pair();
-            let id = host.admit(ours, players.to_vec()).unwrap();
+            let name = named(seat as u32 + 1);
+            let id = host.admit(ours, players.to_vec(), &name).unwrap();
             let welcome = welcome(&mut theirs).unwrap().unwrap();
             assert_eq!((welcome.client, &welcome.setup), (id, &setup()));
             assert_eq!(welcome.players, *players);
@@ -943,11 +985,26 @@ mod tests {
         (host, clients)
     }
 
+    /// What [`hosted`] has the person at each client go by.
+    fn named(client: u32) -> String {
+        format!("Player {client}")
+    }
+
+    /// What a match was given but for the names the host gives sides as
+    /// it begins.
+    fn asked(record: &Record) -> Vec<Given> {
+        let given = record.given.iter().cloned();
+        given
+            .filter(|g| !matches!(g.action, Action::Name { .. }))
+            .collect()
+    }
+
     fn gone(client: u32, players: &[u32]) -> Gone {
         let players = players.to_vec();
         Gone {
             client,
             players,
+            name: named(client),
             kicked: false,
         }
     }
@@ -978,7 +1035,7 @@ mod tests {
         assert!(host.world().units[0].position[0] > 12.0);
         assert!(host.world().units[1].position[0] < 9.0);
         let record = host.schedule().record();
-        assert_eq!(record.given.len(), 2);
+        assert_eq!(asked(record).len(), 2);
         assert_eq!(record.checks.len(), 5);
         for c in &clients {
             assert_eq!(c.world().hash(), host.world().hash());
@@ -1000,13 +1057,13 @@ mod tests {
         clients[1].ask(Action::Pause(true)).unwrap();
         clients[0].ask(Action::Win(1)).unwrap();
         play(&mut host, &mut clients, 3);
-        assert!(host.schedule().record().given.is_empty());
+        assert!(asked(host.schedule().record()).is_empty());
         assert_eq!(host.world().ticks, 3);
         host.trust(1);
         clients[0].ask(Action::Win(1)).unwrap();
         clients[1].ask(Action::Win(2)).unwrap();
         play(&mut host, &mut clients, 1);
-        assert_eq!(host.schedule().record().given.len(), 1);
+        assert_eq!(asked(host.schedule().record()).len(), 1);
         // An order the match refuses is refused in every copy.
         clients[0].ask(go(1, 1, [5.0, 30.0])).unwrap();
         assert_eq!(host.turn(), []);
@@ -1049,7 +1106,7 @@ mod tests {
         // What it asks for is carried out when the host hears it.
         slow[0].ask(go(2, 1, [5.0, 30.0])).unwrap();
         play(&mut host, &mut clients, 5);
-        assert_eq!(host.schedule().record().given[1].step, 45);
+        assert_eq!(asked(host.schedule().record())[1].step, 45);
         assert_eq!(clients[1].world().hash(), host.world().hash());
         assert_eq!(clients[1].diverged(), []);
     }
@@ -1285,14 +1342,14 @@ mod tests {
         let (first, then) = (go(1, 0, [5.0, 5.0]), go(1, 0, [6.0, 6.0]));
         clients[0].ask(first.clone()).unwrap();
         wait_out(&clock, &mut host, &mut clients, 1, 1);
-        assert!(host.schedule().record().given.is_empty());
+        assert!(asked(host.schedule().record()).is_empty());
         // Not dealt with until it's carried out.
         assert_eq!(clients[0].answered(), 0);
         clients[1].advance(usize::MAX).unwrap();
         clients[0].ask(then.clone()).unwrap();
         host.turn();
-        let given: Vec<_> = (host.schedule().record().given.iter())
-            .map(|g| g.action.clone())
+        let given: Vec<_> = (asked(host.schedule().record()).into_iter())
+            .map(|g| g.action)
             .collect();
         assert_eq!(given, [first, then]);
         clients[0].advance(usize::MAX).unwrap();
@@ -1313,16 +1370,20 @@ mod tests {
         clients[0].say(" ".into()).unwrap();
         host.turn();
         clients[0].advance(usize::MAX).unwrap();
-        let said = |from, words: &str| Said {
+        let said = |from, name: &str, words: &str| Said {
             from,
+            name: name.into(),
             words: words.into(),
         };
         assert_eq!(
             clients[0].take_said(),
-            [said(Some(1), "wait for me"), said(None, "hi")]
+            [
+                said(Some(1), "Player 1", "wait for me"),
+                said(None, "Player 3", "hi")
+            ]
         );
         // Nor is any of it in a step.
-        assert!(host.schedule().record().given.is_empty());
+        assert!(asked(host.schedule().record()).is_empty());
     }
 
     #[test]
@@ -1346,16 +1407,16 @@ mod tests {
         let mut admit = |players: &[u32]| {
             let (ours, theirs) = pair();
             drop(theirs);
-            host.admit(ours, players.to_vec())
+            host.admit(ours, players.to_vec(), "Bob")
         };
         assert_eq!(admit(&[1]), Err(Refusal::Taken(1)));
         assert_eq!(admit(&[2, 7]), Err(Refusal::NoPlayer(7)));
         // Its other end having gone already.
         assert_eq!(admit(&[2]), Err(Refusal::Lost));
         let (ours, _theirs) = pair();
-        assert_eq!(host.admit(ours, vec![2]), Ok(2));
+        assert_eq!(host.admit(ours, vec![2], "Bob"), Ok(2));
         host.turn();
-        let mut admit = |players: &[u32]| host.admit(pair().0, players.to_vec());
+        let mut admit = |players: &[u32]| host.admit(pair().0, players.to_vec(), "Bob");
         assert_eq!(admit(&[]), Err(Refusal::Begun));
     }
 
@@ -1375,7 +1436,7 @@ mod tests {
         host.want(3);
         assert!(host.waiting());
         let (ours, mut theirs) = pair();
-        assert_eq!(host.admit(ours, vec![]), Ok(4));
+        assert_eq!(host.admit(ours, vec![], "Bob"), Ok(4));
         welcome(&mut theirs).unwrap();
         let mut fourth = Client::new(theirs);
         assert!(host.waiting());
@@ -1384,7 +1445,7 @@ mod tests {
         assert!(!host.waiting());
         // With those it wants, it lets in no more.
         let (ours, mut late) = pair();
-        assert_eq!(host.admit(ours, vec![]), Err(Refusal::Full));
+        assert_eq!(host.admit(ours, vec![], "Bob"), Err(Refusal::Full));
         assert_eq!(welcome(&mut late), Err(NotJoined::Refused(Refusal::Full)));
         assert_eq!((host.clients(), host.world().ticks), (3, 0));
         // Nor is a match under way held up by hearing it.
@@ -1529,17 +1590,17 @@ mod tests {
             clients[0].ask(Action::Pause(false)).unwrap();
         }
         assert_eq!(host.turn(), []);
-        assert_eq!(host.schedule().record().given.len(), HEARD_A_TURN);
+        assert_eq!(asked(host.schedule().record()).len(), HEARD_A_TURN);
         // The rest the turn after.
         assert_eq!(host.turn(), []);
-        assert_eq!(host.schedule().record().given.len(), HEARD_A_TURN + 5);
+        assert_eq!(asked(host.schedule().record()).len(), HEARD_A_TURN + 5);
         // But for one it trusts, which is heard out.
         host.trust(1);
         for _ in 0..HEARD_A_TURN + 5 {
             clients[0].ask(Action::Pause(false)).unwrap();
         }
         assert_eq!(host.turn(), []);
-        assert_eq!(host.schedule().record().given.len(), 2 * HEARD_A_TURN + 10);
+        assert_eq!(asked(host.schedule().record()).len(), 2 * HEARD_A_TURN + 10);
         // And a message too long to be anything it has to say, not at all.
         clients[1].link().send(vec![0; LONGEST_HEARD + 1]).unwrap();
         assert_eq!(host.turn(), [Event::Left(2)]);
@@ -1554,7 +1615,7 @@ mod tests {
         clients[0].ask(Action::Pause(true)).unwrap();
         clients[1].ask(Action::Lose(1)).unwrap();
         play(&mut host, &mut clients, 1);
-        assert_eq!(host.schedule().record().given.len(), 3);
+        assert_eq!(asked(host.schedule().record()).len(), 3);
     }
 
     #[test]
@@ -1566,7 +1627,7 @@ mod tests {
         assert_eq!(host.relay(), []);
         clients[0].advance(usize::MAX).unwrap();
         assert_eq!(clients[0].world().ticks, 0);
-        assert_eq!(clients[0].schedule().record().given.len(), 2);
+        assert_eq!(asked(clients[0].schedule().record()).len(), 2);
         assert!(clients[0].schedule().paused());
         // And a tick is played though the match is held still.
         assert_eq!(host.tick(), []);
@@ -1587,11 +1648,12 @@ mod tests {
         // Nothing until they ask.
         assert_eq!(host.seat(), []);
         // A player asked for twice is asked for once.
-        crate::join(&mut ends[0], vec![1, 1]).unwrap();
-        crate::join(&mut ends[1], vec![1, 2]).unwrap();
+        crate::join(&mut ends[0], vec![1, 1], "Bob".into()).unwrap();
+        crate::join(&mut ends[1], vec![1, 2], "Bob".into()).unwrap();
         let older = Join {
             protocol: PROTOCOL + 1,
             players: vec![2],
+            name: "Bob".into(),
         };
         ends[2].send(encode(&older)).unwrap();
         let taken = Refusal::Taken(1);
@@ -1610,9 +1672,42 @@ mod tests {
         // As is one that comes after.
         let (ours, mut late) = pair();
         host.greet(ours);
-        crate::join(&mut late, Vec::new()).unwrap();
+        crate::join(&mut late, Vec::new(), "Bob".into()).unwrap();
         assert_eq!(host.seat(), [Err(Refusal::Begun)]);
         assert_eq!(welcome(&mut late), Err(begun));
+    }
+
+    #[test]
+    fn each_side_a_person_plays_goes_by_their_name_unlike_anyone_else() {
+        let mut host = Host::new(setup(), fresh());
+        host.number_names("%s #%d".into());
+        let mut admit = |players: Vec<u32>, name: &str| {
+            let (ours, theirs) = pair();
+            let admitted = host.admit(ours, players, name);
+            admitted.map(|_| theirs)
+        };
+        let mut ends = [
+            admit(vec![2], " Bob ").unwrap(),
+            admit(vec![], "Bob").unwrap(),
+            admit(vec![1, 3], "Bob").unwrap(),
+        ];
+        // Each is told what it goes by.
+        let told = ends
+            .each_mut()
+            .map(|end| welcome(end).unwrap().unwrap().name);
+        assert_eq!(told, ["Bob", "Bob #1", "Bob #2"]);
+        // What's no name isn't let in.
+        assert!(matches!(admit(vec![4], "  "), Err(Refusal::Lost)));
+        let named = |seat: &Seated| (seat.players.clone(), seat.name.clone());
+        let seats: Vec<_> = host.status().seats.iter().map(named).collect();
+        let bobs = [(vec![2], "Bob"), (vec![], "Bob #1"), (vec![1, 3], "Bob #2")];
+        assert_eq!(seats, bobs.map(|(p, n)| (p, n.to_string())));
+        host.turn();
+        let names = [(1, "Bob #2"), (2, "Bob"), (3, "Bob #2")];
+        let names = names.map(|(p, n)| (p, n.to_string())).into();
+        assert_eq!(host.world().sides.names, names);
+        // Nobody asks for them, and so nobody's answered.
+        assert_eq!(asked(host.schedule().record()), []);
     }
 
     #[test]
@@ -1642,9 +1737,9 @@ mod tests {
         assert_eq!(host.wait(), [Event::Left(1)]);
         assert_eq!(host.clients(), 1);
         let (ours, _theirs) = pair();
-        assert_eq!(host.admit(ours, vec![1]), Ok(3));
+        assert_eq!(host.admit(ours, vec![1], "Bob"), Ok(3));
         play(&mut host, &mut clients, 2);
-        assert!(host.schedule().record().given.is_empty());
+        assert!(asked(host.schedule().record()).is_empty());
         assert_eq!(host.world().ticks, 2);
     }
 }

@@ -33,7 +33,8 @@ options:
   --clients <number>  how many clients a hosted match waits for, each to join
                       and be ready to play, before it begins; 1 unless given
   --players <ids>     with --join, the players to give the orders of, by id,
-                      e.g. 1,2; none unless given";
+                      e.g. 1,2; none unless given
+  --name <name>       with --join, what the others know this player as";
 
 /// The most seconds of a match it plays, so that a film whose length was
 /// damaged doesn't keep it playing for good.
@@ -46,8 +47,8 @@ enum Asked {
     /// file if one's named, and hosting it if it's to be.
     Play(Setup, f32, Option<String>, Option<Hosting>),
     /// Play a copy of the match hosted at this address, asking for these
-    /// players.
-    Join(SocketAddr, Vec<u32>),
+    /// players, going by this name if one's given.
+    Join(SocketAddr, Vec<u32>, Option<String>),
     /// Play the film in this file again.
     Replay(String),
 }
@@ -86,8 +87,13 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
             }
             None => Vec::new(),
         };
+        let name = match take_option(&mut args, "--name")? {
+            Some(typed) => Some(tgserver::name(&typed).ok_or(())?),
+            None => None,
+        };
         let [dir] = <[String; 1]>::try_from(args).map_err(|_| ())?;
-        return Ok((dir, Asked::Join(at.parse().map_err(|_| ())?, players)));
+        let at = at.parse().map_err(|_| ())?;
+        return Ok((dir, Asked::Join(at, players, name)));
     }
     let clients = match take_option(&mut args, "--clients")? {
         Some(n) => Some(n.parse().ok().filter(|&n| n > 0).ok_or(())?),
@@ -141,10 +147,12 @@ fn host(
     world: World,
     ticks: u64,
     hosting: Hosting,
+    numbered: String,
 ) -> Result<(World, Record), String> {
     let mut listener = quic::listen(hosting.at)?;
     eprintln!("hosting at {}", listener.at()?);
     let mut host = Host::new(setup, world);
+    host.number_names(numbered);
     host.want(hosting.clients);
     let mut greet = |host: &mut Host<quic::Remote>| {
         while let Some(link) = listener.accept() {
@@ -201,7 +209,10 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             let world = tgserver::start(&game, &setup, || {})?.world;
             let ticks = (seconds / TICK).round() as u64;
             let (world, record) = match hosting {
-                Some(hosting) => host(setup.clone(), world, ticks, hosting)?,
+                Some(hosting) => {
+                    let numbered = tgserver::numbered(&game.strings());
+                    host(setup.clone(), world, ticks, hosting, numbered)?
+                }
                 None => {
                     let (mut world, mut schedule) = (world, Schedule::default());
                     for _ in 0..ticks {
@@ -216,9 +227,10 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             }
             Ok((world, seed))
         }
-        Asked::Join(at, players) => {
+        Asked::Join(at, players, name) => {
             let mut link = quic::connect(at)?;
-            let welcome = tgserver::enter(&mut link, players, ANSWERED)
+            let name = name.unwrap_or_else(|| tgserver::default_name(&game.strings()));
+            let welcome = tgserver::enter(&mut link, players, name, ANSWERED)
                 .map_err(|e| format!("{at}: not let in: {e:?}"))?;
             eprintln!("joined as client {}", welcome.client);
             let mut world = tgserver::start(&game, &welcome.setup, || {})?.world;
@@ -366,12 +378,15 @@ mod tests {
         ];
         assert_eq!(hosted(&words), Some(Hosting { at, clients: 3 }));
         let joined = |words: &[&str]| match asked(args(words)) {
-            Ok((_, Asked::Join(at, players))) => (at, players),
+            Ok((_, Asked::Join(at, players, name))) => (at, players, name),
             _ => panic!("not a match to join"),
         };
-        assert_eq!(joined(&["game", "--join", "127.0.0.1:4000"]), (at, vec![]));
+        let words = ["game", "--join", "127.0.0.1:4000"];
+        assert_eq!(joined(&words), (at, vec![], None));
         let words = ["--players", "1,12", "game", "--join", "127.0.0.1:4000"];
-        assert_eq!(joined(&words), (at, vec![1, 12]));
+        assert_eq!(joined(&words), (at, vec![1, 12], None));
+        let words = ["game", "--join", "127.0.0.1:4000", "--name", " Bob "];
+        assert_eq!(joined(&words), (at, vec![], Some("Bob".into())));
     }
 
     #[test]
@@ -399,6 +414,8 @@ mod tests {
             &["game", "berlin", "--join", "127.0.0.1:4000"],
             &["game", "--join", "127.0.0.1:4000", "--players", "1,two"],
             &["game", "--join", "127.0.0.1:4000", "--seed", "3"],
+            &["game", "--join", "127.0.0.1:4000", "--name", "  "],
+            &["game", "berlin", "--name", "Bob"],
         ] {
             assert!(asked(args(words)).is_err(), "{words:?}");
         }

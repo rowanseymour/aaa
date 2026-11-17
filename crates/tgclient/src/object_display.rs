@@ -800,7 +800,7 @@ impl Ui<'_> {
                                     };
                                     line.spawn(ui::side_mark(self.gem, p.rgb, mark));
                                 }
-                                let owner = self.leaders.owner(p, self.local, &self.looks.map);
+                                let owner = self.leaders.owner(p, &self.sim.sides, &self.looks.map);
                                 line.spawn((ui::coloured(owner, Font::Hud, colour), unwrapped()));
                             });
                         });

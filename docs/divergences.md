@@ -53,6 +53,8 @@ talk is our own, so this project and the original can't join each other's matche
   the original's aren't read. See [film.rs](../crates/tgserver/src/film.rs).
 - **A server with no window.** `tgserver` hosts a match without playing in it;
   the original's host is always one of the players.
+- **Nickname.** Set in the Gameplay tab rather than a Network tab of its own, or
+  with `--name`. See [options.rs](../crates/tgclient/src/options.rs).
 
 ## Tools
 

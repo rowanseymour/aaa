@@ -184,6 +184,7 @@ pub(crate) fn at_war() -> Sides {
         ..player(id, None, relations, &[])
     };
     Sides {
+        names: Default::default(),
         players: vec![
             side(1, &[0, 3, 1]),
             side(2, &[3, 0, 3]),

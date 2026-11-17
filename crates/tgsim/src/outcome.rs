@@ -259,6 +259,7 @@ mod tests {
         };
         let side = |id, team| player(id, team, &[], &[]);
         let sides = Sides {
+            names: Default::default(),
             players: vec![
                 side(1, Some(0)),
                 side(2, Some(0)),
@@ -283,6 +284,7 @@ mod tests {
             p
         });
         let sides = Sides {
+            names: Default::default(),
             players: players.collect(),
             teams: Vec::new(),
         };
@@ -422,6 +424,7 @@ mod tests {
             ..player(id, Some(0), &[], &[])
         };
         let sides = |outcomes: [Outcome; 2]| Sides {
+            names: Default::default(),
             players: vec![side(1, outcomes[0]), side(2, outcomes[1])],
             teams: Vec::new(),
         };

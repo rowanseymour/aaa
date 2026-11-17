@@ -671,15 +671,12 @@ pub fn refuse(
 }
 
 /// Posts a line once the host is leaving a match that's over, then one
-/// for each player whose machine has left the match since last time,
-/// whether by choice, by being lost or by being kicked out, the host's
-/// among them, and one for each kick vote cast or taken back. One that
-/// only watched gave no player's orders, and goes unremarked.
+/// for each machine that has left the match since last time, whether by
+/// choice, by being lost or by being kicked out, the host's among them,
+/// and one for each kick vote cast or taken back.
 pub fn tell_leaving(
     mut orders: ResMut<Orders>,
     sim: Res<Sim>,
-    local: Res<Local>,
-    leaders: Res<Leaders>,
     time: Res<Time>,
     mut log: ResMut<MessageLog>,
     mut sounds: ResMut<Sounds>,
@@ -691,17 +688,15 @@ pub fn tell_leaving(
         );
         log.say("GENERIC_EVENT", said, None, &time, &mut sounds);
     }
-    let side = |player: u32| {
-        let player = sim.0.sides.player(player)?;
-        let name = leaders.owner(player, local.0, &log.look.map);
-        Some(Fill::side_of(name, player))
-    };
-    // A client is named by the first side it plays.
-    let named = |orders: &Orders, client| orders.players_of(client).first().and_then(|&p| side(p));
+    let person = |name: &str, players: &[u32]| person(&sim.0, name, players);
     let mut lines = Vec::new();
     // The votes came before any kick they brought.
     for kick in orders.take_kicking() {
-        let named = |client| named(&orders, client);
+        let named = |client| {
+            orders
+                .seen(client)
+                .map(|(players, name)| person(name, players))
+        };
         let (Some(voter), Some(target)) = (named(kick.voter), named(kick.target)) else {
             continue;
         };
@@ -730,28 +725,35 @@ pub fn tell_leaving(
                 .look
                 .said("networking_player_quit|s", "Player %s quit the game"),
         };
-        for name in players.iter().filter_map(|&p| side(p)) {
-            lines.push(fill_all(&said, &[name]));
-        }
+        lines.push(fill_all(&said, &[person(&gone.name, players)]));
     }
     for words in lines {
         log.say("GENERIC_EVENT", words, None, &time, &mut sounds);
     }
     // What's said in the connection dialog makes no sound.
     for said in orders.take_said() {
-        let words = said_line(&sim.0, local.0, &leaders, &log.look, said);
+        let words = said_line(&log.look, said);
         log.post("GENERIC_EVENT", words, None, time.elapsed_secs());
     }
 }
 
-/// The line for what's said in the connection dialog, as `local`, the side
-/// here, sees it: plain, in none of the chat bar's colours.
-fn said_line(sim: &World, local: Option<u32>, leaders: &Leaders, look: &Look, said: Said) -> Words {
-    let name = match said.from.and_then(|p| sim.sides.player(p)) {
-        Some(player) => leaders.owner(player, local, &look.map),
-        None => observer(look),
-    };
-    fill_all(&look.said("public_chat|ss", "%s: %s"), &[name, said.words])
+/// A person as lines name them: by their own name, marked as the first of
+/// `players`, the sides they play, is; unmarked if they only watch.
+fn person(sim: &World, name: &str, players: &[u32]) -> Fill {
+    let side = players.first().and_then(|&p| sim.sides.player(p));
+    match side {
+        Some(player) => Fill::side_of(name.to_string(), player),
+        None => Fill::from(name.to_string()),
+    }
+}
+
+/// The line for what's said in the connection dialog: plain, in none of
+/// the chat bar's colours.
+fn said_line(look: &Look, said: Said) -> Words {
+    fill_all(
+        &look.said("public_chat|ss", "%s: %s"),
+        &[said.name, said.words],
+    )
 }
 
 /// What one who only watches is called.
@@ -854,7 +856,7 @@ fn chat(
     };
     let ink = |(var, stock): (&str, [f32; 3])| look.vars.rgb(var).unwrap_or(stock);
     let name = match from.and_then(|f| sim.sides.player(f)) {
-        Some(player) => leaders.owner(player, local, &look.map),
+        Some(player) => leaders.owner(player, &sim.sides, &look.map),
         None => observer(look),
     };
     let with = [
@@ -887,7 +889,7 @@ fn told(
         ours(owner) || local.is_some_and(|p| sim.seen(p, place.at) == Seen::Visible)
     };
     let side = |id: u32| match sim.sides.player(id) {
-        Some(p) => Fill::side_of(leaders.owner(p, local, &look.map), p),
+        Some(p) => Fill::side_of(leaders.owner(p, &sim.sides, &look.map), p),
         None => Fill::from(String::new()),
     };
     let team_name = |team: usize| {
@@ -1535,6 +1537,7 @@ mod tests {
         players[0].relations[1] = tgmap::Relation::Ally;
         players[1].relations[0] = tgmap::Relation::Ally;
         let sides = tgsim::Sides {
+            names: Default::default(),
             players,
             teams: Vec::new(),
         };
@@ -1617,18 +1620,27 @@ mod tests {
     }
 
     #[test]
-    fn what_is_said_in_the_connection_dialog_is_plain() {
+    fn a_person_is_named_as_themselves_marked_as_their_side_if_they_have_one() {
         let sim = allied_sides();
-        let (look, leaders) = (look(&[]), Leaders::default());
+        let player = sim.sides.player(1).unwrap();
+        let bob = person(&sim, "Bob", &[1]);
+        assert_eq!(bob, Fill::side_of("Bob".into(), player));
+        assert_eq!(person(&sim, "Ann", &[]), Fill::from("Ann".to_string()));
+    }
+
+    #[test]
+    fn what_is_said_in_the_connection_dialog_is_plain() {
+        let look = look(&[]);
         let said = |from| Said {
             from,
+            name: "Bob".into(),
             words: "wait".into(),
         };
-        let line = said_line(&sim, Some(2), &leaders, &look, said(Some(1)));
-        assert_eq!(line.text, "kingdom_1: wait");
+        let line = said_line(&look, said(Some(1)));
+        assert_eq!(line.text, "Bob: wait");
         assert!(line.inks.is_empty() && line.marks.is_empty());
-        let line = said_line(&sim, Some(2), &leaders, &look, said(None));
-        assert_eq!(line.text, "Observer: wait");
+        // One who watches is named all the same.
+        assert_eq!(said_line(&look, said(None)).text, "Bob: wait");
     }
 
     #[test]
