@@ -260,8 +260,20 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             let welcome = tgserver::enter(&mut link, players, name, ANSWERED)
                 .map_err(|e| format!("{at}: not let in: {e:?}"))?;
             eprintln!("joined as client {}", welcome.client);
-            let mut world = tgserver::start(&game, &welcome.setup, || {})?.world;
             let mut client = Client::new(link);
+            // Kept in touch with the host while it's set up, which would
+            // otherwise take the client for lost.
+            let setup = welcome.setup.clone();
+            let starting = std::thread::spawn(move || tgserver::start(&game, &setup, || {}));
+            while !starting.is_finished() {
+                client
+                    .wait()
+                    .map_err(|_| format!("{at}: the host has gone"))?;
+                std::thread::sleep(IDLE);
+            }
+            let started =
+                (starting.join()).unwrap_or_else(|panic| std::panic::resume_unwind(panic));
+            let mut world = started?.world;
             client
                 .ready()
                 .map_err(|_| format!("{at}: the host has gone"))?;

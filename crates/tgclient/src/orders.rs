@@ -358,6 +358,18 @@ impl Orders {
         self.played(played.is_err())
     }
 
+    /// Hears from a host elsewhere while the game's copy of the match is
+    /// still being set up, so that it doesn't take the game for lost: how
+    /// everyone stands, who's gone and what's said.
+    pub(crate) fn wait(&mut self) {
+        if self.quit || !self.joined_to() {
+            return;
+        }
+        let lost = self.client.wait().is_err();
+        // Nothing's carried out before then, so nothing is refused.
+        self.played(lost);
+    }
+
     /// Takes stock after the game's copy of the match has done what the
     /// host said, `lost` being whether the host is found gone.
     fn played(&mut self, lost: bool) -> Vec<(u32, Refused)> {

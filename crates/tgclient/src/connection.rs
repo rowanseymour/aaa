@@ -1,8 +1,9 @@
 //! The connection dialog: how everyone in a match stands as its host sees
-//! them. It opens by itself once the match has been held for a moment and
-//! closes when it goes on, and it's where players vote to drop those
-//! holding it or to kick a player out. Its chat gets through to everyone
-//! at once, held match or not.
+//! them. It's open while a match hosted elsewhere loads, opens by itself
+//! once the match has been held for a moment and closes when it goes on,
+//! and it's where players vote to drop those holding it or to kick a
+//! player out. Its chat gets through to everyone at once, held match or
+//! not.
 
 use std::collections::HashMap;
 
@@ -13,7 +14,7 @@ use tgdata::PingLook;
 use tgserver::protocol::{Seated, Standing, Status};
 
 use crate::ui::{self, Font, Ink};
-use crate::{Orders, Screen, Sim, confirm, menu, messages};
+use crate::{LoadingScreen, Orders, Screen, Sim, confirm, menu, messages};
 
 /// How long the match is held before the dialog opens by itself, so that
 /// a moment's hold doesn't flash it.
@@ -140,9 +141,12 @@ pub struct Dialog {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Opened {
     /// By the player, from the game menu: it stays until they close it.
-    ByPlayer,
+    Player,
     /// By the match being held: it closes when the match goes on.
-    ByHold,
+    Hold,
+    /// By the match, hosted elsewhere, being loaded: it closes as play
+    /// begins, unless the match has been held long enough to keep it open.
+    Loading,
 }
 
 /// How the dialog is laid out: why it's open, whether the match is held,
@@ -225,14 +229,18 @@ impl Plugin for ConnectionPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Dialog>()
             .init_resource::<Look>()
-            .add_systems(OnEnter(Screen::Match), |mut dialog: ResMut<Dialog>| {
+            .add_systems(OnEnter(Screen::Loading), |mut dialog: ResMut<Dialog>| {
                 *dialog = Dialog::default()
+            })
+            // What was laid out over the loading screen names no sides.
+            .add_systems(OnEnter(Screen::Match), |mut dialog: ResMut<Dialog>| {
+                dialog.drawn = None
             })
             .add_systems(
                 Update,
                 (watch, draw, fill_in, keys, show_typing)
                     .chain()
-                    .run_if(in_state(Screen::Match))
+                    .run_if(in_state(Screen::Loading).or_else(in_state(Screen::Match)))
                     .run_if(resource_exists::<Orders>),
             );
     }
@@ -281,7 +289,7 @@ pub fn closed(dialog: Res<Dialog>) -> bool {
 
 /// Opens the dialog at the player's asking, as the game menu does.
 pub fn open(dialog: &mut Dialog) {
-    dialog.opened = Some(Opened::ByPlayer);
+    dialog.opened = Some(Opened::Player);
 }
 
 /// Whether the dialog can be opened: only in a match with others in it.
@@ -289,29 +297,39 @@ pub fn openable(orders: &Orders) -> bool {
     orders.joined_to()
 }
 
-/// Opens the dialog once the match has been held for a moment, and
-/// closes it as the match goes on if that's what opened it.
-fn watch(orders: Res<Orders>, time: Res<Time<Real>>, mut dialog: ResMut<Dialog>) {
+/// Keeps the dialog open while a match hosted elsewhere loads, opens it
+/// once the match has been held for a moment, and closes it as play
+/// begins or the match goes on if that's what opened it.
+fn watch(
+    orders: Res<Orders>,
+    time: Res<Time<Real>>,
+    mut dialog: ResMut<Dialog>,
+    loading: Query<(), With<LoadingScreen>>,
+) {
     // With the host gone, what it last said no longer stands.
     let held = !orders.gone() && orders.status().is_some_and(|s| s.held);
     let now = time.elapsed_secs();
+    let since = held.then(|| *dialog.held_since.get_or_insert(now));
     if !held {
         dialog.held_since = None;
-        if dialog.opened == Some(Opened::ByHold) {
-            dialog.opened = None;
-        }
+    }
+    if orders.joined_to() && !orders.gone() && !loading.is_empty() {
+        dialog.opened = Some(Opened::Loading);
         return;
     }
-    let since = *dialog.held_since.get_or_insert(now);
-    if dialog.opened.is_none() && now - since >= OPENS_AFTER {
-        dialog.opened = Some(Opened::ByHold);
-    }
+    let long_held = since.is_some_and(|since| now - since >= OPENS_AFTER);
+    dialog.opened = match dialog.opened {
+        Some(Opened::Player) => Some(Opened::Player),
+        _ if long_held => Some(Opened::Hold),
+        _ => None,
+    };
 }
 
 /// What the dialog needs to mark each client's side.
 #[derive(bevy::ecs::system::SystemParam)]
 struct Naming<'w> {
-    sim: Res<'w, Sim>,
+    /// None while the match is still being set up.
+    sim: Option<Res<'w, Sim>>,
     gem: Res<'w, ui::Gem>,
 }
 
@@ -411,8 +429,7 @@ fn draw(
         ))
         .id();
     // Only one the player opened, with nothing holding the match.
-    let closable = opened == Opened::ByPlayer && !status.held;
-    if closable {
+    if opened == Opened::Player && !status.held {
         commands
             .spawn((
                 ChildOf(buttons),
@@ -420,19 +437,17 @@ fn draw(
                 ui::called("connection.close"),
             ))
             .observe(close);
-    } else {
-        commands.spawn((
-            ChildOf(buttons),
-            ui::disabled(words.close.clone(), Font::Body),
-        ));
     }
-    commands
-        .spawn((
-            ChildOf(buttons),
-            ui::button(words.leave.clone(), Font::Body),
-            ui::called("connection.leave"),
-        ))
-        .observe(ask_leave);
+    // Loading, only once the match is held.
+    if opened != Opened::Loading || status.held {
+        commands
+            .spawn((
+                ChildOf(buttons),
+                ui::button(words.leave.clone(), Font::Body),
+                ui::called("connection.leave"),
+            ))
+            .observe(ask_leave);
+    }
 }
 
 /// Keeps what's in the dialog's slots and lower panel as the host last
@@ -570,7 +585,8 @@ fn slot(
             },
         ))
         .id();
-    let player = (seat.players.first()).and_then(|&p| naming.sim.0.sides.player(p));
+    let sides = naming.sim.as_ref().map(|sim| &sim.0.sides);
+    let player = (seat.players.first()).and_then(|&p| sides?.player(p));
     if let Some(player) = player {
         let node = Node {
             width: px(ui::GEM),
@@ -753,6 +769,7 @@ fn ask_leave(
     confirm: Res<confirm::Words>,
 ) {
     let question = words.leave_confirm.clone();
+    // Asked on the loading screen, it stays up as the match is set up.
     confirm::confirm(&mut commands, &confirm, Screen::Match, question, menu::quit);
 }
 
@@ -775,6 +792,9 @@ mod tests {
         /// Clients that only ever keep up, playing these sides.
         more: Vec<(tgserver::Client<Linked>, tgsim::World)>,
         clock: Clock,
+        /// Whether the match has yet to begin, every copy of it still
+        /// being set up.
+        loading: bool,
     }
 
     impl Match {
@@ -823,6 +843,37 @@ mod tests {
                 other_world: fresh(),
                 more,
                 clock,
+                loading: false,
+            }
+        }
+
+        /// As [`Match::new`], on the loading screen, with the game's copy
+        /// of the match still being set up and the host yet to begin it.
+        fn loading() -> Match {
+            let mut m = Match::new();
+            m.loading = true;
+            let world = m.app.world_mut();
+            world.remove_resource::<Sim>();
+            world.spawn(LoadingScreen);
+            let mut screen = world.resource_mut::<NextState<Screen>>();
+            screen.set(Screen::Loading);
+            m.app.update();
+            m
+        }
+
+        /// Has a [`Match::loading`] begin: the game's copy set up, and
+        /// then its loading screen taken down as the host begins it.
+        fn begin(&mut self) {
+            self.loading = false;
+            let world = self.app.world_mut();
+            world.insert_resource(Sim(fresh()));
+            let mut screen = world.resource_mut::<NextState<Screen>>();
+            screen.set(Screen::Match);
+            self.app.update();
+            let world = self.app.world_mut();
+            let mut screens = world.query_filtered::<Entity, With<LoadingScreen>>();
+            for screen in screens.iter(world).collect::<Vec<_>>() {
+                world.despawn(screen);
             }
         }
 
@@ -830,6 +881,21 @@ mod tests {
         /// unless it's `silent`.
         fn second(&mut self, silent: bool) {
             self.clock.pass(Duration::from_secs(1));
+            if self.loading {
+                self.host.wait();
+                if !silent {
+                    self.other.wait().unwrap();
+                }
+                for (client, _) in &mut self.more {
+                    client.wait().unwrap();
+                }
+                let world = self.app.world_mut();
+                world.resource_mut::<Orders>().wait();
+                let mut time = world.resource_mut::<Time<Real>>();
+                time.update_with_duration(Duration::from_secs(1));
+                self.app.update();
+                return;
+            }
             self.host.turn();
             if !silent {
                 self.other
@@ -903,6 +969,53 @@ mod tests {
         // Only the game is still heard from, so its vote alone would do.
         assert!(shown.contains(&"0/1 Votes".to_string()), "{shown:?}");
         assert!(shown.contains(&"Player 2".to_string()), "{shown:?}");
+        m.second(false);
+        m.second(false);
+        assert!(m.shown().is_empty());
+    }
+
+    #[test]
+    fn it_is_open_while_the_match_loads_with_no_way_out_unless_it_is_held() {
+        let mut m = Match::loading();
+        m.second(false);
+        let shown = m.shown();
+        assert!(shown.contains(&"Connected to 10.0.0.1:4000".to_string()));
+        assert!(shown.contains(&"Player 2".to_string()), "{shown:?}");
+        assert!(!shown.contains(&"Close".to_string()), "{shown:?}");
+        assert!(!shown.contains(&"Leave Game".to_string()), "{shown:?}");
+        // What's typed gets through as in play.
+        m.key("h");
+        m.key("enter");
+        m.host.wait();
+        m.other.wait().unwrap();
+        let said: Vec<_> = m.other.take_said().into_iter().map(|s| s.words).collect();
+        assert_eq!(said, ["h"]);
+        // The other goes quiet before its copy is set up.
+        for _ in 0..3 {
+            m.second(true);
+        }
+        let shown = m.shown();
+        assert!(shown.contains(&"Leave Game".to_string()), "{shown:?}");
+        assert!(shown.contains(&"0/1 Votes".to_string()), "{shown:?}");
+        assert!(!shown.contains(&"Close".to_string()), "{shown:?}");
+    }
+
+    #[test]
+    fn as_play_begins_it_closes_unless_the_match_has_been_held_a_while() {
+        let mut m = Match::loading();
+        m.second(false);
+        m.begin();
+        m.second(false);
+        assert!(m.shown().is_empty());
+        let mut m = Match::loading();
+        m.second(false);
+        for _ in 0..4 {
+            m.second(true);
+        }
+        m.begin();
+        m.second(true);
+        let shown = m.shown();
+        assert!(shown.contains(&"Leave Game".to_string()), "{shown:?}");
         m.second(false);
         m.second(false);
         assert!(m.shown().is_empty());

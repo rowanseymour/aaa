@@ -7,7 +7,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use bevy::ecs::system::SystemParam;
-use bevy::image::CompressedImageFormatSupport;
+use bevy::image::{CompressedImageFormatSupport, CompressedImageFormats};
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GameEvent, Id, InterfaceVars};
@@ -531,40 +531,89 @@ type Parts<'a> = (
 #[derive(Component)]
 struct LookAt(u64);
 
+impl Look {
+    /// What `game` has lines look like, short of what the map has things
+    /// called, which [`Look::name_things`] gives once the match is set up.
+    fn of(
+        game: &tgdata::GameData,
+        images: &mut Assets<Image>,
+        formats: CompressedImageFormats,
+        gem: &crate::ui::Gem,
+    ) -> Look {
+        let kinds = game
+            .message_kinds()
+            .into_iter()
+            .map(|k| {
+                let icon = k.icon.as_deref().and_then(|path| {
+                    let image = textures::decode(&game.read(path)?, path, formats, true)?;
+                    Some(images.add(image))
+                });
+                let [r, g, b] = k.colour;
+                let kind = Kind {
+                    icon,
+                    colour: Color::srgb(r, g, b),
+                    filter: k.filter,
+                    sound: k.sound,
+                };
+                (k.id, kind)
+            })
+            .collect();
+        let strings = game.strings();
+        Look {
+            kinds,
+            events: game.game_events(),
+            vars: game.interface_vars(),
+            to_location: (strings.get("ui_tooltip_message_location").cloned())
+                .unwrap_or_else(|| "Move camera to message location".into()),
+            gem: gem.clone(),
+            strings,
+            map: Default::default(),
+            names: HashMap::new(),
+        }
+    }
+
+    /// Has it call things by what `loaded`'s data and map call them.
+    fn name_things(&mut self, loaded: &Loaded) {
+        let game = &loaded.game;
+        self.map = loaded.map.strings.clone();
+        self.names = (game.listings().iter())
+            .map(|(id, l)| (id.clone(), l.name.clone()))
+            .chain((game.technologies().iter()).map(|(id, t)| (id.clone(), t.name.clone())))
+            .collect();
+    }
+}
+
+/// Starts the log as a match begins loading, so that who goes and what's
+/// said while it loads is told then and kept.
+pub fn start(
+    mut commands: Commands,
+    data: Res<crate::Data>,
+    mut images: ResMut<Assets<Image>>,
+    formats: Option<Res<CompressedImageFormatSupport>>,
+    gem: Res<crate::ui::Gem>,
+) {
+    let formats = formats.map(|f| f.0).unwrap_or_default();
+    let look = Look::of(&data.0, &mut images, formats, &gem);
+    commands.insert_resource(MessageLog::new(look));
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
+    mut log: ResMut<MessageLog>,
     local: Res<Local>,
     leaders: Res<Leaders>,
     bindings: Res<Bindings>,
-    mut icons: ResMut<displays::Icons>,
-    gem: Res<crate::ui::Gem>,
+    (mut icons, mut images, formats): (
+        ResMut<displays::Icons>,
+        ResMut<Assets<Image>>,
+        Res<CompressedImageFormatSupport>,
+    ),
 ) {
     let corner = crate::special_ops::corner(&local, &leaders);
-    let game = &loaded.game;
-    let kinds = game
-        .message_kinds()
-        .into_iter()
-        .map(|k| {
-            let icon = k.icon.as_deref().and_then(|path| {
-                let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
-                Some(images.add(image))
-            });
-            let [r, g, b] = k.colour;
-            let kind = Kind {
-                icon,
-                colour: Color::srgb(r, g, b),
-                filter: k.filter,
-                sound: k.sound,
-            };
-            (k.id, kind)
-        })
-        .collect();
-    let strings = game.strings();
-    let said = crate::ui::said(&strings);
+    log.look.name_things(&loaded);
+    let said = crate::ui::said(&log.look.strings);
     displays::spawn_button(
         &mut commands,
         &bindings,
@@ -590,21 +639,6 @@ pub fn spawn(
             pane: true,
         },
     );
-    let look = Look {
-        kinds,
-        events: game.game_events(),
-        vars: game.interface_vars(),
-        to_location: (strings.get("ui_tooltip_message_location").cloned())
-            .unwrap_or_else(|| "Move camera to message location".into()),
-        gem: gem.clone(),
-        strings,
-        map: loaded.map.strings.clone(),
-        names: (game.listings().iter())
-            .map(|(id, l)| (id.clone(), l.name.clone()))
-            .chain((game.technologies().iter()).map(|(id, t)| (id.clone(), t.name.clone())))
-            .collect(),
-    };
-    commands.insert_resource(MessageLog::new(look));
     commands.spawn((
         LogBox,
         Node {
@@ -681,10 +715,11 @@ pub fn refuse(
 /// Posts a line once the host is leaving a match that's over, then one
 /// for each machine that has left the match since last time, whether by
 /// choice, by being lost or by being kicked out, the host's among them,
-/// and one for each kick vote cast or taken back.
+/// and one for each kick vote cast or taken back. While the match is
+/// still being set up, nobody's side is marked.
 pub fn tell_leaving(
     mut orders: ResMut<Orders>,
-    sim: Res<Sim>,
+    sim: Option<Res<Sim>>,
     time: Res<Time>,
     mut log: ResMut<MessageLog>,
     mut sounds: ResMut<Sounds>,
@@ -696,7 +731,8 @@ pub fn tell_leaving(
         );
         log.say("GENERIC_EVENT", said, None, &time, &mut sounds);
     }
-    let person = |name: &str, players: &[u32]| person(&sim.0, name, players);
+    let sim = sim.as_deref().map(|s| &s.0);
+    let person = |name: &str, players: &[u32]| person(sim, name, players);
     let mut lines = Vec::new();
     // The votes came before any kick they brought.
     for kick in orders.take_kicking() {
@@ -747,8 +783,8 @@ pub fn tell_leaving(
 
 /// A person as lines name them: by their own name, marked as the first of
 /// `players`, the sides they play, is; unmarked if they only watch.
-fn person(sim: &World, name: &str, players: &[u32]) -> Fill {
-    let side = players.first().and_then(|&p| sim.sides.player(p));
+fn person(sim: Option<&World>, name: &str, players: &[u32]) -> Fill {
+    let side = players.first().and_then(|&p| sim?.sides.player(p));
     match side {
         Some(player) => Fill::side_of(name.to_string(), player),
         None => Fill::from(name.to_string()),
@@ -1707,9 +1743,12 @@ mod tests {
     fn a_person_is_named_as_themselves_marked_as_their_side_if_they_have_one() {
         let sim = allied_sides();
         let player = sim.sides.player(1).unwrap();
-        let bob = person(&sim, "Bob", &[1]);
+        let bob = person(Some(&sim), "Bob", &[1]);
         assert_eq!(bob, Fill::side_of("Bob".into(), player));
-        assert_eq!(person(&sim, "Ann", &[]), Fill::from("Ann".to_string()));
+        assert_eq!(
+            person(Some(&sim), "Ann", &[]),
+            Fill::from("Ann".to_string())
+        );
     }
 
     #[test]

@@ -262,14 +262,22 @@ impl<L: Link> Client<L> {
     /// it, so that one far behind catches up a part at a time. The link
     /// is only lost once all the host said has been done.
     pub fn advance(&mut self, world: &mut World, most: usize) -> Result<(), Lost> {
-        self.run(world, most, usize::MAX)
+        self.run(Some(world), most, usize::MAX)
     }
 
     /// As [`Client::advance`], but stopping short of the tick after the
     /// next `ticks` of them: for a copy that keeps time itself, and plays
     /// a tick only when one is due.
     pub fn play(&mut self, world: &mut World, ticks: usize) -> Result<(), Lost> {
-        self.run(world, usize::MAX, ticks)
+        self.run(Some(world), usize::MAX, ticks)
+    }
+
+    /// Takes in what the host has said while its copy of the match is
+    /// still being set up, so that the host hears from it all the while:
+    /// how everyone stands, who's gone and what's said, but no step,
+    /// which waits for a copy to play it.
+    pub fn wait(&mut self) -> Result<(), Lost> {
+        self.run(None, 0, 0)
     }
 
     /// Takes in what the host has sent.
@@ -313,8 +321,13 @@ impl<L: Link> Client<L> {
     }
 
     /// Has `world` do what the host has said, up to `steps` steps of it
-    /// of which `ticks` play a tick.
-    fn run(&mut self, world: &mut World, mut steps: usize, mut ticks: usize) -> Result<(), Lost> {
+    /// of which `ticks` play a tick; with no `world`, no steps.
+    fn run(
+        &mut self,
+        mut world: Option<&mut World>,
+        mut steps: usize,
+        mut ticks: usize,
+    ) -> Result<(), Lost> {
         // Taking in what's come, as far as there's room, finds what's said
         // for everyone behind steps still to play.
         self.hear();
@@ -323,13 +336,18 @@ impl<L: Link> Client<L> {
                 self.hear();
             }
             match self.heard.front() {
-                Some(ToClient::Step(bundle)) if steps == 0 || (bundle.tick && ticks == 0) => break,
+                Some(ToClient::Step(bundle))
+                    if steps == 0 || world.is_none() || (bundle.tick && ticks == 0) =>
+                {
+                    break;
+                }
                 Some(_) => {}
                 None if self.lost => return Err(Lost),
                 None => break,
             }
             match self.heard.pop_front() {
                 Some(ToClient::Step(bundle)) => {
+                    let world = (world.as_deref_mut()).expect("a step waits for a copy to play it");
                     steps -= 1;
                     for action in bundle.actions {
                         self.schedule.act(action);

@@ -207,11 +207,13 @@ enum Stage {
     Objects,
     Resources,
     Finished,
+    /// Set up, and waiting on the match's host to begin it.
+    Waiting,
 }
 
 /// What the loading screen says for each [`Stage`], in the game's words.
 #[derive(Resource)]
-struct StageWords([String; 4]);
+struct StageWords([String; 5]);
 
 impl StageWords {
     fn of(strings: &tgdata::Strings) -> Self {
@@ -221,6 +223,10 @@ impl StageWords {
             said("app_status_loading_objects", "Loading Objects"),
             said("app_status_loading_resources", "Loading Resources"),
             said("app_status_finished", "Finished Loading"),
+            said(
+                "app_status_waiting_on_other_players",
+                "Waiting on Other Players",
+            ),
         ])
     }
 
@@ -240,10 +246,6 @@ struct Readying {
 /// which is elsewhere and may be waiting on others, begins it.
 #[derive(Component)]
 struct AwaitingHost;
-
-/// What the loading screen says then. Not the game's words: it has none
-/// for this.
-const AWAITING_HOST: &str = "Waiting for other players";
 
 /// Takes down a loading screen that's [`AwaitingHost`] once the match has
 /// begun, or its host has gone.
@@ -283,7 +285,9 @@ struct Preparing {
 /// What [`prepare`] sets a match up with.
 struct Prepared {
     loaded: Loaded,
-    orders: Orders,
+    /// Those of a match hosted here; a match hosted elsewhere has had its
+    /// own since it began loading.
+    orders: Option<Orders>,
     sim: World,
     raising: Recruits,
     person: Option<u32>,
@@ -916,7 +920,7 @@ pub fn run(program: Program) -> ExitCode {
             chat::ChatPlugin,
         ))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
-        .add_systems(OnEnter(Screen::Loading), loading)
+        .add_systems(OnEnter(Screen::Loading), (loading, messages::start))
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
             OnEnter(Screen::Match),
@@ -956,7 +960,8 @@ pub fn run(program: Program) -> ExitCode {
                 .run_if(widgets::original)
                 .run_if(in_state(Screen::Match)),
         )
-        .add_plugins(HoldFirstTick)
+        .add_plugins((HoldFirstTick, InTouch))
+        .configure_sets(Update, Telling.after(carry_out).before(messages::show))
         .add_systems(
             FixedUpdate,
             step.in_set(Ticks).run_if(in_state(Screen::Match)),
@@ -1022,17 +1027,12 @@ pub fn run(program: Program) -> ExitCode {
                 resource_bar::show.after(actions::show),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
-                messages::relist.after(messages::tell_leaving),
                 chat::keys
                     .after(keys::send)
                     .run_if(takes_input)
                     .run_if(connection::closed)
                     .run_if(resource_exists::<Orders>)
                     .before(carry_out),
-                messages::tell_leaving
-                    .after(carry_out)
-                    .before(messages::show)
-                    .run_if(resource_exists::<Orders>),
                 (ghost::show, ghost::land, ghost::redden).chain(),
                 waypoints::cursor,
                 (waypoints::mark, waypoints::clear).chain().after(carry_out),
@@ -1175,10 +1175,13 @@ pub fn keys_free(chat: Option<Res<chat::Chat>>, dialog: Option<Res<connection::D
     chat::closed(chat) && dialog.is_none_or(connection::closed)
 }
 
-/// Loads a map and sets up the sim and recruits for a match on it.
+/// Loads a map and sets up the sim and recruits for a match on it, given
+/// the players the game was let in to give the orders of and the name it
+/// was let in by, where it's `joined` a match hosted elsewhere.
 fn prepare(
     game: Arc<GameData>,
     pending: Pending,
+    joined: Option<(Vec<u32>, String)>,
     side: Side,
     name: String,
     stage: &Mutex<Stage>,
@@ -1188,9 +1191,9 @@ fn prepare(
         setup,
         person,
         from_menu,
-        joined,
         ..
     } = pending;
+    let elsewhere = joined.is_some();
     info!("seed {}", setup.seed);
     let tgserver::Started {
         map,
@@ -1200,12 +1203,12 @@ fn prepare(
     } = tgserver::start(&game, &setup, || reached(Stage::Objects))?;
     let person = match (&joined, from_menu) {
         // Its host says who the game plays.
-        (Some((_, welcome, _)), _) => welcome.players.first().copied(),
+        (Some((players, _)), _) => players.first().copied(),
         (None, true) => person,
         (None, false) => lobby::default_person(&map.players, side),
     };
-    let own = match &joined {
-        Some((_, welcome, _)) => (welcome.players.clone(), welcome.name.clone()),
+    let own = match joined {
+        Some(own) => own,
         None => (person.into_iter().collect(), name.clone()),
     };
     let leaders = Leaders(factions, Some(own));
@@ -1221,11 +1224,9 @@ fn prepare(
     game.property_looks();
     Ok(Prepared {
         loaded: Loaded { game, map },
-        orders: match joined {
-            Some((link, welcome, at)) => Orders::joined(link, welcome, at),
-            // The host's copy, made here to keep it off the window's thread.
-            None => Orders::hosting(setup, sim.clone(), person, &name),
-        },
+        // The host's copy, made here to keep it off the window's thread.
+        // A host elsewhere is heard from while the match is set up.
+        orders: (!elsewhere).then(|| Orders::hosting(setup, sim.clone(), person, &name)),
         sim,
         raising,
         person,
@@ -1262,7 +1263,9 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     world.insert_resource(Local(lineup.person()));
     world.insert_resource(leaders);
     world.insert_resource(lineup);
-    world.insert_resource(orders);
+    if let Some(orders) = orders {
+        world.insert_resource(orders);
+    }
     world.insert_resource(Sim(sim));
     world.insert_resource(Raising(raising));
     world.insert_resource(effects);
@@ -1340,16 +1343,24 @@ fn loading(mut commands: Commands, pending: Res<Pending>, words: Res<StageWords>
 /// match on it behind the loading screen, or goes back to the lobby or exits
 /// if it can't be loaded.
 fn load(world: &mut bevy::ecs::world::World) {
-    if let Some(pending) = world.remove_resource::<Pending>() {
+    if let Some(mut pending) = world.remove_resource::<Pending>() {
         let Some(game) = world.get_resource::<Data>().map(|d| d.0.clone()) else {
             return;
         };
         let side = *world.resource::<Side>();
         let name = world.resource::<Nickname>().0.clone();
         let from_menu = pending.from_menu;
+        // Heard from all the while the match is set up, as its host hears
+        // from the game.
+        let joined = pending.joined.take().map(|(link, welcome, at)| {
+            let own = (welcome.players.clone(), welcome.name.clone());
+            world.insert_resource(Orders::joined(link, welcome, at));
+            own
+        });
         let stage = Arc::new(Mutex::new(Stage::Data));
         let reached = stage.clone();
-        let thread = std::thread::spawn(move || prepare(game, pending, side, name, &reached));
+        let thread =
+            std::thread::spawn(move || prepare(game, pending, joined, side, name, &reached));
         world.insert_resource(Preparing {
             thread,
             stage,
@@ -1438,7 +1449,7 @@ fn ready(
             commands.entity(screen).insert(AwaitingHost);
         }
         for mut text in &mut status {
-            text.0 = AWAITING_HOST.into();
+            text.0 = words.of_stage(Stage::Waiting).into();
         }
         return;
     }
@@ -1681,6 +1692,33 @@ fn target_position(sim: &World, target: Target) -> [f32; 2] {
 /// shown is how the match begins, however long its first frame took.
 #[derive(Resource)]
 struct Shown;
+
+/// Tells who goes and what's said in a match, from when it starts loading:
+/// a game joined to a match hosted elsewhere keeps in touch with its host
+/// while the match loads, as it does once the match is played.
+struct InTouch;
+
+/// What [`InTouch`] tells, once the match has played what it's given.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+struct Telling;
+
+impl Plugin for InTouch {
+    fn build(&self, app: &mut App) {
+        app.add_systems(
+            Update,
+            (
+                (|mut orders: ResMut<Orders>| orders.wait())
+                    .run_if(in_state(Screen::Loading))
+                    .run_if(resource_exists::<Orders>),
+                messages::tell_leaving.run_if(resource_exists::<Orders>),
+                messages::relist,
+            )
+                .chain()
+                .in_set(Telling)
+                .run_if(in_state(Screen::Loading).or_else(in_state(Screen::Match))),
+        );
+    }
+}
 
 /// Holds the sim's ticks off until the match has been shown once.
 struct HoldFirstTick;
@@ -3048,6 +3086,35 @@ mod tests {
         assert_eq!(drawn(&app).0, 1);
         app.update();
         assert_eq!(drawn(&app).0, 3);
+    }
+
+    #[test]
+    fn a_game_joined_elsewhere_hears_who_goes_and_what_is_said_while_it_loads() {
+        let (mut host, mut orders, _) = orders::testing::joined(&[1]);
+        let (link, _) = orders::testing::let_in(&mut host, &[2]);
+        let mut other = tgserver::Client::new(link);
+        let clock = tgserver::Clock::stopped();
+        host.clock(clock.clone());
+        orders.clock(clock.clone());
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, bevy::state::app::StatesPlugin))
+            .add_plugins(InTouch)
+            .insert_state(Screen::Loading)
+            .insert_resource(orders)
+            .insert_resource(messages::testing::log())
+            .insert_resource(sound::Sounds::of(Default::default(), &[]));
+        app.update();
+        other.say("hurry up".into()).unwrap();
+        host.wait();
+        drop(other);
+        clock.pass(std::time::Duration::from_secs(1));
+        host.wait();
+        app.update();
+        let log = app.world().resource::<messages::MessageLog>();
+        assert_eq!(
+            messages::testing::texts(log),
+            ["Player Player 2 quit the game", "Player 2: hurry up"]
+        );
     }
 
     #[test]
