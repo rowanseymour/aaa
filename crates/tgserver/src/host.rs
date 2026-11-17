@@ -168,6 +168,7 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
     match action {
         Action::Order { player, .. } => players.contains(player),
         Action::Pause(_) => !players.is_empty(),
+        Action::Resign(player) => players.contains(player),
         // Chat is from the client's own side, or from none if it only
         // watches.
         Action::Chat { from, words, .. } => {
@@ -566,6 +567,8 @@ impl<L: Link> Host<L> {
         self.begun = true;
         let mut events = Vec::new();
         let mut votes_changed = false;
+        // Whether anyone's side resigned, leaving them watching.
+        let mut resigned = false;
         // Each kick vote cast or taken back, by whom.
         let mut kicks = Vec::new();
         // What's said for everyone, to pass on at once.
@@ -677,6 +680,12 @@ impl<L: Link> Host<L> {
             }
             // Nobody reads them here, and they'd only mount up.
             self.world.take_notices();
+            // Whoever played a side that's resigned only watches now.
+            for seat in &mut self.clients {
+                let sides = seat.players.len();
+                seat.players.retain(|&p| !self.world.resigned(p));
+                resigned |= seat.players.len() != sides;
+            }
         }
         self.answer();
         if self.held != was_held {
@@ -686,7 +695,8 @@ impl<L: Link> Host<L> {
         // Everyone hears at once that the match is held or let go, how
         // the votes stand, which a voter sees its own by, and who's gone.
         let due = self.told.is_none_or(|t| self.now >= t + TOLD);
-        if due || self.held != was_held || votes_changed || !parted.is_empty() {
+        let changed = votes_changed || resigned || !parted.is_empty();
+        if due || self.held != was_held || changed {
             self.told = Some(self.now);
             self.tell(&ToClient::Status(self.status()));
         }
@@ -1189,6 +1199,31 @@ mod tests {
         play(&mut host, &mut clients, 1);
         assert!(!host.schedule().paused() && !clients[0].schedule().paused());
         assert_eq!(pausing(&host).len(), 7);
+    }
+
+    #[test]
+    fn a_side_resigned_leaves_its_player_watching() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[3]]);
+        host.multiplayer();
+        play(&mut host, &mut clients, 2);
+        // Only a side's own player resigns it.
+        clients[0].ask(Action::Resign(2)).unwrap();
+        clients[1].ask(Action::Resign(2)).unwrap();
+        play(&mut host, &mut clients, 2);
+        assert_eq!(asked(host.schedule().record()).len(), 1);
+        assert!(clients.iter().all(|c| c.world().resigned(2)));
+        let seat = |host: &Host<Local>, client| {
+            let mut seats = host.status().seats.into_iter();
+            seats.find(|s| s.client == client).unwrap().players
+        };
+        assert_eq!(seat(&host, 2), []);
+        assert_eq!(clients[1].status().unwrap().seats[1].players, []);
+        // Nor can they pause any more, or give orders.
+        clients[1].ask(Action::Pause(true)).unwrap();
+        clients[1].ask(go(2, 1, [5.0, 30.0])).unwrap();
+        play(&mut host, &mut clients, 2);
+        assert_eq!(asked(host.schedule().record()).len(), 1);
+        assert!(!host.schedule().paused());
     }
 
     #[test]

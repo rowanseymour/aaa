@@ -181,16 +181,17 @@ pub fn keys(
     mut log: ResMut<MessageLog>,
     time: Res<Time>,
 ) {
+    let local = speaker(&sim.0, &local);
     let activate = crate::intent::asked(&mut intents, ACTIVATE);
     if !chat.open {
         presses.clear();
         if activate {
-            open(&mut chat, &orders, &sim.0, local.0);
+            open(&mut chat, &orders, &sim.0, local);
         }
         return;
     }
     let step = |chat: &mut Chat, by: isize| {
-        chat.filter = stepped(&offered(&orders, local.0), chat.filter, by);
+        chat.filter = stepped(&offered(&orders, local), chat.filter, by);
     };
     if bindings.pressed(&keys, "ChatSend") {
         presses.clear();
@@ -198,7 +199,7 @@ pub fn keys(
             &mut chat,
             &mut orders,
             &sim.0,
-            local.0,
+            local,
             &leaders,
             &mut log,
             &time,
@@ -463,8 +464,15 @@ fn fill_in(
     }
 }
 
-fn next_filter(_: On<Activate>, mut chat: ResMut<Chat>, orders: Res<Orders>, local: Res<Local>) {
-    chat.filter = stepped(&offered(&orders, local.0), chat.filter, 1);
+fn next_filter(
+    _: On<Activate>,
+    mut chat: ResMut<Chat>,
+    orders: Res<Orders>,
+    sim: Res<Sim>,
+    local: Res<Local>,
+) {
+    let local = speaker(&sim.0, &local);
+    chat.filter = stepped(&offered(&orders, local), chat.filter, 1);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -482,11 +490,17 @@ fn send_pressed(
         &mut chat,
         &mut orders,
         &sim.0,
-        local.0,
+        speaker(&sim.0, &local),
         &leaders,
         &mut log,
         &time,
     );
+}
+
+/// The side the player here speaks for: theirs, until it's resigned,
+/// which leaves them watching.
+fn speaker(sim: &World, local: &Local) -> Option<u32> {
+    local.0.filter(|&side| !sim.resigned(side))
 }
 
 #[cfg(test)]

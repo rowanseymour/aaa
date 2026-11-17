@@ -1024,6 +1024,7 @@ impl World {
         self.ticks += 1;
         self.run_triggers();
         self.settle_outcomes();
+        self.clear_out_resigned();
     }
 }
 

@@ -92,6 +92,8 @@ impl World {
             outcome: p.outcome,
             default_defeat: p.default_defeat,
             by_cities: p.won_by_cities,
+            resigned: p.resigned,
+            resigning: false,
         };
         let fates: BTreeMap<u32, Fate> = sides.players.iter().map(|p| (p.id, fate(p))).collect();
         // A match is over once a side has won or every side has lost.

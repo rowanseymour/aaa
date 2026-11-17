@@ -20,6 +20,10 @@ impl World {
     /// Whether `player` may give `command` now: what [`World::apply`]
     /// would refuse it for, without carrying it out.
     pub fn check(&self, player: u32, command: &Command) -> Result<(), Refused> {
+        // Nobody plays a side that's resigned.
+        if self.resigned(player) {
+            return Err(Refused::NotYours);
+        }
         match *command {
             Command::Move { organization, .. }
             | Command::Guard { organization, .. }
