@@ -25,7 +25,7 @@ use tgmap::Organization;
 use tgrender::textures;
 use tgsim::{Lacking, Researchable};
 
-use crate::intent::{Asks, Intent};
+use crate::intent::{Asked, Asks, Intent};
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
 use crate::resource_bar::{Preview, Previewed};
@@ -1798,12 +1798,12 @@ pub fn widget(slot: usize) -> String {
 
 /// Presses the button an intent asks for, by what it does or by its
 /// widget, if it's showing.
-pub fn act(mut asked: MessageReader<Intent>, mut presser: Presser) {
-    let asked: Vec<Intent> = asked.read().cloned().collect();
+pub fn act(mut intents: MessageReader<Intent>, mut presser: Presser) {
+    let asked = Asked::read(&mut intents);
     if asked.is_empty() {
         return;
     }
-    let wanted = |name: &str| asked.iter().any(|a| a.is(name));
+    let wanted = |name: &str| asked.wants(name);
     let building = presser.chosen.0.filter(|_| presser.selected.0.is_empty());
     let menu = presser.looks.menu(&presser.sim.0, building);
     let list = building.map_or(&[][..], |b| presser.sim.0.research_list(b));

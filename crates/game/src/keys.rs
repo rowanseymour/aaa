@@ -206,9 +206,57 @@ fn key(name: &str) -> Option<KeyCode> {
     })
 }
 
-/// Which keys give each action, and how each key shows.
+/// Where a binding applies, as its hotkey's target says.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum Scope {
+    /// It presses the widget named, wherever that's on screen.
+    Widget(String),
+    /// It gives its command in any of these places, such as `game` or a
+    /// panel's window.
+    In(Vec<String>),
+}
+
+impl Scope {
+    fn of(hotkey: &Hotkey) -> Scope {
+        let mut places = hotkey.target.split('|').map(str::to_string);
+        match hotkey.command {
+            None => Scope::Widget(places.next().unwrap_or_default()),
+            Some(_) => Scope::In(places.collect()),
+        }
+    }
+
+    /// Whether it's heard: with no panel up, in the match's own places
+    /// and on its widgets; with `window` up, in that window, over
+    /// everything, and on the widgets `passes` lets through.
+    fn heard(&self, window: Option<&str>, passes: impl Fn(&str) -> bool) -> bool {
+        match (self, window) {
+            (Scope::In(places), None) => places.iter().any(|p| MATCH.contains(&p.as_str())),
+            (Scope::In(places), Some(window)) => {
+                (places.iter()).any(|p| p == ROOT || p.eq_ignore_ascii_case(window))
+            }
+            (Scope::Widget(_), None) => true,
+            (Scope::Widget(widget), Some(_)) => passes(widget),
+        }
+    }
+}
+
+/// The places a match hears commands in while no panel's up.
+const MATCH: [&str; 4] = [ROOT, "vworld", "game", "dev"];
+/// The place heard over everything.
+const ROOT: &str = "root";
+
+/// A widget's name without the slot a repeated one is numbered by, e.g.
+/// `ActionButtonsButton` for `ActionButtonsButton_3`.
+fn unnumbered(widget: &str) -> &str {
+    match widget.rsplit_once('_') {
+        Some((base, n)) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => base,
+        _ => widget,
+    }
+}
+
+/// Which keys give each action, where, and how each key shows.
 #[derive(Resource, Default)]
-pub struct Bindings(Vec<(Chord, String, KeyName)>);
+pub struct Bindings(Vec<(Chord, String, KeyName, Scope)>);
 
 impl Bindings {
     /// The bindings a set of hotkeys makes, leaving out any on keys not
@@ -238,13 +286,26 @@ impl Bindings {
                 types: chord.types(),
                 name,
             };
-            Some((chord, h.action().to_string(), shown))
+            Some((chord, h.action().to_string(), shown, Scope::of(h)))
         };
         Bindings(hotkeys.iter().filter_map(bound).collect())
     }
 
-    fn bound<'a>(&'a self, action: &'a str) -> impl Iterator<Item = &'a (Chord, String, KeyName)> {
-        self.0.iter().filter(move |(_, a, _)| a == action)
+    /// Leaves out what presses a widget the screen doesn't have, such as
+    /// the main menu's, given the names of those it has.
+    pub fn on_screen(mut self, widgets: &std::collections::HashSet<String>) -> Self {
+        self.0.retain(|(.., scope)| match scope {
+            Scope::Widget(w) => widgets.contains(&unnumbered(w).to_ascii_lowercase()),
+            Scope::In(_) => true,
+        });
+        self
+    }
+
+    fn bound<'a>(
+        &'a self,
+        action: &'a str,
+    ) -> impl Iterator<Item = &'a (Chord, String, KeyName, Scope)> {
+        self.0.iter().filter(move |(_, a, ..)| a == action)
     }
 
     /// Whether a key that gives `action` has just been pressed.
@@ -252,20 +313,21 @@ impl Bindings {
         self.bound(action).any(|(chord, ..)| chord.pressed(keys))
     }
 
-    /// The actions whose keys have just been pressed, in the order bound.
-    pub fn just_pressed<'a>(
+    /// The actions whose keys have just been pressed, in the order bound,
+    /// with where each applies.
+    fn just_pressed<'a>(
         &'a self,
         keys: &'a ButtonInput<KeyCode>,
-    ) -> impl Iterator<Item = &'a str> {
+    ) -> impl Iterator<Item = (&'a str, &'a Scope)> {
         (self.0.iter())
             .filter(|(chord, ..)| chord.pressed(keys))
-            .map(|(_, action, _)| action.as_str())
+            .map(|(_, action, _, scope)| (action.as_str(), scope))
     }
 
     /// How the key that gives `action` shows, if one does.
     pub fn key(&self, action: &str) -> Option<&KeyName> {
-        let bound = self.0.iter().find(|(_, a, _)| a == action);
-        bound.map(|(.., name)| name)
+        let bound = self.0.iter().find(|(_, a, ..)| a == action);
+        bound.map(|(_, _, name, _)| name)
     }
 
     /// `name` with the key that gives `action` marked in it, if one does.
@@ -277,8 +339,8 @@ impl Bindings {
     }
 }
 
-/// Asks for what each key just pressed gives, of what's heard while a
-/// display panel's up.
+/// Asks for what each key just pressed gives where it's heard: in the
+/// match, or in the display panel that's up.
 pub fn send(
     keys: Res<ButtonInput<KeyCode>>,
     bindings: Res<Bindings>,
@@ -288,8 +350,11 @@ pub fn send(
     if keys.get_just_pressed().next().is_none() {
         return;
     }
-    let heard = bindings.just_pressed(&keys).filter(|a| displays.hears(a));
-    intents.write_batch(heard.map(Intent::from));
+    let window = displays.window();
+    let heard = (bindings.just_pressed(&keys))
+        .filter(|(_, scope)| scope.heard(window, |w| displays.passes(w)))
+        .map(|(action, _)| Intent::from(action));
+    intents.write_batch(heard);
 }
 
 /// Reads the hotkeys chosen in the options, and how the game marks them.
@@ -302,7 +367,16 @@ pub fn load(
     let game = &loaded.game;
     theme.key = (game.highlight_colour()).map(|[r, g, b]| Color::srgb(r, g, b));
     let hotkeys = game.hotkeys(options.hotkeys());
-    commands.insert_resource(Bindings::new(&hotkeys, &game.strings()));
+    let mut widgets = std::collections::HashSet::new();
+    fn named(widget: &tgdata::widgets::Widget, out: &mut std::collections::HashSet<String>) {
+        out.insert(widget.name.to_ascii_lowercase());
+        widget.children.iter().for_each(|c| named(c, out));
+    }
+    game.game_widgets()
+        .iter()
+        .for_each(|w| named(w, &mut widgets));
+    let bindings = Bindings::new(&hotkeys, &game.strings()).on_screen(&widgets);
+    commands.insert_resource(bindings);
 }
 
 #[cfg(test)]
@@ -315,6 +389,51 @@ mod tests {
             target: "game".into(),
             command: Some(command.into()),
         }
+    }
+
+    fn scoped(target: &str, command: Option<&str>) -> Scope {
+        Scope::of(&Hotkey {
+            chord: "a".into(),
+            target: target.into(),
+            command: command.map(str::to_string),
+        })
+    }
+
+    #[test]
+    fn keys_are_heard_where_the_files_scope_them() {
+        let none = |_: &str| false;
+        let command = scoped("game|action|verify", Some("ActorCommand move"));
+        assert!(command.heard(None, none));
+        assert!(!command.heard(Some("ObjectivesDisplay"), none));
+        let close = scoped("ObjectivesDisplay", Some("ObjectivesDisplayClose"));
+        assert!(!close.heard(None, none));
+        assert!(close.heard(Some("ObjectivesDisplay"), none));
+        assert!(!close.heard(Some("TechnologyDisplay"), none));
+        let root = scoped("root", Some("screenshot"));
+        assert!(root.heard(None, none) && root.heard(Some("ObjectivesDisplay"), none));
+        assert!(!scoped("editbox", Some("EditboxCopy")).heard(None, none));
+        let button = scoped("ButtonObjectives", None);
+        assert!(button.heard(None, none));
+        assert!(!button.heard(Some("TechnologyDisplay"), none));
+        assert!(button.heard(Some("TechnologyDisplay"), |_| true));
+    }
+
+    #[test]
+    fn widgets_off_the_screen_lose_their_keys() {
+        let press = |target: &str| Hotkey {
+            chord: "q".into(),
+            target: target.into(),
+            command: None,
+        };
+        let hotkeys = [
+            press("MainMenuButtonQuit"),
+            press("ActionButtonsButton_0|action"),
+            hotkey("m", "ActorCommand move"),
+        ];
+        let widgets = ["actionbuttonsbutton".to_string()].into();
+        let bindings = Bindings::new(&hotkeys, &tgdata::Strings::default()).on_screen(&widgets);
+        let actions: Vec<&str> = bindings.0.iter().map(|(_, a, ..)| a.as_str()).collect();
+        assert_eq!(actions, ["ActionButtonsButton_0", "ActorCommand move"]);
     }
 
     #[test]

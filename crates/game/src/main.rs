@@ -1002,6 +1002,8 @@ fn main() -> ExitCode {
             )
                 .run_if(in_state(Screen::Match))
                 .run_if(resource_exists::<Orders>)
+                // What they work on is all there once the match has loaded.
+                .run_if(displays::loaded)
                 .before(carry_out),
         )
         .add_systems(
@@ -1084,14 +1086,9 @@ fn takes_input(
 }
 
 /// Whether keys reach the match's hotkeys: neither the console nor the
-/// pause menu is up, and the match has loaded. A display panel that's up
-/// hears only its own, as [`displays::Displays::hears`] has it.
-fn keys_heard(
-    console: Res<console::Console>,
-    menu: Res<pause::PauseMenu>,
-    loading: Query<(), With<LoadingScreen>>,
-) -> bool {
-    console::closed(console) && pause::closed(menu) && loading.is_empty()
+/// pause menu is up. Which of them are heard is [`keys::send`]'s to say.
+pub(crate) fn keys_heard(console: Res<console::Console>, menu: Res<pause::PauseMenu>) -> bool {
+    console::closed(console) && pause::closed(menu)
 }
 
 /// Whether the match has the keyboard: neither the chat bar nor the

@@ -12,7 +12,7 @@ use bevy::ui_widgets::{Button, ScrollArea};
 use tgrender::textures;
 
 use crate::actions::Blocks;
-use crate::intent::{Asks, Intent};
+use crate::intent::{Asked, Asks, Intent};
 use crate::keys::Bindings;
 use crate::ui::{self, Click, Edge, Font, Hint, Ink, Marked, Surface, Theme, label};
 use crate::{Orders, Screen, minimap};
@@ -46,6 +46,16 @@ impl Panel {
             Panel::MessageLog => ("ButtonMessageLog", "MessageLogToggle"),
         }
     }
+
+    /// The window the original shows it in, where the hotkey files bind
+    /// its keys.
+    fn window(self) -> &'static str {
+        match self {
+            Panel::Objectives => "ObjectivesDisplay",
+            Panel::Technologies => "TechnologyDisplay",
+            Panel::MessageLog => "SideMessageLogPanel",
+        }
+    }
 }
 
 /// Which panel's up, and whether opening it paused the match.
@@ -60,14 +70,18 @@ impl Displays {
         self.open == Some(panel)
     }
 
-    /// Whether a key giving `action` is heard: while a panel's up, only
-    /// the panels' own keys are.
-    pub fn hears(&self, action: &str) -> bool {
-        self.open.is_none()
-            || action == CLOSE_ALL
-            || PANELS
-                .iter()
-                .any(|p| [p.keys().0, p.keys().1].contains(&action))
+    /// The window of the panel that's up, whose keys are heard while it
+    /// is.
+    pub fn window(&self) -> Option<&'static str> {
+        self.open.map(Panel::window)
+    }
+
+    /// Whether a key pressing `widget` is heard while a panel's up: only
+    /// the panels' own buttons, which put another in its place.
+    pub fn passes(&self, widget: &str) -> bool {
+        PANELS
+            .iter()
+            .any(|p| p.keys().0.eq_ignore_ascii_case(widget))
     }
 
     /// Keeps the match paused when the panel closes, as a pause asked for
@@ -183,7 +197,7 @@ impl Plugin for DisplaysPlugin {
 pub struct Keys;
 
 /// Whether the loading screen has gone, so the match is up to look at.
-fn loaded(loading: Query<(), With<crate::LoadingScreen>>) -> bool {
+pub fn loaded(loading: Query<(), With<crate::LoadingScreen>>) -> bool {
     loading.is_empty()
 }
 
@@ -373,8 +387,8 @@ impl Toggling<'_, '_> {
 /// whatever's up, closes it, and a panel's button opens it or, up, closes
 /// it.
 fn keys(mut intents: MessageReader<Intent>, mut toggling: Toggling) {
-    let asked: Vec<Intent> = intents.read().cloned().collect();
-    let wants = |name: &str| asked.iter().any(|i| i.is(name));
+    let asked = Asked::read(&mut intents);
+    let wants = |name: &str| asked.wants(name);
     if let Some(open) = toggling.displays.open
         && (wants(open.keys().1) || wants(CLOSE_ALL))
     {
@@ -508,6 +522,7 @@ mod tests {
             hotkey("f3", "SideMessageLogPanel", Some("MessageLogToggle")),
             hotkey("esc", "TechnologyDisplay", Some("TechnologyDisplayClose")),
             hotkey("backspace", "TechnologyDisplay|1", Some(CLOSE_ALL)),
+            hotkey("m", "game|action|verify", Some(MOVE)),
         ];
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, PausePlugin))
@@ -521,9 +536,11 @@ mod tests {
             .init_resource::<Orders>()
             .insert_resource(Bindings::new(&hotkeys, &tgdata::Strings::default()))
             .add_message::<Intent>()
+            .init_resource::<Sent>()
+            .add_observer(crate::intent::send)
             .add_systems(
                 Update,
-                (crate::keys::send.run_if(pause::closed), keys)
+                (crate::keys::send.run_if(crate::keys_heard), (keys, record))
                     .chain()
                     .after(pause::Toggle),
             );
@@ -545,6 +562,58 @@ mod tests {
 
     fn open(app: &App) -> Option<Panel> {
         app.world().resource::<Displays>().open
+    }
+
+    const MOVE: &str = "ActorCommand move";
+
+    /// Every intent sent so far.
+    #[derive(Resource, Default)]
+    struct Sent(Vec<String>);
+
+    fn record(mut intents: MessageReader<Intent>, mut sent: ResMut<Sent>) {
+        sent.0.extend(intents.read().map(|i| i.0.clone()));
+    }
+
+    fn sent(app: &App, name: &str) -> bool {
+        app.world().resource::<Sent>().0.iter().any(|s| s == name)
+    }
+
+    #[test]
+    fn a_panel_keeps_the_match_keys_to_itself() {
+        let mut app = app();
+        press(&mut app, KeyCode::F2);
+        press(&mut app, KeyCode::KeyM);
+        assert!(!sent(&app, MOVE));
+        press(&mut app, KeyCode::Backspace);
+        press(&mut app, KeyCode::KeyM);
+        assert!(sent(&app, MOVE));
+    }
+
+    #[test]
+    fn a_panels_own_keys_go_unheard_while_it_is_down() {
+        let mut app = app();
+        press(&mut app, KeyCode::Backspace);
+        assert!(!sent(&app, CLOSE_ALL));
+    }
+
+    #[test]
+    fn the_pause_menu_keeps_the_keys() {
+        let mut app = app();
+        press(&mut app, KeyCode::Escape);
+        assert!(!app.world_mut().run_system_cached(pause::closed).unwrap());
+        press(&mut app, KeyCode::KeyM);
+        press(&mut app, KeyCode::F2);
+        assert!(!sent(&app, MOVE) && open(&app).is_none());
+    }
+
+    #[test]
+    fn its_button_asks_as_its_key_does() {
+        let mut app = app();
+        let button = app.world_mut().spawn(Asks::new("ButtonTechnology")).id();
+        app.world_mut()
+            .trigger(bevy::ui_widgets::Activate { entity: button });
+        app.update();
+        assert!(open(&app) == Some(Panel::Technologies));
     }
 
     fn paused(app: &App) -> bool {
