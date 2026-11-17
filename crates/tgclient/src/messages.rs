@@ -15,7 +15,7 @@ use tgrender::camera::RtsCamera;
 use tgrender::terrain::world;
 use tgrender::textures;
 use tgserver::protocol::Said;
-use tgsim::{Channel, Notice, Pause, Piece, Relation, Seen, World};
+use tgsim::{Channel, Notice, Pause, Pausing, Piece, Relation, Seen, Votes, World};
 
 use crate::actions::{self, Aim, fill};
 use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
@@ -437,8 +437,10 @@ pub(crate) fn filled(text: &str, with: &[impl Into<Fill> + Clone]) -> String {
     fill_all(text, with).text
 }
 
-/// Fills the `%s`, `%d` and `%i` placeholders of a line in turn, reads
-/// `%%` as `%`, and takes `<color=r,g,b>` as the colour of what follows.
+/// Fills the `%s`, `%d`, `%i` and `%f` placeholders of a line in turn,
+/// the last also as `%.2f` and the like, though what fills it is written
+/// as its caller has it; reads `%%` as `%`, and takes `<color=r,g,b>` as
+/// the colour of what follows.
 fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {
     let mut out = String::new();
     let mut marks = Vec::new();
@@ -461,12 +463,18 @@ fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {
             continue;
         }
         let after = &rest[i + 1..];
+        // A placeholder for a number with its places given, e.g. `%.0f`.
+        let places = after
+            .strip_prefix('.')
+            .map(|p| p.trim_start_matches(|c: char| c.is_ascii_digit()))
+            .filter(|p| p.starts_with('f'));
+        let after = places.unwrap_or(after);
         match after.chars().next() {
             Some('%') => {
                 out.push('%');
                 rest = &after[1..];
             }
-            Some('s' | 'd' | 'i') => {
+            Some('s' | 'd' | 'i' | 'f') => {
                 if let Some(Fill { words, side, ink }) = with.next() {
                     if let Some(rgb) = side {
                         marks.push(Mark { at: out.len(), rgb });
@@ -756,6 +764,58 @@ fn said_line(look: &Look, said: Said) -> Words {
     )
 }
 
+/// The line for what came of someone asking to pause or unpause, with
+/// each person named by `side`, as their side's name.
+fn paused_line(look: &Look, pausing: Pausing, side: impl Fn(u32) -> Fill) -> Words {
+    let count = |n: u32| Fill::from(n.to_string());
+    let (key, or, fills) = match pausing {
+        Pausing::Paused { by } => (
+            "networking_vote_to_pause_player_game_paused|s",
+            "%s has paused the game",
+            vec![side(by)],
+        ),
+        // The count needed comes first here.
+        Pausing::Needed(Votes { votes, needed }) => (
+            "networking_vote_to_pause_needed_votes|dd",
+            "Votes needed to unpause %d, current votes %d",
+            vec![count(needed), count(votes)],
+        ),
+        Pausing::Unpaused { by } => (
+            "networking_vote_to_pause_player_game_unpaused|s",
+            "%s has unpaused the game",
+            vec![side(by)],
+        ),
+        Pausing::Voted { by, cast, votes } => {
+            let (key, or) = match cast {
+                true => (
+                    "networking_vote_to_pause_player_votes_to_unpause|sdd",
+                    "%s votes to unpause the game (%d/%d)",
+                ),
+                false => (
+                    "networking_vote_to_pause_player_retracts_vote|sdd",
+                    "%s has retracted vote to unpause (%d/%d)",
+                ),
+            };
+            (
+                key,
+                or,
+                vec![side(by), count(votes.votes), count(votes.needed)],
+            )
+        }
+        Pausing::VotedOff => (
+            "networking_vote_to_pause_game_unpaused",
+            "Game unpaused",
+            vec![],
+        ),
+        Pausing::Refused { by } => (
+            "networking_vote_to_pause_pause_rejected|s",
+            "%s attempted to pause but failed due to recent votes",
+            vec![side(by)],
+        ),
+    };
+    fill_all(&look.said(key, or), &fills)
+}
+
 /// What one who only watches is called.
 fn observer(look: &Look) -> String {
     look.said("game_interface_KingdomDropDown_observer_text", "Observer")
@@ -785,6 +845,7 @@ pub fn tell(
         let posted = match told(&sim.0, local.0, &leaders, &log.look, notice) {
             Some(Told::Event(event, with, place)) => log.event(event, &with, place, now),
             Some(Told::Line(kind, text, place)) => log.post(kind, text, place, now),
+            Some(Told::Words(kind, words)) => log.post(kind, words, None, now),
             // Chat sounds whether or not its line shows, and as itself
             // rather than as its line's kind.
             Some(Told::Chat(kind, words)) => {
@@ -820,6 +881,8 @@ enum Told {
     Event(&'static str, Vec<Fill>, Option<Place>),
     /// A line of a kind of message.
     Line(&'static str, String, Option<Place>),
+    /// A line, with what fills it, of a kind of message.
+    Words(&'static str, Words),
 }
 
 /// The line chat from the person playing `from`, or watching for none,
@@ -897,6 +960,15 @@ fn told(
         look.map.get(name).unwrap_or(name).clone()
     };
     Some(match notice {
+        Notice::Pausing(pausing) => Told::Words("GENERIC_EVENT", paused_line(look, pausing, side)),
+        Notice::Speed(speed) => {
+            let said = look.said(
+                "networking_change_game_speed|f",
+                "Game speed changed to %.0f%%",
+            );
+            let percent = format!("{:.0}", speed * 100.0);
+            Told::Words("GENERIC_EVENT", fill_all(&said, &[percent]))
+        }
         Notice::Chat { from, to, words } => {
             let (kind, words) = chat(sim, local, leaders, look, from, to, words)?;
             Told::Chat(kind, words)
@@ -1641,6 +1713,45 @@ mod tests {
         assert!(line.inks.is_empty() && line.marks.is_empty());
         // One who watches is named all the same.
         assert_eq!(said_line(&look, said(None)).text, "Bob: wait");
+    }
+
+    #[test]
+    fn a_number_with_its_places_given_fills_like_any_other() {
+        let line = fill_all("Game speed changed to %.0f%%", &["141"]);
+        assert_eq!(line.text, "Game speed changed to 141%");
+        assert_eq!(fill_all("%f and %.f", &["1", "2"]).text, "1 and 2");
+        // What's not one is left as it is.
+        assert_eq!(fill_all("%.x %s", &["a"]).text, "%.x a");
+    }
+
+    #[test]
+    fn pausing_names_each_person_and_counts_the_votes() {
+        let look = look(&[]);
+        let line = |pausing| {
+            let side = |id: u32| Fill::from(format!("P{id}"));
+            paused_line(&look, pausing, side).text
+        };
+        let votes = Votes {
+            votes: 1,
+            needed: 3,
+        };
+        assert_eq!(line(Pausing::Paused { by: 1 }), "P1 has paused the game");
+        assert_eq!(
+            line(Pausing::Needed(votes)),
+            "Votes needed to unpause 3, current votes 1"
+        );
+        let voted = |cast| Pausing::Voted { by: 2, cast, votes };
+        assert_eq!(line(voted(true)), "P2 votes to unpause the game (1/3)");
+        assert_eq!(line(voted(false)), "P2 has retracted vote to unpause (1/3)");
+        assert_eq!(
+            line(Pausing::Unpaused { by: 1 }),
+            "P1 has unpaused the game"
+        );
+        assert_eq!(line(Pausing::VotedOff), "Game unpaused");
+        assert_eq!(
+            line(Pausing::Refused { by: 1 }),
+            "P1 attempted to pause but failed due to recent votes"
+        );
     }
 
     #[test]

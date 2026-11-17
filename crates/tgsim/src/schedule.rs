@@ -47,6 +47,34 @@ pub enum Action {
     },
     /// Has side `player` go by the name of the person playing it.
     Name { player: u32, name: String },
+    /// Tells everyone what came of someone asking to pause or unpause.
+    Pausing(Pausing),
+}
+
+/// What came of a person asking to pause or unpause a match played
+/// between machines, each naming a person by the first side they play.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Pausing {
+    /// `by` paused the match.
+    Paused { by: u32 },
+    /// The votes towards unpausing it, where that takes a vote, as it's
+    /// paused.
+    Needed(Votes),
+    /// `by`, who paused it, unpaused it.
+    Unpaused { by: u32 },
+    /// `by` voted to unpause it, or took their vote back.
+    Voted { by: u32, cast: bool, votes: Votes },
+    /// Enough voted, and it's unpaused.
+    VotedOff,
+    /// `by` asked to pause too soon after a pause of theirs was voted off.
+    Refused { by: u32 },
+}
+
+/// How many are for unpausing a match, and how many it takes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Votes {
+    pub votes: u32,
+    pub needed: u32,
 }
 
 /// The most characters a line of chat holds.
@@ -101,6 +129,7 @@ impl Action {
                 world.sides.names.insert(player, name);
             }
             Action::Name { .. } => {}
+            Action::Pausing(pausing) => world.notices.push(crate::Notice::Pausing(pausing)),
         }
         Ok(())
     }
@@ -205,6 +234,9 @@ impl Schedule {
         for action in self.waiting.drain(..) {
             let mut clock = (self.paused, self.speed);
             action.set_clock(&mut clock);
+            if clock.1 != self.speed {
+                world.notices.push(crate::Notice::Speed(clock.1));
+            }
             (self.paused, self.speed) = clock;
             let step = world.ticks;
             self.record.given.push(Given {

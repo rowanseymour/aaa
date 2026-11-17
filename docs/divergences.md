@@ -55,6 +55,10 @@ talk is our own, so this project and the original can't join each other's matche
   the original's host is always one of the players.
 - **Nickname.** Set in the Gameplay tab rather than a Network tab of its own, or
   with `--name`. See [options.rs](../crates/tgclient/src/options.rs).
+- **Pausing.** The host alone decides who may pause and unpause, timing the
+  minutes after a vote by its own clock, where the original has each machine time
+  them and so can split right at the mark. See
+  [pausing.rs](../crates/tgserver/src/pausing.rs).
 
 ## Tools
 

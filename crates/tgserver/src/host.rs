@@ -7,6 +7,7 @@ use tgsim::{Action, Record, Schedule, World};
 
 use serde::{Deserialize, Serialize};
 
+use crate::pausing::{Pauses, Person};
 use crate::protocol::{
     Bundle, Gone, Join, KickVote, PROTOCOL, Said, Seated, Standing, Status, ToClient, ToHost,
     Welcome, decode, encode,
@@ -69,9 +70,10 @@ pub struct Host<L> {
     /// When the clients were last told how everyone stands.
     told: Option<Instant>,
     /// Whether the match is held for everyone, and the actions asked while
-    /// it is, which wait for it to go on.
+    /// it is, which wait for it to go on, each with the client that asked,
+    /// if one did.
     held: bool,
-    put_off: Vec<Action>,
+    put_off: Vec<(Option<u32>, Action)>,
     /// Whether any client's standing holds the match, rather than it
     /// waiting only on the rest catching up.
     holding: bool,
@@ -82,6 +84,9 @@ pub struct Host<L> {
     parted: bool,
     /// How a name that's taken is numbered, as [`crate::unique`] takes it.
     numbered: String,
+    /// Who has paused the match and who's for unpausing it, where the match
+    /// is played between machines and so pausing has rules.
+    pauses: Option<Pauses>,
 }
 
 /// A client as the host has it.
@@ -162,7 +167,7 @@ pub fn sayable(words: &str) -> bool {
 pub fn allows(players: &[u32], action: &Action) -> bool {
     match action {
         Action::Order { player, .. } => players.contains(player),
-        Action::Pause(_) | Action::Speed(_) => !players.is_empty(),
+        Action::Pause(_) => !players.is_empty(),
         // Chat is from the client's own side, or from none if it only
         // watches.
         Action::Chat { from, words, .. } => {
@@ -172,12 +177,15 @@ pub fn allows(players: &[u32], action: &Action) -> bool {
             };
             speaker && sayable(words)
         }
-        // Names are the host's to give.
-        Action::Win(_)
+        // The speed is the host's to set, and names and what pausing came
+        // to its to give.
+        Action::Speed(_)
+        | Action::Win(_)
         | Action::Lose(_)
         | Action::Raise { .. }
         | Action::Destroy(_)
-        | Action::Name { .. } => false,
+        | Action::Name { .. }
+        | Action::Pausing(_) => false,
     }
 }
 
@@ -212,7 +220,20 @@ impl<L: Link> Host<L> {
             wanted: None,
             begun: false,
             numbered: crate::NUMBERED.into(),
+            pauses: None,
         }
+    }
+
+    /// Has it play the match as one between machines, where only a person
+    /// with a side pauses it, and others unpause it only by vote.
+    pub fn multiplayer(&mut self) {
+        self.pauses.get_or_insert_default();
+    }
+
+    /// Has it play the match `speed` times as fast from its next turn on,
+    /// as only whoever hosts may have it.
+    pub fn speed(&mut self, speed: f32) {
+        self.put_off.push((None, Action::Speed(speed)));
     }
 
     /// Has it number a name that's taken by `numbered`, as
@@ -468,6 +489,10 @@ impl<L: Link> Host<L> {
                 for other in &mut self.clients {
                     other.kicking.retain(|&c| c != client);
                 }
+                if let Some(pauses) = &mut self.pauses {
+                    let let_go = pauses.leave(client).into_iter().map(|a| (None, a));
+                    self.put_off.extend(let_go);
+                }
                 let left = ToClient::Left(Gone {
                     client,
                     players: seat.players,
@@ -531,10 +556,11 @@ impl<L: Link> Host<L> {
             }
             // Every side a person plays goes by their name from the first.
             for seat in &self.clients {
-                actions.extend(seat.players.iter().map(|&player| Action::Name {
+                let name = |&player| Action::Name {
                     player,
                     name: seat.name.clone(),
-                }));
+                };
+                actions.extend(seat.players.iter().map(name).map(|a| (None, a)));
             }
         }
         self.begun = true;
@@ -571,7 +597,7 @@ impl<L: Link> Host<L> {
                             if !first_taken.iter().any(|&(id, _)| id == seat.id) {
                                 first_taken.push((seat.id, seat.asked));
                             }
-                            actions.push(action);
+                            actions.push((Some(seat.id), action));
                         }
                         seat.asked += 1;
                     }
@@ -636,7 +662,7 @@ impl<L: Link> Host<L> {
             }
             let mut put_off = std::mem::take(&mut self.put_off);
             put_off.append(&mut actions);
-            actions = put_off;
+            let actions = self.rule(put_off);
             for action in &actions {
                 self.schedule.act(action.clone());
             }
@@ -668,6 +694,27 @@ impl<L: Link> Host<L> {
         events.extend(self.part());
         self.keep_up();
         events
+    }
+
+    /// What `asked`, each with the client that asked if one did, has every
+    /// copy of the match given, by the rules for pausing it.
+    fn rule(&mut self, asked: Vec<(Option<u32>, Action)>) -> Vec<Action> {
+        let pausing = |(_, a): &(_, Action)| matches!(a, Action::Pause(_));
+        let Some(pauses) = (self.pauses.as_mut()).filter(|_| asked.iter().any(pausing)) else {
+            return asked.into_iter().map(|(_, action)| action).collect();
+        };
+        let people: Vec<_> = (self.clients.iter())
+            .filter(|c| !c.lost)
+            .map(|c| Person {
+                client: c.id,
+                side: c.players.first().copied(),
+            })
+            .collect();
+        let rule = |(client, action)| match (client, action) {
+            (Some(client), Action::Pause(pause)) => pauses.ask(client, pause, self.now, &people),
+            (_, action) => vec![action],
+        };
+        asked.into_iter().flat_map(rule).collect()
     }
 
     /// Casts or takes back each of `kicks`, a voter's vote for kicking a
@@ -869,7 +916,7 @@ impl<L: Link> Host<L> {
 #[cfg(test)]
 mod tests {
     use tgmap::{Domain, Formation, Member, Organization, Pathing};
-    use tgsim::{Command, Given, Record, Refused, Sides};
+    use tgsim::{Command, Given, Pausing, Record, Refused, Sides, Votes};
 
     use super::*;
     use crate::testing::player;
@@ -1080,6 +1127,9 @@ mod tests {
         play(&mut host, &mut clients, 10);
         assert_eq!(host.world().ticks, 4);
         assert!(clients.iter().all(|c| c.schedule().paused()));
+        // Only whoever runs the host sets the speed.
+        clients[1].ask(Action::Speed(4.0)).unwrap();
+        host.trust(2);
         clients[1].ask(Action::Speed(2.0)).unwrap();
         clients[1].ask(Action::Pause(false)).unwrap();
         play(&mut host, &mut clients, 6);
@@ -1089,6 +1139,56 @@ mod tests {
             assert_eq!((c.schedule().paused(), c.schedule().speed()), (false, 2.0));
             assert_eq!(c.schedule().record(), host.schedule().record());
         }
+    }
+
+    #[test]
+    fn the_speed_it_is_given_is_every_copy_s_from_its_next_turn() {
+        let (mut host, mut clients) = hosted(&[&[1]]);
+        host.speed(2.0);
+        play(&mut host, &mut clients, 1);
+        assert_eq!(host.schedule().speed(), 2.0);
+        assert_eq!(clients[0].schedule().speed(), 2.0);
+    }
+
+    #[test]
+    fn between_machines_a_pause_is_let_go_by_its_pauser_or_by_vote() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2], &[3]]);
+        host.multiplayer();
+        play(&mut host, &mut clients, 2);
+        let pausing = |host: &Host<Local>| -> Vec<Pausing> {
+            let given = host.schedule().record().given.iter();
+            let pausing = given.filter_map(|g| match g.action {
+                Action::Pausing(p) => Some(p),
+                _ => None,
+            });
+            pausing.collect()
+        };
+        // What pausing comes to is the host's to say.
+        clients[0].ask(Action::Pausing(Pausing::VotedOff)).unwrap();
+        clients[0].ask(Action::Pause(true)).unwrap();
+        play(&mut host, &mut clients, 2);
+        let needed = Pausing::Needed(Votes {
+            votes: 0,
+            needed: 2,
+        });
+        assert_eq!(pausing(&host), [Pausing::Paused { by: 1 }, needed]);
+        assert!(clients.iter().all(|c| c.schedule().paused()));
+        clients[1].ask(Action::Pause(false)).unwrap();
+        clients[2].ask(Action::Pause(false)).unwrap();
+        play(&mut host, &mut clients, 2);
+        assert_eq!(pausing(&host)[4], Pausing::VotedOff);
+        assert!(clients.iter().all(|c| !c.schedule().paused()));
+        assert_eq!(host.world().ticks, 4);
+        // A pauser who goes lets the match go with them.
+        clients[1].ask(Action::Pause(true)).unwrap();
+        play(&mut host, &mut clients, 1);
+        assert!(host.schedule().paused());
+        clients[1].leave().unwrap();
+        clients.remove(1);
+        host.turn();
+        play(&mut host, &mut clients, 1);
+        assert!(!host.schedule().paused() && !clients[0].schedule().paused());
+        assert_eq!(pausing(&host).len(), 7);
     }
 
     #[test]
@@ -1465,8 +1565,9 @@ mod tests {
         assert_eq!(clients[0].answered(), 1);
         assert!(!clients[0].schedule().paused());
         // Carried out or not, and only once its copy has done it.
+        host.trust(2);
         clients[0].ask(Action::Win(1)).unwrap();
-        clients[0].ask(Action::Speed(2.0)).unwrap();
+        clients[0].ask(Action::Speed(4.0)).unwrap();
         clients[1].ask(Action::Speed(2.0)).unwrap();
         host.turn();
         let Copy { client, world } = &mut clients[0];

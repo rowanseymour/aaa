@@ -32,6 +32,8 @@ options:
                       clients that join, playing it at its own speed
   --clients <number>  how many clients a hosted match waits for, each to join
                       and be ready to play, before it begins; 1 unless given
+  --speed <times>     how many times as fast a hosted match is played, within
+                      the game's speeds, e.g. 2; 1 unless given
   --players <ids>     with --join, the players to give the orders of, by id,
                       e.g. 1,2; none unless given
   --name <name>       with --join, what the others know this player as";
@@ -58,6 +60,9 @@ enum Asked {
 struct Hosting {
     at: SocketAddr,
     clients: usize,
+    /// How many times as fast it's played, if not as fast as the game's
+    /// own time.
+    speed: Option<f32>,
 }
 
 /// Removes `flag` and the value after it from `args`; an error if the
@@ -99,13 +104,23 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
         Some(n) => Some(n.parse().ok().filter(|&n| n > 0).ok_or(())?),
         None => None,
     };
-    let hosting = match (take_option(&mut args, "--host")?, clients) {
-        (Some(at), clients) => Some(Hosting {
+    let speed = match take_option(&mut args, "--speed")? {
+        Some(n) => Some(
+            n.parse()
+                .ok()
+                .filter(|n| tgsim::SPEEDS.contains(n))
+                .ok_or(())?,
+        ),
+        None => None,
+    };
+    let hosting = match (take_option(&mut args, "--host")?, clients, speed) {
+        (Some(at), clients, speed) => Some(Hosting {
             at: at.parse().map_err(|_| ())?,
             clients: clients.unwrap_or(1),
+            speed,
         }),
-        (None, Some(_)) => return Err(()),
-        (None, None) => None,
+        (None, None, None) => None,
+        (None, ..) => return Err(()),
     };
     let seed = match take_option(&mut args, "--seed")? {
         Some(n) => n.parse().map_err(|_| ())?,
@@ -153,6 +168,10 @@ fn host(
     eprintln!("hosting at {}", listener.at()?);
     let mut host = Host::new(setup, world);
     host.number_names(numbered);
+    host.multiplayer();
+    if let Some(speed) = hosting.speed {
+        host.speed(speed);
+    }
     host.want(hosting.clients);
     let mut greet = |host: &mut Host<quic::Remote>| {
         while let Some(link) = listener.accept() {
@@ -210,6 +229,14 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             let ticks = (seconds / TICK).round() as u64;
             let (world, record) = match hosting {
                 Some(hosting) => {
+                    let speeds = game.game_speeds();
+                    let (slowest, fastest) = (speeds.start().exp2(), speeds.end().exp2());
+                    if let Some(speed) = hosting.speed.filter(|s| !(slowest..=fastest).contains(s))
+                    {
+                        return Err(format!(
+                            "speed {speed}: the game plays from {slowest} to {fastest}"
+                        ));
+                    }
                     let numbered = tgserver::numbered(&game.strings());
                     host(setup.clone(), world, ticks, hosting, numbered)?
                 }
@@ -367,7 +394,8 @@ mod tests {
         };
         let at: SocketAddr = "127.0.0.1:4000".parse().unwrap();
         let hosting = hosted(&["game", "berlin", "--host", "127.0.0.1:4000"]);
-        assert_eq!(hosting, Some(Hosting { at, clients: 1 }));
+        let hosted_at = |clients, speed| Some(Hosting { at, clients, speed });
+        assert_eq!(hosting, hosted_at(1, None));
         let words = [
             "game",
             "--clients",
@@ -376,7 +404,9 @@ mod tests {
             "--host",
             "127.0.0.1:4000",
         ];
-        assert_eq!(hosted(&words), Some(Hosting { at, clients: 3 }));
+        assert_eq!(hosted(&words), hosted_at(3, None));
+        let words = ["game", "berlin", "--host", "127.0.0.1:4000", "--speed", "2"];
+        assert_eq!(hosted(&words), hosted_at(1, Some(2.0)));
         let joined = |words: &[&str]| match asked(args(words)) {
             Ok((_, Asked::Join(at, players, name))) => (at, players, name),
             _ => panic!("not a match to join"),
@@ -403,6 +433,8 @@ mod tests {
             &["--replay", "out.film"],
             &["game", "berlin", "--host", "nowhere"],
             &["game", "berlin", "--clients", "2"],
+            &["game", "berlin", "--speed", "2"],
+            &["game", "berlin", "--host", "127.0.0.1:4000", "--speed", "0"],
             &[
                 "game",
                 "berlin",

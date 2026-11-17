@@ -26,6 +26,7 @@ mod actions;
 mod backdrop;
 mod banners;
 mod chat;
+mod clock;
 mod confirm;
 mod connection;
 mod console;
@@ -1072,6 +1073,7 @@ pub fn run(program: Program) -> ExitCode {
                     messages::cycle,
                     supply::toggle_border,
                     fog::cheat,
+                    clock::keys,
                 )
                     .after(keys::send),
             )

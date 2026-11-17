@@ -1192,6 +1192,11 @@ pub struct SVars {
     /// How much nearer the intruder a guard is already after counts.
     #[serde(rename = "GuardOldTargetBias")]
     pub guard_old_target_bias: Option<f32>,
+    /// The slowest and fastest a match is played, as powers of two.
+    #[serde(rename = "GameSpeedMin")]
+    pub game_speed_min: Option<f32>,
+    #[serde(rename = "GameSpeedMax")]
+    pub game_speed_max: Option<f32>,
     /// The lowest a terrain's speed limit comes to.
     #[serde(rename = "TerrainMinimumMoveSpeed")]
     pub terrain_minimum_move_speed: Option<f32>,
