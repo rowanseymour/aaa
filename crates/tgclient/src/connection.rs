@@ -13,7 +13,7 @@ use tgdata::PingLook;
 use tgserver::protocol::{Seated, Standing, Status};
 
 use crate::ui::{self, Font, Ink};
-use crate::{Leaders, Loaded, Local, Orders, Screen, Sim, confirm, menu, messages};
+use crate::{Orders, Screen, Sim, confirm, menu, messages};
 
 /// How long the match is held before the dialog opens by itself, so that
 /// a moment's hold doesn't flash it.
@@ -36,7 +36,6 @@ pub struct Words {
     close: String,
     leave: String,
     leave_confirm: String,
-    observer: String,
     send: String,
     standings: HashMap<Standing, String>,
 }
@@ -91,7 +90,6 @@ impl Words {
                 "Leave Game",
             ),
             leave_confirm: said("csd_leave_game_confirm", "Exit the game?"),
-            observer: said("game_interface_KingdomDropDown_observer_text", "Observer"),
             send: said(
                 "connection_status_dialog_ChatPanel_SendButton_Client_View_text",
                 "Send",
@@ -310,14 +308,10 @@ fn watch(orders: Res<Orders>, time: Res<Time<Real>>, mut dialog: ResMut<Dialog>)
     }
 }
 
-/// What the dialog needs to say who each client is.
+/// What the dialog needs to mark each client's side.
 #[derive(bevy::ecs::system::SystemParam)]
 struct Naming<'w> {
     sim: Res<'w, Sim>,
-    local: Res<'w, Local>,
-    leaders: Res<'w, Leaders>,
-    /// Only for the names the map gives sides.
-    loaded: Option<Res<'w, Loaded>>,
     gem: Res<'w, ui::Gem>,
 }
 
@@ -395,7 +389,7 @@ fn draw(
         .iter()
         .any(|s| s.client == me && !s.players.is_empty());
     for seat in &status.seats {
-        let line = slot(&mut commands, panel, seat, &words, &look, &naming);
+        let line = slot(&mut commands, panel, seat, &look, &naming);
         if kicks && !seat.players.is_empty() {
             // Whoever runs the host is there for good.
             let toggle = seat.client != me && !seat.host;
@@ -555,7 +549,6 @@ fn slot(
     commands: &mut Commands,
     panel: Entity,
     seat: &Seated,
-    words: &Words,
     look: &Look,
     naming: &Naming,
 ) -> Entity {
@@ -578,23 +571,16 @@ fn slot(
         ))
         .id();
     let player = (seat.players.first()).and_then(|&p| naming.sim.0.sides.player(p));
-    match player {
-        Some(player) => {
-            let map = naming.loaded.as_ref().map(|l| l.map.strings.clone());
-            let called = (naming.leaders).owner(player, naming.local.0, &map.unwrap_or_default());
-            let node = Node {
-                width: px(ui::GEM),
-                height: px(ui::GEM),
-                ..default()
-            };
-            let mark = ui::side_mark(&naming.gem, player.rgb, node);
-            commands.spawn((ChildOf(name), mark));
-            commands.spawn((ChildOf(name), ui::text(called, Font::Body)));
-        }
-        None => {
-            commands.spawn((ChildOf(name), ui::text(words.observer.clone(), Font::Body)));
-        }
+    if let Some(player) = player {
+        let node = Node {
+            width: px(ui::GEM),
+            height: px(ui::GEM),
+            ..default()
+        };
+        let mark = ui::side_mark(&naming.gem, player.rgb, node);
+        commands.spawn((ChildOf(name), mark));
     }
+    commands.spawn((ChildOf(name), ui::text(seat.name.clone(), Font::Body)));
     commands.spawn((ChildOf(line), icon(None), PingGlyphOf(seat.client)));
     commands.spawn((ChildOf(line), ui::text("", Font::Body), PingOf(seat.client)));
     line
@@ -706,9 +692,11 @@ fn keys(
     mut orders: ResMut<Orders>,
     console: Res<crate::console::Console>,
     asked: Query<(), With<confirm::Question>>,
+    options: Query<(), With<crate::options::Page>>,
 ) {
-    // Not under the console, or a question asked over the dialog.
-    let under = !crate::console::closed(console) || !asked.is_empty();
+    // Not under the console, a question asked over the dialog, or the
+    // options, whose nickname takes what's typed.
+    let under = !crate::console::closed(console) || !asked.is_empty() || !options.is_empty();
     if dialog.opened.is_none() || under {
         presses.clear();
         return;
@@ -719,7 +707,7 @@ fn keys(
         return;
     }
     let mut typing = std::mem::take(&mut dialog.typing);
-    crate::chat::type_into(&mut typing, &mut presses);
+    crate::chat::type_into(&mut typing, tgsim::CHAT_LONGEST, &mut presses);
     if dialog.typing != typing {
         dialog.typing = typing;
     }
@@ -825,8 +813,6 @@ mod tests {
             .insert_resource(confirm::Words::default())
             .insert_resource(orders)
             .insert_resource(Sim(fresh()))
-            .insert_resource(Local(Some(1)))
-            .init_resource::<Leaders>()
             .init_resource::<ui::Gem>()
             .init_resource::<crate::console::Console>();
             app.update();
@@ -916,7 +902,7 @@ mod tests {
         assert!(shown.contains(&"Connected to 10.0.0.1:4000".to_string()));
         // Only the game is still heard from, so its vote alone would do.
         assert!(shown.contains(&"0/1 Votes".to_string()), "{shown:?}");
-        assert!(shown.contains(&"kingdom_2".to_string()), "{shown:?}");
+        assert!(shown.contains(&"Player 2".to_string()), "{shown:?}");
         m.second(false);
         m.second(false);
         assert!(m.shown().is_empty());
@@ -945,7 +931,8 @@ mod tests {
         let said: Vec<_> = m.other.take_said().into_iter().map(|s| s.words).collect();
         assert_eq!(said, ["hi ", "o"]);
         // Outside the steps.
-        assert!(m.host.schedule().record().given.is_empty());
+        let given = crate::orders::testing::asked(m.host.schedule().record());
+        assert!(given.is_empty());
     }
 
     #[test]
@@ -954,6 +941,20 @@ mod tests {
         open(&mut m.app.world_mut().resource_mut());
         m.app.update();
         m.press_called("connection.leave");
+        m.key("h");
+        m.key("enter");
+        assert!(!m.shown().contains(&"h_".to_string()));
+        m.host.turn();
+        m.other.advance(&mut m.other_world, usize::MAX).unwrap();
+        assert_eq!(m.other.take_said(), []);
+    }
+
+    #[test]
+    fn nothing_is_typed_under_the_options() {
+        let mut m = Match::new();
+        open(&mut m.app.world_mut().resource_mut());
+        m.app.world_mut().spawn(crate::options::Page);
+        m.app.update();
         m.key("h");
         m.key("enter");
         assert!(!m.shown().contains(&"h_".to_string()));

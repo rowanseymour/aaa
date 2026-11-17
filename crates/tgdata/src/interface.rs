@@ -150,6 +150,17 @@ impl GameData {
         }
     }
 
+    /// What the options dialog calls the player's LAN nickname: the label
+    /// its LAN panel shows over the box it's typed in.
+    pub fn nickname_label(&self) -> Option<String> {
+        // Not in the load lists.
+        let files = self.parse_named(["UI/Shared/options_dialog.tgi"]);
+        let strings = self.strings();
+        let panel = (files.iter()).find_map(|(_, f)| descendant(&f.root, "LANOptionsPanel"))?;
+        let text = labelled(panel)?;
+        localized(&strings, Some(text))
+    }
+
     /// One of the interface's settings.
     pub(crate) fn interface_setting<T>(&self, of: impl Fn(defs::UVars) -> Option<T>) -> Option<T> {
         self.uvars().iter().cloned().find_map(of)
@@ -264,5 +275,60 @@ impl GameData {
             }
         }
         out
+    }
+}
+
+/// The first block of `kind` under `block`, however deep.
+fn descendant<'a>(block: &'a tgi::Block, kind: &str) -> Option<&'a tgi::Block> {
+    (block.blocks()).find_map(|b| match b.kind() == Some(kind) {
+        true => Some(b),
+        false => descendant(b, kind),
+    })
+}
+
+/// The first text under `block`, however deep.
+fn labelled(block: &tgi::Block) -> Option<&str> {
+    block
+        .value("text")
+        .or_else(|| block.blocks().find_map(labelled))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_nickname_is_labelled_by_the_lan_panel_s_first_text() {
+        let parsed = tgi::parse(
+            r##"
+[OptionsDialog]
+{
+    [GamePlayPage]
+    {
+        [Child]
+        {
+            text = "#other"
+        }
+        [LANOptionsPanel Inherit=OptionsRightColumnPanel]
+        {
+            [View]
+            {
+                [Child Template=SharedMediumLeftLabelVE]
+                {
+                    text = "#nickname"
+                }
+            }
+            [NetworkLanNicknameEditbox]
+            {
+                text = "#box"
+            }
+        }
+    }
+}
+"##,
+        );
+        let panel = descendant(&parsed.root, "LANOptionsPanel").unwrap();
+        assert_eq!(labelled(panel), Some("#nickname"));
+        assert!(descendant(&parsed.root, "Elsewhere").is_none());
     }
 }

@@ -5,6 +5,7 @@ use bevy::anti_alias::fxaa::Fxaa;
 use bevy::anti_alias::smaa::Smaa;
 use bevy::ecs::observer::IntoEntityObserver;
 use bevy::ecs::system::NonSendMarker;
+use bevy::input::keyboard::KeyboardInput;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui_widgets::{Activate, SliderValue, ValueChange};
@@ -23,7 +24,7 @@ use crate::ui::{
     Card, Chosen, Dropdown, Font, Ink, Surface, button, called, card, label, layer, padded, slider,
     slug, switch, text, toggle,
 };
-use crate::{Screen, UI_SCALES, UiScaleSetting, menu};
+use crate::{Nickname, Screen, UI_SCALES, UiScaleSetting, menu};
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
 const BORDER: &str = "options_dialog_Child_text_15";
@@ -56,6 +57,8 @@ pub struct Options {
     hotkeys: Option<Id>,
     /// What the game calls the choice of hotkeys.
     hotkeys_label: String,
+    /// What the game calls what the player goes by.
+    nickname_label: String,
     /// What the game calls the choice to show the supply border.
     border_label: String,
     /// What the game calls the choice of the window's size.
@@ -90,7 +93,11 @@ impl Options {
         let strings = game.strings();
         let configurations = game.hotkey_configurations(&strings);
         let named = game.default_hotkey_configuration();
-        Options::of(configurations, named, &strings)
+        let mut options = Options::of(configurations, named, &strings);
+        if let Some(label) = game.nickname_label() {
+            options.nickname_label = label;
+        }
+        options
     }
 
     /// With `named` the set of hotkeys in use, or the first where there's
@@ -112,6 +119,7 @@ impl Options {
             hotkeys: known.or_else(|| configurations.first().map(|c| c.id.clone())),
             configurations,
             hotkeys_label: said(HOTKEYS, "Hotkeys"),
+            nickname_label: "Nickname".into(),
             border_label: said(BORDER, "Supply Border"),
             resolution_label: said(RESOLUTION, "Resolution"),
             display_label: "Display".into(),
@@ -176,6 +184,15 @@ struct Body;
 /// Where the choice of hotkeys goes.
 #[derive(Component)]
 struct Hotkeys;
+
+/// The box the player's nickname is typed in.
+#[derive(Component)]
+struct NicknameBox;
+
+/// What's being typed in the [`NicknameBox`] while it takes the keyboard,
+/// and the nickname before, which stands while what's typed is no name.
+#[derive(Resource, Default)]
+struct Typing(Option<(String, String)>);
 
 /// A button choosing a set of hotkeys, by its id.
 #[derive(Component)]
@@ -406,10 +423,12 @@ impl Plugin for OptionsPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Open>()
             .init_resource::<Tab>()
+            .init_resource::<Typing>()
             .init_resource::<AntiAliasing>()
             .init_resource::<WindowedSize>()
             .add_systems(OnEnter(Screen::Options), screen)
             .add_observer(set_volume)
+            .add_observer(type_in_nickname)
             .add_systems(PreUpdate, follow_window)
             .add_systems(PostUpdate, anti_alias)
             .add_systems(
@@ -424,6 +443,8 @@ impl Plugin for OptionsPlugin {
                     show_ui_scale,
                     mark_chosen,
                     show_border,
+                    type_nickname,
+                    show_nickname,
                     show_volumes,
                     show_sound_switches,
                 )
@@ -444,6 +465,7 @@ fn screen(mut commands: Commands, options: Res<Options>) {
 pub fn page(commands: &mut Commands, options: &Options) -> Entity {
     commands.insert_resource(Open::Nothing);
     commands.insert_resource(Tab::Game);
+    commands.insert_resource(Typing::default());
     let page = Node {
         position_type: PositionType::Absolute,
         width: percent(100),
@@ -576,10 +598,26 @@ fn show_body(
     }
     commands.entity(body).despawn_children();
     commands.insert_resource(Open::Nothing);
+    commands.insert_resource(Typing::default());
     match *tab {
         Tab::Game => {
             let game = section(&mut commands, body, &options.game_title);
             choice(&mut commands, game, &options.hotkeys_label, Hotkeys);
+            let field = Node {
+                width: px(LIST_WIDTH),
+                justify_content: JustifyContent::Start,
+                ..padded()
+            };
+            let field = (
+                NicknameBox,
+                switch(card(field)),
+                Card,
+                called("options.nickname"),
+                children![text("", Font::Body)],
+            );
+            let name = &options.nickname_label;
+            let holder = children![field];
+            choice(&mut commands, game, name, holder);
             let extras = section(&mut commands, body, &options.extras_title);
             commands
                 .spawn((
@@ -1088,6 +1126,73 @@ fn close_list(
     }
 }
 
+/// Has the [`NicknameBox`] pressed take the keyboard, or give it back.
+fn type_in_nickname(
+    pressed: On<Activate>,
+    boxes: Query<(), With<NicknameBox>>,
+    mut typing: ResMut<Typing>,
+    nickname: Res<Nickname>,
+) {
+    if !boxes.contains(pressed.entity) {
+        return;
+    }
+    typing.0 = match typing.0 {
+        Some(_) => None,
+        None => Some((nickname.0.clone(), nickname.0.clone())),
+    };
+}
+
+/// Types into the [`NicknameBox`] while it has the keyboard, the player
+/// going by what's typed whenever that makes a name, until Enter.
+fn type_nickname(
+    mut presses: MessageReader<KeyboardInput>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut typing: ResMut<Typing>,
+    mut nickname: ResMut<Nickname>,
+    console: Option<Res<crate::console::Console>>,
+) {
+    // What's typed in the console is the console's.
+    let under = console.is_some_and(|c| !crate::console::closed(c));
+    let Some((typed, before)) = typing.0.as_mut().filter(|_| !under) else {
+        presses.clear();
+        return;
+    };
+    if keys.any_just_pressed([KeyCode::Enter, KeyCode::NumpadEnter]) {
+        presses.clear();
+        typing.0 = None;
+        return;
+    }
+    let mut now = typed.clone();
+    crate::chat::type_into(&mut now, tgserver::NAME_LONGEST, &mut presses);
+    if now != *typed {
+        let name = tgserver::name(&now).unwrap_or_else(|| before.clone());
+        nickname.set_if_neq(Nickname(name));
+        *typed = now;
+    }
+}
+
+/// Shows what's being typed in the [`NicknameBox`] while it has the
+/// keyboard, else the nickname.
+fn show_nickname(
+    typing: Res<Typing>,
+    nickname: Res<Nickname>,
+    boxes: Query<(&Children, Ref<NicknameBox>)>,
+    mut texts: Query<&mut Text>,
+) {
+    for (children, added) in &boxes {
+        if !typing.is_changed() && !nickname.is_changed() && !added.is_added() {
+            continue;
+        }
+        let shown = match &typing.0 {
+            Some((typed, _)) => format!("{typed}_"),
+            None => nickname.0.clone(),
+        };
+        if let Some(Ok(mut text)) = texts.iter_many_mut(children).fetch_next() {
+            text.0 = shown;
+        }
+    }
+}
+
 /// Says whether the supply border is showing.
 fn show_border(
     options: Res<Options>,
@@ -1130,19 +1235,25 @@ mod tests {
 
     fn app() -> App {
         let mut app = App::new();
-        app.add_plugins((MinimalPlugins, StatesPlugin, OptionsPlugin))
-            .insert_state(Screen::Options)
-            .insert_resource(options(Some("classic")))
-            .insert_resource(Volumes::from(tgdata::Volumes {
-                main: 0.8,
-                fx: 0.8,
-                speech: 0.95,
-                music: 0.7,
-            }))
-            .insert_resource(Sounds::of(Default::default(), &[]))
-            .init_resource::<Border>()
-            .insert_resource(UiScaleSetting(1.0))
-            .add_message::<WindowResized>();
+        app.add_plugins((
+            MinimalPlugins,
+            StatesPlugin,
+            bevy::input::InputPlugin,
+            OptionsPlugin,
+        ))
+        .insert_state(Screen::Options)
+        .insert_resource(options(Some("classic")))
+        .insert_resource(Nickname("Player".into()))
+        .insert_resource(Volumes::from(tgdata::Volumes {
+            main: 0.8,
+            fx: 0.8,
+            speech: 0.95,
+            music: 0.7,
+        }))
+        .insert_resource(Sounds::of(Default::default(), &[]))
+        .init_resource::<Border>()
+        .insert_resource(UiScaleSetting(1.0))
+        .add_message::<WindowResized>();
         app.update();
         app
     }
@@ -1159,6 +1270,53 @@ mod tests {
     fn choices(app: &mut App) -> usize {
         let world = app.world_mut();
         world.query::<&HotkeysChoice>().iter(world).count()
+    }
+
+    fn press(app: &mut App, chord: &str) {
+        let keys = crate::drive::press(app.world_mut(), chord).unwrap();
+        app.update();
+        crate::drive::release(app.world_mut(), &keys);
+        app.update();
+    }
+
+    fn nickname(app: &App) -> &str {
+        &app.world().resource::<Nickname>().0
+    }
+
+    fn shown_nickname(app: &mut App) -> String {
+        let world = app.world_mut();
+        let mut boxes = world.query_filtered::<&Children, With<NicknameBox>>();
+        let child = boxes.single(world).unwrap()[0];
+        world.get::<Text>(child).unwrap().0.clone()
+    }
+
+    #[test]
+    fn the_nickname_is_what_is_typed_trimmed_and_no_longer_than_a_name() {
+        let mut app = app();
+        assert_eq!(shown_nickname(&mut app), "Player");
+        // Keys go nowhere until the box is pressed.
+        press(&mut app, "a");
+        assert_eq!(nickname(&app), "Player");
+        activate::<NicknameBox>(&mut app, |_| true);
+        for _ in 0.."Player".len() {
+            press(&mut app, "backspace");
+        }
+        // Nothing left is no name, so the last stands.
+        assert_eq!(shown_nickname(&mut app), "_");
+        assert_eq!(nickname(&app), "Player");
+        for key in ["space", "b", "o", "b", "space"] {
+            press(&mut app, key);
+        }
+        assert_eq!(shown_nickname(&mut app), " bob _");
+        assert_eq!(nickname(&app), "bob");
+        for _ in 0..30 {
+            press(&mut app, "x");
+        }
+        assert_eq!(nickname(&app), format!(" bob {}", "x".repeat(13)).trim());
+        press(&mut app, "enter");
+        assert_eq!(shown_nickname(&mut app), nickname(&app));
+        press(&mut app, "x");
+        assert_eq!(nickname(&app).len(), 17);
     }
 
     #[test]

@@ -23,11 +23,15 @@ pub enum NotJoined {
 }
 
 /// Asks the host at the other end of `link` to be let in to give the
-/// orders of `players`, or only to watch if there are none. Its answer is
-/// its [`welcome`].
-pub fn join(link: &mut impl Link, players: Vec<u32>) -> Result<(), Lost> {
+/// orders of `players`, or only to watch if there are none, for a person
+/// going by `name`. Its answer is its [`welcome`].
+pub fn join(link: &mut impl Link, players: Vec<u32>, name: String) -> Result<(), Lost> {
     let protocol = PROTOCOL;
-    link.send(encode(&Join { protocol, players }))
+    link.send(encode(&Join {
+        protocol,
+        players,
+        name,
+    }))
 }
 
 /// What the host first tells a client at the other end of `link`, which
@@ -67,9 +71,10 @@ const LOOKS: Duration = Duration::from_millis(10);
 pub fn enter(
     link: &mut impl Link,
     players: Vec<u32>,
+    name: String,
     wait: Duration,
 ) -> Result<Welcome, NotJoined> {
-    join(link, players).map_err(|_| NotJoined::Lost)?;
+    join(link, players, name).map_err(|_| NotJoined::Lost)?;
     let asked = Instant::now();
     loop {
         match welcome(link)? {

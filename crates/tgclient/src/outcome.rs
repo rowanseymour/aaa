@@ -147,6 +147,7 @@ mod tests {
     /// A match of sides 1 and 2, the player as 1.
     fn app() -> App {
         let sides = Sides {
+            names: Default::default(),
             players: [1, 2].map(crate::tests::player).into(),
             teams: Vec::new(),
         };

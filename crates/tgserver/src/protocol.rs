@@ -12,7 +12,7 @@ use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 9;
+pub const PROTOCOL: u32 = 10;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -21,6 +21,8 @@ pub struct Join {
     pub protocol: u32,
     /// The players it wants to give the orders of; none to only watch.
     pub players: Vec<u32>,
+    /// What the person at it goes by.
+    pub name: String,
 }
 
 /// From a client to the host.
@@ -84,6 +86,8 @@ pub enum ToClient {
 pub struct Said {
     /// The side of the person who said them, or none for one watching.
     pub from: Option<u32>,
+    /// What that person goes by.
+    pub name: String,
     pub words: String,
 }
 
@@ -110,6 +114,8 @@ pub struct Status {
 pub struct Seated {
     pub client: u32,
     pub players: Vec<u32>,
+    /// What the person at it goes by.
+    pub name: String,
     /// Whether it's the client of whoever runs the host.
     pub host: bool,
     pub standing: Standing,
@@ -149,6 +155,8 @@ pub struct Gone {
     pub client: u32,
     /// The players it gave the orders of.
     pub players: Vec<u32>,
+    /// What the person at it went by.
+    pub name: String,
     pub kicked: bool,
 }
 
@@ -173,6 +181,9 @@ pub struct Welcome {
     /// The players the client gives orders for; none for one that only
     /// watches.
     pub players: Vec<u32>,
+    /// What the person at it goes by in the match, numbered if the name
+    /// it asked with was taken.
+    pub name: String,
 }
 
 /// The actions to carry out next, in order.
@@ -237,6 +248,7 @@ mod tests {
                     ..Default::default()
                 },
                 players: vec![1, 2],
+                name: "Bob (1)".into(),
             }),
             ToClient::Step(Bundle {
                 actions: vec![order, Action::Pause(true)],
@@ -251,6 +263,7 @@ mod tests {
             ToClient::Left(Gone {
                 client: 2,
                 players: vec![1],
+                name: "Bob".into(),
                 kicked: true,
             }),
             ToClient::Kicking(KickVote {
@@ -264,12 +277,14 @@ mod tests {
             ToClient::Alive,
             ToClient::Said(Said {
                 from: Some(1),
+                name: "Bob".into(),
                 words: "hi".into(),
             }),
             ToClient::Status(Status {
                 seats: vec![Seated {
                     client: 2,
                     players: vec![1],
+                    name: "Bob".into(),
                     host: false,
                     standing: Standing::Disconnected,
                     vote: true,
@@ -286,6 +301,7 @@ mod tests {
         let join = Join {
             protocol: PROTOCOL,
             players: vec![3],
+            name: "Bob".into(),
         };
         assert_eq!(decode(&encode(&join)), Some(join));
         for message in to_client {

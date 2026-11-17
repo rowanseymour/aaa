@@ -111,6 +111,7 @@ options:
   --players <ids>           with --join, the players to give the orders of, by
                             id, e.g. 1,2, playing the first; none, to watch,
                             unless given
+  --name <name>             what others in the match know this player as
   --side <n>                play the map's nth player (\"Side n\" in its lobby)
                             instead of the first one a person may play
   --exec <script.txt>       run a file of console commands once the match starts,
@@ -335,6 +336,10 @@ struct Drawn(Models);
 #[derive(Resource, Clone, Copy)]
 struct Side(Option<usize>);
 
+/// What the person playing goes by.
+#[derive(Resource, Clone, PartialEq)]
+pub(crate) struct Nickname(pub(crate) String);
+
 /// What matches' chances are drawn from, as asked on the command line.
 #[derive(Resource, Clone, Copy)]
 struct Seed(Option<u64>);
@@ -346,10 +351,10 @@ impl Seed {
     }
 }
 
-/// The faction that leads each side, by player id; none for sides without a
-/// nation.
+/// The faction that leads each side, by player id, none for sides without a
+/// nation; and the sides the person here plays, with what they go by.
 #[derive(Resource, Default)]
-struct Leaders(HashMap<u32, tgdata::Faction>);
+struct Leaders(HashMap<u32, tgdata::Faction>, Option<(Vec<u32>, String)>);
 
 impl Leaders {
     /// The banner, by id, the faction leading `player`'s side flies.
@@ -357,13 +362,17 @@ impl Leaders {
         self.0.get(&player)?.banner.as_ref()
     }
 
-    /// What a side is called, as its things' owner and in lines: the
-    /// person's own side is the player, the computer's after the computer
-    /// player of its faction, such as `Kesselring AI`, and the rest by the
-    /// name the map gives them.
-    fn owner(&self, player: &tgmap::Player, local: Option<u32>, map: &tgdata::Strings) -> String {
-        if local == Some(player.id) {
-            return "Player".into();
+    /// What a side is called, as its things' owner and in lines: a
+    /// person's side by the name `sides` has for it, or the person here's
+    /// by theirs until the match gives it, the computer's after the
+    /// computer player of its faction, such as `Kesselring AI`, and the
+    /// rest by the name the map gives them.
+    fn owner(&self, player: &tgmap::Player, sides: &tgsim::Sides, map: &tgdata::Strings) -> String {
+        if let Some(name) = sides.names.get(&player.id) {
+            return name.clone();
+        }
+        if let Some((_, name)) = (self.1.as_ref()).filter(|(own, _)| own.contains(&player.id)) {
+            return name.clone();
         }
         let faction = self.0.get(&player.id);
         if let Some(name) = faction.and_then(|g| g.computer_name.clone()) {
@@ -597,6 +606,8 @@ struct Options {
     /// Where the match to play in is hosted, and the players to ask its
     /// host for.
     join: Option<(SocketAddr, Vec<u32>)>,
+    /// What the person goes by, if not by the game's default.
+    name: Option<String>,
 }
 
 /// Takes the options out of `args`; `None` if any is malformed.
@@ -645,6 +656,10 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         None => None,
     };
     let log = take_option(args, "--log")?;
+    let name = match take_option(args, "--name")? {
+        Some(typed) => Some(tgserver::name(&typed)?),
+        None => None,
+    };
     let players = match take_option(args, "--players")? {
         Some(ids) => Some(
             (ids.split(',').map(str::parse))
@@ -675,6 +690,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         seed,
         log,
         join,
+        name,
     })
 }
 
@@ -683,10 +699,15 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
 const ANSWERED: Duration = Duration::from_secs(10);
 
 /// Asks the host at `at` to let the game in to its match to give the
-/// orders of `players`: the link to it, and what it let the game in with.
-fn join(at: SocketAddr, players: Vec<u32>) -> Result<(orders::Line, Welcome, String), String> {
+/// orders of `players`, for a person going by `name`: the link to it, and
+/// what it let the game in with.
+fn join(
+    at: SocketAddr,
+    players: Vec<u32>,
+    name: String,
+) -> Result<(orders::Line, Welcome, String), String> {
     let mut link = tgserver::quic::connect(at)?;
-    let welcome = tgserver::enter(&mut link, players, ANSWERED)
+    let welcome = tgserver::enter(&mut link, players, name, ANSWERED)
         .map_err(|e| format!("{at}: not let in: {e:?}"))?;
     Ok((Box::new(link), welcome, at.to_string()))
 }
@@ -716,6 +737,7 @@ pub fn run(program: Program) -> ExitCode {
         seed,
         log,
         join: joining,
+        name,
     }) = options(&mut args)
     else {
         eprintln!("{}", usage(&program));
@@ -767,7 +789,9 @@ pub fn run(program: Program) -> ExitCode {
     };
     // Before there's a window, so that a host that isn't there or won't
     // let the game in is said where the game was asked for.
-    let joined = match joining.map(|(at, players)| join(at, players)).transpose() {
+    let name = name.unwrap_or_else(|| tgserver::default_name(&game.strings()));
+    let joining = joining.map(|(at, players)| join(at, players, name.clone()));
+    let joined = match joining.transpose() {
         Ok(j) => j,
         Err(e) => {
             eprintln!("{}: {e}", program.name);
@@ -873,6 +897,7 @@ pub fn run(program: Program) -> ExitCode {
         .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
+        .insert_resource(Nickname(name))
         .insert_resource(Seed(seed))
         .add_plugins((
             ui::UiPlugin,
@@ -1153,6 +1178,7 @@ fn prepare(
     game: Arc<GameData>,
     pending: Pending,
     side: Side,
+    name: String,
     stage: &Mutex<Stage>,
 ) -> Result<Prepared, String> {
     let reached = |s| *stage.lock().unwrap_or_else(|e| e.into_inner()) = s;
@@ -1170,13 +1196,17 @@ fn prepare(
         world: sim,
         factions,
     } = tgserver::start(&game, &setup, || reached(Stage::Objects))?;
-    let leaders = Leaders(factions);
     let person = match (&joined, from_menu) {
         // Its host says who the game plays.
         (Some((_, welcome, _)), _) => welcome.players.first().copied(),
         (None, true) => person,
         (None, false) => lobby::default_person(&map.players, side),
     };
+    let own = match &joined {
+        Some((_, welcome, _)) => (welcome.players.clone(), welcome.name.clone()),
+        None => (person.into_iter().collect(), name.clone()),
+    };
+    let leaders = Leaders(factions, Some(own));
     if !from_menu && side.0.is_some() && person.is_none() {
         warn!("{}: no such side to play", map.title);
     }
@@ -1192,7 +1222,7 @@ fn prepare(
         orders: match joined {
             Some((link, welcome, at)) => Orders::joined(link, welcome, at),
             // The host's copy, made here to keep it off the window's thread.
-            None => Orders::hosting(setup, sim.clone(), person),
+            None => Orders::hosting(setup, sim.clone(), person, &name),
         },
         sim,
         raising,
@@ -1313,10 +1343,11 @@ fn load(world: &mut bevy::ecs::world::World) {
             return;
         };
         let side = *world.resource::<Side>();
+        let name = world.resource::<Nickname>().0.clone();
         let from_menu = pending.from_menu;
         let stage = Arc::new(Mutex::new(Stage::Data));
         let reached = stage.clone();
-        let thread = std::thread::spawn(move || prepare(game, pending, side, &reached));
+        let thread = std::thread::spawn(move || prepare(game, pending, side, name, &reached));
         world.insert_resource(Preparing {
             thread,
             stage,
@@ -3073,7 +3104,7 @@ mod tests {
     }
 
     #[test]
-    fn sides_are_called_the_player_the_computer_player_or_as_the_map_has_it() {
+    fn sides_are_called_by_their_person_their_computer_player_or_the_map() {
         let faction = |id: &str, computer: Option<&str>| tgdata::Faction {
             id: id.into(),
             name: format!("General {id}"),
@@ -3085,27 +3116,38 @@ mod tests {
             computer_name: computer.map(Into::into),
             banner: None,
         };
-        let leaders = Leaders(HashMap::from([
-            (1, faction("patton", Some("Patton AI"))),
-            (2, faction("rommel", Some("Rommel AI"))),
-            // No computer player plays as this one.
-            (3, faction("patton_tutorial", None)),
-        ]));
+        let mut leaders = Leaders(
+            HashMap::from([
+                (1, faction("patton", Some("Patton AI"))),
+                (2, faction("rommel", Some("Rommel AI"))),
+                // No computer player plays as this one.
+                (3, faction("patton_tutorial", None)),
+            ]),
+            None,
+        );
         let map: tgdata::Strings = [("kingdom_4".into(), "Civilian (Aggressive)".into())]
             .into_iter()
             .collect();
-        assert_eq!(leaders.owner(&player(1), Some(1), &map), "Player");
+        let sides = tgsim::Sides {
+            names: [(1, "Bob".to_string())].into(),
+            ..Default::default()
+        };
+        // A person's side goes by their name.
+        assert_eq!(leaders.owner(&player(1), &sides, &map), "Bob");
         // Never the faction's own name.
-        assert_eq!(leaders.owner(&player(2), Some(1), &map), "Rommel AI");
-        // Watching, every side is the computer's.
-        assert_eq!(leaders.owner(&player(1), None, &map), "Patton AI");
+        assert_eq!(leaders.owner(&player(2), &sides, &map), "Rommel AI");
         // Without a computer player's name, a side goes by the map's name
         // for it, if any.
-        assert_eq!(leaders.owner(&player(3), Some(1), &map), "kingdom_3");
+        assert_eq!(leaders.owner(&player(3), &sides, &map), "kingdom_3");
         assert_eq!(
-            leaders.owner(&player(4), Some(1), &map),
+            leaders.owner(&player(4), &sides, &map),
             "Civilian (Aggressive)"
         );
+        // The person here's sides go by their name until the match names
+        // them, and then by the match's.
+        leaders.1 = Some((vec![1, 2], "Ann".into()));
+        assert_eq!(leaders.owner(&player(2), &sides, &map), "Ann");
+        assert_eq!(leaders.owner(&player(1), &sides, &map), "Bob");
     }
 
     #[test]

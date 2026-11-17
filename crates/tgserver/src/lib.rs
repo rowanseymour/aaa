@@ -6,6 +6,7 @@ mod clock;
 mod film;
 mod host;
 mod link;
+mod names;
 pub mod protocol;
 pub mod quic;
 #[cfg(test)]
@@ -25,6 +26,7 @@ pub use clock::Clock;
 pub use film::{Film, NotFilm};
 pub use host::{Event, Host, Refusal, allows, sayable};
 pub use link::{Link, Local, Lost, pair};
+pub use names::{NAME_LONGEST, NUMBERED, default_name, name, numbered, unique};
 
 /// What a match is played on and by, as its lobby leaves it: all that
 /// every copy of the match has to agree on before it starts.

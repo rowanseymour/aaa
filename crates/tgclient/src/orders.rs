@@ -42,8 +42,9 @@ pub(crate) struct Orders {
     left: Vec<Gone>,
     kicked: bool,
     /// The players each client the host has said of gives the orders of,
-    /// kept once it's gone, for what's said of it after.
-    seen: HashMap<u32, Vec<u32>>,
+    /// and what the person at it goes by, kept once it's gone, for what's
+    /// said of it after.
+    seen: HashMap<u32, (Vec<u32>, String)>,
 }
 
 /// Where the match's host is.
@@ -61,21 +62,21 @@ impl Default for Orders {
     fn default() -> Self {
         let pathing = tgmap::Pathing::uniform(1, tgmap::Domain::Land);
         let world = World::from_organizations(Default::default(), pathing, &[]);
-        Orders::hosting(Setup::default(), world, None)
+        Orders::hosting(Setup::default(), world, None, "Player")
     }
 }
 
 impl Orders {
     /// Those of a match hosted here, which `setup` set up, `world` being
-    /// the host's copy of it.
-    pub(crate) fn hosting(setup: Setup, world: World, person: Option<u32>) -> Orders {
+    /// the host's copy of it, for a person going by `name`.
+    pub(crate) fn hosting(setup: Setup, world: World, person: Option<u32>, name: &str) -> Orders {
         // Theirs is the side the others hear has quit should they leave
         // early.
         let players = person.filter(|&p| world.sides.player(p).is_some());
         let mut host = Host::new(setup.clone(), world);
         let (ours, mut theirs) = tgserver::pair();
         // Whoever runs the host may give any side's orders, and cheat.
-        let me = host.admit(ours, players.into_iter().collect());
+        let me = host.admit(ours, players.into_iter().collect(), name);
         let me = me.expect("a host lets in the first to ask");
         host.trust(me);
         // The game set the match up itself.
@@ -150,10 +151,11 @@ impl Orders {
         self.me
     }
 
-    /// The players `client` gave the orders of, as the host last said of
-    /// it, if it ever did.
-    pub(crate) fn players_of(&self, client: u32) -> &[u32] {
-        self.seen.get(&client).map_or(&[], Vec::as_slice)
+    /// The players `client` gave the orders of and what the person at it
+    /// went by, as the host first said of it, if it ever did.
+    pub(crate) fn seen(&self, client: u32) -> Option<(&[u32], &str)> {
+        let (players, name) = self.seen.get(&client)?;
+        Some((players, name))
     }
 
     /// Whether the game is for kicking `client` out, as the host last
@@ -367,8 +369,8 @@ impl Orders {
         }
         self.diverged = diverged.len();
         for seat in self.client.status().into_iter().flat_map(|s| &s.seats) {
-            let players = || seat.players.clone();
-            self.seen.entry(seat.client).or_insert_with(players);
+            let seen = || (seat.players.clone(), seat.name.clone());
+            self.seen.entry(seat.client).or_insert_with(seen);
         }
         for gone in self.client.take_left() {
             match gone.client == self.me {
@@ -477,6 +479,7 @@ pub(crate) mod testing {
             unpacks: None,
         };
         let sides = Sides {
+            names: Default::default(),
             players: [1, 2, 3].map(crate::tests::player).into(),
             teams: Vec::new(),
         };
@@ -484,11 +487,24 @@ pub(crate) mod testing {
         World::from_organizations(sides, pathing, &[organization(0), organization(1)])
     }
 
-    /// Has `host` let in a client asking for `players`: its end of the
-    /// link, and what it was let in with.
+    /// What a match was given but for the names its host gives sides as it
+    /// begins.
+    pub(crate) fn asked(record: &Record) -> Vec<Action> {
+        let given = record.given.iter().map(|g| g.action.clone());
+        given
+            .filter(|a| !matches!(a, Action::Name { .. }))
+            .collect()
+    }
+
+    /// Has `host` let in a client asking for `players`, going by
+    /// "Player n" for the first of them or "Watcher" for none: its end of
+    /// the link, and what it was let in with.
     pub(crate) fn let_in(host: &mut Host<Local>, players: &[u32]) -> (Local, Welcome) {
         let (ours, mut theirs) = tgserver::pair();
-        tgserver::join(&mut theirs, players.to_vec()).unwrap();
+        let name = players
+            .first()
+            .map_or("Watcher".into(), |p| format!("Player {p}"));
+        tgserver::join(&mut theirs, players.to_vec(), name).unwrap();
         host.greet(ours);
         assert!(matches!(host.seat()[..], [Ok(_)]));
         let welcome = tgserver::welcome(&mut theirs).unwrap().unwrap();
@@ -583,11 +599,11 @@ mod tests {
             Ok(())
         );
         orders.carry_out(&mut world);
-        assert!(orders.record().given.is_empty());
+        assert!(testing::asked(orders.record()).is_empty());
         host.turn();
         orders.step(&mut world);
         assert_eq!(orders.record(), host.schedule().record());
-        assert_eq!(orders.record().given.len(), 1);
+        assert_eq!(testing::asked(orders.record()).len(), 1);
         assert!(!orders.gone());
     }
 
@@ -657,7 +673,7 @@ mod tests {
         assert!(orders.may(&stop(1, 0)) && orders.may(&Action::Pause(true)));
         host.turn();
         orders.step(&mut world);
-        assert_eq!((world.ticks, orders.record().given.len()), (2, 0));
+        assert_eq!((world.ticks, testing::asked(orders.record()).len()), (2, 0));
         // One only watching asks for nothing, and expects nothing.
         let (mut host, mut watching, mut world) = begun(&[]);
         watching.act(Action::Pause(true));
@@ -670,7 +686,7 @@ mod tests {
         watching.step(&mut world);
         assert_eq!((world.ticks, host.schedule().record().given.len()), (2, 0));
         // A host here does whatever it's asked.
-        let hosting = Orders::hosting(Setup::default(), fresh(), None);
+        let hosting = Orders::hosting(Setup::default(), fresh(), None, "Player");
         assert!(!hosting.joined_to() && hosting.players().is_none());
         assert!(hosting.may(&Action::Win(1)) && hosting.may(&stop(2, 1)));
     }
@@ -756,7 +772,7 @@ mod tests {
 
     #[test]
     fn a_game_leaving_a_match_it_hosts_ends_it() {
-        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), None);
+        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), None, "Player");
         let Hosted::Here(host) = &mut orders.host else {
             unreachable!()
         };
@@ -774,7 +790,7 @@ mod tests {
 
     #[test]
     fn a_game_exiting_leaves_the_match_but_keeps_its_orders() {
-        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), None);
+        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), None, "Player");
         let Hosted::Here(host) = &mut orders.host else {
             unreachable!()
         };
@@ -800,7 +816,8 @@ mod tests {
 
     #[test]
     fn a_game_leaving_a_match_it_hosts_early_is_heard_to_quit() {
-        let mut orders = Orders::hosting(Setup::default(), super::testing::fresh(), Some(1));
+        let mut orders =
+            Orders::hosting(Setup::default(), super::testing::fresh(), Some(1), "Player");
         let Hosted::Here(host) = &mut orders.host else {
             unreachable!()
         };
@@ -824,7 +841,7 @@ mod tests {
     #[test]
     fn what_is_asked_is_carried_out_in_both_copies_at_once() {
         let mut world = fresh();
-        let mut orders = Orders::hosting(Setup::default(), world.clone(), None);
+        let mut orders = Orders::hosting(Setup::default(), world.clone(), None, "Player");
         orders.act(Action::Speed(2.0));
         orders.act(Action::Pause(true));
         // Known to be coming before it's come.
@@ -846,7 +863,7 @@ mod tests {
     #[test]
     fn a_step_plays_a_tick_of_both_copies() {
         let mut world = fresh();
-        let mut orders = Orders::hosting(Setup::default(), world.clone(), None);
+        let mut orders = Orders::hosting(Setup::default(), world.clone(), None, "Player");
         // Held still or not: the game's clock is what's held.
         orders.act(Action::Pause(true));
         for _ in 0..25 {
