@@ -31,6 +31,7 @@ pub fn join(link: &mut impl Link, players: Vec<u32>, name: String) -> Result<(),
         protocol,
         players,
         name,
+        password: String::new(),
     }))
 }
 
@@ -293,7 +294,13 @@ impl<L: Link> Client<L> {
                     self.lost |= now >= self.heard_at + UNHEARD;
                     break;
                 }
-                Ok(Some(Some(ToClient::Alive))) => {}
+                // Nothing of a game being set up means anything once it's launched.
+                Ok(Some(Some(
+                    ToClient::Alive
+                    | ToClient::Entered { .. }
+                    | ToClient::Staging(_)
+                    | ToClient::Told(_),
+                ))) => {}
                 Ok(Some(Some(ToClient::Said(said)))) => {
                     // Only the latest are kept for one that never asks.
                     if self.said.len() == SAID_KEPT {
@@ -379,7 +386,13 @@ impl<L: Link> Client<L> {
                     self.answered = asked.clamp(self.answered, self.asked)
                 }
                 Some(
-                    ToClient::Start(_) | ToClient::Refused(_) | ToClient::Alive | ToClient::Said(_),
+                    ToClient::Start(_)
+                    | ToClient::Refused(_)
+                    | ToClient::Alive
+                    | ToClient::Said(_)
+                    | ToClient::Entered { .. }
+                    | ToClient::Staging(_)
+                    | ToClient::Told(_),
                 )
                 | None => {}
             }

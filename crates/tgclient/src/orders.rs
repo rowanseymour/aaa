@@ -51,9 +51,15 @@ pub(crate) struct Orders {
 enum Hosted {
     /// Here, doing whatever it's asked.
     Here(Box<Host<Local>>),
-    /// Elsewhere, at `at`, taking from here only the orders of these
+    /// Shared between machines, taking from here only the orders of these
     /// players, and of the rest only what it takes from anyone who plays.
-    Elsewhere { players: Vec<u32>, at: String },
+    /// players: elsewhere, at `at`, or here, by `host`, which the game
+    /// has hear from everyone as it plays.
+    Shared {
+        players: Vec<u32>,
+        at: Option<String>,
+        host: Option<Box<Host<Line>>>,
+    },
 }
 
 #[cfg(test)]
@@ -89,7 +95,36 @@ impl Orders {
     /// game in with `welcome`.
     pub(crate) fn joined(link: Line, welcome: Welcome, at: String) -> Orders {
         let (players, me) = (welcome.players, welcome.client);
-        Orders::of(Hosted::Elsewhere { players, at }, link, welcome.setup, me)
+        let host = Hosted::Shared {
+            players,
+            at: Some(at),
+            host: None,
+        };
+        Orders::of(host, link, welcome.setup, me)
+    }
+
+    /// Those of a match between machines that `host`, here, let the game
+    /// in to at the other end of `link` with `welcome`; the host is given
+    /// its own copy of the match once it's set up, with [`Orders::build`].
+    pub(crate) fn sharing(host: Host<Line>, link: Line, welcome: Welcome) -> Orders {
+        let (players, me) = (welcome.players, welcome.client);
+        let host = Hosted::Shared {
+            players,
+            at: None,
+            host: Some(Box::new(host)),
+        };
+        Orders::of(host, link, welcome.setup, me)
+    }
+
+    /// Gives a host here of a match between machines its copy of the
+    /// match, set up as the game's was.
+    pub(crate) fn build(&mut self, world: World) {
+        if let Hosted::Shared {
+            host: Some(host), ..
+        } = &mut self.host
+        {
+            host.build(world);
+        }
     }
 
     fn of(host: Hosted, link: Line, setup: Setup, me: u32) -> Orders {
@@ -115,7 +150,7 @@ impl Orders {
     pub(crate) fn players(&self) -> Option<&[u32]> {
         match &self.host {
             Hosted::Here(_) => None,
-            Hosted::Elsewhere { players, .. } => Some(players),
+            Hosted::Shared { players, .. } => Some(players),
         }
     }
 
@@ -129,7 +164,7 @@ impl Orders {
     pub(crate) fn host_at(&self) -> Option<&str> {
         match &self.host {
             Hosted::Here(_) => None,
-            Hosted::Elsewhere { at, .. } => Some(at),
+            Hosted::Shared { at, .. } => at.as_deref(),
         }
     }
 
@@ -330,7 +365,10 @@ impl Orders {
             }
             // The game's clock stands still with the match, so no tick
             // falls due to play the one the match goes on with.
-            Hosted::Elsewhere { .. } => {
+            Hosted::Shared { host, .. } => {
+                if let Some(host) = host.as_deref_mut().filter(|h| !h.waiting()) {
+                    said(host.relay());
+                }
                 let ticks = usize::from(self.client.schedule().paused());
                 self.client.play(world, ticks)
             }
@@ -350,7 +388,12 @@ impl Orders {
                 said(host.tick());
                 self.client.advance(world, usize::MAX)
             }
-            Hosted::Elsewhere { .. } => {
+            Hosted::Shared { host, .. } => {
+                match host.as_deref_mut() {
+                    Some(host) if host.waiting() => said(host.wait()),
+                    Some(host) => said(host.turn()),
+                    None => {}
+                }
                 let ticks = self.client.behind().clamp(1, CAUGHT_UP);
                 self.client.play(world, ticks)
             }
@@ -364,6 +407,15 @@ impl Orders {
     pub(crate) fn wait(&mut self) {
         if self.quit || !self.joined_to() {
             return;
+        }
+        if let Hosted::Shared {
+            host: Some(host), ..
+        } = &mut self.host
+        {
+            match host.waiting() {
+                true => said(host.wait()),
+                false => said(host.turn()),
+            }
         }
         let lost = self.client.wait().is_err();
         // Nothing's carried out before then, so nothing is refused.
@@ -384,7 +436,7 @@ impl Orders {
             let seen = || (seat.players.clone(), seat.name.clone());
             self.seen.entry(seat.client).or_insert_with(seen);
             // A side resigned is taken from whoever played it.
-            if let Hosted::Elsewhere { players, .. } = &mut self.host
+            if let Hosted::Shared { players, .. } = &mut self.host
                 && seat.client == self.me
                 && *players != seat.players
             {
@@ -418,8 +470,11 @@ impl Orders {
         }
         match &mut self.host {
             Hosted::Here(host) => host.end(),
+            Hosted::Shared {
+                host: Some(host), ..
+            } => host.end(),
             // Failing only where the host has already gone.
-            Hosted::Elsewhere { .. } => _ = self.client.leave(),
+            Hosted::Shared { host: None, .. } => _ = self.client.leave(),
         }
     }
 }
@@ -447,6 +502,7 @@ fn said(events: Vec<Event>) {
         match event {
             Event::Held(true) => info!("the match is held"),
             Event::Held(false) => info!("the match goes on"),
+            Event::Left(client) => info!("client {client} has left the match"),
             // With both copies here, only by the match not playing out
             // the same way twice.
             _ => warn!("the match's host says: {event:?}"),
@@ -560,7 +616,7 @@ mod tests {
         fn host(&self) -> &Host<Local> {
             match &self.host {
                 Hosted::Here(host) => host,
-                Hosted::Elsewhere { .. } => panic!("not a match hosted here"),
+                Hosted::Shared { .. } => panic!("not a match hosted here alone"),
             }
         }
     }

@@ -5834,6 +5834,7 @@ dependencies = [
  "rcgen",
  "rustls",
  "serde",
+ "socket2",
  "tgdata",
  "tgmap",
  "tgsim",

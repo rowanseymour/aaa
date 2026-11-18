@@ -21,12 +21,12 @@ const HEARD_A_TURN: usize = 64;
 
 /// The most clients waiting to say what they want that it keeps links
 /// to.
-const GREETED: usize = 32;
+pub(crate) const GREETED: usize = 32;
 
 /// The longest message taken from a client, in bytes, which is well over
 /// what anything it has to say comes to. A longer one is taken as
 /// nonsense, so that what every copy of the match keeps of it is small.
-const LONGEST_HEARD: usize = 1024;
+pub(crate) const LONGEST_HEARD: usize = 1024;
 
 /// How long a client playing the match goes unheard from before it holds
 /// the match.
@@ -65,6 +65,9 @@ pub struct Host<L> {
     /// before then is waited on to be replaced; one that leaves after
     /// isn't.
     gathering: bool,
+    /// Whether its copy of the match is set up, which it has to be before
+    /// the match begins.
+    built: bool,
     begun: bool,
     clock: Clock,
     /// The time at this turn, and at the last that drained or refilled
@@ -153,6 +156,16 @@ pub enum Refusal {
     /// The host has as many clients, or as many waiting to ask, as it
     /// will have.
     Full,
+    /// It asked without the game's password.
+    Password,
+    /// It was put out of the game being set up.
+    Kicked,
+}
+
+/// Tells whoever is at the other end of `link` they're not let in, and
+/// why.
+pub fn refuse(link: &mut impl Link, refusal: Refusal) {
+    let _ = link.send(encode(&ToClient::Refused(refusal)));
 }
 
 /// Something a turn brought that those running the host may want to know.
@@ -232,12 +245,30 @@ impl<L: Link> Host<L> {
             next: 1,
             wanted: None,
             gathering: false,
+            built: true,
             begun: false,
             naming: Naming::default(),
             departed: Vec::new(),
             taking_over: Vec::new(),
             pauses: None,
         }
+    }
+
+    /// A host of the match `setup` sets up, between the sides `sides`,
+    /// before its own copy is: it lets clients in and hears from them, but
+    /// waits for [`Host::build`] before the match begins.
+    pub fn awaiting(setup: Setup, sides: tgsim::Sides) -> Host<L> {
+        let pathing = tgmap::Pathing::uniform(1, tgmap::Domain::Land);
+        let mut host = Host::new(setup, World::from_organizations(sides, pathing, &[]));
+        host.built = false;
+        host
+    }
+
+    /// Gives it its copy of the match, which `setup` set up and which has
+    /// yet to be played, for one made [awaiting](Host::awaiting) it.
+    pub fn build(&mut self, world: World) {
+        self.world = world;
+        self.built = true;
     }
 
     /// Has it play the match as one between machines, where only a person
@@ -283,7 +314,7 @@ impl<L: Link> Host<L> {
     /// its copy of the match is set up. A match begun before then leaves
     /// those clients behind from the start.
     pub fn waiting(&self) -> bool {
-        self.gathering || self.clients.iter().any(|c| !c.ready)
+        !self.built || self.gathering || self.clients.iter().any(|c| !c.ready)
     }
 
     /// Has it carry out whatever `client` asks from here on: any player's
@@ -567,6 +598,10 @@ impl<L: Link> Host<L> {
     /// playing a tick as `tick` says, or by whether the match is held
     /// still if it doesn't; or, unless `play`, one that plays nothing.
     fn go(&mut self, tick: Option<bool>, play: bool) -> Vec<Event> {
+        assert!(
+            self.built || !play,
+            "a match begins once the host's copy is set up"
+        );
         self.now = self.clock.now();
         let mut actions = Vec::new();
         if play && !self.begun {
@@ -653,6 +688,8 @@ impl<L: Link> Host<L> {
                         seat.lost = true;
                         break;
                     }
+                    // Too late to change how the match is set up.
+                    Ok(Some(Some(ToHost::Choose(_)))) => {}
                     Ok(Some(Some(ToHost::Check { step, hash }))) => {
                         // The host has played every tick a client has.
                         let stands = checks.binary_search(&(step, hash)).is_ok();
@@ -1899,6 +1936,7 @@ mod tests {
             protocol: PROTOCOL + 1,
             players: vec![2],
             name: "Bob".into(),
+            password: String::new(),
         };
         ends[2].send(encode(&older)).unwrap();
         let taken = Refusal::Taken(1);

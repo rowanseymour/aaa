@@ -12,6 +12,7 @@ use tgmap::{Brief, Player};
 use tgrender::textures;
 
 use crate::actions::GLYPH_DIR;
+use crate::lan::Staged;
 use crate::menu::{MenuPage, open};
 use crate::presets::Preset;
 use crate::ui::{
@@ -262,6 +263,46 @@ impl Lobby {
         }
     }
 
+    /// Takes what the host of a game between machines says it has come
+    /// to, `me` being what the host knows the person here as.
+    pub(crate) fn follow(&mut self, data: &Data, staging: &tgserver::Staging, me: u32) {
+        if self.map != staging.map {
+            self.map.clone_from(&staging.map);
+            self.brief = Brief::load(&data.0, &staging.map);
+        }
+        self.preset = staging.preset;
+        self.person = staging.guest(me).and_then(|g| g.side);
+        self.nations = staging.nations.clone().into_iter().collect();
+        self.factions = staging.factions.clone().into_iter().collect();
+        self.handicaps = staging.handicaps.clone().into_iter().collect();
+    }
+
+    /// What the match is played on and by as the lobby has it, drawing
+    /// its chances from `seed`, with what the loading screen says of it;
+    /// none without a map to play.
+    pub(crate) fn setup(&self, seed: u64) -> Option<(tgserver::Setup, String, String)> {
+        let brief = self.brief.as_ref().ok()?;
+        let setup = tgserver::Setup {
+            map: self.map.clone(),
+            seed,
+            teams: self.preset.arrange(&brief.players),
+            nations: self.nations.clone().into_iter().collect(),
+            factions: self.factions.clone().into_iter().collect(),
+            handicaps: computer_handicaps(&brief.players, self.person, &self.handicaps),
+            fog: None,
+        };
+        Some((setup, brief.name.clone(), brief.description.clone()))
+    }
+
+    /// The map's sides, as the match has them before it's set up.
+    pub(crate) fn sides(&self) -> tgsim::Sides {
+        let players = self.brief.as_ref().map(|b| b.players.clone());
+        tgsim::Sides {
+            players: players.unwrap_or_default(),
+            ..Default::default()
+        }
+    }
+
     /// Moves the person to the first side they may play if theirs has left
     /// the match.
     fn keep_person_playing(&mut self) {
@@ -379,8 +420,22 @@ fn load_pictures(
     commands.insert_resource(Flags { nations, random });
 }
 
-/// Picks the first of the scenarios, unless the lobby has been here before.
-fn enter(mut commands: Commands, data: Res<Data>, asked: Res<Side>, lobby: Option<ResMut<Lobby>>) {
+/// Picks the first of the scenarios, unless the lobby has been here before;
+/// or for a game between machines, what its host says.
+fn enter(
+    mut commands: Commands,
+    data: Res<Data>,
+    asked: Res<Side>,
+    lobby: Option<ResMut<Lobby>>,
+    staged: Option<Res<Staged>>,
+) {
+    if let Some(staged) = staged {
+        let staging = staged.entry.staging();
+        let mut lobby = Lobby::new(&data, staging.map.clone(), Side(None));
+        lobby.follow(&data, staging, staged.entry.me());
+        commands.insert_resource(lobby);
+        return;
+    }
     if let Some(mut lobby) = lobby {
         lobby.open = Open::Nothing;
         return;
@@ -389,6 +444,37 @@ fn enter(mut commands: Commands, data: Res<Data>, asked: Res<Side>, lobby: Optio
         return;
     };
     commands.insert_resource(Lobby::new(&data, map, *asked));
+}
+
+/// The first map a custom game offers, by archive path.
+pub(crate) fn first_scenario(data: &Data) -> Option<String> {
+    scenarios(data).into_iter().next()
+}
+
+/// How a game played on `map` starts out: its sides in teams as the map
+/// has them, and those a person may take.
+pub(crate) fn opening(data: &Data, map: &str) -> (Preset, Vec<u32>) {
+    let Ok(brief) = Brief::load(&data.0, map) else {
+        return (Preset::Custom, Vec::new());
+    };
+    let preset = Preset::made_for(&brief.players);
+    (preset, shared_sides(&brief, preset))
+}
+
+/// The sides of `brief`'s map a person may take with them in teams as
+/// `preset` has them, by player id: those it plays that a person may.
+fn shared_sides(brief: &Brief, preset: Preset) -> Vec<u32> {
+    let playing: Option<Vec<u32>> = preset.arrange(&brief.players).map(|t| t.concat());
+    let sides = brief.sides().filter(|p| p.playable);
+    sides
+        .filter(|p| playing.as_ref().is_none_or(|t| t.contains(&p.id)))
+        .map(|p| p.id)
+        .collect()
+}
+
+/// Whether this machine has `map`, to play it.
+pub(crate) fn has_map(data: &Data, map: &str) -> bool {
+    Brief::load(&data.0, map).is_ok()
 }
 
 /// The maps a custom game is played on, by archive path: those in the maps
@@ -404,7 +490,7 @@ fn scenarios(data: &Data) -> Vec<String> {
 
 /// Lays out the lobby as the game does: the preset over the sides on the
 /// left, the map and the buttons on the right.
-fn spawn(mut commands: Commands, data: Res<Data>) {
+fn spawn(mut commands: Commands, data: Res<Data>, staged: Option<Res<Staged>>) {
     commands.spawn((Camera2d, DespawnOnExit(Screen::Lobby)));
     let root = commands
         .spawn((
@@ -454,6 +540,9 @@ fn spawn(mut commands: Commands, data: Res<Data>) {
             },
         ),
     ));
+    if staged.is_some() {
+        crate::staging::spawn_log(&mut commands, left);
+    }
     let right = commands
         .spawn((
             ChildOf(root),
@@ -514,6 +603,18 @@ fn spawn(mut commands: Commands, data: Res<Data>) {
             ))
             .observe(choose_map);
     }
+    if staged.is_some() {
+        commands.spawn((
+            ChildOf(right),
+            crate::staging::Controls,
+            Node {
+                flex_direction: FlexDirection::Column,
+                row_gap: px(12),
+                ..default()
+            },
+        ));
+        return;
+    }
     commands
         .spawn((
             ChildOf(right),
@@ -553,16 +654,41 @@ fn choose_map(
     data: Res<Data>,
     asked: Res<Side>,
     mut commands: Commands,
+    staged: Option<ResMut<Staged>>,
 ) {
-    if let Ok(MapChoice(name)) = choices.get(activate.entity) {
+    let Ok(MapChoice(name)) = choices.get(activate.entity) else {
+        return;
+    };
+    let (preset, sides) = opening(&data, name);
+    let map = name.clone();
+    if !share(staged, tgserver::Choice::Map { map, preset, sides }) {
         commands.insert_resource(Lobby::new(&data, name.clone(), *asked));
     }
 }
 
-fn choose_side(activate: On<Activate>, choices: Query<&SideChoice>, mut lobby: ResMut<Lobby>) {
+/// Asks the host of a game between machines for `choice`, where the
+/// lobby is one's. Whether it was, and so the lobby waits to hear what
+/// the host made of it rather than making it itself.
+fn share(staged: Option<ResMut<Staged>>, choice: tgserver::Choice) -> bool {
+    let Some(mut staged) = staged else {
+        return false;
+    };
+    // A host that's gone is found so as the lobby next hears from it.
+    let _ = staged.entry.choose(choice);
+    true
+}
+
+fn choose_side(
+    activate: On<Activate>,
+    choices: Query<&SideChoice>,
+    mut lobby: ResMut<Lobby>,
+    staged: Option<ResMut<Staged>>,
+) {
     if let Ok(SideChoice(person)) = choices.get(activate.entity) {
-        lobby.person = *person;
         lobby.open = Open::Nothing;
+        if !share(staged, tgserver::Choice::Side(*person)) {
+            lobby.person = *person;
+        }
     }
 }
 
@@ -583,8 +709,17 @@ fn open_nations(activate: On<Activate>, sides: Query<&NationsOf>, mut lobby: Res
     }
 }
 
-fn choose_nation(activate: On<Activate>, choices: Query<&NationChoice>, mut lobby: ResMut<Lobby>) {
+fn choose_nation(
+    activate: On<Activate>,
+    choices: Query<&NationChoice>,
+    mut lobby: ResMut<Lobby>,
+    staged: Option<ResMut<Staged>>,
+) {
     if let Ok(NationChoice(player, nation)) = choices.get(activate.entity) {
+        lobby.open = Open::Nothing;
+        if share(staged, tgserver::Choice::Nation(*player, nation.clone())) {
+            return;
+        }
         match nation {
             Some(n) => lobby.nations.insert(*player, n.clone()),
             None => lobby.nations.remove(player),
@@ -609,8 +744,13 @@ fn choose_faction(
     activate: On<Activate>,
     choices: Query<&FactionChoice>,
     mut lobby: ResMut<Lobby>,
+    staged: Option<ResMut<Staged>>,
 ) {
     if let Ok(FactionChoice(player, faction)) = choices.get(activate.entity) {
+        lobby.open = Open::Nothing;
+        if share(staged, tgserver::Choice::Faction(*player, faction.clone())) {
+            return;
+        }
         match faction {
             Some(g) => lobby.factions.insert(*player, g.clone()),
             None => lobby.factions.remove(player),
@@ -632,15 +772,35 @@ fn choose_handicap(
     activate: On<Activate>,
     choices: Query<&HandicapChoice>,
     mut lobby: ResMut<Lobby>,
+    staged: Option<ResMut<Staged>>,
 ) {
     if let Ok(HandicapChoice(player, handicap)) = choices.get(activate.entity) {
+        lobby.open = Open::Nothing;
+        let choice = tgserver::Choice::Handicap(*player, Some(handicap.clone()));
+        if share(staged, choice) {
+            return;
+        }
         lobby.handicaps.insert(*player, handicap.clone());
         lobby.open = Open::Nothing;
     }
 }
 
-fn choose_preset(activate: On<Activate>, choices: Query<&PresetChoice>, mut lobby: ResMut<Lobby>) {
+fn choose_preset(
+    activate: On<Activate>,
+    choices: Query<&PresetChoice>,
+    mut lobby: ResMut<Lobby>,
+    staged: Option<ResMut<Staged>>,
+) {
     if let Ok(PresetChoice(preset)) = choices.get(activate.entity) {
+        lobby.open = Open::Nothing;
+        let sides = lobby.brief.as_ref().map(|b| shared_sides(b, *preset));
+        let choice = tgserver::Choice::Preset {
+            preset: *preset,
+            sides: sides.unwrap_or_default(),
+        };
+        if share(staged, choice) {
+            return;
+        }
         lobby.preset = *preset;
         lobby.open = Open::Nothing;
         lobby.keep_person_playing();
@@ -657,24 +817,17 @@ fn launch(
     let Some(lobby) = lobby else {
         return;
     };
-    let Ok(brief) = &lobby.brief else {
+    let Some((setup, title, description)) = lobby.setup(seed.get()) else {
         return;
     };
     commands.insert_resource(Pending {
-        title: brief.name.clone(),
-        description: brief.description.clone(),
+        title,
+        description,
         person: lobby.person,
         from_menu: true,
+        back: Some(Screen::Lobby),
         joined: None,
-        setup: tgserver::Setup {
-            map: lobby.map.clone(),
-            seed: seed.get(),
-            teams: lobby.preset.arrange(&brief.players),
-            nations: lobby.nations.clone().into_iter().collect(),
-            factions: lobby.factions.clone().into_iter().collect(),
-            handicaps: computer_handicaps(&brief.players, lobby.person, &lobby.handicaps),
-            fog: None,
-        },
+        setup,
     });
     next.set(Screen::Loading);
 }
@@ -725,6 +878,7 @@ fn show_presets(mut commands: Commands, lobby: Res<Lobby>, presets: Single<Entit
 
 /// Lists the sides by team, each with who plays it, and a place to watch
 /// from.
+#[allow(clippy::too_many_arguments)]
 fn show_slots(
     mut commands: Commands,
     lobby: Res<Lobby>,
@@ -733,8 +887,12 @@ fn show_slots(
     handicaps: Res<Handicaps>,
     gem: Res<crate::ui::Gem>,
     slots: Single<Entity, With<Slots>>,
+    staged: Option<Res<Staged>>,
+    look: Res<crate::connection::Look>,
 ) {
     let slots = *slots;
+    let staging = staged.as_ref().map(|s| (s.entry.staging(), s.entry.me()));
+    let hosting = staging.is_some_and(|(s, me)| s.guest(me).is_some_and(|g| g.host));
     commands.entity(slots).despawn_children();
     let brief = match &lobby.brief {
         Ok(b) => b,
@@ -753,9 +911,11 @@ fn show_slots(
             };
             let player = sides[i];
             let side = format!("lobby.side{}", i + 1);
-            let who = match lobby.person == Some(id) {
-                true => "Player",
-                false => "Computer",
+            let holder = staging.and_then(|(s, _)| s.guests.iter().find(|g| g.side == Some(id)));
+            let who = match (holder, lobby.person == Some(id)) {
+                (Some(guest), _) => guest.name.clone(),
+                (None, true) => "Player".into(),
+                (None, false) => "Computer".into(),
             };
             let cell = |width: f32| Node {
                 width: px(width),
@@ -788,7 +948,7 @@ fn show_slots(
                     switch(cell(140.0)),
                     called(format!("{side}.seat")),
                     SideChoice(Some(id)),
-                    children![text(who, Font::Body)],
+                    children![text(who.clone(), Font::Body)],
                 )),
                 false => commands.spawn((
                     ChildOf(row),
@@ -833,14 +993,39 @@ fn show_slots(
                     ));
                 }
             }
-            if lobby.person != Some(id) {
+            if let Some(guest) = holder {
+                crate::staging::marks(&mut commands, row, guest, hosting, &look);
+            } else if lobby.person != Some(id) {
                 handicap_list(&mut commands, row, &lobby, (player, &side), &handicaps);
             }
         }
     }
-    let label = match lobby.person {
-        None => "Observer: Player",
-        Some(_) => "Observer",
+    // Those watching.
+    let watching = staging
+        .into_iter()
+        .flat_map(|(s, _)| s.guests.iter().filter(|g| g.side.is_none()));
+    for guest in watching {
+        let row = commands
+            .spawn((
+                ChildOf(slots),
+                Node {
+                    column_gap: px(12),
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+                children![label(
+                    format!("Observer: {}", guest.name),
+                    Font::Body,
+                    Ink::Muted
+                )],
+            ))
+            .id();
+        crate::staging::marks(&mut commands, row, guest, hosting, &look);
+    }
+    let label = match (lobby.person, &staging) {
+        (_, Some(_)) => "Observer",
+        (None, None) => "Observer: Player",
+        (Some(_), None) => "Observer",
     };
     let watch = Node {
         margin: UiRect::top(px(8)),

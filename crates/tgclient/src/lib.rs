@@ -34,10 +34,12 @@ mod deliveries;
 mod displays;
 mod drive;
 mod effects;
+mod fields;
 mod fog;
 mod ghost;
 mod intent;
 mod keys;
+mod lan;
 mod lobby;
 mod menu;
 mod messages;
@@ -49,12 +51,13 @@ mod options;
 mod orders;
 mod outcome;
 mod pause;
-mod presets;
+use tgserver::presets;
 mod remote;
 mod resource_bar;
 mod selection;
 mod sound;
 mod special_ops;
+mod staging;
 mod supply;
 mod technologies;
 mod ui;
@@ -163,6 +166,7 @@ pub struct Program {
 enum Screen {
     MainMenu,
     Options,
+    Lan,
     Lobby,
     Loading,
     Match,
@@ -187,9 +191,20 @@ struct Pending {
     /// back to and which waits for the person to continue once it's loaded,
     /// rather than given on the command line, which it exits or starts.
     from_menu: bool,
+    /// The screen a failed load goes back to; none to exit.
+    back: Option<Screen>,
     /// The link to its host, what the host let the game in with, and
-    /// where the host is, where the match is hosted elsewhere.
-    joined: Option<(orders::Line, Welcome, String)>,
+    /// where the host is, where the match is between machines.
+    joined: Option<(orders::Line, Welcome, HostedAt)>,
+}
+
+/// Where the host of a match between machines is.
+enum HostedAt {
+    /// Elsewhere, at this address.
+    Elsewhere(String),
+    /// Here, in the game, to be given its copy of the match once it's set
+    /// up.
+    Here(Box<tgserver::Host<orders::Line>>),
 }
 
 /// The loading screen, which stays over the match while it's set up.
@@ -280,6 +295,7 @@ struct Preparing {
     /// What the loading screen last said.
     shown: Stage,
     from_menu: bool,
+    back: Option<Screen>,
 }
 
 /// What [`prepare`] sets a match up with.
@@ -712,11 +728,11 @@ fn join(
     at: SocketAddr,
     players: Vec<u32>,
     name: String,
-) -> Result<(orders::Line, Welcome, String), String> {
+) -> Result<(orders::Line, Welcome, HostedAt), String> {
     let mut link = tgserver::quic::connect(at)?;
     let welcome = tgserver::enter(&mut link, players, name, ANSWERED)
         .map_err(|e| format!("{at}: not let in: {e:?}"))?;
-    Ok((Box::new(link), welcome, at.to_string()))
+    Ok((Box::new(link), welcome, HostedAt::Elsewhere(at.to_string())))
 }
 
 /// Whether `game` is the data of the game tagged `tag`.
@@ -921,6 +937,7 @@ pub fn run(program: Program) -> ExitCode {
             connection::ConnectionPlugin,
             chat::ChatPlugin,
         ))
+        .add_plugins((fields::FieldsPlugin, lan::LanPlugin, staging::StagingPlugin))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(OnEnter(Screen::Loading), (loading, messages::start))
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
@@ -1109,6 +1126,8 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(connection::Words::of(&strings))
         .insert_resource(pause::Words::of(&strings))
         .insert_resource(chat::Words::of(&strings))
+        .insert_resource(lan::Words::of(&strings))
+        .insert_resource(staging::Words::of(&strings))
         .insert_resource(StageWords::of(&strings))
         .insert_resource(options::Options::new(&game))
         .insert_resource(sound::Sounds::new(&game, &ui::CLICKS))
@@ -1133,6 +1152,7 @@ pub fn run(program: Program) -> ExitCode {
                 description: String::new(),
                 person: None,
                 from_menu: false,
+                back: None,
                 setup,
                 joined,
             })
@@ -1351,12 +1371,15 @@ fn load(world: &mut bevy::ecs::world::World) {
         };
         let side = *world.resource::<Side>();
         let name = world.resource::<Nickname>().0.clone();
-        let from_menu = pending.from_menu;
+        let (from_menu, back) = (pending.from_menu, pending.back);
         // Heard from all the while the match is set up, as its host hears
         // from the game.
         let joined = pending.joined.take().map(|(link, welcome, at)| {
             let own = (welcome.players.clone(), welcome.name.clone());
-            world.insert_resource(Orders::joined(link, welcome, at));
+            world.insert_resource(match at {
+                HostedAt::Elsewhere(at) => Orders::joined(link, welcome, at),
+                HostedAt::Here(host) => Orders::sharing(*host, link, welcome),
+            });
             own
         });
         let stage = Arc::new(Mutex::new(Stage::Data));
@@ -1368,6 +1391,7 @@ fn load(world: &mut bevy::ecs::world::World) {
             stage,
             shown: Stage::Data,
             from_menu,
+            back,
         });
         return;
     }
@@ -1383,7 +1407,10 @@ fn load(world: &mut bevy::ecs::world::World) {
         return;
     }
     let Some(Preparing {
-        thread, from_menu, ..
+        thread,
+        from_menu,
+        back,
+        ..
     }) = world.remove_resource::<Preparing>()
     else {
         return;
@@ -1393,19 +1420,28 @@ fn load(world: &mut bevy::ecs::world::World) {
         .unwrap_or_else(|panic| std::panic::resume_unwind(panic));
     match prepared {
         Ok(prepared) => {
+            if let Some(mut orders) = world.get_resource_mut::<Orders>() {
+                orders.build(prepared.sim.clone());
+            }
             // Shown this frame, before the match is set up on the next.
             show_stage(world, Stage::Resources);
             begin(world, prepared);
             world.insert_resource(Readying { wait: from_menu });
             world.resource_mut::<NextState<Screen>>().set(Screen::Match);
         }
-        Err(e) if from_menu => {
+        Err(e) if let Some(back) = back => {
             error!("{e}");
             let mut screens = world.query_filtered::<Entity, With<LoadingScreen>>();
             for screen in screens.iter(world).collect::<Vec<_>>() {
                 world.despawn(screen);
             }
-            world.resource_mut::<NextState<Screen>>().set(Screen::Lobby);
+            // Leaving any match between machines it was to be.
+            world.remove_resource::<Orders>();
+            world.resource_mut::<NextState<Screen>>().set(back);
+            if back == Screen::Lan {
+                let failed = world.resource::<lan::Words>().failed.clone();
+                world.insert_resource(lan::Notice(failed));
+            }
         }
         Err(e) => {
             error!("{e}");

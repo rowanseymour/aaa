@@ -29,6 +29,12 @@ impl Words {
     }
 }
 
+impl Words {
+    pub fn cancel(&self) -> String {
+        self.cancel.clone()
+    }
+}
+
 impl Default for Words {
     fn default() -> Self {
         Words::of(&tgdata::Strings::default())
@@ -83,6 +89,19 @@ pub fn nothing(_: On<Activate>) {}
 pub struct Asked {
     root: Entity,
     row: Entity,
+    dialog: Entity,
+}
+
+impl Asked {
+    /// The box the question is in, to put more in under it.
+    pub fn dialog(&self) -> Entity {
+        self.dialog
+    }
+
+    /// What takes the question down when despawned.
+    pub fn root(&self) -> Entity {
+        self.root
+    }
 }
 
 /// Puts `question` up on `screen` with no answers yet: [`offer`] adds
@@ -110,6 +129,18 @@ pub fn ask(commands: &mut Commands, screen: Screen, question: impl Into<String>)
         ))
         .id();
     commands.spawn((ui::text(question, Font::Question), ChildOf(dialog)));
+    // What's put in the box goes between the question and the answers.
+    let body = commands
+        .spawn((
+            ChildOf(dialog),
+            Node {
+                width: percent(100),
+                flex_direction: FlexDirection::Column,
+                row_gap: px(8),
+                ..default()
+            },
+        ))
+        .id();
     let row = commands
         .spawn((
             ChildOf(dialog),
@@ -120,7 +151,11 @@ pub fn ask(commands: &mut Commands, screen: Screen, question: impl Into<String>)
             },
         ))
         .id();
-    Asked { root, row }
+    Asked {
+        root,
+        row,
+        dialog: body,
+    }
 }
 
 /// Adds an answer saying `words` to a question, called `id` for the
@@ -132,7 +167,7 @@ pub fn offer<M>(
     id: &str,
     then: impl IntoEntityObserver<M>,
 ) -> Entity {
-    let Asked { root, row } = asked;
+    let Asked { root, row, .. } = asked;
     // Already gone if Escape or another answer took it down this frame.
     let dismiss = move |_: On<Activate>, mut commands: Commands| {
         commands.entity(root).try_despawn();
