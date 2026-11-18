@@ -15,6 +15,7 @@ use bevy::window::{
 };
 use bevy::winit::WINIT_WINDOWS;
 use raw_window_handle::RawDisplayHandle;
+use serde::{Deserialize, Serialize};
 use tgdata::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 use tgrender::camera::RtsCamera;
 
@@ -145,6 +146,13 @@ impl Options {
         let chosen = self.hotkeys.as_ref()?;
         self.configurations.iter().find(|c| c.id == *chosen)
     }
+
+    /// Uses the set of hotkeys with the id `id`, if the game has one.
+    pub fn choose_hotkeys(&mut self, id: &str) {
+        if let Some(c) = self.configurations.iter().find(|c| c.id.as_str() == id) {
+            self.hotkeys = Some(c.id.clone());
+        }
+    }
 }
 
 /// Which list of choices is open.
@@ -240,8 +248,9 @@ fn listed<T: Listed, M>(
 }
 
 /// How the window takes the screen.
-#[derive(PartialEq, Clone, Copy, Debug)]
-enum Display {
+#[derive(PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Display {
     /// With a frame, at the size chosen.
     Windowed,
     /// Without a frame, covering the screen at the size the screen is
@@ -267,7 +276,7 @@ impl Listed for Display {
 }
 
 impl Display {
-    fn of(mode: WindowMode) -> Self {
+    pub fn of(mode: WindowMode) -> Self {
         match mode {
             WindowMode::Windowed => Display::Windowed,
             WindowMode::BorderlessFullscreen(_) => Display::Borderless,
@@ -275,20 +284,25 @@ impl Display {
         }
     }
 
-    fn mode(self) -> WindowMode {
+    pub fn mode(self) -> WindowMode {
+        self.mode_on(MonitorSelection::Current)
+    }
+
+    /// As [`mode`](Self::mode), on the screen `on` rather than the one the
+    /// window's on.
+    pub fn mode_on(self, on: MonitorSelection) -> WindowMode {
         match self {
             Display::Windowed => WindowMode::Windowed,
-            Display::Borderless => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
-            Display::Fullscreen => {
-                WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Current)
-            }
+            Display::Borderless => WindowMode::BorderlessFullscreen(on),
+            Display::Fullscreen => WindowMode::Fullscreen(on, VideoModeSelection::Current),
         }
     }
 }
 
 /// How the edges of the map's 3D scene are smoothed.
-#[derive(Resource, Default, PartialEq, Clone, Copy, Debug)]
-enum AntiAliasing {
+#[derive(Resource, Default, PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AntiAliasing {
     Off,
     /// Four samples to each pixel: the one count every GPU wgpu runs on
     /// takes.
@@ -344,7 +358,7 @@ struct DisplayHolder;
 
 /// The window's size before it last took the whole screen, to go back to.
 #[derive(Resource, Default)]
-struct WindowedSize(Option<Vec2>);
+pub struct WindowedSize(pub Option<Vec2>);
 
 /// Where the choice of the window's size goes.
 #[derive(Component)]
@@ -416,6 +430,25 @@ const RESOLUTIONS: [(u32, u32); 9] = [
     (2560, 1440),
     (3840, 2160),
 ];
+
+/// Whether a window is on Wayland, which has no exclusive fullscreen: asked
+/// for, it does nothing.
+pub fn on_wayland(handle: &RawHandleWrapper) -> bool {
+    matches!(handle.get_display_handle(), RawDisplayHandle::Wayland(_))
+}
+
+/// A screen's size in logical pixels, as a window's is given.
+pub fn room(monitor: &Monitor) -> UVec2 {
+    let size = UVec2::new(monitor.physical_width, monitor.physical_height).as_dvec2();
+    (size / monitor.scale_factor).as_uvec2()
+}
+
+/// The sizes offered for the window, smallest first, of those smaller than
+/// a screen with `room`, which leaves room for its frame.
+pub fn fitting(room: Option<UVec2>) -> impl Iterator<Item = UVec2> {
+    let sizes = RESOLUTIONS.iter().map(|&(w, h)| UVec2::new(w, h));
+    sizes.filter(move |s| room.is_none_or(|room| s.cmplt(room).all()))
+}
 
 pub struct OptionsPlugin;
 
@@ -817,9 +850,7 @@ fn show_display(
     }
     *shown = display;
     // Wayland has no exclusive fullscreen: asked for, it does nothing.
-    let wayland = window
-        .and_then(|(_, h)| h)
-        .is_some_and(|h| matches!(h.get_display_handle(), RawDisplayHandle::Wayland(_)));
+    let wayland = window.and_then(|(_, h)| h).is_some_and(on_wayland);
     let choices = Display::ALL.iter().copied();
     let choices = choices.filter(|d| !(wayland && *d == Display::Fullscreen));
     listed(
@@ -863,7 +894,7 @@ fn choose_display(
 /// Keeps the window's mode to what it is when the platform changes it, as
 /// on leaving fullscreen by the system's own shortcut, so the options say
 /// what it is and choosing the mode it had again isn't taken as no change.
-fn follow_window(
+pub fn follow_window(
     mut resized: MessageReader<WindowResized>,
     mut window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     _winit: NonSendMarker,
@@ -891,7 +922,7 @@ fn follow_window(
 }
 
 /// A window's size as the options show it, e.g. `1280x720`.
-fn size_of(window: &Window) -> UVec2 {
+pub fn size_of(window: &Window) -> UVec2 {
     window.size().round().as_uvec2()
 }
 
@@ -927,13 +958,8 @@ fn show_resolution(
     let on = window
         .and_then(|(_, on)| on)
         .and_then(|on| monitors.get(on.0).ok());
-    let room = on.or(primary.single().ok()).map(|m| {
-        let size = UVec2::new(m.physical_width, m.physical_height).as_dvec2();
-        (size / m.scale_factor).as_uvec2()
-    });
-    let sizes = RESOLUTIONS.iter().map(|&(w, h)| UVec2::new(w, h));
-    let sizes = sizes.filter(|s| room.is_none_or(|room| s.cmplt(room).all()));
-    let choices = sizes.map(|s| {
+    let room = on.or(primary.single().ok()).map(room);
+    let choices = fitting(room).map(|s| {
         let size = format!("{}x{}", s.x, s.y);
         (size.clone(), (ResolutionChoice(s), InList), size)
     });

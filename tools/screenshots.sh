@@ -88,7 +88,7 @@ taken() {
 game() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    shoot "$1" "$bin/aaa-game" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" \
+    shoot "$1" "$bin/$game_bin" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" \
         --screenshot "$work/$1.png"
 }
 
@@ -96,7 +96,7 @@ game() {
 menus() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    shoot "$1" "$bin/aaa-game" "$game" --exec "$work/$1.txt" --screenshot "$work/$1.png"
+    shoot "$1" "$bin/$game_bin" "$game" --exec "$work/$1.txt" --screenshot "$work/$1.png"
 }
 
 # editor <name> <map> <camera> <ids to inspect>
@@ -174,7 +174,17 @@ EOF
 build() {
     checkout=$1
     shift
-    cargo build --release -p aaa-game -p "$(editor_in "$checkout")" --manifest-path "$checkout/Cargo.toml" "$@"
+    cargo build --release -p "$(game_in "$checkout")" -p "$(editor_in "$checkout")" --manifest-path "$checkout/Cargo.toml" "$@"
+}
+
+# The AA game's package in a checkout, which has a different name, and
+# folder, in a ref from before its renames.
+game_in() {
+    if [ -f "$1/crates/aaa/Cargo.toml" ]; then
+        sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' "$1/crates/aaa/Cargo.toml" | head -n 1
+    else
+        echo aaa-game
+    fi
 }
 
 # The editor's package in a checkout, which has a different name in a ref from
@@ -194,6 +204,7 @@ check() {
 if [ -z "$ref" ]; then
     build "$root"
     bin=$root/target/release
+    game_bin=$(game_in "$root")
     editor=$bin/tgeditor
     mkdir -p "$root/docs/screenshots"
     scenes
@@ -230,6 +241,7 @@ for side in new base; do
     base) bin=$root/target/compare-base/release checkout=$work/base ;;
     esac
     editor=$bin/$(editor_in "$checkout")
+    game_bin=$(game_in "$checkout")
     take=1
     while [ "$take" -le "$takes" ]; do
         log=$out/$side-$take.log

@@ -38,6 +38,11 @@ Options the original doesn't offer, all in the Video tab's Basic section:
 - **Interface Scale:** draws the interface larger or smaller, for high-resolution
   screens.
 
+The options chosen are kept in a TOML file of this project's own, in the platform's
+usual folder for a program's settings, rather than in the original's files in the
+game's folder: the original, installed alongside, keeps its own options, which ours
+needn't match. See [saved.rs](../crates/tgclient/src/saved.rs).
+
 ## Multiplayer
 
 Matches between machines work as the original's do: every machine plays its own copy

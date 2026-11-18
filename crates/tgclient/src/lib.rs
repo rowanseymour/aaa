@@ -54,6 +54,7 @@ mod pause;
 use tgserver::presets;
 mod remote;
 mod resource_bar;
+mod saved;
 mod selection;
 mod sound;
 mod special_ops;
@@ -130,6 +131,9 @@ options:
                             drive and take screenshots of
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it
+  --options <file.toml>     keep the options chosen in this file rather than
+                            the usual one, which runs for testing, e.g. with
+                            --console, leave alone
   --original-hud            draw the original game's in-match interface in place
                             of this project's
   --fog <setting>           none, explored or full: how much of the map the fog
@@ -144,7 +148,8 @@ options:
 /// What a game's program says of it that its data doesn't.
 #[derive(Resource, Clone)]
 pub struct Program {
-    /// The program's name, for its window, usage and errors.
+    /// The program's name, for its usage, errors and the folder its
+    /// options are kept in.
     pub name: &'static str,
     /// What the game's data calls the game, as [`GameData::is_of`] takes
     /// it: the program plays only data of its own game.
@@ -154,7 +159,8 @@ pub struct Program {
     /// Our emblem for the game, as a PNG, crowning the main menu; without
     /// one that can be read, the menu is headed by [`Program::title`].
     pub logo: Option<&'static [u8]>,
-    /// What the game is called on the main menu without a logo.
+    /// What the game is called on its window, and on the main menu
+    /// without a logo.
     pub title: &'static str,
     /// The colours the interface is drawn in.
     pub palette: Palette,
@@ -627,7 +633,9 @@ struct Options {
     screenshot: Option<String>,
     shot_after: f64,
     headless: bool,
-    ui_scale: f32,
+    ui_scale: Option<f32>,
+    /// Where the options chosen are kept, if not where they usually are.
+    saved: Option<String>,
     hud: widgets::Hud,
     fog: Option<tgmap::FogSetting>,
     seed: Option<u64>,
@@ -666,9 +674,10 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         None => false,
     };
     let ui_scale = match take_option(args, "--ui-scale")? {
-        Some(n) => n.parse().ok().filter(|n| UI_SCALES.contains(n))?,
-        None => 1.0,
+        Some(n) => Some(n.parse().ok().filter(|n| UI_SCALES.contains(n))?),
+        None => None,
     };
+    let saved = take_option(args, "--options")?;
     let hud = match args.iter().position(|a| a == "--original-hud") {
         Some(at) => {
             args.remove(at);
@@ -714,6 +723,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         shot_after,
         headless,
         ui_scale,
+        saved,
         hud,
         fog,
         seed,
@@ -761,6 +771,7 @@ pub fn run(program: Program) -> ExitCode {
         shot_after,
         headless,
         ui_scale,
+        saved,
         hud,
         fog,
         seed,
@@ -816,9 +827,24 @@ pub fn run(program: Program) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    // What's kept is the player's own, which a run for testing, without a
+    // window or driven by the console, neither takes nor changes unless
+    // given somewhere else to keep it.
+    let testing = windowless || console.is_some() || !scripts.is_empty();
+    let saved = match (saved, testing) {
+        (Some(path), _) => saved::Saved::read(path.into()),
+        (None, true) => saved::Saved::none(),
+        (None, false) => match saved::default_path(program.name) {
+            Some(path) => saved::Saved::read(path),
+            None => saved::Saved::none(),
+        },
+    };
+    let ui_scale = ui_scale.or(saved.ui_scale()).unwrap_or(1.0);
     // Before there's a window, so that a host that isn't there or won't
     // let the game in is said where the game was asked for.
-    let name = name.unwrap_or_else(|| tgserver::default_name(&game.strings()));
+    let name = name
+        .or_else(|| saved.nickname())
+        .unwrap_or_else(|| tgserver::default_name(&game.strings()));
     let joining = joining.map(|(at, players)| join(at, players, name.clone()));
     let joined = match joining.transpose() {
         Ok(j) => j,
@@ -829,11 +855,12 @@ pub fn run(program: Program) -> ExitCode {
     };
 
     let mut app = App::new();
-    let mut window = shot::window(program.name.into(), screenshot.is_some());
+    let mut window = shot::window(program.title.into(), screenshot.is_some());
     // Its size, and whether it fills the screen, are chosen in the options.
     if let Some(window) = &mut window.primary_window {
         window.resizable = false;
         window.enabled_buttons.maximize = false;
+        saved.shape(window);
     }
     let plugins = DefaultPlugins.set(window).set(log);
     match windowless {
@@ -1142,6 +1169,8 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(Data(Arc::new(game)))
         .init_resource::<ui::Gem>()
         .add_systems(Startup, (ui::load_gem, connection::load));
+    saved.apply(app.world_mut());
+    app.insert_resource(saved).add_plugins(saved::SavedPlugin);
     let setup = match &joined {
         Some((_, welcome, _)) => Some(welcome.setup.clone()),
         None => map.map(|name| tgserver::Setup {
@@ -1567,7 +1596,7 @@ fn title_window(
     mut window: Option<Single<&mut Window, With<PrimaryWindow>>>,
 ) {
     if let Some(window) = &mut window {
-        window.title = format!("{} - {}", loaded.map.title, program.name);
+        window.title = format!("{} - {}", loaded.map.title, program.title);
     }
 }
 
