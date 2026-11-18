@@ -669,6 +669,8 @@ pub(crate) fn hit_by(w: &mut World, u: usize, k: usize) {
         from: Some(crate::Target::Unit(k)),
         by,
         at: w.ticks,
+        filter: tgmap::ANY_DAMAGE,
+        damage: 1.0,
     });
     w.units[u].struck = struck;
     let r = w.units[u].organization;

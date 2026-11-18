@@ -30,6 +30,8 @@ pub struct Triggers {
     /// One for each of `list`.
     pub switches: Vec<Switch>,
     pub variables: BTreeMap<String, f32>,
+    /// The things the map gives a name, with their ids, in its order.
+    pub(crate) names: Arc<[(String, u32)]>,
 }
 
 impl Triggers {
@@ -51,13 +53,14 @@ impl Triggers {
             list: t.triggers.clone().into(),
             switches: t.triggers.iter().map(switch).collect(),
             variables: t.variables.iter().cloned().collect(),
+            names: Arc::default(),
         }
     }
 }
 
 impl crate::hash::Digest for Triggers {
     fn digest(&self, h: &mut crate::hash::Hasher) {
-        // The list is fixed by the map.
+        // The list and names are fixed by the map.
         self.switches.digest(h);
         self.variables.digest(h);
     }
@@ -77,7 +80,17 @@ const HANDLED: &[&str] = &[
     "decr_variable",
     "trigger_active",
     "trigger_deactive",
+    "actor_modify_morale",
+    "actor_gains_experience",
 ];
+
+/// What a thing parameter names.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Thing {
+    Organization(usize),
+    Unit(usize),
+    Building(usize),
+}
 
 /// How two numbers are compared, by the game's numbering.
 fn compare(how: u32, a: f32, b: f32) -> bool {
@@ -220,8 +233,72 @@ impl World {
                 }
                 true
             }
+            "actor_modify_morale" => match (self.thing(p.first()), self.number(p.get(1))) {
+                (Some(t), Some(by)) => self.modify_morale(t, by),
+                _ => false,
+            },
+            "actor_gains_experience" => match (self.thing(p.first()), self.number(p.get(1))) {
+                (Some(t), Some(amount)) => {
+                    // Only a regiment itself takes it, though naming
+                    // anything is success.
+                    if let Thing::Organization(r) = t {
+                        self.gain_experience(r, amount);
+                    }
+                    true
+                }
+                _ => false,
+            },
             _ => false,
         }
+    }
+
+    /// Adds `by` to the morale of the regiment `t` is or is in.
+    fn modify_morale(&mut self, t: Thing, by: f32) -> bool {
+        let regiment = match t {
+            Thing::Organization(r) => Some(r),
+            Thing::Unit(u) => Some(self.units[u].organization),
+            Thing::Building(b) => (0..self.organizations.len())
+                .find(|&r| self.organizations[r].unpacked_into == Some(b)),
+        };
+        let has = |r: usize| self.organizations[r].morale_max > 0.0 && self.organization_on_map(r);
+        let Some(r) = regiment.filter(|&r| has(r)) else {
+            return false;
+        };
+        if by > 0.0 {
+            self.gain_morale(r, by);
+        } else if by < 0.0 {
+            self.lose_morale(r, -by, false);
+        }
+        by != 0.0
+    }
+
+    /// The thing a parameter names, by its id or its name, while it's on
+    /// the map.
+    fn thing(&self, p: Option<&Parameter>) -> Option<Thing> {
+        let p = p?;
+        match (p.source.as_str(), &p.value) {
+            ("mi_actor_id", Value::Int(id)) => self.by_id(*id),
+            // The one that came into being last.
+            ("mi_actor_named", Value::String(n)) => (self.triggers.names.iter().rev())
+                .filter(|(name, _)| name.eq_ignore_ascii_case(n))
+                .find_map(|&(_, id)| self.by_id(id)),
+            _ => None,
+        }
+    }
+
+    /// The thing on the map with the map id `id`.
+    fn by_id(&self, id: u32) -> Option<Thing> {
+        let organization = (0..self.organizations.len())
+            .find(|&r| self.organizations[r].id == id && self.organization_on_map(r));
+        let unit =
+            || (0..self.units.len()).find(|&u| self.units[u].id == id && self.unit_on_map(u));
+        let building = || {
+            (0..self.buildings.len())
+                .find(|&b| self.buildings[b].id == id && self.building_on_map(b))
+        };
+        (organization.map(Thing::Organization))
+            .or_else(|| unit().map(Thing::Unit))
+            .or_else(|| building().map(Thing::Building))
     }
 
     /// The number a parameter gives: stored, or a variable's.
@@ -283,6 +360,7 @@ mod tests {
     use tgmap::triggers::{Element, Parameter, Trigger, Value};
 
     use super::Triggers;
+    use crate::experience::regiment_tests::veterans;
     use crate::heroes::tests::pool;
     use crate::testing::run;
     use crate::{Outcome, World};
@@ -523,5 +601,106 @@ mod tests {
         // The hero for scenarios alone isn't taken at random.
         let left: Vec<String> = w.heroes(1).iter().map(|h| h.hero.to_string()).collect();
         assert_eq!(left, ["cutscene"]);
+    }
+
+    fn actor_id(id: u32) -> Parameter {
+        parameter("ma_actor", "mi_actor_id", Value::Int(id))
+    }
+
+    fn fixed(v: f32) -> Parameter {
+        parameter("ma_value", "mi_fixed", Value::Float(v))
+    }
+
+    /// The veterans' world with a map init trigger running `effects`.
+    fn running(effects: Vec<Element>) -> World {
+        with(
+            veterans(),
+            vec![trigger(1, true, false, Vec::new(), effects)],
+            &[],
+        )
+    }
+
+    #[test]
+    fn morale_goes_to_the_regiment_named_or_one_of_its_units() {
+        let morale = |w: &World, r: usize| w.organizations[r].morale;
+        let mut w = running(vec![
+            element("actor_modify_morale", vec![actor_id(1), fixed(-3.0)]),
+            element("actor_modify_morale", vec![actor_id(4), fixed(-2.0)]),
+        ]);
+        let [a, b] = [morale(&w, 0), morale(&w, 1)];
+        w.tick();
+        assert!((morale(&w, 0) - (a - 3.0)).abs() < 1e-4);
+        assert!((morale(&w, 1) - (b - 2.0)).abs() < 1e-4);
+        // Never past its most.
+        let mut w = running(vec![element(
+            "actor_modify_morale",
+            vec![actor_id(2), fixed(1000.0)],
+        )]);
+        w.organizations[0].morale = 1.0;
+        w.tick();
+        assert_eq!(morale(&w, 0), w.organizations[0].morale_max);
+    }
+
+    #[test]
+    fn a_trigger_taking_morale_can_rout_a_regiment() {
+        // To just above nothing, past its breakpoint, mid-fight or not.
+        let morale = veterans().organizations[0].morale;
+        let mut w = running(vec![element(
+            "actor_modify_morale",
+            vec![actor_id(1), fixed(0.01 - morale)],
+        )]);
+        w.rules.morale_breakpoints.insert("squad".into(), 1.0);
+        w.tick();
+        assert!(w.organizations[0].routing());
+    }
+
+    #[test]
+    fn the_dead_are_found_until_their_remains_are_taken_off() {
+        let mut w = running(vec![
+            element("actor_gains_experience", vec![actor_id(1), fixed(12.0)]),
+            element("actor_modify_morale", vec![actor_id(2), fixed(-3.0)]),
+        ]);
+        // Its unit's remains lie a second; the regiment has none.
+        w.rules.remains.insert("soldier".into(), [0.5, 0.5]);
+        w.units[0].died = Some(0);
+        let was = w.organizations[0].morale;
+        w.tick();
+        assert_eq!(w.organizations[0].experience, 0.0);
+        assert_eq!(w.organizations[0].morale, was);
+        assert_eq!(w.thing(Some(&actor_id(2))), Some(super::Thing::Unit(0)));
+        w.ticks = crate::SECOND;
+        assert_eq!(w.thing(Some(&actor_id(2))), None);
+    }
+
+    #[test]
+    fn experience_goes_only_to_a_regiment_itself() {
+        let mut w = running(vec![
+            element("actor_gains_experience", vec![actor_id(1), fixed(12.0)]),
+            element("actor_gains_experience", vec![actor_id(4), fixed(12.0)]),
+            element("actor_gains_experience", vec![actor_id(1), fixed(-5.0)]),
+        ]);
+        w.lead(1, 0.0, Some(5000.0), Vec::new());
+        w.tick();
+        assert!((w.organizations[0].experience - 12.0).abs() < 1e-4);
+        assert_eq!(w.organizations[0].level, 1);
+        assert_eq!(w.organizations[1].experience, 0.0);
+        // The side takes its share.
+        assert!((w.experience(1).unwrap() - 12.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_named_thing_is_found_only_while_it_lives() {
+        let named = parameter("ma_actor", "mi_actor_named", Value::String("Ivan".into()));
+        let mut w = running(vec![element(
+            "actor_gains_experience",
+            vec![named, fixed(12.0)],
+        )]);
+        w.triggers.names = vec![("ivan".to_string(), 3)].into();
+        let mut dead = w.clone();
+        w.tick();
+        assert!((w.organizations[1].experience - 12.0).abs() < 1e-4);
+        dead.units[1].died = Some(0);
+        dead.tick();
+        assert_eq!(dead.organizations[1].experience, 0.0);
     }
 }

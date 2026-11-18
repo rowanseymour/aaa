@@ -31,6 +31,14 @@ pub struct Rules {
     /// How far around them things that send out units of their own keep
     /// their guard zone, by template.
     pub guard_zones: HashMap<Id, f32>,
+    /// Seconds the remains of each template's things lie rotting once
+    /// dead, then sink, by template; none for one without a body.
+    pub remains: HashMap<Id, [f32; 2]>,
+    /// The death animations each template's units choose from as they
+    /// die, by template.
+    pub deaths: HashMap<Id, Vec<tgmap::Death>>,
+    /// Each kind of damage's number for death animations, by its id.
+    pub damage_filters: HashMap<Id, i32>,
     /// The settings morale and routing run by.
     pub morale_rules: tgmap::MoraleRules,
     /// The morale each unit template adds to its organization's maximum,
@@ -148,6 +156,9 @@ impl Default for Rules {
             supply_rules: Default::default(),
             guard_rules: Default::default(),
             guard_zones: HashMap::new(),
+            remains: HashMap::new(),
+            deaths: HashMap::new(),
+            damage_filters: HashMap::new(),
             morale_rules: Default::default(),
             morale_values: HashMap::new(),
             morale_breakpoints: HashMap::new(),

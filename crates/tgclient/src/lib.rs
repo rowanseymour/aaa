@@ -480,6 +480,8 @@ struct UnitView {
     /// The outline its model tilts on to follow the ground, if it does.
     conform: Option<Shape>,
     footing: Footing,
+    /// How far its remains sink.
+    depth: f32,
 }
 
 /// Draws the trailer one of the sim's units tows.
@@ -527,6 +529,7 @@ fn spawn_unit_view(
     let Some(e) = models.spawn_unit(commands, assets, thing, owner, speed) else {
         return false;
     };
+    let depth = models.remains_depth(thing, false);
     commands.entity(e).insert(UnitView {
         unit,
         shot: None,
@@ -534,6 +537,7 @@ fn spawn_unit_view(
         moving: false,
         conform: models.conform(&thing.template),
         footing: models.footing(&thing.template),
+        depth,
     });
     true
 }
@@ -578,6 +582,8 @@ struct BuildingView {
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
     destroyed: bool,
+    /// How far its remains sink.
+    depth: f32,
     /// The model it plays while it packs or unpacks, shown in its place,
     /// and whether it's unpacking.
     packing: Option<(Entity, bool)>,
@@ -1640,11 +1646,13 @@ fn setup(
         ) {
             Some(e) => {
                 let [x, y, z] = thing.position;
+                let depth = models.remains_depth(thing, true);
                 commands.entity(e).insert(BuildingView {
                     building: i,
                     placed: world(x, y, z),
                     shot: None,
                     destroyed: false,
+                    depth,
                     packing: None,
                 });
             }
@@ -1917,12 +1925,14 @@ fn spawn_views(
             continue;
         };
         let [x, y, z] = thing.position;
+        let depth = drawn.0.remains_depth(&thing, true);
         commands.entity(e).insert((
             BuildingView {
                 building: b,
                 placed: world(x, y, z),
                 shot: None,
                 destroyed: false,
+                depth,
                 packing: None,
             },
             DespawnOnExit(Screen::Match),
@@ -2076,10 +2086,21 @@ fn show_units(
                     owner,
                 );
             }
-            let dies = playing.as_mut().is_some_and(|p| p.die(unit.id as usize));
-            if !dies || !seen {
-                *visibility = Visibility::Hidden;
+            // As the simulation picked it; with none, it lies as it stood.
+            if let Some(p) = playing.as_mut() {
+                p.die(unit.death.as_ref().map(|d| d.as_str()));
             }
+        }
+        // Its remains, till they're taken off.
+        let sunk = match (unit.alive(), sim.0.unit_remains(view.unit)) {
+            (false, Some(r)) => sunk(r, sim.0.ticks, t),
+            _ => Some(0.0),
+        };
+        if !unit.alive() {
+            visibility.set_if_neq(match (seen, sunk) {
+                (true, Some(_)) => Visibility::Inherited,
+                _ => Visibility::Hidden,
+            });
         }
         if unit.shot != view.shot {
             view.shot = unit.shot;
@@ -2104,6 +2125,7 @@ fn show_units(
             view.conform,
             view.footing,
         );
+        transform.translation.y -= view.depth * sunk.unwrap_or(1.0);
         if unit.alive() && unit.moving() != view.moving {
             view.moving = unit.moving();
             let event: fn(&tgdata::ObjectAudio) -> &Vec<_> = match view.moving {
@@ -2118,6 +2140,17 @@ fn show_units(
             let speed = sim.0.organizations[unit.organization].speed;
             playing.set_moving(unit.moving().then_some(speed));
         }
+    }
+}
+
+/// How far into its sinking `remains` are, from 0 while they rot to 1 as
+/// they go, a fraction `t` of a tick past `ticks`; `None` once taken off.
+fn sunk(remains: tgsim::Remains, ticks: u64, t: f32) -> Option<f32> {
+    let now = ticks as f32 + t;
+    let [sinking, gone] = [remains.sinking, remains.gone].map(|k| k as f32);
+    match now < gone {
+        true => Some(((now - sinking) / (gone - sinking)).clamp(0.0, 1.0)),
+        false => None,
     }
 }
 
@@ -2136,8 +2169,8 @@ fn show_buildings(
         Option<&mut Playing>,
     )>,
 ) {
-    const SINK_TIME: f32 = 3.0;
-    const SINK_DEPTH: f32 = 12.0;
+    // The sound of a fall is for one seen to fall, not first seen fallen.
+    const FRESH: f32 = 3.0;
     for (mut view, mut transform, mut visibility, playing) in &mut views {
         // Left as last seen until seen again.
         if fog.building(view.building) != fog::Look::Shown {
@@ -2148,7 +2181,7 @@ fn show_buildings(
             view.destroyed = true;
             // Not for one that fell out of sight, first seen fallen now.
             let since = (sim.0.ticks - fell) as f32 * TICK;
-            if since < SINK_TIME {
+            if since < FRESH {
                 let (at, owner) = (building.position, building.owner);
                 sounds.cue(
                     &time,
@@ -2159,12 +2192,10 @@ fn show_buildings(
                 );
             }
         }
-        if let State::Destroyed(fell) = building.state {
-            let since = (sim.0.ticks - fell) as f32 + fixed.overstep_fraction();
-            let sunk = (since * TICK / SINK_TIME).min(1.0);
-            transform.translation = view.placed - Vec3::Y * SINK_DEPTH * sunk;
-            if sunk >= 1.0 {
-                *visibility = Visibility::Hidden;
+        if let Some(remains) = sim.0.building_remains(view.building) {
+            match sunk(remains, sim.0.ticks, fixed.overstep_fraction()) {
+                Some(sunk) => transform.translation = view.placed - Vec3::Y * view.depth * sunk,
+                None => *visibility = Visibility::Hidden,
             }
             continue;
         }

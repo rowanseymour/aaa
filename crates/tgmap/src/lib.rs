@@ -24,12 +24,13 @@ pub mod triggers {
     pub use tgck::map::{Element, Parameter, Trigger, Triggers, Value};
 }
 pub use tgdata::{
-    Affliction, Airlift, Amounts, CombatAbility, CombatEffect, CombatProfile, CombatValueRules,
-    Damage, DeployPoints, ENGAGED, EXHAUSTED, Economy, EconomyRules, Efficiency, ExperienceGains,
-    Fall, Fighter, Flight, FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Level,
-    Levels, Logistics, Lookout, MoraleEffect, MoraleRules, Operation, REFORMING, RESTING, ROUTING,
-    Requires, Research, ResourceKind, RoutRules, Shape, Sight, Strike, Summon, Supply,
-    SupplyEffect, SupplyRules, TARGETED, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
+    ANY_DAMAGE, Affliction, Airlift, Amounts, BLEEDING, CombatAbility, CombatEffect, CombatProfile,
+    CombatValueRules, Damage, Death, DeployPoints, ENGAGED, EXHAUSTED, Economy, EconomyRules,
+    Efficiency, ExperienceGains, Fall, Fighter, Flight, FlightKind, FogSetting, Grant, GuardRules,
+    Hero, Id, Kind, Level, Levels, Logistics, Lookout, MoraleEffect, MoraleRules, Operation,
+    REFORMING, RESTING, ROUTING, Requires, Research, ResourceKind, RoutRules, Shape, Sight, Strike,
+    Summon, Supply, SupplyEffect, SupplyRules, TARGETED, Targets, TerrainEffect, TerrainRules,
+    Turret, Weapon,
 };
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
@@ -251,6 +252,13 @@ impl Map {
         buildings::standing(&self.things)
             .map(|(t, _)| t)
             .filter(|t| !self.crowded.contains(&t.id))
+    }
+
+    /// The actors the map gives a name, with their ids, in its order.
+    pub fn named(&self) -> impl Iterator<Item = (&str, u32)> {
+        (self.things.iter())
+            .filter(|t| t.class == tgck::map::ACTOR && !t.name.is_empty())
+            .map(|t| (t.name.as_str(), t.id))
     }
 
     /// Each of [`Map::things`] with what it is in a match.

@@ -601,8 +601,14 @@ impl World {
         let place = tgmap::from_local(organization.position, facing, offset(p));
         let u = organization.units[p];
         let full = self.max_health(u);
+        // One dead is a new thing in its place, with an id of its own.
+        if self.units[u].died.is_some() {
+            self.units[u].id = self.next_id;
+            self.next_id += 1;
+        }
         let unit = &mut self.units[u];
         unit.died = None;
+        unit.death = None;
         unit.struck = None;
         unit.awaited = false;
         unit.health = full;
@@ -979,6 +985,7 @@ mod tests {
             deployment: [-6.0, 0.0],
         });
         let lost = w.organizations[1].units[2];
+        let id = w.units[lost].id;
         w.units[lost].die(0);
         w.apply(1, Command::Attach { organization: 1 }).unwrap();
         while !w.units[lost].alive() {
@@ -989,6 +996,8 @@ mod tests {
         assert!(near(w.units[lost].position, b.position));
         assert_eq!(w.units[lost].path.last(), Some(&out));
         assert!(w.units[lost].path.len() > 1);
+        // A new thing, not the dead one.
+        assert_ne!(w.units[lost].id, id);
     }
 
     #[test]

@@ -635,7 +635,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod regiment_tests {
+pub(crate) mod regiment_tests {
     use super::*;
     use crate::testing::*;
     use tgmap::{Level, Levels, MoraleEffect};
@@ -643,7 +643,7 @@ mod regiment_tests {
     /// Player 1's and player 2's riflemen 10 apart, in each other's range
     /// and too weak to kill each other for a long while, each in a squad
     /// that's Regular at 10 experience and Veteran at 20.
-    fn veterans() -> World {
+    pub(crate) fn veterans() -> World {
         let mut w = battle(
             &[1, 2],
             vec![
@@ -846,6 +846,8 @@ mod regiment_tests {
                 from: Some(Target::Unit(0)),
                 by,
                 at: w.ticks,
+                filter: tgmap::ANY_DAMAGE,
+                damage: 1.0,
             });
             // Worn away rather than shot down.
             w.ticks += (seconds / TICK) as u64;

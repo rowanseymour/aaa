@@ -29,8 +29,8 @@ pub struct Rig {
     moving: Option<Clip>,
     /// What it plays once to use an ability, by the animation's ids.
     abilities: Vec<(String, Clip)>,
-    /// Ways it can die, each held at its end.
-    deaths: Vec<Clip>,
+    /// Ways it can die, each held at its end, by the animation's ids.
+    deaths: Vec<(String, Clip)>,
 }
 
 struct RigNode {
@@ -137,7 +137,8 @@ pub struct Clips {
     pub moving: Option<(Arc<Nif>, f32)>,
     /// What it plays once to use an ability, by the animation's ids.
     pub abilities: Vec<(String, Arc<Nif>, f32)>,
-    pub deaths: Vec<(Arc<Nif>, f32)>,
+    /// Its deaths, by the animation's ids.
+    pub deaths: Vec<(String, Arc<Nif>, f32)>,
 }
 
 /// A rig's nodes as nif indices and the meshes hanging from them.
@@ -291,7 +292,7 @@ impl Nodes {
             .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
             .collect();
         let deaths = (clips.deaths.iter())
-            .filter_map(|(kf, length)| self.clip(kf, *length))
+            .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
             .collect();
         let meshes = meshes
             .into_iter()
@@ -593,6 +594,7 @@ impl Rig {
             moving: None,
             once: None,
             rate: 1.0,
+            held: false,
         });
         joints
     }
@@ -690,6 +692,8 @@ pub struct Playing {
     once: Option<Once>,
     /// Seconds of animation per second played.
     pub(crate) rate: f32,
+    /// It's dead with no death of its own to play, so lies as it stood.
+    held: bool,
 }
 
 struct Once {
@@ -710,7 +714,7 @@ impl Rig {
     fn once(&self, clip: OnceClip) -> &Clip {
         match clip {
             OnceClip::Ability(i) => &self.abilities[i].1,
-            OnceClip::Death(i) => &self.deaths[i],
+            OnceClip::Death(i) => &self.deaths[i].1,
         }
     }
 }
@@ -735,26 +739,34 @@ impl Playing {
         }
     }
 
-    /// Plays one of its deaths, picked by `pick`, and stays at its end;
-    /// false if it has none to play.
-    pub fn die(&mut self, pick: usize) -> bool {
-        if self.rig.deaths.is_empty() {
-            return false;
+    /// Plays the death with these ids and stays at its end; without one it
+    /// can play, it stops where it is.
+    pub fn die(&mut self, ids: Option<&str>) {
+        if self.dying() || self.held {
+            return;
         }
-        if !self.dying() {
-            self.once = Some(Once {
-                clip: OnceClip::Death(pick % self.rig.deaths.len()),
-                time: 0.0,
-            });
+        let deaths = self.rig.deaths.iter();
+        match ids.and_then(|ids| {
+            deaths
+                .clone()
+                .position(|(a, _)| a.eq_ignore_ascii_case(ids))
+        }) {
+            Some(i) => {
+                self.once = Some(Once {
+                    clip: OnceClip::Death(i),
+                    time: 0.0,
+                })
+            }
+            None => (self.once, self.moving, self.held) = (None, None, true),
         }
-        true
     }
 
     /// Back from its death to idling, for one that's been replaced.
     pub fn revive(&mut self) {
-        if self.dying() {
+        if self.dying() || self.held {
             self.once = None;
             self.time = 0.0;
+            self.held = false;
         }
     }
 
@@ -810,7 +822,9 @@ pub fn play(
                 (clip, once.time.min(clip.length * 0.999))
             }
             None => {
-                p.time += dt * p.moving.unwrap_or(1.0);
+                if !p.held {
+                    p.time += dt * p.moving.unwrap_or(1.0);
+                }
                 let clip = match (&p.rig.moving, p.moving) {
                     (Some(clip), Some(_)) => clip,
                     _ => &p.rig.idle,

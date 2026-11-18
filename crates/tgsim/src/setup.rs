@@ -41,6 +41,7 @@ impl World {
         );
         world.settlements = map.settlements.clone();
         world.triggers = crate::Triggers::new(map.triggers.as_ref());
+        world.triggers.names = map.named().map(|(n, id)| (n.to_string(), id)).collect();
         for p in &map.players {
             for t in &p.technologies {
                 world.grant(p.id, t.clone());
@@ -311,6 +312,7 @@ impl World {
             target: None,
             shot: None,
             died: None,
+            death: None,
             besieged: None,
             struck: None,
             left: None,
@@ -408,6 +410,7 @@ impl World {
                 supply: Supplying::default(),
                 properties: Vec::new(),
                 created: self.ticks,
+                remembered: Vec::new(),
             });
             self.next_id = self.next_id.max(b.id + 1);
             if numbered {
