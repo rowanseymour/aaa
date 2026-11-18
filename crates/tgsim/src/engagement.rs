@@ -4,8 +4,8 @@
 use tgmap::Zone;
 
 use crate::{
-    CONTACT, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Relation, Step, Target, World, normalised,
-    squared_distance, within, within_strictly,
+    CONTACT, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Relation, Step, TICK, Target, World,
+    next_chance, normalised, squared_distance, within, within_strictly,
 };
 
 impl World {
@@ -56,6 +56,7 @@ impl World {
                 meetings.push((r, self.piece(from)));
             }
         }
+        let mut run_into = Vec::new();
         for (u, unit) in self.units.iter().enumerate() {
             if !unit.alive()
                 || !unit.moving()
@@ -69,9 +70,13 @@ impl World {
                     && within(unit.position, other.position, CONTACT)
                     && self.hostile(unit.organization, Piece::Organization(other.organization))
             });
-            if let Some((_, other)) = met {
+            if let Some((v, other)) = met {
                 meetings.push((unit.organization, Piece::Organization(other.organization)));
+                run_into.push((u, v));
             }
+        }
+        for (u, v) in run_into {
+            self.units[u].met = Some(Target::Unit(v));
         }
         for r in 0..self.organizations.len() {
             if self.organizations[r].aggressive() && !self.destroyed(r) {
@@ -95,6 +100,7 @@ impl World {
             self.organizations[r].engaged.push(enemy);
             if first {
                 self.hold(r, enemy);
+                self.react(r);
             }
         }
         for r in 0..self.organizations.len() {
@@ -187,6 +193,7 @@ impl World {
             let enemy = Piece::Organization(e);
             self.organizations[r].engaged.push(enemy);
             self.hold(r, enemy);
+            self.react(r);
             return;
         }
         if !self.chase(r, e, false) && !self.underway(r) {
@@ -216,8 +223,7 @@ impl World {
     fn fires_on(&self, r: usize, t: Target) -> bool {
         self.survivors(r).any(|u| {
             let f = self.units[u].fighter.iter().flat_map(|f| &f.weapons);
-            f.into_iter()
-                .any(|w| self.can_target(Target::Unit(u), w, t))
+            f.into_iter().any(|w| self.bears_on(u, w, t))
         })
     }
 
@@ -311,6 +317,22 @@ impl World {
         let facing = normalised([there[0] - here[0], there[1] - here[1]]);
         let facing = facing.unwrap_or(organization.facing);
         self.send(r, here, facing);
+    }
+
+    /// Gives each member of an organization that's just engaged a moment of
+    /// its own, up to its
+    /// [`engage_reaction`](crate::Rules::engage_reaction), before it
+    /// first decides what to do.
+    fn react(&mut self, r: usize) {
+        let longest = self.rules.engage_reaction / TICK;
+        if longest <= 0.0 {
+            return;
+        }
+        for u in self.survivors(r).collect::<Vec<_>>() {
+            let pause = (next_chance(&mut self.rng) * longest).round() as u64;
+            let unit = &mut self.units[u];
+            unit.busy = unit.busy.max(self.ticks + pause);
+        }
     }
 
     /// Sends an organization that's no longer engaged on its way again, in the
@@ -497,6 +519,37 @@ mod tests {
     }
 
     #[test]
+    fn organizations_engage_only_what_their_units_can_bear_on() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![rifle(12.0, 10.0)]), soldier(Vec::new())],
+            at_war(),
+        );
+        // Too near for its rifle...
+        fn gun(w: &mut crate::World) -> &mut tgmap::Weapon {
+            &mut w.units[0].fighter.as_mut().unwrap().weapons[0]
+        }
+        gun(&mut w).min_range = 12.0;
+        run(&mut w, 1.0);
+        assert!(w.organizations[0].engaged.is_empty());
+        // ...or behind its turret's arc, facing back.
+        gun(&mut w).min_range = 0.0;
+        gun(&mut w).aimed_by = Some(0);
+        w.units[0].fighter.as_mut().unwrap().turrets = vec![tgmap::Turret {
+            turn_rate: 1.0,
+            sweep: 90f32.to_radians(),
+            start: std::f32::consts::PI,
+            reset: None,
+            offset: [0.0; 2],
+        }];
+        run(&mut w, 1.0);
+        assert!(w.organizations[0].engaged.is_empty());
+        w.units[0].fighter.as_mut().unwrap().turrets[0].start = 0.0;
+        run(&mut w, 1.0);
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
+    }
+
+    #[test]
     fn passive_organizations_only_answer_fire() {
         let mut w = skirmish();
         w.units[1].position = [10.0, 26.0];
@@ -646,7 +699,7 @@ mod tests {
         assert!(w.units[0].moving());
         // ...until near enough to engage it too, when the next hit draws it
         // onto what fires on it...
-        run(&mut w, 8.0);
+        run(&mut w, 12.0);
         assert!(!w.units[1].alive() && w.units[2].alive());
         assert_eq!(w.organizations[0].engaged, [Piece::Organization(2)]);
         assert_eq!(w.organizations[0].order, Order::Pursue(2));

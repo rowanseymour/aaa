@@ -580,6 +580,13 @@ impl GameData {
             .find_map(|v| v.kill_target_is_highest_priority)
     }
 
+    /// `EngageReactionTimeRange`, in seconds.
+    pub fn engage_reaction(&self) -> Option<f32> {
+        self.svars()
+            .iter()
+            .find_map(|v| v.engage_reaction_time_range)
+    }
+
     /// How far around them city centres hold sway, by template id, including
     /// the ids the game has since renamed.
     pub fn city_zones(&self) -> HashMap<Id, f32> {

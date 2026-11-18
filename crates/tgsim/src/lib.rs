@@ -510,9 +510,14 @@ pub struct Unit {
     /// While it's left its place to go after its target, the range it's
     /// going to be within of it.
     closing: Option<f32>,
-    /// The tick the ability it's using is over, until which it does
-    /// nothing else.
+    /// The tick it next decides what to do: once the ability it's using
+    /// is over, it's waited a while for one, or it's reacted to its
+    /// organization engaging.
     busy: u64,
+    /// The tick it last decided what to do.
+    decided: u64,
+    /// The enemy it last ran into on its way since then.
+    met: Option<Target>,
     /// What it can take and deal; `None` for what can't be hurt.
     pub fighter: Option<Fighter>,
     pub health: f32,
@@ -958,19 +963,26 @@ impl Building {
     /// The yaw its turret `turret` would point at `at` with, from where the
     /// turret stands; `None` from right there.
     fn yaw_to(&self, turret: &Turret, at: [f32; 2]) -> Option<f32> {
-        let [ahead, left] = turret.offset;
-        let spot = tgmap::from_local(self.position, self.facing, [-left, ahead]);
-        let [right, ahead] = tgmap::to_local(spot, self.facing, at);
-        (right != 0.0 || ahead != 0.0).then(|| libm::atan2f(-right, ahead))
+        yaw_to(self.position, self.facing, turret, at)
     }
+}
 
-    /// Whether its turret `turret` can be aimed at `at`.
-    fn in_arc(&self, turret: &Turret, at: [f32; 2]) -> bool {
-        turret.sweep >= TAU
-            || self
-                .yaw_to(turret, at)
-                .is_none_or(|yaw| wrap(yaw - turret.start).abs() <= turret.sweep / 2.0)
-    }
+/// The yaw `turret`, on something at `position` facing `facing`, would
+/// point at `at` with, from where the turret stands; `None` from right
+/// there.
+fn yaw_to(position: [f32; 2], facing: [f32; 2], turret: &Turret, at: [f32; 2]) -> Option<f32> {
+    let [ahead, left] = turret.offset;
+    let spot = tgmap::from_local(position, facing, [-left, ahead]);
+    let [right, ahead] = tgmap::to_local(spot, facing, at);
+    (right != 0.0 || ahead != 0.0).then(|| libm::atan2f(-right, ahead))
+}
+
+/// Whether `turret`, on something at `position` facing `facing`, can be
+/// aimed at `at`.
+fn in_arc(position: [f32; 2], facing: [f32; 2], turret: &Turret, at: [f32; 2]) -> bool {
+    turret.sweep >= TAU
+        || yaw_to(position, facing, turret, at)
+            .is_none_or(|yaw| wrap(yaw - turret.start).abs() <= turret.sweep / 2.0)
 }
 
 /// Where one of a building's turrets points, in radians from the
@@ -1227,7 +1239,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, acceleration, turn_radius, trailer, closing, busy, health,
+    exact, ways, look, speed, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
     fired_ago, target, shot, died, death, besieged, struck, left, awaited, descent,
 } skip {

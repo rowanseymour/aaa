@@ -123,6 +123,8 @@ impl Unit {
         self.speed = 0.0;
         self.closing = None;
         self.busy = 0;
+        self.decided = 0;
+        self.met = None;
         self.target = None;
         self.shot = None;
         self.fired_ago.fill(f32::INFINITY);

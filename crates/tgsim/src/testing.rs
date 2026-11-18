@@ -198,7 +198,11 @@ pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> Wo
             }
         })
         .collect::<Vec<_>>();
-    World::from_organizations(sides, Pathing::uniform(40, Domain::Land), &organizations)
+    let mut w =
+        World::from_organizations(sides, Pathing::uniform(40, Domain::Land), &organizations);
+    // So shots can be counted from when a fight starts.
+    w.rules.engage_reaction = 0.0;
+    w
 }
 
 /// Players 1 and 2 at war, and 3 allied to 1.

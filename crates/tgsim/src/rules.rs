@@ -86,6 +86,9 @@ pub struct Rules {
     /// Whether an organization's attack target comes before all else its
     /// members could fire on.
     pub attack_target_first: bool,
+    /// The longest a unit waits, once its organization engages, before it
+    /// first decides, in seconds.
+    pub engage_reaction: f32,
     /// What each property does to supply, for those that do anything to
     /// it, by its id.
     pub supply_effects: HashMap<Id, tgmap::SupplyEffect>,
@@ -184,6 +187,7 @@ impl Default for Rules {
             kill_credit_seconds: 2.0,
             attacker_bonus: 0.5,
             attack_target_first: true,
+            engage_reaction: 0.3,
             supply_effects: HashMap::new(),
             kinds: HashMap::new(),
             sort_objectives: true,
