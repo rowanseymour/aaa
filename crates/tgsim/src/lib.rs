@@ -10,6 +10,7 @@ mod capture;
 mod combat;
 mod commands;
 mod companies;
+mod computer;
 mod delivery;
 mod disposal;
 pub mod economy;
@@ -54,6 +55,7 @@ use tgmap::{
 
 pub use attach::Hq;
 pub use combat::Struck;
+pub use computer::{ComputerPlayer, Idle};
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::{Commander, Operated, SpecialOp};
