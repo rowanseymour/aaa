@@ -28,7 +28,7 @@ pub enum Mind {
         retry: u64,
     },
     /// Got where it ran to, and pulling itself together until the tick
-    /// `until`: it does no damage meanwhile.
+    /// `until`.
     Reforming { until: u64 },
     /// Out of morale: it stands until its morale is back above its
     /// breakpoint.
@@ -52,9 +52,14 @@ impl crate::Organization {
         matches!(self.mind, Mind::Routing { .. })
     }
 
-    /// Whether it has no formation, as while routing or exhausted.
+    /// Whether it has no formation: routing, or Exhausted and not
+    /// fighting.
     pub fn broken(&self) -> bool {
-        matches!(self.mind, Mind::Routing { .. } | Mind::Exhausted)
+        match self.mind {
+            Mind::Routing { .. } => true,
+            Mind::Exhausted => self.engaged.is_empty(),
+            _ => false,
+        }
     }
 }
 
@@ -257,6 +262,7 @@ impl World {
             unit.target = None;
             unit.closing = false;
         }
+        self.break_formation(r);
         self.run_away(r);
     }
 
@@ -277,6 +283,19 @@ impl World {
         for (e, gain) in gains {
             self.gain_morale(e, gain);
         }
+    }
+
+    /// Has each member of the organization at `r` keep where it stands
+    /// from its leader, on the map's own axes, while it has no formation.
+    pub(crate) fn break_formation(&mut self, r: usize) {
+        let [lx, ly] = self.leader_position(r);
+        let places = (self.organizations[r].units.iter())
+            .map(|&u| {
+                let [x, y] = self.units[u].position;
+                [x - lx, y - ly]
+            })
+            .collect();
+        self.organizations[r].broken_places = places;
     }
 
     /// Sends the routing organization at `r` to the best place it finds to
@@ -307,6 +326,30 @@ impl World {
                 };
             }
         }
+    }
+
+    /// The guard zones of the organization at `r`'s enemies, as where each
+    /// is and how far it reaches: one round each living enemy thing that
+    /// sends out units of its own.
+    fn guard_zones(&self, r: usize) -> Vec<([f32; 2], f32)> {
+        let zones = &self.rules.guard_zones;
+        let units = (0..self.units.len())
+            .filter(|&u| self.units[u].alive())
+            .map(Target::Unit);
+        let buildings = (0..self.buildings.len())
+            .filter(|&b| self.buildings[b].standing())
+            .map(Target::Building);
+        (units.chain(buildings))
+            .filter_map(|t| {
+                let template = match t {
+                    Target::Unit(u) => &self.units[u].template,
+                    Target::Building(b) => &self.buildings[b].template,
+                };
+                let range = *zones.get(template)?;
+                self.hostile(r, self.piece(t))
+                    .then(|| (self.position(t), range))
+            })
+            .collect()
     }
 
     /// The best place for the organization at `r` to run to, of those it
@@ -353,6 +396,7 @@ impl World {
         let enemies: Vec<usize> = (0..self.organizations.len())
             .filter(|&e| !self.destroyed(e) && self.hostile(r, Piece::Organization(e)))
             .collect();
+        let guarded = self.guard_zones(r);
         let score = |w: &World, point: [f32; 2], fuzz: f32| {
             let mut score = rules.base_value;
             if !engagers.is_empty() {
@@ -376,8 +420,12 @@ impl World {
             if controlled {
                 score -= rules.penalty_enemy_zoc;
             }
-            // `RoutPenaltyEnemyZOG` is left out: the spec doesn't say which
-            // enemy zone it's for.
+            if guarded
+                .iter()
+                .any(|&(at, range)| distance(at, point) < range)
+            {
+                score -= rules.penalty_enemy_zog;
+            }
             if w.supplied(owner, point) {
                 score += rules.bonus_friendly_zos;
             }
@@ -1101,6 +1149,61 @@ mod tests {
         };
         let size = w.pathing.size();
         assert!(to.iter().all(|c| (0.0..size).contains(c)), "{to:?}");
+    }
+
+    #[test]
+    fn a_broken_regiment_runs_a_quarter_faster() {
+        let mut w = standoff();
+        let speed = w.regiment_speed(0);
+        let template = w.organizations[0].template.clone();
+        let broken = tgmap::CombatEffect {
+            speed: 0.25,
+            ..Default::default()
+        };
+        w.rules.broken_effects.insert(template, broken);
+        assert_eq!(w.regiment_speed(0), speed);
+        w.organizations[0].mind = Mind::Exhausted;
+        assert_eq!(w.regiment_speed(0), speed * 1.25);
+        // Fighting, an Exhausted one is back in its combat formation.
+        w.organizations[0].engaged.push(Piece::Organization(1));
+        assert!(!w.organizations[0].broken());
+    }
+
+    #[test]
+    fn routing_members_keep_where_they_stood_from_the_leader() {
+        let mut w = standoff();
+        let mut second = w.units[0].clone();
+        second.position = [w.units[0].position[0] + 3.0, w.units[0].position[1]];
+        w.units.push(second);
+        let u = w.units.len() - 1;
+        w.organizations[0].units.push(u);
+        let leader = w.units[0].position;
+        engaged(&mut w);
+        let offset = [0, 1].map(|i| w.units[u].position[i] - w.units[0].position[i]);
+        w.organizations[0].morale = 20.2;
+        w.lose_morale(0, 1.0, false);
+        assert!(
+            w.organizations[0].routing(),
+            "{:?}",
+            w.organizations[0].mind
+        );
+        let to = w.units[0].goal.expect("the leader runs");
+        let goal = w.units[u].goal.expect("the second runs too");
+        let off = [goal[0] - to[0], goal[1] - to[1]];
+        assert!(near(off, offset), "{off:?} {offset:?} from {leader:?}");
+    }
+
+    #[test]
+    fn enemies_that_send_out_units_keep_guard_zones() {
+        let mut w = standoff();
+        let template = w.units[1].template.clone();
+        w.rules.guard_zones.insert(template, 30.0);
+        let zones = w.guard_zones(0);
+        assert_eq!(zones, vec![(w.units[1].position, 30.0)]);
+        // Not one's own side's, and not the dead.
+        assert!(w.guard_zones(1).iter().all(|z| z.0 != w.units[1].position));
+        w.units[1].die(0);
+        assert!(w.guard_zones(0).is_empty());
     }
 
     #[test]

@@ -256,6 +256,7 @@ impl World {
             engaging_before: false,
             efficiency: organization.efficiency.unwrap_or(1.0),
             struck: None,
+            broken_places: Vec::new(),
         });
         self.set_experience(r, organization.experience);
         self.organizations[r].morale_max = self.maximum_morale(r);
@@ -338,6 +339,7 @@ impl World {
                 false => 0.0,
             },
             speed: 0.0,
+            speed_max: m.speed,
             acceleration: m.acceleration,
             turn_rate: m.turn_rate,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),

@@ -28,6 +28,9 @@ pub struct Rules {
     /// The settings supply runs by.
     pub supply_rules: tgmap::SupplyRules,
     pub guard_rules: tgmap::GuardRules,
+    /// How far around them things that send out units of their own keep
+    /// their guard zone, by template.
+    pub guard_zones: HashMap<Id, f32>,
     /// The settings morale and routing run by.
     pub morale_rules: tgmap::MoraleRules,
     /// The morale each unit template adds to its organization's maximum,
@@ -49,12 +52,12 @@ pub struct Rules {
     /// What each property does to its holder's fighting, for those that do
     /// anything to it, by its id.
     pub combat_effects: HashMap<Id, tgmap::CombatEffect>,
-    /// What each formation sets its regiment's attack efficiency to, by
+    /// What each formation's properties give the regiment in it, by
     /// formation id.
-    pub formation_efficiencies: HashMap<Id, tgmap::Efficiency>,
-    /// What each organization template's broken formation sets its attack
-    /// efficiency to, by template, for while it has no formation.
-    pub broken_efficiencies: HashMap<Id, tgmap::Efficiency>,
+    pub formation_effects: HashMap<Id, tgmap::CombatEffect>,
+    /// What each organization template's broken formation's property gives
+    /// it while it has no formation, by template.
+    pub broken_effects: HashMap<Id, tgmap::CombatEffect>,
     /// Attack efficiency a second a regiment gains while below its target,
     /// and loses while above it.
     pub efficiency_rates: [f32; 2],
@@ -144,6 +147,7 @@ impl Default for Rules {
             supplies: HashMap::new(),
             supply_rules: Default::default(),
             guard_rules: Default::default(),
+            guard_zones: HashMap::new(),
             morale_rules: Default::default(),
             morale_values: HashMap::new(),
             morale_breakpoints: HashMap::new(),
@@ -152,8 +156,8 @@ impl Default for Rules {
             combat_profiles: HashMap::new(),
             combat_means: Default::default(),
             combat_effects: HashMap::new(),
-            formation_efficiencies: HashMap::new(),
-            broken_efficiencies: HashMap::new(),
+            formation_effects: HashMap::new(),
+            broken_effects: HashMap::new(),
             efficiency_rates: [0.01, 0.02],
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),

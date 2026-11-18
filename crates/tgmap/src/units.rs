@@ -1040,7 +1040,7 @@ mod tests {
         let formation = |id: &str, dy: f32| LayoutFormation {
             id: Id::from(id),
             aggressive: false,
-            efficiency: Default::default(),
+            effect: Default::default(),
             slots: vec![
                 vec![[-1.0, dy], [1.0, dy]],
                 vec![[3.0, 0.0]],

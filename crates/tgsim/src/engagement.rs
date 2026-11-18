@@ -742,7 +742,9 @@ mod tests {
     fn running_organizations_break_off_and_ignore_enemies() {
         let mut w = skirmish();
         // Too slow to keep after it.
-        w.organizations[1].speed = 0.5;
+        for u in w.organizations[1].units.clone() {
+            w.units[u].speed_max = 0.5;
+        }
         w.apply(
             1,
             Command::Move {

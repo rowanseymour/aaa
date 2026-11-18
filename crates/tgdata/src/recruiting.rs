@@ -549,7 +549,7 @@ mod tests {
                 id: Id::from("column"),
                 slots: vec![vec![[0.0; 2]; 3], vec![[0.0; 2]], vec![[0.0; 2]]],
                 aggressive: false,
-                efficiency: Default::default(),
+                effect: Default::default(),
             }],
             default: 0,
             combat: None,

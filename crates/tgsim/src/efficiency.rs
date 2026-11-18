@@ -24,21 +24,29 @@ impl World {
         self.held_effect(owner, &organization.template, held, &more)
     }
 
+    /// What the formation the organization at `r` is in at the moment
+    /// gives it: its broken formation's while it has none.
+    pub(crate) fn formation_effect(&self, r: usize) -> Option<&CombatEffect> {
+        let organization = &self.organizations[r];
+        match organization.broken() {
+            true => self.rules.broken_effects.get(&organization.template),
+            false => {
+                let formation = organization
+                    .formations
+                    .get(organization.current_formation())?;
+                let id = Id::from(formation.id.as_str());
+                self.rules.formation_effects.get(&id)
+            }
+        }
+    }
+
     /// The attack efficiency the organization at `r` eases towards: its
     /// state's if that sets one, else its formation's, or its broken
     /// formation's while it has none.
     pub fn efficiency_target(&self, r: usize) -> f32 {
-        let organization = &self.organizations[r];
-        let formation = match organization.broken() {
-            true => self.rules.broken_efficiencies.get(&organization.template),
-            false => (organization.formations.get(organization.formation)).and_then(|f| {
-                self.rules
-                    .formation_efficiencies
-                    .get(&tgmap::Id::from(f.id.as_str()))
-            }),
-        };
+        let formation = self.formation_effect(r).map(|e| e.efficiency);
         let held = self.organization_effect(r).efficiency;
-        strength(held.with(formation.copied().unwrap_or_default()))
+        strength(held.with(formation.unwrap_or_default()))
     }
 
     /// The attack efficiency a hit by `from` is dealt with: a regiment's
@@ -100,6 +108,14 @@ mod tests {
         }
     }
 
+    /// A property's effect that sets nothing but a desired efficiency.
+    fn efficient(amount: f32) -> CombatEffect {
+        CombatEffect {
+            efficiency: desired(amount),
+            ..Default::default()
+        }
+    }
+
     /// Two riflemen's regiments, each led by its one member, the first in
     /// a formation that sets 0.5.
     fn column() -> crate::World {
@@ -109,7 +125,7 @@ mod tests {
             at_war(),
         );
         let id = Id::from(w.organizations[0].formations[0].id.as_str());
-        w.rules.formation_efficiencies.insert(id, desired(0.5));
+        w.rules.formation_effects.insert(id, efficient(0.5));
         w
     }
 
@@ -122,7 +138,7 @@ mod tests {
         assert!((e - 0.8).abs() < 1e-4, "{e}");
         run(&mut w, 30.0);
         assert!((w.organizations[0].efficiency - 0.5).abs() < 1e-4);
-        w.rules.formation_efficiencies.clear();
+        w.rules.formation_effects.clear();
         run(&mut w, 10.0);
         let e = w.organizations[0].efficiency;
         assert!((e - 0.6).abs() < 1e-4, "{e}");
@@ -149,7 +165,7 @@ mod tests {
     fn a_broken_regiment_takes_its_broken_formations_efficiency() {
         let mut w = column();
         let template = w.organizations[0].template.clone();
-        w.rules.broken_efficiencies.insert(template, desired(0.25));
+        w.rules.broken_effects.insert(template, efficient(0.25));
         w.organizations[0].mind = Mind::Exhausted;
         assert_eq!(w.efficiency_target(0), 0.25);
     }
@@ -158,7 +174,7 @@ mod tests {
     fn efficiency_never_targets_below_the_floor() {
         let mut w = column();
         let id = Id::from(w.organizations[0].formations[0].id.as_str());
-        w.rules.formation_efficiencies.insert(id, desired(0.0));
+        w.rules.formation_effects.insert(id, efficient(0.0));
         assert_eq!(w.efficiency_target(0), MULTIPLY_FLOOR);
     }
 }

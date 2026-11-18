@@ -12,6 +12,11 @@ pub const ROUTING: &str = "actor_state_routing";
 pub const REFORMING: &str = "actor_state_reforming";
 /// The property a regiment out of morale has.
 pub const EXHAUSTED: &str = "actor_state_exhausted";
+/// The property a regiment that's engaged has.
+pub const ENGAGED: &str = "actor_state_engaged";
+/// The property a regiment that's engaged by another without engaging
+/// back has.
+pub const TARGETED: &str = "actor_state_targeted";
 
 /// The settings morale and routing run by, by their `SVars` names.
 #[derive(Debug, Clone, Copy, PartialEq)]

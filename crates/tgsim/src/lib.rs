@@ -289,6 +289,9 @@ pub struct Organization {
     pub bombarded: Vec<Bombarder>,
     /// The last hit an enemy dealt any of its members.
     pub struck: Option<Struck>,
+    /// Where each member stood from its leader when it last broke
+    /// formation, on the map's own axes, kept while it has none.
+    pub broken_places: Vec<[f32; 2]>,
     /// The properties it has for a time, such as an operation's.
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
@@ -480,6 +483,8 @@ pub struct Unit {
     look: u32,
     /// World units a second it's going at.
     pub speed: f32,
+    /// Its template's top speed, before its properties change it.
+    pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
     acceleration: f32,
     /// Radians a second it turns; 0 for at once.
@@ -1177,7 +1182,7 @@ digest!(Organization {
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
     guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before, experience,
-    level, engaging_before, efficiency, struck,
+    level, engaging_before, efficiency, struck, broken_places,
 } skip {
     // Its template's.
     formations, unpacks,
@@ -1206,6 +1211,7 @@ digest!(Unit {
     fired_ago, target, shot, died, besieged, struck, left, awaited, descent,
 } skip {
     // Its template's.
+    speed_max,
     domain, shape, fighter,
     // Follows from where it stands.
     terrain,
