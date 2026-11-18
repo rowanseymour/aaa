@@ -1210,6 +1210,19 @@ fn told(
         Notice::TeamResigned { team } => {
             Told::Event("team_resigned", vec![team_name(team).into()], None)
         }
+        Notice::TakenOver {
+            player,
+            person,
+            computer,
+        } => {
+            let said = look.said("sai_midgame_name_change|ss", "%s taken over by %s");
+            let named = |name: String| match sim.sides.player(player) {
+                Some(p) => Fill::side_of(name, p),
+                None => Fill::from(name),
+            };
+            let with = [named(person), named(computer)];
+            Told::Words("GENERIC_EVENT", fill_all(&said, &with))
+        }
         Notice::ResignVote { player, team } => {
             let said = look.said(
                 "networking_player_voted_to_resign_team|ss",
@@ -1658,6 +1671,7 @@ mod tests {
         players[1].relations[0] = tgmap::Relation::Ally;
         let sides = tgsim::Sides {
             names: Default::default(),
+            computers: Default::default(),
             players,
             teams: Vec::new(),
         };
@@ -1791,6 +1805,27 @@ mod tests {
             resigned,
             Some(Told::Event("kingdom_resigned", ..))
         ));
+    }
+
+    #[test]
+    fn a_side_taken_over_names_the_person_then_the_computer_player() {
+        let mut sim = allied_sides();
+        sim.sides.computers.insert(1, "Bob AI".into());
+        let (look, leaders) = (look(&[]), Leaders::default());
+        let taken_over = Notice::TakenOver {
+            player: 1,
+            person: "Bob".into(),
+            computer: "Bob AI".into(),
+        };
+        let Some(Told::Words(kind, words)) = told(&sim, Some(3), &leaders, &look, taken_over)
+        else {
+            panic!("a takeover is a line of its own");
+        };
+        assert_eq!(kind, "GENERIC_EVENT");
+        assert_eq!(words.text, "Bob taken over by Bob AI");
+        // The side now goes by the computer player's name.
+        let side = &sim.sides.players[0];
+        assert_eq!(leaders.owner(side, &sim.sides, &look.map), "Bob AI");
     }
 
     #[test]

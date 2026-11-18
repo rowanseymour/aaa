@@ -185,6 +185,7 @@ pub(crate) fn at_war() -> Sides {
     };
     Sides {
         names: Default::default(),
+        computers: Default::default(),
         players: vec![
             side(1, &[0, 3, 1]),
             side(2, &[3, 0, 3]),

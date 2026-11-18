@@ -25,6 +25,7 @@ impl World {
     pub fn new(map: &Map, rules: Rules) -> World {
         let sides = Sides {
             names: BTreeMap::new(),
+            computers: BTreeMap::new(),
             players: map.players.clone(),
             teams: map.teams.clone(),
         };

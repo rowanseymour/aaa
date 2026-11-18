@@ -368,12 +368,14 @@ impl Leaders {
     }
 
     /// What a side is called, as its things' owner and in lines: a
-    /// person's side by the name `sides` has for it, or the person here's
-    /// by theirs until the match gives it, the computer's after the
-    /// computer player of its faction, such as `Kesselring AI`, and the
-    /// rest by the name the map gives them.
+    /// person's side, or one a computer player took over from a person,
+    /// by the name `sides` has for it, or the person here's by theirs
+    /// until the match gives it, the computer's after the computer player
+    /// of its faction, such as `Kesselring AI`, and the rest by the name
+    /// the map gives them.
     fn owner(&self, player: &tgmap::Player, sides: &tgsim::Sides, map: &tgdata::Strings) -> String {
-        if let Some(name) = sides.names.get(&player.id) {
+        let named = sides.names.get(&player.id);
+        if let Some(name) = named.or_else(|| sides.computers.get(&player.id)) {
             return name.clone();
         }
         if let Some((_, name)) = (self.1.as_ref()).filter(|(own, _)| own.contains(&player.id)) {

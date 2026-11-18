@@ -27,7 +27,7 @@ pub use clock::Clock;
 pub use film::{Film, NotFilm};
 pub use host::{Event, Host, Refusal, allows, sayable};
 pub use link::{Link, Local, Lost, pair};
-pub use names::{NAME_LONGEST, NUMBERED, default_name, name, numbered, unique};
+pub use names::{NAME_LONGEST, NUMBERED, Naming, TAKEN_OVER, default_name, name, unique};
 
 /// What a match is played on and by, as its lobby leaves it: all that
 /// every copy of the match has to agree on before it starts.

@@ -57,6 +57,25 @@ impl World {
         self.sides.names.contains_key(&player) && !self.resigned(player)
     }
 
+    /// Has a computer player going by `name` take over a side a person
+    /// plays, as when they leave; nothing for a side nobody plays.
+    pub fn take_over(&mut self, player: u32, name: String) {
+        let Some(person) = self.sides.names.remove(&player) else {
+            return;
+        };
+        self.sides.computers.insert(player, name.clone());
+        self.notices.push(Notice::TakenOver {
+            player,
+            person,
+            computer: name,
+        });
+        // The side had a vote the rest of its team may have been waiting
+        // on.
+        if let Some(team) = self.shared_team(player) {
+            self.settle_resigning(team);
+        }
+    }
+
     /// Has the person playing a side resign it while the match goes on:
     /// at once if it stands alone, or else as their vote for its team to,
     /// which it does once everyone playing one of its sides has voted.
@@ -71,20 +90,26 @@ impl World {
             return;
         };
         self.fates.get_mut(&player).expect("voted").resigning = true;
+        if !self.settle_resigning(team) {
+            self.notices.push(Notice::ResignVote { player, team });
+        }
+    }
+
+    /// Has the team at this index into [`Sides::teams`] resign if everyone
+    /// playing one of its sides has voted to, as votes stand for the rest
+    /// of the match. Whether it did.
+    fn settle_resigning(&mut self, team: usize) -> bool {
         let members = self.sides.players.iter().filter(|p| p.team == Some(team));
         let held: Vec<u32> = members.map(|p| p.id).filter(|&p| self.held(p)).collect();
-        // Votes stand for the rest of the match.
-        if held
-            .iter()
-            .any(|p| !self.fates.get(p).is_some_and(|f| f.resigning))
-        {
-            self.notices.push(Notice::ResignVote { player, team });
-            return;
+        let voted = |p: &u32| self.fates.get(p).is_some_and(|f| f.resigning);
+        if self.over || held.is_empty() || !held.iter().all(voted) {
+            return false;
         }
         self.notices.push(Notice::TeamResigned { team });
         for player in held {
             self.concede(player);
         }
+        true
     }
 
     /// Takes a side from whoever plays it, losing it the match.
@@ -339,6 +364,7 @@ mod tests {
         let side = |id, team| player(id, team, &[], &[]);
         let sides = Sides {
             names: Default::default(),
+            computers: Default::default(),
             players: vec![
                 side(1, Some(0)),
                 side(2, Some(0)),
@@ -364,6 +390,7 @@ mod tests {
         });
         let sides = Sides {
             names: Default::default(),
+            computers: Default::default(),
             players: players.collect(),
             teams: Vec::new(),
         };
@@ -462,6 +489,38 @@ mod tests {
         assert_eq!(outcomes(&w), [Lost, Lost, Lost, Playing, Playing]);
         assert!(!w.resigned(4));
         assert_eq!(told(&mut w), [Notice::TeamResigned { team: 1 }]);
+    }
+
+    #[test]
+    fn a_side_taken_over_by_a_computer_player_has_no_vote_to_resign() {
+        let mut w = teams();
+        played(&mut w, &[1, 2]);
+        w.take_over(2, "Person 2 AI".into());
+        assert!(!w.held(2));
+        assert_eq!(w.sides.computers, [(2, "Person 2 AI".to_string())].into());
+        let taken_over = Notice::TakenOver {
+            player: 2,
+            person: "Person 2".into(),
+            computer: "Person 2 AI".into(),
+        };
+        assert_eq!(w.take_notices(), [taken_over]);
+        // Once a computer player has a side, there's nobody to take it from.
+        w.take_over(2, "Again".into());
+        assert_eq!(w.take_notices(), []);
+        w.resign(1);
+        assert_eq!(outcomes(&w)[..2], [Lost, Playing]);
+        assert_eq!(told(&mut w), [Notice::TeamResigned { team: 0 }]);
+    }
+
+    #[test]
+    fn a_team_waiting_only_on_a_side_taken_over_resigns_then() {
+        let mut w = teams();
+        played(&mut w, &[1, 2]);
+        w.resign(1);
+        assert_eq!(told(&mut w), [Notice::ResignVote { player: 1, team: 0 }]);
+        w.take_over(2, "Person 2 AI".into());
+        assert_eq!(outcomes(&w)[..2], [Lost, Playing]);
+        assert_eq!(told(&mut w), [Notice::TeamResigned { team: 0 }]);
     }
 
     #[test]
@@ -597,6 +656,7 @@ mod tests {
         };
         let sides = |outcomes: [Outcome; 2]| Sides {
             names: Default::default(),
+            computers: Default::default(),
             players: vec![side(1, outcomes[0]), side(2, outcomes[1])],
             teams: Vec::new(),
         };
