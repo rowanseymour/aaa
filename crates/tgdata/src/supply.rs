@@ -198,6 +198,16 @@ impl GameData {
     /// it, by its id: the shared ones, technologies among them, and those
     /// abilities give.
     pub fn supply_effects(&self) -> HashMap<Id, SupplyEffect> {
+        self.property_effects(effect)
+    }
+
+    /// What `effect` makes of each property, for those it makes anything
+    /// of, by its id: the shared ones, technologies among them, and those
+    /// abilities give.
+    pub(crate) fn property_effects<E>(
+        &self,
+        effect: impl Fn(&defs::Property) -> Option<E>,
+    ) -> HashMap<Id, E> {
         let definitions = self.definitions();
         let shared = definitions.properties.values();
         let given = definitions

@@ -521,7 +521,7 @@ fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
 
 /// The properties an organization or building holds that have an icon: its
 /// template's own, then for an organization its formation's, its terrain's
-/// and its stance's, then those it has for a time. Those in `shown` come
+/// its stance's and its morale's, then those it has for a time. Those in `shown` come
 /// first, as they stand there, so that icons keep the order their
 /// properties came in while their holder stays selected.
 fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
@@ -541,11 +541,13 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
                 .filter(|_| afield)
                 .and_then(|f| looks.formations.get(&Id::from(f.id.as_str())));
             let guarding = (afield && organization.guarding()).then(|| Id::from(GUARDING));
+            let mind = organization.mind.property().map(Id::from);
             let timed = organization.properties.iter().map(|h| h.property.clone());
             own(&organization.template)
                 .chain(formation.into_iter().flatten().cloned())
                 .chain(organization.terrain_properties.iter().cloned())
                 .chain(guarding)
+                .chain(mind)
                 .chain(timed)
                 .collect()
         }
@@ -1600,8 +1602,11 @@ fn organization_state(sim: &World, r: usize) -> Option<&'static str> {
     if sim.destroyed(r) {
         return None;
     }
-    Some(match () {
+    Some(match organization.mind {
+        tgsim::Mind::Routing { .. } => "mind_routing",
+        tgsim::Mind::Exhausted => "mind_exhausted",
         _ if !organization.engaged.is_empty() => "mind_engaged",
+        tgsim::Mind::Reforming { .. } => "mind_reforming",
         _ if matches!(organization.order, Order::Pursue(_)) => "mind_attacking",
         _ if organization.guarding() => "mind_guarding",
         _ if sim.underway(r) || organization.unpack_at.is_some() => match organization.order {

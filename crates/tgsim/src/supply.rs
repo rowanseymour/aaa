@@ -94,15 +94,8 @@ impl World {
         template: &Id,
         held: &'a [Held],
     ) -> impl Iterator<Item = &'a SupplyEffect> {
-        let kind = self.rules.kinds.get(template);
-        let on = move |e: &&SupplyEffect| {
-            let has = |p| kind.is_some_and(|k| k.properties.contains(p));
-            e.requires.iter().all(has)
-        };
-        let technologies = self.technologies.get(&owner).into_iter().flatten();
-        let timed = held.iter().map(|h| &h.property);
-        let of = |p| self.rules.supply_effects.get(p);
-        (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
+        let table = &self.rules.supply_effects;
+        self.bearing(table, |e| &e.requires, owner, template, held)
     }
 
     /// Carries out the special operation `operation` for `player`, aimed
@@ -523,6 +516,7 @@ impl World {
                 && (organization.hq.is_some() || logistics.detached || flagged)
                 && (flagged && short.is_none() || self.supplied(owner, self.leader_position(r)));
             let resting = organization.engaged.is_empty()
+                && !organization.routing()
                 && !organization.bombarding
                 && !matches!(organization.order, Order::Pursue(_));
             self.organizations[r].in_supply = in_supply;

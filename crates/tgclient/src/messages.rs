@@ -1176,6 +1176,14 @@ fn told(
             let with = vec![look.building(sim, building).into(), paid.to_string().into()];
             Told::Event("building_sold", with, at(About::Building(building)))
         }
+        Notice::Routed {
+            player,
+            organization,
+        } if ours(player) => Told::Event(
+            "company_routed",
+            vec![look.organization(sim, organization).into()],
+            at(About::Organization(organization)),
+        ),
         // Its owner is told it's lost, and its enemies who see it go that
         // it's destroyed, whoever did it. What's nobody's tells no one.
         Notice::Destroyed { owner, what } if sim.sides.player(owner).is_some() => {

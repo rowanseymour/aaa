@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::supply::is;
 use crate::{Cue, GameData, Id, WeaponEffects, audio::cues, defs, effects::vfx_cues, not_null};
 
 /// How a template's objects take part in movement.
@@ -131,6 +132,8 @@ pub struct Weapon {
     /// An order to bombard can use it, and its hits are bombardment when
     /// it fires other than by its user's own choice of shot.
     pub bombard: bool,
+    /// The morale each unit it hits takes from its organization.
+    pub morale_loss: f32,
 }
 
 /// How a projectile flies to what it's fired at.
@@ -519,6 +522,10 @@ pub(crate) fn fighter(
             projectile: not_null(d.projectile_ids.clone()),
             flight: None,
             bombard: d.flags.iter().any(|f| f.bombard),
+            morale_loss: (d.effect.iter())
+                .filter(|e| is(&e.kind, "MORALE_LOSS"))
+                .filter_map(|e| e.amount)
+                .sum(),
         });
     }
     Some(fighter)

@@ -15,7 +15,8 @@ impl World {
     /// [`Organization::aggressive`](crate::Organization::aggressive) ones with
     /// enemies that come within their control range and enemy units their
     /// moving units run into, and those on [`Order::Pursue`] with their enemy
-    /// once near enough. Organizations on [`Order::Run`] engage nothing.
+    /// once near enough. Organizations on [`Order::Run`], or routing, engage
+    /// nothing.
     pub(crate) fn engage(&mut self, fired_on: &[(usize, Target)]) {
         for r in 0..self.organizations.len() {
             if let Order::Pursue(e) = self.organizations[r].order
@@ -82,6 +83,7 @@ impl World {
             // What's already gone or out of reach would only be dropped
             // again, such as what fired the tick it died.
             if organization.order == Order::Run
+                || organization.routing()
                 || organization.engaged.contains(&enemy)
                 || !self.within_range(r, enemy)
                 || self.destroyed(r)

@@ -248,6 +248,8 @@ pub struct OrganizationComponent {
     /// The share of their health its members lose a second out of supply
     /// while their side can't pay its upkeep.
     pub shortfall_damage_rate: Option<f32>,
+    /// The morale at or below which it routs.
+    pub morale_breakpoint: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -369,6 +371,8 @@ impl<'de> Deserialize<'de> for Amount {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ElementComponent {
+    /// What it adds to its organization's maximum morale.
+    pub morale_value: Option<f32>,
     /// Health it gets back a second in supply, as a share of its own;
     /// recruiting one alone takes its inverse in seconds.
     pub resupply_rate: Option<f32>,
@@ -1216,6 +1220,68 @@ pub struct SVars {
     /// Morale a second a regiment regaining it gains more in supply.
     #[serde(rename = "MoraleSupplyBonus")]
     pub morale_supply_bonus: Option<f32>,
+    /// How regiments lose and regain morale, and rout: see
+    /// [`MoraleRules`](crate::MoraleRules).
+    #[serde(rename = "MoraleEngagementLoss")]
+    pub morale_engagement_loss: Option<f32>,
+    #[serde(rename = "MoraleEngagementLossFactorMax")]
+    pub morale_engagement_loss_factor_max: Option<f32>,
+    #[serde(rename = "MoraleDeathFactor")]
+    pub morale_death_factor: Option<f32>,
+    #[serde(rename = "MoraleRetreatPenalty")]
+    pub morale_retreat_penalty: Option<f32>,
+    #[serde(rename = "MoraleSlayerBase")]
+    pub morale_slayer_base: Option<f32>,
+    #[serde(rename = "MoraleSlayerFactorMin")]
+    pub morale_slayer_factor_min: Option<f32>,
+    #[serde(rename = "MoraleSlayerFactorMax")]
+    pub morale_slayer_factor_max: Option<f32>,
+    #[serde(rename = "MoraleBreakerBase")]
+    pub morale_breaker_base: Option<f32>,
+    #[serde(rename = "MoraleBreakerFactorMin")]
+    pub morale_breaker_factor_min: Option<f32>,
+    #[serde(rename = "MoraleBreakerFactorMax")]
+    pub morale_breaker_factor_max: Option<f32>,
+    #[serde(rename = "MoraleReplenish")]
+    pub morale_replenish: Option<f32>,
+    #[serde(rename = "RoutingTime")]
+    pub routing_time: Option<f32>,
+    #[serde(rename = "ReformTime")]
+    pub reform_time: Option<f32>,
+    #[serde(rename = "RoutRandomCandidates")]
+    pub rout_random_candidates: Option<u32>,
+    #[serde(rename = "RoutMaxDistanceDelta")]
+    pub rout_max_distance_delta: Option<f32>,
+    #[serde(rename = "RoutSupplyZoneCandidates")]
+    pub rout_supply_zone_candidates: Option<u32>,
+    #[serde(rename = "RoutSupplyZoneMaxAngleDelta")]
+    pub rout_supply_zone_max_angle_delta: Option<f32>,
+    #[serde(rename = "RoutBaseValue")]
+    pub rout_base_value: Option<f32>,
+    #[serde(rename = "RoutFactorEnemyDist")]
+    pub rout_factor_enemy_dist: Option<f32>,
+    #[serde(rename = "RoutFactorEnemyDistCap")]
+    pub rout_factor_enemy_dist_cap: Option<f32>,
+    #[serde(rename = "RoutFactorEnemyAngle")]
+    pub rout_factor_enemy_angle: Option<f32>,
+    #[serde(rename = "RoutFactorMovedDist")]
+    pub rout_factor_moved_dist: Option<f32>,
+    #[serde(rename = "RoutFactorMovedDistCap")]
+    pub rout_factor_moved_dist_cap: Option<f32>,
+    #[serde(rename = "RoutFactorSupplyDist")]
+    pub rout_factor_supply_dist: Option<f32>,
+    #[serde(rename = "RoutFactorSupplyDistCap")]
+    pub rout_factor_supply_dist_cap: Option<f32>,
+    #[serde(rename = "RoutPenaltyEnemyZOC")]
+    pub rout_penalty_enemy_zoc: Option<f32>,
+    #[serde(rename = "RoutPenaltyEnemyZOG")]
+    pub rout_penalty_enemy_zog: Option<f32>,
+    #[serde(rename = "RoutBonusFriendlyZOS")]
+    pub rout_bonus_friendly_zos: Option<f32>,
+    #[serde(rename = "RoutBonusSupplyInRange")]
+    pub rout_bonus_supply_in_range: Option<f32>,
+    #[serde(rename = "RoutFuzziness")]
+    pub rout_fuzziness: Option<f32>,
     /// 0, 1 or 2 for no fog, explored or full; the world rule overrides it.
     #[serde(rename = "FogOfWar")]
     pub fog_of_war: Option<u8>,

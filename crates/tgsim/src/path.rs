@@ -25,6 +25,13 @@ pub fn find(pathing: &Pathing, domain: Domain, from: [f32; 2], to: [f32; 2]) -> 
     smooth(pathing, domain, from, points)
 }
 
+/// Whether a mover on `domain` can get from `from` to `to`.
+pub fn reaches(pathing: &Pathing, domain: Domain, from: [f32; 2], to: [f32; 2]) -> bool {
+    let goal = Tile::at(to);
+    pathing.passable(goal, domain)
+        && search(pathing, domain, Tile::at(from), goal).last() == Some(&goal)
+}
+
 #[derive(PartialEq)]
 struct Open {
     estimate: f32,

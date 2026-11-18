@@ -258,6 +258,8 @@ pub struct Organization {
     pub unpacks: Option<Unpacks>,
     /// The id of the HQ it's attached to.
     pub hq: Option<u32>,
+    /// Its morale as a share of its maximum: 1 for full.
+    pub morale: f32,
 }
 
 impl Organization {
@@ -461,6 +463,7 @@ pub(crate) fn organizations(
             let mut organization =
                 organization(t.id, &t.template, owner, facing, members, places, ranges)?;
             organization.hq = organization.hq.filter(|&id| id != 0);
+            organization.morale = stored.morale;
             Some(organization)
         })
         .collect()
@@ -639,6 +642,7 @@ fn organization(
         primary,
         unpacks: None,
         hq: None,
+        morale: 1.0,
     })
 }
 
@@ -945,6 +949,7 @@ fn one_place(ranges: Ranges) -> Organization {
         operational_range: ranges.operational,
         control_range: ranges.control,
         primary: Some(0),
+        morale: 1.0,
         unpacks: None,
     }
 }

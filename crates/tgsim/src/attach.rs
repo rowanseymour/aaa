@@ -241,6 +241,7 @@ impl World {
             self.detach_all(hq);
         }
         self.organizations[r].owner = owner;
+        self.refigure_morale(r, false);
     }
 }
 

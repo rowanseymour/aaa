@@ -1,5 +1,7 @@
 //! The properties things hold for a time.
 
+use std::collections::HashMap;
+
 use tgmap::Id;
 
 use crate::{Piece, TICK, World};
@@ -14,6 +16,28 @@ pub struct Held {
 }
 
 impl World {
+    /// What of `table`, by property, bears on something of `owner`'s made
+    /// from `template` holding `held`: its side's technologies whose
+    /// `requires` its kind has, then the properties it holds for a time.
+    pub(crate) fn bearing<'a, E>(
+        &'a self,
+        table: &'a HashMap<Id, E>,
+        requires: fn(&E) -> &[Id],
+        owner: u32,
+        template: &Id,
+        held: &'a [Held],
+    ) -> impl Iterator<Item = &'a E> {
+        let kind = self.rules.kinds.get(template);
+        let on = move |e: &&E| {
+            let has = |p| kind.is_some_and(|k| k.properties.contains(p));
+            requires(e).iter().all(has)
+        };
+        let technologies = self.technologies.get(&owner).into_iter().flatten();
+        let timed = held.iter().map(|h| &h.property);
+        let of = |p| table.get(p);
+        (technologies.filter_map(of).filter(on)).chain(timed.filter_map(of))
+    }
+
     /// Gives an organization or building a property for `seconds` from now,
     /// unless it still has it.
     pub fn give(&mut self, to: Piece, property: Id, seconds: f32) {
