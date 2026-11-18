@@ -5,8 +5,8 @@ use std::collections::{BTreeMap, VecDeque};
 use tgmap::{Domain, Id, Map, Pathing, Role, TerrainIndex, Tile};
 
 use crate::{
-    Building, Fate, Fog, Order, Organization, Outcome, Rules, Sides, State, Supplying, Trailer,
-    Treasury, TurretAim, Unit, World, normalised, wrap,
+    Building, Fate, Fog, Mind, Order, Organization, Outcome, Rules, Sides, State, Supplying,
+    Trailer, Treasury, TurretAim, Unit, World, normalised, wrap,
 };
 
 /// [`World::holdings`] from each placed object's role, owner and template.
@@ -247,7 +247,15 @@ impl World {
             arriving: false,
             terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),
+            morale: 0.0,
+            morale_max: 0.0,
+            mind: Mind::Steady,
+            engaged_before: false,
         });
+        self.organizations[r].morale_max = self.maximum_morale(r);
+        // A map keeps its share; what's raised starts full.
+        let share = organization.morale.clamp(0.0, 1.0);
+        self.organizations[r].morale = self.organizations[r].morale_max * share;
         let ids = organization.members.iter().map(|m| m.id);
         self.next_id = ids
             .chain([organization.id])

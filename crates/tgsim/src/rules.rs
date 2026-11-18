@@ -28,6 +28,21 @@ pub struct Rules {
     /// The settings supply runs by.
     pub supply_rules: tgmap::SupplyRules,
     pub guard_rules: tgmap::GuardRules,
+    /// The settings morale and routing run by.
+    pub morale_rules: tgmap::MoraleRules,
+    /// The morale each unit template adds to its organization's maximum,
+    /// by template. An organization whose maximum comes to nothing has no
+    /// morale: it never loses, regains or routs.
+    pub morale_values: HashMap<Id, f32>,
+    /// Each organization template's breakpoint, by template.
+    pub morale_breakpoints: HashMap<Id, f32>,
+    /// What each property does to morale, for those that do anything to
+    /// it, by its id.
+    pub morale_effects: HashMap<Id, tgmap::MoraleEffect>,
+    /// Each unit template's combat value at full health, by template,
+    /// which the morale a kill wins compares. A template without one is
+    /// worth nothing, so wins nothing by its kills.
+    pub combat_values: HashMap<Id, f32>,
     /// Seconds an enemy's damage keeps what it hurt under siege.
     pub siege_seconds: f32,
     /// What each property does to supply, for those that do anything to
@@ -106,6 +121,11 @@ impl Default for Rules {
             supplies: HashMap::new(),
             supply_rules: Default::default(),
             guard_rules: Default::default(),
+            morale_rules: Default::default(),
+            morale_values: HashMap::new(),
+            morale_breakpoints: HashMap::new(),
+            morale_effects: HashMap::new(),
+            combat_values: HashMap::new(),
             siege_seconds: 7.0,
             supply_effects: HashMap::new(),
             kinds: HashMap::new(),

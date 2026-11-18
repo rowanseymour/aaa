@@ -19,6 +19,7 @@ mod fog;
 mod guard;
 mod hash;
 mod heroes;
+mod morale;
 mod movement;
 mod notices;
 mod objectives;
@@ -54,6 +55,7 @@ pub use experience::{Commander, Operated, SpecialOp};
 pub use fog::{Fog, Seen};
 use hash::{Digest, Hasher, digest};
 pub use heroes::Pooled;
+pub use morale::Mind;
 pub use notices::Notice;
 pub use objectives::{Objective, Objectives, Standing};
 pub use outcome::Fate;
@@ -292,6 +294,15 @@ pub struct Organization {
     pub terrain: TerrainIndex,
     /// The properties that terrain gives it.
     pub terrain_properties: Vec<Id>,
+    /// Its morale, from 0 up to `morale_max`.
+    pub morale: f32,
+    /// The most morale it can have; 0 for one with no morale.
+    pub morale_max: f32,
+    /// What its morale has it doing.
+    pub mind: Mind,
+    /// Whether an enemy organization was engaging it at its last look at
+    /// its morale.
+    engaged_before: bool,
 }
 
 /// An organization's order to keep a post: it comes back to it after every
@@ -358,9 +369,12 @@ impl Organization {
 
     /// Whether it takes on enemies that come within its control range or
     /// that it runs into, not only what fires on it: always while engaged,
-    /// attacking or guarding, never while running, else as its formation
-    /// is.
+    /// attacking or guarding, never while running or routing, else as its
+    /// formation is.
     pub fn aggressive(&self) -> bool {
+        if self.routing() {
+            return false;
+        }
         match self.order {
             Order::Run => false,
             Order::Attack | Order::Pursue(_) => true,
@@ -715,6 +729,12 @@ pub enum Refused {
     Understrength,
     /// It's a hero that's dead, until it's healed in its side's pool.
     Dead,
+    /// It's an organization routing, which takes no orders until it's
+    /// done.
+    Routing,
+    /// It's an organization out of morale, which takes no orders until
+    /// it's regained some.
+    Exhausted,
 }
 
 impl From<NotYours> for Refused {
@@ -751,6 +771,9 @@ pub enum Command {
     /// going after the enemy organizations fighting it, until it's gone.
     /// Refused for the organization itself, or what's already gone.
     GuardPiece { organization: usize, piece: Piece },
+    /// Has an organization rout at once, as if its morale had broken.
+    /// Refused for one with no morale, that isn't fighting or can't move.
+    Rout { organization: usize },
     /// Halts an organization, its members forming up around where they stand on
     /// average, and drops where it was headed, so that once done with any
     /// engagement it stays put.
@@ -970,6 +993,7 @@ impl World {
             let unit = &mut self.units[u];
             if unit.alive() {
                 unit.die(self.ticks);
+                self.mourn(u, None);
                 self.lost_member(u);
             }
         }
@@ -1006,6 +1030,7 @@ impl World {
         self.notice();
         let fired_on = self.fight();
         self.engage(&fired_on);
+        self.keep_morale();
         self.keep_guard();
         self.close_in();
         self.occupy();
@@ -1119,7 +1144,7 @@ digest!(Organization {
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
-    guard, arriving, terrain_properties,
+    guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before,
 } skip {
     // Its template's.
     formations, unpacks,

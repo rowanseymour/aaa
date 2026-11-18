@@ -37,6 +37,8 @@ pub(crate) struct Hit {
     by: u32,
     /// For bombardment, its weapon's seconds between shots.
     bombard: Option<f32>,
+    /// The morale it takes from the organization of the unit it lands on.
+    morale: f32,
 }
 
 impl Hit {
@@ -49,6 +51,7 @@ impl Hit {
             from: None,
             by,
             bombard: None,
+            morale: 0.0,
         }
     }
 }
@@ -203,12 +206,21 @@ impl World {
                 }
             };
             let by = self.owner(s);
+            // Nothing fires while routing, nor what does no damage, as while
+            // reforming; reloading goes on.
+            let held = match s {
+                Target::Unit(u) => {
+                    let organization = &self.organizations[self.units[u].organization];
+                    organization.routing() || organization.harmless()
+                }
+                Target::Building(_) => false,
+            };
             for aim in &mut turrets {
                 aim.idle += TICK;
             }
             for (w, weapon) in fighter.weapons.iter().enumerate() {
                 reloads[w] = (reloads[w] - TICK).max(0.0);
-                if reloads[w] > 0.0 || moving && !weapon.turret {
+                if held || reloads[w] > 0.0 || moving && !weapon.turret {
                     continue;
                 }
                 let Some(t) = self.aim(s, weapon, target) else {
@@ -365,8 +377,16 @@ impl World {
                     besiege(&mut unit.besieged, ticks + window);
                 }
                 unit.health -= hit.amount;
-                if unit.health <= 0.0 {
+                let dead = unit.health <= 0.0;
+                if dead {
                     unit.die(ticks);
+                }
+                let r = self.units[u].organization;
+                if enemy {
+                    self.lose_morale(r, hit.morale, true);
+                }
+                if dead {
+                    self.mourn(u, hit.from);
                     self.lost_member(u);
                 }
             }
@@ -726,6 +746,7 @@ impl World {
                     from: Some(from),
                     by,
                     bombard,
+                    morale: weapon.morale_loss,
                 });
             }
             return;
@@ -757,6 +778,7 @@ impl World {
             from: Some(from),
             by,
             bombard,
+            morale: weapon.morale_loss,
         }));
     }
 }
@@ -1386,6 +1408,30 @@ mod tests {
         w.tick();
         assert_eq!(w.units[0].target, Some(Target::Building(0)));
         assert_eq!(w.buildings[0].health, 70.0);
+    }
+
+    #[test]
+    fn only_enemies_hits_take_morale() {
+        let mut w = battle(
+            &[1, 3],
+            vec![soldier(Vec::new()), soldier(Vec::new())],
+            at_war(),
+        );
+        w.rules.morale_values.insert("soldier".into(), 50.0);
+        w.refigure_morale(0, true);
+        let hit = |by| Hit {
+            target: Target::Unit(0),
+            amount: 1.0,
+            from: Some(Target::Unit(1)),
+            by,
+            bombard: None,
+            morale: 0.75,
+        };
+        // Player 3 is player 1's ally.
+        w.land(hit(3));
+        assert_eq!(w.organizations[0].morale, 50.0);
+        w.land(hit(2));
+        assert_eq!(w.organizations[0].morale, 50.0 - 0.75);
     }
 
     #[test]

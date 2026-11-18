@@ -50,6 +50,7 @@ pub(crate) fn world(pathing: Pathing) -> World {
         operational_range: None,
         control_range: None,
         primary: None,
+        morale: 1.0,
         unpacks: None,
     };
     World::from_organizations(Sides::default(), pathing, &[organization])
@@ -86,6 +87,7 @@ pub(crate) fn vehicle(acceleration: f32, turn_rate: f32, trailer: Option<tgmap::
         operational_range: None,
         control_range: None,
         primary: None,
+        morale: 1.0,
         unpacks: None,
     };
     World::from_organizations(
@@ -122,6 +124,7 @@ pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
         projectile: None,
         flight: None,
         bombard: false,
+        morale_loss: 0.0,
     }
 }
 
@@ -170,6 +173,7 @@ pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> Wo
                 operational_range: Some(34.0),
                 control_range: Some(18.0),
                 primary: None,
+                morale: 1.0,
                 unpacks: None,
             }
         })
@@ -402,6 +406,7 @@ pub(crate) fn truck() -> tgmap::Organization {
         operational_range: None,
         control_range: None,
         primary: Some(0),
+        morale: 1.0,
         unpacks: Some(Unpacks {
             building: depot,
             room: Shape::Rect {

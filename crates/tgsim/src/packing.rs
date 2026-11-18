@@ -115,6 +115,7 @@ impl World {
             }
             let b = self.buildings.len();
             self.organizations[r].unpacked_into = Some(b);
+            self.refigure_morale(r, true);
             // It keeps the truck's number rather than taking one.
             self.push_buildings(std::slice::from_ref(&building), false);
             self.buildings[b].number = self.organizations[r].number;
@@ -245,6 +246,8 @@ impl World {
             unit.left = None;
             unit.stand_at(tgmap::from_local(position, facing, offset), facing);
         }
+        // Its leader is back afresh, and its morale with it.
+        self.refigure_morale(organization, true);
     }
 }
 

@@ -1753,6 +1753,7 @@ mod tests {
                 life: 0.0,
             }),
             bombard: false,
+            morale_loss: 0.0,
         }
     }
 

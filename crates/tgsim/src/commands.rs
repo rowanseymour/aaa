@@ -30,11 +30,13 @@ impl World {
     /// would refuse it for, without carrying it out.
     pub fn check(&self, player: u32, command: &Command) -> Result<(), Refused> {
         self.playable(player)?;
+        self.heeded(command)?;
         match *command {
+            Command::Run { organization, .. } => self.may_run(player, organization),
+            Command::Rout { organization } => self.may_rout(player, organization),
             Command::Move { organization, .. }
             | Command::Guard { organization, .. }
             | Command::Attack { organization, .. }
-            | Command::Run { organization, .. }
             | Command::Stop { organization }
             | Command::Formation { organization, .. } => {
                 Ok(self.may_command(player, organization)?)
@@ -92,10 +94,20 @@ impl World {
     /// Carries out `command` from `player`, unless it's refused.
     pub fn apply(&mut self, player: u32, command: Command) -> Result<(), Refused> {
         self.playable(player)?;
+        self.heeded(&command)?;
+        let steering = steered(&command);
         match command {
             Command::Move { organization, to } => self.order_move(player, organization, to)?,
             Command::Attack { organization, to } => self.order_attack(player, organization, to)?,
-            Command::Run { organization, to } => self.order_run(player, organization, to)?,
+            Command::Run { organization, to } => {
+                self.may_run(player, organization)?;
+                self.flee(organization);
+                self.order_run(player, organization, to)?
+            }
+            Command::Rout { organization } => {
+                self.may_rout(player, organization)?;
+                self.rout(organization);
+            }
             Command::Pursue {
                 organization,
                 enemy,
@@ -185,7 +197,21 @@ impl World {
                 self.special_operation(player, operation, at, on)?
             }
         }
+        // An order cuts a reform short.
+        if let Some(r) = steering {
+            self.settle(r);
+        }
         Ok(())
+    }
+
+    /// Whether the organization `command` is to has the morale to carry
+    /// it out: those that move or fight it, or disband it, aren't taken
+    /// while it routs or is exhausted.
+    fn heeded(&self, command: &Command) -> Result<(), Refused> {
+        match steered(command) {
+            Some(organization) => self.may_steer(organization),
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn may_command(&self, player: u32, organization: usize) -> Result<(), NotYours> {
@@ -524,6 +550,23 @@ impl World {
     }
 }
 
+/// The organization `command` moves, fights or disbands, if it's one of
+/// those orders.
+fn steered(command: &Command) -> Option<usize> {
+    match *command {
+        Command::Move { organization, .. }
+        | Command::Attack { organization, .. }
+        | Command::Run { organization, .. }
+        | Command::Pursue { organization, .. }
+        | Command::Guard { organization, .. }
+        | Command::GuardPiece { organization, .. }
+        | Command::Stop { organization }
+        | Command::Unpack { organization, .. }
+        | Command::Disband { organization } => Some(organization),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::testing::*;
@@ -608,6 +651,7 @@ mod tests {
             operational_range: None,
             control_range: None,
             primary: None,
+            morale: 1.0,
             unpacks: None,
         };
         let r = w.add_organization(&second);

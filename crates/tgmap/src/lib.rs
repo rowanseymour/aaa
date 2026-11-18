@@ -24,10 +24,11 @@ pub mod triggers {
     pub use tgck::map::{Element, Parameter, Trigger, Triggers, Value};
 }
 pub use tgdata::{
-    Affliction, Airlift, Amounts, Damage, DeployPoints, Economy, EconomyRules, Fall, Fighter,
-    Flight, FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Logistics, Lookout,
-    Operation, Requires, Research, ResourceKind, Shape, Sight, Strike, Summon, Supply,
-    SupplyEffect, SupplyRules, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
+    Affliction, Airlift, Amounts, Damage, DeployPoints, EXHAUSTED, Economy, EconomyRules, Fall,
+    Fighter, Flight, FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Logistics, Lookout,
+    MoraleEffect, MoraleRules, Operation, REFORMING, ROUTING, Requires, Research, ResourceKind,
+    RoutRules, Shape, Sight, Strike, Summon, Supply, SupplyEffect, SupplyRules, Targets,
+    TerrainEffect, TerrainRules, Turret, Weapon,
 };
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};

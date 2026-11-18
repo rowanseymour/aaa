@@ -1887,6 +1887,8 @@ fn refused_why(refused: tgsim::Refused) -> &'static str {
         tgsim::Refused::OutOfSupply => "Out of supply",
         tgsim::Refused::Understrength => "Needs at least two units",
         tgsim::Refused::Dead => "Not alive",
+        tgsim::Refused::Routing => "Routing",
+        tgsim::Refused::Exhausted => "Exhausted",
     }
 }
 
