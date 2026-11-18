@@ -600,6 +600,24 @@ impl Models {
         self.measures(path)?.points.get(name).map(bevy_transform)
     }
 
+    /// How far `thing`'s remains sink before they're taken off: the top of
+    /// its model for a `building`, else the diagonal of its ground size or,
+    /// where the data sets none, the top of its model.
+    pub fn remains_depth(&mut self, thing: &Thing, building: bool) -> f32 {
+        let Some(view) = self.view(&thing.template) else {
+            return 0.0;
+        };
+        if let Some([across, along]) = view.ground_size.filter(|_| !building) {
+            return across.hypot(along);
+        }
+        let scale = view.scale * thing.scale;
+        let Some(path) = self.model_path(thing, None).map(str::to_string) else {
+            return 0.0;
+        };
+        self.extent(&path)
+            .map_or(0.0, |[_, high]| high.max(0.0) * scale)
+    }
+
     /// The heights of the lowest and highest of the meshes of the model at
     /// `path`, as modelled, in its own units.
     pub fn extent(&mut self, path: &str) -> Option<[f32; 2]> {
@@ -1047,7 +1065,7 @@ impl Models {
                 continue;
             };
             match a.kind {
-                AnimationKind::Die => clips.deaths.push((kf, a.length)),
+                AnimationKind::Die => clips.deaths.push((a.ids.clone(), kf, a.length)),
                 _ => clips.abilities.push((a.ids.clone(), kf, a.length)),
             }
         }

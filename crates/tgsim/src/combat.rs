@@ -41,9 +41,19 @@ pub struct Struck {
     pub by: u32,
     /// The tick it landed on.
     pub at: u64,
+    /// Its main damage's [`tgmap::Death::filter`].
+    pub filter: i32,
+    /// The health it took.
+    pub damage: f32,
 }
 
-crate::hash::digest!(Struck { from, by, at });
+crate::hash::digest!(Struck {
+    from,
+    by,
+    at,
+    filter,
+    damage
+});
 
 /// Damage a shot does to what it lands on, for the side that fired it.
 pub(crate) struct Hit {
@@ -56,12 +66,14 @@ pub(crate) struct Hit {
     bombard: Option<f32>,
     /// The morale it takes from the organization of the unit it lands on.
     morale: f32,
+    /// Its main damage's kind.
+    kind: Option<Id>,
 }
 
 impl Hit {
     /// A hit of `by`'s special operation: the side's as a whole, so neither
     /// bombardment nor drawing fire.
-    pub(crate) fn strike(target: Target, amount: f32, by: u32) -> Hit {
+    pub(crate) fn strike(target: Target, amount: f32, by: u32, kind: Option<Id>) -> Hit {
         Hit {
             target,
             amount,
@@ -69,6 +81,7 @@ impl Hit {
             by,
             bombard: None,
             morale: 0.0,
+            kind,
         }
     }
 }
@@ -475,10 +488,15 @@ impl World {
     fn land(&mut self, hit: Hit) {
         let ticks = self.ticks;
         let window = (self.rules.siege_seconds / TICK).round() as u64;
+        let filters = &self.rules.damage_filters;
         let struck = Struck {
             from: hit.from,
             by: hit.by,
             at: ticks,
+            filter: (hit.kind.as_ref())
+                .and_then(|k| filters.get(k).copied())
+                .unwrap_or(tgmap::ANY_DAMAGE),
+            damage: hit.amount,
         };
         match hit.target {
             Target::Unit(u) => {
@@ -880,6 +898,7 @@ impl World {
                     by,
                     bombard,
                     morale: weapon.morale_loss,
+                    kind: weapon.damage.first().map(|d| d.kind.clone()),
                 });
             }
             return;
@@ -918,6 +937,7 @@ impl World {
             by,
             bombard,
             morale: weapon.morale_loss,
+            kind: weapon.damage.first().map(|d| d.kind.clone()),
         }));
     }
 }
@@ -1685,6 +1705,7 @@ mod tests {
             by,
             bombard: None,
             morale: 0.75,
+            kind: None,
         };
         // Player 3 is player 1's ally.
         w.land(hit(3));

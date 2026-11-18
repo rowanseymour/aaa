@@ -212,7 +212,12 @@ impl World {
                 .filter(|(targets, _)| targets.allow(flags()))
                 .map(|(_, d)| d.amount * (1.0 - resistance(f, &ground, &d.kind)))
                 .sum();
-            hits.push(Hit::strike(target, main + extra, player));
+            hits.push(Hit::strike(
+                target,
+                main + extra,
+                player,
+                strike.damage.first().map(|d| d.kind.clone()),
+            ));
             if let Target::Unit(u) = target {
                 units.push(u);
             }

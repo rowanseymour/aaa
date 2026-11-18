@@ -239,6 +239,7 @@ impl World {
     /// what its killer's organization wins for the kill, if a unit killed
     /// it, and for the organization if it was the last of it.
     pub(crate) fn mourn(&mut self, u: usize) {
+        self.pick_death(u);
         let rules = self.rules.morale_rules;
         let template = self.units[u].template.clone();
         let value = self

@@ -213,6 +213,9 @@ pub struct BodyComponent {
     pub defense_icon: Option<String>,
     pub captureable: Option<bool>,
     pub destructible: Option<bool>,
+    /// Seconds its remains lie after it dies, then sink for `sink_time`.
+    pub rot_time: Option<f32>,
+    pub sink_time: Option<f32>,
 }
 
 /// What makes a building a city centre, claiming a zone of the map. A city
@@ -758,6 +761,20 @@ pub struct Animation {
     pub length: Option<f32>,
     /// For moving animations, how far one play carries the unit.
     pub walk_distance: Option<f32>,
+    /// For deaths, the [`DamageType::damage_filter`] of the last hit it
+    /// plays after, -1 for any, and the least damage that hit did.
+    pub damage_filter: Option<i32>,
+    pub damage_threshold: Option<f32>,
+    /// For deaths, how likely it is beside others that fit as well.
+    pub weight: Option<f32>,
+}
+
+/// A kind of damage, from `Game/damage_types.tgi`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DamageType {
+    pub ids: Option<Id>,
+    /// The number death animations pick it out by.
+    pub damage_filter: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

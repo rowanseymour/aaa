@@ -46,6 +46,9 @@ pub struct View {
     /// How far from its middle its normal model reaches over the ground,
     /// where the data says rather than leaving it to be measured.
     pub ground_reach: Option<f32>,
+    /// How far across and along the ground its normal model reaches, where
+    /// the data sets it.
+    pub ground_size: Option<[f32; 2]>,
 }
 
 /// A model of a face for the object display to show, by its own camera.
@@ -91,6 +94,7 @@ impl View {
             portrait: None,
             faction_portrait: false,
             ground_reach: None,
+            ground_size: None,
         }
     }
 
@@ -373,6 +377,9 @@ impl GameData {
                 .find_map(|a| a.ground_size)
                 .map(|[across, along]| across.max(along))
                 .filter(|reach| *reach > 0.0),
+            ground_size: (view.aspect_normal.iter())
+                .find_map(|a| a.ground_size)
+                .filter(|s| s.iter().any(|&d| d > 0.0)),
         })
     }
 }

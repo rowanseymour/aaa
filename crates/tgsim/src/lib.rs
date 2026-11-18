@@ -29,6 +29,7 @@ mod packing;
 pub mod path;
 mod production;
 mod properties;
+mod remains;
 mod research;
 mod rules;
 mod schedule;
@@ -64,6 +65,7 @@ pub use objectives::{Objective, Objectives, Standing};
 pub use outcome::Fate;
 pub use packing::unpack_site;
 pub use properties::Held;
+pub use remains::Remains;
 pub use research::{Lacking, Researchable};
 pub use rules::Rules;
 pub use schedule::{
@@ -512,6 +514,9 @@ pub struct Unit {
     pub died: Option<u64>,
     /// While it's under siege, the tick that may end on.
     pub besieged: Option<u64>,
+    /// The death it died, by its ids, which plays before its remains start
+    /// lying.
+    pub death: Option<Id>,
     /// The last hit an enemy dealt it.
     pub struck: Option<Struck>,
     /// How it left the map without dying, if it has.
@@ -593,6 +598,9 @@ pub struct Building {
     inside: BTreeMap<Target, Footing>,
     /// While it's under siege, the tick that may end on.
     pub besieged: Option<u64>,
+    /// The sides that remember its remains under the fog, once they've
+    /// been taken off the map, until they see the place again.
+    pub remembered: Vec<u32>,
     /// The last hit an enemy dealt it.
     pub struck: Option<Struck>,
     /// Where each of its fighter's turrets points.
@@ -1084,6 +1092,7 @@ impl World {
         self.lead_sides();
         self.look();
         self.ticks += 1;
+        self.clear_remains();
         self.run_triggers();
         self.settle_outcomes();
         self.clear_out_resigned();
@@ -1208,7 +1217,7 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, acceleration, turn_rate, turn_radius, trailer, closing, health,
     health_factor,
-    fired_ago, target, shot, died, besieged, struck, left, awaited, descent,
+    fired_ago, target, shot, died, death, besieged, struck, left, awaited, descent,
 } skip {
     // Its template's.
     speed_max,
@@ -1230,7 +1239,7 @@ digest!(Building {
     id, template, number, owner, position, facing, health, health_factor, fired_ago, target,
     noticed, awake,
     inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
-    captured, unpacked_from, zone, members, supply, properties, created,
+    captured, unpacked_from, zone, members, supply, properties, created, remembered,
 } skip {
     // Its template's, or as the map has it.
     fighter, deploy, organization, obstacle,
