@@ -15,6 +15,7 @@ use bevy::window::{
 };
 use bevy::winit::WINIT_WINDOWS;
 use raw_window_handle::RawDisplayHandle;
+use serde::{Deserialize, Serialize};
 use tgdata::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 use tgrender::camera::RtsCamera;
 
@@ -145,6 +146,13 @@ impl Options {
         let chosen = self.hotkeys.as_ref()?;
         self.configurations.iter().find(|c| c.id == *chosen)
     }
+
+    /// Uses the set of hotkeys with the id `id`, if the game has one.
+    pub fn choose_hotkeys(&mut self, id: &str) {
+        if let Some(c) = self.configurations.iter().find(|c| c.id.as_str() == id) {
+            self.hotkeys = Some(c.id.clone());
+        }
+    }
 }
 
 /// Which list of choices is open.
@@ -240,8 +248,9 @@ fn listed<T: Listed, M>(
 }
 
 /// How the window takes the screen.
-#[derive(PartialEq, Clone, Copy, Debug)]
-enum Display {
+#[derive(PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Display {
     /// With a frame, at the size chosen.
     Windowed,
     /// Without a frame, covering the screen at the size the screen is
@@ -267,7 +276,7 @@ impl Listed for Display {
 }
 
 impl Display {
-    fn of(mode: WindowMode) -> Self {
+    pub fn of(mode: WindowMode) -> Self {
         match mode {
             WindowMode::Windowed => Display::Windowed,
             WindowMode::BorderlessFullscreen(_) => Display::Borderless,
@@ -284,11 +293,23 @@ impl Display {
             }
         }
     }
+
+    /// As [`mode`](Self::mode), for a window not yet on any screen.
+    pub fn starting_mode(self) -> WindowMode {
+        match self.mode() {
+            WindowMode::BorderlessFullscreen(_) => {
+                WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
+            }
+            WindowMode::Fullscreen(_, v) => WindowMode::Fullscreen(MonitorSelection::Primary, v),
+            m => m,
+        }
+    }
 }
 
 /// How the edges of the map's 3D scene are smoothed.
-#[derive(Resource, Default, PartialEq, Clone, Copy, Debug)]
-enum AntiAliasing {
+#[derive(Resource, Default, PartialEq, Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum AntiAliasing {
     Off,
     /// Four samples to each pixel: the one count every GPU wgpu runs on
     /// takes.
@@ -344,7 +365,7 @@ struct DisplayHolder;
 
 /// The window's size before it last took the whole screen, to go back to.
 #[derive(Resource, Default)]
-struct WindowedSize(Option<Vec2>);
+pub struct WindowedSize(pub Option<Vec2>);
 
 /// Where the choice of the window's size goes.
 #[derive(Component)]
@@ -429,7 +450,7 @@ impl Plugin for OptionsPlugin {
             .add_systems(OnEnter(Screen::Options), screen)
             .add_observer(set_volume)
             .add_observer(type_in_nickname)
-            .add_systems(PreUpdate, follow_window)
+            .add_systems(PreUpdate, (no_fullscreen_on_wayland, follow_window))
             .add_systems(PostUpdate, anti_alias)
             .add_systems(
                 Update,
@@ -860,6 +881,23 @@ fn choose_display(
     *open = Open::Nothing;
 }
 
+/// Has a window that starts fullscreen on Wayland, which has no exclusive
+/// fullscreen and so ignores it, take the screen borderless instead.
+fn no_fullscreen_on_wayland(
+    mut window: Query<(&mut Window, Ref<RawHandleWrapper>), With<PrimaryWindow>>,
+) {
+    let Ok((mut window, handle)) = window.single_mut() else {
+        return;
+    };
+    if !handle.is_added() {
+        return;
+    }
+    let wayland = matches!(handle.get_display_handle(), RawDisplayHandle::Wayland(_));
+    if wayland && Display::of(window.mode) == Display::Fullscreen {
+        window.mode = Display::Borderless.mode();
+    }
+}
+
 /// Keeps the window's mode to what it is when the platform changes it, as
 /// on leaving fullscreen by the system's own shortcut, so the options say
 /// what it is and choosing the mode it had again isn't taken as no change.
@@ -891,7 +929,7 @@ fn follow_window(
 }
 
 /// A window's size as the options show it, e.g. `1280x720`.
-fn size_of(window: &Window) -> UVec2 {
+pub fn size_of(window: &Window) -> UVec2 {
     window.size().round().as_uvec2()
 }
 

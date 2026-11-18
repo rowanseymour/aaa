@@ -17,3 +17,6 @@ tgsim = { path = "../tgsim" }
 tgck = { path = "../tgck" }
 bevy = { version = "0.20", default-features = false, features = ["3d", "ui", "tga", "dds", "bevy_audio", "wav", "mp3", "custom_cursor"] }
 raw-window-handle = "0.6"
+serde = { version = "1", features = ["derive"] }
+toml = "1"
+directories = "6"
