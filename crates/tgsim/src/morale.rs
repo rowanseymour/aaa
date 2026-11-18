@@ -290,7 +290,7 @@ impl World {
         for u in organization.units.clone() {
             let unit = &mut self.units[u];
             unit.target = None;
-            unit.closing = false;
+            unit.closing = None;
         }
         self.break_formation(r);
         self.run_away(r);
@@ -990,6 +990,10 @@ mod tests {
     #[test]
     fn spent_regiments_are_exhausted_after_their_rout_and_take_no_orders() {
         let mut w = standoff();
+        // Neither takes on the other.
+        for r in &mut w.organizations {
+            r.formations[0].aggressive = false;
+        }
         w.organizations[0].morale = 1.0;
         // Out of a fight, it routs as it falls to 0.
         w.lose_morale(0, 5.0, false);

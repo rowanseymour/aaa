@@ -220,7 +220,8 @@ mod tests {
         bunker.fighter.capturable = true;
         let mut pillbox = building(21, 2, [20.0, 10.0]);
         pillbox.fighter.destructible = true;
-        let house = building(22, 2, [0.0, 10.0]);
+        let mut house = building(22, 2, [0.0, 10.0]);
+        house.fighter.destructible = false;
         let mut w = siege(&[bunker, pillbox, house]);
         assert!(!w.pathing.passable(Tile::new(10, 5), Domain::Land));
         run(&mut w, 30.0);
@@ -245,6 +246,8 @@ mod tests {
     #[test]
     fn cities_go_to_whoever_holds_their_zone() {
         let mut w = siege(&city());
+        // Walking into its zone, not stopping to fight it.
+        w.organizations[0].formations[0].aggressive = false;
         run(&mut w, 1.0);
         assert_eq!(w.buildings[0].owner, 2);
         w.apply(
@@ -279,6 +282,7 @@ mod tests {
         // Its member 31 comes after it, and nothing has the id 99.
         w.buildings[0].members.push(99);
         w.add_buildings(&city()[1..]);
+        w.organizations[0].formations[0].aggressive = false;
         w.apply(
             1,
             Command::Move {

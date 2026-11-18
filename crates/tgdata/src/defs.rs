@@ -549,6 +549,10 @@ pub struct Modifier {
 pub struct PerformerComponent {
     #[serde(default)]
     pub check_damage_resistance: bool,
+    /// Added to the score of each of its abilities by how it rates.
+    pub move_bonus: Option<f32>,
+    pub use_bonus: Option<f32>,
+    pub wait_bonus: Option<f32>,
     #[serde(default)]
     pub ability: Vec<Ability>,
     /// How high above its user an attack starts, unless it says.
@@ -607,6 +611,21 @@ pub struct Ability {
     pub spawn_position: Option<[f32; 3]>,
     /// Seconds after its animation before its user can act again.
     pub reload_time: Option<f32>,
+    /// How its user scores it against others: `priority` times the
+    /// weight for how it rates, plus the bonus for that.
+    pub priority: Option<f32>,
+    pub move_weight: Option<f32>,
+    pub use_weight: Option<f32>,
+    pub wait_weight: Option<f32>,
+    pub move_bonus: Option<f32>,
+    pub use_bonus: Option<f32>,
+    pub wait_bonus: Option<f32>,
+    /// Comma-separated properties its user must hold to have it.
+    pub required_properties: Option<String>,
+    /// The levels its user's organization must be within to have it; -1
+    /// for no limit.
+    pub required_experience_min: Option<i32>,
+    pub required_experience_max: Option<i32>,
     pub ability_definition: Option<AbilityDefinition>,
 }
 
@@ -1268,6 +1287,13 @@ pub struct SVars {
     pub under_siege_recently_damaged_seconds: Option<f32>,
     #[serde(rename = "KillCreditTimeout")]
     pub kill_credit_timeout: Option<f32>,
+    /// Added to a target's score for a unit it's attacking.
+    #[serde(rename = "AbilityScoreAttackerBonus")]
+    pub ability_score_attacker_bonus: Option<f32>,
+    /// Whether a regiment's attack target comes before all else its
+    /// members could fire on.
+    #[serde(rename = "KillTargetIsHighestPriority")]
+    pub kill_target_is_highest_priority: Option<bool>,
     /// Attack efficiency a second a regiment's gains while below its
     /// target.
     #[serde(rename = "AttackEfficiencyPointsPerSecondClimbing")]

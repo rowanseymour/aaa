@@ -200,6 +200,12 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(seconds) = game.kill_credit_seconds() {
         rules.kill_credit_seconds = seconds;
     }
+    if let Some(bonus) = game.attacker_bonus() {
+        rules.attacker_bonus = bonus;
+    }
+    if let Some(first) = game.attack_target_first() {
+        rules.attack_target_first = first;
+    }
     let mut world = World::new(&map, rules);
     world.set_fog(setup.fog.unwrap_or_else(|| game.fog_setting()));
     let recharges = game.operation_recharges();

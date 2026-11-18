@@ -48,8 +48,8 @@ pub use audio::{
     MusicSettings, ObjectAudio, SoundSwitches, Volumes,
 };
 pub use combat::{
-    AimHeights, Body, Damage, Does, Fighter, Flight, FlightKind, PropertyTypes, Shape, Targets,
-    Turret, Weapon, WeaponHit,
+    AimHeights, Body, Choice, Damage, Does, Fighter, Flight, FlightKind, PropertyTypes, Ratings,
+    Shape, Targets, Turret, Weapon, WeaponHit,
 };
 pub use combat_value::{CombatAbility, CombatProfile, CombatValueRules};
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, ResourceKind, ResourceRole, Supply};
@@ -564,6 +564,20 @@ impl GameData {
     /// `KillCreditTimeout`, in seconds.
     pub fn kill_credit_seconds(&self) -> Option<f32> {
         self.svars().iter().find_map(|v| v.kill_credit_timeout)
+    }
+
+    /// `AbilityScoreAttackerBonus`.
+    pub fn attacker_bonus(&self) -> Option<f32> {
+        self.svars()
+            .iter()
+            .find_map(|v| v.ability_score_attacker_bonus)
+    }
+
+    /// `KillTargetIsHighestPriority`.
+    pub fn attack_target_first(&self) -> Option<bool> {
+        self.svars()
+            .iter()
+            .find_map(|v| v.kill_target_is_highest_priority)
     }
 
     /// How far around them city centres hold sway, by template id, including

@@ -58,6 +58,11 @@ pub struct Fighter {
     /// properties or `invulnerable` from its flags.
     pub flags: Vec<Id>,
     pub weapons: Vec<Weapon>,
+    /// Added to each of its weapons' scores, by how the weapon rates.
+    pub bonus: Ratings,
+    /// Whether it scores weapons by how little the target resists their
+    /// main damage, as well as by their own [`Choice`].
+    pub check_resistance: bool,
     /// How high above it its attacks start, where they don't say.
     pub attack_height: f32,
     /// For one that defends itself, how near something must come for it to
@@ -140,6 +145,51 @@ pub struct Weapon {
     pub vorpal: bool,
     /// Its main damage ignores its user's attack efficiency.
     pub spell: bool,
+    pub choice: Choice,
+}
+
+/// What decides whether a unit picks a weapon over its others.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Choice {
+    pub priority: f32,
+    /// What the priority is multiplied by, by how the weapon rates.
+    pub weight: Ratings,
+    /// What's added to that.
+    pub bonus: Ratings,
+    /// The properties its user must all hold to have it.
+    pub requires: Vec<Id>,
+    /// The lowest and highest level its user's organization may be at to
+    /// have it, by index into its levels.
+    pub levels: [Option<usize>; 2],
+    /// Seconds a use takes, its animation and reloading after, during
+    /// which its user does nothing else.
+    pub lasts: f32,
+}
+
+impl Default for Choice {
+    fn default() -> Self {
+        Choice {
+            priority: 0.0,
+            weight: Ratings {
+                move_into_range: 1.0,
+                use_now: 1.0,
+                wait: 1.0,
+            },
+            bonus: Ratings::default(),
+            requires: Vec::new(),
+            levels: [None; 2],
+            lasts: 0.0,
+        }
+    }
+}
+
+/// An amount for each way a weapon can rate against a target it can be
+/// used on.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Ratings {
+    pub move_into_range: f32,
+    pub use_now: f32,
+    pub wait: f32,
 }
 
 impl Weapon {
@@ -548,6 +598,15 @@ pub(crate) fn fighter(
         .map(|t| (t.turret_ids.as_ref(), turret(name, t)))
         .collect();
     fighter.turrets = turrets.iter().map(|(_, t)| t.clone()).collect();
+    if let Some(p) = &thing.performer_component {
+        fighter.check_resistance = p.check_damage_resistance;
+        fighter.bonus = Ratings {
+            move_into_range: p.move_bonus.unwrap_or(0.0),
+            use_now: p.use_bonus.unwrap_or(0.0),
+            wait: p.wait_bonus.unwrap_or(0.0),
+        };
+    }
+    let animations = (thing.character_component.as_ref()).map_or(&[][..], |c| &c.animation);
     let performs = thing.performer_component.iter().flat_map(|p| &p.ability);
     let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
     let abilities = performs.chain(defends);
@@ -598,9 +657,45 @@ pub(crate) fn fighter(
             bombard: d.flags.iter().any(|f| f.bombard),
             vorpal: d.flags.iter().any(|f| f.vorpal),
             spell: d.flags.iter().any(|f| f.spell),
+            choice: choice(a, animations),
         });
     }
     Some(fighter)
+}
+
+/// How a unit weighs ability `a` against its others, used by something
+/// animated by `animations`.
+fn choice(a: &defs::Ability, animations: &[defs::Animation]) -> Choice {
+    let base = Choice::default();
+    let played = (a.animation1.as_deref())
+        .and_then(|ids| animations.iter().find(|n| crate::supply::is(&n.ids, ids)))
+        .and_then(|n| n.length)
+        .unwrap_or(0.0);
+    let level = |l: Option<i32>| l.and_then(|l| usize::try_from(l).ok());
+    Choice {
+        priority: a.priority.unwrap_or(base.priority),
+        weight: Ratings {
+            move_into_range: a.move_weight.unwrap_or(base.weight.move_into_range),
+            use_now: a.use_weight.unwrap_or(base.weight.use_now),
+            wait: a.wait_weight.unwrap_or(base.weight.wait),
+        },
+        bonus: Ratings {
+            move_into_range: a.move_bonus.unwrap_or(0.0),
+            use_now: a.use_bonus.unwrap_or(0.0),
+            wait: a.wait_bonus.unwrap_or(0.0),
+        },
+        requires: (a.required_properties.as_deref().unwrap_or(""))
+            .split(',')
+            .map(str::trim)
+            .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("null"))
+            .map(Id::from)
+            .collect(),
+        levels: [
+            level(a.required_experience_min),
+            level(a.required_experience_max),
+        ],
+        lasts: played + a.reload_time.unwrap_or(0.0).max(0.0),
+    }
 }
 
 /// What an ability's effects do as a weapon fires it, those that damage or
@@ -893,6 +988,49 @@ mod tests {
             offset: [1.0, -2.0],
         };
         assert_eq!(hq.turrets, [other, turret]);
+    }
+
+    #[test]
+    fn weapons_take_how_their_user_chooses_them_from_their_abilities() {
+        let parsed = tgi::parse(
+            "[Template Ability]\n{\n\tpriority = 0\n\tmove_bonus = 0\n\tuse_bonus = 0\n}\n\
+             [Template Gun inherit=Ability]\n{\n\tpriority = 1\n\twait_weight = 0\n\
+             \tmove_bonus = 3\n\tuse_bonus = 50\n}\n\
+             [Thing]\n{\n\tIDS = banzai\n\t[BodyComponent]\n\thealth = 100\n\
+             \t[CharacterComponent]\n\t{\n\t\t[Animation]\n\t\t{\n\t\t\tids = charge\n\
+             \t\t\tlength = 0.75\n\t\t}\n\t}\n\
+             \t[PerformerComponent]\n\t{\n\t\tcheck_damage_resistance = true\n\t\tuse_bonus = 2\n\
+             \t\t[Ability Template=Gun]\n\t\t{\n\t\t\tanimation1 = charge\n\t\t\treload_time = 0.5\n\
+             \t\t\tuse_bonus = 110\n\t\t\trequired_properties = tech_napalm, veteran\n\
+             \t\t\trequired_experience_min = 1\n\t\t\trequired_experience_max = -1\n\
+             \t\t\t[AbilityDefinition]\n\t\t\t{\n\t\t\t\trange = 0.5\n\
+             \t\t\t\t[Effect]\n\t\t\t\ttype = MAIN_DAMAGE\n\t\t\t\tdamage_type_IDS = armor_piercing\n\
+             \t\t\t\tamount = 200\n\t\t\t}\n\t\t}\n\t}\n}\n",
+        );
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        let man = fighter(&thing, &HashMap::new()).unwrap();
+        assert!(man.check_resistance);
+        assert_eq!(man.bonus.use_now, 2.0);
+        let choice = &man.weapons[0].choice;
+        assert_eq!(choice.priority, 1.0);
+        let weight = &choice.weight;
+        assert_eq!(
+            [weight.move_into_range, weight.use_now, weight.wait],
+            [1.0, 1.0, 0.0]
+        );
+        let bonus = &choice.bonus;
+        assert_eq!(
+            [bonus.move_into_range, bonus.use_now, bonus.wait],
+            [3.0, 110.0, 0.0]
+        );
+        assert_eq!(
+            choice.requires,
+            [Id::from("tech_napalm"), Id::from("veteran")]
+        );
+        assert_eq!(choice.levels, [Some(1), None]);
+        assert_eq!(choice.lasts, 1.25);
     }
 
     #[test]

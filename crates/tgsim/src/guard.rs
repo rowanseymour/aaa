@@ -240,6 +240,8 @@ mod tests {
             at_war(),
         );
         w.organizations[0].control_range = 4.0;
+        // The enemy takes on nothing unless told to.
+        w.organizations[2].formations[0].aggressive = false;
         let guard = Command::GuardPiece {
             organization: 0,
             piece: Piece::Organization(1),

@@ -87,6 +87,7 @@ impl World {
                 || organization.engaged.contains(&enemy)
                 || !self.within_range(r, enemy)
                 || self.destroyed(r)
+                || !self.can_engage(r, enemy)
             {
                 continue;
             }
@@ -105,89 +106,48 @@ impl World {
         }
     }
 
-    /// Sends each armed member of an engaged organization that can fire on
-    /// nothing after the enemy it would fire on first, and stops those
-    /// that have come within reach to fire.
+    /// Moves each unit that's chosen to go after its target until it's
+    /// within the range it's going for. One whose target is gone stops
+    /// where it is to take on the next, and goes back to its place only
+    /// once there's nothing left to pick. Its way is planned afresh only
+    /// once the target has drifted [`PURSUIT_DRIFT`] off where it was
+    /// headed.
     pub(crate) fn close_in(&mut self) {
         for u in 0..self.units.len() {
             let unit = &self.units[u];
-            let r = unit.organization;
-            if !unit.alive() || self.organizations[r].engaged.is_empty() {
+            let Some(range) = unit.closing.filter(|_| unit.alive()) else {
                 continue;
-            }
-            let Some(fighter) = unit.fighter.as_ref() else {
+            };
+            let r = unit.organization;
+            let Some(t) = unit.target.filter(|&t| self.fighter(t).is_some()) else {
+                // Only looked at, so the match's chances are left as they are.
+                if self.decide_attack(u, &mut self.rng.clone()).is_some() {
+                    self.units[u].halt();
+                    continue;
+                }
+                let place = self.formation_places(r).into_iter().find(|&(v, _)| v == u);
+                let facing = self.organizations[r].facing;
+                match place {
+                    Some((_, place)) => self.take_place(u, place, facing, false),
+                    None => self.units[u].closing = None,
+                }
                 continue;
             };
             let s = Target::Unit(u);
-            let weapons = &fighter.weapons;
-            if weapons
-                .iter()
-                .any(|w| self.targets().any(|t| self.can_hit(s, w, t)))
-            {
-                if unit.closing {
-                    let unit = &mut self.units[u];
-                    unit.halt();
-                    unit.closing = false;
-                }
+            if self.gap(s, t).is_none_or(|gap| gap <= range) {
+                self.units[u].halt();
                 continue;
             }
-            // Those still taking their places carry on.
-            if unit.moving() && !unit.closing {
+            let goal = self.position(t);
+            let on_course = unit.path.first().is_some_and(|&end| {
+                squared_distance(end, goal) <= PURSUIT_DRIFT * squared_distance(unit.position, goal)
+            });
+            if on_course {
                 continue;
             }
-            let Some((goal, range)) = self.quarry(u) else {
-                continue;
-            };
-            if unit.closing
-                && unit
-                    .path
-                    .first()
-                    .is_some_and(|&end| self.reach(end, goal) <= range)
-            {
-                continue;
-            }
-            let way = self.way(u, self.position(goal));
-            let unit = &mut self.units[u];
-            unit.take(way, false);
-            unit.closing = true;
+            let way = self.way(u, goal);
+            self.units[u].take(way, false);
         }
-    }
-
-    /// What a member of an engaged organization goes after when it can fire on
-    /// nothing, with the reach of its longest weapon that fires on it: the
-    /// nearest of the enemy its organization pursues, where that's within its
-    /// operational range, else the nearest of what it's engaged with.
-    fn quarry(&self, u: usize) -> Option<(Target, f32)> {
-        let r = self.units[u].organization;
-        let organization = &self.organizations[r];
-        let s = Target::Unit(u);
-        let from = self.units[u].position;
-        let weapons = &self.units[u].fighter.as_ref()?.weapons;
-        let range = |t: Target| {
-            let ranges = weapons.iter().filter(|w| self.can_target(s, w, t));
-            ranges.map(|w| w.range).max_by(f32::total_cmp)
-        };
-        let nearest = |ts: Vec<Target>| {
-            ts.into_iter()
-                .filter_map(|t| Some((t, range(t)?)))
-                .min_by(|a, b| self.reach(from, a.0).total_cmp(&self.reach(from, b.0)))
-        };
-        let units = |e: usize| self.survivors(e).map(Target::Unit).collect::<Vec<_>>();
-        if let Order::Pursue(e) = organization.order {
-            let here = self.centre(r);
-            let pursued = units(e);
-            let near = pursued
-                .iter()
-                .any(|&t| within_strictly(here, self.position(t), organization.operational_range));
-            if let Some(found) = nearest(pursued).filter(|_| near) {
-                return Some(found);
-            }
-        }
-        let engaged = organization.engaged.iter().flat_map(|&enemy| match enemy {
-            Piece::Organization(e) => units(e),
-            Piece::Building(b) => vec![Target::Building(b)],
-        });
-        nearest(engaged.collect())
     }
 
     /// Whether the enemy organization `e` an organization is pursuing is no
@@ -252,17 +212,29 @@ impl World {
         true
     }
 
+    /// Whether any of the organization at `r`'s members has a weapon for `t`.
+    fn fires_on(&self, r: usize, t: Target) -> bool {
+        self.survivors(r).any(|u| {
+            let f = self.units[u].fighter.iter().flat_map(|f| &f.weapons);
+            f.into_iter()
+                .any(|w| self.can_target(Target::Unit(u), w, t))
+        })
+    }
+
+    /// Whether the organization at `r` can engage `enemy`: something of it
+    /// is still there that one of its members has a weapon for.
+    fn can_engage(&self, r: usize, enemy: Piece) -> bool {
+        match enemy {
+            Piece::Organization(e) => self.survivors(e).any(|u| self.fires_on(r, Target::Unit(u))),
+            Piece::Building(b) => self.fires_on(r, Target::Building(b)),
+        }
+    }
+
     /// The enemies with something within an organization's control range that
     /// its members can fire on.
     fn in_control(&self, r: usize) -> Vec<Piece> {
         let zone = self.control_zone(r);
-        let fires_on = |t: Target| {
-            self.survivors(r).any(|u| {
-                let f = self.units[u].fighter.iter().flat_map(|f| &f.weapons);
-                f.into_iter()
-                    .any(|w| self.can_target(Target::Unit(u), w, t))
-            })
-        };
+        let fires_on = |t: Target| self.fires_on(r, t);
         let mut found = Vec::new();
         for t in self.targets() {
             let enemy = self.piece(t);
@@ -381,7 +353,8 @@ mod tests {
             },
         )
         .unwrap();
-        // In the enemy's range after 4s, at 18.
+        // Engaged by the enemy within its control range, which comes on to
+        // fire.
         run(&mut w, 4.5);
         assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
         assert_eq!(w.organizations[0].current_formation(), 1);
@@ -397,7 +370,7 @@ mod tests {
             },
         )
         .unwrap();
-        run(&mut w, 1.0);
+        run(&mut w, 0.5);
         assert!(near(w.units[0].position, stopped));
         assert!(near(w.units[0].facing, [0.0, 1.0]));
         run(&mut w, 2.0);
@@ -406,37 +379,6 @@ mod tests {
         assert_eq!(w.organizations[0].current_formation(), 0);
         run(&mut w, 15.0);
         assert!(near(w.units[0].position, [30.0, 20.0]));
-    }
-
-    #[test]
-    fn moving_organizations_carry_on_past_what_dies_as_it_fires_on_them() {
-        // A gun that fires on the move and kills outright.
-        let mut gun = rifle(12.0, 500.0);
-        gun.turret = true;
-        let mut w = battle(
-            &[1, 2],
-            vec![soldier(vec![gun]), soldier(vec![rifle(12.0, 10.0)])],
-            at_war(),
-        );
-        w.units[1].position = [10.0, 30.0];
-        w.apply(
-            1,
-            Command::Move {
-                organization: 0,
-                to: [10.0, 60.0],
-            },
-        )
-        .unwrap();
-        // Each fires as the first comes into range, 4s on.
-        let mut before = w.units[0].position;
-        for _ in 0..60 {
-            w.tick();
-            let u = &w.units[0];
-            assert!(w.organizations[0].engaged.is_empty());
-            assert!(near(u.facing, [0.0, 1.0]) && u.position[1] > before[1]);
-            before = u.position;
-        }
-        assert!(!w.units[1].alive() && w.units[0].health < 100.0);
     }
 
     #[test]
@@ -523,11 +465,45 @@ mod tests {
     }
 
     #[test]
+    fn what_dies_as_it_fires_is_not_engaged() {
+        let mut w = battle(
+            &[1, 2],
+            vec![
+                soldier(vec![rifle(12.0, 500.0)]),
+                soldier(vec![rifle(12.0, 10.0)]),
+            ],
+            at_war(),
+        );
+        w.organizations[1].formations[0].aggressive = false;
+        w.organizations[0].engaged = vec![Piece::Organization(1)];
+        w.organizations[1].engaged = vec![Piece::Organization(0)];
+        // Each fires on the other the same tick; one shot kills.
+        w.tick();
+        assert!(!w.units[1].alive() && w.units[0].health == 90.0);
+        assert!(w.organizations[0].engaged.is_empty());
+    }
+
+    #[test]
+    fn organizations_engage_only_what_they_can_fire_on() {
+        let mut w = skirmish();
+        w.units[1].position = [10.0, 16.0];
+        // Its rifle can't hurt tanks, so neither being fired on by one nor
+        // its coming near starts anything.
+        w.units[1].fighter.as_mut().unwrap().flags = vec![Id::from("tank")];
+        w.organizations[0].formations[0].aggressive = true;
+        run(&mut w, 3.0);
+        assert!(w.units[0].health < 100.0);
+        assert!(w.organizations[0].engaged.is_empty());
+    }
+
+    #[test]
     fn passive_organizations_only_answer_fire() {
         let mut w = skirmish();
         w.units[1].position = [10.0, 26.0];
-        // The enemy's within its control range but out of its own reach.
+        // The enemy's within its control range but out of its own reach,
+        // and passive too.
         w.units[1].fighter = Some(soldier(vec![rifle(12.0, 10.0)]));
+        w.organizations[1].formations[0].aggressive = false;
         w.units[0].fighter = Some(soldier(vec![rifle(12.0, 50.0)]));
         run(&mut w, 3.0);
         assert!(w.organizations[0].engaged.is_empty());
@@ -662,15 +638,20 @@ mod tests {
             },
         )
         .unwrap();
+        // Engaged by what fired on it, it goes after its own enemy first,
+        // not yet among what it's engaged with, so picked afresh...
         run(&mut w, 1.0);
         assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
-        assert!(!w.units[0].moving());
-        run(&mut w, 3.0);
-        assert!(!w.units[1].alive());
-        assert!(w.organizations[0].engaged.is_empty());
+        assert_eq!(w.units[0].target, Some(Target::Unit(2)));
         assert!(w.units[0].moving());
+        // ...until near enough to engage it too, when the next hit draws it
+        // onto what fires on it...
+        run(&mut w, 8.0);
+        assert!(!w.units[1].alive() && w.units[2].alive());
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(2)]);
         assert_eq!(w.organizations[0].order, Order::Pursue(2));
-        run(&mut w, 15.0);
+        // ...and then back to its own.
+        run(&mut w, 5.0);
         assert!(!w.units[2].alive());
     }
 
@@ -680,13 +661,15 @@ mod tests {
             &[1, 2, 2],
             vec![
                 soldier(vec![rifle(12.0, 50.0)]),
-                soldier(vec![rifle(12.0, 10.0)]),
+                soldier(vec![rifle(4.0, 10.0)]),
                 soldier(Vec::new()),
             ],
             at_war(),
         );
-        // Armed and nearer, but not the one pursued.
+        // Armed and nearer, but not the one pursued, and short of reaching
+        // it, and passive, so no hit of its own draws it away.
         w.units[1].position = [16.0, 10.0];
+        w.organizations[1].formations[0].aggressive = false;
         w.units[2].position = [10.0, 20.0];
         w.apply(
             1,

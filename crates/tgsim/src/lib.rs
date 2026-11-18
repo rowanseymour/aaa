@@ -5,6 +5,7 @@
 //! their nations, teams and rules) once it's running. Each *player* is a side
 //! in it, controlled by a person or an AI.
 
+mod abilities;
 mod attach;
 mod capture;
 mod combat;
@@ -441,6 +442,16 @@ pub enum Order {
     Pursue(usize),
 }
 
+/// A number from 0 up to 1 drawn from `rng`, the same in every copy of a
+/// match.
+pub(crate) fn next_chance(rng: &mut u64) -> f32 {
+    *rng = rng.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = *rng;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+}
+
 /// The leg of its path a unit is driving, to its next waypoint.
 #[derive(Debug, Clone, Copy)]
 struct Leg {
@@ -490,14 +501,16 @@ pub struct Unit {
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
     acceleration: f32,
-    /// Radians a second it turns; 0 for at once.
-    turn_rate: f32,
     /// The radius of the circle it turns at its own top speed; 0 for one
     /// that turns at once.
     turn_radius: f32,
     pub trailer: Option<Trailer>,
-    /// Whether it's left its place to come within reach of an enemy.
-    closing: bool,
+    /// While it's left its place to go after its target, the range it's
+    /// going to be within of it.
+    closing: Option<f32>,
+    /// The tick the ability it's using is over, until which it does
+    /// nothing else.
+    busy: u64,
     /// What it can take and deal; `None` for what can't be hurt.
     pub fighter: Option<Fighter>,
     pub health: f32,
@@ -1059,11 +1072,7 @@ impl World {
 
     /// A number from 0 up to 1, the same in every copy of a match.
     pub(crate) fn chance(&mut self) -> f32 {
-        self.rng = self.rng.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.rng;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        ((z ^ (z >> 31)) >> 40) as f32 / (1u64 << 24) as f32
+        next_chance(&mut self.rng)
     }
 
     /// Plays one [`TICK`].
@@ -1216,7 +1225,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, acceleration, turn_rate, turn_radius, trailer, closing, health,
+    exact, ways, look, speed, acceleration, turn_radius, trailer, closing, busy, health,
     health_factor,
     fired_ago, target, shot, died, death, besieged, struck, left, awaited, descent,
 } skip {
@@ -1394,7 +1403,10 @@ mod tests {
     /// house, played out to the end.
     fn played_battle() -> World {
         let rifles = |n| (0..n).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
-        let mut w = battle(&[1, 2, 3, 2], rifles(4), at_war());
+        let mut w = battle(&[1, 2, 3, 2, 1], rifles(5), at_war());
+        // One out of the fight, to be given orders after.
+        w.units[4].position = [38.0, 0.0];
+        w.organizations[4].position = [38.0, 0.0];
         let house = building(20, 2, [30.0, 10.0]);
         w.pathing.block(house.obstacle.as_ref().unwrap());
         w.add_buildings(&[house]);
@@ -1619,7 +1631,7 @@ mod tests {
         let played = format!("{}\n{}", snapshot(&battle), snapshot(&towing));
         assert_eq!(
             fingerprint(&[&battle, &towing]),
-            0x79087b9feb5389f6,
+            0x6de9c23e4a0f9b8f,
             "{played}"
         );
     }

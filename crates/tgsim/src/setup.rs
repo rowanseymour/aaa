@@ -343,9 +343,9 @@ impl World {
             speed: 0.0,
             speed_max: m.speed,
             acceleration: m.acceleration,
-            turn_rate: m.turn_rate,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
-            closing: false,
+            closing: None,
+            busy: 0,
         }
     }
 

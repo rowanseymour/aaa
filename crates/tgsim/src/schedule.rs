@@ -310,8 +310,12 @@ mod tests {
 
     /// Four organizations of riflemen at war.
     fn fresh() -> World {
-        let rifles = (0..4).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
-        battle(&[1, 2, 3, 2], rifles, at_war())
+        let rifles = (0..5).map(|_| soldier(vec![rifle(12.0, 25.0)])).collect();
+        let mut w = battle(&[1, 2, 3, 2, 1], rifles, at_war());
+        // One out of the fight, to be given orders after.
+        w.units[4].position = [38.0, 0.0];
+        w.organizations[4].position = [38.0, 0.0];
+        w
     }
 
     /// A match played for a minute, its sides given orders along the way.

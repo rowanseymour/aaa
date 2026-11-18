@@ -808,6 +808,8 @@ mod tests {
         let mut centre = city()[0].clone();
         centre.template = "centre".into();
         let mut w = siege(&[centre]);
+        // Walking into its zone, not stopping to fight it.
+        w.organizations[0].formations[0].aggressive = false;
         w.rules
             .supplies
             .insert(Id::from("centre"), supply(20.0, false, 0.0));
@@ -1151,6 +1153,12 @@ mod tests {
             }];
             w.add_buildings(&[gun]);
             w.organizations[1].operational_range = 34.0;
+            // Armed, so it can answer fire.
+            for u in w.organizations[1].units.clone() {
+                let unit = &mut w.units[u];
+                unit.fighter.as_mut().unwrap().weapons = vec![rifle(12.0, 1.0)];
+                unit.fired_ago = vec![f32::INFINITY];
+            }
             w.tick();
             let hurt = |u: &&usize| w.units[**u].health == 90.0;
             assert_eq!(w.organizations[1].units.iter().filter(hurt).count(), 1);
@@ -1167,7 +1175,8 @@ mod tests {
         assert!(bombarded.is_empty());
         assert_eq!(engaged, [Piece::Building(1)]);
         // A building that picks its own shots makes ordinary hits, and a
-        // organization ordered to bombard does so with whatever it fires.
+        // organization ordered to bombard does so, with its bombarding
+        // weapons.
         let mut w = supplied_division();
         let mut gun = building(30, 2, [40.0, 14.0]);
         gun.fighter.weapons = vec![Weapon {
@@ -1177,8 +1186,14 @@ mod tests {
         w.add_buildings(&[gun]);
         w.tick();
         assert!(w.organizations[1].bombarded.is_empty());
-        let mut w = battle(&[1, 2], vec![soldier(vec![rifle(12.0, 30.0)]); 2], at_war());
+        let shell = Weapon {
+            bombard: true,
+            ..rifle(12.0, 30.0)
+        };
+        let mut w = battle(&[1, 2], vec![soldier(vec![shell]); 2], at_war());
         w.organizations[0].bombarding = true;
+        // It engages, then fires.
+        w.tick();
         w.tick();
         assert_eq!(w.organizations[1].bombarded[0].by, Piece::Organization(0));
         assert!(w.organizations[0].bombarded.is_empty());
