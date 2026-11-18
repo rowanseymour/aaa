@@ -13,6 +13,10 @@ use crate::{
     TurretAim, World, bounding_radius, distance, supply, targets::User, wrap,
 };
 
+/// The most seconds a unit waiting to use an ability goes before deciding
+/// again.
+const WAIT_SECONDS: f32 = 0.6;
+
 impl TurretAim {
     /// Turns toward `yaw` by up to a tick's worth of `turret`'s turn rate,
     /// the short way round, returning whether it got there.
@@ -467,21 +471,30 @@ impl World {
         fired_on
     }
 
-    /// Has the unit at `u`, unless it's routing or still using an
-    /// ability, choose what to take on and with which weapon, and act on
-    /// it: use the weapon, hold until it's ready, or go after its target.
+    /// Has the unit at `u`, unless it's routing or not yet due to decide,
+    /// choose what to take on and with which weapon, and act on it: use
+    /// the weapon, hold until it's ready or for [`WAIT_SECONDS`] if that's
+    /// sooner, or go after its target.
     fn act(&mut self, u: usize, hits: &mut Vec<Hit>, launched: &mut Vec<Projectile>) {
         for ago in &mut self.units[u].fired_ago {
             *ago += TICK;
         }
         let r = self.units[u].organization;
-        if self.organizations[r].routing() || self.ticks < self.units[u].busy {
+        if self.organizations[r].routing() {
+            // What hit it or it ran into while routing is behind it.
+            let unit = &mut self.units[u];
+            (unit.decided, unit.met) = (self.ticks, None);
+            return;
+        }
+        if self.ticks < self.units[u].busy {
             return;
         }
         let mut rng = self.rng;
         let decided = self.decide_attack(u, &mut rng);
         self.rng = rng;
         let unit = &mut self.units[u];
+        unit.decided = self.ticks;
+        unit.met = None;
         let Some((t, pick)) = decided else {
             unit.target = None;
             return;
@@ -495,6 +508,8 @@ impl World {
             unit.halt();
         }
         if pick.rating == Rating::Wait {
+            let most = (WAIT_SECONDS / TICK).round() as u64;
+            self.units[u].busy = self.ticks + self.recharged_in(u, pick.weapon, most);
             return;
         }
         let fighter = unit.fighter.as_ref().expect("units that pick can fight");
@@ -807,7 +822,7 @@ impl World {
                     let weapons = &building.fighter.weapons;
                     weapons
                         .iter()
-                        .any(|w| self.can_target(s, w, t) && self.in_arc(b, w, t))
+                        .any(|w| self.can_target(s, w, t) && self.in_arc(s, w, t))
                 })
                 .map(|&(t, _)| self.piece(t))
                 .collect();
@@ -841,7 +856,7 @@ impl World {
         let valid = |t: Target| {
             noticed.contains(&self.piece(t))
                 && self.can_hit(s, weapon, t)
-                && self.in_arc(b, weapon, t)
+                && self.in_arc(s, weapon, t)
                 && self.defended_rank(t) > 0
         };
         if let Some(t) = last.filter(|&t| valid(t) && self.defended_rank(t) >= 2) {
@@ -855,13 +870,16 @@ impl World {
             .max_by(|&a, &b| (self.defended_rank(a).cmp(&self.defended_rank(b))).then(nearer(a, b)))
     }
 
-    /// Whether building `b`'s turret for `weapon`, if it has one, can be
-    /// aimed at `t`'s centre.
-    fn in_arc(&self, b: usize, weapon: &Weapon, t: Target) -> bool {
-        let building = &self.buildings[b];
-        weapon
-            .aimed_by
-            .is_none_or(|i| building.in_arc(&building.fighter.turrets[i], self.position(t)))
+    /// Whether `s`'s turret for `weapon`, if it has one, can be aimed at
+    /// `t`'s centre.
+    pub(crate) fn in_arc(&self, s: Target, weapon: &Weapon, t: Target) -> bool {
+        let (position, facing) = match s {
+            Target::Unit(u) => (self.units[u].position, self.units[u].facing),
+            Target::Building(b) => (self.buildings[b].position, self.buildings[b].facing),
+        };
+        let turrets = self.fighter(s).map(|f| &f.turrets[..]).unwrap_or_default();
+        (weapon.aimed_by.and_then(|i| turrets.get(i)))
+            .is_none_or(|turret| crate::in_arc(position, facing, turret, self.position(t)))
     }
 
     /// How much a target is worth a defending building's fire before

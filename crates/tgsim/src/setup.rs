@@ -346,6 +346,8 @@ impl World {
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
             closing: None,
             busy: 0,
+            decided: 0,
+            met: None,
         }
     }
 

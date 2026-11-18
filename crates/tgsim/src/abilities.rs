@@ -3,7 +3,7 @@
 use tgmap::{Id, Ratings, Weapon};
 
 use crate::combat::resistance;
-use crate::{CONTACT, Order, Target, World, distance, next_chance};
+use crate::{CONTACT, Order, TICK, Target, World, distance, next_chance};
 
 /// How one of a unit's abilities rates against a target it can be used
 /// on, worst first.
@@ -97,6 +97,24 @@ impl World {
             || ago * self.fire_rate(Target::Unit(u)) >= fighter.weapons[w].recharge - 1e-4
     }
 
+    /// How many ticks from now the unit at `u`'s weapon `w` will have
+    /// recharged by, from one to `most`, as [`World::ready`] will find it.
+    pub(crate) fn recharged_in(&self, u: usize, w: usize, most: u64) -> u64 {
+        let unit = &self.units[u];
+        let (Some(fighter), Some(&ago)) = (&unit.fighter, unit.fired_ago.get(w)) else {
+            return most;
+        };
+        let (rate, recharge) = (self.fire_rate(Target::Unit(u)), fighter.weapons[w].recharge);
+        let mut later = ago;
+        for n in 1..most {
+            later += TICK;
+            if later * rate >= recharge - 1e-4 {
+                return n;
+            }
+        }
+        most
+    }
+
     /// Whether the unit at `u` can go after what's out of its range: it
     /// moves, and its organization's engaged.
     fn can_close(&self, u: usize) -> bool {
@@ -104,19 +122,25 @@ impl World {
         unit.speed_max > 0.0 && !self.organizations[unit.organization].engaged.is_empty()
     }
 
+    /// Whether the unit at `u` could use `weapon` on `t`, however far it
+    /// is: `t` matches its targets, is beyond its minimum range and is
+    /// within its turret's arc.
+    pub(crate) fn bears_on(&self, u: usize, weapon: &Weapon, t: Target) -> bool {
+        let s = Target::Unit(u);
+        let inside = || self.gap(s, t).is_some_and(|g| g <= weapon.min_range);
+        self.can_target(s, weapon, t)
+            && !(weapon.min_range > 0.0 && inside())
+            && self.in_arc(s, weapon, t)
+    }
+
     /// How the unit at `u`'s weapon `w`, reaching `range`, rates against
     /// `t`, if it can be used on it at all.
     pub(crate) fn rate(&self, u: usize, w: usize, range: f32, t: Target) -> Option<Rating> {
         let weapon = self.units[u].fighter.as_ref()?.weapons.get(w)?;
-        let s = Target::Unit(u);
-        if self.fighter(t).is_none() || !self.can_target(s, weapon, t) {
+        if self.fighter(t).is_none() || !self.bears_on(u, weapon, t) {
             return None;
         }
-        let gap = self.gap(s, t);
-        if gap.is_some_and(|g| weapon.min_range > 0.0 && g <= weapon.min_range) {
-            return None;
-        }
-        if gap.is_some_and(|g| g > range) {
+        if self.gap(Target::Unit(u), t).is_some_and(|g| g > range) {
             return self.can_close(u).then_some(Rating::MoveIntoRange);
         }
         Some(match self.ready(u, w) {
@@ -253,10 +277,11 @@ impl World {
     /// What the unit at `u` takes on, and with which weapon. It keeps its
     /// target while its organization's still engaged with it and it has a
     /// weapon for it, unless it's going after one below the aggressive, or
-    /// an enemy that's just hit it rates better; otherwise it picks afresh
-    /// from the enemies within its organization's operational range of its
-    /// centre, and what its organization is engaged with. A unit only picks
-    /// while its organization is engaged.
+    /// an enemy that's hit it or that it's run into since it last decided
+    /// rates better; otherwise it picks afresh from the enemies within its
+    /// organization's operational range of its centre, and what its
+    /// organization is engaged with. A unit only picks while its
+    /// organization is engaged.
     pub(crate) fn decide_attack(&self, u: usize, rng: &mut u64) -> Option<(Target, Pick)> {
         let unit = &self.units[u];
         let r = unit.organization;
@@ -277,16 +302,21 @@ impl World {
         if let Some((t, pick)) = keeps {
             let by = unit
                 .struck
-                .filter(|s| s.at + 1 >= self.ticks)
+                .filter(|s| s.at >= unit.decided)
                 .and_then(|s| s.from);
-            let attacker = by
-                .filter(|&a| a != t && near(a))
-                .and_then(|a| Some((a, self.choose(u, &ranges, a, rng)?)));
             let worth = |(a, p): (Target, Pick)| (p.rating, p.score + self.attacker_bonus(u, a));
-            return match attacker {
-                Some(a) if worth(a) > worth((t, pick)) => Some(a),
-                _ => Some((t, pick)),
-            };
+            let mut best = (t, pick);
+            for a in [by, unit.met].into_iter().flatten() {
+                if a == t || !near(a) {
+                    continue;
+                }
+                if let Some(p) = self.choose(u, &ranges, a, rng)
+                    && worth((a, p)) > worth(best)
+                {
+                    best = (a, p);
+                }
+            }
+            return Some(best);
         }
         let from = unit.position;
         let candidates = self
@@ -454,11 +484,18 @@ mod tests {
 
     #[test]
     fn units_use_one_ability_at_a_time() {
-        let mut first = rifle(12.0, 10.0);
-        first.choice.lasts = 1.0;
+        let lasting = |amount| {
+            let mut gun = rifle(12.0, amount);
+            gun.choice.lasts = 1.0;
+            gun.choice.bonus.use_now = 1.0;
+            gun
+        };
         let mut w = battle(
             &[1, 2],
-            vec![soldier(vec![first, rifle(12.0, 5.0)]), soldier(Vec::new())],
+            vec![
+                soldier(vec![lasting(10.0), lasting(5.0)]),
+                soldier(Vec::new()),
+            ],
             at_war(),
         );
         w.organizations[1].formations[0].aggressive = false;
@@ -522,19 +559,20 @@ mod tests {
         w.organizations[2].formations[0].aggressive = false;
         run(&mut w, 1.0);
         assert_eq!(w.units[0].target, Some(Target::Unit(2)));
-        // Once it's gone it picks afresh, the house last...
+        // Once it's gone it picks afresh when it next decides, the house
+        // last...
         w.units[2].die(w.ticks);
-        w.tick();
+        run(&mut w, 0.6);
         assert_eq!(w.units[0].target, Some(Target::Unit(1)));
         // ...and only as what its regiment's engaged with.
         w.units[1].die(w.ticks);
         w.organizations[0].engaged.clear();
         w.organizations[0].formations[0].aggressive = false;
         w.organizations[0].engaged = vec![Piece::Organization(1)];
-        w.tick();
+        run(&mut w, 0.6);
         assert_eq!(w.units[0].target, None);
         w.organizations[0].engaged = vec![Piece::Building(0)];
-        w.tick();
+        run(&mut w, 0.6);
         assert_eq!(w.units[0].target, Some(Target::Building(0)));
     }
 
@@ -563,6 +601,80 @@ mod tests {
         // Both now rate waiting, but what fires on it gets its 0.5 more.
         w.tick();
         assert_eq!(w.units[0].target, Some(Target::Unit(2)));
+    }
+
+    #[test]
+    fn units_turn_on_an_enemy_they_run_into_if_it_rates_better() {
+        let rifles = || soldier(vec![rifle(4.0, 1.0)]);
+        let mut w = battle(
+            &[1, 2, 2],
+            vec![soldier(vec![rifle(12.0, 10.0)]), rifles(), rifles()],
+            at_war(),
+        );
+        w.units[1].position = [10.0, 35.0];
+        w.units[2].position = [10.0, 18.0];
+        w.organizations[0].engaged = vec![Piece::Organization(1), Piece::Organization(2)];
+        // Going after an aggressive enemy, it keeps after it...
+        w.units[0].target = Some(Target::Unit(1));
+        w.units[0].closing = Some(12.0);
+        let decided = w.decide_attack(0, &mut 0).unwrap();
+        assert_eq!(
+            (decided.0, decided.1.rating),
+            (Target::Unit(1), Rating::MoveIntoRange)
+        );
+        // ...until it runs into one it can fire on where it is.
+        w.units[0].met = Some(Target::Unit(2));
+        let decided = w.decide_attack(0, &mut 0).unwrap();
+        assert_eq!(
+            (decided.0, decided.1.rating),
+            (Target::Unit(2), Rating::UseNow)
+        );
+    }
+
+    #[test]
+    fn units_wait_a_moment_once_engaged_before_deciding() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![rifle(12.0, 10.0)]), soldier(Vec::new())],
+            at_war(),
+        );
+        w.organizations[1].formations[0].aggressive = false;
+        let first_shot = |mut w: crate::World, reaction: f32| {
+            w.rules.engage_reaction = reaction;
+            let mut ticks = 0;
+            while w.units[1].health == 100.0 && ticks < 200 {
+                w.tick();
+                ticks += 1;
+            }
+            ticks
+        };
+        // Engaged on the first tick, it fires on the next with no pause,
+        // and some time in the next 10 s with one.
+        assert_eq!(first_shot(w.clone(), 0.0), 2);
+        let ticks = first_shot(w, 10.0);
+        assert!((3..=102).contains(&ticks), "{ticks}");
+    }
+
+    #[test]
+    fn waiting_units_decide_again_once_recharged_or_after_a_while() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![rifle(12.0, 10.0)]), soldier(Vec::new())],
+            at_war(),
+        );
+        w.organizations[1].formations[0].aggressive = false;
+        // Engaged on the first tick, it fires on the next.
+        w.tick();
+        w.tick();
+        assert_eq!(w.units[1].health, 90.0);
+        // With 2 s to recharge it holds for 0.6 s...
+        w.tick();
+        let held = w.units[0].busy - w.units[0].decided;
+        w.units[0].busy = 0;
+        // ...and for less when it's sooner ready.
+        w.units[0].fired_ago[0] = 1.75;
+        w.tick();
+        assert_eq!([held, w.units[0].busy - w.units[0].decided], [6, 2]);
     }
 
     #[test]

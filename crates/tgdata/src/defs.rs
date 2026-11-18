@@ -1294,6 +1294,10 @@ pub struct SVars {
     /// members could fire on.
     #[serde(rename = "KillTargetIsHighestPriority")]
     pub kill_target_is_highest_priority: Option<bool>,
+    /// The longest a unit waits, once its regiment engages, before it
+    /// first decides what to do.
+    #[serde(rename = "EngageReactionTimeRange")]
+    pub engage_reaction_time_range: Option<f32>,
     /// Attack efficiency a second a regiment's gains while below its
     /// target.
     #[serde(rename = "AttackEfficiencyPointsPerSecondClimbing")]

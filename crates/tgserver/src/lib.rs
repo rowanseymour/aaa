@@ -206,6 +206,9 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(first) = game.attack_target_first() {
         rules.attack_target_first = first;
     }
+    if let Some(seconds) = game.engage_reaction() {
+        rules.engage_reaction = seconds;
+    }
     let mut world = World::new(&map, rules);
     world.set_fog(setup.fog.unwrap_or_else(|| game.fog_setting()));
     let recharges = game.operation_recharges();
