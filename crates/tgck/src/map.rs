@@ -891,6 +891,11 @@ impl Thing {
         self.actor()?.towed()
     }
 
+    /// The experience this thing has earned, if its record holds any.
+    pub fn experience(&self) -> Option<f32> {
+        self.actor()?.experience()
+    }
+
     /// Which of its nation's division badges this thing wears as an HQ.
     pub fn hq_badge(&self) -> Option<i32> {
         self.actor()?.hq_badge()

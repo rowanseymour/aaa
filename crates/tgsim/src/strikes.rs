@@ -198,7 +198,13 @@ impl World {
             }
             let ground = self.terrain_effects(target);
             let falloff = attenuated([strike.full_within, strike.area], strike.edge_damage, d);
-            let main = damage(&strike.damage, f, &ground, falloff);
+            let main = damage(
+                &strike.damage,
+                f,
+                &ground,
+                falloff,
+                self.boosts(None, target),
+            );
             let side = self.standing_flag(player, self.owner(target));
             let flags = || f.flags.iter().chain([&side]);
             let extra: f32 = (strike.extra.iter())

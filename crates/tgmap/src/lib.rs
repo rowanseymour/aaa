@@ -24,8 +24,9 @@ pub mod triggers {
     pub use tgck::map::{Element, Parameter, Trigger, Triggers, Value};
 }
 pub use tgdata::{
-    Affliction, Airlift, Amounts, Damage, DeployPoints, EXHAUSTED, Economy, EconomyRules, Fall,
-    Fighter, Flight, FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Logistics, Lookout,
+    Affliction, Airlift, Amounts, CombatAbility, CombatEffect, CombatProfile, CombatValueRules,
+    Damage, DeployPoints, EXHAUSTED, Economy, EconomyRules, ExperienceGains, Fall, Fighter, Flight,
+    FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Level, Levels, Logistics, Lookout,
     MoraleEffect, MoraleRules, Operation, REFORMING, ROUTING, Requires, Research, ResourceKind,
     RoutRules, Shape, Sight, Strike, Summon, Supply, SupplyEffect, SupplyRules, Targets,
     TerrainEffect, TerrainRules, Turret, Weapon,

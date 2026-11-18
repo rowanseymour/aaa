@@ -39,6 +39,7 @@ mod terrain;
 #[cfg(test)]
 mod testing;
 mod triggers;
+mod value;
 
 use std::collections::{BTreeMap, VecDeque};
 use std::f32::consts::{PI, TAU};
@@ -72,6 +73,7 @@ pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
 pub use tgmap::{Outcome, Player, Relation, Team};
 pub use triggers::{Switch, Triggers};
+pub use value::CombatMeans;
 
 /// Seconds of play one [`World::tick`] advances.
 pub const TICK: f32 = 0.1;
@@ -303,6 +305,14 @@ pub struct Organization {
     /// Whether an enemy organization was engaging it at its last look at
     /// its morale.
     engaged_before: bool,
+    /// The experience it's earned, which never goes down.
+    pub experience: f32,
+    /// The experience level it's reached, by index into its template's
+    /// levels.
+    pub level: usize,
+    /// Whether it was engaging an enemy at its last look at its
+    /// experience.
+    engaging_before: bool,
 }
 
 /// An organization's order to keep a post: it comes back to it after every
@@ -476,6 +486,9 @@ pub struct Unit {
     /// What it can take and deal; `None` for what can't be hurt.
     pub fighter: Option<Fighter>,
     pub health: f32,
+    /// What its properties multiply its fighter's health by, as its health
+    /// was last scaled to.
+    pub health_factor: f32,
     /// Seconds until each of its fighter's weapons can fire again.
     reloads: Vec<f32>,
     /// What it last fired on.
@@ -1031,6 +1044,8 @@ impl World {
         let fired_on = self.fight();
         self.engage(&fired_on);
         self.keep_morale();
+        self.keep_experience();
+        self.keep_health();
         self.keep_guard();
         self.close_in();
         self.occupy();
@@ -1144,7 +1159,8 @@ digest!(Organization {
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
-    guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before,
+    guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before, experience,
+    level, engaging_before,
 } skip {
     // Its template's.
     formations, unpacks,
@@ -1169,6 +1185,7 @@ digest!(Leg {
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, acceleration, turn_rate, turn_radius, trailer, closing, health,
+    health_factor,
     reloads, target, shot, died, besieged, left, awaited, descent,
 } skip {
     // Its template's.

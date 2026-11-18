@@ -95,6 +95,14 @@ pub enum Notice {
     /// An organization of its, by index into [`World::organizations`], has
     /// routed.
     Routed { player: u32, organization: usize },
+    /// An organization of its, by index into [`World::organizations`], has
+    /// gained one or more experience levels, reaching `level` (counting
+    /// from 0).
+    Levelled {
+        player: u32,
+        organization: usize,
+        level: usize,
+    },
     /// Something of `owner`'s is destroyed, by whatever cause.
     Destroyed { owner: u32, what: Piece },
     /// A building of its, by index into [`World::buildings`], has been

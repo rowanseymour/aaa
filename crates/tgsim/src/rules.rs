@@ -39,10 +39,21 @@ pub struct Rules {
     /// What each property does to morale, for those that do anything to
     /// it, by its id.
     pub morale_effects: HashMap<Id, tgmap::MoraleEffect>,
-    /// Each unit template's combat value at full health, by template,
-    /// which the morale a kill wins compares. A template without one is
-    /// worth nothing, so wins nothing by its kills.
-    pub combat_values: HashMap<Id, f32>,
+    /// The settings combat values are worked out by.
+    pub combat_value_rules: tgmap::CombatValueRules,
+    /// Each template's figures, which its things' combat values are worked
+    /// out from, by template. A template without them is worth nothing.
+    pub combat_profiles: HashMap<Id, tgmap::CombatProfile>,
+    /// What combat values are measured against.
+    pub combat_means: crate::CombatMeans,
+    /// What each property does to its holder's fighting, for those that do
+    /// anything to it, by its id.
+    pub combat_effects: HashMap<Id, tgmap::CombatEffect>,
+    /// How much experience organizations earn.
+    pub experience_gains: tgmap::ExperienceGains,
+    /// The levels each template's organizations earn with experience, by
+    /// template. Those of templates without them earn none.
+    pub experience_levels: HashMap<Id, tgmap::Levels>,
     /// Seconds an enemy's damage keeps what it hurt under siege.
     pub siege_seconds: f32,
     /// What each property does to supply, for those that do anything to
@@ -125,7 +136,12 @@ impl Default for Rules {
             morale_values: HashMap::new(),
             morale_breakpoints: HashMap::new(),
             morale_effects: HashMap::new(),
-            combat_values: HashMap::new(),
+            combat_value_rules: Default::default(),
+            combat_profiles: HashMap::new(),
+            combat_means: Default::default(),
+            combat_effects: HashMap::new(),
+            experience_gains: Default::default(),
+            experience_levels: HashMap::new(),
             siege_seconds: 7.0,
             supply_effects: HashMap::new(),
             kinds: HashMap::new(),

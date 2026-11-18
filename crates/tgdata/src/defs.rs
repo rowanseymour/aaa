@@ -131,6 +131,7 @@ pub struct Thing {
     pub element_component: Option<ElementComponent>,
     pub detection_component: Option<DetectionComponent>,
     pub construction_component: Option<ConstructionComponent>,
+    pub experience_component: Option<ExperienceComponent>,
     pub placement: Option<Placement>,
     /// On entering and leaving the states named by each command's
     /// `actor_state`.
@@ -216,6 +217,24 @@ pub struct BodyComponent {
 
 /// What makes a building a city centre, claiming a zone of the map. A city
 /// isn't a settlement: see [`SettlementComponent`].
+/// What lets a thing earn experience and the levels it gains with it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExperienceComponent {
+    /// What it counts as for those it falls to, if it has no combat value
+    /// of its own; negative for nothing set.
+    pub fake_cv_value: Option<f32>,
+    /// The first is what it starts at.
+    #[serde(default)]
+    pub experience_level: Vec<ExperienceLevel>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ExperienceLevel {
+    pub experience_required: Option<f32>,
+    /// What it gives at that level.
+    pub property: Option<Property>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct CityComponent {
     pub zone_radius: Option<f32>,
@@ -583,6 +602,8 @@ pub struct Ability {
     pub turret_ids: Option<String>,
     /// Where its projectiles appear, from its user, forward along -y.
     pub spawn_position: Option<[f32; 3]>,
+    /// Seconds after its animation before its user can act again.
+    pub reload_time: Option<f32>,
     pub ability_definition: Option<AbilityDefinition>,
 }
 
@@ -671,6 +692,9 @@ pub struct AbilityFlags {
     /// It's aimed only on the map's main land.
     #[serde(default)]
     pub primary_island_only: bool,
+    /// It's left out of its user's combat value.
+    #[serde(default)]
+    pub ignore_for_cv: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1221,6 +1245,44 @@ pub struct SVars {
     #[serde(rename = "MoraleSupplyBonus")]
     pub morale_supply_bonus: Option<f32>,
     /// How regiments lose and regain morale, and rout: see
+    /// [`CombatValueRules`](crate::CombatValueRules).
+    #[serde(rename = "CombatDamageMinimum")]
+    pub combat_damage_minimum: Option<f32>,
+    #[serde(rename = "CombatValueRangePower")]
+    pub combat_value_range_power: Option<f32>,
+    #[serde(rename = "CombatValueAreaPower")]
+    pub combat_value_area_power: Option<f32>,
+    #[serde(rename = "CombatValueOffenseWeight")]
+    pub combat_value_offense_weight: Option<f32>,
+    #[serde(rename = "CombatValueDefenseWeight")]
+    pub combat_value_defense_weight: Option<f32>,
+    #[serde(rename = "CombatValueDefenseWeightRanged")]
+    pub combat_value_defense_weight_ranged: Option<f32>,
+    #[serde(rename = "CombatValueRangedMinimum")]
+    pub combat_value_ranged_minimum: Option<f32>,
+    #[serde(rename = "CombatValueMovementWeight")]
+    pub combat_value_movement_weight: Option<f32>,
+    #[serde(rename = "CombatValueMovementDefault")]
+    pub combat_value_movement_default: Option<f32>,
+    #[serde(rename = "CombatValueMeanValuesDiscardPercent")]
+    pub combat_value_mean_values_discard_percent: Option<f32>,
+    /// [`ExperienceGains`](crate::ExperienceGains).
+    #[serde(rename = "ExperienceGainMinimum")]
+    pub experience_gain_minimum: Option<f32>,
+    #[serde(rename = "ExperienceGainMaximum")]
+    pub experience_gain_maximum: Option<f32>,
+    #[serde(rename = "ExperienceKillMultiplier")]
+    pub experience_kill_multiplier: Option<f32>,
+    #[serde(rename = "ExperienceCaptureMultiplier")]
+    pub experience_capture_multiplier: Option<f32>,
+    #[serde(rename = "ExperienceRoutMultiplier")]
+    pub experience_rout_multiplier: Option<f32>,
+    #[serde(rename = "ExperienceEngageMultiplier")]
+    pub experience_engage_multiplier: Option<f32>,
+    #[serde(rename = "ExperienceDefaultValue")]
+    pub experience_default_value: Option<f32>,
+    #[serde(rename = "ExperienceFactionGainMultiplier")]
+    pub experience_faction_gain_multiplier: Option<f32>,
     /// [`MoraleRules`](crate::MoraleRules).
     #[serde(rename = "MoraleEngagementLoss")]
     pub morale_engagement_loss: Option<f32>,

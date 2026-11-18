@@ -260,6 +260,8 @@ pub struct Organization {
     pub hq: Option<u32>,
     /// Its morale as a share of its maximum: 1 for full.
     pub morale: f32,
+    /// The experience it's earned.
+    pub experience: f32,
 }
 
 impl Organization {
@@ -464,6 +466,7 @@ pub(crate) fn organizations(
                 organization(t.id, &t.template, owner, facing, members, places, ranges)?;
             organization.hq = organization.hq.filter(|&id| id != 0);
             organization.morale = stored.morale;
+            organization.experience = t.experience().unwrap_or(0.0);
             Some(organization)
         })
         .collect()
@@ -643,6 +646,7 @@ fn organization(
         unpacks: None,
         hq: None,
         morale: 1.0,
+        experience: 0.0,
     })
 }
 
@@ -950,6 +954,7 @@ fn one_place(ranges: Ranges) -> Organization {
         control_range: ranges.control,
         primary: Some(0),
         morale: 1.0,
+        experience: 0.0,
         unpacks: None,
     }
 }

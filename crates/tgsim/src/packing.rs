@@ -89,7 +89,8 @@ impl World {
             // It keeps the share of its health it had as a truck.
             let health = self
                 .survivors(r)
-                .filter_map(|u| Some(self.units[u].health / self.units[u].fighter.as_ref()?.health))
+                .filter(|&u| self.units[u].fighter.is_some())
+                .map(|u| self.units[u].health / self.max_health(u))
                 .fold(1.0_f32, f32::min);
             for u in self.organizations[r].units.clone() {
                 let unit = &mut self.units[u];
@@ -217,11 +218,10 @@ impl World {
             }
         };
         for u in self.organizations[r].units.clone() {
+            let full = self.max_health(u);
             let unit = &mut self.units[u];
-            if unit.alive()
-                && let Some(f) = &unit.fighter
-            {
-                unit.health = f.health * share;
+            if unit.alive() && unit.fighter.is_some() {
+                unit.health = full * share;
             }
         }
         self.buildings[b].state = State::Packed(self.ticks, r);

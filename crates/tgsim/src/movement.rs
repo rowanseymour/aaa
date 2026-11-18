@@ -541,6 +541,7 @@ mod tests {
             control_range: None,
             primary: Some(0),
             morale: 1.0,
+            experience: 0.0,
             unpacks: None,
         };
         let w = World::from_organizations(

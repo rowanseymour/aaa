@@ -552,6 +552,7 @@ pub(crate) mod testing {
             control_range: None,
             primary: None,
             morale: 1.0,
+            experience: 0.0,
             unpacks: None,
         };
         let sides = Sides {

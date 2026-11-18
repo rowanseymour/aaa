@@ -87,24 +87,38 @@ pub(crate) fn resistance(target: &Fighter, ground: &[&TerrainEffect], kind: &Id)
 /// Health a hit of `kinds` of damage takes from `target`, scaled by
 /// `scale`: defence comes off first, then resistance takes its share, and
 /// every hit does at least 1. `ground` is what the terrain properties the
-/// target holds add to both.
+/// target holds add to both, and `[attack, defense]` what the firer's and
+/// target's levels add: attack to the hit's main damage, defense to the
+/// target's.
 pub(crate) fn damage(
     kinds: &[Damage],
     target: &Fighter,
     ground: &[&TerrainEffect],
     scale: f32,
+    [attack, defense]: [f32; 2],
 ) -> f32 {
-    let defense = target.defense + ground.iter().map(|e| e.defense).sum::<f32>();
-    (kinds.iter())
-        .map(|d| {
+    let defense = target.defense + defense + ground.iter().map(|e| e.defense).sum::<f32>();
+    (kinds.iter().enumerate())
+        .map(|(i, d)| {
             let resist = resistance(target, ground, &d.kind);
-            ((d.amount * scale - defense.max(0.0)) * (1.0 - resist)).max(1.0)
+            let amount = d.amount + if i == 0 { attack } else { 0.0 };
+            ((amount * scale - defense.max(0.0)) * (1.0 - resist)).max(1.0)
         })
         .sum()
 }
 
 impl World {
     /// Whatever can be fired on: alive units and standing buildings.
+    /// What `from`'s properties add to its attacks and `to`'s to its
+    /// defense, for units.
+    pub(crate) fn boosts(&self, from: Option<Target>, to: Target) -> [f32; 2] {
+        let boost = |t: Option<Target>| match t {
+            Some(Target::Unit(u)) => self.boost(u),
+            _ => Default::default(),
+        };
+        [boost(from).attack, boost(Some(to)).defense]
+    }
+
     pub(crate) fn targets(&self) -> impl Iterator<Item = Target> + '_ {
         let units = (0..self.units.len()).map(Target::Unit);
         let buildings = (0..self.buildings.len()).map(Target::Building);
@@ -139,7 +153,8 @@ impl World {
             .iter()
             .map(|e| e.defense)
             .sum::<f32>();
-        Some((plain + ground, plain))
+        let [_, level] = self.boosts(None, t);
+        Some((plain + ground + level, plain))
     }
 
     pub(crate) fn owner(&self, t: Target) -> u32 {
@@ -412,7 +427,15 @@ impl World {
                 building.health -= hit.amount;
                 if building.health <= 0.0 {
                     match hit.from {
-                        Some(_) => self.fall(b, Some(hit.by)),
+                        Some(from) => {
+                            let owner = self.buildings[b].owner;
+                            self.fall(b, Some(hit.by));
+                            let captured = self.buildings[b].owner != owner;
+                            let destroyed = matches!(self.buildings[b].state, State::Destroyed(_));
+                            if captured || destroyed {
+                                self.credit_fall(b, from, captured);
+                            }
+                        }
                         None => self.fall_unclaimed(b),
                     }
                 }
@@ -742,7 +765,13 @@ impl World {
             if let Some(f) = self.fighter(t) {
                 hits.push(Hit {
                     target: t,
-                    amount: damage(&weapon.damage, f, &self.terrain_effects(t), 1.0),
+                    amount: damage(
+                        &weapon.damage,
+                        f,
+                        &self.terrain_effects(t),
+                        1.0,
+                        self.boosts(Some(from), t),
+                    ),
                     from: Some(from),
                     by,
                     bombard,
@@ -764,7 +793,13 @@ impl World {
             reached.push((
                 middle,
                 target,
-                damage(&weapon.damage, f, &ground, falloff(weapon, d)),
+                damage(
+                    &weapon.damage,
+                    f,
+                    &ground,
+                    falloff(weapon, d),
+                    self.boosts(Some(from), target),
+                ),
             ));
         }
         // Those nearest by their middles, where there's a most it hits.
@@ -949,9 +984,12 @@ mod tests {
         tank.defense = 6.0;
         tank.resists = [(Id::from("gunfire"), 0.6)].into();
         // (12 - 6) * 0.4
-        assert!((damage(&rifle(12.0, 12.0).damage, &tank, &[], 1.0) - 2.4).abs() < 1e-5);
-        assert_eq!(damage(&rifle(12.0, 5.0).damage, &tank, &[], 1.0), 1.0);
-        assert!((damage(&rifle(12.0, 50.0).damage, &tank, &[], 0.5) - 7.6).abs() < 1e-5);
+        assert!((damage(&rifle(12.0, 12.0).damage, &tank, &[], 1.0, [0.0; 2]) - 2.4).abs() < 1e-5);
+        assert_eq!(
+            damage(&rifle(12.0, 5.0).damage, &tank, &[], 1.0, [0.0; 2]),
+            1.0
+        );
+        assert!((damage(&rifle(12.0, 50.0).damage, &tank, &[], 0.5, [0.0; 2]) - 7.6).abs() < 1e-5);
     }
 
     #[test]

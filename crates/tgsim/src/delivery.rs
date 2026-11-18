@@ -559,6 +559,7 @@ impl World {
     fn descend(&mut self) {
         let fallen = self.rules.gravity / GAME_TICKS * TICK;
         for u in 0..self.units.len() {
+            let full = self.max_health(u);
             let unit = &mut self.units[u];
             let Some(mut descent) = unit.descent else {
                 continue;
@@ -577,7 +578,7 @@ impl World {
             unit.previous = unit.position;
             unit.descent = None;
             unit.awaited = false;
-            unit.health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+            unit.health = full;
             // Down, it makes for its place in its organization's formation.
             let organization = &self.organizations[unit.organization];
             let p = organization.units.iter().position(|&m| m == u).unwrap_or(0);

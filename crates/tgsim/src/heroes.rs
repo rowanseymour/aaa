@@ -220,7 +220,7 @@ impl World {
     /// The unit at `u`'s health, as a share of its full health.
     fn health_share(&self, u: usize) -> f32 {
         let unit = &self.units[u];
-        let full = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+        let full = self.max_health(u);
         match full > 0.0 {
             true => (unit.health / full).clamp(0.0, 1.0),
             false => 1.0,
