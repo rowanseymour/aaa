@@ -1176,6 +1176,15 @@ fn told(
             let with = vec![look.building(sim, building).into(), paid.to_string().into()];
             Told::Event("building_sold", with, at(About::Building(building)))
         }
+        Notice::Levelled {
+            player,
+            organization,
+            ..
+        } if ours(player) => Told::Event(
+            "company_experience_gained_level",
+            vec![look.organization(sim, organization).into()],
+            at(About::Organization(organization)),
+        ),
         Notice::Routed {
             player,
             organization,

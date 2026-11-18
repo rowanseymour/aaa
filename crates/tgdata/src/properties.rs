@@ -209,6 +209,13 @@ impl GameData {
                 },
             );
         }
+        // Their icons are named from the archive's root.
+        let paces = self.paces(&strings);
+        for (id, p) in self.level_properties() {
+            if let Some(look) = self.property_look(&strings, &paces, "", &p) {
+                out.insert(id, look);
+            }
+        }
         out
     }
 }

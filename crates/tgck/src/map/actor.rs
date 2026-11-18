@@ -96,6 +96,7 @@ const PROPERTIES: u32 = 6;
 const ORGANIZATION: u32 = 7;
 const ELEMENT: u32 = 8;
 const CONSTRUCTION: u32 = 15;
+const EXPERIENCE: u32 = 17;
 const DEFENDER: u32 = 20;
 const AIRCRAFT: u32 = 23;
 const CITY: u32 = 29;
@@ -812,7 +813,7 @@ impl Skip {
             "Recruit" => skip_recruit(cur),
             "Experience" => {
                 cur.expect("experience version", 0)?;
-                cur.u32().map(drop)
+                cur.f32().map(drop)
             }
             "MobileDeployment" => skip_mobile_deployment(cur),
             "Defender" => skip_defender(cur),
@@ -1313,6 +1314,21 @@ impl Actor {
         Updatable::parse(&mut cur).ok()?;
         let _version = cur.u32().ok()?;
         cur.i32().ok()
+    }
+
+    /// The experience it's earned, if its record holds an experience
+    /// component.
+    pub fn experience(&self) -> Option<f32> {
+        let data = self.decoded()?.iter().find_map(|c| match c {
+            Component::Framed {
+                bit: EXPERIENCE,
+                data,
+            } => Some(data),
+            _ => None,
+        })?;
+        let mut cur = Cursor::new(data);
+        let _version = cur.u32().ok()?;
+        cur.f32().ok()
     }
 
     pub fn body(&self) -> Option<&Body> {

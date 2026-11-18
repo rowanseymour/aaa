@@ -2898,15 +2898,15 @@ fn show_health(
             if !organization_shown(unit.organization) || !unit.alive() {
                 continue;
             }
-            let Some(fighter) = &unit.fighter else {
+            if unit.fighter.is_none() {
                 continue;
-            };
+            }
             let [x, y] = unit.drawn_at(t);
             // At the edge of its footprint nearest the camera, so the bar
             // clears the model.
             let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
             let at = world(x, y, ground.stand_at(view.footing, [x, y])) + toward * reach;
-            let image = images.health_bar(unit.health / fighter.health);
+            let image = images.health_bar(unit.health / sim.0.max_health(view.unit));
             shown.push((at, HEALTH_BAR, image, 0.0));
         }
         for view in &buildings {

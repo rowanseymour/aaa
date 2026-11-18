@@ -60,12 +60,15 @@ impl crate::Organization {
 
 impl World {
     /// What bears on the morale of the organization at `r`: the properties
-    /// of its template and those it has for a time, and its side's
-    /// technologies that are on its kind.
+    /// of its template and those it has for a time, its side's
+    /// technologies that are on its kind, and its experience level's.
     fn morale_effects(&self, r: usize) -> impl Iterator<Item = &MoraleEffect> {
         let organization = &self.organizations[r];
         let (owner, template) = (organization.owner, &organization.template);
-        self.template_effects(owner, template, &organization.properties)
+        let level = self
+            .level_property(r)
+            .and_then(|p| self.rules.morale_effects.get(p));
+        (self.template_effects(owner, template, &organization.properties)).chain(level)
     }
 
     /// What a thing of `owner`'s made from `template` holding `held` has for
@@ -86,7 +89,8 @@ impl World {
 
     /// The most morale the organization at `r` can have: what every slot
     /// of it adds, filled or not, and the `MORALE` its present members and
-    /// it have.
+    /// it have. Its level's counts for each present member and once more
+    /// for it.
     pub(crate) fn maximum_morale(&self, r: usize) -> f32 {
         let organization = &self.organizations[r];
         let value = |u: usize| {
@@ -101,8 +105,15 @@ impl World {
         if slots <= 0.0 {
             return 0.0;
         }
+        let level = self
+            .level_property(r)
+            .and_then(|p| self.rules.morale_effects.get(p));
         let members: f32 = (self.survivors(r))
-            .flat_map(|u| self.template_effects(organization.owner, &self.units[u].template, &[]))
+            .flat_map(|u| {
+                let template = &self.units[u].template;
+                self.template_effects(organization.owner, template, &[])
+                    .chain(level)
+            })
             .map(|e| e.morale)
             .sum();
         let own: f32 = self.morale_effects(r).map(|e| e.morale).sum();
@@ -139,7 +150,7 @@ impl World {
     }
 
     /// The enemy organizations engaging the one at `r`.
-    fn engagers(&self, r: usize) -> impl Iterator<Item = usize> + '_ {
+    pub(crate) fn engagers(&self, r: usize) -> impl Iterator<Item = usize> + '_ {
         let them = Piece::Organization(r);
         (0..self.organizations.len()).filter(move |&e| {
             self.organizations[e].engaged.contains(&them)
@@ -211,8 +222,8 @@ impl World {
         if !self.hostile(killers, Piece::Organization(r)) {
             return;
         }
-        let worth = |t: &Id| self.rules.combat_values.get(t).copied().unwrap_or(0.0);
-        let (killer, victim) = (worth(&self.units[k].template), worth(&template));
+        let (killer, victim) = (self.unit_value(k), self.unit_value(u));
+        self.credit_kill(u, k, [victim, killer]);
         if killer <= 0.0 {
             return;
         }
@@ -230,6 +241,7 @@ impl World {
             player: owner,
             organization: r,
         });
+        self.credit_rout(r);
         self.hearten_breakers(r);
         let ticks = self.ticks;
         let until = ticks + (self.rules.morale_rules.routing_time / TICK).round() as u64;
@@ -753,20 +765,22 @@ mod tests {
     fn deaths_cost_their_organization_and_kills_win_by_combat_value() {
         let mut w = standoff();
         w.organizations[0].morale = 30.0;
-        w.rules.combat_values.insert("soldier".into(), 4.0);
+        rate(&mut w, "soldier", 10.0);
         w.mourn(1, Some(Target::Unit(0)));
         // A quarter of the victim's value lost, and for killing an equal
         // 0.5 × (1 + 1) ÷ 2 won.
         assert_eq!(w.organizations[1].morale, 50.0 - 12.5);
         assert_eq!(w.organizations[0].morale, 30.5);
-        // A stronger killer wins less: 0.5 × (0.1 + 1) ÷ 2.
-        w.rules.combat_values.insert("strong".into(), 40.0);
+        // A stronger killer wins less.
+        rate(&mut w, "strong", 100.0);
         w.units[0].template = "strong".into();
+        let ratio = w.unit_value(1) / w.unit_value(0);
+        assert!(ratio < 0.5);
         w.mourn(1, Some(Target::Unit(0)));
-        let morale = 30.5 + 0.275;
+        let morale = 30.5 + 0.5 * (ratio + 1.0) / 2.0;
         assert!((w.organizations[0].morale - morale).abs() < 1e-4);
         // One worth nothing wins nothing.
-        w.rules.combat_values.clear();
+        w.rules.combat_profiles.clear();
         w.mourn(1, Some(Target::Unit(0)));
         assert!((w.organizations[0].morale - morale).abs() < 1e-4);
         // A shot that kills does the same.
@@ -1051,7 +1065,7 @@ mod tests {
     #[test]
     fn killing_a_friend_wins_no_morale() {
         let mut w = standoff();
-        w.rules.combat_values.insert("soldier".into(), 4.0);
+        rate(&mut w, "soldier", 10.0);
         w.organizations[0].morale = 30.0;
         w.organizations[1].owner = 1;
         w.mourn(1, Some(Target::Unit(0)));

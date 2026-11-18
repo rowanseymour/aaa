@@ -10,10 +10,12 @@
 mod audio;
 
 mod combat;
+mod combat_value;
 mod companies;
 pub mod defs;
 mod economy;
 mod effects;
+mod experience;
 mod fog;
 mod guard;
 mod heroes;
@@ -47,10 +49,12 @@ pub use audio::{
 pub use combat::{
     AimHeights, Body, Damage, Fighter, Flight, FlightKind, Shape, Targets, Turret, Weapon,
 };
+pub use combat_value::{CombatAbility, CombatProfile, CombatValueRules};
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, ResourceKind, ResourceRole, Supply};
 pub use effects::{
     Decal, HealthCue, HealthTrigger, ObjectEffects, Vfx, VfxCue, VfxTint, WeaponEffects,
 };
+pub use experience::{CombatEffect, ExperienceGains, Level, Levels, level_property};
 pub use fog::{FogSetting, Sight};
 pub use guard::{GUARDING, GuardRules};
 pub use heroes::Hero;

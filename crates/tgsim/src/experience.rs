@@ -1,9 +1,15 @@
 //! The experience a side's faction earns, and spending it on the faction's
-//! special operations.
+//! special operations; and the experience its organizations earn, and the
+//! levels it raises them to.
 
-use tgmap::{Id, Operation};
+use tgmap::{CombatEffect, Id, Operation};
 
-use crate::{LANDINGS_KEPT, Piece, Refused, SECOND, TICK, World};
+use crate::supply::BEAT;
+use crate::value::MULTIPLY_FLOOR;
+use crate::{LANDINGS_KEPT, Notice, Piece, Refused, SECOND, TICK, Target, World};
+
+/// Gains smaller than this are dropped.
+const LEAST_GAIN: f32 = 0.0001;
 
 /// A side's faction: their experience and special operations.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -163,6 +169,255 @@ impl World {
         // A side's property goes at its once-a-second look after its time.
         if ticks.is_multiple_of(SECOND) {
             self.reveals.retain(|_, until| *until > ticks);
+        }
+    }
+}
+
+/// The kinds of event that earn an organization experience, each by its
+/// own multiplier.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Feat {
+    Kill,
+    Capture,
+    Rout,
+    /// A second's engagement, which isn't kept within the gains' bounds.
+    Engagement,
+}
+
+impl World {
+    /// The levels the organization at `r` can earn, if it earns
+    /// experience at all.
+    fn levels(&self, r: usize) -> Option<&[tgmap::Level]> {
+        let template = &self.organizations[r].template;
+        let levels = self.rules.experience_levels.get(template)?;
+        Some(&levels.levels)
+    }
+
+    /// The property the organization at `r`'s level gives it, and every
+    /// member of it.
+    pub fn level_property(&self, r: usize) -> Option<&Id> {
+        let level = self.organizations[r].level;
+        Some(&self.levels(r)?.get(level)?.property)
+    }
+
+    /// The experience the organization at `r`'s next level takes, if it has
+    /// one to go.
+    pub fn next_level(&self, r: usize) -> Option<f32> {
+        let next = self.organizations[r].level + 1;
+        Some(self.levels(r)?.get(next)?.required)
+    }
+
+    /// What the properties the unit at `u` holds add to its fighting: its
+    /// template's own, its side's technologies on its kind, those its
+    /// organization holds for a time, and its organization's level.
+    pub(crate) fn boost(&self, u: usize) -> CombatEffect {
+        let unit = &self.units[u];
+        let r = unit.organization;
+        let organization = &self.organizations[r];
+        let table = &self.rules.combat_effects;
+        let kind = self.rules.kinds.get(&unit.template);
+        let own = kind.into_iter().flat_map(|k| &k.properties);
+        let (owner, held) = (organization.owner, &organization.properties);
+        let bearing = self.bearing(table, |e| &e.requires, owner, &unit.template, held);
+        let level = self.level_property(r).and_then(|p| table.get(p));
+        let effects = own.filter_map(|p| table.get(p)).chain(bearing).chain(level);
+        effects.fold(CombatEffect::default(), |sum, e| CombatEffect {
+            attack: sum.attack + e.attack,
+            defense: sum.defense + e.defense,
+            health: sum.health + e.health,
+            requires: Vec::new(),
+        })
+    }
+
+    /// The most health the unit at `u` can have.
+    pub fn max_health(&self, u: usize) -> f32 {
+        let unit = &self.units[u];
+        let base = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+        base * unit.health_factor
+    }
+
+    /// Rescales the unit at `u`'s maximum health to what its properties
+    /// make it now, keeping its share of health, never below 1 by this.
+    fn rescale_health(&mut self, u: usize) {
+        let factor = (1.0 + self.boost(u).health).max(MULTIPLY_FLOOR);
+        let unit = &mut self.units[u];
+        if factor == unit.health_factor {
+            return;
+        }
+        if unit.died.is_none() && unit.fighter.is_some() {
+            unit.health = (unit.health * factor / unit.health_factor).max(1.0);
+        }
+        unit.health_factor = factor;
+    }
+
+    /// Rescales every unit's maximum health to what its properties make it
+    /// now, as technologies arrive and properties come and go.
+    pub(crate) fn keep_health(&mut self) {
+        for u in 0..self.units.len() {
+            self.rescale_health(u);
+        }
+    }
+
+    /// The level `experience` reaches among `levels`.
+    fn level_for(levels: &[tgmap::Level], experience: f32) -> usize {
+        let reached = levels.iter().take_while(|l| l.required <= experience);
+        reached.count().saturating_sub(1)
+    }
+
+    /// Sets the organization at `r`'s experience, as a map stores it, and
+    /// its level to what that reaches, telling nobody.
+    pub(crate) fn set_experience(&mut self, r: usize, experience: f32) {
+        let Some(levels) = self.levels(r) else {
+            return;
+        };
+        let level = Self::level_for(levels, experience.max(0.0));
+        self.organizations[r].experience = experience.max(0.0);
+        self.raise_to(r, level);
+    }
+
+    /// Puts the organization at `r` at `level`, rescaling its members'
+    /// health at once. Its maximum morale waits for the next time it's
+    /// worked out.
+    fn raise_to(&mut self, r: usize, level: usize) {
+        self.organizations[r].level = level;
+        for u in self.organizations[r].units.clone() {
+            self.rescale_health(u);
+        }
+    }
+
+    /// Gives the organization at `r` `amount` experience, if it earns any,
+    /// and its side's faction its share; raising it a level or more where
+    /// that reaches them.
+    pub(crate) fn gain_experience(&mut self, r: usize, amount: f32) {
+        if amount < LEAST_GAIN || self.levels(r).is_none() {
+            return;
+        }
+        let owner = self.organizations[r].owner;
+        let experience = self.organizations[r].experience + amount;
+        self.organizations[r].experience = experience;
+        let share = amount * self.rules.experience_gains.faction_gain_multiplier;
+        if let Some(commander) = self.commanders.get_mut(&owner) {
+            commander.set(commander.experience + share);
+        }
+        let levels = self.levels(r).expect("checked");
+        let level = Self::level_for(levels, experience);
+        if level > self.organizations[r].level {
+            self.raise_to(r, level);
+            self.notices.push(Notice::Levelled {
+                player: owner,
+                organization: r,
+                level,
+            });
+        }
+    }
+
+    /// What `feat` earns a gainer worth `gainer` against a victim worth
+    /// `victim`, made from `template`.
+    fn worth(&self, feat: Feat, victim: f32, gainer: f32, template: &Id) -> f32 {
+        let gains = &self.rules.experience_gains;
+        if gainer <= 0.0 {
+            return 0.0;
+        }
+        let faked =
+            (self.rules.experience_levels.get(template)).is_some_and(|l| l.fake_value.is_some());
+        let victim = match () {
+            _ if victim > 0.0 => victim,
+            _ if faked => gains.default_value,
+            _ => -1.0,
+        };
+        let base = 0.5 + 0.5 * victim / gainer;
+        let (multiplier, kept) = match feat {
+            Feat::Kill => (gains.kill_multiplier, true),
+            Feat::Capture => (gains.capture_multiplier, true),
+            Feat::Rout => (gains.rout_multiplier, true),
+            Feat::Engagement => (gains.engage_multiplier, false),
+        };
+        let amount = base * multiplier;
+        match kept {
+            true => amount.clamp(gains.gain_minimum, gains.gain_maximum),
+            false => amount,
+        }
+    }
+
+    /// What the organization of the unit at `k` earns for killing the
+    /// enemy unit at `u`, the two worth `[victim, killer]`, and for killing
+    /// its organization if that was the last of it.
+    pub(crate) fn credit_kill(&mut self, u: usize, k: usize, [victim, killer]: [f32; 2]) {
+        let (killers, r) = (self.units[k].organization, self.units[u].organization);
+        if !self.hostile(killers, Piece::Organization(r)) {
+            return;
+        }
+        let template = self.units[u].template.clone();
+        let gain = self.worth(Feat::Kill, victim, killer, &template);
+        self.gain_experience(killers, gain);
+        if self.destroyed(r) {
+            let template = self.organizations[r].template.clone();
+            let (victim, gainer) = (self.full_value(r), self.full_value(killers));
+            let gain = self.worth(Feat::Kill, victim, gainer, &template);
+            self.gain_experience(killers, gain);
+        }
+    }
+
+    /// What the organization of `by`, a unit, earns for bringing down the
+    /// building at `b`: taking it compares the building with the whole
+    /// organization, destroying it with the unit alone.
+    pub(crate) fn credit_fall(&mut self, b: usize, by: Target, captured: bool) {
+        let Target::Unit(k) = by else {
+            return;
+        };
+        let (template, r) = (
+            self.buildings[b].template.clone(),
+            self.units[k].organization,
+        );
+        let victim = self.target_value(Target::Building(b));
+        let (feat, gainer) = match captured {
+            true => (Feat::Capture, self.full_value(r)),
+            false => (Feat::Kill, self.unit_value(k)),
+        };
+        let gain = self.worth(feat, victim, gainer, &template);
+        self.gain_experience(r, gain);
+    }
+
+    /// What each organization engaging the one at `r`, which is routing,
+    /// earns for breaking it.
+    pub(crate) fn credit_rout(&mut self, r: usize) {
+        let template = self.organizations[r].template.clone();
+        let victim = self.full_value(r);
+        let gains: Vec<(usize, f32)> = (self.engagers(r))
+            .map(|e| {
+                (
+                    e,
+                    self.worth(Feat::Rout, victim, self.full_value(e), &template),
+                )
+            })
+            .collect();
+        for (e, gain) in gains {
+            self.gain_experience(e, gain);
+        }
+    }
+
+    /// Plays a tick of organizations' experience: on each one's beat, what
+    /// a second of staying engaged earns it.
+    pub(crate) fn keep_experience(&mut self) {
+        for r in 0..self.organizations.len() {
+            if !(self.ticks + r as u64).is_multiple_of(BEAT) {
+                continue;
+            }
+            let organization = &self.organizations[r];
+            let target = organization.engaged.first().copied();
+            let engaging = target.is_some() && !self.destroyed(r);
+            let stayed = engaging && organization.engaging_before;
+            self.organizations[r].engaging_before = engaging;
+            let Some(target) = target.filter(|_| stayed) else {
+                continue;
+            };
+            let template = match target {
+                Piece::Organization(t) => self.organizations[t].template.clone(),
+                Piece::Building(b) => self.buildings[b].template.clone(),
+            };
+            let victim = self.piece_value(target);
+            let gain = self.worth(Feat::Engagement, victim, self.full_value(r), &template);
+            self.gain_experience(r, gain);
         }
     }
 }
@@ -327,5 +582,372 @@ mod tests {
             w.tick();
         }
         assert!(!w.revealed(1));
+    }
+}
+
+#[cfg(test)]
+mod regiment_tests {
+    use super::*;
+    use crate::testing::*;
+    use tgmap::{Level, Levels, MoraleEffect};
+
+    /// Player 1's and player 2's riflemen 10 apart, in each other's range
+    /// and too weak to kill each other for a long while, each in a squad
+    /// that's Regular at 10 experience and Veteran at 20.
+    fn veterans() -> World {
+        let mut w = battle(
+            &[1, 2],
+            vec![
+                soldier(vec![rifle(12.0, 0.1)]),
+                soldier(vec![rifle(12.0, 0.1)]),
+            ],
+            at_war(),
+        );
+        let level = |n: usize, required: f32| Level {
+            required,
+            property: Id::from(format!("squad_level_{n}")),
+        };
+        let levels = Levels {
+            levels: vec![level(0, 0.0), level(1, 10.0), level(2, 20.0)],
+            fake_value: None,
+        };
+        w.rules.experience_levels.insert("squad".into(), levels);
+        let regular = CombatEffect {
+            attack: 5.0,
+            defense: 2.0,
+            health: 0.5,
+            ..Default::default()
+        };
+        let veteran = CombatEffect {
+            attack: 10.0,
+            defense: 4.0,
+            health: 1.0,
+            ..Default::default()
+        };
+        w.rules
+            .combat_effects
+            .insert("squad_level_1".into(), regular);
+        w.rules
+            .combat_effects
+            .insert("squad_level_2".into(), veteran);
+        let steady = MoraleEffect {
+            morale: 3.0,
+            recovery_rate: 0.5,
+            ..Default::default()
+        };
+        w.rules
+            .morale_effects
+            .insert("squad_level_2".into(), steady);
+        w.rules.morale_values.insert("soldier".into(), 10.0);
+        for r in 0..w.organizations.len() {
+            w.refigure_morale(r, true);
+        }
+        rate(&mut w, "soldier", 10.0);
+        w
+    }
+
+    /// Credits the unit at `k`'s organization with killing the unit at `u`.
+    fn kill(w: &mut World, u: usize, k: usize) {
+        let values = [w.unit_value(u), w.unit_value(k)];
+        w.credit_kill(u, k, values);
+    }
+
+    fn levelled(w: &World) -> Vec<(usize, usize)> {
+        (w.notices().iter())
+            .filter_map(|n| match *n {
+                Notice::Levelled {
+                    organization,
+                    level,
+                    ..
+                } => Some((organization, level)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn organizations_go_up_levels_as_they_earn_and_their_side_earns_too() {
+        let mut w = veterans();
+        w.lead(1, 0.0, Some(5000.0), Vec::new());
+        assert_eq!(w.organizations[0].level, 0);
+        assert_eq!(w.level_property(0), Some(&Id::from("squad_level_0")));
+        w.gain_experience(0, 9.9);
+        assert_eq!(w.organizations[0].level, 0);
+        w.gain_experience(0, 0.1);
+        assert_eq!(w.organizations[0].level, 1);
+        // Two at once are told of together.
+        w.gain_experience(0, 15.0);
+        assert_eq!(w.organizations[0].level, 2);
+        assert_eq!(levelled(&w), [(0, 1), (0, 2)]);
+        // Past the last level experience goes on growing.
+        w.gain_experience(0, 100.0);
+        assert!((w.organizations[0].experience - 125.0).abs() < 1e-4);
+        assert_eq!(w.organizations[0].level, 2);
+        assert!((w.experience(1).unwrap() - 125.0).abs() < 1e-4);
+        // Gains too small to count are dropped, for the side too.
+        w.gain_experience(0, 0.00005);
+        assert!((w.experience(1).unwrap() - 125.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn organizations_without_levels_earn_nothing() {
+        let mut w = veterans();
+        w.lead(1, 0.0, None, Vec::new());
+        w.rules.experience_levels.clear();
+        w.gain_experience(0, 50.0);
+        assert_eq!(w.organizations[0].experience, 0.0);
+        assert_eq!(w.experience(1), Some(0.0));
+        assert_eq!(w.level_property(0), None);
+    }
+
+    #[test]
+    fn a_level_adds_attack_defense_and_health_keeping_its_share() {
+        let mut w = veterans();
+        w.units[0].health = 50.0;
+        let before = w.unit_value(0);
+        w.gain_experience(0, 10.0);
+        // Half health of half as much again.
+        assert_eq!(w.max_health(0), 150.0);
+        assert_eq!(w.units[0].health, 75.0);
+        assert_eq!(w.boosts(Some(Target::Unit(0)), Target::Unit(1)), [5.0, 0.0]);
+        assert_eq!(w.boosts(Some(Target::Unit(1)), Target::Unit(0)), [0.0, 2.0]);
+        assert_eq!(w.defense(Target::Unit(0)), Some((2.0, 0.0)));
+        // It's worth more for it.
+        assert!(w.unit_value(0) > before);
+        // The next level's replaces it rather than adding to it.
+        w.gain_experience(0, 10.0);
+        assert_eq!(w.max_health(0), 200.0);
+        assert_eq!(w.units[0].health, 100.0);
+        assert_eq!(w.boosts(None, Target::Unit(0)), [0.0, 4.0]);
+    }
+
+    #[test]
+    fn a_levels_attack_reaches_what_it_fires_on() {
+        let mut w = veterans();
+        w.gain_experience(0, 10.0);
+        w.units[1].fighter.as_mut().unwrap().weapons.clear();
+        run(&mut w, 1.0);
+        // 0.1 + 5 a shot.
+        assert!((w.units[1].health - (100.0 - 5.1)).abs() < 1e-3);
+    }
+
+    #[test]
+    fn a_levels_morale_waits_for_the_maximum_to_be_worked_out_again() {
+        let mut w = veterans();
+        assert_eq!(w.organizations[0].morale_max, 10.0);
+        w.organizations[0].morale = 5.0;
+        w.gain_experience(0, 20.0);
+        assert_eq!(w.organizations[0].morale_max, 10.0);
+        assert_eq!(w.organizations[0].morale, 5.0);
+        // Then it counts for its one man and once more for the squad.
+        w.refigure_morale(0, false);
+        assert_eq!(w.organizations[0].morale_max, 16.0);
+        assert_eq!(w.organizations[0].morale, 8.0);
+    }
+
+    #[test]
+    fn a_level_never_leaves_a_unit_below_1_health() {
+        let mut w = veterans();
+        w.rules
+            .combat_effects
+            .get_mut(&Id::from("squad_level_1"))
+            .unwrap()
+            .health = -0.9;
+        w.units[0].health = 5.0;
+        w.gain_experience(0, 10.0);
+        assert_eq!(w.units[0].health, 1.0);
+    }
+
+    #[test]
+    fn destroying_a_building_is_a_kill_of_its_own_value() {
+        let mut pillbox = building(20, 2, [10.0, 20.0]);
+        pillbox.fighter.destructible = true;
+        let mut house = building(21, 2, [10.0, 20.0]);
+        house.fighter.destructible = false;
+        for (target, destroyed) in [(pillbox, true), (house, false)] {
+            let mut w = siege(&[target]);
+            let levels = w_levels();
+            w.rules.experience_levels.insert("squad".into(), levels);
+            w.rules.experience_gains.engage_multiplier = 0.0;
+            rate(&mut w, "soldier", 10.0);
+            run(&mut w, 30.0);
+            let gone = matches!(w.buildings[0].state, crate::State::Destroyed(_));
+            assert_eq!(gone, destroyed);
+            // Unrated, it's worth the least; one only disabled, nothing.
+            let gain = match destroyed {
+                true => 0.5 - 0.5 / w.unit_value(0),
+                false => 0.0,
+            };
+            assert!((w.organizations[0].experience - gain).abs() < 1e-4);
+        }
+    }
+
+    fn w_levels() -> Levels {
+        Levels {
+            levels: vec![Level {
+                required: 0.0,
+                property: "squad_level_0".into(),
+            }],
+            fake_value: None,
+        }
+    }
+
+    #[test]
+    fn rescaling_leaves_health_alone_where_nothing_changes() {
+        let mut w = veterans();
+        w.units[0].health = 0.4;
+        w.set_experience(0, 0.0);
+        assert_eq!(w.units[0].health, 0.4);
+    }
+
+    #[test]
+    fn members_away_from_the_map_are_rescaled_too() {
+        let mut w = veterans();
+        w.units[0].left = Some(crate::Left::Unpacked(0));
+        w.units[0].health = 50.0;
+        w.gain_experience(0, 10.0);
+        assert_eq!(w.units[0].health, 75.0);
+    }
+
+    #[test]
+    fn technologies_and_held_properties_add_to_fighting_too() {
+        let mut w = veterans();
+        let tough = CombatEffect {
+            defense: 1.0,
+            health: 1.0,
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert("tough".into(), tough);
+        w.give(Piece::Organization(0), "tough".into(), 1.0);
+        w.units[1].fighter.as_mut().unwrap().weapons.clear();
+        w.units[0].health = 50.0;
+        w.tick();
+        assert_eq!((w.max_health(0), w.units[0].health), (200.0, 100.0));
+        assert_eq!(w.boosts(None, Target::Unit(0)), [0.0, 1.0]);
+        // Once it's gone, back again.
+        run(&mut w, 3.0);
+        assert_eq!(w.max_health(0), 100.0);
+        assert_eq!(w.boosts(None, Target::Unit(0)), [0.0, 0.0]);
+    }
+
+    #[test]
+    fn kills_are_worth_more_against_the_stronger() {
+        let mut w = veterans();
+        // An even kill is worth 1, and the last of an organization another
+        // for the organization as a whole.
+        w.units[1].die(0);
+        kill(&mut w, 1, 0);
+        assert!((w.organizations[0].experience - 2.0).abs() < 1e-4);
+        // One twice as strong, half as much again.
+        let mut w = veterans();
+        rate(&mut w, "strong", 10.0);
+        w.rules
+            .combat_profiles
+            .get_mut(&Id::from("strong"))
+            .unwrap()
+            .health = 400.0;
+        w.units[1].template = "strong".into();
+        let ratio = w.unit_value(1) / w.unit_value(0);
+        assert!(ratio > 1.0);
+        kill(&mut w, 1, 0);
+        let gain = 0.5 + 0.5 * ratio;
+        assert!((w.organizations[0].experience - gain).abs() < 1e-4);
+        // Killing a friend is worth nothing.
+        let mut w = veterans();
+        w.organizations[1].owner = 1;
+        kill(&mut w, 1, 0);
+        assert_eq!(w.organizations[0].experience, 0.0);
+    }
+
+    #[test]
+    fn a_kill_is_kept_within_the_gains_bounds() {
+        let mut w = veterans();
+        w.rules.experience_gains.gain_maximum = 0.8;
+        kill(&mut w, 1, 0);
+        assert!((w.organizations[0].experience - 0.8).abs() < 1e-4);
+        // A victim worth nothing counts as −1, so is worth less than half.
+        let mut w = veterans();
+        w.units[1].template = "unrated".into();
+        kill(&mut w, 1, 0);
+        let gain = 0.5 - 0.5 / w.unit_value(0);
+        assert!((w.organizations[0].experience - gain).abs() < 1e-4);
+        // Unless it's faked, when it counts as the default value.
+        let mut w = veterans();
+        w.units[1].template = "unrated".into();
+        let faked = Levels {
+            levels: Vec::new(),
+            fake_value: Some(50.0),
+        };
+        w.rules.experience_levels.insert("unrated".into(), faked);
+        kill(&mut w, 1, 0);
+        let gain = 0.5 + 0.5 / w.unit_value(0);
+        assert!((w.organizations[0].experience - gain).abs() < 1e-4);
+    }
+
+    #[test]
+    fn a_shot_that_kills_earns_the_killer() {
+        let mut w = veterans();
+        w.units[1].health = 0.05;
+        run(&mut w, 1.0);
+        assert!(!w.units[1].alive());
+        // The unit and then its organization, at 1 each.
+        assert!((w.organizations[0].experience - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn staying_engaged_earns_a_second_at_a_time_after_the_first() {
+        let mut w = veterans();
+        for unit in &mut w.units {
+            unit.fighter.as_mut().unwrap().weapons[0].damage[0].amount = 0.0;
+        }
+        run(&mut w, 1.0);
+        assert!(!w.organizations[0].engaged.is_empty());
+        assert_eq!(w.organizations[0].experience, 0.0);
+        run(&mut w, 3.0);
+        // An even match, 1 a second.
+        let earned = w.organizations[0].experience;
+        assert!((2.0..=3.0).contains(&earned), "{earned}");
+        assert!((earned - earned.round()).abs() < 1e-4);
+    }
+
+    #[test]
+    fn breaking_an_enemy_earns_those_engaging_it() {
+        let mut w = veterans();
+        run(&mut w, 0.5);
+        assert!(!w.organizations[0].engaged.is_empty());
+        w.rout(1);
+        assert!((w.organizations[0].experience - 1.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn organizations_placed_with_experience_start_at_its_level() {
+        let mut w = veterans();
+        let mut m = member(10, [30.0, 30.0], 2.0);
+        m.fighter = Some(soldier(Vec::new()));
+        let organization = tgmap::Organization {
+            hq: None,
+            id: 9,
+            template: "squad".into(),
+            owner: 1,
+            facing: [0.0, 1.0],
+            members: vec![m],
+            formations: vec![tgmap::Formation {
+                id: "line".into(),
+                offsets: vec![[0.0, 0.0]],
+                aggressive: false,
+            }],
+            formation: 0,
+            combat: None,
+            operational_range: None,
+            control_range: None,
+            primary: None,
+            morale: 1.0,
+            experience: 25.0,
+            unpacks: None,
+        };
+        let r = w.push_organization(&organization, false);
+        assert_eq!(w.organizations[r].level, 2);
+        assert_eq!(w.units[w.organizations[r].units[0]].health, 200.0);
+        assert!(levelled(&w).is_empty());
     }
 }

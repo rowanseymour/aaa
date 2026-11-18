@@ -294,7 +294,13 @@ mod tests {
         let (_, rules) = forest();
         let effect = |id: &str| &rules.effects[&Id::from(id)];
         let hit = |ground: &[&TerrainEffect]| {
-            damage(&rifle(12.0, 12.0).damage, &soldier(vec![]), ground, 1.0)
+            damage(
+                &rifle(12.0, 12.0).damage,
+                &soldier(vec![]),
+                ground,
+                1.0,
+                [0.0; 2],
+            )
         };
         assert_eq!(hit(&[]), 12.0);
         assert!((hit(&[effect("forest_infantry")]) - 4.0).abs() < 1e-5);

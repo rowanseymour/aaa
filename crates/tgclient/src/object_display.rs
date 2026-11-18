@@ -320,6 +320,8 @@ pub struct Looks {
     /// The template in each organization's primary slot, by the
     /// organization's; none for one with no such slot.
     primaries: HashMap<Id, Option<Id>>,
+    /// The names of experience levels, by their properties' ids.
+    levels: HashMap<Id, String>,
     images: HashMap<String, Option<Handle<Image>>>,
     formats: bevy::image::CompressedImageFormats,
 }
@@ -392,6 +394,7 @@ pub fn spawn(
     }
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
+        levels: game.level_names(),
         names: names.collect(),
         listings: listings.clone(),
         glyphs,
@@ -543,7 +546,9 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
             let guarding = (afield && organization.guarding()).then(|| Id::from(GUARDING));
             let mind = organization.mind.property().map(Id::from);
             let timed = organization.properties.iter().map(|h| h.property.clone());
+            let level = sim.level_property(r).cloned();
             own(&organization.template)
+                .chain(level)
                 .chain(formation.into_iter().flatten().cloned())
                 .chain(organization.terrain_properties.iter().cloned())
                 .chain(guarding)
@@ -1647,7 +1652,7 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
 fn measure(sim: &World, fill: Fill) -> (f32, f32) {
     let unit = |u: usize| {
         let unit = &sim.units[u];
-        let full = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+        let full = sim.max_health(u);
         match unit.alive() {
             true => (unit.health, full),
             false => (0.0, full),
@@ -1710,6 +1715,7 @@ impl Teller<'_> {
                     let health = of(measure(sim, Fill::Unit(u)));
                     lines.push(row("ui_tooltip_item_title_health", health));
                 }
+                lines.extend(self.experience(unit.organization));
                 // One that's dead says only what its template would.
                 if unit.alive() {
                     let owner = sim.organizations[unit.organization].owner;
@@ -1731,7 +1737,10 @@ impl Teller<'_> {
                 lines.extend(self.faction(&building.template, building.owner));
                 lines
             }
-            Says::Organization(r) => vec![name(&sim.organizations[r].template)],
+            Says::Organization(r) => {
+                let name = name(&sim.organizations[r].template);
+                std::iter::once(name).chain(self.experience(r)).collect()
+            }
             Says::Queued {
                 building: b,
                 place,
@@ -1764,6 +1773,23 @@ impl Teller<'_> {
                 lines
             }
         }
+    }
+
+    /// The experience the organization at `r` has, if it earns any: its
+    /// level's name, then its points over the next level's.
+    fn experience(&self, r: usize) -> Option<String> {
+        let sim = self.sim;
+        let level = sim.level_property(r)?;
+        let points = sim.organizations[r].experience;
+        let held = match sim.next_level(r) {
+            Some(next) => format!("{points:.0}/{next:.0}"),
+            None => format!("{points:.0}"),
+        };
+        let said = match self.looks.levels.get(level) {
+            Some(name) => format!("{name} {held}"),
+            None => held,
+        };
+        Some(self.row("ui_tooltip_item_title_experience", said))
     }
 
     /// What a template that shows its owner's faction says of them: who,

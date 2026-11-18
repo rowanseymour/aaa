@@ -539,7 +539,7 @@ impl World {
         let rate = |u: usize| {
             let unit = &self.units[u];
             let rate = self.rules.resupply_rates.get(&unit.template);
-            let health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+            let health = self.max_health(u);
             (rate.copied().unwrap_or(0.0) * pace.max(0.0), health)
         };
         let hurt = |&p: &usize| {
@@ -600,10 +600,11 @@ impl World {
         let stand = out.unwrap_or(tgmap::from_local(at, facing, [x - lx, y - ly]));
         let place = tgmap::from_local(organization.position, facing, offset(p));
         let u = organization.units[p];
+        let full = self.max_health(u);
         let unit = &mut self.units[u];
         unit.died = None;
         unit.awaited = false;
-        unit.health = unit.fighter.as_ref().map_or(0.0, |f| f.health);
+        unit.health = full;
         unit.stand_at(stand, facing);
         match points {
             Some((creation, deployment)) => {
@@ -645,15 +646,11 @@ impl World {
         for u in self.organizations[r].units.clone() {
             let (least, most) = ATTRITION;
             let share = least + (most - least) * self.chance();
+            let health = self.max_health(u);
             let unit = &mut self.units[u];
-            let Some(health) = unit
-                .fighter
-                .as_ref()
-                .map(|f| f.health)
-                .filter(|_| unit.alive())
-            else {
+            if !unit.alive() || unit.fighter.is_none() {
                 continue;
-            };
+            }
             unit.health -= rate * health * share;
             if unit.health <= 0.0 {
                 unit.die(ticks);

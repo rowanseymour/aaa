@@ -251,7 +251,11 @@ impl World {
             morale_max: 0.0,
             mind: Mind::Steady,
             engaged_before: false,
+            experience: 0.0,
+            level: 0,
+            engaging_before: false,
         });
+        self.set_experience(r, organization.experience);
         self.organizations[r].morale_max = self.maximum_morale(r);
         // A map keeps its share; what's raised starts full.
         let share = organization.morale.clamp(0.0, 1.0);
@@ -296,6 +300,7 @@ impl World {
         let fighter = m.fighter.clone();
         Unit {
             health: fighter.as_ref().map_or(0.0, |f| f.health * m.health),
+            health_factor: 1.0,
             reloads: fighter
                 .as_ref()
                 .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),

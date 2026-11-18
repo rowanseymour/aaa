@@ -125,6 +125,12 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         }
     }
     let experience = game.experience_rules();
+    let heroes = game.heroes();
+    let hero_templates = heroes.iter().map(|h| h.id.clone()).collect();
+    let combat_profiles = game.combat_profiles();
+    let combat_value_rules = game.combat_value_rules();
+    let combat_means =
+        tgsim::CombatMeans::of(&combat_profiles, &combat_value_rules, &hero_templates);
     let mut rules = tgsim::Rules {
         seed,
         terrain_rules: game.terrain_rules(),
@@ -140,10 +146,16 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         morale_values: game.morale_values(),
         morale_breakpoints: game.morale_breakpoints(),
         morale_effects: game.morale_effects(),
+        combat_value_rules,
+        combat_profiles,
+        combat_means,
+        combat_effects: game.combat_effects(),
+        experience_gains: game.experience_gains(),
+        experience_levels: game.experience_levels(),
         supply_effects: game.supply_effects(),
         kinds: game.kinds(),
         sort_objectives: game.sort_objectives(),
-        heroes: game.heroes(),
+        heroes,
         faction_groups: game.faction_groups(),
         operations,
         drops,

@@ -51,6 +51,7 @@ pub(crate) fn world(pathing: Pathing) -> World {
         control_range: None,
         primary: None,
         morale: 1.0,
+        experience: 0.0,
         unpacks: None,
     };
     World::from_organizations(Sides::default(), pathing, &[organization])
@@ -88,6 +89,7 @@ pub(crate) fn vehicle(acceleration: f32, turn_rate: f32, trailer: Option<tgmap::
         control_range: None,
         primary: None,
         morale: 1.0,
+        experience: 0.0,
         unpacks: None,
     };
     World::from_organizations(
@@ -174,6 +176,7 @@ pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> Wo
                 control_range: Some(18.0),
                 primary: None,
                 morale: 1.0,
+                experience: 0.0,
                 unpacks: None,
             }
         })
@@ -407,6 +410,7 @@ pub(crate) fn truck() -> tgmap::Organization {
         control_range: None,
         primary: Some(0),
         morale: 1.0,
+        experience: 0.0,
         unpacks: Some(Unpacks {
             building: depot,
             room: Shape::Rect {
@@ -621,4 +625,29 @@ pub(crate) fn kind(properties: &[&str]) -> tgmap::Kind {
         properties: properties.iter().map(|&p| Id::from(p)).collect(),
         ..tgmap::Kind::default()
     }
+}
+
+/// Measures combat values in `w` against an average of 100 health, no
+/// defense, speed 2 and 10 damage, and gives `template` the figures of a
+/// rifleman doing `damage` every 2 seconds at range 12.
+pub(crate) fn rate(w: &mut World, template: &str, damage: f32) {
+    w.rules.combat_means = crate::CombatMeans {
+        attack: 10.0,
+        defense: 0.0,
+        speed: 2.0,
+        health: 100.0,
+    };
+    let profile = tgmap::CombatProfile {
+        health: 100.0,
+        defense: 0.0,
+        speed: Some(2.0),
+        abilities: vec![tgmap::CombatAbility {
+            damage,
+            range: 12.0,
+            area: 0.0,
+            cycle: 2.0,
+            ignored: false,
+        }],
+    };
+    w.rules.combat_profiles.insert(template.into(), profile);
 }

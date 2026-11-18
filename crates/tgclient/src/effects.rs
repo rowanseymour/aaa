@@ -653,7 +653,7 @@ fn notice(
         let fighter = unit.fighter.as_ref();
         let now = Now {
             states: unit_states(unit),
-            health: share(unit.health, fighter.map_or(0.0, |f| f.health)),
+            health: share(unit.health, sim.max_health(view.unit)),
             shot: unit.shot,
             weapon: unit.shot.and_then(|(_, w)| fighter?.weapons.get(w)),
             target: unit.target,

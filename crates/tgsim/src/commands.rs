@@ -652,6 +652,7 @@ mod tests {
             control_range: None,
             primary: None,
             morale: 1.0,
+            experience: 0.0,
             unpacks: None,
         };
         let r = w.add_organization(&second);

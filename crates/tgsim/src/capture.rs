@@ -121,11 +121,11 @@ impl World {
             .filter(|&t| counts(self.owner(t)))
             .filter_map(|t| {
                 let f = self.fighter(t).filter(|f| !f.weapons.is_empty())?;
-                let health = match t {
-                    Target::Unit(u) => self.units[u].health,
-                    Target::Building(b) => self.buildings[b].health,
+                let (health, full) = match t {
+                    Target::Unit(u) => (self.units[u].health, self.max_health(u)),
+                    Target::Building(b) => (self.buildings[b].health, f.health),
                 };
-                Some((self.owner(t), health / f.health))
+                Some((self.owner(t), health / full))
             })
             .collect()
     }
@@ -182,6 +182,33 @@ mod tests {
 
     fn captured(building: usize, player: u32) -> Notice {
         Notice::Captured { player, building }
+    }
+
+    #[test]
+    fn taking_a_building_earns_the_regiment_of_the_unit_that_took_it() {
+        let mut bunker = building(20, 2, [10.0, 20.0]);
+        bunker.fighter.capturable = true;
+        let mut w = siege(&[bunker]);
+        let levels = tgmap::Levels {
+            levels: vec![tgmap::Level {
+                required: 0.0,
+                property: "squad_level_0".into(),
+            }],
+            fake_value: None,
+        };
+        w.rules.experience_levels.insert("squad".into(), levels);
+        // Only the capture counts here, not the engagement before it.
+        w.rules.experience_gains.engage_multiplier = 0.0;
+        rate(&mut w, "soldier", 10.0);
+        rate(&mut w, "house", 10.0);
+        let mut fixed = w.rules.combat_profiles[&tgmap::Id::from("house")].clone();
+        fixed.speed = None;
+        w.rules.combat_profiles.insert("house".into(), fixed);
+        run(&mut w, 30.0);
+        assert_eq!(w.buildings[0].owner, 1);
+        // Worth 0.8 of the rifleman that took it.
+        let gain = 0.5 + 0.5 * 0.8;
+        assert!((w.organizations[0].experience - gain).abs() < 1e-3);
     }
 
     #[test]
