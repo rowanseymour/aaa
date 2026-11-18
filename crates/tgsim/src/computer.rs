@@ -5,10 +5,12 @@ use crate::{Command, World};
 /// Gives the orders of one side nobody else plays. Only whatever hosts
 /// the match runs one, and what it orders reaches every copy of the
 /// match as a person's orders do, so it needn't decide the same way
-/// twice.
+/// twice. It thinks in the host's turn, holding up everyone, so it has to
+/// be quick: work that takes longer is spread over turns, or done apart and
+/// taken up once it's done.
 pub trait ComputerPlayer: Send + Sync {
     /// The orders it gives side `player` as the match stands in `world`,
-    /// before its next tick.
+    /// before each tick it's played.
     fn think(&mut self, world: &World, player: u32) -> Vec<Command>;
 }
 
