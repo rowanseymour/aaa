@@ -16,7 +16,8 @@ impl Plugin for MenuPlugin {
         app.add_sub_state::<MenuPage>()
             .add_systems(OnEnter(Screen::MainMenu), backdrop)
             .add_systems(OnEnter(MenuPage::Top), main_menu)
-            .add_systems(OnEnter(MenuPage::NewGame), new_game);
+            .add_systems(OnEnter(MenuPage::NewGame), new_game)
+            .add_systems(OnEnter(MenuPage::Multiplayer), multiplayer);
     }
 }
 
@@ -27,6 +28,7 @@ pub(crate) enum MenuPage {
     #[default]
     Top,
     NewGame,
+    Multiplayer,
 }
 
 /// Asks whether to exit the game, and does if so.
@@ -153,7 +155,13 @@ fn main_menu(
             ChildOf(column),
         ))
         .observe(open(MenuPage::NewGame));
-    commands.spawn((disabled("Multiplayer", Font::Large), ChildOf(column)));
+    commands
+        .spawn((
+            button("Multiplayer", Font::Large),
+            called("menu.multiplayer"),
+            ChildOf(column),
+        ))
+        .observe(open(MenuPage::Multiplayer));
     commands
         .spawn((
             button("Options", Font::Large),
@@ -181,6 +189,26 @@ fn new_game(mut commands: Commands) {
             ChildOf(column),
         ))
         .observe(go(Screen::Lobby));
+    commands.spawn((spacer(), ChildOf(column)));
+    commands
+        .spawn((
+            button("Back", Font::Large),
+            called("menu.back"),
+            ChildOf(column),
+        ))
+        .observe(open(MenuPage::Top));
+}
+
+fn multiplayer(mut commands: Commands) {
+    let column = column(&mut commands, MenuPage::Multiplayer);
+    commands
+        .spawn((
+            button("LAN", Font::Large),
+            called("menu.lan"),
+            ChildOf(column),
+        ))
+        .observe(go(Screen::Lan));
+    commands.spawn((disabled("Internet", Font::Large), ChildOf(column)));
     commands.spawn((spacer(), ChildOf(column)));
     commands
         .spawn((

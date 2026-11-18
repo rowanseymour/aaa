@@ -8,11 +8,12 @@
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use tgsim::Action;
 
+use crate::lobby::{Choice, Staging, Told};
 use crate::{Refusal, Setup};
 
 /// The version of all this that this build speaks: a host lets in only
 /// clients that speak its own.
-pub const PROTOCOL: u32 = 13;
+pub const PROTOCOL: u32 = 14;
 
 /// What a client first says to a host: that it wants in.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -23,6 +24,8 @@ pub struct Join {
     pub players: Vec<u32>,
     /// What the person at it goes by.
     pub name: String,
+    /// The game's password, if it has one.
+    pub password: String,
 }
 
 /// From a client to the host.
@@ -47,6 +50,8 @@ pub enum ToHost {
     Kick { client: u32, vote: bool },
     /// Words for everyone, to pass on at once, outside the steps.
     Say(String),
+    /// Asks for a change to what a game being set up has chosen.
+    Choose(Choice),
 }
 
 /// From the host to a client.
@@ -79,6 +84,13 @@ pub enum ToClient {
     /// Words a client said for everyone, passed on at once, held match or
     /// not, and so in no step.
     Said(Said),
+    /// The client is let in to a game being set up, as what the host
+    /// knows it as and what the person at it goes by there.
+    Entered { client: u32, name: String },
+    /// What a game being set up has chosen so far.
+    Staging(Staging),
+    /// Something to tell of a game being set up.
+    Told(Told),
 }
 
 /// Words a client said for everyone.
@@ -302,6 +314,7 @@ mod tests {
             protocol: PROTOCOL,
             players: vec![3],
             name: "Bob".into(),
+            password: String::new(),
         };
         assert_eq!(decode(&encode(&join)), Some(join));
         for message in to_client {

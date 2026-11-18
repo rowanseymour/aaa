@@ -5,9 +5,12 @@ mod client;
 mod clock;
 mod film;
 mod host;
+pub mod lan;
 mod link;
+mod lobby;
 mod names;
 mod pausing;
+pub mod presets;
 pub mod protocol;
 pub mod quic;
 #[cfg(test)]
@@ -25,8 +28,9 @@ use tgsim::World;
 pub use client::{Client, NotJoined, enter, join, welcome};
 pub use clock::Clock;
 pub use film::{Film, NotFilm};
-pub use host::{Event, Host, Refusal, allows, sayable};
+pub use host::{Event, Host, Refusal, allows, refuse, sayable};
 pub use link::{Link, Local, Lost, pair};
+pub use lobby::{COUNTDOWN, Choice, Entry, Guest, Lobby, Staging, Told, enter_lobby};
 pub use names::{NAME_LONGEST, NUMBERED, Naming, TAKEN_OVER, default_name, name, unique};
 
 /// What a match is played on and by, as its lobby leaves it: all that

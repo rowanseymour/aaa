@@ -126,6 +126,13 @@ pub struct Look {
     ping: PingLook,
 }
 
+impl Look {
+    /// The glyph drawn before a ping of `ms` milliseconds.
+    pub(crate) fn ping_glyph(&self, ms: u32) -> Option<Handle<Image>> {
+        self.pings.get(self.ping.glyph(ms)?).cloned()
+    }
+}
+
 /// Whether the dialog is open, and why.
 #[derive(Resource, Default)]
 pub struct Dialog {

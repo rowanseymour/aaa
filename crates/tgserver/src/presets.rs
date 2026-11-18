@@ -1,13 +1,15 @@
 //! The ways a lobby can arrange a map's sides into teams: as the map has
 //! them, so many equal teams, or everyone for themselves.
 
+use serde::{Deserialize, Serialize};
 use tgmap::Player;
 
 /// The most sides a match has.
 const MOST: usize = 8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Preset {
+    #[default]
     /// The teams the map was made with, every side playing.
     Custom,
     /// So many teams of so many sides.
