@@ -5,8 +5,8 @@ root=$(git rev-parse --show-toplevel)
 
 usage() {
     echo "usage: $0 aa|k2|server|editor [map] [--data=dir] [app options...]" >&2
-    echo "  aa          play AA (aaa-game)" >&2
-    echo "  k2          play K2 (k2-game)" >&2
+    echo "  aa          play AA (tag-aa)" >&2
+    echo "  k2          play K2 (tag-k2)" >&2
     echo "  server      host or play a match with no window (tgserver)" >&2
     echo "  editor      view maps (tgeditor)" >&2
     echo "  --data=dir  path to your legally owned copy of the game" >&2
@@ -16,8 +16,8 @@ usage() {
 
 install=AA_INSTALL
 case $1 in
-aa) app=aaa-game ;;
-k2) app=k2-game; install=K2_INSTALL ;;
+aa) app=tag-aa ;;
+k2) app=tag-k2; install=K2_INSTALL ;;
 server) app=tgserver ;;
 editor) app=tgeditor ;;
 *) usage ;;

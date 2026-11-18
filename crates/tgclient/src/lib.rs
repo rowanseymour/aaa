@@ -148,7 +148,8 @@ options:
 /// What a game's program says of it that its data doesn't.
 #[derive(Resource, Clone)]
 pub struct Program {
-    /// The program's name, for its window, usage and errors.
+    /// The program's name, for its usage, errors and the folder its
+    /// options are kept in.
     pub name: &'static str,
     /// What the game's data calls the game, as [`GameData::is_of`] takes
     /// it: the program plays only data of its own game.
@@ -158,7 +159,8 @@ pub struct Program {
     /// Our emblem for the game, as a PNG, crowning the main menu; without
     /// one that can be read, the menu is headed by [`Program::title`].
     pub logo: Option<&'static [u8]>,
-    /// What the game is called on the main menu without a logo.
+    /// What the game is called on its window, and on the main menu
+    /// without a logo.
     pub title: &'static str,
     /// The colours the interface is drawn in.
     pub palette: Palette,
@@ -853,7 +855,7 @@ pub fn run(program: Program) -> ExitCode {
     };
 
     let mut app = App::new();
-    let mut window = shot::window(program.name.into(), screenshot.is_some());
+    let mut window = shot::window(program.title.into(), screenshot.is_some());
     // Its size, and whether it fills the screen, are chosen in the options.
     if let Some(window) = &mut window.primary_window {
         window.resizable = false;
@@ -1594,7 +1596,7 @@ fn title_window(
     mut window: Option<Single<&mut Window, With<PrimaryWindow>>>,
 ) {
     if let Some(window) = &mut window {
-        window.title = format!("{} - {}", loaded.map.title, program.name);
+        window.title = format!("{} - {}", loaded.map.title, program.title);
     }
 }
 

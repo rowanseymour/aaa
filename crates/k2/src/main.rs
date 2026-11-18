@@ -6,7 +6,7 @@ use tgclient::{Color, Palette, Program, View};
 
 fn main() -> ExitCode {
     tgclient::run(Program {
-        name: "k2-game",
+        name: "tag-k2",
         tag: "k2",
         example_map: "(1v1)Battleground",
         logo: None,

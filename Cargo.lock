@@ -3,13 +3,6 @@
 version = 4
 
 [[package]]
-name = "aaa-game"
-version = "0.1.0-alpha"
-dependencies = [
- "tgclient",
-]
-
-[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3723,13 +3716,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "k2-game"
-version = "0.1.0-alpha"
-dependencies = [
- "tgclient",
-]
-
-[[package]]
 name = "khronos-egl"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5784,6 +5770,20 @@ dependencies = [
  "serde",
  "slotmap",
  "smallvec",
+]
+
+[[package]]
+name = "tag-aa"
+version = "0.1.0-alpha"
+dependencies = [
+ "tgclient",
+]
+
+[[package]]
+name = "tag-k2"
+version = "0.1.0-alpha"
+dependencies = [
+ "tgclient",
 ]
 
 [[package]]

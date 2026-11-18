@@ -6,7 +6,7 @@ use tgclient::{Color, Palette, Program, View};
 
 fn main() -> ExitCode {
     tgclient::run(Program {
-        name: "aaa-game",
+        name: "tag-aa",
         tag: "aa",
         example_map: "allies10_berlin",
         logo: Some(include_bytes!("../../../assets/logo/logo.png")),

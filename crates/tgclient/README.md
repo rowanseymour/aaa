@@ -7,8 +7,8 @@ game's lobby, where you pick a map, how its sides team up and the side you
 play, the computer taking the rest, or starts straight away on a map it's
 given.
 
-It's a library: each game's own program, such as [`aaa-game`](../aaa) or
-[`k2-game`](../k2), runs it with what that game's data doesn't say, such as
+It's a library: each game's own program, such as [`tag-aa`](../aaa) or
+[`tag-k2`](../k2), runs it with what that game's data doesn't say, such as
 its name and what its main menu stands over. Everything else comes from the
 game's data.
 
