@@ -132,8 +132,8 @@ options:
   --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
                             though smaller if the window's too narrow for it
   --options <file.toml>     keep the options chosen in this file rather than
-                            the usual one, which runs with --exec, --console,
-                            --screenshot or --headless leave alone
+                            the usual one, which runs for testing, e.g. with
+                            --console, leave alone
   --original-hud            draw the original game's in-match interface in place
                             of this project's
   --fog <setting>           none, explored or full: how much of the map the fog

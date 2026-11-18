@@ -284,24 +284,17 @@ impl Display {
         }
     }
 
-    fn mode(self) -> WindowMode {
-        match self {
-            Display::Windowed => WindowMode::Windowed,
-            Display::Borderless => WindowMode::BorderlessFullscreen(MonitorSelection::Current),
-            Display::Fullscreen => {
-                WindowMode::Fullscreen(MonitorSelection::Current, VideoModeSelection::Current)
-            }
-        }
+    pub fn mode(self) -> WindowMode {
+        self.mode_on(MonitorSelection::Current)
     }
 
-    /// As [`mode`](Self::mode), for a window not yet on any screen.
-    pub fn starting_mode(self) -> WindowMode {
-        match self.mode() {
-            WindowMode::BorderlessFullscreen(_) => {
-                WindowMode::BorderlessFullscreen(MonitorSelection::Primary)
-            }
-            WindowMode::Fullscreen(_, v) => WindowMode::Fullscreen(MonitorSelection::Primary, v),
-            m => m,
+    /// As [`mode`](Self::mode), on the screen `on` rather than the one the
+    /// window's on.
+    pub fn mode_on(self, on: MonitorSelection) -> WindowMode {
+        match self {
+            Display::Windowed => WindowMode::Windowed,
+            Display::Borderless => WindowMode::BorderlessFullscreen(on),
+            Display::Fullscreen => WindowMode::Fullscreen(on, VideoModeSelection::Current),
         }
     }
 }
@@ -438,6 +431,25 @@ const RESOLUTIONS: [(u32, u32); 9] = [
     (3840, 2160),
 ];
 
+/// Whether a window is on Wayland, which has no exclusive fullscreen: asked
+/// for, it does nothing.
+pub fn on_wayland(handle: &RawHandleWrapper) -> bool {
+    matches!(handle.get_display_handle(), RawDisplayHandle::Wayland(_))
+}
+
+/// A screen's size in logical pixels, as a window's is given.
+pub fn room(monitor: &Monitor) -> UVec2 {
+    let size = UVec2::new(monitor.physical_width, monitor.physical_height).as_dvec2();
+    (size / monitor.scale_factor).as_uvec2()
+}
+
+/// The sizes offered for the window, smallest first, of those smaller than
+/// a screen with `room`, which leaves room for its frame.
+pub fn fitting(room: Option<UVec2>) -> impl Iterator<Item = UVec2> {
+    let sizes = RESOLUTIONS.iter().map(|&(w, h)| UVec2::new(w, h));
+    sizes.filter(move |s| room.is_none_or(|room| s.cmplt(room).all()))
+}
+
 pub struct OptionsPlugin;
 
 impl Plugin for OptionsPlugin {
@@ -450,7 +462,7 @@ impl Plugin for OptionsPlugin {
             .add_systems(OnEnter(Screen::Options), screen)
             .add_observer(set_volume)
             .add_observer(type_in_nickname)
-            .add_systems(PreUpdate, (no_fullscreen_on_wayland, follow_window))
+            .add_systems(PreUpdate, follow_window)
             .add_systems(PostUpdate, anti_alias)
             .add_systems(
                 Update,
@@ -838,9 +850,7 @@ fn show_display(
     }
     *shown = display;
     // Wayland has no exclusive fullscreen: asked for, it does nothing.
-    let wayland = window
-        .and_then(|(_, h)| h)
-        .is_some_and(|h| matches!(h.get_display_handle(), RawDisplayHandle::Wayland(_)));
+    let wayland = window.and_then(|(_, h)| h).is_some_and(on_wayland);
     let choices = Display::ALL.iter().copied();
     let choices = choices.filter(|d| !(wayland && *d == Display::Fullscreen));
     listed(
@@ -881,27 +891,10 @@ fn choose_display(
     *open = Open::Nothing;
 }
 
-/// Has a window that starts fullscreen on Wayland, which has no exclusive
-/// fullscreen and so ignores it, take the screen borderless instead.
-fn no_fullscreen_on_wayland(
-    mut window: Query<(&mut Window, Ref<RawHandleWrapper>), With<PrimaryWindow>>,
-) {
-    let Ok((mut window, handle)) = window.single_mut() else {
-        return;
-    };
-    if !handle.is_added() {
-        return;
-    }
-    let wayland = matches!(handle.get_display_handle(), RawDisplayHandle::Wayland(_));
-    if wayland && Display::of(window.mode) == Display::Fullscreen {
-        window.mode = Display::Borderless.mode();
-    }
-}
-
 /// Keeps the window's mode to what it is when the platform changes it, as
 /// on leaving fullscreen by the system's own shortcut, so the options say
 /// what it is and choosing the mode it had again isn't taken as no change.
-fn follow_window(
+pub fn follow_window(
     mut resized: MessageReader<WindowResized>,
     mut window: Query<(Entity, &mut Window), With<PrimaryWindow>>,
     _winit: NonSendMarker,
@@ -965,13 +958,8 @@ fn show_resolution(
     let on = window
         .and_then(|(_, on)| on)
         .and_then(|on| monitors.get(on.0).ok());
-    let room = on.or(primary.single().ok()).map(|m| {
-        let size = UVec2::new(m.physical_width, m.physical_height).as_dvec2();
-        (size / m.scale_factor).as_uvec2()
-    });
-    let sizes = RESOLUTIONS.iter().map(|&(w, h)| UVec2::new(w, h));
-    let sizes = sizes.filter(|s| room.is_none_or(|room| s.cmplt(room).all()));
-    let choices = sizes.map(|s| {
+    let room = on.or(primary.single().ok()).map(room);
+    let choices = fitting(room).map(|s| {
         let size = format!("{}x{}", s.x, s.y);
         (size.clone(), (ResolutionChoice(s), InList), size)
     });

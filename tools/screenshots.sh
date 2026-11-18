@@ -177,10 +177,14 @@ build() {
     cargo build --release -p "$(game_in "$checkout")" -p "$(editor_in "$checkout")" --manifest-path "$checkout/Cargo.toml" "$@"
 }
 
-# The AA game's package in a checkout, which has a different name in a ref
-# from before its rename.
+# The AA game's package in a checkout, which has a different name, and
+# folder, in a ref from before its renames.
 game_in() {
-    sed -n 's/^name = "\(.*\)"/\1/p' "$1/crates/aaa/Cargo.toml"
+    if [ -f "$1/crates/aaa/Cargo.toml" ]; then
+        sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' "$1/crates/aaa/Cargo.toml" | head -n 1
+    else
+        echo aaa-game
+    fi
 }
 
 # The editor's package in a checkout, which has a different name in a ref from

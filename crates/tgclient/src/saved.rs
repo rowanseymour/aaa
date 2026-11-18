@@ -8,10 +8,15 @@
 use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
-use bevy::window::PrimaryWindow;
+use bevy::window::{
+    Monitor, MonitorSelection, PrimaryMonitor, PrimaryWindow, RawHandleWrapper, WindowPosition,
+    WindowResized,
+};
 use serde::{Deserialize, Serialize};
 
-use crate::options::{AntiAliasing, Display, Options, Page, WindowedSize, size_of};
+use crate::options::{
+    AntiAliasing, Display, Options, Page, WindowedSize, fitting, on_wayland, room, size_of,
+};
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
 use crate::{Nickname, UI_SCALES, UiScaleSetting};
@@ -36,6 +41,9 @@ pub struct Chosen {
     pub display: Option<Display>,
     /// The window's size while windowed.
     pub resolution: Option<[u32; 2]>,
+    /// Where the window is, in physical pixels, which also says the screen
+    /// it takes in borderless or fullscreen.
+    pub position: Option<[i32; 2]>,
     pub anti_aliasing: Option<AntiAliasing>,
     pub ui_scale: Option<f32>,
     #[serde(skip_serializing_if = "unset")]
@@ -47,10 +55,10 @@ pub struct Chosen {
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
 #[serde(default)]
 pub struct Levels {
-    pub main: Option<f32>,
-    pub fx: Option<f32>,
-    pub speech: Option<f32>,
-    pub music: Option<f32>,
+    pub main: Option<f64>,
+    pub fx: Option<f64>,
+    pub speech: Option<f64>,
+    pub music: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
@@ -66,7 +74,7 @@ fn unset<T: Default + PartialEq>(table: &T) -> bool {
 }
 
 impl Levels {
-    fn get(&self, channel: Channel) -> Option<f32> {
+    fn get(&self, channel: Channel) -> Option<f64> {
         match channel {
             Channel::Main => self.main,
             Channel::Fx => self.fx,
@@ -131,14 +139,19 @@ impl Saved {
         self.chosen.ui_scale.filter(|s| UI_SCALES.contains(s))
     }
 
-    /// Sizes and places `window` as kept.
+    /// Sizes and places `window` as kept, windowed until [`restore`] has
+    /// it take the screen it's on, as it isn't on any yet.
     pub fn shape(&self, window: &mut Window) {
-        if let Some([x, y]) = self.chosen.resolution.filter(|r| r.iter().all(|&n| n > 0)) {
+        if let Some([x, y]) = self.resolution() {
             window.resolution.set(x as f32, y as f32);
         }
-        if let Some(display) = self.chosen.display {
-            window.mode = display.starting_mode();
+        if let Some([x, y]) = self.chosen.position {
+            window.position = WindowPosition::At(IVec2::new(x, y));
         }
+    }
+
+    fn resolution(&self) -> Option<[u32; 2]> {
+        self.chosen.resolution.filter(|r| r.iter().all(|&n| n > 0))
     }
 
     /// Has the app's options start as kept, where the command line didn't
@@ -157,7 +170,7 @@ impl Saved {
         let mut volumes = world.resource_mut::<Volumes>();
         for channel in Channel::ALL {
             if let Some(level) = chosen.volume.get(channel) {
-                volumes.set(channel, level);
+                volumes.set(channel, level as f32);
             }
         }
         let mut sounds = world.resource_mut::<Sounds>();
@@ -166,11 +179,6 @@ impl Saved {
         }
         if let Some(on) = chosen.sounds.replies {
             sounds.switches.replies = on;
-        }
-        // To go back to on leaving the whole screen.
-        let windowed = chosen.display.is_some_and(|d| d != Display::Windowed);
-        if let (true, Some([x, y])) = (windowed, chosen.resolution) {
-            world.insert_resource(WindowedSize(Some(Vec2::new(x as f32, y as f32))));
         }
     }
 
@@ -250,8 +258,80 @@ pub struct SavedPlugin;
 
 impl Plugin for SavedPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(Last, keep.run_if(resource_exists::<Saved>));
+        // After the window's mode follows a resize, which the window being
+        // made has, so as not to be taken for the platform leaving the mode.
+        app.add_systems(
+            PreUpdate,
+            restore
+                .after(crate::options::follow_window)
+                .run_if(resource_exists::<Saved>),
+        )
+        .add_systems(Last, keep.run_if(resource_exists::<Saved>));
     }
+}
+
+/// Once the window is made, keeps it on a screen there still is, no bigger
+/// than the options would offer for it, and then, once it's settled there,
+/// has it take that screen as kept: a window still being sized as it's
+/// made would be taken back out of it.
+fn restore(
+    mut commands: Commands,
+    saved: Res<Saved>,
+    mut window: Query<(&mut Window, Ref<RawHandleWrapper>), With<PrimaryWindow>>,
+    monitors: Query<(Entity, &Monitor, Has<PrimaryMonitor>)>,
+    mut resized: MessageReader<WindowResized>,
+    mut taking: Local<Option<(Display, MonitorSelection)>>,
+) {
+    let settling = resized.read().count() > 0;
+    let Ok((mut window, handle)) = window.single_mut() else {
+        return;
+    };
+    if let Some((display, on)) = *taking
+        && !settling
+    {
+        *taking = None;
+        // To go back to on leaving the whole screen.
+        commands.insert_resource(WindowedSize(Some(window.size())));
+        window.mode = display.mode_on(on);
+    }
+    if !handle.is_added() {
+        return;
+    }
+    let at = match window.position {
+        WindowPosition::At(at) => Some(at),
+        _ => None,
+    };
+    let on = |m: &Monitor| {
+        let size = IVec2::new(m.physical_width as i32, m.physical_height as i32);
+        at.is_some_and(|at| {
+            at.cmpge(m.physical_position).all() && at.cmplt(m.physical_position + size).all()
+        })
+    };
+    let primary = monitors.iter().find(|(_, _, p)| *p).map(|(_, m, _)| m);
+    let monitor = monitors.iter().find(|(_, m, _)| on(m));
+    if at.is_some() && monitor.is_none() && !monitors.is_empty() {
+        window.position = WindowPosition::Centered(MonitorSelection::Primary);
+    }
+    let screen = monitor.map_or(MonitorSelection::Primary, |(e, _, _)| {
+        MonitorSelection::Entity(e)
+    });
+    let room = monitor.map(|(_, m, _)| m).or(primary).map(room);
+    if room.is_some_and(|room| !size_of(&window).cmplt(room).all())
+        && let Some(fits) = fitting(room).last()
+    {
+        window.resolution.set(fits.x as f32, fits.y as f32);
+    }
+    let display = match saved.chosen.display {
+        Some(Display::Fullscreen) if on_wayland(&handle) => Some(Display::Borderless),
+        Some(Display::Windowed) | None => None,
+        d => d,
+    };
+    *taking = display.map(|d| (d, screen));
+}
+
+/// A volume as kept, to the nearest percent, which writes as it reads.
+fn percent(level: f32) -> f64 {
+    (f64::from(level) * 100.0).round() / 100.0
 }
 
 /// Seconds after the last change that the options are written.
@@ -267,37 +347,56 @@ struct Now<'w, 's> {
     ui_scale: Res<'w, UiScaleSetting>,
     volumes: Res<'w, Volumes>,
     sounds: Res<'w, Sounds>,
-    window: Query<'w, 's, Ref<'static, Window>, With<PrimaryWindow>>,
+    window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
+    /// What [`Now::shown`] last was.
+    shown: Local<'s, Option<Shown>>,
 }
+
+/// What of the window the options keep, which changes far less often than
+/// the window does, e.g. as the cursor moves over it.
+type Shown = (Option<Display>, Option<[u32; 2]>, Option<[i32; 2]>);
 
 impl Now<'_, '_> {
     /// Whether any of the options may have changed since last looked at.
-    fn changed(&self) -> bool {
-        self.nickname.is_changed()
+    fn changed(&mut self) -> bool {
+        let shown = Some(self.shown());
+        let moved = *self.shown != shown;
+        *self.shown = shown;
+        moved
+            || self.nickname.is_changed()
             || self.options.is_changed()
             || self.border.is_changed()
             || self.anti_aliasing.is_changed()
             || self.ui_scale.is_changed()
             || self.volumes.is_changed()
             || self.sounds.is_changed()
-            || self.window.iter().any(|w| w.is_changed())
     }
 
-    fn chosen(&self) -> Chosen {
+    fn shown(&self) -> Shown {
         let window = self.window.single().ok();
-        let display = window.as_ref().map(|w| Display::of(w.mode));
+        let display = window.map(|w| Display::of(w.mode));
         // Taking the whole screen sizes the window to it.
         let resolution = window
             .filter(|_| display == Some(Display::Windowed))
-            .map(|w| size_of(&w).to_array());
+            .map(|w| size_of(w).to_array());
+        let position = window.and_then(|w| match w.position {
+            WindowPosition::At(at) => Some(at.to_array()),
+            _ => None,
+        });
+        (display, resolution, position)
+    }
+
+    fn chosen(&self) -> Chosen {
+        let (display, resolution, position) = self.shown();
         let volumes = *self.volumes;
-        let level = |c| Some(volumes.get(c));
+        let level = |c| Some(percent(volumes.get(c)));
         Chosen {
             nickname: Some(self.nickname.0.clone()),
             hotkeys: self.options.hotkeys().map(|c| c.id.as_str().to_string()),
             supply_border: Some(self.border.0),
             display,
             resolution,
+            position,
             anti_aliasing: Some(*self.anti_aliasing),
             ui_scale: Some(self.ui_scale.0),
             volume: Levels {
@@ -315,7 +414,7 @@ impl Now<'_, '_> {
 }
 
 fn keep(
-    now: Now,
+    mut now: Now,
     mut saved: ResMut<Saved>,
     mut before: Local<Option<Chosen>>,
     pages: Query<(), With<Page>>,
@@ -448,6 +547,16 @@ mod tests {
             (None, Some(0.5), Some(0.25))
         );
         assert!(!saved.note(&level(0.25), &level(0.25)));
+    }
+
+    #[test]
+    fn a_volume_is_written_as_it_reads() {
+        let mut chosen = Chosen::default();
+        chosen.volume.music = Some(percent(0.73));
+        chosen.volume.fx = Some(percent(0.7349));
+        let text = toml::to_string(&chosen).unwrap();
+        assert!(text.contains("music = 0.73\n"), "{text}");
+        assert!(text.contains("fx = 0.73\n"), "{text}");
     }
 
     #[test]
