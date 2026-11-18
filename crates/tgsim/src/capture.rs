@@ -20,7 +20,10 @@ impl World {
             building.health = CAPTURE_HEALTH * building.fighter.health * building.health_factor;
             self.change_hands(b, by);
         } else if building.fighter.destructible {
-            let owner = building.owner;
+            let (owner, struck) = (building.owner, building.struck);
+            if let Some(by) = self.killer(struck, owner) {
+                self.credit_fall(b, by, false);
+            }
             self.remove(b, State::Destroyed(ticks));
             let what = Piece::Building(b);
             self.notices.push(Notice::Destroyed { owner, what });

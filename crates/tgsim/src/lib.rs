@@ -51,6 +51,7 @@ use tgmap::{
 };
 
 pub use attach::Hq;
+pub use combat::Struck;
 pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::{Commander, Operated, SpecialOp};
@@ -286,6 +287,8 @@ pub struct Organization {
     pub bombarding: bool,
     /// What has bombarded it lately, which keeps it out of supply.
     pub bombarded: Vec<Bombarder>,
+    /// The last hit an enemy dealt any of its members.
+    pub struck: Option<Struck>,
     /// The properties it has for a time, such as an operation's.
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
@@ -504,6 +507,8 @@ pub struct Unit {
     pub died: Option<u64>,
     /// While it's under siege, the tick that may end on.
     pub besieged: Option<u64>,
+    /// The last hit an enemy dealt it.
+    pub struck: Option<Struck>,
     /// How it left the map without dying, if it has.
     pub left: Option<Left>,
     /// Whether it's yet to join its organization, as a recruit's members are
@@ -583,6 +588,8 @@ pub struct Building {
     inside: BTreeMap<Target, Footing>,
     /// While it's under siege, the tick that may end on.
     pub besieged: Option<u64>,
+    /// The last hit an enemy dealt it.
+    pub struck: Option<Struck>,
     /// Where each of its fighter's turrets points.
     pub turrets: Vec<TurretAim>,
     /// The tick it last fired on, and the index of the weapon it fired.
@@ -1015,7 +1022,7 @@ impl World {
             let unit = &mut self.units[u];
             if unit.alive() {
                 unit.die(self.ticks);
-                self.mourn(u, None);
+                self.mourn(u);
                 self.lost_member(u);
             }
         }
@@ -1170,7 +1177,7 @@ digest!(Organization {
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
     guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before, experience,
-    level, engaging_before, efficiency,
+    level, engaging_before, efficiency, struck,
 } skip {
     // Its template's.
     formations, unpacks,
@@ -1196,7 +1203,7 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, acceleration, turn_rate, turn_radius, trailer, closing, health,
     health_factor,
-    fired_ago, target, shot, died, besieged, left, awaited, descent,
+    fired_ago, target, shot, died, besieged, struck, left, awaited, descent,
 } skip {
     // Its template's.
     domain, shape, fighter,
@@ -1216,7 +1223,7 @@ digest!(Trailer {
 digest!(Building {
     id, template, number, owner, position, facing, health, health_factor, fired_ago, target,
     noticed, awake,
-    inside, besieged, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
+    inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
     captured, unpacked_from, zone, members, supply, properties, created,
 } skip {
     // Its template's, or as the map has it.

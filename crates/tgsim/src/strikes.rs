@@ -176,6 +176,7 @@ impl World {
             unit.health -= amount;
             if unit.health <= 0.0 {
                 unit.die(ticks);
+                self.mourn(u);
                 self.lost_member(u);
             }
             a.next += SECOND;

@@ -6,7 +6,7 @@ use tgmap::{CombatEffect, Id, Operation};
 
 use crate::supply::BEAT;
 use crate::value::MULTIPLY_FLOOR;
-use crate::{LANDINGS_KEPT, Notice, Piece, Refused, SECOND, TICK, Target, World};
+use crate::{LANDINGS_KEPT, Notice, Piece, Refused, Relation, SECOND, Struck, TICK, Target, World};
 
 /// Gains smaller than this are dropped.
 const LEAST_GAIN: f32 = 0.0001;
@@ -372,23 +372,39 @@ impl World {
         }
     }
 
-    /// What the organization of the unit at `k` earns for killing the
-    /// enemy unit at `u`, the two worth `[victim, killer]`, and for killing
-    /// its organization if that was the last of it.
+    /// What's credited with killing something of `owner`'s whose last
+    /// enemy hit was `struck`: what fired it, if it came recently enough
+    /// and its side is still an enemy. A special operation's credits no
+    /// one.
+    pub(crate) fn killer(&self, struck: Option<Struck>, owner: u32) -> Option<Target> {
+        let struck = struck?;
+        let window = (self.rules.kill_credit_seconds / TICK).round() as u64;
+        let recent = self.ticks - struck.at <= window;
+        let enemy = self.sides.relation(struck.by, owner) == Relation::Enemy;
+        struck.from.filter(|_| recent && enemy)
+    }
+
+    /// What the organization of the unit at `k` earns for killing the unit
+    /// at `u`, the two worth `[victim, killer]`.
     pub(crate) fn credit_kill(&mut self, u: usize, k: usize, [victim, killer]: [f32; 2]) {
-        let (killers, r) = (self.units[k].organization, self.units[u].organization);
-        if !self.hostile(killers, Piece::Organization(r)) {
-            return;
-        }
         let template = self.units[u].template.clone();
         let gain = self.worth(Feat::Kill, victim, killer, &template);
+        self.gain_experience(self.units[k].organization, gain);
+    }
+
+    /// What the organization of whatever last hit one of the organization
+    /// at `r`'s members earns for destroying it, if a unit did.
+    pub(crate) fn credit_destruction(&mut self, r: usize) {
+        let organization = &self.organizations[r];
+        let by = self.killer(organization.struck, organization.owner);
+        let Some(Target::Unit(k)) = by else {
+            return;
+        };
+        let killers = self.units[k].organization;
+        let template = organization.template.clone();
+        let (victim, gainer) = (self.full_value(r), self.full_value(killers));
+        let gain = self.worth(Feat::Kill, victim, gainer, &template);
         self.gain_experience(killers, gain);
-        if self.destroyed(r) {
-            let template = self.organizations[r].template.clone();
-            let (victim, gainer) = (self.full_value(r), self.full_value(killers));
-            let gain = self.worth(Feat::Kill, victim, gainer, &template);
-            self.gain_experience(killers, gain);
-        }
     }
 
     /// What the organization of `by`, a unit, earns for bringing down the
@@ -679,10 +695,10 @@ mod regiment_tests {
         w
     }
 
-    /// Credits the unit at `k`'s organization with killing the unit at `u`.
+    /// Has the unit at `k` deal the unit at `u` its death.
     fn kill(w: &mut World, u: usize, k: usize) {
-        let values = [w.unit_value(u), w.unit_value(k)];
-        w.credit_kill(u, k, values);
+        hit_by(w, u, k);
+        w.mourn(u);
     }
 
     fn levelled(w: &World) -> Vec<(usize, usize)> {
@@ -817,6 +833,30 @@ mod regiment_tests {
         }
     }
 
+    #[test]
+    fn a_building_that_falls_soon_after_a_hit_is_the_hitters_kill() {
+        for (seconds, credited) in [(1.0, true), (3.0, false)] {
+            let mut pillbox = building(20, 2, [10.0, 20.0]);
+            pillbox.fighter.destructible = true;
+            let mut w = siege(&[pillbox]);
+            w.rules.experience_levels.insert("squad".into(), w_levels());
+            rate(&mut w, "soldier", 10.0);
+            let by = w.organizations[w.units[0].organization].owner;
+            w.buildings[0].struck = Some(Struck {
+                from: Some(Target::Unit(0)),
+                by,
+                at: w.ticks,
+            });
+            // Worn away rather than shot down.
+            w.ticks += (seconds / TICK) as u64;
+            w.fall(0, None);
+            assert!(matches!(w.buildings[0].state, crate::State::Destroyed(_)));
+            let gain = 0.5 - 0.5 / w.unit_value(0);
+            let expected = if credited { gain } else { 0.0 };
+            assert!((w.organizations[0].experience - expected).abs() < 1e-4);
+        }
+    }
+
     fn w_levels() -> Levels {
         Levels {
             levels: vec![Level {
@@ -927,6 +967,53 @@ mod regiment_tests {
         assert!(!w.units[1].alive());
         // The unit and then its organization, at 1 each.
         assert!((w.organizations[0].experience - 2.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn the_last_enemy_to_hit_within_the_timeout_is_credited() {
+        // Dying of something else a second after an enemy's hit.
+        let mut w = veterans();
+        hit_by(&mut w, 1, 0);
+        w.ticks += (1.0 / TICK) as u64;
+        w.units[1].die(w.ticks);
+        w.mourn(1);
+        assert!((w.organizations[0].experience - 2.0).abs() < 1e-4);
+        // Three seconds after, nobody.
+        let mut w = veterans();
+        hit_by(&mut w, 1, 0);
+        w.ticks += (3.0 / TICK) as u64;
+        w.units[1].die(w.ticks);
+        w.mourn(1);
+        assert_eq!(w.organizations[0].experience, 0.0);
+        // Nor one that's no longer an enemy.
+        let mut w = veterans();
+        w.organizations[1].owner = 1;
+        kill(&mut w, 1, 0);
+        assert_eq!(w.organizations[0].experience, 0.0);
+    }
+
+    #[test]
+    fn a_strikes_hit_takes_the_credit_from_whoever_hit_before() {
+        let mut w = veterans();
+        hit_by(&mut w, 1, 0);
+        let struck = w.units[1].struck.map(|s| crate::Struck { from: None, ..s });
+        (w.units[1].struck, w.organizations[1].struck) = (struck, struck);
+        w.units[1].die(w.ticks);
+        let morale = w.organizations[0].morale;
+        w.mourn(1);
+        assert_eq!(w.organizations[0].experience, 0.0);
+        assert_eq!(w.organizations[0].morale, morale);
+    }
+
+    #[test]
+    fn a_regiment_is_credited_to_the_last_to_hit_any_of_it() {
+        let mut w = veterans();
+        hit_by(&mut w, 1, 0);
+        // Its last man dies with no recent hit of his own.
+        w.units[1].struck = None;
+        w.units[1].die(w.ticks);
+        w.mourn(1);
+        assert!((w.organizations[0].experience - 1.0).abs() < 1e-4);
     }
 
     #[test]

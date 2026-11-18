@@ -65,6 +65,9 @@ pub struct Rules {
     pub experience_levels: HashMap<Id, tgmap::Levels>,
     /// Seconds an enemy's damage keeps what it hurt under siege.
     pub siege_seconds: f32,
+    /// Seconds after an enemy's last hit on something that the enemy is
+    /// still credited with killing it.
+    pub kill_credit_seconds: f32,
     /// What each property does to supply, for those that do anything to
     /// it, by its id.
     pub supply_effects: HashMap<Id, tgmap::SupplyEffect>,
@@ -155,6 +158,7 @@ impl Default for Rules {
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),
             siege_seconds: 7.0,
+            kill_credit_seconds: 2.0,
             supply_effects: HashMap::new(),
             kinds: HashMap::new(),
             sort_objectives: true,
