@@ -1,8 +1,11 @@
 //! Weapons: what they fire on, turrets, projectiles and the damage they
 //! do.
 
-use tgmap::{Damage, Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon};
+use tgmap::{
+    CombatEffect, Damage, Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon,
+};
 
+use crate::value::MULTIPLY_FLOOR;
 use crate::{
     Footing, LANDINGS_KEPT, Landing, Order, Piece, Projectile, Relation, State, TICK, Target,
     TurretAim, World, bounding_radius, distance, supply, wrap,
@@ -84,41 +87,111 @@ pub(crate) fn resistance(target: &Fighter, ground: &[&TerrainEffect], kind: &Id)
             .sum::<f32>()
 }
 
+/// What a hit's main damage gets beyond its weapon's own: from what fired
+/// it and from what it lands on.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Blow {
+    /// The attack efficiency it's dealt with.
+    pub efficiency: f32,
+    /// Added to its main damage.
+    pub attack: f32,
+    /// Added to its target's defense.
+    pub defense: f32,
+    /// It ignores defense.
+    pub vorpal: bool,
+}
+
+impl Default for Blow {
+    fn default() -> Self {
+        Blow {
+            efficiency: 1.0,
+            attack: 0.0,
+            defense: 0.0,
+            vorpal: false,
+        }
+    }
+}
+
 /// Health a hit of `kinds` of damage takes from `target`, scaled by
-/// `scale`: defence comes off first, then resistance takes its share, and
-/// every hit does at least 1. `ground` is what the terrain properties the
-/// target holds add to both, and `[attack, defense]` what the firer's and
-/// target's levels add: attack to the hit's main damage, defense to the
-/// target's.
+/// `scale` and `blow`'s efficiency: defence comes off first, then
+/// resistance takes its share, and every hit does at least 1. `ground` is
+/// what the terrain properties the target holds add to both, and `blow`
+/// what else adds to the first kind, its main damage, and to defense.
 pub(crate) fn damage(
     kinds: &[Damage],
     target: &Fighter,
     ground: &[&TerrainEffect],
     scale: f32,
-    [attack, defense]: [f32; 2],
+    blow: Blow,
 ) -> f32 {
-    let defense = target.defense + defense + ground.iter().map(|e| e.defense).sum::<f32>();
+    let defense = target.defense + blow.defense + ground.iter().map(|e| e.defense).sum::<f32>();
+    let defense = if blow.vorpal { 0.0 } else { defense.max(0.0) };
     (kinds.iter().enumerate())
         .map(|(i, d)| {
             let resist = resistance(target, ground, &d.kind);
-            let amount = d.amount + if i == 0 { attack } else { 0.0 };
-            ((amount * scale - defense.max(0.0)) * (1.0 - resist)).max(1.0)
+            let amount = match i {
+                // What lowers it takes it no lower than 1, or its own if
+                // that's less.
+                0 => (d.amount + blow.attack).max(d.amount.min(1.0)).max(0.0),
+                _ => d.amount,
+            };
+            ((blow.efficiency * amount * scale - defense) * (1.0 - resist)).max(1.0)
         })
         .sum()
 }
 
 impl World {
-    /// Whatever can be fired on: alive units and standing buildings.
-    /// What `from`'s properties add to its attacks and `to`'s to its
-    /// defense, for units.
-    pub(crate) fn boosts(&self, from: Option<Target>, to: Target) -> [f32; 2] {
-        let boost = |t: Option<Target>| match t {
-            Some(Target::Unit(u)) => self.boost(u),
-            _ => Default::default(),
-        };
-        [boost(from).attack, boost(Some(to)).defense]
+    /// What the properties `t` holds add to its fighting.
+    pub(crate) fn effect(&self, t: Target) -> CombatEffect {
+        match t {
+            Target::Unit(u) => self.boost(u),
+            Target::Building(b) => self.building_boost(b),
+        }
     }
 
+    /// What the properties the building at `b` holds add to its fighting:
+    /// its template's own, its side's technologies on its kind and those
+    /// it holds for a time.
+    pub(crate) fn building_boost(&self, b: usize) -> CombatEffect {
+        let building = &self.buildings[b];
+        self.held_effect(
+            building.owner,
+            &building.template,
+            &building.properties,
+            &[],
+        )
+    }
+
+    /// What a hit `from`'s `weapon` fires, or a special operation's
+    /// without either, gets beyond the weapon's own landing on `to`.
+    pub(crate) fn blow(&self, from: Option<Target>, weapon: Option<&Weapon>, to: Target) -> Blow {
+        let by = from.map(|f| self.effect(f)).unwrap_or_default();
+        let attack = match weapon {
+            Some(w) if from.is_some() => {
+                let reach = if w.projectile.is_some() {
+                    by.ranged
+                } else {
+                    by.melee
+                };
+                by.attack + reach
+            }
+            _ => 0.0,
+        };
+        let spell = weapon.is_some_and(|w| w.spell);
+        Blow {
+            efficiency: if spell { 1.0 } else { self.efficiency(from) },
+            attack,
+            defense: self.effect(to).defense,
+            vorpal: weapon.is_some_and(|w| w.vorpal),
+        }
+    }
+
+    /// What `t`'s properties multiply its weapons' rate of fire by.
+    fn fire_rate(&self, t: Target) -> f32 {
+        (1.0 + self.effect(t).recharge).max(MULTIPLY_FLOOR)
+    }
+
+    /// Whatever can be fired on: alive units and standing buildings.
     pub(crate) fn targets(&self) -> impl Iterator<Item = Target> + '_ {
         let units = (0..self.units.len()).map(Target::Unit);
         let buildings = (0..self.buildings.len()).map(Target::Building);
@@ -153,7 +226,7 @@ impl World {
             .iter()
             .map(|e| e.defense)
             .sum::<f32>();
-        let [_, level] = self.boosts(None, t);
+        let level = self.effect(t).defense;
         Some((plain + ground + level, plain))
     }
 
@@ -210,32 +283,40 @@ impl World {
                 Target::Building(b) => Some(&self.buildings[b].fighter),
             };
             let fighter = fighter.expect("shooters can fight");
-            let (mut reloads, mut target, mut shot, moving) = match s {
+            let (mut fired_ago, mut target, mut shot, moving) = match s {
                 Target::Unit(u) => {
                     let u = &self.units[u];
-                    (u.reloads.clone(), u.target, u.shot, u.moving())
+                    (u.fired_ago.clone(), u.target, u.shot, u.moving())
                 }
                 Target::Building(b) => {
                     let b = &self.buildings[b];
-                    (b.reloads.clone(), b.target, b.shot, false)
+                    (b.fired_ago.clone(), b.target, b.shot, false)
                 }
             };
+            // Only a weapon that's fired since its shooter last stood still
+            // needs the rate: one that hasn't is ready at any.
+            let mut rate = None;
             let by = self.owner(s);
-            // Nothing fires while routing, nor what does no damage, as while
-            // reforming; reloading goes on.
+            // Nothing fires while routing; reloading goes on.
             let held = match s {
-                Target::Unit(u) => {
-                    let organization = &self.organizations[self.units[u].organization];
-                    organization.routing() || organization.harmless()
-                }
+                Target::Unit(u) => self.organizations[self.units[u].organization].routing(),
                 Target::Building(_) => false,
             };
             for aim in &mut turrets {
                 aim.idle += TICK;
             }
             for (w, weapon) in fighter.weapons.iter().enumerate() {
-                reloads[w] = (reloads[w] - TICK).max(0.0);
-                if held || reloads[w] > 0.0 || moving && !weapon.turret {
+                // The rate is read as the time is checked, so a change to it
+                // shortens or lengthens a recharge under way.
+                fired_ago[w] += TICK;
+                if held || moving && !weapon.turret {
+                    continue;
+                }
+                let ready = fired_ago[w].is_infinite() || {
+                    let rate = *rate.get_or_insert_with(|| self.fire_rate(s));
+                    fired_ago[w] * rate >= weapon.recharge - 1e-4
+                };
+                if !ready {
                     continue;
                 }
                 let Some(t) = self.aim(s, weapon, target) else {
@@ -256,7 +337,7 @@ impl World {
                     }
                 }
                 shot = Some((self.ticks, w));
-                reloads[w] = weapon.recharge;
+                fired_ago[w] = 0.0;
                 match weapon.flight {
                     Some(flight) => launched.push(self.launch(s, by, w, weapon, flight, t)),
                     None => {
@@ -268,7 +349,7 @@ impl World {
             match s {
                 Target::Unit(u) => {
                     let u = &mut self.units[u];
-                    (u.reloads, u.target, u.shot) = (reloads, target, shot);
+                    (u.fired_ago, u.target, u.shot) = (fired_ago, target, shot);
                 }
                 Target::Building(b) => {
                     let b = &mut self.buildings[b];
@@ -277,7 +358,7 @@ impl World {
                             aim.turn(turret, turret.start);
                         }
                     }
-                    (b.reloads, b.target, b.shot, b.turrets) = (reloads, target, shot, turrets);
+                    (b.fired_ago, b.target, b.shot, b.turrets) = (fired_ago, target, shot, turrets);
                 }
             }
         }
@@ -770,7 +851,7 @@ impl World {
                         f,
                         &self.terrain_effects(t),
                         1.0,
-                        self.boosts(Some(from), t),
+                        self.blow(Some(from), Some(weapon), t),
                     ),
                     from: Some(from),
                     by,
@@ -798,7 +879,7 @@ impl World {
                     f,
                     &ground,
                     falloff(weapon, d),
-                    self.boosts(Some(from), target),
+                    self.blow(Some(from), Some(weapon), target),
                 ),
             ));
         }
@@ -826,6 +907,7 @@ mod tests {
     use std::f32::consts::{PI, TAU};
 
     use crate::{Command, NotYours, Piece, Target, World};
+    use tgmap::CombatEffect;
 
     /// A player 2 pillbox at (10, 24), noticing within 20, whose rifle
     /// can't hit aircraft, and unarmed soldiers of two of player 1's
@@ -926,6 +1008,116 @@ mod tests {
     }
 
     #[test]
+    fn efficiency_scales_main_damage_and_vorpal_ignores_defense() {
+        let mut tank = soldier(Vec::new());
+        tank.defense = 6.0;
+        let rifle = rifle(12.0, 12.0).damage;
+        let hit = |blow| damage(&rifle, &tank, &[], 1.0, blow);
+        let halved = Blow {
+            efficiency: 0.5,
+            ..Default::default()
+        };
+        // 12 * 0.5 - 6 is nothing, so the least.
+        assert_eq!(hit(halved), 1.0);
+        let vorpal = Blow {
+            vorpal: true,
+            ..halved
+        };
+        assert_eq!(hit(vorpal), 6.0);
+        // What lowers it takes it no lower than 1.
+        let feeble = Blow {
+            attack: -20.0,
+            vorpal: true,
+            ..Default::default()
+        };
+        assert_eq!(hit(feeble), 1.0);
+    }
+
+    /// Player 1's rifleman of a regiment hitting at half strength, whose
+    /// kind is `sharp`, and player 2's unarmed one 10 off.
+    fn sharpshooter(sharp: CombatEffect) -> World {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![rifle(12.0, 10.0)]), soldier(Vec::new())],
+            at_war(),
+        );
+        w.organizations[0].efficiency = 0.5;
+        w.rules.kinds.insert("soldier".into(), kind(&["sharp"]));
+        w.rules.combat_effects.insert("sharp".into(), sharp);
+        w
+    }
+
+    #[test]
+    fn melee_and_ranged_attack_raise_only_their_own_attacks() {
+        let sharp = CombatEffect {
+            attack: 1.0,
+            melee: 5.0,
+            ranged: 3.0,
+            ..Default::default()
+        };
+        let w = sharpshooter(sharp);
+        let mut gun = w.units[0].fighter.as_ref().unwrap().weapons[0].clone();
+        let blow = |gun: &Weapon| w.blow(Some(Target::Unit(0)), Some(gun), Target::Unit(1));
+        assert_eq!(blow(&gun).attack, 6.0);
+        assert_eq!(blow(&gun).efficiency, 0.5);
+        gun.projectile = Some(Id::from("bullet"));
+        assert_eq!(blow(&gun).attack, 4.0);
+        // A spell hits at full strength; a special operation adds nothing.
+        gun.spell = true;
+        assert_eq!(blow(&gun).efficiency, 1.0);
+        assert_eq!(w.blow(None, None, Target::Unit(1)), Blow::default());
+    }
+
+    #[test]
+    fn recharge_time_multipliers_change_the_rate_of_fire() {
+        let shots = |recharge: f32| {
+            let mut w = sharpshooter(CombatEffect {
+                recharge,
+                ..Default::default()
+            });
+            w.organizations[0].efficiency = 1.0;
+            run(&mut w, 4.0);
+            ((100.0 - w.units[1].health) / 10.0).round()
+        };
+        // Every 2s, then every 1s, then every 4s.
+        assert_eq!(shots(0.0), 2.0);
+        assert_eq!(shots(1.0), 4.0);
+        assert_eq!(shots(-0.5), 1.0);
+    }
+
+    #[test]
+    fn a_buildings_properties_raise_its_defense() {
+        let mut w = siege(&[building(9, 2, [10.0, 20.0])]);
+        w.rules.kinds.insert("house".into(), kind(&["walls"]));
+        let walls = CombatEffect {
+            defense: 3.0,
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert("walls".into(), walls);
+        let b = Target::Building(0);
+        assert_eq!(w.blow(Some(Target::Unit(0)), None, b).defense, 3.0);
+        assert_eq!(w.defense(b), Some((3.0, 0.0)));
+    }
+
+    #[test]
+    fn a_buildings_health_scales_with_its_properties_keeping_its_share() {
+        let mut w = siege(&[building(9, 2, [40.0, 40.0])]);
+        w.buildings[0].health = 50.0;
+        let stout = CombatEffect {
+            health: 0.5,
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert("stout".into(), stout);
+        w.give(Piece::Building(0), "stout".into(), 1.0);
+        w.tick();
+        assert_eq!(w.building_max_health(0), 150.0);
+        assert_eq!(w.buildings[0].health, 75.0);
+        run(&mut w, 2.0);
+        assert_eq!(w.building_max_health(0), 100.0);
+        assert_eq!(w.buildings[0].health, 50.0);
+    }
+
+    #[test]
     fn only_turrets_fire_on_the_move() {
         let turret = Weapon {
             turret: true,
@@ -984,12 +1176,18 @@ mod tests {
         tank.defense = 6.0;
         tank.resists = [(Id::from("gunfire"), 0.6)].into();
         // (12 - 6) * 0.4
-        assert!((damage(&rifle(12.0, 12.0).damage, &tank, &[], 1.0, [0.0; 2]) - 2.4).abs() < 1e-5);
+        assert!(
+            (damage(&rifle(12.0, 12.0).damage, &tank, &[], 1.0, Blow::default()) - 2.4).abs()
+                < 1e-5
+        );
         assert_eq!(
-            damage(&rifle(12.0, 5.0).damage, &tank, &[], 1.0, [0.0; 2]),
+            damage(&rifle(12.0, 5.0).damage, &tank, &[], 1.0, Blow::default()),
             1.0
         );
-        assert!((damage(&rifle(12.0, 50.0).damage, &tank, &[], 0.5, [0.0; 2]) - 7.6).abs() < 1e-5);
+        assert!(
+            (damage(&rifle(12.0, 50.0).damage, &tank, &[], 0.5, Blow::default()) - 7.6).abs()
+                < 1e-5
+        );
     }
 
     #[test]
@@ -1257,7 +1455,7 @@ mod tests {
         let mut w = turreted(90.0, 360.0);
         let rifle = w.buildings[0].fighter.weapons[0].clone();
         w.buildings[0].fighter.weapons.push(rifle);
-        w.buildings[0].reloads.push(0.0);
+        w.buildings[0].fired_ago.push(f32::INFINITY);
         run(&mut w, 0.4);
         assert_eq!(w.units[0].health, 100.0);
         run(&mut w, 0.2);

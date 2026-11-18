@@ -549,10 +549,12 @@ mod tests {
                 id: Id::from("column"),
                 slots: vec![vec![[0.0; 2]; 3], vec![[0.0; 2]], vec![[0.0; 2]]],
                 aggressive: false,
+                efficiency: Default::default(),
             }],
             default: 0,
             combat: None,
             primary: None,
+            broken: Default::default(),
         };
         assert_eq!(
             kept(&HashMap::from([(Id::from("line"), line)])),

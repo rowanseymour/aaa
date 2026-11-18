@@ -296,7 +296,7 @@ impl World {
         let Some(packs) = self.rules.packing.get(&b.template) else {
             return Err(Refused::Unable);
         };
-        if b.busy() || b.health <= packs.health_min * b.fighter.health {
+        if b.busy() || b.health <= packs.health_min * b.fighter.health * b.health_factor {
             return Err(Refused::Unable);
         }
         Ok((packs.seconds / TICK).round() as u64)
@@ -653,6 +653,7 @@ mod tests {
             primary: None,
             morale: 1.0,
             experience: 0.0,
+            efficiency: None,
             unpacks: None,
         };
         let r = w.add_organization(&second);

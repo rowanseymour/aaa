@@ -63,11 +63,18 @@ pub struct CombatAbility {
     pub damage: f32,
     pub range: f32,
     pub area: f32,
-    /// Seconds from one use to the next: the longer of its animation's
-    /// length plus its `reload_time`, and its `recharge_time`.
-    pub cycle: f32,
+    /// Its animation's length plus its `reload_time`.
+    pub played: f32,
+    /// Its `recharge_time`; the longer of the two is the seconds from one
+    /// use to the next.
+    pub recharge: f32,
     /// It's left out of its user's value, though not out of the means.
     pub ignored: bool,
+    /// It fires a projectile, so `AV_RANGED` raises it rather than
+    /// `AV_MELEE`.
+    pub projectile: bool,
+    /// It's a `BOMBARD` ability.
+    pub bombard: bool,
 }
 
 /// `a`, used by something animated by `animations`.
@@ -83,8 +90,11 @@ fn ability(a: &defs::Ability, animations: &[defs::Animation]) -> Option<CombatAb
         damage: main.filter_map(|e| e.amount).sum(),
         range: d.range.unwrap_or(0.0),
         area: d.area,
-        cycle: (played + reload).max(d.recharge_time),
+        played: played + reload,
+        recharge: d.recharge_time,
         ignored: d.flags.iter().any(|f| f.ignore_for_cv),
+        projectile: crate::not_null(d.projectile_ids.clone()).is_some(),
+        bombard: d.flags.iter().any(|f| f.bombard),
     })
 }
 
@@ -173,8 +183,11 @@ mod tests {
             damage: 10.0,
             range: 20.0,
             area: 0.0,
-            cycle: 2.0,
+            played: 0.5,
+            recharge: 2.0,
             ignored: false,
+            projectile: false,
+            bombard: false,
         };
         let flak = CombatAbility {
             range: 30.0,
@@ -200,6 +213,7 @@ mod tests {
              \t\t\t\trange = 20\n\t\t\t\trecharge_time = 2\n\t\t\t}\n\t\t}\n\
              \t}\n}\n",
         );
-        assert_eq!(profile(&t).unwrap().abilities[0].cycle, 3.5);
+        let a = profile(&t).unwrap().abilities[0];
+        assert_eq!((a.played, a.recharge), (3.5, 2.0));
     }
 }

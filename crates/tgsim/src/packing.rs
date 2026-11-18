@@ -171,7 +171,7 @@ impl World {
             return;
         };
         log::debug!("{} {} packed up", building.template, building.id);
-        let share = building.health / building.fighter.health;
+        let share = building.health / (building.fighter.health * building.health_factor);
         let at = building.position;
         let owner = building.owner;
         // Its ground is free for its truck, but its outline stays its own.

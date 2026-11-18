@@ -147,6 +147,7 @@ mod tests {
             default: 0,
             combat: None,
             primary,
+            broken: Default::default(),
         }
     }
 

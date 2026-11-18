@@ -49,6 +49,15 @@ pub struct Rules {
     /// What each property does to its holder's fighting, for those that do
     /// anything to it, by its id.
     pub combat_effects: HashMap<Id, tgmap::CombatEffect>,
+    /// What each formation sets its regiment's attack efficiency to, by
+    /// formation id.
+    pub formation_efficiencies: HashMap<Id, tgmap::Efficiency>,
+    /// What each organization template's broken formation sets its attack
+    /// efficiency to, by template, for while it has no formation.
+    pub broken_efficiencies: HashMap<Id, tgmap::Efficiency>,
+    /// Attack efficiency a second a regiment gains while below its target,
+    /// and loses while above it.
+    pub efficiency_rates: [f32; 2],
     /// How much experience organizations earn.
     pub experience_gains: tgmap::ExperienceGains,
     /// The levels each template's organizations earn with experience, by
@@ -140,6 +149,9 @@ impl Default for Rules {
             combat_profiles: HashMap::new(),
             combat_means: Default::default(),
             combat_effects: HashMap::new(),
+            formation_efficiencies: HashMap::new(),
+            broken_efficiencies: HashMap::new(),
+            efficiency_rates: [0.01, 0.02],
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),
             siege_seconds: 7.0,

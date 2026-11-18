@@ -254,6 +254,7 @@ impl World {
             experience: 0.0,
             level: 0,
             engaging_before: false,
+            efficiency: organization.efficiency.unwrap_or(1.0),
         });
         self.set_experience(r, organization.experience);
         self.organizations[r].morale_max = self.maximum_morale(r);
@@ -301,9 +302,9 @@ impl World {
         Unit {
             health: fighter.as_ref().map_or(0.0, |f| f.health * m.health),
             health_factor: 1.0,
-            reloads: fighter
+            fired_ago: fighter
                 .as_ref()
-                .map_or(Vec::new(), |f| vec![0.0; f.weapons.len()]),
+                .map_or(Vec::new(), |f| vec![f32::INFINITY; f.weapons.len()]),
             fighter,
             target: None,
             shot: None,
@@ -366,7 +367,7 @@ impl World {
                 owner: b.owner,
                 position: b.position,
                 facing: b.facing,
-                reloads: vec![0.0; b.fighter.weapons.len()],
+                fired_ago: vec![f32::INFINITY; b.fighter.weapons.len()],
                 turrets: (b.fighter.turrets.iter())
                     .map(|t| TurretAim {
                         yaw: wrap(t.start),
@@ -375,6 +376,7 @@ impl World {
                     .collect(),
                 fighter: b.fighter.clone(),
                 health,
+                health_factor: 1.0,
                 target: None,
                 noticed: Vec::new(),
                 awake: b.awake,

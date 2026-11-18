@@ -676,7 +676,7 @@ fn notice(
         let b = &sim.buildings[view.building];
         let now = Now {
             states: building_states(b),
-            health: share(b.health, b.fighter.health),
+            health: share(b.health, b.fighter.health * b.health_factor),
             shot: b.shot,
             weapon: b.shot.and_then(|(_, w)| b.fighter.weapons.get(w)),
             target: b.target,
@@ -1754,6 +1754,8 @@ mod tests {
             }),
             bombard: false,
             morale_loss: 0.0,
+            vorpal: false,
+            spell: false,
         }
     }
 

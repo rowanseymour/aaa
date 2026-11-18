@@ -695,6 +695,10 @@ pub struct AbilityFlags {
     /// It's left out of its user's combat value.
     #[serde(default)]
     pub ignore_for_cv: bool,
+    #[serde(default)]
+    pub vorpal: bool,
+    #[serde(default)]
+    pub spell: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -906,6 +910,8 @@ pub struct OrganizationLayout {
     pub default_formation_ids: Option<Id>,
     /// The one it fights in once engaged.
     pub combat_formation_ids: Option<Id>,
+    /// Held while it has no formation.
+    pub broken_property: Option<Property>,
     #[serde(default)]
     pub slot: Vec<LayoutSlot>,
     #[serde(default)]
@@ -1238,6 +1244,13 @@ pub struct SVars {
     /// Seconds an enemy's damage keeps what it hurt under siege.
     #[serde(rename = "UnderSiegeRecentlyDamagedSeconds")]
     pub under_siege_recently_damaged_seconds: Option<f32>,
+    /// Attack efficiency a second a regiment's gains while below its
+    /// target.
+    #[serde(rename = "AttackEfficiencyPointsPerSecondClimbing")]
+    pub attack_efficiency_climbing: Option<f32>,
+    /// And loses while above it.
+    #[serde(rename = "AttackEfficiencyPointsPerSecondFalling")]
+    pub attack_efficiency_falling: Option<f32>,
     /// The least a multiplier that modifiers add up to comes to.
     #[serde(rename = "ModifierAttributeClampMultiply")]
     pub modifier_attribute_clamp_multiply: Option<f32>,

@@ -262,6 +262,8 @@ pub struct Organization {
     pub morale: f32,
     /// The experience it's earned.
     pub experience: f32,
+    /// Its attack efficiency, where the map keeps one.
+    pub efficiency: Option<f32>,
 }
 
 impl Organization {
@@ -467,6 +469,7 @@ pub(crate) fn organizations(
             organization.hq = organization.hq.filter(|&id| id != 0);
             organization.morale = stored.morale;
             organization.experience = t.experience().unwrap_or(0.0);
+            organization.efficiency = stored.fighting.as_ref().map(|f| f.efficiency);
             Some(organization)
         })
         .collect()
@@ -647,6 +650,7 @@ fn organization(
         hq: None,
         morale: 1.0,
         experience: 0.0,
+        efficiency: None,
     })
 }
 
@@ -955,6 +959,7 @@ fn one_place(ranges: Ranges) -> Organization {
         primary: Some(0),
         morale: 1.0,
         experience: 0.0,
+        efficiency: None,
         unpacks: None,
     }
 }
@@ -1035,6 +1040,7 @@ mod tests {
         let formation = |id: &str, dy: f32| LayoutFormation {
             id: Id::from(id),
             aggressive: false,
+            efficiency: Default::default(),
             slots: vec![
                 vec![[-1.0, dy], [1.0, dy]],
                 vec![[3.0, 0.0]],
@@ -1046,6 +1052,7 @@ mod tests {
             default: 1,
             combat: Some(0),
             primary: Some(2),
+            broken: Default::default(),
         }
     }
 
