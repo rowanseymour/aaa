@@ -1756,6 +1756,7 @@ mod tests {
             bombard: false,
             vorpal: false,
             spell: false,
+            choice: Default::default(),
         }
     }
 

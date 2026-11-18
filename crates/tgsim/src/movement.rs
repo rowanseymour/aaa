@@ -121,7 +121,8 @@ impl Unit {
         self.end_facing = facing;
         self.halt();
         self.speed = 0.0;
-        self.closing = false;
+        self.closing = None;
+        self.busy = 0;
         self.target = None;
         self.shot = None;
         self.fired_ago.fill(f32::INFINITY);
@@ -192,16 +193,18 @@ impl Unit {
     /// turns toward its leg's heading as fast as it can, speeds up toward
     /// `top` and goes the way it faces, until it's level with the leg's
     /// end, however far to the side that leaves it. It never slows to turn.
-    fn drive(&mut self, top: f32) {
+    /// It turns at a fixed rate whatever its speed, `own` top speed over its
+    /// radius, so at that speed it keeps to its turning circle.
+    fn drive(&mut self, top: f32, own: f32) {
         self.take_leg();
         let (Some(&next), Some(leg)) = (self.path.last(), self.leg) else {
             self.speed = 0.0;
             return;
         };
-        match leg.snapped || self.turn_rate <= 0.0 {
+        match leg.snapped || self.turn_radius <= 0.0 {
             true => self.facing = leg.heading,
             false => {
-                steer(&mut self.facing, leg.heading, self.turn_rate * TICK);
+                steer(&mut self.facing, leg.heading, own / self.turn_radius * TICK);
             }
         }
         self.speed = match self.speed < top && self.acceleration > 0.0 {
@@ -378,9 +381,21 @@ impl World {
         let facing = r.facing;
         // A move to unpack has to end right there.
         let exact = r.unpack_at.is_some();
+        for (u, place) in self.formation_places(organization) {
+            if !self.units[u].alive() {
+                continue;
+            }
+            self.take_place(u, place, facing, exact);
+        }
+    }
+
+    /// Where each of an organization's members has its place, by unit.
+    pub(crate) fn formation_places(&self, organization: usize) -> Vec<(usize, [f32; 2])> {
+        let r = &self.organizations[organization];
+        let facing = r.facing;
         let [x, y] = r.position;
         let broken = r.routing() && r.broken_places.len() == r.units.len();
-        let places: Vec<(usize, [f32; 2])> = match broken {
+        match broken {
             // Without a formation each keeps where it stood from the
             // leader, turning with nothing.
             true => (r.units.iter())
@@ -391,12 +406,6 @@ impl World {
                 .zip(&r.formations[r.current_formation()].offsets)
                 .map(|(&u, &offset)| (u, tgmap::from_local(r.position, facing, offset)))
                 .collect(),
-        };
-        for (u, place) in places {
-            if !self.units[u].alive() {
-                continue;
-            }
-            self.take_place(u, place, facing, exact);
         }
     }
 
@@ -405,7 +414,7 @@ impl World {
         let way = self.plan(u, place, exact);
         let unit = &mut self.units[u];
         unit.take(way, exact);
-        unit.closing = false;
+        unit.closing = None;
         unit.end_facing = facing;
         if unit.path.is_empty() {
             unit.goal = None;
@@ -474,11 +483,15 @@ impl World {
         let tops: Vec<f32> = (0..self.organizations.len())
             .map(|r| self.regiment_speed(r))
             .collect();
+        let handed: Vec<f32> = (0..self.organizations.len())
+            .map(|r| self.handed_down_speed(r))
+            .collect();
         for u in 0..self.units.len() {
             let limit = self.speed_limit(u).unwrap_or(f32::INFINITY);
+            let own = self.top_speed(u, handed[self.units[u].organization]);
             let unit = &mut self.units[u];
             unit.previous = unit.position;
-            unit.drive(tops[unit.organization].min(limit));
+            unit.drive(tops[unit.organization].min(limit), own);
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {
                     true => EXACT_REACH,
@@ -534,9 +547,9 @@ mod tests {
         let u = &mut w.units[0];
         u.target = Some(crate::Target::Unit(1));
         u.shot = Some((3, 0));
-        u.closing = true;
+        u.closing = Some(1.0);
         u.stand_at([4.0, 6.0], [1.0, 0.0]);
-        assert!(!u.moving() && u.speed == 0.0 && !u.closing);
+        assert!(!u.moving() && u.speed == 0.0 && u.closing.is_none());
         assert_eq!((u.position, u.previous), ([4.0, 6.0], [4.0, 6.0]));
         assert_eq!((u.target, u.shot), (None, None));
         // It stays there, facing as it was stood.
@@ -723,6 +736,32 @@ mod tests {
             within(u.position, [20.0, 10.0], ARRIVAL_REACH),
             "{:?}",
             u.position
+        );
+    }
+
+    #[test]
+    fn units_turn_faster_as_their_top_speed_rises() {
+        let mut w = vehicle(0.0, 1.0, None);
+        let faster = tgmap::CombatEffect {
+            speed: 1.0,
+            ..Default::default()
+        };
+        w.rules.formation_effects.insert("lone".into(), faster);
+        w.apply(
+            7,
+            Command::Move {
+                organization: 0,
+                to: [20.0, 10.0],
+            },
+        )
+        .unwrap();
+        w.tick();
+        // Twice as fast, it turns twice as far, keeping its circle.
+        let (sin, cos) = libm::sincosf(0.2);
+        assert!(
+            near(w.units[0].facing, [sin, cos]),
+            "{:?}",
+            w.units[0].facing
         );
     }
 

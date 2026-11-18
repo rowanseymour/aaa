@@ -6,6 +6,7 @@ use tgmap::{
     WeaponHit,
 };
 
+use crate::abilities::Rating;
 use crate::value::MULTIPLY_FLOOR;
 use crate::{
     Footing, LANDINGS_KEPT, Landing, Order, Piece, Projectile, Relation, State, TICK, Target,
@@ -244,7 +245,7 @@ impl World {
     }
 
     /// What `t`'s properties multiply its weapons' rate of fire by.
-    fn fire_rate(&self, t: Target) -> f32 {
+    pub(crate) fn fire_rate(&self, t: Target) -> f32 {
         (1.0 + self.effect(t).recharge).max(MULTIPLY_FLOOR)
     }
 
@@ -310,10 +311,10 @@ impl World {
         }
     }
 
-    /// Fires every weapon that's ready at what it can hit, then takes the
-    /// dead out of the fight, so that all hit each other at once. Only
-    /// turrets fire on the move: anything else turns its user to aim.
-    /// Returns, for each unit hit, its organization and what fired.
+    /// Has each unit act on the ability it chooses and each building fire
+    /// every weapon that's ready at what it can hit, then takes the dead
+    /// out of the fight, so that all hit each other at once. Returns, for
+    /// each unit hit, its organization and what fired.
     pub(crate) fn fight(&mut self) -> Vec<(usize, Target)> {
         let mut hits: Vec<Hit> = Vec::new();
         let mut launched = Vec::new();
@@ -330,6 +331,10 @@ impl World {
             })
             .collect();
         for s in shooters {
+            if let Target::Unit(u) = s {
+                self.act(u, &mut hits, &mut launched);
+                continue;
+            }
             // Nothing aiming reads turrets' yaw, so it's left out meanwhile.
             let mut turrets = match s {
                 Target::Building(b) => std::mem::take(&mut self.buildings[b].turrets),
@@ -460,6 +465,54 @@ impl World {
             }
         }
         fired_on
+    }
+
+    /// Has the unit at `u`, unless it's routing or still using an
+    /// ability, choose what to take on and with which weapon, and act on
+    /// it: use the weapon, hold until it's ready, or go after its target.
+    fn act(&mut self, u: usize, hits: &mut Vec<Hit>, launched: &mut Vec<Projectile>) {
+        for ago in &mut self.units[u].fired_ago {
+            *ago += TICK;
+        }
+        let r = self.units[u].organization;
+        if self.organizations[r].routing() || self.ticks < self.units[u].busy {
+            return;
+        }
+        let mut rng = self.rng;
+        let decided = self.decide_attack(u, &mut rng);
+        self.rng = rng;
+        let unit = &mut self.units[u];
+        let Some((t, pick)) = decided else {
+            unit.target = None;
+            return;
+        };
+        unit.target = Some(t);
+        if pick.rating == Rating::MoveIntoRange {
+            unit.closing = Some(pick.range);
+            return;
+        }
+        if unit.closing.take().is_some() {
+            unit.halt();
+        }
+        if pick.rating == Rating::Wait {
+            return;
+        }
+        let fighter = unit.fighter.as_ref().expect("units that pick can fight");
+        let weapon = fighter.weapons[pick.weapon].clone();
+        unit.shot = Some((self.ticks, pick.weapon));
+        unit.fired_ago[pick.weapon] = 0.0;
+        unit.busy = self.ticks + (weapon.choice.lasts / TICK).round() as u64;
+        let s = Target::Unit(u);
+        let by = self.owner(s);
+        self.use_on_user(&weapon, (s, by), hits);
+        match weapon.flight {
+            Some(flight) => launched.push(self.launch(s, by, pick.weapon, &weapon, flight, t)),
+            None => {
+                let bombard = self.bombards(s, &weapon);
+                let at = self.impact(s, &weapon, self.position(t));
+                self.strike(&weapon, at, t, (s, by), bombard, hits)
+            }
+        }
     }
 
     /// Where the area of `s`'s `weapon` is centred for a shot landing at
@@ -881,7 +934,7 @@ impl World {
     /// anything else, the other counts as the circle round it: of two, a
     /// square beside a rectangle does, else the smaller, or `t` if they're
     /// as big.
-    fn gap(&self, s: Target, t: Target) -> Option<f32> {
+    pub(crate) fn gap(&self, s: Target, t: Target) -> Option<f32> {
         let (from, to) = (self.outline(s), self.outline(t));
         // A rectangle before a square before the rest, then the bigger.
         let rank = |of: Target, o: &Obstacle| {
@@ -1021,7 +1074,7 @@ mod tests {
 
     use std::f32::consts::{PI, TAU};
 
-    use crate::{Command, NotYours, Piece, Target, World};
+    use crate::{NotYours, Piece, Target, World};
     use tgmap::CombatEffect;
 
     /// A player 2 pillbox at (10, 24), noticing within 20, whose rifle
@@ -1074,6 +1127,8 @@ mod tests {
             ],
             at_war(),
         );
+        // It engages, then fires.
+        w.tick();
         w.tick();
         assert_eq!(w.units[0].target, Some(Target::Unit(1)));
         assert_eq!(w.units[0].health, 80.0);
@@ -1104,8 +1159,10 @@ mod tests {
             vec![soldier(vec![gun(0.0)]), soldier(vec![gun(1.0)])],
             at_war(),
         );
+        // It engages, then fires.
         w.tick();
-        assert_eq!(w.units[0].shot, Some((0, 0)));
+        w.tick();
+        assert_eq!(w.units[0].shot, Some((1, 0)));
         assert_eq!((w.units[0].health, w.units[1].health), (100.0, 100.0));
         assert_eq!(w.flying.len(), 2);
         run(&mut w, 0.3);
@@ -1115,7 +1172,7 @@ mod tests {
         let landed = &w.landings[0];
         assert_eq!(
             (landed.tick, landed.from, landed.target),
-            (4, Target::Unit(0), Target::Unit(1))
+            (5, Target::Unit(0), Target::Unit(1))
         );
         run(&mut w, 0.6);
         assert_eq!(w.units[0].health, 70.0);
@@ -1233,41 +1290,33 @@ mod tests {
     }
 
     #[test]
-    fn only_turrets_fire_on_the_move() {
-        let turret = Weapon {
-            turret: true,
-            ..rifle(12.0, 10.0)
-        };
-        for (weapon, fires_on_the_move) in [(rifle(12.0, 10.0), false), (turret, true)] {
-            let mut w = battle(
-                &[1, 2],
-                vec![soldier(vec![weapon]), soldier(Vec::new())],
-                at_war(),
-            );
-            // 2 units a second toward the enemy, in range all the way.
-            w.apply(
-                1,
-                Command::Move {
-                    organization: 0,
-                    to: [10.0, 14.0],
-                },
-            )
-            .unwrap();
-            run(&mut w, 1.5);
-            assert!(w.units[0].moving());
-            assert_eq!(w.units[1].health < 100.0, fires_on_the_move);
-            run(&mut w, 1.0);
-            assert!(!w.units[0].moving());
-            assert!(w.units[1].health < 100.0);
-        }
+    fn units_fire_while_they_take_their_places_in_a_fight() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![rifle(12.0, 10.0)]), soldier(Vec::new())],
+            at_war(),
+        );
+        // Its combat formation stands it 2 to the side.
+        let r = &mut w.organizations[0];
+        r.formations.push(tgmap::Formation {
+            id: "wide".into(),
+            offsets: vec![[2.0, 0.0]],
+            aggressive: true,
+        });
+        r.combat = Some(1);
+        w.tick();
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
+        w.tick();
+        assert!(w.units[0].moving());
+        assert_eq!(w.units[1].health, 90.0);
     }
 
     #[test]
     fn weapons_hold_fire_on_friends_what_they_exclude_and_what_is_out_of_range() {
         let mut tank = soldier(vec![rifle(12.0, 30.0)]);
         tank.flags = vec![Id::from("tank")];
-        // 1 and 3 are allies, 2 a tank the rifles can't hurt, and 4 out of
-        // the rifles' range.
+        // 1 and 3 are allies, 2 a tank the rifles can't hurt, so can't
+        // engage, and 4 out of the rifles' range.
         let mut w = battle(
             &[1, 3, 2, 2],
             vec![
@@ -1346,7 +1395,8 @@ mod tests {
             edge_damage: 0.5,
             ..rifle(30.0, 40.0)
         };
-        // A friend 2 from where the shell lands, on an enemy.
+        // A friend 2 from where the shell lands, on an enemy within the
+        // control range.
         let mut w = battle(
             &[1, 1, 2],
             vec![
@@ -1356,7 +1406,10 @@ mod tests {
             ],
             at_war(),
         );
-        w.units[1].position = [10.0, 28.0];
+        w.units[1].position = [10.0, 23.0];
+        w.units[2].position = [10.0, 25.0];
+        // It engages, then fires.
+        w.tick();
         w.tick();
         assert_eq!(w.units[1].health, 100.0);
         assert_eq!(w.units[2].health, 60.0);
@@ -1367,6 +1420,7 @@ mod tests {
             at_war(),
         );
         w.units[1].position = [10.0, 12.0];
+        w.tick();
         w.tick();
         assert_eq!(w.units[0].health, 100.0);
         assert_eq!(w.units[1].health, 60.0);
@@ -1701,10 +1755,12 @@ mod tests {
             ],
             at_war(),
         );
-        w.units[1].position = [10.0, 30.0];
-        w.units[2].position = [14.0, 30.0];
-        w.units[3].position = [7.0, 30.0];
+        w.units[1].position = [10.0, 25.0];
+        w.units[2].position = [14.0, 25.0];
+        w.units[3].position = [7.0, 25.0];
         w.units[0].target = Some(Target::Unit(1));
+        // It engages, then fires.
+        w.tick();
         w.tick();
         let health: Vec<f32> = w.units[1..].iter().map(|u| u.health).collect();
         assert_eq!(health, [60.0, 100.0, 60.0]);
@@ -1731,9 +1787,15 @@ mod tests {
     fn organizations_answer_fire_only_from_nearer_than_their_operational_range() {
         let mut w = battle(
             &[1, 2],
-            vec![soldier(Vec::new()), soldier(vec![rifle(40.0, 10.0)])],
+            vec![
+                soldier(vec![rifle(12.0, 1.0)]),
+                soldier(vec![rifle(40.0, 10.0)]),
+            ],
             at_war(),
         );
+        // The rifleman's regiment is engaged from further off.
+        w.organizations[1].operational_range = 50.0;
+        w.organizations[1].engaged = vec![Piece::Organization(0)];
         w.units[1].position = [10.0, 44.0];
         w.tick();
         assert!(w.units[0].health < 100.0);
@@ -1759,9 +1821,11 @@ mod tests {
             ],
             at_war(),
         );
-        w.units[1].position = [10.0, 30.0];
-        w.units[2].position = [17.0, 30.0];
+        w.units[1].position = [10.0, 25.0];
+        w.units[2].position = [17.0, 25.0];
         w.units[0].target = Some(Target::Unit(1));
+        // It engages, then fires.
+        w.tick();
         w.tick();
         assert_eq!((w.units[1].health, w.units[2].health), (60.0, 100.0));
         w.units[2].fighter.as_mut().unwrap().soft = Shape::Rect {
@@ -1776,6 +1840,8 @@ mod tests {
     fn range_reaches_to_a_buildings_edge() {
         // Its middle is 14 off, out of the rifle's 12, but its edge 11.
         let mut w = siege(&[building(20, 2, [10.0, 24.0])]);
+        // It engages, then fires.
+        w.tick();
         w.tick();
         assert_eq!(w.units[0].target, Some(Target::Building(0)));
         assert_eq!(w.buildings[0].health, 70.0);
@@ -1810,6 +1876,8 @@ mod tests {
     #[test]
     fn enemy_damage_keeps_a_building_under_siege_for_a_while() {
         let mut w = siege(&[building(20, 2, [10.0, 24.0])]);
+        // It engages, then fires.
+        w.tick();
         w.tick();
         assert!(w.buildings[0].besieged.is_some());
         // Out of range from then on.
@@ -1833,6 +1901,8 @@ mod tests {
             at_war(),
         );
         w.add_buildings(&[building(20, 2, [16.0, 10.0])]);
+        // It engages, then fires.
+        w.tick();
         w.tick();
         assert_eq!(w.units[0].target, Some(Target::Unit(1)));
         assert_eq!(w.buildings[0].health, 100.0);

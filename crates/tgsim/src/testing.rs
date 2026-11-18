@@ -140,6 +140,7 @@ pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
         bombard: false,
         vorpal: false,
         spell: false,
+        choice: Default::default(),
     }
 }
 
@@ -152,6 +153,8 @@ pub(crate) fn soldier(weapons: Vec<Weapon>) -> Fighter {
         resists: HashMap::new(),
         flags: vec![Id::from("infantry")],
         weapons,
+        bonus: Default::default(),
+        check_resistance: false,
         attack_height: 1.45,
         notice: None,
         turrets: Vec::new(),
@@ -181,7 +184,7 @@ pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> Wo
                 formations: vec![tgmap::Formation {
                     id: "line".into(),
                     offsets: vec![[0.0, 0.0]],
-                    aggressive: false,
+                    aggressive: true,
                 }],
                 formation: 0,
                 combat: None,
@@ -230,6 +233,8 @@ pub(crate) fn skirmish() -> World {
     );
     w.units[1].position = [10.0, 30.0];
     let r = &mut w.organizations[0];
+    // Only the second takes on what comes near it.
+    r.formations[0].aggressive = false;
     r.formations.push(tgmap::Formation {
         id: "wide".into(),
         offsets: vec![[0.0, 0.0]],
@@ -240,7 +245,8 @@ pub(crate) fn skirmish() -> World {
 }
 
 /// An unarmed building of `owner`'s with 100 health, 6 across and
-/// square to the axes, at `position`.
+/// square to the axes, at `position`, which is destroyed when its health
+/// runs out.
 pub(crate) fn building(id: u32, owner: u32, position: [f32; 2]) -> tgmap::Building {
     tgmap::Building {
         id,
@@ -250,7 +256,7 @@ pub(crate) fn building(id: u32, owner: u32, position: [f32; 2]) -> tgmap::Buildi
         facing: [0.0, -1.0],
         fighter: Fighter {
             flags: vec![Id::from("building")],
-            destructible: false,
+            destructible: true,
             soft: Shape::Rect {
                 width: 7.0,
                 height: 7.0,
@@ -312,9 +318,12 @@ pub(crate) fn lost(building: usize, player: u32, by: u32) -> Notice {
 pub(crate) fn city() -> [tgmap::Building; 2] {
     let mut centre = building(30, 2, [40.0, 10.0]);
     centre.fighter.capturable = true;
+    centre.fighter.destructible = false;
     centre.zone = Some(15.0);
     centre.members = vec![31];
-    [centre, building(31, 2, [40.0, 20.0])]
+    let mut house = building(31, 2, [40.0, 20.0]);
+    house.fighter.destructible = false;
+    [centre, house]
 }
 
 pub(crate) fn player(

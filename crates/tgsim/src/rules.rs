@@ -81,6 +81,11 @@ pub struct Rules {
     /// Seconds after an enemy's last hit on something that the enemy is
     /// still credited with killing it.
     pub kill_credit_seconds: f32,
+    /// Added to a target's score for a unit it's attacking.
+    pub attacker_bonus: f32,
+    /// Whether an organization's attack target comes before all else its
+    /// members could fire on.
+    pub attack_target_first: bool,
     /// What each property does to supply, for those that do anything to
     /// it, by its id.
     pub supply_effects: HashMap<Id, tgmap::SupplyEffect>,
@@ -177,6 +182,8 @@ impl Default for Rules {
             experience_levels: HashMap::new(),
             siege_seconds: 7.0,
             kill_credit_seconds: 2.0,
+            attacker_bonus: 0.5,
+            attack_target_first: true,
             supply_effects: HashMap::new(),
             kinds: HashMap::new(),
             sort_objectives: true,
