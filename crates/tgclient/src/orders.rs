@@ -499,6 +499,7 @@ pub(crate) mod testing {
         };
         let sides = Sides {
             names: Default::default(),
+            computers: Default::default(),
             players: [1, 2, 3].map(crate::tests::player).into(),
             teams: Vec::new(),
         };

@@ -1075,6 +1075,8 @@ pub struct Sides {
     /// What each side a person plays goes by, by player id: the person's
     /// own name, where they have one in the match.
     pub names: BTreeMap<u32, String>,
+    /// What each side a computer player took over from a person goes by.
+    pub computers: BTreeMap<u32, String>,
 }
 
 impl Sides {
@@ -1097,15 +1099,20 @@ impl Sides {
 digest!(World {
     organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
     holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, afflicted, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
-    next_commission, rng,
+    next_commission, rng, sides,
 } skip {
     // Fixed by the map and the game's data.
-    sides, rules, tile_terrains, scenery,
+    rules, tile_terrains, scenery,
     // Follow from the buildings standing and the scenery cleared, or from
     // the terrain alone.
     pathing, clearable, main_land,
     // Taken by whatever shows them, whenever it does.
     notices,
+});
+
+digest!(Sides { names, computers } skip {
+    // Fixed by the map.
+    players, teams,
 });
 
 digest!(Organization {
@@ -1389,6 +1396,7 @@ mod tests {
         // and civilians neutral to everyone.
         let sides = Sides {
             names: Default::default(),
+            computers: Default::default(),
             players: vec![
                 player(1, Some(0), &[0, 3, 3, 3], &[3, 3]),
                 player(2, Some(0), &[3, 0, 3, 3], &[3, 3]),
@@ -1413,6 +1421,7 @@ mod tests {
     fn players_without_teams_keep_their_own_relations() {
         let sides = Sides {
             names: Default::default(),
+            computers: Default::default(),
             players: vec![
                 player(1, None, &[0, 1, 3], &[]),
                 player(2, None, &[1, 0, 3], &[]),

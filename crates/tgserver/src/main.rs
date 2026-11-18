@@ -7,7 +7,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
 use tgdata::GameData;
-use tgserver::{Client, Event, Film, Host, Setup, quic};
+use tgserver::{Client, Event, Film, Host, Naming, Setup, quic};
 use tgsim::{Record, Schedule, TICK, World};
 
 const USAGE: &str = "\
@@ -162,12 +162,12 @@ fn host(
     world: World,
     ticks: u64,
     hosting: Hosting,
-    numbered: String,
+    naming: Naming,
 ) -> Result<(World, Record), String> {
     let mut listener = quic::listen(hosting.at)?;
     eprintln!("hosting at {}", listener.at()?);
     let mut host = Host::new(setup, world);
-    host.number_names(numbered);
+    host.name_by(naming);
     host.multiplayer();
     if let Some(speed) = hosting.speed {
         host.speed(speed);
@@ -225,7 +225,7 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             let found = game.find_map(&setup.map);
             let map = found.ok_or_else(|| format!("no map \"{}\"", setup.map))?;
             let setup = Setup { map, ..setup };
-            let world = tgserver::start(&game, &setup, || {})?.world;
+            let started = tgserver::start(&game, &setup, || {})?;
             let ticks = (seconds / TICK).round() as u64;
             let (world, record) = match hosting {
                 Some(hosting) => {
@@ -237,11 +237,11 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
                             "speed {speed}: the game plays from {slowest} to {fastest}"
                         ));
                     }
-                    let numbered = tgserver::numbered(&game.strings());
-                    host(setup.clone(), world, ticks, hosting, numbered)?
+                    let naming = Naming::of(&game.strings(), &started.factions);
+                    host(setup.clone(), started.world, ticks, hosting, naming)?
                 }
                 None => {
-                    let (mut world, mut schedule) = (world, Schedule::default());
+                    let (mut world, mut schedule) = (started.world, Schedule::default());
                     for _ in 0..ticks {
                         schedule.step(&mut world);
                     }

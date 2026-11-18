@@ -1,5 +1,7 @@
 //! What the people in a match go by.
 
+use std::collections::{BTreeMap, HashMap};
+
 /// The most characters a person's name keeps.
 pub const NAME_LONGEST: usize = 18;
 
@@ -13,11 +15,46 @@ pub fn default_name(strings: &tgdata::Strings) -> String {
     name.unwrap_or_else(|| "Player".into())
 }
 
-/// How the game's data numbers a name that's taken, as [`unique`] takes
-/// it.
-pub fn numbered(strings: &tgdata::Strings) -> String {
-    let numbered = strings.get("networking_duplicate_name_formate|sd");
-    numbered.map_or(NUMBERED, String::as_str).to_string()
+/// What follows a person's name in that of a computer player taking their
+/// side over, unless the game's data says otherwise.
+pub const TAKEN_OVER: &str = " AI";
+
+/// How a match's host names those in it.
+#[derive(Debug, Clone)]
+pub struct Naming {
+    /// How a name that's taken is numbered, as [`unique`] takes it.
+    pub numbered: String,
+    /// What follows a person's name in that of a computer player taking
+    /// their side over.
+    pub taken_over: String,
+    /// What the computer player of each side's faction goes by, by player
+    /// id, as it does on a side nobody else plays.
+    pub computers: BTreeMap<u32, String>,
+}
+
+impl Default for Naming {
+    fn default() -> Naming {
+        Naming {
+            numbered: NUMBERED.into(),
+            taken_over: TAKEN_OVER.into(),
+            computers: BTreeMap::new(),
+        }
+    }
+}
+
+impl Naming {
+    /// As the game's data has it, for a match whose sides `factions` lead.
+    pub fn of(strings: &tgdata::Strings, factions: &HashMap<u32, tgdata::Faction>) -> Naming {
+        let string = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+        let computer = |(&player, faction): (&u32, &tgdata::Faction)| {
+            Some((player, faction.computer_name.clone()?))
+        };
+        Naming {
+            numbered: string("networking_duplicate_name_formate|sd", NUMBERED),
+            taken_over: string("sai_midgame_name_postfix", TAKEN_OVER),
+            computers: factions.iter().filter_map(computer).collect(),
+        }
+    }
 }
 
 /// The name `typed` makes: its first [`NAME_LONGEST`] characters, without

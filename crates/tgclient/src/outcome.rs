@@ -152,6 +152,7 @@ mod tests {
     fn app() -> App {
         let sides = Sides {
             names: Default::default(),
+            computers: Default::default(),
             players: [1, 2].map(crate::tests::player).into(),
             teams: Vec::new(),
         };
