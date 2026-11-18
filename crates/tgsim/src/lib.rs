@@ -13,6 +13,7 @@ mod companies;
 mod delivery;
 mod disposal;
 pub mod economy;
+mod efficiency;
 mod engagement;
 mod experience;
 mod fog;
@@ -313,6 +314,9 @@ pub struct Organization {
     /// Whether it was engaging an enemy at its last look at its
     /// experience.
     engaging_before: bool,
+    /// How hard it hits now, as a share of full strength, easing towards
+    /// what its properties set.
+    pub efficiency: f32,
 }
 
 /// An organization's order to keep a post: it comes back to it after every
@@ -489,8 +493,9 @@ pub struct Unit {
     /// What its properties multiply its fighter's health by, as its health
     /// was last scaled to.
     pub health_factor: f32,
-    /// Seconds until each of its fighter's weapons can fire again.
-    reloads: Vec<f32>,
+    /// Seconds since each of its fighter's weapons last fired; infinite
+    /// for one that hasn't.
+    fired_ago: Vec<f32>,
     /// What it last fired on.
     pub target: Option<Target>,
     /// The tick it last fired on, and the index of the weapon it fired.
@@ -559,8 +564,12 @@ pub struct Building {
     pub facing: [f32; 2],
     pub fighter: Fighter,
     pub health: f32,
-    /// Seconds until each of its fighter's weapons can fire again.
-    reloads: Vec<f32>,
+    /// What its properties multiply its fighter's health by, as its health
+    /// was last scaled to.
+    pub health_factor: f32,
+    /// Seconds since each of its fighter's weapons last fired; infinite
+    /// for one that hasn't.
+    fired_ago: Vec<f32>,
     /// What it last fired on.
     pub target: Option<Target>,
     /// For one that defends itself, what it's noticed, which is all it
@@ -1044,6 +1053,7 @@ impl World {
         let fired_on = self.fight();
         self.engage(&fired_on);
         self.keep_morale();
+        self.keep_efficiency();
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
@@ -1160,7 +1170,7 @@ digest!(Organization {
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
     guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before, experience,
-    level, engaging_before,
+    level, engaging_before, efficiency,
 } skip {
     // Its template's.
     formations, unpacks,
@@ -1186,7 +1196,7 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, acceleration, turn_rate, turn_radius, trailer, closing, health,
     health_factor,
-    reloads, target, shot, died, besieged, left, awaited, descent,
+    fired_ago, target, shot, died, besieged, left, awaited, descent,
 } skip {
     // Its template's.
     domain, shape, fighter,
@@ -1204,7 +1214,8 @@ digest!(Trailer {
 });
 
 digest!(Building {
-    id, template, number, owner, position, facing, health, reloads, target, noticed, awake,
+    id, template, number, owner, position, facing, health, health_factor, fired_ago, target,
+    noticed, awake,
     inside, besieged, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
     captured, unpacked_from, zone, members, supply, properties, created,
 } skip {

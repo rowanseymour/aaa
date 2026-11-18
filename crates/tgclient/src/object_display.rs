@@ -1673,7 +1673,7 @@ fn measure(sim: &World, fill: Fill) -> (f32, f32) {
         }
         Fill::Building(b) => {
             let b = &sim.buildings[b];
-            (b.health, b.fighter.health)
+            (b.health, b.fighter.health * b.health_factor)
         }
         Fill::Progress(b) => {
             let b = &sim.buildings[b];

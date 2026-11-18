@@ -122,7 +122,7 @@ impl Unit {
         self.closing = false;
         self.target = None;
         self.shot = None;
-        self.reloads.fill(0.0);
+        self.fired_ago.fill(f32::INFINITY);
         if let Some(t) = &mut self.trailer {
             t.behind(at, facing);
         }
@@ -542,6 +542,7 @@ mod tests {
             primary: Some(0),
             morale: 1.0,
             experience: 0.0,
+            efficiency: None,
             unpacks: None,
         };
         let w = World::from_organizations(

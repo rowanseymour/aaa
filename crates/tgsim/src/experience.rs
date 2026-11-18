@@ -207,6 +207,26 @@ impl World {
         Some(self.levels(r)?.get(next)?.required)
     }
 
+    /// What the properties something of `owner`'s made from `template`
+    /// and holding `held` adds to its fighting, with those of `more` as
+    /// well: its template's own, its side's technologies on its kind and
+    /// those it holds for a time.
+    pub(crate) fn held_effect(
+        &self,
+        owner: u32,
+        template: &Id,
+        held: &[crate::Held],
+        more: &[Option<&Id>],
+    ) -> CombatEffect {
+        let table = &self.rules.combat_effects;
+        let kind = self.rules.kinds.get(template);
+        let own = kind.into_iter().flat_map(|k| &k.properties);
+        let bearing = self.bearing(table, |e| &e.requires, owner, template, held);
+        let more = more.iter().flatten().filter_map(|&p| table.get(p));
+        (own.filter_map(|p| table.get(p)).chain(bearing).chain(more))
+            .fold(CombatEffect::default(), CombatEffect::with)
+    }
+
     /// What the properties the unit at `u` holds add to its fighting: its
     /// template's own, its side's technologies on its kind, those its
     /// organization holds for a time, and its organization's level.
@@ -214,19 +234,8 @@ impl World {
         let unit = &self.units[u];
         let r = unit.organization;
         let organization = &self.organizations[r];
-        let table = &self.rules.combat_effects;
-        let kind = self.rules.kinds.get(&unit.template);
-        let own = kind.into_iter().flat_map(|k| &k.properties);
         let (owner, held) = (organization.owner, &organization.properties);
-        let bearing = self.bearing(table, |e| &e.requires, owner, &unit.template, held);
-        let level = self.level_property(r).and_then(|p| table.get(p));
-        let effects = own.filter_map(|p| table.get(p)).chain(bearing).chain(level);
-        effects.fold(CombatEffect::default(), |sum, e| CombatEffect {
-            attack: sum.attack + e.attack,
-            defense: sum.defense + e.defense,
-            health: sum.health + e.health,
-            requires: Vec::new(),
-        })
+        self.held_effect(owner, &unit.template, held, &[self.level_property(r)])
     }
 
     /// The most health the unit at `u` can have.
@@ -250,11 +259,35 @@ impl World {
         unit.health_factor = factor;
     }
 
-    /// Rescales every unit's maximum health to what its properties make it
-    /// now, as technologies arrive and properties come and go.
+    /// The most health the building at `b` can have.
+    pub fn building_max_health(&self, b: usize) -> f32 {
+        let building = &self.buildings[b];
+        building.fighter.health * building.health_factor
+    }
+
+    /// Rescales the building at `b`'s maximum health as
+    /// [`World::rescale_health`] does a unit's.
+    fn rescale_building_health(&mut self, b: usize) {
+        let factor = (1.0 + self.building_boost(b).health).max(MULTIPLY_FLOOR);
+        let building = &mut self.buildings[b];
+        if factor == building.health_factor {
+            return;
+        }
+        if building.health > 0.0 {
+            building.health = (building.health * factor / building.health_factor).max(1.0);
+        }
+        building.health_factor = factor;
+    }
+
+    /// Rescales every unit's and building's maximum health to what its
+    /// properties make it now, as technologies arrive and properties come
+    /// and go.
     pub(crate) fn keep_health(&mut self) {
         for u in 0..self.units.len() {
             self.rescale_health(u);
+        }
+        for b in 0..self.buildings.len() {
+            self.rescale_building_health(b);
         }
     }
 
@@ -709,8 +742,10 @@ mod regiment_tests {
         // Half health of half as much again.
         assert_eq!(w.max_health(0), 150.0);
         assert_eq!(w.units[0].health, 75.0);
-        assert_eq!(w.boosts(Some(Target::Unit(0)), Target::Unit(1)), [5.0, 0.0]);
-        assert_eq!(w.boosts(Some(Target::Unit(1)), Target::Unit(0)), [0.0, 2.0]);
+        assert_eq!(w.effect(Target::Unit(0)).attack, 5.0);
+        assert_eq!(w.effect(Target::Unit(1)).defense, 0.0);
+        assert_eq!(w.effect(Target::Unit(1)).attack, 0.0);
+        assert_eq!(w.effect(Target::Unit(0)).defense, 2.0);
         assert_eq!(w.defense(Target::Unit(0)), Some((2.0, 0.0)));
         // It's worth more for it.
         assert!(w.unit_value(0) > before);
@@ -718,7 +753,7 @@ mod regiment_tests {
         w.gain_experience(0, 10.0);
         assert_eq!(w.max_health(0), 200.0);
         assert_eq!(w.units[0].health, 100.0);
-        assert_eq!(w.boosts(None, Target::Unit(0)), [0.0, 4.0]);
+        assert_eq!(w.effect(Target::Unit(0)).defense, 4.0);
     }
 
     #[test]
@@ -823,11 +858,11 @@ mod regiment_tests {
         w.units[0].health = 50.0;
         w.tick();
         assert_eq!((w.max_health(0), w.units[0].health), (200.0, 100.0));
-        assert_eq!(w.boosts(None, Target::Unit(0)), [0.0, 1.0]);
+        assert_eq!(w.effect(Target::Unit(0)).defense, 1.0);
         // Once it's gone, back again.
         run(&mut w, 3.0);
         assert_eq!(w.max_health(0), 100.0);
-        assert_eq!(w.boosts(None, Target::Unit(0)), [0.0, 0.0]);
+        assert_eq!(w.effect(Target::Unit(0)).defense, 0.0);
     }
 
     #[test]
@@ -943,6 +978,7 @@ mod regiment_tests {
             primary: None,
             morale: 1.0,
             experience: 25.0,
+            efficiency: None,
             unpacks: None,
         };
         let r = w.push_organization(&organization, false);

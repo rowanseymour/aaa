@@ -52,6 +52,7 @@ pub(crate) fn world(pathing: Pathing) -> World {
         primary: None,
         morale: 1.0,
         experience: 0.0,
+        efficiency: None,
         unpacks: None,
     };
     World::from_organizations(Sides::default(), pathing, &[organization])
@@ -90,6 +91,7 @@ pub(crate) fn vehicle(acceleration: f32, turn_rate: f32, trailer: Option<tgmap::
         primary: None,
         morale: 1.0,
         experience: 0.0,
+        efficiency: None,
         unpacks: None,
     };
     World::from_organizations(
@@ -127,6 +129,8 @@ pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
         flight: None,
         bombard: false,
         morale_loss: 0.0,
+        vorpal: false,
+        spell: false,
     }
 }
 
@@ -177,6 +181,7 @@ pub(crate) fn battle(owners: &[u32], fighters: Vec<Fighter>, sides: Sides) -> Wo
                 primary: None,
                 morale: 1.0,
                 experience: 0.0,
+                efficiency: None,
                 unpacks: None,
             }
         })
@@ -411,6 +416,7 @@ pub(crate) fn truck() -> tgmap::Organization {
         primary: Some(0),
         morale: 1.0,
         experience: 0.0,
+        efficiency: None,
         unpacks: Some(Unpacks {
             building: depot,
             room: Shape::Rect {
@@ -645,8 +651,11 @@ pub(crate) fn rate(w: &mut World, template: &str, damage: f32) {
             damage,
             range: 12.0,
             area: 0.0,
-            cycle: 2.0,
+            played: 0.0,
+            recharge: 2.0,
             ignored: false,
+            projectile: false,
+            bombard: false,
         }],
     };
     w.rules.combat_profiles.insert(template.into(), profile);

@@ -154,6 +154,8 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         combat_profiles,
         combat_means,
         combat_effects: game.combat_effects(),
+        formation_efficiencies: game.formation_efficiencies(),
+        broken_efficiencies: game.broken_efficiencies(),
         experience_gains: game.experience_gains(),
         experience_levels: game.experience_levels(),
         supply_effects: game.supply_effects(),
@@ -182,6 +184,11 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(gravity) = game.gravity() {
         rules.gravity = gravity;
     }
+    let [climbing, falling] = game.efficiency_rates();
+    rules.efficiency_rates = [
+        climbing.unwrap_or(rules.efficiency_rates[0]),
+        falling.unwrap_or(rules.efficiency_rates[1]),
+    ];
     if let Some(seconds) = game.siege_seconds() {
         rules.siege_seconds = seconds;
     }

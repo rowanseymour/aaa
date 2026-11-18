@@ -1051,6 +1051,7 @@ mod tests {
             primary: None,
             morale: 1.0,
             experience: 0.0,
+            efficiency: None,
             unpacks: None,
         };
         let sides = Sides {

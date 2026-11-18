@@ -54,7 +54,7 @@ pub use economy::{Amounts, Economy, EconomyRules, Logistics, ResourceKind, Resou
 pub use effects::{
     Decal, HealthCue, HealthTrigger, ObjectEffects, Vfx, VfxCue, VfxTint, WeaponEffects,
 };
-pub use experience::{CombatEffect, ExperienceGains, Level, Levels, level_property};
+pub use experience::{CombatEffect, Efficiency, ExperienceGains, Level, Levels, level_property};
 pub use fog::{FogSetting, Sight};
 pub use guard::{GUARDING, GuardRules};
 pub use heroes::Hero;
@@ -539,6 +539,16 @@ impl GameData {
     }
 
     /// Seconds an enemy's damage keeps what it hurt under siege.
+    /// Attack efficiency a second a regiment gains while below its
+    /// target, and loses while above it, for those the data sets.
+    pub fn efficiency_rates(&self) -> [Option<f32>; 2] {
+        let svars = self.svars();
+        [
+            svars.iter().find_map(|v| v.attack_efficiency_climbing),
+            svars.iter().find_map(|v| v.attack_efficiency_falling),
+        ]
+    }
+
     pub fn siege_seconds(&self) -> Option<f32> {
         let svars = self.svars();
         svars

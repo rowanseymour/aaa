@@ -17,7 +17,7 @@ impl World {
         // Cities change hands by who holds them instead.
         let taker = by.filter(|_| building.fighter.capturable && building.zone.is_none());
         if let Some(by) = taker {
-            building.health = CAPTURE_HEALTH * building.fighter.health;
+            building.health = CAPTURE_HEALTH * building.fighter.health * building.health_factor;
             self.change_hands(b, by);
         } else if building.fighter.destructible {
             let owner = building.owner;

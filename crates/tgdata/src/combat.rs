@@ -134,6 +134,10 @@ pub struct Weapon {
     pub bombard: bool,
     /// The morale each unit it hits takes from its organization.
     pub morale_loss: f32,
+    /// Its main damage ignores defense.
+    pub vorpal: bool,
+    /// Its main damage ignores its user's attack efficiency.
+    pub spell: bool,
 }
 
 /// How a projectile flies to what it's fired at.
@@ -522,6 +526,8 @@ pub(crate) fn fighter(
             projectile: not_null(d.projectile_ids.clone()),
             flight: None,
             bombard: d.flags.iter().any(|f| f.bombard),
+            vorpal: d.flags.iter().any(|f| f.vorpal),
+            spell: d.flags.iter().any(|f| f.spell),
             morale_loss: (d.effect.iter())
                 .filter(|e| is(&e.kind, "MORALE_LOSS"))
                 .filter_map(|e| e.amount)

@@ -52,9 +52,9 @@ impl crate::Organization {
         matches!(self.mind, Mind::Routing { .. })
     }
 
-    /// Whether it does no damage, as while reforming.
-    pub fn harmless(&self) -> bool {
-        matches!(self.mind, Mind::Reforming { .. })
+    /// Whether it has no formation, as while routing or exhausted.
+    pub fn broken(&self) -> bool {
+        matches!(self.mind, Mind::Routing { .. } | Mind::Exhausted)
     }
 }
 
@@ -891,7 +891,7 @@ mod tests {
             }
         }
         assert!(reformed);
-        assert!(w.organizations[0].harmless());
+        assert!(matches!(w.organizations[0].mind, Mind::Reforming { .. }));
         // It takes orders, and regains morale.
         let before = w.organizations[0].morale;
         run(&mut w, 2.0);
@@ -1080,9 +1080,9 @@ mod tests {
             until: 1000,
             retry: 1000,
         };
-        w.units[0].reloads = vec![1.0];
+        w.units[0].fired_ago = vec![0.0];
         w.tick();
-        assert!(w.units[0].reloads[0] < 1.0);
+        assert!(w.units[0].fired_ago[0] > 0.0);
     }
 
     #[test]

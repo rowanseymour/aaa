@@ -1906,7 +1906,7 @@ fn can_pack(sim: &tgsim::World, building: usize) -> bool {
         .packing
         .get(&b.template)
         .map_or(1.0, |p| p.health_min);
-    !b.busy() && b.health > floor * b.fighter.health
+    !b.busy() && b.health > floor * b.fighter.health * b.health_factor
 }
 
 /// What an attack aimed at `focus` would strike.

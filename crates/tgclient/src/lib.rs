@@ -2956,7 +2956,9 @@ fn show_health(
             // front of it.
             let [x, y] = building.position;
             let at = world(x, y, view.placed.y);
-            let image = images.building_health_bar(building.health / building.fighter.health);
+            let image = images.building_health_bar(
+                building.health / (building.fighter.health * building.health_factor),
+            );
             shown.push((at, BUILDING_HEALTH_BAR, image, 0.0));
             // A relay's supply stockpile, below its health.
             if let Some(supply) = sim

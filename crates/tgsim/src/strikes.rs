@@ -203,7 +203,7 @@ impl World {
                 f,
                 &ground,
                 falloff,
-                self.boosts(None, target),
+                self.blow(None, None, target),
             );
             let side = self.standing_flag(player, self.owner(target));
             let flags = || f.flags.iter().chain([&side]);

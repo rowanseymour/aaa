@@ -299,7 +299,7 @@ mod tests {
                 &soldier(vec![]),
                 ground,
                 1.0,
-                [0.0; 2],
+                Default::default(),
             )
         };
         assert_eq!(hit(&[]), 12.0);

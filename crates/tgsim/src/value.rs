@@ -89,12 +89,27 @@ pub(crate) fn combat_value(
             }
         }
     };
+    let rate = (1.0 + boost.recharge).max(MULTIPLY_FLOOR);
     let value = |a: &CombatAbility| {
+        let range = a.range
+            + if a.projectile {
+                boost.projectile_range
+            } else {
+                0.0
+            }
+            + if a.bombard { boost.bombard_range } else { 0.0 };
+        let cycle = a.played.max(a.recharge / rate);
         let offense = match a.damage > 0.0 {
             true => {
-                let damage = (a.damage + boost.attack - means.defense).max(rules.damage_minimum);
-                damage / a.cycle.max(TICK)
-                    * libm::powf(a.range.max(0.0), rules.range_power)
+                let reach = if a.projectile {
+                    boost.ranged
+                } else {
+                    boost.melee
+                };
+                let damage = a.damage + boost.attack + reach;
+                let damage = (damage - means.defense).max(rules.damage_minimum);
+                damage / cycle.max(TICK)
+                    * libm::powf(range.max(0.0), rules.range_power)
                     * libm::powf(1.0 + a.area / 2.0, rules.area_power)
             }
             false => 0.0,
@@ -106,7 +121,7 @@ pub(crate) fn combat_value(
             true => health / taken / means.lifetime(),
             false => 0.0,
         };
-        let weight = match a.range >= rules.ranged_minimum && ratio < 1.0 {
+        let weight = match range >= rules.ranged_minimum && ratio < 1.0 {
             true => rules.defense_weight_ranged,
             false => rules.defense_weight,
         };
@@ -148,7 +163,10 @@ impl World {
     pub fn target_value(&self, t: Target) -> f32 {
         match t {
             Target::Unit(u) => self.unit_value(u),
-            Target::Building(b) => self.template_value(&self.buildings[b].template),
+            Target::Building(b) => {
+                let boost = self.building_boost(b);
+                self.value_of(&self.buildings[b].template, &boost)
+            }
         }
     }
 
@@ -191,8 +209,11 @@ mod tests {
                 damage,
                 range: 12.0,
                 area: 0.0,
-                cycle: 2.0,
+                played: 0.0,
+                recharge: 2.0,
                 ignored: false,
+                projectile: false,
+                bombard: false,
             }],
         }
     }
@@ -227,6 +248,45 @@ mod tests {
             (1.0, 2.0, 100.0)
         );
         assert_eq!(trimmed(Vec::new(), 0.2), 0.0);
+    }
+
+    #[test]
+    fn faster_fire_and_longer_range_count_only_for_their_attacks() {
+        let means = CombatMeans {
+            attack: 10.0,
+            defense: 1.0,
+            speed: 2.0,
+            health: 100.0,
+        };
+        let rules = rules();
+        let value = |profile: &CombatProfile, boost: &CombatEffect| {
+            combat_value(profile, boost, &rules, &means)
+        };
+        let plain = rifleman(10.0);
+        let none = CombatEffect::default();
+        let faster = CombatEffect {
+            recharge: 1.0,
+            ..Default::default()
+        };
+        assert!(value(&plain, &faster) > value(&plain, &none));
+        let longer = CombatEffect {
+            projectile_range: 8.0,
+            melee: 3.0,
+            ..Default::default()
+        };
+        // A rifle that fires no projectile gains the melee bonus only.
+        let melee = CombatEffect {
+            melee: 3.0,
+            ..Default::default()
+        };
+        assert_eq!(value(&plain, &longer), value(&plain, &melee));
+        let mut shooter = rifleman(10.0);
+        shooter.abilities[0].projectile = true;
+        let ranged = CombatEffect {
+            projectile_range: 8.0,
+            ..Default::default()
+        };
+        assert!(value(&shooter, &ranged) > value(&shooter, &none));
     }
 
     #[test]

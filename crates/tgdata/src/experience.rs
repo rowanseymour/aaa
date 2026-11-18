@@ -72,23 +72,105 @@ pub fn level_property(template: &Id, level: usize) -> Id {
 pub struct CombatEffect {
     /// `AV`: added to each attack's main damage.
     pub attack: f32,
+    /// `AV_MELEE`: added to the main damage of each attack that fires no
+    /// projectile.
+    pub melee: f32,
+    /// `AV_RANGED`: added to the main damage of each attack that fires one.
+    pub ranged: f32,
     /// `DV`: added to defense.
     pub defense: f32,
     /// `HEALTH`: added to the 1 maximum health is multiplied by.
     pub health: f32,
+    /// `RECHARGE_TIME`: added to the 1 the time between attacks is divided
+    /// by.
+    pub recharge: f32,
+    /// `PROJECTILE_ABILITY_RANGE`: added to the range of each attack that
+    /// fires a projectile, as its combat value counts it.
+    pub projectile_range: f32,
+    /// `BOMBARD_ABILITY_RANGE`: the same for each `BOMBARD` attack.
+    pub bombard_range: f32,
+    pub efficiency: Efficiency,
     /// For a technology, the properties a thing of the side needs for it
     /// to be on it.
     pub requires: Vec<Id>,
+}
+
+impl CombatEffect {
+    /// The two together, as a thing holding both has them.
+    pub fn with(self, other: &CombatEffect) -> CombatEffect {
+        CombatEffect {
+            attack: self.attack + other.attack,
+            melee: self.melee + other.melee,
+            ranged: self.ranged + other.ranged,
+            defense: self.defense + other.defense,
+            health: self.health + other.health,
+            recharge: self.recharge + other.recharge,
+            projectile_range: self.projectile_range + other.projectile_range,
+            bombard_range: self.bombard_range + other.bombard_range,
+            efficiency: self.efficiency.with(other.efficiency),
+            requires: Vec::new(),
+        }
+    }
+}
+
+/// What a property sets its holder's attack efficiency to: each the
+/// largest of its multipliers on that attribute, 1 plus its amount.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Efficiency {
+    /// `ATTACK_EFFICIENCY_ACTUAL`, which wins over `desired`.
+    pub actual: Option<f32>,
+    /// `ATTACK_EFFICIENCY_DESIRED`.
+    pub desired: Option<f32>,
+}
+
+impl Efficiency {
+    /// The two together, as a thing holding both has them.
+    pub fn with(self, other: Efficiency) -> Efficiency {
+        let most = |a: Option<f32>, b: Option<f32>| match (a, b) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        };
+        Efficiency {
+            actual: most(self.actual, other.actual),
+            desired: most(self.desired, other.desired),
+        }
+    }
+
+    /// The efficiency it sets, if it sets one.
+    pub fn value(self) -> Option<f32> {
+        self.actual.or(self.desired)
+    }
+
+    /// What `p`'s modifiers set.
+    pub fn of(p: &defs::Property) -> Efficiency {
+        combat_effect(p).map_or_else(Efficiency::default, |e| e.efficiency)
+    }
 }
 
 fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
     let mut out = CombatEffect::default();
     for m in &p.modifier {
         let amount = m.amount.unwrap_or(0.0);
+        let add = is(&m.kind, "ADD");
+        let multiply = is(&m.kind, "MULTIPLY");
+        let most = |v: Option<f32>| Some(v.map_or(1.0 + amount, |v| v.max(1.0 + amount)));
         match () {
-            _ if is(&m.kind, "ADD") && is(&m.attribute, "AV") => out.attack += amount,
-            _ if is(&m.kind, "ADD") && is(&m.attribute, "DV") => out.defense += amount,
-            _ if is(&m.kind, "MULTIPLY") && is(&m.attribute, "HEALTH") => out.health += amount,
+            _ if add && is(&m.attribute, "AV") => out.attack += amount,
+            _ if add && is(&m.attribute, "AV_MELEE") => out.melee += amount,
+            _ if add && is(&m.attribute, "AV_RANGED") => out.ranged += amount,
+            _ if add && is(&m.attribute, "DV") => out.defense += amount,
+            _ if add && is(&m.attribute, "PROJECTILE_ABILITY_RANGE") => {
+                out.projectile_range += amount;
+            }
+            _ if add && is(&m.attribute, "BOMBARD_ABILITY_RANGE") => out.bombard_range += amount,
+            _ if multiply && is(&m.attribute, "HEALTH") => out.health += amount,
+            _ if multiply && is(&m.attribute, "RECHARGE_TIME") => out.recharge += amount,
+            _ if multiply && is(&m.attribute, "ATTACK_EFFICIENCY_ACTUAL") => {
+                out.efficiency.actual = most(out.efficiency.actual);
+            }
+            _ if multiply && is(&m.attribute, "ATTACK_EFFICIENCY_DESIRED") => {
+                out.efficiency.desired = most(out.efficiency.desired);
+            }
             _ => {}
         }
     }
@@ -221,8 +303,33 @@ mod tests {
             attack: 4.0,
             defense: 1.0,
             health: 0.05,
-            requires: Vec::new(),
+            ..Default::default()
         };
         assert_eq!(combat_effect(regular), Some(effect));
+    }
+
+    #[test]
+    fn properties_say_how_they_raise_attacks_and_set_efficiency() {
+        let parsed = tgi::parse(
+            "[Property]\n{\n\t[Modifier]\n\t{\n\t\ttype = ADD\n\t\tattribute = AV_MELEE\n\t\tamount = 2\n\t}\n\
+             \t[Modifier]\n\t{\n\t\ttype = MULTIPLY\n\t\tattribute = RECHARGE_TIME\n\t\tamount = 0.5\n\t}\n\
+             \t[Modifier]\n\t{\n\t\ttype = MULTIPLY\n\t\tattribute = ATTACK_EFFICIENCY_DESIRED\n\t\tamount = -.5\n\t}\n\
+             \t[Modifier]\n\t{\n\t\ttype = MULTIPLY\n\t\tattribute = ATTACK_EFFICIENCY_DESIRED\n\t\tamount = -.25\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("Property").next().unwrap();
+        let p: defs::Property = tgi::from_block(block).unwrap();
+        let effect = combat_effect(&p).unwrap();
+        assert_eq!(
+            (effect.melee, effect.ranged, effect.recharge),
+            (2.0, 0.0, 0.5)
+        );
+        // The largest counts, not their sum.
+        assert_eq!(effect.efficiency.desired, Some(0.75));
+        assert_eq!(effect.efficiency.value(), Some(0.75));
+        let actual = Efficiency {
+            actual: Some(1.0),
+            desired: None,
+        };
+        assert_eq!(effect.efficiency.with(actual).value(), Some(1.0));
     }
 }

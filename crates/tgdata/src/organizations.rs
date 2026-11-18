@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use crate::{GameData, Id, defs, scoped};
+use crate::{Efficiency, GameData, Id, defs, scoped};
 
 /// How far around it an organization reaches.
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -38,6 +38,9 @@ pub struct Layout {
     pub combat: Option<usize>,
     /// The slot whose member the organization's position follows.
     pub primary: Option<usize>,
+    /// What its broken formation, while it has none, sets its attack
+    /// efficiency to.
+    pub broken: Efficiency,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -50,6 +53,8 @@ pub struct Formation {
     /// Whether a regiment standing or moving in it takes on enemies that
     /// come within its operational range, or runs into.
     pub aggressive: bool,
+    /// What it sets its regiment's attack efficiency to.
+    pub efficiency: Efficiency,
 }
 
 impl GameData {
@@ -98,24 +103,73 @@ impl GameData {
             .filter(|f| f.aggressive)
             .filter_map(|f| f.ids)
             .collect();
+        let mut efficiencies = HashMap::new();
+        for scope in &files {
+            for block in scope.root.blocks_of("Formation") {
+                let ids = scope
+                    .deserialize::<defs::Formation>(block)
+                    .and_then(|f| f.ids);
+                let held = scope.deserialize::<defs::FormationProperties>(block);
+                let held = held.map_or_else(Vec::new, |h| h.property);
+                let efficiency =
+                    (held.iter().map(Efficiency::of)).fold(Efficiency::default(), Efficiency::with);
+                // The first of those defined more than once, as for other
+                // properties.
+                if let Some(ids) = ids {
+                    efficiencies.entry(ids).or_insert(efficiency);
+                }
+            }
+        }
+        let known = Known {
+            aggressive: &aggressive,
+            efficiencies: &efficiencies,
+        };
         files
             .iter()
             .flat_map(|f| f.read::<defs::OrganizationLayout>("OrganizationLayout"))
-            .filter_map(|l| Some((l.ids.clone()?, layout(&l, &aggressive)?)))
+            .filter_map(|l| Some((l.ids.clone()?, layout(&l, known)?)))
+            .collect()
+    }
+
+    /// What each organization template's broken formation sets its attack
+    /// efficiency to, by template id, for those whose layout has one.
+    pub fn broken_efficiencies(&self) -> HashMap<Id, Efficiency> {
+        let layouts = self.layouts();
+        (self.organization_components().into_iter())
+            .filter_map(|(t, o)| Some((t, layouts.get(&o.layout)?.broken)))
+            .filter(|(_, e)| e.value().is_some())
+            .collect()
+    }
+
+    /// What each formation sets its regiment's attack efficiency to, by
+    /// formation id, for those that set it.
+    pub fn formation_efficiencies(&self) -> HashMap<Id, Efficiency> {
+        let layouts = self.layouts();
+        (layouts.values().flat_map(|l| &l.formations))
+            .filter(|f| f.efficiency.value().is_some())
+            .map(|f| (f.id.clone(), f.efficiency))
             .collect()
     }
 }
 
+/// What the formations themselves say, by formation id.
+#[derive(Clone, Copy)]
+struct Known<'a> {
+    aggressive: &'a HashSet<Id>,
+    efficiencies: &'a HashMap<Id, Efficiency>,
+}
+
 /// A layout's formations, each with its positions given to the slots in
 /// turn: a slot takes the next position for its property.
-fn layout(l: &defs::OrganizationLayout, aggressive: &HashSet<Id>) -> Option<Layout> {
+fn layout(l: &defs::OrganizationLayout, known: Known) -> Option<Layout> {
     let formations: Vec<Formation> = l
         .formation
         .iter()
         .filter_map(|f| {
             let id = f.formation_ids.clone()?;
             Some(Formation {
-                aggressive: aggressive.contains(&id),
+                aggressive: known.aggressive.contains(&id),
+                efficiency: known.efficiencies.get(&id).copied().unwrap_or_default(),
                 slots: slot_positions(&l.slot, f)?,
                 id,
             })
@@ -133,6 +187,11 @@ fn layout(l: &defs::OrganizationLayout, aggressive: &HashSet<Id>) -> Option<Layo
         default,
         combat,
         primary: l.slot.iter().position(|s| s.primary),
+        broken: l
+            .broken_property
+            .as_ref()
+            .map(Efficiency::of)
+            .unwrap_or_default(),
     })
 }
 
@@ -170,6 +229,8 @@ mod tests {
         let parsed = tgi::parse(
             "[OrganizationLayout]\n{\n\tIDS = squad\n\tdefault_formation_ids = missing\n\
              \tcombat_formation_ids = line\n\
+             \t[BrokenProperty]\n\t{\n\t\t[Modifier]\n\t\t{\n\t\t\ttype = MULTIPLY\n\
+             \t\t\tattribute = ATTACK_EFFICIENCY_DESIRED\n\t\t\tamount = -.5\n\t\t}\n\t}\n\
              \t[Slot]\n\tproperty_IDS = front\n\tnumber = 2\n\
              \t[Slot]\n\tproperty_IDS = captain\n\tprimary = true\n\
              \t[Formation]\n\t{\n\t\tformation_IDS = line\n\
@@ -179,7 +240,21 @@ mod tests {
         );
         let block = parsed.root.blocks_of("OrganizationLayout").next().unwrap();
         let l: defs::OrganizationLayout = tgi::from_block(block).unwrap();
-        let layout = layout(&l, &HashSet::new()).unwrap();
+        let efficiencies = [(
+            Id::from("line"),
+            Efficiency {
+                actual: None,
+                desired: Some(0.75),
+            },
+        )];
+        let efficiencies = efficiencies.into();
+        let known = Known {
+            aggressive: &HashSet::new(),
+            efficiencies: &efficiencies,
+        };
+        let layout = layout(&l, known).unwrap();
+        assert_eq!(layout.broken.desired, Some(0.5));
+        assert_eq!(layout.formations[0].efficiency.desired, Some(0.75));
         assert_eq!(layout.default, 0);
         assert_eq!(layout.combat, Some(0));
         assert_eq!(layout.primary, Some(1));
