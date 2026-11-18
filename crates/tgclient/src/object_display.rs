@@ -544,7 +544,7 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
                 .filter(|_| afield)
                 .and_then(|f| looks.formations.get(&Id::from(f.id.as_str())));
             let guarding = (afield && organization.guarding()).then(|| Id::from(GUARDING));
-            let mind = organization.mind.property().map(Id::from);
+            let mind = sim.state(r).map(Id::from);
             let timed = organization.properties.iter().map(|h| h.property.clone());
             let level = sim.level_property(r).cloned();
             own(&organization.template)

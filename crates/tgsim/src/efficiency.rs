@@ -19,7 +19,7 @@ impl World {
     fn organization_effect(&self, r: usize) -> CombatEffect {
         let organization = &self.organizations[r];
         let (owner, held) = (organization.owner, &organization.properties);
-        let state = organization.mind.property().map(Id::from);
+        let state = self.state(r).map(Id::from);
         let more = [self.level_property(r), state.as_ref()];
         self.held_effect(owner, &organization.template, held, &more)
     }
@@ -159,6 +159,42 @@ mod tests {
             .insert(Id::from(tgmap::REFORMING), reforming);
         w.organizations[0].mind = Mind::Reforming { until: 1000 };
         assert_eq!(w.efficiency_target(0), 1.0);
+    }
+
+    #[test]
+    fn a_regiment_resting_idle_is_at_full_strength() {
+        let mut w = column();
+        let resting = CombatEffect {
+            efficiency: Efficiency {
+                actual: Some(1.0),
+                desired: None,
+            },
+            ..Default::default()
+        };
+        w.rules
+            .combat_effects
+            .insert(Id::from(tgmap::RESTING), resting);
+        assert!(w.resting(0));
+        assert_eq!(w.efficiency_target(0), 1.0);
+        // Not while it's on its way somewhere.
+        let to = [10.0, 30.0];
+        w.apply(
+            1,
+            crate::Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
+        w.tick();
+        assert!(!w.resting(0));
+        assert_eq!(w.efficiency_target(0), 0.5);
+        // Nor while it fights.
+        run(&mut w, 30.0);
+        w.organizations[0]
+            .engaged
+            .push(crate::Piece::Organization(1));
+        assert!(!w.resting(0));
     }
 
     #[test]

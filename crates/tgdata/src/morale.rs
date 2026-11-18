@@ -12,6 +12,8 @@ pub const ROUTING: &str = "actor_state_routing";
 pub const REFORMING: &str = "actor_state_reforming";
 /// The property a regiment out of morale has.
 pub const EXHAUSTED: &str = "actor_state_exhausted";
+/// The property a regiment standing idle, with nothing else to do, has.
+pub const RESTING: &str = "actor_state_resting";
 /// The property a regiment that's engaged has.
 pub const ENGAGED: &str = "actor_state_engaged";
 /// The property a regiment that's engaged by another without engaging
