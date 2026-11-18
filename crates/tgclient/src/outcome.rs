@@ -58,16 +58,20 @@ pub struct OutcomePlugin;
 impl Plugin for OutcomePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Told>()
-            .add_systems(OnEnter(Screen::Match), |mut told: ResMut<Told>| {
+            .add_systems(OnEnter(Screen::Loading), |mut told: ResMut<Told>| {
                 *told = Told::default()
             })
             .add_systems(
                 Update,
                 (
-                    tell.run_if(resource_exists::<Sim>),
-                    tell_host_gone.run_if(resource_exists::<Orders>),
-                )
-                    .run_if(in_state(Screen::Match)),
+                    tell.run_if(resource_exists::<Sim>)
+                        .run_if(in_state(Screen::Match)),
+                    // A host elsewhere can be lost, or kick the game out,
+                    // while its copy of the match is still being set up.
+                    tell_host_gone
+                        .run_if(resource_exists::<Orders>)
+                        .run_if(in_state(Screen::Loading).or_else(in_state(Screen::Match))),
+                ),
             );
     }
 }
@@ -212,6 +216,29 @@ mod tests {
         host.turn();
         for _ in 0..2 {
             orders.step(&mut world);
+        }
+        app.insert_resource(orders);
+        app.update();
+        assert_eq!(shown(&mut app), ["Ok", "You were kicked from the game"]);
+    }
+
+    #[test]
+    fn a_game_kicked_out_while_its_match_loads_is_told_so_then() {
+        let mut app = app();
+        app.world_mut().remove_resource::<Sim>();
+        let mut screen = app.world_mut().resource_mut::<NextState<Screen>>();
+        screen.set(Screen::Loading);
+        app.update();
+        let (mut host, mut orders, _) = crate::orders::testing::joined(&[1]);
+        let _others = [2, 3].map(|p| {
+            let (link, _) = crate::orders::testing::let_in(&mut host, &[p]);
+            let mut other = tgserver::Client::new(link);
+            other.kick(orders.me(), true).unwrap();
+            other
+        });
+        host.wait();
+        for _ in 0..2 {
+            orders.wait();
         }
         app.insert_resource(orders);
         app.update();

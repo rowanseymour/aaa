@@ -61,6 +61,10 @@ pub struct Host<L> {
     /// How many clients it's to have before the match begins, and the
     /// most it lets in, if that's been said.
     wanted: Option<usize>,
+    /// Whether it has yet to have had them all at once. One that leaves
+    /// before then is waited on to be replaced; one that leaves after
+    /// isn't.
+    gathering: bool,
     begun: bool,
     clock: Clock,
     /// The time at this turn, and at the last that drained or refilled
@@ -106,8 +110,9 @@ struct Seat<L> {
     /// told are dealt with.
     asked: u64,
     answered: u64,
-    /// When it was last heard from, and last sent anything.
-    heard: Instant,
+    /// When it was last heard from, if it has been since it was let in,
+    /// and when it was last sent anything.
+    heard: Option<Instant>,
     sent: Instant,
     /// How many ticks it's said its copy has played.
     played: u64,
@@ -219,6 +224,7 @@ impl<L: Link> Host<L> {
             greeted: Vec::new(),
             next: 1,
             wanted: None,
+            gathering: false,
             begun: false,
             numbered: crate::NUMBERED.into(),
             pauses: None,
@@ -259,15 +265,16 @@ impl<L: Link> Host<L> {
     /// [`Host::waiting`] until it has them.
     pub fn want(&mut self, clients: usize) {
         self.wanted = Some(clients);
+        self.gathering = self.clients.len() < clients;
     }
 
     /// Whether those running it should hold off beginning the match:
-    /// while it has fewer clients than it [wants](Host::want), or any has
-    /// yet to say, as far as it's heard, that its copy of the match is
-    /// set up. A match begun before then leaves those clients behind
-    /// from the start.
+    /// until it has had as many clients as it [wants](Host::want), and
+    /// while any of those left has yet to say, as far as it's heard, that
+    /// its copy of the match is set up. A match begun before then leaves
+    /// those clients behind from the start.
     pub fn waiting(&self) -> bool {
-        self.clients.len() < self.wanted.unwrap_or(0) || self.clients.iter().any(|c| !c.ready)
+        self.gathering || self.clients.iter().any(|c| !c.ready)
     }
 
     /// Has it carry out whatever `client` asks from here on: any player's
@@ -364,7 +371,7 @@ impl<L: Link> Host<L> {
             ready: false,
             asked: 0,
             answered: 0,
-            heard: self.now,
+            heard: None,
             sent: self.now,
             played: 0,
             allowance: ALLOWANCE,
@@ -373,6 +380,7 @@ impl<L: Link> Host<L> {
             kicking: Vec::new(),
             kicked: false,
         });
+        self.gathering &= self.wanted.is_some_and(|w| self.clients.len() < w);
         Ok(id)
     }
 
@@ -382,10 +390,7 @@ impl<L: Link> Host<L> {
         if self.begun {
             return Some(Refusal::Begun);
         }
-        if self
-            .wanted
-            .is_some_and(|wanted| self.clients.len() >= wanted)
-        {
+        if self.wanted.is_some() && !self.gathering {
             return Some(Refusal::Full);
         }
         players.iter().find_map(|&p| {
@@ -439,44 +444,13 @@ impl<L: Link> Host<L> {
     }
 
     /// Hears from the clients let in before the match has begun, without
-    /// beginning it: which are ready, and which have gone. What a client
-    /// asks for before it begins is dropped, as it's told.
+    /// beginning it, as a turn hears them: which are ready, who's gone,
+    /// who's for dropping or kicking whom, and what's said, everyone being
+    /// told how they all stand. One that goes quiet holds the match, and
+    /// can be dropped, as in play. What's asked of the match before it
+    /// begins is dropped, as the client is told.
     pub fn wait(&mut self) -> Vec<Event> {
-        self.now = self.clock.now();
-        for seat in &mut self.clients {
-            for _ in 0..HEARD_A_TURN {
-                match seat.link.receive() {
-                    Ok(Some(message)) => {
-                        seat.heard = self.now;
-                        let heard = (message.len() <= LONGEST_HEARD).then(|| decode(&message));
-                        match heard.flatten() {
-                            Some(ToHost::Ask(_)) => seat.asked += 1,
-                            Some(ToHost::Ready) => seat.ready = true,
-                            Some(ToHost::Leave) => seat.lost = true,
-                            Some(
-                                ToHost::Check { .. }
-                                | ToHost::Played(_)
-                                | ToHost::Vote(_)
-                                | ToHost::Kick { .. }
-                                | ToHost::Say(_),
-                            )
-                            | None => {}
-                        }
-                        if seat.lost {
-                            break;
-                        }
-                    }
-                    Ok(None) => break,
-                    Err(_) => {
-                        seat.lost = true;
-                        break;
-                    }
-                }
-            }
-        }
-        self.answer();
-        self.keep_up();
-        self.part()
+        self.go(None, false)
     }
 
     /// Lets go of the clients that have gone, telling those left of each.
@@ -530,31 +504,28 @@ impl<L: Link> Host<L> {
     /// carry out what they asked that it lets them, and plays a tick
     /// unless the match is held still.
     pub fn turn(&mut self) -> Vec<Event> {
-        self.go(None)
+        self.go(None, true)
     }
 
     /// As [`Host::turn`], but playing no tick: for carrying out what's
     /// asked sooner than the next tick.
     pub fn relay(&mut self) -> Vec<Event> {
-        self.go(Some(false))
+        self.go(Some(false), true)
     }
 
     /// As [`Host::turn`], but playing a tick whether or not the match is
     /// held still: for what keeps the match's time itself.
     pub fn tick(&mut self) -> Vec<Event> {
-        self.go(Some(true))
+        self.go(Some(true), true)
     }
 
-    /// A turn, playing a tick as `tick` says, or by whether the match is
-    /// held still if it doesn't.
-    fn go(&mut self, tick: Option<bool>) -> Vec<Event> {
+    /// A turn, beginning the match if `play` and it hasn't begun, and then
+    /// playing a tick as `tick` says, or by whether the match is held
+    /// still if it doesn't; or, unless `play`, one that plays nothing.
+    fn go(&mut self, tick: Option<bool>, play: bool) -> Vec<Event> {
         self.now = self.clock.now();
         let mut actions = Vec::new();
-        if !self.begun {
-            // Setting a copy of the match up is no time to be heard from.
-            for seat in &mut self.clients {
-                seat.heard = self.now;
-            }
+        if play && !self.begun {
             // Every side a person plays goes by their name from the first.
             for seat in &self.clients {
                 let name = |&player| Action::Name {
@@ -564,7 +535,7 @@ impl<L: Link> Host<L> {
                 actions.extend(seat.players.iter().map(name).map(|a| (None, a)));
             }
         }
-        self.begun = true;
+        self.begun |= play;
         let mut events = Vec::new();
         let mut votes_changed = false;
         // Whether anyone's side resigned, leaving them watching.
@@ -591,7 +562,7 @@ impl<L: Link> Host<L> {
                     heard.map(|m| m.map(|m| (m.len() <= LONGEST_HEARD).then(|| decode(&m))));
                 let heard = heard.map(|m| m.map(Option::flatten));
                 if let Ok(Some(_)) = heard {
-                    seat.heard = self.now;
+                    seat.heard = Some(self.now);
                 }
                 match heard {
                     Ok(None) => break,
@@ -651,7 +622,8 @@ impl<L: Link> Host<L> {
         votes_changed |= self.kick(kicks);
         let was_held = self.held;
         self.judge();
-        if self.held {
+        // Nothing's carried out before the match begins.
+        if play && self.held {
             // What's asked while the match is held waits for it to go on,
             // and so isn't answered until it has.
             self.put_off.append(&mut actions);
@@ -659,7 +631,7 @@ impl<L: Link> Host<L> {
                 let first = first_taken.iter().find(|&&(id, _)| id == seat.id);
                 seat.put_off_from = seat.put_off_from.or(first.map(|&(_, asked)| asked));
             }
-        } else {
+        } else if play {
             for seat in &mut self.clients {
                 seat.put_off_from = None;
             }
@@ -805,7 +777,10 @@ impl<L: Link> Host<L> {
     /// How `seat` stands at this turn.
     fn standing(&self, seat: &Seat<L>) -> Standing {
         // The client of whoever runs the host is never lost to it.
-        if !seat.trusted && self.now >= seat.heard + UNHEARD {
+        // One yet to say anything since it was let in is still starting
+        // up, and is found gone only if its link is.
+        let unheard = seat.heard.is_some_and(|heard| self.now >= heard + UNHEARD);
+        if !seat.trusted && unheard {
             Standing::Disconnected
         } else if seat.diverged {
             Standing::OutOfSync
@@ -1601,6 +1576,53 @@ mod tests {
         clients[0].ready().unwrap();
         play(&mut host, &mut clients, 2);
         assert_eq!(clients[1].world().ticks, 2);
+    }
+
+    #[test]
+    fn while_copies_are_set_up_the_match_is_held_and_dropped_from_as_in_play() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2], &[]]);
+        host.want(3);
+        clients[0].ready().unwrap();
+        clients[1].ready().unwrap();
+        // The watcher's copy is still being set up when it goes quiet.
+        let wait_out = |host: &mut Host<Local>, clients: &mut [Copy], seconds| {
+            let mut events = Vec::new();
+            for _ in 0..seconds {
+                clock.pass(Duration::from_secs(1));
+                events.extend(host.wait());
+                for c in &mut clients[..2] {
+                    c.wait().unwrap();
+                }
+            }
+            events
+        };
+        // One yet to say anything since it was let in is still starting
+        // up, and holds nothing.
+        assert_eq!(wait_out(&mut host, &mut clients, 3), []);
+        clients[2].wait().unwrap();
+        assert_eq!(wait_out(&mut host, &mut clients, 3), [Event::Held(true)]);
+        let status = clients[0].status().unwrap().clone();
+        assert!(status.held);
+        assert_eq!(status.seats[2].standing, Standing::Disconnected);
+        clients[1].say("hurry up".into()).unwrap();
+        clients[0].vote(true).unwrap();
+        clients[1].vote(true).unwrap();
+        let events = wait_out(&mut host, &mut clients, 15);
+        assert_eq!(events, [Event::Left(3), Event::Held(false)]);
+        assert_eq!(clients[0].take_left(), [gone(3, &[])]);
+        let said: Vec<_> = clients[0]
+            .take_said()
+            .into_iter()
+            .map(|s| s.words)
+            .collect();
+        assert_eq!(said, ["hurry up"]);
+        // It has had all it wanted, so begins without the one gone, and
+        // takes nobody in its place.
+        assert!(!host.waiting());
+        let (ours, _theirs) = pair();
+        assert_eq!(host.admit(ours, vec![], "Bob"), Err(Refusal::Full));
+        assert_eq!(host.world().ticks, 0);
     }
 
     #[test]
