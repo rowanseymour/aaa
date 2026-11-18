@@ -101,6 +101,15 @@ pub(crate) fn vehicle(acceleration: f32, turn_rate: f32, trailer: Option<tgmap::
     )
 }
 
+/// The main damage `weapon` does.
+pub(crate) fn main_damage(weapon: &Weapon) -> tgmap::Damage {
+    weapon
+        .main_damage()
+        .next()
+        .expect("it does main damage")
+        .clone()
+}
+
 pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
     Weapon {
         range,
@@ -114,10 +123,11 @@ pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
             required: vec![Id::from("enemy")],
             excluded: vec![Id::from("tank")],
         },
-        damage: vec![tgmap::Damage {
+        hits: vec![tgmap::WeaponHit::main(tgmap::Damage {
             kind: Id::from("gunfire"),
             amount,
-        }],
+        })],
+        centred_on_user: false,
         animation: None,
         turret: false,
         turret_point: None,
@@ -128,7 +138,6 @@ pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
         projectile: None,
         flight: None,
         bombard: false,
-        morale_loss: 0.0,
         vorpal: false,
         spell: false,
     }

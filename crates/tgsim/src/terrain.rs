@@ -295,7 +295,7 @@ mod tests {
         let effect = |id: &str| &rules.effects[&Id::from(id)];
         let hit = |ground: &[&TerrainEffect]| {
             damage(
-                &rifle(12.0, 12.0).damage,
+                &main_damage(&rifle(12.0, 12.0)),
                 &soldier(vec![]),
                 ground,
                 1.0,

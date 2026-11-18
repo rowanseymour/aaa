@@ -702,6 +702,9 @@ pub struct AbilityFlags {
     pub vorpal: bool,
     #[serde(default)]
     pub spell: bool,
+    /// Its area is round its user rather than where it lands.
+    #[serde(default)]
+    pub center_on_source: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -781,6 +784,8 @@ pub struct DamageType {
 pub struct Flags {
     #[serde(default)]
     pub invisible: bool,
+    /// It counts as `invulnerable` to target filters.
+    pub invulnerable: Option<bool>,
     pub blocking: Option<bool>,
     /// Its model tilts to follow the ground under its soft shape.
     pub conform_to_terrain: Option<bool>,

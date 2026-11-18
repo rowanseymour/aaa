@@ -10,6 +10,7 @@ use std::sync::Arc;
 use tgmap::Id;
 use tgmap::triggers::{Element, Parameter, Trigger, Value};
 
+use crate::targets::Thing;
 use crate::{SECOND, TICK, World};
 
 /// Where a trigger stands in the match.
@@ -83,14 +84,6 @@ const HANDLED: &[&str] = &[
     "actor_modify_morale",
     "actor_gains_experience",
 ];
-
-/// What a thing parameter names.
-#[derive(Debug, Clone, Copy, PartialEq)]
-enum Thing {
-    Organization(usize),
-    Unit(usize),
-    Building(usize),
-}
 
 /// How two numbers are compared, by the game's numbering.
 fn compare(how: u32, a: f32, b: f32) -> bool {
@@ -254,12 +247,7 @@ impl World {
 
     /// Adds `by` to the morale of the regiment `t` is or is in.
     fn modify_morale(&mut self, t: Thing, by: f32) -> bool {
-        let regiment = match t {
-            Thing::Organization(r) => Some(r),
-            Thing::Unit(u) => Some(self.units[u].organization),
-            Thing::Building(b) => (0..self.organizations.len())
-                .find(|&r| self.organizations[r].unpacked_into == Some(b)),
-        };
+        let regiment = self.regiment_of(t);
         let has = |r: usize| self.organizations[r].morale_max > 0.0 && self.organization_on_map(r);
         let Some(r) = regiment.filter(|&r| has(r)) else {
             return false;
@@ -667,7 +655,10 @@ mod tests {
         w.tick();
         assert_eq!(w.organizations[0].experience, 0.0);
         assert_eq!(w.organizations[0].morale, was);
-        assert_eq!(w.thing(Some(&actor_id(2))), Some(super::Thing::Unit(0)));
+        assert_eq!(
+            w.thing(Some(&actor_id(2))),
+            Some(crate::targets::Thing::Unit(0))
+        );
         w.ticks = crate::SECOND;
         assert_eq!(w.thing(Some(&actor_id(2))), None);
     }

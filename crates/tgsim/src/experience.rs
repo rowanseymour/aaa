@@ -1022,7 +1022,10 @@ pub(crate) mod regiment_tests {
     fn staying_engaged_earns_a_second_at_a_time_after_the_first() {
         let mut w = veterans();
         for unit in &mut w.units {
-            unit.fighter.as_mut().unwrap().weapons[0].damage[0].amount = 0.0;
+            let weapon = &mut unit.fighter.as_mut().unwrap().weapons[0];
+            let mut d = crate::testing::main_damage(weapon);
+            d.amount = 0.0;
+            weapon.hits = vec![tgmap::WeaponHit::main(d)];
         }
         run(&mut w, 1.0);
         assert!(!w.organizations[0].engaged.is_empty());

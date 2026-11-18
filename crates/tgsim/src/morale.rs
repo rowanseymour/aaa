@@ -864,7 +864,11 @@ mod tests {
     #[test]
     fn weapons_with_morale_loss_take_it_from_each_unit_they_hit() {
         let mut w = standoff();
-        w.units[1].fighter.as_mut().unwrap().weapons[0].morale_loss = 0.75;
+        (w.units[1].fighter.as_mut().unwrap().weapons[0].hits).push(tgmap::WeaponHit {
+            targets: Default::default(),
+            on_user: false,
+            does: tgmap::Does::Morale(0.75),
+        });
         w.organizations[0].morale_max = 50.0;
         w.organizations[0].morale = 50.0;
         // A shot or two before the fight's own wear starts.

@@ -2,13 +2,14 @@
 //! do.
 
 use tgmap::{
-    CombatEffect, Damage, Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon,
+    CombatEffect, Damage, Does, Fighter, Id, Obstacle, Shape, TerrainEffect, Tile, Turret, Weapon,
+    WeaponHit,
 };
 
 use crate::value::MULTIPLY_FLOOR;
 use crate::{
     Footing, LANDINGS_KEPT, Landing, Order, Piece, Projectile, Relation, State, TICK, Target,
-    TurretAim, World, bounding_radius, distance, supply, wrap,
+    TurretAim, World, bounding_radius, distance, supply, targets::User, wrap,
 };
 
 impl TurretAim {
@@ -66,11 +67,23 @@ pub(crate) struct Hit {
     bombard: Option<f32>,
     /// The morale it takes from the organization of the unit it lands on.
     morale: f32,
-    /// Its main damage's kind.
+    /// Its damage's kind.
     kind: Option<Id>,
+    /// It's what the weapon's user did to itself.
+    on_user: bool,
 }
 
 impl Hit {
+    #[cfg(test)]
+    pub(crate) fn target(&self) -> Target {
+        self.target
+    }
+
+    #[cfg(test)]
+    pub(crate) fn amount(&self) -> f32 {
+        self.amount
+    }
+
     /// A hit of `by`'s special operation: the side's as a whole, so neither
     /// bombardment nor drawing fire.
     pub(crate) fn strike(target: Target, amount: f32, by: u32, kind: Option<Id>) -> Hit {
@@ -82,6 +95,7 @@ impl Hit {
             bombard: None,
             morale: 0.0,
             kind,
+            on_user: false,
         }
     }
 }
@@ -139,13 +153,13 @@ impl Default for Blow {
     }
 }
 
-/// Health a hit of `kinds` of damage takes from `target`, scaled by
-/// `scale` and `blow`'s efficiency: defence comes off first, then
-/// resistance takes its share, and every hit does at least 1. `ground` is
-/// what the terrain properties the target holds add to both, and `blow`
-/// what else adds to the first kind, its main damage, and to defense.
+/// Health main damage `d` takes from `target`, scaled by `scale` and
+/// `blow`'s efficiency: defence comes off first, then resistance takes its
+/// share, and every hit does at least 1. `ground` is what the terrain
+/// properties the target holds add to both, and `blow` what else adds to
+/// the damage and to defense.
 pub(crate) fn damage(
-    kinds: &[Damage],
+    d: &Damage,
     target: &Fighter,
     ground: &[&TerrainEffect],
     scale: f32,
@@ -153,18 +167,34 @@ pub(crate) fn damage(
 ) -> f32 {
     let defense = target.defense + blow.defense + ground.iter().map(|e| e.defense).sum::<f32>();
     let defense = if blow.vorpal { 0.0 } else { defense.max(0.0) };
-    (kinds.iter().enumerate())
-        .map(|(i, d)| {
-            let resist = resistance(target, ground, &d.kind);
-            let amount = match i {
-                // What lowers it takes it no lower than 1, or its own if
-                // that's less.
-                0 => (d.amount + blow.attack).max(d.amount.min(1.0)).max(0.0),
-                _ => d.amount,
-            };
-            ((blow.efficiency * amount * scale - defense) * (1.0 - resist)).max(1.0)
-        })
-        .sum()
+    let resist = resistance(target, ground, &d.kind);
+    // What lowers it takes it no lower than 1, or its own if that's less.
+    let amount = (d.amount + blow.attack).max(d.amount.min(1.0)).max(0.0);
+    ((blow.efficiency * amount * scale - defense) * (1.0 - resist)).max(1.0)
+}
+
+/// Health additive damage `d` takes from `target` standing on `ground`:
+/// only resistance lessens it.
+pub(crate) fn added(d: &Damage, target: &Fighter, ground: &[&TerrainEffect]) -> f32 {
+    d.amount * (1.0 - resistance(target, ground, &d.kind))
+}
+
+/// What `effect` does to `f`, standing on `ground`, with `scale` of falloff
+/// and `blow` for main damage: the health it takes, the morale it takes
+/// from its organization, and its damage's kind. Only main damage and
+/// morale lessen away from an area's middle.
+fn effect_does(
+    effect: &WeaponHit,
+    f: &Fighter,
+    ground: &[&TerrainEffect],
+    scale: f32,
+    blow: Blow,
+) -> (f32, f32, Option<Id>) {
+    match &effect.does {
+        Does::Main(d) => (damage(d, f, ground, scale, blow), 0.0, Some(d.kind.clone())),
+        Does::Add(d) => (added(d, f, ground), 0.0, Some(d.kind.clone())),
+        Does::Morale(amount) => (0.0, amount * scale, None),
+    }
 }
 
 impl World {
@@ -365,11 +395,13 @@ impl World {
                 }
                 shot = Some((self.ticks, w));
                 fired_ago[w] = 0.0;
+                self.use_on_user(weapon, (s, by), &mut hits);
                 match weapon.flight {
                     Some(flight) => launched.push(self.launch(s, by, w, weapon, flight, t)),
                     None => {
                         let bombard = self.bombards(s, weapon);
-                        self.strike(weapon, self.position(t), t, (s, by), bombard, &mut hits)
+                        let at = self.impact(s, weapon, self.position(t));
+                        self.strike(weapon, at, t, (s, by), bombard, &mut hits)
                     }
                 }
             }
@@ -415,20 +447,7 @@ impl World {
         }
         self.land_strikes(&mut hits);
         let mut fired_on = Vec::new();
-        for hit in hits {
-            if let Target::Unit(u) = hit.target {
-                let r = self.units[u].organization;
-                let alive = self.units[u].alive();
-                match (hit.bombard, hit.from) {
-                    // Bombardment keeps what it hurts out of supply rather
-                    // than drawing its fire.
-                    (Some(recharge), Some(from)) if alive => self.shell(r, from, recharge),
-                    (None, Some(from)) => fired_on.push((r, from)),
-                    _ => {}
-                }
-            }
-            self.land(hit);
-        }
+        self.land_all(hits, &mut fired_on);
         let gone = |w: &World, t: Option<Target>| t.is_some_and(|t| w.fighter(t).is_none());
         for u in 0..self.units.len() {
             if gone(self, self.units[u].target) {
@@ -441,6 +460,15 @@ impl World {
             }
         }
         fired_on
+    }
+
+    /// Where the area of `s`'s `weapon` is centred for a shot landing at
+    /// `at`: round `s` where it stands for one centred on its user.
+    fn impact(&self, s: Target, weapon: &Weapon, at: [f32; 2]) -> [f32; 2] {
+        match weapon.centred_on_user && weapon.area > 0.0 {
+            true => self.position(s),
+            false => at,
+        }
     }
 
     /// The projectile `s`, of player `by`, fires with its weapon `w` at
@@ -476,7 +504,7 @@ impl World {
             weapon: w,
             shot: weapon.clone(),
             target: t,
-            at: [0, 1].map(|i| aim[i] + velocity[i] * seconds),
+            at: self.impact(s, weapon, [0, 1].map(|i| aim[i] + velocity[i] * seconds)),
             lands: self.ticks + (seconds / TICK - 1e-4).ceil().max(0.0) as u64,
             bombard: self.bombards(s, weapon),
         }
@@ -485,7 +513,53 @@ impl World {
     /// Takes a hit's damage off what it lands on. A building whose health
     /// runs out is captured by the hit's owner if it can be, else destroyed
     /// if it can be, else disabled.
+    fn land_all(&mut self, hits: Vec<Hit>, fired_on: &mut Vec<(usize, Target)>) {
+        // A unit one effect of a use kills still takes the use's later
+        // effects, the last of them its last hit, before its death counts.
+        let mut dying: Option<(usize, Option<Target>, u32)> = None;
+        for hit in hits {
+            let (from, by) = (hit.from, hit.by);
+            let of_use = move |u| (u, from, by);
+            let follows = matches!(hit.target, Target::Unit(u) if dying == Some(of_use(u)));
+            if !follows && let Some((u, ..)) = dying.take() {
+                self.mourn(u);
+                self.lost_member(u);
+            }
+            if let Target::Unit(u) = hit.target {
+                let r = self.units[u].organization;
+                let alive = self.units[u].alive();
+                match (hit.bombard, hit.from) {
+                    // Bombardment keeps what it hurts out of supply rather
+                    // than drawing its fire.
+                    (Some(recharge), Some(from)) if alive => self.shell(r, from, recharge),
+                    (None, Some(from)) => fired_on.push((r, from)),
+                    _ => {}
+                }
+            }
+            let target = hit.target;
+            if self.strike_down(hit, follows)
+                && let Target::Unit(u) = target
+            {
+                dying = Some(of_use(u));
+            }
+        }
+        if let Some((u, ..)) = dying {
+            self.mourn(u);
+            self.lost_member(u);
+        }
+    }
+
+    /// Lands a hit, a unit it kills counting as dead at once.
+    #[cfg(test)]
     fn land(&mut self, hit: Hit) {
+        self.land_all(vec![hit], &mut Vec::new());
+    }
+
+    /// Takes a hit's damage off what it lands on, as [`World::land`] does,
+    /// but leaves a unit it kills to be mourned by the caller: returns
+    /// whether it killed one. One that `follows` a hit of the same use
+    /// that killed its unit still counts as that unit's last hit.
+    fn strike_down(&mut self, hit: Hit, follows: bool) -> bool {
         let ticks = self.ticks;
         let window = (self.rules.siege_seconds / TICK).round() as u64;
         let filters = &self.rules.damage_filters;
@@ -504,15 +578,17 @@ impl World {
                 let enemy = self.sides.relation(hit.by, owner) == Relation::Enemy;
                 let harmful = enemy && hit.amount > 0.0;
                 let unit = &mut self.units[u];
-                if !unit.alive() {
-                    return;
+                if !unit.alive() && !follows {
+                    return false;
                 }
                 if harmful {
                     besiege(&mut unit.besieged, ticks + window);
                     unit.struck = Some(struck);
                 }
-                unit.health -= hit.amount;
-                let dead = unit.health <= 0.0;
+                let dead = !follows && {
+                    unit.health -= hit.amount;
+                    unit.health <= 0.0
+                };
                 if dead {
                     unit.die(ticks);
                 }
@@ -520,13 +596,10 @@ impl World {
                 if harmful {
                     self.organizations[r].struck = Some(struck);
                 }
-                if enemy {
+                if enemy || hit.on_user {
                     self.lose_morale(r, hit.morale, true);
                 }
-                if dead {
-                    self.mourn(u);
-                    self.lost_member(u);
-                }
+                dead
             }
             Target::Building(b) => {
                 let building = &mut self.buildings[b];
@@ -534,7 +607,7 @@ impl World {
                 // over earlier in the tick; its special operations do.
                 let own = building.owner == hit.by && hit.from.is_some();
                 if !building.standing() || own {
-                    return;
+                    return false;
                 }
                 if self.sides.relation(hit.by, building.owner) == Relation::Enemy
                     && hit.amount > 0.0
@@ -561,6 +634,7 @@ impl World {
                         None => self.fall_unclaimed(b),
                     }
                 }
+                false
             }
         }
     }
@@ -835,44 +909,52 @@ impl World {
 
     /// Whether `weapon` fires on what `t` is, wherever it stands.
     pub(crate) fn can_target(&self, s: Target, weapon: &Weapon, t: Target) -> bool {
-        t != s && self.fighter(t).is_some() && self.matches(s, &weapon.targets, t)
+        t != s && self.matches(s, &weapon.targets, t)
     }
 
-    /// Whether what `t` is, a fighter with its flags and its side's
-    /// standing toward `s`'s, has the flags `targets` asks for, alive or
-    /// not.
+    /// Whether what `t` is has the target types `targets` asks for, as
+    /// `s` sees it, alive or not.
     pub fn matches(&self, s: Target, targets: &tgmap::Targets, t: Target) -> bool {
-        self.fits(self.owner(s), targets, t)
+        self.fighter(t).is_some() && self.reaches(self.user(s), targets, t)
     }
 
-    /// As [`World::matches`], for something of player `by`'s, which a shot
-    /// in flight stays whatever becomes of what fired it.
-    fn fits(&self, by: u32, targets: &tgmap::Targets, t: Target) -> bool {
-        let fighter = match t {
-            Target::Unit(u) => self.units[u].fighter.as_ref(),
-            Target::Building(b) => Some(&self.buildings[b].fighter),
+    /// `s` as the user of what it fires.
+    pub(crate) fn user(&self, s: Target) -> User {
+        User {
+            player: self.owner(s),
+            thing: Some(s),
+        }
+    }
+
+    /// What the effects of `weapon` that go to its user, `from` of `by`'s
+    /// side, do to it as it's used: before anything else of the use lands,
+    /// and as if from its own side.
+    fn use_on_user(&self, weapon: &Weapon, (from, by): (Target, u32), hits: &mut Vec<Hit>) {
+        let Some(f) = self.fighter(from) else {
+            return;
         };
-        let Some(fighter) = fighter else {
-            return false;
-        };
-        let side = self.standing_flag(by, self.owner(t));
-        targets.allow(fighter.flags.iter().chain(std::iter::once(&side)))
+        let ground = self.terrain_effects(from);
+        let blow = self.blow(Some(from), Some(weapon), from);
+        for h in weapon.hits.iter().filter(|h| h.on_user) {
+            let (amount, morale, kind) = effect_does(h, f, &ground, 1.0, blow);
+            hits.push(Hit {
+                target: from,
+                amount,
+                from: None,
+                by,
+                bombard: None,
+                morale,
+                kind,
+                on_user: true,
+            });
+        }
     }
 
-    /// The flag something of `owner`'s has for [`tgmap::Targets`] of
-    /// `by`'s to match, by how the sides stand.
-    pub(crate) fn standing_flag(&self, by: u32, owner: u32) -> Id {
-        Id::from(match self.sides.relation(by, owner) {
-            Relation::Enemy => "enemy",
-            Relation::Ally | Relation::Itself => "friend",
-            _ => "neutral",
-        })
-    }
-
-    /// Records the damage a shot fired by `from` of `by`'s side, as
-    /// bombardment or not, landing at `at` and aimed at `t`, does to what
-    /// it hits: `t`, or for an area
-    /// shot whatever around `at` the weapon fires on, but never `from`.
+    /// Records what a shot fired by `from` of `by`'s side, as bombardment
+    /// or not, landing at `at` and aimed at `t`, does to what it hits: `t`,
+    /// or for an area shot whatever around `at` the weapon fires on. Each
+    /// of its effects that reaches a thing hit is a hit of its own, in the
+    /// order the weapon lists them.
     fn strike(
         &self,
         weapon: &Weapon,
@@ -882,63 +964,53 @@ impl World {
         bombard: bool,
         hits: &mut Vec<Hit>,
     ) {
-        let bombard = bombard.then_some(weapon.recharge);
+        let user = User {
+            player: by,
+            thing: Some(from),
+        };
+        let mut reached = Vec::new();
         if weapon.area <= 0.0 {
-            if let Some(f) = self.fighter(t) {
+            if self.fighter(t).is_some() {
+                reached.push((0.0, t, 1.0));
+            }
+        } else {
+            for target in self.targets() {
+                let f = self.fighter(target).expect("targets can fight");
+                // To the circle round its soft shape, however it's turned.
+                let middle = distance(at, self.position(target));
+                let d = (middle - bounding_radius(f.soft)).max(0.0);
+                if d <= weapon.area && self.reaches(user, &weapon.targets, target) {
+                    reached.push((middle, target, falloff(weapon, d)));
+                }
+            }
+            // Those nearest by their middles, where there's a most it hits.
+            if weapon.max_targets > 0 {
+                reached.sort_by(|a, b| a.0.total_cmp(&b.0));
+                reached.truncate(weapon.max_targets as usize);
+            }
+        }
+        let bombard = bombard.then_some(weapon.recharge);
+        for (_, target, scale) in reached {
+            let f = self.fighter(target).expect("targets can fight");
+            let ground = self.terrain_effects(target);
+            let blow = self.blow(Some(from), Some(weapon), target);
+            for h in weapon.hits.iter().filter(|h| !h.on_user) {
+                if !self.reaches(user, &h.targets, target) {
+                    continue;
+                }
+                let (amount, morale, kind) = effect_does(h, f, &ground, scale, blow);
                 hits.push(Hit {
-                    target: t,
-                    amount: damage(
-                        &weapon.damage,
-                        f,
-                        &self.terrain_effects(t),
-                        1.0,
-                        self.blow(Some(from), Some(weapon), t),
-                    ),
+                    target,
+                    amount,
                     from: Some(from),
                     by,
                     bombard,
-                    morale: weapon.morale_loss,
-                    kind: weapon.damage.first().map(|d| d.kind.clone()),
+                    morale,
+                    kind,
+                    on_user: false,
                 });
             }
-            return;
         }
-        let mut reached = Vec::new();
-        for target in self.targets() {
-            let f = self.fighter(target).expect("targets can fight");
-            // To the circle round its soft shape, however it's turned.
-            let middle = distance(at, self.position(target));
-            let d = (middle - bounding_radius(f.soft)).max(0.0);
-            if d > weapon.area || target == from || !self.fits(by, &weapon.targets, target) {
-                continue;
-            }
-            let ground = self.terrain_effects(target);
-            reached.push((
-                middle,
-                target,
-                damage(
-                    &weapon.damage,
-                    f,
-                    &ground,
-                    falloff(weapon, d),
-                    self.blow(Some(from), Some(weapon), target),
-                ),
-            ));
-        }
-        // Those nearest by their middles, where there's a most it hits.
-        if weapon.max_targets > 0 {
-            reached.sort_by(|a, b| a.0.total_cmp(&b.0));
-            reached.truncate(weapon.max_targets as usize);
-        }
-        hits.extend(reached.into_iter().map(|(_, target, amount)| Hit {
-            target,
-            amount,
-            from: Some(from),
-            by,
-            bombard,
-            morale: weapon.morale_loss,
-            kind: weapon.damage.first().map(|d| d.kind.clone()),
-        }));
     }
 }
 
@@ -1054,7 +1126,7 @@ mod tests {
     fn efficiency_scales_main_damage_and_vorpal_ignores_defense() {
         let mut tank = soldier(Vec::new());
         tank.defense = 6.0;
-        let rifle = rifle(12.0, 12.0).damage;
+        let rifle = main_damage(&rifle(12.0, 12.0));
         let hit = |blow| damage(&rifle, &tank, &[], 1.0, blow);
         let halved = Blow {
             efficiency: 0.5,
@@ -1220,15 +1292,35 @@ mod tests {
         tank.resists = [(Id::from("gunfire"), 0.6)].into();
         // (12 - 6) * 0.4
         assert!(
-            (damage(&rifle(12.0, 12.0).damage, &tank, &[], 1.0, Blow::default()) - 2.4).abs()
+            (damage(
+                &main_damage(&rifle(12.0, 12.0)),
+                &tank,
+                &[],
+                1.0,
+                Blow::default()
+            ) - 2.4)
+                .abs()
                 < 1e-5
         );
         assert_eq!(
-            damage(&rifle(12.0, 5.0).damage, &tank, &[], 1.0, Blow::default()),
+            damage(
+                &main_damage(&rifle(12.0, 5.0)),
+                &tank,
+                &[],
+                1.0,
+                Blow::default()
+            ),
             1.0
         );
         assert!(
-            (damage(&rifle(12.0, 50.0).damage, &tank, &[], 0.5, Blow::default()) - 7.6).abs()
+            (damage(
+                &main_damage(&rifle(12.0, 50.0)),
+                &tank,
+                &[],
+                0.5,
+                Blow::default()
+            ) - 7.6)
+                .abs()
                 < 1e-5
         );
     }
@@ -1706,6 +1798,7 @@ mod tests {
             bombard: None,
             morale: 0.75,
             kind: None,
+            on_user: false,
         };
         // Player 3 is player 1's ally.
         w.land(hit(3));
@@ -1746,5 +1839,186 @@ mod tests {
         run(&mut w, 10.0);
         assert!(!w.units[1].alive());
         assert_eq!(w.units[0].target, Some(Target::Building(0)));
+    }
+
+    fn hit(targets: &str, on_user: bool, does: Does) -> WeaponHit {
+        let targets = tgmap::Targets {
+            required: (targets.split(' ').filter(|t| !t.is_empty()).map(Id::from)).collect(),
+            excluded: Vec::new(),
+        };
+        WeaponHit {
+            targets,
+            on_user,
+            does,
+        }
+    }
+
+    fn of(kind: &str, amount: f32) -> Damage {
+        Damage {
+            kind: Id::from(kind),
+            amount,
+        }
+    }
+
+    /// Player 1's soldier firing `weapon`, and player 2's, 10 off, it's
+    /// aimed at, with what each hit of a use does to what, the user's
+    /// first.
+    fn used(weapon: Weapon, flags: &[&str]) -> (World, Vec<(Target, f32)>) {
+        let mut target = soldier(Vec::new());
+        target.flags = flags.iter().map(|&f| Id::from(f)).collect();
+        let w = battle(
+            &[1, 2],
+            vec![soldier(vec![weapon.clone()]), target],
+            at_war(),
+        );
+        let (s, t) = (Target::Unit(0), Target::Unit(1));
+        let mut hits = Vec::new();
+        w.use_on_user(&weapon, (s, 1), &mut hits);
+        let at = w.impact(s, &weapon, w.position(t));
+        w.strike(&weapon, at, t, (s, 1), false, &mut hits);
+        let done = hits.iter().map(|h| (h.target, h.amount)).collect();
+        (w, done)
+    }
+
+    fn sniper() -> Weapon {
+        let mut weapon = rifle(12.0, 10.0);
+        weapon.targets = Default::default();
+        weapon
+            .hits
+            .push(hit("infantry", false, Does::Add(of("gunfire", 250.0))));
+        weapon
+    }
+
+    #[test]
+    fn each_effect_reaches_only_what_its_own_targets_match() {
+        let (_, hits) = used(sniper(), &["infantry"]);
+        assert_eq!(hits, [(Target::Unit(1), 10.0), (Target::Unit(1), 250.0)]);
+        let (_, hits) = used(sniper(), &["tank"]);
+        assert_eq!(hits, [(Target::Unit(1), 10.0)]);
+    }
+
+    #[test]
+    fn a_things_last_hit_is_the_last_effect_to_reach_it() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![sniper()]), soldier(vec![])],
+            at_war(),
+        );
+        w.rules.damage_filters.insert("gunfire".into(), 4);
+        let mut hits = Vec::new();
+        let (s, t) = (Target::Unit(0), Target::Unit(1));
+        w.strike(&sniper(), w.position(t), t, (s, 1), false, &mut hits);
+        for hit in hits {
+            w.land(hit);
+        }
+        let struck = w.units[1].struck.unwrap();
+        assert_eq!((struck.filter, struck.damage), (4, 250.0));
+    }
+
+    #[test]
+    fn effects_after_the_one_that_kills_still_land_before_the_death_counts() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![sniper()]), soldier(vec![])],
+            at_war(),
+        );
+        w.rules.damage_filters.insert("gunfire".into(), 4);
+        // Its death is picked by the gunfire, not the pierce that killed.
+        let deaths = vec![
+            tgmap::Death {
+                ids: "shot".into(),
+                filter: 4,
+                threshold: 100.0,
+                weight: 1.0,
+                length: 1.0,
+            },
+            tgmap::Death {
+                ids: "pierced".into(),
+                filter: tgmap::ANY_DAMAGE,
+                threshold: 0.0,
+                weight: 1.0,
+                length: 1.0,
+            },
+        ];
+        w.rules.deaths.insert("soldier".into(), deaths);
+        w.units[1].health = 5.0;
+        let mut hits = Vec::new();
+        let (s, t) = (Target::Unit(0), Target::Unit(1));
+        w.strike(&sniper(), w.position(t), t, (s, 1), false, &mut hits);
+        w.land_all(hits, &mut Vec::new());
+        assert!(!w.units[1].alive());
+        assert_eq!(w.units[1].death, Some(Id::from("shot")));
+    }
+
+    #[test]
+    fn what_goes_to_the_user_lands_first_and_isnt_an_enemys() {
+        let mut charge = rifle(1.0, 200.0);
+        charge
+            .hits
+            .push(hit("self", true, Does::Add(of("explosive", 900.0))));
+        let (mut w, hits) = used(charge.clone(), &["infantry"]);
+        assert_eq!(hits, [(Target::Unit(0), 900.0), (Target::Unit(1), 200.0)]);
+        // Resistance lessens it.
+        let resists = &mut w.units[0].fighter.as_mut().unwrap().resists;
+        resists.insert("explosive".into(), 0.5);
+        let mut hits = Vec::new();
+        w.use_on_user(&charge, (Target::Unit(0), 1), &mut hits);
+        assert_eq!(hits[0].amount, 450.0);
+        let mut hits = Vec::new();
+        w.use_on_user(&charge, (Target::Unit(0), 1), &mut hits);
+        w.use_on_user(&charge, (Target::Unit(0), 1), &mut hits);
+        for hit in hits {
+            w.land(hit);
+        }
+        // It's dead, credited to no enemy, and never struck by one.
+        assert!(!w.units[0].alive());
+        assert!(w.units[0].struck.is_none() && w.units[0].besieged.is_none());
+    }
+
+    #[test]
+    fn main_damage_only_for_the_user_spares_what_its_aimed_at() {
+        let mut pole = rifle(5.0, 0.0);
+        pole.hits = vec![hit("self", true, Does::Main(of("blast", 25.0)))];
+        let (_, hits) = used(pole, &["infantry"]);
+        assert_eq!(hits, [(Target::Unit(0), 25.0)]);
+    }
+
+    #[test]
+    fn an_area_centred_on_its_user_hits_round_it_wherever_it_was_aimed() {
+        let mut charge = rifle(12.0, 50.0);
+        charge.area = 1.0;
+        charge.centred_on_user = true;
+        let (_, hits) = used(charge.clone(), &["infantry"]);
+        assert!(hits.is_empty());
+        let mut w = battle(
+            &[1, 2, 2],
+            vec![soldier(vec![]), soldier(vec![]), soldier(vec![])],
+            at_war(),
+        );
+        w.units[2].position = [10.5, 10.0];
+        let (s, t) = (Target::Unit(0), Target::Unit(1));
+        let mut hits = Vec::new();
+        let at = w.impact(s, &charge, w.position(t));
+        w.strike(&charge, at, t, (s, 1), false, &mut hits);
+        let hit: Vec<Target> = hits.iter().map(|h| h.target).collect();
+        assert_eq!(hit, [Target::Unit(2)]);
+    }
+
+    #[test]
+    fn falloff_lessens_main_damage_and_morale_but_not_additive_damage() {
+        let mut shell = rifle(12.0, 100.0);
+        shell.targets = Default::default();
+        (shell.area, shell.full_within, shell.edge_damage) = (4.0, 0.0, 0.5);
+        shell
+            .hits
+            .push(hit("", false, Does::Add(of("explosive", 40.0))));
+        shell.hits.push(hit("", false, Does::Morale(2.0)));
+        let w = battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war());
+        let (s, t) = (Target::Unit(0), Target::Unit(1));
+        let mut hits = Vec::new();
+        let at = [w.position(t)[0] + 4.0, w.position(t)[1]];
+        w.strike(&shell, at, t, (s, 1), false, &mut hits);
+        let done: Vec<(f32, f32)> = hits.iter().map(|h| (h.amount, h.morale)).collect();
+        assert_eq!(done, [(50.0, 0.0), (40.0, 0.0), (0.0, 1.0)]);
     }
 }

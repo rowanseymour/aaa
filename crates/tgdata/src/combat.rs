@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::supply::is;
+use crate::supply::{is, listed};
 use crate::{Cue, GameData, Id, WeaponEffects, audio::cues, defs, effects::vfx_cues, not_null};
 
 /// How a template's objects take part in movement.
@@ -54,8 +54,8 @@ pub struct Fighter {
     /// The fraction of each damage type's damage its properties turn
     /// aside, by damage type; negative where they add to it.
     pub resists: HashMap<Id, f32>,
-    /// What its properties make it for weapons' targets to match, e.g.
-    /// `infantry`.
+    /// The target types its template gives it, e.g. `infantry` from its
+    /// properties or `invulnerable` from its flags.
     pub flags: Vec<Id>,
     pub weapons: Vec<Weapon>,
     /// How high above it its attacks start, where they don't say.
@@ -109,7 +109,11 @@ pub struct Weapon {
     /// ...falling to this fraction of it at the area's edge.
     pub edge_damage: f32,
     pub targets: Targets,
-    pub damage: Vec<Damage>,
+    /// What each use does, in the order its ability lists its effects.
+    pub hits: Vec<WeaponHit>,
+    /// Its area is round its user where it stands as it fires, whatever
+    /// it's aimed at.
+    pub centred_on_user: bool,
     /// The ids of the animation its user plays to fire it.
     pub animation: Option<String>,
     /// It's on a turret, which aims it without turning its user.
@@ -132,12 +136,54 @@ pub struct Weapon {
     /// An order to bombard can use it, and its hits are bombardment when
     /// it fires other than by its user's own choice of shot.
     pub bombard: bool,
-    /// The morale each unit it hits takes from its organization.
-    pub morale_loss: f32,
     /// Its main damage ignores defense.
     pub vorpal: bool,
     /// Its main damage ignores its user's attack efficiency.
     pub spell: bool,
+}
+
+impl Weapon {
+    /// Its main damage, as it lands on what it's fired at.
+    pub fn main_damage(&self) -> impl Iterator<Item = &Damage> {
+        (self.hits.iter())
+            .filter(|h| !h.on_user)
+            .filter_map(|h| match &h.does {
+                Does::Main(d) => Some(d),
+                _ => None,
+            })
+    }
+}
+
+/// One of the effects of a weapon's use.
+#[derive(Debug, Clone, PartialEq)]
+pub struct WeaponHit {
+    /// Which of the things the use hits it reaches.
+    pub targets: Targets,
+    /// It goes to the weapon's user instead, once a use, as it's used.
+    pub on_user: bool,
+    pub does: Does,
+}
+
+/// What an effect of a weapon's use does to what it reaches.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Does {
+    /// Damage past defence and attack modifiers.
+    Main(Damage),
+    /// Damage that only resistance lessens.
+    Add(Damage),
+    /// Morale taken from the organization of the unit it reaches.
+    Morale(f32),
+}
+
+impl WeaponHit {
+    /// A weapon's main damage, for whatever it's fired at.
+    pub fn main(damage: Damage) -> WeaponHit {
+        WeaponHit {
+            targets: Targets::default(),
+            on_user: false,
+            does: Does::Main(damage),
+        }
+    }
 }
 
 /// How a projectile flies to what it's fired at.
@@ -170,9 +216,9 @@ pub struct AimHeights {
     pub arcing: f32,
 }
 
-/// Which flags a target must have, and must not, for a weapon to fire on
-/// it. Besides a fighter's own [`Fighter::flags`], it has `enemy`, `friend`
-/// or `neutral` by how its side stands toward the firer's.
+/// The target types a thing must have, and must not, for a filter to
+/// match it. What it has besides its own [`Fighter::flags`] depends on the
+/// match, as the simulation works it out.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Targets {
     pub required: Vec<Id>,
@@ -199,6 +245,23 @@ impl Targets {
         self.required.iter().all(|r| flags.clone().any(|f| f == r))
             && !flags.any(|f| self.excluded.contains(f))
     }
+}
+
+/// The target types a property gives whatever holds it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct PropertyTypes {
+    pub types: Vec<Id>,
+    /// For a technology, the properties a thing of the side needs for it
+    /// to be on it.
+    pub requires: Vec<Id>,
+}
+
+fn property_types(p: &defs::Property) -> Option<PropertyTypes> {
+    let types = listed(p.enabled_target_flags.as_deref());
+    (!types.is_empty()).then(|| PropertyTypes {
+        types,
+        requires: listed(p.required_properties.as_deref()),
+    })
 }
 
 /// Damage a shot does, of one type.
@@ -246,6 +309,18 @@ impl GameData {
     /// including the ids the game has since renamed.
     pub fn bodies(&self) -> HashMap<Id, Body> {
         self.by_template(|t| Some(body(t)))
+    }
+
+    /// The target types each property that gives any gives, by property
+    /// id, experience levels' included.
+    pub fn property_types(&self) -> HashMap<Id, PropertyTypes> {
+        let mut out = self.property_effects(property_types);
+        for (id, p) in self.level_properties() {
+            if let Some(types) = property_types(&p) {
+                out.insert(id, types);
+            }
+        }
+        out
     }
 
     /// How the objects of every template that can be hurt fight, by
@@ -454,6 +529,16 @@ pub(crate) fn fighter(
             }
         }
     }
+    // What it is, whatever it holds.
+    let invulnerable = thing.flags.iter().rev().find_map(|f| f.invulnerable) == Some(true);
+    for (is, flag) in [
+        (invulnerable, "invulnerable"),
+        (thing.construction_component.is_some(), "constructable"),
+    ] {
+        if is {
+            fighter.flags.push(Id::from(flag));
+        }
+    }
     fighter.attack_height = (thing.performer_component.iter())
         .find_map(|p| p.attack_height)
         .unwrap_or(1.45);
@@ -467,26 +552,10 @@ pub(crate) fn fighter(
     let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
     let abilities = performs.chain(defends);
     for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
-        let attack = d
-            .ability_type
-            .as_deref()
-            .is_some_and(|t| t.eq_ignore_ascii_case("attack"));
-        let damage: Vec<Damage> = d
-            .effect
-            .iter()
-            .filter(|e| {
-                e.kind
-                    .as_deref()
-                    .is_some_and(|k| k.eq_ignore_ascii_case("MAIN_DAMAGE"))
-            })
-            .filter_map(|e| {
-                Some(Damage {
-                    kind: e.damage_type_ids.clone()?,
-                    amount: e.amount?,
-                })
-            })
-            .collect();
-        let Some(range) = d.range.filter(|_| attack && !damage.is_empty()) else {
+        // Whatever kind of ability it is, if it does damage.
+        let hits = weapon_hits(&d.effect);
+        let damages = hits.iter().any(|h| !matches!(h.does, Does::Morale(_)));
+        let Some(range) = d.range.filter(|_| damages) else {
             continue;
         };
         fighter.weapons.push(Weapon {
@@ -498,7 +567,8 @@ pub(crate) fn fighter(
             full_within: d.attenuation_range_min.unwrap_or(1.0),
             edge_damage: d.attenuation_factor_max.unwrap_or(1.0),
             targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
-            damage,
+            hits,
+            centred_on_user: d.flags.iter().any(|f| f.center_on_source),
             animation: a
                 .animation1
                 .clone()
@@ -528,13 +598,36 @@ pub(crate) fn fighter(
             bombard: d.flags.iter().any(|f| f.bombard),
             vorpal: d.flags.iter().any(|f| f.vorpal),
             spell: d.flags.iter().any(|f| f.spell),
-            morale_loss: (d.effect.iter())
-                .filter(|e| is(&e.kind, "MORALE_LOSS"))
-                .filter_map(|e| e.amount)
-                .sum(),
         });
     }
     Some(fighter)
+}
+
+/// What an ability's effects do as a weapon fires it, those that damage or
+/// take morale, in the order it lists them.
+fn weapon_hits(effects: &[defs::Effect]) -> Vec<WeaponHit> {
+    let damage = |e: &defs::Effect| {
+        Some(Damage {
+            kind: e.damage_type_ids.clone()?,
+            amount: e.amount?,
+        })
+    };
+    let hit = |e: &defs::Effect| {
+        let does = match () {
+            _ if is(&e.kind, "MAIN_DAMAGE") => Does::Main(damage(e)?),
+            _ if is(&e.kind, "ADD_DAMAGE") => Does::Add(damage(e)?),
+            _ if is(&e.kind, "MORALE_LOSS") => Does::Morale(e.amount?),
+            _ => return None,
+        };
+        let targets = Targets::parse(e.targets.as_deref().unwrap_or(""));
+        let on_user = targets.required.contains(&Id::from("self"));
+        Some(WeaponHit {
+            targets,
+            on_user,
+            does,
+        })
+    };
+    effects.iter().filter_map(hit).collect()
 }
 
 /// A turret's yaw fields must each be 0 to 360 degrees; those outside are
@@ -663,6 +756,108 @@ mod tests {
         );
     }
 
+    /// The fighter `text`'s one Thing makes.
+    fn read_fighter(text: &str) -> Fighter {
+        let parsed = tgi::parse(text);
+        let templates = tgi::Templates::new([&parsed.root]);
+        let block = parsed.root.blocks_of("Thing").next().unwrap();
+        let thing: defs::Thing = templates.deserialize(block).unwrap();
+        fighter(&thing, &HashMap::new()).unwrap()
+    }
+
+    #[test]
+    fn any_ability_that_does_damage_is_a_weapon_its_effects_in_order() {
+        let charge = read_fighter(
+            "[Thing]
+{
+    IDS = banzai
+    [BodyComponent]
+    health = 175
+    [PerformerComponent]
+    {
+        [Ability]
+        {
+            [AbilityDefinition]
+            {
+                ability_type = null
+                range = 0.5
+                area = 1
+                [Flags]
+                {
+                    center_on_source = true
+                }
+                [Effect]
+                {
+                    type = MAIN_DAMAGE
+                    damage_type_IDS = ap
+                    amount = 200
+                }
+                [Effect]
+                {
+                    type = ADD_DAMAGE
+                    damage_type_IDS = explosive
+                    targets = SELF
+                    amount = 900
+                }
+                [Effect]
+                {
+                    type = MORALE_LOSS
+                    targets = infantry
+                    amount = 3
+                }
+            }
+        }
+    }
+}
+",
+        );
+        let weapon = &charge.weapons[0];
+        assert!(weapon.centred_on_user);
+        let damage = |kind: &str, amount| Damage {
+            kind: Id::from(kind),
+            amount,
+        };
+        let on_self = WeaponHit {
+            targets: Targets::parse("SELF"),
+            on_user: true,
+            does: Does::Add(damage("explosive", 900.0)),
+        };
+        let morale = WeaponHit {
+            targets: Targets::parse("infantry"),
+            on_user: false,
+            does: Does::Morale(3.0),
+        };
+        assert_eq!(
+            weapon.hits,
+            [WeaponHit::main(damage("ap", 200.0)), on_self, morale]
+        );
+        assert_eq!(weapon.main_damage().count(), 1);
+    }
+
+    #[test]
+    fn fighters_are_invulnerable_and_constructable_as_their_templates_say() {
+        let plain = "[Thing]\n{\n\tIDS = a\n\t[BodyComponent]\n\thealth = 1\n}\n";
+        assert!(read_fighter(plain).flags.is_empty());
+        let both = read_fighter(
+            "[Thing]
+{
+    IDS = a
+    [BodyComponent]
+    health = 1
+    [Flags]
+    {
+        invulnerable = true
+    }
+    [ConstructionComponent]
+}
+",
+        );
+        assert_eq!(
+            both.flags,
+            [Id::from("invulnerable"), Id::from("constructable")]
+        );
+    }
+
     #[test]
     fn fighters_take_weapons_from_defenders() {
         let parsed = tgi::parse(
@@ -736,11 +931,11 @@ mod tests {
         assert_eq!(gun.animation.as_deref(), Some("attack1"));
         assert!(gun.turret);
         assert_eq!(
-            gun.damage,
-            [Damage {
+            gun.hits,
+            [WeaponHit::main(Damage {
                 kind: Id::from("gunfire"),
                 amount: 12.0
-            }]
+            })]
         );
         let enemy = Id::from("enemy");
         assert!(gun.targets.allow([&enemy].into_iter()));

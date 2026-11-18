@@ -25,12 +25,12 @@ pub mod triggers {
 }
 pub use tgdata::{
     ANY_DAMAGE, Affliction, Airlift, Amounts, BLEEDING, CombatAbility, CombatEffect, CombatProfile,
-    CombatValueRules, Damage, Death, DeployPoints, ENGAGED, EXHAUSTED, Economy, EconomyRules,
+    CombatValueRules, Damage, Death, DeployPoints, Does, ENGAGED, EXHAUSTED, Economy, EconomyRules,
     Efficiency, ExperienceGains, Fall, Fighter, Flight, FlightKind, FogSetting, Grant, GuardRules,
     Hero, Id, Kind, Level, Levels, Logistics, Lookout, MoraleEffect, MoraleRules, Operation,
-    REFORMING, RESTING, ROUTING, Requires, Research, ResourceKind, RoutRules, Shape, Sight, Strike,
-    Summon, Supply, SupplyEffect, SupplyRules, TARGETED, Targets, TerrainEffect, TerrainRules,
-    Turret, Weapon,
+    PropertyTypes, REFORMING, RESTING, ROUTING, Requires, Research, ResourceKind, RoutRules, Shape,
+    Sight, Strike, Summon, Supply, SupplyEffect, SupplyRules, TARGETED, Targets, TerrainEffect,
+    TerrainRules, Turret, Weapon, WeaponHit,
 };
 pub use tile::Tile;
 pub use tile_terrains::{TerrainIndex, TileTerrain, TileTerrains};
