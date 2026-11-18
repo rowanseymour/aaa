@@ -3,7 +3,8 @@
 
 use tgmap::{Id, Operation, Strike};
 
-use crate::combat::{Hit, attenuated, damage, resistance};
+use crate::combat::{Hit, added, attenuated, damage, resistance};
+use crate::targets::User;
 use crate::{Piece, SECOND, TICK, Target, World, bounding_radius, distance};
 
 /// A strike on its way.
@@ -79,12 +80,7 @@ impl World {
     /// Whether `player`'s strike on `targets` can be given on, and hits,
     /// what `t` is.
     pub(crate) fn strikes(&self, player: u32, targets: &tgmap::Targets, t: Target) -> bool {
-        let Some(fighter) = self.fighter(t) else {
-            return false;
-        };
-        let side = self.standing_flag(player, self.owner(t));
-        let actor = Id::from("actor");
-        targets.allow(fighter.flags.iter().chain([&side, &actor]))
+        self.fighter(t).is_some() && self.reaches(User::side(player), targets, t)
     }
 
     /// Whether `player`'s strike on `targets` can be given on `on`: on any
@@ -199,25 +195,19 @@ impl World {
             }
             let ground = self.terrain_effects(target);
             let falloff = attenuated([strike.full_within, strike.area], strike.edge_damage, d);
-            let main = damage(
-                &strike.damage,
-                f,
-                &ground,
-                falloff,
-                self.blow(None, None, target),
-            );
-            let side = self.standing_flag(player, self.owner(target));
-            let flags = || f.flags.iter().chain([&side]);
-            let extra: f32 = (strike.extra.iter())
-                .filter(|(targets, _)| targets.allow(flags()))
-                .map(|(_, d)| d.amount * (1.0 - resistance(f, &ground, &d.kind)))
-                .sum();
-            hits.push(Hit::strike(
-                target,
-                main + extra,
-                player,
-                strike.damage.first().map(|d| d.kind.clone()),
-            ));
+            let blow = self.blow(None, None, target);
+            // Each effect that reaches it is a hit of its own.
+            for d in &strike.damage {
+                let amount = damage(d, f, &ground, falloff, blow);
+                hits.push(Hit::strike(target, amount, player, Some(d.kind.clone())));
+            }
+            let user = User::side(player);
+            for (targets, d) in &strike.extra {
+                if self.reaches(user, targets, target) {
+                    let amount = added(d, f, &ground);
+                    hits.push(Hit::strike(target, amount, player, Some(d.kind.clone())));
+                }
+            }
             if let Target::Unit(u) = target {
                 units.push(u);
             }
@@ -329,6 +319,27 @@ mod tests {
         assert!(w.watches.len() == 1);
         run(&mut w, 2.0);
         assert!(w.watches.is_empty());
+    }
+
+    #[test]
+    fn each_effect_of_a_strike_is_a_hit_of_its_own() {
+        let mut house = building(40, 1, [30.0, 20.0]);
+        house.fighter.health = 5000.0;
+        let w = with_buildings(bombing(), &[house]);
+        let Some(Operation::Strike(strike)) = w.rules.operations.values().next().cloned() else {
+            panic!("bombing has a strike");
+        };
+        let mut hits = Vec::new();
+        w.blast(1, &strike, [26.5, 20.0], &mut hits);
+        let on = |t| {
+            hits.iter()
+                .filter(move |h| h.target() == t)
+                .map(Hit::amount)
+        };
+        // The house takes the main damage, then the extra for buildings.
+        let house: Vec<f32> = on(Target::Building(0)).collect();
+        assert_eq!(house, [400.0, 1200.0]);
+        assert!(on(Target::Unit(0)).all(|amount| amount < 1200.0));
     }
 
     #[test]

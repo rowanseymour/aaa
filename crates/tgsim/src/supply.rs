@@ -9,6 +9,7 @@ use tgmap::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, 
 use crate::{
     Building, Held, Order, Piece, Refused, Relation, SECOND, State, TICK, Target, World,
     bounding_radius, deploy_point, distance,
+    targets::{Thing, User},
 };
 
 /// Ticks between looks at whether a building gives supply, each building
@@ -184,12 +185,7 @@ impl World {
     /// Whether an operation `player` uses on `targets` can work on the
     /// organization at `r`, judged from `player`'s side.
     fn enchants(&self, player: u32, targets: &tgmap::Targets, r: usize) -> bool {
-        let organization = &self.organizations[r];
-        let kind = self.rules.kinds.get(&organization.template);
-        let side = self.standing_flag(player, organization.owner);
-        let is_one = Id::from("organization");
-        let flags = kind.into_iter().flat_map(|k| &k.flags);
-        targets.allow(flags.chain([&is_one, &side]))
+        self.reaches(User::side(player), targets, Thing::Organization(r))
     }
 
     /// Where a click gives `player`'s faction's `i`th operation, if

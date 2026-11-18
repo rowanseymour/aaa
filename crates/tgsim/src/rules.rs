@@ -60,6 +60,8 @@ pub struct Rules {
     /// What each property does to its holder's fighting, for those that do
     /// anything to it, by its id.
     pub combat_effects: HashMap<Id, tgmap::CombatEffect>,
+    /// The target types each property gives what holds it.
+    pub property_types: HashMap<Id, tgmap::PropertyTypes>,
     /// What each formation's properties give the regiment in it, by
     /// formation id.
     pub formation_effects: HashMap<Id, tgmap::CombatEffect>,
@@ -167,6 +169,7 @@ impl Default for Rules {
             combat_profiles: HashMap::new(),
             combat_means: Default::default(),
             combat_effects: HashMap::new(),
+            property_types: HashMap::new(),
             formation_effects: HashMap::new(),
             broken_effects: HashMap::new(),
             efficiency_rates: [0.01, 0.02],

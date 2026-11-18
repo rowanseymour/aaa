@@ -1738,7 +1738,8 @@ mod tests {
             full_within: 0.0,
             edge_damage: 1.0,
             targets: Targets::default(),
-            damage: Vec::new(),
+            hits: Vec::new(),
+            centred_on_user: false,
             animation: None,
             turret: false,
             turret_point: None,
@@ -1753,7 +1754,6 @@ mod tests {
                 life: 0.0,
             }),
             bombard: false,
-            morale_loss: 0.0,
             vorpal: false,
             spell: false,
         }

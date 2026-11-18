@@ -37,6 +37,7 @@ mod setup;
 mod strikes;
 mod summons;
 mod supply;
+mod targets;
 mod terrain;
 #[cfg(test)]
 mod testing;
