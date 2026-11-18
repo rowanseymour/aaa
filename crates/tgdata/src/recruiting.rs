@@ -550,11 +550,13 @@ mod tests {
                 slots: vec![vec![[0.0; 2]; 3], vec![[0.0; 2]], vec![[0.0; 2]]],
                 aggressive: false,
                 effect: Default::default(),
+                types: Vec::new(),
             }],
             default: 0,
             combat: None,
             primary: None,
             broken: Default::default(),
+            broken_types: Vec::new(),
         };
         assert_eq!(
             kept(&HashMap::from([(Id::from("line"), line)])),

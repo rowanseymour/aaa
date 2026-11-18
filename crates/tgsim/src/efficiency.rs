@@ -40,6 +40,23 @@ impl World {
         }
     }
 
+    /// The target types the formation the organization at `r` is in at
+    /// the moment gives it: its broken formation's while it has none.
+    pub(crate) fn formation_types(&self, r: usize) -> &[Id] {
+        let organization = &self.organizations[r];
+        // Formations seldom give types; spare the lookup when none do.
+        if self.rules.formation_types.is_empty() && self.rules.broken_types.is_empty() {
+            return &[];
+        }
+        let types = match organization.broken() {
+            true => self.rules.broken_types.get(&organization.template),
+            false => (organization.formations)
+                .get(organization.current_formation())
+                .and_then(|f| self.rules.formation_types.get(&Id::from(f.id.as_str()))),
+        };
+        types.map_or(&[], Vec::as_slice)
+    }
+
     /// The attack efficiency the organization at `r` eases towards: its
     /// state's if that sets one, else its formation's, or its broken
     /// formation's while it has none.

@@ -79,6 +79,7 @@ use serde::{Deserialize, Serialize};
 pub use strikes::{Afflicted, Incoming, Watch};
 pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
+pub use targets::TypeSlots;
 pub use tgmap::{Outcome, Player, Relation, Team};
 pub use triggers::{Switch, Triggers};
 pub use value::CombatMeans;
