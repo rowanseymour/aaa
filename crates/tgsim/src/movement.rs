@@ -3,7 +3,9 @@
 
 use std::f32::consts::FRAC_PI_4;
 
-use tgmap::{Obstacle, Tile};
+use tgmap::{Id, Obstacle, Tile};
+
+use crate::value::MULTIPLY_FLOOR;
 
 use crate::{
     ARRIVAL_REACH, EXACT_REACH, LOOK, Leg, NotYours, TICK, Trailer, Unit, World, normalised, path,
@@ -307,6 +309,44 @@ fn steer(facing: &mut [f32; 2], to: [f32; 2], most: f32) -> f32 {
 }
 
 impl World {
+    /// The state the organization at `r` holds for its part in a fight, as
+    /// the data names it: engaged, or targeted while another engages it
+    /// and it doesn't engage back.
+    fn fight_state(&self, r: usize) -> Option<&'static str> {
+        match self.organizations[r].engaged.is_empty() {
+            false => Some(tgmap::ENGAGED),
+            true => self.engagers(r).next().map(|_| tgmap::TARGETED),
+        }
+    }
+
+    /// What the organization at `r` adds to each member's top speed past
+    /// the member's own properties: its formation's, and its state's in a
+    /// fight.
+    fn handed_down_speed(&self, r: usize) -> f32 {
+        let formation = self.formation_effect(r).map_or(0.0, |e| e.speed);
+        let state = (self.fight_state(r)).and_then(|p| self.rules.combat_effects.get(&Id::from(p)));
+        formation + state.map_or(0.0, |e| e.speed)
+    }
+
+    /// The unit at `u`'s top speed: its own, times what its properties and
+    /// the `handed` down from its organization make of it.
+    fn top_speed(&self, u: usize, handed: f32) -> f32 {
+        let factor = 1.0 + self.boost(u).speed + handed;
+        self.units[u].speed_max * factor.max(MULTIPLY_FLOOR)
+    }
+
+    /// How fast the organization at `r` moves: as fast as its slowest
+    /// member present can.
+    pub(crate) fn regiment_speed(&self, r: usize) -> f32 {
+        let handed = self.handed_down_speed(r);
+        let present = (self.organizations[r].units.iter()).filter(|&&u| self.units[u].alive());
+        let slowest = (present.map(|&u| self.top_speed(u, handed))).fold(f32::INFINITY, f32::min);
+        match slowest.is_finite() {
+            true => slowest,
+            false => self.organizations[r].speed,
+        }
+    }
+
     pub(crate) fn send(&mut self, organization: usize, target: [f32; 2], facing: [f32; 2]) {
         let r = &mut self.organizations[organization];
         r.position = target;
@@ -338,13 +378,20 @@ impl World {
         let facing = r.facing;
         // A move to unpack has to end right there.
         let exact = r.unpack_at.is_some();
-        let offsets = &r.formations[r.current_formation()].offsets;
-        let places: Vec<(usize, [f32; 2])> = r
-            .units
-            .iter()
-            .zip(offsets)
-            .map(|(&u, &offset)| (u, tgmap::from_local(r.position, facing, offset)))
-            .collect();
+        let [x, y] = r.position;
+        let broken = r.routing() && r.broken_places.len() == r.units.len();
+        let places: Vec<(usize, [f32; 2])> = match broken {
+            // Without a formation each keeps where it stood from the
+            // leader, turning with nothing.
+            true => (r.units.iter())
+                .zip(&r.broken_places)
+                .map(|(&u, &[dx, dy])| (u, [x + dx, y + dy]))
+                .collect(),
+            false => (r.units.iter())
+                .zip(&r.formations[r.current_formation()].offsets)
+                .map(|(&u, &offset)| (u, tgmap::from_local(r.position, facing, offset)))
+                .collect(),
+        };
         for (u, place) in places {
             if !self.units[u].alive() {
                 continue;
@@ -424,11 +471,14 @@ impl World {
     /// short of where it was to stop finds another way from where it is,
     /// until it's tried enough; once done it faces as it was told to.
     pub(crate) fn travel(&mut self) {
+        let tops: Vec<f32> = (0..self.organizations.len())
+            .map(|r| self.regiment_speed(r))
+            .collect();
         for u in 0..self.units.len() {
             let limit = self.speed_limit(u).unwrap_or(f32::INFINITY);
             let unit = &mut self.units[u];
             unit.previous = unit.position;
-            unit.drive(self.organizations[unit.organization].speed.min(limit));
+            unit.drive(tops[unit.organization].min(limit));
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {
                     true => EXACT_REACH,
@@ -551,6 +601,74 @@ mod tests {
             &[organization],
         );
         assert_eq!(w.units[0].health, 50.0);
+    }
+
+    fn speeding(amount: f32) -> tgmap::CombatEffect {
+        tgmap::CombatEffect {
+            speed: amount,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn a_regiment_moves_at_its_formations_and_its_fights_speed() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(Vec::new()), soldier(Vec::new())],
+            at_war(),
+        );
+        assert_eq!(w.regiment_speed(0), 2.0);
+        w.rules
+            .formation_effects
+            .insert("line".into(), speeding(0.25));
+        assert_eq!(w.regiment_speed(0), 2.5);
+        // Engaged it adds its state's; targeted, without engaging back,
+        // the other's.
+        w.rules
+            .combat_effects
+            .insert(tgmap::ENGAGED.into(), speeding(0.25));
+        w.rules
+            .combat_effects
+            .insert(tgmap::TARGETED.into(), speeding(-0.1));
+        w.organizations[1]
+            .engaged
+            .push(crate::Piece::Organization(0));
+        assert!((w.regiment_speed(0) - 2.3).abs() < 1e-5);
+        w.organizations[0]
+            .engaged
+            .push(crate::Piece::Organization(1));
+        assert_eq!(w.regiment_speed(0), 3.0);
+        // The amounts add, never below a twentieth.
+        w.rules
+            .formation_effects
+            .insert("line".into(), speeding(-5.0));
+        assert!((w.regiment_speed(0) - 0.1).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_regiment_keeps_to_its_slowest_member_as_its_properties_have_it() {
+        let mut w = battle(&[1], vec![soldier(Vec::new())], at_war());
+        let mut tank = w.units[0].clone();
+        tank.template = "tank".into();
+        tank.speed_max = 1.0;
+        w.units.push(tank);
+        w.organizations[0].units.push(1);
+        assert_eq!(w.regiment_speed(0), 1.0);
+        // A technology on tanks speeds up only the tank.
+        let mut engines = speeding(3.0);
+        engines.requires = vec!["tank".into()];
+        w.rules.combat_effects.insert("engines".into(), engines);
+        let kind = |p: &str| tgmap::Kind {
+            properties: vec![p.into()],
+            flags: Vec::new(),
+            soft: tgmap::Shape::Point,
+        };
+        w.rules.kinds.insert("tank".into(), kind("tank"));
+        w.technologies.insert(1, vec!["engines".into()]);
+        assert_eq!(w.regiment_speed(0), 2.0);
+        // Once the slowest is gone the rest go at their own.
+        w.units[0].die(0);
+        assert_eq!(w.regiment_speed(0), 4.0);
     }
 
     #[test]

@@ -1,9 +1,15 @@
 //! The settings regiments keep guard by.
 
+use std::collections::HashMap;
+
 use crate::{GameData, Id};
 
 /// The property a regiment resting at the post it guards has.
 pub const GUARDING: &str = "actor_state_guarding";
+
+/// The guard range of a thing that sends out units of its own and sets
+/// none.
+const GUARD_RANGE: f32 = 10.0;
 
 /// The settings regiments keep guard by.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -40,5 +46,14 @@ impl GameData {
             bias: bias.unwrap_or(default.bias),
             control: control.unwrap_or(default.control),
         }
+    }
+
+    /// How far around each template's things their guard zone reaches,
+    /// for those that send out units of their own, by template id.
+    pub fn guard_zones(&self) -> HashMap<Id, f32> {
+        self.by_template(|t| {
+            let denizen = t.denizen_component.as_ref()?;
+            Some(denizen.guard_range.unwrap_or(GUARD_RANGE))
+        })
     }
 }

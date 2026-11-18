@@ -89,6 +89,8 @@ pub struct CombatEffect {
     pub projectile_range: f32,
     /// `BOMBARD_ABILITY_RANGE`: the same for each `BOMBARD` attack.
     pub bombard_range: f32,
+    /// `SPEED_MAX`: added to the 1 top speed is multiplied by.
+    pub speed: f32,
     pub efficiency: Efficiency,
     /// For a technology, the properties a thing of the side needs for it
     /// to be on it.
@@ -107,6 +109,7 @@ impl CombatEffect {
             recharge: self.recharge + other.recharge,
             projectile_range: self.projectile_range + other.projectile_range,
             bombard_range: self.bombard_range + other.bombard_range,
+            speed: self.speed + other.speed,
             efficiency: self.efficiency.with(other.efficiency),
             requires: Vec::new(),
         }
@@ -140,14 +143,9 @@ impl Efficiency {
     pub fn value(self) -> Option<f32> {
         self.actual.or(self.desired)
     }
-
-    /// What `p`'s modifiers set.
-    pub fn of(p: &defs::Property) -> Efficiency {
-        combat_effect(p).map_or_else(Efficiency::default, |e| e.efficiency)
-    }
 }
 
-fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
+pub(crate) fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
     let mut out = CombatEffect::default();
     for m in &p.modifier {
         let amount = m.amount.unwrap_or(0.0);
@@ -165,6 +163,7 @@ fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
             _ if add && is(&m.attribute, "BOMBARD_ABILITY_RANGE") => out.bombard_range += amount,
             _ if multiply && is(&m.attribute, "HEALTH") => out.health += amount,
             _ if multiply && is(&m.attribute, "RECHARGE_TIME") => out.recharge += amount,
+            _ if multiply && is(&m.attribute, "SPEED_MAX") => out.speed += amount,
             _ if multiply && is(&m.attribute, "ATTACK_EFFICIENCY_ACTUAL") => {
                 out.efficiency.actual = most(out.efficiency.actual);
             }
