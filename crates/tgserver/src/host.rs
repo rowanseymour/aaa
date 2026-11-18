@@ -1,9 +1,14 @@
 //! The host of a match: the one copy that decides what the match is
 //! given and when, and tells every client.
 
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
-use tgsim::{Action, Record, Schedule, World};
+use tgsim::{Action, ComputerPlayer, Outcome, Record, Schedule, World};
+
+/// Makes the computer player for a side of the match set up as given, by
+/// the side's player id.
+type MakeComputer = dyn Fn(&Setup, &World, u32) -> Box<dyn ComputerPlayer> + Send + Sync;
 
 use serde::{Deserialize, Serialize};
 
@@ -100,6 +105,10 @@ pub struct Host<L> {
     /// Who has paused the match and who's for unpausing it, where the match
     /// is played between machines and so pausing has rules.
     pauses: Option<Pauses>,
+    computer: Box<MakeComputer>,
+    /// The computer player of each side still in the match that no client
+    /// plays, by player id, once the match has begun.
+    computers: BTreeMap<u32, Box<dyn ComputerPlayer>>,
 }
 
 /// A client as the host has it.
@@ -251,6 +260,8 @@ impl<L: Link> Host<L> {
             departed: Vec::new(),
             taking_over: Vec::new(),
             pauses: None,
+            computer: Box::new(|_, _, _| Box::new(tgsim::Idle)),
+            computers: BTreeMap::new(),
         }
     }
 
@@ -287,6 +298,17 @@ impl<L: Link> Host<L> {
     /// [`Naming::default`].
     pub fn name_by(&mut self, naming: Naming) {
         self.naming = naming;
+    }
+
+    /// Has computer players that `computer` makes play the sides nobody
+    /// else does, rather than ones that give no orders. It's given how the
+    /// match was set up, the match as the side first needs one, and the
+    /// side's player id.
+    pub fn computers_by(
+        &mut self,
+        computer: impl Fn(&Setup, &World, u32) -> Box<dyn ComputerPlayer> + Send + Sync + 'static,
+    ) {
+        self.computer = Box::new(computer);
     }
 
     /// Has it tell the time by `clock`.
@@ -550,14 +572,37 @@ impl<L: Link> Host<L> {
         let sides = &self.world.sides;
         let to_take_over = |a: &Action| matches!(a, Action::TakeOver { name: n, .. } if n == name);
         let played = |p: &u32| {
-            sides.names.contains_key(p)
-                || sides.computers.contains_key(p)
-                || self.clients.iter().any(|c| c.players.contains(p))
+            sides.names.contains_key(p) || sides.computers.contains_key(p) || self.seated(*p)
         };
         self.clients.iter().any(|c| c.name == name)
             || sides.computers.values().any(|c| c == name)
             || self.taking_over.iter().any(to_take_over)
             || (self.naming.computers.iter()).any(|(p, c)| c == name && !played(p))
+    }
+
+    /// Whether a client gives side `player`'s orders.
+    fn seated(&self, player: u32) -> bool {
+        self.clients.iter().any(|c| c.players.contains(&player))
+    }
+
+    /// The orders of the computer player of each side still in the match
+    /// that no client plays, making one for a side as it comes to need it.
+    /// A side whose person leaves is the computer's from the turn after.
+    fn think(&mut self) -> Vec<Action> {
+        let theirs: Vec<u32> = (tgmap::sides(&self.world.sides.players))
+            .map(|p| p.id)
+            .filter(|&p| !self.seated(p) && self.world.outcome(p) == Outcome::Playing)
+            .collect();
+        let (setup, world, make) = (&self.setup, &self.world, &self.computer);
+        self.computers.retain(|p, _| theirs.contains(p));
+        for player in theirs {
+            (self.computers.entry(player)).or_insert_with(|| make(setup, world, player));
+        }
+        let orders = self.computers.iter_mut().flat_map(|(&player, computer)| {
+            let order = move |command| Action::Order { player, command };
+            computer.think(world, player).into_iter().map(order)
+        });
+        orders.collect()
     }
 
     /// Tells each client that's asked for more since it was last told
@@ -746,6 +791,16 @@ impl<L: Link> Host<L> {
             self.schedule.act(action.clone());
         }
         let tick = ticking.map(|t| t.unwrap_or(!self.schedule.pausing()));
+        // Judged once this turn's pausing is carried out, so orders aren't
+        // decided for a match standing still, which would only have them
+        // pile up or land on a stale match once it goes on.
+        if tick == Some(true) {
+            let orders = self.think();
+            for order in &orders {
+                self.schedule.act(order.clone());
+            }
+            given.extend(orders);
+        }
         if let Some(tick) = tick.filter(|&tick| tick || !given.is_empty()) {
             self.tell(&ToClient::Step(Bundle {
                 actions: given,
@@ -2030,6 +2085,115 @@ mod tests {
         assert_eq!(host.world().sides.names, names);
         assert_eq!(clients[0].world().sides.computers, computers);
         assert_eq!(clients[0].world().hash(), host.world().hash());
+    }
+
+    /// A computer player that sends its side's organization, if it's the
+    /// second, along x, noting each side it thinks for.
+    struct Marcher(Thought);
+
+    type Thought = std::sync::Arc<std::sync::Mutex<Vec<u32>>>;
+
+    impl ComputerPlayer for Marcher {
+        fn think(&mut self, _: &World, player: u32) -> Vec<Command> {
+            self.0.lock().unwrap().push(player);
+            let to = [30.0, 20.0];
+            (player == 2)
+                .then_some(Command::Move {
+                    organization: 1,
+                    to,
+                })
+                .into_iter()
+                .collect()
+        }
+    }
+
+    /// Has `host` play the sides nobody else does by [`Marcher`]s, giving
+    /// what they note.
+    fn marching(host: &mut Host<Local>) -> Thought {
+        let thought = Thought::default();
+        let noted = std::sync::Arc::clone(&thought);
+        host.computers_by(move |_, _, _| Box::new(Marcher(noted.clone())));
+        thought
+    }
+
+    #[test]
+    fn computer_players_give_the_orders_of_the_sides_nobody_else_plays() {
+        let (mut host, mut clients) = hosted(&[&[1], &[]]);
+        let thought = marching(&mut host);
+        play(&mut host, &mut clients, 2);
+        // Each side but the person's, every turn.
+        assert_eq!(*thought.lock().unwrap(), [2, 3, 4, 2, 3, 4]);
+        let ordered = Action::Order {
+            player: 2,
+            command: Command::Move {
+                organization: 1,
+                to: [30.0, 20.0],
+            },
+        };
+        let given: Vec<_> = asked(host.schedule().record());
+        assert_eq!(
+            given.iter().map(|g| &g.action).collect::<Vec<_>>(),
+            [&ordered, &ordered]
+        );
+        play(&mut host, &mut clients, 20);
+        assert!(host.world().units[1].position[0] > 10.0);
+        for client in &clients {
+            assert_eq!(client.world().hash(), host.world().hash());
+        }
+    }
+
+    #[test]
+    fn computer_players_think_only_while_the_match_goes_on() {
+        let (mut host, mut clients) = hosted(&[&[1]]);
+        let thought = marching(&mut host);
+        play(&mut host, &mut clients, 1);
+        // Not on the turn it's paused, nor while it is.
+        clients[0].ask(Action::Pause(true)).unwrap();
+        play(&mut host, &mut clients, 3);
+        assert_eq!(*thought.lock().unwrap(), [2, 3, 4]);
+        // But on the turn it goes on.
+        clients[0].ask(Action::Pause(false)).unwrap();
+        play(&mut host, &mut clients, 1);
+        assert_eq!(*thought.lock().unwrap(), [2, 3, 4, 2, 3, 4]);
+    }
+
+    #[test]
+    fn computer_players_think_only_while_the_match_isnt_held() {
+        let clock = Clock::stopped();
+        let (mut host, mut clients) = hosted_by(&clock, &[&[1], &[2]]);
+        let thought = marching(&mut host);
+        play(&mut host, &mut clients, 1);
+        wait_out(&clock, &mut host, &mut clients, 1, 3);
+        assert!(host.held());
+        thought.lock().unwrap().clear();
+        wait_out(&clock, &mut host, &mut clients, 1, 2);
+        assert!(host.held());
+        assert_eq!(*thought.lock().unwrap(), []);
+    }
+
+    #[test]
+    fn computer_players_stop_for_sides_out_of_the_match() {
+        let (mut host, mut clients) = hosted(&[&[1]]);
+        let thought = marching(&mut host);
+        host.trust(1);
+        clients[0].ask(Action::Lose(3)).unwrap();
+        play(&mut host, &mut clients, 1);
+        thought.lock().unwrap().clear();
+        play(&mut host, &mut clients, 1);
+        assert_eq!(*thought.lock().unwrap(), [2, 4]);
+    }
+
+    #[test]
+    fn a_computer_player_plays_on_for_one_who_leaves() {
+        let (mut host, mut clients) = hosted(&[&[1], &[2]]);
+        let thought = marching(&mut host);
+        play(&mut host, &mut clients, 1);
+        clients[1].leave().unwrap();
+        assert_eq!(host.turn(), [Event::Left(2)]);
+        clients.remove(1);
+        thought.lock().unwrap().clear();
+        play(&mut host, &mut clients, 1);
+        assert_eq!(*thought.lock().unwrap(), [2, 3, 4]);
     }
 
     #[test]
