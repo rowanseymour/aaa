@@ -63,7 +63,7 @@ pub use id::Id;
 pub use interface::{Command, ConnectionLook, CursorLook, FormationLook, SupplyBorder};
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use morale::{
-    ENGAGED, EXHAUSTED, MoraleEffect, MoraleRules, REFORMING, ROUTING, RoutRules, TARGETED,
+    ENGAGED, EXHAUSTED, MoraleEffect, MoraleRules, REFORMING, RESTING, ROUTING, RoutRules, TARGETED,
 };
 pub use nations::{BannerDecal, Banners, Faction, FactionOperation, Handicap, Nation};
 pub use objectives::{ObjectiveLook, ObjectiveLooks};

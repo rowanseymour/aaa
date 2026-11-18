@@ -64,6 +64,35 @@ impl crate::Organization {
 }
 
 impl World {
+    /// Whether the organization at `r` stands idle: steady, on no order but
+    /// to stand, neither fighting nor on its way anywhere.
+    fn idle(&self, r: usize) -> bool {
+        let organization = &self.organizations[r];
+        organization.mind == Mind::Steady
+            && organization.order == Order::Move
+            && organization.engaged.is_empty()
+            && !self.underway(r)
+    }
+
+    /// Whether the organization at `r` is resting: idle with nothing else
+    /// to do, neither guarding, bombarding nor still arriving.
+    pub fn resting(&self, r: usize) -> bool {
+        let organization = &self.organizations[r];
+        self.idle(r)
+            && organization.guard.is_none()
+            && !organization.bombarding
+            && !organization.arriving
+            && organization.unpacked_into.is_none()
+            && !self.destroyed(r)
+    }
+
+    /// The property the organization at `r` holds for what it's doing, as
+    /// the data names it: its morale's, else resting's.
+    pub fn state(&self, r: usize) -> Option<&'static str> {
+        let mind = self.organizations[r].mind.property();
+        mind.or_else(|| self.resting(r).then_some(tgmap::RESTING))
+    }
+
     /// What bears on the morale of the organization at `r`: the properties
     /// of its template and those it has for a time, its side's
     /// technologies that are on its kind, and its experience level's.
@@ -551,13 +580,8 @@ impl World {
             return;
         }
         let morale = organization.morale;
-        let steady = organization.mind == Mind::Steady;
-        let idle = steady
-            && organization.engaged.is_empty()
-            && organization.order == Order::Move
-            && !self.underway(r);
         let low = morale > 0.0 && morale <= self.breakpoint(r) && self.fighting(r);
-        if low || (morale <= 0.0 && idle) {
+        if low || (morale <= 0.0 && self.idle(r)) {
             self.rout(r);
         }
     }
@@ -572,13 +596,9 @@ impl World {
         match organization.mind {
             Mind::Reforming { .. } | Mind::Exhausted => true,
             Mind::Routing { .. } => false,
-            Mind::Steady => {
-                let resting = organization.engaged.is_empty()
-                    && organization.order == Order::Move
-                    && !organization.bombarding
-                    && !self.underway(r);
-                resting || organization.guarding()
-            }
+            // Standing still under a guard, or while some of it lands,
+            // counts as well as resting.
+            Mind::Steady => (self.idle(r) && !organization.bombarding) || organization.guarding(),
         }
     }
 
