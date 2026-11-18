@@ -660,3 +660,17 @@ pub(crate) fn rate(w: &mut World, template: &str, damage: f32) {
     };
     w.rules.combat_profiles.insert(template.into(), profile);
 }
+
+/// Has the unit at `k` hit the unit at `u` just now, as kill credit
+/// remembers it.
+pub(crate) fn hit_by(w: &mut World, u: usize, k: usize) {
+    let by = w.organizations[w.units[k].organization].owner;
+    let struck = Some(crate::Struck {
+        from: Some(crate::Target::Unit(k)),
+        by,
+        at: w.ticks,
+    });
+    w.units[u].struck = struck;
+    let r = w.units[u].organization;
+    w.organizations[r].struck = struck;
+}

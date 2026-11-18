@@ -538,7 +538,6 @@ impl GameData {
         threshold.is_some_and(|t| r + g + b < t)
     }
 
-    /// Seconds an enemy's damage keeps what it hurt under siege.
     /// Attack efficiency a second a regiment gains while below its
     /// target, and loses while above it, for those the data sets.
     pub fn efficiency_rates(&self) -> [Option<f32>; 2] {
@@ -549,11 +548,17 @@ impl GameData {
         ]
     }
 
+    /// Seconds an enemy's damage keeps what it hurt under siege.
     pub fn siege_seconds(&self) -> Option<f32> {
         let svars = self.svars();
         svars
             .iter()
             .find_map(|v| v.under_siege_recently_damaged_seconds)
+    }
+
+    /// `KillCreditTimeout`, in seconds.
+    pub fn kill_credit_seconds(&self) -> Option<f32> {
+        self.svars().iter().find_map(|v| v.kill_credit_timeout)
     }
 
     /// How far around them city centres hold sway, by template id, including

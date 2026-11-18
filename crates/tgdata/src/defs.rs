@@ -1244,6 +1244,8 @@ pub struct SVars {
     /// Seconds an enemy's damage keeps what it hurt under siege.
     #[serde(rename = "UnderSiegeRecentlyDamagedSeconds")]
     pub under_siege_recently_damaged_seconds: Option<f32>,
+    #[serde(rename = "KillCreditTimeout")]
+    pub kill_credit_timeout: Option<f32>,
     /// Attack efficiency a second a regiment's gains while below its
     /// target.
     #[serde(rename = "AttackEfficiencyPointsPerSecondClimbing")]

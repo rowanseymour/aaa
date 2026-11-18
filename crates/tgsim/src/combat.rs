@@ -31,6 +31,20 @@ fn besiege(besieged: &mut Option<u64>, until: u64) {
     *besieged = Some(besieged.map_or(until, |u| u.max(until)));
 }
 
+/// A hit an enemy dealt something, as it's remembered for crediting the
+/// kill.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Struck {
+    /// What fired it, unless it was a special operation's.
+    pub from: Option<Target>,
+    /// The side that dealt it.
+    pub by: u32,
+    /// The tick it landed on.
+    pub at: u64,
+}
+
+crate::hash::digest!(Struck { from, by, at });
+
 /// Damage a shot does to what it lands on, for the side that fired it.
 pub(crate) struct Hit {
     target: Target,
@@ -461,16 +475,23 @@ impl World {
     fn land(&mut self, hit: Hit) {
         let ticks = self.ticks;
         let window = (self.rules.siege_seconds / TICK).round() as u64;
+        let struck = Struck {
+            from: hit.from,
+            by: hit.by,
+            at: ticks,
+        };
         match hit.target {
             Target::Unit(u) => {
                 let owner = self.organizations[self.units[u].organization].owner;
                 let enemy = self.sides.relation(hit.by, owner) == Relation::Enemy;
+                let harmful = enemy && hit.amount > 0.0;
                 let unit = &mut self.units[u];
                 if !unit.alive() {
                     return;
                 }
-                if enemy && hit.amount > 0.0 {
+                if harmful {
                     besiege(&mut unit.besieged, ticks + window);
+                    unit.struck = Some(struck);
                 }
                 unit.health -= hit.amount;
                 let dead = unit.health <= 0.0;
@@ -478,11 +499,14 @@ impl World {
                     unit.die(ticks);
                 }
                 let r = self.units[u].organization;
+                if harmful {
+                    self.organizations[r].struck = Some(struck);
+                }
                 if enemy {
                     self.lose_morale(r, hit.morale, true);
                 }
                 if dead {
-                    self.mourn(u, hit.from);
+                    self.mourn(u);
                     self.lost_member(u);
                 }
             }
@@ -497,6 +521,7 @@ impl World {
                 if self.sides.relation(hit.by, building.owner) == Relation::Enemy
                     && hit.amount > 0.0
                 {
+                    building.struck = Some(struck);
                     // A bombarder holds it for as long as it keeps a
                     // organization out of supply, if that's longer.
                     let held = hit.bombard.map_or(0.0, |recharge| {
@@ -511,10 +536,8 @@ impl World {
                         Some(from) => {
                             let owner = self.buildings[b].owner;
                             self.fall(b, Some(hit.by));
-                            let captured = self.buildings[b].owner != owner;
-                            let destroyed = matches!(self.buildings[b].state, State::Destroyed(_));
-                            if captured || destroyed {
-                                self.credit_fall(b, from, captured);
+                            if self.buildings[b].owner != owner {
+                                self.credit_fall(b, from, true);
                             }
                         }
                         None => self.fall_unclaimed(b),

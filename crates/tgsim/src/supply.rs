@@ -603,6 +603,7 @@ impl World {
         let full = self.max_health(u);
         let unit = &mut self.units[u];
         unit.died = None;
+        unit.struck = None;
         unit.awaited = false;
         unit.health = full;
         unit.stand_at(stand, facing);
@@ -654,6 +655,7 @@ impl World {
             unit.health -= rate * health * share;
             if unit.health <= 0.0 {
                 unit.die(ticks);
+                self.mourn(u);
                 self.lost_member(u);
             }
         }

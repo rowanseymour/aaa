@@ -255,6 +255,7 @@ impl World {
             level: 0,
             engaging_before: false,
             efficiency: organization.efficiency.unwrap_or(1.0),
+            struck: None,
         });
         self.set_experience(r, organization.experience);
         self.organizations[r].morale_max = self.maximum_morale(r);
@@ -310,6 +311,7 @@ impl World {
             shot: None,
             died: None,
             besieged: None,
+            struck: None,
             left: None,
             // One its organization has lost comes back as a recruit's do.
             awaited: m.lost.is_some(),
@@ -382,6 +384,7 @@ impl World {
                 awake: b.awake,
                 inside: BTreeMap::new(),
                 besieged: None,
+                struck: None,
                 shot: None,
                 state: match health > 0.0 {
                     true => State::Standing,

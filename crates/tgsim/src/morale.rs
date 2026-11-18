@@ -201,10 +201,10 @@ impl World {
         }
     }
 
-    /// What the organization at `r` loses as the member at `u` dies, and
-    /// what the organization of `by`, the unit that killed it if one did,
-    /// wins for the kill.
-    pub(crate) fn mourn(&mut self, u: usize, by: Option<Target>) {
+    /// What the organization of the member at `u` loses as it dies, and
+    /// what its killer's organization wins for the kill, if a unit killed
+    /// it, and for the organization if it was the last of it.
+    pub(crate) fn mourn(&mut self, u: usize) {
         let rules = self.rules.morale_rules;
         let template = self.units[u].template.clone();
         let value = self
@@ -215,22 +215,20 @@ impl World {
             .unwrap_or(0.0);
         let r = self.units[u].organization;
         self.lose_morale(r, value * rules.death_factor, false);
-        let Some(Target::Unit(k)) = by else {
-            return;
-        };
-        let killers = self.units[k].organization;
-        if !self.hostile(killers, Piece::Organization(r)) {
-            return;
+        let owner = self.organizations[r].owner;
+        if let Some(Target::Unit(k)) = self.killer(self.units[u].struck, owner) {
+            let killers = self.units[k].organization;
+            let (killer, victim) = (self.unit_value(k), self.unit_value(u));
+            self.credit_kill(u, k, [victim, killer]);
+            if killer > 0.0 {
+                let [low, high] = rules.slayer_factor;
+                let factor = ((victim / killer + 1.0) / 2.0).clamp(low, high);
+                self.gain_morale(killers, rules.slayer_base * factor);
+            }
         }
-        let (killer, victim) = (self.unit_value(k), self.unit_value(u));
-        self.credit_kill(u, k, [victim, killer]);
-        if killer <= 0.0 {
-            return;
+        if self.destroyed(r) {
+            self.credit_destruction(r);
         }
-        let [low, high] = rules.slayer_factor;
-        let factor = ((victim / killer + 1.0) / 2.0).clamp(low, high);
-        let gain = rules.slayer_base * factor;
-        self.gain_morale(killers, gain);
     }
 
     /// Has the organization at `r` break and run: its owner is told, those
@@ -766,7 +764,8 @@ mod tests {
         let mut w = standoff();
         w.organizations[0].morale = 30.0;
         rate(&mut w, "soldier", 10.0);
-        w.mourn(1, Some(Target::Unit(0)));
+        hit_by(&mut w, 1, 0);
+        w.mourn(1);
         // A quarter of the victim's value lost, and for killing an equal
         // 0.5 × (1 + 1) ÷ 2 won.
         assert_eq!(w.organizations[1].morale, 50.0 - 12.5);
@@ -776,12 +775,14 @@ mod tests {
         w.units[0].template = "strong".into();
         let ratio = w.unit_value(1) / w.unit_value(0);
         assert!(ratio < 0.5);
-        w.mourn(1, Some(Target::Unit(0)));
+        hit_by(&mut w, 1, 0);
+        w.mourn(1);
         let morale = 30.5 + 0.5 * (ratio + 1.0) / 2.0;
         assert!((w.organizations[0].morale - morale).abs() < 1e-4);
         // One worth nothing wins nothing.
         w.rules.combat_profiles.clear();
-        w.mourn(1, Some(Target::Unit(0)));
+        hit_by(&mut w, 1, 0);
+        w.mourn(1);
         assert!((w.organizations[0].morale - morale).abs() < 1e-4);
         // A shot that kills does the same.
         let mut w = standoff();
@@ -810,7 +811,7 @@ mod tests {
         w.give(Piece::Organization(0), "berserk".into(), 100.0);
         w.lose_morale(0, 3.0, true);
         assert_eq!(w.organizations[0].morale, 50.0 - 0.75);
-        w.mourn(0, None);
+        w.mourn(0);
         assert_eq!(w.organizations[0].morale, 50.0 - 0.75 - 12.5);
     }
 
@@ -1068,7 +1069,8 @@ mod tests {
         rate(&mut w, "soldier", 10.0);
         w.organizations[0].morale = 30.0;
         w.organizations[1].owner = 1;
-        w.mourn(1, Some(Target::Unit(0)));
+        hit_by(&mut w, 1, 0);
+        w.mourn(1);
         assert_eq!(w.organizations[0].morale, 30.0);
     }
 
