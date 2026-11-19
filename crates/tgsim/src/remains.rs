@@ -81,6 +81,7 @@ impl World {
     /// namesake of it, or failing one its first; with no death to start,
     /// it never does.
     pub(crate) fn pick_death(&mut self, u: usize) {
+        (self.units[u].death, self.units[u].dying) = (None, 0);
         let (filter, damage) =
             (self.units[u].struck).map_or((BLEEDING, 0.0), |s| (s.filter, s.damage));
         let (into, now) = self.dying_stance(u);

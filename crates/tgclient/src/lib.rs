@@ -2070,7 +2070,8 @@ fn keep_selection(
 
 /// Places units between where the last two ticks left them, playing their
 /// moving animation while they move, their attack as they fire and their
-/// death as they die; the dead without one are hidden.
+/// death as they die, each from the animations of the look their stance
+/// gives them; the dead without one are hidden.
 fn show_units(
     sim: Res<Sim>,
     loaded: Res<Loaded>,
@@ -2108,6 +2109,10 @@ fn show_units(
                     p.revive();
                 }
             }
+        }
+        // Its stance's look, before a death that starts in it.
+        if let Some(p) = playing.as_mut() {
+            p.set_look(sim.0.stance_look(view.unit).map(|l| l.as_str()));
         }
         if !unit.alive() && !view.dead {
             view.dead = true;

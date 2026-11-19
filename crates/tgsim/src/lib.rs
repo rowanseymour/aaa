@@ -615,6 +615,20 @@ pub struct Unit {
     pub terrain: TerrainIndex,
 }
 
+impl Unit {
+    /// Forgets how it died and the stance it died in, for one that's
+    /// replaced: the new one is decided afresh.
+    pub(crate) fn forget_dying(&mut self) {
+        (self.died, self.death, self.dying) = (None, None, 0);
+        (
+            self.stance,
+            self.stance_due,
+            self.stance_heard,
+            self.playing,
+        ) = (None, None, None, 0);
+    }
+}
+
 /// How a unit left the map without dying, and the tick it did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Left {

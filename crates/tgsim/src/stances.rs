@@ -148,6 +148,13 @@ impl World {
     /// Has the unit at `u` start playing the animation `ids` once, as it
     /// uses an ability, in the set of the stance it holds.
     pub(crate) fn play_once(&mut self, u: usize, ids: Option<&str>) {
+        // A change waiting for the last one to end comes as this starts.
+        let unit = &mut self.units[u];
+        if self.ticks >= unit.playing
+            && let Some(due) = unit.stance_due.take()
+        {
+            unit.stance = due;
+        }
         let unit = &self.units[u];
         let set = self.animations_in(u, unit.stance.as_ref());
         let length = ids.and_then(|ids| set?.lengths.get(&Id::from(ids)));
@@ -312,6 +319,20 @@ mod tests {
         assert_eq!(w.units[0].stance, Some(Id::from("kneel")));
         // Kneeling, his shot is the kneeling one's.
         shoot(&mut w);
+        assert_eq!(w.units[0].playing, w.ticks + SECOND / 2);
+    }
+
+    #[test]
+    fn a_waiting_change_comes_as_the_next_shot_starts() {
+        let mut w = kneeling();
+        shoot(&mut w);
+        under_fire(&mut w);
+        w.keep_stances();
+        // Firing again the moment the last shot ends, as the fight runs
+        // before stances are looked at.
+        w.ticks += SECOND;
+        shoot(&mut w);
+        assert_eq!(w.units[0].stance, Some(Id::from("kneel")));
         assert_eq!(w.units[0].playing, w.ticks + SECOND / 2);
     }
 

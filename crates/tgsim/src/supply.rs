@@ -584,8 +584,7 @@ impl World {
             self.next_id += 1;
         }
         let unit = &mut self.units[u];
-        unit.died = None;
-        unit.death = None;
+        unit.forget_dying();
         unit.struck = None;
         // It comes on foot, whatever the one before was doing as it died.
         unit.descent = None;
