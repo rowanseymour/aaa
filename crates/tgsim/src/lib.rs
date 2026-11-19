@@ -343,6 +343,13 @@ pub struct Organization {
     pub settled: Option<u64>,
     /// Whether it's set off along a route of its own and isn't there yet.
     pub travelling: bool,
+    /// While its leader is on its way along a route, where the route
+    /// ends, at which the regiment turns and its members make for their
+    /// places.
+    pub route_end: Option<[f32; 2]>,
+    /// The way it was sent to face, which it turns to once there, rather
+    /// than along its route's last leg.
+    pub turn_to: Option<[f32; 2]>,
     /// The properties it holds while it's entrenched, which it is while
     /// it has these.
     pub entrenched: Option<Vec<Id>>,
@@ -559,6 +566,14 @@ pub struct Unit {
     /// Whether it's dashing straight for its next waypoint to get back
     /// onto its route.
     detour: bool,
+    /// On a copy of its leader's route, the leader's point each of its
+    /// waypoints was made from, the next last; empty on a way of its own.
+    sources: Vec<[f32; 2]>,
+    /// How many times it's found no way to its next waypoint.
+    point_tries: u8,
+    /// Whether it was inside its moving regiment's control zone when the
+    /// regiment last looked; `None` for one that's joined since.
+    with: Option<bool>,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -1232,6 +1247,7 @@ impl World {
     /// Plays one [`TICK`].
     pub fn tick(&mut self) {
         self.travel();
+        self.keep_routes();
         self.stand();
         self.notice();
         let fired_on = self.fight();
@@ -1362,7 +1378,7 @@ digest!(Organization {
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
-    guard, arriving, terrain_properties, settled, travelling, entrenched, morale, morale_max,
+    guard, arriving, terrain_properties, settled, travelling, route_end, turn_to, entrenched, morale, morale_max,
     mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
     chased, follow, build, mending,
 } skip {
@@ -1394,7 +1410,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, detour, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, sources, point_tries, with, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
     fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
@@ -1802,7 +1818,7 @@ mod tests {
         let played = format!("{}\n{}", snapshot(&battle), snapshot(&towing));
         assert_eq!(
             fingerprint(&[&battle, &towing]),
-            0x6de9c23e4a0f9b8f,
+            0x6906730b52272f27,
             "{played}"
         );
     }

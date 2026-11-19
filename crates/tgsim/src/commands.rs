@@ -461,7 +461,7 @@ impl World {
         let from = r.position;
         let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
         match r.engaged.is_empty() {
-            true => self.send(organization, target, facing),
+            true => self.send_along(organization, target),
             false => r.resume = Some((target, facing)),
         }
         Ok(())
@@ -477,9 +477,7 @@ impl World {
         let r = &mut self.organizations[organization];
         r.take_order(Order::Run);
         r.engaged.clear();
-        let from = r.position;
-        let facing = normalised([target[0] - from[0], target[1] - from[1]]).unwrap_or(r.facing);
-        self.send(organization, target, facing);
+        self.send_along(organization, target);
         Ok(())
     }
 
