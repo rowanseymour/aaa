@@ -60,6 +60,12 @@ impl Widget {
             .map(|(_, v)| v.as_str())
     }
 
+    /// What a tooltip says of it: its name, and what it does.
+    pub fn tooltip(&self, strings: &crate::Strings) -> (Option<String>, Option<String>) {
+        let said = |key| crate::strings::localized(strings, self.value(key));
+        (said("ToolTip_name"), said("tooltip"))
+    }
+
     /// Its bounds, given its parent's.
     pub fn bounds(&self, parent: Rect) -> Rect {
         (self.view.as_ref()).map_or(parent, |v| v.bounds.place(parent))

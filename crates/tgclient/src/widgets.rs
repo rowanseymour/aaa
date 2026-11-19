@@ -1,8 +1,9 @@
 //! The original interface's in-match panels, drawn from its layouts (see
 //! [`tgdata::widgets`]) in place of ours: their pictures as they look at
-//! rest, and the command grid's buttons, which show what
+//! rest, the command grid's buttons, which show what
 //! [`actions::Shown`](crate::actions::Shown) holds and ask for their
-//! widget by name when pressed.
+//! widget by name when pressed, and other buttons that ask for what our
+//! interface's do, such as pausing.
 
 use std::collections::HashMap;
 
@@ -72,6 +73,24 @@ const OPTIONAL: [(&str, Flag); 2] = [
     ("ButtonPause", |f| f.pause_button),
 ];
 
+/// One of the control panel's buttons that asks for what one of ours does.
+struct Press {
+    widget: &'static str,
+    asks: &'static str,
+    /// What ours is [`called`](crate::ui::called), so a script works with
+    /// either.
+    called: &'static str,
+    /// Marks it as a button of its subject's, which keeps its state.
+    subject: fn(&mut EntityCommands),
+}
+
+static PRESSABLE: [Press; 1] = [Press {
+    widget: "ButtonPause",
+    asks: crate::clock::PAUSE,
+    called: crate::clock::PAUSE_BUTTON,
+    subject: |button| _ = button.insert(crate::clock::Pauses),
+}];
+
 /// The widgets the interface repeats once for each entry a panel lists,
 /// such as a group or a command: templates, not shown themselves, and
 /// with nothing listed at rest.
@@ -104,12 +123,14 @@ pub fn remove_ours(mut commands: Commands, ours: Query<Entity, Added<Ours>>) {
 }
 
 /// Draws the original's panels, in the skin of the player's nation.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     local: Res<Local>,
     looks: Res<crate::actions::Looks>,
+    bindings: Res<crate::keys::Bindings>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
@@ -136,6 +157,7 @@ pub fn spawn(
         },
         flags: game.interface_flags(),
         drawn: Vec::new(),
+        pressables: Vec::new(),
     };
     let mut grid = None;
     if let Some(top) = named(GAME).and_then(|g| g.find(ON_GAME)) {
@@ -190,7 +212,7 @@ pub fn spawn(
     }
     commands.insert_resource(greyed);
     let buttons = grid.map(|(area, button)| grid_buttons(area, button, &mut drawer.pictures));
-    let drawn = drawer.drawn;
+    let (drawn, pressables) = (drawer.drawn, drawer.pressables);
     // The layouts' screen at its own shape, as tall as the window and
     // centred in it: its pictures only line up at that shape, and the
     // original stretches it over a wider window instead.
@@ -215,6 +237,9 @@ pub fn spawn(
             }
             for button in buttons.into_iter().flatten() {
                 button.spawn(screen);
+            }
+            for button in pressables {
+                button.spawn(screen, &bindings);
             }
         })
         .id();
@@ -305,6 +330,7 @@ struct Drawer<'a> {
     pictures: Pictures<'a>,
     flags: InterfaceFlags,
     drawn: Vec<(Vec<Step>, Handle<Image>)>,
+    pressables: Vec<BuiltPressable>,
 }
 
 impl Drawer<'_> {
@@ -327,6 +353,11 @@ impl Drawer<'_> {
         if !widget.visible || entry || optional.is_some_and(|(_, flag)| !flag(&self.flags)) {
             return None;
         }
+        let press = (PRESSABLE.iter()).find(|p| widget.name.eq_ignore_ascii_case(p.widget));
+        if let Some(press) = press {
+            self.pressable(press, widget, within);
+            return None;
+        }
         let mut chain = within.to_vec();
         if let Some(view) = &widget.view {
             chain.push(Step::Into(view.bounds));
@@ -338,6 +369,63 @@ impl Drawer<'_> {
             self.element(part, &chain);
         }
         Some(chain)
+    }
+
+    /// Keeps a [`PRESSABLE`] widget to spawn as a button, with all its
+    /// pictures, as each is placed and the states each is drawn in.
+    fn pressable(&mut self, press: &'static Press, widget: &Widget, within: &[Step]) {
+        let mut chain = within.to_vec();
+        let mut faces = Vec::new();
+        if let Some(view) = &widget.view {
+            chain.push(Step::Into(view.bounds));
+            self.faces(view, &chain, &[], &mut faces);
+        }
+        for part in &widget.parts {
+            let mut chain = chain.clone();
+            chain.push(Step::Into(part.bounds));
+            self.faces(part, &chain, &[], &mut faces);
+        }
+        let (name, help) = widget.tooltip(&self.pictures.game.strings());
+        self.pressables.push(BuiltPressable {
+            press,
+            name: name.unwrap_or_default(),
+            help: help.unwrap_or_default(),
+            at: reach(&chain),
+            faces,
+        });
+    }
+
+    /// Adds `element`'s pictures and its children's to `faces`, each drawn
+    /// in the states it and those it's in are, `chain` ending in its own
+    /// bounds.
+    fn faces(
+        &mut self,
+        element: &ViewElement,
+        chain: &[Step],
+        within: &[ViewElement],
+        faces: &mut Vec<Face>,
+    ) {
+        let mut when = within.to_vec();
+        when.push(ViewElement {
+            children: Vec::new(),
+            ..element.clone()
+        });
+        if let Some(image) = (element.texture.as_deref()).and_then(|t| self.pictures.get(t)) {
+            let greyed = (self.pictures.images.get(&image))
+                .and_then(grey)
+                .map(|g| self.pictures.images.add(g));
+            faces.push(Face {
+                at: reach(chain),
+                when: when.clone(),
+                image,
+                greyed,
+            });
+        }
+        for child in &element.children {
+            let mut chain = chain.to_vec();
+            chain.push(Step::Into(child.bounds));
+            self.faces(child, &chain, &when, faces);
+        }
     }
 
     /// Adds a view element's pictures, `chain` ending in its own bounds.
@@ -424,6 +512,148 @@ impl Built {
             })
             .observe(hold);
     }
+}
+
+/// A button of [`PRESSABLE`]'s, drawn in the states it's held in.
+#[derive(Component, Default)]
+pub struct Pressable {
+    /// Whether it's switched on, such as the pause button while the match
+    /// is paused; set by whatever it asks for.
+    pub selected: bool,
+}
+
+/// One of a [`Pressable`]'s pictures: where it's drawn on the screen, the
+/// view elements it's in, from the outermost to its own, each of whose
+/// states must hold for it to be drawn, and its picture and a greyed one
+/// for while the button's disabled.
+struct Face {
+    at: Rect,
+    when: Vec<ViewElement>,
+    image: Handle<Image>,
+    greyed: Option<Handle<Image>>,
+}
+
+/// A [`Face`] as spawned.
+#[derive(Component)]
+pub struct Drawn {
+    when: Vec<ViewElement>,
+    image: Handle<Image>,
+    greyed: Option<Handle<Image>>,
+}
+
+/// A [`Pressable`] ready to spawn.
+struct BuiltPressable {
+    press: &'static Press,
+    name: String,
+    help: String,
+    at: Rect,
+    faces: Vec<Face>,
+}
+
+impl BuiltPressable {
+    fn spawn(
+        self,
+        screen: &mut bevy::ecs::hierarchy::ChildSpawnerCommands,
+        bindings: &crate::keys::Bindings,
+    ) {
+        let press = self.press;
+        let at = self.at;
+        let mut button = screen.spawn((
+            Pressable::default(),
+            Asks::new(press.asks),
+            crate::keys::Named::new(bindings, press.asks, self.name),
+            crate::ui::Hint(self.help),
+            on_screen(at),
+            Button,
+            crate::ui::Click::TOGGLE,
+            crate::ui::called(press.called),
+            Hovered::default(),
+            Blocks,
+            RelativeCursorPosition::default(),
+        ));
+        (press.subject)(&mut button);
+        button.with_children(|button| {
+            for face in self.faces {
+                // Placed within the button, as a share of its size.
+                let share = |v: f32, of: f32| Val::Percent(100.0 * v / of.max(1.0));
+                button.spawn((
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: share(face.at.left - at.left, at.width()),
+                        top: share(face.at.top - at.top, at.height()),
+                        width: share(face.at.width().max(0.0), at.width()),
+                        height: share(face.at.height().max(0.0), at.height()),
+                        ..default()
+                    },
+                    ImageNode::new(face.image.clone()).with_mode(NodeImageMode::Stretch),
+                    Visibility::Hidden,
+                    Drawn {
+                        when: face.when,
+                        image: face.image,
+                        greyed: face.greyed,
+                    },
+                    Pickable::IGNORE,
+                ));
+            }
+        });
+    }
+}
+
+/// Shows each [`Pressable`]'s pictures for the states it's in: switched on
+/// or not, hovered, held down, and disabled where it can't be pressed,
+/// greyed as the original greys a command it can't give.
+#[allow(clippy::type_complexity)]
+pub fn show_pressables(
+    buttons: Query<(
+        &Pressable,
+        &Hovered,
+        Has<bevy::ui::Pressed>,
+        Has<bevy::ui::InteractionDisabled>,
+        &Children,
+    )>,
+    mut faces: Query<(&Drawn, &mut Visibility, &mut ImageNode)>,
+) {
+    for (button, hovered, pressed, disabled, children) in &buttons {
+        let holding = holding(button.selected, hovered.get(), pressed, disabled);
+        for &child in children {
+            let Ok((drawn, mut shown, mut image)) = faces.get_mut(child) else {
+                continue;
+            };
+            let all = drawn.when.iter().all(|e| e.shown(&holding));
+            shown.set_if_neq(match all {
+                true => Visibility::Inherited,
+                false => Visibility::Hidden,
+            });
+            let picture = match (disabled, &drawn.greyed) {
+                (true, Some(greyed)) => greyed,
+                _ => &drawn.image,
+            };
+            if image.image != *picture {
+                image.image = picture.clone();
+            }
+        }
+    }
+}
+
+/// The states a button's held in, as its layout names them.
+fn holding(selected: bool, hovered: bool, pressed: bool, disabled: bool) -> [&'static str; 6] {
+    let usable = !disabled;
+    [
+        if usable { "ENABLED" } else { "DISABLED" },
+        if hovered && usable {
+            "FOCUSED"
+        } else {
+            "UNFOCUSED"
+        },
+        if pressed && usable {
+            "PRESSED"
+        } else {
+            "UNPRESSED"
+        },
+        if selected { "SELECTED" } else { "UNSELECTED" },
+        "UNTARGETED",
+        "CLOSED",
+    ]
 }
 
 /// The grid's buttons: `button`'s layout repeated in each cell of
@@ -606,4 +836,80 @@ fn grey(icon: &Image) -> Option<Image> {
         pixel[..3].fill(grey);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use tgdata::widgets::Bounds;
+
+    use super::*;
+
+    fn element(when: &[&str]) -> ViewElement {
+        ViewElement {
+            name: "Child".into(),
+            kind: None,
+            bounds: Bounds::default(),
+            when: when.iter().map(|w| w.to_string()).collect(),
+            texture: None,
+            colour: [1.0; 3],
+            text: None,
+            children: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn a_face_shows_while_it_and_all_it_is_in_hold_greyed_while_disabled() {
+        let mut app = App::new();
+        app.add_systems(Update, show_pressables);
+        let (image, greyed) = (
+            Handle::<Image>::default(),
+            Handle::Uuid(Default::default(), default()),
+        );
+        let face = app
+            .world_mut()
+            .spawn((
+                Visibility::Hidden,
+                ImageNode::new(image.clone()),
+                Drawn {
+                    when: vec![element(&["SELECTED"]), element(&["UNFOCUSED"])],
+                    image: image.clone(),
+                    greyed: Some(greyed.clone()),
+                },
+            ))
+            .id();
+        let button = app
+            .world_mut()
+            .spawn((Pressable::default(), Hovered(false)))
+            .add_child(face)
+            .id();
+        let look = |app: &mut App| {
+            app.update();
+            let world = app.world();
+            let shown = *world.get::<Visibility>(face).unwrap() == Visibility::Inherited;
+            (shown, world.get::<ImageNode>(face).unwrap().image == greyed)
+        };
+        assert_eq!(look(&mut app), (false, false), "not selected");
+        app.world_mut()
+            .get_mut::<Pressable>(button)
+            .unwrap()
+            .selected = true;
+        assert_eq!(look(&mut app), (true, false));
+        app.world_mut().entity_mut(button).insert(Hovered(true));
+        assert_eq!(look(&mut app), (false, false), "its own state fails");
+        let mut button = app.world_mut().entity_mut(button);
+        button.insert((Hovered(false), bevy::ui::InteractionDisabled));
+        assert_eq!(look(&mut app), (true, true));
+    }
+
+    #[test]
+    fn a_disabled_button_is_never_focused_nor_pressed_but_may_be_selected() {
+        let held = holding(true, true, true, false);
+        assert_eq!(held[..4], ["ENABLED", "FOCUSED", "PRESSED", "SELECTED"]);
+        let held = holding(true, true, true, true);
+        assert_eq!(
+            held[..4],
+            ["DISABLED", "UNFOCUSED", "UNPRESSED", "SELECTED"]
+        );
+        assert_eq!(holding(false, false, false, false), RESTING);
+    }
 }

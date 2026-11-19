@@ -955,6 +955,7 @@ pub fn run(program: Program) -> ExitCode {
         .init_resource::<ghost::Landing>()
         .init_resource::<deliveries::Flights>()
         .init_resource::<supply::Border>()
+        .init_resource::<clock::PauseState>()
         .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
         .insert_resource(Side(side))
@@ -1007,7 +1008,7 @@ pub fn run(program: Program) -> ExitCode {
             Update,
             (
                 keys::load.run_if(resource_changed::<options::Options>),
-                clock::mark_button.run_if(resource_exists_and_changed::<keys::Bindings>),
+                keys::mark.run_if(resource_exists_and_changed::<keys::Bindings>),
             )
                 .chain()
                 .run_if(in_state(Screen::Match)),
@@ -1046,7 +1047,15 @@ pub fn run(program: Program) -> ExitCode {
                     supply::tint_buildings,
                     supply::show_cycle_button,
                 ),
-                clock::light_button.run_if(resource_exists::<Orders>),
+                (
+                    clock::follow.run_if(resource_exists::<Orders>),
+                    clock::disable_buttons,
+                    clock::light_button,
+                    (clock::select_original_button, widgets::show_pressables)
+                        .chain()
+                        .run_if(widgets::original),
+                )
+                    .chain(),
                 show_health.after(camera::Controls),
                 (
                     banners::add_banners,

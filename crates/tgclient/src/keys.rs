@@ -339,6 +339,29 @@ impl Bindings {
     }
 }
 
+/// A button's name, with the key that gives what it asks for marked in
+/// it, kept marked as the hotkeys change.
+#[derive(Component)]
+#[require(Marked)]
+pub struct Named {
+    action: &'static str,
+    name: String,
+}
+
+impl Named {
+    pub fn new(bindings: &Bindings, action: &'static str, name: String) -> (Named, Marked) {
+        let marked = bindings.marked(action, &name);
+        (Named { action, name }, marked)
+    }
+}
+
+/// Marks each [`Named`] button's key afresh once the hotkeys change.
+pub fn mark(bindings: Res<Bindings>, mut buttons: Query<(&Named, &mut Marked)>) {
+    for (named, mut marked) in &mut buttons {
+        marked.set_if_neq(bindings.marked(named.action, &named.name));
+    }
+}
+
 /// Asks for what each key just pressed gives where it's heard: in the
 /// match, or in the display panel that's up.
 pub fn send(
