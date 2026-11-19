@@ -661,6 +661,34 @@ mod tests {
         assert!(open(&app).is_none() && paused(&app));
     }
 
+    /// Asks for `action` as the pause key or button would.
+    fn ask(app: &mut App, action: Action) {
+        let world = app.world_mut();
+        world.resource_scope(|world, mut orders: Mut<Orders>| {
+            let mut displays = world.resource_mut::<Displays>();
+            crate::clock::ask(&mut orders, Some(&mut displays), vec![action]);
+        });
+    }
+
+    #[test]
+    fn a_pause_asked_while_it_was_up_holds_once_it_closes() {
+        let mut app = app();
+        press(&mut app, KeyCode::F2);
+        ask(&mut app, Action::Pause(false));
+        ask(&mut app, Action::Pause(true));
+        press(&mut app, KeyCode::F2);
+        assert!(open(&app).is_none() && paused(&app));
+    }
+
+    #[test]
+    fn an_unpause_asked_while_it_was_up_holds_once_it_closes() {
+        let mut app = app();
+        press(&mut app, KeyCode::F2);
+        ask(&mut app, Action::Pause(false));
+        press(&mut app, KeyCode::F2);
+        assert!(open(&app).is_none() && !paused(&app));
+    }
+
     #[test]
     fn closing_it_leaves_a_match_paused_while_it_was_up() {
         let mut app = app();

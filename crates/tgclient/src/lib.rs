@@ -996,6 +996,7 @@ pub fn run(program: Program) -> ExitCode {
                 widgets::spawn.run_if(widgets::original),
                 messages::spawn,
                 supply::spawn,
+                clock::spawn_button,
                 waypoints::load,
                 console::start_scripts,
                 ready,
@@ -1006,7 +1007,7 @@ pub fn run(program: Program) -> ExitCode {
             Update,
             (
                 keys::load.run_if(resource_changed::<options::Options>),
-                supply::mark_border.run_if(resource_exists_and_changed::<keys::Bindings>),
+                clock::mark_button.run_if(resource_exists_and_changed::<keys::Bindings>),
             )
                 .chain()
                 .run_if(in_state(Screen::Match)),
@@ -1044,8 +1045,8 @@ pub fn run(program: Program) -> ExitCode {
                     supply::show_border,
                     supply::tint_buildings,
                     supply::show_cycle_button,
-                    supply::show_border_button,
                 ),
+                clock::light_button.run_if(resource_exists::<Orders>),
                 show_health.after(camera::Controls),
                 (
                     banners::add_banners,

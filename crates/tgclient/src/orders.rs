@@ -278,8 +278,14 @@ impl Orders {
 
     /// Whether the host would carry `action` out if asked.
     pub(crate) fn may(&self, action: &Action) -> bool {
+        !self.gone && !self.waiting() && self.allowed(action)
+    }
+
+    /// Whether the players given the orders of here may ask for `action`
+    /// at all, as against just now.
+    pub(crate) fn allowed(&self, action: &Action) -> bool {
         let allowed = |players| tgserver::allows(players, action);
-        !self.gone && !self.waiting() && self.players().is_none_or(allowed)
+        self.players().is_none_or(allowed)
     }
 
     /// Asks for `command` from `player`, unless `world`, the game's copy
