@@ -163,7 +163,7 @@ impl World {
         if self.over || self.ticks < GRACE {
             return;
         }
-        let ids: Vec<u32> = self.sides.players.iter().map(|p| p.id).collect();
+        let ids = self.contenders();
         let sustained = self.sustained();
         for &player in &ids {
             if self.over {
@@ -184,8 +184,7 @@ impl World {
             return;
         }
         for &player in &ids {
-            let independent = self.sides.player(player).is_some_and(|p| p.independent);
-            if independent || self.outcome(player) != Outcome::Playing {
+            if self.outcome(player) != Outcome::Playing {
                 continue;
             }
             // Its team's count however the team's sides have fared, and
@@ -244,6 +243,17 @@ impl World {
         (sustained.iter()).any(|&s| s == player || shared && self.team_mates(s, player))
     }
 
+    /// Whether a side is one of the match's and not an independent one,
+    /// which take no part in its outcome but through triggers.
+    pub(crate) fn contends(&self, player: u32) -> bool {
+        self.sides.player(player).is_some_and(|p| !p.independent)
+    }
+
+    /// The sides that [contend](Self::contends), in side order.
+    fn contenders(&self) -> Vec<u32> {
+        tgmap::sides(&self.sides.players).map(|p| p.id).collect()
+    }
+
     fn team(&self, player: u32) -> Option<usize> {
         self.sides.player(player)?.team
     }
@@ -283,24 +293,22 @@ impl World {
                 false => {}
             }
         }
-        let independent = self.sides.player(player).is_some_and(|p| p.independent);
         match won {
-            _ if !spreads || independent => {}
+            _ if !spreads || !self.contends(player) => {}
             true => self.spread_win(player),
             false => self.spread_loss(player),
         }
     }
 
     /// Ends the match on a side's win: its team wins with it where teams
-    /// win together, and everyone else loses.
+    /// win together, and everyone else but the independent sides loses.
     fn spread_win(&mut self, player: u32) {
         self.over = true;
         let team = self.shared_team(player);
         if let Some(team) = team {
             self.notices.push(Notice::TeamVictorious { team });
         }
-        let ids: Vec<u32> = self.sides.players.iter().map(|p| p.id).collect();
-        for other in ids {
+        for other in self.contenders() {
             let with = team.is_some() && self.team(other) == team;
             self.decide(other, with, false);
         }
@@ -308,9 +316,10 @@ impl World {
 
     /// Ends the match on a side's loss if that leaves nobody, one side or
     /// the sides of one team, who then win whether or not teams win
-    /// together. Otherwise the match goes on.
+    /// together. Otherwise the match goes on. Independent sides don't
+    /// count.
     fn spread_loss(&mut self, player: u32) {
-        let ids = self.sides.players.iter().map(|p| p.id);
+        let ids = self.contenders().into_iter();
         let left: Vec<u32> = ids.filter(|&p| self.outcome(p) != Outcome::Lost).collect();
         if left.iter().any(|&p| !self.team_mates(p, left[0])) {
             let Some(team) = self.shared_team(player) else {
@@ -352,8 +361,7 @@ mod tests {
     use tgmap::{Domain, Id, Pathing};
 
     /// Sides 1 and 2 on one team and 3 and 4 on another, each with a
-    /// company, and an independent 9 with nothing whose loss decides
-    /// nothing.
+    /// company, and an independent 9 with nothing, which takes no part.
     fn teams() -> World {
         let team = |id| crate::Team {
             id,
@@ -470,6 +478,9 @@ mod tests {
     #[test]
     fn a_team_resigns_once_everyone_playing_it_has_voted() {
         let mut w = teams();
+        // A side of its own keeps the match going once a team is out.
+        w.sides.players[4].independent = false;
+        company(&mut w, 9);
         played(&mut w, &[1, 2, 3]);
         w.resign(1);
         assert_eq!(outcomes(&w)[..2], [Playing, Playing]);
@@ -668,6 +679,22 @@ mod tests {
         assert!(w.take_notices().is_empty());
         assert!(!world([Lost, Playing]).over);
         assert!(world([Lost, Lost]).over);
+        // Independent sides neither keep a match going nor end one.
+        let independent = |outcome| {
+            let mut sides = sides([Lost, Lost]);
+            sides.players.push(Player {
+                outcome,
+                ..player(9, None, &[], &[])
+            });
+            World::from_organizations(sides, land(), &[])
+        };
+        assert!(independent(Playing).over);
+        let mut sides = sides([Lost, Playing]);
+        sides.players.push(Player {
+            outcome: Won,
+            ..player(9, None, &[], &[])
+        });
+        assert!(!World::from_organizations(sides, land(), &[]).over);
     }
 
     #[test]
@@ -682,16 +709,16 @@ mod tests {
     fn a_team_falls_together_once_none_of_it_has_anything() {
         let mut w = teams();
         run(&mut w, 1.0);
-        // The independent side has nothing, and its loss ends nothing.
-        assert_eq!(outcomes(&w), [Playing, Playing, Playing, Playing, Lost]);
-        assert_eq!(told(&mut w), [Notice::Defeated { player: 9 }]);
+        // The independent side has nothing, yet isn't defeated.
+        assert_eq!(outcomes(&w), [Playing; 5]);
+        assert_eq!(told(&mut w), []);
         rout(&mut w, 3);
         w.tick();
         assert_eq!(w.outcome(3), Playing);
         rout(&mut w, 4);
         w.tick();
         assert!(w.over);
-        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Lost]);
+        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Playing]);
         assert_eq!(told(&mut w), [Notice::TeamVictorious { team: 0 }]);
     }
 
@@ -708,7 +735,7 @@ mod tests {
         rout(&mut w, 4);
         w.tick();
         assert!(w.over);
-        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Lost]);
+        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Playing]);
         let events = [
             Notice::Defeated { player: 3 },
             Notice::Defeated { player: 4 },
@@ -767,7 +794,7 @@ mod tests {
         let mut w = teams();
         w.win(2);
         assert!(w.over);
-        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Lost]);
+        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Playing]);
         assert_eq!(told(&mut w), [Notice::TeamVictorious { team: 0 }]);
         // Decided once, for good.
         w.lose(1);
@@ -775,14 +802,24 @@ mod tests {
     }
 
     #[test]
-    fn the_one_left_wins_even_if_independent_and_nobody_left_ends_it_unwon() {
+    fn an_independent_side_neither_holds_open_nor_ends_a_match() {
         let mut w = free_for_all();
         w.sides.players[0].independent = true;
         w.lose(2);
-        assert!(!w.over);
-        w.lose(3);
         assert!(w.over);
-        assert_eq!(outcomes(&w), [Won, Lost, Lost]);
+        assert_eq!(outcomes(&w), [Playing, Lost, Won]);
+        // A trigger can still decide one, which tells of it.
+        let mut w = free_for_all();
+        w.sides.players[0].independent = true;
+        w.lose(1);
+        assert!(!w.over);
+        assert_eq!(told(&mut w), [Notice::Defeated { player: 1 }]);
+        let mut w = free_for_all();
+        w.sides.players[0].independent = true;
+        w.win(1);
+        assert!(!w.over);
+        assert_eq!(outcomes(&w), [Won, Playing, Playing]);
+        assert_eq!(told(&mut w), [Notice::Victorious { player: 1 }]);
         let mut w = free_for_all();
         w.sides.players.truncate(1);
         w.lose(1);
@@ -816,7 +853,7 @@ mod tests {
         w.buildings[1].state = State::Standing;
         w.tick();
         assert!(w.over);
-        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Lost]);
+        assert_eq!(outcomes(&w), [Won, Won, Lost, Lost, Playing]);
         assert!(w.fates[&1].by_cities && w.fates[&2].by_cities);
         assert!(!w.fates[&3].by_cities);
         let events = [

@@ -98,10 +98,11 @@ impl World {
             resigning: false,
         };
         let fates: BTreeMap<u32, Fate> = sides.players.iter().map(|p| (p.id, fate(p))).collect();
-        // A match is over once a side has won or every side has lost.
-        let decided = |of: Outcome| fates.values().filter(move |f| f.outcome == of);
-        let over = decided(Outcome::Won).next().is_some()
-            || !fates.is_empty() && decided(Outcome::Playing).next().is_none();
+        // A match is over once a side has won or every side has lost,
+        // independent sides aside.
+        let contending: Vec<Outcome> = (tgmap::sides(&sides.players)).map(|p| p.outcome).collect();
+        let over = contending.contains(&Outcome::Won)
+            || !contending.is_empty() && !contending.contains(&Outcome::Playing);
         let rng = rules.seed;
         let mut world = World {
             sides,
