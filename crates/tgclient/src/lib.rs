@@ -2205,15 +2205,19 @@ fn sunk(remains: tgsim::Remains, ticks: u64, t: f32) -> Option<f32> {
     }
 }
 
-/// Plays buildings' attacks as they fire, and sinks the destroyed into the
-/// ground.
+/// Plays buildings' attacks as they fire, sinks the destroyed into the
+/// ground, and sinks a site an effect lowers by the share of its health
+/// it's yet to gain.
+#[allow(clippy::too_many_arguments)]
 fn show_buildings(
     sim: Res<Sim>,
     fog: Res<fog::Fog>,
     fixed: Res<Time<Fixed>>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
+    lowering: Query<&effects::Lowers>,
     mut views: Query<(
+        Entity,
         &mut BuildingView,
         &mut Transform,
         &mut Visibility,
@@ -2222,7 +2226,8 @@ fn show_buildings(
 ) {
     // The sound of a fall is for one seen to fall, not first seen fallen.
     const FRESH: f32 = 3.0;
-    for (mut view, mut transform, mut visibility, playing) in &mut views {
+    let lowered: Vec<Entity> = lowering.iter().map(|l| l.0).collect();
+    for (e, mut view, mut transform, mut visibility, playing) in &mut views {
         // Left as last seen until seen again.
         if fog.building(view.building) != fog::Look::Shown {
             continue;
@@ -2249,6 +2254,16 @@ fn show_buildings(
                 None => *visibility = Visibility::Hidden,
             }
             continue;
+        }
+        let missing = match lowered.contains(&e) {
+            true => {
+                1.0 - (building.health / sim.0.building_max_health(view.building)).clamp(0.0, 1.0)
+            }
+            false => 0.0,
+        };
+        let at = view.placed - Vec3::Y * view.depth * missing;
+        if transform.translation != at {
+            transform.translation = at;
         }
         if building.shot != view.shot {
             view.shot = building.shot;

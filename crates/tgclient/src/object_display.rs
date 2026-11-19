@@ -1640,6 +1640,7 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     match () {
         _ if building.packing.is_some() => Some("structure_packing"),
         _ if building.unpacking.is_some() => Some("structure_unpacking"),
+        _ if building.constructing => Some("construction"),
         _ if queue.is_some() => queue,
         _ if sim.out_of_supply(b) && building.standing() => Some("out_of_supply"),
         _ if building.state == State::Disabled => Some("disabled"),

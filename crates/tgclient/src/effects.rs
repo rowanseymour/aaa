@@ -57,6 +57,9 @@ pub struct Effects {
     detail: f32,
     /// The map's sun is dark enough that effects for the night show.
     night: bool,
+    /// Seconds since a site's health last changed that it's still being
+    /// worked on, if the game says.
+    at_work: Option<f32>,
     rng: u64,
 }
 
@@ -103,7 +106,7 @@ enum Subject {
 struct Scenery;
 
 /// What a view's thing was last seen doing, to notice the events of.
-#[derive(Component)]
+#[derive(Component, Default)]
 struct Seen {
     shot: Option<(u64, usize)>,
     /// A share of its maximum.
@@ -113,6 +116,13 @@ struct Seen {
     finished: bool,
     /// The properties it was seen holding that show effects.
     held: Vec<Id>,
+    /// As a site, the tick its health last changed.
+    worked: Option<u64>,
+    /// As a site, whether it was being worked on at its last look, which
+    /// it takes once a second.
+    at_work: bool,
+    /// The second of the match it last looked in, as a site.
+    looked: Option<u64>,
 }
 
 /// One of the effects playing.
@@ -266,6 +276,7 @@ impl Effects {
             aim: game.aim_heights().straight,
             detail: 1.0,
             night,
+            at_work: game.active_construction_seconds(),
             rng: 0x9e37_79b9_7f4a_7c15,
         }
     }
@@ -365,6 +376,22 @@ impl Effects {
     /// `seen`, and notes what it's doing `now`.
     fn witness(&mut self, me: Target, template: &str, seen: &mut Seen, now: Now, at: When) {
         let objects = self.objects.get(&Id::from(template)).cloned();
+        let mut now = now;
+        if now.site {
+            if now.health != seen.health {
+                seen.worked = Some(at.tick);
+            }
+            let second = (at.tick as f32 * tgsim::TICK) as u64;
+            if seen.looked != Some(second) {
+                seen.looked = Some(second);
+                let ago = |t: u64| (at.tick - t) as f32 * tgsim::TICK;
+                let within = |s: f32| seen.worked.is_some_and(|t| ago(t) <= s);
+                seen.at_work = self.at_work.is_some_and(within);
+            }
+            if seen.at_work {
+                now.states.push(AT_WORK);
+            }
+        }
         if let Some(o) = &objects {
             let (entered, left) = changes(&seen.states, &now.states);
             for state in entered {
@@ -375,10 +402,31 @@ impl Effects {
                 }
             }
             for state in left {
+                // What lasts on the thing that entering it started ends
+                // with it.
+                let on_it =
+                    |c: &VfxCue| c.attached && matches!(c.at.as_str(), "SELF" | "TARGET_THING");
+                let lasting = |c: &VfxCue| {
+                    c.duration.is_none()
+                        && on_it(c)
+                        && self.vfx.get(&c.vfx).is_some_and(|v| v.permanent)
+                };
+                let ended: Vec<VfxCue> = (by_state(&o.entered, state).into_iter())
+                    .filter(|c| !c.stop && lasting(c))
+                    .map(|c| VfxCue {
+                        stop: true,
+                        delay: 0.0,
+                        ..c
+                    })
+                    .collect();
+                self.queue(at, &ended, Source::Thing(me), None);
                 let cues = by_state(&o.left, state);
                 self.queue(at, &cues, Source::Thing(me), None);
             }
-            if now.health != seen.health {
+            // A site's health going up and down sets nothing off, finishing
+            // included.
+            let was_site = seen.states.contains(&"construction");
+            if now.health != seen.health && !now.site && !was_site {
                 let cues = crossed(&o.health, seen.health, now.health);
                 self.queue(at, &cues, Source::Thing(me), None);
             }
@@ -459,8 +507,21 @@ struct Now<'a> {
     target: Option<Target>,
     /// It's a building that's done going up and is still there.
     finished: bool,
+    /// It's a site still going up.
+    site: bool,
     held: Vec<Id>,
 }
+
+/// The state a site is in while it's being worked on.
+const AT_WORK: &str = "active_construction";
+/// The kind of effect that sinks a site into the ground by the share of
+/// its health it's yet to gain.
+const RAISE: &str = "VFXCONSTRUCTIONRAISEMODIFIER";
+
+/// On an effect that sinks a building's view, the view, for as long as the
+/// effect lasts.
+#[derive(Component)]
+pub struct Lowers(pub Entity);
 
 const DEAD: &str = "dead";
 
@@ -472,6 +533,9 @@ fn building_states(b: &tgsim::Building) -> Vec<&'static str> {
     }
     if b.unpacking.is_some() {
         states.push("structure_unpacking");
+    }
+    if b.constructing && !b.gone() {
+        states.push("construction");
     }
     if matches!(b.state, State::Destroyed(_)) {
         states.push(DEAD);
@@ -658,6 +722,7 @@ fn notice(
             weapon: unit.shot.and_then(|(_, w)| fighter?.weapons.get(w)),
             target: unit.target,
             finished: false,
+            site: false,
             held: held(sim, view.unit),
         };
         let me = Target::Unit(view.unit);
@@ -680,7 +745,8 @@ fn notice(
             shot: b.shot,
             weapon: b.shot.and_then(|(_, w)| b.fighter.weapons.get(w)),
             target: b.target,
-            finished: b.unpacking.is_none() && !b.gone(),
+            finished: b.unpacking.is_none() && !b.constructing && !b.gone(),
+            site: b.constructing && !b.gone(),
             held: Vec::new(),
         };
         let me = Target::Building(view.building);
@@ -740,9 +806,7 @@ fn see(
             let mut seen = Seen {
                 shot: now.shot,
                 health: now.health,
-                states: Vec::new(),
-                finished: false,
-                held: Vec::new(),
+                ..Seen::default()
             };
             effects.create(Source::Thing(me), template, at);
             effects.witness(me, template, &mut seen, now, at);
@@ -884,6 +948,26 @@ fn play(
         let Some(vfx) = effects.vfx.get(&cue.vfx).cloned() else {
             continue;
         };
+        if vfx.category == RAISE && fits(sim, &cue.targets, fired_by, p.target) {
+            let view = match by {
+                Some(Subject::Thing(t @ Target::Building(_))) => views.get(&t).map(|v| v.1),
+                _ => None,
+            };
+            if let Some(view) = view {
+                commands.spawn((
+                    Lowers(view),
+                    Effect {
+                        vfx: cue.vfx.clone(),
+                        by,
+                        holding: p.holding.clone(),
+                        ends: None,
+                        discard: false,
+                    },
+                    DespawnOnExit(Screen::Match),
+                ));
+            }
+            continue;
+        }
         let path = vfx.model.as_deref().filter(|_| vfx.category == "VFXMODEL");
         if path.is_none() && vfx.decal.is_none() {
             continue;
@@ -1329,9 +1413,18 @@ fn follow(
             });
         }
         if let Some(f) = follow {
-            let Some((root, _, _)) = there(f.anchor) else {
+            let Some((root, _, building)) = there(f.anchor) else {
                 commands.entity(e).despawn();
                 continue;
+            };
+            // What's on a site stays on the ground as its model's sunk.
+            let standing = building.filter(|v| sim.0.buildings[v.building].constructing);
+            let root = match standing {
+                Some(v) => &Transform {
+                    translation: v.placed,
+                    ..*root
+                },
+                None => root,
             };
             let placed = f.on.place(root);
             transform.translation = placed.translation;
@@ -1537,6 +1630,62 @@ mod tests {
     }
 
     #[test]
+    fn a_sites_lasting_effects_end_with_it_and_work_on_it_puffs_dust() {
+        let site = ObjectEffects {
+            entered: vec![
+                (Id::from("construction"), cue("scaffold")),
+                (Id::from(AT_WORK), cue("dust")),
+            ],
+            left: vec![(Id::from("construction"), cue("teardown"))],
+            ..ObjectEffects::default()
+        };
+        let mut effects = effects(HashMap::from([(Id::from("bunker"), site)]));
+        effects.vfx = Arc::new(HashMap::from([(Id::from("scaffold"), vfx(true, None))]));
+        let mut seen = Seen {
+            health: 0.1,
+            ..Seen::default()
+        };
+        let me = Target::Building(0);
+        let second = (1.0 / tgsim::TICK) as u64;
+        // Healed in its first second, left alone for three, then finished.
+        let looks = [
+            (0, 0.1, true),
+            (1, 0.2, true),
+            (second, 0.2, true),
+            (4 * second, 0.2, true),
+            (5 * second, 1.0, false),
+        ];
+        let mut played = Vec::new();
+        for (tick, health, site) in looks {
+            let now = Now {
+                states: if site {
+                    vec!["construction"]
+                } else {
+                    Vec::new()
+                },
+                health,
+                shot: None,
+                weapon: None,
+                target: None,
+                finished: !site,
+                site,
+                held: Vec::new(),
+            };
+            effects.witness(me, "bunker", &mut seen, now, at(tick));
+            let queued = std::mem::take(&mut effects.queued);
+            let cues = queued
+                .iter()
+                .map(|(_, p)| (p.cue.vfx.to_string(), p.cue.stop));
+            played.push(cues.collect::<Vec<_>>());
+        }
+        let s = |v: &str, stop| (v.to_string(), stop);
+        assert_eq!(played[0], [s("scaffold", false)]);
+        assert_eq!(played[2], [s("dust", false)]);
+        assert_eq!(played[3], []);
+        assert_eq!(played[4], [s("scaffold", true), s("teardown", false)]);
+    }
+
+    #[test]
     fn states_entered_and_left() {
         let (entered, left) = changes(&["structure_unpacking"], &["dead"]);
         assert_eq!((entered, left), (vec!["dead"], vec!["structure_unpacking"]));
@@ -1715,6 +1864,7 @@ mod tests {
             aim: 0.65,
             detail: 1.0,
             night: false,
+            at_work: Some(2.5),
             rng: 1,
         }
     }
@@ -1777,11 +1927,8 @@ mod tests {
         weapon_effects.per_target.push(cue("spark"));
         let me = Target::Unit(0);
         let mut seen = Seen {
-            shot: None,
             health: 1.0,
-            states: Vec::new(),
-            finished: false,
-            held: Vec::new(),
+            ..Seen::default()
         };
         let shooting = |weapon: &Weapon, effects: &mut Effects, seen: &mut Seen, tick| {
             let now = Now {
@@ -1791,6 +1938,7 @@ mod tests {
                 weapon: Some(weapon),
                 target: Some(Target::Unit(1)),
                 finished: false,
+                site: false,
                 held: Vec::new(),
             };
             effects.witness(me, "tank", seen, now, at(tick));
@@ -1855,11 +2003,8 @@ mod tests {
         };
         let mut effects = effects(HashMap::from([(Id::from("depot"), depot)]));
         let mut seen = Seen {
-            shot: None,
             health: 1.0,
-            states: Vec::new(),
-            finished: false,
-            held: Vec::new(),
+            ..Seen::default()
         };
         let me = Target::Building(0);
         let states = [
@@ -1877,6 +2022,7 @@ mod tests {
                 shot: None,
                 weapon: None,
                 target: None,
+                site: false,
                 held: Vec::new(),
             };
             effects.witness(me, "depot", &mut seen, now, at(0));
@@ -1894,11 +2040,8 @@ mod tests {
         (effects.properties).insert(radiation.clone(), vec![cue("sparks")]);
         let me = Target::Unit(0);
         let mut seen = Seen {
-            shot: None,
             health: 1.0,
-            states: Vec::new(),
-            finished: false,
-            held: Vec::new(),
+            ..Seen::default()
         };
         let mut witness = |effects: &mut Effects, held| {
             let now = Now {
@@ -1908,6 +2051,7 @@ mod tests {
                 weapon: None,
                 target: None,
                 finished: false,
+                site: false,
                 held,
             };
             effects.witness(me, "tank", &mut seen, now, at(0));
