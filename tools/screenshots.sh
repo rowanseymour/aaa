@@ -180,11 +180,13 @@ build() {
 # The AA game's package in a checkout, which has a different name, and
 # folder, in a ref from before its renames.
 game_in() {
-    if [ -f "$1/crates/aaa/Cargo.toml" ]; then
-        sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' "$1/crates/aaa/Cargo.toml" | head -n 1
-    else
-        echo aaa-game
-    fi
+    for dir in aa aaa; do
+        if [ -f "$1/crates/$dir/Cargo.toml" ]; then
+            sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' "$1/crates/$dir/Cargo.toml" | head -n 1
+            return
+        fi
+    done
+    echo aaa-game
 }
 
 # The editor's package in a checkout, which has a different name in a ref from
