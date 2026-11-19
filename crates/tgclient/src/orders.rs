@@ -33,6 +33,9 @@ pub(crate) struct Orders {
     /// Whether the game has left the match, after which there's nothing
     /// more of it to play.
     quit: bool,
+    /// While orders are gathered to go as one group, whose they are and
+    /// those given so far.
+    gathered: Option<(u32, Vec<Command>)>,
     /// Whether the game has taken that the host ended the match.
     ended_taken: bool,
     /// What the host knows the game's client as.
@@ -136,6 +139,7 @@ impl Orders {
             diverged: 0,
             gone: false,
             quit: false,
+            gathered: None,
             ended_taken: false,
             me,
             left: Vec::new(),
@@ -302,8 +306,33 @@ impl Orders {
         if !self.may(&action) {
             return Err(Refused::NotYours);
         }
-        self.act(action);
+        match (&mut self.gathered, action) {
+            (Some((_, gathered)), Action::Order { command, .. }) => gathered.push(command),
+            (None, action) => self.act(action),
+            (Some(_), _) => unreachable!("only orders are gathered"),
+        }
         Ok(())
+    }
+
+    /// From now until [`Orders::send_gathered`], gathers the orders
+    /// `player` gives rather than asking for each, to ask for them as one
+    /// group.
+    pub(crate) fn gather(&mut self, player: u32) {
+        self.gathered = Some((player, Vec::new()));
+    }
+
+    /// Asks for the orders gathered as one group, or for one alone as it
+    /// is.
+    pub(crate) fn send_gathered(&mut self) {
+        let Some((player, mut orders)) = self.gathered.take() else {
+            return;
+        };
+        let command = match orders.len() {
+            0 => return,
+            1 => orders.remove(0),
+            _ => Command::Group { orders },
+        };
+        self.act(Action::Order { player, command });
     }
 
     /// Asks for `action`, unless the host is known not to carry it out.

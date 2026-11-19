@@ -30,6 +30,7 @@ mod clock;
 mod confirm;
 mod connection;
 mod console;
+mod control_groups;
 mod deliveries;
 mod displays;
 mod drive;
@@ -327,6 +328,8 @@ fn log_refused(refused: Vec<(u32, tgsim::Refused)>) {
 /// Carries out orders as soon as they're given, ticking or not, so that
 /// what shows them sees them taken up.
 fn carry_out(mut sim: ResMut<Sim>, mut orders: ResMut<Orders>) {
+    // Those given this frame as one group go together.
+    orders.send_gathered();
     log_refused(orders.carry_out(&mut sim.0));
 }
 
@@ -932,6 +935,7 @@ pub fn run(program: Program) -> ExitCode {
         .add_message::<messages::Failed>()
         .init_resource::<Selected>()
         .init_resource::<SelectedBuilding>()
+        .init_resource::<control_groups::ControlGroups>()
         .init_resource::<Focus>()
         .init_resource::<ghost::Ghost>()
         .init_resource::<placing::Anchor>()
@@ -1117,6 +1121,7 @@ pub fn run(program: Program) -> ExitCode {
                     special_ops::give,
                 )
                     .chain(),
+                control_groups::recall,
                 choose_formation.run_if(keys_free),
             )
                 .run_if(in_state(Screen::Match))
@@ -1332,6 +1337,7 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
         world.insert_resource(orders);
     }
     world.insert_resource(Sim(sim));
+    world.insert_resource(control_groups::ControlGroups::default());
     world.insert_resource(Raising(raising));
     world.insert_resource(effects);
     world.insert_resource(loaded);
@@ -2614,8 +2620,8 @@ fn command(
     looks: Res<waypoints::Looks>,
     sim: Res<Sim>,
     mut orders: ResMut<Orders>,
-    selected: Res<Selected>,
-    chosen: Res<SelectedBuilding>,
+    (selected, chosen): (Res<Selected>, Res<SelectedBuilding>),
+    groups: Res<control_groups::ControlGroups>,
     time: Res<Time>,
     mut sounds: ResMut<sound::Sounds>,
     mut sent: MessageWriter<waypoints::Sent>,
@@ -2645,6 +2651,10 @@ fn command(
         return;
     }
     acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+    // With Group Behavior on, what each is told goes as one group.
+    if groups.grouping(&selected.0) {
+        orders.gather(player);
+    }
     let mut moving = selected.0.clone();
     if let Some(e) = enemy_at(&sim.0, player, *focus) {
         let (pursuing, rest) = pursue(&sim.0, &mut orders, player, &selected.0, e);
@@ -2845,7 +2855,13 @@ fn choose_formation(
         KeyCode::Digit8,
         KeyCode::Digit9,
     ];
-    let (Some(f), Some(player)) = (KEYS.iter().position(|&k| keys.just_pressed(k)), local.0) else {
+    // The digits alone are the control groups'.
+    let alt = keys.any_pressed([KeyCode::AltLeft, KeyCode::AltRight]);
+    let (Some(f), Some(player), true) = (
+        KEYS.iter().position(|&k| keys.just_pressed(k)),
+        local.0,
+        alt,
+    ) else {
         return;
     };
     for &r in &selected.0 {
