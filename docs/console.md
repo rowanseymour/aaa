@@ -26,7 +26,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `outcome`: says whether the match is over, and how it's come out for each kingdom
 - `missionwon kingdom`: has a kingdom, by name or id, win the match
 - `missionlost kingdom`: has a kingdom, by name or id, lose the match
-- `move organization x y`: sends an organization, by its id, to x y
+- `move organization (x y | other)`: sends an organization, by its id, to x y, or to keep near another organization, by its id
 - `attack organization (x y | enemy)`: sends an organization, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy organization, by its id
 - `guard organization (x y | other)`: posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight
 - `heroes [kingdom]`: lists the heroes a kingdom, by name or id, holds, and what each is doing; without one, the kingdom played

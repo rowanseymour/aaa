@@ -52,13 +52,13 @@ impl crate::Organization {
         matches!(self.mind, Mind::Routing { .. })
     }
 
-    /// Whether it has no formation: routing, or Exhausted and not
-    /// fighting.
+    /// Whether it has no formation: routing, chasing, or Exhausted and
+    /// not fighting.
     pub fn broken(&self) -> bool {
         match self.mind {
             Mind::Routing { .. } => true,
             Mind::Exhausted => self.engaged.is_empty(),
-            _ => false,
+            _ => self.chasing(),
         }
     }
 }
@@ -87,10 +87,12 @@ impl World {
     }
 
     /// The property the organization at `r` holds for what it's doing, as
-    /// the data names it: its morale's, else resting's.
+    /// the data names it: its morale's, else chasing's or resting's.
     pub fn state(&self, r: usize) -> Option<&'static str> {
-        let mind = self.organizations[r].mind.property();
-        mind.or_else(|| self.resting(r).then_some(tgmap::RESTING))
+        let organization = &self.organizations[r];
+        let mind = organization.mind.property();
+        let chasing = organization.chasing().then_some(tgmap::CHASING);
+        (mind.or(chasing)).or_else(|| self.resting(r).then_some(tgmap::RESTING))
     }
 
     /// What bears on the morale of the organization at `r`: the properties

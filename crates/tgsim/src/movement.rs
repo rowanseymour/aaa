@@ -396,7 +396,7 @@ impl World {
         let r = &self.organizations[organization];
         let facing = r.facing;
         let [x, y] = r.position;
-        let broken = r.routing() && r.broken_places.len() == r.units.len();
+        let broken = (r.routing() || r.chasing()) && r.broken_places.len() == r.units.len();
         match broken {
             // Without a formation each keeps where it stood from the
             // leader, turning with nothing.

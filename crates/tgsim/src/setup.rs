@@ -258,6 +258,8 @@ impl World {
             efficiency: organization.efficiency.unwrap_or(1.0),
             struck: None,
             broken_places: Vec::new(),
+            chased: None,
+            follow: None,
         });
         self.set_experience(r, organization.experience);
         self.organizations[r].morale_max = self.maximum_morale(r);

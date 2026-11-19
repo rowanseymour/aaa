@@ -45,7 +45,12 @@ impl World {
                 organization,
                 enemy,
             } => self.may_pursue(player, organization, enemy),
+            // What can be guarded can be moved onto.
             Command::GuardPiece {
+                organization,
+                piece,
+            }
+            | Command::MoveOnto {
                 organization,
                 piece,
             } => self.may_guard(player, organization, piece),
@@ -118,6 +123,10 @@ impl World {
                 organization,
                 piece,
             } => self.order_guard_piece(player, organization, piece)?,
+            Command::MoveOnto {
+                organization,
+                piece,
+            } => self.order_move_onto(player, organization, piece)?,
             Command::Unpack {
                 organization,
                 at,
@@ -451,6 +460,19 @@ impl World {
         Ok(())
     }
 
+    fn order_move_onto(
+        &mut self,
+        player: u32,
+        organization: usize,
+        piece: Piece,
+    ) -> Result<(), Refused> {
+        self.may_guard(player, organization, piece)?;
+        let (to, _) = self.near(organization, piece);
+        self.advance(player, organization, to, Order::Move, None)?;
+        self.organizations[organization].follow = Some(piece);
+        Ok(())
+    }
+
     fn order_guard_piece(
         &mut self,
         player: u32,
@@ -560,6 +582,7 @@ fn steered(command: &Command) -> Option<usize> {
         | Command::Pursue { organization, .. }
         | Command::Guard { organization, .. }
         | Command::GuardPiece { organization, .. }
+        | Command::MoveOnto { organization, .. }
         | Command::Stop { organization }
         | Command::Unpack { organization, .. }
         | Command::Disband { organization } => Some(organization),
