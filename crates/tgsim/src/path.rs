@@ -157,6 +157,19 @@ fn smooth(
 /// Whether every tile the straight line from `a` to `b` crosses is
 /// passable, apart from the one `a` is in.
 pub(crate) fn clear(pathing: &Pathing, domain: Domain, a: [f32; 2], b: [f32; 2]) -> bool {
+    along(a, b, |tile| pathing.passable(tile, domain))
+}
+
+/// Whether the straight line from `a` to `b` crosses no tile whose ground
+/// is closed to a mover on `domain`, whatever stands on it, apart from the
+/// one `a` is in.
+pub(crate) fn open(pathing: &Pathing, domain: Domain, a: [f32; 2], b: [f32; 2]) -> bool {
+    along(a, b, |tile| pathing.crossable(tile, domain))
+}
+
+/// Whether every tile the straight line from `a` to `b` crosses is `fit`,
+/// apart from the one `a` is in.
+fn along(a: [f32; 2], b: [f32; 2], fit: impl Fn(Tile) -> bool) -> bool {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     // A tenth of a tile at a time, so corners aren't cut by much.
     let steps = ((libm::hypotf(dx, dy) / CELL_SIZE) * 10.0).ceil().max(1.0) as usize;
@@ -164,7 +177,7 @@ pub(crate) fn clear(pathing: &Pathing, domain: Domain, a: [f32; 2], b: [f32; 2])
     (1..=steps).all(|s| {
         let t = s as f32 / steps as f32;
         let tile = Tile::at([a[0] + dx * t, a[1] + dy * t]);
-        tile == first || pathing.passable(tile, domain)
+        tile == first || fit(tile)
     })
 }
 

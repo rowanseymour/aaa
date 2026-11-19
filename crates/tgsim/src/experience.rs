@@ -200,6 +200,12 @@ impl World {
         Some(&self.levels(r)?.get(level)?.property)
     }
 
+    /// Which of its levels the organization at `r` has reached, counting
+    /// from 0, if it earns experience at all.
+    pub fn level_reached(&self, r: usize) -> Option<usize> {
+        self.levels(r).map(|_| self.organizations[r].level)
+    }
+
     /// The experience the organization at `r`'s next level takes, if it has
     /// one to go.
     pub fn next_level(&self, r: usize) -> Option<f32> {

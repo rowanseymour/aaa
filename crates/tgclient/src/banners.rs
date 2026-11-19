@@ -1,8 +1,8 @@
 //! The banner over each organization: a plate in its owner's colour showing
 //! what the organization is and the badge of the HQ it's attached to, with
 //! crossed rifles behind it while it's engaged, brackets around it while
-//! the cursor is on it, and a border while it's out of supply or its side
-//! can't pay its upkeep.
+//! the cursor is on it, a border while it's out of supply or its side
+//! can't pay its upkeep, a mark while it's entrenched and its rank.
 
 use std::collections::{HashMap, HashSet};
 
@@ -34,9 +34,14 @@ pub struct Banner {
     focus: Entity,
     out_of_supply: Entity,
     shortage: Entity,
+    entrenched: Entity,
+    rank: Entity,
     frame: Entity,
     badge: Entity,
     wears: Option<Worn>,
+    /// The experience level its rank shows, once shown: none for one that
+    /// earns no experience.
+    ranked: Option<Option<usize>>,
     /// The side whose faction's banner it shows, drawn again on a change.
     owner: u32,
 }
@@ -426,6 +431,8 @@ pub fn add_banners(
         let focus = hidden(&banners.focus);
         let out_of_supply = hidden(&looks.out_of_supply);
         let shortage = hidden(&looks.shortage);
+        let entrenched = hidden(&looks.entrenched);
+        let rank = hidden(&None);
         // Over the frame's lower edge.
         let badge = hidden(&None);
         let plate = layer(&looks.plate, Color::srgb(red, green, blue));
@@ -442,6 +449,8 @@ pub fn add_banners(
             frame,
             out_of_supply,
             shortage,
+            entrenched,
+            rank,
             badge,
             focus,
         ]);
@@ -452,9 +461,12 @@ pub fn add_banners(
             focus,
             out_of_supply,
             shortage,
+            entrenched,
+            rank,
             frame,
             badge,
             wears: None,
+            ranked: None,
             owner: organization.owner,
         });
     }
@@ -545,6 +557,9 @@ pub fn show_banners(
         if let Ok((_, mut v)) = layers.get_mut(banner.out_of_supply) {
             v.set_if_neq(show(sim.0.lacks_supply(banner.organization)));
         }
+        if let Ok((_, mut v)) = layers.get_mut(banner.entrenched) {
+            v.set_if_neq(show(sim.0.entrenched(banner.organization)));
+        }
         if let Ok((_, mut v)) = layers.get_mut(banner.shortage) {
             let owner = organization.owner;
             let short = *(short.entry(owner)).or_insert_with(|| sim.0.short(owner).is_some());
@@ -617,12 +632,32 @@ pub fn badge_banners(
                 (banner.engaged, looks.engaged, Color::WHITE),
                 (banner.out_of_supply, looks.out_of_supply, Color::WHITE),
                 (banner.shortage, looks.shortage, Color::WHITE),
+                (banner.entrenched, looks.entrenched, Color::WHITE),
             ];
             for (layer, image, colour) in drawn {
                 if let Ok((mut node, _)) = layers.get_mut(layer) {
                     node.color = if image.is_some() { colour } else { Color::NONE };
                     node.image = image.unwrap_or_default();
                 }
+            }
+            banner.ranked = None;
+        }
+        let ranked = Some(sim.0.level_reached(banner.organization));
+        if banner.ranked != ranked {
+            banner.ranked = ranked;
+            let (banners, assets) = (&mut *images.0, &mut *images.1);
+            let flies = (
+                organization.template.as_str(),
+                leaders.banner(organization.owner),
+            );
+            let image = ranked
+                .flatten()
+                .and_then(|level| banners.rank(&loaded.game, assets, flies, level));
+            if let Ok((mut node, mut visibility)) = layers.get_mut(banner.rank) {
+                *visibility = show(image.is_some());
+                // Made with no image, it starts clear.
+                node.color = Color::WHITE;
+                node.image = image.unwrap_or_default();
             }
         }
         let wears = wears(&sim.0, &hqs, banner.organization).map(|hq| (hq, badges.side(hq)));
@@ -642,6 +677,8 @@ pub fn badge_banners(
             true => Visibility::Inherited,
             false => Visibility::Hidden,
         };
+        // Made with no image, it starts clear.
+        image.color = Color::WHITE;
         image.image = badge.unwrap_or_default();
     }
 }
@@ -771,9 +808,12 @@ mod tests {
             focus: none,
             out_of_supply: none,
             shortage: none,
+            entrenched: none,
+            rank: none,
             frame: none,
             badge: none,
             wears: None,
+            ranked: None,
             owner: 0,
         };
         let hq = |building: usize| HqBanner {

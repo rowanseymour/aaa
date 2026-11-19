@@ -3,7 +3,8 @@
 
 use std::f32::consts::FRAC_PI_4;
 
-use tgmap::{Id, Obstacle, Tile};
+use tgmap::pathing::CELL_SIZE;
+use tgmap::{Id, Obstacle, Shape, Tile};
 
 use crate::value::MULTIPLY_FLOOR;
 
@@ -444,15 +445,43 @@ impl World {
     /// entrenchment. It faces `facing` until it has a route to face along,
     /// and turns to it once there if `ordered`.
     fn set_off(&mut self, organization: usize, target: [f32; 2], facing: [f32; 2], ordered: bool) {
+        let far = !within(
+            self.organizations[organization].position,
+            target,
+            SETTING_OFF,
+        );
+        let leader = self
+            .pacer(organization)
+            .map(|p| self.organizations[organization].units[p]);
+        if far && leader.is_some_and(|l| self.no_route(l, target)) {
+            self.stay(organization, ordered.then_some(facing));
+            return;
+        }
         let r = &mut self.organizations[organization];
         r.settled = None;
-        if !within(r.position, target, SETTING_OFF) {
+        if far {
             r.travelling = true;
             r.entrenched = None;
         }
         r.position = target;
         r.facing = facing;
         r.turn_to = ordered.then_some(facing);
+        self.take_places(organization);
+    }
+
+    /// Has the organization at `organization`, whose move found no route,
+    /// stay as it was, its move dropped: it rests where it stands, turned
+    /// to the `facing` the move was given, if any.
+    fn stay(&mut self, organization: usize, facing: Option<[f32; 2]>) {
+        let here = self.standing_point(organization);
+        let r = &mut self.organizations[organization];
+        r.position = here;
+        r.travelling = false;
+        r.route_end = None;
+        r.turn_to = None;
+        if let Some(facing) = facing {
+            r.facing = facing;
+        }
         self.take_places(organization);
     }
 
@@ -487,7 +516,9 @@ impl World {
             .filter(|_| r.travelling);
         let mut places = self.formation_places(organization);
         let lead = leader.and_then(|l| places.iter().find(|(u, _)| *u == l).copied());
-        let route = lead.map_or_else(Vec::new, |(l, place)| self.plan(l, place, exact));
+        let route = lead
+            .and_then(|(l, place)| self.plan(l, place, exact))
+            .unwrap_or_default();
         // A route that turns ends facing along its last leg, its places
         // turned with it. The leader's own place is the regiment's
         // position, whichever way it faces.
@@ -796,7 +827,11 @@ impl World {
 
     /// Sends a unit to stand at `place` facing `facing`.
     pub(crate) fn take_place(&mut self, u: usize, place: [f32; 2], facing: [f32; 2], exact: bool) {
-        let way = self.plan(u, place, exact);
+        let Some(way) = self.plan(u, place, exact) else {
+            // One that finds no route stops where it is, as it faces.
+            self.units[u].halt();
+            return;
+        };
         let unit = &mut self.units[u];
         unit.take(way, exact);
         unit.closing = None;
@@ -810,12 +845,14 @@ impl World {
     /// The way a unit takes to stop at `to`, last waypoint first, `exact`
     /// for a move that has to end right there. It goes straight at what's
     /// near enough on such a move, and turns at once to what's ahead of it
-    /// but nearer than it could turn onto; otherwise it finds a way.
-    pub(crate) fn plan(&mut self, u: usize, to: [f32; 2], exact: bool) -> Vec<[f32; 2]> {
+    /// but nearer than it could turn onto; otherwise it finds a way to
+    /// where it [aims](Self::aimed_at).
+    /// None where it [finds no route](Self::no_route).
+    pub(crate) fn plan(&mut self, u: usize, to: [f32; 2], exact: bool) -> Option<Vec<[f32; 2]>> {
         let unit = &self.units[u];
         let off = [to[0] - unit.position[0], to[1] - unit.position[1]];
         if exact && within_strictly(unit.position, to, STRAIGHT_REACH) {
-            return vec![to];
+            return Some(vec![to]);
         }
         let [fx, fy] = unit.facing;
         let ahead = fx * off[0] + fy * off[1] >= 0.0;
@@ -825,9 +862,10 @@ impl World {
             if let Some(facing) = normalised(off) {
                 self.units[u].facing = facing;
             }
-            return vec![to];
+            return Some(vec![to]);
         }
-        self.way(u, to)
+        let to = self.routed(u, to)?;
+        Some(self.way(u, to))
     }
 
     /// A unit's way to `to`, last waypoint first. It passes through the
@@ -859,6 +897,86 @@ impl World {
         };
         way.reverse();
         way
+    }
+
+    /// Where the unit at `u` sent to `to` aims its route: the first spot on
+    /// the line back from `to` towards it, a tile at a time, that it could
+    /// stand on, or, where that spot falls on a thing, the spot a tile out
+    /// from the thing along the thing's facing, on the unit's side. None
+    /// where it would get back to where it stands first.
+    fn aimed_at(&self, u: usize, to: [f32; 2]) -> Option<[f32; 2]> {
+        let unit = &self.units[u];
+        let (from, domain) = (unit.position, unit.domain);
+        let home = Tile::at(from);
+        // Where it was sent may be where it stands, or beside it; a spot
+        // pulled back to its own tile is where it stands.
+        let stands = |at: [f32; 2], pulled: bool| {
+            self.pathing.passable(Tile::at(at), domain) && !(pulled && Tile::at(at) == home)
+        };
+        let off = [to[0] - from[0], to[1] - from[1]];
+        let length = libm::hypotf(off[0], off[1]);
+        if stands(to, false) {
+            return Some(to);
+        }
+        let mut back = 0.0;
+        while back < length {
+            let t = 1.0 - back / length;
+            let spot = [from[0] + off[0] * t, from[1] + off[1] * t];
+            let pulled = back > 0.0;
+            if pulled && stands(spot, true) {
+                return Some(spot);
+            }
+            // Only a thing keeps it off ground of its own kind.
+            let held_off = self.pathing.crossable(Tile::at(spot), domain);
+            let beside = held_off.then(|| self.beside_blocker(spot, from)).flatten();
+            if let Some(beside) = beside.filter(|&b| stands(b, true)) {
+                return Some(beside);
+            }
+            back += CELL_SIZE;
+        }
+        None
+    }
+
+    /// The spot a tile out along its facing from the thing blocking the
+    /// tile under `spot`, on `side`'s side of it, if a thing does: the
+    /// middle of the row of tiles along its edge.
+    fn beside_blocker(&self, spot: [f32; 2], side: [f32; 2]) -> Option<[f32; 2]> {
+        let tile = Tile::at(spot);
+        let buildings = self.buildings.iter().filter(|b| !b.gone());
+        let mut obstacles = buildings
+            .filter_map(|b| b.obstacle.as_ref())
+            .chain(&self.scenery);
+        let o = obstacles.find(|o| o.covers(tile))?;
+        let [across, _] = tgmap::to_local(o.position, o.facing, spot);
+        let [_, ahead] = tgmap::to_local(o.position, o.facing, side);
+        let half = match o.shape {
+            Shape::Point => 0.0,
+            Shape::Circle { radius } => radius,
+            Shape::Rect { height, .. } => height / 2.0,
+        };
+        let along = (half + CELL_SIZE / 2.0).copysign(ahead);
+        Some(tgmap::from_local(o.position, o.facing, [across, along]))
+    }
+
+    /// Whether the unit at `u` finds no route to `to`, so doesn't set off.
+    pub(crate) fn no_route(&self, u: usize, to: [f32; 2]) -> bool {
+        self.routed(u, to).is_none()
+    }
+
+    /// Where the unit at `u` sent to `to` routes to: where it
+    /// [aims](Self::aimed_at), unless there's no spot to aim at or, where
+    /// the rules divide the map into areas, none of its own kind of ground
+    /// joins it to that spot and a straight line there crosses some closed
+    /// to it. One standing on ground closed to it has no area to judge by.
+    fn routed(&self, u: usize, to: [f32; 2]) -> Option<[f32; 2]> {
+        let aimed = self.aimed_at(u, to)?;
+        let unit = &self.units[u];
+        let (from, domain) = (unit.position, unit.domain);
+        let cut_off = self.rules.terrain_rules.areas
+            && self.pathing.crossable(Tile::at(from), domain)
+            && !self.pathing.joined(domain, from, aimed)
+            && !path::open(&self.pathing, domain, from, aimed);
+        (!cut_off).then_some(aimed)
     }
 
     /// What the member at `u` of the organization at `r`, heading for its
@@ -1010,7 +1128,7 @@ impl World {
                 let (exact, ways) = (unit.exact, unit.ways);
                 let again = match within(unit.position, goal, reach) || ways >= WAYS_TRIED {
                     true => Vec::new(),
-                    false => self.plan(u, goal, exact),
+                    false => self.plan(u, goal, exact).unwrap_or_default(),
                 };
                 let unit = &mut self.units[u];
                 match again.is_empty() {

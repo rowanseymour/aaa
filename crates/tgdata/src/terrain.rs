@@ -31,6 +31,9 @@ pub struct TerrainRules {
     pub unlimited: Vec<Id>,
     /// The templates with such a property, shared or their own.
     pub free: HashSet<Id>,
+    /// Whether a move fails at once when no stretch of the mover's own
+    /// kind of ground joins it to where it's going.
+    pub areas: bool,
 }
 
 impl Default for TerrainRules {
@@ -40,6 +43,7 @@ impl Default for TerrainRules {
             effects: HashMap::new(),
             unlimited: Vec::new(),
             free: HashSet::new(),
+            areas: true,
         }
     }
 }
@@ -70,7 +74,9 @@ fn effect(p: &defs::Property) -> TerrainEffect {
 
 impl GameData {
     pub fn terrain_rules(&self) -> TerrainRules {
-        let slowest = (self.svars().iter()).find_map(|v| v.terrain_minimum_move_speed);
+        let svars = self.svars();
+        let slowest = svars.iter().find_map(|v| v.terrain_minimum_move_speed);
+        let areas = svars.iter().find_map(|v| v.use_region_path_planner);
         let definitions = self.definitions();
         let shared = definitions.properties.iter();
         let effects = shared.map(|(id, p)| (id.clone(), effect(p))).collect();
@@ -92,6 +98,7 @@ impl GameData {
             effects,
             unlimited,
             free: free.into_keys().collect(),
+            areas: areas.unwrap_or(true),
         }
     }
 }

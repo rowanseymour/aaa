@@ -244,6 +244,63 @@ mod tests {
     }
 
     #[test]
+    fn a_move_that_finds_no_route_leaves_it_be() {
+        let mut w = trench();
+        // Water from 20 to 22 the length of the map.
+        for y in 0..w.pathing.side() as i32 {
+            w.pathing.set(tgmap::Tile::new(10, y), tgmap::Domain::Naval);
+        }
+        run(&mut w, 31.0);
+        let (here, facing) = (w.organizations[0].position, w.organizations[0].facing);
+        // Across the water there's no route: it stays as it was, its
+        // attack dropped.
+        let across = Command::Attack {
+            organization: 0,
+            to: [30.0, 10.0],
+        };
+        order(&mut w, across);
+        run(&mut w, 2.0);
+        assert!(w.entrenched(0));
+        assert!(!w.underway(0));
+        assert_eq!(w.organizations[0].position, here);
+        assert_eq!(w.organizations[0].facing, facing);
+        assert_eq!(w.organizations[0].order, crate::Order::Move);
+        // One sent with a facing turns to it all the same.
+        w.send(0, [30.0, 10.0], [0.0, 1.0]);
+        assert_eq!(w.organizations[0].facing, [0.0, 1.0]);
+        assert!(w.entrenched(0));
+        // Into the water it heads for the near shore, which ends it.
+        order(
+            &mut w,
+            Command::Move {
+                organization: 0,
+                to: [21.0, 10.0],
+            },
+        );
+        w.tick();
+        assert!(!w.entrenched(0));
+        run(&mut w, 10.0);
+        let at = w.units[0].position;
+        assert!((17.0..20.0).contains(&at[0]), "{at:?}");
+        // From the shore itself the nearest spot short of the water is
+        // where it stands, so there's no route.
+        let mut w = trench();
+        for y in 0..w.pathing.side() as i32 {
+            w.pathing.set(tgmap::Tile::new(10, y), tgmap::Domain::Naval);
+        }
+        w.units[0].position = [19.5, 10.0];
+        w.organizations[0].position = [19.5, 10.0];
+        run(&mut w, 31.0);
+        let wade = Command::Move {
+            organization: 0,
+            to: [21.0, 10.0],
+        };
+        order(&mut w, wade);
+        w.tick();
+        assert!(w.entrenched(0));
+    }
+
+    #[test]
     fn a_fight_doesnt_end_it_whatever_the_formation() {
         let mut w = skirmish();
         w.rules = trench().rules;

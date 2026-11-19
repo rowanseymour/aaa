@@ -1293,6 +1293,8 @@ pub struct Glyph {
 /// The game's tuning settings.
 #[derive(Debug, Clone, Deserialize)]
 pub struct SVars {
+    #[serde(rename = "TAIUseRegionPathPlanner")]
+    pub use_region_path_planner: Option<bool>,
     /// The experience a side with a faction gains each second.
     #[serde(rename = "ExperienceFactionGainPeriodic")]
     pub experience_faction_gain_periodic: Option<f32>,
