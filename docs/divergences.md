@@ -32,6 +32,9 @@ where the original stretches them to fill the screen. See
   original, so a wider window sees more of the map to each side rather than stretching
   it. At the same zoom this reads as being zoomed out further. See
   [camera.rs](../crates/tgrender/src/camera.rs).
+- **Fidgets.** Idle men always fidget. The original lets the `CharacterFidget` game
+  variable turn them off, which the stock data never does. See
+  [stances.rs](../crates/tgsim/src/stances.rs).
 
 ## New options
 
