@@ -7,6 +7,7 @@
 
 use std::collections::HashMap;
 
+use bevy::camera::Viewport;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
@@ -16,19 +17,31 @@ use tgrender::textures;
 use bevy::picking::hover::Hovered;
 use bevy::render::render_resource::TextureFormat;
 use bevy::ui_widgets::Button;
+use serde::{Deserialize, Serialize};
 
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
 use crate::intent::Asks;
 use crate::{Loaded, Local, Screen, Sim};
 
-/// Which interface a match is played with.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug)]
+/// Which interface matches are played with, as chosen in the options.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Hud {
-    /// This project's own.
+    /// This project's own, over a view as wide as the window.
     #[default]
-    Ours,
-    /// The original's, from its layouts.
+    Modern,
+    /// The original's, from its layouts, over a view of their 4:3 shape.
     Original,
+}
+
+/// The [`Hud`] the match under way is played with: one chosen during it
+/// waits for the next.
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug)]
+pub struct InMatch(pub Hud);
+
+/// Has the match about to be played take the [`Hud`] chosen.
+pub fn choose(mut commands: Commands, hud: Res<Hud>) {
+    commands.insert_resource(InMatch(*hud));
 }
 
 /// The parts of our interface the original's takes the place of.
@@ -36,8 +49,94 @@ pub enum Hud {
 pub struct Ours;
 
 /// Whether the match is played with the original's interface.
-pub fn original(hud: Res<Hud>) -> bool {
-    *hud == Hud::Original
+pub fn original(hud: Res<InMatch>) -> bool {
+    hud.0 == Hud::Original
+}
+
+/// Spawns the camera the interface is drawn by over the whole window, as
+/// that drawn by the map's camera would be cut to its view by [`fit_view`].
+pub fn spawn_overlay(mut commands: Commands) {
+    commands.spawn((
+        Camera2d,
+        Camera {
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        Overlay,
+        DespawnOnExit(Screen::Match),
+    ));
+}
+
+/// The camera [`spawn_overlay`] spawns.
+#[derive(Component)]
+pub struct Overlay;
+
+/// Has the [`Overlay`] take the map camera's MSAA: drawing over what that
+/// camera drew needs the same samples to each pixel, as with others the
+/// two draw to different textures and the overlay's shows what's stale.
+pub fn match_msaa(
+    map: Query<&Msaa, With<tgrender::camera::RtsCamera>>,
+    mut overlays: Query<&mut Msaa, (With<Overlay>, Without<tgrender::camera::RtsCamera>)>,
+) {
+    let Ok(&msaa) = map.single() else {
+        return;
+    };
+    for mut overlay in &mut overlays {
+        overlay.set_if_neq(msaa);
+    }
+}
+
+/// The layouts' screen, which [`fit_view`] fits the map's view to.
+#[derive(Component)]
+pub struct Frame;
+
+/// Fits the map's view, and the [`Frame`] over it, to the largest
+/// rectangle of the layouts' shape centred in what's drawn to, black
+/// beside it: the panels' pictures only line up at that shape, and the map
+/// shows within them and nowhere else.
+pub fn fit_view(
+    mut cameras: Query<&mut Camera, With<tgrender::camera::RtsCamera>>,
+    mut frames: Query<&mut Node, With<Frame>>,
+    ui: Res<UiScale>,
+) {
+    for mut camera in &mut cameras {
+        let (Some(size), Some(scale)) = (
+            camera.physical_target_size(),
+            camera.target_scaling_factor(),
+        ) else {
+            continue;
+        };
+        let (at, size) = fit(size);
+        let now = (camera.viewport.as_ref()).map(|v| (v.physical_position, v.physical_size));
+        if now != Some((at, size)) {
+            camera.viewport = Some(Viewport {
+                physical_position: at,
+                physical_size: size,
+                ..default()
+            });
+        }
+        for mut node in &mut frames {
+            let mut placed = node.clone();
+            crate::place_on_map(
+                &mut placed,
+                at.as_vec2() / scale,
+                size.as_vec2() / scale,
+                &ui,
+            );
+            node.set_if_neq(placed);
+        }
+    }
+}
+
+/// The corner and size of the largest rectangle of the layouts' shape
+/// centred in `size`.
+fn fit(size: UVec2) -> (UVec2, UVec2) {
+    let shape = SCREEN[0] / SCREEN[1];
+    let width = ((size.y as f32 * shape).round() as u32).min(size.x);
+    let height = ((width as f32 / shape).round() as u32).min(size.y);
+    let fitted = UVec2::new(width, height);
+    ((size - fitted) / 2, fitted)
 }
 
 /// The panel the parts of the screen's lower edge are placed within.
@@ -213,17 +312,16 @@ pub fn spawn(
     commands.insert_resource(greyed);
     let buttons = grid.map(|(area, button)| grid_buttons(area, button, &mut drawer.pictures));
     let (drawn, pressables) = (drawer.drawn, drawer.pressables);
-    // The layouts' screen at its own shape, as tall as the window and
-    // centred in it: its pictures only line up at that shape, and the
-    // original stretches it over a wider window instead.
-    let screen = commands
+    // Where the original stretches it over a wider window instead.
+    commands
         .spawn((
             Node {
-                height: Val::Percent(100.0),
-                aspect_ratio: Some(SCREEN[0] / SCREEN[1]),
+                position_type: PositionType::Absolute,
                 ..default()
             },
+            Frame,
             Pickable::IGNORE,
+            DespawnOnExit(Screen::Match),
         ))
         .with_children(|screen| {
             for (chain, image) in drawn {
@@ -241,22 +339,7 @@ pub fn spawn(
             for button in pressables {
                 button.spawn(screen, &bindings);
             }
-        })
-        .id();
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                width: Val::Percent(100.0),
-                height: Val::Percent(100.0),
-                justify_content: JustifyContent::Center,
-                align_items: AlignItems::Center,
-                ..default()
-            },
-            Pickable::IGNORE,
-            DespawnOnExit(Screen::Match),
-        ))
-        .add_child(screen);
+        });
 }
 
 /// Where on the layouts' screen the steps from it lead.
@@ -843,6 +926,14 @@ mod tests {
     use tgdata::widgets::Bounds;
 
     use super::*;
+
+    #[test]
+    fn the_view_fits_the_layouts_shape_whichever_way_the_window_is_out() {
+        let fit = |w, h| fit(UVec2::new(w, h));
+        assert_eq!(fit(1280, 720), (UVec2::new(160, 0), UVec2::new(960, 720)));
+        assert_eq!(fit(1280, 1024), (UVec2::new(0, 32), UVec2::new(1280, 960)));
+        assert_eq!(fit(1024, 768), (UVec2::ZERO, UVec2::new(1024, 768)));
+    }
 
     fn element(when: &[&str]) -> ViewElement {
         ViewElement {

@@ -337,7 +337,7 @@ pub fn show_hq_banners(
         let Some(p) = camera
             .world_to_viewport(&global, over)
             .ok()
-            .filter(|_| seen)
+            .filter(|&p| seen && crate::in_view(camera, p))
         else {
             *visibility = Visibility::Hidden;
             continue;
@@ -521,7 +521,8 @@ pub fn show_banners(
         let seen = fog.shows_organization(&sim.0, banner.organization)
             || dropping && fog.at(organization.position) == tgsim::Seen::Visible;
         let at = at.filter(|_| seen);
-        let Some(p) = at.and_then(|p| camera.world_to_viewport(&global, p).ok()) else {
+        let drawn_at = |p| camera.world_to_viewport(&global, p).ok();
+        let Some(p) = at.and_then(drawn_at).filter(|&p| crate::in_view(camera, p)) else {
             *visibility = Visibility::Hidden;
             continue;
         };

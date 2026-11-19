@@ -22,10 +22,12 @@ use tgrender::camera::RtsCamera;
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
 use crate::ui::{
-    Card, Chosen, Dropdown, Font, Ink, Surface, button, called, card, label, layer, padded, slider,
-    slug, switch, text, toggle,
+    Card, Chosen, Dropdown, Font, Hint, Ink, Surface, button, called, card, label, layer, padded,
+    slider, slug, switch, text, toggle,
 };
+use crate::widgets::Hud;
 use crate::{Nickname, Screen, UI_SCALES, UiScaleSetting, menu};
+use bevy::ecs::component::Mutable;
 
 const HOTKEYS: &str = "options_dialog_Child_text_6";
 const BORDER: &str = "options_dialog_Child_text_15";
@@ -64,11 +66,14 @@ pub struct Options {
     border_label: String,
     /// What the game calls the choice of the window's size.
     resolution_label: String,
-    /// What the choices of [`Display`], [`AntiAliasing`] and the
-    /// interface's scale are called, which the game has no words for.
+    /// What the choices of [`Display`], [`AntiAliasing`], the interface's
+    /// scale and [`Hud`] are called, which the game has no words for, and
+    /// what the last says of when it applies.
     display_label: String,
     anti_aliasing_label: String,
     ui_scale_label: String,
+    hud_label: String,
+    hud_hint: String,
     /// What the game calls each tab, by [`Tab`], and the groups of options
     /// in them.
     game_tab: String,
@@ -126,6 +131,8 @@ impl Options {
             display_label: "Display".into(),
             anti_aliasing_label: "Anti-aliasing".into(),
             ui_scale_label: "Interface Scale".into(),
+            hud_label: "Interface".into(),
+            hud_hint: "Takes effect from the next match.".into(),
             game_tab: tab(GAME_TAB, "Gameplay"),
             video_tab: tab(VIDEO_TAB, "Video"),
             audio_tab: tab(AUDIO_TAB, "Audio"),
@@ -165,6 +172,7 @@ enum Open {
     Resolution,
     AntiAliasing,
     UiScale,
+    Hud,
 }
 
 /// The options shown: those of the game, of how it's drawn, or of how it
@@ -336,6 +344,23 @@ impl Listed for AntiAliasing {
 #[derive(Component)]
 struct AntiAliasingHolder;
 
+impl Listed for Hud {
+    const ALL: &'static [Self] = &[Hud::Modern, Hud::Original];
+    const LIST: Open = Open::Hud;
+    const ID: &'static str = "options.hud";
+
+    fn name(self) -> &'static str {
+        match self {
+            Hud::Modern => "Modern",
+            Hud::Original => "Original",
+        }
+    }
+}
+
+/// Where the choice of [`Hud`] goes.
+#[derive(Component)]
+struct HudHolder;
+
 /// Where the choice of the interface's scale goes.
 #[derive(Component)]
 struct UiScaleHolder;
@@ -472,8 +497,9 @@ impl Plugin for OptionsPlugin {
                     show_hotkeys,
                     show_display,
                     show_resolution,
-                    show_anti_aliasing,
+                    show_listed::<AntiAliasing, AntiAliasingHolder>,
                     show_ui_scale,
+                    show_listed::<Hud, HudHolder>,
                     mark_chosen,
                     show_border,
                     type_nickname,
@@ -669,6 +695,13 @@ fn show_body(
             choice(&mut commands, basic, aa, AntiAliasingHolder);
             let scale = &options.ui_scale_label;
             choice(&mut commands, basic, scale, UiScaleHolder);
+            // A match under way keeps the interface it started with.
+            let hud = (
+                HudHolder,
+                Hint(options.hud_hint.clone()),
+                Hovered::default(),
+            );
+            choice(&mut commands, basic, &options.hud_label, hud);
         }
         Tab::Audio => {
             let volume = section(&mut commands, body, &options.volume_title);
@@ -993,17 +1026,19 @@ fn choose_resolution(
 }
 
 /// Shows the anti-aliasing in use, and the others while picking.
-fn show_anti_aliasing(
+/// Shows the `T` chosen in the `H` that holds it, and the others while
+/// picking.
+fn show_listed<T: Listed + Resource<Mutability = Mutable>, H: Component>(
     mut commands: Commands,
-    chosen: Res<AntiAliasing>,
+    chosen: Res<T>,
     open: Res<Open>,
-    holder: Single<(Entity, Ref<AntiAliasingHolder>)>,
+    holder: Single<(Entity, Ref<H>)>,
 ) {
     let (holder, added) = *holder;
     if !chosen.is_changed() && !open.is_changed() && !added.is_added() {
         return;
     }
-    let choices = AntiAliasing::ALL.iter().copied();
+    let choices = T::ALL.iter().copied();
     let current = Some(*chosen);
     listed(
         &mut commands,
@@ -1011,14 +1046,14 @@ fn show_anti_aliasing(
         *open,
         current,
         choices,
-        choose_anti_aliasing,
+        choose_listed::<T>,
     );
 }
 
-fn choose_anti_aliasing(
+fn choose_listed<T: Listed + Resource<Mutability = Mutable>>(
     activate: On<Activate>,
-    choices: Query<&Pick<AntiAliasing>>,
-    mut chosen: ResMut<AntiAliasing>,
+    choices: Query<&Pick<T>>,
+    mut chosen: ResMut<T>,
     mut open: ResMut<Open>,
 ) {
     if let Ok(choice) = choices.get(activate.entity) {
@@ -1106,6 +1141,7 @@ type Choice<'a> = (
     Option<&'a ResolutionChoice>,
     Option<&'a Pick<AntiAliasing>>,
     Option<&'a UiScaleChoice>,
+    Option<&'a Pick<Hud>>,
 );
 
 /// The buttons the options choose with.
@@ -1116,6 +1152,7 @@ type Choosing = Or<(
     With<ResolutionChoice>,
     With<Pick<AntiAliasing>>,
     With<UiScaleChoice>,
+    With<Pick<Hud>>,
 )>;
 
 fn mark_chosen(
@@ -1123,19 +1160,21 @@ fn mark_chosen(
     tab: Res<Tab>,
     anti_aliasing: Res<AntiAliasing>,
     ui_scale: Res<UiScaleSetting>,
+    hud: Res<Hud>,
     window: Query<&Window, With<PrimaryWindow>>,
     mut buttons: Query<Choice, Choosing>,
 ) {
     let window = window.single().ok();
     let size = window.map(size_of);
     let display = window.map(|w| Display::of(w.mode));
-    for (mut chosen, shown, hotkeys, mode, resolution, aa, scale) in &mut buttons {
+    for (mut chosen, shown, hotkeys, mode, resolution, aa, scale, interface) in &mut buttons {
         let now = shown.is_some_and(|t| t.0 == *tab)
             || hotkeys.is_some_and(|h| options.hotkeys.as_ref() == Some(&h.0))
             || mode.is_some_and(|m| display == Some(m.0))
             || resolution.is_some_and(|r| size == Some(r.0))
             || aa.is_some_and(|a| *anti_aliasing == a.0)
-            || scale.is_some_and(|s| ui_scale.0 == s.0);
+            || scale.is_some_and(|s| ui_scale.0 == s.0)
+            || interface.is_some_and(|h| *hud == h.0);
         chosen.set_if_neq(Chosen(now));
     }
 }
@@ -1279,6 +1318,7 @@ mod tests {
         .insert_resource(Sounds::of(Default::default(), &[]))
         .init_resource::<Border>()
         .insert_resource(UiScaleSetting(1.0))
+        .init_resource::<Hud>()
         .add_message::<WindowResized>();
         app.update();
         app
@@ -1423,6 +1463,23 @@ mod tests {
         activate::<Opener>(&mut app, |o| o.0 == Open::AntiAliasing);
         app.update();
         assert_eq!(marked::<AntiAliasing>(&mut app), vec![AntiAliasing::Fxaa]);
+    }
+
+    #[test]
+    fn an_interface_chosen_is_set_and_marked() {
+        let mut app = app();
+        activate::<TabButton>(&mut app, |t| t.0 == Tab::Video);
+        activate::<Opener>(&mut app, |o| o.0 == Open::Hud);
+        activate::<Pick<Hud>>(&mut app, |h| h.0 == Hud::Original);
+        assert_eq!(*app.world().resource::<Hud>(), Hud::Original);
+        activate::<Opener>(&mut app, |o| o.0 == Open::Hud);
+        app.update();
+        let world = app.world_mut();
+        let mut choices = world.query::<(&Pick<Hud>, &Chosen)>();
+        let marked: Vec<_> = (choices.iter(world).filter(|(_, c)| c.0))
+            .map(|(h, _)| h.0)
+            .collect();
+        assert_eq!(marked, vec![Hud::Original]);
     }
 
     #[test]
