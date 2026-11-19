@@ -110,6 +110,8 @@ pub struct Rules {
     /// What those operations drop, by template, each standing anywhere and
     /// owned by nobody.
     pub drops: HashMap<Id, tgmap::Building>,
+    /// What each template that can be built puts up, as its site starts.
+    pub buildable: HashMap<Id, tgmap::Building>,
     /// The health each template's buildings lose a second from when
     /// they're put on the map, by template.
     pub decays: HashMap<Id, f32>,
@@ -204,6 +206,7 @@ impl Default for Rules {
             sort_objectives: true,
             operations: HashMap::new(),
             drops: HashMap::new(),
+            buildable: HashMap::new(),
             decays: HashMap::new(),
             logistics: HashMap::new(),
             resupply_rates: HashMap::new(),

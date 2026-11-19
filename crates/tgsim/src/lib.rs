@@ -12,6 +12,7 @@ mod combat;
 mod commands;
 mod companies;
 mod computer;
+mod construction;
 mod delivery;
 mod disposal;
 pub mod economy;
@@ -308,6 +309,11 @@ pub struct Organization {
     /// What it was moved onto, which it keeps near until it's given
     /// another order.
     pub follow: Option<Piece>,
+    /// The building it's on its way to put up, until it's started it.
+    pub build: Option<Build>,
+    /// What it's raising or repairing, until that's done or it's given
+    /// another order.
+    pub mending: Option<Piece>,
     /// The properties it has for a time, such as an operation's.
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
@@ -339,6 +345,15 @@ pub struct Organization {
     /// How hard it hits now, as a share of full strength, easing towards
     /// what its properties set.
     pub efficiency: f32,
+}
+
+/// An organization's order to put up a building where it's going.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Build {
+    pub template: Id,
+    pub at: [f32; 2],
+    /// The way the building will face, a unit vector.
+    pub facing: [f32; 2],
 }
 
 /// An organization's order to keep a post: it comes back to it after every
@@ -373,6 +388,8 @@ impl Organization {
         self.order = order;
         self.follow = None;
         self.guard = None;
+        self.build = None;
+        self.mending = None;
         self.resume = None;
         self.unpack_at = None;
         self.unpack_again = None;
@@ -547,6 +564,11 @@ pub struct Unit {
     pub target: Option<Target>,
     /// The tick it last fired on, and the index of the weapon it fired.
     pub shot: Option<(u64, usize)>,
+    /// Seconds since each of its fighter's repairs was last used; infinite
+    /// for one that hasn't been.
+    mended_ago: Vec<f32>,
+    /// The tick it last used a repair on, and the index of the repair.
+    pub mended: Option<(u64, usize)>,
     /// The tick it died on.
     pub died: Option<u64>,
     /// While it's under siege, the tick that may end on.
@@ -681,6 +703,9 @@ pub struct Building {
     pub properties: Vec<Held>,
     /// The tick it was put on the map.
     pub created: u64,
+    /// Whether it's a site still going up, which does nothing a finished
+    /// building does until its health is full.
+    pub constructing: bool,
 }
 
 /// How a building stands.
@@ -944,6 +969,22 @@ pub enum Command {
     /// Refused for one whose template can't be sold, one unpacking or
     /// packing, and one under siege where the rules say so.
     Sell { building: usize },
+    /// Sends an organization to `at`, to put up a building of `template`
+    /// there facing `facing` once the place is within its control zone,
+    /// and then raise it. Refused for one with no member that builds it.
+    Build {
+        organization: usize,
+        template: Id,
+        at: [f32; 2],
+        facing: [f32; 2],
+    },
+    /// Sends an organization to repair `piece`, damaged and its side's or
+    /// an ally's, until it's at full health. Refused for one with no member
+    /// that can repair it.
+    Repair { organization: usize, piece: Piece },
+    /// Takes a site still going up off the map, giving its owner back
+    /// what it cost.
+    CancelConstruction { building: usize },
     /// Uses the `operation`th of the player's faction's special
     /// operations, aimed at `at`, or given on `on` there. Refused while
     /// it's recharging, when the side hasn't the experience for it, and for
@@ -971,7 +1012,7 @@ impl Building {
 
     /// Whether it's unpacking or packing, and so can't take orders.
     pub fn busy(&self) -> bool {
-        self.unpacking.is_some() || self.packing.is_some()
+        self.unpacking.is_some() || self.packing.is_some() || self.constructing
     }
 
     /// How far a point is from it, to the edge of the ground it covers.
@@ -1124,6 +1165,7 @@ impl World {
         self.keep_health();
         self.keep_guard();
         self.keep_company();
+        self.construct();
         self.close_in();
         self.occupy();
         self.decay();
@@ -1238,7 +1280,7 @@ digest!(Organization {
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
     guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before, experience,
-    level, engaging_before, efficiency, struck, broken_places, chased, follow,
+    level, engaging_before, efficiency, struck, broken_places, chased, follow, build, mending,
 } skip {
     // Its template's.
     formations, unpacks,
@@ -1254,6 +1296,12 @@ digest!(Guard {
     unreachable
 });
 
+digest!(Build {
+    template,
+    at,
+    facing
+});
+
 digest!(Leg {
     heading,
     aim,
@@ -1264,7 +1312,7 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
-    fired_ago, target, shot, died, death, besieged, struck, left, awaited, descent,
+    fired_ago, target, shot, mended_ago, mended, died, death, besieged, struck, left, awaited, descent,
 } skip {
     // Its template's.
     speed_max,
@@ -1286,7 +1334,7 @@ digest!(Building {
     id, template, number, owner, position, facing, health, health_factor, fired_ago, target,
     noticed, awake,
     inside, besieged, struck, turrets, shot, state, unpacking, packing, queue, progress, paused, rally,
-    captured, unpacked_from, zone, members, supply, properties, created, remembered,
+    captured, unpacked_from, zone, members, supply, properties, created, remembered, constructing,
 } skip {
     // Its template's, or as the map has it.
     fighter, deploy, organization, obstacle,

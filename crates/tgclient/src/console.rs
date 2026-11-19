@@ -346,6 +346,17 @@ const VERBS: &[Verb] = &[
         "x y [degrees]",
         "sends the selected packed building to unpack at x y, facing that far counter-clockwise from the map's x axis",
     ),
+    verb(
+        "build",
+        "organization template x y [degrees]",
+        "sends an organization, by its id, to put up a building of template at x y, facing that far counter-clockwise from the map's x axis",
+    ),
+    verb(
+        "repair",
+        "organization building",
+        "sends an organization, by its id, to repair a building, by its id",
+    ),
+    verb("cancelsite", "", "calls off the selected building site"),
     verb("destroyselected", "", "destroys the selected organizations"),
     verb(
         "advance",
@@ -531,6 +542,11 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                     building_order(world, &args, |building| tgsim::Command::Sell { building })
                 }
                 "disband" => disband(world, &args),
+                "build" => build(world, &args),
+                "repair" => repair(world, &args),
+                "cancelsite" => building_order(world, &args, |building| {
+                    tgsim::Command::CancelConstruction { building }
+                }),
                 "attach" => attach(world, &args, true),
                 "detach" => attach(world, &args, false),
                 "attachhero" => attach_hero(world, &args),
@@ -1158,6 +1174,7 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
             at: to,
             facing: crate::actions::UNPACK_FACING,
         },
+        Aim::Repair => return Err(usage("repair")),
     };
     if sim.destroyed(r) {
         return Err(format!("organization {id} is destroyed"));
@@ -1481,6 +1498,52 @@ fn unpack(world: &mut World, args: &[&str]) -> Reply {
         organizations: vec![(r, at)],
     });
     Ok(format!("unpacking at {:.0} {:.0}", at[0], at[1]))
+}
+
+fn build(world: &mut World, args: &[&str]) -> Reply {
+    let (id, template, x, y, facing) = match args {
+        [id, template, x, y] => (id, template, x, y, crate::actions::UNPACK_FACING),
+        [id, template, x, y, degrees] => {
+            let a = number(degrees)?.to_radians();
+            (id, template, x, y, [a.cos(), a.sin()])
+        }
+        _ => return Err(usage("build")),
+    };
+    let at = place(&world.resource::<Loaded>().map.ground, x, y)?;
+    let sim = &world.resource::<Sim>().0;
+    let organization = organization_by_id(sim, id)?;
+    let owner = sim.organizations[organization].owner;
+    let template = tgmap::Id::from(*template);
+    let command = tgsim::Command::Build {
+        organization,
+        template,
+        at,
+        facing,
+    };
+    give(world, owner, command)?;
+    Ok(format!("building at {:.0} {:.0}", at[0], at[1]))
+}
+
+fn repair(world: &mut World, args: &[&str]) -> Reply {
+    let [id, building] = args else {
+        return Err(usage("repair"));
+    };
+    let sim = &world.resource::<Sim>().0;
+    let organization = organization_by_id(sim, id)?;
+    let b = (sim.buildings.iter())
+        .position(|b| b.id.to_string() == *building && !b.gone())
+        .ok_or_else(|| format!("no building {building}"))?;
+    let owner = sim.organizations[organization].owner;
+    let piece = tgsim::Piece::Building(b);
+    give(
+        world,
+        owner,
+        tgsim::Command::Repair {
+            organization,
+            piece,
+        },
+    )?;
+    Ok(String::new())
 }
 
 /// Queues `command` from `player` for the next tick, as a click would.

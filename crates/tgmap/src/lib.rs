@@ -29,7 +29,7 @@ pub use tgdata::{
     EXHAUSTED, Economy, EconomyRules, Efficiency, ExperienceGains, Fall, Fighter, Flight,
     FlightKind, FogSetting, Grant, GuardRules, Hero, Id, Kind, Level, Levels, Logistics, Lookout,
     MoraleEffect, MoraleRules, Operation, PropertyTypes, REFORMING, RESTING, ROUTING, Ratings,
-    Requires, Research, ResourceKind, RoutRules, Shape, Sight, Strike, Summon, Supply,
+    Repair, Requires, Research, ResourceKind, RoutRules, Shape, Sight, Strike, Summon, Supply,
     SupplyEffect, SupplyRules, TARGETED, Targets, TerrainEffect, TerrainRules, Turret, Weapon,
     WeaponHit,
 };

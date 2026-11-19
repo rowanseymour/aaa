@@ -51,6 +51,7 @@ mod options;
 mod orders;
 mod outcome;
 mod pause;
+mod placing;
 use tgserver::presets;
 mod remote;
 mod resource_bar;
@@ -481,6 +482,8 @@ struct UnitView {
     unit: usize,
     /// The last of its shots shown.
     shot: Option<(u64, usize)>,
+    /// The last of its repairs shown.
+    mended: Option<(u64, usize)>,
     dead: bool,
     moving: bool,
     /// The outline its model tilts on to follow the ground, if it does.
@@ -539,6 +542,7 @@ fn spawn_unit_view(
     commands.entity(e).insert(UnitView {
         unit,
         shot: None,
+        mended: None,
         dead: false,
         moving: false,
         conform: models.conform(&thing.template),
@@ -947,6 +951,7 @@ pub fn run(program: Program) -> ExitCode {
         .init_resource::<SelectedBuilding>()
         .init_resource::<Focus>()
         .init_resource::<ghost::Ghost>()
+        .init_resource::<placing::Anchor>()
         .init_resource::<ghost::Landing>()
         .init_resource::<deliveries::Flights>()
         .init_resource::<supply::Border>()
@@ -1106,6 +1111,7 @@ pub fn run(program: Program) -> ExitCode {
                         .run_if(not(actions::aiming))
                         .run_if(not(special_ops::armed)),
                     actions::aim.run_if(actions::pointer_away),
+                    placing::place.run_if(actions::pointer_away),
                     special_ops::give,
                 )
                     .chain(),
@@ -2147,6 +2153,22 @@ fn show_units(
                 p.use_ability(ids);
             }
         }
+        if unit.mended != view.mended {
+            view.mended = unit.mended;
+            let repair = unit
+                .mended
+                .and_then(|(_, i)| unit.fighter.as_ref()?.repairs.get(i));
+            if let (Some(r), Some(target), true) = (repair, unit.target, seen) {
+                let to = target_position(&sim.0, target);
+                sounds.shot(&time, &r.sounds, unit.position, to, owner);
+            }
+            if let (Some(p), Some(ids)) = (
+                playing.as_mut(),
+                repair.and_then(|r| r.animation.as_deref()),
+            ) {
+                p.use_ability(ids);
+            }
+        }
         (transform.translation, transform.rotation) = pose(
             &loaded.map.ground,
             unit.drawn_at(t),
@@ -2597,9 +2619,23 @@ fn command(
         });
         moving = rest;
     }
-    // What can't be attacked there is moved onto instead.
+    // What can't be attacked there is repaired, by those that can, or
+    // else moved onto.
     if let Some(piece) = onto(&sim.0, player, *focus) {
-        let (went, rest) = approach(&sim.0, &mut orders, player, &moving, piece);
+        let (repairing, rest): (Vec<usize>, Vec<usize>) =
+            moving.iter().partition(|&&organization| {
+                let repair = tgsim::Command::Repair {
+                    organization,
+                    piece,
+                };
+                orders.give(&sim.0, player, repair).is_ok()
+            });
+        sent.write(waypoints::Sent {
+            to: None,
+            aim: actions::Aim::Repair,
+            organizations: repairing.iter().map(|&r| (r, point)).collect(),
+        });
+        let (went, rest) = approach(&sim.0, &mut orders, player, &rest, piece);
         sent.write(waypoints::Sent {
             to: None,
             aim: actions::Aim::Move,
@@ -2745,6 +2781,8 @@ fn send(
                 at: to,
                 facing: actions::UNPACK_FACING,
             },
+            // Given on a thing.
+            actions::Aim::Repair => continue,
         };
         if orders.give(sim, player, command).is_ok() {
             sent.push((r, target));

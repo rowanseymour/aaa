@@ -106,6 +106,8 @@ pub enum Change<'a> {
     Research(&'a tgmap::Research),
     /// A packed building, by index into [`World::organizations`], unpacking.
     Unpack(usize),
+    /// Putting up a building of this template.
+    Build(&'a Id),
 }
 
 /// The resource stockpiled and spent, which makes up shortfalls: the first
@@ -200,7 +202,7 @@ impl World {
             }
         }
         // Unpacking and packing aren't construction: it earns through both.
-        let working = b.state == State::Standing;
+        let working = b.state == State::Standing && !b.constructing;
         let production = match self.rules.packing.get(&b.template) {
             _ if !working => Amounts::default(),
             _ if !self.out_of_supply(building) => e.production.clone(),
@@ -341,6 +343,10 @@ impl World {
                 ledger += self.commission_ledger(organization);
             }
             Change::Research(item) => stockpile -= self.research_cost(item),
+            Change::Build(template) => {
+                stockpile -= self.site_cost(template);
+                ledger += self.holding_ledger(template);
+            }
             Change::Unpack(r) => {
                 ledger = ledger.without(&self.organization_ledger(r));
                 if let Some(u) = &self.organizations[r].unpacks {

@@ -43,6 +43,9 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `attachhero organization hero`: puts a hero from its side's pool at the head of a company, by the company's id
 - `detachhero organization`: sends the hero leading a company, by its id, back to its side's pool
 - `unpack x y [degrees]`: sends the selected packed building to unpack at x y, facing that far counter-clockwise from the map's x axis
+- `build organization template x y [degrees]`: sends an organization, by its id, to put up a building of template at x y, facing that far counter-clockwise from the map's x axis
+- `repair organization building`: sends an organization, by its id, to repair a building, by its id
+- `cancelsite`: calls off the selected building site
 - `destroyselected`: destroys the selected organizations
 - `advance seconds`: plays that much of the game at once, paused or not
 - `record [file]`: says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for tgserver to play again

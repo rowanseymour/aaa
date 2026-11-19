@@ -148,7 +148,7 @@ impl World {
 
     /// Takes away for good the scenery whose shape overlaps `footprint`, a
     /// building's as it goes up.
-    fn clear_under(&mut self, footprint: &Obstacle) {
+    pub(crate) fn clear_under(&mut self, footprint: &Obstacle) {
         let cleared = &mut self.cleared;
         self.clearable.retain(|(id, shape)| {
             let under = shape.overlaps(footprint);

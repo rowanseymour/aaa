@@ -1051,6 +1051,38 @@ fn told(
             let text = fill(&said, &[&look.name(template.as_str())]);
             Told::Line("GENERIC_ERROR", text, None)
         }
+        Notice::CannotAfford {
+            player,
+            organization,
+            template,
+        } if ours(player) => {
+            let said = look.said(
+                "construct_error_affording|ss",
+                "Insufficient funds for %s. Requires %s.",
+            );
+            let cost = sim.site_cost(&template).ceil().to_string();
+            let text = fill(&said, &[&look.name(template.as_str()), &cost]);
+            Told::Line("GENERIC_ERROR", text, at(About::Organization(organization)))
+        }
+        Notice::NotBuilt {
+            player,
+            organization,
+            template,
+        } if ours(player) => {
+            let said = look.said("construct_error_creating|s", "Could not create %s");
+            let text = fill(&said, &[&look.name(template.as_str())]);
+            Told::Line("GENERIC_ERROR", text, at(About::Organization(organization)))
+        }
+        Notice::Constructed { player, building } if ours(player) => Told::Event(
+            "building_construction_complete",
+            vec![look.building(sim, building).into()],
+            at(About::Building(building)),
+        ),
+        Notice::Mended { player, building } if ours(player) => Told::Event(
+            "building_repair_complete",
+            vec![look.building(sim, building).into()],
+            at(About::Building(building)),
+        ),
         Notice::HeroKilled {
             player,
             hero,

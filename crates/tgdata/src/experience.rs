@@ -91,6 +91,8 @@ pub struct CombatEffect {
     pub bombard_range: f32,
     /// `SPEED_MAX`: added to the 1 top speed is multiplied by.
     pub speed: f32,
+    /// `ABILITY_HEAL`: added to the health each use of a repair adds.
+    pub heal: f32,
     pub efficiency: Efficiency,
     /// For a technology, the properties a thing of the side needs for it
     /// to be on it.
@@ -110,6 +112,7 @@ impl CombatEffect {
             projectile_range: self.projectile_range + other.projectile_range,
             bombard_range: self.bombard_range + other.bombard_range,
             speed: self.speed + other.speed,
+            heal: self.heal + other.heal,
             efficiency: self.efficiency.with(other.efficiency),
             requires: Vec::new(),
         }
@@ -157,6 +160,7 @@ pub(crate) fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
             _ if add && is(&m.attribute, "AV_MELEE") => out.melee += amount,
             _ if add && is(&m.attribute, "AV_RANGED") => out.ranged += amount,
             _ if add && is(&m.attribute, "DV") => out.defense += amount,
+            _ if add && is(&m.attribute, "ABILITY_HEAL") => out.heal += amount,
             _ if add && is(&m.attribute, "PROJECTILE_ABILITY_RANGE") => {
                 out.projectile_range += amount;
             }

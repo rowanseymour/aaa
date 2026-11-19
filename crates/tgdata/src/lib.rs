@@ -49,7 +49,7 @@ pub use audio::{
 };
 pub use combat::{
     AimHeights, Body, Choice, Damage, Does, Fighter, Flight, FlightKind, PropertyTypes, Ratings,
-    Shape, Targets, Turret, Weapon, WeaponHit,
+    Repair, Shape, Targets, Turret, Weapon, WeaponHit,
 };
 pub use combat_value::{CombatAbility, CombatProfile, CombatValueRules};
 pub use economy::{Amounts, Economy, EconomyRules, Logistics, ResourceKind, ResourceRole, Supply};

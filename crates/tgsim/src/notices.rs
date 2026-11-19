@@ -83,6 +83,26 @@ pub enum Notice {
     /// A company of `template` it recruited had nowhere to come out, so
     /// wasn't made.
     NotCreated { player: u32, template: Id },
+    /// An organization of its, by index into [`World::organizations`],
+    /// reached where it was to build one of `template` that it couldn't
+    /// pay for, and gave up.
+    CannotAfford {
+        player: u32,
+        organization: usize,
+        template: Id,
+    },
+    /// The building of `template` an organization of its was to put up
+    /// couldn't be made.
+    NotBuilt {
+        player: u32,
+        organization: usize,
+        template: Id,
+    },
+    /// A site of its, by index into [`World::buildings`], is finished.
+    Constructed { player: u32, building: usize },
+    /// A damaged building of its, by index into [`World::buildings`], is
+    /// back to full health.
+    Mended { player: u32, building: usize },
     /// Its hero `hero` died leading the company at this index into
     /// [`World::organizations`].
     HeroKilled {

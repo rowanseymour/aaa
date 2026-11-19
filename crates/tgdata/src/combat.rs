@@ -60,6 +60,9 @@ pub struct Fighter {
     /// The templates it can build, which aren't `cannot_build` to it.
     pub builds: Vec<Id>,
     pub weapons: Vec<Weapon>,
+    /// The abilities that put health back into what they're used on, such
+    /// as an engineer's for raising a building or mending one.
+    pub repairs: Vec<Repair>,
     /// Added to each of its weapons' scores, by how the weapon rates.
     pub bonus: Ratings,
     /// Whether it scores weapons by how little the target resists their
@@ -148,6 +151,24 @@ pub struct Weapon {
     /// Its main damage ignores its user's attack efficiency.
     pub spell: bool,
     pub choice: Choice,
+}
+
+/// An ability that adds health to what it's used on each time, up to its
+/// most.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Repair {
+    pub range: f32,
+    /// Seconds between uses.
+    pub recharge: f32,
+    /// The health each use adds, before its user's properties add to it.
+    pub amount: f32,
+    pub targets: Targets,
+    /// The ids of the animation its user plays to use it.
+    pub animation: Option<String>,
+    /// Played each use.
+    pub sounds: Vec<Cue>,
+    /// Seconds a use takes, during which its user does nothing else.
+    pub lasts: f32,
 }
 
 /// What decides whether a unit picks a weapon over its others.
@@ -649,6 +670,20 @@ pub(crate) fn fighter(
     let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
     let abilities = performs.chain(defends);
     for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
+        let heals = d.effect.iter().filter(|e| is(&e.kind, "HEAL"));
+        let heal: Option<f32> = heals.map(|e| e.amount.unwrap_or(0.0)).reduce(|a, b| a + b);
+        if let (Some(amount), Some(range)) = (heal, d.range) {
+            fighter.repairs.push(Repair {
+                range,
+                recharge: d.recharge_time,
+                amount,
+                targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
+                animation: (a.animation1.clone()).filter(|ids| !ids.eq_ignore_ascii_case("null")),
+                sounds: cues(&d.when_do),
+                lasts: choice(a, animations).lasts,
+            });
+            continue;
+        }
         // Whatever kind of ability it is, if it does damage.
         let hits = weapon_hits(&d.effect);
         let damages = hits.iter().any(|h| !matches!(h.does, Does::Morale(_)));
@@ -1011,6 +1046,49 @@ mod tests {
 ",
         );
         assert_eq!(engineer.builds, [Id::from("bunker"), Id::from("bunker_aa")]);
+    }
+
+    #[test]
+    fn abilities_that_heal_are_repairs_not_weapons() {
+        let engineer = read_fighter(
+            "[Thing]
+{
+    IDS = a
+    [BodyComponent]
+    health = 1
+    [PerformerComponent]
+    {
+        [Ability]
+        {
+            animation1 = build1
+            [AbilityDefinition]
+            {
+                range = 1
+                recharge_time = 1.5
+                targets = +constructable -under_construction +friend
+                [Effect]
+                {
+                    type = HEAL
+                    amount = 5
+                }
+            }
+        }
+    }
+}
+",
+        );
+        assert!(engineer.weapons.is_empty());
+        let [repair] = &engineer.repairs[..] else {
+            panic!("{:?}", engineer.repairs);
+        };
+        assert_eq!(
+            (repair.range, repair.recharge, repair.amount),
+            (1.0, 1.5, 5.0)
+        );
+        assert_eq!(repair.animation.as_deref(), Some("build1"));
+        let ids = |l: &[&str]| l.iter().map(|&t| Id::from(t)).collect::<Vec<_>>();
+        assert_eq!(repair.targets.required, ids(&["constructable", "friend"]));
+        assert_eq!(repair.targets.excluded, ids(&["under_construction"]));
     }
 
     #[test]

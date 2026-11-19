@@ -118,6 +118,23 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         | tgmap::Operation::Summon(_) => None,
     });
     let drops = (dropped.filter_map(|t| Some((t.clone(), raising.building(t)?)))).collect();
+    // What anything raised lists to build.
+    let builds = (raisable.values())
+        .flat_map(|r| &r.members)
+        .filter_map(|m| m.fighter.as_ref())
+        .flat_map(|f| &f.builds);
+    let mut buildable = HashMap::new();
+    for t in builds {
+        if buildable.contains_key(t) {
+            continue;
+        }
+        match raising.building(t) {
+            Some(b) => {
+                buildable.insert(t.clone(), b);
+            }
+            None => debug!("can't build {t}"),
+        }
+    }
     let mut recruit_lists = game.recruit_lists();
     // A settlement recruits its companies itself.
     recruit_lists.extend(game.settlement_recruits());
@@ -173,6 +190,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         faction_groups: game.faction_groups(),
         operations,
         drops,
+        buildable,
         decays: game.decays(),
         logistics: game.logistics(),
         resupply_rates: game.resupply_rates(),
