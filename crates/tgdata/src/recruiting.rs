@@ -46,6 +46,8 @@ pub struct Airlift {
     pub turn_radius: f32,
     /// How far above the ground it flies.
     pub height: f32,
+    /// How far above the ground it comes to rest when it comes down.
+    pub taxi_height: f32,
     /// Seconds between the things it drops.
     pub delay: f32,
 }
@@ -262,6 +264,9 @@ impl GameData {
                 speed: mover.speed_max?,
                 turn_radius: mover.turn_radius.unwrap_or(0.0),
                 height: t.aircraft_component.as_ref()?.operational_height?,
+                taxi_height: (t.aircraft_component.as_ref())
+                    .and_then(|a| a.taxi_height)
+                    .unwrap_or(0.0),
                 delay: (t.transport_component.as_ref())
                     .and_then(|c| c.deployment_delay)
                     .unwrap_or(0.0),
@@ -286,6 +291,12 @@ impl GameData {
     /// second.
     pub fn gravity(&self) -> Option<f32> {
         self.svars().iter().find_map(|v| v.gravity).map(f32::abs)
+    }
+
+    /// How much of its speed times gravity an aircraft shot down gains in
+    /// sinking speed each second.
+    pub fn plane_fall_gravity_tweak(&self) -> Option<f32> {
+        self.svars().iter().find_map(|v| v.plane_fall_gravity_tweak)
     }
 
     /// Every id a building a requirement names may go by on a map, as maps

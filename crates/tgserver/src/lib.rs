@@ -211,6 +211,9 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         team_victory: game.team_victory(),
         ..Default::default()
     };
+    if let Some(tweak) = game.plane_fall_gravity_tweak() {
+        rules.plane_fall_tweak = tweak;
+    }
     if let Some(gravity) = game.gravity() {
         rules.gravity = gravity;
     }

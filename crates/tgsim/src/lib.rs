@@ -643,9 +643,13 @@ pub struct Unit {
     /// Whether it's yet to join its organization, as a recruit's members are
     /// until supply brings them.
     pub awaited: bool,
-    /// Its fall, for one coming down by parachute, which is awaited
-    /// until it lands.
+    /// Its fall, for one coming down by parachute.
     pub descent: Option<Descent>,
+    /// Whether it's in the air under its own power, as an aircraft
+    /// bringing a delivery is until it leaves the map or comes down.
+    pub aloft: bool,
+    /// The tick it came down on, for one that died in the air.
+    pub landed: Option<u64>,
     /// The properties it has for a time, such as an operation's.
     pub properties: Vec<Held>,
     /// The terrain it's on, as [`tgmap::TileTerrains::get`] takes it: its
@@ -657,7 +661,7 @@ impl Unit {
     /// Forgets how it died and the stance it died in, for one that's
     /// replaced: the new one is decided afresh.
     pub(crate) fn forget_dying(&mut self) {
-        (self.died, self.death, self.dying) = (None, None, 0);
+        (self.died, self.death, self.dying, self.landed) = (None, None, 0, None);
         (self.idle_until, self.fidget, self.fired_in_fight) = (None, None, false);
         (
             self.stance,
@@ -1414,7 +1418,7 @@ digest!(Unit {
     health_factor,
     fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
-    properties,
+    aloft, landed, properties,
 } skip {
     // Its template's.
     speed_max,

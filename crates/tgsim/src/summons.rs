@@ -536,6 +536,7 @@ mod tests {
             speed: 7.0,
             turn_radius: 18.0,
             height: 17.0,
+            taxi_height: 1.0,
             delay: 0.4,
         };
         w.rules.airlifts.insert(Id::from(template), airlift);

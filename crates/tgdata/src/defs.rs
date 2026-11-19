@@ -232,6 +232,8 @@ pub struct BodyComponent {
     /// Seconds its remains lie after it dies, then sink for `sink_time`.
     pub rot_time: Option<f32>,
     pub sink_time: Option<f32>,
+    #[serde(rename = "OnDeathAbility")]
+    pub on_death_ability: Option<Ability>,
 }
 
 /// What makes a building a city centre, claiming a zone of the map. A city
@@ -778,6 +780,8 @@ pub struct AbilityFlags {
 pub struct AircraftComponent {
     /// How far above the ground it flies.
     pub operational_height: Option<f32>,
+    /// How far above the ground it sits when down.
+    pub taxi_height: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1324,6 +1328,10 @@ pub struct SVars {
     /// How fast what falls gains speed; negative, for downwards.
     #[serde(rename = "Gravity")]
     pub gravity: Option<f32>,
+    /// How much of its speed times gravity an aircraft shot down gains in
+    /// sinking speed each second.
+    #[serde(rename = "PlaneFallGravityTweak")]
+    pub plane_fall_gravity_tweak: Option<f32>,
     /// The share of its cost a building sells for.
     #[serde(rename = "SellFactor")]
     pub sell_factor: Option<f32>,

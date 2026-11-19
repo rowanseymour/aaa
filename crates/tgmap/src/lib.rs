@@ -158,6 +158,7 @@ impl Map {
             }
         }
         let mut pathing = Pathing::new(&terrain, &variations);
+        pathing.set_heights(|at| ground.height_at(at));
         let tile_terrains = TileTerrains::new(&terrain, &variations);
         let Placed {
             off_map,

@@ -524,6 +524,12 @@ impl World {
         if self.ticks < self.units[u].busy {
             return;
         }
+        // Coming down, it neither takes a target nor fires.
+        if self.units[u].descent.is_some() {
+            let unit = &mut self.units[u];
+            (unit.target, unit.closing) = (None, None);
+            return;
+        }
         let mut rng = self.rng;
         let decided = self.decide_attack(u, &mut rng);
         self.rng = rng;
@@ -619,10 +625,11 @@ impl World {
     /// Takes a hit's damage off what it lands on. A building whose health
     /// runs out is captured by the hit's owner if it can be, else destroyed
     /// if it can be, else disabled.
-    fn land_all(&mut self, hits: Vec<Hit>, fired_on: &mut Vec<(usize, Target)>) {
+    pub(crate) fn land_all(&mut self, hits: Vec<Hit>, fired_on: &mut Vec<(usize, Target)>) {
         // A unit one effect of a use kills still takes the use's later
         // effects, the last of them its last hit, before its death counts.
         let mut dying: Option<(usize, Option<Target>, u32)> = None;
+        let mut killed = Vec::new();
         for hit in hits {
             let (from, by) = (hit.from, hit.by);
             let of_use = move |u| (u, from, by);
@@ -630,6 +637,7 @@ impl World {
             if !follows && let Some((u, ..)) = dying.take() {
                 self.mourn(u);
                 self.lost_member(u);
+                killed.push(u);
             }
             if let Target::Unit(u) = hit.target {
                 let r = self.units[u].organization;
@@ -652,7 +660,28 @@ impl World {
         if let Some((u, ..)) = dying {
             self.mourn(u);
             self.lost_member(u);
+            killed.push(u);
         }
+        // An aircraft's goes off where it comes down.
+        for u in killed {
+            if !self.units[u].aloft {
+                self.set_off_death(u);
+            }
+        }
+    }
+
+    /// Fires the on-death ability of the unit at `u`, if it has one, where
+    /// it is.
+    pub(crate) fn set_off_death(&mut self, u: usize) {
+        let unit = &self.units[u];
+        let Some(weapon) = unit.fighter.as_ref().and_then(|f| f.on_death.clone()) else {
+            return;
+        };
+        let (s, at) = (Target::Unit(u), unit.position);
+        let by = self.owner(s);
+        let mut hits = Vec::new();
+        self.strike(&weapon, at, s, (s, by), false, &mut hits);
+        self.land_all(hits, &mut Vec::new());
     }
 
     /// Lands a hit, a unit it kills counting as dead at once.
