@@ -353,6 +353,93 @@ fn nested_block_naming_another_template() {
 }
 
 #[test]
+fn nested_block_naming_its_enclosing_templates_template() {
+    let schema = ok("[template Definition]\n{\n[list Effect]\n}");
+    let files = ok("
+[Template Base Template=Definition]
+{
+    recharge_time = 1.5
+    targets = building
+    [Effect]
+    kind = base
+}
+[Template Repair Inherit=Base]
+{
+    name = repair
+}
+[Template Ability]
+{
+    [Definition Template=Definition]
+    {
+        IDS = null
+    }
+}
+[Template RepairLocal Inherit=Ability]
+{
+    [Definition Template=Repair]
+    {
+        recharge_time = 0.0
+    }
+}
+[Ability Template=RepairLocal]
+{
+    [Definition Template=Repair]
+    {
+        amount = 5
+    }
+}
+[Ability Template=RepairLocal]
+{
+    [Definition]
+    amount = 8
+}
+");
+    let templates = Templates::new([&schema, &files]);
+    for (ability, amount) in files.blocks_of("Ability").zip(["5", "8"]) {
+        let ability = templates.resolve(ability);
+        let definition = first_of(&ability, "Definition");
+        // What the enclosing template's section sets beats its template's
+        // chain, whose own fields still come through.
+        assert_eq!(definition.value("recharge_time"), Some("0.0"));
+        assert_eq!(definition.value("targets"), Some("building"));
+        assert_eq!(definition.value("name"), Some("repair"));
+        assert_eq!(definition.value("amount"), Some(amount));
+        assert_eq!(definition.blocks_of("Effect").count(), 1);
+        assert_eq!(definition.attr("template"), None);
+    }
+}
+
+#[test]
+fn nested_block_naming_a_template_outside_its_line_is_refused() {
+    let files = ok("
+[Template Attack]
+[Template Rifle Template=Attack]
+[Template Heal]
+[Template Gun]
+{
+    [Definition Template=Attack]
+}
+[Ability Template=Gun]
+{
+    [Definition Template=Rifle]
+}
+[Ability Template=Gun]
+{
+    [Definition Template=Heal]
+}
+[Ability Template=Gun]
+{
+    [Definition Template=Missing]
+}
+");
+    let templates = Templates::new([&files]);
+    let refused: Vec<bool> = (files.blocks_of("Ability"))
+        .map(|a| templates.try_resolve(a).is_err())
+        .collect();
+    assert_eq!(refused, [false, true, false]);
+}
+
+#[test]
 fn template_cycle_through_nested_block() {
     let files = ok("
 [Template A Template=B]
@@ -447,7 +534,7 @@ fn retemplated_block_keeps_inherited_attributes() {
     [View Template=X Layer=3]
 }
 [Template X]
-[Template Y]
+[Template Y Template=X]
 [Thing Template=Base]
 {
     [View Template=Y]

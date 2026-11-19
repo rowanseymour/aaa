@@ -176,7 +176,8 @@ impl Coverage {
     }
 
     fn unread(&mut self, path: &str, block: &Block, templates: Option<&Templates>) {
-        let block = &*resolved(templates, block);
+        let resolved = (templates.filter(|t| t.parent(block).is_some())).map(|t| t.resolve(block));
+        let block = resolved.as_ref().unwrap_or(block);
         for item in &block.items {
             match item {
                 Item::Field(f) => self.count(path, f, false),
@@ -349,7 +350,7 @@ impl<'a> Node<'a> {
                 ));
             }
         };
-        let block = &*resolved(ctx.templates, block);
+        let block = &*resolved(ctx.templates, block)?;
         // Only a struct's own field names fold underscores: a map's keys are
         // what the file says, and `a_b` and `ab` are different ones.
         let same = |a: &str, b: &str| match fields {
@@ -617,11 +618,15 @@ impl<'de> de::Deserializer<'de> for Scalar<'_> {
     }
 }
 
-/// The block with what it inherits merged in, where it inherits anything.
-fn resolved<'b>(templates: Option<&Templates>, block: &'b Block) -> Cow<'b, Block> {
+/// The block with what it inherits merged in, where it inherits anything,
+/// or the error that makes the game refuse it.
+fn resolved<'b>(templates: Option<&Templates>, block: &'b Block) -> Result<Cow<'b, Block>, Error> {
     match templates {
-        Some(t) if t.parent(block).is_some() => Cow::Owned(t.resolve(block)),
-        _ => Cow::Borrowed(block),
+        Some(t) if t.parent(block).is_some() => t
+            .try_resolve(block)
+            .map(Cow::Owned)
+            .map_err(|e| Error::new(block.line, e)),
+        _ => Ok(Cow::Borrowed(block)),
     }
 }
 

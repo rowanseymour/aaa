@@ -38,7 +38,7 @@ pub use inherit::Templates;
 
 /// A block: a header with the fields and blocks it contains. The document root
 /// is a block with an empty header.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default)]
 pub struct Block {
     pub header: Header,
     pub items: Vec<Item>,
@@ -46,6 +46,19 @@ pub struct Block {
     pub braced: bool,
     /// 1-based line of the header (0 for the root).
     pub line: usize,
+    /// The template this block named, where inheritance has already merged
+    /// that template in and dropped the `Template=` that named it.
+    pub(crate) resolved_from: Option<String>,
+}
+
+/// Blocks are equal by what they hold, however they were resolved.
+impl PartialEq for Block {
+    fn eq(&self, other: &Self) -> bool {
+        self.header == other.header
+            && self.items == other.items
+            && self.braced == other.braced
+            && self.line == other.line
+    }
 }
 
 /// What's between a block's `[ ]`.
