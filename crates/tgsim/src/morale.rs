@@ -77,8 +77,17 @@ impl World {
     /// Whether the organization at `r` is resting: idle with nothing else
     /// to do, neither guarding, bombarding nor still arriving.
     pub fn resting(&self, r: usize) -> bool {
+        self.at_rest(r) && !self.underway(r)
+    }
+
+    /// Whether the organization at `r` is, as a whole, resting, whatever
+    /// its members are doing on their own: steady on no order but to
+    /// stand, out of any fight, with nothing else to do.
+    pub(crate) fn at_rest(&self, r: usize) -> bool {
         let organization = &self.organizations[r];
-        self.idle(r)
+        organization.mind == Mind::Steady
+            && organization.order == Order::Move
+            && organization.engaged.is_empty()
             && organization.guard.is_none()
             && !organization.bombarding
             && !organization.arriving
@@ -97,14 +106,17 @@ impl World {
 
     /// What bears on the morale of the organization at `r`: the properties
     /// of its template and those it has for a time, its side's
-    /// technologies that are on its kind, and its experience level's.
-    fn morale_effects(&self, r: usize) -> impl Iterator<Item = &MoraleEffect> {
+    /// technologies that are on its kind, its experience level's and its
+    /// entrenchment's.
+    pub(crate) fn morale_effects(&self, r: usize) -> impl Iterator<Item = &MoraleEffect> {
         let organization = &self.organizations[r];
         let (owner, template) = (organization.owner, &organization.template);
-        let level = self
-            .level_property(r)
-            .and_then(|p| self.rules.morale_effects.get(p));
-        (self.template_effects(owner, template, &organization.properties)).chain(level)
+        let table = &self.rules.morale_effects;
+        let level = self.level_property(r).and_then(|p| table.get(p));
+        let entrenched = organization.entrenched.iter().flatten();
+        (self.template_effects(owner, template, &organization.properties))
+            .chain(level)
+            .chain(entrenched.filter_map(|p| table.get(p)))
     }
 
     /// What a thing of `owner`'s made from `template` holding `held` has for

@@ -16,6 +16,10 @@ use crate::{
 /// to go straight at it.
 const STRAIGHT_REACH: f32 = 3.0;
 
+/// How far an organization is sent from where it was headed before the
+/// move sets it off along a route.
+pub(crate) const SETTING_OFF: f32 = 0.5;
+
 /// How many times a unit finds a way to a destination before giving up on
 /// stopping there.
 const WAYS_TRIED: u8 = 3;
@@ -362,8 +366,17 @@ impl World {
         }
     }
 
+    /// Sends the organization at `organization` to stand at `target`
+    /// facing `facing`. Any such move unsettles it; one further than
+    /// [`SETTING_OFF`] sets it off along a route, which ends its
+    /// entrenchment.
     pub(crate) fn send(&mut self, organization: usize, target: [f32; 2], facing: [f32; 2]) {
         let r = &mut self.organizations[organization];
+        r.settled = None;
+        if !within(r.position, target, SETTING_OFF) {
+            r.travelling = true;
+            r.entrenched = None;
+        }
         r.position = target;
         r.facing = facing;
         self.take_places(organization);

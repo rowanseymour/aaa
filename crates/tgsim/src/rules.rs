@@ -53,6 +53,8 @@ pub struct Rules {
     /// What each property does to morale, for those that do anything to
     /// it, by its id.
     pub morale_effects: HashMap<Id, tgmap::MoraleEffect>,
+    /// What entrenching takes and gives.
+    pub entrenchment: tgmap::Entrenchment,
     /// The settings combat values are worked out by.
     pub combat_value_rules: tgmap::CombatValueRules,
     /// Each template's figures, which its things' combat values are worked
@@ -192,6 +194,7 @@ impl Default for Rules {
             morale_values: HashMap::new(),
             morale_breakpoints: HashMap::new(),
             morale_effects: HashMap::new(),
+            entrenchment: Default::default(),
             combat_value_rules: Default::default(),
             combat_profiles: HashMap::new(),
             combat_means: Default::default(),

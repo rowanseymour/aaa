@@ -248,6 +248,10 @@ impl World {
             arriving: false,
             terrain: TerrainIndex::default(),
             terrain_properties: Vec::new(),
+            // Counting from when it's made.
+            settled: Some(self.ticks),
+            travelling: false,
+            entrenched: None,
             morale: 0.0,
             morale_max: 0.0,
             mind: Mind::Steady,

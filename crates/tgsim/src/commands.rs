@@ -459,7 +459,7 @@ impl World {
 
     pub(crate) fn order_stop(&mut self, player: u32, organization: usize) -> Result<(), NotYours> {
         self.may_command(player, organization)?;
-        let here = self.centre(organization);
+        let here = self.standing_point(organization);
         let r = &mut self.organizations[organization];
         r.take_order(Order::Move);
         if r.engaged.is_empty() {

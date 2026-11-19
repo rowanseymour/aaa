@@ -190,7 +190,7 @@ impl World {
         match t {
             Thing::Organization(r) => {
                 let o = &self.organizations[r];
-                self.held_effect(o.owner, &o.template, &o.properties, &[])
+                self.held_effect(o.owner, &o.template, &o.properties, [])
             }
             Thing::Unit(u) => self.boost(u),
             Thing::Building(b) => self.building_boost(b),
