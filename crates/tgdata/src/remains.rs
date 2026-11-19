@@ -9,6 +9,10 @@ use crate::{GameData, Id, defs, scoped};
 const ROT_TIME: f32 = 0.0;
 const SINK_TIME: f32 = 2.0;
 
+/// The idle loops a view that sets none plays before a fidget: at least
+/// the first, fewer than the second.
+const IDLE_LOOPS: [u32; 2] = [1, 3];
+
 /// The seconds a death animation that sets no length takes.
 const DEATH_LENGTH: f32 = 1.0;
 
@@ -46,6 +50,16 @@ pub struct AnimationSet {
     /// takes, such as an attack's, by ids. A look's set has those of the
     /// character's own set it doesn't list itself.
     pub lengths: HashMap<Id, f32>,
+    /// Seconds one loop of the idle it plays standing still takes: its
+    /// first `IDLE`'s, or for a look without one, the character's own.
+    pub idle: f32,
+    /// How many idle loops it plays before a fidget: at least the first,
+    /// and fewer than the second.
+    pub idle_loops: [u32; 2],
+    /// The fidgets it picks from after idling, by their ids, each with its
+    /// weight; a look's set has those of the character's own set it
+    /// doesn't list itself.
+    pub fidgets: Vec<(Id, f32)>,
 }
 
 /// A template's animation sets, its own first, then each look's in the
@@ -56,6 +70,16 @@ fn animation_sets(t: &defs::Thing) -> Option<Vec<AnimationSet>> {
     let character = t.character_component.as_ref()?;
     let kind =
         |a: &defs::Animation, k: &str| a.kind.as_deref().is_some_and(|n| n.eq_ignore_ascii_case(k));
+    let least = t
+        .view
+        .as_ref()
+        .and_then(|v| v.idle_loops_min)
+        .unwrap_or(IDLE_LOOPS[0]);
+    let most = t
+        .view
+        .as_ref()
+        .and_then(|v| v.idle_loops_max)
+        .unwrap_or(IDLE_LOOPS[1]);
     let set = |look: Option<Id>, animations: &[defs::Animation]| {
         let dies = animations.iter().filter(|a| kind(a, "die") && !flying);
         let deaths = dies
@@ -73,10 +97,17 @@ fn animation_sets(t: &defs::Thing) -> Option<Vec<AnimationSet>> {
         let lengths = once
             .filter_map(|a| Some((Id::from(a.ids.as_deref()?), a.length.unwrap_or(1.0))))
             .collect();
+        let idle = (animations.iter().find(|a| kind(a, "idle"))).map(|a| a.length.unwrap_or(1.0));
+        let fidgets = (animations.iter().filter(|a| kind(a, "fidget")))
+            .filter_map(|a| Some((Id::from(a.ids.as_deref()?), a.weight.unwrap_or(1.0))))
+            .collect();
         AnimationSet {
             look,
             deaths,
             lengths,
+            idle: idle.unwrap_or(0.0),
+            idle_loops: [least, most],
+            fidgets,
         }
     };
     let own = set(None, &character.animation);
@@ -85,6 +116,14 @@ fn animation_sets(t: &defs::Thing) -> Option<Vec<AnimationSet>> {
         let mut set = set(look, &s.animation);
         for (ids, length) in &own.lengths {
             set.lengths.entry(ids.clone()).or_insert(*length);
+        }
+        let theirs: Vec<(Id, f32)> = (own.fidgets.iter())
+            .filter(|(ids, _)| !set.fidgets.iter().any(|(f, _)| f == ids))
+            .cloned()
+            .collect();
+        set.fidgets.extend(theirs);
+        if !s.animation.iter().any(|a| kind(a, "idle")) {
+            set.idle = own.idle;
         }
         set
     });
@@ -135,7 +174,8 @@ mod tests {
              \t\t[Animation]\n\t\t{\n\t\t\ttype = DIE\n\t\t\tIDS = die1\n\t\t\tlength = 2\n\t\t}\n\
              \t\t[Animation]\n\t\t{\n\t\t\ttype = ABILITY\n\t\t\tIDS = attack1\n\t\t\tlength = 0.5\n\t\t}\n\
              \t\t[Animation]\n\t\t{\n\t\t\ttype = ABILITY\n\t\t\tIDS = throw\n\t\t\tlength = 1.5\n\t\t}\n\
-             \t\t[Animation]\n\t\t{\n\t\t\ttype = IDLE\n\t\t\tIDS = idle\n\t\t}\n\
+             \t\t[Animation]\n\t\t{\n\t\t\ttype = IDLE\n\t\t\tIDS = idle\n\t\t\tlength = 3\n\t\t}\n\
+             \t\t[Animation]\n\t\t{\n\t\t\ttype = FIDGET\n\t\t\tIDS = fidget1\n\t\t\tweight = 5\n\t\t}\n\
              \t\t[AspectAnimationSet]\n\t\t{\n\t\t\taspect_ids = kneel\n\
              \t\t\t[Animation]\n\t\t\t{\n\t\t\t\ttype = ABILITY\n\t\t\t\tIDS = attack1\n\t\t\t\tlength = 0.8\n\t\t\t}\n\
              \t\t}\n\t}\n}\n",
@@ -146,11 +186,15 @@ mod tests {
         let sets = animation_sets(&thing).unwrap();
         assert_eq!(sets.len(), 2);
         assert_eq!((sets[0].look.clone(), sets[0].deaths.len()), (None, 1));
-        assert_eq!(sets[0].lengths.len(), 2, "not the idle");
+        assert_eq!(sets[0].lengths.len(), 3, "not the idle");
+        assert_eq!((sets[0].idle, sets[0].idle_loops), (3.0, [1, 3]));
         let kneel = &sets[1];
         assert_eq!(kneel.look, Some(Id::from("kneel")));
         assert!(kneel.deaths.is_empty());
         assert_eq!(kneel.lengths[&Id::from("attack1")], 0.8);
         assert_eq!(kneel.lengths[&Id::from("throw")], 1.5);
+        // It idles and fidgets as the character does.
+        assert_eq!(kneel.idle, 3.0);
+        assert_eq!(kneel.fidgets, [(Id::from("fidget1"), 5.0)]);
     }
 }

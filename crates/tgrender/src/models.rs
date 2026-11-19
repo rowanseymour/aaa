@@ -1405,9 +1405,12 @@ fn moving(view: &View, speed: f32) -> Option<&tgdata::Animation> {
 }
 
 /// Whether an animation is one units play once when told to: using an
-/// ability or dying.
+/// ability, fidgeting or dying.
 fn once(a: &tgdata::Animation) -> bool {
-    matches!(a.kind, AnimationKind::Ability | AnimationKind::Die)
+    matches!(
+        a.kind,
+        AnimationKind::Ability | AnimationKind::Fidget | AnimationKind::Die
+    )
 }
 
 /// The idle animation a view's models play: the one named `idle`, else the

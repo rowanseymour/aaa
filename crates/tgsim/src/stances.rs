@@ -163,6 +163,60 @@ impl World {
         }
     }
 
+    /// Has each living character standing idle play its idle for a
+    /// number of loops drawn at random, then a fidget picked by weight,
+    /// then idle again. One moving, playing something once, or between
+    /// shots of a fight it's fired in, which it idles to attack through,
+    /// doesn't fidget, and starts its loops afresh once it's done.
+    pub(crate) fn keep_idling(&mut self) {
+        for u in 0..self.units.len() {
+            let unit = &self.units[u];
+            let fighting = unit.shot.is_some()
+                && (unit.target.is_some() || self.organizations[unit.organization].bombarding);
+            if !unit.alive() || unit.moving() || self.ticks < unit.playing || fighting {
+                self.units[u].idle_until = None;
+                continue;
+            }
+            let Some(set) = self.animations_in(u, unit.stance.as_ref()) else {
+                continue;
+            };
+            let ([least, most], idle) = (set.idle_loops, set.idle);
+            let total: f32 = set.fidgets.iter().map(|(_, w)| w.max(0.0)).sum();
+            if total <= 0.0 {
+                continue;
+            }
+            match unit.idle_until {
+                None => {
+                    let more = most.saturating_sub(least);
+                    let loops =
+                        least + ((self.chance() * more as f32) as u32).min(more.saturating_sub(1));
+                    let ticks = (loops as f32 * idle / TICK).round() as u64;
+                    self.units[u].idle_until = Some(self.ticks + ticks);
+                }
+                Some(until) if self.ticks >= until => {
+                    let mut at = self.chance() * total;
+                    let unit = &self.units[u];
+                    let set = self
+                        .animations_in(u, unit.stance.as_ref())
+                        .expect("looked at above");
+                    let picked = (set.fidgets.iter())
+                        .find(|(_, w)| {
+                            at -= w.max(0.0);
+                            at < 0.0
+                        })
+                        .or(set.fidgets.last())
+                        .map(|(ids, _)| ids.clone())
+                        .expect("it has fidgets");
+                    self.play_once(u, Some(picked.as_str()));
+                    let unit = &mut self.units[u];
+                    unit.fidget = Some((self.ticks, picked));
+                    unit.idle_until = None;
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
     /// The stance the unit at `u` dies into, and whether it changes to
     /// it at once; any change it was waiting on is forgotten.
     pub(crate) fn dying_stance(&mut self, u: usize) -> (Option<Id>, bool) {
@@ -247,6 +301,7 @@ mod tests {
             look: look.map(Id::from),
             deaths,
             lengths: [(Id::from("attack1"), attack)].into(),
+            ..AnimationSet::default()
         };
         let sets = vec![
             set(
@@ -334,6 +389,40 @@ mod tests {
         shoot(&mut w);
         assert_eq!(w.units[0].stance, Some(Id::from("kneel")));
         assert_eq!(w.units[0].playing, w.ticks + SECOND / 2);
+    }
+
+    #[test]
+    fn idle_men_fidget_after_their_idle_loops_and_change_stance_once_its_over() {
+        let mut w = kneeling();
+        for set in w.rules.animation_sets.values_mut().flatten() {
+            set.idle = 1.5;
+            set.idle_loops = [2, 3];
+            set.fidgets = vec![("scratch".into(), 1.0)];
+            set.lengths.insert("scratch".into(), 4.0);
+        }
+        // Two loops of a second and a half, then the fidget.
+        w.keep_idling();
+        w.ticks += 3 * SECOND - 1;
+        w.keep_idling();
+        assert_eq!(w.units[0].fidget, None);
+        w.ticks += 1;
+        w.keep_idling();
+        let scratched = w.ticks;
+        assert_eq!(w.units[0].fidget, Some((scratched, Id::from("scratch"))));
+        assert_eq!(w.units[0].playing, scratched + 4 * SECOND);
+        // Drawn into a fight, he scratches on standing.
+        under_fire(&mut w);
+        w.keep_stances();
+        assert_eq!(w.units[0].stance, None);
+        w.ticks += 4 * SECOND;
+        w.keep_stances();
+        assert_eq!(w.units[0].stance, Some(Id::from("kneel")));
+        // Once he's fired, he idles to attack and never fidgets.
+        w.units[0].shot = Some((w.ticks, 0));
+        w.ticks += 60 * SECOND;
+        w.keep_idling();
+        w.keep_idling();
+        assert_eq!(w.units[0].fidget.as_ref().map(|f| f.0), Some(scratched));
     }
 
     #[test]

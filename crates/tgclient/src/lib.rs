@@ -480,6 +480,8 @@ struct UnitView {
     shot: Option<(u64, usize)>,
     /// The last of its repairs shown.
     mended: Option<(u64, usize)>,
+    /// The last of its fidgets shown.
+    fidget: Option<(u64, tgmap::Id)>,
     dead: bool,
     moving: bool,
     /// The outline its model tilts on to follow the ground, if it does.
@@ -539,6 +541,7 @@ fn spawn_unit_view(
         unit,
         shot: None,
         mended: None,
+        fidget: None,
         dead: false,
         moving: false,
         conform: models.conform(&thing.template),
@@ -2155,6 +2158,12 @@ fn show_units(
                 weapon.and_then(|w| w.animation.as_deref()),
             ) {
                 p.use_ability(ids);
+            }
+        }
+        if unit.fidget != view.fidget {
+            view.fidget = unit.fidget.clone();
+            if let (Some(p), Some((_, ids))) = (playing.as_mut(), unit.fidget.as_ref()) {
+                p.use_ability(ids.as_str());
             }
         }
         if unit.mended != view.mended {

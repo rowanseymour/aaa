@@ -1220,7 +1220,10 @@ mod tests {
         assert!(near(unit.path[1], [11.0, 28.0]), "{:?}", unit.path);
         assert!(near(unit.path[0], [29.0, 28.0]));
         // Its first leg holds the leader's heading, north.
-        let [fx, fy] = [unit.path[1][0] - unit.from[0], unit.path[1][1] - unit.from[1]];
+        let [fx, fy] = [
+            unit.path[1][0] - unit.from[0],
+            unit.path[1][1] - unit.from[1],
+        ];
         assert!(fx.abs() < 1e-4 && fy > 0.0);
     }
 

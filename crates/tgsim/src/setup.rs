@@ -330,6 +330,8 @@ impl World {
             stance_due: None,
             stance_heard: None,
             playing: 0,
+            idle_until: None,
+            fidget: None,
             besieged: None,
             struck: None,
             left: None,
