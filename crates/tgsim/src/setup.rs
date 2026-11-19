@@ -122,6 +122,8 @@ impl World {
             next_commission: 0,
             flying: Vec::new(),
             landings: Vec::new(),
+            groups: Vec::new(),
+            next_group: 0,
             technologies: BTreeMap::new(),
             objectives: BTreeMap::new(),
             pools: BTreeMap::new(),
@@ -251,6 +253,9 @@ impl World {
             // Counting from when it's made.
             settled: Some(self.ticks),
             travelling: false,
+            group: None,
+            group_speed: None,
+            taking_part: false,
             entrenched: None,
             morale: 0.0,
             morale_max: 0.0,

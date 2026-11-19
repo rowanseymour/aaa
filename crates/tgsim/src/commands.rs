@@ -32,6 +32,14 @@ impl World {
         self.playable(player)?;
         self.heeded(command)?;
         match *command {
+            // Taken if any of them is.
+            Command::Group { ref orders } => {
+                let mut checked = orders.iter().map(|o| self.check(player, o));
+                match checked.clone().any(|c| c.is_ok()) {
+                    true => Ok(()),
+                    false => checked.next().unwrap_or(Err(Refused::Unable)),
+                }
+            }
             Command::Run { organization, .. } => self.may_run(player, organization),
             Command::Rout { organization } => self.may_rout(player, organization),
             Command::Move { organization, .. }
@@ -111,6 +119,17 @@ impl World {
 
     /// Carries out `command` from `player`, unless it's refused.
     pub fn apply(&mut self, player: u32, command: Command) -> Result<(), Refused> {
+        self.give_order(player, command, false)
+    }
+
+    /// Carries out `command` for `player`; one to a regiment that isn't
+    /// its group's own takes it out of its group.
+    pub(crate) fn give_order(
+        &mut self,
+        player: u32,
+        command: Command,
+        grouped: bool,
+    ) -> Result<(), Refused> {
         self.playable(player)?;
         self.heeded(&command)?;
         let steering = steered(&command);
@@ -231,6 +250,10 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.cancel_construction(player, building)?
             }
+            Command::Group { orders } => self.order_group(player, orders)?,
+        }
+        if let (Some(r), false) = (steering, grouped) {
+            self.leave_group(r);
         }
         // An order cuts a reform short.
         if let Some(r) = steering {
@@ -600,7 +623,7 @@ impl World {
 
 /// The organization `command` moves, fights or disbands, if it's one of
 /// those orders.
-fn steered(command: &Command) -> Option<usize> {
+pub(crate) fn steered(command: &Command) -> Option<usize> {
     match *command {
         Command::Move { organization, .. }
         | Command::Attack { organization, .. }

@@ -115,7 +115,7 @@ impl Unit {
     }
 
     /// How far it has left to go along its path.
-    fn route_left(&self) -> f32 {
+    pub(crate) fn route_left(&self) -> f32 {
         let mut at = self.position;
         let mut left = 0.0;
         for &p in self.path.iter().rev() {
@@ -384,6 +384,16 @@ impl World {
     /// How fast the organization at `r` moves: as fast as its slowest
     /// member present can.
     pub(crate) fn regiment_speed(&self, r: usize) -> f32 {
+        let own = self.unhurried_speed(r);
+        // Its group's, which only ever slows it.
+        self.organizations[r]
+            .group_speed
+            .map_or(own, |s| s.min(own))
+    }
+
+    /// How fast the organization at `r` moves left to itself: as fast as
+    /// its slowest member present can, whatever its group would have.
+    pub(crate) fn unhurried_speed(&self, r: usize) -> f32 {
         let handed = self.handed_down_speed(r);
         let present = (self.organizations[r].units.iter()).filter(|&&u| self.units[u].alive());
         let slowest = (present.map(|&u| self.top_speed(u, handed))).fold(f32::INFINITY, f32::min);
@@ -737,7 +747,7 @@ impl World {
     /// The place in the organization at `r` of the member the rest keep
     /// their places from: its leader, or while it has none present, the
     /// first of its members that is.
-    fn pacer(&self, r: usize) -> Option<usize> {
+    pub(crate) fn pacer(&self, r: usize) -> Option<usize> {
         let organization = &self.organizations[r];
         let present = |&p: &usize| self.units[organization.units[p]].alive();
         (organization.leader.filter(present))
@@ -779,8 +789,12 @@ impl World {
     /// until it's tried enough; once done it faces as it was told to.
     /// Regiments' members keep their places on the way.
     pub(crate) fn travel(&mut self) {
+        // One waiting for the rest of its group stands.
         let tops: Vec<f32> = (0..self.organizations.len())
-            .map(|r| self.regiment_speed(r))
+            .map(|r| match self.waiting_for_group(r) {
+                true => 0.0,
+                false => self.regiment_speed(r),
+            })
             .collect();
         let handed: Vec<f32> = (0..self.organizations.len())
             .map(|r| self.handed_down_speed(r))
