@@ -123,6 +123,8 @@ pub struct BannerLayers {
     pub out_of_supply: Option<Handle<Image>>,
     /// Flashing while its side can't pay its upkeep.
     pub shortage: Option<Handle<Image>>,
+    /// While the organization is entrenched.
+    pub entrenched: Option<Handle<Image>>,
 }
 
 /// The layers of the banners that float over organizations, each a square
@@ -215,7 +217,23 @@ impl BannerImages {
             engaged: decal(BannerDecal::Engaged),
             out_of_supply: decal(BannerDecal::OutOfSupply),
             shortage: decal(BannerDecal::UpkeepShortage),
+            entrenched: decal(BannerDecal::Entrenched),
         }
+    }
+
+    /// The rank the banner an organization of `template` flies, for a side
+    /// whose faction flies `faction`'s, shows at experience level `level`,
+    /// counting from 0; loaded the first time it's asked for.
+    pub fn rank(
+        &mut self,
+        game: &GameData,
+        images: &mut Assets<Image>,
+        (template, faction): (&str, Option<&Id>),
+        level: usize,
+    ) -> Option<Handle<Image>> {
+        let banner = self.banners.banner(&Id::from(template), faction)?;
+        let path = self.banners.rank(banner, level)?.to_string();
+        self.image(game, images, path)
     }
 
     /// How many badges the nation of an organization of `template` has.

@@ -91,6 +91,9 @@ pub struct Banners {
     /// Each banner's decals, by banner id: when each shows, and the
     /// archive path of its first image, in the order the banner lists them.
     pub decals: HashMap<Id, Vec<(BannerDecal, String)>>,
+    /// Each banner's rank decal, by banner id: the archive path of its
+    /// image for each experience level, lowest first.
+    pub ranks: HashMap<Id, Vec<String>>,
     /// Each banner's plate, by banner id: the archive path of its model
     /// and the name of the shape in it that's always shown with no decals
     /// over it, whose own image is tinted in the owner's colour.
@@ -109,6 +112,9 @@ pub enum BannerDecal {
     Engaged,
     OutOfSupply,
     UpkeepShortage,
+    Entrenched,
+    /// By experience level, one image for each.
+    Experience,
 }
 
 impl BannerDecal {
@@ -120,6 +126,8 @@ impl BannerDecal {
             ("ENGAGED", BannerDecal::Engaged),
             ("OUT_OF_SUPPLY", BannerDecal::OutOfSupply),
             ("UPKEEP_SHORTAGE", BannerDecal::UpkeepShortage),
+            ("ENTRENCHED", BannerDecal::Entrenched),
+            ("EXPERIENCE", BannerDecal::Experience),
         ]
         .into_iter()
         .find_map(|(f, d)| is(f).then_some(d))
@@ -146,6 +154,14 @@ impl Banners {
         Some((model, shape))
     }
 
+    /// The archive path of the image `banner`'s rank decal shows at
+    /// experience level `level`, counting from 0: a level past the last
+    /// image keeps the last.
+    pub fn rank(&self, banner: &Id, level: usize) -> Option<&str> {
+        let ranks = self.ranks.get(banner)?;
+        ranks.get(level).or(ranks.last()).map(String::as_str)
+    }
+
     /// The archive path of the first image `banner` shows `when`.
     pub fn decal(&self, banner: &Id, when: BannerDecal) -> Option<&str> {
         let decals = self.decals.get(banner)?;
@@ -157,17 +173,29 @@ impl Banners {
 }
 
 /// `banner`'s decals that show `when` they're read as, each by its first
-/// image's archive path: relative to `file`'s folder, with `%s` its prefix.
-fn decals(file: &str, banner: &defs::Banner) -> Vec<(BannerDecal, String)> {
+/// image's archive path, and the images of its first rank decal: relative
+/// to `file`'s folder, with `%s` its prefix.
+fn decals(file: &str, banner: &defs::Banner) -> (Vec<(BannerDecal, String)>, Vec<String>) {
     let prefix = banner.resource_prefix.as_deref().unwrap_or("");
-    let decals = banner.plane.iter().flat_map(|p| &p.decal);
-    decals
-        .filter_map(|d| {
-            let when = BannerDecal::read(d.function.as_deref()?)?;
-            let texture = d.texture.iter().find_map(|t| t.texture.as_deref())?;
-            Some((when, beside(file, &texture.trim().replace("%s", prefix))))
-        })
-        .collect()
+    let mut ranks = None;
+    let mut first = Vec::new();
+    for d in banner.plane.iter().flat_map(|p| &p.decal) {
+        let Some(when) = d.function.as_deref().and_then(BannerDecal::read) else {
+            continue;
+        };
+        let textures = d.texture.iter().filter_map(|t| t.texture.as_deref());
+        let mut paths: Vec<String> = textures
+            .map(|t| beside(file, &t.trim().replace("%s", prefix)))
+            .collect();
+        if paths.is_empty() {
+            continue;
+        }
+        if when == BannerDecal::Experience && ranks.is_none() {
+            ranks = Some(paths.clone());
+        }
+        first.push((when, paths.swap_remove(0)));
+    }
+    (first, ranks.unwrap_or_default())
 }
 
 /// The archive path of `banner`'s model, relative to `file`'s folder with
@@ -202,7 +230,11 @@ impl GameData {
                     if let Some(plate) = plate(f.file, &b) {
                         out.plates.entry(id.clone()).or_insert(plate);
                     }
-                    out.decals.entry(id).or_insert_with(|| decals(f.file, &b));
+                    if !out.decals.contains_key(&id) {
+                        let (first, ranks) = decals(f.file, &b);
+                        out.ranks.insert(id.clone(), ranks);
+                        out.decals.insert(id, first);
+                    }
                 }
             }
         }
@@ -419,6 +451,8 @@ mod tests {
              \t\t[Decal]\n\t\t{\n\t\t\tfunction = none \n\t\t\t[Texture]\n\t\t\ttexture = %sBannerBase.png\n\t\t}\n\
              \t\t[Decal]\n\t\t{\n\t\t\tfunction = ENGAGED\n\t\t\t[Texture]\n\t\t\ttexture = Shared/Engaged1.png\n\t\t}\n\
              \t\t[Decal]\n\t\t{\n\t\t\tfunction = ENGAGED\n\t\t\t[Texture]\n\t\t\ttexture = Shared/Engaged2.png\n\t\t}\n\
+             \t\t[Decal]\n\t\t{\n\t\t\tfunction = EXPERIENCE\n\t\t\t[Texture]\n\t\t\ttexture = Shared/Rank0.png\n\
+             \t\t\t[Texture]\n\t\t\ttexture = Shared/Rank1.png\n\t\t}\n\
              \t}\n}\n\
              [Banner Template=Base]\n{\n\tids = ger_banner\n\tresource_prefix = GER/GER\n}\n",
         );
@@ -427,9 +461,9 @@ mod tests {
         let banner = files[0].read::<defs::Banner>("Banner").next().unwrap();
         let mut banners = Banners::default();
         let id = Id::from("ger_banner");
-        banners
-            .decals
-            .insert(id.clone(), decals(files[0].file, &banner));
+        let (first, ranks) = decals(files[0].file, &banner);
+        banners.decals.insert(id.clone(), first);
+        banners.ranks.insert(id.clone(), ranks);
         let decal = |when| banners.decal(&id, when);
         let frame = "organizations/banners/GER/GERBannerBase.png";
         assert_eq!(decal(BannerDecal::Always), Some(frame));
@@ -437,6 +471,11 @@ mod tests {
         let engaged = "organizations/banners/Shared/Engaged1.png";
         assert_eq!(decal(BannerDecal::Engaged), Some(engaged));
         assert_eq!(decal(BannerDecal::OutOfSupply), None);
+        // A rank for each level, lowest first, the last kept past the end.
+        let rank = |level| banners.rank(&id, level);
+        assert_eq!(rank(0), Some("organizations/banners/Shared/Rank0.png"));
+        assert_eq!(rank(1), Some("organizations/banners/Shared/Rank1.png"));
+        assert_eq!(rank(5), rank(1));
     }
 
     #[test]

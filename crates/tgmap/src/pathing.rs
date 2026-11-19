@@ -5,6 +5,7 @@
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use tgck::map::Terrain;
 use tgdata::{Id, Shape, Variation};
@@ -97,6 +98,8 @@ pub struct Pathing {
     /// Row-major, how many obstacles cover each tile, so that one going
     /// leaves the others' tiles blocked.
     blockers: Vec<u16>,
+    /// Which area each tile is in, for land movers and for ships.
+    areas: Arc<[Vec<u32>; 2]>,
 }
 
 impl Pathing {
@@ -119,27 +122,51 @@ impl Pathing {
                 defined.unwrap_or(if undefined_is_water(t) { NAVAL } else { LAND })
             })
             .collect();
+        let areas = Arc::new(areas(terrain.side, &tiles));
         Pathing {
             side: terrain.side,
             blockers: vec![0; tiles.len()],
             tiles,
+            areas,
         }
     }
 
     /// A map of one kind of tile, for tests and tools.
     pub fn uniform(side: usize, domain: Domain) -> Self {
+        let tiles = vec![bits(domain); side * side];
         Pathing {
             side,
-            tiles: vec![bits(domain); side * side],
+            areas: Arc::new(areas(side, &tiles)),
+            tiles,
             blockers: vec![0; side * side],
         }
     }
 
     /// Makes one tile `domain`'s, for tests and tools.
     pub fn set(&mut self, tile: Tile, domain: Domain) {
+        self.set_bits(tile, bits(domain));
+    }
+
+    /// Makes one tile closed to every mover, for tests and tools.
+    pub fn close(&mut self, tile: Tile) {
+        self.set_bits(tile, 0);
+    }
+
+    fn set_bits(&mut self, tile: Tile, bits: u8) {
         if let Some(i) = tile.index(self.side) {
-            self.tiles[i] = bits(domain);
+            self.tiles[i] = bits;
+            self.areas = Arc::new(areas(self.side, &self.tiles));
         }
+    }
+
+    /// Whether a mover on `domain` could get from the tile under `from`
+    /// to the one under `to` over its own kind of ground, whatever stands
+    /// on it: the two are in the same area. Off the map, or on ground
+    /// closed to it, it couldn't.
+    pub fn joined(&self, domain: Domain, from: [f32; 2], to: [f32; 2]) -> bool {
+        let areas = &self.areas[usize::from(domain == Domain::Naval)];
+        let area = |at| Tile::at(at).index(self.side).map(|i| areas[i]);
+        matches!((area(from), area(to)), (Some(a), Some(b)) if a == b && a != CLOSED)
     }
 
     /// Whether a mover on `domain` can enter the tile; off the map it can't.
@@ -353,6 +380,43 @@ pub(crate) fn undefined_is_water(tile: &tgck::map::Tile) -> bool {
     tile.water_body != 0
 }
 
+/// The area of a tile closed to a mover.
+const CLOSED: u32 = u32::MAX;
+
+/// Which area each of the row-major `tiles` is in, first for land movers
+/// and then for ships: tiles of the mover's ground sharing an edge are in
+/// the same one, and those closed to it in none, [`CLOSED`].
+fn areas(side: usize, tiles: &[u8]) -> [Vec<u32>; 2] {
+    [LAND, NAVAL].map(|bit| {
+        let mut area = vec![CLOSED; tiles.len()];
+        let mut next = 0;
+        for start in 0..tiles.len() {
+            if area[start] != CLOSED || tiles[start] & bit == 0 {
+                continue;
+            }
+            area[start] = next;
+            let mut open = vec![start];
+            while let Some(i) = open.pop() {
+                let (x, y) = (i % side, i / side);
+                let edges = [
+                    (x > 0).then(|| i - 1),
+                    (x + 1 < side).then(|| i + 1),
+                    (y > 0).then(|| i - side),
+                    (y + 1 < side).then(|| i + side),
+                ];
+                for j in edges.into_iter().flatten() {
+                    if area[j] == CLOSED && tiles[j] & bit != 0 {
+                        area[j] = next;
+                        open.push(j);
+                    }
+                }
+            }
+            next += 1;
+        }
+        area
+    })
+}
+
 /// The tile bit a mover on `domain` needs.
 fn bits(domain: Domain) -> u8 {
     match domain {
@@ -364,6 +428,27 @@ fn bits(domain: Domain) -> u8 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn areas_are_split_by_other_ground_but_not_by_what_stands_on_it() {
+        // Water down column 4 and a wall of things down column 7.
+        let mut p = Pathing::uniform(10, Domain::Land);
+        for y in 0..10 {
+            p.set(Tile::new(4, y), Domain::Naval);
+            p.set_blocked(Tile::new(7, y));
+        }
+        let at = |x: i32, y: i32| Tile::new(x, y).centre();
+        assert!(p.joined(Domain::Land, at(5, 0), at(9, 9)));
+        assert!(!p.joined(Domain::Land, at(0, 0), at(5, 0)));
+        assert!(!p.joined(Domain::Land, at(0, 0), at(4, 0)));
+        assert!(p.joined(Domain::Naval, at(4, 0), at(4, 9)));
+        assert!(!p.joined(Domain::Land, at(0, 0), [-1.0, 0.0]));
+        // Tiles touching only at a corner aren't joined.
+        let mut p = Pathing::uniform(4, Domain::Naval);
+        p.set(Tile::new(1, 1), Domain::Land);
+        p.set(Tile::new(2, 2), Domain::Land);
+        assert!(!p.joined(Domain::Land, at(1, 1), at(2, 2)));
+    }
 
     #[test]
     fn zones_are_octagons_of_tiles_on_open_ground() {
