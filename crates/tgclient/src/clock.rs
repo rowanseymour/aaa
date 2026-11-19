@@ -14,13 +14,14 @@ use tgsim::Action;
 use crate::actions::Blocks;
 use crate::displays::{self, Displays, Rim};
 use crate::intent::{Asked, Asks, Intent};
-use crate::keys::Bindings;
-use crate::ui::{Click, Edge, Hint, Ink, Marked, Surface, Theme};
+use crate::keys::{Bindings, Named};
+use crate::ui::{Click, Edge, Hint, Ink, Surface, Theme};
+use crate::widgets::Pressable;
 use crate::{Loaded, Orders, Screen};
 
 /// What the hotkey files call pausing or unpausing, stepping the speed up
 /// or down, and setting it.
-const PAUSE: &str = "gamepause";
+pub(crate) const PAUSE: &str = "gamepause";
 const SPEED_UP: &str = "SpeedUp";
 const SPEED_DOWN: &str = "SpeedDown";
 const SPEED: &str = "GameSpeed";
@@ -93,14 +94,49 @@ fn stepped(now: f32, by: f32, speeds: &RangeInclusive<f32>) -> f32 {
     (nearest + by).clamp(*speeds.start(), *speeds.end())
 }
 
-/// The button that pauses and unpauses the match, lit while it's paused,
-/// with its name to mark its key in.
-#[derive(Component)]
-pub struct PauseButton {
-    name: String,
-    /// Whether it was last drawn lit and usable, once it has been.
-    drawn: Option<(bool, bool)>,
+/// What either interface's pause button is [`called`](crate::ui::called),
+/// so a script works with both.
+pub(crate) const PAUSE_BUTTON: &str = "clock.pause";
+
+/// A button, of either interface, that pauses and unpauses the match.
+#[derive(Component, Default)]
+pub struct Pauses;
+
+/// What the pause buttons show: whether the match is paused, whoever
+/// paused it, and whether the player may pause it at all.
+#[derive(Resource, Default, Clone, Copy, PartialEq, Debug)]
+pub struct PauseState {
+    pub paused: bool,
+    pub usable: bool,
 }
+
+/// Keeps [`PauseState`] to the match's.
+pub fn follow(orders: Res<Orders>, mut state: ResMut<PauseState>) {
+    state.set_if_neq(PauseState {
+        paused: orders.paused(),
+        usable: orders.allowed(&Action::Pause(true)),
+    });
+}
+
+/// Lets the pause buttons be pressed only by those who may pause, such
+/// as not anyone only watching.
+pub fn disable_buttons(
+    mut commands: Commands,
+    state: Res<PauseState>,
+    buttons: Query<(Entity, Has<InteractionDisabled>), With<Pauses>>,
+) {
+    for (id, disabled) in &buttons {
+        match (state.usable, disabled) {
+            (true, true) => _ = commands.entity(id).remove::<InteractionDisabled>(),
+            (false, false) => _ = commands.entity(id).insert(InteractionDisabled),
+            _ => {}
+        }
+    }
+}
+
+/// Our interface's pause button, a glyph on the minimap's rim.
+#[derive(Component)]
+pub struct PauseButton;
 
 /// The glyph on the [`PauseButton`].
 #[derive(Component)]
@@ -126,10 +162,10 @@ pub fn spawn_button(
         Button,
         Click::TOGGLE,
         RelativeCursorPosition::default(),
-        bindings.marked(PAUSE, &name),
+        Named::new(&bindings, PAUSE, name),
         (Asks::new(PAUSE), Hint(help)),
-        crate::ui::called("clock.pause"),
-        PauseButton { name, drawn: None },
+        crate::ui::called(PAUSE_BUTTON),
+        (Pauses, PauseButton),
         Rim::TopLeft.node(),
         Surface::Clear,
         Edge::Border,
@@ -148,17 +184,9 @@ pub fn spawn_button(
     ));
 }
 
-/// Marks the pause button's key afresh once the hotkeys change.
-pub fn mark_button(bindings: Res<Bindings>, mut buttons: Query<(&PauseButton, &mut Marked)>) {
-    for (button, mut marked) in &mut buttons {
-        marked.set_if_neq(bindings.marked(PAUSE, &button.name));
-    }
-}
-
 /// What [`light_button`] reads and sets on the button.
 type ButtonLook = (
-    Entity,
-    &'static mut PauseButton,
+    Ref<'static, PauseButton>,
     Ref<'static, Hovered>,
     Has<bevy::ui::Pressed>,
     &'static mut Edge,
@@ -166,38 +194,28 @@ type ButtonLook = (
     &'static Children,
 );
 
-/// Lights the pause button while the match is paused, whoever paused it,
-/// its edge while it's hovered and its face while it's held down. For
-/// those who may not pause, such as anyone only watching, it's greyed and
-/// can't be pressed.
+/// Lights our pause button while the match is paused, its edge while it's
+/// hovered and its face while it's held down, and greys it for those who
+/// may not pause.
 pub fn light_button(
-    mut commands: Commands,
-    orders: Res<Orders>,
+    state: Res<PauseState>,
     theme: Res<Theme>,
     mut buttons: Query<ButtonLook>,
     mut glyphs: Query<&mut ImageNode, With<PauseGlyph>>,
 ) {
-    let paused = orders.paused();
-    let usable = orders.allowed(&Action::Pause(true));
-    for (id, mut button, hovered, pressed, mut edge, mut surface, children) in &mut buttons {
+    let PauseState { paused, usable } = *state;
+    for (button, hovered, pressed, mut edge, mut surface, children) in &mut buttons {
         surface.set_if_neq(match pressed && usable {
             true => Surface::Hovered,
             false => Surface::Clear,
         });
-        let restyle = button.drawn != Some((paused, usable)) || theme.is_changed();
+        let restyle = state.is_changed() || theme.is_changed() || button.is_added();
         if restyle || hovered.is_changed() {
             edge.set_if_neq(Edge::lit(paused, hovered.get() && usable, Edge::Border));
         }
         if !restyle {
             continue;
         }
-        if button.drawn.is_none_or(|(_, was)| was != usable) {
-            match usable {
-                true => commands.entity(id).remove::<InteractionDisabled>(),
-                false => commands.entity(id).insert(InteractionDisabled),
-            };
-        }
-        button.drawn = Some((paused, usable));
         let colour = match (paused, usable) {
             (true, _) => theme.edge(Edge::Lit),
             (false, true) => theme.ink(Ink::Help),
@@ -211,9 +229,40 @@ pub fn light_button(
     }
 }
 
+/// Switches the original interface's pause button on while the match is
+/// paused.
+pub fn select_original_button(
+    state: Res<PauseState>,
+    mut buttons: Query<(Ref<Pauses>, &mut Pressable)>,
+) {
+    for (pauses, mut button) in &mut buttons {
+        if state.is_changed() || pauses.is_added() {
+            button.selected = state.paused;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_original_pause_button_follows_the_pause_and_who_may_pause() {
+        let mut app = App::new();
+        app.init_resource::<PauseState>()
+            .add_systems(Update, (disable_buttons, select_original_button));
+        let button = app.world_mut().spawn((Pauses, Pressable::default())).id();
+        let set = |app: &mut App, paused, usable| {
+            *app.world_mut().resource_mut::<PauseState>() = PauseState { paused, usable };
+            app.update();
+            let world = app.world();
+            let selected = world.get::<Pressable>(button).unwrap().selected;
+            (selected, world.get::<InteractionDisabled>(button).is_some())
+        };
+        assert_eq!(set(&mut app, true, true), (true, false));
+        assert_eq!(set(&mut app, false, false), (false, true));
+        assert_eq!(set(&mut app, true, true), (true, false));
+    }
 
     #[test]
     fn each_key_asks_for_its_pause_or_speed() {

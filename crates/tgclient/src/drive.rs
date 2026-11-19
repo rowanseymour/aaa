@@ -3,7 +3,7 @@
 //!
 //! A button goes by its [`ButtonId`]. Clicking one activates it directly,
 //! with nothing hovered, but only where a person could: not one under
-//! whatever [`Covers`] the screen.
+//! whatever [`Covers`] the screen, nor one that's disabled.
 
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput, NativeKey};
@@ -86,6 +86,12 @@ pub fn click(world: &mut World, id: &str) -> Result<(), String> {
     let Some(button) = seen.iter().find(|b| b.id.eq_ignore_ascii_case(id)) else {
         return Err(format!("no button {id:?} to press; ui lists them"));
     };
+    if world
+        .get::<bevy::ui::InteractionDisabled>(button.entity)
+        .is_some()
+    {
+        return Err(format!("button {id:?} is disabled"));
+    }
     world.trigger(Activate {
         entity: button.entity,
     });
@@ -203,6 +209,21 @@ mod tests {
         assert_eq!(world.resource::<Clicked>().0, ["launch", "second"]);
         assert!(click(&mut world, "gone").is_err(), "it's hidden");
         assert!(click(&mut world, "nothing").is_err());
+    }
+
+    #[test]
+    fn a_disabled_button_cannot_be_clicked() {
+        let mut world = world();
+        let launch = ids(&mut world)
+            .iter()
+            .position(|id| id == "launch")
+            .unwrap();
+        let entity = buttons(&mut world).0[launch].entity;
+        world
+            .entity_mut(entity)
+            .insert(bevy::ui::InteractionDisabled);
+        assert!(click(&mut world, "launch").is_err());
+        assert!(world.resource::<Clicked>().0.is_empty());
     }
 
     #[test]
