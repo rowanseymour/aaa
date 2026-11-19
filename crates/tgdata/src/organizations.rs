@@ -167,6 +167,22 @@ impl GameData {
             .collect()
     }
 
+    /// Where the regiments of a group all in one formation stand, from
+    /// the group's centre in the group's order, by that formation's id,
+    /// for those that name a group formation.
+    pub fn group_formations(&self) -> HashMap<Id, Vec<[f32; 2]>> {
+        let files = self.parse_tgis(|n| n.starts_with("organizations/") || n.starts_with("game/"));
+        let files = scoped(&files);
+        let groups: HashMap<Id, Vec<[f32; 2]>> = (files.iter())
+            .flat_map(|f| f.read::<defs::GroupFormation>("GroupFormation"))
+            .filter_map(|g| Some((g.ids?, g.position.iter().filter_map(|p| p.offset).collect())))
+            .collect();
+        (files.iter())
+            .flat_map(|f| f.read::<defs::Formation>("Formation"))
+            .filter_map(|f| Some((f.ids?, groups.get(&f.group_formation_ids?)?.clone())))
+            .collect()
+    }
+
     /// What each formation's properties give the regiment in it, by
     /// formation id, for those that give anything.
     pub fn formation_effects(&self) -> HashMap<Id, CombatEffect> {

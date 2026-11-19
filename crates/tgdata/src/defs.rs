@@ -1709,6 +1709,23 @@ pub struct Formation {
     /// come within its operational range, or runs into.
     #[serde(default)]
     pub aggressive: bool,
+    /// The [`GroupFormation`] a group of regiments all in it takes.
+    pub group_formation_ids: Option<Id>,
+}
+
+/// Where each regiment of a group stands, regiment by regiment in the
+/// group's order.
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupFormation {
+    pub ids: Option<Id>,
+    #[serde(default)]
+    pub position: Vec<GroupFormationPosition>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct GroupFormationPosition {
+    /// From the group's centre, with 0,1 straight ahead.
+    pub offset: Option<[f32; 2]>,
 }
 
 /// What an organization in a formation holds. Read apart from the

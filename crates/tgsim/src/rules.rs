@@ -70,6 +70,10 @@ pub struct Rules {
     /// What each formation's properties give the regiment in it, by
     /// formation id.
     pub formation_effects: HashMap<Id, tgmap::CombatEffect>,
+    /// Where the regiments of a group all in one formation stand, from the
+    /// group's centre (x to its right, y ahead) in the group's order, by
+    /// that formation's id.
+    pub group_formations: HashMap<Id, Vec<[f32; 2]>>,
     /// What each organization template's broken formation's property gives
     /// it while it has no formation, by template.
     pub broken_effects: HashMap<Id, tgmap::CombatEffect>,
@@ -201,6 +205,7 @@ impl Default for Rules {
             combat_effects: HashMap::new(),
             property_types: HashMap::new(),
             formation_effects: HashMap::new(),
+            group_formations: HashMap::new(),
             broken_effects: HashMap::new(),
             formation_types: HashMap::new(),
             broken_types: HashMap::new(),

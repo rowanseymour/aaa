@@ -250,14 +250,15 @@ impl World {
         let centre = self.group_centre(&g.organizations);
         let facing =
             zone.and_then(|(at, _)| crate::normalised([at[0] - centre[0], at[1] - centre[1]]));
-        let times: Vec<(usize, f32, f32)> = (g.organizations.iter())
-            .filter(|&&r| self.organizations[r].taking_part && self.underway(r))
-            .filter_map(|&r| {
+        let places = facing.map(|f| self.group_places(&g.organizations, f));
+        let times: Vec<(usize, f32, f32)> = (g.organizations.iter().enumerate())
+            .filter(|&(_, &r)| self.organizations[r].taking_part && self.underway(r))
+            .filter_map(|(i, &r)| {
                 let speed = self.unhurried_speed(r);
                 let lp = self.pacer(r)?;
                 let mut left = self.units[self.organizations[r].units[lp]].route_left();
-                if let (Some((_, range)), Some(facing)) = (zone, facing) {
-                    let ahead = tgmap::to_local(centre, facing, self.centre(r))[1];
+                if let (Some((_, range)), Some(places)) = (zone, &places) {
+                    let ahead = places[i][1];
                     left = (left - (range + SUPPLY_ZONE_BUFFER + ahead)).max(0.0);
                 }
                 (speed > 0.0).then_some((r, speed, left / speed))
@@ -273,6 +274,44 @@ impl World {
         for (r, speed, time) in times {
             self.organizations[r].group_speed = Some(speed * time / longest);
         }
+    }
+
+    /// Each of `organizations`' places in their group facing `facing`,
+    /// from its centre, x to its right and y ahead: all in one formation,
+    /// the positions its group formation gives them in turn; otherwise
+    /// where each stands, one not taking part put at the zone's least
+    /// radius in its own direction. Either way set about the centre.
+    fn group_places(&self, organizations: &[usize], facing: [f32; 2]) -> Vec<[f32; 2]> {
+        let formation = |r: usize| {
+            let o = &self.organizations[r];
+            (!o.broken()).then(|| o.formations.get(o.current_formation()).map(|f| &f.id))?
+        };
+        let first = organizations.first().and_then(|&r| formation(r));
+        let shared = first.filter(|&id| organizations.iter().all(|&r| formation(r) == Some(id)));
+        let given = shared
+            .and_then(|id| {
+                self.rules
+                    .group_formations
+                    .get(&tgmap::Id::from(id.as_str()))
+            })
+            .filter(|positions| positions.len() >= organizations.len());
+        let centre = self.group_centre(organizations);
+        let places: Vec<[f32; 2]> = match given {
+            Some(positions) => positions[..organizations.len()].to_vec(),
+            None => (organizations.iter())
+                .map(|&r| {
+                    let at = tgmap::to_local(centre, facing, self.centre(r));
+                    match self.organizations[r].taking_part {
+                        true => at,
+                        false => crate::normalised(at)
+                            .map_or(at, |[x, y]| [x * ZONE_RANGE_MIN, y * ZONE_RANGE_MIN]),
+                    }
+                })
+                .collect(),
+        };
+        let n = places.len().max(1) as f32;
+        let [mx, my] = (places.iter()).fold([0.0, 0.0], |[x, y], [a, b]| [x + a / n, y + b / n]);
+        places.iter().map(|[x, y]| [x - mx, y - my]).collect()
     }
 
     /// Whether the organization at `r` is waiting for the rest of its
@@ -394,5 +433,26 @@ mod tests {
         let at = w.units[1].position;
         run(&mut w, 1.0);
         assert_eq!(w.units[1].position, at);
+    }
+
+    #[test]
+    fn regiments_all_in_one_formation_take_its_group_formations_places() {
+        let mut w = grouped();
+        let line = vec![[0.0, 6.0], [-13.5, 6.0], [13.5, 6.0]];
+        w.rules.group_formations.insert("line".into(), line);
+        let north = [0.0, 1.0];
+        let places = w.group_places(&[0, 1], north);
+        assert!(near(places[0], [6.75, 0.0]) && near(places[1], [-6.75, 0.0]));
+        // In different formations, each keeps where it stands, set about
+        // the centre: the first, at 9,10, 1 to the left.
+        w.organizations[1].formation = 1;
+        for r in [0, 1] {
+            w.organizations[r].taking_part = true;
+        }
+        let places = w.group_places(&[0, 1], north);
+        assert!(
+            near(places[0], [-1.0, 0.0]) && near(places[1], [1.0, 0.0]),
+            "{places:?}"
+        );
     }
 }
