@@ -23,6 +23,7 @@ mod entrenchment;
 mod experience;
 mod fog;
 mod follow;
+mod groups;
 mod guard;
 mod hash;
 mod heroes;
@@ -66,6 +67,7 @@ pub use delivery::{Delivery, Descent};
 pub use economy::{Balance, Change, Ledger, Limit, Treasury};
 pub use experience::{Commander, Operated, SpecialOp};
 pub use fog::{Fog, Seen};
+pub use groups::Group;
 use hash::{Digest, Hasher, digest};
 pub use heroes::Pooled;
 pub use morale::Mind;
@@ -224,6 +226,10 @@ pub struct World {
     /// Projectiles that landed in the last [`LANDINGS_KEPT`] ticks, oldest
     /// first, for what shows them to find.
     pub landings: Vec<Landing>,
+    /// The regiments ordered as one, timed together.
+    pub groups: Vec<Group>,
+    /// The id the next group is given.
+    next_group: u32,
     /// The last number each side has given a numbered template, by side
     /// and template.
     numbers: BTreeMap<(u32, Id), u32>,
@@ -249,6 +255,13 @@ pub struct Organization {
     pub units: Vec<usize>,
     /// Its slowest member's, which they all keep to so as to stay together.
     pub speed: f32,
+    /// The group it's in, by [`Group::id`].
+    pub group: Option<u32>,
+    /// The speed its group hands it to arrive with the rest, while it does.
+    group_speed: Option<f32>,
+    /// Whether it was inside its group's zone when its group last looked,
+    /// and so takes part in its timing.
+    taking_part: bool,
     /// Where it stands, or is headed: its members take their places in the
     /// formation around it.
     pub position: [f32; 2],
@@ -543,6 +556,9 @@ pub struct Unit {
     /// What each step it drives is stretched by, as a regiment's member
     /// keeping its place does: 0 while it waits for its place to come.
     pace: f32,
+    /// Whether it's dashing straight for its next waypoint to get back
+    /// onto its route.
+    detour: bool,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -598,6 +614,13 @@ pub struct Unit {
     stance_heard: Option<(u32, u8)>,
     /// The tick the animation it plays once, such as an attack's, ends.
     playing: u64,
+    /// While it stands idle, the tick it fidgets on.
+    idle_until: Option<u64>,
+    /// Whether it's fired in the fight it's in, so it idles to attack
+    /// rather than fidgeting.
+    fired_in_fight: bool,
+    /// The fidget it last started, by its ids, and the tick it did.
+    pub fidget: Option<(u64, Id)>,
     /// The last hit an enemy dealt it.
     pub struck: Option<Struck>,
     /// How it left the map without dying, if it has.
@@ -620,6 +643,7 @@ impl Unit {
     /// replaced: the new one is decided afresh.
     pub(crate) fn forget_dying(&mut self) {
         (self.died, self.death, self.dying) = (None, None, 0);
+        (self.idle_until, self.fidget, self.fired_in_fight) = (None, None, false);
         (
             self.stance,
             self.stance_due,
@@ -1003,6 +1027,9 @@ pub enum Command {
     /// map for good, for nothing. Refused for an organization that's engaged or
     /// attached to an HQ, or anything on its way to unpack.
     Disband { organization: usize },
+    /// Gives these orders to the regiments they're to as one group, with
+    /// Group Behavior on: a fresh group of them, timed to arrive together.
+    Group { orders: Vec<Command> },
     /// Takes a building off the map for its [`World::sale_value`].
     /// Refused for one whose template can't be sold, one unpacking or
     /// packing, and one under siege where the rules say so.
@@ -1214,8 +1241,10 @@ impl World {
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
+        self.keep_idling();
         self.keep_stances();
         self.keep_entrenchment();
+        self.keep_groups();
         self.keep_company();
         self.construct();
         self.close_in();
@@ -1311,7 +1340,7 @@ impl Sides {
 
 digest!(World {
     organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
+    groups, next_group, holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng, sides,
 } skip {
     // Fixed by the map and the game's data.
@@ -1329,6 +1358,7 @@ digest!(Sides { names, computers } skip {
 });
 
 digest!(Organization {
+    group, group_speed, taking_part,
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
@@ -1364,10 +1394,10 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
     fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
-    stance_heard, playing, besieged, struck, left, awaited, descent,
+    stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
     properties,
 } skip {
     // Its template's.

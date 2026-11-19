@@ -554,6 +554,7 @@ impl World {
         unit.fired_ago[pick.weapon] = 0.0;
         unit.busy = self.ticks + (weapon.choice.lasts / TICK).round() as u64;
         self.play_once(u, weapon.animation.as_deref());
+        self.units[u].fired_in_fight = true;
         let s = Target::Unit(u);
         let by = self.owner(s);
         self.use_on_user(&weapon, (s, by), hits);

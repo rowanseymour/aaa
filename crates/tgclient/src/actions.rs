@@ -25,6 +25,7 @@ use tgmap::Organization;
 use tgrender::textures;
 use tgsim::{Lacking, Researchable};
 
+use crate::control_groups::{self, ControlGroups};
 use crate::intent::{Asked, Asks, Intent};
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
@@ -56,7 +57,7 @@ const fn span(n: usize) -> f32 {
 /// The game leaves the rest of the commands off an organization's grid.
 /// They're in the game's own order of commands, which decides who keeps a
 /// slot two want.
-const ORDERS: [(&str, Option<Give>); 14] = [
+const ORDERS: [(&str, Option<Give>); 16] = [
     ("kill", Some(Give::Aim(Aim::Attack))),
     ("guard", Some(Give::Aim(Aim::Guard))),
     ("repair", Some(Give::Aim(Aim::Repair))),
@@ -71,6 +72,8 @@ const ORDERS: [(&str, Option<Give>); 14] = [
     ("detach", Some(Give::DetachHero)),
     ("hq_attach", Some(Give::Attach)),
     ("hq_detach", Some(Give::Detach)),
+    (control_groups::ENABLE, Some(Give::GroupBehavior)),
+    (control_groups::DISABLE, Some(Give::GroupBehavior)),
 ];
 
 /// The commands whose buttons open a recruiter's two menus.
@@ -144,6 +147,8 @@ enum Give {
     DetachHero,
     /// Opens the Build menu.
     Build,
+    /// Flips the Group Behavior switch.
+    GroupBehavior,
 }
 
 impl Give {
@@ -156,7 +161,9 @@ impl Give {
             Give::Detach => Some(tgsim::Command::Detach { organization }),
             Give::Disband => Some(tgsim::Command::Disband { organization }),
             Give::DetachHero => Some(tgsim::Command::DetachHero { organization }),
-            Give::Aim(_) | Give::Stop | Give::AttachHero | Give::Build => None,
+            Give::Aim(_) | Give::Stop | Give::AttachHero | Give::Build | Give::GroupBehavior => {
+                None
+            }
         }
     }
 }
@@ -348,12 +355,14 @@ impl BuildingButtons<'_> {
 /// instead, or on its way to unpack; while it fights it's greyed. Only
 /// where the game has HQs can organizations attach to them, and only where
 /// it has heroes can one company selected alone take one on or let it go.
-/// Rout shows while any of them could rout now.
+/// Rout shows while any of them could rout now. Two or more have the
+/// Group Behavior switch of their current group, `behavior`, to flip.
 fn offered(
     sim: &tgsim::World,
     player: Option<u32>,
     selected: &[usize],
     has: GameHas,
+    behavior: Option<bool>,
 ) -> [bool; ORDERS.len()] {
     let packed = |&r: &usize| sim.organizations[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
@@ -384,6 +393,8 @@ fn offered(
         "retreat" | "guard" => !all_packed || !lone,
         "disband" => disband,
         "attach" | "detach" => led,
+        control_groups::ENABLE => behavior == Some(false),
+        control_groups::DISABLE => behavior == Some(true),
         _ => true,
     })
 }
@@ -1270,6 +1281,7 @@ fn contents(
     selected: &[usize],
     building: Option<usize>,
     local: Option<u32>,
+    behavior: Option<bool>,
 ) -> Shown {
     let hq = shown_hq(sim, selected, building);
     let menu = looks.menu(sim, building);
@@ -1296,7 +1308,7 @@ fn contents(
     let entries = layout(
         page,
         &order_slots,
-        &offered(sim, local, selected, looks.has),
+        &offered(sim, local, selected, looks.has, behavior),
         building.map(|b| BuildingButtons {
             deploy: looks.deploy.0,
             location: looks.location.0,
@@ -1346,17 +1358,26 @@ fn contents(
 /// and whichever interface draws it.
 pub fn fill_slots(
     page: Res<Page>,
-    selected: Res<Selected>,
-    chosen: Res<SelectedBuilding>,
+    (selected, chosen): (Res<Selected>, Res<SelectedBuilding>),
     sim: Res<Sim>,
     looks: Res<Looks>,
     local: Res<Local>,
+    groups: Res<ControlGroups>,
     mut shown: ResMut<Shown>,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
+    let behavior = groups.behavior(&selected.0);
     // Others' things have no buttons, nor anything for a key to press.
     let now = match crate::selection::commanded(&sim.0, local.0, &selected.0, building) {
-        true => contents(*page, &sim.0, &looks, &selected.0, building, local.0),
+        true => contents(
+            *page,
+            &sim.0,
+            &looks,
+            &selected.0,
+            building,
+            local.0,
+            behavior,
+        ),
         false => Shown::default(),
     };
     shown.set_if_neq(now);
@@ -1805,6 +1826,7 @@ pub struct Presser<'w, 's> {
     local: Res<'w, Local>,
     sim: Res<'w, Sim>,
     orders: ResMut<'w, Orders>,
+    groups: ResMut<'w, ControlGroups>,
     page: ResMut<'w, Page>,
     time: Res<'w, Time>,
     sounds: ResMut<'w, crate::sound::Sounds>,
@@ -1829,6 +1851,9 @@ impl Presser<'_, '_> {
                 Some(Give::Stop) => {
                     let selected = &self.selected.0;
                     crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
+                    if self.groups.grouping(selected) {
+                        self.orders.gather(player);
+                    }
                     for &organization in selected {
                         let stop = tgsim::Command::Stop { organization };
                         let _ = self.orders.give(sim, player, stop);
@@ -1864,6 +1889,7 @@ impl Presser<'_, '_> {
                     }
                 }
                 Some(Give::Build) => *self.page = Page::Menu(Menu::Build),
+                Some(Give::GroupBehavior) => self.groups.toggle(&self.selected.0),
                 None => {}
             },
             Entry::Build(i) => *self.page = Page::Placing(i),
@@ -2216,7 +2242,7 @@ pub fn aim(
     scenery: Res<crate::banners::Scenery>,
     loaded: Res<Loaded>,
     local: Res<Local>,
-    (selected, chosen): (Res<Selected>, Res<SelectedBuilding>),
+    (selected, chosen, groups): (Res<Selected>, Res<SelectedBuilding>, Res<ControlGroups>),
     focus: Res<crate::Focus>,
     (looks, menus): (Res<crate::waypoints::Looks>, Res<Looks>),
     sim: Res<Sim>,
@@ -2307,6 +2333,10 @@ pub fn aim(
         *page = Page::Orders;
         return;
     };
+    // With Group Behavior on, what each is told goes as one group.
+    if groups.grouping(&selected.0) {
+        orders.gather(player);
+    }
     if aim == Aim::Repair {
         *page = Page::Orders;
         let piece = match focus {
@@ -2500,6 +2530,8 @@ mod tests {
         at(10),
         at(10),
         at(11),
+        at(4),
+        at(4),
     ];
 
     /// Which of [`ORDERS`] the selection has, by command id.
@@ -2548,15 +2580,15 @@ mod tests {
             hqs: true,
             heroes: true,
         };
-        assert!(ids(offered(&w, None, &[0], GameHas::default())).is_empty());
+        assert!(ids(offered(&w, None, &[0], GameHas::default(), None)).is_empty());
         // A hero takes a captain's place, which this has none of.
-        assert_eq!(ids(offered(&w, None, &[0], both)), ["hq_attach"]);
+        assert_eq!(ids(offered(&w, None, &[0], both, None)), ["hq_attach"]);
         w.organizations[0].leader = Some(0);
         let led = ["attach", "detach", "hq_attach"];
-        assert_eq!(ids(offered(&w, None, &[0], both)), led);
+        assert_eq!(ids(offered(&w, None, &[0], both, None)), led);
         // One company at a time.
         assert_eq!(
-            ids(offered(&w, None, &[0, 1], both)),
+            ids(offered(&w, None, &[0, 1], both, None)),
             ["hq_attach", "hq_detach"]
         );
     }
@@ -2566,7 +2598,7 @@ mod tests {
         let mut w = crate::orders::testing::fresh();
         let i = ORDERS.iter().position(|(id, _)| *id == "rout").unwrap();
         let routs = |w: &tgsim::World, player, selected: &[usize]| {
-            offered(w, Some(player), selected, GameHas::default())[i]
+            offered(w, Some(player), selected, GameHas::default(), None)[i]
         };
         w.organizations[0].morale_max = 50.0;
         w.organizations[0].morale = 50.0;
@@ -2637,7 +2669,8 @@ mod tests {
 
     #[test]
     fn the_build_menu_lists_what_can_be_built_and_sites_offer_only_cancel() {
-        let all = [true; ORDERS.len()];
+        // Not with Group Behavior's, which would take Construct's slot.
+        let all = ORDERS.map(|(id, _)| !id.starts_with("group_behavior"));
         let menu = layout(Page::Menu(Menu::Build), &GAME, &all, None, false, 3);
         let built: Vec<Option<Entry>> = (0..3).map(|i| Some(Entry::Build(i))).collect();
         assert_eq!(menu[..3], built[..]);

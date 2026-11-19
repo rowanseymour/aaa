@@ -52,6 +52,11 @@ impl Asked {
         Asked(intents.read().cloned().collect())
     }
 
+    /// Each of them, in the order asked.
+    pub fn all(&self) -> impl Iterator<Item = &Intent> {
+        self.0.iter()
+    }
+
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

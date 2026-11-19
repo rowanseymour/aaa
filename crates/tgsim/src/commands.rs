@@ -32,6 +32,17 @@ impl World {
         self.playable(player)?;
         self.heeded(command)?;
         match *command {
+            // Taken if any of them is.
+            Command::Group { ref orders } => {
+                if orders.iter().any(|o| matches!(o, Command::Group { .. })) {
+                    return Err(Refused::Unable);
+                }
+                let checked: Vec<_> = orders.iter().map(|o| self.check(player, o)).collect();
+                match checked.iter().any(Result::is_ok) {
+                    true => Ok(()),
+                    false => checked.into_iter().next().unwrap_or(Err(Refused::Unable)),
+                }
+            }
             Command::Run { organization, .. } => self.may_run(player, organization),
             Command::Rout { organization } => self.may_rout(player, organization),
             Command::Move { organization, .. }
@@ -111,6 +122,17 @@ impl World {
 
     /// Carries out `command` from `player`, unless it's refused.
     pub fn apply(&mut self, player: u32, command: Command) -> Result<(), Refused> {
+        self.give_order(player, command, false)
+    }
+
+    /// Carries out `command` for `player`; one to a regiment that isn't
+    /// its group's own takes it out of its group.
+    pub(crate) fn give_order(
+        &mut self,
+        player: u32,
+        command: Command,
+        grouped: bool,
+    ) -> Result<(), Refused> {
         self.playable(player)?;
         self.heeded(&command)?;
         let steering = steered(&command);
@@ -231,6 +253,10 @@ impl World {
             Command::CancelConstruction { building } => {
                 self.cancel_construction(player, building)?
             }
+            Command::Group { orders } => self.order_group(player, orders)?,
+        }
+        if let (Some(r), false) = (steering, grouped) {
+            self.leave_group(r);
         }
         // An order cuts a reform short.
         if let Some(r) = steering {
@@ -600,7 +626,7 @@ impl World {
 
 /// The organization `command` moves, fights or disbands, if it's one of
 /// those orders.
-fn steered(command: &Command) -> Option<usize> {
+pub(crate) fn steered(command: &Command) -> Option<usize> {
     match *command {
         Command::Move { organization, .. }
         | Command::Attack { organization, .. }

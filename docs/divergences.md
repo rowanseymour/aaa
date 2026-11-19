@@ -16,6 +16,9 @@ original's, laid out much the same, but drawn in its own style rather than with 
 original's bitmaps and window chrome. Differences in look alone aren't listed here;
 differences in what you can see or do are.
 
+- **Formation keys.** Alt with a digit puts the selection in that formation. The digits
+  alone save and select control groups, as in the original.
+
 The original's own in-match interface can be chosen instead (see [New options](#new-options)),
 drawn from its layouts and its nations' skins. It and the view under it are kept at
 the layouts' 4:3 shape, as large as fits the window and centred between black bars,
