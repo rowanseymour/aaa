@@ -26,6 +26,15 @@ pub(crate) fn member(id: u32, position: [f32; 2], speed: f32) -> tgmap::Member {
     }
 }
 
+/// The animations a template plays: its own set alone, dying one of
+/// `deaths`.
+pub fn plays(deaths: Vec<tgmap::Death>) -> Vec<tgmap::AnimationSet> {
+    vec![tgmap::AnimationSet {
+        deaths,
+        ..tgmap::AnimationSet::default()
+    }]
+}
+
 /// Two soldiers side by side facing +y, the slower one on the right,
 /// who can also line up one behind the other.
 pub(crate) fn world(pathing: Pathing) -> World {

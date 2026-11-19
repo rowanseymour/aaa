@@ -35,20 +35,12 @@ impl World {
         }
     }
 
-    /// The ticks the death the unit at `u` died takes to play.
-    fn dying(&self, u: usize) -> u64 {
-        let unit = &self.units[u];
-        let deaths = self.rules.deaths.get(&unit.template);
-        let death = (unit.death.as_ref()).and_then(|ids| deaths?.iter().find(|d| &d.ids == ids));
-        death.map_or(0, |d| (d.length.max(0.0) / TICK).round() as u64)
-    }
-
     /// The remains of the unit at `u`, once it's died and its death has
     /// played.
     pub fn unit_remains(&self, u: usize) -> Option<Remains> {
         let unit = &self.units[u];
         let died = unit.died.filter(|_| unit.left.is_none())?;
-        Some(self.remains_from(&unit.template, died + self.dying(u)))
+        Some(self.remains_from(&unit.template, died + unit.dying))
     }
 
     /// The remains of the building at `b`, once it's destroyed.
@@ -83,15 +75,24 @@ impl World {
     }
 
     /// Picks the death the unit at `u` plays as it dies, by the last hit
-    /// an enemy dealt it, and how long it takes.
+    /// an enemy dealt it, and how long it takes, from the animations of
+    /// the stance it's drawn in. If that's one it's leaving, it takes the
+    /// stance it dies into as the death starts, playing that stance's
+    /// namesake of it, or failing one its first; with no death to start,
+    /// it never does.
     pub(crate) fn pick_death(&mut self, u: usize) {
+        let (filter, damage) =
+            (self.units[u].struck).map_or((BLEEDING, 0.0), |s| (s.filter, s.damage));
+        let (into, now) = self.dying_stance(u);
         let unit = &self.units[u];
-        let Some(deaths) = self.rules.deaths.get(&unit.template) else {
-            return;
+        let drawn = match now {
+            true => into.as_ref(),
+            false => unit.stance.as_ref(),
         };
-        let (filter, damage) = (unit.struck).map_or((BLEEDING, 0.0), |s| (s.filter, s.damage));
+        let set = self.animations_in(u, drawn);
+        let deaths = set.map_or(&[][..], |s| s.deaths.as_slice());
         let fits = |d: &&Death| d.filter == ANY_DAMAGE || d.filter == filter;
-        let kept: Vec<Death> = match deaths.as_slice() {
+        let kept: Vec<Death> = match deaths {
             [only] => [only].into_iter().filter(fits).cloned().collect(),
             _ => {
                 let met = || deaths.iter().filter(fits).filter(|d| d.threshold <= damage);
@@ -114,7 +115,28 @@ impl World {
                     .cloned()
             }
         };
-        self.units[u].death = death.map(|d| d.ids);
+        let Some(death) = death else {
+            if now {
+                self.units[u].stance = into;
+            }
+            return;
+        };
+        let played = match !now {
+            true => {
+                let theirs = self
+                    .animations_in(u, into.as_ref())
+                    .map(|s| s.deaths.as_slice());
+                let theirs = theirs.unwrap_or_default();
+                (theirs.iter().find(|d| d.ids == death.ids))
+                    .or(theirs.first())
+                    .map_or(death.ids.clone(), |d| d.ids.clone())
+            }
+            false => death.ids.clone(),
+        };
+        let unit = &mut self.units[u];
+        unit.stance = into;
+        unit.death = Some(played);
+        unit.dying = (death.length.max(0.0) / TICK).round() as u64;
     }
 
     /// Whether the organization at `r` is on the map: one with no body of
@@ -187,14 +209,16 @@ mod tests {
     /// What the unit at 0 dies playing, as the last hit it took was.
     fn dies(deaths: Vec<Death>, struck: Option<(i32, f32)>) -> u64 {
         let mut w = battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war());
-        w.rules.deaths.insert("soldier".into(), deaths);
+        w.rules
+            .animation_sets
+            .insert("soldier".into(), plays(deaths));
         if let Some((filter, damage)) = struck {
             hit_by(&mut w, 0, 1);
             let s = w.units[0].struck.as_mut().unwrap();
             (s.filter, s.damage) = (filter, damage);
         }
         w.pick_death(0);
-        w.dying(0)
+        w.units[0].dying
     }
 
     #[test]
@@ -219,11 +243,9 @@ mod tests {
     fn remains_start_lying_once_the_death_has_played() {
         let mut w = battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war());
         w.rules.remains.insert("soldier".into(), [1.0, 1.0]);
-        w.rules
-            .deaths
-            .insert("soldier".into(), vec![death(ANY_DAMAGE, 0.0, 1.0)]);
         w.units[0].died = Some(0);
         w.units[0].death = Some(Id::from("die1"));
+        w.units[0].dying = SECOND;
         w.ticks = 3 * SECOND - 1;
         assert!(w.unit_on_map(0));
         w.ticks = 3 * SECOND;

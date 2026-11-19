@@ -79,7 +79,7 @@ pub use reads::BY_HAND as READ_BY_HAND;
 pub use recruiting::{
     Airlift, Amount, DeployPoints, Deployment, Fall, Listing, Requires, Technology,
 };
-pub use remains::{ANY_DAMAGE, BLEEDING, Death};
+pub use remains::{ANY_DAMAGE, AnimationSet, BLEEDING, Death};
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, Marker, OperationCues, SpecialOperation};
 pub use stances::Stance;

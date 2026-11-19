@@ -155,6 +155,8 @@ pub struct StanceDef {
     pub health: Option<f32>,
     /// The states it needs, comma-separated.
     pub actor_state: Option<String>,
+    /// The `[Aspect]` a thing in it is drawn with.
+    pub aspect_ids: Option<String>,
 }
 
 /// A component named by its template, e.g. a doodad's
@@ -815,6 +817,18 @@ pub struct TrailerHitch {
 /// How a unit's model is animated.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CharacterComponent {
+    #[serde(default)]
+    pub animation: Vec<Animation>,
+    /// The animations it plays in each of its looks that has its own.
+    #[serde(default)]
+    pub aspect_animation_set: Vec<AspectAnimationSet>,
+}
+
+/// The animations a character plays in one of its looks.
+#[derive(Debug, Clone, Deserialize)]
+pub struct AspectAnimationSet {
+    /// The `[Aspect]` they're for.
+    pub aspect_ids: Option<String>,
     #[serde(default)]
     pub animation: Vec<Animation>,
 }
