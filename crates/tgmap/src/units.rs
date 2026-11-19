@@ -1041,6 +1041,7 @@ mod tests {
             id: Id::from(id),
             aggressive: false,
             effect: Default::default(),
+            types: Vec::new(),
             slots: vec![
                 vec![[-1.0, dy], [1.0, dy]],
                 vec![[3.0, 0.0]],
@@ -1053,6 +1054,7 @@ mod tests {
             combat: Some(0),
             primary: Some(2),
             broken: Default::default(),
+            broken_types: Vec::new(),
         }
     }
 

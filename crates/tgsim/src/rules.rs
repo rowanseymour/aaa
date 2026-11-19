@@ -68,6 +68,14 @@ pub struct Rules {
     /// What each organization template's broken formation's property gives
     /// it while it has no formation, by template.
     pub broken_effects: HashMap<Id, tgmap::CombatEffect>,
+    /// The target types each formation's properties give the regiment in
+    /// it, by formation id.
+    pub formation_types: HashMap<Id, Vec<Id>>,
+    /// The target types each organization template's broken formation's
+    /// property gives it while it has no formation, by template.
+    pub broken_types: HashMap<Id, Vec<Id>>,
+    /// Which target types share a slot.
+    pub type_slots: crate::TypeSlots,
     /// Attack efficiency a second a regiment gains while below its target,
     /// and loses while above it.
     pub efficiency_rates: [f32; 2],
@@ -180,6 +188,9 @@ impl Default for Rules {
             property_types: HashMap::new(),
             formation_effects: HashMap::new(),
             broken_effects: HashMap::new(),
+            formation_types: HashMap::new(),
+            broken_types: HashMap::new(),
+            type_slots: Default::default(),
             efficiency_rates: [0.01, 0.02],
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),

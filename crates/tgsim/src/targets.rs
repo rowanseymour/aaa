@@ -1,9 +1,69 @@
 //! What things are to target filters: the target types each has, worked
 //! out afresh at every test so they follow whatever it holds and is.
 
+use std::collections::HashMap;
+
 use tgmap::{Id, Targets};
 
 use crate::{Relation, Target, World};
+
+/// The types the game makes itself, in its own order, before the data's.
+const MADE: [&str; 16] = [
+    "friend",
+    "enemy",
+    "neutral",
+    "independent",
+    "own",
+    "self",
+    "same_organization",
+    "constructable",
+    "cannot_build",
+    "organization",
+    "under_construction",
+    "capturable",
+    "body",
+    "actor",
+    "invulnerable",
+    "upgrading",
+];
+
+/// How many types a thing can hold: types further on share the slots of
+/// those before them.
+const SLOTS: usize = 32;
+
+/// Which target types share a slot, so that holding one is holding them
+/// all.
+#[derive(Debug, Clone, Default)]
+pub struct TypeSlots {
+    /// The others in each type's slot, for those that share one.
+    alike: HashMap<Id, Vec<Id>>,
+}
+
+impl TypeSlots {
+    /// The slots of the game's own types and then, in turn, each new one
+    /// of those `defined` in the order they load.
+    pub fn new(defined: &[Id]) -> TypeSlots {
+        let mut order: Vec<Id> = MADE.map(Id::from).to_vec();
+        for t in defined {
+            if !order.contains(t) {
+                order.push(t.clone());
+            }
+        }
+        let mut alike: HashMap<Id, Vec<Id>> = HashMap::new();
+        for (i, a) in order.iter().enumerate() {
+            for b in order.iter().skip(i + SLOTS).step_by(SLOTS) {
+                alike.entry(a.clone()).or_default().push(b.clone());
+                alike.entry(b.clone()).or_default().push(a.clone());
+            }
+        }
+        TypeSlots { alike }
+    }
+
+    /// `name` and the types sharing its slot.
+    fn alike<'a>(&'a self, name: &'a Id) -> impl Iterator<Item = &'a Id> {
+        std::iter::once(name).chain(self.alike.get(name).into_iter().flatten())
+    }
+}
 
 /// Something a filter can be tested on: a regiment as well as the units
 /// and buildings that fight.
@@ -42,17 +102,20 @@ impl User {
 
 impl World {
     /// Whether `t` is what `targets` asks for, as `user` sees it: it has
-    /// every type required and none excluded. Each is looked into only as
+    /// every type required and none excluded, holding one when it holds
+    /// any that shares its slot. Each is looked into only as
     /// far as the filter asks, as most ask only how the sides stand.
     pub(crate) fn reaches(&self, user: User, targets: &Targets, t: impl Into<Thing>) -> bool {
         let t = t.into();
         let mut held = None;
-        let mut has = |name: &Id| {
+        let mut holds = |name: &Id| {
             self.is_type(user, t, name).unwrap_or_else(|| {
                 held.get_or_insert_with(|| self.held_types(t))
                     .contains(name)
             })
         };
+        let slots = &self.rules.type_slots;
+        let mut has = |name: &Id| slots.alike(name).any(&mut holds);
         targets.required.iter().all(&mut has) && !targets.excluded.iter().any(has)
     }
 
@@ -82,13 +145,14 @@ impl World {
             _ if is("organization") => matches!(t, Thing::Organization(_)),
             _ if is("body") => self.has_body(t),
             _ if is("capturable") => self.capturable_now(t),
+            _ if is("cannot_build") => !self.builds(user, t),
             _ => return None,
         })
     }
 
     /// The types the properties `t` holds give it: its template's own,
     /// and what its regiment, if it's one or in one, holds and hands down
-    /// to its members, its state in a fight included.
+    /// to its members, its formation and its state in a fight included.
     fn held_types(&self, t: Thing) -> Vec<Id> {
         let table = &self.rules.property_types;
         let of = |p: &Id| {
@@ -111,6 +175,7 @@ impl World {
                 .flatten()
                 .flat_map(|p| of(&p).collect::<Vec<_>>());
             own.chain(bearing.flat_map(|e| e.types.iter().cloned()))
+                .chain(self.formation_types(r).iter().cloned())
                 .chain(more)
                 .collect::<Vec<_>>()
         };
@@ -133,6 +198,22 @@ impl World {
                     .collect()
             }
         }
+    }
+
+    /// Whether `user` can build things of `t`'s kind: a side on its own
+    /// builds nothing.
+    fn builds(&self, user: User, t: Thing) -> bool {
+        let fighter = match user.thing {
+            Some(Target::Unit(u)) => self.units[u].fighter.as_ref(),
+            Some(Target::Building(b)) => Some(&self.buildings[b].fighter),
+            None => None,
+        };
+        let template = match t {
+            Thing::Organization(r) => &self.organizations[r].template,
+            Thing::Unit(u) => &self.units[u].template,
+            Thing::Building(b) => &self.buildings[b].template,
+        };
+        fighter.is_some_and(|f| f.builds.contains(template))
     }
 
     fn thing_owner(&self, t: Thing) -> u32 {
@@ -299,5 +380,65 @@ mod tests {
         assert!(!is(&w, Thing::Building(0), "routing"));
         w.organizations[0].unpacked_into = Some(0);
         assert!(is(&w, Thing::Building(0), "routing same_organization"));
+    }
+
+    #[test]
+    fn what_the_user_cant_build_is_cannot_build_to_it() {
+        let w = battle(&[1], vec![soldier(vec![])], at_war());
+        let mut w = with_buildings(w, &[building(9, 1, [30.0, 10.0])]);
+        w.buildings[0].template = "bunker".into();
+        assert!(is(&w, Thing::Building(0), "cannot_build"));
+        let engineer = w.units[0].fighter.as_mut().unwrap();
+        engineer.builds.push("bunker".into());
+        assert!(!is(&w, Thing::Building(0), "cannot_build"));
+        assert!(is(&w, Thing::Unit(0), "cannot_build"));
+    }
+
+    #[test]
+    fn a_regiments_formation_hands_its_types_down() {
+        let mut w = battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war());
+        let regiment = &w.organizations[1];
+        let formation = &regiment.formations[regiment.current_formation()].id;
+        let (formation, template) = (Id::from(formation.as_str()), regiment.template.clone());
+        let rules = &mut w.rules;
+        rules
+            .formation_types
+            .insert(formation, vec!["drilled".into()]);
+        rules
+            .broken_types
+            .insert(template, vec!["scattered".into()]);
+        assert!(is(&w, Thing::Unit(1), "drilled") && !is(&w, Thing::Unit(1), "scattered"));
+        assert!(is(&w, Thing::Organization(1), "drilled"));
+        w.organizations[1].mind = Mind::Routing {
+            to: None,
+            until: 0,
+            retry: 0,
+        };
+        assert!(is(&w, Thing::Unit(1), "scattered") && !is(&w, Thing::Unit(1), "drilled"));
+    }
+
+    #[test]
+    fn a_type_past_the_last_slot_shares_the_first_ones() {
+        let defined: Vec<Id> = (0..17)
+            .map(|i| Id::from(format!("t{i}").as_str()))
+            .collect();
+        let mut w = battle(&[1, 2], vec![soldier(vec![]), soldier(vec![])], at_war());
+        w.rules.type_slots = TypeSlots::new(&defined);
+        // The last of 33 takes the first's slot: `friend`'s.
+        w.units[1]
+            .fighter
+            .as_mut()
+            .unwrap()
+            .flags
+            .push("t16".into());
+        assert!(is(&w, Thing::Unit(1), "friend enemy"));
+        assert!(is(&w, Thing::Unit(0), "t16"));
+        assert!(!is(&w, Thing::Unit(1), "t15"));
+        // One defined again, here a type the game makes, takes no new slot.
+        let again: Vec<Id> = ["friend".into()].into_iter().chain(defined).collect();
+        w.rules.type_slots = TypeSlots::new(&again);
+        assert!(is(&w, Thing::Unit(1), "friend"));
+        w.rules.type_slots = TypeSlots::new(&again[..17]);
+        assert!(!is(&w, Thing::Unit(1), "friend"));
     }
 }

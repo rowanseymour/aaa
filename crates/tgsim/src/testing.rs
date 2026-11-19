@@ -152,6 +152,7 @@ pub(crate) fn soldier(weapons: Vec<Weapon>) -> Fighter {
         destructible: true,
         resists: HashMap::new(),
         flags: vec![Id::from("infantry")],
+        builds: Vec::new(),
         weapons,
         bonus: Default::default(),
         check_resistance: false,

@@ -148,6 +148,7 @@ mod tests {
             combat: None,
             primary,
             broken: Default::default(),
+            broken_types: Vec::new(),
         }
     }
 

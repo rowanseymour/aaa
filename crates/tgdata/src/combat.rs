@@ -57,6 +57,8 @@ pub struct Fighter {
     /// The target types its template gives it, e.g. `infantry` from its
     /// properties or `invulnerable` from its flags.
     pub flags: Vec<Id>,
+    /// The templates it can build, which aren't `cannot_build` to it.
+    pub builds: Vec<Id>,
     pub weapons: Vec<Weapon>,
     /// Added to each of its weapons' scores, by how the weapon rates.
     pub bonus: Ratings,
@@ -314,6 +316,27 @@ fn property_types(p: &defs::Property) -> Option<PropertyTypes> {
     })
 }
 
+/// `ids` by what the game looks each up by, and by every old id renamed
+/// to one of them.
+fn with_renames(ids: &[Id], renames: &HashMap<Id, Id>) -> Vec<Id> {
+    let current: Vec<Id> = ids.iter().map(|i| crate::renamed(renames, i)).collect();
+    let old = (renames.iter())
+        .filter(|(_, new)| current.contains(new))
+        .map(|(old, _)| old.clone());
+    let mut out: Vec<Id> = current.iter().cloned().chain(old).collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// The target types `files` define, in the order they're read.
+fn defined_types(files: &[crate::Scoped]) -> Vec<Id> {
+    (files.iter())
+        .flat_map(|f| f.read::<defs::TargetType>("TargetType"))
+        .filter_map(|t| t.ids)
+        .collect()
+}
+
 /// Damage a shot does, of one type.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Damage {
@@ -361,6 +384,12 @@ impl GameData {
         self.by_template(|t| Some(body(t)))
     }
 
+    /// The target types the data defines, in the order the game loads
+    /// them, those defined again included.
+    pub fn target_types(&self) -> Vec<Id> {
+        defined_types(&crate::scoped(&self.parse_tgis(|_| true)))
+    }
+
     /// The target types each property that gives any gives, by property
     /// id, experience levels' included.
     pub fn property_types(&self) -> HashMap<Id, PropertyTypes> {
@@ -383,6 +412,11 @@ impl GameData {
         let definitions = self.definitions();
         let flights = self.flights();
         let mut out = self.by_template(|t| fighter(t, &definitions.properties));
+        // Maps may place what a builder lists under an id since renamed.
+        let renames = crate::renames(&self.translations(), "Thing");
+        for f in out.values_mut().filter(|f| !f.builds.is_empty()) {
+            f.builds = with_renames(&f.builds, &renames);
+        }
         for w in out.values_mut().flat_map(|f| &mut f.weapons) {
             w.flight = w.projectile.as_ref().and_then(|p| flights.get(p)).copied();
         }
@@ -589,6 +623,10 @@ pub(crate) fn fighter(
             fighter.flags.push(Id::from(flag));
         }
     }
+    fighter.builds = (thing.builder_component.iter())
+        .flat_map(|b| &b.build_actor)
+        .filter_map(|a| a.actor_ids.clone())
+        .collect();
     fighter.attack_height = (thing.performer_component.iter())
         .find_map(|p| p.attack_height)
         .unwrap_or(1.45);
@@ -951,6 +989,50 @@ mod tests {
             both.flags,
             [Id::from("invulnerable"), Id::from("constructable")]
         );
+    }
+
+    #[test]
+    fn fighters_build_what_their_templates_list() {
+        let engineer = read_fighter(
+            "[Thing]
+{
+    IDS = a
+    [BodyComponent]
+    health = 1
+    [BuilderComponent]
+    {
+        [BuildActor]
+        actor_ids = bunker
+
+        [BuildActor]
+        actor_ids = bunker_aa
+    }
+}
+",
+        );
+        assert_eq!(engineer.builds, [Id::from("bunker"), Id::from("bunker_aa")]);
+    }
+
+    #[test]
+    fn what_a_builder_lists_counts_under_its_old_and_new_ids() {
+        let renames = HashMap::from([
+            (Id::from("old_bunker"), Id::from("bunker")),
+            (Id::from("old_gun"), Id::from("gun")),
+        ]);
+        let ids = [Id::from("bunker"), Id::from("old_gun")];
+        let expected = ["bunker", "gun", "old_bunker", "old_gun"].map(Id::from);
+        assert_eq!(with_renames(&ids, &renames), expected);
+    }
+
+    #[test]
+    fn target_types_are_read_file_by_file_in_order() {
+        let file = |text: &str| (String::new(), tgi::parse(text));
+        let files = [
+            file("[TargetType]\n{\n\tIDS = air\n}\n[TargetType]\n{\n\tIDS = mine\n}\n"),
+            file("[TargetType]\n{\n\tIDS = friend\n}\n[TargetType]\n{\n\tIDS = air\n}\n"),
+        ];
+        let types = defined_types(&crate::scoped(&files));
+        assert_eq!(types, ["air", "mine", "friend", "air"].map(Id::from));
     }
 
     #[test]

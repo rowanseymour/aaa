@@ -131,6 +131,7 @@ pub struct Thing {
     pub element_component: Option<ElementComponent>,
     pub detection_component: Option<DetectionComponent>,
     pub construction_component: Option<ConstructionComponent>,
+    pub builder_component: Option<BuilderComponent>,
     pub experience_component: Option<ExperienceComponent>,
     pub placement: Option<Placement>,
     /// On entering and leaving the states named by each command's
@@ -281,6 +282,17 @@ pub struct ConstructionComponent {
     /// What it can be upgraded into.
     #[serde(default)]
     pub upgrade: Vec<Upgrade>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BuilderComponent {
+    #[serde(default)]
+    pub build_actor: Vec<BuildActor>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct BuildActor {
+    pub actor_ids: Option<Id>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -789,6 +801,13 @@ pub struct Animation {
     pub damage_threshold: Option<f32>,
     /// For deaths, how likely it is beside others that fit as well.
     pub weight: Option<f32>,
+}
+
+/// A type target filters name, from `Game/target_types*.tgi`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TargetType {
+    pub ids: Option<Id>,
+    pub name: Option<String>,
 }
 
 /// A kind of damage, from `Game/damage_types.tgi`.

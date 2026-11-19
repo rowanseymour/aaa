@@ -41,6 +41,8 @@ pub struct Layout {
     /// What its broken formation's property gives it while it has no
     /// formation.
     pub broken: CombatEffect,
+    /// The target types its broken formation's property gives.
+    pub broken_types: Vec<Id>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +57,8 @@ pub struct Formation {
     pub aggressive: bool,
     /// What its properties give the regiment in it.
     pub effect: CombatEffect,
+    /// The target types its properties give.
+    pub types: Vec<Id>,
 }
 
 impl GameData {
@@ -116,7 +120,8 @@ impl GameData {
                 // The first of those defined more than once, as for other
                 // properties.
                 if let Some(ids) = ids {
-                    effects.entry(ids).or_insert(effect);
+                    let types = held.iter().flat_map(types_of).collect();
+                    effects.entry(ids).or_insert(Gives { effect, types });
                 }
             }
         }
@@ -141,6 +146,27 @@ impl GameData {
             .collect()
     }
 
+    /// The target types each organization template's broken formation's
+    /// property gives it while it has no formation, by template id, for
+    /// those that give any.
+    pub fn broken_types(&self) -> HashMap<Id, Vec<Id>> {
+        let layouts = self.layouts();
+        (self.organization_components().into_iter())
+            .filter_map(|(t, o)| Some((t, layouts.get(&o.layout)?.broken_types.clone())))
+            .filter(|(_, types)| !types.is_empty())
+            .collect()
+    }
+
+    /// The target types each formation's properties give the regiment in
+    /// it, by formation id, for those that give any.
+    pub fn formation_types(&self) -> HashMap<Id, Vec<Id>> {
+        let layouts = self.layouts();
+        (layouts.values().flat_map(|l| &l.formations))
+            .filter(|f| !f.types.is_empty())
+            .map(|f| (f.id.clone(), f.types.clone()))
+            .collect()
+    }
+
     /// What each formation's properties give the regiment in it, by
     /// formation id, for those that give anything.
     pub fn formation_effects(&self) -> HashMap<Id, CombatEffect> {
@@ -156,7 +182,19 @@ impl GameData {
 #[derive(Clone, Copy)]
 struct Known<'a> {
     aggressive: &'a HashSet<Id>,
-    effects: &'a HashMap<Id, CombatEffect>,
+    effects: &'a HashMap<Id, Gives>,
+}
+
+/// What a formation's properties give the regiment in it.
+#[derive(Clone, Default)]
+struct Gives {
+    effect: CombatEffect,
+    types: Vec<Id>,
+}
+
+/// The target types a property gives what holds it.
+fn types_of(p: &defs::Property) -> Vec<Id> {
+    crate::supply::listed(p.enabled_target_flags.as_deref())
 }
 
 /// A layout's formations, each with its positions given to the slots in
@@ -167,9 +205,11 @@ fn layout(l: &defs::OrganizationLayout, known: Known) -> Option<Layout> {
         .iter()
         .filter_map(|f| {
             let id = f.formation_ids.clone()?;
+            let gives = known.effects.get(&id).cloned().unwrap_or_default();
             Some(Formation {
                 aggressive: known.aggressive.contains(&id),
-                effect: known.effects.get(&id).cloned().unwrap_or_default(),
+                effect: gives.effect,
+                types: gives.types,
                 slots: slot_positions(&l.slot, f)?,
                 id,
             })
@@ -190,6 +230,7 @@ fn layout(l: &defs::OrganizationLayout, known: Known) -> Option<Layout> {
         broken: (l.broken_property.as_ref())
             .and_then(crate::experience::combat_effect)
             .unwrap_or_default(),
+        broken_types: l.broken_property.as_ref().map(types_of).unwrap_or_default(),
     })
 }
 
@@ -231,7 +272,8 @@ mod tests {
              \t[BrokenProperty]\n\t{\n\t\t[Modifier]\n\t\t{\n\t\t\ttype = MULTIPLY\n\
              \t\t\tattribute = ATTACK_EFFICIENCY_DESIRED\n\t\t\tamount = -.5\n\t\t}\n\
              \t\t[Modifier]\n\t\t{\n\t\t\ttype = MULTIPLY\n\
-             \t\t\tattribute = SPEED_MAX\n\t\t\tamount = .25\n\t\t}\n\t}\n\
+             \t\t\tattribute = SPEED_MAX\n\t\t\tamount = .25\n\t\t}\n\
+             \t\tenabled_target_flags = scattered\n\t}\n\
              \t[Slot]\n\tproperty_IDS = front\n\tnumber = 2\n\
              \t[Slot]\n\tproperty_IDS = captain\n\tprimary = true\n\
              \t[Formation]\n\t{\n\t\tformation_IDS = line\n\
@@ -249,7 +291,11 @@ mod tests {
             },
             ..Default::default()
         };
-        let effects = [(Id::from("line"), line)].into();
+        let gives = Gives {
+            effect: line,
+            types: vec![Id::from("drilled")],
+        };
+        let effects = [(Id::from("line"), gives)].into();
         let known = Known {
             aggressive: &HashSet::new(),
             effects: &effects,
@@ -259,6 +305,8 @@ mod tests {
         assert_eq!(layout.broken.speed, 0.25);
         assert_eq!(layout.formations[0].effect.efficiency.desired, Some(0.75));
         assert_eq!(layout.formations[0].effect.speed, -0.25);
+        assert_eq!(layout.broken_types, [Id::from("scattered")]);
+        assert_eq!(layout.formations[0].types, [Id::from("drilled")]);
         assert_eq!(layout.default, 0);
         assert_eq!(layout.combat, Some(0));
         assert_eq!(layout.primary, Some(1));
