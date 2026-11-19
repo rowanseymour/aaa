@@ -36,6 +36,7 @@ mod research;
 mod settlements;
 mod special_ops;
 mod speed;
+mod stances;
 mod strikes;
 mod strings;
 mod supply;
@@ -79,6 +80,7 @@ pub use recruiting::{
 pub use remains::{ANY_DAMAGE, BLEEDING, Death};
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, Marker, OperationCues, SpecialOperation};
+pub use stances::Stance;
 pub use strikes::{Affliction, Lookout, Strike};
 pub use strings::{PingLook, Strings};
 pub use supply::{Enchantment, Kind, Operation, Summon, SupplyEffect, SupplyRules};

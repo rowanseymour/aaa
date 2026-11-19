@@ -543,15 +543,6 @@ fn building_states(b: &tgsim::Building) -> Vec<&'static str> {
     states
 }
 
-fn unit_states(u: &tgsim::Unit) -> Vec<&'static str> {
-    // Not one that left the map by unpacking, which is no death.
-    match (u.died, u.descent) {
-        (Some(_), _) => vec![DEAD],
-        (None, Some(_)) => vec!["falling"],
-        (None, None) => Vec::new(),
-    }
-}
-
 /// The properties a unit holds while it lives.
 fn held(sim: &World, unit: usize) -> Vec<Id> {
     match sim.units[unit].alive() {
@@ -716,7 +707,7 @@ fn notice(
         let unit = &sim.units[view.unit];
         let fighter = unit.fighter.as_ref();
         let now = Now {
-            states: unit_states(unit),
+            states: sim.unit_states(view.unit),
             health: share(unit.health, sim.max_health(view.unit)),
             shot: unit.shot,
             weapon: unit.shot.and_then(|(_, w)| fighter?.weapons.get(w)),

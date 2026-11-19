@@ -39,6 +39,7 @@ mod research;
 mod rules;
 mod schedule;
 mod setup;
+mod stances;
 mod strikes;
 mod summons;
 mod supply;

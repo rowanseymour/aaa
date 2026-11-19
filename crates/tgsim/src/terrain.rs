@@ -92,11 +92,16 @@ impl World {
         out
     }
 
-    /// What the properties `t` holds for a time and its side's
-    /// technologies on its kind add to its resistance, past its
+    /// What the properties `t` holds for a time or by its stance, and its
+    /// side's technologies on its kind, add to its resistance, past its
     /// template's own, which its fighter has already.
     pub(crate) fn shelter(&self, t: Target) -> TerrainEffect {
-        let borne = self.borne(&self.rules.combat_effects, |e| &e.requires, t);
+        let effects = &self.rules.combat_effects;
+        let stance = match t {
+            Target::Unit(u) => self.stance_property(u).and_then(|p| effects.get(p)),
+            Target::Building(_) => None,
+        };
+        let borne = self.borne(effects, |e| &e.requires, t).chain(stance);
         TerrainEffect {
             resists: borne.flat_map(|e| e.resists.iter().cloned()).collect(),
             ..TerrainEffect::default()

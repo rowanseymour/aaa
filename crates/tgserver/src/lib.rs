@@ -165,6 +165,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         guard_rules: game.guard_rules(),
         guard_zones: game.guard_zones(),
         remains: game.remains(),
+        stances: game.stances(),
         deaths: game.deaths(),
         damage_filters: game.damage_filters(),
         morale_rules: game.morale_rules(),

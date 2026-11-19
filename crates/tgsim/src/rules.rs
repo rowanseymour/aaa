@@ -34,6 +34,9 @@ pub struct Rules {
     /// Seconds the remains of each template's things lie rotting once
     /// dead, then sink, by template; none for one without a body.
     pub remains: HashMap<Id, [f32; 2]>,
+    /// The stances each template's things take, in the order listed, by
+    /// template.
+    pub stances: HashMap<Id, Vec<tgmap::Stance>>,
     /// The death animations each template's units choose from as they
     /// die, by template.
     pub deaths: HashMap<Id, Vec<tgmap::Death>>,
@@ -182,6 +185,7 @@ impl Default for Rules {
             guard_rules: Default::default(),
             guard_zones: HashMap::new(),
             remains: HashMap::new(),
+            stances: HashMap::new(),
             deaths: HashMap::new(),
             damage_filters: HashMap::new(),
             morale_rules: Default::default(),
