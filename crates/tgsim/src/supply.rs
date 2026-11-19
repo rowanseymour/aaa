@@ -569,10 +569,17 @@ impl World {
         let [x, y] = offset(p);
         let stand = out.unwrap_or(tgmap::from_local(at, facing, [x - lx, y - ly]));
         let place = tgmap::from_local(organization.position, facing, offset(p));
-        let u = organization.units[p];
+        let mut u = organization.units[p];
         let full = self.max_health(u);
-        // One dead is a new thing in its place, with an id of its own.
+        // One dead is a new thing in its place, with an id of its own,
+        // leaving the body where it fell for as long as it lies there.
         if self.units[u].died.is_some() {
+            if self.unit_on_map(u) {
+                let fresh = self.units[u].clone();
+                self.units.push(fresh);
+                u = self.units.len() - 1;
+                self.organizations[r].units[p] = u;
+            }
             self.units[u].id = self.next_id;
             self.next_id += 1;
         }
@@ -580,6 +587,8 @@ impl World {
         unit.died = None;
         unit.death = None;
         unit.struck = None;
+        // It comes on foot, whatever the one before was doing as it died.
+        unit.descent = None;
         // What the one before held went with it.
         unit.properties.clear();
         unit.awaited = false;
@@ -1000,6 +1009,26 @@ mod tests {
         let lost = w.organizations[r].units[2];
         assert!(w.units[lost].awaited && !w.units[lost].alive());
         assert_eq!(w.organizations[r].replacing, [0.0, 0.0, 50.0]);
+    }
+
+    #[test]
+    fn a_replacement_comes_while_the_body_it_replaces_still_lies_there() {
+        let mut w = division();
+        let lost = w.organizations[1].units[2];
+        let template = w.units[lost].template.clone();
+        w.rules.remains.insert(template, [60.0, 5.0]);
+        let (id, fell) = (w.units[lost].id, w.units[lost].position);
+        w.units[lost].die(0);
+        w.apply(1, Command::Attach { organization: 1 }).unwrap();
+        while !w.units[w.organizations[1].units[2]].alive() {
+            w.tick();
+        }
+        // The body stays dead where it fell, out of the regiment.
+        let new = w.organizations[1].units[2];
+        assert_ne!(new, lost);
+        assert!(!w.units[lost].alive() && w.unit_on_map(lost));
+        assert_eq!((w.units[lost].id, w.units[lost].position), (id, fell));
+        assert_ne!(w.units[new].id, id);
     }
 
     #[test]
