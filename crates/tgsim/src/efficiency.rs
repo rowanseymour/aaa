@@ -21,7 +21,12 @@ impl World {
         let (owner, held) = (organization.owner, &organization.properties);
         let state = self.state(r).map(Id::from);
         let more = [self.level_property(r), state.as_ref()];
-        self.held_effect(owner, &organization.template, held, &more)
+        self.held_effect(
+            owner,
+            &organization.template,
+            held,
+            more.into_iter().flatten(),
+        )
     }
 
     /// What the formation the organization at `r` is in at the moment

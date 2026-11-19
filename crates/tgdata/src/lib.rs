@@ -15,6 +15,7 @@ mod companies;
 pub mod defs;
 mod economy;
 mod effects;
+mod entrenchment;
 mod experience;
 mod fog;
 mod guard;
@@ -57,6 +58,7 @@ pub use economy::{Amounts, Economy, EconomyRules, Logistics, ResourceKind, Resou
 pub use effects::{
     Decal, HealthCue, HealthTrigger, ObjectEffects, Vfx, VfxCue, VfxTint, WeaponEffects,
 };
+pub use entrenchment::{ENTRENCHED, Entrenchment, EntrenchmentRate};
 pub use experience::{CombatEffect, Efficiency, ExperienceGains, Level, Levels, level_property};
 pub use fog::{FogSetting, Sight};
 pub use guard::{GUARDING, GuardRules};

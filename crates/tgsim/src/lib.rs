@@ -19,6 +19,7 @@ pub mod economy;
 mod efficiency;
 mod enchantments;
 mod engagement;
+mod entrenchment;
 mod experience;
 mod fog;
 mod follow;
@@ -325,6 +326,13 @@ pub struct Organization {
     pub terrain: TerrainIndex,
     /// The properties that terrain gives it.
     pub terrain_properties: Vec<Id>,
+    /// The tick it last settled to rest or guard, while it still is.
+    pub settled: Option<u64>,
+    /// Whether it's set off along a route of its own and isn't there yet.
+    pub travelling: bool,
+    /// The properties it holds while it's entrenched, which it is while
+    /// it has these.
+    pub entrenched: Option<Vec<Id>>,
     /// Its morale, from 0 up to `morale_max`.
     pub morale: f32,
     /// The most morale it can have; 0 for one with no morale.
@@ -1080,6 +1088,18 @@ pub enum Target {
 }
 
 impl World {
+    /// Where an organization stands, for stopping it there: where its
+    /// formation's anchored while it isn't on its way anywhere, so that
+    /// stopping one already standing doesn't shift it; otherwise its
+    /// members' [`World::centre`].
+    pub(crate) fn standing_point(&self, organization: usize) -> [f32; 2] {
+        let r = &self.organizations[organization];
+        match r.travelling {
+            true => self.centre(organization),
+            false => r.position,
+        }
+    }
+
     /// Where an organization's surviving members stand on average, or, with
     /// none on the ground yet, where it does.
     pub fn centre(&self, organization: usize) -> [f32; 2] {
@@ -1169,6 +1189,7 @@ impl World {
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
+        self.keep_entrenchment();
         self.keep_company();
         self.construct();
         self.close_in();
@@ -1285,8 +1306,9 @@ digest!(Organization {
     id, template, number, owner, units, speed, position, facing, formation, combat,
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
-    guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before, experience,
-    level, engaging_before, efficiency, struck, broken_places, chased, follow, build, mending,
+    guard, arriving, terrain_properties, settled, travelling, entrenched, morale, morale_max,
+    mind, engaged_before, experience, level, engaging_before, efficiency, struck, broken_places,
+    chased, follow, build, mending,
 } skip {
     // Its template's.
     formations, unpacks,

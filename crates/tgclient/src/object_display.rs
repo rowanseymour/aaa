@@ -557,10 +557,11 @@ fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
 }
 
 /// The properties an organization or building holds that have an icon: its
-/// template's own, then for an organization its formation's, its terrain's
-/// its stance's and its morale's, then those it has for a time. Those in `shown` come
-/// first, as they stand there, so that icons keep the order their
-/// properties came in while their holder stays selected.
+/// template's own, then for an organization its formation's, its
+/// terrain's, its stance's, its morale's and its entrenchment's, then those
+/// it has for a time. Those in `shown` come first, as they stand there, so
+/// that icons keep the order their properties came in while their holder
+/// stays selected.
 fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
     let own = |template: &Id| {
         let kind = sim.rules().kinds.get(template);
@@ -580,6 +581,7 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
             let guarding = (afield && organization.guarding()).then(|| Id::from(GUARDING));
             let mind = sim.state(r).map(Id::from);
             let timed = organization.properties.iter().map(|h| h.property.clone());
+            let entrenched = organization.entrenched.iter().flatten().cloned();
             let level = sim.level_property(r).cloned();
             own(&organization.template)
                 .chain(level)
@@ -587,6 +589,7 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
                 .chain(organization.terrain_properties.iter().cloned())
                 .chain(guarding)
                 .chain(mind)
+                .chain(entrenched)
                 .chain(timed)
                 .collect()
         }
@@ -1703,6 +1706,7 @@ fn organization_state(sim: &World, r: usize) -> Option<&'static str> {
         },
         // Weightier than resting, lighter than anything it's doing.
         _ if sim.lacks_supply(r) => "out_of_supply",
+        _ if sim.entrenched(r) => tgdata::ENTRENCHED,
         _ => "mind_resting",
     })
 }

@@ -286,6 +286,8 @@ pub struct OrganizationComponent {
     pub shortfall_damage_rate: Option<f32>,
     /// The morale at or below which it routs.
     pub morale_breakpoint: Option<f32>,
+    /// Seconds it rests or guards before it entrenches.
+    pub entrenchment_time: Option<f32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -507,6 +509,15 @@ pub struct PropertiesComponent {
     /// Properties of this template's own.
     #[serde(default)]
     pub intrinsic_property: Vec<Property>,
+}
+
+/// A state a thing can be in, such as resting or entrenched.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ActorState {
+    pub ids: Option<Id>,
+    /// The shared [`Property`]s it gives what's in it.
+    #[serde(default)]
+    pub property: Vec<PropertyRef>,
 }
 
 #[derive(Debug, Clone, Deserialize)]

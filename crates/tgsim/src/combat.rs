@@ -253,12 +253,7 @@ impl World {
     /// it holds for a time.
     pub(crate) fn building_boost(&self, b: usize) -> CombatEffect {
         let building = &self.buildings[b];
-        self.held_effect(
-            building.owner,
-            &building.template,
-            &building.properties,
-            &[],
-        )
+        self.held_effect(building.owner, &building.template, &building.properties, [])
     }
 
     /// What a hit `from`'s `weapon` fires, or a special operation's

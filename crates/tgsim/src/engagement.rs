@@ -220,7 +220,7 @@ impl World {
     /// Calls off an organization's pursuit, leaving it to stand where it is
     /// once done with any engagement.
     pub(crate) fn give_up(&mut self, r: usize) {
-        let here = self.centre(r);
+        let here = self.standing_point(r);
         let organization = &mut self.organizations[r];
         organization.order = Order::Move;
         organization.resume = None;
@@ -362,7 +362,7 @@ impl World {
     /// Stops an organization that's just engaged where it stands, in its combat
     /// formation facing `enemy`, to carry on where it was going afterwards.
     fn hold(&mut self, r: usize, enemy: Piece) {
-        let here = self.centre(r);
+        let here = self.standing_point(r);
         let there = self.middle(enemy);
         let organization = &mut self.organizations[r];
         // A pursuit takes up its enemy afresh instead.

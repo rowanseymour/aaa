@@ -172,6 +172,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         morale_values: game.morale_values(),
         morale_breakpoints: game.morale_breakpoints(),
         morale_effects: game.morale_effects(),
+        entrenchment: game.entrenchment(),
         combat_value_rules,
         combat_profiles,
         combat_means,

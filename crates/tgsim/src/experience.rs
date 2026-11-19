@@ -211,33 +211,34 @@ impl World {
     /// and holding `held` adds to its fighting, with those of `more` as
     /// well: its template's own, its side's technologies on its kind and
     /// those it holds for a time.
-    pub(crate) fn held_effect<'a>(
+    pub(crate) fn held_effect<'a, 'b>(
         &'a self,
         owner: u32,
         template: &Id,
         held: impl IntoIterator<Item = &'a crate::Held> + 'a,
-        more: &[Option<&Id>],
+        more: impl IntoIterator<Item = &'b Id>,
     ) -> CombatEffect {
         let table = &self.rules.combat_effects;
         let kind = self.rules.kinds.get(template);
         let own = kind.into_iter().flat_map(|k| &k.properties);
         let bearing = self.bearing(table, |e| &e.requires, owner, template, held);
-        let more = more.iter().flatten().filter_map(|&p| table.get(p));
+        let more = more.into_iter().filter_map(|p| table.get(p));
         (own.filter_map(|p| table.get(p)).chain(bearing).chain(more))
             .fold(CombatEffect::default(), CombatEffect::with)
     }
 
     /// What the properties the unit at `u` holds add to its fighting: its
     /// template's own, its side's technologies on its kind, those it and
-    /// its organization hold for a time, its organization's level and its
-    /// stance's.
+    /// its organization hold for a time, its organization's level, its
+    /// stance's and those it takes from its organization's entrenchment.
     pub(crate) fn boost(&self, u: usize) -> CombatEffect {
         let unit = &self.units[u];
         let r = unit.organization;
         let owner = self.organizations[r].owner;
         let held = self.timed_on(crate::Target::Unit(u));
         let more = [self.level_property(r), self.stance_property(u)];
-        self.held_effect(owner, &unit.template, held, &more)
+        let more = more.into_iter().flatten().chain(self.entrenched_on(u));
+        self.held_effect(owner, &unit.template, held, more)
     }
 
     /// The most health the unit at `u` can have.
