@@ -2597,6 +2597,16 @@ fn command(
         });
         moving = rest;
     }
+    // What can't be attacked there is moved onto instead.
+    if let Some(piece) = onto(&sim.0, player, *focus) {
+        let (went, rest) = approach(&sim.0, &mut orders, player, &moving, piece);
+        sent.write(waypoints::Sent {
+            to: None,
+            aim: actions::Aim::Move,
+            organizations: went,
+        });
+        moving = rest;
+    }
     let organizations = send(
         &sim.0,
         &mut orders,
@@ -2620,6 +2630,42 @@ fn enemy_at(sim: &World, player: u32, focus: Focus) -> Option<usize> {
     };
     let owner = sim.organizations[e].owner;
     (sim.sides.relation(player, owner) == tgsim::Relation::Enemy).then_some(e)
+}
+
+/// What at `focus` organizations of `player`'s are moved onto, rather than
+/// to its place: any organization, and a building that isn't an enemy's.
+fn onto(sim: &World, player: u32, focus: Focus) -> Option<tgsim::Piece> {
+    match focus {
+        Focus::Organization(r) => Some(tgsim::Piece::Organization(r)),
+        Focus::Building(b) => {
+            let relation = sim.sides.relation(player, sim.buildings[b].owner);
+            (relation != tgsim::Relation::Enemy).then_some(tgsim::Piece::Building(b))
+        }
+        Focus::Nothing => None,
+    }
+}
+
+/// Moves organizations onto `piece`. Returns those that went, each with
+/// where `piece` is, and those that can't.
+fn approach(
+    sim: &World,
+    orders: &mut Orders,
+    player: u32,
+    organizations: &[usize],
+    piece: tgsim::Piece,
+) -> (Vec<(usize, [f32; 2])>, Vec<usize>) {
+    let (went, rest): (Vec<usize>, Vec<usize>) = organizations.iter().partition(|&&r| {
+        let command = tgsim::Command::MoveOnto {
+            organization: r,
+            piece,
+        };
+        orders.give(sim, player, command).is_ok()
+    });
+    let there = match piece {
+        tgsim::Piece::Organization(e) => sim.centre(e),
+        tgsim::Piece::Building(b) => sim.buildings[b].position,
+    };
+    (went.into_iter().map(|r| (r, there)).collect(), rest)
 }
 
 /// Sends organizations after the enemy organization `e`. Returns those that went,
@@ -3087,6 +3133,35 @@ fn show_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_right_click_moves_onto_any_organization_and_buildings_not_an_enemys() {
+        let mut sim = crate::orders::testing::fresh();
+        let house = |owner| tgmap::Building {
+            id: 9,
+            template: "house".into(),
+            owner,
+            position: [20.0, 20.0],
+            facing: [0.0, -1.0],
+            fighter: Default::default(),
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle: None,
+            deploy: None,
+            organization: None,
+            awake: false,
+        };
+        sim.add_buildings(&[house(1), house(2)]);
+        let organization = tgsim::Piece::Organization;
+        assert_eq!(onto(&sim, 1, Focus::Organization(0)), Some(organization(0)));
+        assert_eq!(onto(&sim, 1, Focus::Organization(1)), Some(organization(1)));
+        let own = Focus::Building(0);
+        assert_eq!(onto(&sim, 1, own), Some(tgsim::Piece::Building(0)));
+        // An enemy's building is attacked where it stands instead.
+        assert_eq!(onto(&sim, 1, Focus::Building(1)), None);
+        assert_eq!(onto(&sim, 1, Focus::Nothing), None);
+    }
 
     #[test]
     fn the_clock_follows_the_pause_and_speed_the_match_is_given() {

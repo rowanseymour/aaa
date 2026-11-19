@@ -3,6 +3,7 @@
 
 use tgmap::Zone;
 
+use crate::supply::BEAT;
 use crate::{
     CONTACT, Order, PURSUIT_DRIFT, PURSUIT_REACH, Piece, Relation, Step, TICK, Target, World,
     next_chance, normalised, squared_distance, within, within_strictly,
@@ -16,13 +17,17 @@ impl World {
     /// enemies that come within their control range and enemy units their
     /// moving units run into, and those on [`Order::Pursue`] with their enemy
     /// once near enough. Organizations on [`Order::Run`], or routing, engage
-    /// nothing.
+    /// nothing. On its beat an organization breaks off to chase the enemy
+    /// it's pursuing as that slips out of its control zone, and stops once
+    /// it's back in it or out of reach.
     pub(crate) fn engage(&mut self, fired_on: &[(usize, Target)]) {
         for r in 0..self.organizations.len() {
-            if let Order::Pursue(e) = self.organizations[r].order
-                && self.lost(r, e)
-            {
-                self.give_up(r);
+            if let Order::Pursue(e) = self.organizations[r].order {
+                if self.lost(r, e) {
+                    self.give_up(r);
+                } else if (self.ticks + r as u64).is_multiple_of(BEAT) {
+                    self.keep_chasing(r, e);
+                }
             }
             let organization = &self.organizations[r];
             if !matches!(organization.order, Order::Move | Order::Pursue(_))
@@ -98,18 +103,68 @@ impl World {
             }
             let first = organization.engaged.is_empty();
             self.organizations[r].engaged.push(enemy);
+            // A fight ends a chase, the attack order going on beneath it.
+            self.organizations[r].chased = None;
             if first {
                 self.hold(r, enemy);
                 self.react(r);
             }
         }
         for r in 0..self.organizations.len() {
-            if let Order::Pursue(e) = self.organizations[r].order
-                && self.organizations[r].engaged.is_empty()
+            let organization = &self.organizations[r];
+            if let Order::Pursue(e) = organization.order
+                && organization.engaged.is_empty()
+                && !organization.chasing()
             {
                 self.pursue(r, e);
             }
         }
+    }
+
+    /// Whether the enemy organization `e` has pulled out of the control
+    /// zone of the organization at `r` while staying within its
+    /// operational range: one to chase.
+    fn slipped(&self, r: usize, e: usize) -> bool {
+        let zone = self.control_zone(r);
+        let in_control = (self.survivors(e)).any(|u| self.in_zone(&zone, Target::Unit(u)));
+        !in_control && self.within_range(r, Piece::Organization(e))
+    }
+
+    /// Looks at how the organization at `r` stands to the enemy `e` it's
+    /// pursuing: breaking off a fight to chase it once it's slipped away,
+    /// or ending a chase once it's back in reach or gone too far, else
+    /// turning after it.
+    fn keep_chasing(&mut self, r: usize, e: usize) {
+        let organization = &self.organizations[r];
+        let (chasing, fighting) = (organization.chasing(), !organization.engaged.is_empty());
+        if !chasing && !fighting {
+            return;
+        }
+        match (chasing, self.slipped(r, e)) {
+            (false, true) => self.break_off(r, e),
+            (true, true) => _ = self.chase(r, e, false),
+            (true, false) => {
+                // Back to the attack order's approach, in formation.
+                self.organizations[r].chased = None;
+                self.chase(r, e, true);
+            }
+            (false, false) => {}
+        }
+    }
+
+    /// Has the organization at `r` drop every fight and run after the
+    /// enemy `e`, out of formation, each member where it stood from its
+    /// leader and none firing.
+    fn break_off(&mut self, r: usize, e: usize) {
+        self.organizations[r].engaged.clear();
+        self.organizations[r].chased = Some(e);
+        for u in self.survivors(r).collect::<Vec<_>>() {
+            let unit = &mut self.units[u];
+            unit.target = None;
+            unit.closing = None;
+        }
+        self.break_formation(r);
+        self.chase(r, e, true);
     }
 
     /// Moves each unit that's chosen to go after its target until it's
@@ -339,7 +394,10 @@ impl World {
     /// formation it was put in, or after the enemy it's pursuing.
     fn disengage(&mut self, r: usize) {
         if let Order::Pursue(e) = self.organizations[r].order {
-            self.chase(r, e, true);
+            match self.slipped(r, e) {
+                true => self.break_off(r, e),
+                false => _ = self.chase(r, e, true),
+            }
             return;
         }
         // A guard picks an intruder or its post afresh.
@@ -620,6 +678,87 @@ mod tests {
         run(&mut w, 5.0);
         assert!(near(w.organizations[0].position, stopped));
         assert!(!w.underway(0));
+    }
+
+    #[test]
+    fn pursuing_organizations_chase_their_enemy_out_of_their_control_zone() {
+        let mut w = skirmish();
+        let mut tough = soldier(Vec::new());
+        tough.health = 1e6;
+        w.units[1].fighter = Some(tough);
+        w.units[1].health = 1e6;
+        let pursue = Command::Pursue {
+            organization: 0,
+            enemy: 1,
+        };
+        w.apply(1, pursue).unwrap();
+        run(&mut w, 8.0);
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
+        assert!(!w.organizations[0].chasing());
+        // Faster, it pulls back past the control range of 18 but stays
+        // within the operational range of 34...
+        w.units[1].speed_max *= 3.0;
+        let away = Command::Move {
+            organization: 1,
+            to: [10.0, 80.0],
+        };
+        w.apply(2, away).unwrap();
+        let mut chased = false;
+        for _ in 0..(6.0 / crate::TICK) as usize {
+            w.tick();
+            if w.organizations[0].chasing() {
+                chased = true;
+                break;
+            }
+        }
+        // ...so the regiment breaks off and runs after it, out of formation
+        // and holding fire.
+        assert!(chased);
+        let gap = distance(w.centre(0), w.centre(1));
+        assert!(gap > 18.0 * 0.6 && gap < 34.0, "{gap}");
+        assert!(w.organizations[0].engaged.is_empty());
+        assert!(w.organizations[0].broken());
+        assert_eq!(w.state(0), Some(tgmap::CHASING));
+        assert_eq!(w.units[0].target, None);
+        assert_eq!(w.organizations[0].order, Order::Pursue(1));
+        assert!(w.units[0].moving());
+        // Once it's caught up the chase is over and the fight back on.
+        run(&mut w, 40.0);
+        assert!(!w.organizations[0].chasing());
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
+    }
+
+    #[test]
+    fn a_chase_ends_where_the_enemy_gets_out_of_reach_and_the_attack_goes_on() {
+        let mut w = skirmish();
+        let mut tough = soldier(Vec::new());
+        tough.health = 1e6;
+        w.units[1].fighter = Some(tough);
+        w.units[1].health = 1e6;
+        w.organizations[0].chased = Some(1);
+        // Only a pursuit of the enemy it broke off for is a chase.
+        assert!(!w.organizations[0].chasing());
+        w.organizations[0].order = Order::Pursue(1);
+        assert!(w.organizations[0].chasing());
+        w.units[1].position = [10.0, 60.0];
+        // On its beat, with the enemy beyond its operational range.
+        run(&mut w, 1.0);
+        assert!(!w.organizations[0].chasing());
+        assert!(!w.organizations[0].broken());
+        assert_eq!(w.organizations[0].order, Order::Pursue(1));
+        assert!(w.underway(0));
+    }
+
+    #[test]
+    fn a_chase_ends_where_the_enemy_comes_back_into_the_control_zone() {
+        let mut w = skirmish();
+        w.units[1].fighter = Some(soldier(Vec::new()));
+        w.organizations[0].chased = Some(1);
+        w.organizations[0].order = Order::Pursue(1);
+        w.units[1].position = [10.0, 20.0];
+        run(&mut w, 1.0);
+        assert!(!w.organizations[0].chasing());
+        assert_eq!(w.organizations[0].engaged, [Piece::Organization(1)]);
     }
 
     #[test]

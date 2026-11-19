@@ -19,6 +19,7 @@ mod efficiency;
 mod engagement;
 mod experience;
 mod fog;
+mod follow;
 mod guard;
 mod hash;
 mod heroes;
@@ -299,6 +300,14 @@ pub struct Organization {
     /// Where each member stood from its leader when it last broke
     /// formation, on the map's own axes, kept while it has none.
     pub broken_places: Vec<[f32; 2]>,
+    /// The enemy organization it last broke off to run after, out of
+    /// formation, as that pulled back out of its control zone: a chase
+    /// while it's still pursuing that enemy, as [`Organization::chasing`]
+    /// has it.
+    pub chased: Option<usize>,
+    /// What it was moved onto, which it keeps near until it's given
+    /// another order.
+    pub follow: Option<Piece>,
     /// The properties it has for a time, such as an operation's.
     pub properties: Vec<Held>,
     /// The guard it's keeping, until it's given another order.
@@ -362,11 +371,17 @@ impl Organization {
     /// it forgets. What it's engaged with it stays engaged with.
     pub(crate) fn take_order(&mut self, order: Order) {
         self.order = order;
+        self.follow = None;
         self.guard = None;
         self.resume = None;
         self.unpack_at = None;
         self.unpack_again = None;
         self.rally = None;
+    }
+
+    /// Whether it's chasing the enemy it's pursuing, out of formation.
+    pub fn chasing(&self) -> bool {
+        matches!(self.order, Order::Pursue(e) if self.chased == Some(e))
     }
 
     /// Whether it's resting at the post it guards, which has it stand in
@@ -835,6 +850,12 @@ pub enum Command {
     /// going after the enemy organizations fighting it, until it's gone.
     /// Refused for the organization itself, or what's already gone.
     GuardPiece { organization: usize, piece: Piece },
+    /// Sends an organization towards `piece`, as on [`Command::Move`], to
+    /// stop once near enough and keep near it while it moves, until it's
+    /// given another order or `piece` is gone; a building it stops by and
+    /// is done with. Refused for the organization itself, or what's
+    /// already gone.
+    MoveOnto { organization: usize, piece: Piece },
     /// Has an organization rout at once, as if its morale had broken.
     /// Refused for one with no morale, that isn't fighting or can't move.
     Rout { organization: usize },
@@ -1102,6 +1123,7 @@ impl World {
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
+        self.keep_company();
         self.close_in();
         self.occupy();
         self.decay();
@@ -1216,7 +1238,7 @@ digest!(Organization {
     operational_range, control_range, order, engaged, resume, unpack_at, unpack_again,
     unpacked_into, rally, leader, hq, in_supply, replacing, bombarding, bombarded, properties,
     guard, arriving, terrain_properties, morale, morale_max, mind, engaged_before, experience,
-    level, engaging_before, efficiency, struck, broken_places,
+    level, engaging_before, efficiency, struck, broken_places, chased, follow,
 } skip {
     // Its template's.
     formations, unpacks,

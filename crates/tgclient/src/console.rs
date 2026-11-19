@@ -271,8 +271,8 @@ const VERBS: &[Verb] = &[
     ),
     verb(
         "move",
-        "organization x y",
-        "sends an organization, by its id, to x y",
+        "organization (x y | other)",
+        "sends an organization, by its id, to x y, or to keep near another organization, by its id",
     ),
     verb(
         "attack",
@@ -1133,7 +1133,7 @@ fn create(world: &mut World, args: &[&str]) -> Reply {
 fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     match (aim, args) {
         (Aim::Attack, [id, enemy]) => return after(world, id, enemy, aim),
-        (Aim::Guard, [id, other]) => return after(world, id, other, aim),
+        (Aim::Guard | Aim::Move, [id, other]) => return after(world, id, other, aim),
         _ => {}
     }
     let [id, x, y] = args else {
@@ -1171,8 +1171,8 @@ fn order(world: &mut World, args: &[&str], aim: Aim) -> Reply {
     Ok(String::new())
 }
 
-/// Sends an organization after an enemy organization, or to guard another, both
-/// by their ids.
+/// Sends an organization after an enemy organization, or to guard or keep
+/// near another, both by their ids.
 fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let sim = &world.resource::<Sim>().0;
     let find = |id: &str| {
@@ -1186,6 +1186,10 @@ fn after(world: &mut World, id: &str, enemy: &str, aim: Aim) -> Reply {
     let owner = sim.organizations[r].owner;
     let command = match aim {
         Aim::Guard => tgsim::Command::GuardPiece {
+            organization: r,
+            piece: tgsim::Piece::Organization(e),
+        },
+        Aim::Move => tgsim::Command::MoveOnto {
             organization: r,
             piece: tgsim::Piece::Organization(e),
         },
