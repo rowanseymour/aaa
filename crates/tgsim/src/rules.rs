@@ -79,6 +79,9 @@ pub struct Rules {
     /// Attack efficiency a second a regiment gains while below its target,
     /// and loses while above it.
     pub efficiency_rates: [f32; 2],
+    /// How many times its own top speed a member catching up with its
+    /// place in its regiment goes at most.
+    pub catchup_speed: f32,
     /// How much experience organizations earn.
     pub experience_gains: tgmap::ExperienceGains,
     /// The levels each template's organizations earn with experience, by
@@ -196,6 +199,7 @@ impl Default for Rules {
             broken_types: HashMap::new(),
             type_slots: Default::default(),
             efficiency_rates: [0.01, 0.02],
+            catchup_speed: 1.75,
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),
             siege_seconds: 7.0,

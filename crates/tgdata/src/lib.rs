@@ -554,6 +554,12 @@ impl GameData {
         ]
     }
 
+    /// How many times its own top speed a regiment's member catching up
+    /// with its place goes at most, if the data says.
+    pub fn catchup_speed(&self) -> Option<f32> {
+        self.svars().iter().find_map(|v| v.mover_catchup_speed)
+    }
+
     /// Seconds since a site's health last changed that it counts as being
     /// worked on.
     pub fn active_construction_seconds(&self) -> Option<f32> {

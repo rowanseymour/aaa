@@ -1337,6 +1337,10 @@ pub struct SVars {
     /// And loses while above it.
     #[serde(rename = "AttackEfficiencyPointsPerSecondFalling")]
     pub attack_efficiency_falling: Option<f32>,
+    /// How many times its own top speed a regiment's member catching up
+    /// with its place goes at most.
+    #[serde(rename = "MoverCatchupSpeed")]
+    pub mover_catchup_speed: Option<f32>,
     /// The least a multiplier that modifiers add up to comes to.
     #[serde(rename = "ModifierAttributeClampMultiply")]
     pub modifier_attribute_clamp_multiply: Option<f32>,

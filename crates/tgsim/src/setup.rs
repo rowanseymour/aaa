@@ -350,6 +350,7 @@ impl World {
                 false => 0.0,
             },
             speed: 0.0,
+            pace: 1.0,
             speed_max: m.speed,
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),
