@@ -16,15 +16,16 @@ original's, laid out much the same, but drawn in its own style rather than with 
 original's bitmaps and window chrome. Differences in look alone aren't listed here;
 differences in what you can see or do are.
 
-The original's own in-match interface can be drawn instead, from its layouts and its
-nations' skins (`--original-hud`). Its 4:3 layout is kept at its own shape, as tall as
-the window and centred, where the original stretches it to fill a wider screen. See
+The original's own in-match interface can be chosen instead (see [New options](#new-options)),
+drawn from its layouts and its nations' skins. It and the view under it are kept at
+the layouts' 4:3 shape, as large as fits the window and centred between black bars,
+where the original stretches them to fill the screen. See
 [widgets.rs](../crates/tgclient/src/widgets.rs).
 
 ## View
 
 - **Widescreen.** The original always renders a 4:3 view, stretched to fill wider
-  screens. We keep the window's true aspect, with the same vertical view as the
+  screens. With our own interface, we keep the window's true aspect, with the same vertical view as the
   original, so a wider window sees more of the map to each side rather than stretching
   it. At the same zoom this reads as being zoomed out further. See
   [camera.rs](../crates/tgrender/src/camera.rs).
@@ -37,6 +38,7 @@ Options the original doesn't offer, all in the Video tab's Basic section:
 - **Anti-aliasing:** how the map's edges are smoothed.
 - **Interface Scale:** draws the interface larger or smaller, for high-resolution
   screens.
+- **Interface:** our own in-match interface, or the original's.
 
 The options chosen are kept in a TOML file of this project's own, in the platform's
 usual folder for a program's settings, rather than in the original's files in the

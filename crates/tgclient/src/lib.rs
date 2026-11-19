@@ -130,13 +130,9 @@ options:
   --shot-after <seconds>    with --screenshot, play that long into the match first
   --headless                run without a window or sound, for the console to
                             drive and take screenshots of
-  --ui-scale <scale>        draw the interface that many times as big, 0.5 to 2,
-                            though smaller if the window's too narrow for it
   --options <file.toml>     keep the options chosen in this file rather than
                             the usual one, which runs for testing, e.g. with
                             --console, leave alone
-  --original-hud            draw the original game's in-match interface in place
-                            of this project's
   --fog <setting>           none, explored or full: how much of the map the fog
                             of war hides, rather than the game's default
   --seed <number>           what the match's chances are drawn from, to play one
@@ -637,10 +633,8 @@ struct Options {
     screenshot: Option<String>,
     shot_after: f64,
     headless: bool,
-    ui_scale: Option<f32>,
     /// Where the options chosen are kept, if not where they usually are.
     saved: Option<String>,
-    hud: widgets::Hud,
     fog: Option<tgmap::FogSetting>,
     seed: Option<u64>,
     log: Option<String>,
@@ -677,18 +671,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         }
         None => false,
     };
-    let ui_scale = match take_option(args, "--ui-scale")? {
-        Some(n) => Some(n.parse().ok().filter(|n| UI_SCALES.contains(n))?),
-        None => None,
-    };
     let saved = take_option(args, "--options")?;
-    let hud = match args.iter().position(|a| a == "--original-hud") {
-        Some(at) => {
-            args.remove(at);
-            widgets::Hud::Original
-        }
-        None => widgets::Hud::Ours,
-    };
     let fog = match take_option(args, "--fog")? {
         Some(f) => Some(tgmap::FogSetting::named(&f)?),
         None => None,
@@ -726,9 +709,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         screenshot,
         shot_after,
         headless,
-        ui_scale,
         saved,
-        hud,
         fog,
         seed,
         log,
@@ -774,9 +755,7 @@ pub fn run(program: Program) -> ExitCode {
         screenshot,
         shot_after,
         headless,
-        ui_scale,
         saved,
-        hud,
         fog,
         seed,
         log,
@@ -843,7 +822,7 @@ pub fn run(program: Program) -> ExitCode {
             None => saved::Saved::none(),
         },
     };
-    let ui_scale = ui_scale.or(saved.ui_scale()).unwrap_or(1.0);
+    let ui_scale = saved.ui_scale().unwrap_or(1.0);
     // Before there's a window, so that a host that isn't there or won't
     // let the game in is said where the game was asked for.
     let name = name
@@ -932,7 +911,8 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .insert_resource(ui::Theme::from(program.palette))
-        .insert_resource(hud)
+        .init_resource::<widgets::Hud>()
+        .init_resource::<widgets::InMatch>()
         .add_systems(PreUpdate, fit_ui)
         // The menu's backdrop has a camera too, which stays put.
         .configure_sets(
@@ -978,7 +958,10 @@ pub fn run(program: Program) -> ExitCode {
         ))
         .add_plugins((fields::FieldsPlugin, lan::LanPlugin, staging::StagingPlugin))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
-        .add_systems(OnEnter(Screen::Loading), (loading, messages::start))
+        .add_systems(
+            OnEnter(Screen::Loading),
+            (loading, messages::start, widgets::choose),
+        )
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
             OnEnter(Screen::Match),
@@ -994,7 +977,7 @@ pub fn run(program: Program) -> ExitCode {
                 actions::spawn,
                 object_display::spawn,
                 resource_bar::spawn,
-                widgets::spawn.run_if(widgets::original),
+                (widgets::spawn, widgets::spawn_overlay).run_if(widgets::original),
                 messages::spawn,
                 supply::spawn,
                 clock::spawn_button,
@@ -1015,7 +998,13 @@ pub fn run(program: Program) -> ExitCode {
         )
         .add_systems(
             PostUpdate,
-            widgets::remove_ours
+            (
+                widgets::remove_ours,
+                widgets::match_msaa,
+                widgets::fit_view
+                    .before(bevy::camera::CameraUpdateSystems)
+                    .before(bevy::ui::UiSystems::Prepare),
+            )
                 .run_if(widgets::original)
                 .run_if(in_state(Screen::Match)),
         )
@@ -2389,9 +2378,12 @@ fn pointed(
     let (Ok(window), Ok((camera, transform, _))) = (windows.single(), cameras.single()) else {
         return None;
     };
-    let ray = camera
-        .viewport_to_world(transform, window.cursor_position()?)
-        .ok()?;
+    let cursor = window.cursor_position()?;
+    // Not beside the view, where it's cut narrower than the window.
+    if !camera.logical_viewport_rect()?.contains(cursor) {
+        return None;
+    }
+    let ray = camera.viewport_to_world(transform, cursor).ok()?;
     pick_ground(ground, ray)
 }
 
@@ -2479,10 +2471,15 @@ fn select(
 ) {
     // How far the cursor goes before a click becomes a drag, in pixels.
     const DRAG: f32 = 4.0;
-    let cursor = windows.single().ok().and_then(|w| w.cursor_position());
+    let at = windows.single().ok().and_then(|w| w.cursor_position());
+    let view = (cameras.single().ok()).and_then(|(c, ..)| c.logical_viewport_rect());
+    // The view may be cut narrower than the window: a drag starts in it and
+    // stays within it.
+    let cursor = at.map(|at| view.map_or(at, |v| at.clamp(v.min, v.max)));
     if buttons.just_pressed(MouseButton::Left)
         && minimap::pointer_away(minimap)
         && actions::pointer_away(grid)
+        && at.zip(view).is_none_or(|(at, v)| v.contains(at))
     {
         *start = cursor;
     }
@@ -2925,6 +2922,14 @@ fn fit_ui(
     }
 }
 
+/// Whether `at`, in viewport pixels, is within what `camera` shows, which
+/// may be cut narrower than the window.
+fn in_view(camera: &Camera, at: Vec2) -> bool {
+    camera
+        .logical_viewport_rect()
+        .is_some_and(|r| r.contains(at))
+}
+
 /// Places a node over the map at a rectangle in viewport pixels, which
 /// [`UiScale`] mustn't scale.
 fn place_on_map(node: &mut Node, corner: Vec2, size: Vec2, ui: &UiScale) {
@@ -3151,6 +3156,9 @@ fn show_health(
             ) else {
                 continue;
             };
+            if !in_view(camera, (a + b) / 2.0) {
+                continue;
+            }
             let width = a.distance(b);
             let height = width * size.y / size.x;
             let centre = (a + b) / 2.0 + Vec2::new(0.0, height * (1.0 + 1.5 * below));

@@ -19,6 +19,7 @@ use crate::options::{
 };
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
+use crate::widgets::Hud;
 use crate::{Nickname, UI_SCALES, UiScaleSetting};
 
 /// The options file's name, in the program's own folder for its
@@ -46,6 +47,7 @@ pub struct Chosen {
     pub position: Option<[i32; 2]>,
     pub anti_aliasing: Option<AntiAliasing>,
     pub ui_scale: Option<f32>,
+    pub hud: Option<Hud>,
     #[serde(skip_serializing_if = "unset")]
     pub volume: Levels,
     #[serde(skip_serializing_if = "unset")]
@@ -166,6 +168,9 @@ impl Saved {
         }
         if let Some(aa) = chosen.anti_aliasing {
             world.insert_resource(aa);
+        }
+        if let Some(hud) = chosen.hud {
+            world.insert_resource(hud);
         }
         let mut volumes = world.resource_mut::<Volumes>();
         for channel in Channel::ALL {
@@ -345,6 +350,7 @@ struct Now<'w, 's> {
     border: Res<'w, Border>,
     anti_aliasing: Res<'w, AntiAliasing>,
     ui_scale: Res<'w, UiScaleSetting>,
+    hud: Res<'w, Hud>,
     volumes: Res<'w, Volumes>,
     sounds: Res<'w, Sounds>,
     window: Query<'w, 's, &'static Window, With<PrimaryWindow>>,
@@ -368,6 +374,7 @@ impl Now<'_, '_> {
             || self.border.is_changed()
             || self.anti_aliasing.is_changed()
             || self.ui_scale.is_changed()
+            || self.hud.is_changed()
             || self.volumes.is_changed()
             || self.sounds.is_changed()
     }
@@ -399,6 +406,7 @@ impl Now<'_, '_> {
             position,
             anti_aliasing: Some(*self.anti_aliasing),
             ui_scale: Some(self.ui_scale.0),
+            hud: Some(*self.hud),
             volume: Levels {
                 main: level(Channel::Main),
                 fx: level(Channel::Fx),
@@ -469,6 +477,7 @@ mod tests {
             resolution: Some([1600, 900]),
             anti_aliasing: Some(AntiAliasing::Smaa),
             ui_scale: Some(1.25),
+            hud: Some(Hud::Original),
             volume: Levels {
                 music: Some(0.25),
                 ..default()
@@ -504,7 +513,7 @@ mod tests {
             display: Some(Display::Windowed),
             ..default()
         };
-        // A scale given on the command line, unchanged, leaves the kept one.
+        // A scale started with, unchanged, leaves the kept one.
         saved.note(&start, &start);
         assert!(!saved.dirty);
         assert_eq!(saved.chosen.ui_scale, Some(1.5));

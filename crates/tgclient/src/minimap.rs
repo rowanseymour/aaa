@@ -569,13 +569,8 @@ fn view_corners(
     height: f32,
 ) -> Option<[[f32; 2]; 4]> {
     const FAR: f32 = 2000.0;
-    let size = camera.logical_viewport_size()?;
-    let screen = [
-        Vec2::ZERO,
-        Vec2::new(size.x, 0.0),
-        size,
-        Vec2::new(0.0, size.y),
-    ];
+    let Rect { min, max } = camera.logical_viewport_rect()?;
+    let screen = [min, Vec2::new(max.x, min.y), max, Vec2::new(min.x, max.y)];
     let mut out = [[0.0; 2]; 4];
     for (corner, out) in screen.into_iter().zip(&mut out) {
         let ray = camera.viewport_to_world(transform, corner).ok()?;
