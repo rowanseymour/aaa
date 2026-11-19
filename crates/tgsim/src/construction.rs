@@ -549,6 +549,91 @@ mod tests {
         assert_eq!(w.organizations[0].mending, None);
     }
 
+    /// Seconds an engineer regiment, six engineers and a captain whose
+    /// repairs recharge at once and take a second, takes over a
+    /// 1250-health site, its engineers' recharges multiplied by
+    /// `1 + recharge` and their heals added to by `heal`.
+    fn raising_time(recharge: f32, heal: f32) -> f32 {
+        let mut engineer = soldier(Vec::new());
+        engineer.builds = vec![Id::from("bunker")];
+        engineer.target = tgmap::Shape::Circle { radius: 1.0 };
+        engineer.repairs = vec![Repair {
+            recharge: 0.0,
+            lasts: 1.0,
+            ..ability(&["constructable", "under_construction"], &[])
+        }];
+        let placed = |i: u32, template: &str, fighter| tgmap::Member {
+            template: template.into(),
+            fighter: Some(fighter),
+            ..member(2 + i, [7.0 + i as f32, 10.0], 2.0)
+        };
+        let mut members: Vec<_> = (0..6)
+            .map(|i| placed(i, "engineer", engineer.clone()))
+            .collect();
+        members.push(placed(6, "captain", soldier(Vec::new())));
+        let regiment = tgmap::Organization {
+            id: 1,
+            owner: 1,
+            members,
+            formations: vec![tgmap::Formation {
+                id: "line".into(),
+                offsets: (0..7).map(|i| [i as f32 - 3.0, 0.0]).collect(),
+                aggressive: false,
+            }],
+            template: "regiment".into(),
+            primary: Some(6),
+            operational_range: Some(34.0),
+            control_range: Some(18.0),
+            unpacks: None,
+            ..truck()
+        };
+        let pathing = tgmap::Pathing::uniform(40, tgmap::Domain::Land);
+        let rules = engineers().rules().clone();
+        let mut w = crate::World::from_organizations_by(at_war(), pathing, rules, &[regiment]);
+        w.rules
+            .kinds
+            .insert(Id::from("engineer"), kind(&["drilled"]));
+        let drilled = tgmap::CombatEffect {
+            recharge,
+            heal,
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert(Id::from("drilled"), drilled);
+        w.rules
+            .buildable
+            .get_mut(&Id::from("bunker"))
+            .unwrap()
+            .fighter
+            .health = 1250.0;
+        w.set_stockpile(1, 500.0);
+        w.apply(1, build([10.0, 16.0])).unwrap();
+        run_until(&mut w, 10.0, |w| !w.buildings.is_empty());
+        let started = w.ticks;
+        run_until(&mut w, 200.0, |w| !w.buildings[0].constructing);
+        (w.ticks - started) as f32 * crate::TICK
+    }
+
+    /// Ticks `w` until `done`, failing after `seconds`.
+    fn run_until(w: &mut crate::World, seconds: f32, done: impl Fn(&crate::World) -> bool) {
+        let end = w.ticks + (seconds / crate::TICK) as u64;
+        while !done(w) {
+            assert!(w.ticks < end, "not done in {seconds}s");
+            w.tick();
+        }
+    }
+
+    #[test]
+    fn six_engineers_raise_a_bunker_at_one_use_a_second_each() {
+        // 30 health a second, after closing in; 48 with 3 more a use.
+        let plain = raising_time(0.0, 0.0);
+        assert!((41.0..45.0).contains(&plain), "{plain}");
+        let more = raising_time(0.0, 3.0);
+        assert!((25.0..29.0).contains(&more), "{more}");
+        // A zero recharge stays zero, however it's multiplied.
+        assert_eq!(raising_time(1.0, 0.0), plain);
+        assert_eq!(raising_time(-0.5, 0.0), plain);
+    }
+
     #[test]
     fn a_side_that_cant_pay_on_arrival_is_told_and_nothing_goes_up() {
         let mut w = engineers();

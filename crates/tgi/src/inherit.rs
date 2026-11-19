@@ -9,7 +9,9 @@
 //! own `Template=`, to be resolved in turn if needed, except where a child's
 //! block names a different template from the block it merges into: then its
 //! template's fields override the inherited block's, so both are resolved
-//! first.
+//! first. A child's block naming the same template as the block it merges
+//! into, or none, takes only the inherited block's fields: the inherited
+//! block already holds what that template gives, under its own fields.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -17,6 +19,16 @@ use std::sync::Arc;
 use crate::{Block, Item};
 
 type ByName<'a> = HashMap<String, &'a Block>;
+
+/// Where resolving a block has got to.
+#[derive(Default)]
+struct Merging {
+    /// The template pairs being merged by re-templated nested blocks (see
+    /// [`Templates::merge`]), outermost first.
+    active: Vec<(String, String)>,
+    /// Why the game refuses the block, once that's found.
+    refused: Option<String>,
+}
 
 /// The `[Template]` blocks of a set of files, by name.
 pub struct Templates<'a> {
@@ -120,12 +132,19 @@ impl<'a> Templates<'a> {
     /// The block with everything it inherits merged in. The chain stops at a
     /// missing template or one already visited.
     pub fn resolve(&self, block: &Block) -> Block {
-        self.resolve_in(block, &mut Vec::new())
+        self.resolve_in(block, &mut Merging::default())
     }
 
-    /// `active` holds the template pairs being merged by re-templated nested
-    /// blocks (see [`Templates::merge`]), outermost first.
-    fn resolve_in(&self, block: &Block, active: &mut Vec<(String, String)>) -> Block {
+    /// As [`Templates::resolve`], or why the game refuses the block: a nested
+    /// block naming a template that neither is nor descends from the one the
+    /// block it merges into was built from.
+    pub fn try_resolve(&self, block: &Block) -> Result<Block, String> {
+        let mut merging = Merging::default();
+        let out = self.resolve_in(block, &mut merging);
+        merging.refused.map_or(Ok(out), Err)
+    }
+
+    fn resolve_in(&self, block: &Block, merging: &mut Merging) -> Block {
         let mut chain = vec![block];
         while let Some(p) = self.parent(chain[chain.len() - 1]) {
             if chain.iter().any(|&b| std::ptr::eq(b, p)) {
@@ -138,9 +157,10 @@ impl<'a> Templates<'a> {
             items: Vec::new(),
             braced: block.braced,
             line: block.line,
+            resolved_from: block.resolved_from.clone(),
         };
         for b in chain.iter().rev() {
-            self.merge(&mut out.items, &b.items, false, active);
+            self.merge(&mut out.items, &b.items, false, merging);
         }
         out
     }
@@ -155,13 +175,7 @@ impl<'a> Templates<'a> {
     /// `[View Template=X]` where B holds `[View Template=A]`). A pair already
     /// being merged is merged as plain blocks instead, which ends the cycle;
     /// a template met again under a different pair is fine and common.
-    fn merge(
-        &self,
-        into: &mut Vec<Item>,
-        items: &[Item],
-        shared: bool,
-        active: &mut Vec<(String, String)>,
-    ) {
+    fn merge(&self, into: &mut Vec<Item>, items: &[Item], shared: bool, merging: &mut Merging) {
         // Only inherited items are overridden, so a block may repeat a key.
         let inherited = into.len();
         for item in items {
@@ -175,13 +189,17 @@ impl<'a> Templates<'a> {
             }
             match (existing.map(|i| &mut into[i]), item) {
                 (Some(Item::Block(e)), Item::Block(b))
-                    if retemplates(e, b) && !active.contains(&pair(e, b)) =>
+                    if retemplates(e, b) && !merging.active.contains(&pair(e, b)) =>
                 {
-                    active.push(pair(e, b));
-                    let mut merged = self.resolve_in(e, active);
-                    let child = self.resolve_in(b, active);
-                    self.merge(&mut merged.items, &child.items, true, active);
-                    active.pop();
+                    self.check_line(e, b, merging);
+                    merging.active.push(pair(e, b));
+                    let mut merged = match self.parent(e) {
+                        Some(_) => self.resolve_in(e, merging),
+                        None => e.clone(),
+                    };
+                    let child = self.resolve_in(b, merging);
+                    self.merge(&mut merged.items, &child.items, true, merging);
+                    merging.active.pop();
                     // The inherited block's other attributes stay, under the
                     // child's.
                     merged.header.words = b.header.words.clone();
@@ -190,19 +208,54 @@ impl<'a> Templates<'a> {
                     merged.header.attrs.retain(|(k, _)| !is_template_attr(k));
                     merged.braced = b.braced;
                     merged.line = b.line;
+                    merged.resolved_from = template(b).map(str::to_string);
                     *e = merged;
                 }
                 (Some(Item::Block(e)), Item::Block(b)) => {
+                    // A pair already being merged, whose child's template is
+                    // left to resolve in turn, over what's merged in so far.
+                    let cycle = retemplates(e, b);
                     e.header.words = b.header.words.clone();
                     set_attrs(&mut e.header.attrs, &b.header.attrs);
+                    if cycle {
+                        e.resolved_from = None;
+                    } else if e.resolved_from.is_some() {
+                        // Its template is merged in already, so mustn't be
+                        // again.
+                        e.header.attrs.retain(|(k, _)| !is_template_attr(k));
+                    }
                     e.braced = b.braced;
                     e.line = b.line;
-                    self.merge(&mut e.items, &b.items, shared, active);
+                    self.merge(&mut e.items, &b.items, shared, merging);
                 }
                 (Some(e), _) => *e = item.clone(),
                 (None, _) => into.push(item.clone()),
             }
         }
+    }
+
+    /// Notes in `merging` a `child` naming a template outside the line of the
+    /// one `inherited` is built from, where both templates exist.
+    fn check_line(&self, inherited: &Block, child: &Block, merging: &mut Merging) {
+        let Some(named) = template(inherited).or(inherited.resolved_from.as_deref()) else {
+            return;
+        };
+        let Some(own) = template(child) else {
+            return;
+        };
+        if self.get(named).is_none()
+            || self.get(own).is_none()
+            || self.lineage(child).contains(&named.to_ascii_lowercase())
+        {
+            return;
+        }
+        merging.refused.get_or_insert_with(|| {
+            format!(
+                "[{}] at line {} names {own}, which isn't {named} or one of its descendants",
+                child.kind().unwrap_or(""),
+                child.line
+            )
+        });
     }
 
     /// Whether `item` is a block of a kind declared as a list, which never
@@ -259,9 +312,11 @@ fn find_lists(block: &Block, lists: &mut HashSet<String>) {
     }
 }
 
-/// Whether `child` names a template other than the one `inherited` does.
+/// Whether `child` names a template other than the one `inherited` does or
+/// was built from.
 fn retemplates(inherited: &Block, child: &Block) -> bool {
-    match (template(inherited), template(child)) {
+    let named = template(inherited).or(inherited.resolved_from.as_deref());
+    match (named, template(child)) {
         (_, None) => false,
         (Some(a), Some(b)) => !a.eq_ignore_ascii_case(b),
         (None, Some(_)) => true,
