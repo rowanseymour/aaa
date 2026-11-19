@@ -360,6 +360,7 @@ impl World {
             },
             speed: 0.0,
             pace: 1.0,
+            detour: false,
             speed_max: m.speed,
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),

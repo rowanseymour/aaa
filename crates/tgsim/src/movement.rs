@@ -36,6 +36,18 @@ const LOOK_SNAPPED: u32 = 5;
 /// its place stands until it comes.
 const WAITING_PACE: f32 = 0.2;
 
+/// How near the corner at the end of its leg a member keeping its place
+/// starts counting its place's sideways offset in.
+const CORNER_REACH: f32 = 6.0;
+
+/// How much further than its regiment a member on a detour has to go to
+/// go flat out.
+const DETOUR_CATCHING_UP: f32 = 4.0;
+
+/// How far at a time a member pulls a point of its route it can't stand
+/// on back towards its leader's.
+const PULL_BACK: f32 = 0.5;
+
 impl Trailer {
     pub(crate) fn new(trailer: &tgmap::Trailer, position: [f32; 2], facing: [f32; 2]) -> Trailer {
         let (position, facing) = match trailer.placed {
@@ -102,6 +114,17 @@ impl Unit {
         self.target = None;
     }
 
+    /// How far it has left to go along its path.
+    fn route_left(&self) -> f32 {
+        let mut at = self.position;
+        let mut left = 0.0;
+        for &p in self.path.iter().rev() {
+            left += crate::distance(at, p);
+            at = p;
+        }
+        left
+    }
+
     /// Sets it off along `path`, next waypoint last, to stop at its end.
     pub(crate) fn take(&mut self, path: Vec<[f32; 2]>, exact: bool) {
         self.goal = path.first().copied();
@@ -112,6 +135,7 @@ impl Unit {
         self.ways = 1;
         self.look = LOOK;
         self.pace = 1.0;
+        self.detour = false;
     }
 
     /// Stops it where it is, with nowhere left to go.
@@ -120,6 +144,7 @@ impl Unit {
         self.leg = None;
         self.goal = None;
         self.pace = 1.0;
+        self.detour = false;
     }
 
     /// Stands it at `at` facing `facing` as if just made: still, with
@@ -242,6 +267,7 @@ impl Unit {
             self.path.pop();
             self.from = next;
             self.leg = None;
+            self.detour = false;
             if self.path.is_empty() {
                 self.speed = 0.0;
             }
@@ -297,6 +323,7 @@ impl Unit {
         if along >= short {
             let to = [next[0] - self.position[0], next[1] - self.position[1]];
             self.facing = normalised(to).unwrap_or(self.facing);
+            self.detour = true;
             return;
         }
         self.path.push([
@@ -400,18 +427,146 @@ impl World {
         Ok(())
     }
 
-    /// Sends each of an organization's members to its place in the formation.
+    /// Sends each of an organization's members to its place in the
+    /// formation. One setting off along a route hands its leader the way
+    /// there, and each other member a copy of it fitted to its place.
     pub(crate) fn take_places(&mut self, organization: usize) {
         let r = &self.organizations[organization];
         let facing = r.facing;
         // A move to unpack has to end right there.
         let exact = r.unpack_at.is_some();
-        for (u, place) in self.formation_places(organization) {
-            if !self.units[u].alive() {
+        let places = self.formation_places(organization);
+        let leader = (self.pacer(organization))
+            .map(|p| r.units[p])
+            .filter(|_| r.travelling);
+        let lead = leader.and_then(|l| places.iter().find(|(u, _)| *u == l).copied());
+        if let Some((l, place)) = lead {
+            self.take_place(l, place, facing, exact);
+        }
+        let route = lead
+            .map(|(l, _)| self.units[l].path.clone())
+            .unwrap_or_default();
+        for (u, place) in places {
+            if !self.units[u].alive() || lead.is_some_and(|(l, _)| l == u) {
                 continue;
             }
-            self.take_place(u, place, facing, exact);
+            match (lead, route.is_empty()) {
+                (Some((l, _)), false) => self.take_copy(organization, l, u, &route, place),
+                _ => self.take_place(u, place, facing, exact),
+            }
         }
+    }
+
+    /// Sets the member at `u` of the organization at `r` off along a copy
+    /// of its leader at `l`'s `route` (next point last), fitted to its
+    /// `place` at the end. In formation, each point is moved by where the
+    /// member's place is from the leader's, laid along the point's own
+    /// heading, and all but the last slid to meet the next leg's line, so
+    /// its legs run alongside the leader's; without one, the route is
+    /// moved bodily by where the member stands from the leader. A point
+    /// it can't stand on is pulled back towards the leader's.
+    fn take_copy(&mut self, r: usize, l: usize, u: usize, route: &[[f32; 2]], place: [f32; 2]) {
+        let organization = &self.organizations[r];
+        let leader = &self.units[l];
+        let points: Vec<[f32; 2]> = route.iter().rev().copied().collect();
+        let mut headings = Vec::with_capacity(points.len());
+        let mut from = leader.position;
+        for &p in &points {
+            let last = headings.last().copied().unwrap_or(leader.facing);
+            headings.push(normalised([p[0] - from[0], p[1] - from[1]]).unwrap_or(last));
+            from = p;
+        }
+        let broken = organization.broken_places.len() == organization.units.len()
+            && (organization.routing() || organization.chasing());
+        let unit = &self.units[u];
+        let mut moved: Vec<[f32; 2]> = match broken {
+            true => {
+                let [dx, dy] = [
+                    unit.position[0] - leader.position[0],
+                    unit.position[1] - leader.position[1],
+                ];
+                points.iter().map(|p| [p[0] + dx, p[1] + dy]).collect()
+            }
+            false => {
+                let offsets = &organization.formations[organization.current_formation()].offsets;
+                let offset = |m: usize| {
+                    let p = organization.units.iter().position(|&x| x == m);
+                    p.and_then(|p| offsets.get(p))
+                        .copied()
+                        .unwrap_or([0.0, 0.0])
+                };
+                let ([mx, my], [lx, ly]) = (offset(u), offset(l));
+                let local = [mx - lx, my - ly];
+                let mut moved: Vec<[f32; 2]> = (points.iter().zip(&headings))
+                    .map(|(&p, &h)| tgmap::from_local(p, h, local))
+                    .collect();
+                for i in 0..moved.len().saturating_sub(1) {
+                    let (a, h) = (moved[i], headings[i]);
+                    let (b, k) = (moved[i + 1], headings[i + 1]);
+                    let cross = h[0] * k[1] - h[1] * k[0];
+                    if cross.abs() > 1e-4 {
+                        let t = ((b[0] - a[0]) * k[1] - (b[1] - a[1]) * k[0]) / cross;
+                        moved[i] = [a[0] + h[0] * t, a[1] + h[1] * t];
+                    }
+                }
+                moved
+            }
+        };
+        if let Some(end) = moved.last_mut() {
+            *end = place;
+        }
+        // Each point it can't go straight to from the one before is
+        // pulled back towards the leader's; with none to be had, it finds
+        // its own way.
+        let mut at = unit.position;
+        for (point, &towards) in moved.iter_mut().zip(&points) {
+            let Some(reached) = self.reachable(u, at, *point, towards) else {
+                let facing = self.organizations[r].facing;
+                self.take_place(u, place, facing, false);
+                return;
+            };
+            *point = reached;
+            at = reached;
+        }
+        let first = (moved.first().copied()).zip(headings.first().copied());
+        moved.reverse();
+        let facing = self.organizations[r].facing;
+        let unit = &mut self.units[u];
+        unit.take(moved, false);
+        // Its first leg holds the leader's heading, not the way to it.
+        if let Some(([x, y], [hx, hy])) = first {
+            unit.from = [x - hx, y - hy];
+        }
+        unit.closing = None;
+        unit.end_facing = facing;
+    }
+
+    /// `point`, or failing that the first spot back towards `towards`, a
+    /// step at a time, that the unit at `u` can drive to straight from
+    /// `from`; `None` if not even `towards` is.
+    fn reachable(
+        &self,
+        u: usize,
+        from: [f32; 2],
+        point: [f32; 2],
+        towards: [f32; 2],
+    ) -> Option<[f32; 2]> {
+        let domain = self.units[u].domain;
+        let apart = crate::distance(point, towards);
+        let steps = (apart / PULL_BACK).ceil() as u32;
+        let back = |s: u32| match s < steps {
+            true => {
+                let t = s as f32 * PULL_BACK / apart;
+                [
+                    point[0] + (towards[0] - point[0]) * t,
+                    point[1] + (towards[1] - point[1]) * t,
+                ]
+            }
+            false => towards,
+        };
+        (0..=steps)
+            .map(back)
+            .find(|&p| path::clear(&self.pathing, domain, from, p))
     }
 
     /// Where each of an organization's members has its place, by unit.
@@ -502,10 +657,10 @@ impl World {
     }
 
     /// What the member at `u` of the organization at `r`, heading for its
-    /// place in the formation, stretches its steps by while its leader
-    /// drives at the `regiment`'s speed: the pace that would bring it back
-    /// to where its place is from the leader now, half the way it's out of
-    /// place along the leader's heading each second, but no more than
+    /// place along its copy of the route, stretches its steps by while its
+    /// leader drives at the `regiment`'s speed: the pace that brings it
+    /// back to its place, half the way it's out of place each second, or
+    /// on a detour the faster the further behind it is; never more than
     /// [`Rules::catchup_speed`](crate::Rules) times its `own` top speed.
     /// Nothing for one that's well ahead of its place.
     fn place_pace(&self, r: usize, u: usize, regiment: f32, own: f32) -> f32 {
@@ -518,28 +673,61 @@ impl World {
         let Some(p) = p.filter(|&p| p != lp && regiment > 0.0) else {
             return 1.0;
         };
+        let unit = &self.units[u];
+        let most = self.rules.catchup_speed * own;
+        if unit.detour {
+            let behind = unit.route_left() - leader.route_left();
+            let share = (behind / DETOUR_CATCHING_UP).clamp(0.0, 1.0);
+            return (regiment + (most - regiment).max(0.0) * share) / regiment;
+        }
+        let along = leader.leg.map_or(leader.facing, |l| l.heading);
         let broken = organization.broken_places.len() == organization.units.len()
             && (organization.routing() || organization.chasing());
-        let place = match broken {
+        let local = match broken {
             // Without a formation each keeps where it stood from the leader.
             true => {
                 let ([px, py], [lx, ly]) = (
                     organization.broken_places[p],
                     organization.broken_places[lp],
                 );
-                [leader.position[0] + px - lx, leader.position[1] + py - ly]
+                tgmap::to_local([0.0, 0.0], along, [px - lx, py - ly])
             }
             false => {
                 let offsets = &organization.formations[organization.current_formation()].offsets;
                 let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
                 let ([px, py], [lx, ly]) = (offset(p), offset(lp));
-                tgmap::from_local(leader.position, leader.facing, [px - lx, py - ly])
+                [px - lx, py - ly]
             }
         };
-        let unit = &self.units[u];
-        let [hx, hy] = leader.facing;
-        let ahead = (place[0] - unit.position[0]) * hx + (place[1] - unit.position[1]) * hy;
-        let pace = (regiment + ahead / 2.0).min(self.rules.catchup_speed * own);
+        let (left, leads) = (unit.path.len(), leader.path.len());
+        let ahead = match left == leads {
+            true => {
+                let place = tgmap::from_local(leader.position, along, local);
+                let [hx, hy] = unit.leg.map_or(along, |l| l.heading);
+                let mut d = (place[0] - unit.position[0]) * hx + (place[1] - unit.position[1]) * hy;
+                // Round a corner, the outer file has further to go.
+                if let (Some(&next), Some(&after)) =
+                    (unit.path.last(), unit.path.iter().rev().nth(1))
+                {
+                    let near = crate::distance(unit.position, next);
+                    let onward = normalised([after[0] - next[0], after[1] - next[1]]);
+                    if let (true, Some([nx, ny])) = (near < CORNER_REACH, onward) {
+                        let turn = (hx * ny - hy * nx).signum();
+                        d += local[0] * turn * (1.0 - near / CORNER_REACH);
+                    }
+                }
+                d
+            }
+            false => {
+                let d = unit.route_left() - leader.route_left();
+                let behind = left as f32 - leads as f32;
+                match d.signum() == behind.signum() {
+                    true => d,
+                    false => behind / 2.0,
+                }
+            }
+        };
+        let pace = (regiment + ahead / 2.0).min(most);
         match pace <= WAITING_PACE {
             true => 0.0,
             false => pace / regiment,
@@ -1017,6 +1205,40 @@ mod tests {
         // Far behind, it would ask for far more than 1.25 × its 2.
         let went = w.units[1].position[1] - from;
         assert!((went - 2.5).abs() < 0.05, "{went}");
+    }
+
+    #[test]
+    fn members_follow_the_leaders_route_alongside_it_meeting_its_corners() {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.organizations[0].travelling = true;
+        // North to 9,30, then east to 29,30: a right turn.
+        let route = vec![[29.0, 30.0], [9.0, 30.0]];
+        w.take_copy(0, 0, 1, &route, [29.0, 28.0]);
+        // 2 to the leader's right, it turns inside the corner, before it.
+        let unit = &w.units[1];
+        assert_eq!(unit.path.len(), 2);
+        assert!(near(unit.path[1], [11.0, 28.0]), "{:?}", unit.path);
+        assert!(near(unit.path[0], [29.0, 28.0]));
+        // Its first leg holds the leader's heading, north.
+        let [fx, fy] = [unit.path[1][0] - unit.from[0], unit.path[1][1] - unit.from[1]];
+        assert!(fx.abs() < 1e-4 && fy > 0.0);
+    }
+
+    #[test]
+    fn a_member_whose_copy_is_walled_off_finds_its_own_way() {
+        let mut pathing = Pathing::uniform(20, Domain::Land);
+        // A wall across the member's line north, but not the leader's.
+        for x in 5..8 {
+            pathing.set_blocked(Tile::new(x, 10));
+        }
+        let mut w = world(pathing);
+        w.organizations[0].travelling = true;
+        let route = vec![[9.0, 30.0]];
+        w.take_copy(0, 0, 1, &route, [11.0, 30.0]);
+        // Pulled back to beside the leader's route, or round on its own.
+        let unit = &w.units[1];
+        let straight = unit.path.len() == 1 && unit.from[0] > 10.5;
+        assert!(!straight, "{:?}", unit.path);
     }
 
     #[test]

@@ -543,6 +543,9 @@ pub struct Unit {
     /// What each step it drives is stretched by, as a regiment's member
     /// keeping its place does: 0 while it waits for its place to come.
     pace: f32,
+    /// Whether it's dashing straight for its next waypoint to get back
+    /// onto its route.
+    detour: bool,
     /// Its template's top speed, before its properties change it.
     pub speed_max: f32,
     /// World units a second it gains each second; 0 for at once.
@@ -1364,7 +1367,7 @@ digest!(Leg {
 
 digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
-    exact, ways, look, speed, pace, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
+    exact, ways, look, speed, pace, detour, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
     fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
     stance_heard, playing, besieged, struck, left, awaited, descent,
