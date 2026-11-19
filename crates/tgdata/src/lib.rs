@@ -554,6 +554,13 @@ impl GameData {
         ]
     }
 
+    /// Seconds since a site's health last changed that it counts as being
+    /// worked on.
+    pub fn active_construction_seconds(&self) -> Option<f32> {
+        let svars = self.svars();
+        svars.iter().find_map(|v| v.active_construction_timeout)
+    }
+
     /// Seconds an enemy's damage keeps what it hurt under siege.
     pub fn siege_seconds(&self) -> Option<f32> {
         let svars = self.svars();

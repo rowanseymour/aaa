@@ -1260,6 +1260,9 @@ pub struct SVars {
     pub experience_faction_gain_periodic: Option<f32>,
     #[serde(rename = "BuildingPaddingMeters")]
     pub building_padding_meters: Option<f32>,
+    /// Seconds a site or upgrade's health changing keeps it at work.
+    #[serde(rename = "ActiveConstructionTimeout")]
+    pub active_construction_timeout: Option<f32>,
     /// Whether a side's objectives are kept in order of their text.
     #[serde(rename = "SortObjectives")]
     pub sort_objectives: Option<bool>,
