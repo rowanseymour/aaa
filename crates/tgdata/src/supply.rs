@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use crate::combat::soft_shape;
 use crate::strikes::strike;
-use crate::{GameData, Id, Shape, Strike, Targets, defs};
+use crate::{Damage, GameData, Id, Shape, Strike, Targets, defs};
 
 /// The settings supply runs by.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -62,17 +62,8 @@ pub struct Kind {
 /// out.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Operation {
-    /// Gives regiments around where it's aimed a property for a time.
-    Enchant {
-        targets: Targets,
-        /// How far from where it's aimed it reaches, to the edge of a
-        /// regiment's soft shape.
-        area: f32,
-        /// The most regiments it works on, the nearest; 0 for all.
-        max_targets: u32,
-        property: Id,
-        seconds: f32,
-    },
+    /// Gives what's around where it's aimed a property for a time.
+    Enchant(Enchantment),
     /// Drops something of this template that gives supply where it's
     /// aimed.
     Drop(Id),
@@ -82,6 +73,30 @@ pub enum Operation {
     Strike(Box<Strike>),
     /// Brings something new onto the map for its user.
     Summon(Summon),
+}
+
+/// What an operation that gives a property for a time does.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Enchantment {
+    /// What it works on: regiments, or units and buildings one by one.
+    pub targets: Targets,
+    /// How far from where it's aimed it reaches, to the edge of what it
+    /// works on.
+    pub area: f32,
+    /// The most things it works on, the nearest; 0 for all.
+    pub max_targets: u32,
+    pub property: Id,
+    pub seconds: f32,
+    /// The property's enchantment type, which immunities name.
+    pub kind: Option<Id>,
+    /// Morale each thing it works on gives its regiment; negative for a
+    /// loss.
+    pub morale: f32,
+    /// Main damage it does first to those of what it works on that its
+    /// own targets match.
+    pub damage: Vec<(Targets, Damage)>,
+    /// Seconds after it's used that it takes effect.
+    pub delay: f32,
 }
 
 /// What a summoning operation brings, and what holds it back.
@@ -114,6 +129,48 @@ pub(crate) fn reveals(
         let flag = |m: &defs::Modifier| is(&m.modifier_flag, "MINIMAP_NO_FOG");
         let seconds = p.duration.or_else(|| shared?.duration).unwrap_or(0.0);
         modifiers.iter().any(flag).then_some(seconds)
+    })
+}
+
+/// What an operation that gives a property for a time does, for one
+/// that does.
+fn enchantment(
+    a: &defs::AbilityDefinition,
+    flights: &HashMap<Id, crate::Flight>,
+) -> Option<Enchantment> {
+    let p = a
+        .effect
+        .iter()
+        .find_map(|e| e.enchantment_property.as_ref())?;
+    let amount = |kind: &str| {
+        let of = a.effect.iter().filter(|e| is(&e.kind, kind));
+        of.filter_map(|e| e.amount).sum::<f32>()
+    };
+    let damage = (a.effect.iter())
+        .filter(|e| is(&e.kind, "MAIN_DAMAGE"))
+        .filter_map(|e| {
+            let targets = Targets::parse(e.targets.as_deref().unwrap_or(""));
+            let kind = e.damage_type_ids.clone()?;
+            Some((
+                targets,
+                Damage {
+                    kind,
+                    amount: e.amount?,
+                },
+            ))
+        })
+        .collect();
+    let projectile = a.projectile_ids.as_ref().and_then(|p| flights.get(p));
+    Some(Enchantment {
+        targets: Targets::parse(a.targets.as_deref().unwrap_or("")),
+        area: a.area,
+        max_targets: a.max_targets.unwrap_or(0),
+        property: p.ids.clone()?,
+        seconds: p.duration.unwrap_or(0.0),
+        kind: p.enchantment_type.clone(),
+        morale: amount("MORALE_GAIN") - amount("MORALE_LOSS"),
+        damage,
+        delay: projectile.map_or(0.0, |f| f.life),
     })
 }
 
@@ -201,6 +258,12 @@ impl GameData {
         self.property_effects(effect)
     }
 
+    /// Each property's enchantment type, for those that have one, by its
+    /// id.
+    pub fn enchantment_types(&self) -> HashMap<Id, Id> {
+        self.property_effects(|p| p.enchantment_type.clone())
+    }
+
     /// What `effect` makes of each property, for those it makes anything
     /// of, by its id: the shared ones, technologies among them, and those
     /// abilities give.
@@ -272,7 +335,6 @@ impl GameData {
     /// The special operations the match carries out, by id.
     pub fn operations(&self) -> HashMap<Id, Operation> {
         let definitions = self.definitions();
-        let effects = self.supply_effects();
         let supplies = self.supplies();
         let flights = self.flights();
         let lookouts = self.lookouts();
@@ -282,27 +344,20 @@ impl GameData {
                 out.insert(id.clone(), Operation::Strike(Box::new(s)));
                 continue;
             }
-            let gives = a.effect.iter().find_map(|e| {
-                let p = e.enchantment_property.as_ref()?;
-                let property = p.ids.clone().filter(|id| effects.contains_key(id))?;
-                Some((property, p.duration.unwrap_or(0.0)))
-            });
             let objects = a.effect.iter().filter_map(|e| e.object_ids.as_ref());
             let drops = objects.clone().find(|&o| supplies.contains_key(o)).cloned();
-            let operation = match (gives, drops) {
-                (Some((property, seconds)), _) => Operation::Enchant {
-                    targets: Targets::parse(a.targets.as_deref().unwrap_or("")),
-                    area: a.area,
-                    max_targets: a.max_targets.unwrap_or(0),
-                    property,
-                    seconds,
-                },
-                (None, Some(template)) => Operation::Drop(template),
-                (None, None) => match (reveals(a, &definitions.properties), summon(a)) {
-                    (Some(seconds), _) => Operation::Reveal { seconds },
-                    (None, Some(summon)) => Operation::Summon(summon),
-                    (None, None) => continue,
-                },
+            // What it puts on the map is what it's for, whatever property it
+            // gives besides.
+            let operation = if let Some(seconds) = reveals(a, &definitions.properties) {
+                Operation::Reveal { seconds }
+            } else if let Some(template) = drops {
+                Operation::Drop(template)
+            } else if let Some(summon) = summon(a) {
+                Operation::Summon(summon)
+            } else if let Some(e) = enchantment(a, &flights) {
+                Operation::Enchant(e)
+            } else {
+                continue;
             };
             out.insert(id.clone(), operation);
         }

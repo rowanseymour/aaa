@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::supply::{is, listed};
-use crate::{GameData, Id, defs};
+use crate::{Damage, GameData, Id, defs};
 
 /// How much experience the things that earn it gain, by their `SVars`
 /// names less the `Experience` they start with.
@@ -92,6 +92,16 @@ pub struct CombatEffect {
     /// `SPEED_MAX`: added to the 1 top speed is multiplied by.
     pub speed: f32,
     pub efficiency: Efficiency,
+    /// `RESIST_DAMAGE`: added to its resistance to each damage type.
+    pub resists: Vec<(Id, f32)>,
+    /// `PERIODIC_DAMAGE`: taken each second, times resistance.
+    pub periodic: Vec<Damage>,
+    /// Extra damage each of its attacks also does to what it hits, times
+    /// resistance.
+    pub extra: Vec<Damage>,
+    /// The enchantment types it keeps off when they come from a side not
+    /// its own or an ally; `None` for every type.
+    pub immune: Vec<Option<Id>>,
     /// For a technology, the properties a thing of the side needs for it
     /// to be on it.
     pub requires: Vec<Id>,
@@ -111,8 +121,25 @@ impl CombatEffect {
             bombard_range: self.bombard_range + other.bombard_range,
             speed: self.speed + other.speed,
             efficiency: self.efficiency.with(other.efficiency),
+            resists: [self.resists, other.resists.clone()].concat(),
+            periodic: [self.periodic, other.periodic.clone()].concat(),
+            extra: [self.extra, other.extra.clone()].concat(),
+            immune: [self.immune, other.immune.clone()].concat(),
             requires: Vec::new(),
         }
+    }
+
+    /// What it adds to resistance to damage of `kind`.
+    pub fn resist(&self, kind: &Id) -> f32 {
+        let of = self.resists.iter().filter(|(k, _)| k == kind);
+        of.map(|(_, amount)| amount).sum()
+    }
+
+    /// Whether it keeps off enchantments of type `kind`.
+    pub fn immune_to(&self, kind: &Id) -> bool {
+        self.immune
+            .iter()
+            .any(|i| i.as_ref().is_none_or(|i| i == kind))
     }
 }
 
@@ -169,6 +196,31 @@ pub(crate) fn combat_effect(p: &defs::Property) -> Option<CombatEffect> {
             }
             _ if multiply && is(&m.attribute, "ATTACK_EFFICIENCY_DESIRED") => {
                 out.efficiency.desired = most(out.efficiency.desired);
+            }
+            _ if is(&m.kind, "RESIST_DAMAGE") => {
+                if let Some(kind) = &m.damage_type {
+                    out.resists.push((kind.clone(), amount));
+                }
+            }
+            _ if is(&m.kind, "PERIODIC_DAMAGE") => {
+                if let Some(kind) = &m.damage_type {
+                    let kind = kind.clone();
+                    out.periodic.push(Damage { kind, amount });
+                }
+            }
+            _ if is(&m.kind, "ENCHANTMENT_IMMUNITY") => {
+                let all = |t: &Id| t.as_str().eq_ignore_ascii_case("null");
+                out.immune
+                    .push(m.enchantment_type.clone().filter(|t| !all(t)));
+            }
+            _ if is(&m.kind, "ABILITY_EFFECT") && is(&m.ability_type, "attack") => {
+                let added = m.effect.iter().filter(|e| is(&e.kind, "ADD_DAMAGE"));
+                out.extra.extend(added.filter_map(|e| {
+                    Some(Damage {
+                        kind: e.damage_type_ids.clone()?,
+                        amount: e.amount?,
+                    })
+                }));
             }
             _ => {}
         }

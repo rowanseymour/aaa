@@ -211,11 +211,11 @@ impl World {
     /// and holding `held` adds to its fighting, with those of `more` as
     /// well: its template's own, its side's technologies on its kind and
     /// those it holds for a time.
-    pub(crate) fn held_effect(
-        &self,
+    pub(crate) fn held_effect<'a>(
+        &'a self,
         owner: u32,
         template: &Id,
-        held: &[crate::Held],
+        held: impl IntoIterator<Item = &'a crate::Held> + 'a,
         more: &[Option<&Id>],
     ) -> CombatEffect {
         let table = &self.rules.combat_effects;
@@ -228,13 +228,13 @@ impl World {
     }
 
     /// What the properties the unit at `u` holds add to its fighting: its
-    /// template's own, its side's technologies on its kind, those its
-    /// organization holds for a time, and its organization's level.
+    /// template's own, its side's technologies on its kind, those it and
+    /// its organization hold for a time, and its organization's level.
     pub(crate) fn boost(&self, u: usize) -> CombatEffect {
         let unit = &self.units[u];
         let r = unit.organization;
-        let organization = &self.organizations[r];
-        let (owner, held) = (organization.owner, &organization.properties);
+        let owner = self.organizations[r].owner;
+        let held = self.timed_on(crate::Target::Unit(u));
         self.held_effect(owner, &unit.template, held, &[self.level_property(r)])
     }
 
@@ -526,13 +526,17 @@ mod tests {
     /// seconds to recharge, and an operation the match can't carry out.
     fn operating(experience: f32) -> World {
         let mut w = world();
-        let resupply = tgmap::Operation::Enchant {
+        let resupply = tgmap::Operation::Enchant(tgmap::Enchantment {
             targets: tgmap::Targets::default(),
             area: 15.0,
             max_targets: 4,
             property: Id::from("property_resupply"),
             seconds: 30.0,
-        };
+            kind: None,
+            morale: 0.0,
+            damage: Vec::new(),
+            delay: 0.0,
+        });
         w.rules.operations.insert(Id::from("resupply"), resupply);
         let ops = vec![
             SpecialOp::new(Id::from("resupply"), 200.0, 10.0),

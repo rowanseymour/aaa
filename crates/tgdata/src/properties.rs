@@ -231,6 +231,9 @@ mod tests {
             attribute: attribute.map(str::to_string),
             modifier_flag: None,
             amount: Some(amount),
+            enchantment_type: None,
+            ability_type: None,
+            effect: Vec::new(),
         }
     }
 
