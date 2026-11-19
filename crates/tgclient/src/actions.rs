@@ -54,18 +54,21 @@ const fn span(n: usize) -> f32 {
 /// The orders an organization has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
 /// The game leaves the rest of the commands off an organization's grid.
-const ORDERS: [(&str, Option<Give>); 11] = [
-    ("move", Some(Give::Aim(Aim::Move))),
+/// They're in the game's own order of commands, which decides who keeps a
+/// slot two want.
+const ORDERS: [(&str, Option<Give>); 12] = [
     ("kill", Some(Give::Aim(Aim::Attack))),
-    ("retreat", Some(Give::Aim(Aim::Run))),
-    ("stop", Some(Give::Stop)),
     ("guard", Some(Give::Aim(Aim::Guard))),
-    ("hq_attach", Some(Give::Attach)),
-    ("hq_detach", Some(Give::Detach)),
-    ("unpack", Some(Give::Aim(Aim::Unpack))),
+    ("move", Some(Give::Aim(Aim::Move))),
+    ("stop", Some(Give::Stop)),
+    ("retreat", Some(Give::Aim(Aim::Run))),
+    ("rout", Some(Give::Rout)),
     ("disband", Some(Give::Disband)),
+    ("unpack", Some(Give::Aim(Aim::Unpack))),
     ("attach", Some(Give::AttachHero)),
     ("detach", Some(Give::DetachHero)),
+    ("hq_attach", Some(Give::Attach)),
+    ("hq_detach", Some(Give::Detach)),
 ];
 
 /// The commands whose buttons open a recruiter's two menus.
@@ -127,6 +130,7 @@ enum Give {
     /// Waits for a place on the map.
     Aim(Aim),
     Stop,
+    Rout,
     Attach,
     Detach,
     /// Asks first.
@@ -137,10 +141,11 @@ enum Give {
 }
 
 impl Give {
-    /// The order to attach, detach or disband `organization`, or detach
-    /// its hero; none for what waits on a place or a choice first.
+    /// The order to rout, attach, detach or disband `organization`, or
+    /// detach its hero; none for what waits on a place or a choice first.
     fn command(self, organization: usize) -> Option<tgsim::Command> {
         match self {
+            Give::Rout => Some(tgsim::Command::Rout { organization }),
             Give::Attach => Some(tgsim::Command::Attach { organization }),
             Give::Detach => Some(tgsim::Command::Detach { organization }),
             Give::Disband => Some(tgsim::Command::Disband { organization }),
@@ -264,6 +269,26 @@ fn put(out: &mut [Option<Entry>; SLOTS], place: Option<Place>, entry: Entry) {
     }
 }
 
+/// Puts each of `shown`, given in the game's order of commands, in its
+/// slot unless one later in the order wants it; only then do those left
+/// out move on, so none of them pushes another out of its own slot.
+fn place(
+    out: &mut [Option<Entry>; SLOTS],
+    shown: impl DoubleEndedIterator<Item = (Option<Place>, Entry)>,
+) {
+    let wanted = shown.filter_map(|(p, entry)| Some((p.filter(|p| p.slot < SLOTS)?, entry)));
+    let mut lost = Vec::new();
+    for (place, entry) in wanted.rev() {
+        match out[place.slot] {
+            None => out[place.slot] = Some(entry),
+            Some(_) => lost.push((place, entry)),
+        }
+    }
+    for (place, entry) in lost.into_iter().rev() {
+        put(out, Some(place), entry);
+    }
+}
+
 /// The buttons a selected building has: where its menus' and rally point
 /// buttons go, which menu each thing it recruits is in and how it's
 /// offered, and where its Pack button goes, if it packs.
@@ -295,7 +320,13 @@ impl BuildingButtons<'_> {
 /// instead, or on its way to unpack; while it fights it's greyed. Only
 /// where the game has HQs can organizations attach to them, and only where
 /// it has heroes can one company selected alone take one on or let it go.
-fn offered(sim: &tgsim::World, selected: &[usize], has: GameHas) -> [bool; ORDERS.len()] {
+/// Rout shows while any of them could rout now.
+fn offered(
+    sim: &tgsim::World,
+    player: Option<u32>,
+    selected: &[usize],
+    has: GameHas,
+) -> [bool; ORDERS.len()] {
     let packed = |&r: &usize| sim.organizations[r].unpacks.is_some();
     let all_packed = !selected.is_empty() && selected.iter().all(packed);
     let lone = selected.iter().all(|&r| sim.lone(r));
@@ -311,8 +342,10 @@ fn offered(sim: &tgsim::World, selected: &[usize], has: GameHas) -> [bool; ORDER
         &[r] => has.heroes && sim.organizations[r].leader.is_some() && !sim.lone(r) && !all_packed,
         _ => false,
     };
+    let rout = selected.iter().any(|&r| can(sim, player, Give::Rout, r));
     ORDERS.map(|(ids, _)| match ids {
         "unpack" => all_packed && selected.len() == 1,
+        "rout" => rout,
         "kill" => !all_packed,
         "hq_attach" => has.hqs && !all_packed,
         "hq_detach" => has.hqs && !all_packed && !disband,
@@ -321,6 +354,12 @@ fn offered(sim: &tgsim::World, selected: &[usize], has: GameHas) -> [bool; ORDER
         "attach" | "detach" => led,
         _ => true,
     })
+}
+
+/// Whether `player` could give `give` to the organization at `r` now.
+fn can(sim: &tgsim::World, player: Option<u32>, give: Give, r: usize) -> bool {
+    let command = || give.command(r);
+    player.is_some_and(|p| command().is_some_and(|c| sim.check(p, &c).is_ok()))
 }
 
 /// What the game's data has that some orders need, which a match can't
@@ -355,18 +394,26 @@ fn layout(
     match (page, building) {
         // Aiming a delivery, the grid is back to the building's own.
         (Page::Orders | Page::Delivering(_), Some(b)) => {
-            for (menu, place) in [(Menu::Deploy, b.deploy), (Menu::Location, b.location)] {
-                if b.offers(menu) {
-                    put(&mut out, place, Entry::Open(menu));
-                }
-            }
-            // Even once there's nothing left to research.
-            if !b.researches.is_empty() {
-                put(&mut out, b.research, Entry::Open(Menu::Research));
-            }
-            put(&mut out, b.rally, Entry::Rally);
-            put(&mut out, b.pack, Entry::Pack);
-            put(&mut out, b.sell, Entry::Sell);
+            // In the game's order of commands.
+            let buttons = [
+                (b.offers(Menu::Deploy), b.deploy, Entry::Open(Menu::Deploy)),
+                (true, b.rally, Entry::Rally),
+                (
+                    b.offers(Menu::Location),
+                    b.location,
+                    Entry::Open(Menu::Location),
+                ),
+                (true, b.sell, Entry::Sell),
+                (true, b.pack, Entry::Pack),
+                // Even once there's nothing left to research.
+                (
+                    !b.researches.is_empty(),
+                    b.research,
+                    Entry::Open(Menu::Research),
+                ),
+            ];
+            let shown = buttons.into_iter().filter(|(shows, _, _)| *shows);
+            place(&mut out, shown.map(|(_, place, entry)| (place, entry)));
         }
         (Page::Menu(Menu::Research), Some(b)) => {
             // What's done or under way keeps its slot empty; what's hidden
@@ -402,11 +449,8 @@ fn layout(
         }
         (Page::Menu(_) | Page::Rally | Page::Delivering(_), None) => {}
         (Page::Orders, None) => {
-            for (i, &place) in slots.iter().enumerate() {
-                if offered[i] {
-                    put(&mut out, place, Entry::Order(i));
-                }
-            }
+            let shown = (slots.iter().enumerate()).filter(|&(i, _)| offered[i]);
+            place(&mut out, shown.map(|(i, &p)| (p, Entry::Order(i))));
         }
         (Page::Aiming(aim), _) => {
             let aimed = ORDERS.iter().position(|(_, g)| *g == Some(Give::Aim(aim)));
@@ -1046,11 +1090,7 @@ fn ready(
             (
                 Some(give @ (Give::Attach | Give::Detach | Give::Disband | Give::DetachHero)),
                 Some(player),
-            ) => {
-                let can =
-                    |&r: &usize| (give.command(r)).is_some_and(|c| sim.check(player, &c).is_ok());
-                selected.iter().any(can)
-            }
+            ) => selected.iter().any(|&r| can(sim, Some(player), give, r)),
             (give, _) => give.is_some(),
         },
         Entry::Research(i) => researches[i] == Researchable::Ready,
@@ -1110,7 +1150,7 @@ fn contents(
     let entries = layout(
         page,
         &order_slots,
-        &offered(sim, selected, looks.has),
+        &offered(sim, local, selected, looks.has),
         building.map(|b| BuildingButtons {
             deploy: looks.deploy.0,
             location: looks.location.0,
@@ -1630,11 +1670,17 @@ impl Presser<'_, '_> {
                     }
                     *self.page = Page::Orders;
                 }
-                Some(give @ (Give::Attach | Give::Detach | Give::DetachHero)) => {
+                Some(give @ (Give::Rout | Give::Attach | Give::Detach | Give::DetachHero)) => {
+                    let mut given = false;
                     for &organization in &self.selected.0 {
                         if let Some(command) = give.command(organization) {
-                            let _ = self.orders.give(sim, player, command);
+                            given |= self.orders.give(sim, player, command).is_ok();
                         }
+                    }
+                    // An order refused outright gets no reply.
+                    if given {
+                        let selected = &self.selected.0;
+                        crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
                     }
                 }
                 // A side with no heroes is refused without a word.
@@ -2223,17 +2269,30 @@ mod tests {
     }
 
     /// The slots the game's data gives [`ORDERS`].
-    const GAME: [Option<Place>; 9] = [
-        at(0),
+    const GAME: [Option<Place>; ORDERS.len()] = [
         at(1),
-        at(2),
-        at(3),
         at(6),
+        at(0),
+        at(3),
+        at(2),
+        at(10),
+        high(11),
+        at(9),
+        at(9),
+        at(10),
         at(10),
         at(11),
-        at(9),
-        high(11),
     ];
+
+    /// Which of [`ORDERS`] the selection has, by command id.
+    fn having(ids: &[&str]) -> [bool; ORDERS.len()] {
+        ORDERS.map(|(id, _)| ids.contains(&id))
+    }
+
+    /// Where [`ORDERS`]' `id` is.
+    fn order(id: &str) -> Option<Entry> {
+        ORDERS.iter().position(|(i, _)| *i == id).map(Entry::Order)
+    }
 
     #[test]
     fn attacks_strike_only_enemies() {
@@ -2271,49 +2330,104 @@ mod tests {
             hqs: true,
             heroes: true,
         };
-        assert!(ids(offered(&w, &[0], GameHas::default())).is_empty());
+        assert!(ids(offered(&w, None, &[0], GameHas::default())).is_empty());
         // A hero takes a captain's place, which this has none of.
-        assert_eq!(ids(offered(&w, &[0], both)), ["hq_attach"]);
+        assert_eq!(ids(offered(&w, None, &[0], both)), ["hq_attach"]);
         w.organizations[0].leader = Some(0);
-        let led = ["hq_attach", "attach", "detach"];
-        assert_eq!(ids(offered(&w, &[0], both)), led);
+        let led = ["attach", "detach", "hq_attach"];
+        assert_eq!(ids(offered(&w, None, &[0], both)), led);
         // One company at a time.
-        assert_eq!(ids(offered(&w, &[0, 1], both)), ["hq_attach", "hq_detach"]);
+        assert_eq!(
+            ids(offered(&w, None, &[0, 1], both)),
+            ["hq_attach", "hq_detach"]
+        );
+    }
+
+    #[test]
+    fn rout_is_offered_only_in_a_fight() {
+        let mut w = crate::orders::testing::fresh();
+        let i = ORDERS.iter().position(|(id, _)| *id == "rout").unwrap();
+        let routs = |w: &tgsim::World, player, selected: &[usize]| {
+            offered(w, Some(player), selected, GameHas::default())[i]
+        };
+        w.organizations[0].morale_max = 50.0;
+        w.organizations[0].morale = 50.0;
+        assert!(!routs(&w, 1, &[0]));
+        w.organizations[0]
+            .engaged
+            .push(tgsim::Piece::Organization(1));
+        assert!(routs(&w, 1, &[0]));
+        // Any one of several will do; another side's never does.
+        assert!(routs(&w, 1, &[1, 0]));
+        assert!(!routs(&w, 2, &[0]));
     }
 
     #[test]
     fn orders_take_their_slots() {
-        // An organization attached to an HQ, which can't be disbanded.
-        let mut all = [true; 9];
-        all[8] = false;
-        let grid = layout(Page::Orders, &GAME, &all, None, false);
-        assert_eq!(grid[0], Some(Entry::Order(0)));
-        assert_eq!(grid[3], Some(Entry::Order(3)));
-        assert_eq!(grid[6], Some(Entry::Order(4)));
-        assert_eq!(grid[11], Some(Entry::Order(6)));
-        assert_eq!(grid.iter().flatten().count(), 8);
-        let truck = [true, false, false, true, false, false, false, true, true];
+        let attached = having(&[
+            "move",
+            "kill",
+            "retreat",
+            "stop",
+            "guard",
+            "hq_attach",
+            "hq_detach",
+        ]);
+        let grid = layout(Page::Orders, &GAME, &attached, None, false);
+        for (slot, id) in [
+            (0, "move"),
+            (1, "kill"),
+            (3, "stop"),
+            (6, "guard"),
+            (11, "hq_detach"),
+        ] {
+            assert_eq!(grid[slot], order(id));
+        }
+        assert_eq!(grid.iter().flatten().count(), 7);
+        let truck = having(&["move", "stop", "unpack", "disband"]);
         let grid = layout(Page::Orders, &GAME, &truck, None, false);
-        assert_eq!(grid[9], Some(Entry::Order(7)));
-        assert_eq!(grid[11], Some(Entry::Order(8)));
+        assert_eq!(grid[9], order("unpack"));
+        assert_eq!(grid[11], order("disband"));
         assert_eq!(grid.iter().flatten().count(), 4);
-        // Beside Detach from HQ, as never happens in the game, it gives way.
-        let grid = layout(Page::Orders, &GAME, &[true; 9], None, false);
-        assert_eq!(grid[11], Some(Entry::Order(6)));
-        assert_eq!(grid[8], Some(Entry::Order(8)));
+    }
+
+    #[test]
+    fn of_two_wanting_a_slot_the_later_keeps_it_and_the_other_moves_on() {
+        // As never happens in the game: Detach from HQ beside Disband, and
+        // Attach to HQ beside Rout.
+        let both = having(&[
+            "move",
+            "kill",
+            "retreat",
+            "stop",
+            "guard",
+            "hq_attach",
+            "hq_detach",
+            "disband",
+        ]);
+        let grid = layout(Page::Orders, &GAME, &both, None, false);
+        assert_eq!(grid[11], order("hq_detach"));
+        assert_eq!(grid[10], order("hq_attach"));
+        assert_eq!(grid[9], order("disband"));
+        let rout = having(&["move", "guard", "rout", "hq_attach"]);
+        let grid = layout(Page::Orders, &GAME, &rout, None, false);
+        assert_eq!(grid[10], order("hq_attach"));
+        // The first slot no shown order wants, not Move's.
+        assert_eq!(grid[0], order("move"));
+        assert_eq!(grid[1], order("rout"));
     }
 
     #[test]
     fn hqs_have_a_button_for_their_organizations_where_nothing_else_is() {
-        let truck = [true, false, false, true, false, false, false, true, true];
+        let truck = having(&["move", "stop", "unpack", "disband"]);
         let grid = layout(Page::Orders, &GAME, &truck, None, true);
         assert_eq!(grid[COMMAND_ALL], Some(Entry::CommandAll));
         assert_eq!(grid.iter().flatten().count(), 5);
         // Not over an order, nor while one's aimed.
         let mut slots = GAME;
-        slots[0] = at(COMMAND_ALL);
+        slots[2] = at(COMMAND_ALL);
         let grid = layout(Page::Orders, &slots, &truck, None, true);
-        assert_eq!(grid[COMMAND_ALL], Some(Entry::Order(0)));
+        assert_eq!(grid[COMMAND_ALL], order("move"));
         let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true);
         assert!(!grid.contains(&Some(Entry::CommandAll)));
     }
@@ -2322,7 +2436,7 @@ mod tests {
     fn buttons_go_by_the_names_the_hotkeys_bind() {
         let names = |entry, page| bound(entry, 4, page, &[], &[]);
         assert_eq!(
-            names(Entry::Order(5), Page::Orders),
+            names(order("hq_attach").unwrap(), Page::Orders),
             ["ActorCommand hq_attach", "ActionButtonsButton_4"]
         );
         assert_eq!(names(Entry::CommandAll, Page::Orders)[0], "CommandAll");
@@ -2347,8 +2461,14 @@ mod tests {
 
     #[test]
     fn aiming_shows_the_order_and_a_way_out() {
-        let grid = layout(Page::Aiming(Aim::Run), &GAME, &[true; 9], None, false);
-        assert_eq!(grid[2], Some(Entry::Order(2)));
+        let grid = layout(
+            Page::Aiming(Aim::Run),
+            &GAME,
+            &[true; ORDERS.len()],
+            None,
+            false,
+        );
+        assert_eq!(grid[2], order("retreat"));
         assert_eq!(grid[CANCEL], Some(Entry::Cancel));
         assert_eq!(grid.iter().flatten().count(), 2);
     }
@@ -2373,7 +2493,7 @@ mod tests {
             pack: at(9),
             sell: at(11),
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 9], Some(hq), false);
+        let grid = layout(Page::Orders, &GAME, &[true; ORDERS.len()], Some(hq), false);
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[5], Some(Entry::Rally));
         assert_eq!(grid[9], Some(Entry::Pack));
@@ -2387,14 +2507,26 @@ mod tests {
             ..hq
         };
         assert!(
-            layout(Page::Orders, &GAME, &[true; 9], Some(depot), false)
-                .iter()
-                .all(Option::is_none)
+            layout(
+                Page::Orders,
+                &GAME,
+                &[true; ORDERS.len()],
+                Some(depot),
+                false
+            )
+            .iter()
+            .all(Option::is_none)
         );
-        let menu = layout(Page::Menu(Menu::Deploy), &GAME, &[true; 9], Some(hq), false);
+        let menu = layout(
+            Page::Menu(Menu::Deploy),
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(hq),
+            false,
+        );
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
-        let rally = layout(Page::Rally, &GAME, &[true; 9], Some(hq), false);
+        let rally = layout(Page::Rally, &GAME, &[true; ORDERS.len()], Some(hq), false);
         assert_eq!(rally[5], Some(Entry::Rally));
         assert_eq!(rally[CANCEL], Some(Entry::Cancel));
         assert_eq!(rally.iter().flatten().count(), 2);
@@ -2419,7 +2551,7 @@ mod tests {
             pack: None,
             sell: None,
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 9], Some(hq), false);
+        let grid = layout(Page::Orders, &GAME, &[true; ORDERS.len()], Some(hq), false);
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], None);
         // With everything hidden it still has its rally point.
@@ -2428,10 +2560,22 @@ mod tests {
             recruits: &hidden,
             ..hq
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 9], Some(none), false);
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(none),
+            false,
+        );
         assert_eq!(grid[..2], [None, None]);
         assert_eq!(grid[5], Some(Entry::Rally));
-        let menu = layout(Page::Menu(Menu::Deploy), &GAME, &[true; 9], Some(hq), false);
+        let menu = layout(
+            Page::Menu(Menu::Deploy),
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(hq),
+            false,
+        );
         assert_eq!(
             menu[..3],
             [Some(Entry::Recruit(0)), Some(Entry::Recruit(1)), None]
@@ -2448,24 +2592,50 @@ mod tests {
             recruits: &mixed,
             ..hq
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 9], Some(ship), false);
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(ship),
+            false,
+        );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], Some(Entry::Open(Menu::Location)));
-        // Its slot taken, a button takes the first free one, or the last for
-        // one of high importance.
+        // Of three wanting one slot, the latest in the game's order keeps it
+        // and the others take the first free ones in turn.
         let crowded = BuildingButtons {
             location: high(0),
             rally: at(0),
             ..ship
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 9], Some(crowded), false);
-        assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(crowded),
+            false,
+        );
+        assert_eq!(grid[0], Some(Entry::Open(Menu::Location)));
+        assert_eq!(grid[1], Some(Entry::Open(Menu::Deploy)));
+        assert_eq!(grid[2], Some(Entry::Rally));
+        // One of high importance counts down from the last.
+        let crowded = BuildingButtons {
+            sell: at(1),
+            ..ship
+        };
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(crowded),
+            false,
+        );
+        assert_eq!(grid[1], Some(Entry::Sell));
         assert_eq!(grid[11], Some(Entry::Open(Menu::Location)));
-        assert_eq!(grid[1], Some(Entry::Rally));
         let deploy = layout(
             Page::Menu(Menu::Deploy),
             &GAME,
-            &[true; 9],
+            &[true; ORDERS.len()],
             Some(ship),
             false,
         );
@@ -2474,7 +2644,7 @@ mod tests {
         let carried = layout(
             Page::Menu(Menu::Location),
             &GAME,
-            &[true; 9],
+            &[true; ORDERS.len()],
             Some(ship),
             false,
         );
@@ -2504,13 +2674,19 @@ mod tests {
             pack: None,
             sell: None,
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 9], Some(pool), false);
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(pool),
+            false,
+        );
         assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
         assert_eq!(grid.iter().flatten().count(), 1);
         let menu = layout(
             Page::Menu(Menu::Research),
             &GAME,
-            &[true; 9],
+            &[true; ORDERS.len()],
             Some(pool),
             false,
         );
@@ -2529,7 +2705,13 @@ mod tests {
             researches: &[Taken, Taken],
             ..pool
         };
-        let grid = layout(Page::Orders, &GAME, &[true; 9], Some(done), false);
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(done),
+            false,
+        );
         assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
     }
 }
