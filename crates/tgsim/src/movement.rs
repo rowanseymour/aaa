@@ -28,6 +28,10 @@ const OFF_LINE: f32 = 1.0;
 
 const LOOK_SNAPPED: u32 = 5;
 
+/// The pace, in world units a second, at or below which a member ahead of
+/// its place stands until it comes.
+const WAITING_PACE: f32 = 0.2;
+
 impl Trailer {
     pub(crate) fn new(trailer: &tgmap::Trailer, position: [f32; 2], facing: [f32; 2]) -> Trailer {
         let (position, facing) = match trailer.placed {
@@ -103,6 +107,7 @@ impl Unit {
         self.exact = exact;
         self.ways = 1;
         self.look = LOOK;
+        self.pace = 1.0;
     }
 
     /// Stops it where it is, with nowhere left to go.
@@ -110,6 +115,7 @@ impl Unit {
         self.path.clear();
         self.leg = None;
         self.goal = None;
+        self.pace = 1.0;
     }
 
     /// Stands it at `at` facing `facing` as if just made: still, with
@@ -203,6 +209,10 @@ impl Unit {
             self.speed = 0.0;
             return;
         };
+        if self.pace <= 0.0 {
+            self.speed = 0.0;
+            return;
+        }
         match leg.snapped || self.turn_radius <= 0.0 {
             true => self.facing = leg.heading,
             false => {
@@ -213,7 +223,7 @@ impl Unit {
             true => (self.speed + self.acceleration * TICK).min(top),
             false => top,
         };
-        let step = self.speed * TICK;
+        let step = self.speed * self.pace * TICK;
         let left = (leg.aim[0] - self.position[0]) * leg.heading[0]
             + (leg.aim[1] - self.position[1]) * leg.heading[1];
         let ends = left <= step;
@@ -478,9 +488,95 @@ impl World {
         way
     }
 
+    /// What the member at `u` of the organization at `r`, heading for its
+    /// place in the formation, stretches its steps by while its leader
+    /// drives at the `regiment`'s speed: the pace that would bring it back
+    /// to where its place is from the leader now, half the way it's out of
+    /// place along the leader's heading each second, but no more than
+    /// [`Rules::catchup_speed`](crate::Rules) times its `own` top speed.
+    /// Nothing for one that's well ahead of its place.
+    fn place_pace(&self, r: usize, u: usize, regiment: f32, own: f32) -> f32 {
+        let organization = &self.organizations[r];
+        let Some(lp) = self.pacer(r) else {
+            return 1.0;
+        };
+        let leader = &self.units[organization.units[lp]];
+        let p = organization.units.iter().position(|&m| m == u);
+        let Some(p) = p.filter(|&p| p != lp && regiment > 0.0) else {
+            return 1.0;
+        };
+        let broken = organization.broken_places.len() == organization.units.len()
+            && (organization.routing() || organization.chasing());
+        let place = match broken {
+            // Without a formation each keeps where it stood from the leader.
+            true => {
+                let ([px, py], [lx, ly]) = (
+                    organization.broken_places[p],
+                    organization.broken_places[lp],
+                );
+                [leader.position[0] + px - lx, leader.position[1] + py - ly]
+            }
+            false => {
+                let offsets = &organization.formations[organization.current_formation()].offsets;
+                let offset = |p: usize| offsets.get(p).copied().unwrap_or([0.0, 0.0]);
+                let ([px, py], [lx, ly]) = (offset(p), offset(lp));
+                tgmap::from_local(leader.position, leader.facing, [px - lx, py - ly])
+            }
+        };
+        let unit = &self.units[u];
+        let [hx, hy] = leader.facing;
+        let ahead = (place[0] - unit.position[0]) * hx + (place[1] - unit.position[1]) * hy;
+        let pace = (regiment + ahead / 2.0).min(self.rules.catchup_speed * own);
+        match pace <= WAITING_PACE {
+            true => 0.0,
+            false => pace / regiment,
+        }
+    }
+
+    /// The place in the organization at `r` of the member the rest keep
+    /// their places from: its leader, or while it has none present, the
+    /// first of its members that is.
+    fn pacer(&self, r: usize) -> Option<usize> {
+        let organization = &self.organizations[r];
+        let present = |&p: &usize| self.units[organization.units[p]].alive();
+        (organization.leader.filter(present))
+            .or_else(|| (0..organization.units.len()).find(present))
+    }
+
+    /// Has each regiment's member on its way to its place look, on its
+    /// beat, at how far out of place it is while its leader drives, and
+    /// keep the pace that brings it back. With the leader standing, or
+    /// going after a target of its own, it goes at the regiment's speed:
+    /// its place from the leader is then no guide to the place it's
+    /// making for.
+    fn keep_places(&mut self, tops: &[f32], handed: &[f32]) {
+        for u in 0..self.units.len() {
+            let unit = &self.units[u];
+            if !unit.alive() || unit.goal.is_none() || unit.closing.is_some() {
+                self.units[u].pace = 1.0;
+                continue;
+            }
+            if !(self.ticks + u as u64).is_multiple_of(u64::from(LOOK)) {
+                continue;
+            }
+            let r = unit.organization;
+            let organization = &self.organizations[r];
+            let driving = (self.pacer(r)).is_some_and(|lp| {
+                let leader = &self.units[organization.units[lp]];
+                leader.moving() && leader.closing.is_none()
+            });
+            let pace = match driving {
+                true => self.place_pace(r, u, tops[r], self.top_speed(u, handed[r])),
+                false => 1.0,
+            };
+            self.units[u].pace = pace;
+        }
+    }
+
     /// Moves every unit on along its path. One that's run out of path
     /// short of where it was to stop finds another way from where it is,
     /// until it's tried enough; once done it faces as it was told to.
+    /// Regiments' members keep their places on the way.
     pub(crate) fn travel(&mut self) {
         let tops: Vec<f32> = (0..self.organizations.len())
             .map(|r| self.regiment_speed(r))
@@ -488,6 +584,7 @@ impl World {
         let handed: Vec<f32> = (0..self.organizations.len())
             .map(|r| self.handed_down_speed(r))
             .collect();
+        self.keep_places(&tops, &handed);
         for u in 0..self.units.len() {
             let limit = self.speed_limit(u).unwrap_or(f32::INFINITY);
             let own = self.top_speed(u, handed[self.units[u].organization]);
@@ -851,6 +948,62 @@ mod tests {
         );
         assert!(near(w.units[1].position, [30.0, 9.0]));
         assert!(near(w.units[0].facing, [1.0, 0.0]));
+    }
+
+    /// The two soldiers sent up to 10,30, the slower right-hand man,
+    /// whose speed is the regiment's, standing at `at`.
+    fn moved_with_the_right_hand_man_at(at: [f32; 2]) -> World {
+        let mut w = world(Pathing::uniform(20, Domain::Land));
+        w.units[1].position = at;
+        let to = [10.0, 30.0];
+        w.apply(
+            7,
+            Command::Move {
+                organization: 0,
+                to,
+            },
+        )
+        .unwrap();
+        w
+    }
+
+    #[test]
+    fn a_member_behind_its_place_catches_up_with_it() {
+        let mut w = moved_with_the_right_hand_man_at([11.0, 6.0]);
+        run(&mut w, 6.0);
+        // At the regiment's speed of 2 it would still be 4 behind; it
+        // closes in faster, up to 1.75 times its own top speed.
+        let (leader, behind) = (w.units[0].position[1], w.units[1].position[1]);
+        assert!(leader - behind < 1.5, "{leader} {behind}");
+        run(&mut w, 10.0);
+        assert!(near(w.units[0].position, [9.0, 30.0]));
+        assert!(near(w.units[1].position, [11.0, 30.0]));
+    }
+
+    #[test]
+    fn a_member_well_ahead_of_its_place_waits_for_it() {
+        let mut w = moved_with_the_right_hand_man_at([11.0, 18.0]);
+        // Once it's looked, its place, beside the leader, is well behind
+        // it, so it stands.
+        run(&mut w, 1.5);
+        let stood = w.units[1].position;
+        run(&mut w, 1.0);
+        assert!(near(w.units[1].position, stood));
+        assert!(w.units[1].moving());
+        run(&mut w, 15.0);
+        assert!(near(w.units[1].position, [11.0, 30.0]));
+    }
+
+    #[test]
+    fn a_member_catches_up_no_faster_than_its_catchup_speed() {
+        let mut w = moved_with_the_right_hand_man_at([11.0, 1.0]);
+        w.rules.catchup_speed = 1.25;
+        run(&mut w, 1.2);
+        let from = w.units[1].position[1];
+        run(&mut w, 1.0);
+        // Far behind, it would ask for far more than 1.25 × its 2.
+        let went = w.units[1].position[1] - from;
+        assert!((went - 2.5).abs() < 0.05, "{went}");
     }
 
     #[test]

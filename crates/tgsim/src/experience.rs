@@ -229,13 +229,15 @@ impl World {
 
     /// What the properties the unit at `u` holds add to its fighting: its
     /// template's own, its side's technologies on its kind, those it and
-    /// its organization hold for a time, and its organization's level.
+    /// its organization hold for a time, its organization's level and its
+    /// stance's.
     pub(crate) fn boost(&self, u: usize) -> CombatEffect {
         let unit = &self.units[u];
         let r = unit.organization;
         let owner = self.organizations[r].owner;
         let held = self.timed_on(crate::Target::Unit(u));
-        self.held_effect(owner, &unit.template, held, &[self.level_property(r)])
+        let more = [self.level_property(r), self.stance_property(u)];
+        self.held_effect(owner, &unit.template, held, &more)
     }
 
     /// The most health the unit at `u` can have.

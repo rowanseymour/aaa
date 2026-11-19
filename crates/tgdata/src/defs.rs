@@ -142,6 +142,19 @@ pub struct Thing {
     pub when_leave: Vec<Fxc>,
     #[serde(default)]
     pub component: Vec<Component>,
+    /// The stances it takes, in the order listed.
+    #[serde(default)]
+    pub stance: Vec<StanceDef>,
+}
+
+/// A `[Stance]` block, as `Templates/template_stance.tgi` declares it.
+#[derive(Debug, Clone, Deserialize)]
+pub struct StanceDef {
+    pub ids: Option<String>,
+    pub property_ids: Option<String>,
+    pub health: Option<f32>,
+    /// The states it needs, comma-separated.
+    pub actor_state: Option<String>,
 }
 
 /// A component named by its template, e.g. a doodad's
@@ -1337,6 +1350,10 @@ pub struct SVars {
     /// And loses while above it.
     #[serde(rename = "AttackEfficiencyPointsPerSecondFalling")]
     pub attack_efficiency_falling: Option<f32>,
+    /// How many times its own top speed a regiment's member catching up
+    /// with its place goes at most.
+    #[serde(rename = "MoverCatchupSpeed")]
+    pub mover_catchup_speed: Option<f32>,
     /// The least a multiplier that modifiers add up to comes to.
     #[serde(rename = "ModifierAttributeClampMultiply")]
     pub modifier_attribute_clamp_multiply: Option<f32>,

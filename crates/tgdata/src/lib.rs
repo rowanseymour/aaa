@@ -36,6 +36,7 @@ mod research;
 mod settlements;
 mod special_ops;
 mod speed;
+mod stances;
 mod strikes;
 mod strings;
 mod supply;
@@ -79,6 +80,7 @@ pub use recruiting::{
 pub use remains::{ANY_DAMAGE, BLEEDING, Death};
 pub use research::{Grant, Research};
 pub use special_ops::{EffectLine, ExperienceRules, Marker, OperationCues, SpecialOperation};
+pub use stances::Stance;
 pub use strikes::{Affliction, Lookout, Strike};
 pub use strings::{PingLook, Strings};
 pub use supply::{Enchantment, Kind, Operation, Summon, SupplyEffect, SupplyRules};
@@ -552,6 +554,12 @@ impl GameData {
             svars.iter().find_map(|v| v.attack_efficiency_climbing),
             svars.iter().find_map(|v| v.attack_efficiency_falling),
         ]
+    }
+
+    /// How many times its own top speed a regiment's member catching up
+    /// with its place goes at most, if the data says.
+    pub fn catchup_speed(&self) -> Option<f32> {
+        self.svars().iter().find_map(|v| v.mover_catchup_speed)
     }
 
     /// Seconds since a site's health last changed that it counts as being

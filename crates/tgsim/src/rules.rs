@@ -34,6 +34,9 @@ pub struct Rules {
     /// Seconds the remains of each template's things lie rotting once
     /// dead, then sink, by template; none for one without a body.
     pub remains: HashMap<Id, [f32; 2]>,
+    /// The stances each template's things take, in the order listed, by
+    /// template.
+    pub stances: HashMap<Id, Vec<tgmap::Stance>>,
     /// The death animations each template's units choose from as they
     /// die, by template.
     pub deaths: HashMap<Id, Vec<tgmap::Death>>,
@@ -79,6 +82,9 @@ pub struct Rules {
     /// Attack efficiency a second a regiment gains while below its target,
     /// and loses while above it.
     pub efficiency_rates: [f32; 2],
+    /// How many times its own top speed a member catching up with its
+    /// place in its regiment goes at most.
+    pub catchup_speed: f32,
     /// How much experience organizations earn.
     pub experience_gains: tgmap::ExperienceGains,
     /// The levels each template's organizations earn with experience, by
@@ -179,6 +185,7 @@ impl Default for Rules {
             guard_rules: Default::default(),
             guard_zones: HashMap::new(),
             remains: HashMap::new(),
+            stances: HashMap::new(),
             deaths: HashMap::new(),
             damage_filters: HashMap::new(),
             morale_rules: Default::default(),
@@ -196,6 +203,7 @@ impl Default for Rules {
             broken_types: HashMap::new(),
             type_slots: Default::default(),
             efficiency_rates: [0.01, 0.02],
+            catchup_speed: 1.75,
             experience_gains: Default::default(),
             experience_levels: HashMap::new(),
             siege_seconds: 7.0,

@@ -165,6 +165,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         guard_rules: game.guard_rules(),
         guard_zones: game.guard_zones(),
         remains: game.remains(),
+        stances: game.stances(),
         deaths: game.deaths(),
         damage_filters: game.damage_filters(),
         morale_rules: game.morale_rules(),
@@ -216,6 +217,9 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         climbing.unwrap_or(rules.efficiency_rates[0]),
         falling.unwrap_or(rules.efficiency_rates[1]),
     ];
+    if let Some(catchup) = game.catchup_speed() {
+        rules.catchup_speed = catchup;
+    }
     if let Some(seconds) = game.siege_seconds() {
         rules.siege_seconds = seconds;
     }
