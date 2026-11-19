@@ -616,6 +616,9 @@ pub struct Unit {
     playing: u64,
     /// While it stands idle, the tick it fidgets on.
     idle_until: Option<u64>,
+    /// Whether it's fired in the fight it's in, so it idles to attack
+    /// rather than fidgeting.
+    fired_in_fight: bool,
     /// The fidget it last started, by its ids, and the tick it did.
     pub fidget: Option<(u64, Id)>,
     /// The last hit an enemy dealt it.
@@ -640,7 +643,7 @@ impl Unit {
     /// replaced: the new one is decided afresh.
     pub(crate) fn forget_dying(&mut self) {
         (self.died, self.death, self.dying) = (None, None, 0);
-        (self.idle_until, self.fidget) = (None, None);
+        (self.idle_until, self.fidget, self.fired_in_fight) = (None, None, false);
         (
             self.stance,
             self.stance_due,
@@ -1394,7 +1397,7 @@ digest!(Unit {
     exact, ways, look, speed, pace, detour, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
     fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
-    stance_heard, playing, idle_until, fidget, besieged, struck, left, awaited, descent,
+    stance_heard, playing, idle_until, fired_in_fight, fidget, besieged, struck, left, awaited, descent,
     properties,
 } skip {
     // Its template's.

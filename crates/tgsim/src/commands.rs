@@ -34,10 +34,13 @@ impl World {
         match *command {
             // Taken if any of them is.
             Command::Group { ref orders } => {
-                let mut checked = orders.iter().map(|o| self.check(player, o));
-                match checked.clone().any(|c| c.is_ok()) {
+                if orders.iter().any(|o| matches!(o, Command::Group { .. })) {
+                    return Err(Refused::Unable);
+                }
+                let checked: Vec<_> = orders.iter().map(|o| self.check(player, o)).collect();
+                match checked.iter().any(Result::is_ok) {
                     true => Ok(()),
-                    false => checked.next().unwrap_or(Err(Refused::Unable)),
+                    false => checked.into_iter().next().unwrap_or(Err(Refused::Unable)),
                 }
             }
             Command::Run { organization, .. } => self.may_run(player, organization),

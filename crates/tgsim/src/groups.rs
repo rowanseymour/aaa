@@ -10,6 +10,9 @@ use crate::{Command, Refused, World, distance};
 /// its timing are inside.
 const ZONE_RANGE_MIN: f32 = 18.0;
 
+/// How near a building an order's point is to be on it.
+const ON_BUILDING: f32 = 1.0;
+
 /// The least speed a group hands a regiment; one it would hand less stands
 /// and waits for the rest.
 const SPEED_MIN: f32 = 1.0;
@@ -39,28 +42,28 @@ crate::digest!(Group {
 
 impl World {
     /// Gives `orders` to the regiments they're to as one group: a fresh
-    /// group of them all, each leaving any it was in, timed together from
-    /// now on. Refused only if every order is.
+    /// group of the two or more that take them, each leaving any it was
+    /// in, timed together from now on. Fewer than two take them each on
+    /// their own. Refused only if every order is, or one is itself a
+    /// group's.
     pub(crate) fn order_group(&mut self, player: u32, orders: Vec<Command>) -> Result<(), Refused> {
+        if orders.iter().any(|o| matches!(o, Command::Group { .. })) {
+            return Err(Refused::Unable);
+        }
         let mut ordered: Vec<usize> = Vec::new();
         for o in orders.iter().filter_map(crate::commands::steered) {
             if self.commands(player, o) && !ordered.contains(&o) {
                 ordered.push(o);
             }
         }
-        if ordered.len() >= 2 {
+        let grouped = ordered.len() >= 2;
+        let formed = grouped.then(|| {
             for &r in &ordered {
                 self.leave_group(r);
             }
             let id = self.next_group;
             self.next_group += 1;
-            let heading_for = orders.iter().find_map(|o| match o {
-                Command::MoveOnto {
-                    piece: Piece::Building(b),
-                    ..
-                } => Some(*b),
-                _ => None,
-            });
+            let heading_for = self.heading_for(player, &orders);
             for &r in &ordered {
                 self.organizations[r].group = Some(id);
             }
@@ -70,19 +73,60 @@ impl World {
                 organizations: ordered,
                 heading_for,
             });
-        }
+            id
+        });
         let mut done = Err(Refused::Unable);
+        let mut refused = Vec::new();
         for order in orders {
-            match self.give_order(player, order, true) {
+            let r = crate::commands::steered(&order);
+            match self.give_order(player, order, grouped) {
                 Ok(()) => done = Ok(()),
-                Err(e) if done.is_err() => done = Err(e),
-                Err(_) => {}
+                Err(e) => {
+                    refused.extend(r);
+                    if done.is_err() {
+                        done = Err(e);
+                    }
+                }
             }
         }
-        if let Some(g) = self.groups.last().map(|g| g.id) {
-            self.mark_taking_part(g);
+        if let Some(id) = formed {
+            // What didn't take its order isn't the group's.
+            for r in refused {
+                if self.organizations[r].group == Some(id) {
+                    self.leave_group(r);
+                }
+            }
+            self.mark_taking_part(id);
         }
         done
+    }
+
+    /// The enemy building `orders` send a group onto or at, by index into
+    /// [`World::buildings`], whose supply zone it times its arrival by.
+    fn heading_for(&self, player: u32, orders: &[Command]) -> Option<usize> {
+        let enemy = |b: usize| {
+            let owner = self.buildings[b].owner;
+            self.sides.relation(player, owner) == crate::Relation::Enemy
+                && self.buildings[b].standing()
+        };
+        let at = |to: [f32; 2]| {
+            (0..self.buildings.len())
+                .find(|&b| enemy(b) && self.buildings[b].distance(to) <= ON_BUILDING)
+        };
+        orders.iter().find_map(|o| match *o {
+            Command::MoveOnto {
+                piece: Piece::Building(b),
+                ..
+            }
+            | Command::GuardPiece {
+                piece: Piece::Building(b),
+                ..
+            } => enemy(b).then_some(b),
+            Command::Attack { to, .. } | Command::Move { to, .. } | Command::Guard { to, .. } => {
+                at(to)
+            }
+            _ => None,
+        })
     }
 
     /// Takes the organization at `r` out of its group, which goes if
@@ -319,6 +363,25 @@ mod tests {
         // Left alone, the group goes.
         assert_eq!(w.organizations[0].group.is_some(), w.groups.len() == 1);
         w.ticks += SECOND;
+    }
+
+    #[test]
+    fn a_group_order_one_regiment_takes_is_its_own() {
+        let mut w = grouped();
+        w.apply(7, moves([[9.0, 50.0], [11.0, 30.0]])).unwrap();
+        let alone = Command::Group {
+            orders: vec![Command::Move {
+                organization: 1,
+                to: [11.0, 40.0],
+            }],
+        };
+        w.apply(7, alone).unwrap();
+        assert_eq!(w.organizations[1].group, None);
+        // Nor does a group's order nest another's.
+        let nested = Command::Group {
+            orders: vec![moves([[9.0, 50.0], [11.0, 30.0]])],
+        };
+        assert!(w.apply(7, nested).is_err());
     }
 
     #[test]

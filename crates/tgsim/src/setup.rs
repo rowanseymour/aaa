@@ -336,6 +336,7 @@ impl World {
             stance_heard: None,
             playing: 0,
             idle_until: None,
+            fired_in_fight: false,
             fidget: None,
             besieged: None,
             struck: None,

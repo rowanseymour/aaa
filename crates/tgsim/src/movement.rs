@@ -461,7 +461,7 @@ impl World {
                 continue;
             }
             match (lead, route.is_empty()) {
-                (Some((l, _)), false) => self.take_copy(organization, l, u, &route, place),
+                (Some((l, _)), false) => self.take_copy(organization, l, u, &route, (place, exact)),
                 _ => self.take_place(u, place, facing, exact),
             }
         }
@@ -469,13 +469,21 @@ impl World {
 
     /// Sets the member at `u` of the organization at `r` off along a copy
     /// of its leader at `l`'s `route` (next point last), fitted to its
-    /// `place` at the end. In formation, each point is moved by where the
+    /// `place` at the end, which it has to stop exactly at if `exact`. In
+    /// formation, each point is moved by where the
     /// member's place is from the leader's, laid along the point's own
     /// heading, and all but the last slid to meet the next leg's line, so
     /// its legs run alongside the leader's; without one, the route is
     /// moved bodily by where the member stands from the leader. A point
-    /// it can't stand on is pulled back towards the leader's.
-    fn take_copy(&mut self, r: usize, l: usize, u: usize, route: &[[f32; 2]], place: [f32; 2]) {
+    /// it can't drive to straight is pulled back towards the leader's.
+    fn take_copy(
+        &mut self,
+        r: usize,
+        l: usize,
+        u: usize,
+        route: &[[f32; 2]],
+        (place, exact): ([f32; 2], bool),
+    ) {
         let organization = &self.organizations[r];
         let leader = &self.units[l];
         let points: Vec<[f32; 2]> = route.iter().rev().copied().collect();
@@ -532,7 +540,7 @@ impl World {
         for (point, &towards) in moved.iter_mut().zip(&points) {
             let Some(reached) = self.reachable(u, at, *point, towards) else {
                 let facing = self.organizations[r].facing;
-                self.take_place(u, place, facing, false);
+                self.take_place(u, place, facing, exact);
                 return;
             };
             *point = reached;
@@ -542,7 +550,7 @@ impl World {
         moved.reverse();
         let facing = self.organizations[r].facing;
         let unit = &mut self.units[u];
-        unit.take(moved, false);
+        unit.take(moved, exact);
         // Its first leg holds the leader's heading, not the way to it.
         if let Some(([x, y], [hx, hy])) = first {
             unit.from = [x - hx, y - hy];
@@ -1221,13 +1229,50 @@ mod tests {
         assert!((went - 2.5).abs() < 0.05, "{went}");
     }
 
+    /// The pace the right-hand man keeps, 2 to his leader's right, both
+    /// heading north from 10, his leader with `leads` and he with `path`
+    /// left (next point last), at a regiment speed of 2.
+    fn pace_on(leads: Vec<[f32; 2]>, path: Vec<[f32; 2]>, detour: bool) -> f32 {
+        let mut w = world(Pathing::uniform(40, Domain::Land));
+        w.units[0].path = leads;
+        w.units[1].path = path;
+        w.units[1].detour = detour;
+        w.rules.catchup_speed = 1.75;
+        w.place_pace(0, 1, 2.0, 2.0)
+    }
+
+    #[test]
+    fn members_keep_place_round_corners_on_other_legs_and_on_detours() {
+        let leads = vec![[9.0, 40.0], [9.0, 30.0]];
+        // Level with its place, on the same leg, it keeps the regiment's speed.
+        assert!(
+            (pace_on(leads.clone(), vec![[11.0, 40.0], [11.0, 30.0]], false) - 1.0).abs() < 1e-4
+        );
+        // Near a right turn it's on the inside, so slows; a left, it's
+        // outside, so speeds up.
+        let inside = pace_on(leads.clone(), vec![[30.0, 12.0], [11.0, 12.0]], false);
+        let outside = pace_on(leads.clone(), vec![[-5.0, 12.0], [11.0, 12.0]], false);
+        assert!(inside < 1.0 && outside > 1.0, "{inside} {outside}");
+        // A point behind the leader though less far to go, it goes by
+        // the points: half a point's worth faster.
+        let behind = pace_on(
+            leads.clone(),
+            vec![[11.0, 39.0], [11.0, 30.0], [11.0, 12.0]],
+            false,
+        );
+        assert!((behind - (2.0 + 0.25) / 2.0).abs() < 1e-4, "{behind}");
+        // On a detour 4 or more behind, flat out.
+        let detour = pace_on(leads, vec![[11.0, 60.0]], true);
+        assert!((detour - 1.75).abs() < 1e-4, "{detour}");
+    }
+
     #[test]
     fn members_follow_the_leaders_route_alongside_it_meeting_its_corners() {
         let mut w = world(Pathing::uniform(20, Domain::Land));
         w.organizations[0].travelling = true;
         // North to 9,30, then east to 29,30: a right turn.
         let route = vec![[29.0, 30.0], [9.0, 30.0]];
-        w.take_copy(0, 0, 1, &route, [29.0, 28.0]);
+        w.take_copy(0, 0, 1, &route, ([29.0, 28.0], false));
         // 2 to the leader's right, it turns inside the corner, before it.
         let unit = &w.units[1];
         assert_eq!(unit.path.len(), 2);
@@ -1251,7 +1296,7 @@ mod tests {
         let mut w = world(pathing);
         w.organizations[0].travelling = true;
         let route = vec![[9.0, 30.0]];
-        w.take_copy(0, 0, 1, &route, [11.0, 30.0]);
+        w.take_copy(0, 0, 1, &route, ([11.0, 30.0], false));
         // Pulled back to beside the leader's route, or round on its own.
         let unit = &w.units[1];
         let straight = unit.path.len() == 1 && unit.from[0] > 10.5;

@@ -171,8 +171,13 @@ impl World {
     pub(crate) fn keep_idling(&mut self) {
         for u in 0..self.units.len() {
             let unit = &self.units[u];
-            let fighting = unit.shot.is_some()
-                && (unit.target.is_some() || self.organizations[unit.organization].bombarding);
+            let in_fight =
+                unit.target.is_some() || self.organizations[unit.organization].bombarding;
+            if !in_fight {
+                self.units[u].fired_in_fight = false;
+            }
+            let unit = &self.units[u];
+            let fighting = unit.fired_in_fight && in_fight;
             if !unit.alive() || unit.moving() || self.ticks < unit.playing || fighting {
                 self.units[u].idle_until = None;
                 continue;
@@ -418,7 +423,7 @@ mod tests {
         w.keep_stances();
         assert_eq!(w.units[0].stance, Some(Id::from("kneel")));
         // Once he's fired, he idles to attack and never fidgets.
-        w.units[0].shot = Some((w.ticks, 0));
+        w.units[0].fired_in_fight = true;
         w.ticks += 60 * SECOND;
         w.keep_idling();
         w.keep_idling();
