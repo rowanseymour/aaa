@@ -253,6 +253,8 @@ impl World {
             // Counting from when it's made.
             settled: Some(self.ticks),
             travelling: false,
+            route_end: None,
+            turn_to: None,
             group: None,
             group_speed: None,
             taking_part: false,
@@ -369,6 +371,9 @@ impl World {
             speed: 0.0,
             pace: 1.0,
             detour: false,
+            sources: Vec::new(),
+            point_tries: 0,
+            with: None,
             speed_max: m.speed,
             acceleration: m.acceleration,
             trailer: m.trailer.as_ref().map(|t| Trailer::new(t, [x, y], facing)),

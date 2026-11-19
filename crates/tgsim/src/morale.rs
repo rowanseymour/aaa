@@ -351,15 +351,12 @@ impl World {
         let ticks = self.ticks;
         match self.rout_point(r) {
             Some(to) => {
-                let here = self.centre(r);
-                let facing = normalised([to[0] - here[0], to[1] - here[1]]);
-                let facing = facing.unwrap_or(self.organizations[r].facing);
                 self.organizations[r].mind = Mind::Routing {
                     to: Some(to),
                     until,
                     retry: ticks,
                 };
-                self.send(r, to, facing);
+                self.send_along(r, to);
             }
             None => {
                 let retry = ticks + (ROUT_RETRY / TICK).round() as u64;

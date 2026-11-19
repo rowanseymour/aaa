@@ -268,9 +268,7 @@ impl World {
         if !afresh && off <= PURSUIT_DRIFT * squared_distance(here, there) {
             return false;
         }
-        let facing = normalised([there[0] - here[0], there[1] - here[1]]);
-        let facing = facing.unwrap_or(self.organizations[r].facing);
-        self.send(r, there, facing);
+        self.send_along(r, there);
         true
     }
 

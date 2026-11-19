@@ -179,6 +179,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         combat_effects: game.combat_effects(),
         property_types: game.property_types(),
         formation_effects: game.formation_effects(),
+        group_formations: game.group_formations(),
         broken_effects: game.broken_effects(),
         formation_types: game.formation_types(),
         broken_types: game.broken_types(),

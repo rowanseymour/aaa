@@ -49,6 +49,7 @@ static READS: LazyLock<HashMap<&str, Vec<Read>>> = LazyLock::new(|| {
             ],
         ),
         ("glyph", vec![read::<defs::Glyph>()]),
+        ("groupformation", vec![read::<defs::GroupFormation>()]),
         ("handicap", vec![read::<defs::Handicap>()]),
         (
             "hotkeyconfigurationdata",
