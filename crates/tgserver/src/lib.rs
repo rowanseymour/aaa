@@ -112,7 +112,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     });
     let dropped = operations.values().filter_map(|o| match o {
         tgmap::Operation::Drop(template) => Some(template),
-        tgmap::Operation::Enchant { .. }
+        tgmap::Operation::Enchant(_)
         | tgmap::Operation::Reveal { .. }
         | tgmap::Operation::Strike(_)
         | tgmap::Operation::Summon(_) => None,
@@ -167,6 +167,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         experience_gains: game.experience_gains(),
         experience_levels: game.experience_levels(),
         supply_effects: game.supply_effects(),
+        enchantment_types: game.enchantment_types(),
         kinds: game.kinds(),
         sort_objectives: game.sort_objectives(),
         heroes,

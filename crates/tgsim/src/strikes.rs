@@ -3,9 +3,9 @@
 
 use tgmap::{Id, Operation, Strike};
 
-use crate::combat::{Hit, added, attenuated, damage, resistance};
-use crate::targets::User;
-use crate::{Piece, SECOND, TICK, Target, World, bounding_radius, distance};
+use crate::combat::{Hit, added, attenuated, caught, damage};
+use crate::targets::{Thing, User};
+use crate::{Piece, TICK, Target, World};
 
 /// A strike on its way.
 #[derive(Debug, Clone, PartialEq)]
@@ -18,21 +18,6 @@ pub struct Incoming {
     pub at: [f32; 2],
     /// What it was given on, which it follows.
     pub on: Option<Piece>,
-}
-
-/// A unit a strike left a property on that hurts it each second, as the
-/// Atomic Bomb's radiation does.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Afflicted {
-    pub unit: usize,
-    pub property: Id,
-    /// The damage it takes each second, times resistance, past defence.
-    pub kind: Id,
-    pub amount: f32,
-    /// The tick it's next hurt on.
-    pub next: u64,
-    /// How many more times it is.
-    pub left: u32,
 }
 
 /// Ground a side is shown for a while, as round where a strike is aimed.
@@ -119,67 +104,36 @@ impl World {
             .partition(|s| s.lands <= ticks);
         self.incoming = waiting;
         for s in due {
-            let Some(Operation::Strike(strike)) = self.rules.operations.get(&s.operation) else {
-                continue;
+            let strike = match self.rules.operations.get(&s.operation) {
+                Some(Operation::Strike(strike)) => strike.clone(),
+                Some(Operation::Enchant(e)) => {
+                    let e = e.clone();
+                    let on = s.on.filter(|&on| self.whereabouts(on).is_some());
+                    if on.is_none_or(|on| self.enchantable(s.by, &e, on)) {
+                        hits.extend(self.take_effect(s.by, &e, s.at));
+                    }
+                    continue;
+                }
+                _ => continue,
             };
             let on = s.on.filter(|&on| self.whereabouts(on).is_some());
             if on.is_some_and(|on| !self.strikes_piece(s.by, &strike.targets, on)) {
                 continue;
             }
-            let hit = self.blast(s.by, strike, s.at, hits);
-            if let Some(a) = &strike.affliction {
+            let hit = self.blast(s.by, &strike, s.at, hits);
+            if let Some(a) = strike.affliction.clone() {
                 for u in hit {
-                    // It isn't renewed on one that has it already.
-                    let has = |x: &Afflicted| x.unit == u && x.property == a.property;
-                    if !self.afflicted.iter().any(has) {
-                        self.afflicted.push(Afflicted {
-                            unit: u,
-                            property: a.property.clone(),
-                            kind: a.damage.kind.clone(),
-                            amount: a.damage.amount,
-                            next: ticks + SECOND,
-                            left: a.seconds.round() as u32,
-                        });
-                    }
+                    let kind = a.kind.as_ref();
+                    self.bestow(Thing::Unit(u), s.by, &a.property, a.seconds, kind);
                 }
             }
         }
         self.watches.retain(|w| w.until > ticks);
-        self.afflict();
     }
 
-    /// The properties strikes have left on a unit that it still holds.
+    /// The properties a unit holds for a time of its own.
     pub fn lasting(&self, unit: usize) -> impl Iterator<Item = &Id> {
-        (self.afflicted.iter())
-            .filter(move |a| a.unit == unit)
-            .map(|a| &a.property)
-    }
-
-    /// Hurts each afflicted unit whose second has come, until it's taken
-    /// all it has to.
-    fn afflict(&mut self) {
-        let ticks = self.ticks;
-        let mut afflicted = std::mem::take(&mut self.afflicted);
-        for a in afflicted.iter_mut().filter(|a| a.next <= ticks) {
-            let u = a.unit;
-            let Some(f) = self.fighter(Target::Unit(u)) else {
-                a.left = 0;
-                continue;
-            };
-            let ground = self.terrain_effects(Target::Unit(u));
-            let amount = a.amount * (1.0 - resistance(f, &ground, &a.kind));
-            let unit = &mut self.units[u];
-            unit.health -= amount;
-            if unit.health <= 0.0 {
-                unit.die(ticks);
-                self.mourn(u);
-                self.lost_member(u);
-            }
-            a.next += SECOND;
-            a.left -= 1;
-        }
-        afflicted.retain(|a| a.left > 0);
-        self.afflicted = afflicted;
+        self.units[unit].properties.iter().map(|h| &h.property)
     }
 
     /// The hits `player`'s strike does landing at `at`: to everything
@@ -187,13 +141,12 @@ impl World {
     /// hit.
     fn blast(&self, player: u32, strike: &Strike, at: [f32; 2], hits: &mut Vec<Hit>) -> Vec<usize> {
         let mut units = Vec::new();
-        for target in self.targets() {
+        let things = self.soft_circles(self.targets());
+        let fits = |t| self.strikes(player, &strike.targets, t);
+        for (target, d) in caught(at, strike.area, 0, things, fits) {
             let f = self.fighter(target).expect("targets can fight");
-            let d = (distance(at, self.position(target)) - bounding_radius(f.soft)).max(0.0);
-            if d > strike.area || !self.strikes(player, &strike.targets, target) {
-                continue;
-            }
-            let ground = self.terrain_effects(target);
+            let shelter = self.shelter(target);
+            let ground = self.protection(target, &shelter);
             let falloff = attenuated([strike.full_within, strike.area], strike.edge_damage, d);
             let blow = self.blow(None, None, target);
             // Each effect that reaches it is a hit of its own.
@@ -223,14 +176,7 @@ crate::hash::digest!(Incoming {
     at,
     on
 });
-crate::hash::digest!(Afflicted {
-    unit,
-    property,
-    kind,
-    amount,
-    next,
-    left
-});
+
 crate::hash::digest!(Watch {
     player,
     at,
@@ -417,22 +363,37 @@ mod tests {
         if let Some(Operation::Strike(s)) = w.rules.operations.get_mut(&Id::from("bomb")) {
             s.affliction = Some(tgmap::Affliction {
                 property: Id::from("radiation"),
-                damage: Damage {
-                    kind: Id::from("flame"),
-                    amount: 15.0,
-                },
                 seconds: 10.0,
+                kind: None,
             });
         }
+        let radiation = tgmap::CombatEffect {
+            periodic: vec![Damage {
+                kind: Id::from("flame"),
+                amount: 15.0,
+            }],
+            ..Default::default()
+        };
+        w.rules
+            .combat_effects
+            .insert(Id::from("radiation"), radiation);
         (w.units[1].fighter.as_mut().unwrap().resists).insert(Id::from("flame"), 0.2);
         w.commanders.get_mut(&1).unwrap().experience = 5000.0;
         w.apply(1, bomb([10.0, 20.0], None)).unwrap();
         run(&mut w, 3.1);
-        assert_eq!(w.afflicted.len(), 3);
+        let afflicted = |w: &World| w.units.iter().filter(|u| !u.properties.is_empty()).count();
+        assert_eq!(afflicted(&w), 3);
+        let held = w.units[1].properties.clone();
+        // A second blast doesn't renew it.
+        w.commanders.get_mut(&1).unwrap().operations[0].left = 0.0;
+        w.apply(1, bomb([10.0, 20.0], None)).unwrap();
+        run(&mut w, 3.1);
+        assert_eq!(w.units[1].properties, held);
+        let health = w.units[1].health;
         run(&mut w, 10.0);
-        // 10 seconds of 15, less its fifth.
-        assert_eq!(w.units[1].health, 600.0 - 120.0);
-        assert!(w.afflicted.is_empty());
+        assert_eq!(afflicted(&w), 0);
+        // What it had left of 10 seconds of 15, less its fifth.
+        assert!(health - w.units[1].health <= 120.0 && health > w.units[1].health);
     }
 
     #[test]

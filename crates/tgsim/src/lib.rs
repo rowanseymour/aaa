@@ -16,6 +16,7 @@ mod delivery;
 mod disposal;
 pub mod economy;
 mod efficiency;
+mod enchantments;
 mod engagement;
 mod experience;
 mod fog;
@@ -77,7 +78,7 @@ pub use schedule::{
     Action, CHAT_LONGEST, Channel, Diverged, Given, Pausing, Record, SPEEDS, Schedule, Votes,
 };
 use serde::{Deserialize, Serialize};
-pub use strikes::{Afflicted, Incoming, Watch};
+pub use strikes::{Incoming, Watch};
 pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
 pub use targets::TypeSlots;
@@ -202,8 +203,6 @@ pub struct World {
     pub incoming: Vec<Incoming>,
     /// Ground sides are shown for a while.
     pub watches: Vec<Watch>,
-    /// Units hurt each second by what strikes left on them.
-    pub afflicted: Vec<Afflicted>,
     /// What special operations have put on the map.
     pub summoned: Vec<Summoned>,
     /// Which tiles are of the map's main land, once first asked.
@@ -564,6 +563,8 @@ pub struct Unit {
     /// Its fall, for one coming down by parachute, which is awaited
     /// until it lands.
     pub descent: Option<Descent>,
+    /// The properties it has for a time, such as an operation's.
+    pub properties: Vec<Held>,
     /// The terrain it's on, as [`tgmap::TileTerrains::get`] takes it: its
     /// organization's, or its own tile's while it straggles.
     pub terrain: TerrainIndex,
@@ -1127,6 +1128,7 @@ impl World {
         self.close_in();
         self.occupy();
         self.decay();
+        self.keep_enchantments();
         self.lift_sieges();
         self.supply();
         self.resupply();
@@ -1216,7 +1218,7 @@ impl Sides {
 
 digest!(World {
     organizations, units, buildings, deliveries, cleared, technologies, objectives, fates, over,
-    holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, afflicted, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
+    holdings, settlements, treasuries, commanders, pools, triggers, operated, reveals, incoming, watches, summoned, fog, ticks, loaded, flying, landings, numbers, next_id,
     next_commission, rng, sides,
 } skip {
     // Fixed by the map and the game's data.
@@ -1264,7 +1266,7 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
-    fired_ago, target, shot, died, death, besieged, struck, left, awaited, descent,
+    fired_ago, target, shot, died, death, besieged, struck, left, awaited, descent, properties,
 } skip {
     // Its template's.
     speed_max,

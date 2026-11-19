@@ -29,14 +29,14 @@ pub struct Strike {
     pub affliction: Option<Affliction>,
 }
 
-/// A property a strike leaves on what it hits, hurting it each second for
-/// a while.
+/// A property a strike leaves on each unit it hits for a while, such as
+/// one that hurts it each second.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Affliction {
     pub property: Id,
-    /// What it takes each second, times resistance, past defence.
-    pub damage: Damage,
     pub seconds: f32,
+    /// The property's enchantment type, which immunities name.
+    pub kind: Option<Id>,
 }
 
 /// Ground a special operation shows its user while something it places
@@ -89,14 +89,10 @@ pub(crate) fn strike(
         .copied();
     let affliction = a.effect.iter().find_map(|e| {
         let p = e.enchantment_property.as_ref()?;
-        let periodic = p.modifier.iter().find(|m| is(&m.kind, "PERIODIC_DAMAGE"))?;
         Some(Affliction {
             property: p.ids.clone()?,
-            damage: Damage {
-                kind: periodic.damage_type.clone()?,
-                amount: periodic.amount?,
-            },
             seconds: p.duration.unwrap_or(0.0),
+            kind: p.enchantment_type.clone(),
         })
     });
     Some(Strike {
@@ -209,23 +205,20 @@ mod tests {
     }
 
     #[test]
-    fn a_strike_that_gives_a_property_hurting_each_second_afflicts_what_it_hits() {
+    fn a_strike_that_gives_a_property_leaves_it_on_what_it_hits() {
         let bomb = definition(
             "[AbilityDefinition]\n{\n\tarea = 20\n\
              \t[Effect]\n\t{\n\t\ttype = MAIN_DAMAGE\n\t\tdamage_type_IDS = flame\n\t\tamount = 500\n\t}\n\
              \t[Effect]\n\t{\n\t\ttype = ENCHANTMENT\n\t\t[EnchantmentProperty]\n\t\t{\n\
-             \t\t\tIDS = radiation\n\t\t\tduration = 10\n\
+             \t\t\tIDS = radiation\n\t\t\tduration = 10\n\t\t\tenchantment_type = rays\n\
              \t\t\t[Modifier]\n\t\t\t{\n\t\t\t\ttype = PERIODIC_DAMAGE\n\
              \t\t\t\tdamage_type = flame\n\t\t\t\tamount = 15\n\t\t\t}\n\t\t}\n\t}\n}\n",
         );
         let s = strike(&bomb, &HashMap::new(), &HashMap::new()).unwrap();
         let radiation = Affliction {
             property: Id::from("radiation"),
-            damage: Damage {
-                kind: Id::from("flame"),
-                amount: 15.0,
-            },
             seconds: 10.0,
+            kind: Some(Id::from("rays")),
         };
         assert_eq!(s.affliction, Some(radiation));
     }

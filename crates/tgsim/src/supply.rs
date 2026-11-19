@@ -8,8 +8,7 @@ use tgmap::{Id, Obstacle, Operation, Shape, Supply, SupplyEffect, Tile, Weapon, 
 
 use crate::{
     Building, Held, Order, Piece, Refused, Relation, SECOND, State, TICK, Target, World,
-    bounding_radius, deploy_point, distance,
-    targets::{Thing, User},
+    deploy_point, distance,
 };
 
 /// Ticks between looks at whether a building gives supply, each building
@@ -110,31 +109,7 @@ impl World {
         on: Option<Piece>,
     ) -> Result<(), Refused> {
         match self.rules.operations.get(operation).cloned() {
-            Some(Operation::Enchant {
-                targets,
-                area,
-                max_targets,
-                property,
-                seconds,
-            }) => {
-                let mut near: Vec<(f32, usize)> = (0..self.organizations.len())
-                    .filter(|&r| !self.destroyed(r))
-                    .filter_map(|r| {
-                        let kind = self.rules.kinds.get(&self.organizations[r].template);
-                        let d = distance(at, self.leader_position(r));
-                        let reach = area + kind.map_or(0.0, |k| bounding_radius(k.soft));
-                        (d <= reach && self.enchants(player, &targets, r)).then_some((d, r))
-                    })
-                    .collect();
-                near.sort_by(|a, b| a.0.total_cmp(&b.0));
-                if max_targets > 0 {
-                    near.truncate(max_targets as usize);
-                }
-                // One that still has it gets nothing, but takes its place.
-                for (_, r) in near {
-                    self.give(Piece::Organization(r), property.clone(), seconds);
-                }
-            }
+            Some(Operation::Enchant(e)) => self.enchant(player, operation, &e, at, on)?,
             Some(Operation::Drop(template)) => {
                 let mut dropped = self
                     .rules
@@ -182,12 +157,6 @@ impl World {
         Ok(())
     }
 
-    /// Whether an operation `player` uses on `targets` can work on the
-    /// organization at `r`, judged from `player`'s side.
-    fn enchants(&self, player: u32, targets: &tgmap::Targets, r: usize) -> bool {
-        self.reaches(User::side(player), targets, Thing::Organization(r))
-    }
-
     /// Where a click gives `player`'s faction's `i`th operation, if
     /// anywhere: on `on`, what's under the cursor, when the operation works
     /// on it, else at `at` on the ground for one that's aimed at a place.
@@ -201,11 +170,16 @@ impl World {
     ) -> Option<[f32; 2]> {
         let op = self.special_op(player, i)?;
         match (self.rules.operations.get(&op.id)?, on) {
-            (Operation::Enchant { targets, .. }, Some(Piece::Organization(r))) => {
-                let fits = !self.destroyed(r) && self.enchants(player, targets, r);
+            (Operation::Enchant(e), Some(Piece::Organization(r))) => {
+                let fits =
+                    !self.destroyed(r) && self.enchantable(player, e, Piece::Organization(r));
                 fits.then(|| self.leader_position(r))
             }
-            (Operation::Enchant { area, .. }, None) => (*area > 0.0).then_some(at),
+            (Operation::Enchant(e), Some(Piece::Building(b))) => {
+                let fits = self.enchantable(player, e, Piece::Building(b));
+                fits.then(|| self.buildings[b].position)
+            }
+            (Operation::Enchant(e), None) => (e.area > 0.0).then_some(at),
             (Operation::Strike(s), Some(on)) => {
                 let fits = self.strikes_piece(player, &s.targets, on);
                 fits.then(|| match on {
@@ -606,6 +580,8 @@ impl World {
         unit.died = None;
         unit.death = None;
         unit.struck = None;
+        // What the one before held went with it.
+        unit.properties.clear();
         unit.awaited = false;
         unit.health = full;
         unit.stand_at(stand, facing);
@@ -723,7 +699,7 @@ mod tests {
         w.rules
             .supply_effects
             .insert(Id::from("resupplied"), effect(0.0, 0.25, true, &[]));
-        let operation = tgmap::Operation::Enchant {
+        let operation = tgmap::Operation::Enchant(tgmap::Enchantment {
             targets: tgmap::Targets {
                 required: ["FRIEND", "ORGANIZATION", "ORG_INFANTRY"]
                     .map(Id::from)
@@ -734,7 +710,11 @@ mod tests {
             max_targets: 1,
             property: Id::from("resupplied"),
             seconds: 10.0,
-        };
+            kind: None,
+            morale: 0.0,
+            damage: Vec::new(),
+            delay: 0.0,
+        });
         w.rules.operations.insert(Id::from("resupply"), operation);
         (w, Id::from("resupply"))
     }

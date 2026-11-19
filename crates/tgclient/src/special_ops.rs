@@ -858,13 +858,17 @@ mod tests {
     /// and recharges in 10 seconds.
     fn operating(experience: f32) -> tgsim::World {
         let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
-        let resupply = tgmap::Operation::Enchant {
+        let resupply = tgmap::Operation::Enchant(tgmap::Enchantment {
             targets: Default::default(),
             area: 15.0,
             max_targets: 4,
             property: Id::from("property_resupply"),
             seconds: 30.0,
-        };
+            kind: None,
+            morale: 0.0,
+            damage: Vec::new(),
+            delay: 0.0,
+        });
         let mut rules = tgsim::Rules::default();
         rules.operations.insert(Id::from("resupply"), resupply);
         let mut world =
@@ -941,7 +945,7 @@ mod tests {
     fn a_click_gives_the_operation_on_the_ground_but_not_on_what_it_cant_work_on() {
         let pathing = tgmap::Pathing::uniform(8, tgmap::Domain::Land);
         let mut rules = tgsim::Rules::default();
-        let resupply = tgmap::Operation::Enchant {
+        let resupply = tgmap::Operation::Enchant(tgmap::Enchantment {
             targets: tgmap::Targets {
                 required: vec![Id::from("organization")],
                 excluded: Vec::new(),
@@ -950,7 +954,11 @@ mod tests {
             max_targets: 4,
             property: Id::from("property_resupply"),
             seconds: 30.0,
-        };
+            kind: None,
+            morale: 0.0,
+            damage: Vec::new(),
+            delay: 0.0,
+        });
         rules.operations.insert(Id::from("resupply"), resupply);
         let mut sim = tgsim::World::from_organizations_by(Default::default(), pathing, rules, &[]);
         let op = tgsim::SpecialOp::new(Id::from("resupply"), 0.0, 0.0);

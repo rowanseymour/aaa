@@ -136,7 +136,6 @@ impl World {
             reveals: BTreeMap::new(),
             incoming: Vec::new(),
             watches: Vec::new(),
-            afflicted: Vec::new(),
             summoned: Vec::new(),
             main_land: std::sync::OnceLock::new(),
             notices: Vec::new(),
@@ -321,6 +320,7 @@ impl World {
             // One its organization has lost comes back as a recruit's do.
             awaited: m.lost.is_some(),
             descent: None,
+            properties: Vec::new(),
             terrain: TerrainIndex::default(),
             id: m.id,
             template: m.template.clone(),
