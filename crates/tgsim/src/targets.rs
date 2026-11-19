@@ -187,7 +187,9 @@ impl World {
             Thing::Unit(u) => {
                 let unit = &self.units[u];
                 let own = unit.fighter.iter().flat_map(|f| f.flags.iter().cloned());
-                own.chain(regiment(unit.organization, &unit.template))
+                let timed = (unit.properties.iter()).filter_map(|h| table.get(&h.property));
+                own.chain(timed.flat_map(|e| e.types.iter().cloned()))
+                    .chain(regiment(unit.organization, &unit.template))
                     .collect()
             }
             Thing::Building(b) => {
@@ -219,7 +221,7 @@ impl World {
         fighter.is_some_and(|f| f.builds.contains(template))
     }
 
-    fn thing_owner(&self, t: Thing) -> u32 {
+    pub(crate) fn thing_owner(&self, t: Thing) -> u32 {
         match t {
             Thing::Organization(r) => self.organizations[r].owner,
             Thing::Unit(u) => self.organizations[self.units[u].organization].owner,

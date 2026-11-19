@@ -80,6 +80,29 @@ impl World {
         effect.requires.iter().all(has)
     }
 
+    /// What shields `t` from harm: its terrain properties' effects, and
+    /// `shelter`, what else it holds (from [`World::shelter`]).
+    pub(crate) fn protection<'a>(
+        &'a self,
+        t: Target,
+        shelter: &'a TerrainEffect,
+    ) -> Vec<&'a TerrainEffect> {
+        let mut out = self.terrain_effects(t);
+        out.push(shelter);
+        out
+    }
+
+    /// What the properties `t` holds for a time and its side's
+    /// technologies on its kind add to its resistance, past its
+    /// template's own, which its fighter has already.
+    pub(crate) fn shelter(&self, t: Target) -> TerrainEffect {
+        let borne = self.borne(&self.rules.combat_effects, |e| &e.requires, t);
+        TerrainEffect {
+            resists: borne.flat_map(|e| e.resists.iter().cloned()).collect(),
+            ..TerrainEffect::default()
+        }
+    }
+
     /// What the terrain properties a target holds do: for a unit, those it
     /// has what they need of its organization's terrain and its own.
     pub(crate) fn terrain_effects(&self, t: Target) -> Vec<&TerrainEffect> {
@@ -116,7 +139,9 @@ impl World {
                 .next()?,
         };
         let organization = &self.organizations[unit.organization];
-        let timed = organization.properties.iter().map(|h| &h.property);
+        let timed = (organization.properties.iter())
+            .chain(&unit.properties)
+            .map(|h| &h.property);
         let technologies = self
             .technologies
             .get(&organization.owner)
@@ -211,6 +236,7 @@ mod tests {
         w.organizations[0].properties.push(Held {
             property: Id::from("trailblazing"),
             until: u64::MAX,
+            by: None,
         });
         w.tick();
         assert!(w.units.iter().all(|u| u.speed == 2.0));

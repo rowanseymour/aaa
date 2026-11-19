@@ -118,10 +118,9 @@ impl World {
     /// don't count, nor does the centre.
     pub(crate) fn occupants(&self, c: usize, zone: f32) -> Vec<(u32, f32)> {
         let zone = self.pathing.zone(self.buildings[c].position, zone);
-        let counts = |o: u32| self.sides.player(o).is_some_and(|p| !p.independent);
         self.targets()
             .filter(|&t| t != Target::Building(c) && self.in_zone(&zone, t))
-            .filter(|&t| counts(self.owner(t)))
+            .filter(|&t| self.contends(self.owner(t)))
             .filter_map(|t| {
                 let f = self.fighter(t).filter(|f| !f.weapons.is_empty())?;
                 let (health, full) = match t {

@@ -202,7 +202,44 @@ fn effect_does(
     }
 }
 
+/// Of `things`, each with where its middle is and the radius of the
+/// circle round it, those within `area` of `at` measured to that circle
+/// that `fit`, with that distance; only the `max_targets` nearest by their
+/// middles when that's above 0.
+pub(crate) fn caught<T: Copy>(
+    at: [f32; 2],
+    area: f32,
+    max_targets: u32,
+    things: impl Iterator<Item = (T, [f32; 2], f32)>,
+    fit: impl Fn(T) -> bool,
+) -> Vec<(T, f32)> {
+    let mut near: Vec<(f32, T, f32)> = things
+        .filter_map(|(t, middle, radius)| {
+            let middle = distance(at, middle);
+            let edge = (middle - radius).max(0.0);
+            (edge <= area && fit(t)).then_some((middle, t, edge))
+        })
+        .collect();
+    if max_targets > 0 {
+        near.sort_by(|a, b| a.0.total_cmp(&b.0));
+        near.truncate(max_targets as usize);
+    }
+    near.into_iter().map(|(_, t, edge)| (t, edge)).collect()
+}
+
 impl World {
+    /// Each of `targets` with where it is and the circle round its soft
+    /// shape, however it's turned, for [`caught`].
+    pub(crate) fn soft_circles(
+        &self,
+        targets: impl Iterator<Item = Target>,
+    ) -> impl Iterator<Item = (Target, [f32; 2], f32)> {
+        targets.map(|t| {
+            let f = self.fighter(t).expect("targets can fight");
+            (t, self.position(t), bounding_radius(f.soft))
+        })
+    }
+
     /// What the properties `t` holds add to its fighting.
     pub(crate) fn effect(&self, t: Target) -> CombatEffect {
         match t {
@@ -622,8 +659,7 @@ impl World {
     }
 
     /// Lands a hit, a unit it kills counting as dead at once.
-    #[cfg(test)]
-    fn land(&mut self, hit: Hit) {
+    pub(crate) fn land(&mut self, hit: Hit) {
         self.land_all(vec![hit], &mut Vec::new());
     }
 
@@ -1008,7 +1044,8 @@ impl World {
         let Some(f) = self.fighter(from) else {
             return;
         };
-        let ground = self.terrain_effects(from);
+        let shelter = self.shelter(from);
+        let ground = self.protection(from, &shelter);
         let blow = self.blow(Some(from), Some(weapon), from);
         for h in weapon.hits.iter().filter(|h| h.on_user) {
             let (amount, morale, kind) = effect_does(h, f, &ground, 1.0, blow);
@@ -1046,33 +1083,31 @@ impl World {
         let mut reached = Vec::new();
         if weapon.area <= 0.0 {
             if self.fighter(t).is_some() {
-                reached.push((0.0, t, 1.0));
+                reached.push((t, 1.0));
             }
         } else {
-            for target in self.targets() {
-                let f = self.fighter(target).expect("targets can fight");
-                // To the circle round its soft shape, however it's turned.
-                let middle = distance(at, self.position(target));
-                let d = (middle - bounding_radius(f.soft)).max(0.0);
-                if d <= weapon.area && self.reaches(user, &weapon.targets, target) {
-                    reached.push((middle, target, falloff(weapon, d)));
-                }
-            }
-            // Those nearest by their middles, where there's a most it hits.
-            if weapon.max_targets > 0 {
-                reached.sort_by(|a, b| a.0.total_cmp(&b.0));
-                reached.truncate(weapon.max_targets as usize);
-            }
+            let fits = |target| self.reaches(user, &weapon.targets, target);
+            let things = self.soft_circles(self.targets());
+            let caught = caught(at, weapon.area, weapon.max_targets, things, fits);
+            reached.extend(caught.into_iter().map(|(t, d)| (t, falloff(weapon, d))));
         }
         let bombard = bombard.then_some(weapon.recharge);
-        for (_, target, scale) in reached {
+        // What its user's properties have each of its attacks do besides.
+        let extra = match weapon.main_damage().next() {
+            Some(_) => self.effect(from).extra,
+            None => Vec::new(),
+        };
+        for (target, scale) in reached {
             let f = self.fighter(target).expect("targets can fight");
-            let ground = self.terrain_effects(target);
+            let shelter = self.shelter(target);
+            let ground = self.protection(target, &shelter);
             let blow = self.blow(Some(from), Some(weapon), target);
+            let mut struck = false;
             for h in weapon.hits.iter().filter(|h| !h.on_user) {
                 if !self.reaches(user, &h.targets, target) {
                     continue;
                 }
+                struck = true;
                 let (amount, morale, kind) = effect_does(h, f, &ground, scale, blow);
                 hits.push(Hit {
                     target,
@@ -1082,6 +1117,19 @@ impl World {
                     bombard,
                     morale,
                     kind,
+                    on_user: false,
+                });
+            }
+            // Only on what the attack itself hits.
+            for d in extra.iter().filter(|_| struck) {
+                hits.push(Hit {
+                    target,
+                    amount: added(d, f, &ground),
+                    from: Some(from),
+                    by,
+                    bombard,
+                    morale: 0.0,
+                    kind: Some(d.kind.clone()),
                     on_user: false,
                 });
             }
@@ -1163,6 +1211,33 @@ mod tests {
         assert!(w.destroyed(1) && !w.destroyed(0));
         assert_eq!(w.units[0].target, None);
         assert_eq!(w.order_move(2, 1, [0.0, 0.0]), Err(NotYours));
+    }
+
+    #[test]
+    fn properties_can_add_damage_to_every_attack() {
+        let mut w = battle(
+            &[1, 2],
+            vec![soldier(vec![rifle(12.0, 30.0)]), soldier(Vec::new())],
+            at_war(),
+        );
+        let zeal = CombatEffect {
+            extra: vec![tgmap::Damage {
+                kind: Id::from("armor_piercing"),
+                amount: 5.0,
+            }],
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert(Id::from("zeal"), zeal);
+        w.units[0].properties.push(crate::Held {
+            property: Id::from("zeal"),
+            until: u64::MAX,
+            by: None,
+        });
+        (w.units[1].fighter.as_mut().unwrap().resists).insert(Id::from("armor_piercing"), 0.2);
+        w.tick();
+        w.tick();
+        // 30, and 5 less a fifth, past no defence.
+        assert_eq!(w.units[1].health, 66.0);
     }
 
     #[test]

@@ -536,6 +536,8 @@ pub struct Property {
     pub required_properties: Option<String>,
     /// Seconds it lasts, for one an ability gives.
     pub duration: Option<f32>,
+    /// What immunities to an enchantment name it by.
+    pub enchantment_type: Option<Id>,
     #[serde(default)]
     pub modifier: Vec<Modifier>,
     /// Run on each thing as it gains it.
@@ -554,6 +556,14 @@ pub struct Modifier {
     /// What a `FLAG` one sets, e.g. `SUPPLIED`.
     pub modifier_flag: Option<String>,
     pub amount: Option<f32>,
+    /// For an `ENCHANTMENT_IMMUNITY` one, the type it keeps off; none for
+    /// every type.
+    pub enchantment_type: Option<Id>,
+    /// For an `ABILITY_EFFECT` one, the kind of ability it adds to.
+    pub ability_type: Option<String>,
+    /// For an `ABILITY_EFFECT` one, what it adds.
+    #[serde(default)]
+    pub effect: Vec<Effect>,
 }
 
 /// What an object can do to others.

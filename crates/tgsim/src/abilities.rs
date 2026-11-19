@@ -63,6 +63,7 @@ impl World {
             || self.holds(organization.owner, p)
             || self.level_property(r) == Some(p)
             || organization.properties.iter().any(|h| &h.property == p)
+            || unit.properties.iter().any(|h| &h.property == p)
     }
 
     /// How far each of the unit at `u`'s weapons reaches: its own range,
@@ -167,7 +168,8 @@ impl World {
         let main = weapon.main_damage().next();
         match (fighter.check_resistance, main, self.fighter(t)) {
             (true, Some(d), Some(target)) => {
-                let ground = self.terrain_effects(t);
+                let shelter = self.shelter(t);
+                let ground = self.protection(t, &shelter);
                 score * (1.0 - resistance(target, &ground, &d.kind))
             }
             _ => score,

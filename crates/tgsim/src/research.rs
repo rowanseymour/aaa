@@ -270,6 +270,7 @@ impl World {
         let held = Held {
             property: technology.clone(),
             until: KEPT,
+            by: None,
         };
         self.notices.push(Notice::Researched {
             player,
