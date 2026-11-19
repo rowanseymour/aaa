@@ -88,7 +88,7 @@ taken() {
 game() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    shoot "$1" "$bin/$game_bin" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" \
+    shoot "$1" "$bin/tag-aa" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" \
         --screenshot "$work/$1.png"
 }
 
@@ -96,7 +96,7 @@ game() {
 menus() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    shoot "$1" "$bin/$game_bin" "$game" --exec "$work/$1.txt" --screenshot "$work/$1.png"
+    shoot "$1" "$bin/tag-aa" "$game" --exec "$work/$1.txt" --screenshot "$work/$1.png"
 }
 
 # editor <name> <map> <camera> <ids to inspect>
@@ -174,25 +174,7 @@ EOF
 build() {
     checkout=$1
     shift
-    cargo build --release -p "$(game_in "$checkout")" -p "$(editor_in "$checkout")" --manifest-path "$checkout/Cargo.toml" "$@"
-}
-
-# The AA game's package in a checkout, which has a different name, and
-# folder, in a ref from before its renames.
-game_in() {
-    for dir in aa aaa; do
-        if [ -f "$1/crates/$dir/Cargo.toml" ]; then
-            sed -n '/^\[package\]/,/^\[/s/^name = "\(.*\)"/\1/p' "$1/crates/$dir/Cargo.toml" | head -n 1
-            return
-        fi
-    done
-    echo aaa-game
-}
-
-# The editor's package in a checkout, which has a different name in a ref from
-# before its rename.
-editor_in() {
-    if [ -d "$1/crates/tgeditor" ]; then echo tgeditor; else echo aaa-editor; fi
+    cargo build --release -p tag-aa -p tgeditor --manifest-path "$checkout/Cargo.toml" "$@"
 }
 
 # Stops if any scene couldn't be shot, saying which and from what.
@@ -206,7 +188,6 @@ check() {
 if [ -z "$ref" ]; then
     build "$root"
     bin=$root/target/release
-    game_bin=$(game_in "$root")
     editor=$bin/tgeditor
     mkdir -p "$root/docs/screenshots"
     scenes
@@ -242,8 +223,7 @@ for side in new base; do
     new) bin=$root/target/release checkout=$root ;;
     base) bin=$root/target/compare-base/release checkout=$work/base ;;
     esac
-    editor=$bin/$(editor_in "$checkout")
-    game_bin=$(game_in "$checkout")
+    editor=$bin/tgeditor
     take=1
     while [ "$take" -le "$takes" ]; do
         log=$out/$side-$take.log
