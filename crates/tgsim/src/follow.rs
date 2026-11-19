@@ -159,6 +159,34 @@ mod tests {
     }
 
     #[test]
+    fn regiments_moved_onto_one_thing_stop_on_the_side_each_came_from() {
+        let w = battle(
+            &[1, 1],
+            vec![soldier(Vec::new()), soldier(Vec::new())],
+            at_war(),
+        );
+        let mut w = with_buildings(w, &[building(9, 1, [40.0, 40.0])]);
+        for (r, at) in [(0, [10.0, 40.0]), (1, [70.0, 40.0])] {
+            w.units[r].position = at;
+            w.organizations[r].position = at;
+        }
+        for organization in 0..2 {
+            let onto = Command::MoveOnto {
+                organization,
+                piece: Piece::Building(0),
+            };
+            w.apply(1, onto).unwrap();
+        }
+        run(&mut w, 30.0);
+        let (west, east) = (w.centre(0), w.centre(1));
+        assert!(west[0] < 40.0 && east[0] > 40.0, "{west:?} {east:?}");
+        for at in [west, east] {
+            let gap = distance(at, [40.0, 40.0]);
+            assert!(gap <= 10.8 && gap > 5.0, "{gap}");
+        }
+    }
+
+    #[test]
     fn nothing_moves_onto_itself_or_what_is_gone() {
         let mut w = pair();
         let onto = |piece| Command::MoveOnto {

@@ -10,12 +10,13 @@
 //!   with its progress; clicking one calls it off.
 //! - Company, for an organization: its officer's portrait over the
 //!   organization's health, a card per other unit with the unit's health, and
-//!   its banner. An HQ, packed or not, has instead of the cards a place for
-//!   each organization it takes, with the organization attached there or the
-//!   one it's been asked for.
+//!   its banner under its attack efficiency, marked where that's heading. An
+//!   HQ, packed or not, has instead of the cards a place for each
+//!   organization it takes, with the organization attached there or the one
+//!   it's been asked for.
 //! - Group, for several: a card each, up to [`MAX_SELECTED`], with the
-//!   banner, the organization's health and each unit's; clicking one selects
-//!   it alone.
+//!   banner, its efficiency, the organization's health and each unit's;
+//!   clicking one selects it alone.
 //! - Settlement, for a settlement (see [`tgdata::defs::CityComponent`]):
 //!   unused, since a city shows as a simple actor.
 //!
@@ -159,6 +160,9 @@ struct Detail {
     banners: Vec<(usize, Option<banners::Worn>, bool)>,
     /// The properties whose icons show, those held longest first.
     properties: Vec<Id>,
+    /// The units in each place of the organizations shown, which a
+    /// replacement changes.
+    members: Vec<usize>,
 }
 
 /// What's in one of an HQ's places.
@@ -221,7 +225,19 @@ pub enum Fill {
     Stockpile(usize),
     /// The health of a delivery's aircraft, which nothing hurts.
     Flight,
+    /// An organization's attack efficiency.
+    Efficiency(usize),
 }
+
+/// The marker on an organization's efficiency bar at the efficiency it's
+/// easing towards.
+#[derive(Component)]
+pub struct EfficiencyTarget(usize);
+
+/// The widget whose layout the efficiency bar's marker comes from, and
+/// the marker's own widget within it.
+const EFFICIENCY_BAR: &str = "AttackEfficiency";
+const EFFICIENCY_TARGET: &str = "TargetPercentage";
 
 /// Whose tooltip a part of the display gives under the pointer.
 #[derive(Component, Clone, Copy)]
@@ -324,6 +340,9 @@ pub struct Looks {
     levels: HashMap<Id, String>,
     images: HashMap<String, Option<Handle<Image>>>,
     formats: bevy::image::CompressedImageFormats,
+    /// The archive path of the efficiency bar's marker, if the layouts
+    /// have one.
+    efficiency_target: Option<String>,
 }
 
 impl Looks {
@@ -407,6 +426,7 @@ pub fn spawn(
             .collect(),
         images: HashMap::new(),
         formats: formats.0,
+        efficiency_target: efficiency_target(&game.game_widgets()),
     });
     commands.insert_resource(Showing::default());
     // Above the display and as wide, growing upwards as its words wrap.
@@ -454,6 +474,20 @@ pub fn spawn(
             DespawnOnExit(Screen::Match),
         ))
         .add_children(&[said, display]);
+}
+
+/// The archive path of the picture marking where an efficiency bar is
+/// heading, from the layouts.
+fn efficiency_target(widgets: &[tgdata::widgets::Widget]) -> Option<String> {
+    let bar = widgets.iter().find_map(|w| w.find(EFFICIENCY_BAR))?;
+    let marker = bar.find(EFFICIENCY_TARGET)?;
+    (marker.parts.iter()).find_map(|p| p.texture.clone())
+}
+
+/// How far along its efficiency bar the organization at `r`'s marker
+/// stands: at the efficiency it's easing towards.
+fn towards(sim: &World, r: usize) -> Val {
+    percent(100.0 * sim.efficiency_target(r).clamp(0.0, 1.0))
 }
 
 /// The mode the selection calls for the display to show in.
@@ -614,6 +648,8 @@ fn detail(
         Place::Organization(r) => Some(*r),
         _ => None,
     });
+    let members = (own.iter()).flat_map(|&r| sim.organizations[r].units.iter().copied());
+    let members = members.collect();
     let flying = own.iter().copied().chain(attached);
     let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
     let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
@@ -622,6 +658,7 @@ fn detail(
         slots,
         banners,
         properties,
+        members,
     }
 }
 
@@ -854,6 +891,37 @@ impl Ui<'_> {
                 Some(of),
             );
         });
+    }
+
+    /// The organization at `r`'s efficiency bar in `node`, on black, with a
+    /// marker at what it's easing towards.
+    fn efficiency(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
+        let path = self.looks.efficiency_target.clone();
+        let marker = self.looks.image(self.game, self.images, path.as_deref());
+        let size = (marker.as_ref())
+            .and_then(|h| self.images.get(h))
+            .map(Image::size_f32);
+        let mut bar = parent.spawn((
+            meter(node, Gauge::Efficiency),
+            Fill::Efficiency(r),
+            BackgroundColor(Color::BLACK),
+        ));
+        if let (Some(marker), Some(size)) = (marker, size) {
+            bar.with_child((
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(0),
+                    left: towards(self.sim, r),
+                    width: px(size.x * SCALE),
+                    height: px(size.y * SCALE),
+                    margin: UiRect::left(px(-size.x * SCALE)),
+                    ..default()
+                },
+                ImageNode::new(marker),
+                EfficiencyTarget(r),
+                Pickable::IGNORE,
+            ));
+        }
     }
 
     /// An icon for each property that shows.
@@ -1218,6 +1286,7 @@ impl Ui<'_> {
                         says(Says::Organization(r)),
                     ))
                     .with_children(|card| {
+                        self.efficiency(card, at(0.0, 6.0, 63.0, 2.0), r);
                         self.banner(
                             card,
                             Node {
@@ -1283,13 +1352,16 @@ impl Ui<'_> {
                     },
                     r,
                 );
+                if !lone(self.sim, r) {
+                    self.efficiency(card, at(2.0, 48.0, CARD - 6.0, 2.0), r);
+                }
                 // The wide bar is the captain's, then one for each unit.
-                let wide = at(2.0, 50.0, CARD - 6.0, 5.0);
+                let wide = at(2.0, 51.0, CARD - 6.0, 5.0);
                 bar(card, wide, Fill::Unit(captain), Some(Says::Unit(captain)));
                 let half = (CARD - 8.0) / 2.0;
                 for (n, &u) in units.iter().enumerate() {
                     let (col, row) = ((n % 2) as f32, (n / 2) as f32);
-                    let node = at(2.0 + col * (half + 2.0), 58.0 + row * 5.0, half, 3.0);
+                    let node = at(2.0 + col * (half + 2.0), 59.0 + row * 5.0, half, 3.0);
                     bar(card, node, Fill::Unit(u), Some(Says::Unit(u)));
                 }
                 card.spawn((
@@ -1486,6 +1558,8 @@ pub fn refresh(
     leaders: Res<Leaders>,
     local: Res<Local>,
     mut bars: Query<(&Fill, &mut Meter)>,
+    mut targets: Query<(&EfficiencyTarget, &mut Node)>,
+    fog: Option<Res<crate::fog::Fog>>,
     mut tips: Query<(&Says, &mut Hint, &Hovered)>,
     mut pictures: Query<(&UnitPicture, &mut Shade)>,
     mut statuses: Query<(&Status, &mut Text)>,
@@ -1504,10 +1578,16 @@ pub fn refresh(
             (Fill::Unit(_) | Fill::Organization(_) | Fill::Building(_) | Fill::Flight, false) => {
                 1.0
             }
-            (Fill::Progress(_) | Fill::Stockpile(_), false) => 0.0,
+            (Fill::Progress(_) | Fill::Stockpile(_) | Fill::Efficiency(_), false) => 0.0,
         };
         if meter.share != share {
             meter.share = share;
+        }
+    }
+    for (target, mut node) in &mut targets {
+        let towards = towards(sim, target.0);
+        if node.left != towards {
+            node.left = towards;
         }
     }
     let teller = Teller {
@@ -1516,6 +1596,7 @@ pub fn refresh(
         drawn: &drawn,
         leaders: &leaders,
         local: local.0,
+        fog: fog.as_deref(),
     };
     // Only what the pointer's on has anyone to tell.
     for (says, mut hint, _) in tips.iter_mut().filter(|(.., on)| on.get()) {
@@ -1688,6 +1769,7 @@ fn measure(sim: &World, fill: Fill) -> (f32, f32) {
             (sim.buildings[b].supply.stockpile, max)
         }
         Fill::Flight => (1.0, 1.0),
+        Fill::Efficiency(r) => (sim.organizations[r].efficiency, 1.0),
     }
 }
 
@@ -1698,6 +1780,7 @@ struct Teller<'a> {
     drawn: &'a Drawn,
     leaders: &'a Leaders,
     local: Option<u32>,
+    fog: Option<&'a crate::fog::Fog>,
 }
 
 impl Teller<'_> {
@@ -1740,8 +1823,24 @@ impl Teller<'_> {
                 lines
             }
             Says::Organization(r) => {
-                let name = name(&sim.organizations[r].template);
-                std::iter::once(name).chain(self.experience(r)).collect()
+                let organization = &sim.organizations[r];
+                let mut lines = vec![name(&organization.template)];
+                // What it's like now is told only of one in sight.
+                if self.sees(r) {
+                    let percent = (100.0 * organization.efficiency).round() as i32;
+                    let efficiency = match looks.said("ui_tooltip_attack_efficiency|d") {
+                        said if said.is_empty() => format!("{percent}%"),
+                        said => crate::messages::filled(&said, &[percent.to_string()]),
+                    };
+                    lines.push(row("ui_tooltip_item_title_attack_efficiency", efficiency));
+                    if organization.morale_max > 0.0 {
+                        let morale =
+                            format!("{:.0}/{:.0}", organization.morale, organization.morale_max);
+                        lines.push(row("ui_tooltip_item_title_morale", morale));
+                    }
+                }
+                lines.extend(self.experience(r));
+                lines
             }
             Says::Queued {
                 building: b,
@@ -1811,6 +1910,12 @@ impl Teller<'_> {
             lines.push(self.row("ui_tooltip_item_experience", format!("{experience:.0}")));
         }
         lines
+    }
+
+    /// Whether the player sees the organization at `r` now.
+    fn sees(&self, r: usize) -> bool {
+        self.fog
+            .is_none_or(|f| f.lifted || f.shows_organization(self.sim, r))
     }
 
     /// A line of a tooltip: the game's words for what it tells, then that.
@@ -2046,6 +2151,39 @@ fn cancel(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_efficiency_marker_comes_from_its_bars_layout() {
+        use tgdata::widgets::{ViewElement, Widget};
+        let widget = |name: &str, parts, children| Widget {
+            name: name.into(),
+            kind: None,
+            visible: true,
+            view: None,
+            parts,
+            children,
+            fields: Vec::new(),
+        };
+        let decal = ViewElement {
+            name: "Decal".into(),
+            kind: None,
+            bounds: Default::default(),
+            when: Vec::new(),
+            texture: Some("UI/Game/ObjectDisplay/TargetPercentageBar.tga".into()),
+            colour: [1.0; 3],
+            text: None,
+            children: Vec::new(),
+        };
+        let marker = widget(EFFICIENCY_TARGET, vec![decal], Vec::new());
+        let bar = widget(EFFICIENCY_BAR, Vec::new(), vec![marker]);
+        let display = widget("CompanyDisplay", Vec::new(), vec![bar]);
+        let layouts = [widget("ObjectDisplay", Vec::new(), vec![display])];
+        assert_eq!(
+            efficiency_target(&layouts).as_deref(),
+            Some("UI/Game/ObjectDisplay/TargetPercentageBar.tga")
+        );
+        assert_eq!(efficiency_target(&layouts[0].children[0].children), None);
+    }
 
     #[test]
     fn property_icons_keep_their_order_and_the_newest_go_without_a_place() {
