@@ -1736,6 +1736,10 @@ mod tests {
         run(&mut w, 15.0);
         // The one left takes over and, once at its place, turns east.
         assert!(w.organizations[0].route_end.is_none());
-        assert!(near(w.units[1].facing, [1.0, 0.0]), "{:?}", w.units[1].facing);
+        assert!(
+            near(w.units[1].facing, [1.0, 0.0]),
+            "{:?}",
+            w.units[1].facing
+        );
     }
 }
