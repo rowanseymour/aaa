@@ -93,6 +93,19 @@ impl World {
             Command::Disband { organization } => self.may_disband(player, organization),
             Command::Sell { building } => self.may_sell(player, building),
             Command::Operate { operation, .. } => self.may_operate(player, operation),
+            Command::Build {
+                organization,
+                ref template,
+                at,
+                facing,
+            } => self.may_build(player, organization, template, (at, facing)),
+            Command::Repair {
+                organization,
+                piece,
+            } => self.may_repair(player, organization, piece),
+            Command::CancelConstruction { building } => {
+                self.may_cancel_construction(player, building)
+            }
         }
     }
 
@@ -204,6 +217,19 @@ impl World {
             }
             Command::Operate { operation, at, on } => {
                 self.special_operation(player, operation, at, on)?
+            }
+            Command::Build {
+                organization,
+                template,
+                at,
+                facing,
+            } => self.order_build(player, organization, template, at, facing)?,
+            Command::Repair {
+                organization,
+                piece,
+            } => self.order_repair(player, organization, piece)?,
+            Command::CancelConstruction { building } => {
+                self.cancel_construction(player, building)?
             }
         }
         // An order cuts a reform short.
@@ -394,7 +420,7 @@ impl World {
         Ok(())
     }
 
-    fn advance(
+    pub(crate) fn advance(
         &mut self,
         player: u32,
         organization: usize,
@@ -585,6 +611,8 @@ fn steered(command: &Command) -> Option<usize> {
         | Command::MoveOnto { organization, .. }
         | Command::Stop { organization }
         | Command::Unpack { organization, .. }
+        | Command::Build { organization, .. }
+        | Command::Repair { organization, .. }
         | Command::Disband { organization } => Some(organization),
         _ => None,
     }

@@ -218,7 +218,9 @@ impl World {
             .filter(|&r| !self.lone(r) || sustaining.contains(&self.organizations[r].template))
             .map(|r| self.organizations[r].owner);
         let buildings = (self.buildings.iter())
-            .filter(|b| b.state == State::Standing && sustaining.contains(&b.template))
+            .filter(|b| {
+                b.state == State::Standing && !b.constructing && sustaining.contains(&b.template)
+            })
             .map(|b| b.owner);
         // What's neither is never lost, so keeps its side in for good.
         let held = (self.holdings.iter())

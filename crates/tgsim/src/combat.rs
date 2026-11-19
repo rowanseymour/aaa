@@ -367,6 +367,8 @@ impl World {
             .map(Target::Building);
         let shooters: Vec<Target> = (self.targets().chain(disabled))
             .filter(|&t| match t {
+                // A site has no weapons until it's finished.
+                Target::Building(b) if self.buildings[b].constructing => false,
                 Target::Building(b) => !defends(b) || self.buildings[b].awake,
                 Target::Unit(_) => true,
             })
@@ -513,7 +515,8 @@ impl World {
     /// the weapon, hold until it's ready or for [`WAIT_SECONDS`] if that's
     /// sooner, or go after its target.
     fn act(&mut self, u: usize, hits: &mut Vec<Hit>, launched: &mut Vec<Projectile>) {
-        for ago in &mut self.units[u].fired_ago {
+        let unit = &mut self.units[u];
+        for ago in unit.fired_ago.iter_mut().chain(&mut unit.mended_ago) {
             *ago += TICK;
         }
         let r = self.units[u].organization;
@@ -534,6 +537,7 @@ impl World {
         unit.met = None;
         let Some((t, pick)) = decided else {
             unit.target = None;
+            self.mend(u);
             return;
         };
         unit.target = Some(t);

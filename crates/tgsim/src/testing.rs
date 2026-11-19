@@ -154,6 +154,7 @@ pub(crate) fn soldier(weapons: Vec<Weapon>) -> Fighter {
         flags: vec![Id::from("infantry")],
         builds: Vec::new(),
         weapons,
+        repairs: Vec::new(),
         bonus: Default::default(),
         check_resistance: false,
         attack_height: 1.45,

@@ -260,6 +260,8 @@ impl World {
             broken_places: Vec::new(),
             chased: None,
             follow: None,
+            build: None,
+            mending: None,
         });
         self.set_experience(r, organization.experience);
         self.organizations[r].morale_max = self.maximum_morale(r);
@@ -310,9 +312,13 @@ impl World {
             fired_ago: fighter
                 .as_ref()
                 .map_or(Vec::new(), |f| vec![f32::INFINITY; f.weapons.len()]),
+            mended_ago: fighter
+                .as_ref()
+                .map_or(Vec::new(), |f| vec![f32::INFINITY; f.repairs.len()]),
             fighter,
             target: None,
             shot: None,
+            mended: None,
             died: None,
             death: None,
             besieged: None,
@@ -416,6 +422,7 @@ impl World {
                 properties: Vec::new(),
                 created: self.ticks,
                 remembered: Vec::new(),
+                constructing: false,
             });
             self.next_id = self.next_id.max(b.id + 1);
             if numbered {

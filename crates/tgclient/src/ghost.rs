@@ -1,6 +1,7 @@
 //! While Unpack is being aimed, the building the truck would unpack into
 //! follows the cursor where it would stand, on the map or through the
-//! minimap, drawn all in red where it wouldn't fit.
+//! minimap, drawn all in red where it wouldn't fit; and so does a building
+//! being placed to build, turned as it's dragged.
 
 use bevy::prelude::*;
 use tgrender::MapAssets;
@@ -10,9 +11,13 @@ use tgrender::terrain::world;
 use crate::actions::{self, Aim, Page};
 use crate::{Drawn, Loaded, Local, Pointer, Pointing, Screen, Selected, Sim, thing_at};
 
-/// The preview shown: its root, what it is, where, and whether it fits.
+/// The preview shown.
 #[derive(Resource, Default)]
-pub struct Ghost(Option<(Entity, tgdata::Id, [f32; 2], bool)>);
+pub struct Ghost(Option<Shown>);
+
+/// A preview's root, what it is, where, facing which way, and whether it
+/// fits.
+type Shown = (Entity, tgdata::Id, [f32; 2], [f32; 2], bool);
 
 /// On a preview that doesn't fit, for [`redden`] to paint.
 #[derive(Component)]
@@ -35,6 +40,7 @@ pub fn show(
     mut assets: MapAssets,
     mut ghost: ResMut<Ghost>,
     pointer: Pointer,
+    anchor: Res<crate::placing::Anchor>,
     mut transforms: Query<&mut Transform>,
 ) {
     let unpacks = match (*page, &selected.0[..]) {
@@ -42,45 +48,51 @@ pub fn show(
         _ => None,
     };
     let point = pointer.at(&loaded.map.ground).map(Pointing::point);
-    let wanted = unpacks.zip(point).map(|(u, p)| {
+    let unpacking = unpacks.zip(point).map(|(u, p)| {
         let at = p.map(f32::round);
-        (u, at, sim.0.room_to_unpack(u, at, actions::UNPACK_FACING))
+        let facing = actions::UNPACK_FACING;
+        (&u.building, at, facing, sim.0.room_to_unpack(u, at, facing))
     });
-    // A different building, or one that's turned to fit or not, is drawn
-    // afresh.
+    let ground_point = match pointer.at(&loaded.map.ground) {
+        Some(Pointing::Ground(p)) => Some(p),
+        _ => None,
+    };
+    let placing =
+        crate::placing::placed(*page, &sim.0, &selected.0, local.0, anchor.0, ground_point);
+    let placing = placing.and_then(|(template, at, facing, fits)| {
+        Some((sim.0.rules().buildable.get(&template)?, at, facing, fits))
+    });
+    let wanted = unpacking.or(placing);
+    // A different building, or one that's turned or turned to fit or not,
+    // is drawn afresh.
     let keep = match (&ghost.0, &wanted) {
-        (Some((_, t, _, fits)), Some((u, _, f))) => *t == u.building.template && fits == f,
+        (Some((_, t, _, way, fits)), Some((b, _, facing, f))) => {
+            *t == b.template && fits == f && way == facing
+        }
         _ => false,
     };
     if !keep && let Some((e, ..)) = ghost.0.take() {
         commands.entity(e).despawn();
     }
-    let Some((unpacks, at, fits)) = wanted else {
+    let Some((building, at, facing, fits)) = wanted else {
         return;
     };
     let ground = &loaded.map.ground;
     let [x, y] = at;
     match &mut ghost.0 {
-        Some((e, _, placed, _)) => {
+        Some((e, _, placed, _, _)) => {
             if *placed != at
                 && let Ok(mut t) = transforms.get_mut(*e)
             {
                 *placed = at;
-                let footing = drawn.0.footing(unpacks.building.template.as_str());
+                let footing = drawn.0.footing(building.template.as_str());
                 t.translation = world(x, y, ground.stand_at(footing, [x, y]));
             }
         }
         None => {
-            let b = &unpacks.building;
+            let b = building;
             let footing = drawn.0.footing(b.template.as_str());
-            let thing = thing_at(
-                ground,
-                footing,
-                b.id,
-                b.template.as_str(),
-                at,
-                actions::UNPACK_FACING,
-            );
+            let thing = thing_at(ground, footing, b.id, b.template.as_str(), at, facing);
             let owner = local.0.unwrap_or(0);
             let mut models = assets.models();
             let Some(e) = drawn
@@ -93,7 +105,7 @@ pub fn show(
             if !fits {
                 commands.entity(e).insert(Unfit);
             }
-            ghost.0 = Some((e, b.template.clone(), at, fits));
+            ghost.0 = Some((e, b.template.clone(), at, facing, fits));
         }
     }
 }

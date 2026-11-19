@@ -146,6 +146,9 @@ impl World {
             _ if is("body") => self.has_body(t),
             _ if is("capturable") => self.capturable_now(t),
             _ if is("cannot_build") => !self.builds(user, t),
+            _ if is("under_construction") => {
+                matches!(t, Thing::Building(b) if self.buildings[b].constructing)
+            }
             _ => return None,
         })
     }

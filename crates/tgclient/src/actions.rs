@@ -56,9 +56,11 @@ const fn span(n: usize) -> f32 {
 /// The game leaves the rest of the commands off an organization's grid.
 /// They're in the game's own order of commands, which decides who keeps a
 /// slot two want.
-const ORDERS: [(&str, Option<Give>); 12] = [
+const ORDERS: [(&str, Option<Give>); 14] = [
     ("kill", Some(Give::Aim(Aim::Attack))),
     ("guard", Some(Give::Aim(Aim::Guard))),
+    ("repair", Some(Give::Aim(Aim::Repair))),
+    (CONSTRUCT, Some(Give::Build)),
     ("move", Some(Give::Aim(Aim::Move))),
     ("stop", Some(Give::Stop)),
     ("retreat", Some(Give::Aim(Aim::Run))),
@@ -74,6 +76,8 @@ const ORDERS: [(&str, Option<Give>); 12] = [
 /// The commands whose buttons open a recruiter's two menus.
 const DEPLOY: &str = "recruit";
 const DEPLOY_TO_LOCATION: &str = "recruit_location";
+/// The command whose button opens a regiment's Build menu.
+const CONSTRUCT: &str = "construct";
 /// The command whose button opens a building's research menu.
 const RESEARCH: &str = "research";
 /// The command that packs a building up, such as into a truck.
@@ -138,6 +142,8 @@ enum Give {
     /// Needs a hero chosen first.
     AttachHero,
     DetachHero,
+    /// Opens the Build menu.
+    Build,
 }
 
 impl Give {
@@ -150,7 +156,7 @@ impl Give {
             Give::Detach => Some(tgsim::Command::Detach { organization }),
             Give::Disband => Some(tgsim::Command::Disband { organization }),
             Give::DetachHero => Some(tgsim::Command::DetachHero { organization }),
-            Give::Aim(_) | Give::Stop | Give::AttachHero => None,
+            Give::Aim(_) | Give::Stop | Give::AttachHero | Give::Build => None,
         }
     }
 }
@@ -167,10 +173,19 @@ pub enum Aim {
     Run,
     Guard,
     Unpack,
+    /// Given on a thing, not a place.
+    Repair,
 }
 
 impl Aim {
-    pub const ALL: [Aim; 5] = [Aim::Move, Aim::Attack, Aim::Run, Aim::Guard, Aim::Unpack];
+    pub const ALL: [Aim; 6] = [
+        Aim::Move,
+        Aim::Attack,
+        Aim::Run,
+        Aim::Guard,
+        Aim::Unpack,
+        Aim::Repair,
+    ];
 }
 
 /// What the grid is showing.
@@ -186,18 +201,24 @@ pub enum Page {
     /// Waiting for a click on the map to have the selected building
     /// deliver there the entry at this index into its menu.
     Delivering(usize),
+    /// Waiting for a click on the map, or a drag to turn it, to have the
+    /// selection put up there the entry at this index into its Build
+    /// menu.
+    Placing(usize),
     /// One of the selected building's menus of what it recruits or
     /// researches.
     Menu(Menu),
 }
 
 /// Which of a building's menus something is in: Deploy for what comes out
-/// of it, Deploy to Location for what names a transport, and Research.
+/// of it, Deploy to Location for what names a transport, and Research; or
+/// a regiment's Build menu.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Menu {
     Deploy,
     Location,
     Research,
+    Build,
 }
 
 /// How a recruiter's menu shows one of its entries.
@@ -241,6 +262,10 @@ pub enum Entry {
     Rally,
     /// Selects the organizations attached to the selected HQ.
     CommandAll,
+    /// Index into what the selection can build.
+    Build(usize),
+    /// Calls off the selected building site.
+    CancelSite,
 }
 
 /// Where a command's button goes: its slot and, that taken, which end of
@@ -304,6 +329,9 @@ struct BuildingButtons<'a> {
     pack: Option<Place>,
     /// Where its Sell button goes, while it can be sold.
     sell: Option<Place>,
+    /// Where its Cancel button goes, while it's a site going up, which
+    /// has no other.
+    site: Option<Place>,
 }
 
 impl BuildingButtons<'_> {
@@ -343,7 +371,11 @@ fn offered(
         _ => false,
     };
     let rout = selected.iter().any(|&r| can(sim, player, Give::Rout, r));
+    let builds = builder(sim, selected).is_some();
+    let repairs = selected.iter().any(|&r| repairs(sim, r));
     ORDERS.map(|(ids, _)| match ids {
+        "construct" => builds,
+        "repair" => repairs,
         "unpack" => all_packed && selected.len() == 1,
         "rout" => rout,
         "kill" => !all_packed,
@@ -354,6 +386,27 @@ fn offered(
         "attach" | "detach" => led,
         _ => true,
     })
+}
+
+/// The first of the selected organizations that can build anything, which
+/// the Build menu is for.
+pub(crate) fn builder(sim: &tgsim::World, selected: &[usize]) -> Option<usize> {
+    (selected.iter().copied())
+        .find(|&r| sim.organizations[r].unpacks.is_none() && !sim.buildable(r).is_empty())
+}
+
+/// What the Build menu offers the selection.
+pub(crate) fn builds(sim: &tgsim::World, selected: &[usize]) -> Vec<Id> {
+    let mut out = builder(sim, selected).map_or(Vec::new(), |r| sim.buildable(r));
+    out.retain(|t| sim.rules().buildable.contains_key(t));
+    out
+}
+
+/// Whether the organization at `r` has a member that repairs.
+pub(crate) fn repairs(sim: &tgsim::World, r: usize) -> bool {
+    let fighter = |u: usize| sim.units[u].fighter.as_ref();
+    sim.organizations[r].unpacks.is_none()
+        && (sim.survivors(r)).any(|u| fighter(u).is_some_and(|f| !f.repairs.is_empty()))
 }
 
 /// Whether `player` could give `give` to the organization at `r` now.
@@ -389,9 +442,13 @@ fn layout(
     offered: &[bool],
     building: Option<BuildingButtons>,
     hq: bool,
+    builds: usize,
 ) -> [Option<Entry>; SLOTS] {
     let mut out = [None; SLOTS];
     match (page, building) {
+        (Page::Orders, Some(BuildingButtons { site: Some(p), .. })) => {
+            put(&mut out, Some(p), Entry::CancelSite);
+        }
         // Aiming a delivery, the grid is back to the building's own.
         (Page::Orders | Page::Delivering(_), Some(b)) => {
             // In the game's order of commands.
@@ -415,6 +472,13 @@ fn layout(
             let shown = buttons.into_iter().filter(|(shows, _, _)| *shows);
             place(&mut out, shown.map(|(_, place, entry)| (place, entry)));
         }
+        (Page::Menu(Menu::Build), None) => {
+            for (i, slot) in (0..builds).zip(&mut out[..MENU_CANCEL]) {
+                *slot = Some(Entry::Build(i));
+            }
+            out[MENU_CANCEL] = Some(Entry::Cancel);
+        }
+        (Page::Placing(_), None) => out[CANCEL] = Some(Entry::Cancel),
         (Page::Menu(Menu::Research), Some(b)) => {
             // What's done or under way keeps its slot empty; what's hidden
             // gives its slot up.
@@ -448,6 +512,7 @@ fn layout(
             out[CANCEL] = Some(Entry::Cancel);
         }
         (Page::Menu(_) | Page::Rally | Page::Delivering(_), None) => {}
+        (Page::Placing(_), Some(_)) => {}
         (Page::Orders, None) => {
             let shown = (slots.iter().enumerate()).filter(|&(i, _)| offered[i]);
             place(&mut out, shown.map(|(i, &p)| (p, Entry::Order(i))));
@@ -490,6 +555,15 @@ struct Recruit {
     organization: Option<Organization>,
 }
 
+/// One of the buildings a regiment can put up, as its button shows.
+struct Buildable {
+    look: Look,
+    /// Its cost and upkeep, for the tooltip.
+    economy: Vec<Row>,
+    /// Its description, under them.
+    notes: Vec<String>,
+}
+
 /// One of the technologies a building researches, as its button shows.
 struct Topic {
     look: Look,
@@ -512,6 +586,8 @@ pub struct Looks {
     pack: (Option<Place>, Look),
     sell: (Option<Place>, Look),
     cancel: Look,
+    /// Where a site's Cancel goes.
+    site: Option<Place>,
     command_all: Look,
     /// The tooltip's heading for what a recruit needs.
     requires: String,
@@ -527,12 +603,17 @@ pub struct Looks {
     research_requires: String,
     /// What Attach Hero says pressed with no hero chosen.
     choose_hero: String,
+    /// What an order given only on things says given on the ground, with
+    /// the order's name.
+    no_target: String,
     has: GameHas,
     /// What each of the map's building templates commissions, in its
     /// buttons' order.
     menus: HashMap<String, Vec<Recruit>>,
     /// What each building template researches, in its buttons' order.
     researches: HashMap<Id, Vec<Topic>>,
+    /// How each template a regiment can build shows in its Build menu.
+    buildings: HashMap<Id, Buildable>,
     /// What each template and technology is called, for saying what a
     /// commission needs.
     names: HashMap<Id, String>,
@@ -558,6 +639,11 @@ impl Looks {
             return None;
         };
         self.menu(sim, building).get(i)?.organization.as_ref()
+    }
+
+    /// How the building of `template` shows in the Build menu.
+    fn buildable(&self, template: &Id) -> Option<&Buildable> {
+        self.buildings.get(template)
     }
 
     /// The research menu of the selected building, as its research list
@@ -648,7 +734,8 @@ impl Looks {
             .map(|(_, look)| look)
             .chain([&self.cancel, &self.command_all])
             .chain(self.menus.values().flatten().map(|r| &r.look))
-            .chain(self.researches.values().flatten().map(|t| &t.look));
+            .chain(self.researches.values().flatten().map(|t| &t.look))
+            .chain(self.buildings.values().map(|b| &b.look));
         looks.filter_map(|look| look.icon.as_ref())
     }
 
@@ -739,7 +826,7 @@ pub fn spawn(
     let rally = look_of(game, RALLY);
     let pack = look_of(game, PACK);
     let sell = look_of(game, SELL);
-    let cancel = look_of(game, CANCEL_LOOK).1;
+    let (site, cancel) = look_of(game, CANCEL_LOOK);
     let strings = game.strings();
     let title = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
     let cost = title("ui_tooltip_item_title_cost", "Cost");
@@ -763,6 +850,7 @@ pub fn spawn(
     );
     let research_requires = title("research_error_missing_requirements|ss", "%s required: %s");
     let research_refused = title("research_error_generic|s", "Could not research %s");
+    let no_target = title("ui_error_command_target|s", "Invalid target for %s");
     let choose_hero = title(
         "ui_error_missing_single_recruit_item",
         "Must select a hero to attach",
@@ -889,6 +977,39 @@ pub fn spawn(
         }));
         menus.insert(template, menu);
     }
+    let buildings = (sim.0.rules().buildable.keys())
+        .map(|id| {
+            let listing = listings.get(id);
+            let economy = listing.map_or_else(Vec::new, |l| {
+                [(&cost, &l.cost, false), (&upkeep, &l.upkeep, false)]
+                    .into_iter()
+                    .filter(|(_, amounts, _)| !amounts.is_empty())
+                    .map(|(label, amounts, earned)| Row {
+                        label: label.clone(),
+                        amounts: quantities(amounts, earned),
+                    })
+                    .collect()
+            });
+            let look = Look {
+                name: listing.map_or_else(|| id.to_string(), |l| l.name.clone()),
+                help: None,
+                disabled: None,
+                icon: (listing.and_then(|l| l.icon.as_deref())).and_then(|p| image(game, p)),
+            };
+            let notes = listing
+                .and_then(|l| l.description.clone())
+                .into_iter()
+                .collect();
+            (
+                id.clone(),
+                Buildable {
+                    look,
+                    economy,
+                    notes,
+                },
+            )
+        })
+        .collect();
     commands.insert_resource(Looks {
         orders,
         deploy,
@@ -898,16 +1019,19 @@ pub fn spawn(
         pack,
         sell,
         cancel,
+        site,
         command_all,
         requires,
         affording,
         research_affording,
         research_refused,
         choose_hero,
+        no_target,
         has: GameHas::of(sim.0.rules()),
         research_requires,
         menus,
         researches,
+        buildings,
         names: (listings.iter().map(|(id, l)| (id.clone(), l.name.clone())))
             .chain((technologies.iter()).map(|(id, t)| (id.clone(), t.name.clone())))
             .collect(),
@@ -1009,7 +1133,10 @@ pub fn over_grid(
 }
 
 pub fn aiming(page: Res<Page>) -> bool {
-    matches!(*page, Page::Aiming(_) | Page::Rally | Page::Delivering(_))
+    matches!(
+        *page,
+        Page::Aiming(_) | Page::Rally | Page::Delivering(_) | Page::Placing(_)
+    )
 }
 
 /// Goes back to the orders on Escape, and when what the page is for is
@@ -1020,15 +1147,18 @@ pub fn back_out(
     chosen: Res<SelectedBuilding>,
     (sim, local): (Res<Sim>, Res<crate::Local>),
     mut page: ResMut<Page>,
-    mut was: bevy::ecs::system::Local<Option<usize>>,
+    mut was: bevy::ecs::system::Local<(Option<usize>, Option<usize>)>,
     displays: Res<crate::displays::Displays>,
 ) {
-    // A menu is the building's it was opened on.
-    let switched = std::mem::replace(&mut *was, chosen.0) != chosen.0;
+    // A menu is the building's, or the builder's, it was opened on.
+    let switched = std::mem::replace(&mut was.0, chosen.0) != chosen.0;
+    let builder = builder(&sim.0, &selected.0);
+    let rebuilt = std::mem::replace(&mut was.1, builder) != builder;
     let theirs = !crate::selection::commanded(&sim.0, local.0, &selected.0, chosen.0);
     let gone = match *page {
         Page::Orders => false,
         _ if theirs => true,
+        Page::Placing(_) | Page::Menu(Menu::Build) => builder.is_none() || rebuilt,
         Page::Aiming(_) => selected.0.is_empty(),
         Page::Menu(_) => chosen.0.is_none() || switched,
         Page::Rally => chosen.0.is_none(),
@@ -1057,8 +1187,17 @@ fn look_of<'a>(
     sim: &tgsim::World,
     looks: &'a Looks,
     building: Option<usize>,
+    builds: &[Id],
 ) -> &'a Look {
     match entry {
+        Entry::Build(i) => (builds.get(i))
+            .and_then(|t| looks.buildable(t))
+            .map_or(&looks.cancel, |b| &b.look),
+        Entry::CancelSite => &looks.cancel,
+        Entry::Open(Menu::Build) => {
+            let i = ORDERS.iter().position(|(_, g)| *g == Some(Give::Build));
+            i.map_or(&looks.cancel, |i| &looks.orders[i].1)
+        }
         Entry::Order(i) => &looks.orders[i].1,
         Entry::Cancel => &looks.cancel,
         Entry::Open(Menu::Deploy) => &looks.deploy.1,
@@ -1101,7 +1240,13 @@ fn ready(
                 && lacking.properties.is_empty()
                 && lacking.structures.is_empty()
         }
-        Entry::Cancel | Entry::Open(_) | Entry::Rally | Entry::CommandAll | Entry::Sell => true,
+        Entry::Cancel
+        | Entry::Open(_)
+        | Entry::Rally
+        | Entry::CommandAll
+        | Entry::Sell
+        | Entry::Build(_)
+        | Entry::CancelSite => true,
     }
 }
 
@@ -1147,6 +1292,7 @@ fn contents(
     };
     researches.truncate(list.len());
     let order_slots: Vec<Option<Place>> = looks.orders.iter().map(|(s, _)| *s).collect();
+    let builds = builds(sim, selected);
     let entries = layout(
         page,
         &order_slots,
@@ -1168,12 +1314,14 @@ fn contents(
                 .sell
                 .0
                 .filter(|_| local.is_some_and(|p| sim.check(p, &sell_command(b)).is_ok())),
+            site: looks.site.filter(|_| sim.buildings[b].constructing),
         }),
         hq.is_some(),
+        builds.len(),
     );
     let faces = entries.map(|entry| {
         entry.map(|e| Face {
-            icon: look_of(e, sim, looks, building).icon.clone(),
+            icon: look_of(e, sim, looks, building, &builds).icon.clone(),
             ready: ready(
                 e,
                 sim,
@@ -1289,7 +1437,9 @@ fn previewed(
         Some(Entry::Order(i)) if ORDERS[i].1 == Some(Give::Aim(Aim::Unpack)) => {
             unpacking.map(Previewed::Unpack)
         }
+        Some(Entry::Build(i)) => builds(sim, selected).get(i).cloned().map(Previewed::Build),
         _ => match page {
+            Page::Placing(i) => builds(sim, selected).get(i).cloned().map(Previewed::Build),
             Page::Aiming(Aim::Unpack) => unpacking.map(Previewed::Unpack),
             Page::Delivering(_) => (looks.delivered(sim, building, page))
                 .map(|r| Previewed::Commission(Box::new(r.clone()))),
@@ -1335,6 +1485,7 @@ pub fn show(
     let topics = looks.topics(&sim.0, building);
     let list = building.map_or(&[][..], |b| sim.0.research_list(b));
     let list = &list[..list.len().min(topics.len())];
+    let builds = builds(&sim.0, &selected.0);
     let mut hovered = None;
     for (id, clicks, slot, hover, children, mut border, mut pickable) in &mut slots {
         let entry = shown.entries[slot.0];
@@ -1357,7 +1508,7 @@ pub fn show(
         let mut notes = Vec::new();
         // A greyed technology's tooltip says only what it wants.
         let mut only = None;
-        let look = look_of(entry, &sim.0, &looks, building);
+        let look = look_of(entry, &sim.0, &looks, building, &builds);
         let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
         let lit = lit(entry, *page);
         match entry {
@@ -1371,6 +1522,12 @@ pub fn show(
                         .collect();
                     let with = [topic.look.name.as_str(), &names.join(", ")];
                     only = Some(fill(&looks.research_requires, &with));
+                }
+            }
+            Entry::Build(i) => {
+                if let Some(b) = builds.get(i).and_then(|t| looks.buildable(t)) {
+                    table.extend(b.economy.iter().cloned());
+                    notes.extend(b.notes.iter().cloned());
                 }
             }
             Entry::Recruit(i) => {
@@ -1415,7 +1572,7 @@ pub fn show(
                 (false, Some(why), _) => Some(why),
                 (false, None, _) => Some(look.disabled.clone().unwrap_or("Not yet".into())),
             };
-            let names = bound(entry, slot.0, *page, menu, list);
+            let names = bound(entry, slot.0, *page, (menu, &builds), list);
             let key = names.iter().find_map(|action| bindings.key(action));
             let help = match (entry, building) {
                 (Entry::Sell, Some(b)) => (look.help.as_deref())
@@ -1463,9 +1620,11 @@ pub fn show(
             })
         }
         (None, Page::Aiming(Aim::Guard)) => prompt("Left click what or where to guard"),
+        (None, Page::Aiming(Aim::Repair)) => prompt("Left click what to repair"),
         (None, Page::Aiming(_)) => prompt("Left click where to go"),
         (None, Page::Rally) => prompt("Left click where new regiments go"),
         (None, Page::Delivering(_)) => prompt("Left click where to deploy"),
+        (None, Page::Placing(_)) => prompt("Left click where to build, or drag to turn it"),
         (None, _) => None,
     };
     tooltip.say(tip);
@@ -1602,7 +1761,7 @@ fn bound(
     entry: Entry,
     slot: usize,
     page: Page,
-    menu: &[Recruit],
+    (menu, builds): (&[Recruit], &[Id]),
     researches: &[tgmap::Research],
 ) -> Vec<String> {
     let command = |ids: &str| format!("ActorCommand {ids}");
@@ -1613,6 +1772,7 @@ fn bound(
         Entry::Open(Menu::Deploy) => vec![command(DEPLOY)],
         Entry::Open(Menu::Location) => vec![command(DEPLOY_TO_LOCATION)],
         Entry::Open(Menu::Research) => vec![command(RESEARCH)],
+        Entry::Open(Menu::Build) => vec![command(CONSTRUCT)],
         Entry::Recruit(i) => vec![format!("ActorDataSelectCommand {}", menu[i].id)],
         Entry::Research(i) => {
             let technology = researches.get(i).map(|r| r.technology.as_str());
@@ -1625,6 +1785,11 @@ fn bound(
         Entry::Sell => vec![command(SELL)],
         Entry::Rally => vec![command(RALLY)],
         Entry::CommandAll => vec!["CommandAll".into()],
+        Entry::Build(i) => {
+            let template = builds.get(i).map_or("", Id::as_str);
+            vec![format!("ActorDataSelectCommand {template}")]
+        }
+        Entry::CancelSite => vec![command(CANCEL_LOOK)],
     };
     names.push(widget(slot));
     names
@@ -1698,8 +1863,18 @@ impl Presser<'_, '_> {
                         self.ask(slot, player, disband);
                     }
                 }
+                Some(Give::Build) => *self.page = Page::Menu(Menu::Build),
                 None => {}
             },
+            Entry::Build(i) => *self.page = Page::Placing(i),
+            Entry::CancelSite => {
+                if let Some(building) = self.chosen.0 {
+                    let cancel = tgsim::Command::CancelConstruction { building };
+                    if let Err(e) = self.orders.give(sim, player, cancel) {
+                        debug!("can't cancel {}: {e:?}", sim.buildings[building].template);
+                    }
+                }
+            }
             Entry::Cancel => *self.page = Page::Orders,
             Entry::Open(menu) => *self.page = Page::Menu(menu),
             Entry::Rally => *self.page = Page::Rally,
@@ -1853,12 +2028,13 @@ pub fn act(mut intents: MessageReader<Intent>, mut presser: Presser) {
     let building = presser.chosen.0.filter(|_| presser.selected.0.is_empty());
     let menu = presser.looks.menu(&presser.sim.0, building);
     let list = building.map_or(&[][..], |b| presser.sim.0.research_list(b));
+    let builds = builds(&presser.sim.0, &presser.selected.0);
     let page = *presser.page;
     let slot = (0..SLOTS).find(|&slot| {
         let names = presser.shown.entries[slot]
             .filter(|e| !matches!(e, Entry::Recruit(i) if *i >= menu.len()))
             .filter(|e| !matches!(e, Entry::Research(i) if *i >= list.len()))
-            .map_or(Vec::new(), |e| bound(e, slot, page, menu, list));
+            .map_or(Vec::new(), |e| bound(e, slot, page, (menu, &builds), list));
         names.iter().any(|name| wanted(name))
     });
     if let Some(slot) = slot {
@@ -2131,6 +2307,44 @@ pub fn aim(
         *page = Page::Orders;
         return;
     };
+    if aim == Aim::Repair {
+        *page = Page::Orders;
+        let piece = match focus {
+            crate::Focus::Organization(r) => tgsim::Piece::Organization(r),
+            crate::Focus::Building(b) => tgsim::Piece::Building(b),
+            crate::Focus::Nothing => {
+                let text = fill(&menus.no_target, &[menus.order(aim)]);
+                failed.write(Failed { text, about: None });
+                return;
+            }
+        };
+        let repair = |organization| tgsim::Command::Repair {
+            organization,
+            piece,
+        };
+        let organizations: Vec<(usize, [f32; 2])> = (selected.0.iter())
+            .filter(|&&r| orders.give(&sim.0, player, repair(r)).is_ok())
+            .map(|&r| (r, point))
+            .collect();
+        if organizations.is_empty() {
+            let about = match piece {
+                tgsim::Piece::Organization(r) => About::Organization(r),
+                tgsim::Piece::Building(b) => About::Building(b),
+            };
+            refused.write(Refused {
+                about,
+                by: Some(aim),
+            });
+            return;
+        }
+        crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+        sent.write(crate::waypoints::Sent {
+            to: None,
+            aim,
+            organizations,
+        });
+        return;
+    }
     if aim == Aim::Attack {
         match attack_at(&sim.0, player, focus) {
             Struck::Friend(about) => {
@@ -2235,6 +2449,8 @@ pub fn aim(
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             vec![(r, at)]
         }
+        // Given on a thing, above.
+        Aim::Repair => return,
         Aim::Move | Aim::Attack | Aim::Run | Aim::Guard => {
             crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
             crate::send(
@@ -2272,6 +2488,8 @@ mod tests {
     const GAME: [Option<Place>; ORDERS.len()] = [
         at(1),
         at(6),
+        at(5),
+        at(4),
         at(0),
         at(3),
         at(2),
@@ -2373,7 +2591,7 @@ mod tests {
             "hq_attach",
             "hq_detach",
         ]);
-        let grid = layout(Page::Orders, &GAME, &attached, None, false);
+        let grid = layout(Page::Orders, &GAME, &attached, None, false, 0);
         for (slot, id) in [
             (0, "move"),
             (1, "kill"),
@@ -2385,7 +2603,7 @@ mod tests {
         }
         assert_eq!(grid.iter().flatten().count(), 7);
         let truck = having(&["move", "stop", "unpack", "disband"]);
-        let grid = layout(Page::Orders, &GAME, &truck, None, false);
+        let grid = layout(Page::Orders, &GAME, &truck, None, false, 0);
         assert_eq!(grid[9], order("unpack"));
         assert_eq!(grid[11], order("disband"));
         assert_eq!(grid.iter().flatten().count(), 4);
@@ -2405,12 +2623,12 @@ mod tests {
             "hq_detach",
             "disband",
         ]);
-        let grid = layout(Page::Orders, &GAME, &both, None, false);
+        let grid = layout(Page::Orders, &GAME, &both, None, false, 0);
         assert_eq!(grid[11], order("hq_detach"));
         assert_eq!(grid[10], order("hq_attach"));
         assert_eq!(grid[9], order("disband"));
         let rout = having(&["move", "guard", "rout", "hq_attach"]);
-        let grid = layout(Page::Orders, &GAME, &rout, None, false);
+        let grid = layout(Page::Orders, &GAME, &rout, None, false, 0);
         assert_eq!(grid[10], order("hq_attach"));
         // The first slot no shown order wants, not Move's.
         assert_eq!(grid[0], order("move"));
@@ -2418,23 +2636,51 @@ mod tests {
     }
 
     #[test]
+    fn the_build_menu_lists_what_can_be_built_and_sites_offer_only_cancel() {
+        let all = [true; ORDERS.len()];
+        let menu = layout(Page::Menu(Menu::Build), &GAME, &all, None, false, 3);
+        let built: Vec<Option<Entry>> = (0..3).map(|i| Some(Entry::Build(i))).collect();
+        assert_eq!(menu[..3], built[..]);
+        assert_eq!(menu.iter().flatten().count(), 4);
+        assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
+        let grid = layout(Page::Orders, &GAME, &all, None, false, 3);
+        assert_eq!(grid[4], order("construct"));
+        assert_eq!(grid[5], order("repair"));
+        let site = BuildingButtons {
+            deploy: at(0),
+            location: None,
+            recruits: &[],
+            research: None,
+            researches: &[],
+            rally: at(5),
+            pack: at(9),
+            sell: None,
+            site: high(11),
+        };
+        let grid = layout(Page::Orders, &GAME, &all, Some(site), false, 0);
+        assert_eq!(grid[11], Some(Entry::CancelSite));
+        assert_eq!(grid.iter().flatten().count(), 1);
+    }
+
+    #[test]
     fn hqs_have_a_button_for_their_organizations_where_nothing_else_is() {
         let truck = having(&["move", "stop", "unpack", "disband"]);
-        let grid = layout(Page::Orders, &GAME, &truck, None, true);
+        let grid = layout(Page::Orders, &GAME, &truck, None, true, 0);
         assert_eq!(grid[COMMAND_ALL], Some(Entry::CommandAll));
         assert_eq!(grid.iter().flatten().count(), 5);
         // Not over an order, nor while one's aimed.
         let mut slots = GAME;
-        slots[2] = at(COMMAND_ALL);
-        let grid = layout(Page::Orders, &slots, &truck, None, true);
+        let moving = ORDERS.iter().position(|(id, _)| *id == "move").unwrap();
+        slots[moving] = at(COMMAND_ALL);
+        let grid = layout(Page::Orders, &slots, &truck, None, true, 0);
         assert_eq!(grid[COMMAND_ALL], order("move"));
-        let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true);
+        let grid = layout(Page::Aiming(Aim::Move), &GAME, &truck, None, true, 0);
         assert!(!grid.contains(&Some(Entry::CommandAll)));
     }
 
     #[test]
     fn buttons_go_by_the_names_the_hotkeys_bind() {
-        let names = |entry, page| bound(entry, 4, page, &[], &[]);
+        let names = |entry, page| bound(entry, 4, page, (&[], &[]), &[]);
         assert_eq!(
             names(order("hq_attach").unwrap(), Page::Orders),
             ["ActorCommand hq_attach", "ActionButtonsButton_4"]
@@ -2467,6 +2713,7 @@ mod tests {
             &[true; ORDERS.len()],
             None,
             false,
+            0,
         );
         assert_eq!(grid[2], order("retreat"));
         assert_eq!(grid[CANCEL], Some(Entry::Cancel));
@@ -2492,8 +2739,16 @@ mod tests {
             rally: at(5),
             pack: at(9),
             sell: at(11),
+            site: None,
         };
-        let grid = layout(Page::Orders, &GAME, &[true; ORDERS.len()], Some(hq), false);
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(hq),
+            false,
+            0,
+        );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[5], Some(Entry::Rally));
         assert_eq!(grid[9], Some(Entry::Pack));
@@ -2512,7 +2767,8 @@ mod tests {
                 &GAME,
                 &[true; ORDERS.len()],
                 Some(depot),
-                false
+                false,
+                0
             )
             .iter()
             .all(Option::is_none)
@@ -2523,10 +2779,18 @@ mod tests {
             &[true; ORDERS.len()],
             Some(hq),
             false,
+            0,
         );
         assert_eq!(menu[10], Some(Entry::Recruit(10)));
         assert_eq!(menu[MENU_CANCEL], Some(Entry::Cancel));
-        let rally = layout(Page::Rally, &GAME, &[true; ORDERS.len()], Some(hq), false);
+        let rally = layout(
+            Page::Rally,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(hq),
+            false,
+            0,
+        );
         assert_eq!(rally[5], Some(Entry::Rally));
         assert_eq!(rally[CANCEL], Some(Entry::Cancel));
         assert_eq!(rally.iter().flatten().count(), 2);
@@ -2550,8 +2814,16 @@ mod tests {
             rally: at(5),
             pack: None,
             sell: None,
+            site: None,
         };
-        let grid = layout(Page::Orders, &GAME, &[true; ORDERS.len()], Some(hq), false);
+        let grid = layout(
+            Page::Orders,
+            &GAME,
+            &[true; ORDERS.len()],
+            Some(hq),
+            false,
+            0,
+        );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], None);
         // With everything hidden it still has its rally point.
@@ -2566,6 +2838,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(none),
             false,
+            0,
         );
         assert_eq!(grid[..2], [None, None]);
         assert_eq!(grid[5], Some(Entry::Rally));
@@ -2575,6 +2848,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(hq),
             false,
+            0,
         );
         assert_eq!(
             menu[..3],
@@ -2598,6 +2872,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(ship),
             false,
+            0,
         );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Deploy)));
         assert_eq!(grid[1], Some(Entry::Open(Menu::Location)));
@@ -2614,6 +2889,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(crowded),
             false,
+            0,
         );
         assert_eq!(grid[0], Some(Entry::Open(Menu::Location)));
         assert_eq!(grid[1], Some(Entry::Open(Menu::Deploy)));
@@ -2629,6 +2905,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(crowded),
             false,
+            0,
         );
         assert_eq!(grid[1], Some(Entry::Sell));
         assert_eq!(grid[11], Some(Entry::Open(Menu::Location)));
@@ -2638,6 +2915,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(ship),
             false,
+            0,
         );
         assert_eq!(deploy[0], Some(Entry::Recruit(1)));
         assert_eq!(deploy.iter().flatten().count(), 2);
@@ -2647,6 +2925,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(ship),
             false,
+            0,
         );
         assert_eq!(
             carried[..3],
@@ -2673,6 +2952,7 @@ mod tests {
             rally: None,
             pack: None,
             sell: None,
+            site: None,
         };
         let grid = layout(
             Page::Orders,
@@ -2680,6 +2960,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(pool),
             false,
+            0,
         );
         assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
         assert_eq!(grid.iter().flatten().count(), 1);
@@ -2689,6 +2970,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(pool),
             false,
+            0,
         );
         assert_eq!(
             menu[..4],
@@ -2711,6 +2993,7 @@ mod tests {
             &[true; ORDERS.len()],
             Some(done),
             false,
+            0,
         );
         assert_eq!(grid[6], Some(Entry::Open(Menu::Research)));
     }

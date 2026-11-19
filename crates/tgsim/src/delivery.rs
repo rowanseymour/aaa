@@ -187,23 +187,29 @@ impl World {
         };
         organization.place(at, [0.0, -1.0]);
         let members = organization.members.iter().map(|m| (m.position, m.shape));
-        members.chain([(at, None)]).all(|(position, shape)| {
-            let spot = spot(position, [0.0, -1.0], shape);
-            // As the least explored of the ground under it is.
-            let (lo, hi) = spot.bounds(spot.shape);
-            let corners = [lo, hi, [lo[0], hi[1]], [hi[0], lo[1]]];
-            let under = corners.into_iter().chain([position]);
-            let seen = under.map(|c| self.seen(player, c)).min_by_key(|s| match s {
-                Seen::Unexplored => 0,
-                Seen::Explored => 1,
-                Seen::Visible => 2,
-            });
-            match seen.unwrap_or(Seen::Unexplored) {
-                Seen::Unexplored => false,
-                Seen::Explored => self.pathing.room_for(&spot, Domain::Land, []),
-                Seen::Visible => self.clear(&spot),
-            }
-        })
+        members
+            .chain([(at, None)])
+            .all(|(position, shape)| self.room_seen(player, &spot(position, [0.0, -1.0], shape)))
+    }
+
+    /// Whether `spot` is on ground `player` has explored, with room to
+    /// stand there as far as it can tell: what stands where it can't see
+    /// now doesn't count against it.
+    pub(crate) fn room_seen(&self, player: u32, spot: &Obstacle) -> bool {
+        // As the least explored of the ground under it is.
+        let (lo, hi) = spot.bounds(spot.shape);
+        let corners = [lo, hi, [lo[0], hi[1]], [hi[0], lo[1]]];
+        let under = corners.into_iter().chain([spot.position]);
+        let seen = under.map(|c| self.seen(player, c)).min_by_key(|s| match s {
+            Seen::Unexplored => 0,
+            Seen::Explored => 1,
+            Seen::Visible => 2,
+        });
+        match seen.unwrap_or(Seen::Unexplored) {
+            Seen::Unexplored => false,
+            Seen::Explored => self.pathing.room_for(spot, Domain::Land, []),
+            Seen::Visible => self.clear(spot),
+        }
     }
 
     /// Whether `spot` is on the map, on land, and clear of everything

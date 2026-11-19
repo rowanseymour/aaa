@@ -31,6 +31,8 @@ pub enum Previewed {
     /// The packed building at this index into the sim's organizations
     /// unpacking.
     Unpack(usize),
+    /// Putting up a building of this template.
+    Build(tgmap::Id),
 }
 
 /// One of the two bars: the player's economy now, or previewed.
@@ -208,6 +210,7 @@ pub fn show(
             Previewed::Research(r) => Change::Research(r),
             Previewed::Unpack(r) if *r < sim.organizations.len() => Change::Unpack(*r),
             Previewed::Unpack(_) => return None,
+            Previewed::Build(t) => Change::Build(t),
         };
         Some(sim.preview(player, change))
     });
