@@ -1080,10 +1080,10 @@ fn highlight(mut buttons: Query<Lighting, With<MenuButton>>) {
 }
 
 /// Plays a button's [`Click`] as it's pressed, not once it's let go and
-/// activates.
+/// activates, unless it can't be.
 fn click(
     press: On<PointerPress>,
-    buttons: Query<&Click>,
+    buttons: Query<&Click, Without<bevy::ui::InteractionDisabled>>,
     mut sounds: ResMut<Sounds>,
     time: Res<Time>,
 ) {

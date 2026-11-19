@@ -7,7 +7,7 @@ use std::ops::RangeInclusive;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::RelativeCursorPosition;
+use bevy::ui::{InteractionDisabled, RelativeCursorPosition};
 use bevy::ui_widgets::Button;
 use tgsim::Action;
 
@@ -98,8 +98,8 @@ fn stepped(now: f32, by: f32, speeds: &RangeInclusive<f32>) -> f32 {
 #[derive(Component)]
 pub struct PauseButton {
     name: String,
-    /// Whether it was last lit.
-    lit: bool,
+    /// Whether it was last drawn lit and usable, once it has been.
+    drawn: Option<(bool, bool)>,
 }
 
 /// The glyph on the [`PauseButton`].
@@ -129,7 +129,7 @@ pub fn spawn_button(
         bindings.marked(PAUSE, &name),
         (Asks::new(PAUSE), Hint(help)),
         crate::ui::called("clock.pause"),
-        PauseButton { name, lit: false },
+        PauseButton { name, drawn: None },
         Rim::TopLeft.node(),
         Surface::Clear,
         Edge::Border,
@@ -157,48 +157,51 @@ pub fn mark_button(bindings: Res<Bindings>, mut buttons: Query<(&PauseButton, &m
 
 /// What [`light_button`] reads and sets on the button.
 type ButtonLook = (
+    Entity,
     &'static mut PauseButton,
     Ref<'static, Hovered>,
     Has<bevy::ui::Pressed>,
     &'static mut Edge,
     &'static mut Surface,
-    &'static mut Node,
     &'static Children,
 );
 
 /// Lights the pause button while the match is paused, whoever paused it,
-/// its edge while it's hovered and its face while it's held down. It's
-/// hidden from those who may not pause, such as anyone only watching.
+/// its edge while it's hovered and its face while it's held down. For
+/// those who may not pause, such as anyone only watching, it's greyed and
+/// can't be pressed.
 pub fn light_button(
+    mut commands: Commands,
     orders: Res<Orders>,
     theme: Res<Theme>,
     mut buttons: Query<ButtonLook>,
     mut glyphs: Query<&mut ImageNode, With<PauseGlyph>>,
 ) {
     let paused = orders.paused();
-    let display = match orders.allowed(&Action::Pause(true)) {
-        true => Display::Flex,
-        false => Display::None,
-    };
-    for (mut button, hovered, pressed, mut edge, mut surface, mut node, children) in &mut buttons {
-        if node.display != display {
-            node.display = display;
-        }
-        surface.set_if_neq(match pressed {
+    let usable = orders.allowed(&Action::Pause(true));
+    for (id, mut button, hovered, pressed, mut edge, mut surface, children) in &mut buttons {
+        surface.set_if_neq(match pressed && usable {
             true => Surface::Hovered,
             false => Surface::Clear,
         });
-        let restyle = button.lit != paused || theme.is_changed() || button.is_added();
+        let restyle = button.drawn != Some((paused, usable)) || theme.is_changed();
         if restyle || hovered.is_changed() {
-            edge.set_if_neq(Edge::lit(paused, hovered.get(), Edge::Border));
+            edge.set_if_neq(Edge::lit(paused, hovered.get() && usable, Edge::Border));
         }
         if !restyle {
             continue;
         }
-        button.lit = paused;
-        let colour = match paused {
-            true => theme.edge(Edge::Lit),
-            false => theme.ink(Ink::Help),
+        if button.drawn.is_none_or(|(_, was)| was != usable) {
+            match usable {
+                true => commands.entity(id).remove::<InteractionDisabled>(),
+                false => commands.entity(id).insert(InteractionDisabled),
+            };
+        }
+        button.drawn = Some((paused, usable));
+        let colour = match (paused, usable) {
+            (true, _) => theme.edge(Edge::Lit),
+            (false, true) => theme.ink(Ink::Help),
+            (false, false) => theme.ink(Ink::Muted),
         };
         for &child in children {
             if let Ok(mut glyph) = glyphs.get_mut(child) {
