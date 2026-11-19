@@ -383,6 +383,7 @@ impl World {
         unit.mended_ago[i] = 0.0;
         unit.mended = Some((self.ticks, i));
         unit.busy = self.ticks + (repair.lasts / TICK).round() as u64;
+        self.play_once(u, repair.animation.as_deref());
         let amount = (repair.amount + self.boost(u).heal).max(0.0);
         self.heal(t, amount);
         true

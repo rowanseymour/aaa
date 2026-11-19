@@ -24,6 +24,14 @@ pub struct Rig {
     /// Node indices by nif object index.
     index: HashMap<usize, usize>,
     meshes: Vec<RigMesh>,
+    /// What it plays in its plain look.
+    own: ClipSet,
+    /// What it plays in each look that has its own, by the look's ids.
+    looks: Vec<(String, ClipSet)>,
+}
+
+/// The animations a rig plays in one look.
+struct ClipSet {
     idle: Clip,
     /// Timed per world unit moved rather than per second.
     moving: Option<Clip>,
@@ -139,6 +147,8 @@ pub struct Clips {
     pub abilities: Vec<(String, Arc<Nif>, f32)>,
     /// Its deaths, by the animation's ids.
     pub deaths: Vec<(String, Arc<Nif>, f32)>,
+    /// What it plays in each look that has its own, by the look's ids.
+    pub looks: Vec<(String, Clips)>,
 }
 
 /// A rig's nodes as nif indices and the meshes hanging from them.
@@ -283,16 +293,9 @@ impl Nodes {
         clips: &Clips,
         assets: &mut ModelAssets,
     ) -> Option<Rig> {
-        let moving = (clips.moving.as_ref()).and_then(|(kf, length)| self.clip(kf, *length));
-        let idle = match &clips.idle {
-            Some((kf, length)) => self.clip(kf, *length)?,
-            None => self.own_clip(nif)?,
-        };
-        let abilities = (clips.abilities.iter())
-            .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
-            .collect();
-        let deaths = (clips.deaths.iter())
-            .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
+        let own = self.clip_set(nif, clips)?;
+        let looks = (clips.looks.iter())
+            .filter_map(|(look, clips)| Some((look.clone(), self.clip_set(nif, clips)?)))
             .collect();
         let meshes = meshes
             .into_iter()
@@ -324,10 +327,29 @@ impl Nodes {
             nodes: self.nodes,
             index: self.index,
             meshes,
+            own,
+            looks,
+        })
+    }
+
+    /// The clips of one look bound to these nodes; `None` without an
+    /// idle one.
+    fn clip_set(&self, nif: &Nif, clips: &Clips) -> Option<ClipSet> {
+        let moving = (clips.moving.as_ref()).and_then(|(kf, length)| self.clip(kf, *length));
+        let idle = match &clips.idle {
+            Some((kf, length)) => self.clip(kf, *length)?,
+            None => self.own_clip(nif)?,
+        };
+        let bound = |list: &[(String, Arc<Nif>, f32)]| {
+            (list.iter())
+                .filter_map(|(ids, kf, length)| Some((ids.clone(), self.clip(kf, *length)?)))
+                .collect()
+        };
+        Some(ClipSet {
             idle,
             moving,
-            abilities,
-            deaths,
+            abilities: bound(&clips.abilities),
+            deaths: bound(&clips.deaths),
         })
     }
 
@@ -595,14 +617,16 @@ impl Rig {
             once: None,
             rate: 1.0,
             held: false,
+            look: None,
         });
         joints
     }
 
     /// Node `i`'s transform below its parent, `t` seconds into idling.
     fn pose(&self, i: usize, t: f32) -> nif::Transform {
-        let channels = self.idle.channels.iter().filter(|c| c.node == i);
-        pose(channels, self.nodes[i].rest, t * self.idle.speed)
+        let idle = &self.own.idle;
+        let channels = idle.channels.iter().filter(|c| c.node == i);
+        pose(channels, self.nodes[i].rest, t * idle.speed)
     }
 }
 
@@ -694,6 +718,9 @@ pub struct Playing {
     pub(crate) rate: f32,
     /// It's dead with no death of its own to play, so lies as it stood.
     held: bool,
+    /// The look it plays the animations of, as an index into
+    /// [`Rig::looks`]; `None` for its plain look.
+    look: Option<usize>,
 }
 
 struct Once {
@@ -704,27 +731,49 @@ struct Once {
 
 #[derive(Clone, Copy, PartialEq)]
 enum OnceClip {
-    /// Index into [`Rig::abilities`].
+    /// Index into [`ClipSet::abilities`].
     Ability(usize),
-    /// Index into [`Rig::deaths`].
+    /// Index into [`ClipSet::deaths`].
     Death(usize),
 }
 
-impl Rig {
+impl ClipSet {
     fn once(&self, clip: OnceClip) -> &Clip {
         match clip {
             OnceClip::Ability(i) => &self.abilities[i].1,
             OnceClip::Death(i) => &self.deaths[i].1,
         }
     }
+
+    /// The ids of what `clip` plays.
+    fn ids(&self, clip: OnceClip) -> &str {
+        match clip {
+            OnceClip::Ability(i) => &self.abilities[i].0,
+            OnceClip::Death(i) => &self.deaths[i].0,
+        }
+    }
+
+    /// What plays the animation of this kind and these ids here.
+    fn find(&self, like: OnceClip, ids: &str) -> Option<OnceClip> {
+        let at =
+            |list: &[(String, Clip)]| list.iter().position(|(a, _)| a.eq_ignore_ascii_case(ids));
+        match like {
+            OnceClip::Ability(_) => at(&self.abilities).map(OnceClip::Ability),
+            OnceClip::Death(_) => at(&self.deaths).map(OnceClip::Death),
+        }
+    }
+}
+
+/// What `rig` plays in the look at `look`, as [`Playing::look`] has it.
+fn set_of(rig: &Rig, look: Option<usize>) -> &ClipSet {
+    look.map_or(&rig.own, |i| &rig.looks[i].1)
 }
 
 impl Playing {
     /// Plays the ability animation with these ids once from the start,
     /// unless it's dying or has none.
     pub fn use_ability(&mut self, ids: &str) {
-        let Some(i) = self
-            .rig
+        let Some(i) = set_of(&self.rig, self.look)
             .abilities
             .iter()
             .position(|(a, _)| a.eq_ignore_ascii_case(ids))
@@ -745,7 +794,7 @@ impl Playing {
         if self.dying() || self.held {
             return;
         }
-        let deaths = self.rig.deaths.iter();
+        let deaths = set_of(&self.rig, self.look).deaths.iter();
         match ids.and_then(|ids| {
             deaths
                 .clone()
@@ -777,7 +826,24 @@ impl Playing {
 
     /// Seconds one play of its idle animation takes.
     pub(crate) fn idle_length(&self) -> f32 {
-        self.rig.idle.length
+        set_of(&self.rig, self.look).idle.length
+    }
+
+    /// Plays the animations of the look with these ids from now on, its
+    /// plain one's for `None` or a look without its own: what it was
+    /// playing starts over from the new set.
+    pub fn set_look(&mut self, look: Option<&str>) {
+        let look =
+            look.and_then(|l| (self.rig.looks.iter()).position(|(a, _)| a.eq_ignore_ascii_case(l)));
+        // The dead keep the look they fell in.
+        if look == self.look || self.held || self.dying() {
+            return;
+        }
+        let (from, to) = (set_of(&self.rig, self.look), set_of(&self.rig, look));
+        let once = (self.once.as_ref()).and_then(|o| to.find(o.clip, from.ids(o.clip)));
+        self.once = once.map(|clip| Once { clip, time: 0.0 });
+        self.time = 0.0;
+        self.look = look;
     }
 
     fn dying(&self) -> bool {
@@ -787,7 +853,7 @@ impl Playing {
     /// Switches between idling and moving at `speed`, for rigs with a
     /// moving animation.
     pub fn set_moving(&mut self, speed: Option<f32>) {
-        let speed = speed.filter(|_| self.rig.moving.is_some());
+        let speed = speed.filter(|_| set_of(&self.rig, self.look).moving.is_some());
         if speed.is_some() != self.moving.is_some() {
             self.time = 0.0;
         }
@@ -808,16 +874,17 @@ pub fn play(
             true => real.delta_secs(),
             false => time.delta_secs() * p.rate,
         };
+        let set = set_of(&p.rig, p.look);
         if let Some(once) = &mut p.once {
             once.time += dt;
-            let ended = once.time >= p.rig.once(once.clip).length;
+            let ended = once.time >= set.once(once.clip).length;
             if ended && matches!(once.clip, OnceClip::Ability(_)) {
                 p.once = None;
             }
         }
         let (clip, time) = match &p.once {
             Some(once) => {
-                let clip = p.rig.once(once.clip);
+                let clip = set.once(once.clip);
                 // Short of the end, which looping clips would wrap around.
                 (clip, once.time.min(clip.length * 0.999))
             }
@@ -825,9 +892,9 @@ pub fn play(
                 if !p.held {
                     p.time += dt * p.moving.unwrap_or(1.0);
                 }
-                let clip = match (&p.rig.moving, p.moving) {
+                let clip = match (&set.moving, p.moving) {
                     (Some(clip), Some(_)) => clip,
-                    _ => &p.rig.idle,
+                    _ => &set.idle,
                 };
                 (clip, p.time)
             }
@@ -1035,6 +1102,52 @@ mod tests {
                 .translation()
                 .abs_diff_eq(Vec3::new(100.0, 10.0, 2.0), 1e-5)
         );
+    }
+
+    #[test]
+    fn a_new_look_starts_what_was_playing_over_from_its_own_set() {
+        let clip = |length| Clip {
+            channels: Vec::new(),
+            speed: 1.0,
+            length,
+        };
+        let set = |attack| ClipSet {
+            idle: clip(3.0),
+            moving: None,
+            abilities: vec![("attack1".into(), clip(attack))],
+            deaths: Vec::new(),
+        };
+        let rig = Rig {
+            nodes: Vec::new(),
+            index: HashMap::new(),
+            meshes: Vec::new(),
+            own: set(1.0),
+            looks: vec![("kneel".into(), set(0.5))],
+        };
+        let mut p = Playing {
+            rig: Arc::new(rig),
+            joints: Vec::new(),
+            time: 2.0,
+            moving: None,
+            once: None,
+            rate: 1.0,
+            held: false,
+            look: None,
+        };
+        p.use_ability("attack1");
+        p.once.as_mut().unwrap().time = 0.4;
+        p.set_look(Some("KNEEL"));
+        assert_eq!(p.look, Some(0));
+        assert_eq!(p.once.as_ref().map(|o| o.time), Some(0.0));
+        assert_eq!(
+            set_of(&p.rig, p.look)
+                .once(p.once.as_ref().unwrap().clip)
+                .length,
+            0.5
+        );
+        // A look without its own set plays the plain one's.
+        p.set_look(Some("prone"));
+        assert_eq!((p.look, p.time), (None, 0.0));
     }
 
     #[test]

@@ -23,6 +23,9 @@ pub struct View {
     pub scale: f32,
     /// The animations the models can play; units have them.
     pub animations: Vec<Animation>,
+    /// The animations its models play in each look that has its own,
+    /// by the look's `[Aspect]` ids, in the order listed.
+    pub looks: Vec<(String, Vec<Animation>)>,
     /// The outline under which the ground is sampled to tilt the model to
     /// follow it, as vehicles do; `None` for models that stay upright.
     pub conform: Option<Shape>,
@@ -85,6 +88,7 @@ impl View {
             texture_renames: HashMap::new(),
             scale: 1.0,
             animations: Vec::new(),
+            looks: Vec::new(),
             conform: None,
             footing: Footing::Ground,
             unpacking: None,
@@ -337,27 +341,32 @@ impl GameData {
             _ => 1.0,
         };
         // A `.kf` path's second `%s` is the animation's ids.
-        let animations = thing
-            .character_component
-            .iter()
-            .flat_map(|c| &c.animation)
-            .filter_map(|a| {
-                let ids = a.ids.clone()?;
-                let kf = path(
-                    &a.kf
-                        .as_deref()?
-                        .replacen("%s", prefix, 1)
-                        .replacen("%s", &ids, 1),
-                );
-                Some(Animation {
-                    kind: AnimationKind::parse(a.kind.as_deref().unwrap_or_default()),
-                    ids,
-                    kf,
-                    length: a.length.unwrap_or(1.0),
-                    walk_distance: a.walk_distance,
-                })
+        let animation = |a: &defs::Animation| {
+            let ids = a.ids.clone()?;
+            let kf = path(
+                &a.kf
+                    .as_deref()?
+                    .replacen("%s", prefix, 1)
+                    .replacen("%s", &ids, 1),
+            );
+            Some(Animation {
+                kind: AnimationKind::parse(a.kind.as_deref().unwrap_or_default()),
+                ids,
+                kf,
+                length: a.length.unwrap_or(1.0),
+                walk_distance: a.walk_distance,
             })
-            .filter(|a| self.exists(&a.kf))
+        };
+        let read = |list: &[defs::Animation]| -> Vec<Animation> {
+            (list.iter().filter_map(animation))
+                .filter(|a| self.exists(&a.kf))
+                .collect()
+        };
+        let character = thing.character_component.as_ref();
+        let animations = character.map_or_else(Vec::new, |c| read(&c.animation));
+        let looks = (character.into_iter())
+            .flat_map(|c| &c.aspect_animation_set)
+            .filter_map(|s| Some((s.aspect_ids.clone()?, read(&s.animation))))
             .collect();
         Some(View {
             models,
@@ -365,6 +374,7 @@ impl GameData {
             texture_renames,
             scale,
             animations,
+            looks,
             conform: conform(thing),
             footing: footing(thing),
             unpacking,

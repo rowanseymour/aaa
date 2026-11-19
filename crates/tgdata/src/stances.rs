@@ -16,6 +16,9 @@ pub struct Stance {
     pub states: Vec<Id>,
     /// What a thing holds while in it.
     pub property: Option<Id>,
+    /// The `[Aspect]` a thing in it is drawn with; `None` for its plain
+    /// look.
+    pub look: Option<Id>,
 }
 
 /// A template's stances, in the order it lists them; none for one with no
@@ -36,6 +39,7 @@ fn stances(t: &defs::Thing) -> Option<Vec<Stance>> {
                 .map(Id::from)
                 .collect(),
             property: named(&s.property_ids).map(Id::from),
+            look: named(&s.aspect_ids).map(Id::from),
         })
         .collect();
     (!stances.is_empty()).then_some(stances)
@@ -56,7 +60,7 @@ mod tests {
     fn stances_need_every_state_they_name() {
         let parsed = tgi::parse(
             "[Thing]\n{\n\t[BodyComponent]\n\t{\n\t}\n\
-             \t[Stance]\n\t{\n\t\tids = kneel\n\t\tproperty_ids = infantry_kneel\n\
+             \t[Stance]\n\t{\n\t\tids = kneel\n\t\tproperty_ids = infantry_kneel\n\t\taspect_ids = kneel\n\
              \t\thealth = 1.0\n\t\tactor_state = mind_engaged, under_siege\n\t}\n\
              \t[Stance]\n\t{\n\t\tids = prone\n\t\tproperty_ids = NULL\n\t\thealth = 0.5\n\
              \t\tactor_state = NULL\n\t}\n}\n",
@@ -72,5 +76,9 @@ mod tests {
         assert_eq!(found[0].property, Some(Id::from("infantry_kneel")));
         assert_eq!((found[1].health, found[1].property.clone()), (0.5, None));
         assert!(found[1].states.is_empty());
+        assert_eq!(
+            (found[0].look.clone(), found[1].look.clone()),
+            (Some(Id::from("kneel")), None)
+        );
     }
 }

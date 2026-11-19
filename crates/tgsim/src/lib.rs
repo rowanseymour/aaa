@@ -587,6 +587,17 @@ pub struct Unit {
     /// The death it died, by its ids, which plays before its remains start
     /// lying.
     pub death: Option<Id>,
+    /// The ticks its death takes to play.
+    dying: u64,
+    /// The stance it holds, by its ids, which gives it its look and
+    /// property.
+    pub stance: Option<Id>,
+    /// The stance it's to change to once the animation it's playing ends.
+    stance_due: Option<Option<Id>>,
+    /// The health and states its stance was last decided by.
+    stance_heard: Option<(u32, u8)>,
+    /// The tick the animation it plays once, such as an attack's, ends.
+    playing: u64,
     /// The last hit an enemy dealt it.
     pub struck: Option<Struck>,
     /// How it left the map without dying, if it has.
@@ -602,6 +613,20 @@ pub struct Unit {
     /// The terrain it's on, as [`tgmap::TileTerrains::get`] takes it: its
     /// organization's, or its own tile's while it straggles.
     pub terrain: TerrainIndex,
+}
+
+impl Unit {
+    /// Forgets how it died and the stance it died in, for one that's
+    /// replaced: the new one is decided afresh.
+    pub(crate) fn forget_dying(&mut self) {
+        (self.died, self.death, self.dying) = (None, None, 0);
+        (
+            self.stance,
+            self.stance_due,
+            self.stance_heard,
+            self.playing,
+        ) = (None, None, None, 0);
+    }
 }
 
 /// How a unit left the map without dying, and the tick it did.
@@ -1189,6 +1214,7 @@ impl World {
         self.keep_experience();
         self.keep_health();
         self.keep_guard();
+        self.keep_stances();
         self.keep_entrenchment();
         self.keep_company();
         self.construct();
@@ -1340,7 +1366,8 @@ digest!(Unit {
     id, template, organization, position, previous, facing, end_facing, path, from, leg, goal,
     exact, ways, look, speed, pace, acceleration, turn_radius, trailer, closing, busy, decided, met, health,
     health_factor,
-    fired_ago, target, shot, mended_ago, mended, died, death, besieged, struck, left, awaited, descent,
+    fired_ago, target, shot, mended_ago, mended, died, death, dying, stance, stance_due,
+    stance_heard, playing, besieged, struck, left, awaited, descent,
     properties,
 } skip {
     // Its template's.

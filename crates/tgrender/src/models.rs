@@ -517,6 +517,42 @@ impl<'a> Plays<'a> {
         let once = self.once;
         view.animations.iter().filter(move |a| once(a))
     }
+
+    /// What it plays in each of `view`'s looks that has its own
+    /// animations, by the look's ids: the look's own, and of its plain
+    /// look's those the look has none of its name for. It idles with the
+    /// look's own idle if it has one.
+    fn looks(&self, view: &'a View) -> Vec<(&'a str, LookPlays<'a>)> {
+        let named = |list: &[tgdata::Animation], a: &tgdata::Animation| {
+            list.iter()
+                .any(|b| b.kind == a.kind && b.ids.eq_ignore_ascii_case(&a.ids))
+        };
+        let once = self.once;
+        (view.looks.iter())
+            .map(|(look, list)| {
+                let moving = (self.moving).map(|m| {
+                    let same = |a: &&tgdata::Animation| {
+                        a.kind == m.kind && a.ids.eq_ignore_ascii_case(&m.ids)
+                    };
+                    list.iter().find(same).unwrap_or(m)
+                });
+                let own = self.once_in(view).filter(|a| !named(list, a));
+                let plays = LookPlays {
+                    idle: idle_in(list).or(self.idle),
+                    moving,
+                    once: list.iter().filter(|a| once(a)).chain(own).collect(),
+                };
+                (look.as_str(), plays)
+            })
+            .collect()
+    }
+}
+
+/// What a model plays in one of its looks.
+struct LookPlays<'a> {
+    idle: Option<&'a tgdata::Animation>,
+    moving: Option<&'a tgdata::Animation>,
+    once: Vec<&'a tgdata::Animation>,
 }
 
 /// How an effect's model plays.
@@ -1038,8 +1074,20 @@ impl Models {
         plays: Plays,
     ) -> Option<Model> {
         let once = plays.once_in(view);
-        let clips = plays.idle.into_iter().chain(plays.moving).chain(once);
-        let key = ModelKey::playing(path, clips.map(|a| a.kf.clone()), view);
+        let looks = plays.looks(view);
+        // Each look's clips under its name, so they can't be taken for
+        // another's.
+        let in_looks = looks.iter().flat_map(|(look, l)| {
+            let kfs = (l
+                .idle
+                .into_iter()
+                .chain(l.moving)
+                .chain(l.once.iter().copied()))
+            .map(|a| a.kf.clone());
+            std::iter::once(format!("look {look}")).chain(kfs)
+        });
+        let own = (plays.idle.into_iter().chain(plays.moving).chain(once)).map(|a| a.kf.clone());
+        let key = ModelKey::playing(path, own.chain(in_looks), view);
         if let Some(model) = self.models.get(&key) {
             return model.clone();
         }
@@ -1054,13 +1102,28 @@ impl Models {
     /// The clips a rig plays, as `plays` picks them from `view`; `None`
     /// without an idle clip that can be read.
     fn clips(&mut self, view: &View, plays: Plays) -> Option<Clips> {
+        let own = LookPlays {
+            idle: plays.idle,
+            moving: plays.moving,
+            once: plays.once_in(view).collect(),
+        };
+        let mut clips = self.look_clips(&own)?;
+        clips.looks = (plays.looks(view).into_iter())
+            .filter_map(|(look, l)| Some((look.to_string(), self.look_clips(&l)?)))
+            .collect();
+        Some(clips)
+    }
+
+    /// The clips of what a model plays in one look; `None` without an
+    /// idle clip that can be read.
+    fn look_clips(&mut self, plays: &LookPlays) -> Option<Clips> {
         let idle = plays.idle?;
         let mut clips = Clips {
             idle: Some((self.clip(&idle.kf)?, idle.length)),
             ..Clips::default()
         };
         clips.moving = (plays.moving).and_then(|a| Some((self.clip(&a.kf)?, a.walk_distance?)));
-        for a in plays.once_in(view) {
+        for a in &plays.once {
             let Some(kf) = self.clip(&a.kf) else {
                 continue;
             };
@@ -1350,10 +1413,13 @@ fn once(a: &tgdata::Animation) -> bool {
 /// The idle animation a view's models play: the one named `idle`, else the
 /// first of its kind.
 pub(crate) fn idle(view: &View) -> Option<&tgdata::Animation> {
-    let mut idles = view
-        .animations
-        .iter()
-        .filter(|a| a.kind == AnimationKind::Idle);
+    idle_in(&view.animations)
+}
+
+/// The idle animation of `list`: the one named `idle`, else the first of
+/// its kind.
+fn idle_in(list: &[tgdata::Animation]) -> Option<&tgdata::Animation> {
+    let mut idles = list.iter().filter(|a| a.kind == AnimationKind::Idle);
     idles
         .clone()
         .find(|a| a.ids.eq_ignore_ascii_case("idle"))

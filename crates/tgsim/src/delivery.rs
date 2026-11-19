@@ -307,10 +307,11 @@ impl World {
         hq: Option<u32>,
     ) -> Option<usize> {
         let airlift = self.rules.airlifts.get(&organization.template).cloned()?;
+        let top = self.plane_speed(owner, &airlift);
         let line = normalised([to[0] - entry[0], to[1] - entry[1]]).unwrap_or(facing);
         // The drop is centred on the target as if it were flown at half
         // speed throughout, one let go every `delay`.
-        let pace = airlift.speed / 2.0;
+        let pace = top / 2.0;
         let lead = (organization.members.iter())
             .map(|m| self.carry(&m.template, airlift.height, pace))
             .fold(0.0, f32::max);
@@ -335,12 +336,19 @@ impl World {
             flown: 0.0,
             mark,
             // In from rest.
-            ramp: Ramp::over_stretch(0.0, airlift.speed, mark),
+            ramp: Ramp::over_stretch(0.0, top, mark),
             released: 0,
             held: None,
             airlift,
         });
         Some(d)
+    }
+
+    /// The top speed `owner`'s aircraft flying `airlift` has: its speed
+    /// as the side's technologies on its kind change it.
+    fn plane_speed(&self, owner: u32, airlift: &tgmap::Airlift) -> f32 {
+        let effect = self.held_effect(owner, &airlift.transport, [], []);
+        airlift.speed * (1.0 + effect.speed).max(crate::value::MULTIPLY_FLOOR)
     }
 
     /// Where on the map's edge an aircraft with nothing to fly in over
@@ -418,7 +426,7 @@ impl World {
             (None, Some(r)) => self.organizations[r].units.len(),
             (None, None) => 0,
         };
-        let speed = delivery.airlift.speed;
+        let speed = self.plane_speed(delivery.owner, &delivery.airlift);
         if delivery.released < members {
             let delivery = &mut self.deliveries[d];
             delivery.flown += delivery.ramp.fly();
@@ -436,7 +444,11 @@ impl World {
                 delivery.held = Some(past / pace);
                 delivery.ramp = match delivery.released < members {
                     // Slowing to half speed by its next mark.
-                    true => Ramp::new(pace, speed / 2.0, delivery.airlift.delay * speed, past),
+                    // Its marks are set by its plain speed.
+                    true => {
+                        let mark = delivery.airlift.delay * delivery.airlift.speed;
+                        Ramp::new(pace, speed / 2.0, mark, past)
+                    }
                     false => {
                         let home = distance(delivery.position, delivery.entry);
                         Ramp::over_stretch(pace, speed, home)
@@ -663,6 +675,32 @@ mod tests {
         };
         w.rules.falls.insert(Id::from("soldier"), fall);
         w
+    }
+
+    #[test]
+    fn planes_fly_at_the_top_speed_their_sides_technologies_give_them() {
+        let flown = |superchargers: bool| {
+            let mut w = airfield();
+            w.rules.kinds.insert("plane".into(), kind(&["aircraft"]));
+            let effect = tgmap::CombatEffect {
+                speed: 0.25,
+                requires: vec!["aircraft".into()],
+                ..tgmap::CombatEffect::default()
+            };
+            w.rules
+                .combat_effects
+                .insert("superchargers".into(), effect);
+            if superchargers {
+                w.technologies.insert(1, vec!["superchargers".into()]);
+            }
+            w.apply(1, deliver([40.0, 20.0])).unwrap();
+            run(&mut w, 6.0);
+            (w.deliveries[0].flown, w.deliveries[0].mark)
+        };
+        let ((plain, plain_mark), (fast, fast_mark)) = (flown(false), flown(true));
+        assert!(fast > plain, "{fast} against {plain}");
+        // Faster, it lets go further back, to drop round the same place.
+        assert!(fast_mark < plain_mark);
     }
 
     fn deliver(to: [f32; 2]) -> Command {
