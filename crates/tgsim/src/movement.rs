@@ -110,6 +110,12 @@ impl Unit {
         self.died.is_none() && self.left.is_none() && !self.awaited
     }
 
+    /// Whether it's in the air: flying, falling under its parachute or
+    /// falling shot down, alive or not.
+    pub fn in_air(&self) -> bool {
+        self.aloft || self.descent.is_some()
+    }
+
     pub(crate) fn die(&mut self, tick: u64) {
         self.health = 0.0;
         self.died = Some(tick);
@@ -445,6 +451,10 @@ impl World {
     /// entrenchment. It faces `facing` until it has a route to face along,
     /// and turns to it once there if `ordered`.
     fn set_off(&mut self, organization: usize, target: [f32; 2], facing: [f32; 2], ordered: bool) {
+        // What flies goes where its delivery takes it.
+        if self.flown(organization) {
+            return;
+        }
         let far = !within(
             self.organizations[organization].position,
             target,
@@ -827,6 +837,10 @@ impl World {
 
     /// Sends a unit to stand at `place` facing `facing`.
     pub(crate) fn take_place(&mut self, u: usize, place: [f32; 2], facing: [f32; 2], exact: bool) {
+        // Nothing in the air sets off on a move.
+        if self.units[u].in_air() {
+            return;
+        }
         let Some(way) = self.plan(u, place, exact) else {
             // One that finds no route stops where it is, as it faces.
             self.units[u].halt();
@@ -1119,6 +1133,9 @@ impl World {
             let own = self.top_speed(u, handed[self.units[u].organization]);
             let unit = &mut self.units[u];
             unit.previous = unit.position;
+            if unit.in_air() {
+                continue;
+            }
             unit.drive(tops[unit.organization].min(limit), own);
             if let (true, Some(goal)) = (unit.path.is_empty(), unit.goal) {
                 let reach = match unit.exact {

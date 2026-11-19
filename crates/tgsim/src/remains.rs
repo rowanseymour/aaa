@@ -39,8 +39,12 @@ impl World {
     /// played.
     pub fn unit_remains(&self, u: usize) -> Option<Remains> {
         let unit = &self.units[u];
-        let died = unit.died.filter(|_| unit.left.is_none())?;
-        Some(self.remains_from(&unit.template, died + unit.dying))
+        let died = unit
+            .died
+            .filter(|_| unit.left.is_none() && !unit.in_air())?;
+        // One killed in the air starts again as it comes down.
+        let start = (died + unit.dying).max(unit.landed.unwrap_or(0));
+        Some(self.remains_from(&unit.template, start))
     }
 
     /// The remains of the building at `b`, once it's destroyed.

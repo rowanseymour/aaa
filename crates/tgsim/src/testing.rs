@@ -163,6 +163,7 @@ pub(crate) fn soldier(weapons: Vec<Weapon>) -> Fighter {
         flags: vec![Id::from("infantry")],
         builds: Vec::new(),
         weapons,
+        on_death: None,
         repairs: Vec::new(),
         bonus: Default::default(),
         check_resistance: false,

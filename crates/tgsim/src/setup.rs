@@ -346,6 +346,8 @@ impl World {
             // One its organization has lost comes back as a recruit's do.
             awaited: m.lost.is_some(),
             descent: None,
+            aloft: false,
+            landed: None,
             properties: Vec::new(),
             terrain: TerrainIndex::default(),
             id: m.id,

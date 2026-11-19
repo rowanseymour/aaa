@@ -153,6 +153,9 @@ pub struct Rules {
     pub falls: HashMap<Id, tgmap::Fall>,
     /// World units a second each second that what falls gains.
     pub gravity: f32,
+    /// How much of its speed times gravity an aircraft shot down gains in
+    /// sinking speed each second.
+    pub plane_fall_tweak: f32,
     /// Seconds commissioning an organization of each template takes, by
     /// template.
     pub recruit_times: HashMap<Id, f32>,
@@ -236,6 +239,7 @@ impl Default for Rules {
             airlifts: HashMap::new(),
             falls: HashMap::new(),
             gravity: 49.05,
+            plane_fall_tweak: 0.005,
             recruit_times: HashMap::new(),
             research_lists: HashMap::new(),
             experience_per_second: 0.0,

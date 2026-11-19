@@ -2099,7 +2099,8 @@ fn show_units(
     for (mut view, mut transform, mut visibility, mut playing) in &mut views {
         let unit = &sim.0.units[view.unit];
         let owner = sim.0.organizations[unit.organization].owner;
-        if unit.left.is_some() || unit.awaited {
+        // What's in the air is drawn with its delivery.
+        if unit.left.is_some() || unit.awaited || unit.in_air() {
             visibility.set_if_neq(Visibility::Hidden);
             continue;
         }

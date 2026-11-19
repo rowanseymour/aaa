@@ -60,6 +60,8 @@ pub struct Fighter {
     /// The templates it can build, which aren't `cannot_build` to it.
     pub builds: Vec<Id>,
     pub weapons: Vec<Weapon>,
+    /// What it sets off where it dies.
+    pub on_death: Option<Weapon>,
     /// The abilities that put health back into what they're used on, such
     /// as an engineer's for raising a building or mending one.
     pub repairs: Vec<Repair>,
@@ -669,28 +671,12 @@ pub(crate) fn fighter(
     let performs = thing.performer_component.iter().flat_map(|p| &p.ability);
     let defends = thing.defender_component.iter().flat_map(|d| &d.ability);
     let abilities = performs.chain(defends);
-    for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
-        let heals = d.effect.iter().filter(|e| is(&e.kind, "HEAL"));
-        let heal: Option<f32> = heals.map(|e| e.amount.unwrap_or(0.0)).reduce(|a, b| a + b);
-        if let (Some(amount), Some(range)) = (heal, d.range) {
-            fighter.repairs.push(Repair {
-                range,
-                recharge: d.recharge_time,
-                amount,
-                targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
-                animation: (a.animation1.clone()).filter(|ids| !ids.eq_ignore_ascii_case("null")),
-                sounds: cues(&d.when_do),
-                lasts: choice(a, animations).lasts,
-            });
-            continue;
-        }
-        // Whatever kind of ability it is, if it does damage.
+    // The weapon an ability is, if it does damage and has a range.
+    let weapon_of = |a: &defs::Ability, d: &defs::AbilityDefinition, range: Option<f32>| {
         let hits = weapon_hits(&d.effect);
         let damages = hits.iter().any(|h| !matches!(h.does, Does::Morale(_)));
-        let Some(range) = d.range.filter(|_| damages) else {
-            continue;
-        };
-        fighter.weapons.push(Weapon {
+        let range = range.filter(|_| damages)?;
+        Some(Weapon {
             range,
             min_range: d.min_range,
             recharge: d.recharge_time,
@@ -731,8 +717,32 @@ pub(crate) fn fighter(
             vorpal: d.flags.iter().any(|f| f.vorpal),
             spell: d.flags.iter().any(|f| f.spell),
             choice: choice(a, animations),
-        });
+        })
+    };
+    for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {
+        let heals = d.effect.iter().filter(|e| is(&e.kind, "HEAL"));
+        let heal: Option<f32> = heals.map(|e| e.amount.unwrap_or(0.0)).reduce(|a, b| a + b);
+        if let (Some(amount), Some(range)) = (heal, d.range) {
+            fighter.repairs.push(Repair {
+                range,
+                recharge: d.recharge_time,
+                amount,
+                targets: Targets::parse(d.targets.as_deref().unwrap_or("")),
+                animation: (a.animation1.clone()).filter(|ids| !ids.eq_ignore_ascii_case("null")),
+                sounds: cues(&d.when_do),
+                lasts: choice(a, animations).lasts,
+            });
+            continue;
+        }
+        // Whatever kind of ability it is, if it does damage.
+        if let Some(weapon) = weapon_of(a, d, d.range) {
+            fighter.weapons.push(weapon);
+        }
     }
+    let dies_with = body.on_death_ability.as_ref();
+    let dies_with = dies_with.and_then(|a| Some((a, a.ability_definition.as_ref()?)));
+    // It's set off where its user is, so needs no range.
+    fighter.on_death = dies_with.and_then(|(a, d)| weapon_of(a, d, Some(0.0)));
     Some(fighter)
 }
 

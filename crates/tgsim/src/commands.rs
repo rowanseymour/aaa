@@ -15,6 +15,7 @@ impl World {
             .get(organization)
             .is_some_and(|r| r.owner == player)
             && !self.destroyed(organization)
+            && !self.flown(organization)
     }
 
     /// Whether anyone may give `player`'s orders: nobody plays a side

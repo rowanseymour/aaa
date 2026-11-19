@@ -1,5 +1,6 @@
-//! The aircraft bringing organizations in, flying over the map, and what
-//! they've dropped coming down under its parachute.
+//! The aircraft bringing organizations in, flying over the map or diving
+//! to the ground shot down, and what they've dropped coming down under
+//! its parachute.
 
 use std::collections::HashMap;
 
@@ -58,14 +59,15 @@ pub fn show(
         }
     };
     let done = |d: &tgsim::Delivery| {
-        d.left.is_some()
+        (d.left.is_some() || d.down.is_some())
             && d.organization
                 .is_none_or(|r| !sim.0.organizations[r].arriving)
     };
     for (d, delivery) in sim.0.deliveries.iter().enumerate().skip(flights.over) {
         // Level over where it's bound, whatever it crosses.
         let level = ground.stand_at(Footing::Ground, delivery.target) + delivery.height;
-        if delivery.left.is_some() {
+        // Down, its unit's remains are drawn instead.
+        if delivery.left.is_some() || delivery.down.is_some() {
             if let Some(Some(e)) = flights.planes.remove(&d) {
                 commands.entity(e).despawn();
             }
@@ -91,6 +93,12 @@ pub fn show(
             });
             let (mut over, turned) = pose(ground, at, delivery.facing, None, Footing::Ground);
             over.y = level;
+            // Nose down as steeply as it dives: turning the way it's
+            // heading back about this axis takes it down towards the ground.
+            let [fx, fy] = delivery.facing;
+            let axis = tgrender::terrain::world(fx, fy, 0.0).cross(Vec3::Y);
+            let dip = Quat::from_axis_angle(axis.normalize_or_zero(), -delivery.dive().atan());
+            let turned = dip * turned;
             if let Some(e) = plane {
                 place(e, over, turned, seen(delivery.owner, at));
             }

@@ -100,6 +100,9 @@ pub struct Pathing {
     blockers: Vec<u16>,
     /// Which area each tile is in, for land movers and for ships.
     areas: Arc<[Vec<u32>; 2]>,
+    /// Row-major, the ground's height in the middle of each tile; none for
+    /// ground taken as level.
+    heights: Option<Arc<Vec<f32>>>,
 }
 
 impl Pathing {
@@ -128,6 +131,7 @@ impl Pathing {
             blockers: vec![0; tiles.len()],
             tiles,
             areas,
+            heights: None,
         }
     }
 
@@ -139,7 +143,27 @@ impl Pathing {
             areas: Arc::new(areas(side, &tiles)),
             tiles,
             blockers: vec![0; side * side],
+            heights: None,
         }
+    }
+
+    /// Takes the ground's height in the middle of each tile from `height`.
+    pub fn set_heights(&mut self, height: impl Fn([f32; 2]) -> f32) {
+        let tiles =
+            (0..self.side * self.side).map(|i| height(Tile::of_index(i, self.side).centre()));
+        self.heights = Some(Arc::new(tiles.collect()));
+    }
+
+    /// The ground's height under `at`, by the tile it's in: the nearest
+    /// tile's beyond the map, and 0 on ground taken as level.
+    pub fn height(&self, at: [f32; 2]) -> f32 {
+        let Some(heights) = &self.heights else {
+            return 0.0;
+        };
+        let last = self.side.saturating_sub(1) as f32;
+        let held = at.map(|c| (c / CELL_SIZE).floor().clamp(0.0, last) as i32);
+        let tile = Tile::new(held[0], held[1]);
+        tile.index(self.side).map_or(0.0, |i| heights[i])
     }
 
     /// Makes one tile `domain`'s, for tests and tools.

@@ -113,12 +113,35 @@ pub struct Delivery {
     /// seconds ago the last, once one's gone.
     released: usize,
     held: Option<f32>,
+    /// The aircraft as a unit, by index into [`World::units`], which can be
+    /// shot down.
+    pub plane: Option<usize>,
+    /// Its fall, once it's shot down.
+    plunge: Option<Plunge>,
+    /// The tick it came down on, shot down.
+    pub down: Option<u64>,
+}
+
+/// An aircraft shot down, falling out of its flight.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Plunge {
+    /// Its speed along the ground, which never changes, and how fast it
+    /// sinks.
+    across: f32,
+    sinking: f32,
 }
 
 impl Delivery {
     /// The template of the organization it brings.
     pub fn cargo(&self) -> Option<&Id> {
         self.cargo.as_ref().map(|c| &c.template)
+    }
+
+    /// How steeply it's diving, as how far it sinks for each unit it goes
+    /// along the ground: 0 in level flight.
+    pub fn dive(&self) -> f32 {
+        self.plunge
+            .map_or(0.0, |p| p.sinking / p.across.max(f32::MIN_POSITIVE))
     }
 
     /// Where it is `t` of the way from the last tick to this one.
@@ -339,9 +362,26 @@ impl World {
             ramp: Ramp::over_stretch(0.0, top, mark),
             released: 0,
             held: None,
+            plane: None,
+            plunge: None,
+            down: None,
             airlift,
         });
+        // The aircraft is a unit of its own, there to be shot at.
+        let template = self.deliveries[d].template.clone();
+        if let Some(r) = self.raise(&template, owner, entry, line) {
+            let u = self.organizations[r].units[0];
+            self.units[u].aloft = true;
+            self.deliveries[d].plane = Some(u);
+        }
         Some(d)
+    }
+
+    /// Whether the organization at `r` is an aircraft a delivery flies,
+    /// which goes where the delivery takes it.
+    pub fn flown(&self, r: usize) -> bool {
+        let units = &self.organizations[r].units;
+        !units.is_empty() && units.iter().all(|&u| self.units[u].aloft)
     }
 
     /// The top speed `owner`'s aircraft flying `airlift` has: its speed
@@ -400,8 +440,21 @@ impl World {
     /// where it goes, and brings down what's been dropped.
     pub(crate) fn deliver(&mut self) {
         for d in 0..self.deliveries.len() {
-            if self.deliveries[d].left.is_none() {
-                self.fly(d);
+            let delivery = &self.deliveries[d];
+            if delivery.left.is_some() || delivery.down.is_some() {
+                continue;
+            }
+            let shot = delivery.plane.is_some_and(|u| self.units[u].died.is_some());
+            if shot && delivery.plunge.is_none() {
+                self.shot_down(d);
+            }
+            match self.deliveries[d].plunge.is_some() {
+                true => self.plunge(d),
+                false => self.fly(d),
+            }
+            // One just down has been put where it came down.
+            if self.deliveries[d].down.is_none() {
+                self.carry_plane(d);
             }
         }
         self.descend();
@@ -411,11 +464,83 @@ impl World {
                 continue;
             };
             let organization = &self.organizations[r];
-            let out = delivery.released == organization.units.len();
+            // What a plane shot down still held never comes.
+            let out = delivery.released == organization.units.len() || delivery.plunge.is_some();
             let down = (organization.units.iter()).all(|&u| self.units[u].descent.is_none());
             if organization.arriving && out && down {
                 self.organizations[r].arriving = false;
             }
+        }
+    }
+
+    /// Has the delivery at `d`'s aircraft, just shot down, drop out of its
+    /// flight: what it's yet to drop is lost with it, freeing its place
+    /// at its HQ, and it carries on the way it was heading at the speed
+    /// it was flying, level, starting to fall.
+    fn shot_down(&mut self, d: usize) {
+        let delivery = &mut self.deliveries[d];
+        delivery.cargo = None;
+        let across = delivery.ramp.speed();
+        delivery.plunge = Some(Plunge {
+            across,
+            sinking: 0.0,
+        });
+        log::debug!("{} {} shot down", delivery.template, delivery.id);
+    }
+
+    /// Brings the delivery at `d`'s aircraft down a tick further: on at
+    /// the same speed along the ground, sinking faster each tick by the
+    /// whole speed it has, until it comes to rest at its `taxi_height`
+    /// over the ground, whatever's there, where its remains start and
+    /// its on-death ability goes off.
+    fn plunge(&mut self, d: usize) {
+        let pull = self.rules.plane_fall_tweak * self.rules.gravity * TICK;
+        let delivery = &mut self.deliveries[d];
+        let Some(mut p) = delivery.plunge else {
+            return;
+        };
+        p.sinking += pull * libm::hypotf(p.across, p.sinking);
+        delivery.plunge = Some(p);
+        delivery.previous = delivery.position;
+        let [fx, fy] = delivery.facing;
+        let on = [
+            delivery.position[0] + fx * p.across * TICK,
+            delivery.position[1] + fy * p.across * TICK,
+        ];
+        // It comes down on the map, however near the edge it was hit.
+        let at = self.pathing.inside(on);
+        let level = self.pathing.height(delivery.target);
+        let floor = self.pathing.height(at) + delivery.airlift.taxi_height - level;
+        delivery.position = at;
+        delivery.height -= p.sinking * TICK;
+        if delivery.height > floor {
+            return;
+        }
+        delivery.height = floor;
+        delivery.down = Some(self.ticks);
+        let Some(u) = delivery.plane else {
+            return;
+        };
+        let (facing, ticks) = (delivery.facing, self.ticks);
+        self.carry_plane(d);
+        let unit = &mut self.units[u];
+        (unit.aloft, unit.landed, unit.facing) = (false, Some(ticks), facing);
+        self.set_off_death(u);
+    }
+
+    /// Keeps the delivery at `d`'s aircraft, as a unit, where it flies.
+    fn carry_plane(&mut self, d: usize) {
+        let delivery = &self.deliveries[d];
+        let Some(u) = delivery.plane else {
+            return;
+        };
+        let (position, previous, facing) = (delivery.position, delivery.previous, delivery.facing);
+        let gone = delivery.left;
+        let unit = &mut self.units[u];
+        (unit.position, unit.previous, unit.facing) = (position, previous, facing);
+        if let Some(tick) = gone.filter(|_| unit.left.is_none()) {
+            unit.left = Some(crate::Left::Disbanded(tick));
+            unit.aloft = false;
         }
     }
 
@@ -533,7 +658,10 @@ impl World {
         let Some(lands) = self.landing(aimed, line, shape) else {
             return;
         };
+        // On the map from here, there to be shot at, though not to act.
+        let full = self.max_health(u);
         let unit = &mut self.units[u];
+        (unit.awaited, unit.health) = (false, full);
         unit.stand_at(at, line);
         unit.descent = Some(Descent {
             height: from,
@@ -572,12 +700,12 @@ impl World {
     }
 
     /// Brings down what's been dropped, straight from where it was let
-    /// go to where it lands, where it joins its organization and makes for
-    /// its place in it.
+    /// go to where it lands, where it makes for its place in its
+    /// organization, or, killed on the way, its remains start again.
     fn descend(&mut self) {
         let fallen = self.rules.gravity / GAME_TICKS * TICK;
+        let ticks = self.ticks;
         for u in 0..self.units.len() {
-            let full = self.max_health(u);
             let unit = &mut self.units[u];
             let Some(mut descent) = unit.descent else {
                 continue;
@@ -595,8 +723,10 @@ impl World {
             unit.stand_at(descent.lands, facing);
             unit.previous = unit.position;
             unit.descent = None;
-            unit.awaited = false;
-            unit.health = full;
+            if unit.died.is_some() {
+                unit.landed = Some(ticks);
+                continue;
+            }
             // Down, it makes for its place in its organization's formation.
             let organization = &self.organizations[unit.organization];
             let p = organization.units.iter().position(|&m| m == u).unwrap_or(0);
@@ -629,11 +759,13 @@ crate::hash::digest!(Ramp {
 
 crate::hash::digest!(Delivery {
     id, template, owner, position, previous, facing, height, target, hq, organization, left,
-    entry, line, flown, mark, ramp, released, held,
+    entry, line, flown, mark, ramp, released, held, plane, plunge, down,
 } skip {
     // Its template's.
     cargo, airlift,
 });
+
+crate::hash::digest!(Plunge { across, sinking });
 
 crate::hash::digest!(Descent {
     height,
@@ -666,6 +798,7 @@ mod tests {
                 speed: 7.0,
                 turn_radius: 18.0,
                 height: 17.0,
+                taxi_height: 1.0,
                 delay: 0.4,
             },
         );
@@ -701,6 +834,161 @@ mod tests {
         assert!(fast > plain, "{fast} against {plain}");
         // Faster, it lets go further back, to drop round the same place.
         assert!(fast_mark < plain_mark);
+    }
+
+    /// [`airfield`] whose plane is a unit of its own, of 500 health,
+    /// that blasts 150 within 5 of where it comes down.
+    fn airfield_with_plane() -> World {
+        let mut w = airfield();
+        let mut plane = truck();
+        plane.template = "plane".into();
+        plane.unpacks = None;
+        let mut blast = rifle(0.0, 150.0);
+        (blast.area, blast.spell) = (5.0, true);
+        let mut fighter = soldier(Vec::new());
+        (fighter.health, fighter.flags) = (500.0, vec![Id::from("air")]);
+        fighter.on_death = Some(blast);
+        let m = &mut plane.members[0];
+        (m.template, m.fighter) = ("plane".into(), Some(fighter));
+        w.rules.raisable.insert(Id::from("plane"), plane);
+        w
+    }
+
+    #[test]
+    fn a_plane_shot_down_falls_on_and_blasts_where_it_comes_down() {
+        let mut w = airfield_with_plane();
+        w.apply(1, deliver([40.0, 20.0])).unwrap();
+        while w.deliveries.is_empty() || w.deliveries[0].ramp.speed() < 6.0 {
+            w.tick();
+        }
+        let u = w.deliveries[0].plane.expect("a plane");
+        assert!(w.units[u].alive() && w.units[u].in_air());
+        assert_eq!(w.units[u].position, w.deliveries[0].position);
+        // No order moves it.
+        let r = w.units[u].organization;
+        assert!(!w.commands(1, r));
+        // An enemy at the crash site and one well away.
+        let near = w
+            .raise(&Id::from("truck"), 2, [1.0, 1.0], [0.0, 1.0])
+            .unwrap();
+        let far = w
+            .raise(&Id::from("truck"), 2, [38.0, 38.0], [0.0, 1.0])
+            .unwrap();
+        let (near, far) = (
+            w.organizations[near].units[0],
+            w.organizations[far].units[0],
+        );
+        let speed = w.deliveries[0].ramp.speed();
+        let kill = crate::combat::Hit::strike(crate::Target::Unit(u), 1000.0, 2, None);
+        w.land(kill);
+        assert!(!w.units[u].alive());
+        // Whatever it carried is lost with it.
+        w.tick();
+        assert_eq!(w.deliveries[0].cargo(), None);
+        assert!(w.bound_for(0).next().is_none());
+        let mut dives = Vec::new();
+        let (started, shot_at) = (w.ticks, w.deliveries[0].position);
+        while w.deliveries[0].down.is_none() {
+            assert!(w.ticks - started < 400, "still falling");
+            // Its remains wait for it to come down.
+            assert!(w.unit_remains(u).is_none());
+            dives.push(w.deliveries[0].dive());
+            w.units[near].position = w.deliveries[0].position;
+            w.tick();
+        }
+        // Diving ever more steeply, on at the speed it was going.
+        assert!(dives.windows(2).all(|d| d[1] > d[0]));
+        let seconds = (w.ticks - started) as f32 * crate::TICK;
+        let on = distance(shot_at, w.units[u].position);
+        assert!(
+            (on - speed * seconds).abs() < speed * 0.1,
+            "{on} in {seconds}s at {speed}"
+        );
+        // Down the 16 from its height to its taxi height in about 4s.
+        assert!((3.0..5.0).contains(&seconds), "{seconds}s");
+        let landed = w.units[u].landed.expect("down");
+        assert_eq!(w.unit_remains(u).expect("down").sinking, landed);
+        assert!(!w.units[u].in_air());
+        // A spell, its full 150 kills the one there outright.
+        assert!(!w.units[near].alive() && w.units[far].health == 100.0);
+    }
+
+    #[test]
+    fn only_what_can_hit_air_engages_and_shoots_at_a_plane_flying_over() {
+        let mut w = airfield_with_plane();
+        // Gunners of player 2's beside its way in, one with a rifle that
+        // can hit aircraft and one with one that can't.
+        let gunner = |air: bool| {
+            let mut gun = rifle(20.0, 100.0);
+            gun.recharge = 0.5;
+            let targets = &mut gun.targets;
+            // Leaving the airfield be.
+            targets.excluded.push(Id::from("building"));
+            match air {
+                true => targets.required.push(Id::from("air")),
+                false => targets.excluded.push(Id::from("air")),
+            }
+            let mut o = truck();
+            (o.template, o.unpacks) = (if air { "flak" } else { "rifles" }.into(), None);
+            (o.control_range, o.operational_range) = (Some(18.0), Some(34.0));
+            o.formations[0].aggressive = true;
+            o.members[0].template = o.template.clone();
+            o.members[0].fighter = Some(soldier(vec![gun]));
+            o
+        };
+        for (air, at) in [(true, [6.0, 33.0]), (false, [6.0, 6.0])] {
+            let o = gunner(air);
+            let template = o.template.clone();
+            w.rules.raisable.insert(template.clone(), o);
+            w.raise(&template, 2, at, [0.0, 1.0]).unwrap();
+        }
+        w.apply(1, deliver([40.0, 20.0])).unwrap();
+        run(&mut w, 2.0);
+        let u = w.deliveries[0].plane.expect("a plane");
+        let r = w.units[u].organization;
+        let fired = |w: &World, gunner: usize| w.units[w.organizations[gunner].units[0]].shot;
+        let mut engaged = [false; 2];
+        for _ in 0..(16.0 / crate::TICK) as u32 {
+            for (g, e) in engaged.iter_mut().enumerate() {
+                *e |= w.organizations[g]
+                    .engaged
+                    .contains(&crate::Piece::Organization(r));
+            }
+            w.tick();
+        }
+        assert_eq!(engaged, [true, false]);
+        assert!(fired(&w, 0).is_some() && fired(&w, 1).is_none());
+        assert!(w.units[u].health < 500.0);
+    }
+
+    #[test]
+    fn men_coming_down_can_be_shot_but_dont_fight_and_the_dead_land_as_remains() {
+        let mut w = airfield();
+        w.apply(1, deliver([40.0, 20.0])).unwrap();
+        while w.units.first().is_none_or(|u| u.descent.is_none()) {
+            w.tick();
+        }
+        let man = 0;
+        w.rules.remains.insert("soldier".into(), [5.0, 3.0]);
+        w.units[man].fighter = Some(soldier(vec![rifle(30.0, 10.0)]));
+        w.raise(&Id::from("truck"), 2, [30.0, 20.0], [0.0, 1.0])
+            .unwrap();
+        w.tick();
+        let unit = &w.units[man];
+        assert!(unit.alive() && unit.target.is_none());
+        let kill = crate::combat::Hit::strike(crate::Target::Unit(man), 1000.0, 2, None);
+        w.land(kill);
+        let died = w.units[man].died.expect("dead");
+        // Dead, he comes down all the same, and lies where he lands.
+        while w.units[man].descent.is_some() {
+            assert!(w.unit_remains(man).is_none());
+            w.tick();
+        }
+        let landed = w.units[man].landed.expect("landed");
+        assert!(landed > died);
+        let rot = (5.0 / crate::TICK).round() as u64;
+        assert_eq!(w.unit_remains(man).expect("down").sinking, landed + rot);
+        assert!(!w.units[man].moving());
     }
 
     fn deliver(to: [f32; 2]) -> Command {
@@ -742,8 +1030,9 @@ mod tests {
         }
         let r = &w.organizations[0];
         assert!(r.arriving && !w.destroyed(0) && !w.lacks_supply(0));
-        assert_eq!((r.position, r.facing, w.centre(0)), (to, line, to));
-        assert!(w.survivors(0).next().is_none());
+        assert_eq!((r.position, r.facing), (to, line));
+        // The first out is on the map, coming down, none yet landed.
+        assert_eq!(w.survivors(0).collect::<Vec<_>>(), [0]);
         assert_eq!(w.ledger(1).upkeep, upkeep);
         let falling = w.units[0].descent.expect("falling");
         assert_eq!(falling.previous, 15.0);
