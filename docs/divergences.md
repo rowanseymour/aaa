@@ -23,7 +23,7 @@ The original's own in-match interface can be chosen instead (see [New options](#
 drawn from its layouts and its nations' skins. It and the view under it are kept at
 the layouts' 4:3 shape, as large as fits the window and centred between black bars,
 where the original stretches them to fill the screen. See
-[widgets.rs](../crates/tgclient/src/widgets.rs).
+[hud/original](../crates/tgclient/src/hud/original/mod.rs).
 
 ## View
 

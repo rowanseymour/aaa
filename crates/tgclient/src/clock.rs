@@ -10,7 +10,6 @@ use tgsim::Action;
 
 use crate::displays::Displays;
 use crate::intent::{Asked, Intent};
-use crate::widgets::Pressable;
 use crate::{Loaded, Orders};
 
 /// What the hotkey files call pausing or unpausing, stepping the speed up
@@ -128,40 +127,9 @@ pub fn disable_buttons(
     }
 }
 
-/// Switches the original interface's pause button on while the match is
-/// paused.
-pub fn select_original_button(
-    state: Res<PauseState>,
-    mut buttons: Query<(Ref<Pauses>, &mut Pressable)>,
-) {
-    for (pauses, mut button) in &mut buttons {
-        if state.is_changed() || pauses.is_added() {
-            button.selected = state.paused;
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn the_original_pause_button_follows_the_pause_and_who_may_pause() {
-        let mut app = App::new();
-        app.init_resource::<PauseState>()
-            .add_systems(Update, (disable_buttons, select_original_button));
-        let button = app.world_mut().spawn((Pauses, Pressable::default())).id();
-        let set = |app: &mut App, paused, usable| {
-            *app.world_mut().resource_mut::<PauseState>() = PauseState { paused, usable };
-            app.update();
-            let world = app.world();
-            let selected = world.get::<Pressable>(button).unwrap().selected;
-            (selected, world.get::<InteractionDisabled>(button).is_some())
-        };
-        assert_eq!(set(&mut app, true, true), (true, false));
-        assert_eq!(set(&mut app, false, false), (false, true));
-        assert_eq!(set(&mut app, true, true), (true, false));
-    }
 
     #[test]
     fn each_key_asks_for_its_pause_or_speed() {

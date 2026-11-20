@@ -66,7 +66,6 @@ mod supply;
 mod technologies;
 mod ui;
 mod waypoints;
-mod widgets;
 
 pub use backdrop::View;
 pub use ui::Palette;
@@ -933,7 +932,10 @@ pub fn run(program: Program) -> ExitCode {
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
         .add_plugins(special_ops::SpecialOpsPlugin)
-        .add_plugins(hud::modern::ModernHudPlugin)
+        .add_plugins((
+            hud::modern::ModernHudPlugin,
+            hud::original::OriginalHudPlugin,
+        ))
         .add_plugins(music::MusicPlugin)
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
@@ -1010,7 +1012,6 @@ pub fn run(program: Program) -> ExitCode {
                     supply::setup,
                 )
                     .in_set(hud::Setup),
-                (widgets::spawn, widgets::spawn_overlay).run_if(hud::playing(hud::Hud::Original)),
                 messages::spawn,
                 waypoints::load,
                 console::start_scripts,
@@ -1025,18 +1026,6 @@ pub fn run(program: Program) -> ExitCode {
                 keys::mark.run_if(resource_exists_and_changed::<keys::Bindings>),
             )
                 .chain()
-                .run_if(in_state(Screen::Match)),
-        )
-        .add_systems(
-            PostUpdate,
-            (
-                widgets::match_msaa,
-                (widgets::fit_view, widgets::scale_layout)
-                    .chain()
-                    .before(bevy::camera::CameraUpdateSystems)
-                    .before(bevy::ui::UiSystems::Prepare),
-            )
-                .run_if(hud::playing(hud::Hud::Original))
                 .run_if(in_state(Screen::Match)),
         )
         .add_plugins((HoldFirstTick, InTouch))
@@ -1066,9 +1055,6 @@ pub fn run(program: Program) -> ExitCode {
                 (
                     clock::follow.run_if(resource_exists::<Orders>),
                     clock::disable_buttons,
-                    (clock::select_original_button, widgets::show_pressables)
-                        .chain()
-                        .run_if(hud::playing(hud::Hud::Original)),
                 )
                     .chain(),
                 (
@@ -1098,29 +1084,14 @@ pub fn run(program: Program) -> ExitCode {
                     actions::fill_slots,
                     actions::hover,
                     actions::tell,
-                    widgets::show_grid.run_if(hud::playing(hud::Hud::Original)),
-                    widgets::show_tip.run_if(hud::playing(hud::Hud::Original)),
                 )
                     .chain(),
                 (
                     object_display::choose,
-                    widgets::lay_out_object.run_if(hud::playing(hud::Hud::Original)),
-                    (
-                        object_display::refresh,
-                        object_display::portray,
-                        (
-                            widgets::fill_object_bars,
-                            widgets::object_economy,
-                            widgets::portray_object.after(object_display::portray),
-                        )
-                            .run_if(hud::playing(hud::Hud::Original)),
-                    ),
+                    (object_display::refresh, object_display::portray),
                 )
                     .chain(),
                 resource_bar::show.after(actions::hover),
-                widgets::slide_bars
-                    .after(resource_bar::show)
-                    .run_if(hud::playing(hud::Hud::Original)),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
                 chat::keys
@@ -2957,16 +2928,32 @@ struct UiScaleSetting(f32);
 /// How much of the window's height the bottom of the screen may take.
 const UI_HEIGHT_SHARE: f32 = 1.0 / 3.0;
 
-/// Sets [`UiScale`] from [`UiScaleSetting`], shrunk until the object
+/// Sets [`UiScale`] from [`UiScaleSetting`], shrunk until our object
 /// display, centred, clears the minimap and action grid either side of it, and
-/// they take no more than [`UI_HEIGHT_SHARE`] of the window's height.
+/// they take no more than [`UI_HEIGHT_SHARE`] of the window's height. The
+/// original's interface scales its own panels to its layouts' shape, so a
+/// match played with it takes the setting as it is.
 fn fit_ui(
     setting: Res<UiScaleSetting>,
     windows: Query<Ref<Window>, With<PrimaryWindow>>,
+    screen: Option<Res<bevy::state::state::State<Screen>>>,
+    hud: Res<hud::InMatch>,
     mut scale: ResMut<UiScale>,
 ) {
     let window = windows.single().ok();
-    if !setting.is_changed() && !window.as_ref().is_some_and(|w| w.is_changed()) {
+    let changed = setting.is_changed()
+        || window.as_ref().is_some_and(|w| w.is_changed())
+        || screen.as_ref().is_some_and(|s| s.is_changed())
+        || hud.is_changed();
+    if !changed {
+        return;
+    }
+    let original = hud.0 == hud::Hud::Original && screen.is_some_and(|s| *s.get() == Screen::Match);
+    if original {
+        let wanted = setting.0.max(*UI_SCALES.start());
+        if scale.0 != wanted {
+            scale.0 = wanted;
+        }
         return;
     }
     // Without a window, a screenshot's image.
