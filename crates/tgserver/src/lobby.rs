@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tgdata::Id;
+use tgmap::FogSetting;
 
 use crate::host::{GREETED, LONGEST_HEARD};
 use crate::presets::Preset;
@@ -40,6 +41,12 @@ pub struct Staging {
     pub sides: Vec<u32>,
     /// How the map's sides are put in teams.
     pub preset: Preset,
+    /// How much of the map the fog of war hides, if not as the game's
+    /// world rule has it.
+    pub fog: Option<FogSetting>,
+    /// The choice of the `Sun` world rule the match is lit by, if not the
+    /// rule's default.
+    pub sun: Option<Id>,
     /// The nation, faction and handicap chosen for each side, by player
     /// id, where one is.
     pub nations: BTreeMap<u32, Id>,
@@ -123,7 +130,10 @@ impl Staging {
             false => guest.host && !self.taken(player),
         };
         match choice {
-            Choice::Map { .. } | Choice::Preset { .. } | Choice::Launch(_) => guest.host,
+            Choice::Map { .. }
+            | Choice::Rules { .. }
+            | Choice::Preset { .. }
+            | Choice::Launch(_) => guest.host,
             Choice::Kick(client) => guest.host && self.guest(*client).is_some_and(|g| !g.host),
             Choice::Nation(player, _) | Choice::Faction(player, _) => side(player),
             // People have no handicap.
@@ -153,8 +163,16 @@ impl Staging {
             None => _ = map.remove(&player),
         };
         match choice {
-            Choice::Map { map, preset, sides } => {
+            Choice::Map {
+                map,
+                preset,
+                sides,
+                fog,
+                sun,
+            } => {
                 self.map = map;
+                self.fog = fog;
+                self.sun = sun;
                 // What was chosen for the old map's sides means nothing on
                 // the new one's, and each machine has yet to say whether it
                 // has the new one.
@@ -166,6 +184,7 @@ impl Staging {
                 }
                 self.arrange(preset, sides);
             }
+            Choice::Rules { fog, sun } => (self.fog, self.sun) = (fog, sun),
             Choice::Preset { preset, sides } => self.arrange(preset, sides),
             Choice::Holds(map, holds) => {
                 let guest = self.guests.iter_mut().find(|g| g.client == client);
@@ -211,11 +230,20 @@ impl Staging {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Choice {
     /// Play `map`, its sides in teams as `preset` has them, `sides` being
-    /// those a person may take.
+    /// those a person may take, under the world rules' `fog` and `sun`
+    /// where they're not the defaults.
     Map {
         map: String,
         preset: Preset,
         sides: Vec<u32>,
+        fog: Option<FogSetting>,
+        sun: Option<Id>,
+    },
+    /// Play the map under the world rules' `fog` and `sun` where they're
+    /// not the defaults, keeping all else that's chosen.
+    Rules {
+        fog: Option<FogSetting>,
+        sun: Option<Id>,
     },
     /// Put the sides in teams as `preset` has them, `sides` being those a
     /// person may then take.
@@ -897,6 +925,8 @@ mod tests {
             map: "hills".into(),
             preset: Preset::Custom,
             sides: vec![2],
+            fog: Some(FogSetting::None),
+            sun: Some(Id::from("sun_night")),
         };
         host.choose(map).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);
@@ -906,6 +936,26 @@ mod tests {
             ("hills", None)
         );
         assert!(staging.nations.is_empty());
+        assert_eq!(
+            (staging.fog, staging.sun.clone()),
+            (Some(FogSetting::None), Some(Id::from("sun_night")))
+        );
+        // Changing only the rules keeps what's chosen for the sides.
+        host.choose(Choice::Nation(2, Some(Id::from("usa"))))
+            .unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        let rules = Choice::Rules {
+            fog: None,
+            sun: Some(Id::from("sun_dusk")),
+        };
+        host.choose(rules).unwrap();
+        turn(&mut lobby, &mut [&mut host, &mut bob]);
+        let staging = bob.staging();
+        assert_eq!(staging.nations, [(2, Id::from("usa"))].into());
+        assert_eq!(
+            (staging.fog, staging.sun.clone()),
+            (None, Some(Id::from("sun_dusk")))
+        );
     }
 
     #[test]
@@ -1006,6 +1056,8 @@ mod tests {
             map: "hills".into(),
             preset: Preset::Custom,
             sides: vec![1, 2],
+            fog: None,
+            sun: None,
         };
         host.choose(map).unwrap();
         turn(&mut lobby, &mut [&mut host, &mut bob]);

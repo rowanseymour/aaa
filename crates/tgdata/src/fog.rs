@@ -37,6 +37,15 @@ impl FogSetting {
             _ => return None,
         })
     }
+
+    /// The id of the world rule's choice that names it.
+    pub fn id(self) -> &'static str {
+        match self {
+            FogSetting::None => "NONE",
+            FogSetting::Explored => "EXPLORED",
+            FogSetting::Full => "FULL",
+        }
+    }
 }
 
 /// A template's [`Sight`], if it sees at all, its ranges corrected as the

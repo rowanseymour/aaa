@@ -12,6 +12,7 @@ use std::collections::VecDeque;
 use std::f32::consts::FRAC_PI_2;
 use std::sync::mpsc::SyncSender;
 
+use bevy::camera::visibility::RenderLayers;
 use bevy::input::ButtonState;
 use bevy::input::keyboard::{Key, KeyboardInput};
 use bevy::prelude::*;
@@ -392,6 +393,11 @@ const VERBS: &[Verb] = &[
         "",
         "lifts the fog of war from the screen, or lays it again",
     ),
+    dev_verb(
+        "sun",
+        "[preset]",
+        "lights the map with a lighting preset's colours at once, by its id, e.g. sun_dusk; effects for the night show or not by the new light only once they next start; without one, lists the presets",
+    ),
     verb(
         "gamespeed",
         "[speed]",
@@ -582,10 +588,47 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                     fog.lifted = !fog.lifted;
                     String::new()
                 }),
+                "sun" => sun(world, &args),
                 _ => unreachable!("{name} isn't handled"),
             }
         }
     }
+}
+
+/// Lights the map with the preset `args` names, or lists the presets.
+fn sun(world: &mut World, args: &[&str]) -> Reply {
+    let game = world.resource::<Loaded>().game.clone();
+    let presets = game.sun_presets();
+    let ids = presets.iter().filter_map(|p| p.ids.as_ref());
+    let [id] = args else {
+        return match args {
+            [] => Ok(ids.map(Id::to_string).collect::<Vec<_>>().join(" ")),
+            _ => Err(usage("sun")),
+        };
+    };
+    let id = Id::from(*id);
+    let Some(preset) = presets.iter().find(|p| p.ids.as_ref() == Some(&id)) else {
+        return Err(format!("no lighting preset \"{id}\""));
+    };
+    // The menu's backdrop has a sun of its own, still up as the match starts.
+    let mut lights = world.query_filtered::<&mut DirectionalLight, (
+        Without<RenderLayers>,
+        Without<crate::backdrop::Backdrop>,
+    )>();
+    if lights.iter(world).next().is_none() {
+        return Err("the map isn't lit yet".into());
+    }
+    world.resource_mut::<Loaded>().map.light(preset);
+    let night = game.night(preset.diffuse);
+    world
+        .resource_mut::<crate::effects::Effects>()
+        .set_night(night);
+    let mut ambient = world.resource::<GlobalAmbientLight>().clone();
+    for mut light in lights.iter_mut(world) {
+        tgrender::color_lights(&mut light, &mut ambient, preset.diffuse, preset.ambient);
+    }
+    world.insert_resource(ambient);
+    Ok(String::new())
 }
 
 fn usage(name: &str) -> String {

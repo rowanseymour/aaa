@@ -44,6 +44,7 @@ mod supply;
 mod terrain;
 mod views;
 pub mod widgets;
+mod world_rules;
 
 pub use audio::{
     AnimationAudio, Audio, AudioCategory, AudioControl, AudioPriority, AudioWho, AudioWorld, Cue,
@@ -92,6 +93,7 @@ pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
 };
 pub use views::{Animation, AnimationKind, Footing, Portrait, View};
+pub use world_rules::{ChoiceRule, RuleChoice};
 
 use std::any::Any;
 use std::borrow::Borrow;

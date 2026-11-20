@@ -274,6 +274,19 @@ impl Map {
         )
     }
 
+    /// Lights the map with `preset`'s colours at once, keeping its sun's
+    /// direction and dimmer: any change of colour it was part-way through
+    /// is dropped.
+    pub fn light(&mut self, preset: &tgdata::defs::Sun) {
+        let sun = &mut self.sun;
+        (sun.diffuse, sun.ambient, sun.specular) =
+            (preset.diffuse, preset.ambient, preset.specular);
+        sun.target_diffuse = preset.diffuse;
+        sun.target_ambient = preset.ambient;
+        sun.target_specular = preset.specular;
+        sun.color_fade_time = 0.0;
+    }
+
     /// Regroups the map's sides into `teams`, each a list of player ids, for
     /// a match: sides on a team are allies, at war with the other teams, and
     /// sides on none leave the match with everything they own. Independent

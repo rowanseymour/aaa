@@ -53,7 +53,7 @@ impl Plugin for BackdropPlugin {
 
 /// On everything the backdrop spawns.
 #[derive(Component, Clone)]
-struct Backdrop;
+pub(crate) struct Backdrop;
 
 /// The map being loaded and its land built, until it's spawned.
 #[derive(Resource)]

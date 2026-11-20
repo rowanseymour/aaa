@@ -59,6 +59,7 @@ use tgserver::presets;
 mod remote;
 mod resource_bar;
 mod saved;
+mod scenario;
 mod selection;
 mod sound;
 mod special_ops;
@@ -993,6 +994,7 @@ pub fn run(program: Program) -> ExitCode {
             backdrop::BackdropPlugin,
             options::OptionsPlugin,
             lobby::LobbyPlugin,
+            scenario::ScenarioPlugin,
             pause::PausePlugin,
             displays::DisplaysPlugin,
             technologies::TechnologyPlugin,
