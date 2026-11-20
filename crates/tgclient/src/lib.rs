@@ -2342,15 +2342,7 @@ struct Pointer<'w, 's> {
             &'static RtsCamera,
         ),
     >,
-    grid: Query<
-        'w,
-        's,
-        (
-            &'static RelativeCursorPosition,
-            &'static InheritedVisibility,
-        ),
-        With<actions::Blocks>,
-    >,
+    panels: actions::Panels<'w, 's>,
     minimap: Res<'w, minimap::Minimap>,
     views: Query<'w, 's, &'static RelativeCursorPosition, With<minimap::MinimapView>>,
 }
@@ -2372,7 +2364,7 @@ impl Pointing {
 
 impl Pointer<'_, '_> {
     fn at(&self, ground: &Ground) -> Option<Pointing> {
-        if actions::over_grid(&self.grid) {
+        if self.panels.under_cursor() {
             return None;
         }
         match self.minimap.spot(&self.views) {
@@ -2445,7 +2437,7 @@ fn focus(
     banners: Query<banners::Pointed<banners::Banner>>,
     hq_banners: Query<banners::Pointed<banners::HqBanner>>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
-    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
+    panels: actions::Panels,
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     scenery: Res<banners::Scenery>,
@@ -2461,7 +2453,7 @@ fn focus(
         .and_then(Window::cursor_position)
         .zip(cameras.single().ok())
         .is_some_and(|(at, (c, ..))| c.logical_viewport_rect().is_some_and(|r| !r.contains(at)));
-    if !minimap::pointer_away(minimap) || actions::over_grid(&grid) || beside {
+    if !minimap::pointer_away(minimap) || panels.under_cursor() || beside {
         focus.set_if_neq(Focus::Nothing);
         return;
     }
@@ -2513,7 +2505,7 @@ fn select(
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform, &RtsCamera)>,
     minimap: Query<&RelativeCursorPosition, With<minimap::MinimapView>>,
-    grid: Query<(&RelativeCursorPosition, &InheritedVisibility), With<actions::Blocks>>,
+    panels: actions::Panels,
     (loaded, drawn): (Res<Loaded>, Res<Drawn>),
     local: Res<Local>,
     focus: Res<Focus>,
@@ -2533,7 +2525,7 @@ fn select(
     let cursor = at.map(|at| view.map_or(at, |v| at.clamp(v.min, v.max)));
     if buttons.just_pressed(MouseButton::Left)
         && minimap::pointer_away(minimap)
-        && actions::pointer_away(grid)
+        && actions::pointer_away(panels)
         && at.zip(view).is_none_or(|(at, v)| v.contains(at))
     {
         *start = cursor;
