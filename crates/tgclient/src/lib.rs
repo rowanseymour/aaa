@@ -12,7 +12,7 @@
 //! building packs up. Right-click the ground to send the selection there, keeping its
 //! organizations' places relative to each other and stopping to fight enemies on
 //! the way. The number keys pick the selection's formation, in the order each organization's
-//! layout lists them, and the buttons in the corner give the selection the
+//! layout lists them, as the [`formations`] buttons beside the display do, and the buttons in the corner give the selection the
 //! orders in [`actions`]. Clicking the minimap moves the camera there, or
 //! gives an aimed order there, and the key left of 1 opens a console for
 //! script commands. Units and buildings make their sounds as they're
@@ -37,6 +37,7 @@ mod drive;
 mod effects;
 mod fields;
 mod fog;
+mod formations;
 mod ghost;
 mod hud;
 mod intent;
@@ -963,6 +964,8 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(Time::<Fixed>::from_seconds(TICK.into()))
         .add_message::<intent::Intent>()
         .add_observer(intent::send)
+        .add_observer(formations::on_press)
+        .add_observer(formations::on_activate)
         .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
         .add_message::<messages::Failed>()
@@ -978,6 +981,7 @@ pub fn run(program: Program) -> ExitCode {
         .init_resource::<clock::PauseState>()
         .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
+        .init_resource::<formations::Formations>()
         .insert_resource(Side(side))
         .insert_resource(Nickname(name))
         .insert_resource(Seed(seed))
@@ -1095,6 +1099,13 @@ pub fn run(program: Program) -> ExitCode {
                 (
                     object_display::choose,
                     (object_display::refresh, object_display::portray),
+                )
+                    .chain(),
+                (
+                    formations::let_go,
+                    formations::light,
+                    formations::press.after(keys::send),
+                    formations::show,
                 )
                     .chain(),
                 resource_bar::show.after(actions::hover),

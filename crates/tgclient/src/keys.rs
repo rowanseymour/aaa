@@ -393,7 +393,16 @@ pub fn load(
     let mut widgets = std::collections::HashSet::new();
     fn named(widget: &tgdata::widgets::Widget, out: &mut std::collections::HashSet<String>) {
         out.insert(widget.name.to_ascii_lowercase());
-        widget.children.iter().for_each(|c| named(c, out));
+        // The hotkey files name a widget within a display after the
+        // display, as `CompanyFormationButtons` for the company display's
+        // `FormationButtons`.
+        let display = widget.name.strip_suffix("Display");
+        for child in &widget.children {
+            if let Some(display) = display {
+                out.insert(format!("{display}{}", child.name).to_ascii_lowercase());
+            }
+            named(child, out);
+        }
     }
     game.game_widgets()
         .iter()

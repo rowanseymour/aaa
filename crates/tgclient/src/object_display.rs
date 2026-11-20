@@ -285,6 +285,8 @@ pub struct Looks {
     /// The properties an organization in each formation holds, by the
     /// formation's id.
     pub(crate) formations: HashMap<Id, Vec<Id>>,
+    /// How each formation shows on its button, by its id.
+    pub(crate) formation_looks: Arc<HashMap<Id, tgdata::FormationLook>>,
     /// Each technology's research button icon, by id, for what's being
     /// researched.
     pub(crate) technologies: HashMap<Id, String>,
@@ -378,6 +380,7 @@ pub fn setup(
         map: loaded.map.strings.clone(),
         properties,
         formations,
+        formation_looks: game.formation_looks(),
         technologies: (technologies.iter())
             .filter_map(|(id, t)| Some((id.clone(), t.icon.clone()?)))
             .collect(),
