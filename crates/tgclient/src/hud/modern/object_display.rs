@@ -721,6 +721,10 @@ impl Ui<'_> {
             Actor::Organization(r) => self.organization(commands, root, r),
             Actor::Building(b, _) => {
                 self.structure(commands, root, b);
+                // An HQ unpacked from a regiment shows the regiment's banner.
+                if let Some(r) = self.sim.buildings[b].unpacked_from {
+                    self.flag(commands, root, r);
+                }
                 // Its places show what it's been asked for.
                 self.slots(commands, root, Some(b));
                 self.status(commands, root, Status::Building(b));
@@ -803,33 +807,39 @@ impl Ui<'_> {
                     });
             });
         }
-        if !lone(self.sim, r) {
-            commands.entity(root).with_children(|display| {
-                display
-                    .spawn((
-                        framed(at(366.0, 44.0, 63.0, 77.0)),
-                        says(Says::Organization(r)),
-                    ))
-                    .with_children(|card| {
-                        self.efficiency(card, at(0.0, 6.0, 63.0, 2.0), r);
-                        self.banner(
-                            card,
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: px(6.0 * SCALE),
-                                top: px(12.0 * SCALE),
-                                width: px(51.0 * SCALE),
-                                height: px(51.0 * SCALE),
-                                ..default()
-                            },
-                            r,
-                        );
-                        morale(card, at(0.0, 69.0, 63.0, 2.0), r);
-                    });
-            });
-        }
+        // A lone thing has this display only as an HQ, which still shows
+        // its banner.
+        self.flag(commands, root, r);
         self.slots(commands, root, None);
         self.status(commands, root, Status::Organization(r));
+    }
+
+    /// The organization at `r`'s banner, between its efficiency and its
+    /// morale.
+    fn flag(&mut self, commands: &mut Commands, root: Entity, r: usize) {
+        commands.entity(root).with_children(|display| {
+            display
+                .spawn((
+                    framed(at(366.0, 44.0, 63.0, 77.0)),
+                    says(Says::Organization(r)),
+                ))
+                .with_children(|card| {
+                    self.efficiency(card, at(0.0, 6.0, 63.0, 2.0), r);
+                    self.banner(
+                        card,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(6.0 * SCALE),
+                            top: px(12.0 * SCALE),
+                            width: px(51.0 * SCALE),
+                            height: px(51.0 * SCALE),
+                            ..default()
+                        },
+                        r,
+                    );
+                    morale(card, at(0.0, 69.0, 63.0, 2.0), r);
+                });
+        });
     }
 
     /// The group display: a card per organization.

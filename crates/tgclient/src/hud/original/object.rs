@@ -1055,6 +1055,10 @@ impl Draw<'_, '_> {
             Actor::Organization(r) => self.organization(r),
             Actor::Building(b, _) => {
                 self.structure(b);
+                // An HQ unpacked from a regiment shows the regiment's banner.
+                if let Some(r) = self.sim.buildings[b].unpacked_from {
+                    self.flag(r);
+                }
                 self.places(Some(b));
                 self.status(Status::Building(b));
             }
@@ -1072,9 +1076,9 @@ impl Draw<'_, '_> {
         if !lone && self.detail.slots.is_empty() {
             self.units(r, captain);
         }
-        if !lone {
-            self.flag(r);
-        }
+        // A lone thing has this display only as an HQ, which still shows
+        // its banner.
+        self.flag(r);
         self.places(None);
         self.status(Status::Organization(r));
     }
