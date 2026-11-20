@@ -2176,6 +2176,9 @@ mod tests {
             texture: Some("UI/Game/ObjectDisplay/TargetPercentageBar.tga".into()),
             colour: [1.0; 3],
             text: None,
+            font: None,
+            justify: None,
+            tiles: None,
             children: Vec::new(),
         };
         let marker = widget(EFFICIENCY_TARGET, vec![decal], Vec::new());

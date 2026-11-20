@@ -1615,6 +1615,7 @@ pub struct Resource {
     /// What a unit of it costs, for those that can be bought.
     pub purchase_cost: Option<Resources>,
     pub name: Option<String>,
+    pub description: Option<String>,
     /// The glyph it's drawn with.
     pub icon: Option<String>,
 }

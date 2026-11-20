@@ -23,6 +23,12 @@
 //!
 //! A view element's `when` names the states it's drawn in, joined by `+`,
 //! all of which must hold, e.g. `FOCUSED + UNSELECTED`.
+//!
+//! A label (`LabelVE`) names its `font` by the font's `ids` (see
+//! [`GameData::font`]) and how its lines `justify`. A tiled decal
+//! (`DecalVETiled`) fills its bounds from six images: `corners_texture`,
+//! whose quarters are the four corners, the four `*_border_texture`s, each
+//! repeated along its edge, and `center_texture`, repeated over the rest.
 
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -96,6 +102,12 @@ pub struct ViewElement {
     pub colour: [f32; 3],
     /// What a label says: a key into the strings if it starts with `#`.
     pub text: Option<String>,
+    /// A label's font, by its `ids`.
+    pub font: Option<String>,
+    /// How a label's lines line up, e.g. `left`.
+    pub justify: Option<String>,
+    /// A tiled decal's images.
+    pub tiles: Option<Tiles>,
     /// A group's view elements, in the order written.
     pub children: Vec<ViewElement>,
 }
@@ -105,6 +117,17 @@ impl ViewElement {
     pub fn shown(&self, holding: &[&str]) -> bool {
         (self.when.iter()).all(|w| holding.iter().any(|h| w.eq_ignore_ascii_case(h)))
     }
+}
+
+/// The archive paths of a tiled decal's images.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Tiles {
+    pub corners: String,
+    pub left: String,
+    pub right: String,
+    pub top: String,
+    pub bottom: String,
+    pub center: String,
 }
 
 /// The states a widget is in when nothing's been done to it.
@@ -395,7 +418,23 @@ fn view_element(block: &tgi::Block, templates: &tgi::Templates) -> Option<ViewEl
             .and_then(|c| colour(&c))
             .unwrap_or([1.0; 3]),
         text: value(block, "text").filter(|t| !t.is_empty()),
+        font: value(block, "font").filter(|f| !f.eq_ignore_ascii_case("null")),
+        justify: value(block, "justify"),
+        tiles: tiles(block),
         children,
+    })
+}
+
+/// A tiled decal's images, if it has them all.
+fn tiles(block: &tgi::Block) -> Option<Tiles> {
+    let path = |key: &str| value(block, key).and_then(|t| ui_path(&t));
+    Some(Tiles {
+        corners: path("corners_texture")?,
+        left: path("left_border_texture")?,
+        right: path("right_border_texture")?,
+        top: path("top_border_texture")?,
+        bottom: path("bottom_border_texture")?,
+        center: path("center_texture")?,
     })
 }
 

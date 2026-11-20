@@ -1008,7 +1008,8 @@ pub fn run(program: Program) -> ExitCode {
             (
                 widgets::remove_ours,
                 widgets::match_msaa,
-                widgets::fit_view
+                (widgets::fit_view, widgets::scale_layout)
+                    .chain()
                     .before(bevy::camera::CameraUpdateSystems)
                     .before(bevy::ui::UiSystems::Prepare),
             )
@@ -1078,8 +1079,10 @@ pub fn run(program: Program) -> ExitCode {
                     actions::back_out,
                     actions::fill_slots,
                     actions::hover,
+                    actions::tell,
                     actions::show,
                     widgets::show_grid.run_if(widgets::original),
+                    widgets::show_tip.run_if(widgets::original),
                 )
                     .chain(),
                 (
@@ -1088,6 +1091,9 @@ pub fn run(program: Program) -> ExitCode {
                 )
                     .chain(),
                 resource_bar::show.after(actions::show),
+                widgets::slide_bars
+                    .after(resource_bar::show)
+                    .run_if(widgets::original),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
                 chat::keys
