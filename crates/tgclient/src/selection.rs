@@ -18,11 +18,22 @@ pub enum Standing {
 }
 
 /// What sort of thing it is, lowest first. Many organizations go together,
-/// but only one building.
+/// and many movers, but only one building.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Kind {
+    /// A unit that moves on its own, in no regiment, such as a supply
+    /// truck.
+    Mover,
     Building,
+    /// A regiment, or what moves and acts as one, such as a packed HQ.
     Organization,
+}
+
+impl Kind {
+    /// Whether more than one of it may be selected at once.
+    fn many(self) -> bool {
+        self != Kind::Building
+    }
 }
 
 /// Something that can be selected.
@@ -57,7 +68,10 @@ pub fn rank(sim: &World, local: Option<u32>, thing: Thing) -> Rank {
     match thing {
         Thing::Organization(r) => (
             standing(sim, local, sim.organizations[r].owner),
-            Kind::Organization,
+            match crate::object_display::lone(sim, r) {
+                true => Kind::Mover,
+                false => Kind::Organization,
+            },
         ),
         Thing::Building(b) => (standing(sim, local, sim.buildings[b].owner), Kind::Building),
     }
@@ -130,7 +144,7 @@ impl Selection<'_> {
             Some(ours) if ours > theirs => {}
             Some(ours) if ours == theirs => {
                 let room = self.organizations.len() < MAX_SELECTED;
-                if theirs.1 == Kind::Organization && room && !self.holds(thing) {
+                if theirs.1.many() && room && !self.holds(thing) {
                     self.take(thing);
                 }
             }
@@ -174,10 +188,12 @@ mod tests {
     use super::*;
 
     /// Organization 0 is the player's, organizations 1 and 2 and building 0 an
-    /// enemy's, building 1 an ally's.
+    /// enemy's, building 1 an ally's; organizations 10 and up are the
+    /// player's movers.
     fn ranked(thing: Thing) -> Rank {
         match thing {
             Thing::Organization(0) => (Standing::Own, Kind::Organization),
+            Thing::Organization(10..) => (Standing::Own, Kind::Mover),
             Thing::Organization(_) => (Standing::Enemy, Kind::Organization),
             Thing::Building(0) => (Standing::Enemy, Kind::Building),
             Thing::Building(_) => (Standing::Ally, Kind::Building),
@@ -210,6 +226,23 @@ mod tests {
         assert_eq!(*s.building, Some(0));
         s.add(ranked, Thing::Building(1));
         assert_eq!(*s.building, Some(0));
+    }
+
+    #[test]
+    fn movers_go_together_but_never_with_regiments() {
+        let (mut organizations, mut building) = (Vec::new(), None);
+        let mut s = Selection {
+            organizations: &mut organizations,
+            building: &mut building,
+        };
+        s.replace(Thing::Organization(10));
+        s.add(ranked, Thing::Organization(11));
+        assert_eq!(*s.organizations, [10, 11]);
+        // A regiment outranks them, and they don't join it.
+        s.add(ranked, Thing::Organization(0));
+        assert_eq!(*s.organizations, [0]);
+        s.add(ranked, Thing::Organization(10));
+        assert_eq!(*s.organizations, [0]);
     }
 
     #[test]
