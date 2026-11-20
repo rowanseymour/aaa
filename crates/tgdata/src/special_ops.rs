@@ -206,9 +206,9 @@ impl Words<'_> {
     }
 }
 
-/// The game's word for an area of `radius`, from the descriptions of
-/// `category`, the first range to hold it, its upper end left out.
-fn area_word(
+/// The game's word for a figure of `category`, such as an area's radius,
+/// from its descriptions: the first range to hold it, its upper end left out.
+pub(crate) fn word_for(
     strings: &crate::Strings,
     descriptions: &[defs::Description],
     category: &str,
@@ -322,7 +322,7 @@ fn operation(
         false => ("AREA", a.area),
     };
     let area = (radius > 0.0)
-        .then(|| area_word(words.strings, descriptions, category, radius))
+        .then(|| word_for(words.strings, descriptions, category, radius))
         .flatten();
     SpecialOperation {
         name,

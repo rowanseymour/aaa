@@ -158,6 +158,17 @@ impl Default for Blow {
     }
 }
 
+/// What `by` adds to the main damage of a weapon `w`, by whether it fires
+/// from afar.
+fn attack_bonus(by: &CombatEffect, w: &Weapon) -> f32 {
+    let reach = if w.projectile.is_some() {
+        by.ranged
+    } else {
+        by.melee
+    };
+    by.attack + reach
+}
+
 /// Health main damage `d` takes from `target`, scaled by `scale` and
 /// `blow`'s efficiency: defence comes off first, then resistance takes its
 /// share, and every hit does at least 1. `ground` is what the terrain
@@ -173,9 +184,14 @@ pub(crate) fn damage(
     let defense = target.defense + blow.defense + ground.iter().map(|e| e.defense).sum::<f32>();
     let defense = if blow.vorpal { 0.0 } else { defense.max(0.0) };
     let resist = resistance(target, ground, &d.kind);
-    // What lowers it takes it no lower than 1, or its own if that's less.
-    let amount = (d.amount + blow.attack).max(d.amount.min(1.0)).max(0.0);
+    let amount = raised(d.amount, blow.attack);
     ((blow.efficiency * amount * scale - defense) * (1.0 - resist)).max(1.0)
+}
+
+/// Main damage of `amount` with `attack` added: what lowers it takes it no
+/// lower than 1, or its own if that's less.
+fn raised(amount: f32, attack: f32) -> f32 {
+    (amount + attack).max(amount.min(1.0)).max(0.0)
 }
 
 /// Health additive damage `d` takes from `target` standing on `ground`:
@@ -261,14 +277,7 @@ impl World {
     pub(crate) fn blow(&self, from: Option<Target>, weapon: Option<&Weapon>, to: Target) -> Blow {
         let by = from.map(|f| self.effect(f)).unwrap_or_default();
         let attack = match weapon {
-            Some(w) if from.is_some() => {
-                let reach = if w.projectile.is_some() {
-                    by.ranged
-                } else {
-                    by.melee
-                };
-                by.attack + reach
-            }
+            Some(w) if from.is_some() => attack_bonus(&by, w),
             _ => 0.0,
         };
         let spell = weapon.is_some_and(|w| w.spell);
@@ -278,6 +287,27 @@ impl World {
             defense: self.effect(to).defense,
             vorpal: weapon.is_some_and(|w| w.vorpal),
         }
+    }
+
+    /// `t`'s weapons, in the order its template gives them.
+    pub fn weapons(&self, t: Target) -> &[Weapon] {
+        let fighter = match t {
+            Target::Unit(u) => self.units[u].fighter.as_ref(),
+            Target::Building(b) => Some(&self.buildings[b].fighter),
+        };
+        fighter.map_or(&[], |f| &f.weapons)
+    }
+
+    /// The main damage of `t`'s weapon `i` as it stands now, with what
+    /// `t`'s properties add to each hit, and the weapon's own.
+    pub fn attack(&self, t: Target, i: usize) -> Option<(f32, f32)> {
+        let weapon = self.weapons(t).get(i)?;
+        let bonus = attack_bonus(&self.effect(t), weapon);
+        let hits = weapon.main_damage().map(|d| d.amount);
+        let (now, plain) = hits.fold((0.0, 0.0), |(now, plain), amount| {
+            (now + raised(amount, bonus), plain + amount)
+        });
+        Some((now, plain))
     }
 
     /// What `t`'s properties multiply its weapons' rate of fire by.
@@ -1392,6 +1422,29 @@ mod tests {
         let b = Target::Building(0);
         assert_eq!(w.blow(Some(Target::Unit(0)), None, b).defense, 3.0);
         assert_eq!(w.defense(b), Some((3.0, 0.0)));
+    }
+
+    #[test]
+    fn a_buildings_properties_raise_its_attacks() {
+        let mut w = siege(&[building(9, 2, [10.0, 20.0])]);
+        w.buildings[0].fighter.weapons = vec![rifle(12.0, 20.0)];
+        let figures = |w: &World| w.attack(Target::Building(0), 0);
+        assert_eq!(figures(&w), Some((20.0, 20.0)));
+        assert_eq!(w.attack(Target::Building(0), 1), None);
+        w.rules.kinds.insert("house".into(), kind(&["drilled"]));
+        let drilled = CombatEffect {
+            attack: 2.0,
+            melee: 3.0,
+            ..Default::default()
+        };
+        w.rules.combat_effects.insert("drilled".into(), drilled);
+        // The rifle fires no projectile, so its melee bonus counts.
+        assert_eq!(figures(&w), Some((25.0, 20.0)));
+        // Each hit gets the bonus, as each is dealt.
+        let mut twice = rifle(12.0, 20.0);
+        twice.hits.push(twice.hits[0].clone());
+        w.buildings[0].fighter.weapons = vec![twice];
+        assert_eq!(figures(&w), Some((50.0, 40.0)));
     }
 
     #[test]

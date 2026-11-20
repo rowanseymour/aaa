@@ -229,6 +229,24 @@ pub struct Defends(pub(crate) Target, pub(crate) Option<Color>);
 #[derive(Component, Clone, Copy)]
 pub struct Shield(pub(crate) Target);
 
+/// The figure by a weapon's icon: the main damage of the selected thing's
+/// weapon, by its place among the thing's weapons, as it stands, and the
+/// colour it's in while that's its plain one, the theme's if none.
+#[derive(Component, Clone, Copy)]
+pub struct Strikes(
+    pub(crate) Target,
+    pub(crate) usize,
+    pub(crate) Option<Color>,
+);
+
+/// A weapon's icon and its figure together, which give the weapon's
+/// tooltip.
+#[derive(Component, Clone, Copy)]
+pub struct Armed(pub(crate) Target, pub(crate) usize);
+
+/// The most weapons the display shows of one thing.
+pub(crate) const MOST_WEAPONS: usize = 5;
+
 /// The game's colours for a figure that's above or below its plain one.
 const RAISED: Color = Color::srgb(0.0, 1.0, 0.0);
 const LOWERED: Color = Color::srgb(1.0, 0.0, 0.0);
@@ -757,6 +775,59 @@ pub fn portray(
     }
 }
 
+/// Whether the player sees `of` now, rather than only remembering it.
+fn seen_now(sim: &World, fog: Option<&crate::fog::Fog>, of: Target) -> bool {
+    fog.is_none_or(|f| {
+        f.lifted
+            || match of {
+                Target::Unit(u) => f.shows_organization(sim, sim.units[u].organization),
+                Target::Building(b) => f.building(b) == crate::fog::Look::Shown,
+            }
+    })
+}
+
+fn visible(shown: bool) -> Visibility {
+    match shown {
+        true => Visibility::Inherited,
+        false => Visibility::Hidden,
+    }
+}
+
+/// A weapon's tooltip: its name, its damage now as `figure`, the game's
+/// words for its rate and area, and what kind of weapon it is.
+fn weapon_tip(looks: &Looks, weapon: &tgdata::Weapon, figure: String) -> Vec<String> {
+    let shown = &weapon.shown;
+    let row = |key: &str, value: &Option<String>| {
+        value.as_ref().map(|v| format!("{} {v}", looks.said(key)))
+    };
+    // The glyph for its damage's type has nowhere to go in a tooltip.
+    let damage = looks.said("ability_effect_desc_main_damage_glyph_long|cf");
+    let damage = (!figure.is_empty()).then(|| damage.replace("%lc", "").replacen("%g", &figure, 1));
+    let kinds = [
+        (weapon.bombard, "ui_tooltip_bombard"),
+        (weapon.vorpal, "ui_tooltip_vorpal"),
+    ];
+    let mut lines = vec![shown.name.clone(), damage];
+    lines.push(row("ui_tooltip_item_title_recharge_rate", &shown.rate));
+    lines.push(row("ui_tooltip_item_title_area", &shown.area));
+    lines.extend(
+        kinds
+            .iter()
+            .filter(|(is, _)| *is)
+            .map(|(_, key)| Some(looks.said(key))),
+    );
+    lines
+        .into_iter()
+        .flatten()
+        .filter(|l| !l.is_empty())
+        .collect()
+}
+
+/// What a weapon's figure isn't, among the display's other words.
+type OtherFigure = (Without<Status>, Without<Defends>);
+/// What a weapon isn't, among the display's other tooltips.
+type OtherTip = (Without<Says>, Without<Shield>);
+
 /// Keeps the display's bars, pictures, tooltips and status up to date.
 #[allow(clippy::too_many_arguments)]
 pub fn refresh(
@@ -772,7 +843,9 @@ pub fn refresh(
     mut pictures: Query<(&UnitPicture, &mut Shade)>,
     mut statuses: Query<(&Status, &mut Text)>,
     mut defenses: Query<(&Defends, &mut Text, &mut TextColor), Without<Status>>,
-    mut shields: Query<(&Shield, &mut Hint, &Hovered), Without<Says>>,
+    mut shields: Query<(&Shield, &mut Hint, &Hovered, &mut Visibility), Without<Says>>,
+    mut strikes: Query<(&Strikes, &mut Text, &mut TextColor), OtherFigure>,
+    mut armed: Query<(&Armed, &mut Hint, &Hovered, &mut Visibility), OtherTip>,
     theme: Res<ui::Theme>,
 ) {
     let sim = &sim.0;
@@ -808,24 +881,61 @@ pub fn refresh(
         // Adding nothing keeps what rounds up to nothing from reading "-0".
         (format!("{:.0}", now.round() + 0.0), now.partial_cmp(&plain))
     };
+    let tint = |against: Option<std::cmp::Ordering>, plain: Option<Color>| match against {
+        Some(std::cmp::Ordering::Greater) => RAISED,
+        Some(std::cmp::Ordering::Less) => LOWERED,
+        _ => plain.unwrap_or_else(|| theme.ink(Ink::Body)),
+    };
     for (of, mut text, mut colour) in &mut defenses {
         let (figure, against) = defense(of.0);
-        let tint = match against {
-            Some(std::cmp::Ordering::Greater) => RAISED,
-            Some(std::cmp::Ordering::Less) => LOWERED,
-            _ => of.1.unwrap_or_else(|| theme.ink(Ink::Body)),
-        };
+        let tint = tint(against, of.1);
         if text.0 != figure {
             text.0 = figure;
         }
         colour.set_if_neq(TextColor(tint));
     }
-    for (of, mut hint, _) in shields.iter_mut().filter(|(.., on)| on.get()) {
+    // Neither shows for a thing only remembered.
+    let seen = |of: Target| seen_now(sim, fog.as_deref(), of);
+    for (of, mut hint, on, mut shown) in &mut shields {
+        shown.set_if_neq(visible(seen(of.0)));
+        if !on.get() {
+            continue;
+        }
         let title = looks.said("ui_tooltip_defense_value");
         let explains = looks.said("template_game_DefenseValues_ToolTip");
         let mut words = vec![title, defense(of.0).0, explains];
         words.retain(|line| !line.is_empty());
         let words = words.join("\n");
+        if hint.0 != words {
+            hint.0 = words;
+        }
+    }
+    // A weapon whose plain main damage is nothing shows no figure.
+    let attack = |of: Target, i: usize| {
+        let (now, plain) = sim.attack(of, i)?;
+        let figure = format!("{:.0}", now.round() + 0.0);
+        let figure = if plain == 0.0 { String::new() } else { figure };
+        Some((figure, now.partial_cmp(&plain)))
+    };
+    for (of, mut text, mut colour) in &mut strikes {
+        let Some((figure, against)) = attack(of.0, of.1) else {
+            continue;
+        };
+        if text.0 != figure {
+            text.0 = figure;
+        }
+        colour.set_if_neq(TextColor(tint(against, of.2)));
+    }
+    for (of, mut hint, on, mut shown) in &mut armed {
+        shown.set_if_neq(visible(seen(of.0)));
+        if !on.get() {
+            continue;
+        }
+        let (Some(weapon), Some((figure, _))) = (sim.weapons(of.0).get(of.1), attack(of.0, of.1))
+        else {
+            continue;
+        };
+        let words = weapon_tip(&looks, weapon, figure).join("\n");
         if hint.0 != words {
             hint.0 = words;
         }

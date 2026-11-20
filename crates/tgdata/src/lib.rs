@@ -51,7 +51,7 @@ pub use audio::{
 };
 pub use combat::{
     AimHeights, Body, Choice, Damage, Does, Fighter, Flight, FlightKind, PropertyTypes, Ratings,
-    Repair, Shape, Targets, Turret, Weapon, WeaponHit,
+    Repair, Shape, Targets, Turret, Weapon, WeaponHit, WeaponShown,
 };
 pub use combat_value::{CombatAbility, CombatProfile, CombatValueRules};
 pub use economy::{

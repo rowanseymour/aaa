@@ -92,6 +92,11 @@ pub struct EconomyLine(Vec<(Id, String)>);
 /// the figure beside it.
 const DEFENSE: [f32; 4] = [196.0, 46.0, 16.0, 16.0];
 
+/// The game's layout's place for a lone thing's first weapon: its icon,
+/// with the figure beside it, and how far down each next one goes.
+const WEAPON: [f32; 4] = [144.0, 46.0, 16.0, 16.0];
+const WEAPON_ROW: f32 = 21.0;
+
 /// The game's layout's box for what a lone thing's template says of it,
 /// and how far in its words start.
 const DESCRIPTION: [f32; 4] = [244.0, 46.0, 239.0, 104.0];
@@ -547,6 +552,7 @@ impl Ui<'_> {
                 let organization = &self.sim.organizations[r];
                 let captain = captain(self.sim, self.looks, r);
                 let unit = self.sim.units[captain].template.clone();
+                self.attacks(commands, root, Target::Unit(captain));
                 self.defense(commands, root, Target::Unit(captain), &unit);
                 let says = [&organization.template, &unit];
                 let says = says.into_iter().find_map(|t| self.described(t));
@@ -556,6 +562,7 @@ impl Ui<'_> {
             Actor::Building(b, ref queue) => {
                 self.structure(commands, root, b);
                 let template = self.sim.buildings[b].template.clone();
+                self.attacks(commands, root, Target::Building(b));
                 self.defense(commands, root, Target::Building(b), &template);
                 // What it's commissioning shows where its description would.
                 match queue.is_empty() {
@@ -604,6 +611,43 @@ impl Ui<'_> {
                     row.spawn(figure);
                 });
         });
+    }
+
+    /// `target`'s weapons, each its icon with its main damage by it, a row
+    /// each.
+    fn attacks(&mut self, commands: &mut Commands, root: Entity, target: Target) {
+        let icons: Vec<Option<String>> = (self.sim.weapons(target).iter())
+            .take(MOST_WEAPONS)
+            .map(|w| w.shown.icon.clone())
+            .collect();
+        for (i, icon) in icons.into_iter().enumerate() {
+            let icon = self.looks.image(self.game, self.images, icon.as_deref());
+            let [left, top, width, height] = WEAPON;
+            let top = top + WEAPON_ROW * i as f32;
+            commands.entity(root).with_children(|display| {
+                let row = Node {
+                    align_items: AlignItems::Center,
+                    column_gap: px(2.0 * SCALE),
+                    ..at(left, top, 50.0, height)
+                };
+                // Filled in by [`refresh`], as its damage changes.
+                let figure = ui::coloured("", Font::Small, Color::WHITE);
+                let figure = (figure, Strikes(target, i, None));
+                let icon_node = Node {
+                    width: px(width * SCALE),
+                    height: px(height * SCALE),
+                    ..default()
+                };
+                display
+                    .spawn((row, Armed(target, i), Hint(String::new())))
+                    .with_children(|row| {
+                        if let Some(icon) = icon {
+                            row.spawn((icon_node, ImageNode::new(icon), Pickable::IGNORE));
+                        }
+                        row.spawn(figure);
+                    });
+            });
+        }
     }
 
     /// The box of what a lone thing's template says of it; none for one
