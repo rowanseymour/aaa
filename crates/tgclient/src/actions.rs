@@ -30,7 +30,7 @@ use crate::intent::{Asked, Intent};
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
 use crate::resource_bar::{Preview, Previewed};
-use crate::ui::Marked;
+use crate::ui::{Hint, Marked};
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 pub const COLUMNS: usize = 4;
@@ -411,6 +411,140 @@ pub(crate) fn repairs(sim: &tgsim::World, r: usize) -> bool {
 fn can(sim: &tgsim::World, player: Option<u32>, give: Give, r: usize) -> bool {
     let command = || give.command(r);
     player.is_some_and(|p| command().is_some_and(|c| sim.check(p, &c).is_ok()))
+}
+
+/// The widget of the button under each regiment's card in the group
+/// display, and, with the regiment's id after it, what pressing it asks
+/// for, e.g. `RetreatRoutButton 12`.
+pub const CARD_BUTTON: &str = "RetreatRoutButton";
+
+/// What the button under a regiment's card gives that regiment alone.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardOrder {
+    Run,
+    Rout,
+}
+
+impl CardOrder {
+    /// The command whose name and help it borrows.
+    fn command(self) -> &'static str {
+        match self {
+            CardOrder::Run => "retreat",
+            CardOrder::Rout => "rout",
+        }
+    }
+}
+
+/// What the button under the card of the organization at `r` gives it:
+/// Run while `player` could have it run, else Rout while it could rout,
+/// so nothing for another's regiment or one routing or Exhausted.
+pub fn card_order(sim: &tgsim::World, player: Option<u32>, r: usize) -> Option<CardOrder> {
+    let player = player?;
+    if crate::object_display::lone(sim, r) {
+        return None;
+    }
+    // Where to doesn't decide whether it may run.
+    let run = tgsim::Command::Run {
+        organization: r,
+        to: [0.0; 2],
+    };
+    if sim.check(player, &run).is_ok() {
+        Some(CardOrder::Run)
+    } else if can(sim, Some(player), Give::Rout, r) {
+        Some(CardOrder::Rout)
+    } else {
+        None
+    }
+}
+
+/// The button under a regiment's card, of either interface, for the
+/// organization at this index.
+#[derive(Component)]
+#[require(Hint = Hint(String::new()), Marked, Hovered)]
+pub struct CardButton(pub usize);
+
+/// The one organization the order being aimed goes to instead of the
+/// selection, as one aimed from its card's button.
+#[derive(Resource, Default)]
+pub struct AimedFor(pub Option<usize>);
+
+/// Shows each [`CardButton`] while it has an order to give, with that
+/// order's name and help as its tooltip.
+pub fn show_card_buttons(
+    sim: Res<Sim>,
+    local: Res<Local>,
+    looks: Res<Looks>,
+    mut buttons: Query<(&CardButton, &mut Visibility, &mut Hint, &mut Marked)>,
+) {
+    for (button, mut shown, mut hint, mut name) in &mut buttons {
+        let order = card_order(&sim.0, local.0, button.0);
+        shown.set_if_neq(match order {
+            Some(_) => Visibility::Inherited,
+            None => Visibility::Hidden,
+        });
+        let Some(order) = order else {
+            continue;
+        };
+        let Some(i) = ORDERS.iter().position(|(id, _)| *id == order.command()) else {
+            continue;
+        };
+        let look = &looks.orders[i].1;
+        // A blank line between its name and what it does.
+        let help = format!("\n{}", look.help.as_deref().unwrap_or_default());
+        if hint.0 != help {
+            hint.0 = help;
+        }
+        name.set_if_neq(Marked::plain(look.name.clone()));
+    }
+}
+
+/// A [`CardButton`] a mouse button other than the left went down on,
+/// whose activation as it's let go gives no order.
+#[derive(Component)]
+pub struct NotLeft;
+
+/// Notes whether it was the left mouse button that went down on a
+/// [`CardButton`].
+pub fn hold_card_button(
+    press: On<PointerPress>,
+    buttons: Query<(), With<CardButton>>,
+    mut commands: Commands,
+) {
+    if buttons.contains(press.entity) {
+        let mut button = commands.entity(press.entity);
+        match press.button {
+            PointerButton::Primary => _ = button.remove::<NotLeft>(),
+            _ => _ = button.insert(NotLeft),
+        }
+    }
+}
+
+/// Forgets a press once the mouse buttons are let go, wherever, so one
+/// that came to nothing doesn't hold back the next activation, such as
+/// the console's.
+pub fn let_go_card_buttons(
+    mouse: Res<ButtonInput<MouseButton>>,
+    held: Query<Entity, With<NotLeft>>,
+    mut commands: Commands,
+) {
+    if !mouse.any_pressed([MouseButton::Right, MouseButton::Middle]) {
+        held.iter()
+            .for_each(|b| _ = commands.entity(b).remove::<NotLeft>());
+    }
+}
+
+/// Asks for a [`CardButton`]'s order as it's activated, unless by a mouse
+/// button other than the left, which gives none.
+pub fn press_card_button(
+    activate: On<Activate>,
+    buttons: Query<(&CardButton, Has<NotLeft>)>,
+    sim: Res<Sim>,
+    mut intents: MessageWriter<Intent>,
+) {
+    if let Ok((button, false)) = buttons.get(activate.entity) {
+        let id = sim.0.organizations[button.0].id;
+        intents.write(Intent(format!("{CARD_BUTTON} {id}")));
+    }
 }
 
 /// What the game's data has that some orders need, which a match can't
@@ -1663,6 +1797,7 @@ pub struct Presser<'w, 's> {
     orders: ResMut<'w, Orders>,
     groups: ResMut<'w, ControlGroups>,
     page: ResMut<'w, Page>,
+    aimed_for: ResMut<'w, AimedFor>,
     time: Res<'w, Time>,
     sounds: ResMut<'w, crate::sound::Sounds>,
     refusal: ResMut<'w, Refusal>,
@@ -1673,6 +1808,31 @@ pub struct Presser<'w, 's> {
 }
 
 impl Presser<'_, '_> {
+    /// Presses the button under the card of the organization with `id`:
+    /// aims Run for it alone, or has it alone rout.
+    fn press_card(&mut self, id: &str) {
+        let Some(player) = self.local.0 else {
+            return;
+        };
+        let sim = &self.sim.0;
+        let Some(r) = (sim.organizations.iter()).position(|o| o.id.to_string() == id) else {
+            return;
+        };
+        match card_order(sim, Some(player), r) {
+            Some(CardOrder::Run) => {
+                *self.page = Page::Aiming(Aim::Run);
+                self.aimed_for.0 = Some(r);
+            }
+            Some(CardOrder::Rout) => {
+                let rout = tgsim::Command::Rout { organization: r };
+                if self.orders.give(sim, player, rout).is_ok() {
+                    crate::acknowledge(sim, &mut self.sounds, &self.time, player, &[r]);
+                }
+            }
+            None => {}
+        }
+    }
+
     /// Presses the button in `slot`: gives its order, aims it, opens or
     /// works the commission menu, or cancels.
     fn press(&mut self, slot: usize) {
@@ -1682,7 +1842,10 @@ impl Presser<'_, '_> {
         let sim = &self.sim.0;
         match entry {
             Entry::Order(i) => match ORDERS[i].1 {
-                Some(Give::Aim(aim)) => *self.page = Page::Aiming(aim),
+                Some(Give::Aim(aim)) => {
+                    *self.page = Page::Aiming(aim);
+                    self.aimed_for.0 = None;
+                }
                 Some(Give::Stop) => {
                     let selected = &self.selected.0;
                     crate::acknowledge(sim, &mut self.sounds, &self.time, player, selected);
@@ -1885,6 +2048,10 @@ pub fn act(mut intents: MessageReader<Intent>, mut presser: Presser) {
     if asked.is_empty() {
         return;
     }
+    let cards = (asked.all()).filter_map(|i| i.0.strip_prefix(CARD_BUTTON)?.strip_prefix(' '));
+    for id in cards {
+        presser.press_card(id);
+    }
     let wanted = |name: &str| asked.wants(name);
     let building = presser.chosen.0.filter(|_| presser.selected.0.is_empty());
     let menu = presser.looks.menu(&presser.sim.0, building);
@@ -2077,7 +2244,12 @@ pub fn aim(
     scenery: Res<crate::banners::Scenery>,
     loaded: Res<Loaded>,
     local: Res<Local>,
-    (selected, chosen, groups): (Res<Selected>, Res<SelectedBuilding>, Res<ControlGroups>),
+    (selected, chosen, groups, aimed_for): (
+        Res<Selected>,
+        Res<SelectedBuilding>,
+        Res<ControlGroups>,
+        Res<AimedFor>,
+    ),
     focus: Res<crate::Focus>,
     (looks, menus): (Res<crate::waypoints::Looks>, Res<Looks>),
     sim: Res<Sim>,
@@ -2168,8 +2340,13 @@ pub fn aim(
         *page = Page::Orders;
         return;
     };
+    // Aimed from a card's button, it's that card's regiment's alone.
+    let given = match aimed_for.0 {
+        Some(r) => vec![r],
+        None => selected.0.clone(),
+    };
     // With Group Behavior on, what each is told goes as one group.
-    if groups.grouping(&selected.0) {
+    if groups.grouping(&given) {
         orders.gather(player);
     }
     if aim == Aim::Repair {
@@ -2187,7 +2364,7 @@ pub fn aim(
             organization,
             piece,
         };
-        let organizations: Vec<(usize, [f32; 2])> = (selected.0.iter())
+        let organizations: Vec<(usize, [f32; 2])> = (given.iter())
             .filter(|&&r| orders.give(&sim.0, player, repair(r)).is_ok())
             .map(|&r| (r, point))
             .collect();
@@ -2202,7 +2379,7 @@ pub fn aim(
             });
             return;
         }
-        crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+        crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
         sent.write(crate::waypoints::Sent {
             to: None,
             aim,
@@ -2227,7 +2404,7 @@ pub fn aim(
             }
             Struck::Ground => {}
             Struck::Enemy(e) => {
-                let (pursuing, rest) = crate::pursue(&sim.0, &mut orders, player, &selected.0, e);
+                let (pursuing, rest) = crate::pursue(&sim.0, &mut orders, player, &given, e);
                 // An enemy none of them can attack is no target either.
                 if pursuing.is_empty() {
                     let about = About::Organization(e);
@@ -2245,7 +2422,7 @@ pub fn aim(
                     (aim, looks.together(aim)),
                     loaded.map.ground.size(),
                 );
-                crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+                crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
                 sent.write(crate::waypoints::Sent {
                     to: None,
                     aim,
@@ -2275,20 +2452,20 @@ pub fn aim(
         return;
     }
     if aim == Aim::Guard
-        && let Some(piece) = guard_at(&sim.0, player, &selected.0, focus)
+        && let Some(piece) = guard_at(&sim.0, player, &given, focus)
     {
         let guard = |organization| tgsim::Command::GuardPiece {
             organization,
             piece,
         };
-        let organizations: Vec<(usize, [f32; 2])> = (selected.0.iter())
+        let organizations: Vec<(usize, [f32; 2])> = (given.iter())
             .filter(|&&r| orders.give(&sim.0, player, guard(r)).is_ok())
             .map(|&r| (r, point))
             .collect();
         if organizations.is_empty() {
             return;
         }
-        crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+        crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
         sent.write(crate::waypoints::Sent {
             to: None,
             aim,
@@ -2299,7 +2476,7 @@ pub fn aim(
     }
     let organizations = match aim {
         Aim::Unpack => {
-            let &[r] = &selected.0[..] else {
+            let &[r] = &given[..] else {
                 return;
             };
             let unpack = tgsim::Command::Unpack {
@@ -2311,18 +2488,18 @@ pub fn aim(
                 return;
             }
             let at = tgsim::unpack_site(point);
-            crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+            crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
             vec![(r, at)]
         }
         // Given on a thing, above.
         Aim::Repair => return,
         Aim::Move | Aim::Attack | Aim::Run | Aim::Guard => {
-            crate::acknowledge(&sim.0, &mut sounds, &time, player, &selected.0);
+            crate::acknowledge(&sim.0, &mut sounds, &time, player, &given);
             crate::send(
                 &sim.0,
                 &mut orders,
                 player,
-                &selected.0,
+                &given,
                 point,
                 (aim, looks.together(aim)),
                 loaded.map.ground.size(),
@@ -2342,6 +2519,56 @@ mod tests {
     use bevy::ecs::system::RunSystemOnce;
 
     use super::*;
+
+    #[test]
+    fn a_cards_button_runs_or_else_routs_the_players_own_regiment() {
+        let mut sim = crate::orders::testing::fresh();
+        assert_eq!(card_order(&sim, Some(1), 0), Some(CardOrder::Run));
+        // Not for another's, or with no player.
+        assert_eq!(card_order(&sim, Some(1), 1), None);
+        assert_eq!(card_order(&sim, None, 0), None);
+        // Fighting with too little morale to run, it routs.
+        let r = &mut sim.organizations[0];
+        (r.morale_max, r.morale, r.speed) = (100.0, 0.5, 2.0);
+        r.engaged.push(tgsim::Piece::Organization(1));
+        assert_eq!(card_order(&sim, Some(1), 0), Some(CardOrder::Rout));
+        // Exhausted, it has neither.
+        sim.organizations[0].mind = tgsim::Mind::Exhausted;
+        assert_eq!(card_order(&sim, Some(1), 0), None);
+    }
+
+    #[test]
+    fn only_a_left_press_on_a_cards_button_asks_for_its_order() {
+        let sim = crate::orders::testing::fresh();
+        let id = sim.organizations[0].id;
+        let mut app = App::new();
+        app.insert_resource(Sim(sim))
+            .init_resource::<ButtonInput<MouseButton>>()
+            .add_message::<Intent>()
+            .add_observer(press_card_button)
+            .add_systems(Update, let_go_card_buttons);
+        let button = app.world_mut().spawn(CardButton(0)).id();
+        let activate = |app: &mut App| {
+            app.world_mut().trigger(Activate { entity: button });
+            app.world_mut().flush();
+            let mut asked = app.world_mut().resource_mut::<Messages<Intent>>();
+            asked.drain().map(|i| i.0).collect::<Vec<_>>()
+        };
+        assert_eq!(activate(&mut app), [format!("{CARD_BUTTON} {id}")]);
+        // A right or middle press gives nothing...
+        app.world_mut().entity_mut(button).insert(NotLeft);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.update();
+        assert!(activate(&mut app).is_empty());
+        // ...and once let go, it doesn't hold back the next activation.
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Right);
+        app.update();
+        assert_eq!(activate(&mut app), [format!("{CARD_BUTTON} {id}")]);
+    }
 
     /// Spawns a node the cursor is on, `stack` deep in the UI.
     fn pointed(world: &mut World, stack: u32, marker: impl Bundle) {
