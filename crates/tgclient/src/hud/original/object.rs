@@ -22,8 +22,8 @@ use super::Pictures;
 use super::lettering::{Letters, Measured, PLAIN, Sliced};
 use crate::banners::Badges;
 use crate::object_display::{
-    self as shown, Actor, Armed, Defends, Detail, EfficiencyTarget, Fill, Flown, Looks, Mode, Pick,
-    Place, Queued, Says, Shield, Showing, Status, Strikes, UnitPicture,
+    self as shown, Actor, Armed, Defends, Detail, Fill, Flown, Looks, Marker, Mode, Pick, Place,
+    Queued, Says, Shield, Showing, Status, Strikes, UnitPicture,
 };
 use crate::ui::{self, Hint, Shade};
 use crate::{Drawn, Leaders, Loaded, Local, Sim};
@@ -1055,6 +1055,10 @@ impl Draw<'_, '_> {
             Actor::Organization(r) => self.organization(r),
             Actor::Building(b, _) => {
                 self.structure(b);
+                // An HQ unpacked from an organization shows its banner.
+                if let Some(r) = self.sim.buildings[b].unpacked_from {
+                    self.flag(r);
+                }
                 self.places(Some(b));
                 self.status(Status::Building(b));
             }
@@ -1072,9 +1076,9 @@ impl Draw<'_, '_> {
         if !lone && self.detail.slots.is_empty() {
             self.units(r, captain);
         }
-        if !lone {
-            self.flag(r);
-        }
+        // A lone thing has this display only as an HQ, which still shows
+        // its banner.
+        self.flag(r);
         self.places(None);
         self.status(Status::Organization(r));
     }
@@ -1137,24 +1141,34 @@ impl Draw<'_, '_> {
         self.says(&parts, "", Says::Organization(r));
         let parts = self.part("AttackEfficiency", &[]);
         self.efficiency(&parts, "", r);
-        let parts = self.part("Morale", &["TargetPercentage"]);
-        self.fill(&parts, "StatusBar", Fill::Morale(r));
-        self.says(&parts, "", Says::Organization(r));
+        let parts = self.part("Morale", &[]);
+        self.marked(&parts, "", Fill::Morale(r), Marker::Breakpoint(r));
     }
 
     /// Fills the efficiency bar at `path` of `parts` for the organization
     /// at `r`, its marker at what that's easing towards.
     fn efficiency(&mut self, parts: &Parts, path: &str, r: usize) {
+        self.marked(parts, path, Fill::Efficiency(r), Marker::Efficiency(r));
+    }
+
+    /// Fills the bar at `path` of `parts` with `fill`, its marker where
+    /// `marker` says.
+    fn marked(&mut self, parts: &Parts, path: &str, fill: Fill, marker: Marker) {
         let join = |name: &str| match path {
             "" => name.to_string(),
             _ => format!("{path}/{name}"),
         };
         let (status, target) = (join("StatusBar"), join("TargetPercentage"));
         let decal = format!("{target}/Decal");
-        self.fill(parts, &status, Fill::Efficiency(r));
-        self.says(parts, path, Says::Organization(r));
-        let (Some(&(bar, at)), Some(&(marker, mark))) = (parts.get(&status), parts.get(&decal))
+        self.fill(parts, &status, fill);
+        self.says(parts, path, Says::Organization(marker.organization()));
+        let (Some(&(bar, at)), Some(&(picture, mark))) = (parts.get(&status), parts.get(&decal))
         else {
+            // A marker that can't be placed isn't shown at all.
+            let commands = self.s.commands_mut();
+            for (_, &(e, _)) in parts.iter().filter(|(p, _)| p.starts_with(&target)) {
+                commands.entity(e).despawn();
+            }
             return;
         };
         // Within the bar, its right edge at the share.
@@ -1167,19 +1181,19 @@ impl Draw<'_, '_> {
             return;
         };
         let commands = self.s.commands_mut();
-        commands.entity(marker).insert((
+        commands.entity(picture).insert((
             Node {
                 position_type: PositionType::Absolute,
                 top: px(0),
-                left: shown::towards(self.sim, r),
+                left: shown::marked(self.sim, marker),
                 width,
                 height,
                 margin: UiRect::left(percent(-w)),
                 ..default()
             },
-            EfficiencyTarget(r),
+            marker,
         ));
-        commands.entity(bar).add_child(marker);
+        commands.entity(bar).add_child(picture);
         for (_, &(e, _)) in parts
             .iter()
             .filter(|(p, _)| p.starts_with(&target) && **p != decal)
@@ -1394,7 +1408,6 @@ impl Draw<'_, '_> {
             "RetreatRoutButton",
             "Health/TargetPercentage",
             "PrimaryHealth/TargetPercentage",
-            "Morale/TargetPercentage",
         ];
         let parts = self.painter.paint(self.s, card, SCREEN_RECT, &skip);
         let captain = shown::captain(self.sim, self.looks, r);
@@ -1436,7 +1449,7 @@ impl Draw<'_, '_> {
                 }
                 self.fill(&parts, "PrimaryHealth/StatusBar", Fill::Unit(captain));
                 self.says(&parts, "PrimaryHealth", Says::Unit(captain));
-                self.fill(&parts, "Morale/StatusBar", Fill::Morale(r));
+                self.marked(&parts, "Morale", Fill::Morale(r), Marker::Breakpoint(r));
                 self.efficiency(&parts, "AttackEfficiency", r);
                 self.health_bars(card, bounds, r);
                 self.card_button(card, bounds, r);
@@ -1520,8 +1533,14 @@ impl Draw<'_, '_> {
             let parts = self
                 .painter
                 .paint(self.s, bar, within, &["TargetPercentage"]);
-            self.fill(&parts, "StatusBar", Fill::Unit(u));
-            self.says(&parts, "", Says::Unit(u));
+            match u {
+                Some(u) => {
+                    self.fill(&parts, "StatusBar", Fill::Unit(u));
+                    self.says(&parts, "", Says::Unit(u));
+                }
+                // Nothing's grown back there yet.
+                None => self.fill(&parts, "StatusBar", Fill::Vacant),
+            }
         }
     }
 }

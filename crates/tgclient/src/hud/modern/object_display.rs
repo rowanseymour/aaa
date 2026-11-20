@@ -405,29 +405,45 @@ impl Ui<'_> {
     /// The organization at `r`'s efficiency bar in `node`, on black, with a
     /// marker at what it's easing towards.
     fn efficiency(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
-        let path = self.looks.efficiency_target.clone();
-        let marker = self.looks.image(self.game, self.images, path.as_deref());
-        let size = (marker.as_ref())
+        let (gauge, fill) = (Gauge::Efficiency, Fill::Efficiency(r));
+        self.marked_bar(parent, node, gauge, fill, Marker::Efficiency(r));
+    }
+
+    /// The organization at `r`'s morale bar in `node`, on black, with a
+    /// marker at its breakpoint.
+    fn morale(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
+        let (gauge, fill) = (Gauge::Morale, Fill::Morale(r));
+        self.marked_bar(parent, node, gauge, fill, Marker::Breakpoint(r));
+    }
+
+    /// A bar on black with `marker` on it.
+    fn marked_bar(
+        &mut self,
+        parent: &mut ChildSpawnerCommands,
+        node: Node,
+        gauge: Gauge,
+        fill: Fill,
+        marker: Marker,
+    ) {
+        let path = self.looks.marker.clone();
+        let picture = self.looks.image(self.game, self.images, path.as_deref());
+        let size = (picture.as_ref())
             .and_then(|h| self.images.get(h))
             .map(Image::size_f32);
-        let mut bar = parent.spawn((
-            meter(node, Gauge::Efficiency),
-            Fill::Efficiency(r),
-            BackgroundColor(Color::BLACK),
-        ));
-        if let (Some(marker), Some(size)) = (marker, size) {
+        let mut bar = parent.spawn((meter(node, gauge), fill, BackgroundColor(Color::BLACK)));
+        if let (Some(picture), Some(size)) = (picture, size) {
             bar.with_child((
                 Node {
                     position_type: PositionType::Absolute,
                     top: px(0),
-                    left: towards(self.sim, r),
+                    left: marked(self.sim, marker),
                     width: px(size.x * SCALE),
                     height: px(size.y * SCALE),
                     margin: UiRect::left(px(-size.x * SCALE)),
                     ..default()
                 },
-                ImageNode::new(marker),
-                EfficiencyTarget(r),
+                ImageNode::new(picture),
+                marker,
                 Pickable::IGNORE,
             ));
         }
@@ -721,6 +737,10 @@ impl Ui<'_> {
             Actor::Organization(r) => self.organization(commands, root, r),
             Actor::Building(b, _) => {
                 self.structure(commands, root, b);
+                // An HQ unpacked from an organization shows its banner.
+                if let Some(r) = self.sim.buildings[b].unpacked_from {
+                    self.flag(commands, root, r);
+                }
                 // Its places show what it's been asked for.
                 self.slots(commands, root, Some(b));
                 self.status(commands, root, Status::Building(b));
@@ -803,33 +823,39 @@ impl Ui<'_> {
                     });
             });
         }
-        if !lone(self.sim, r) {
-            commands.entity(root).with_children(|display| {
-                display
-                    .spawn((
-                        framed(at(366.0, 44.0, 63.0, 77.0)),
-                        says(Says::Organization(r)),
-                    ))
-                    .with_children(|card| {
-                        self.efficiency(card, at(0.0, 6.0, 63.0, 2.0), r);
-                        self.banner(
-                            card,
-                            Node {
-                                position_type: PositionType::Absolute,
-                                left: px(6.0 * SCALE),
-                                top: px(12.0 * SCALE),
-                                width: px(51.0 * SCALE),
-                                height: px(51.0 * SCALE),
-                                ..default()
-                            },
-                            r,
-                        );
-                        morale(card, at(0.0, 69.0, 63.0, 2.0), r);
-                    });
-            });
-        }
+        // A lone thing has this display only as an HQ, which still shows
+        // its banner.
+        self.flag(commands, root, r);
         self.slots(commands, root, None);
         self.status(commands, root, Status::Organization(r));
+    }
+
+    /// The organization at `r`'s banner, between its efficiency and its
+    /// morale.
+    fn flag(&mut self, commands: &mut Commands, root: Entity, r: usize) {
+        commands.entity(root).with_children(|display| {
+            display
+                .spawn((
+                    framed(at(366.0, 44.0, 63.0, 77.0)),
+                    says(Says::Organization(r)),
+                ))
+                .with_children(|card| {
+                    self.efficiency(card, at(0.0, 6.0, 63.0, 2.0), r);
+                    self.banner(
+                        card,
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(6.0 * SCALE),
+                            top: px(12.0 * SCALE),
+                            width: px(51.0 * SCALE),
+                            height: px(51.0 * SCALE),
+                            ..default()
+                        },
+                        r,
+                    );
+                    self.morale(card, at(0.0, 69.0, 63.0, 2.0), r);
+                });
+        });
     }
 
     /// The group display: a card per organization.
@@ -949,11 +975,6 @@ impl Ui<'_> {
 /// A bar in `node`, filled as `fill` says, giving `of`'s tooltip where
 /// it has one of its own rather than leaving that to what it's on.
 /// The organization at `r`'s morale bar.
-fn morale(parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
-    let gauge = meter(node, Gauge::Morale);
-    parent.spawn((gauge, Fill::Morale(r), BackgroundColor(Color::BLACK)));
-}
-
 fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill, of: Option<Says>) {
     let gauge = match fill {
         Fill::Progress(_) => Gauge::Progress,
