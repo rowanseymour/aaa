@@ -158,7 +158,9 @@ fn from_image(size: f32, p: Vec2) -> [f32; 2] {
     [(p.x + p.y - 0.5) * size, (p.x - p.y + 0.5) * size]
 }
 
-pub fn spawn(
+/// Draws the map's ground and loads its icons, for either interface to
+/// place a [`Minimap::view`] of.
+pub fn setup(
     mut commands: Commands,
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
@@ -210,9 +212,13 @@ pub fn spawn(
         icons,
         colours: palette,
     };
+    commands.insert_resource(minimap);
+}
+
+/// Spawns our interface's disc, in the window's lower left corner.
+pub fn spawn(mut commands: Commands, minimap: Res<Minimap>, mut images: ResMut<Assets<Image>>) {
     let backdrop = images.add(silhouette(BACKDROP_TEXELS, backdrop_shape));
     commands.spawn((
-        crate::widgets::Ours,
         Node {
             position_type: PositionType::Absolute,
             left: px(crate::MARGIN),
@@ -246,7 +252,6 @@ pub fn spawn(
             ),
         ],
     ));
-    commands.insert_resource(minimap);
 }
 
 /// The disc's backdrop, drawn as one with the buttons on its rim so where

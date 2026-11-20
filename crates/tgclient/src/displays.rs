@@ -205,8 +205,72 @@ fn reset(mut displays: ResMut<Displays>) {
     *displays = Displays::default();
 }
 
+/// Spawns our interface's buttons on the minimap's rim that open the
+/// panels.
+pub fn spawn_buttons(
+    mut commands: Commands,
+    loaded: Res<crate::Loaded>,
+    bindings: Res<Bindings>,
+    mut icons: ResMut<Icons>,
+    mut images: ResMut<Assets<Image>>,
+    formats: Res<bevy::image::CompressedImageFormatSupport>,
+) {
+    let strings = loaded.game.strings();
+    let said = ui::said(&strings);
+    for panel in PANELS {
+        let (rim, icon, [name, name_or], [help, help_or]) = match panel {
+            Panel::Objectives => (
+                Rim::BottomLeft,
+                icon!("objectives"),
+                [
+                    "control_panel_ButtonObjectives_ToolTip",
+                    "Display Objectives",
+                ],
+                [
+                    "control_panel_ButtonObjectives_tooltip_2",
+                    "Displays a list of mission objectives.",
+                ],
+            ),
+            Panel::Technologies => (
+                Rim::TopRight,
+                icon!("technologies"),
+                [
+                    "control_panel_ButtonTechnology_ToolTip",
+                    "Display Technologies",
+                ],
+                [
+                    "control_panel_ButtonTechnology_tooltip_2",
+                    "Displays a list of all your technologies.",
+                ],
+            ),
+            Panel::MessageLog => (
+                Rim::BottomRight,
+                icon!("message-log"),
+                [
+                    "control_panel_ButtonMessageLog_ToolTip",
+                    "Display Message Log",
+                ],
+                [
+                    "control_panel_ButtonMessageLog_tooltip_2",
+                    "Displays a log of all recent messages.",
+                ],
+            ),
+        };
+        let glyph = icons.get(icon, &mut images, formats.0);
+        spawn_button(
+            &mut commands,
+            &bindings,
+            panel,
+            rim,
+            glyph,
+            said(name, name_or),
+            said(help, help_or),
+        );
+    }
+}
+
 /// Spawns the button at `rim` that opens `panel`, drawn with `glyph`.
-pub fn spawn_button(
+fn spawn_button(
     commands: &mut Commands,
     bindings: &Bindings,
     panel: Panel,
@@ -228,7 +292,6 @@ pub fn spawn_button(
             Panel::MessageLog => "panel.messages",
         }),
         PanelButton { panel, name },
-        crate::widgets::Ours,
         rim.node(),
         Surface::Clear,
         Edge::Border,

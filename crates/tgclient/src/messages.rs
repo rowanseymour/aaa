@@ -18,8 +18,7 @@ use tgserver::protocol::Said;
 use tgsim::{Channel, Notice, Pause, Pausing, Piece, Relation, Seen, Votes, World};
 
 use crate::actions::{self, Aim, fill};
-use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
-use crate::keys::Bindings;
+use crate::displays::{self, Contents, Displays, Panel, Window};
 use crate::sound::Sounds;
 use crate::ui::{Font, Hint, font};
 use crate::{Leaders, Loaded, Local, Orders, Screen, Sim};
@@ -597,38 +596,16 @@ pub fn start(
     commands.insert_resource(MessageLog::new(look));
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
     mut log: ResMut<MessageLog>,
     local: Res<Local>,
     leaders: Res<Leaders>,
-    bindings: Res<Bindings>,
-    (mut icons, mut images, formats): (
-        ResMut<displays::Icons>,
-        ResMut<Assets<Image>>,
-        Res<CompressedImageFormatSupport>,
-    ),
 ) {
     let corner = crate::special_ops::corner(&local, &leaders);
     log.look.name_things(&loaded);
     let said = crate::ui::said(&log.look.strings);
-    displays::spawn_button(
-        &mut commands,
-        &bindings,
-        Panel::MessageLog,
-        Rim::BottomRight,
-        icons.get(displays::icon!("message-log"), &mut images, formats.0),
-        said(
-            "control_panel_ButtonMessageLog_ToolTip",
-            "Display Message Log",
-        ),
-        said(
-            "control_panel_ButtonMessageLog_tooltip_2",
-            "Displays a log of all recent messages.",
-        ),
-    );
     displays::spawn_window(
         &mut commands,
         Window {

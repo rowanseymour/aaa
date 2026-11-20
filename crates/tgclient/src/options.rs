@@ -19,13 +19,13 @@ use serde::{Deserialize, Serialize};
 use tgdata::{GameData, HotkeyConfiguration, Id, SoundSwitches};
 use tgrender::camera::RtsCamera;
 
+use crate::hud::Hud;
 use crate::sound::{Channel, Sounds, Volumes};
 use crate::supply::Border;
 use crate::ui::{
     Card, Chosen, Dropdown, Font, Hint, Ink, Surface, button, called, card, label, layer, padded,
     slider, slug, switch, text, toggle,
 };
-use crate::widgets::Hud;
 use crate::{Nickname, Screen, UI_SCALES, UiScaleSetting, menu};
 use bevy::ecs::component::Mutable;
 

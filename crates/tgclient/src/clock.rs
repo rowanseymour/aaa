@@ -157,7 +157,6 @@ pub fn spawn_button(
     let help = said("control_panel_ButtonPause_tooltip_2", "Pauses the game.");
     let glyph = icons.get(displays::icon!("pause"), &mut images, formats.0);
     commands.spawn((
-        crate::widgets::Ours,
         Blocks,
         Button,
         Click::TOGGLE,

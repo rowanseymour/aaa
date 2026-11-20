@@ -19,7 +19,6 @@ use tgrender::textures;
 use bevy::picking::hover::Hovered;
 use bevy::render::render_resource::TextureFormat;
 use bevy::ui_widgets::Button;
-use serde::{Deserialize, Serialize};
 
 mod bars;
 mod lettering;
@@ -37,36 +36,6 @@ pub use tips::show as show_tip;
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
 use crate::intent::Asks;
 use crate::{Loaded, Local, Screen, Sim};
-
-/// Which interface matches are played with, as chosen in the options.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Hud {
-    /// This project's own, over a view as wide as the window.
-    #[default]
-    Modern,
-    /// The original's, from its layouts, over a view of their 4:3 shape.
-    Original,
-}
-
-/// The [`Hud`] the match under way is played with: one chosen during it
-/// waits for the next.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug)]
-pub struct InMatch(pub Hud);
-
-/// Has the match about to be played take the [`Hud`] chosen.
-pub fn choose(mut commands: Commands, hud: Res<Hud>) {
-    commands.insert_resource(InMatch(*hud));
-}
-
-/// The parts of our interface the original's takes the place of.
-#[derive(Component)]
-pub struct Ours;
-
-/// Whether the match is played with the original's interface.
-pub fn original(hud: Res<InMatch>) -> bool {
-    hud.0 == Hud::Original
-}
 
 /// Spawns the camera the interface is drawn by over the whole window, as
 /// that drawn by the map's camera would be cut to its view by [`fit_view`].
@@ -227,15 +196,6 @@ const ICON_INSET_PRESSED: &str = "action_button_pressed_client_";
 enum Step {
     Into(Bounds),
     By([f32; 2]),
-}
-
-/// Takes away the parts of our interface the original's replaces. They're
-/// spawned all the same, as what they set up besides themselves is needed
-/// either way.
-pub fn remove_ours(mut commands: Commands, ours: Query<Entity, Added<Ours>>) {
-    for part in &ours {
-        commands.entity(part).despawn();
-    }
 }
 
 /// Draws the original's panels, in the skin of the player's nation.

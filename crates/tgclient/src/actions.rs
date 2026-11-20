@@ -820,7 +820,9 @@ pub struct Face {
 #[derive(Resource, Default)]
 pub struct Refusal(Option<(usize, tgsim::Refused)>);
 
-pub fn spawn(
+/// Loads how each command looks and what each building offers, for
+/// either interface.
+pub fn setup(
     mut commands: Commands,
     loaded: Res<Loaded>,
     raising: Res<Raising>,
@@ -1089,11 +1091,14 @@ pub fn spawn(
     commands.init_resource::<Refusal>();
     commands.init_resource::<Said>();
     commands.insert_resource(Page::Orders);
+}
 
+/// Spawns our interface's command grid, in the window's lower right
+/// corner, with the tooltip above it.
+pub fn spawn(mut commands: Commands) {
     commands
         .spawn((
             Panel,
-            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 right: px(crate::MARGIN),

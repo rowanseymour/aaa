@@ -106,19 +106,24 @@ pub struct ShortageIcon;
 
 const SHORTAGE_ICON: &str = "UI/Game/ControlPanel/BleedIcon.png";
 
+/// Takes the game's colour for what's short, and clears any preview, for
+/// either interface.
+pub fn setup(mut commands: Commands, loaded: Res<Loaded>, mut theme: ResMut<Theme>) {
+    theme.short = (loaded.game.invalid_colour()).map(|[r, g, b]| Color::srgb(r, g, b));
+    commands.init_resource::<Preview>();
+    commands.init_resource::<Previewing>();
+}
+
+/// Spawns our interface's bars, in the window's upper right corner.
 pub fn spawn(
     mut commands: Commands,
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
-    mut theme: ResMut<Theme>,
 ) {
     let game = &loaded.game;
-    theme.short = game.invalid_colour().map(|[r, g, b]| Color::srgb(r, g, b));
     let strings = game.strings();
     let said = crate::ui::said(&strings);
-    commands.init_resource::<Preview>();
-    commands.init_resource::<Previewing>();
     let shortage = game
         .read(SHORTAGE_ICON)
         .and_then(|bytes| textures::decode(&bytes, SHORTAGE_ICON, formats.0, true))
@@ -182,7 +187,6 @@ pub fn spawn(
     };
     commands
         .spawn((
-            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 top: px(crate::MARGIN),
