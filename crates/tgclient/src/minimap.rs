@@ -200,9 +200,8 @@ pub fn spawn(
         RenderAssetUsages::default(),
     );
     image.data = Some(base.clone());
-    let image = images.add(image);
-    commands.insert_resource(Minimap {
-        image: image.clone(),
+    let minimap = Minimap {
+        image: images.add(image),
         fogged: base.clone(),
         samples: samples(map.ground.size()),
         fog: Vec::new(),
@@ -210,7 +209,7 @@ pub fn spawn(
         size: map.ground.size(),
         icons,
         colours: palette,
-    });
+    };
     let backdrop = images.add(silhouette(BACKDROP_TEXELS, backdrop_shape));
     commands.spawn((
         crate::widgets::Ours,
@@ -238,9 +237,7 @@ pub fn spawn(
                 Pickable::IGNORE,
             ),
             (
-                MinimapView,
-                RelativeCursorPosition::default(),
-                ImageNode::new(image),
+                minimap.view(),
                 Node {
                     width: percent(100),
                     height: percent(100),
@@ -249,6 +246,7 @@ pub fn spawn(
             ),
         ],
     ));
+    commands.insert_resource(minimap);
 }
 
 /// The disc's backdrop, drawn as one with the buttons on its rim so where
@@ -733,6 +731,16 @@ fn spot(size: f32, over: Option<Vec2>) -> Spot {
 }
 
 impl Minimap {
+    /// The map drawn as it's shown, for a node to show it in.
+    pub fn view(&self) -> impl Bundle {
+        (
+            MinimapView,
+            crate::actions::OfMap,
+            RelativeCursorPosition::default(),
+            ImageNode::new(self.image.clone()),
+        )
+    }
+
     pub fn spot(&self, views: &Query<&RelativeCursorPosition, With<MinimapView>>) -> Spot {
         spot(self.size, over(views))
     }

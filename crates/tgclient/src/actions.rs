@@ -18,7 +18,7 @@ use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::RelativeCursorPosition;
+use bevy::ui::{ComputedStackIndex, RelativeCursorPosition};
 use bevy::ui_widgets::{Activate, Button};
 use tgdata::{GameData, Id};
 use tgmap::Organization;
@@ -730,6 +730,39 @@ impl Quantity {
 #[derive(Component)]
 pub struct Blocks;
 
+/// Part of the interface whose clicks are the map's, even drawn over a
+/// panel that [`Blocks`] them, such as the minimap.
+#[derive(Component)]
+pub struct OfMap;
+
+/// What's under the cursor of what takes clicks from the map and what
+/// gives them back.
+#[derive(SystemParam)]
+pub struct Panels<'w, 's> {
+    blocking: Query<'w, 's, Pointed, With<Blocks>>,
+    giving: Query<'w, 's, Pointed, With<OfMap>>,
+}
+
+type Pointed = (
+    &'static RelativeCursorPosition,
+    &'static InheritedVisibility,
+    &'static ComputedStackIndex,
+);
+
+impl Panels<'_, '_> {
+    /// Whether the cursor is on a panel, with nothing of the map's drawn
+    /// over it there.
+    pub fn under_cursor(&self) -> bool {
+        fn top<F: bevy::ecs::query::QueryFilter>(q: &Query<Pointed, F>) -> Option<u32> {
+            (q.iter())
+                .filter(|(p, shown, _)| shown.get() && p.cursor_over)
+                .map(|(.., stack)| stack.0)
+                .max()
+        }
+        top(&self.blocking) > top(&self.giving)
+    }
+}
+
 impl Looks {
     /// Every icon a button can show.
     pub fn icons(&self) -> impl Iterator<Item = &Handle<Image>> {
@@ -1132,16 +1165,8 @@ pub fn spawn(
 }
 
 /// Whether the cursor is off the grid, so clicks go to the map.
-pub fn pointer_away(
-    grids: Query<(&RelativeCursorPosition, &InheritedVisibility), With<Blocks>>,
-) -> bool {
-    !over_grid(&grids)
-}
-
-pub fn over_grid(
-    grids: &Query<(&RelativeCursorPosition, &InheritedVisibility), With<Blocks>>,
-) -> bool {
-    grids.iter().any(|(p, shown)| shown.get() && p.cursor_over)
+pub fn pointer_away(panels: Panels) -> bool {
+    !panels.under_cursor()
 }
 
 pub fn aiming(page: Res<Page>) -> bool {
@@ -2591,7 +2616,41 @@ pub fn aim(
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::system::RunSystemOnce;
+
     use super::*;
+
+    /// Spawns a node the cursor is on, `stack` deep in the UI.
+    fn pointed(world: &mut World, stack: u32, marker: impl Bundle) {
+        let cursor = RelativeCursorPosition {
+            cursor_over: true,
+            normalized: Some(Vec2::ZERO),
+        };
+        world.spawn((
+            cursor,
+            InheritedVisibility::VISIBLE,
+            ComputedStackIndex(stack),
+            marker,
+        ));
+    }
+
+    fn on_panel(world: &mut World) -> bool {
+        world
+            .run_system_once(|panels: Panels| panels.under_cursor())
+            .unwrap()
+    }
+
+    #[test]
+    fn the_map_over_a_panel_takes_the_click() {
+        let mut world = World::new();
+        assert!(!on_panel(&mut world));
+        pointed(&mut world, 3, Blocks);
+        assert!(on_panel(&mut world));
+        pointed(&mut world, 5, OfMap);
+        assert!(!on_panel(&mut world));
+        pointed(&mut world, 7, Blocks);
+        assert!(on_panel(&mut world));
+    }
 
     const fn at(slot: usize) -> Option<Place> {
         Some(Place { slot, high: false })
