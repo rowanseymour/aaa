@@ -618,6 +618,9 @@ pub struct Looks {
     /// What each template and technology is called, for saying what a
     /// commission needs.
     names: HashMap<Id, String>,
+    /// The file each icon was read from, as its pixels are gone once it's
+    /// first drawn.
+    sources: HashMap<AssetId<Image>, String>,
 }
 
 impl Looks {
@@ -758,6 +761,11 @@ impl Looks {
         looks.filter_map(|look| look.icon.as_ref())
     }
 
+    /// The file `icon` was read from.
+    pub fn source(&self, icon: &Handle<Image>) -> Option<&str> {
+        self.sources.get(&icon.id()).map(String::as_str)
+    }
+
     /// The name of the order that aims `aim`.
     pub fn order(&self, aim: Aim) -> &str {
         let i = ORDERS.iter().position(|(_, g)| *g == Some(Give::Aim(aim)));
@@ -804,9 +812,12 @@ pub fn setup(
 ) {
     let game = &loaded.game;
     let glyphs = glyphs(game, &mut images, formats.0);
+    let mut sources = HashMap::new();
     let mut image = |game: &GameData, path: &str| {
         let image = textures::decode(&game.read(path)?, path, formats.0, true)?;
-        Some(images.add(image))
+        let handle = images.add(image);
+        sources.insert(handle.id(), path.to_string());
+        Some(handle)
     };
     let commands_by_id: HashMap<Id, tgdata::Command> = game
         .commands()
@@ -1058,6 +1069,7 @@ pub fn setup(
         names: (listings.iter().map(|(id, l)| (id.clone(), l.name.clone())))
             .chain((technologies.iter()).map(|(id, t)| (id.clone(), t.name.clone())))
             .collect(),
+        sources,
     });
     commands.init_resource::<Shown>();
     commands.init_resource::<Refusal>();

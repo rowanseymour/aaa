@@ -27,27 +27,32 @@ mod tips;
 
 use lettering::LayoutScale;
 
-use super::{Hud, Setup, playing};
+use super::{Hud, InMatch};
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
 use crate::intent::Asks;
-use crate::{Loaded, Local, Screen, Sim};
+use crate::{Loaded, Local, Sim};
+
+/// While a match is played with the original's interface.
+pub(crate) const DRAWN: InMatch = InMatch(Hud::Original);
 
 pub struct OriginalHudPlugin;
 
 impl Plugin for OriginalHudPlugin {
     fn build(&self, app: &mut App) {
-        let drawn = || playing(Hud::Original);
         app.add_systems(
-            OnEnter(Screen::Match),
+            OnEnter(DRAWN),
             (
                 spawn,
                 spawn_overlay,
-                place_log.after(spawn).after(crate::messages::spawn),
-            )
-                .after(Setup)
-                .before(crate::console::start_scripts)
-                .run_if(drawn()),
+                place_log.after(spawn),
+                grey_icons,
+                crate::object_display::redraw,
+            ),
         )
+        .add_systems(OnExit(DRAWN), leave)
+        .add_systems(OnExit(crate::Screen::Match), |mut commands: Commands| {
+            commands.remove_resource::<Greyed>();
+        })
         .add_systems(
             PostUpdate,
             (
@@ -57,8 +62,7 @@ impl Plugin for OriginalHudPlugin {
                     .before(bevy::camera::CameraUpdateSystems)
                     .before(bevy::ui::UiSystems::Prepare),
             )
-                .run_if(in_state(Screen::Match))
-                .run_if(drawn()),
+                .run_if(in_state(DRAWN)),
         )
         .add_systems(
             Update,
@@ -77,8 +81,7 @@ impl Plugin for OriginalHudPlugin {
                 object::portray.after(crate::object_display::portray),
                 bars::slide.after(crate::resource_bar::show),
             )
-                .run_if(in_state(Screen::Match))
-                .run_if(drawn()),
+                .run_if(in_state(DRAWN)),
         );
     }
 }
@@ -109,6 +112,31 @@ fn place_log(
     }
 }
 
+/// Takes down what [`spawn`] put up, leaving the message log for the
+/// interface put up next to place, and gives the map's view back the whole
+/// window.
+fn leave(
+    mut commands: Commands,
+    frames: Query<Entity, With<Frame>>,
+    logs: Query<Entity, With<crate::messages::LogBox>>,
+    mut cameras: Query<&mut Camera, With<tgrender::camera::RtsCamera>>,
+) {
+    for log in &logs {
+        // Taken out before the frame goes, as it would go with it.
+        commands.entity(log).try_remove::<ChildOf>();
+    }
+    for frame in &frames {
+        commands.entity(frame).try_despawn();
+    }
+    for mut camera in &mut cameras {
+        camera.viewport = None;
+    }
+    commands.remove_resource::<LogAt>();
+    commands.remove_resource::<lettering::Letters>();
+    commands.remove_resource::<object::Layout>();
+    commands.remove_resource::<LayoutScale>();
+}
+
 /// Spawns the camera the interface is drawn by over the whole window, as
 /// that drawn by the map's camera would be cut to its view by [`fit_view`].
 pub fn spawn_overlay(mut commands: Commands) {
@@ -120,7 +148,7 @@ pub fn spawn_overlay(mut commands: Commands) {
             ..default()
         },
         Overlay,
-        DespawnOnExit(Screen::Match),
+        DespawnOnExit(DRAWN),
     ));
 }
 
@@ -284,7 +312,6 @@ pub fn spawn(
     loaded: Res<Loaded>,
     sim: Res<Sim>,
     local: Res<Local>,
-    looks: Res<crate::actions::Looks>,
     bindings: Res<crate::keys::Bindings>,
     mut images: ResMut<Assets<Image>>,
     mut faces: ResMut<Assets<bevy::text::Font>>,
@@ -403,15 +430,6 @@ pub fn spawn(
         (&mut letters, &mut faces),
         (key, short),
     );
-    // Icons keep their pixels only until they're first drawn.
-    let mut greyed = Greyed::default();
-    let images = &mut drawer.pictures.images;
-    for icon in looks.icons() {
-        if let Some(grey) = images.get(icon).and_then(grey) {
-            greyed.0.insert(icon.id(), images.add(grey));
-        }
-    }
-    commands.insert_resource(greyed);
     let buttons = grid.map(|(area, button)| grid_buttons(area, button, &mut drawer.pictures));
     let (drawn, pressables) = (drawer.drawn, drawer.pressables);
     let mut docked = None;
@@ -424,7 +442,6 @@ pub fn spawn(
             },
             Frame,
             Pickable::IGNORE,
-            DespawnOnExit(Screen::Match),
         ))
         .with_children(|screen| {
             for (chain, image) in drawn {
@@ -981,6 +998,34 @@ fn hold(press: On<PointerPress>, mut buttons: Query<&mut GridButton>) {
 #[derive(Resource, Default)]
 pub struct Greyed(HashMap<AssetId<Image>, Handle<Image>>);
 
+/// Makes the [`Greyed`] icons the first time the interface is put up in a
+/// match, from their files, as the icons themselves keep their pixels only
+/// until they're first drawn.
+fn grey_icons(
+    mut commands: Commands,
+    greyed: Option<Res<Greyed>>,
+    loaded: Res<Loaded>,
+    looks: Res<crate::actions::Looks>,
+    formats: Res<CompressedImageFormatSupport>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if greyed.is_some() {
+        return;
+    }
+    let game = &loaded.game;
+    let mut greyed = Greyed::default();
+    for icon in looks.icons() {
+        let Some(path) = looks.source(icon) else {
+            continue;
+        };
+        let decoded = (game.read(path)).and_then(|b| textures::decode(&b, path, formats.0, true));
+        if let Some(grey) = decoded.as_ref().and_then(grey) {
+            greyed.0.insert(icon.id(), images.add(grey));
+        }
+    }
+    commands.insert_resource(greyed);
+}
+
 /// Shows each grid button as its slot holds, in the states the mouse
 /// puts it in.
 #[allow(clippy::type_complexity)]
@@ -1084,6 +1129,36 @@ mod tests {
 
     use super::*;
     use crate::clock::{PauseState, Pauses, disable_buttons};
+
+    #[test]
+    fn leaving_takes_the_frame_down_but_keeps_the_log_and_the_whole_view() {
+        use bevy::state::app::StatesPlugin;
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(crate::Screen::Match)
+            .insert_resource(Hud::Original)
+            .add_systems(OnExit(DRAWN), leave);
+        crate::hud::add_states(&mut app);
+        app.update();
+        let world = app.world_mut();
+        let log = world.spawn(crate::messages::LogBox).id();
+        let frame = world.spawn(Frame).add_child(log).id();
+        let viewport = Some(Viewport::default());
+        let camera = Camera {
+            viewport,
+            ..default()
+        };
+        let map = world
+            .spawn((camera, tgrender::camera::RtsCamera::new(Vec3::ZERO)))
+            .id();
+        *world.resource_mut::<Hud>() = Hud::Modern;
+        app.update();
+        let world = app.world();
+        assert!(world.get_entity(frame).is_err());
+        assert!(world.get_entity(log).is_ok());
+        assert!(world.get::<ChildOf>(log).is_none());
+        assert!(world.get::<Camera>(map).unwrap().viewport.is_none());
+    }
 
     #[test]
     fn the_pause_button_follows_the_pause_and_who_may_pause() {

@@ -9,7 +9,7 @@ use tgrender::textures;
 
 use crate::resource_bar::{Cell, Previewing, stockpile};
 use crate::ui::{Font, Hint, Ink, Surface, backed, label};
-use crate::{Loaded, Local, Screen, Sim};
+use crate::{Loaded, Local, Sim};
 
 const CELL: f32 = 80.0;
 
@@ -113,7 +113,7 @@ pub fn spawn(
             },
             Pickable::IGNORE,
             GlobalZIndex(1),
-            DespawnOnExit(Screen::Match),
+            DespawnOnExit(super::DRAWN),
         ))
         .with_children(|root| {
             root.spawn(Node {
