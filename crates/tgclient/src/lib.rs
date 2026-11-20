@@ -1396,7 +1396,7 @@ fn loading(mut commands: Commands, pending: Res<Pending>, words: Res<StageWords>
                 ..default()
             },
             Surface::Solid,
-            GlobalZIndex(10),
+            GlobalZIndex(ui::layer::PAGE),
         ))
         .id();
     commands.spawn((ChildOf(root), text(pending.title.clone(), Font::Title)));
@@ -1633,6 +1633,7 @@ fn setup_overlays(
         BorderColor::all(OWN),
         BackgroundColor(OWN.with_alpha(0.1)),
         Visibility::Hidden,
+        GlobalZIndex(ui::layer::SELECTING),
         Pickable::IGNORE,
         DespawnOnExit(Screen::Match),
     ));
@@ -3293,8 +3294,7 @@ fn show_health(
             HealthBar,
             node,
             OnMap,
-            // Over the banners.
-            GlobalZIndex(1),
+            GlobalZIndex(ui::layer::HEALTH_BARS),
             ImageNode::new(frame).with_mode(NodeImageMode::Stretch),
             Pickable::IGNORE,
             DespawnOnExit(Screen::Match),

@@ -155,7 +155,7 @@ fn spawn_button(
         rim.node(),
         Surface::Clear,
         Edge::Border,
-        GlobalZIndex(2),
+        GlobalZIndex(crate::ui::layer::HUD_TOP),
         DespawnOnExit(super::DRAWN),
         children![(
             Glyph,

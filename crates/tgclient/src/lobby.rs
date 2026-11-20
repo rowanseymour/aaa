@@ -524,7 +524,7 @@ fn spawn(mut commands: Commands, data: Res<Data>, staged: Option<Res<Staged>>) {
             ..default()
         },
         // Its list opens over the sides.
-        GlobalZIndex(1),
+        GlobalZIndex(crate::ui::layer::RAISED),
     ));
     commands.spawn((
         Slots,

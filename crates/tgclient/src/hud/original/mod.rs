@@ -441,6 +441,7 @@ pub fn spawn(
                 ..default()
             },
             Frame,
+            GlobalZIndex(crate::ui::layer::HUD),
             Pickable::IGNORE,
         ))
         .with_children(|screen| {

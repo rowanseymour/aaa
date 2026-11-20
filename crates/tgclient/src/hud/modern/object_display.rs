@@ -117,7 +117,7 @@ pub fn spawn(mut commands: Commands) {
                 width: px(SIZE.x),
                 ..default()
             }),
-            GlobalZIndex(1),
+            GlobalZIndex(crate::ui::layer::HUD),
         ))
         .id();
     let display = commands
@@ -135,7 +135,7 @@ pub fn spawn(mut commands: Commands) {
                 },
             ),
             Visibility::Hidden,
-            GlobalZIndex(1),
+            GlobalZIndex(crate::ui::layer::HUD),
         ))
         .id();
     commands

@@ -62,7 +62,7 @@ pub fn spawn(mut commands: Commands) {
                 ..default()
             },
             Visibility::Hidden,
-            GlobalZIndex(1),
+            GlobalZIndex(crate::ui::layer::HUD),
             DespawnOnExit(super::DRAWN),
         ))
         .with_children(|root| {
