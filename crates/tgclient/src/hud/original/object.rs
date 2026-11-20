@@ -1329,7 +1329,7 @@ impl Draw<'_, '_> {
             .unwrap_or(0.0);
         // Each card after the last, whatever its kind and so its width.
         let mut left = 0.0;
-        for &r in rs {
+        for r in shown::newest_first(rs) {
             let Some(card) = card_widget(self.display, shown::lone(self.sim, r)) else {
                 continue;
             };

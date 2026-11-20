@@ -141,7 +141,9 @@ pub(crate) enum Mode {
     /// A settlement's, which no AA thing is.
     #[allow(dead_code)]
     Settlement,
-    /// That of several organizations.
+    /// That of several organizations, in the order they were selected.
+    /// Its name is the first's, which has been selected longest, and its
+    /// cards go newest first: see [`newest_first`].
     Group(Vec<usize>),
 }
 
@@ -1366,6 +1368,12 @@ pub(crate) fn numbered(strings: &tgdata::Strings, number: Option<u32>, name: Str
             .replacen("%s", &name, 1),
         None => format!("{} {name}", ordinal(n)),
     }
+}
+
+/// The group display's cards' organizations, left to right: each that
+/// joins the selection goes first, pushing the rest along.
+pub(crate) fn newest_first(rs: &[usize]) -> impl Iterator<Item = usize> + '_ {
+    rs.iter().rev().copied()
 }
 
 /// Whether an organization is a unit on its own, such as a truck.

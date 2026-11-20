@@ -847,7 +847,7 @@ impl Ui<'_> {
             return;
         };
         let mut left = 8.0;
-        for &r in rs {
+        for r in newest_first(rs) {
             let lone = lone(self.sim, r);
             let (Some(size), Some(top)) = (cards.size(lone), cards.top(lone)) else {
                 continue;
