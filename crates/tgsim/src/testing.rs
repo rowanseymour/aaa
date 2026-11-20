@@ -603,6 +603,7 @@ pub(crate) fn logistics(attachments: Option<u32>) -> tgmap::Logistics {
         detached: false,
         shortfall_damage: 0.01,
         attachments,
+        recruit_full: false,
     }
 }
 

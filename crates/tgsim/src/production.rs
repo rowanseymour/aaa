@@ -84,9 +84,9 @@ impl World {
                 organization: r,
             });
             // Those that resupply come out as their leader alone, the
-            // rest to follow.
+            // rest to follow, unless they're recruited whole.
             let used = self.logistics_of(&self.organizations[r].template);
-            if used.is_some_and(|l| l.supply_used) {
+            if used.is_some_and(|l| l.supply_used && !l.recruit_full) {
                 let leader = self.organizations[r].leader.unwrap_or(0);
                 for (p, u) in self.organizations[r].units.clone().into_iter().enumerate() {
                     // Only those resupply can bring.
