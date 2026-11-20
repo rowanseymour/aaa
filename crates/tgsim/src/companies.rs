@@ -175,7 +175,10 @@ impl World {
         // Those that resupply come out as their leader alone, the rest to
         // follow, as from a building's queue.
         let template = &self.organizations[r].template;
-        if self.logistics_of(template).is_some_and(|l| l.supply_used) {
+        if self
+            .logistics_of(template)
+            .is_some_and(|l| l.supply_used && !l.recruit_full)
+        {
             let leader = self.organizations[r].leader.unwrap_or(0);
             for (p, u) in self.organizations[r].units.clone().into_iter().enumerate() {
                 let rate = self.rules.resupply_rates.get(&self.units[u].template);
@@ -306,6 +309,20 @@ pub(crate) mod tests {
     fn a_company_that_isnt_supplied_comes_out_whole() {
         let mut w = village();
         w.rules.logistics.remove(&Id::from("company_pikeman"));
+        w.apply(1, recruit("company_pikeman")).unwrap();
+        let r = &w.organizations[0];
+        assert!(r.units.iter().all(|&u| !w.units[u].awaited));
+    }
+
+    #[test]
+    fn a_company_recruited_full_comes_out_whole() {
+        let mut w = village();
+        let logistics = w
+            .rules
+            .logistics
+            .get_mut(&Id::from("company_pikeman"))
+            .unwrap();
+        logistics.recruit_full = true;
         w.apply(1, recruit("company_pikeman")).unwrap();
         let r = &w.organizations[0];
         assert!(r.units.iter().all(|&u| !w.units[u].awaited));

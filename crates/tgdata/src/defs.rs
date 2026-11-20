@@ -283,6 +283,9 @@ pub struct OrganizationComponent {
     pub slot: Vec<OrganizationSlot>,
     /// Whether it's in or out of supply at all.
     pub supply_used: Option<bool>,
+    /// Whether it's recruited with every member, rather than its leader
+    /// alone.
+    pub recruit_full: Option<bool>,
     /// Whether it can be in supply without an HQ.
     pub in_supply_detached: Option<bool>,
     /// The share of their health its members lose a second out of supply

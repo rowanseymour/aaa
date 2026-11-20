@@ -259,6 +259,9 @@ pub struct Logistics {
     pub shortfall_damage: f32,
     /// For an HQ, how many regiments it takes.
     pub attachments: Option<u32>,
+    /// Whether it's recruited with every member, rather than its leader
+    /// alone to be filled out by resupply.
+    pub recruit_full: bool,
 }
 
 /// The settings that bound every side's economy.
@@ -380,6 +383,7 @@ impl GameData {
                     .hq_component
                     .as_ref()
                     .map(|h| h.max_attachments.unwrap_or(0)),
+                recruit_full: o.recruit_full.unwrap_or(false),
             })
         })
     }
