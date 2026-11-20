@@ -7,8 +7,8 @@ use std::collections::{BTreeMap, HashMap};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
-use tgdata::{Faction, Handicap, Id, Nation};
-use tgmap::{Brief, FogSetting, Player};
+use tgdata::{Faction, Handicap, Id, Nation, RuleValues};
+use tgmap::{Brief, Player};
 use tgrender::textures;
 
 use crate::actions::GLYPH_DIR;
@@ -196,8 +196,8 @@ pub struct Lobby {
     /// The handicap chosen for each side the computer plays, by player id;
     /// the default where none is.
     handicaps: HashMap<u32, Id>,
-    /// The choice of each world rule not at its default, by the rule's id.
-    rules: BTreeMap<Id, Id>,
+    /// What each world rule is set to, by id.
+    rules: RuleValues,
     open: Open,
 }
 
@@ -213,14 +213,18 @@ impl Lobby {
         };
         let mut lobby = Lobby {
             map,
-            brief,
             preset,
             person,
             nations: HashMap::new(),
             factions: HashMap::new(),
             handicaps: HashMap::new(),
-            rules: BTreeMap::new(),
             open: Open::Nothing,
+            // As the map stores them, until the scenario map dialog
+            // changes them.
+            rules: (brief.as_ref())
+                .map(|b| b.rules.values.clone())
+                .unwrap_or_default(),
+            brief,
         };
         lobby.keep_person_playing();
         lobby
@@ -231,8 +235,8 @@ impl Lobby {
         &self.map
     }
 
-    /// The choice of each world rule not at its default, by the rule's id.
-    pub(crate) fn rules(&self) -> &BTreeMap<Id, Id> {
+    /// What each world rule is set to, by id.
+    pub(crate) fn rules(&self) -> &RuleValues {
         &self.rules
     }
 
@@ -284,7 +288,7 @@ impl Lobby {
             self.brief = Brief::load(&data.0, &staging.map);
         }
         self.preset = staging.preset;
-        self.rules = chosen_rules(staging.fog, staging.sun.clone());
+        self.rules.clone_from(&staging.rules);
         self.person = staging.guest(me).and_then(|g| g.side);
         self.nations = staging.nations.clone().into_iter().collect();
         self.factions = staging.factions.clone().into_iter().collect();
@@ -303,8 +307,7 @@ impl Lobby {
             nations: self.nations.clone().into_iter().collect(),
             factions: self.factions.clone().into_iter().collect(),
             handicaps: computer_handicaps(&brief.players, self.person, &self.handicaps),
-            fog: fog_of(&self.rules),
-            sun: self.rules.get(&Id::from(SUN)).cloned(),
+            rules: self.rules.clone(),
         };
         Some((setup, brief.name.clone(), brief.description.clone()))
     }
@@ -640,23 +643,6 @@ fn ask_exit(
     );
 }
 
-/// The world rules the lobby passes on to the match by its own terms.
-const FOG_OF_WAR: &str = "FogOfWar";
-const SUN: &str = "Sun";
-
-/// The fog setting `rules` choose, if not the default.
-fn fog_of(rules: &BTreeMap<Id, Id>) -> Option<FogSetting> {
-    FogSetting::named(rules.get(&Id::from(FOG_OF_WAR))?.as_str())
-}
-
-/// The world rules' choices for a `fog` setting and `sun`, those not at
-/// their defaults.
-fn chosen_rules(fog: Option<FogSetting>, sun: Option<Id>) -> BTreeMap<Id, Id> {
-    let fog = fog.map(|f| (Id::from(FOG_OF_WAR), Id::from(f.id())));
-    let sun = sun.map(|s| (Id::from(SUN), s));
-    fog.into_iter().chain(sun).collect()
-}
-
 /// Plays `map` under the world rules' choices in `rules`, as the scenario
 /// map dialog loads it: what was chosen for another map's sides goes.
 pub(crate) fn play(
@@ -665,15 +651,11 @@ pub(crate) fn play(
     (asked, lobby): (Side, Option<ResMut<Lobby>>),
     staged: Option<ResMut<Staged>>,
     map: String,
-    rules: BTreeMap<Id, Id>,
+    rules: RuleValues,
 ) {
     if let Some(mut lobby) = lobby.filter(|l| l.map == map) {
         // Only the rules change, so what's chosen for the sides stays.
-        let choice = tgserver::Choice::Rules {
-            fog: fog_of(&rules),
-            sun: rules.get(&Id::from(SUN)).cloned(),
-        };
-        if !share(staged, choice) {
+        if !share(staged, tgserver::Choice::Rules(rules.clone())) {
             lobby.rules = rules;
         }
         return;
@@ -683,8 +665,7 @@ pub(crate) fn play(
         map: map.clone(),
         preset,
         sides,
-        fog: fog_of(&rules),
-        sun: rules.get(&Id::from(SUN)).cloned(),
+        rules: rules.clone(),
     };
     if !share(staged, choice) {
         let mut lobby = Lobby::new(data, map, asked);
@@ -1339,6 +1320,8 @@ mod tests {
             relations: vec![Relation::Neutral; 4],
             team_relations: Vec::new(),
             stockpile: 0.0,
+            default_stockpile: false,
+            stockpile_bonus: 0.0,
             technologies: Vec::new(),
             handicap: None,
             barred: Vec::new(),
@@ -1414,14 +1397,6 @@ mod tests {
         // An independent player has no seat, so the person watches.
         lineup.seat(Some(11));
         assert_eq!(lineup.person(), None);
-    }
-
-    #[test]
-    fn world_rules_choices_come_back_as_chosen() {
-        let rules = chosen_rules(Some(FogSetting::None), Some(Id::from("sun_dusk")));
-        assert_eq!(fog_of(&rules), Some(FogSetting::None));
-        assert_eq!(rules.get(&Id::from(SUN)), Some(&Id::from("sun_dusk")));
-        assert!(chosen_rules(None, None).is_empty());
     }
 
     #[test]

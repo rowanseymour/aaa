@@ -18,7 +18,7 @@ const MAGIC: &[u8; 4] = b"film";
 /// The layout this build writes, and the only one it reads: a film's steps
 /// only play out the same under the rules it was recorded with, so there's
 /// nothing to gain from reading an older one.
-const VERSION: u16 = 1;
+const VERSION: u16 = 2;
 
 /// A match as it was played.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -109,7 +109,7 @@ mod tests {
                 seed: u64::MAX,
                 teams: Some(vec![vec![1, 2], vec![3]]),
                 nations: [(1, "nation_usa".into())].into(),
-                fog: Some(tgmap::FogSetting::Explored),
+                rules: [("FogOfWar".into(), "EXPLORED".into())].into(),
                 ..Default::default()
             },
             record: Record {

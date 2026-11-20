@@ -1644,9 +1644,25 @@ pub struct WorldRule {
     pub name: Option<String>,
     /// What it's set to unless changed, a number or a choice's id.
     pub default: Option<String>,
+    /// `enum` for a choice of its `enum_value`s, `enum_specified` for one
+    /// of the blocks named as its id, `fixed` or `int` for a number, or
+    /// `bool`.
+    #[serde(rename = "type")]
+    pub kind: Option<String>,
     /// What it can be set to, where it's a choice.
     #[serde(default)]
     pub enum_value: Vec<WorldRuleChoice>,
+    /// The most a number typed in for it may be.
+    pub editbox_max_value: Option<f32>,
+    /// Whether a number is set with a slider rather than typed in, and
+    /// the slider's range and step.
+    pub use_slider: Option<bool>,
+    /// Numbers written as text, `NULL` where not given.
+    pub slider_min: Option<String>,
+    pub slider_max: Option<String>,
+    pub step_size: Option<f32>,
+    /// Whether the lobby never offers to change it.
+    pub never_editable: Option<bool>,
 }
 
 /// One of the choices a [`WorldRule`] offers.

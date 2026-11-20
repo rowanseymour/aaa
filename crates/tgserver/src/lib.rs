@@ -21,7 +21,7 @@ use std::hash::{BuildHasher, RandomState};
 
 use log::{debug, warn};
 use serde::{Deserialize, Serialize};
-use tgdata::{Faction, GameData, Handicap, Id, Nation};
+use tgdata::{Faction, GameData, Handicap, Id, Nation, RuleValues};
 use tgmap::{FogSetting, Map, Player, Recruits};
 use tgsim::World;
 
@@ -53,13 +53,10 @@ pub struct Setup {
     pub factions: BTreeMap<u32, Id>,
     /// The handicap given each side, by player id, in place of the map's.
     pub handicaps: BTreeMap<u32, Id>,
-    /// How much of the map the fog of war hides, if not as the game's
-    /// world rule has it.
-    pub fog: Option<FogSetting>,
-    /// The choice of the `Sun` world rule the match is lit by, if not the
-    /// rule's default.
-    #[serde(default)]
-    pub sun: Option<Id>,
+    /// The world rules the match is played with, such as the fog of war,
+    /// the time of day and the money each side starts with, in place of
+    /// those the map stores.
+    pub rules: RuleValues,
 }
 
 /// A match set up and yet to be played.
@@ -99,8 +96,15 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(teams) = &setup.teams {
         map.arrange(teams);
     }
-    if let Some(sun) = game.sun_for(setup.sun.as_ref()) {
+    let mut world_rules = map.rules.values.clone();
+    world_rules.extend(setup.rules.clone());
+    let rule = |id: &str| world_rules.get(&Id::from(id)).map(String::as_str);
+    if let Some(sun) = game.sun_for(rule(tgdata::SUN)) {
         map.light(&sun);
+    }
+    if let Some(money) = rule(tgdata::STOCKPILE).and_then(tgdata::number) {
+        let most = game.economy_rules().stockpile_max;
+        map.set_default_stockpile((money as f32).min(most));
     }
     mapped();
     let mut operations = game.operations();
@@ -152,7 +156,10 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
             debug!("can't commission {t}: {e}");
         }
     }
-    let experience = game.experience_rules();
+    let mut experience = game.experience_rules();
+    if let Some(starting) = rule(tgdata::STARTING_EXPERIENCE).and_then(tgdata::number) {
+        experience.starting = starting as f32;
+    }
     let heroes = game.heroes();
     let hero_templates = heroes.iter().map(|h| h.id.clone()).collect();
     let combat_profiles = game.combat_profiles();
@@ -248,8 +255,12 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     if let Some(seconds) = game.engage_reaction() {
         rules.engage_reaction = seconds;
     }
+    if let Some(ratio) = rule(tgdata::CITY_VICTORY_RATIO).and_then(tgdata::number) {
+        rules.city_victory_ratio = ratio.min(100);
+    }
     let mut world = World::new(&map, rules);
-    world.set_fog(setup.fog.unwrap_or_else(|| game.fog_setting()));
+    let fog = rule(tgdata::FOG_OF_WAR).and_then(FogSetting::named);
+    world.set_fog(fog.unwrap_or_else(|| game.fog_setting()));
     let recharges = game.operation_recharges();
     for (&player, faction) in &factions {
         let ops = (faction.operations.iter())

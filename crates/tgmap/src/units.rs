@@ -50,6 +50,10 @@ pub struct Player {
     pub team_relations: Vec<Relation>,
     /// The money it starts with.
     pub stockpile: f32,
+    /// Whether that's the match's default money rather than its own, with
+    /// `stockpile_bonus` on top.
+    pub default_stockpile: bool,
+    pub stockpile_bonus: f32,
     /// The technologies it starts with.
     pub technologies: Vec<Id>,
     /// The handicap the map gives it, e.g. `handicap_hard`, which the
@@ -175,6 +179,8 @@ pub(crate) fn players_and_teams(
                 true => default_stockpile,
                 false => money(&k.resources),
             } + k.bonus_stockpile.as_deref().map_or(0.0, money),
+            default_stockpile: k.use_default_stockpile,
+            stockpile_bonus: k.bonus_stockpile.as_deref().map_or(0.0, money),
             technologies: (k.start_technologies.iter().flatten())
                 .map(|t| Id::from(t.as_str()))
                 .collect(),

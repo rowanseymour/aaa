@@ -1217,7 +1217,9 @@ pub fn run(program: Program) -> ExitCode {
         None => map.map(|name| tgserver::Setup {
             map: name,
             seed: Seed(seed).get(),
-            fog,
+            rules: (fog.map(|f| (tgdata::Id::from(tgdata::FOG_OF_WAR), f.id().to_string())))
+                .into_iter()
+                .collect(),
             ..Default::default()
         }),
     };
@@ -3521,6 +3523,8 @@ mod tests {
             relations: Vec::new(),
             team_relations: Vec::new(),
             stockpile: 0.0,
+            default_stockpile: false,
+            stockpile_bonus: 0.0,
             technologies: Vec::new(),
             handicap: None,
             barred: Vec::new(),

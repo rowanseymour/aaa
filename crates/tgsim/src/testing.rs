@@ -367,6 +367,8 @@ pub(crate) fn player(
         relations: stored(relations),
         team_relations: stored(team_relations),
         stockpile: 0.0,
+        default_stockpile: false,
+        stockpile_bonus: 0.0,
         technologies: Vec::new(),
         handicap: None,
         barred: Vec::new(),
