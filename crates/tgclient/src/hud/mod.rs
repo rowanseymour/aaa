@@ -5,6 +5,8 @@
 use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
+pub mod modern;
+
 /// Which interface matches are played with, as chosen in the options.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -30,3 +32,8 @@ pub fn choose(mut commands: Commands, hud: Res<Hud>) {
 pub fn playing(hud: Hud) -> impl Fn(Res<InMatch>) -> bool + Clone {
     move |in_match: Res<InMatch>| in_match.0 == hud
 }
+
+/// Where what both interfaces share is set up as a match starts, for what
+/// either draws to go after.
+#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
+pub struct Setup;

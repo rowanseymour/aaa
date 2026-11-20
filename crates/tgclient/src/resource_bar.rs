@@ -1,24 +1,15 @@
-//! The resource bar in the top right corner: the player's money and what
-//! they net of each resource a minute, and a second bar under it previewing
-//! what the order under the cursor would make of them.
+//! The resource bar's figures: the player's money and what they net of
+//! each resource a minute, and what the order under the cursor would make
+//! of them, for either interface to lay out.
 
-use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use tgdata::{Id, ResourceRole};
 use tgmap::Organization;
-use tgrender::textures;
 use tgsim::{Balance, Change};
 
-use crate::ui::{Font, Hint, Ink, Marked, Surface, Theme, backed, label};
-use crate::{Loaded, Local, Screen, Sim};
-
-const CELL: f32 = 80.0;
-/// The stockpile's cell's width, which has room for the stockpile beside
-/// its rate.
-const STOCKPILE_CELL: f32 = 112.0;
-const HEIGHT: f32 = 22.0;
-const GAP: f32 = 4.0;
+use crate::ui::{Hint, Ink, Marked, Theme};
+use crate::{Loaded, Local, Sim};
 
 /// What the order under the cursor would change, set by the action grid.
 #[derive(Resource, Default)]
@@ -41,10 +32,6 @@ pub enum Previewed {
 /// still applies, as [`show`] last found.
 #[derive(Resource, Default)]
 pub struct Previewing(pub bool);
-
-/// One of the two bars: the player's economy now, or previewed.
-#[derive(Component)]
-pub struct Bar(bool);
 
 /// The text of a cell of a bar, drawn in a span for each run of it, in
 /// its own font. Its parent holds it and the resource's glyph, hidden
@@ -92,19 +79,13 @@ pub struct Colours {
 }
 
 /// The resource the sim keeps a stockpile of: the first stockpiled one.
-fn stockpile(game: &tgdata::GameData) -> Option<Id> {
+pub(crate) fn stockpile(game: &tgdata::GameData) -> Option<Id> {
     let resources = game.resources();
     let first = resources
         .iter()
         .find(|r| r.role == ResourceRole::Stockpiled);
     first.map(|r| r.id.clone())
 }
-
-/// The mark beside the bar while the player can't pay their upkeep.
-#[derive(Component)]
-pub struct ShortageIcon;
-
-const SHORTAGE_ICON: &str = "UI/Game/ControlPanel/BleedIcon.png";
 
 /// Takes the game's colour for what's short, and clears any preview, for
 /// either interface.
@@ -114,147 +95,20 @@ pub fn setup(mut commands: Commands, loaded: Res<Loaded>, mut theme: ResMut<Them
     commands.init_resource::<Previewing>();
 }
 
-/// Spawns our interface's bars, in the window's upper right corner.
-pub fn spawn(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-) {
-    let game = &loaded.game;
-    let strings = game.strings();
-    let said = crate::ui::said(&strings);
-    let shortage = game
-        .read(SHORTAGE_ICON)
-        .and_then(|bytes| textures::decode(&bytes, SHORTAGE_ICON, formats.0, true))
-        .map(|i| images.add(i));
-    let shortage_tip = said(
-        "game_interface_UpkeepShortageIcon_ToolTip",
-        "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
-    );
-    let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
-    let stockpile = stockpile(game);
-    let cells = game.economy_bar();
-    let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
-        root.spawn((
-            Bar(preview),
-            backed(
-                Surface::Hud,
-                Node {
-                    display: match preview {
-                        true => Display::None,
-                        false => Display::Flex,
-                    },
-                    height: px(HEIGHT),
-                    column_gap: px(GAP),
-                    padding: UiRect::horizontal(px(GAP * 2.0)),
-                    border_radius: BorderRadius::all(px(6)),
-                    ..default()
-                },
-            ),
-        ))
-        .with_children(|bar| {
-            for kind in &cells {
-                bar.spawn(Node {
-                    width: px(match stockpile.as_ref() == Some(kind) {
-                        true => STOCKPILE_CELL,
-                        false => CELL,
-                    }),
-                    column_gap: px(3),
-                    align_items: AlignItems::Center,
-                    ..default()
-                })
-                .with_children(|cell| {
-                    if let Some(glyph) = glyphs.get(kind) {
-                        cell.spawn((
-                            ImageNode::new(glyph.clone()),
-                            Node {
-                                width: px(16),
-                                height: px(16),
-                                ..default()
-                            },
-                        ));
-                    }
-                    let (text, hint) = Cell::new(game, preview, kind);
-                    let mut text = cell.spawn((text, label("", Font::Hud, Ink::Body)));
-                    // Unlike a label's, its text is hovered.
-                    if let Some(hint) = hint {
-                        text.insert((hint, Pickable::default()));
-                    }
-                });
-            }
-        });
-    };
-    commands
-        .spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                top: px(crate::MARGIN),
-                right: px(crate::MARGIN),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::FlexEnd,
-                row_gap: px(GAP),
-                ..default()
-            },
-            Pickable::IGNORE,
-            GlobalZIndex(1),
-            DespawnOnExit(Screen::Match),
-        ))
-        .with_children(|root| {
-            root.spawn(Node {
-                column_gap: px(GAP),
-                align_items: AlignItems::Center,
-                ..default()
-            })
-            .with_children(|row| {
-                if let Some(icon) = shortage {
-                    row.spawn((
-                        ShortageIcon,
-                        Hint(shortage_tip),
-                        ImageNode::new(icon),
-                        Node {
-                            display: Display::None,
-                            width: px(HEIGHT),
-                            height: px(HEIGHT),
-                            ..default()
-                        },
-                    ));
-                }
-                bar(row, false);
-            });
-            bar(root, true);
-        });
-}
-
-/// Fills both bars for the player, the preview only while there's
-/// something to preview, and marks a shortage beside them.
+/// Fills the cells of both bars for the player, the preview's only while
+/// there's something to preview.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     sim: Res<Sim>,
     local: Res<Local>,
     preview: Res<Preview>,
     mut previewing: ResMut<Previewing>,
-    mut bars: Query<(&Bar, &mut Node), Without<ShortageIcon>>,
-    mut icons: Query<&mut Node, With<ShortageIcon>>,
     mut commands: Commands,
     mut cells: Query<CellParts>,
     mut holders: Query<&mut Visibility>,
     mut spans: Query<SpanParts>,
 ) {
-    let short = local.0.is_some_and(|p| sim.0.short(p).is_some());
-    for mut node in &mut icons {
-        let display = match short {
-            true => Display::Flex,
-            false => Display::None,
-        };
-        if node.display != display {
-            node.display = display;
-        }
-    }
     let Some(player) = local.0 else {
-        for (_, mut node) in &mut bars {
-            node.display = Display::None;
-        }
         previewing.0 = false;
         return;
     };
@@ -273,15 +127,6 @@ pub fn show(
     });
     if previewing.0 != previewed.is_some() {
         previewing.0 = previewed.is_some();
-    }
-    for (bar, mut node) in &mut bars {
-        let display = match bar.0 && previewed.is_none() {
-            true => Display::None,
-            false => Display::Flex,
-        };
-        if node.display != display {
-            node.display = display;
-        }
     }
     for (entity, cell, children, style, holder, hint) in &mut cells {
         let shown = match cell.preview {
@@ -425,6 +270,7 @@ fn cell_parts(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::{Font, label};
     use tgmap::ResourceKind;
     use tgsim::{Ledger, economy::EconomyRules};
 
