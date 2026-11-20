@@ -33,6 +33,12 @@ const SIMPLE: &str = "SimpleActorDisplay";
 const COMPANY: &str = "CompanyDisplay";
 const GROUP: &str = "GroupDisplay";
 
+/// The formation buttons' panel, the button it repeats, and the part of
+/// that the formation's picture is drawn in.
+const FORMATIONS: &str = "FormationButtons";
+const FORMATION_BUTTON: &str = "FormationButton";
+const FORMATION_DECAL: &str = "FormationButtonDecal";
+
 /// The layouts the display is drawn from, with their pictures.
 #[derive(Resource)]
 pub struct Layout {
@@ -534,6 +540,9 @@ pub fn lay_out(
             Mode::Group(rs) => draw.group(rs),
             Mode::Settlement => {}
         }
+        if matches!(mode, Mode::Company(Actor::Organization(_)) | Mode::Group(_)) {
+            draw.formation_buttons();
+        }
     });
 }
 
@@ -558,6 +567,91 @@ struct Draw<'a, 'w> {
 }
 
 impl Draw<'_, '_> {
+    /// The formation buttons, down the layout's panel for them from its
+    /// top, each its height over [`MOST`](crate::formations::MOST) apart,
+    /// drawn in the states they're in, with a place for the formation's
+    /// picture that [`show`](crate::formations::show) fills.
+    fn formation_buttons(&mut self) {
+        let Some(panel) = self.display.children.iter().find(|c| c.name == FORMATIONS) else {
+            return;
+        };
+        let Some(button) = panel.children.iter().find(|c| c.name == FORMATION_BUTTON) else {
+            return;
+        };
+        let within = panel.bounds(self.area);
+        let row = (within.height() / crate::formations::MOST as f32).floor();
+        let size = button.bounds(Rect {
+            left: 0.0,
+            top: 0.0,
+            right: within.width(),
+            bottom: within.height(),
+        });
+        let decal = button.children.iter().find(|c| c.name == FORMATION_DECAL);
+        for n in 0..crate::formations::MOST {
+            let top = within.top + row * n as f32;
+            let at = Rect {
+                left: within.left,
+                top,
+                right: within.left + size.width(),
+                bottom: top + size.height(),
+            };
+            // Placed within the button, as a share of its size.
+            let share = |r: Rect| Node {
+                position_type: PositionType::Absolute,
+                left: Val::Percent(100.0 * (r.left - at.left) / at.width().max(1.0)),
+                top: Val::Percent(100.0 * (r.top - at.top) / at.height().max(1.0)),
+                width: Val::Percent(100.0 * r.width() / at.width().max(1.0)),
+                height: Val::Percent(100.0 * r.height() / at.height().max(1.0)),
+                ..default()
+            };
+            let faces: Vec<(Node, super::Drawn)> = (button.view.iter())
+                .flat_map(|v| &v.children)
+                .filter_map(|e| {
+                    let image = self
+                        .painter
+                        .layout
+                        .images
+                        .get(e.texture.as_deref()?)?
+                        .clone();
+                    let element = ViewElement {
+                        children: Vec::new(),
+                        ..e.clone()
+                    };
+                    let drawn = super::Drawn {
+                        when: vec![element],
+                        image,
+                        greyed: None,
+                    };
+                    Some((share(e.bounds.place(at)), drawn))
+                })
+                .collect();
+            let icon = decal.map_or(at, |d| d.bounds(at));
+            self.s
+                .spawn((
+                    super::Pressable::default(),
+                    crate::formations::FormationButton(n),
+                    ui::called(format!("formation.{}", n + 1)),
+                    on_screen(at),
+                    Button,
+                    Pickable::default(),
+                    Visibility::Hidden,
+                ))
+                .with_children(|b| {
+                    for (node, drawn) in faces {
+                        let image = ImageNode::new(drawn.image.clone())
+                            .with_mode(bevy::ui::widget::NodeImageMode::Stretch);
+                        b.spawn((node, image, Visibility::Hidden, drawn, Pickable::IGNORE));
+                    }
+                    b.spawn((
+                        share(icon),
+                        ImageNode::default(),
+                        crate::formations::FormationIcon,
+                        Pickable::IGNORE,
+                    ));
+                });
+        }
+    }
+
     /// The display's widget called `name`, drawn but for `skip`.
     fn part(&mut self, name: &str, skip: &[&str]) -> Parts {
         let Some(widget) = self.display.children.iter().find(|c| c.name == name) else {

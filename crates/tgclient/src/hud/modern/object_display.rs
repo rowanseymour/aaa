@@ -216,6 +216,49 @@ pub fn lay_out(
         Mode::Settlement => {}
         Mode::Group(rs) => ui.group(&mut commands, root, rs),
     }
+    if matches!(mode, Mode::Company(Actor::Organization(_)) | Mode::Group(_)) {
+        formation_buttons(&mut commands, root);
+    }
+}
+
+/// The game's layout's place for the formation buttons, the size of each
+/// and how far apart their tops are.
+const FORMATIONS_AT: Vec2 = Vec2::new(444.0, 36.0);
+const FORMATION_BUTTON: f32 = 46.0;
+const FORMATION_ROW: f32 = 47.0;
+
+/// The formation buttons down the display's right edge, which
+/// [`show`](crate::formations::show) fills.
+fn formation_buttons(commands: &mut Commands, root: Entity) {
+    commands.entity(root).with_children(|display| {
+        for n in 0..crate::formations::MOST {
+            let top = FORMATIONS_AT.y + FORMATION_ROW * n as f32;
+            let node = at(FORMATIONS_AT.x, top, FORMATION_BUTTON, FORMATION_BUTTON);
+            display.spawn((
+                crate::formations::FormationButton(n),
+                ui::called(format!("formation.{}", n + 1)),
+                Button,
+                Pickable::default(),
+                Visibility::Hidden,
+                Node {
+                    border: UiRect::all(px(2)),
+                    ..node
+                },
+                Surface::Slot,
+                ui::Edge::Clear,
+                children![(
+                    crate::formations::FormationIcon,
+                    ImageNode::default(),
+                    Node {
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                    Pickable::IGNORE,
+                )],
+            ));
+        }
+    });
 }
 
 /// What laying the display out reads.

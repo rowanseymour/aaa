@@ -60,6 +60,9 @@ pub struct FormationLook {
     /// How the properties an organization in it holds show beside the
     /// organization, those that have an icon.
     pub properties: Vec<crate::PropertyLook>,
+    /// The game's words for each change its properties make, as its
+    /// button's tooltip lists them.
+    pub modifiers: Vec<String>,
 }
 
 /// How the supply border is drawn.
@@ -305,9 +308,13 @@ impl GameData {
                 let held = scope.deserialize::<defs::FormationProperties>(block);
                 let held = held.map_or_else(Vec::new, |h| h.property);
                 let look = |p| self.property_look(&strings, &paces, scope.file, p);
+                let modifiers = (held.iter())
+                    .flat_map(|p| &p.modifier)
+                    .filter_map(|m| crate::properties::line(&strings, &paces, m));
                 let look = FormationLook {
                     name,
                     icon,
+                    modifiers: modifiers.collect(),
                     properties: held.iter().filter_map(look).collect(),
                 };
                 out.insert(ids, look);
