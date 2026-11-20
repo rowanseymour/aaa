@@ -474,6 +474,25 @@ struct DrapedMark(usize, Vec2);
 #[derive(Component)]
 struct HealthBar;
 
+/// A node drawn over the map, which [`target_map`] has the map's camera
+/// draw: cut to its view, and under any panels over it.
+#[derive(Component)]
+pub struct OnMap;
+
+/// Has the map's camera draw each [`OnMap`] node, once there is one.
+fn target_map(
+    mut commands: Commands,
+    nodes: Query<Entity, (With<OnMap>, Without<UiTargetCamera>)>,
+    cameras: Query<Entity, With<RtsCamera>>,
+) {
+    let Ok(map) = cameras.single() else {
+        return;
+    };
+    for node in &nodes {
+        commands.entity(node).insert(UiTargetCamera(map));
+    }
+}
+
 /// Draws one of the simulation's units.
 #[derive(Component)]
 struct UnitView {
@@ -1053,12 +1072,13 @@ pub fn run(program: Program) -> ExitCode {
                         .run_if(widgets::original),
                 )
                     .chain(),
-                show_health.after(camera::Controls),
                 (
+                    show_health,
                     banners::add_banners,
                     banners::badge_banners,
                     banners::add_hq_banners,
                     (banners::show_banners, banners::show_hq_banners),
+                    target_map,
                 )
                     .chain()
                     .after(camera::Controls),
@@ -2433,7 +2453,15 @@ fn focus(
     mut focus: ResMut<Focus>,
 ) {
     const REACH: f32 = 2.0;
-    if !minimap::pointer_away(minimap) || actions::over_grid(&grid) {
+    // Beside the view, where it's cut narrower than the window, a banner
+    // at its edge reaches out of sight.
+    let beside = windows
+        .single()
+        .ok()
+        .and_then(Window::cursor_position)
+        .zip(cameras.single().ok())
+        .is_some_and(|(at, (c, ..))| c.logical_viewport_rect().is_some_and(|r| !r.contains(at)));
+    if !minimap::pointer_away(minimap) || actions::over_grid(&grid) || beside {
         focus.set_if_neq(Focus::Nothing);
         return;
     }
@@ -2959,18 +2987,25 @@ fn fit_ui(
     }
 }
 
-/// Whether `at`, in viewport pixels, is within what `camera` shows, which
-/// may be cut narrower than the window.
-fn in_view(camera: &Camera, at: Vec2) -> bool {
+/// Whether any of `rect`, in viewport pixels, is within what `camera`
+/// shows.
+fn overlaps_view(camera: &Camera, rect: Rect) -> bool {
     camera
         .logical_viewport_rect()
-        .is_some_and(|r| r.contains(at))
+        .is_some_and(|r| !r.intersect(rect).is_empty())
 }
 
-/// Where `at`, in viewport pixels, falls among nodes `camera` draws itself,
-/// which [`UiTargetCamera`] lays out from the corner of its view.
-fn in_own_view(camera: &Camera, at: Vec2) -> Vec2 {
-    at - camera.logical_viewport_rect().map_or(Vec2::ZERO, |r| r.min)
+/// Where `rect`, in viewport pixels, falls among [`OnMap`] nodes: the map's
+/// camera lays out what it draws from the corner of its view.
+fn within_view(camera: &Camera, rect: Rect) -> Rect {
+    let corner = camera.logical_viewport_rect().map_or(Vec2::ZERO, |r| r.min);
+    Rect::from_corners(rect.min - corner, rect.max - corner)
+}
+
+/// Places an [`OnMap`] node at a rectangle in viewport pixels.
+fn place_in_view(node: &mut Node, camera: &Camera, rect: Rect, ui: &UiScale) {
+    let rect = within_view(camera, rect);
+    place_on_map(node, rect.min, rect.size(), ui);
 }
 
 /// Places a node over the map at a rectangle in viewport pixels, which
@@ -3128,97 +3163,93 @@ fn show_health(
     images: Res<OverlayImages>,
     fixed: Res<Time<Fixed>>,
     ui: Res<UiScale>,
-    cameras: Query<(Entity, &Camera, &Transform), With<RtsCamera>>,
+    cameras: Query<(&Camera, &Transform), With<RtsCamera>>,
     units: Query<(&UnitView, Option<&Footprint>)>,
     buildings: Query<&BuildingView>,
     mut bars: Query<(&mut Node, &mut ImageNode, &mut Visibility), With<HealthBar>>,
 ) {
-    let Ok((map, camera, transform)) = cameras.single() else {
-        return;
-    };
     let mut wanted = Vec::new();
-    // This frame's camera, which moves after transforms propagate.
-    let global = GlobalTransform::from(*transform);
-    let toward = (transform.back().as_vec3() * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
-    let ground = &loaded.map.ground;
-    let t = fixed.overstep_fraction();
-    // Where on the ground each bar's middle goes, its size there, and
-    // the frame it shows.
-    let mut shown = Vec::new();
-    let organization_shown = |r: usize| selected.0.contains(&r) || *focus == Focus::Organization(r);
-    let building_shown = |b: usize| chosen.0 == Some(b) || *focus == Focus::Building(b);
-    for (view, footprint) in &units {
-        let unit = &sim.0.units[view.unit];
-        if !organization_shown(unit.organization) || !unit.alive() {
-            continue;
+    if let Ok((camera, transform)) = cameras.single() {
+        // This frame's camera, which moves after transforms propagate.
+        let global = GlobalTransform::from(*transform);
+        let toward = (transform.back().as_vec3() * Vec3::new(1.0, 0.0, 1.0)).normalize_or_zero();
+        let ground = &loaded.map.ground;
+        let t = fixed.overstep_fraction();
+        // Where on the ground each bar's middle goes, its size there, and
+        // the frame it shows.
+        let mut shown = Vec::new();
+        let organization_shown =
+            |r: usize| selected.0.contains(&r) || *focus == Focus::Organization(r);
+        let building_shown = |b: usize| chosen.0 == Some(b) || *focus == Focus::Building(b);
+        for (view, footprint) in &units {
+            let unit = &sim.0.units[view.unit];
+            if !organization_shown(unit.organization) || !unit.alive() {
+                continue;
+            }
+            if unit.fighter.is_none() {
+                continue;
+            }
+            let [x, y] = unit.drawn_at(t);
+            // At the edge of its footprint nearest the camera, so the bar
+            // clears the model.
+            let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
+            let at = world(x, y, ground.stand_at(view.footing, [x, y])) + toward * reach;
+            let image = images.health_bar(unit.health / sim.0.max_health(view.unit));
+            shown.push((at, HEALTH_BAR, image, 0.0));
         }
-        if unit.fighter.is_none() {
-            continue;
+        for view in &buildings {
+            let b = view.building;
+            let building = &sim.0.buildings[b];
+            // A disabled one shows its empty bar.
+            if !building_shown(b) || building.gone() {
+                continue;
+            }
+            // On the ground at its middle, which from above reads as in
+            // front of it.
+            let [x, y] = building.position;
+            let at = world(x, y, view.placed.y);
+            let image = images.building_health_bar(
+                building.health / (building.fighter.health * building.health_factor),
+            );
+            shown.push((at, BUILDING_HEALTH_BAR, image, 0.0));
+            // A relay's supply stockpile, below its health.
+            if let Some(supply) = sim
+                .0
+                .supply_of(b)
+                .filter(|s| s.relay && s.stockpile_max > 0.0)
+            {
+                let share = building.supply.stockpile / supply.stockpile_max;
+                let image = images.stockpile_bar(share);
+                shown.push((at, BUILDING_HEALTH_BAR, image, 1.0));
+            }
         }
-        let [x, y] = unit.drawn_at(t);
-        // At the edge of its footprint nearest the camera, so the bar
-        // clears the model.
-        let reach = footprint.map_or(0.0, |f| f.0.length() / 2.0);
-        let at = world(x, y, ground.stand_at(view.footing, [x, y])) + toward * reach;
-        let image = images.health_bar(unit.health / sim.0.max_health(view.unit));
-        shown.push((at, HEALTH_BAR, image, 0.0));
+        let half = transform.right().as_vec3() / 2.0;
+        for (at, size, image, below) in shown {
+            let Some(image) = image else {
+                continue;
+            };
+            let (Ok(a), Ok(b)) = (
+                camera.world_to_viewport(&global, at - half * size.x),
+                camera.world_to_viewport(&global, at + half * size.x),
+            ) else {
+                continue;
+            };
+            let width = a.distance(b);
+            let height = width * size.y / size.x;
+            let centre = (a + b) / 2.0 + Vec2::new(0.0, height * (1.0 + 1.5 * below));
+            let rect = Rect::from_center_size(centre, Vec2::new(width, height));
+            if !overlaps_view(camera, rect) {
+                continue;
+            }
+            wanted.push((within_view(camera, rect), image.clone()));
+        }
     }
-    for view in &buildings {
-        let b = view.building;
-        let building = &sim.0.buildings[b];
-        // A disabled one shows its empty bar.
-        if !building_shown(b) || building.gone() {
-            continue;
-        }
-        // On the ground at its middle, which from above reads as in
-        // front of it.
-        let [x, y] = building.position;
-        let at = world(x, y, view.placed.y);
-        let image = images.building_health_bar(
-            building.health / (building.fighter.health * building.health_factor),
-        );
-        shown.push((at, BUILDING_HEALTH_BAR, image, 0.0));
-        // A relay's supply stockpile, below its health.
-        if let Some(supply) = sim
-            .0
-            .supply_of(b)
-            .filter(|s| s.relay && s.stockpile_max > 0.0)
-        {
-            let share = building.supply.stockpile / supply.stockpile_max;
-            let image = images.stockpile_bar(share);
-            shown.push((at, BUILDING_HEALTH_BAR, image, 1.0));
-        }
-    }
-    let half = transform.right().as_vec3() / 2.0;
-    for (at, size, image, below) in shown {
-        let Some(image) = image else {
-            continue;
-        };
-        let (Ok(a), Ok(b)) = (
-            camera.world_to_viewport(&global, at - half * size.x),
-            camera.world_to_viewport(&global, at + half * size.x),
-        ) else {
-            continue;
-        };
-        if !in_view(camera, (a + b) / 2.0) {
-            continue;
-        }
-        let width = a.distance(b);
-        let height = width * size.y / size.x;
-        let centre =
-            in_own_view(camera, (a + b) / 2.0) + Vec2::new(0.0, height * (1.0 + 1.5 * below));
-        wanted.push((
-            centre - Vec2::new(width, height) / 2.0,
-            Vec2::new(width, height),
-            image.clone(),
-        ));
-    }
-    let place = |node: &mut Node, corner: Vec2, size: Vec2| place_on_map(node, corner, size, &ui);
+    let place = |node: &mut Node, r: Rect| place_on_map(node, r.min, r.size(), &ui);
     let mut wanted = wanted.into_iter();
     for (mut node, mut image, mut visibility) in &mut bars {
         match wanted.next() {
-            Some((corner, size, frame)) => {
-                place(&mut node, corner, size);
+            Some((rect, frame)) => {
+                place(&mut node, rect);
                 if image.image != frame {
                     image.image = frame;
                 }
@@ -3227,17 +3258,16 @@ fn show_health(
             None => *visibility = Visibility::Hidden,
         }
     }
-    for (corner, size, frame) in wanted {
+    for (rect, frame) in wanted {
         let mut node = Node {
             position_type: PositionType::Absolute,
             ..default()
         };
-        place(&mut node, corner, size);
+        place(&mut node, rect);
         commands.spawn((
             HealthBar,
             node,
-            // Cut to the map's view, and under any panels over it.
-            UiTargetCamera(map),
+            OnMap,
             // Over the banners.
             GlobalZIndex(1),
             ImageNode::new(frame).with_mode(NodeImageMode::Stretch),
