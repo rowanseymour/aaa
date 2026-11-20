@@ -6,9 +6,10 @@ use std::ops::AddAssign;
 
 use tgmap::Id;
 
-pub use tgmap::{Amounts, Economy, EconomyRules};
+pub use tgmap::{Amounts, Economy, EconomyEffect, EconomyRules};
 
-use crate::{Commission, Notice, Pause, State, TICK, World};
+use crate::properties::Held;
+use crate::{Commission, Notice, Pause, State, TICK, Target, World};
 
 /// What a side, or one thing of it, earns and takes to keep, per minute.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -101,8 +102,9 @@ const SHORTAGE_STEP: f32 = 5.0;
 
 /// Something that would change a side's economy, to preview.
 pub enum Change<'a> {
-    /// Commissioning an organization as it's raised.
-    Commission(&'a tgmap::Organization),
+    /// Commissioning an organization as it's raised, at the building at
+    /// this index.
+    Commission(usize, &'a tgmap::Organization),
     Research(&'a tgmap::Research),
     /// A packed building, by index into [`World::organizations`], unpacking.
     Unpack(usize),
@@ -117,14 +119,11 @@ pub(crate) fn money(rules: &EconomyRules) -> &str {
 }
 
 impl World {
-    /// What a side's holdings add to its economy: their own production and
-    /// upkeep.
-    fn holding_ledger(&self, template: &Id) -> Ledger {
-        let e = self.economy_of(template);
-        Ledger {
-            production: e.production.clone(),
-            upkeep: e.upkeep.clone(),
-        }
+    /// What a holding of `owner`'s made from `template` adds to its
+    /// economy: its own production and upkeep, as its properties leave them.
+    fn holding_ledger(&self, owner: u32, template: &Id) -> Ledger {
+        let effects = self.economy_effects(owner, template, &[], []);
+        self.affected(template, &effects)
     }
 
     /// A template's own economy, none for one that has none.
@@ -133,23 +132,84 @@ impl World {
         self.rules.economies.get(template).unwrap_or(&NONE)
     }
 
-    /// What an organization adds to its owner's economy: its members'
-    /// production, and its own upkeep and that of every place in it, the
-    /// member there or not, but for those that have unpacked into
-    /// buildings. Nothing once it's gone.
+    /// What the properties on a thing of `owner`'s made from `template` do
+    /// to the economy, each once: its template's own, its side's
+    /// technologies whose `requires` it or one of `with` has, and those it
+    /// holds for a time.
+    fn economy_effects<'a>(
+        &'a self,
+        owner: u32,
+        template: &Id,
+        with: &[&Id],
+        held: impl IntoIterator<Item = &'a Held>,
+    ) -> Vec<&'a EconomyEffect> {
+        let table = &self.rules.economy_effects;
+        let kind = |t: &Id| self.rules.kinds.get(t);
+        let own = kind(template).into_iter().flat_map(|k| &k.properties);
+        let has = |p: &Id| {
+            (std::iter::once(template).chain(with.iter().copied()))
+                .any(|t| kind(t).is_some_and(|k| k.properties.contains(p)))
+        };
+        let technologies = (self.technologies.get(&owner).into_iter().flatten())
+            .filter(|t| table.get(*t).is_some_and(|e| e.requires.iter().all(has)));
+        let timed = held.into_iter().map(|h| &h.property);
+        let mut ids: Vec<&Id> = Vec::new();
+        for id in own.chain(technologies).chain(timed) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids.into_iter().filter_map(|id| table.get(id)).collect()
+    }
+
+    /// What a thing earns and keeps under `effects`: its own production
+    /// with what they add, if it has an economy, and its upkeep unless one
+    /// lifts it.
+    fn affected(&self, template: &Id, effects: &[&EconomyEffect]) -> Ledger {
+        let Some(e) = self.rules.economies.get(template) else {
+            return Ledger::default();
+        };
+        let added = effects.iter().map(|e| &e.production);
+        Ledger {
+            production: added.fold(e.production.clone(), |sum, a| sum + a),
+            upkeep: match effects.iter().any(|e| e.no_upkeep) {
+                true => Amounts::default(),
+                false => e.upkeep.clone(),
+            },
+        }
+    }
+
+    /// What an organization adds to its owner's economy: its own production
+    /// and that of its members still alive, and its own upkeep and that of
+    /// every place in it, the member there or not, but for those that have
+    /// unpacked into buildings. Each counts what its properties make of it.
+    /// Nothing once it's gone.
     pub fn organization_ledger(&self, organization: usize) -> Ledger {
         let r = &self.organizations[organization];
         if self.destroyed(organization) {
             return Ledger::default();
         }
-        let kept = (r.units.iter())
-            .filter(|&&u| !matches!(self.units[u].left, Some(crate::Left::Unpacked(_))));
-        let templates = kept.map(|&u| &self.units[u].template).collect();
-        let mut ledger = self.members_ledger(&r.template, templates);
-        let earning = self
-            .survivors(organization)
-            .map(|u| self.economy_of(&self.units[u].template));
-        ledger.production = earning.fold(Amounts::default(), |sum, e| sum + &e.production);
+        let kept: Vec<usize> = (r.units.iter().copied())
+            .filter(|&u| !matches!(self.units[u].left, Some(crate::Left::Unpacked(_))))
+            .collect();
+        // A lone unit is its own organization, and counts once.
+        let lone = matches!(&r.units[..], &[u] if self.units[u].template == r.template);
+        let mut ledger = Ledger::default();
+        if !lone {
+            let places: Vec<&Id> = (r.units.iter()).map(|&u| &self.units[u].template).collect();
+            let effects = self.economy_effects(r.owner, &r.template, &places, &r.properties);
+            ledger += self.affected(&r.template, &effects);
+        }
+        for u in kept {
+            let unit = &self.units[u];
+            let held = self.timed_on(Target::Unit(u));
+            let effects = self.economy_effects(r.owner, &unit.template, &[], held);
+            let mut own = self.affected(&unit.template, &effects);
+            if !unit.alive() {
+                own.production = Amounts::default();
+            }
+            ledger += own;
+        }
         ledger
     }
 
@@ -181,14 +241,16 @@ impl World {
     /// only its upkeep while disabled, and the limits taken by
     /// what it's commissioning. One that passes supply on and has none
     /// earns as what it packs into does, or nothing if it needs supply and
-    /// doesn't pack.
+    /// doesn't pack. What its properties add or lift is judged by it.
     pub fn building_ledger(&self, building: usize) -> Ledger {
         let b = &self.buildings[building];
         if b.gone() {
             return Ledger::default();
         }
         let e = self.economy_of(&b.template);
-        let mut upkeep = e.upkeep.clone();
+        let held = self.timed_on(Target::Building(building));
+        let effects = self.economy_effects(b.owner, &b.template, &[], held);
+        let mut upkeep = self.affected(&b.template, &effects).upkeep;
         for r in b
             .queue
             .iter()
@@ -203,13 +265,15 @@ impl World {
         }
         // Unpacking and packing aren't construction: it earns through both.
         let working = b.state == State::Standing && !b.constructing;
-        let production = match self.rules.packing.get(&b.template) {
-            _ if !working => Amounts::default(),
-            _ if !self.out_of_supply(building) => e.production.clone(),
-            Some(packs) => self.commission_ledger(&packs.truck).production,
-            None if e.supply_required => Amounts::default(),
-            None => e.production.clone(),
+        let own = match self.rules.packing.get(&b.template) {
+            _ if !working => None,
+            _ if !self.out_of_supply(building) => Some(e.production.clone()),
+            Some(packs) => Some(self.commission_ledger(&packs.truck).production),
+            None if e.supply_required => None,
+            None => Some(e.production.clone()),
         };
+        let added = effects.iter().map(|e| &e.production);
+        let production = own.map_or_else(Amounts::default, |own| added.fold(own, |sum, a| sum + a));
         Ledger { production, upkeep }
     }
 
@@ -269,7 +333,7 @@ impl World {
             *out.entry(self.buildings[b].owner).or_default() += self.building_ledger(b);
         }
         for (owner, template) in &self.holdings {
-            *out.entry(*owner).or_default() += self.holding_ledger(template);
+            *out.entry(*owner).or_default() += self.holding_ledger(*owner, template);
         }
         for d in 0..self.deliveries.len() {
             *out.entry(self.deliveries[d].owner).or_default() += self.delivery_ledger(d);
@@ -317,15 +381,27 @@ impl World {
         full.map(|l| l.consumed.clone())
     }
 
-    /// The money commissioning `organization` as raised takes: its own cost and
-    /// its members'.
-    pub fn cost(&self, organization: &tgmap::Organization) -> f32 {
+    /// The money commissioning `organization` as raised at the building at
+    /// `recruiter` takes: its own cost and its members', times what the
+    /// recruiter's properties make of what it charges.
+    pub fn cost(&self, recruiter: usize, organization: &tgmap::Organization) -> f32 {
         let money = money(&self.rules.economy);
         let members = organization.members.iter().map(|m| &m.template);
         let own = (!organization.lone()).then_some(&organization.template);
-        (members.chain(own))
+        let listed: f32 = (members.chain(own))
             .map(|t| self.economy_of(t).cost.get(money))
-            .sum()
+            .sum();
+        listed * self.recruit_multiplier(recruiter)
+    }
+
+    /// What the building at `recruiter` charges for what it recruits is
+    /// multiplied by: 1 and what its properties add.
+    pub fn recruit_multiplier(&self, recruiter: usize) -> f32 {
+        let b = &self.buildings[recruiter];
+        let held = self.timed_on(Target::Building(recruiter));
+        let effects = self.economy_effects(b.owner, &b.template, &[], held);
+        let added: f32 = effects.iter().map(|e| e.recruit_cost).sum();
+        (1.0 + added).max(self.rules.supply_rules.multiply_floor)
     }
 
     /// What researching `item` costs, in the one resource stockpiled.
@@ -338,19 +414,19 @@ impl World {
         let mut ledger = self.ledger(player);
         let mut stockpile = self.stockpile(player);
         match change {
-            Change::Commission(organization) => {
-                stockpile -= self.cost(organization);
+            Change::Commission(recruiter, organization) => {
+                stockpile -= self.cost(recruiter, organization);
                 ledger += self.commission_ledger(organization);
             }
             Change::Research(item) => stockpile -= self.research_cost(item),
             Change::Build(template) => {
                 stockpile -= self.site_cost(template);
-                ledger += self.holding_ledger(template);
+                ledger += self.holding_ledger(player, template);
             }
             Change::Unpack(r) => {
                 ledger = ledger.without(&self.organization_ledger(r));
                 if let Some(u) = &self.organizations[r].unpacks {
-                    ledger += self.holding_ledger(&u.building.template);
+                    ledger += self.holding_ledger(player, &u.building.template);
                 }
             }
         }
@@ -400,7 +476,7 @@ mod tests {
 
     use tgmap::Id;
 
-    use crate::{Change, Command, Limit, Notice, Pause, Refused, State, World};
+    use crate::{Change, Command, EconomyEffect, Limit, Notice, Pause, Refused, State, World};
 
     #[test]
     fn sides_earn_what_they_own_produces_less_its_upkeep() {
@@ -441,6 +517,130 @@ mod tests {
         let ledger = w.ledger(1);
         assert_eq!(ledger.production.get("money"), 12.0);
         assert_eq!(ledger.upkeep.get("building_limit_consumed"), 2.0);
+    }
+
+    /// A property doing to the economy what's given, on what has all of
+    /// `requires`.
+    fn economic(
+        production: &[(&str, f32)],
+        recruit_cost: f32,
+        no_upkeep: bool,
+        requires: &[&str],
+    ) -> EconomyEffect {
+        EconomyEffect {
+            production: amounts(production),
+            recruit_cost,
+            no_upkeep,
+            requires: requires.iter().map(|&p| Id::from(p)).collect(),
+        }
+    }
+
+    #[test]
+    fn organizations_earn_for_themselves_as_well_as_their_members() {
+        let mut w = economy();
+        let r = company(&mut w, 1);
+        let money = |w: &World| w.organization_ledger(r).production.get("money");
+        assert_eq!(money(&w), 0.0);
+        let company = w.rules.economies.get_mut(&Id::from("company")).unwrap();
+        company.production.set("money", 5.0);
+        assert_eq!(money(&w), 5.0);
+        // A lone truck is its own organization, and earns once.
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let t = w.add_organization(&t);
+        assert_eq!(w.organization_ledger(t).production.get("money"), 12.0);
+    }
+
+    #[test]
+    fn technologies_add_production_to_each_thing_with_what_they_need() {
+        let mut w = economy();
+        let oil = Id::from("tech_oil_production");
+        (w.rules.economy_effects)
+            .insert(oil.clone(), economic(&[("oil", 5.0)], 0.0, false, &["oil"]));
+        w.rules.kinds.insert(Id::from("house"), kind(&["oil"]));
+        let r = company(&mut w, 1);
+        w.rules.kinds.insert(Id::from("soldier"), kind(&["oil"]));
+        let oil_of = |w: &World| w.balance(1).net.get("oil");
+        assert_eq!(oil_of(&w), 10.0);
+        w.grant(1, oil.clone());
+        // The house and each of the three soldiers, alive or not, and the
+        // company for having them.
+        assert_eq!(oil_of(&w), 10.0 + 5.0 * 5.0);
+        w.units[w.organizations[r].units[0]].die(0);
+        assert_eq!(oil_of(&w), 10.0 + 5.0 * 4.0);
+        // Unpacking previews the building's extra in place of the truck's.
+        w.rules.kinds.insert(Id::from("truck"), kind(&["oil"]));
+        w.rules.kinds.insert(Id::from("depot"), kind(&["oil"]));
+        let mut t = truck();
+        t.owner = 1;
+        t.place([30.0, 30.0], [0.0, 1.0]);
+        let t = w.add_organization(&t);
+        let now = oil_of(&w);
+        let (_, after) = w.preview(1, Change::Unpack(t));
+        assert_eq!(after.net.get("oil"), now - 2.0 + 5.0);
+        // Nothing while the house earns nothing.
+        w.buildings[0].state = State::Disabled;
+        assert_eq!(w.building_ledger(0).production.get("oil"), 0.0);
+        // Not on a side without it.
+        assert_eq!(w.balance(2).net.get("oil"), 0.0);
+    }
+
+    #[test]
+    fn what_has_no_upkeep_uses_no_limits_but_an_organization_keeps_its_places() {
+        let mut w = economy();
+        let free = Id::from("tech_noupkeep");
+        (w.rules.economy_effects).insert(free.clone(), economic(&[], 0.0, true, &[]));
+        company(&mut w, 1);
+        let before = w.ledger(1).upkeep;
+        assert_eq!(before.get("ammo"), 16.0);
+        w.grant(1, free);
+        let after = w.ledger(1).upkeep;
+        // The house's building limit and the company's own upkeep go, and
+        // so do the soldiers' own.
+        assert_eq!(after.get("building_limit_consumed"), 0.0);
+        assert_eq!(after.get("unit_limit_consumed"), 0.0);
+        assert_eq!(after.get("ammo"), 0.0);
+        assert_eq!(w.balance(1).limits[1].used, 0.0);
+    }
+
+    #[test]
+    fn an_organizations_lifted_upkeep_leaves_its_members_own() {
+        let mut w = economy();
+        let free = Id::from("free_company");
+        (w.rules.economy_effects).insert(free.clone(), economic(&[], 0.0, true, &[]));
+        w.rules
+            .kinds
+            .insert(Id::from("company"), kind(&["free_company"]));
+        company(&mut w, 1);
+        let upkeep = w.ledger(1).upkeep;
+        assert_eq!(upkeep.get("unit_limit_consumed"), 0.0);
+        assert_eq!(upkeep.get("ammo"), 6.0);
+    }
+
+    #[test]
+    fn recruiters_properties_scale_what_they_charge() {
+        let mut w = economy();
+        let cheap = Id::from("handicap_easy");
+        (w.rules.economy_effects).insert(cheap.clone(), economic(&[], -0.25, false, &[]));
+        let dear = Id::from("tech_conscription");
+        (w.rules.economy_effects).insert(dear.clone(), economic(&[], 0.5, false, &["infhq"]));
+        w.rules.supply_rules.multiply_floor = 0.05;
+        w.grant(1, cheap);
+        assert_eq!(w.cost(0, &truck()), 187.5);
+        // Only where the recruiter has what it needs.
+        w.grant(1, dear);
+        assert_eq!(w.cost(0, &truck()), 187.5);
+        w.rules.kinds.insert(Id::from("house"), kind(&["infhq"]));
+        assert_eq!(w.cost(0, &truck()), 312.5);
+        // Never below the floor.
+        let free = Id::from("free");
+        (w.rules.economy_effects).insert(free.clone(), economic(&[], -5.0, false, &[]));
+        w.grant(1, free);
+        assert_eq!(w.cost(0, &truck()), 250.0 * 0.05);
+        // What's paid is what's charged.
+        w.apply(1, commission(0, "truck")).unwrap();
+        assert!((w.stockpile(1) - (500.0 - 12.5)).abs() < 0.001);
     }
 
     #[test]
@@ -520,7 +720,7 @@ mod tests {
     #[test]
     fn previews_show_the_economy_after_an_order() {
         let mut w = economy();
-        let (stockpile, balance) = w.preview(1, Change::Commission(&truck()));
+        let (stockpile, balance) = w.preview(1, Change::Commission(0, &truck()));
         assert_eq!(stockpile, 250.0);
         assert_eq!(balance.net.get("money"), 37.0);
         assert_eq!(balance.limits[0].provided, 6.0);

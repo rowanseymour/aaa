@@ -202,6 +202,39 @@ pub struct Economy {
     pub supply_required: bool,
 }
 
+/// What a property does to the economy of what has it.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct EconomyEffect {
+    /// Added to the production of each thing it's on that has an economy.
+    pub production: Amounts,
+    /// Added to the 1 what a recruiter charges is multiplied by.
+    pub recruit_cost: f32,
+    /// Whether what it's on takes no upkeep.
+    pub no_upkeep: bool,
+    /// For a technology, the properties a thing of the side needs for it
+    /// to be on it.
+    pub requires: Vec<Id>,
+}
+
+fn effect(p: &defs::Property) -> Option<EconomyEffect> {
+    let mut out = EconomyEffect {
+        requires: crate::supply::listed(p.required_properties.as_deref()),
+        ..EconomyEffect::default()
+    };
+    for m in &p.modifier {
+        if crate::supply::is(&m.kind, "RESOURCE_PRODUCTION") {
+            out.production += Amounts::from(m.production.as_ref().unwrap_or(&Default::default()));
+        }
+        if crate::supply::is(&m.kind, "MULTIPLY") && crate::supply::is(&m.attribute, "RECRUIT_COST")
+        {
+            out.recruit_cost += m.amount.unwrap_or(0.0);
+        }
+        out.no_upkeep |= crate::supply::is(&m.modifier_flag, "NO_UPKEEP");
+    }
+    let does = out.production.nonzero().next().is_some() || out.recruit_cost != 0.0;
+    (does || out.no_upkeep).then_some(out)
+}
+
 /// How a template supplies its side's regiments.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Supply {
@@ -306,6 +339,12 @@ impl GameData {
                 supply_required: e.supply_required.unwrap_or(false),
             })
         })
+    }
+
+    /// What each property does to the economy, for those that do anything
+    /// to it, by its id.
+    pub fn economy_effects(&self) -> HashMap<Id, EconomyEffect> {
+        self.property_effects(effect)
     }
 
     /// The templates whose things their owner can sell.
@@ -545,6 +584,45 @@ mod tests {
         let amounts = Amounts::from(&read);
         let named: Vec<_> = amounts.iter().map(|(k, v)| (k.as_str(), v)).collect();
         assert_eq!(named, [("money", 5.0)]);
+    }
+
+    fn property(text: &str) -> defs::Property {
+        let parsed = tgi::parse(text);
+        let block = parsed.root.blocks_of("Property").next().unwrap();
+        tgi::from_block(block).unwrap()
+    }
+
+    #[test]
+    fn properties_change_production_upkeep_and_what_recruits_cost() {
+        let oil = property(
+            "[Property]\n{\n\tIDS = tech_oil_production\n\trequired_properties = oil\n\
+             \t[Modifier]\n\t{\n\t\ttype = RESOURCE_PRODUCTION\n\
+             \t\t[Production]\n\t\t{\n\t\t\toil = 5\n\t\t}\n\t}\n}\n",
+        );
+        let mut five = Amounts::default();
+        five.set("oil", 5.0);
+        assert_eq!(
+            effect(&oil),
+            Some(EconomyEffect {
+                production: five,
+                requires: vec![Id::from("oil")],
+                ..EconomyEffect::default()
+            })
+        );
+        let cheaper = property(
+            "[Property]\n{\n\tIDS = easy\n\
+             \t[Modifier]\n\t{\n\t\ttype = MULTIPLY\n\t\tattribute = RECRUIT_COST\n\t\tamount = -0.25\n\t}\n\
+             \t[Modifier]\n\t{\n\t\ttype = MULTIPLY\n\t\tattribute = health\n\t\tamount = -0.25\n\t}\n\
+             \t[Modifier]\n\t{\n\t\ttype = FLAG\n\t\tmodifier_flag = NO_UPKEEP\n\t}\n}\n",
+        );
+        let cheaper = effect(&cheaper).unwrap();
+        assert_eq!((cheaper.recruit_cost, cheaper.no_upkeep), (-0.25, true));
+        // What touches nothing economic isn't kept.
+        let healthier = property(
+            "[Property]\n{\n\tIDS = tougher\n\
+             \t[Modifier]\n\t{\n\t\ttype = MULTIPLY\n\t\tattribute = health\n\t\tamount = 0.1\n\t}\n}\n",
+        );
+        assert_eq!(effect(&healthier), None);
     }
 
     /// The templates resources are defined with, as AA and Kohan II have

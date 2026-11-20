@@ -592,6 +592,9 @@ pub struct Modifier {
     /// For an `ABILITY_EFFECT` one, what it adds.
     #[serde(default)]
     pub effect: Vec<Effect>,
+    /// For a `RESOURCE_PRODUCTION` one, what it adds to the production of
+    /// each thing it's on.
+    pub production: Option<Resources>,
 }
 
 /// What an object can do to others.
@@ -1148,6 +1151,8 @@ pub struct Handicap {
     pub description: Option<String>,
     /// The technology the side starts with, or `null`.
     pub property_ids: Option<String>,
+    /// Added to what the side starts with.
+    pub extra_resources: Option<Resources>,
 }
 
 /// A faction a side can be led by.

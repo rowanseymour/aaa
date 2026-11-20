@@ -40,6 +40,8 @@ pub struct Handicap {
     pub description: String,
     /// The technology the side starts with, if any.
     pub property: Option<Id>,
+    /// Added to what the side starts with.
+    pub extra: crate::Amounts,
 }
 
 /// A faction that leads a side.
@@ -342,6 +344,11 @@ impl GameData {
                     property: (h.property_ids.as_deref().map(str::trim))
                         .filter(|p| !p.is_empty() && !p.eq_ignore_ascii_case("null"))
                         .map(Id::from),
+                    extra: h
+                        .extra_resources
+                        .as_ref()
+                        .map(crate::Amounts::from)
+                        .unwrap_or_default(),
                     id,
                 })
             })
@@ -441,6 +448,17 @@ mod tests {
     fn handicap_names_that_are_one_glyph_show_its_image() {
         assert_eq!(only_char("\u{86}"), Some('\u{86}'));
         assert_eq!(only_char("Easy"), None);
+    }
+
+    #[test]
+    fn handicaps_can_add_to_what_a_side_starts_with() {
+        let parsed = tgi::parse(
+            "[Handicap]\n{\n\tIDS = rich\n\t[ExtraResources]\n\t{\n\t\tmoney = 300\n\t}\n}\n",
+        );
+        let block = parsed.root.blocks_of("Handicap").next().unwrap();
+        let h: defs::Handicap = tgi::from_block(block).unwrap();
+        let extra = crate::Amounts::from(h.extra_resources.as_ref().unwrap());
+        assert_eq!(extra.get("money"), 300.0);
     }
 
     #[test]

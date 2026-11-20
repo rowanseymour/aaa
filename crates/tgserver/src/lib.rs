@@ -187,6 +187,7 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
         experience_gains: game.experience_gains(),
         experience_levels: game.experience_levels(),
         supply_effects: game.supply_effects(),
+        economy_effects: game.economy_effects(),
         enchantment_types: game.enchantment_types(),
         kinds: game.kinds(),
         sort_objectives: game.sort_objectives(),
@@ -252,9 +253,14 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
             .collect();
         world.lead(player, experience.starting, faction.experience_max, ops);
     }
-    let given = handicap_technologies(&map.players, &setup.handicaps, &game.handicaps());
-    for (player, technology) in given {
-        world.gain(player, technology);
+    let handicaps = side_handicaps(&map.players, &setup.handicaps, &game.handicaps());
+    for (player, handicap) in handicaps {
+        if let Some(technology) = handicap.property {
+            world.gain(player, technology);
+        }
+        let stockpiled = world.rules().economy.stockpiled().next().cloned();
+        let extra = stockpiled.map_or(0.0, |s| handicap.extra.get(s.as_str()));
+        world.set_stockpile(player, world.stockpile(player) + extra);
     }
     Ok(Started {
         map,
@@ -264,18 +270,17 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     })
 }
 
-/// The technology each side starts with from its handicap, by player id:
-/// the one `chosen` for it, else the one the map gives it.
-pub fn handicap_technologies(
+/// Each side's handicap, by player id: the one `chosen` for it, else the
+/// one the map gives it.
+pub fn side_handicaps(
     players: &[Player],
     chosen: &BTreeMap<u32, Id>,
     all: &[Handicap],
-) -> HashMap<u32, Id> {
+) -> HashMap<u32, Handicap> {
     tgmap::sides(players)
         .filter_map(|p| {
             let id = chosen.get(&p.id).or(p.handicap.as_ref())?;
-            let handicap = all.iter().find(|h| h.id == *id)?;
-            Some((p.id, handicap.property.clone()?))
+            Some((p.id, all.iter().find(|h| h.id == *id)?.clone()))
         })
         .collect()
 }

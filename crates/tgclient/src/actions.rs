@@ -562,6 +562,9 @@ struct Recruit {
     look: Look,
     /// Its cost, production and upkeep, for the tooltip.
     economy: Vec<Row>,
+    /// Whether the first of `economy` is its cost, which the recruiter's
+    /// properties scale.
+    costed: bool,
     /// What it raises; `None` for what can't be raised yet, shown dimmed.
     organization: Option<Organization>,
 }
@@ -975,6 +978,7 @@ pub fn spawn(
             .map(|id| {
                 let listing = listings.get(id);
                 let organization = sim.0.rules().raisable.get(id).cloned();
+                let costed = listing.is_some_and(|l| !l.cost.is_empty());
                 let economy = listing.map_or_else(Vec::new, |l| {
                     [
                         (&cost, &l.cost, false),
@@ -1004,6 +1008,7 @@ pub fn spawn(
                             .and_then(|p| image(game, p)),
                     },
                     economy,
+                    costed,
                     organization,
                 }
             })
@@ -1440,8 +1445,8 @@ pub fn hover(
     let changed = match (&preview.0, &previewed) {
         (None, None) => false,
         (Some(Previewed::Unpack(a)), Some(Previewed::Unpack(b))) => a != b,
-        (Some(Previewed::Commission(a)), Some(Previewed::Commission(b))) => {
-            a.template != b.template
+        (Some(Previewed::Commission(at, a)), Some(Previewed::Commission(by, b))) => {
+            at != by || a.template != b.template
         }
         (Some(Previewed::Research(a)), Some(Previewed::Research(b))) => a != b,
         _ => true,
@@ -1474,9 +1479,12 @@ fn previewed(
         .filter(|(_, hover)| hover.get())
         .find_map(|(slot, _)| shown.entries[slot.0]);
     match hovered {
-        Some(Entry::Recruit(i)) => (looks.menu(sim, building).get(i))
-            .and_then(|r| r.organization.clone())
-            .map(|r| Previewed::Commission(Box::new(r))),
+        Some(Entry::Recruit(i)) => (looks.menu(sim, building).get(i)).and_then(|r| {
+            Some(Previewed::Commission(
+                building?,
+                Box::new(r.organization.clone()?),
+            ))
+        }),
         Some(Entry::Research(i)) => {
             let list = building.map_or(&[][..], |b| sim.research_list(b));
             list.get(i).cloned().map(Previewed::Research)
@@ -1489,7 +1497,7 @@ fn previewed(
             Page::Placing(i) => builds(sim, selected).get(i).cloned().map(Previewed::Build),
             Page::Aiming(Aim::Unpack) => unpacking.map(Previewed::Unpack),
             Page::Delivering(_) => (looks.delivered(sim, building, page))
-                .map(|r| Previewed::Commission(Box::new(r.clone()))),
+                .and_then(|r| Some(Previewed::Commission(building?, Box::new(r.clone())))),
             _ => None,
         },
     }
@@ -1672,7 +1680,16 @@ impl Grounds<'_> {
                 }
             }
             Entry::Recruit(i) => {
-                table.extend(menu[i].economy.iter().cloned());
+                let mut economy = menu[i].economy.clone();
+                // What it costs here, shown rounded up as it's charged.
+                if let (true, Some(b), Some(cost)) = (menu[i].costed, building, economy.first_mut())
+                {
+                    let times = sim.recruit_multiplier(b);
+                    for q in &mut cost.amounts {
+                        q.amount = (q.amount * times).ceil();
+                    }
+                }
+                table.extend(economy);
                 let lacking: Vec<String> = (lacks[i].properties.iter())
                     .chain(&lacks[i].structures)
                     .map(|id| looks.names.get(id).map_or(id.to_string(), Clone::clone))
@@ -1685,10 +1702,11 @@ impl Grounds<'_> {
         }
         let refused = (self.refusal.0).filter(|(s, _)| *s == slot).map(|(_, r)| r);
         let unaffordable = match (entry, refused) {
-            (Entry::Recruit(i), Some(tgsim::Refused::Unaffordable)) => menu[i]
-                .organization
-                .as_ref()
-                .map(|r| (&looks.affording, sim.cost(r))),
+            (Entry::Recruit(i), Some(tgsim::Refused::Unaffordable)) => {
+                (menu[i].organization.as_ref())
+                    .zip(building)
+                    .map(|(r, b)| (&looks.affording, sim.cost(b, r)))
+            }
             _ => None,
         };
         let why = match (ready, why, refused) {
@@ -2399,7 +2417,7 @@ pub fn aim(
             Err(tgsim::Refused::Unaffordable) => {
                 let listed = menus.menu(&sim.0, chosen.0).get(i);
                 let name = listed.map_or("", |r| r.look.name.as_str());
-                let cost = sim.0.cost(organization).ceil().to_string();
+                let cost = sim.0.cost(b, organization).ceil().to_string();
                 let text = fill(&menus.affording, &[name, &cost]);
                 let about = About::Building(b);
                 failed.write(Failed {

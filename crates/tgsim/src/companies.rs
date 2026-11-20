@@ -63,7 +63,7 @@ impl World {
         if self.buildings[centre].besieged.is_some() {
             return Err(Refused::Besieged);
         }
-        if self.cost(&organization) > self.stockpile(player) {
+        if self.cost(centre, &organization) > self.stockpile(player) {
             return Err(Refused::Unaffordable);
         }
         if self.over_limit(player, &organization).is_some() {
@@ -109,7 +109,7 @@ impl World {
             .may_recruit(player, settlement, template, hero)?
             .into_owned();
         let centre = self.centre_of(settlement).ok_or(NotYours)?;
-        let paid = self.cost(&organization);
+        let paid = self.cost(centre, &organization);
         let left = self.stockpile(player) - paid;
         self.set_stockpile(player, left);
         organization.owner = player;

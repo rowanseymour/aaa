@@ -1337,6 +1337,7 @@ mod tests {
             name: None,
             description: String::new(),
             property: property.map(Id::from),
+            extra: Default::default(),
         };
         let handicaps = Handicaps::new(vec![
             handicap("easy", Some("penalty")),
@@ -1356,7 +1357,10 @@ mod tests {
         // The lobby offers the person's side none.
         let chosen = computer_handicaps(&players, Some(12), &chosen);
         assert_eq!(chosen, BTreeMap::from([(10, hard.clone())]));
-        let given = tgserver::handicap_technologies(&players, &chosen, &handicaps.all);
+        let given: HashMap<u32, Id> = (tgserver::side_handicaps(&players, &chosen, &handicaps.all)
+            .into_iter())
+        .filter_map(|(p, h)| Some((p, h.property?)))
+        .collect();
         // The independent player gets none, even from the map.
         let bonus_and_penalty = [(10, Id::from("bonus")), (13, Id::from("penalty"))];
         assert_eq!(given, HashMap::from(bonus_and_penalty));
