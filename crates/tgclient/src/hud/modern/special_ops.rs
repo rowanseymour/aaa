@@ -20,7 +20,7 @@ use crate::ui::{
     self, Click, Edge, Font, Gauge, Hint, Ink, Marked, Meter, Shade, Surface, label, meter, panel,
     tooltip,
 };
-use crate::{Leaders, Loaded, Local, Screen, Sim};
+use crate::{Leaders, Loaded, Local, Sim};
 
 /// An icon's size within its button, which is the action palette's, and
 /// the bar under it.
@@ -130,7 +130,7 @@ pub fn spawn(
             },
             Pickable::IGNORE,
             GlobalZIndex(2),
-            DespawnOnExit(Screen::Match),
+            DespawnOnExit(super::DRAWN),
         ))
         .with_children(|corner| {
             corner

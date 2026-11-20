@@ -28,22 +28,19 @@ pub struct SpecialOpsPlugin;
 
 impl Plugin for SpecialOpsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(
-            OnEnter(Screen::Match),
-            setup.in_set(crate::hud::Setup).after(crate::keys::load),
-        )
-        .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
-            commands.remove_resource::<Panel>();
-        })
-        .init_resource::<Armed>()
-        .add_systems(OnExit(Screen::Match), |mut armed: ResMut<Armed>| {
-            armed.0 = None
-        })
-        .add_systems(
-            Update,
-            mark.run_if(in_state(Screen::Match))
-                .run_if(resource_exists::<Panel>),
-        );
+        app.add_systems(OnEnter(Screen::Match), setup.after(crate::keys::load))
+            .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
+                commands.remove_resource::<Panel>();
+            })
+            .init_resource::<Armed>()
+            .add_systems(OnExit(Screen::Match), |mut armed: ResMut<Armed>| {
+                armed.0 = None
+            })
+            .add_systems(
+                Update,
+                mark.run_if(in_state(Screen::Match))
+                    .run_if(resource_exists::<Panel>),
+            );
     }
 }
 

@@ -4,8 +4,7 @@
 
 use bevy::prelude::*;
 
-use super::{Hud, Setup, playing};
-use crate::Screen;
+use super::{Hud, InMatch};
 
 pub mod actions;
 pub mod clock;
@@ -17,13 +16,15 @@ pub mod resource_bar;
 pub mod special_ops;
 pub mod supply;
 
+/// While a match is played with our interface.
+pub(crate) const DRAWN: InMatch = InMatch(Hud::Modern);
+
 pub struct ModernHudPlugin;
 
 impl Plugin for ModernHudPlugin {
     fn build(&self, app: &mut App) {
-        let drawn = || playing(Hud::Modern);
         app.add_systems(
-            OnEnter(Screen::Match),
+            OnEnter(DRAWN),
             (
                 minimap::spawn,
                 actions::spawn,
@@ -33,11 +34,9 @@ impl Plugin for ModernHudPlugin {
                 clock::spawn,
                 displays::spawn_buttons,
                 special_ops::spawn,
-                messages::place.after(crate::messages::spawn),
-            )
-                .after(Setup)
-                .before(crate::console::start_scripts)
-                .run_if(drawn()),
+                messages::place,
+                crate::object_display::redraw,
+            ),
         )
         .add_systems(
             Update,
@@ -60,8 +59,7 @@ impl Plugin for ModernHudPlugin {
                 (special_ops::refresh, special_ops::tips)
                     .run_if(resource_exists::<crate::special_ops::Panel>),
             )
-                .run_if(in_state(Screen::Match))
-                .run_if(drawn()),
+                .run_if(in_state(DRAWN)),
         );
     }
 }

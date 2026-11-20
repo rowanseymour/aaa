@@ -33,6 +33,7 @@ pub fn spawn(mut commands: Commands, minimap: Res<Minimap>, mut images: ResMut<A
         },
         // Over the banners, which stack by where they are on screen.
         GlobalZIndex(1),
+        DespawnOnExit(super::DRAWN),
         children![
             (
                 Backdrop,

@@ -942,8 +942,6 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(UiScaleSetting(ui_scale))
         .insert_resource(ui::Theme::from(program.palette))
         .init_resource::<hud::Hud>()
-        .init_resource::<hud::InMatch>()
-        .add_systems(PreUpdate, fit_ui)
         // The menu's backdrop has a camera too, which stays put.
         .configure_sets(
             Update,
@@ -989,10 +987,7 @@ pub fn run(program: Program) -> ExitCode {
         ))
         .add_plugins((fields::FieldsPlugin, lan::LanPlugin, staging::StagingPlugin))
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
-        .add_systems(
-            OnEnter(Screen::Loading),
-            (loading, messages::start, hud::choose),
-        )
+        .add_systems(OnEnter(Screen::Loading), (loading, messages::start))
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
             OnEnter(Screen::Match),
@@ -1010,8 +1005,7 @@ pub fn run(program: Program) -> ExitCode {
                     object_display::setup,
                     resource_bar::setup,
                     supply::setup,
-                )
-                    .in_set(hud::Setup),
+                ),
                 messages::spawn,
                 waypoints::load,
                 console::start_scripts,
@@ -1214,6 +1208,13 @@ pub fn run(program: Program) -> ExitCode {
             app.insert_state(Screen::MainMenu);
         }
     }
+    hud::add_states(&mut app);
+    // After the screen and the interface change, so the scale changes with
+    // them rather than a frame late.
+    app.add_systems(
+        bevy::state::state::StateTransition,
+        fit_ui.after(bevy::state::state::StateTransitionSystems::EnterSchedules),
+    );
     app.add_systems(Last, orders::leave_on_exit)
         .insert_resource(program);
     match app.run() {
@@ -2938,14 +2939,14 @@ fn fit_ui(
     setting: Res<UiScaleSetting>,
     windows: Query<Ref<Window>, With<PrimaryWindow>>,
     screen: Option<Res<bevy::state::state::State<Screen>>>,
-    hud: Res<hud::InMatch>,
+    hud: Option<Res<bevy::state::state::State<hud::InMatch>>>,
     mut scale: ResMut<UiScale>,
 ) {
     let window = windows.single().ok();
     let changed = setting.is_changed()
         || window.as_ref().is_some_and(|w| w.is_changed())
         || screen.as_ref().is_some_and(|s| s.is_changed())
-        || hud.is_changed();
+        || hud.as_ref().is_some_and(|h| h.is_changed());
     if !changed {
         return;
     }
@@ -2954,7 +2955,7 @@ fn fit_ui(
     if size.min_element() <= 0.0 {
         return;
     }
-    let original = hud.0 == hud::Hud::Original && screen.is_some_and(|s| *s.get() == Screen::Match);
+    let original = hud.is_some_and(|h| h.0 == hud::Hud::Original);
     let wanted = match original {
         true => hud::original::layout_scale(size),
         false => fitted(setting.0, size),

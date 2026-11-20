@@ -14,7 +14,7 @@ use crate::actions::{
 };
 use crate::intent::Asks;
 use crate::ui::{self, Click, Edge, Font, Ink, Shade, Surface, label, panel, tooltip};
-use crate::{Local, Screen, Selected, SelectedBuilding, Sim};
+use crate::{Local, Selected, SelectedBuilding, Sim};
 
 /// A button's side, in logical pixels; the icons are drawn 42 across.
 pub const BUTTON: f32 = 56.0;
@@ -63,7 +63,7 @@ pub fn spawn(mut commands: Commands) {
             },
             Visibility::Hidden,
             GlobalZIndex(1),
-            DespawnOnExit(Screen::Match),
+            DespawnOnExit(super::DRAWN),
         ))
         .with_children(|root| {
             // As wide as the grid, which the object display is kept clear of, and as
@@ -211,7 +211,7 @@ type TooltipOnly = (With<Tooltip>, Without<Slot>);
 /// The tooltip's box and what it last said.
 #[derive(SystemParam)]
 pub struct TipParts<'w, 's> {
-    tooltip: Single<'w, 's, (Entity, &'static mut Node), TooltipOnly>,
+    tooltip: Single<'w, 's, (Entity, &'static mut Node, Ref<'static, Tooltip>), TooltipOnly>,
     said: bevy::ecs::system::Local<'s, Tip>,
     commands: Commands<'w, 's>,
 }
@@ -219,7 +219,7 @@ pub struct TipParts<'w, 's> {
 impl TipParts<'_, '_> {
     /// Shows the tip, or hides the box for none.
     fn say(&mut self, tip: Option<Tip>) {
-        let (entity, node) = &mut *self.tooltip;
+        let (entity, node, fresh) = &mut *self.tooltip;
         let display = match tip {
             Some(_) => Display::Flex,
             None => Display::None,
@@ -228,7 +228,8 @@ impl TipParts<'_, '_> {
             node.display = display;
         }
         let tip = tip.unwrap_or_default();
-        if *self.said == tip {
+        // What it last said was in the box before this one.
+        if *self.said == tip && !fresh.is_added() {
             return;
         }
         let mut tooltip = self.commands.entity(*entity);

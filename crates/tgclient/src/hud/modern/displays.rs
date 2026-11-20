@@ -7,12 +7,12 @@ use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
 
 use super::minimap;
+use crate::Loaded;
 use crate::actions::Blocks;
 use crate::displays::{Displays, Icons, PANELS, Panel, icon};
 use crate::intent::Asks;
 use crate::keys::Bindings;
 use crate::ui::{self, Click, Edge, Hint, Ink, Marked, Surface, Theme};
-use crate::{Loaded, Screen};
 
 /// A glyph's size on its button.
 pub const GLYPH_SIZE: f32 = 22.0;
@@ -156,7 +156,7 @@ fn spawn_button(
         Surface::Clear,
         Edge::Border,
         GlobalZIndex(2),
-        DespawnOnExit(Screen::Match),
+        DespawnOnExit(super::DRAWN),
         children![(
             Glyph,
             ImageNode::new(glyph),
@@ -179,7 +179,7 @@ pub fn mark_buttons(bindings: Res<Bindings>, mut buttons: Query<(&PanelButton, &
 
 /// What [`light_buttons`] reads and sets on a button.
 type ButtonLook = (
-    &'static PanelButton,
+    Ref<'static, PanelButton>,
     Ref<'static, Hovered>,
     Has<bevy::ui::Pressed>,
     &'static mut Edge,
@@ -198,6 +198,7 @@ pub fn light_buttons(
     let restyle = displays.is_changed() || theme.is_changed();
     for (button, hovered, pressed, mut edge, mut surface, children) in &mut buttons {
         let open = displays.is_open(button.panel);
+        let restyle = restyle || button.is_added();
         if restyle || hovered.is_changed() {
             edge.set_if_neq(Edge::lit(open, hovered.get(), Edge::Border));
         }

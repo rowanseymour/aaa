@@ -95,6 +95,12 @@ pub struct Showing {
     pub(crate) icons_only: bool,
 }
 
+/// Has the interface just put up lay its display out afresh, as it would
+/// once what's shown changes.
+pub fn redraw(mut showing: ResMut<Showing>) {
+    showing.icons_only = false;
+}
+
 /// What of the display's layout can change while it shows the same thing.
 #[derive(Clone, PartialEq, Debug, Default)]
 pub(crate) struct Detail {

@@ -9,7 +9,7 @@ pub mod modern;
 pub mod original;
 
 /// Which interface matches are played with, as chosen in the options.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]
+#[derive(Resource, Clone, Copy, PartialEq, Eq, Hash, Default, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Hud {
     /// This project's own, over a view as wide as the window.
@@ -19,22 +19,86 @@ pub enum Hud {
     Original,
 }
 
-/// The [`Hud`] the match under way is played with: one chosen during it
-/// waits for the next.
-#[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug)]
-pub struct InMatch(pub Hud);
+/// The [`Hud`] chosen, as a state for [`InMatch`] to follow.
+#[derive(States, Clone, Copy, PartialEq, Eq, Hash, Default, Debug)]
+pub struct Chosen(pub Hud);
 
-/// Has the match about to be played take the [`Hud`] chosen.
-pub fn choose(mut commands: Commands, hud: Res<Hud>) {
-    commands.insert_resource(InMatch(*hud));
+/// The [`Hud`] the match under way is played with, which exists only
+/// during one and changes with the choice.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub(crate) struct InMatch(pub Hud);
+
+impl ComputedStates for InMatch {
+    type SourceStates = (crate::Screen, Chosen);
+
+    fn compute((screen, chosen): (crate::Screen, Chosen)) -> Option<Self> {
+        (screen == crate::Screen::Match).then_some(InMatch(chosen.0))
+    }
 }
 
-/// A run condition for what only `hud` draws.
-pub fn playing(hud: Hud) -> impl Fn(Res<InMatch>) -> bool + Clone {
-    move |in_match: Res<InMatch>| in_match.0 == hud
+/// Has [`Chosen`] follow the [`Hud`] chosen in the options.
+pub fn follow(hud: Res<Hud>, chosen: Res<State<Chosen>>, mut next: ResMut<NextState<Chosen>>) {
+    if chosen.0 != *hud {
+        next.set(Chosen(*hud));
+    }
 }
 
-/// Where what both interfaces share is set up as a match starts, for what
-/// either draws to go after.
-#[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
-pub struct Setup;
+/// Registers [`InMatch`], once the screens are.
+pub fn add_states(app: &mut App) {
+    app.init_state::<Chosen>()
+        .add_computed_state::<InMatch>()
+        .add_systems(PreUpdate, follow);
+}
+
+#[cfg(test)]
+mod tests {
+    use bevy::state::app::StatesPlugin;
+
+    use super::*;
+    use crate::Screen;
+
+    fn app(screen: Screen, hud: Hud) -> App {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(screen)
+            .insert_resource(hud);
+        add_states(&mut app);
+        app.update();
+        app
+    }
+
+    fn in_match(app: &App) -> Option<Hud> {
+        let state = app.world().get_resource::<State<InMatch>>();
+        state.map(|s| s.get().0)
+    }
+
+    #[test]
+    fn follows_the_choice_during_a_match() {
+        let mut app = app(Screen::Match, Hud::Original);
+        assert_eq!(in_match(&app), Some(Hud::Original));
+        *app.world_mut().resource_mut::<Hud>() = Hud::Modern;
+        app.update();
+        assert_eq!(in_match(&app), Some(Hud::Modern));
+        *app.world_mut().resource_mut::<Hud>() = Hud::Original;
+        app.update();
+        assert_eq!(in_match(&app), Some(Hud::Original));
+    }
+
+    #[test]
+    fn exists_only_during_a_match() {
+        let mut app = app(Screen::MainMenu, Hud::Original);
+        assert_eq!(in_match(&app), None);
+        let next = Screen::Match;
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(next);
+        app.update();
+        assert_eq!(in_match(&app), Some(Hud::Original));
+        let next = Screen::MainMenu;
+        app.world_mut()
+            .resource_mut::<NextState<Screen>>()
+            .set(next);
+        app.update();
+        assert_eq!(in_match(&app), None);
+    }
+}

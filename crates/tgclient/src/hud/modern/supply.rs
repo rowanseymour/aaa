@@ -12,7 +12,7 @@ use crate::actions::Blocks;
 use crate::intent::Asks;
 use crate::keys;
 use crate::ui::Hint;
-use crate::{Loaded, Local, Screen, Sim};
+use crate::{Loaded, Local, Sim};
 
 /// The button over the minimap that steps through the player's detached
 /// organizations, as F5 does; there only while there are some.
@@ -55,7 +55,7 @@ pub fn spawn(
             ..default()
         },
         GlobalZIndex(1),
-        DespawnOnExit(Screen::Match),
+        DespawnOnExit(super::DRAWN),
     ));
 }
 
@@ -65,9 +65,10 @@ pub fn spawn(
 pub fn show_cycle_button(
     sim: Res<Sim>,
     local: Res<Local>,
-    mut button: Single<&mut Node, With<CycleDetached>>,
+    mut button: Single<(&mut Node, Ref<CycleDetached>)>,
 ) {
-    if !sim.is_changed() && !local.is_changed() {
+    let (button, added) = &mut *button;
+    if !sim.is_changed() && !local.is_changed() && !added.is_added() {
         return;
     }
     let any = local.0.is_some_and(|p| sim.0.attachable(p));

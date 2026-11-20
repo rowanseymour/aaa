@@ -17,7 +17,7 @@ use crate::actions::Blocks;
 use crate::banners::Badges;
 use crate::object_display::*;
 use crate::ui::{self, Font, Gauge, Hint, Ink, Shade, Surface, framed, label, meter};
-use crate::{Drawn, Leaders, Loaded, Local, Screen, Sim};
+use crate::{Drawn, Leaders, Loaded, Local, Sim};
 
 /// Our pixels to one of the game's interface units, in which its layout is
 /// given, chosen so the display stands as tall as the action buttons beside it.
@@ -146,7 +146,7 @@ pub fn spawn(mut commands: Commands) {
                 ..default()
             },
             Pickable::IGNORE,
-            DespawnOnExit(Screen::Match),
+            DespawnOnExit(super::DRAWN),
         ))
         .add_children(&[said, display]);
 }
