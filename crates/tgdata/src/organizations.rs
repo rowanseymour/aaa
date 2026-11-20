@@ -38,6 +38,9 @@ pub struct Layout {
     pub combat: Option<usize>,
     /// The slot whose member the organization's position follows.
     pub primary: Option<usize>,
+    /// Each slot's property, e.g. `front`, which the object display groups
+    /// members' cards by.
+    pub kinds: Vec<Id>,
     /// What its broken formation's property gives it while it has no
     /// formation.
     pub broken: CombatEffect,
@@ -243,6 +246,9 @@ fn layout(l: &defs::OrganizationLayout, known: Known) -> Option<Layout> {
         default,
         combat,
         primary: l.slot.iter().position(|s| s.primary),
+        kinds: (l.slot.iter())
+            .map(|s| Id::from(s.property_ids.as_deref().unwrap_or_default()))
+            .collect(),
         broken: (l.broken_property.as_ref())
             .and_then(crate::experience::combat_effect)
             .unwrap_or_default(),
@@ -322,6 +328,7 @@ mod tests {
         assert_eq!(layout.formations[0].effect.efficiency.desired, Some(0.75));
         assert_eq!(layout.formations[0].effect.speed, -0.25);
         assert_eq!(layout.broken_types, [Id::from("scattered")]);
+        assert_eq!(layout.kinds, [Id::from("front"), Id::from("captain")]);
         assert_eq!(layout.formations[0].types, [Id::from("drilled")]);
         assert_eq!(layout.default, 0);
         assert_eq!(layout.combat, Some(0));

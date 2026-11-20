@@ -293,6 +293,9 @@ pub struct Looks {
     /// The template in each organization's primary slot, by the
     /// organization's; none for one with no such slot.
     pub(crate) primaries: HashMap<Id, Option<Id>>,
+    /// Each member's slot property, e.g. `front`, in member order, for
+    /// an organization of each template that's whole.
+    pub(crate) kinds: HashMap<Id, Vec<Id>>,
     /// The names of experience levels, by their properties' ids.
     pub(crate) levels: HashMap<Id, String>,
     pub(crate) images: HashMap<String, Option<Handle<Image>>>,
@@ -354,6 +357,16 @@ pub fn setup(
         let slot = layouts.get(&o.layout).and_then(|l| l.primary);
         (id.clone(), slot.and_then(|s| o.slots.get(s)?.clone()))
     });
+    let kinds = components.iter().filter_map(|(id, o)| {
+        let layout = layouts.get(&o.layout)?;
+        let start = layout.formations.get(layout.default)?;
+        let filled = o.slots.iter().enumerate().filter(|(_, e)| e.is_some());
+        let kinds = filled.flat_map(|(i, _)| {
+            let kind = layout.kinds.get(i).cloned().unwrap_or_else(|| Id::from(""));
+            std::iter::repeat_n(kind, start.slots.get(i).map_or(1, Vec::len))
+        });
+        Some((id.clone(), kinds.collect()))
+    });
     let (technologies, listings) = (game.technologies(), game.listings());
     let names = (technologies
         .iter()
@@ -372,6 +385,7 @@ pub fn setup(
     }
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
+        kinds: kinds.collect(),
         levels: game.level_names(),
         names: names.collect(),
         listings: listings.clone(),
@@ -1365,6 +1379,77 @@ pub(crate) fn captain(sim: &World, looks: &Looks, r: usize) -> usize {
     unit.unwrap_or_else(|| leader(sim, r))
 }
 
+/// The organization at `r`'s units that have cards, all but an officer
+/// `captain`, who has the portrait: grouped by their slots' property,
+/// the groups in the order the layout first has them.
+pub(crate) fn card_groups(sim: &World, looks: &Looks, r: usize, captain: usize) -> Vec<Vec<usize>> {
+    let organization = &sim.organizations[r];
+    let officer = is_officer(sim.units[captain].template.as_str());
+    let kinds = looks.kinds.get(&organization.template).map(Vec::as_slice);
+    grouped(&organization.units, kinds, officer.then_some(captain))
+}
+
+/// `units` but `without`, grouped by their `kinds`, given in the same
+/// order; all in one group where the kinds don't account for them.
+fn grouped(units: &[usize], kinds: Option<&[Id]>, without: Option<usize>) -> Vec<Vec<usize>> {
+    let kinds = kinds.filter(|k| k.len() == units.len());
+    let mut groups: Vec<(Option<&Id>, Vec<usize>)> = Vec::new();
+    for (n, &u) in units.iter().enumerate() {
+        if without == Some(u) {
+            continue;
+        }
+        let kind = kinds.map(|k| &k[n]);
+        match groups.iter_mut().find(|(k, _)| *k == kind) {
+            Some((_, group)) => group.push(u),
+            None => groups.push((kind, vec![u])),
+        }
+    }
+    groups.into_iter().map(|(_, g)| g).collect()
+}
+
+/// Where each card of `groups` goes from the corner of the space they
+/// share, `size` big: each group a block as many cards high as fit,
+/// filled across then down, `gap` apart, and the blocks side by side
+/// `separation` further apart. Blocks too wide for it all go in one,
+/// wrapping across.
+pub(crate) fn card_places(
+    groups: &[Vec<usize>],
+    card: Vec2,
+    gap: Vec2,
+    separation: f32,
+    size: Vec2,
+) -> Vec<(usize, Vec2)> {
+    let step = card + gap;
+    let rows = (((size.y + gap.y) / step.y).floor() as usize).max(1);
+    let fits = (((size.x + gap.x) / step.x).floor() as usize).max(1);
+    let blocks: Vec<usize> = groups.iter().map(|g| g.len().div_ceil(rows)).collect();
+    let wide = blocks
+        .iter()
+        .map(|&a| a as f32 * step.x + separation)
+        .sum::<f32>();
+    let all;
+    let (groups, blocks) = match wide - gap.x - separation <= size.x {
+        true => (groups, blocks),
+        false => {
+            all = [groups.concat()];
+            (&all[..], vec![fits])
+        }
+    };
+    let mut left = 0.0;
+    let mut places = Vec::new();
+    for (group, across) in groups.iter().zip(blocks) {
+        for (n, &u) in group.iter().enumerate() {
+            let (column, row) = (n % across, n / across);
+            places.push((
+                u,
+                Vec2::new(left + column as f32 * step.x, row as f32 * step.y),
+            ));
+        }
+        left += across as f32 * step.x + separation;
+    }
+    places
+}
+
 /// An organization's commanding officer, else its first unit.
 fn leader(sim: &World, r: usize) -> usize {
     let units = &sim.organizations[r].units;
@@ -1562,6 +1647,48 @@ mod tests {
             formation_property(&column, 0),
             formation_property(&column, 1)
         );
+    }
+
+    #[test]
+    fn each_kind_of_card_has_a_block_of_its_own() {
+        let groups = [(0..6).collect(), vec![6, 7]];
+        let (card, gap) = (Vec2::new(42.0, 47.0), Vec2::splat(2.0));
+        let places = card_places(&groups, card, gap, 5.0, Vec2::new(203.0, 101.0));
+        let at = |u: usize| places.iter().find(|p| p.0 == u).unwrap().1;
+        // Three across and two down, then the other two in a column.
+        assert_eq!(at(2), Vec2::new(88.0, 0.0));
+        assert_eq!(at(3), Vec2::new(0.0, 49.0));
+        assert_eq!(at(6), Vec2::new(137.0, 0.0));
+        assert_eq!(at(7), Vec2::new(137.0, 49.0));
+    }
+
+    #[test]
+    fn too_many_cards_for_blocks_wrap_across_in_one() {
+        let groups = [(0..8).collect(), vec![8, 9]];
+        // Wider than the space, as one group of ten would be too.
+        let (card, gap) = (Vec2::new(42.0, 47.0), Vec2::splat(2.0));
+        let places = card_places(&groups, card, gap, 5.0, Vec2::new(203.0, 101.0));
+        let at = |u: usize| places.iter().find(|p| p.0 == u).unwrap().1;
+        assert_eq!(at(3), Vec2::new(132.0, 0.0));
+        assert_eq!(at(4), Vec2::new(0.0, 49.0));
+        assert!(places.iter().all(|(_, p)| p.x + card.x <= 203.0));
+    }
+
+    #[test]
+    fn cards_are_grouped_by_slot_unless_the_slots_dont_fit() {
+        let (front, support) = (Id::from("front"), Id::from("support"));
+        let kinds = [
+            front.clone(),
+            support.clone(),
+            front.clone(),
+            Id::from("captain"),
+        ];
+        assert_eq!(
+            grouped(&[5, 6, 7, 8], Some(&kinds), Some(8)),
+            [vec![5, 7], vec![6]]
+        );
+        // One lost, so the slots no longer say which is which.
+        assert_eq!(grouped(&[5, 6, 7], Some(&kinds), None), [vec![5, 6, 7]]);
     }
 
     #[test]

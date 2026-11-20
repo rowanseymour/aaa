@@ -746,34 +746,29 @@ impl Ui<'_> {
         // An HQ shows its places where an organization shows its units.
         let is_hq = !self.detail.slots.is_empty();
         if !lone(self.sim, r) && !is_hq {
-            // Cards across, wrapping, as the game's has them,
-            // for all but an officer, who has the portrait.
-            let officer = is_officer(self.sim.units[captain].template.as_str());
-            let mut units = self.sim.organizations[r].units.clone();
-            units.retain(|&u| !(officer && u == captain));
-            let pictures: Vec<_> = units
+            // A block of cards for each kind of slot, as the game's has
+            // them, for all but an officer, who has the portrait.
+            let groups = card_groups(self.sim, self.looks, r, captain);
+            let card = Vec2::new(42.0, 47.0);
+            let places = card_places(
+                &groups,
+                card,
+                Vec2::splat(2.0),
+                5.0,
+                Vec2::new(210.0, 110.0),
+            );
+            let pictures: Vec<_> = places
                 .iter()
-                .map(|&u| self.picture(self.sim.units[u].template.as_str()))
+                .map(|&(u, _)| self.picture(self.sim.units[u].template.as_str()))
                 .collect();
             commands.entity(root).with_children(|display| {
                 display
-                    .spawn((
-                        Node {
-                            flex_wrap: FlexWrap::Wrap,
-                            column_gap: px(2.0 * SCALE),
-                            row_gap: px(2.0 * SCALE),
-                            align_content: AlignContent::FlexStart,
-                            ..at(144.0, 44.0, 210.0, 110.0)
-                        },
-                        Pickable::IGNORE,
-                    ))
+                    .spawn((at(144.0, 44.0, 210.0, 110.0), Pickable::IGNORE))
                     .with_children(|cards| {
-                        for (&u, picture) in units.iter().zip(pictures) {
+                        for (&(u, place), picture) in places.iter().zip(pictures) {
                             let card = framed(Node {
-                                width: px(42.0 * SCALE),
-                                height: px(47.0 * SCALE),
                                 flex_direction: FlexDirection::Column,
-                                ..default()
+                                ..at(place.x, place.y, card.x, card.y)
                             });
                             cards
                                 .spawn((card, says(Says::Unit(u))))

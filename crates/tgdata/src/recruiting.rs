@@ -566,6 +566,7 @@ mod tests {
             default: 0,
             combat: None,
             primary: None,
+            kinds: Vec::new(),
             broken: Default::default(),
             broken_types: Vec::new(),
         };
