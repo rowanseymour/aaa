@@ -1398,7 +1398,13 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
 /// about, and how loading goes.
 fn loading(mut commands: Commands, pending: Res<Pending>, words: Res<StageWords>) {
     use ui::{Edge, Font, Ink, Surface, label, text};
-    commands.spawn((Camera2d, DespawnOnExit(Screen::Loading)));
+    // After the map's camera, which is set up behind the screen and draws
+    // to a texture of its own.
+    let camera = Camera {
+        order: 1,
+        ..default()
+    };
+    commands.spawn((Camera2d, camera, DespawnOnExit(Screen::Loading)));
     let root = commands
         .spawn((
             LoadingScreen,
