@@ -179,16 +179,31 @@ pub enum Fill {
     Stockpile(usize),
     /// The health of a delivery's aircraft, which nothing hurts.
     Flight,
+    /// The health of a position in an organization that no one fills.
+    Vacant,
     /// An organization's attack efficiency.
     Efficiency(usize),
     /// An organization's morale.
     Morale(usize),
 }
 
-/// The marker on an organization's efficiency bar at the efficiency it's
-/// easing towards.
-#[derive(Component)]
-pub struct EfficiencyTarget(pub(crate) usize);
+/// A marker on one of an organization's bars, by the organization's index.
+#[derive(Component, Clone, Copy)]
+pub enum Marker {
+    /// On its efficiency bar, at the efficiency it's easing towards.
+    Efficiency(usize),
+    /// On its morale bar, at its breakpoint, the morale it breaks at.
+    Breakpoint(usize),
+}
+
+impl Marker {
+    /// The organization whose bar it's on.
+    pub(crate) fn organization(self) -> usize {
+        match self {
+            Marker::Efficiency(r) | Marker::Breakpoint(r) => r,
+        }
+    }
+}
 
 /// The widget whose layout the efficiency bar's marker comes from, and
 /// the marker's own widget within it.
@@ -302,13 +317,18 @@ pub struct Looks {
     /// Which member, in member order, holds the primary position of an
     /// organization of each template that's whole, for those with one.
     pub(crate) primary_members: HashMap<Id, usize>,
+    /// Every position of each organization template's layout, in order,
+    /// with the unit template its own template names for it, and which
+    /// is the primary one, for those with one.
+    pub(crate) positions: HashMap<Id, (Vec<Option<Id>>, Option<usize>)>,
     /// The names of experience levels, by their properties' ids.
     pub(crate) levels: HashMap<Id, String>,
     pub(crate) images: HashMap<String, Option<Handle<Image>>>,
     pub(crate) formats: bevy::image::CompressedImageFormats,
-    /// The archive path of the efficiency bar's marker, if the layouts
-    /// have one.
-    pub(crate) efficiency_target: Option<String>,
+    /// The archive path of the picture marking a point on an
+    /// organization's bars, if the layouts have one: the efficiency
+    /// bar's, which the morale bar shares.
+    pub(crate) marker: Option<String>,
 }
 
 impl Looks {
@@ -375,6 +395,8 @@ pub fn setup(
     });
     let primary_members = (components.iter())
         .filter_map(|(id, o)| Some((id.clone(), primary_member_of(layouts.get(&o.layout)?, o)?)));
+    let positions = (components.iter())
+        .filter_map(|(id, o)| Some((id.clone(), positions_of(layouts.get(&o.layout)?, o)?)));
     let (technologies, listings) = (game.technologies(), game.listings());
     let names = (technologies
         .iter()
@@ -395,6 +417,7 @@ pub fn setup(
         primaries: primaries.collect(),
         kinds: kinds.collect(),
         primary_members: primary_members.collect(),
+        positions: positions.collect(),
         levels: game.level_names(),
         names: names.collect(),
         listings: listings.clone(),
@@ -409,7 +432,7 @@ pub fn setup(
             .collect(),
         images: HashMap::new(),
         formats: formats.0,
-        efficiency_target: efficiency_target(&game.game_widgets()),
+        marker: efficiency_target(&game.game_widgets()),
     });
     commands.insert_resource(Showing::default());
 }
@@ -422,10 +445,19 @@ fn efficiency_target(widgets: &[tgdata::widgets::Widget]) -> Option<String> {
     (marker.parts.iter()).find_map(|p| p.texture.clone())
 }
 
-/// How far along its efficiency bar the organization at `r`'s marker
-/// stands: at the efficiency it's easing towards.
-pub(crate) fn towards(sim: &World, r: usize) -> Val {
-    percent(100.0 * sim.efficiency_target(r).clamp(0.0, 1.0))
+/// How far along its bar `marker` stands, its right edge there.
+pub(crate) fn marked(sim: &World, marker: Marker) -> Val {
+    let share = match marker {
+        Marker::Efficiency(r) => sim.efficiency_target(r),
+        Marker::Breakpoint(r) => {
+            let max = sim.organizations[r].morale_max;
+            match max > 0.0 {
+                true => sim.breakpoint(r) / max,
+                false => 0.0,
+            }
+        }
+    };
+    percent(100.0 * share.clamp(0.0, 1.0))
 }
 
 /// The mode the selection calls for the display to show in.
@@ -501,9 +533,11 @@ fn holder(sim: &World, mode: &Mode) -> Option<Piece> {
 /// that icons keep the order their properties came in while their holder
 /// stays selected.
 fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
+    // A thing is made with its template's properties last listed first,
+    // so its own before those it inherits.
     let own = |template: &Id| {
         let kind = sim.rules().kinds.get(template);
-        kind.into_iter().flat_map(|k| &k.properties).cloned()
+        kind.into_iter().flat_map(|k| k.properties.iter().rev()).cloned()
     };
     let all: Vec<Id> = match holder {
         Piece::Organization(r) => {
@@ -868,7 +902,7 @@ pub fn refresh(
     leaders: Res<Leaders>,
     local: Res<Local>,
     mut bars: Query<(&Fill, &mut Meter)>,
-    mut targets: Query<(&EfficiencyTarget, &mut Node)>,
+    mut markers: Query<(&Marker, &mut Node)>,
     fog: Option<Res<crate::fog::Fog>>,
     mut tips: Query<(&Says, &mut Hint, &Hovered)>,
     mut pictures: Query<(&UnitPicture, &mut Shade)>,
@@ -886,10 +920,10 @@ pub fn refresh(
             meter.share = share;
         }
     }
-    for (target, mut node) in &mut targets {
-        let towards = towards(sim, target.0);
-        if node.left != towards {
-            node.left = towards;
+    for (&marker, mut node) in &mut markers {
+        let at = marked(sim, marker);
+        if node.left != at {
+            node.left = at;
         }
     }
     let teller = Teller {
@@ -1044,9 +1078,14 @@ pub(crate) fn share(sim: &World, fill: Fill) -> f32 {
         (_, true) => (now / full).clamp(0.0, 1.0),
         // What has no health to lose shows whole.
         (Fill::Unit(_) | Fill::Organization(_) | Fill::Building(_) | Fill::Flight, false) => 1.0,
-        (Fill::Progress(_) | Fill::Stockpile(_) | Fill::Efficiency(_) | Fill::Morale(_), false) => {
-            0.0
-        }
+        (
+            Fill::Progress(_)
+            | Fill::Stockpile(_)
+            | Fill::Efficiency(_)
+            | Fill::Morale(_)
+            | Fill::Vacant,
+            false,
+        ) => 0.0,
     }
 }
 
@@ -1090,6 +1129,7 @@ fn measure(sim: &World, fill: Fill) -> (f32, f32) {
             (sim.buildings[b].supply.stockpile, max)
         }
         Fill::Flight => (1.0, 1.0),
+        Fill::Vacant => (0.0, 1.0),
         Fill::Efficiency(r) => (sim.organizations[r].efficiency, 1.0),
         Fill::Morale(r) => {
             let organization = &sim.organizations[r];
@@ -1489,6 +1529,26 @@ fn primary_member_of(
     through.sum::<usize>().checked_sub(1)
 }
 
+/// Every position of `layout`, in order, with the unit template
+/// `component` names for it, and which is the primary one: the last of
+/// the primary slot's.
+fn positions_of(
+    layout: &tgdata::Layout,
+    component: &tgdata::OrganizationComponent,
+) -> Option<(Vec<Option<Id>>, Option<usize>)> {
+    let start = layout.formations.get(layout.default)?;
+    let mut positions = Vec::new();
+    let mut primary = None;
+    for (i, slot) in start.slots.iter().enumerate() {
+        let template = component.slots.get(i).cloned().flatten();
+        positions.extend(std::iter::repeat_n(template, slot.len()));
+        if layout.primary == Some(i) {
+            primary = positions.len().checked_sub(1);
+        }
+    }
+    Some((positions, primary))
+}
+
 /// Which of `organization`'s members holds its primary position, where
 /// its members can be told apart by position.
 fn primary_member(looks: &Looks, organization: &tgsim::Organization) -> Option<usize> {
@@ -1497,28 +1557,62 @@ fn primary_member(looks: &Looks, organization: &tgsim::Organization) -> Option<u
     (kinds.len() == organization.units.len()).then_some(p)
 }
 
-/// The organization at `r`'s units that have a small bar on its card in
-/// the group display: those of its first nine positions but the primary
-/// one, whose unit has the wide bar.
-pub(crate) fn small_bars(sim: &World, looks: &Looks, r: usize) -> Vec<usize> {
+/// The small bars on the organization at `r`'s card in the group display,
+/// in order: one for each of its first nine positions that its template
+/// names a unit for, but the primary one, whose unit has the wide bar.
+/// Each has the unit standing in that position, or none while it's empty.
+pub(crate) fn small_bars(sim: &World, looks: &Looks, r: usize) -> Vec<Option<usize>> {
     let organization = &sim.organizations[r];
-    let primary = match primary_member(looks, organization) {
-        Some(p) => Some(organization.units[p]),
-        // Where the positions can't be told apart, the one with the wide
-        // bar.
-        None => looks
-            .primaries
-            .get(&organization.template)
-            .is_some_and(Option::is_some)
-            .then(|| captain(sim, looks, r)),
+    let Some((positions, primary)) = looks.positions.get(&organization.template) else {
+        // Without its layout, a bar for each of its units but the captain.
+        let captain = captain(sim, looks, r);
+        let units = organization.units.iter().copied().take(MOST_SMALL_BARS);
+        return units.filter(|&u| u != captain).map(Some).collect();
     };
-    small(&organization.units, primary)
+    let units = organization
+        .units
+        .iter()
+        .map(|&u| (u, &sim.units[u].template));
+    small(positions, &standing(positions, units), *primary)
 }
 
-/// `units`, of the first [`MOST_SMALL_BARS`] positions, but `primary`.
-fn small(units: &[usize], primary: Option<usize>) -> Vec<usize> {
-    let first = units.iter().take(MOST_SMALL_BARS).copied();
-    first.filter(|&u| Some(u) != primary).collect()
+/// Which of `units`, each with its template, stands in each of
+/// `positions`: the first not yet placed of the position's template, then
+/// any left over in the positions still empty, as one whose template has
+/// since changed.
+fn standing<'a>(
+    positions: &[Option<Id>],
+    units: impl Iterator<Item = (usize, &'a Id)>,
+) -> Vec<Option<usize>> {
+    let mut left: Vec<_> = units.collect();
+    let mut held: Vec<Option<usize>> = (positions.iter())
+        .map(|template| {
+            let at = left
+                .iter()
+                .position(|(_, t)| Some(*t) == template.as_ref())?;
+            Some(left.remove(at).0)
+        })
+        .collect();
+    let mut left = left.into_iter();
+    for (place, template) in held.iter_mut().zip(positions) {
+        if place.is_none() && template.is_some() {
+            *place = left.next().map(|(u, _)| u);
+        }
+    }
+    held
+}
+
+/// Who `held` has in each of the first [`MOST_SMALL_BARS`] of
+/// `positions`, but `primary` and any with no unit template.
+fn small(
+    positions: &[Option<Id>],
+    held: &[Option<usize>],
+    primary: Option<usize>,
+) -> Vec<Option<usize>> {
+    (positions.iter().zip(held).take(MOST_SMALL_BARS).enumerate())
+        .filter(|&(i, (template, _))| template.is_some() && Some(i) != primary)
+        .map(|(_, (_, &u))| u)
+        .collect()
 }
 
 /// How many of an organization's positions the group display's card
@@ -1799,15 +1893,60 @@ mod tests {
 
     #[test]
     fn small_bars_are_the_first_nine_positions_but_the_primary() {
-        // An officer last after eight soldiers, as AA's infantry has.
-        assert_eq!(
-            small(&(10..19).collect::<Vec<_>>(), Some(18)),
-            (10..18).collect::<Vec<_>>()
-        );
+        let named = |slots: [(Option<&str>, usize); 6]| -> Vec<Option<Id>> {
+            (slots.into_iter())
+                .flat_map(|(t, n)| std::iter::repeat_n(t.map(Id::from), n))
+                .collect()
+        };
+        // AA's infantry: eight soldiers, then the captain, all named.
+        let infantry = named([
+            (Some("rifle"), 3),
+            (Some("mg"), 1),
+            (Some("mortar"), 1),
+            (Some("at"), 1),
+            (Some("sniper"), 2),
+            (Some("captain"), 1),
+        ]);
+        let held: Vec<_> = (10..19).map(Some).collect();
+        let bars = small(&infantry, &held, Some(8));
+        assert_eq!(bars, (10..18).map(Some).collect::<Vec<_>>());
+        // Its recon regiment names no unit for three slots.
+        let recon = named([
+            (Some("rifle"), 3),
+            (None, 1),
+            (Some("mortar"), 1),
+            (None, 1),
+            (None, 2),
+            (Some("captain"), 1),
+        ]);
+        assert_eq!(small(&recon, &held, Some(8)).len(), 4);
         // The primary one first, as a tank regiment's lead tank.
-        assert_eq!(small(&[4, 5, 6, 7], Some(4)), [5, 6, 7]);
+        let tanks = vec![Some(Id::from("tank")); 4];
+        let held = [Some(4), Some(5), Some(6), Some(7)];
+        assert_eq!(small(&tanks, &held, Some(0)), [Some(5), Some(6), Some(7)]);
         // No primary position: one each, nine at most.
-        assert_eq!(small(&(0..10).collect::<Vec<_>>(), None).len(), 9);
+        let herd = vec![Some(Id::from("cow")); 10];
+        assert_eq!(small(&herd, &[None; 10], None).len(), 9);
+    }
+
+    #[test]
+    fn units_stand_in_the_positions_of_their_templates() {
+        let (rifle, captain) = (Id::from("rifle"), Id::from("captain"));
+        let positions = [
+            Some(rifle.clone()),
+            Some(rifle.clone()),
+            None,
+            Some(captain.clone()),
+        ];
+        // A regiment that's arrived as its captain and one rifleman.
+        let units = [(7, &captain), (8, &rifle)];
+        let held = standing(&positions, units.into_iter());
+        assert_eq!(held, [Some(8), None, None, Some(7)]);
+        // One whose template no position names takes the first empty one.
+        let other = Id::from("other");
+        let units = [(7, &captain), (9, &other)];
+        let held = standing(&positions, units.into_iter());
+        assert_eq!(held, [Some(9), None, None, Some(7)]);
     }
 
     #[test]
