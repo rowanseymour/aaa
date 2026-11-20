@@ -967,6 +967,8 @@ pub fn run(program: Program) -> ExitCode {
         .add_observer(intent::send)
         .add_observer(formations::on_press)
         .add_observer(formations::on_activate)
+        .add_observer(actions::hold_card_button)
+        .add_observer(actions::press_card_button)
         .add_message::<waypoints::Sent>()
         .add_message::<messages::Refused>()
         .add_message::<messages::Failed>()
@@ -982,6 +984,7 @@ pub fn run(program: Program) -> ExitCode {
         .init_resource::<clock::PauseState>()
         .init_resource::<supply::Outline>()
         .init_resource::<actions::Page>()
+        .init_resource::<actions::AimedFor>()
         .init_resource::<formations::Formations>()
         .insert_resource(Side(side))
         .insert_resource(Nickname(name))
@@ -1098,6 +1101,8 @@ pub fn run(program: Program) -> ExitCode {
                     actions::tell,
                 )
                     .chain(),
+                (actions::let_go_card_buttons, actions::show_card_buttons)
+                    .after(object_display::refresh),
                 (
                     object_display::choose,
                     (object_display::refresh, object_display::portray),

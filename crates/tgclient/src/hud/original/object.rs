@@ -593,6 +593,28 @@ struct Draw<'a, 'w> {
     images: &'a mut Assets<Image>,
 }
 
+/// `r` placed within `at`, as a share of its size.
+fn share(r: Rect, at: Rect) -> Node {
+    Node {
+        position_type: PositionType::Absolute,
+        left: Val::Percent(100.0 * (r.left - at.left) / at.width().max(1.0)),
+        top: Val::Percent(100.0 * (r.top - at.top) / at.height().max(1.0)),
+        width: Val::Percent(100.0 * r.width() / at.width().max(1.0)),
+        height: Val::Percent(100.0 * r.height() / at.height().max(1.0)),
+        ..default()
+    }
+}
+
+/// A button's pictures, which [`Pressable`](super::Pressable) shows by
+/// the state it's in.
+fn spawn_faces(button: &mut ChildSpawnerCommands, faces: Vec<(Node, super::Drawn)>) {
+    for (node, drawn) in faces {
+        let image =
+            ImageNode::new(drawn.image.clone()).with_mode(bevy::ui::widget::NodeImageMode::Stretch);
+        button.spawn((node, image, Visibility::Hidden, drawn, Pickable::IGNORE));
+    }
+}
+
 impl Draw<'_, '_> {
     /// The formation buttons, down the layout's panel for them from its
     /// top, each its height over [`MOST`](crate::formations::MOST) apart,
@@ -622,36 +644,7 @@ impl Draw<'_, '_> {
                 right: within.left + size.width(),
                 bottom: top + size.height(),
             };
-            // Placed within the button, as a share of its size.
-            let share = |r: Rect| Node {
-                position_type: PositionType::Absolute,
-                left: Val::Percent(100.0 * (r.left - at.left) / at.width().max(1.0)),
-                top: Val::Percent(100.0 * (r.top - at.top) / at.height().max(1.0)),
-                width: Val::Percent(100.0 * r.width() / at.width().max(1.0)),
-                height: Val::Percent(100.0 * r.height() / at.height().max(1.0)),
-                ..default()
-            };
-            let faces: Vec<(Node, super::Drawn)> = (button.view.iter())
-                .flat_map(|v| &v.children)
-                .filter_map(|e| {
-                    let image = self
-                        .painter
-                        .layout
-                        .images
-                        .get(e.texture.as_deref()?)?
-                        .clone();
-                    let element = ViewElement {
-                        children: Vec::new(),
-                        ..e.clone()
-                    };
-                    let drawn = super::Drawn {
-                        when: vec![element],
-                        image,
-                        greyed: None,
-                    };
-                    Some((share(e.bounds.place(at)), drawn))
-                })
-                .collect();
+            let faces = self.faces(button, at);
             let icon = decal.map_or(at, |d| d.bounds(at));
             self.s
                 .spawn((
@@ -664,19 +657,36 @@ impl Draw<'_, '_> {
                     Visibility::Hidden,
                 ))
                 .with_children(|b| {
-                    for (node, drawn) in faces {
-                        let image = ImageNode::new(drawn.image.clone())
-                            .with_mode(bevy::ui::widget::NodeImageMode::Stretch);
-                        b.spawn((node, image, Visibility::Hidden, drawn, Pickable::IGNORE));
-                    }
+                    spawn_faces(b, faces);
                     b.spawn((
-                        share(icon),
+                        share(icon, at),
                         ImageNode::default(),
                         crate::formations::FormationIcon,
                         Pickable::IGNORE,
                     ));
                 });
         }
+    }
+
+    /// The pictures of `button` at `at` for the states it shows them in,
+    /// each placed within it.
+    fn faces(&self, button: &Widget, at: Rect) -> Vec<(Node, super::Drawn)> {
+        (button.view.iter())
+            .flat_map(|v| &v.children)
+            .filter_map(|e| {
+                let image = (self.painter.layout.images).get(e.texture.as_deref()?)?;
+                let element = ViewElement {
+                    children: Vec::new(),
+                    ..e.clone()
+                };
+                let drawn = super::Drawn {
+                    when: vec![element],
+                    image: image.clone(),
+                    greyed: None,
+                };
+                Some((share(e.bounds.place(at), at), drawn))
+            })
+            .collect()
     }
 
     /// The display's widget called `name`, drawn but for `skip`.
@@ -1429,8 +1439,42 @@ impl Draw<'_, '_> {
                 self.fill(&parts, "Morale/StatusBar", Fill::Morale(r));
                 self.efficiency(&parts, "AttackEfficiency", r);
                 self.health_bars(card, bounds, r);
+                self.card_button(card, bounds, r);
             }
         }
+    }
+
+    /// The button under the card at `at` that has the organization at
+    /// `r` run or rout, which [`show_card_buttons`] shows.
+    ///
+    /// [`show_card_buttons`]: crate::actions::show_card_buttons
+    fn card_button(&mut self, card: &Widget, at: Rect, r: usize) {
+        let name = crate::actions::CARD_BUTTON;
+        let Some(button) = card.children.iter().find(|c| c.name == name) else {
+            return;
+        };
+        let at = button.bounds(at);
+        let faces = self.faces(button, at);
+        // Shown at once, so it's there to press as soon as the card is.
+        let shown = match crate::actions::card_order(self.sim, self.local, r) {
+            Some(_) => Visibility::Inherited,
+            None => Visibility::Hidden,
+        };
+        let id = format!(
+            "object.organization.{}.retreat",
+            self.sim.organizations[r].id
+        );
+        self.s
+            .spawn((
+                super::Pressable::default(),
+                crate::actions::CardButton(r),
+                ui::called(id),
+                self.painter.place(at),
+                Button,
+                Pickable::default(),
+                shown,
+            ))
+            .with_children(|b| spawn_faces(b, faces));
     }
 
     /// The small bars on a group display's card at `at` for the
