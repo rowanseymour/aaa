@@ -9,7 +9,8 @@
 
 use std::collections::HashMap;
 
-use bevy::camera::Viewport;
+use bevy::camera::{Hdr, Viewport};
+use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
@@ -57,7 +58,7 @@ impl Plugin for OriginalHudPlugin {
         .add_systems(
             PostUpdate,
             (
-                match_msaa,
+                match_textures,
                 (fit_view, lettering::scale, lettering::share_face)
                     .chain()
                     .before(bevy::camera::CameraUpdateSystems)
@@ -148,6 +149,10 @@ pub fn spawn_overlay(mut commands: Commands) {
             clear_color: ClearColorConfig::None,
             ..default()
         },
+        // Its finishing pass runs over the map's picture too, which the
+        // map's camera leaves as it is.
+        Tonemapping::None,
+        DebandDither::Disabled,
         Overlay,
         DespawnOnExit(DRAWN),
     ));
@@ -157,20 +162,28 @@ pub fn spawn_overlay(mut commands: Commands) {
 #[derive(Component)]
 pub struct Overlay;
 
-/// Has the [`Overlay`] take the map camera's MSAA: drawing over what that
-/// camera drew needs the same samples to each pixel, as with others the
-/// two draw to different textures and the overlay's shows what's stale.
-pub fn match_msaa(
-    map: Query<&Msaa, With<tgrender::camera::RtsCamera>>,
-    mut overlays: Query<&mut Msaa, (With<Overlay>, Without<tgrender::camera::RtsCamera>)>,
+/// Has the [`Overlay`] take the map camera's MSAA and HDR: drawing over what
+/// that camera drew needs the same kind of texture, as with another the two
+/// draw to different textures and the overlay's shows what's stale.
+pub fn match_textures(
+    mut commands: Commands,
+    map: Query<(&Msaa, Has<Hdr>), With<tgrender::camera::RtsCamera>>,
+    mut overlays: Query<(Entity, &mut Msaa, Has<Hdr>), OverlayOnly>,
 ) {
-    let Ok(&msaa) = map.single() else {
+    let Ok((&msaa, hdr)) = map.single() else {
         return;
     };
-    for mut overlay in &mut overlays {
-        overlay.set_if_neq(msaa);
+    for (overlay, mut samples, has_hdr) in &mut overlays {
+        samples.set_if_neq(msaa);
+        match (hdr, has_hdr) {
+            (true, false) => _ = commands.entity(overlay).insert(Hdr),
+            (false, true) => _ = commands.entity(overlay).remove::<Hdr>(),
+            _ => {}
+        }
     }
 }
+
+type OverlayOnly = (With<Overlay>, Without<tgrender::camera::RtsCamera>);
 
 /// The layouts' screen, which [`fit_view`] fits the map's view to.
 #[derive(Component)]
@@ -1208,6 +1221,23 @@ mod tests {
         assert!(world.get_entity(log).is_ok());
         assert!(world.get::<ChildOf>(log).is_none());
         assert!(world.get::<Camera>(map).unwrap().viewport.is_none());
+    }
+
+    #[test]
+    fn the_overlay_draws_to_the_same_kind_of_texture_as_the_map() {
+        let mut app = App::new();
+        app.add_systems(Update, match_textures);
+        let world = app.world_mut();
+        let map = (Msaa::Off, Hdr, tgrender::camera::RtsCamera::new(Vec3::ZERO));
+        let map = world.spawn(map).id();
+        let overlay = world.spawn((Overlay, Msaa::Sample4)).id();
+        app.update();
+        let world = app.world();
+        assert_eq!(world.get::<Msaa>(overlay), Some(&Msaa::Off));
+        assert!(world.get::<Hdr>(overlay).is_some());
+        app.world_mut().entity_mut(map).remove::<Hdr>();
+        app.update();
+        assert!(app.world().get::<Hdr>(overlay).is_none());
     }
 
     #[test]
