@@ -281,6 +281,11 @@ impl Effects {
         }
     }
 
+    /// Has effects for the night show from now on, or not.
+    pub(crate) fn set_night(&mut self, night: bool) {
+        self.night = night;
+    }
+
     /// The terrain group of the tile at a map point.
     fn group_at(&self, [x, y]: [f32; 2]) -> Option<&Id> {
         if self.side == 0 {

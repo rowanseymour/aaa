@@ -6,9 +6,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
-use bevy::ui_widgets::{Activate, ScrollArea};
+use bevy::ui_widgets::Activate;
 use tgdata::{Faction, Handicap, Id, Nation};
-use tgmap::{Brief, Player};
+use tgmap::{Brief, FogSetting, Player};
 use tgrender::textures;
 
 use crate::actions::GLYPH_DIR;
@@ -196,6 +196,8 @@ pub struct Lobby {
     /// The handicap chosen for each side the computer plays, by player id;
     /// the default where none is.
     handicaps: HashMap<u32, Id>,
+    /// The choice of each world rule not at its default, by the rule's id.
+    rules: BTreeMap<Id, Id>,
     open: Open,
 }
 
@@ -217,10 +219,21 @@ impl Lobby {
             nations: HashMap::new(),
             factions: HashMap::new(),
             handicaps: HashMap::new(),
+            rules: BTreeMap::new(),
             open: Open::Nothing,
         };
         lobby.keep_person_playing();
         lobby
+    }
+
+    /// The map's archive path.
+    pub(crate) fn map(&self) -> &str {
+        &self.map
+    }
+
+    /// The choice of each world rule not at its default, by the rule's id.
+    pub(crate) fn rules(&self) -> &BTreeMap<Id, Id> {
+        &self.rules
     }
 
     /// The teams the sides play in, by player id, each with what to call
@@ -271,6 +284,7 @@ impl Lobby {
             self.brief = Brief::load(&data.0, &staging.map);
         }
         self.preset = staging.preset;
+        self.rules = chosen_rules(staging.fog, staging.sun.clone());
         self.person = staging.guest(me).and_then(|g| g.side);
         self.nations = staging.nations.clone().into_iter().collect();
         self.factions = staging.factions.clone().into_iter().collect();
@@ -289,7 +303,8 @@ impl Lobby {
             nations: self.nations.clone().into_iter().collect(),
             factions: self.factions.clone().into_iter().collect(),
             handicaps: computer_handicaps(&brief.players, self.person, &self.handicaps),
-            fog: None,
+            fog: fog_of(&self.rules),
+            sun: self.rules.get(&Id::from(SUN)).cloned(),
         };
         Some((setup, brief.name.clone(), brief.description.clone()))
     }
@@ -318,10 +333,6 @@ impl Lobby {
         }
     }
 }
-
-/// A map in the list.
-#[derive(Component)]
-struct MapChoice(String);
 
 /// A player to play, or none to watch.
 #[derive(Component)]
@@ -479,7 +490,7 @@ pub(crate) fn has_map(data: &Data, map: &str) -> bool {
 
 /// The maps a custom game is played on, by archive path: those in the maps
 /// folder itself, not the campaign's or the developers' below it.
-fn scenarios(data: &Data) -> Vec<String> {
+pub(crate) fn scenarios(data: &Data) -> Vec<String> {
     let names = data.0.map_names().into_iter();
     let top = names.filter(|n| {
         n.rsplit_once('/')
@@ -490,7 +501,7 @@ fn scenarios(data: &Data) -> Vec<String> {
 
 /// Lays out the lobby as the game does: the preset over the sides on the
 /// left, the map and the buttons on the right.
-fn spawn(mut commands: Commands, data: Res<Data>, staged: Option<Res<Staged>>) {
+fn spawn(mut commands: Commands, staged: Option<Res<Staged>>) {
     commands.spawn((Camera2d, DespawnOnExit(Screen::Lobby)));
     let root = commands
         .spawn((
@@ -570,38 +581,19 @@ fn spawn(mut commands: Commands, data: Res<Data>, staged: Option<Res<Staged>>) {
             },
         ),
     ));
-    let list = commands
-        .spawn((
-            ChildOf(right),
-            ScrollArea,
-            panel(
-                Surface::Panel,
-                Node {
-                    flex_grow: 1.0,
-                    flex_basis: px(0),
-                    flex_direction: FlexDirection::Column,
-                    overflow: Overflow::scroll_y(),
-                    min_height: px(0),
-                    padding: UiRect::all(px(12)),
-                    row_gap: px(2),
-                    ..default()
-                },
-            ),
-        ))
-        .id();
-    commands.spawn((ChildOf(list), text("Scenario Maps", Font::Body)));
-    for name in scenarios(&data) {
-        let label = Brief::load(&data.0, &name)
-            .map_or_else(|_| tgdata::map_title(&name).to_string(), |b| b.name);
+    // Only the host of a game between machines chooses its map.
+    let hosting = staged.as_ref().is_none_or(|s| {
+        let me = s.entry.me();
+        s.entry.staging().guest(me).is_some_and(|g| g.host)
+    });
+    if hosting {
         commands
             .spawn((
-                ChildOf(list),
-                switch(padded()),
-                children![text(label, Font::Body)],
-                called(format!("lobby.map.{}", slug(tgdata::map_title(&name)))),
-                MapChoice(name),
+                ChildOf(right),
+                button("Scenario Map", Font::Large),
+                called("lobby.scenario"),
             ))
-            .observe(choose_map);
+            .observe(crate::scenario::open);
     }
     if staged.is_some() {
         commands.spawn((
@@ -648,21 +640,56 @@ fn ask_exit(
     );
 }
 
-fn choose_map(
-    activate: On<Activate>,
-    choices: Query<&MapChoice>,
-    data: Res<Data>,
-    asked: Res<Side>,
-    mut commands: Commands,
+/// The world rules the lobby passes on to the match by its own terms.
+const FOG_OF_WAR: &str = "FogOfWar";
+const SUN: &str = "Sun";
+
+/// The fog setting `rules` choose, if not the default.
+fn fog_of(rules: &BTreeMap<Id, Id>) -> Option<FogSetting> {
+    FogSetting::named(rules.get(&Id::from(FOG_OF_WAR))?.as_str())
+}
+
+/// The world rules' choices for a `fog` setting and `sun`, those not at
+/// their defaults.
+fn chosen_rules(fog: Option<FogSetting>, sun: Option<Id>) -> BTreeMap<Id, Id> {
+    let fog = fog.map(|f| (Id::from(FOG_OF_WAR), Id::from(f.id())));
+    let sun = sun.map(|s| (Id::from(SUN), s));
+    fog.into_iter().chain(sun).collect()
+}
+
+/// Plays `map` under the world rules' choices in `rules`, as the scenario
+/// map dialog loads it: what was chosen for another map's sides goes.
+pub(crate) fn play(
+    commands: &mut Commands,
+    data: &Data,
+    (asked, lobby): (Side, Option<ResMut<Lobby>>),
     staged: Option<ResMut<Staged>>,
+    map: String,
+    rules: BTreeMap<Id, Id>,
 ) {
-    let Ok(MapChoice(name)) = choices.get(activate.entity) else {
+    if let Some(mut lobby) = lobby.filter(|l| l.map == map) {
+        // Only the rules change, so what's chosen for the sides stays.
+        let choice = tgserver::Choice::Rules {
+            fog: fog_of(&rules),
+            sun: rules.get(&Id::from(SUN)).cloned(),
+        };
+        if !share(staged, choice) {
+            lobby.rules = rules;
+        }
         return;
+    }
+    let (preset, sides) = opening(data, &map);
+    let choice = tgserver::Choice::Map {
+        map: map.clone(),
+        preset,
+        sides,
+        fog: fog_of(&rules),
+        sun: rules.get(&Id::from(SUN)).cloned(),
     };
-    let (preset, sides) = opening(&data, name);
-    let map = name.clone();
-    if !share(staged, tgserver::Choice::Map { map, preset, sides }) {
-        commands.insert_resource(Lobby::new(&data, name.clone(), *asked));
+    if !share(staged, choice) {
+        let mut lobby = Lobby::new(data, map, asked);
+        lobby.rules = rules;
+        commands.insert_resource(lobby);
     }
 }
 
@@ -833,7 +860,7 @@ fn launch(
 }
 
 /// A side's gem in its colour, as the lobby marks it.
-fn side_mark(gem: &crate::ui::Gem, player: &Player) -> impl Bundle {
+pub(crate) fn side_mark(gem: &crate::ui::Gem, player: &Player) -> impl Bundle {
     let node = Node {
         width: px(crate::ui::GEM),
         height: px(crate::ui::GEM),
@@ -1156,12 +1183,14 @@ fn faction_list(
     );
 }
 
-/// Describes the chosen map: its name, size and sides.
+/// Describes the chosen map: its name, size and sides, and the time of
+/// day it's played at.
 fn show_about(
     mut commands: Commands,
     lobby: Res<Lobby>,
     gem: Res<crate::ui::Gem>,
     about: Single<Entity, With<About>>,
+    rules: Option<Res<crate::scenario::WorldRules>>,
 ) {
     let about = *about;
     commands.entity(about).despawn_children();
@@ -1196,21 +1225,31 @@ fn show_about(
             ],
         ));
     }
+    let shown = rules.map(|r| r.shown(&lobby.rules)).unwrap_or_default();
+    for (i, (rule, chosen)) in shown.into_iter().enumerate() {
+        let gap = if i == 0 { 8.0 } else { 0.0 };
+        commands.spawn((
+            ChildOf(about),
+            Node {
+                margin: UiRect::top(px(gap)),
+                ..default()
+            },
+            children![text(format!("{rule}: {chosen}"), Font::Body)],
+        ));
+    }
 }
 
 /// A button and what it chooses.
 type Choice<'a> = (
     &'a mut Chosen,
-    Option<&'a MapChoice>,
     Option<&'a SideChoice>,
     Option<&'a PresetChoice>,
     Option<&'a NationChoice>,
 );
 
 fn mark_chosen(lobby: Res<Lobby>, mut buttons: Query<Choice>) {
-    for (mut chosen, map, side, preset, nation) in &mut buttons {
-        let now = map.is_some_and(|m| m.0 == lobby.map)
-            || side.is_some_and(|s| s.0 == lobby.person)
+    for (mut chosen, side, preset, nation) in &mut buttons {
+        let now = side.is_some_and(|s| s.0 == lobby.person)
             || preset.is_some_and(|p| p.0 == lobby.preset)
             || nation.is_some_and(|NationChoice(p, n)| lobby.nations.get(p) == n.as_ref());
         chosen.set_if_neq(Chosen(now));
@@ -1375,6 +1414,14 @@ mod tests {
         // An independent player has no seat, so the person watches.
         lineup.seat(Some(11));
         assert_eq!(lineup.person(), None);
+    }
+
+    #[test]
+    fn world_rules_choices_come_back_as_chosen() {
+        let rules = chosen_rules(Some(FogSetting::None), Some(Id::from("sun_dusk")));
+        assert_eq!(fog_of(&rules), Some(FogSetting::None));
+        assert_eq!(rules.get(&Id::from(SUN)), Some(&Id::from("sun_dusk")));
+        assert!(chosen_rules(None, None).is_empty());
     }
 
     #[test]

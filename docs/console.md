@@ -51,6 +51,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `advance seconds`: plays that much of the game at once, paused or not; only with --dev, in a match no other machine shares
 - `record [file]`: says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for tgserver to play again
 - `fog`: lifts the fog of war from the screen, or lays it again; only with --dev, in a match no other machine shares
+- `sun [preset]`: lights the map with a lighting preset's colours at once, by its id, e.g. sun_dusk; effects for the night show or not by the new light only once they next start; without one, lists the presets; only with --dev, in a match no other machine shares
 - `gamespeed [speed]`: runs the game that many times as fast, 0.05 to 16; without, says how fast
 - `gamepause [1/0]`: pauses or resumes the game; without, switches
 - `toggleshowzonesupply`: shows or hides the supply border

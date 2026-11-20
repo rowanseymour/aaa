@@ -1640,8 +1640,21 @@ pub enum ResourceRole {
 #[derive(Debug, Clone, Deserialize)]
 pub struct WorldRule {
     pub ids: Option<Id>,
+    /// A `#` key for what it's called, or the words themselves.
+    pub name: Option<String>,
     /// What it's set to unless changed, a number or a choice's id.
     pub default: Option<String>,
+    /// What it can be set to, where it's a choice.
+    #[serde(default)]
+    pub enum_value: Vec<WorldRuleChoice>,
+}
+
+/// One of the choices a [`WorldRule`] offers.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorldRuleChoice {
+    pub ids: Option<Id>,
+    /// A `#` key for what it's called, or the words themselves.
+    pub name: Option<String>,
 }
 
 /// A visual effect. Its base templates are declared in

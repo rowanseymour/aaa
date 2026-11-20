@@ -56,6 +56,10 @@ pub struct Setup {
     /// How much of the map the fog of war hides, if not as the game's
     /// world rule has it.
     pub fog: Option<FogSetting>,
+    /// The choice of the `Sun` world rule the match is lit by, if not the
+    /// rule's default.
+    #[serde(default)]
+    pub sun: Option<Id>,
 }
 
 /// A match set up and yet to be played.
@@ -94,6 +98,9 @@ pub fn start(game: &GameData, setup: &Setup, mapped: impl FnOnce()) -> Result<St
     }
     if let Some(teams) = &setup.teams {
         map.arrange(teams);
+    }
+    if let Some(sun) = game.sun_for(setup.sun.as_ref()) {
+        map.light(&sun);
     }
     mapped();
     let mut operations = game.operations();
