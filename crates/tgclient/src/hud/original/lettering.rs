@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use bevy::text::{Font as Face, FontSource};
 
 use super::SCREEN;
+use crate::Screen;
 
 /// How many of the interface's pixels a pixel of the layouts' screen is,
 /// as [`fit_view`](super::fit_view) fits that screen to the window.
@@ -97,6 +98,31 @@ pub fn scale(
     }
 }
 
+/// Sets the text over the map that both interfaces share in the face of the
+/// layouts' [`PLAIN`] font, as the layouts' own text is. Only text that goes
+/// with the match: what outlasts it, such as the hint by the pointer, is
+/// also the menus' and keeps their face.
+pub fn share_face(
+    letters: Res<Letters>,
+    mut texts: Query<(Entity, &mut TextFont)>,
+    parents: Query<&ChildOf>,
+    with_match: Query<(), With<DespawnOnExit<Screen>>>,
+) {
+    let Some(face) = letters.face(PLAIN) else {
+        return;
+    };
+    let shared = FontSource::Handle(crate::ui::HUD);
+    for (text, mut font) in &mut texts {
+        if (letters.is_changed() || font.is_changed())
+            && font.font == shared
+            && (with_match.contains(text)
+                || parents.iter_ancestors(text).any(|a| with_match.contains(a)))
+        {
+            font.font = FontSource::Handle(face.clone());
+        }
+    }
+}
+
 /// The layouts' fonts, as a label names them, read as they're asked for.
 #[derive(Resource, Default)]
 pub struct Letters {
@@ -142,13 +168,20 @@ impl Letters {
         self.fonts.insert(key, Lettering { face, px, shadow });
     }
 
+    /// The face of the font `ids` names, as read, or one the data does hold.
+    fn face(&self, ids: &str) -> Option<Handle<Face>> {
+        let lettering = self.fonts.get(&ids.to_ascii_lowercase());
+        (lettering.and_then(|l| l.face.clone())).or_else(|| self.first.clone())
+    }
+
     /// The font `ids` names, as read, at its size on the layouts' screen.
     /// A font whose face the data doesn't hold is drawn in one it does.
     pub fn font(&self, ids: &str) -> TextFont {
         let lettering = self.fonts.get(&ids.to_ascii_lowercase());
-        let face = (lettering.and_then(|l| l.face.clone())).or_else(|| self.first.clone());
         TextFont {
-            font: face.map_or_else(FontSource::default, FontSource::Handle),
+            font: self
+                .face(ids)
+                .map_or_else(FontSource::default, FontSource::Handle),
             font_size: FontSize::Px(lettering.map_or(16.0, |l| l.px)),
             ..default()
         }
@@ -170,5 +203,41 @@ impl Letters {
             Lettered(px),
             Pickable::IGNORE,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_matchs_shared_text_takes_the_layouts_face() {
+        let mut app = App::new();
+        let face = Handle::<Face>::default();
+        let mut letters = Letters::default();
+        let lettering = Lettering {
+            face: Some(face.clone()),
+            px: 16.0,
+            shadow: 0.0,
+        };
+        letters.fonts.insert(PLAIN.into(), lettering);
+        app.insert_resource(letters).add_systems(Update, share_face);
+        let hud = || crate::ui::font(crate::ui::Font::Hud);
+        let world = app.world_mut();
+        let window = world.spawn(DespawnOnExit(Screen::Match)).id();
+        let shared = world.spawn((hud(), ChildOf(window))).id();
+        let menu = world
+            .spawn((crate::ui::font(crate::ui::Font::Body), ChildOf(window)))
+            .id();
+        let lasting = world.spawn(hud()).id();
+        app.update();
+        // Text spawned once the layouts' fonts are read is set too.
+        let later = app.world_mut().spawn((hud(), ChildOf(window))).id();
+        app.update();
+        let font = |e| app.world().get::<TextFont>(e).unwrap().font.clone();
+        assert_eq!(font(shared), FontSource::Handle(face.clone()));
+        assert_eq!(font(later), FontSource::Handle(face));
+        assert_eq!(font(menu), crate::ui::font(crate::ui::Font::Body).font);
+        assert_eq!(font(lasting), hud().font);
     }
 }

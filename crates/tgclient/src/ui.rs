@@ -315,10 +315,12 @@ impl Font {
 
     /// The face it's set in: the logo's lettering, its stencil where it's
     /// big enough to keep its letters whole, and the same family's plain cut,
-    /// drawn for small sizes, elsewhere.
+    /// drawn for small sizes, elsewhere. The interface over the map has a
+    /// handle of its own, for an interface to set in a face of its own.
     fn source(self) -> FontSource {
         match self {
             Font::Heading | Font::Large | Font::Title => FontSource::Handle(STENCIL),
+            Font::Small | Font::Hud | Font::HudTitle => FontSource::Handle(HUD),
             _ => FontSource::Handle(PLAIN),
         }
     }
@@ -326,6 +328,11 @@ impl Font {
 
 const STENCIL: Handle<Face> = uuid_handle!("8ce28202-5c4b-41aa-b4eb-656a8714c917");
 const PLAIN: Handle<Face> = uuid_handle!("f5c773eb-4ca7-4c04-80e4-2f691862ea4e");
+/// The face of the interface over the map: [`PLAIN`]'s, unless an interface
+/// sets its text in another.
+pub const HUD: Handle<Face> = uuid_handle!("c36b3287-1c7b-4378-b32a-61c4bce2710a");
+
+const PLAIN_FACE: &[u8] = include_bytes!("../../../assets/fonts/BigShouldersText-600.ttf");
 
 fn faces(mut fonts: ResMut<Assets<Face>>) {
     let faces = [
@@ -333,10 +340,8 @@ fn faces(mut fonts: ResMut<Assets<Face>>) {
             STENCIL,
             &include_bytes!("../../../assets/fonts/BigShouldersStencilDisplay-800.ttf")[..],
         ),
-        (
-            PLAIN,
-            &include_bytes!("../../../assets/fonts/BigShouldersText-600.ttf")[..],
-        ),
+        (PLAIN, PLAIN_FACE),
+        (HUD, PLAIN_FACE),
     ];
     for (handle, bytes) in faces {
         // Never fails for a fixed handle.
