@@ -237,9 +237,10 @@ impl World {
         ledger
     }
 
-    /// What a building adds to its owner's economy: nothing once gone,
-    /// only its upkeep while disabled, and the limits taken by
-    /// what it's commissioning. One that passes supply on and has none
+    /// What a building counts for in its owner's economy: nothing once
+    /// gone, only its upkeep while disabled. The limits taken by what it's
+    /// commissioning count for its owner but not for it: see
+    /// [`reserved_ledger`](Self::reserved_ledger). One that passes supply on and has none
     /// earns as what it packs into does, or nothing if it needs supply and
     /// doesn't pack. What its properties add or lift is judged by it.
     pub fn building_ledger(&self, building: usize) -> Ledger {
@@ -250,19 +251,7 @@ impl World {
         let e = self.economy_of(&b.template);
         let held = self.timed_on(Target::Building(building));
         let effects = self.economy_effects(b.owner, &b.template, &[], held);
-        let mut upkeep = self.affected(&b.template, &effects).upkeep;
-        for r in b
-            .queue
-            .iter()
-            .filter(|c| c.held)
-            .filter_map(Commission::organization)
-        {
-            let taken = self.commission_ledger(r).upkeep;
-            for (consumed, _) in self.rules.economy.limits() {
-                let consumed = consumed.as_str();
-                upkeep.set(consumed, upkeep.get(consumed) + taken.get(consumed));
-            }
-        }
+        let upkeep = self.affected(&b.template, &effects).upkeep;
         // Unpacking and packing aren't construction: it earns through both.
         let working = b.state == State::Standing && !b.constructing;
         let own = match self.rules.packing.get(&b.template) {
@@ -275,6 +264,28 @@ impl World {
         let added = effects.iter().map(|e| &e.production);
         let production = own.map_or_else(Amounts::default, |own| added.fold(own, |sum, a| sum + a));
         Ledger { production, upkeep }
+    }
+
+    /// The limits a building's queue has taken for what it's commissioning,
+    /// as upkeep: its owner's, until the finished thing holds them.
+    pub fn reserved_ledger(&self, building: usize) -> Ledger {
+        let b = &self.buildings[building];
+        if b.gone() {
+            return Ledger::default();
+        }
+        let mut upkeep = Amounts::default();
+        let held = b.queue.iter().filter(|c| c.held);
+        for r in held.filter_map(Commission::organization) {
+            let taken = self.commission_ledger(r).upkeep;
+            for (consumed, _) in self.rules.economy.limits() {
+                let consumed = consumed.as_str();
+                upkeep.set(consumed, upkeep.get(consumed) + taken.get(consumed));
+            }
+        }
+        Ledger {
+            upkeep,
+            ..Ledger::default()
+        }
     }
 
     /// Whether a building's queue can't move on this tick: there's nothing
@@ -330,7 +341,9 @@ impl World {
             *out.entry(self.organizations[r].owner).or_default() += self.organization_ledger(r);
         }
         for b in 0..self.buildings.len() {
-            *out.entry(self.buildings[b].owner).or_default() += self.building_ledger(b);
+            let side = out.entry(self.buildings[b].owner).or_default();
+            *side += self.building_ledger(b);
+            *side += self.reserved_ledger(b);
         }
         for (owner, template) in &self.holdings {
             *out.entry(*owner).or_default() += self.holding_ledger(*owner, template);
@@ -781,6 +794,8 @@ mod tests {
         w.tick();
         assert_eq!(w.buildings[0].paused, None);
         assert_eq!(w.balance(1).limits[0].used, 1.0);
+        let own = w.building_ledger(0).upkeep.get("unit_limit_consumed");
+        assert_eq!(own, 0.0, "the side's, not the building's own");
         for _ in 0..10 {
             w.tick();
         }
