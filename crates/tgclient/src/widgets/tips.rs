@@ -141,15 +141,7 @@ impl Built {
 /// outermost along its side, and the center's in the middle, each a
 /// quarter of the corners' image across.
 fn framed(pictures: &mut Pictures, tiles: &Tiles) -> Option<(Handle<Image>, f32)> {
-    let mut rgba = |path: &str| -> Option<(UVec2, Vec<u8>)> {
-        let handle = pictures.get(path)?;
-        let image = pictures.images.get(&handle)?;
-        let image = match image.texture_descriptor.format {
-            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => image.clone(),
-            _ => image.convert(TextureFormat::Rgba8UnormSrgb)?,
-        };
-        Some((image.size(), image.data?))
-    };
+    let mut rgba = |path: &str| pictures.rgba(path);
     let corners = rgba(&tiles.corners)?;
     let (left, right, top, bottom, center) = (
         rgba(&tiles.left)?,
