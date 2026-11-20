@@ -93,7 +93,10 @@ pub use terrain::{
     DepthColor, TerrainEffect, TerrainKind, TerrainRules, TextureAnimation, Variation,
 };
 pub use views::{Animation, AnimationKind, Footing, Portrait, View};
-pub use world_rules::{ChoiceRule, RuleChoice};
+pub use world_rules::{
+    CITY_VICTORY_RATIO, FOG_OF_WAR, LobbyRule, RuleChoice, RuleKind, RuleValues,
+    STARTING_EXPERIENCE, STOCKPILE, SUN, number,
+};
 
 use std::any::Any;
 use std::borrow::Borrow;
@@ -450,9 +453,16 @@ impl GameData {
         own.into_iter().chain([file]).collect()
     }
 
-    /// The world rule `ids`, from the game's own world rules before the
-    /// ones every game has.
+    /// The world rule `ids`, the game's own where it has one in place of
+    /// the one every game has.
     pub(crate) fn world_rule(&self, ids: &str) -> Option<defs::WorldRule> {
+        (self.world_rules().into_iter())
+            .find(|r| (r.ids.as_ref()).is_some_and(|id| id.as_str().eq_ignore_ascii_case(ids)))
+    }
+
+    /// Every world rule, those every game has first, each replaced by the
+    /// game's own of the same id where it has one, then the game's others.
+    pub(crate) fn world_rules(&self) -> Vec<defs::WorldRule> {
         let versions = self.versions("Game/world_rules.tgi");
         let at = |n: &str| versions.iter().position(|v| v.eq_ignore_ascii_case(n));
         // The templates are there for the rules to inherit from.
@@ -460,10 +470,22 @@ impl GameData {
         let mut files: Vec<_> = (scoped(&files).into_iter())
             .filter_map(|f| Some((at(f.file)?, f)))
             .collect();
-        files.sort_by_key(|&(at, _)| at);
-        (files.iter())
+        // Every game's file last in `versions`, so first here.
+        files.sort_by_key(|&(at, _)| std::cmp::Reverse(at));
+        let mut rules: Vec<defs::WorldRule> = Vec::new();
+        for rule in files
+            .iter()
             .flat_map(|(_, f)| f.read::<defs::WorldRule>("WorldRule"))
-            .find(|r| (r.ids.as_ref()).is_some_and(|id| id.as_str().eq_ignore_ascii_case(ids)))
+        {
+            match rules
+                .iter_mut()
+                .find(|r| r.ids.is_some() && r.ids == rule.ids)
+            {
+                Some(had) => *had = rule,
+                None => rules.push(rule),
+            }
+        }
+        rules
     }
 
     /// What `build` makes, made the first time `key` is asked for and kept.

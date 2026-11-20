@@ -45,8 +45,8 @@ pub use units::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use tgck::map::{Sun, Terrain, Thing, Value};
-use tgdata::{GameData, Nation};
+use tgck::map::{RuleValue, Sun, Terrain, Thing, Value};
+use tgdata::{GameData, Nation, RuleKind, RuleValues};
 
 pub struct Map {
     /// The file name without its extension, e.g. `(2v2)Berlin`.
@@ -83,6 +83,48 @@ pub struct Map {
     pub warnings: Vec<String>,
     /// The map's scripting, where it could be read.
     pub triggers: Option<Triggers>,
+    /// The world rules the map stores, which those chosen for the match
+    /// replace.
+    pub rules: StoredRules,
+}
+
+/// The world rules a map stores: each one's value as the data writes it,
+/// for those a lobby offers, and those the map fixes.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct StoredRules {
+    pub values: RuleValues,
+    pub fixed: Vec<Id>,
+}
+
+impl StoredRules {
+    /// The rules `map` stores, as `game`'s world rules read them.
+    fn read<R: std::io::Read + std::io::Seek>(
+        game: &GameData,
+        map: &mut tgck::Map<R>,
+    ) -> tgck::Result<StoredRules> {
+        let stored = map.rules()?.rules;
+        let mut out = StoredRules::default();
+        for rule in game.lobby_rules() {
+            let Some(found) = stored.iter().find(|r| Id::from(r.name.as_str()) == rule.id) else {
+                continue;
+            };
+            let value = match (found.value, &rule.kind) {
+                (RuleValue::Choice(i), RuleKind::Choice(choices)) => {
+                    choices.get(i as usize).map(|c| c.id.to_string())
+                }
+                (RuleValue::Int(n), _) => Some(n.max(0).to_string()),
+                (RuleValue::Float(n), _) => Some((n.max(0.0).round() as u32).to_string()),
+                _ => None,
+            };
+            if let Some(value) = value {
+                out.values.insert(rule.id.clone(), value);
+            }
+            if found.locked {
+                out.fixed.push(rule.id.clone());
+            }
+        }
+        Ok(out)
+    }
 }
 
 impl Map {
@@ -236,6 +278,7 @@ impl Map {
             crowded,
             warnings,
             triggers,
+            rules: StoredRules::read(game, &mut map).map_err(err)?,
         })
     }
 }
@@ -272,6 +315,12 @@ impl Map {
             &self.buildings,
             &self.crowded,
         )
+    }
+
+    /// Starts the sides that start with the match's default money with
+    /// `amount` instead, plus any bonus of their own.
+    pub fn set_default_stockpile(&mut self, amount: f32) {
+        default_stockpile(&mut self.players, amount);
     }
 
     /// Lights the map with `preset`'s colours at once, keeping its sun's
@@ -736,6 +785,8 @@ pub struct Brief {
     pub size: Option<[f32; 2]>,
     pub players: Vec<Player>,
     pub teams: Vec<Team>,
+    /// The world rules it stores, which a lobby starts from.
+    pub rules: StoredRules,
 }
 
 impl Brief {
@@ -758,6 +809,7 @@ impl Brief {
             size: header.size,
             players,
             teams,
+            rules: StoredRules::read(game, &mut map).map_err(err)?,
         })
     }
 
@@ -825,6 +877,14 @@ pub fn from_local(origin: [f32; 2], [fx, fy]: [f32; 2], [right, ahead]: [f32; 2]
 pub fn to_local(origin: [f32; 2], [fx, fy]: [f32; 2], point: [f32; 2]) -> [f32; 2] {
     let (dx, dy) = (point[0] - origin[0], point[1] - origin[1]);
     [dx * fy - dy * fx, dx * fx + dy * fy]
+}
+
+/// Starts the `players` that start with the match's default money with
+/// `amount`, plus any bonus of their own.
+fn default_stockpile(players: &mut [Player], amount: f32) {
+    for p in players.iter_mut().filter(|p| p.default_stockpile) {
+        p.stockpile = amount + p.stockpile_bonus;
+    }
 }
 
 #[cfg(test)]
@@ -932,6 +992,8 @@ mod tests {
             relations: vec![Enemy; 5],
             team_relations: vec![Enemy; 2],
             stockpile: 0.0,
+            default_stockpile: false,
+            stockpile_bonus: 0.0,
             technologies: Vec::new(),
             handicap: None,
             barred: Vec::new(),
@@ -956,6 +1018,17 @@ mod tests {
         let mut teams = vec![team(0, 0), team(1, 1)];
         teams[0].relations[4] = Enemy;
         (players, teams)
+    }
+
+    #[test]
+    fn only_sides_on_the_default_money_get_the_matchs_with_their_bonus() {
+        let (mut players, _) = sides();
+        players[0].stockpile = 300.0;
+        players[1].default_stockpile = true;
+        players[1].stockpile_bonus = 50.0;
+        default_stockpile(&mut players, 800.0);
+        assert_eq!(players[0].stockpile, 300.0);
+        assert_eq!(players[1].stockpile, 850.0);
     }
 
     fn moves(trailer: Option<&str>) -> tgdata::Body {

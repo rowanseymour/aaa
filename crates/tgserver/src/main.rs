@@ -134,12 +134,13 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
         Some(f) => Some(tgmap::FogSetting::named(&f).ok_or(())?),
         None => None,
     };
+    let rules = fog.map(|f| (tgdata::Id::from(tgdata::FOG_OF_WAR), f.id().to_string()));
     let film = take_option(&mut args, "--film")?;
     let [dir, map] = <[String; 2]>::try_from(args).map_err(|_| ())?;
     let setup = Setup {
         map,
         seed,
-        fog,
+        rules: rules.into_iter().collect(),
         ..Default::default()
     };
     Ok((dir, Asked::Play(setup, seconds.ok_or(())?, film, hosting)))
@@ -387,7 +388,7 @@ mod tests {
         else {
             panic!("not a match to play");
         };
-        assert!(setup.fog.is_none() && film.is_none() && hosting.is_none());
+        assert!(setup.rules.is_empty() && film.is_none() && hosting.is_none());
         assert_eq!(seconds, 60.0);
     }
 

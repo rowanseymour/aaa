@@ -20,6 +20,8 @@ pub(crate) fn player(id: u32, independent: bool, playable: bool) -> Player {
         relations: vec![Relation::Neutral; 4],
         team_relations: Vec::new(),
         stockpile: 0.0,
+        default_stockpile: false,
+        stockpile_bonus: 0.0,
         technologies: Vec::new(),
         handicap: None,
         barred: Vec::new(),
