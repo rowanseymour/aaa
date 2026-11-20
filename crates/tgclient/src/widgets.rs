@@ -3,8 +3,8 @@
 //! rest, the command grid's buttons, which show what
 //! [`actions::Shown`](crate::actions::Shown) holds and ask for their
 //! widget by name when pressed, other buttons that ask for what our
-//! interface's do, such as pausing, the resource bars, and the one pane
-//! every tooltip is said in. What they show is shared with ours; only the
+//! interface's do, such as pausing, the resource bars, the object display,
+//! and the one pane every tooltip is said in. What they show is shared with ours; only the
 //! drawing is their own.
 
 use std::collections::HashMap;
@@ -23,10 +23,15 @@ use serde::{Deserialize, Serialize};
 
 mod bars;
 mod lettering;
+mod object;
 mod tips;
 
 pub use bars::slide as slide_bars;
 pub use lettering::{LayoutScale, scale as scale_layout};
+pub use object::{
+    economy as object_economy, fill_bars as fill_object_bars, lay_out as lay_out_object,
+    portray as portray_object,
+};
 pub use tips::show as show_tip;
 
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
@@ -273,6 +278,8 @@ pub fn spawn(
         pressables: Vec::new(),
     };
     let mut grid = None;
+    let mut letters = lettering::Letters::default();
+    let mut object = None;
     // Where the minimap's drawn, and its panel's pictures over it.
     let mut minimap_at = None;
     if let Some(top) = named(GAME).and_then(|g| g.find(ON_GAME)) {
@@ -283,7 +290,13 @@ pub fn spawn(
     {
         for name in UNDER_BUTTONS {
             match named(name) {
-                Some(w) if name == OBJECT_DISPLAY => _ = drawer.own(w, &chain),
+                Some(w) if name == OBJECT_DISPLAY => {
+                    if let Some(within) = drawer.own(w, &chain) {
+                        let fonts = (&mut letters, &mut *faces);
+                        let at = reach(&within);
+                        object = Some(object::Layout::read(w, at, &mut drawer.pictures, fonts));
+                    }
+                }
                 Some(w) if name == GRID => {
                     if let Some(within) = drawer.own(w, &chain) {
                         for child in &w.children {
@@ -322,7 +335,6 @@ pub fn spawn(
             .map(Step::By);
         drawer.widget(widget, &Vec::from_iter(offset));
     }
-    let mut letters = lettering::Letters::default();
     let colour = |c: Option<[f32; 3]>, or: Color| c.map_or(or, |[r, g, b]| Color::srgb(r, g, b));
     let short = colour(game.invalid_colour(), Color::srgb(1.0, 0.0, 0.0));
     let key = colour(game.highlight_colour(), Color::srgb(1.0, 1.0, 0.0));
@@ -366,6 +378,10 @@ pub fn spawn(
             for (chain, image) in drawn {
                 screen.spawn(picture(&chain, image));
             }
+            // Over the panels' pictures, as what's selected shows on them.
+            if object.is_some() {
+                screen.spawn(object::Holder::bundle());
+            }
             for bar in resource_bars {
                 bar.spawn(screen, game, &letters, short);
             }
@@ -389,6 +405,9 @@ pub fn spawn(
         commands.entity(frame).insert(crate::ui::Docks(pane));
     }
     commands.insert_resource(letters);
+    if let Some(object) = object {
+        commands.insert_resource(object);
+    }
     commands.init_resource::<LayoutScale>();
 }
 
@@ -460,6 +479,18 @@ impl Pictures<'_> {
             .map(|i| self.images.add(i));
         self.known.insert(path.to_string(), image.clone());
         image
+    }
+
+    /// The picture at `path`'s size and its pixels, four bytes each, for
+    /// making pictures of its parts.
+    fn rgba(&mut self, path: &str) -> Option<(UVec2, Vec<u8>)> {
+        let handle = self.get(path)?;
+        let image = self.images.get(&handle)?;
+        let image = match image.texture_descriptor.format {
+            TextureFormat::Rgba8UnormSrgb | TextureFormat::Rgba8Unorm => image.clone(),
+            _ => image.convert(TextureFormat::Rgba8UnormSrgb)?,
+        };
+        Some((image.size(), image.data?))
     }
 }
 
@@ -1008,6 +1039,7 @@ mod tests {
             font: None,
             justify: None,
             tiles: None,
+            fields: Vec::new(),
             children: Vec::new(),
         }
     }

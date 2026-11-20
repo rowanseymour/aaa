@@ -110,9 +110,29 @@ pub struct ViewElement {
     pub tiles: Option<Tiles>,
     /// A group's view elements, in the order written.
     pub children: Vec<ViewElement>,
+    /// Its fields, inherited ones included, for settings of its own kind
+    /// such as a status bar's `end_color`.
+    pub fields: Vec<(String, String)>,
 }
 
 impl ViewElement {
+    /// One of its [`fields`](ViewElement::fields), by key, case-insensitive.
+    pub fn value(&self, key: &str) -> Option<&str> {
+        (self.fields.iter().rev())
+            .find(|(k, _)| k.eq_ignore_ascii_case(key))
+            .map(|(_, v)| v.as_str())
+    }
+
+    /// One of its fields naming an image, as an archive path.
+    pub fn image(&self, key: &str) -> Option<String> {
+        self.value(key).and_then(ui_path)
+    }
+
+    /// One of its fields giving a colour.
+    pub fn colour_of(&self, key: &str) -> Option<[f32; 3]> {
+        self.value(key).and_then(colour)
+    }
+
     /// Whether it's drawn while the states in `holding` hold, upper-case.
     pub fn shown(&self, holding: &[&str]) -> bool {
         (self.when.iter()).all(|w| holding.iter().any(|h| w.eq_ignore_ascii_case(h)))
@@ -422,6 +442,9 @@ fn view_element(block: &tgi::Block, templates: &tgi::Templates) -> Option<ViewEl
         justify: value(block, "justify"),
         tiles: tiles(block),
         children,
+        fields: (block.fields())
+            .filter_map(|f| Some((f.key.clone(), f.value.as_deref()?.trim().to_string())))
+            .collect(),
     })
 }
 

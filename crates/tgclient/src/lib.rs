@@ -1106,8 +1106,19 @@ pub fn run(program: Program) -> ExitCode {
                 )
                     .chain(),
                 (
+                    object_display::choose,
                     object_display::lay_out,
-                    (object_display::refresh, object_display::portray),
+                    widgets::lay_out_object.run_if(widgets::original),
+                    (
+                        object_display::refresh,
+                        object_display::portray,
+                        (
+                            widgets::fill_object_bars,
+                            widgets::object_economy,
+                            widgets::portray_object.after(object_display::portray),
+                        )
+                            .run_if(widgets::original),
+                    ),
                 )
                     .chain(),
                 resource_bar::show.after(actions::show),

@@ -111,19 +111,22 @@ const SLOT_PROGRESS: [f32; 4] = [2.0, 44.0, 38.0, 5.0];
 /// Where the `i`th of an HQ's `count` places goes: across then down,
 /// spread evenly over the area they share.
 fn slot_at(i: usize, count: usize) -> [f32; 2] {
+    (SLOTS_AT + spread(i, count, SLOTS_AREA, SLOT)).to_array()
+}
+
+/// How far from the corner of the `area` they share the `i`th of an HQ's
+/// `count` places, each `slot` in size, goes: across then down, spread
+/// evenly over it.
+pub(crate) fn spread(i: usize, count: usize, area: Vec2, slot: Vec2) -> Vec2 {
     let rows = count.div_ceil(SLOTS_ACROSS).max(2);
     let gap = |area: f32, slot: f32, n: usize| (area - n as f32 * slot) / (n - 1) as f32;
-    let step = SLOT
-        + Vec2::new(
-            gap(SLOTS_AREA.x, SLOT.x, SLOTS_ACROSS),
-            gap(SLOTS_AREA.y, SLOT.y, rows),
-        );
-    let place = Vec2::new((i % SLOTS_ACROSS) as f32, (i / SLOTS_ACROSS) as f32);
-    (SLOTS_AT + place * step).to_array()
+    let step = slot + Vec2::new(gap(area.x, slot.x, SLOTS_ACROSS), gap(area.y, slot.y, rows));
+    Vec2::new((i % SLOTS_ACROSS) as f32, (i / SLOTS_ACROSS) as f32) * step
 }
 
 /// The strings' key for what an HQ's empty place says under the pointer.
-const EMPTY_SLOT: &str = "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
+pub(crate) const EMPTY_SLOT: &str =
+    "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
 
 /// The strip across the top: how tall it is, so what's below can start
 /// clear of it, and how far its contents are in from its sides.
@@ -148,26 +151,31 @@ pub struct ObjectDisplay;
 
 /// What the display shows now.
 #[derive(Resource, Default)]
-pub struct Showing(Option<(Mode, Detail)>);
+pub struct Showing {
+    pub(crate) now: Option<(Mode, Detail)>,
+    /// Whether all that's changed since it was last different is which
+    /// properties' icons show.
+    pub(crate) icons_only: bool,
+}
 
 /// What of the display's layout can change while it shows the same thing.
 #[derive(Clone, PartialEq, Debug, Default)]
-struct Detail {
+pub(crate) struct Detail {
     /// For an HQ, what's in each of its places.
-    slots: Vec<Place>,
+    pub(crate) slots: Vec<Place>,
     /// For each organization whose banner shows, the badge it wears and
     /// whether it's out of supply.
-    banners: Vec<(usize, Option<banners::Worn>, bool)>,
+    pub(crate) banners: Vec<(usize, Option<banners::Worn>, bool)>,
     /// The properties whose icons show, those held longest first.
-    properties: Vec<Id>,
+    pub(crate) properties: Vec<Id>,
     /// The units in each place of the organizations shown, which a
     /// replacement changes.
-    members: Vec<usize>,
+    pub(crate) members: Vec<usize>,
 }
 
 /// What's in one of an HQ's places.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Place {
+pub(crate) enum Place {
     Empty,
     /// The organization attached there.
     Organization(usize),
@@ -181,7 +189,7 @@ enum Place {
 /// Which of the game's displays shows, and what of; a change in it lays
 /// the display out afresh.
 #[derive(Clone, PartialEq, Debug)]
-enum Mode {
+pub(crate) enum Mode {
     /// A building's, or that of a unit on its own, such as a truck.
     SimpleActor(Actor),
     /// An organization's, or an HQ's, packed or not.
@@ -195,7 +203,7 @@ enum Mode {
 
 impl Mode {
     /// The one thing it shows, if it shows one.
-    fn actor(&self) -> Option<&Actor> {
+    pub(crate) fn actor(&self) -> Option<&Actor> {
         match self {
             Mode::SimpleActor(actor) | Mode::Company(actor) => Some(actor),
             Mode::Settlement | Mode::Group(_) => None,
@@ -205,7 +213,7 @@ impl Mode {
 
 /// What a display of one thing shows.
 #[derive(Clone, PartialEq, Debug)]
-enum Actor {
+pub(crate) enum Actor {
     Organization(usize),
     /// With the templates of what it's commissioning.
     Building(usize, Vec<String>),
@@ -227,12 +235,14 @@ pub enum Fill {
     Flight,
     /// An organization's attack efficiency.
     Efficiency(usize),
+    /// An organization's morale.
+    Morale(usize),
 }
 
 /// The marker on an organization's efficiency bar at the efficiency it's
 /// easing towards.
 #[derive(Component)]
-pub struct EfficiencyTarget(usize);
+pub struct EfficiencyTarget(pub(crate) usize);
 
 /// The widget whose layout the efficiency bar's marker comes from, and
 /// the marker's own widget within it.
@@ -256,7 +266,7 @@ pub enum Says {
 }
 
 /// What makes a part of the display give `of`'s tooltip.
-fn says(of: Says) -> impl Bundle {
+pub(crate) fn says(of: Says) -> impl Bundle {
     (of, Hint(String::new()))
 }
 
@@ -272,13 +282,14 @@ pub enum Status {
     Building(usize),
 }
 
-/// The figure by the shield: the defence of what's selected, as it stands.
+/// The figure by the shield: the defence of what's selected, as it stands,
+/// and the colour it's in while that's its plain one, the theme's if none.
 #[derive(Component, Clone, Copy)]
-pub struct Defends(Target);
+pub struct Defends(pub(crate) Target, pub(crate) Option<Color>);
 
 /// The shield and its figure together, which give the defence's tooltip.
 #[derive(Component, Clone, Copy)]
-pub struct Shield(Target);
+pub struct Shield(pub(crate) Target);
 
 /// The game's layout's place for a lone thing's defence: its icon, with
 /// the figure beside it.
@@ -301,29 +312,29 @@ pub struct PortraitBox;
 
 /// A unit's picture, darkened once it's dead.
 #[derive(Component)]
-pub struct UnitPicture(usize);
+pub struct UnitPicture(pub(crate) usize);
 
 /// An organization's card, which selects it alone.
 #[derive(Component)]
-pub struct Pick(usize);
+pub struct Pick(pub(crate) usize);
 
 /// One of what a building is commissioning, by place in its queue, which
 /// calls it off.
 #[derive(Component)]
-pub struct Queued(usize);
+pub struct Queued(pub(crate) usize);
 
 /// What the display is drawn with, loaded with the match.
 #[derive(Resource)]
 pub struct Looks {
     /// Templates' and technologies' names, by id.
-    names: HashMap<Id, String>,
+    pub(crate) names: HashMap<Id, String>,
     /// What each template says of itself and shows its defence by.
-    listings: Arc<HashMap<Id, tgdata::Listing>>,
+    pub(crate) listings: Arc<HashMap<Id, tgdata::Listing>>,
     /// Each resource's glyph, by the resource's id.
-    glyphs: HashMap<Id, Handle<Image>>,
-    strings: Arc<tgdata::Strings>,
+    pub(crate) glyphs: HashMap<Id, Handle<Image>>,
+    pub(crate) strings: Arc<tgdata::Strings>,
     /// The map's own text, for the names it gives things and sides.
-    map: Arc<tgdata::Strings>,
+    pub(crate) map: Arc<tgdata::Strings>,
     /// How each property that has an icon shows, by id: the shared ones,
     /// and under ids of their own those of `formations`.
     properties: HashMap<Id, PropertyLook>,
@@ -332,7 +343,7 @@ pub struct Looks {
     formations: HashMap<Id, Vec<Id>>,
     /// Each technology's research button icon, by id, for what's being
     /// researched.
-    technologies: HashMap<Id, String>,
+    pub(crate) technologies: HashMap<Id, String>,
     /// The template in each organization's primary slot, by the
     /// organization's; none for one with no such slot.
     primaries: HashMap<Id, Option<Id>>,
@@ -342,11 +353,11 @@ pub struct Looks {
     formats: bevy::image::CompressedImageFormats,
     /// The archive path of the efficiency bar's marker, if the layouts
     /// have one.
-    efficiency_target: Option<String>,
+    pub(crate) efficiency_target: Option<String>,
 }
 
 impl Looks {
-    fn image(
+    pub(crate) fn image(
         &mut self,
         game: &GameData,
         images: &mut Assets<Image>,
@@ -363,7 +374,7 @@ impl Looks {
     }
 
     /// What the game's strings have under `key`.
-    fn said(&self, key: &str) -> String {
+    pub(crate) fn said(&self, key: &str) -> String {
         self.strings.get(key).cloned().unwrap_or_default()
     }
 
@@ -486,7 +497,7 @@ fn efficiency_target(widgets: &[tgdata::widgets::Widget]) -> Option<String> {
 
 /// How far along its efficiency bar the organization at `r`'s marker
 /// stands: at the efficiency it's easing towards.
-fn towards(sim: &World, r: usize) -> Val {
+pub(crate) fn towards(sim: &World, r: usize) -> Val {
     percent(100.0 * sim.efficiency_target(r).clamp(0.0, 1.0))
 }
 
@@ -665,30 +676,20 @@ fn detail(
     }
 }
 
-/// Lays the display out afresh when what it should show changes.
-#[allow(clippy::too_many_arguments)]
-pub fn lay_out(
-    mut commands: Commands,
+/// Works out what the display should show, for either interface to draw.
+pub fn choose(
     selected: Res<Selected>,
     chosen: Res<SelectedBuilding>,
     sim: Res<Sim>,
     local: Res<Local>,
-    leaders: Res<Leaders>,
-    gem: Res<ui::Gem>,
-    drawn: Res<Drawn>,
     badges: Res<Badges>,
+    looks: Res<Looks>,
     mut showing: ResMut<Showing>,
-    loaded: Res<Loaded>,
-    mut looks: ResMut<Looks>,
-    mut banners: ResMut<BannerImages>,
-    mut images: ResMut<Assets<Image>>,
-    mut display: Single<(Entity, &mut Visibility), With<ObjectDisplay>>,
-    row: Query<Entity, With<PropertyRow>>,
 ) {
     let hqs = sim.0.hqs();
     let mode = wanted(&sim.0, &hqs, local.0, &selected.0, chosen.0);
     let mode = mode.map(|m| {
-        let shown = match &showing.0 {
+        let shown = match &showing.now {
             Some((was, detail)) if holder(&sim.0, was) == holder(&sim.0, &m) => {
                 detail.properties.as_slice()
             }
@@ -698,33 +699,57 @@ pub fn lay_out(
         (m, detail)
     });
     // Who plays decides what owners are called.
-    if showing.0 == mode && !local.is_changed() {
+    if showing.now == mode && !local.is_changed() {
+        return;
+    }
+    let icons_only = !local.is_changed()
+        && match (&showing.now, &mode) {
+            (Some((a, was)), Some((b, now))) => {
+                a == b && was.slots == now.slots && was.banners == now.banners
+            }
+            _ => false,
+        };
+    *showing = Showing {
+        now: mode,
+        icons_only,
+    };
+}
+
+/// Lays the display out afresh when what it should show changes.
+#[allow(clippy::too_many_arguments)]
+pub fn lay_out(
+    mut commands: Commands,
+    sim: Res<Sim>,
+    local: Res<Local>,
+    leaders: Res<Leaders>,
+    gem: Res<ui::Gem>,
+    drawn: Res<Drawn>,
+    badges: Res<Badges>,
+    showing: Res<Showing>,
+    loaded: Res<Loaded>,
+    mut looks: ResMut<Looks>,
+    mut banners: ResMut<BannerImages>,
+    mut images: ResMut<Assets<Image>>,
+    mut display: Single<(Entity, &mut Visibility), With<ObjectDisplay>>,
+    row: Query<Entity, With<PropertyRow>>,
+) {
+    if !showing.is_changed() {
         return;
     }
     // Only the icons, where nothing else has changed.
-    let rest_stands = match (&showing.0, &mode) {
-        (Some((a, was)), Some((b, now))) => {
-            a == b && was.slots == now.slots && was.banners == now.banners
-        }
-        _ => false,
-    };
-    let row = row
-        .single()
-        .ok()
-        .filter(|_| rest_stands && !local.is_changed());
+    let row = row.single().ok().filter(|_| showing.icons_only);
     let (root, visibility) = &mut *display;
     match row {
         Some(row) => drop(commands.entity(row).despawn_related::<Children>()),
         None => {
             commands.entity(*root).despawn_related::<Children>();
-            visibility.set_if_neq(match mode {
+            visibility.set_if_neq(match showing.now {
                 Some(_) => Visibility::Inherited,
                 None => Visibility::Hidden,
             });
         }
     }
-    showing.0 = mode.clone();
-    let Some((mode, detail)) = mode else {
+    let Some((mode, detail)) = &showing.now else {
         return;
     };
     let mut ui = Ui {
@@ -734,7 +759,7 @@ pub fn lay_out(
         gem: &gem,
         drawn: &drawn,
         badges: &badges,
-        detail: &detail,
+        detail,
         game: &loaded.game,
         looks: &mut looks,
         banners: &mut banners,
@@ -745,10 +770,10 @@ pub fn lay_out(
         return ui.icons(&mut commands, row);
     }
     match mode {
-        Mode::SimpleActor(actor) => ui.simple_actor(&mut commands, root, &actor),
-        Mode::Company(actor) => ui.company(&mut commands, root, &actor),
+        Mode::SimpleActor(actor) => ui.simple_actor(&mut commands, root, actor),
+        Mode::Company(actor) => ui.company(&mut commands, root, actor),
         Mode::Settlement => {}
-        Mode::Group(rs) => ui.group(&mut commands, root, &rs),
+        Mode::Group(rs) => ui.group(&mut commands, root, rs),
     }
 }
 
@@ -768,11 +793,8 @@ struct Ui<'a> {
 }
 
 impl Ui<'_> {
-    /// The picture of a template, or of a technology being researched.
     fn picture(&mut self, template: &str) -> Option<Handle<Image>> {
-        let path = (self.drawn.0.icon(template).map(str::to_string))
-            .or_else(|| self.looks.technologies.get(&Id::from(template)).cloned());
-        self.looks.image(self.game, self.images, path.as_deref())
+        picture(self.drawn, self.looks, self.game, self.images, template)
     }
 
     fn organization_name(&self, r: usize) -> String {
@@ -791,12 +813,7 @@ impl Ui<'_> {
         properties: bool,
     ) {
         let player = self.sim.sides.player(owner);
-        let neutral =
-            (self.local).is_some_and(|p| self.sim.sides.relation(p, owner) == Relation::Neutral);
-        let colour = match neutral {
-            true => NEUTRAL,
-            false => TINTS[tint(self.sim, self.local, owner)],
-        };
+        let colour = owner_colour(self.sim, self.local, owner);
         let mut row = None;
         commands.entity(root).with_children(|display| {
             let strip = Node {
@@ -987,32 +1004,14 @@ impl Ui<'_> {
     /// An organization's banner, as it flies over the organization, filling
     /// `node`.
     fn banner(&mut self, parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
-        let organization = &self.sim.organizations[r];
-        let [red, green, blue] = self
-            .sim
-            .sides
-            .player(organization.owner)
-            .map_or([1.0; 3], |p| p.rgb);
-        let icon = self
-            .banners
-            .icon(self.game, self.images, organization.template.as_str());
-        let template = &organization.template;
-        let shown = self.detail.banners.iter().find(|(of, ..)| *of == r);
-        let (wears, lacks) = shown.map_or((None, false), |&(_, wears, lacks)| (wears, lacks));
-        let wears = wears.map(|(hq, _)| hq);
-        let (badges, banners) = (self.badges, &mut *self.banners);
-        let faction = self.leaders.banner(organization.owner);
-        let looks = banners.layers(self.game, self.images, template.as_str(), faction);
-        let badge = wears
-            .and_then(|hq| badges.badge(banners, self.game, self.images, template.as_str(), hq));
-        let out_of_supply = looks.out_of_supply.filter(|_| lacks);
-        let layers = [
-            (looks.plate.clone(), Color::srgb(red, green, blue)),
-            (icon, Color::WHITE),
-            (looks.frame, Color::WHITE),
-            (out_of_supply, Color::WHITE),
-            (badge, Color::WHITE),
-        ];
+        let layers = Flown {
+            sim: self.sim,
+            detail: self.detail,
+            leaders: self.leaders,
+            badges: self.badges,
+            game: self.game,
+        }
+        .layers(self.banners, self.images, r);
         parent
             .spawn((node, Pickable::IGNORE))
             .with_children(|banner| {
@@ -1154,7 +1153,7 @@ impl Ui<'_> {
             };
             // Filled in by [`refresh`], as its defence changes.
             let figure = ui::coloured("", Font::Small, Color::WHITE);
-            let figure = (figure, Defends(target));
+            let figure = (figure, Defends(target, None));
             let shield = Node {
                 width: px(width * SCALE),
                 height: px(height * SCALE),
@@ -1436,6 +1435,68 @@ impl Ui<'_> {
     }
 }
 
+/// The picture of a template, or of a technology being researched.
+pub(crate) fn picture(
+    drawn: &Drawn,
+    looks: &mut Looks,
+    game: &GameData,
+    images: &mut Assets<Image>,
+    template: &str,
+) -> Option<Handle<Image>> {
+    let path = (drawn.0.icon(template).map(str::to_string))
+        .or_else(|| looks.technologies.get(&Id::from(template)).cloned());
+    looks.image(game, images, path.as_deref())
+}
+
+/// The colour an owner's name is in, by how the player stands towards it.
+pub(crate) fn owner_colour(sim: &World, local: Option<u32>, owner: u32) -> Color {
+    match local.is_some_and(|p| sim.sides.relation(p, owner) == Relation::Neutral) {
+        true => NEUTRAL,
+        false => TINTS[tint(sim, local, owner)],
+    }
+}
+
+/// What an organization's banner is drawn from.
+pub(crate) struct Flown<'a> {
+    pub sim: &'a World,
+    pub detail: &'a Detail,
+    pub leaders: &'a Leaders,
+    pub badges: &'a Badges,
+    pub game: &'a GameData,
+}
+
+impl Flown<'_> {
+    /// The organization at `r`'s banner, as it flies over it: its layers,
+    /// bottom first, each in its colour, with none where it has no such
+    /// layer.
+    pub(crate) fn layers(
+        &self,
+        banners: &mut BannerImages,
+        images: &mut Assets<Image>,
+        r: usize,
+    ) -> [(Option<Handle<Image>>, Color); 5] {
+        let (sim, game) = (self.sim, self.game);
+        let organization = &sim.organizations[r];
+        let [red, green, blue] = (sim.sides.player(organization.owner)).map_or([1.0; 3], |p| p.rgb);
+        let template = organization.template.as_str();
+        let icon = banners.icon(game, images, template);
+        let shown = self.detail.banners.iter().find(|(of, ..)| *of == r);
+        let (wears, lacks) = shown.map_or((None, false), |&(_, wears, lacks)| (wears, lacks));
+        let faction = self.leaders.banner(organization.owner);
+        let looks = banners.layers(game, images, template, faction);
+        let badge =
+            wears.and_then(|(hq, _)| self.badges.badge(banners, game, images, template, hq));
+        let out_of_supply = looks.out_of_supply.filter(|_| lacks);
+        [
+            (looks.plate.clone(), Color::srgb(red, green, blue)),
+            (icon, Color::WHITE),
+            (looks.frame, Color::WHITE),
+            (out_of_supply, Color::WHITE),
+            (badge, Color::WHITE),
+        ]
+    }
+}
+
 /// The template whose portrait stands for what the display shows, and
 /// its owner: a building's own, or an organization's primary slot's, which for
 /// an HQ is the building once it's unpacked. None for an organization with no
@@ -1501,7 +1562,7 @@ pub fn portray(
     mut boxes: Query<(&mut ImageNode, &mut Node), With<PortraitBox>>,
     suns: Query<&Transform, With<DirectionalLight>>,
 ) {
-    let mode = showing.0.as_ref().map(|(mode, _)| mode);
+    let mode = showing.now.as_ref().map(|(mode, _)| mode);
     let wanted = mode.and_then(|mode| {
         let (template, owner) = portrayed(&sim.0, &looks, mode)?;
         // Each thing shown on its own gets a portrait afresh, where a
@@ -1574,15 +1635,7 @@ pub fn refresh(
 ) {
     let sim = &sim.0;
     for (fill, mut meter) in &mut bars {
-        let (now, full) = measure(sim, *fill);
-        let share = match (*fill, full > 0.0) {
-            (_, true) => now / full,
-            // What has no health to lose shows whole.
-            (Fill::Unit(_) | Fill::Organization(_) | Fill::Building(_) | Fill::Flight, false) => {
-                1.0
-            }
-            (Fill::Progress(_) | Fill::Stockpile(_) | Fill::Efficiency(_), false) => 0.0,
-        };
+        let share = share(sim, *fill);
         if meter.share != share {
             meter.share = share;
         }
@@ -1650,7 +1703,7 @@ pub fn refresh(
         let tint = match against {
             Some(std::cmp::Ordering::Greater) => RAISED,
             Some(std::cmp::Ordering::Less) => LOWERED,
-            _ => theme.ink(Ink::Body),
+            _ => of.1.unwrap_or_else(|| theme.ink(Ink::Body)),
         };
         if text.0 != figure {
             text.0 = figure;
@@ -1733,6 +1786,19 @@ fn building_state(sim: &World, b: usize) -> Option<&'static str> {
     }
 }
 
+/// How full a bar filled as `fill` says is, from 0 to 1.
+pub(crate) fn share(sim: &World, fill: Fill) -> f32 {
+    let (now, full) = measure(sim, fill);
+    match (fill, full > 0.0) {
+        (_, true) => (now / full).clamp(0.0, 1.0),
+        // What has no health to lose shows whole.
+        (Fill::Unit(_) | Fill::Organization(_) | Fill::Building(_) | Fill::Flight, false) => 1.0,
+        (Fill::Progress(_) | Fill::Stockpile(_) | Fill::Efficiency(_) | Fill::Morale(_), false) => {
+            0.0
+        }
+    }
+}
+
 /// How much a bar has of how much it could: health, a commission's
 /// progress out of 100, or supply. Nothing of nothing for what has no
 /// such measure.
@@ -1774,6 +1840,10 @@ fn measure(sim: &World, fill: Fill) -> (f32, f32) {
         }
         Fill::Flight => (1.0, 1.0),
         Fill::Efficiency(r) => (sim.organizations[r].efficiency, 1.0),
+        Fill::Morale(r) => {
+            let organization = &sim.organizations[r];
+            (organization.morale, organization.morale_max)
+        }
     }
 }
 
@@ -1940,7 +2010,7 @@ fn ours(sim: &World, local: Option<u32>, owner: u32) -> bool {
 
 /// What the thing a status line is of counts for in its side's economy
 /// now, which only the player's own side's and its allies' say.
-fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
+pub(crate) fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
     let (owner, ledger) = match status {
         Status::Building(b) => (sim.buildings[b].owner, sim.building_ledger(b)),
         Status::Organization(r) => {
@@ -1959,7 +2029,7 @@ fn counted(sim: &World, local: Option<u32>, status: Status) -> Option<Ledger> {
 /// has it, by resource in the order `resources` are defined: of each what
 /// it earns less what it takes to keep, signed, but for a limited
 /// resource taken up, which is bare. Nothing for what comes to nothing.
-fn economy(ledger: &Ledger, resources: &[tgdata::ResourceKind]) -> Vec<(Id, String)> {
+pub(crate) fn economy(ledger: &Ledger, resources: &[tgdata::ResourceKind]) -> Vec<(Id, String)> {
     let entries = resources.iter().filter_map(|r| {
         let kind = r.id.as_str();
         let net = ledger.production.get(kind) - ledger.upkeep.get(kind);
@@ -2029,7 +2099,7 @@ fn map_name(map: &tgdata::Strings, id: u32) -> Option<String> {
     map.get(&format!("name_{id}")).cloned()
 }
 
-fn template_name(names: &HashMap<Id, String>, template: &str) -> String {
+pub(crate) fn template_name(names: &HashMap<Id, String>, template: &str) -> String {
     (names.get(&Id::from(template)).cloned()).unwrap_or_else(|| template.to_string())
 }
 
@@ -2062,7 +2132,7 @@ pub(crate) fn lone(sim: &World, r: usize) -> bool {
 
 /// An organization's captain, whose portrait stands for it: the unit in its
 /// primary slot, else its leader.
-fn captain(sim: &World, looks: &Looks, r: usize) -> usize {
+pub(crate) fn captain(sim: &World, looks: &Looks, r: usize) -> usize {
     let organization = &sim.organizations[r];
     let primary = (looks.primaries.get(&organization.template)).and_then(|p| p.as_ref());
     let unit = primary.and_then(|template| {
@@ -2084,7 +2154,7 @@ fn leader(sim: &World, r: usize) -> usize {
 
 /// Whether a unit template is an organization's commanding officer, which the
 /// game names `..._co`.
-fn is_officer(template: &str) -> bool {
+pub(crate) fn is_officer(template: &str) -> bool {
     template.to_ascii_lowercase().ends_with("_co")
 }
 
@@ -2099,7 +2169,7 @@ fn ordinal(n: u32) -> String {
     format!("{n}{suffix}")
 }
 
-fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
+pub(crate) fn picture_node(picture: Option<Handle<Image>>) -> ImageNode {
     ImageNode::new(picture.unwrap_or_default())
 }
 
@@ -2119,7 +2189,7 @@ fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill, of: Option<Say
 }
 
 /// An organization's card clicked: selects it alone, in place of any building.
-fn pick(
+pub(crate) fn pick(
     activate: On<Activate>,
     cards: Query<&Pick>,
     mut selected: ResMut<Selected>,
@@ -2132,7 +2202,7 @@ fn pick(
 }
 
 /// One of a building's commissions clicked: calls it off.
-fn cancel(
+pub(crate) fn cancel(
     activate: On<Activate>,
     places: Query<&Queued>,
     chosen: Res<SelectedBuilding>,
@@ -2179,6 +2249,7 @@ mod tests {
             font: None,
             justify: None,
             tiles: None,
+            fields: Vec::new(),
             children: Vec::new(),
         };
         let marker = widget(EFFICIENCY_TARGET, vec![decal], Vec::new());
