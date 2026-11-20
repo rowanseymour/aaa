@@ -95,8 +95,17 @@ options() {
 game() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
+    hud=${4:-modern}
+    # The game reads an options file it can't make sense of as the defaults.
+    case $hud in
+    modern | original) ;;
+    *)
+        echo "no HUD called $hud" >&2
+        exit 2
+        ;;
+    esac
     shoot "$1" "$bin/tag-aa" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" \
-        --options "$(options "${4:-modern}")" --screenshot "$work/$1.png"
+        --options "$(options "$hud")" --screenshot "$work/$1.png"
 }
 
 # menus <name>, with the script on stdin, which starts from the first menu.
