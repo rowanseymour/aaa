@@ -187,6 +187,13 @@ pub fn fit_view(
     }
 }
 
+/// How many of the interface's pixels a pixel of the layouts' screen is,
+/// drawn as [`fit_view`] fits it within a window `size` across, in logical
+/// pixels.
+pub fn layout_scale(size: Vec2) -> f32 {
+    size.y.min(size.x * SCREEN[1] / SCREEN[0]) / SCREEN[1]
+}
+
 /// The corner and size of the largest rectangle of the layouts' shape
 /// centred in `size`.
 fn fit(size: UVec2) -> (UVec2, UVec2) {
@@ -1094,6 +1101,14 @@ mod tests {
         assert_eq!(set(&mut app, true, true), (true, false));
         assert_eq!(set(&mut app, false, false), (false, true));
         assert_eq!(set(&mut app, true, true), (true, false));
+    }
+
+    #[test]
+    fn what_is_drawn_over_the_view_scales_with_its_height() {
+        assert_eq!(layout_scale(Vec2::new(1024.0, 768.0)), 1.0);
+        assert_eq!(layout_scale(Vec2::new(1280.0, 720.0)), 720.0 / 768.0);
+        // Too narrow for the window's height, the view's width decides.
+        assert_eq!(layout_scale(Vec2::new(1280.0, 1024.0)), 1.25);
     }
 
     #[test]

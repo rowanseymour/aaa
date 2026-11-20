@@ -2930,9 +2930,10 @@ const UI_HEIGHT_SHARE: f32 = 1.0 / 3.0;
 
 /// Sets [`UiScale`] from [`UiScaleSetting`], shrunk until our object
 /// display, centred, clears the minimap and action grid either side of it, and
-/// they take no more than [`UI_HEIGHT_SHARE`] of the window's height. The
-/// original's interface scales its own panels to its layouts' shape, so a
-/// match played with it takes the setting as it is.
+/// they take no more than [`UI_HEIGHT_SHARE`] of the window's height. A match
+/// played with the original's interface takes no setting, as the original
+/// has none: what's drawn over it scales with its layouts' screen, as its
+/// own panels do.
 fn fit_ui(
     setting: Res<UiScaleSetting>,
     windows: Query<Ref<Window>, With<PrimaryWindow>>,
@@ -2948,29 +2949,30 @@ fn fit_ui(
     if !changed {
         return;
     }
-    let original = hud.0 == hud::Hud::Original && screen.is_some_and(|s| *s.get() == Screen::Match);
-    if original {
-        let wanted = setting.0.max(*UI_SCALES.start());
-        if scale.0 != wanted {
-            scale.0 = wanted;
-        }
-        return;
-    }
     // Without a window, a screenshot's image.
     let size = window.map_or(shot::SIZE.as_vec2(), |w| w.size());
     if size.min_element() <= 0.0 {
         return;
     }
+    let original = hud.0 == hud::Hud::Original && screen.is_some_and(|s| *s.get() == Screen::Match);
+    let wanted = match original {
+        true => hud::original::layout_scale(size),
+        false => fitted(setting.0, size),
+    };
+    if scale.0 != wanted {
+        scale.0 = wanted;
+    }
+}
+
+/// `setting`, shrunk as [`fit_ui`] says for a window `size` across.
+fn fitted(setting: f32, size: Vec2) -> f32 {
     let side = MARGIN + modern::minimap::DISC.max(modern::actions::SIZE.x) + MARGIN;
     let wide = size.x / (2.0 * side + modern::object_display::SIZE.x);
     let tallest = modern::minimap::DISC
         .max(modern::actions::SIZE.y)
         .max(modern::object_display::SIZE.y);
     let tall = size.y * UI_HEIGHT_SHARE / (MARGIN + tallest);
-    let wanted = setting.0.min(wide).min(tall).max(*UI_SCALES.start());
-    if scale.0 != wanted {
-        scale.0 = wanted;
-    }
+    setting.min(wide).min(tall).max(*UI_SCALES.start())
 }
 
 /// Whether any of `rect`, in viewport pixels, is within what `camera`

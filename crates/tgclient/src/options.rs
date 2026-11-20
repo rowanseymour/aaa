@@ -72,6 +72,7 @@ pub struct Options {
     ui_scale_label: String,
     hud_label: String,
     hud_hint: String,
+    ui_scale_hint: String,
     /// What each tab is called, by [`Tab`], and the groups of options
     /// in them.
     game_tab: String,
@@ -131,6 +132,8 @@ impl Options {
             ui_scale_label: "Interface Scale".into(),
             hud_label: "Interface".into(),
             hud_hint: "Takes effect from the next match.".into(),
+            ui_scale_hint:
+                "A match played with the original interface scales with its view instead.".into(),
             game_tab: tab(GAME_TAB, "Gameplay"),
             display_tab: "Display".into(),
             sound_tab: "Sound".into(),
@@ -692,7 +695,13 @@ fn show_body(
             let aa = &options.anti_aliasing_label;
             choice(&mut commands, basic, aa, AntiAliasingHolder);
             let scale = &options.ui_scale_label;
-            choice(&mut commands, basic, scale, UiScaleHolder);
+            let hint = Hint(options.ui_scale_hint.clone());
+            choice(
+                &mut commands,
+                basic,
+                scale,
+                (UiScaleHolder, hint, Hovered::default()),
+            );
             // A match under way keeps the interface it started with.
             let hud = (
                 HudHolder,
