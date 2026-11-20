@@ -49,7 +49,7 @@ pub fn spawn(
         Rim::TopLeft.node(),
         Surface::Clear,
         Edge::Border,
-        GlobalZIndex(2),
+        GlobalZIndex(crate::ui::layer::HUD_TOP),
         DespawnOnExit(super::DRAWN),
         children![(
             PauseGlyph,

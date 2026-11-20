@@ -32,7 +32,7 @@ pub fn spawn(mut commands: Commands, minimap: Res<Minimap>, mut images: ResMut<A
             ..default()
         },
         // Over the banners, which stack by where they are on screen.
-        GlobalZIndex(1),
+        GlobalZIndex(crate::ui::layer::HUD),
         DespawnOnExit(super::DRAWN),
         children![
             (

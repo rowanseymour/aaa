@@ -622,7 +622,7 @@ pub fn spawn(mut commands: Commands, loaded: Res<Loaded>, mut log: ResMut<Messag
             ..default()
         },
         Pickable::IGNORE,
-        GlobalZIndex(1),
+        GlobalZIndex(crate::ui::layer::HUD),
         DespawnOnExit(Screen::Match),
     ));
 }

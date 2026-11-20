@@ -773,20 +773,41 @@ pub fn dropdown() -> impl Bundle {
     )
 }
 
-/// Where what's drawn over the rest of the interface stacks, lowest first.
+/// Where what's drawn stacks, lowest first, spaced so one can go
+/// between two. A node given none is at 0 with a screen's own content,
+/// such as a menu's.
 pub mod layer {
+    /// What a menu's screen shows behind its content.
+    pub const BACKDROP: i32 = -10;
+    /// Part of a screen raised over the rest of it, as the lobby's presets
+    /// are for their list to open over the sides.
+    pub const RAISED: i32 = 5;
+    /// Banners over the map; among themselves the nearer over the farther.
+    pub const BANNERS: i32 = 10;
+    /// Health bars over the map, over its banners.
+    pub const HEALTH_BARS: i32 = 20;
+    /// What's drawn over the map but on no one thing, such as the box
+    /// dragged to select.
+    pub const SELECTING: i32 = 30;
+    /// The interface over the match, in either style: its panels and what's
+    /// written over the map, such as messages.
+    pub const HUD: i32 = 50;
+    /// What sits on the edges of the interface's panels, such as the clock
+    /// and the panels' buttons.
+    pub const HUD_TOP: i32 = 60;
     /// A menu over the match, on a [`scrim`](super::scrim).
-    pub const DIALOG: i32 = 10;
-    /// A page over the whole screen, such as the options.
-    pub const PAGE: i32 = 15;
+    pub const DIALOG: i32 = 100;
+    /// A page over the whole screen, such as the options or the loading
+    /// screen.
+    pub const PAGE: i32 = 150;
     /// An open [`Dropdown`](super::Dropdown)'s list.
-    pub const LIST: i32 = 20;
+    pub const LIST: i32 = 200;
     /// A question that wants an answer before anything else.
-    pub const QUESTION: i32 = 25;
+    pub const QUESTION: i32 = 250;
     /// The box that says what the cursor is over.
-    pub const HINT: i32 = 30;
+    pub const HINT: i32 = 300;
     /// The console.
-    pub const CONSOLE: i32 = 100;
+    pub const CONSOLE: i32 = 1000;
 }
 
 /// Dims the whole screen under a [`dialog`] on top of it, drawn at

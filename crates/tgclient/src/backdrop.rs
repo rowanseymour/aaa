@@ -178,7 +178,7 @@ fn arrive(
         },
         BackgroundColor(Color::BLACK),
         // Under the menu, over the land.
-        GlobalZIndex(-1),
+        GlobalZIndex(crate::ui::layer::BACKDROP),
         Pickable::IGNORE,
         // Gone with the menu, or it would cover the screens it opens.
         DespawnOnExit(Screen::MainMenu),

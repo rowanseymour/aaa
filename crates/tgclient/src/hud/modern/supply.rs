@@ -54,7 +54,7 @@ pub fn spawn(
             height: px(CYCLE_SIZE),
             ..default()
         },
-        GlobalZIndex(1),
+        GlobalZIndex(crate::ui::layer::HUD),
         DespawnOnExit(super::DRAWN),
     ));
 }

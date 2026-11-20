@@ -112,7 +112,7 @@ pub fn spawn(
                 ..default()
             },
             Pickable::IGNORE,
-            GlobalZIndex(1),
+            GlobalZIndex(crate::ui::layer::HUD),
             DespawnOnExit(super::DRAWN),
         ))
         .with_children(|root| {
