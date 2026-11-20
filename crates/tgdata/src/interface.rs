@@ -123,6 +123,45 @@ impl GameData {
         self.interface_setting(|v| v.ui_color_highlight)
     }
 
+    /// One of the interface's fonts, by its `ids` as a label names it:
+    /// `[Font]` in a `.tgi` file in `Fonts/`, whose first `[CharacterSet]`
+    /// gives the face.
+    pub fn font(&self, ids: &str) -> Option<FontLook> {
+        let names = self.entry_names(|n| {
+            n.strip_prefix("fonts/")
+                .is_some_and(|f| f.ends_with(".tgi") && !f.contains('/'))
+        });
+        let files = self.parse_named(names.iter().map(String::as_str));
+        let word = |b: &tgi::Block, key: &str| {
+            let value = b.field(key)?.value.as_deref()?;
+            Some(value.split_whitespace().next()?.to_string())
+        };
+        let font = (files.iter())
+            .flat_map(|(_, f)| f.root.blocks_of("Font"))
+            .find(|f| word(f, "ids").is_some_and(|i| i.eq_ignore_ascii_case(ids)))?;
+        let set = font.blocks_of("CharacterSet").next();
+        let flag = |key| {
+            set.and_then(|s| word(s, key))
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"))
+        };
+        // A face the data doesn't hold is one of the system's, by name.
+        let file = (set.and_then(|s| s.field("font")?.value.clone()))
+            .map(|f| f.trim().trim_start_matches('/').to_string())
+            .filter(|f| self.exists(f));
+        Some(FontLook {
+            file,
+            size: word(font, "size")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(12.0),
+            bold: flag("bold"),
+            shadow: flag("shadow").then(|| {
+                (set.and_then(|s| word(s, "shadow_opacity")))
+                    .and_then(|o| o.parse().ok())
+                    .unwrap_or(1.0)
+            }),
+        })
+    }
+
     /// The images the connection dialog draws, as its layout names them.
     pub fn connection_look(&self) -> ConnectionLook {
         // Not in the load lists.
@@ -331,4 +370,18 @@ mod tests {
         assert_eq!(labelled(panel), Some("#nickname"));
         assert!(descendant(&parsed.root, "Elsewhere").is_none());
     }
+}
+
+/// One of the interface's fonts.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontLook {
+    /// The archive path of its face, where the data holds it rather than
+    /// naming one the system has.
+    pub file: Option<String>,
+    /// Its size as Windows gives it, in points of a 96 dots-per-inch
+    /// screen.
+    pub size: f32,
+    pub bold: bool,
+    /// How opaque the shadow behind its glyphs is, where it has one.
+    pub shadow: Option<f32>,
 }

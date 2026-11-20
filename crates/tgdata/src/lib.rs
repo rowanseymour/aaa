@@ -65,7 +65,7 @@ pub use guard::{GUARDING, GuardRules};
 pub use heroes::Hero;
 pub use hotkeys::{Hotkey, HotkeyConfiguration};
 pub use id::Id;
-pub use interface::{Command, ConnectionLook, CursorLook, FormationLook, SupplyBorder};
+pub use interface::{Command, ConnectionLook, CursorLook, FontLook, FormationLook, SupplyBorder};
 pub use messages::{GameEvent, InterfaceVars, MessageKind};
 pub use morale::{
     CHASING, ENGAGED, EXHAUSTED, MoraleEffect, MoraleRules, REFORMING, RESTING, ROUTING, RoutRules,

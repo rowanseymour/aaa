@@ -2,8 +2,10 @@
 //! [`tgdata::widgets`]) in place of ours: their pictures as they look at
 //! rest, the command grid's buttons, which show what
 //! [`actions::Shown`](crate::actions::Shown) holds and ask for their
-//! widget by name when pressed, and other buttons that ask for what our
-//! interface's do, such as pausing.
+//! widget by name when pressed, other buttons that ask for what our
+//! interface's do, such as pausing, the resource bars, and the one pane
+//! every tooltip is said in. What they show is shared with ours; only the
+//! drawing is their own.
 
 use std::collections::HashMap;
 
@@ -18,6 +20,14 @@ use bevy::picking::hover::Hovered;
 use bevy::render::render_resource::TextureFormat;
 use bevy::ui_widgets::Button;
 use serde::{Deserialize, Serialize};
+
+mod bars;
+mod lettering;
+mod tips;
+
+pub use bars::slide as slide_bars;
+pub use lettering::{LayoutScale, scale as scale_layout};
+pub use tips::show as show_tip;
 
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
 use crate::intent::Asks;
@@ -99,6 +109,7 @@ pub fn fit_view(
     mut cameras: Query<&mut Camera, With<tgrender::camera::RtsCamera>>,
     mut frames: Query<&mut Node, With<Frame>>,
     ui: Res<UiScale>,
+    mut layout: ResMut<LayoutScale>,
 ) {
     for mut camera in &mut cameras {
         let (Some(size), Some(scale)) = (
@@ -108,6 +119,7 @@ pub fn fit_view(
             continue;
         };
         let (at, size) = fit(size);
+        layout.set_if_neq(LayoutScale::of(size.y as f32 / scale / ui.0));
         let now = (camera.viewport.as_ref()).map(|v| (v.physical_position, v.physical_size));
         if now != Some((at, size)) {
             camera.viewport = Some(Viewport {
@@ -157,8 +169,7 @@ const OVER_BUTTONS: [&str; 1] = ["GameMiniMap"];
 const ON_GAME: &str = "ControlPanelTop";
 const GAME: &str = "Game";
 type Flag = fn(&InterfaceFlags) -> bool;
-const ON_SCREEN: [(&str, Option<Flag>); 5] = [
-    ("EconomyBar", None),
+const ON_SCREEN: [(&str, Option<Flag>); 4] = [
     ("GroupFloater", None),
     ("FactionAbilitiesFloater", None),
     ("FactionExperience", Some(|f| f.faction_experience)),
@@ -231,6 +242,7 @@ pub fn spawn(
     looks: Res<crate::actions::Looks>,
     bindings: Res<crate::keys::Bindings>,
     mut images: ResMut<Assets<Image>>,
+    mut faces: ResMut<Assets<bevy::text::Font>>,
     formats: Res<CompressedImageFormatSupport>,
 ) {
     let game = &loaded.game;
@@ -301,6 +313,23 @@ pub fn spawn(
             .map(Step::By);
         drawer.widget(widget, &Vec::from_iter(offset));
     }
+    let mut letters = lettering::Letters::default();
+    let colour = |c: Option<[f32; 3]>, or: Color| c.map_or(or, |[r, g, b]| Color::srgb(r, g, b));
+    let short = colour(game.invalid_colour(), Color::srgb(1.0, 0.0, 0.0));
+    let key = colour(game.highlight_colour(), Color::srgb(1.0, 1.0, 0.0));
+    let cells = game.economy_bar();
+    let impact = drawer.flags.economic_impact;
+    let resource_bars: Vec<_> = (bars::BARS.iter())
+        .filter(|name| **name != bars::BARS[0] || impact)
+        .filter_map(|name| named(name))
+        .map(|bar| drawer.bar(bar, &cells, (&mut letters, &mut faces)))
+        .collect();
+    let pane = tips::Built::new(
+        &widgets,
+        &mut drawer.pictures,
+        (&mut letters, &mut faces),
+        (key, short),
+    );
     // Icons keep their pixels only until they're first drawn.
     let mut greyed = Greyed::default();
     let images = &mut drawer.pictures.images;
@@ -312,8 +341,9 @@ pub fn spawn(
     commands.insert_resource(greyed);
     let buttons = grid.map(|(area, button)| grid_buttons(area, button, &mut drawer.pictures));
     let (drawn, pressables) = (drawer.drawn, drawer.pressables);
+    let mut docked = None;
     // Where the original stretches it over a wider window instead.
-    commands
+    let frame = commands
         .spawn((
             Node {
                 position_type: PositionType::Absolute,
@@ -333,13 +363,24 @@ pub fn spawn(
                     RelativeCursorPosition::default(),
                 ));
             }
+            for bar in resource_bars {
+                bar.spawn(screen, game, &letters, short);
+            }
             for button in buttons.into_iter().flatten() {
                 button.spawn(screen);
             }
             for button in pressables {
                 button.spawn(screen, &bindings);
             }
-        });
+            docked = pane.map(|pane| pane.spawn(screen));
+        })
+        .id();
+    // Every hint on the layouts' screen is said in the pane.
+    if let Some(pane) = docked {
+        commands.entity(frame).insert(crate::ui::Docks(pane));
+    }
+    commands.insert_resource(letters);
+    commands.init_resource::<LayoutScale>();
 }
 
 /// Where on the layouts' screen the steps from it lead.
@@ -944,6 +985,9 @@ mod tests {
             texture: None,
             colour: [1.0; 3],
             text: None,
+            font: None,
+            justify: None,
+            tiles: None,
             children: Vec::new(),
         }
     }

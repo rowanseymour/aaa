@@ -688,35 +688,35 @@ pub struct Tooltip;
 /// What the tooltip says: the button's name, what it does, a table of
 /// such as what it costs, and why it can't be pressed.
 #[derive(Clone, PartialEq, Default, Debug)]
-struct Tip {
+pub struct Tip {
     /// The button's name, with the key that presses it marked.
-    title: Marked,
-    help: Option<String>,
-    table: Vec<Row>,
+    pub title: Marked,
+    pub help: Option<String>,
+    pub table: Vec<Row>,
     /// Lines under the table.
-    notes: Vec<String>,
-    why: Option<String>,
+    pub notes: Vec<String>,
+    pub why: Option<String>,
 }
 
 /// A row of the tooltip's table, such as Cost and what it is.
 #[derive(Clone, PartialEq, Debug)]
-struct Row {
-    label: String,
-    amounts: Vec<Quantity>,
+pub struct Row {
+    pub label: String,
+    pub amounts: Vec<Quantity>,
 }
 
 /// So much of a resource, shown by its glyph, or its name without one.
 #[derive(Clone, PartialEq, Debug)]
-struct Quantity {
-    glyph: Option<Handle<Image>>,
-    amount: f32,
+pub struct Quantity {
+    pub glyph: Option<Handle<Image>>,
+    pub amount: f32,
     /// Shown signed, as what's earned is.
-    earned: bool,
-    resource: String,
+    pub earned: bool,
+    pub resource: String,
 }
 
 impl Quantity {
-    fn number(&self) -> String {
+    pub fn number(&self) -> String {
         if self.earned && self.amount > 0.0 {
             format!("+{}", self.amount)
         } else {
@@ -1049,6 +1049,7 @@ pub fn spawn(
     });
     commands.init_resource::<Shown>();
     commands.init_resource::<Refusal>();
+    commands.init_resource::<Said>();
     commands.insert_resource(Page::Orders);
 
     commands
@@ -1469,8 +1470,8 @@ fn previewed(
     }
 }
 
-/// Draws the grid's slots as [`fill_slots`] filled them, and says what's under
-/// the cursor.
+/// Draws the grid's slots as [`fill_slots`] filled them, and in its box
+/// what [`tell`] has the tooltip say.
 #[allow(clippy::too_many_arguments)]
 pub fn show(
     page: Res<Page>,
@@ -1479,14 +1480,12 @@ pub fn show(
     sim: Res<Sim>,
     looks: Res<Looks>,
     shown: Res<Shown>,
+    said: Res<Said>,
     mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
     mut slots: Query<SlotParts, Without<SlotIcon>>,
     mut icons: Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
     mut tooltip: TipParts,
     local: Res<Local>,
-    focus: Res<crate::Focus>,
-    refusal: Res<Refusal>,
-    bindings: Res<Bindings>,
     mut commands: Commands,
 ) {
     let building = chosen.0.filter(|_| selected.0.is_empty());
@@ -1499,15 +1498,7 @@ pub fn show(
     if nothing {
         return;
     }
-    let Shown {
-        lacks, researches, ..
-    } = &*shown;
-    let menu = looks.menu(&sim.0, building);
-    let topics = looks.topics(&sim.0, building);
-    let list = building.map_or(&[][..], |b| sim.0.research_list(b));
-    let list = &list[..list.len().min(topics.len())];
     let builds = builds(&sim.0, &selected.0);
-    let mut hovered = None;
     for (id, clicks, slot, hover, children, mut border, mut pickable) in &mut slots {
         let entry = shown.entries[slot.0];
         // Empty slots are just boxes, which nothing should hear clicks on.
@@ -1523,15 +1514,119 @@ pub fn show(
             set_icon(children, &mut icons, None);
             continue;
         };
+        let look = look_of(entry, &sim.0, &looks, building, &builds);
+        let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
+        let lit = lit(entry, *page);
+        let icon = look.icon.clone();
+        // Only a press that can do something sounds like it.
+        match (ready, clicks) {
+            (true, false) => {
+                commands.entity(id).insert(Click::COMMAND);
+            }
+            (false, true) => {
+                commands.entity(id).remove::<Click>();
+            }
+            _ => {}
+        }
+        border.set_if_neq(Edge::lit(lit, hover.get() && ready, Edge::Clear));
+        let shade = match ready {
+            true => Shade::Full,
+            false => Shade::Dimmed,
+        };
+        set_icon(children, &mut icons, icon.map(|i| (i, shade)));
+    }
+    tooltip.say(said.0.clone());
+}
+
+/// What the tooltip says, whichever interface shows it.
+#[derive(Resource, Default)]
+pub struct Said(pub Option<Tip>);
+
+/// Has the tooltip say what the grid's button under the cursor is, or else
+/// what the order being aimed wants.
+#[allow(clippy::too_many_arguments)]
+pub fn tell(
+    page: Res<Page>,
+    selected: Res<Selected>,
+    chosen: Res<SelectedBuilding>,
+    sim: Res<Sim>,
+    looks: Res<Looks>,
+    shown: Res<Shown>,
+    slots: Query<(&Slot, &Hovered)>,
+    local: Res<Local>,
+    focus: Res<crate::Focus>,
+    refusal: Res<Refusal>,
+    bindings: Res<Bindings>,
+    mut said: ResMut<Said>,
+) {
+    let building = chosen.0.filter(|_| selected.0.is_empty());
+    let tip = match crate::selection::commanded(&sim.0, local.0, &selected.0, building) {
+        true => {
+            let under = (slots.iter()).find_map(|(slot, hover)| {
+                let entry = shown.entries[slot.0].filter(|_| hover.get())?;
+                Some((slot.0, entry))
+            });
+            let hovered = under.map(|(slot, entry)| {
+                let tip = Grounds {
+                    page: *page,
+                    sim: &sim.0,
+                    looks: &looks,
+                    shown: &shown,
+                    selected: &selected.0,
+                    building,
+                    refusal: &refusal,
+                    bindings: &bindings,
+                };
+                tip.of(slot, entry)
+            });
+            prompted(hovered, *page, &sim.0, local.0, *focus)
+        }
+        false => None,
+    };
+    if said.0 != tip {
+        said.0 = tip;
+    }
+}
+
+/// What a grid button's tooltip is worked out from.
+struct Grounds<'a> {
+    page: Page,
+    sim: &'a tgsim::World,
+    looks: &'a Looks,
+    shown: &'a Shown,
+    selected: &'a [usize],
+    building: Option<usize>,
+    refusal: &'a Refusal,
+    bindings: &'a Bindings,
+}
+
+impl Grounds<'_> {
+    /// The tooltip of the button in `slot`, holding `entry`.
+    fn of(&self, slot: usize, entry: Entry) -> Tip {
+        let Grounds {
+            page,
+            sim,
+            looks,
+            shown,
+            building,
+            ..
+        } = *self;
+        let Shown {
+            lacks, researches, ..
+        } = shown;
+        let menu = looks.menu(sim, building);
+        let topics = looks.topics(sim, building);
+        let list = building.map_or(&[][..], |b| sim.research_list(b));
+        let list = &list[..list.len().min(topics.len())];
+        let builds = builds(sim, self.selected);
         // Why it can't be pressed, when that's down to the player.
         let mut why = None;
         let mut table = Vec::new();
         let mut notes = Vec::new();
         // A greyed technology's tooltip says only what it wants.
         let mut only = None;
-        let look = look_of(entry, &sim.0, &looks, building, &builds);
-        let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
-        let lit = lit(entry, *page);
+        let look = look_of(entry, sim, looks, building, &builds);
+        let ready = shown.faces[slot].as_ref().is_some_and(|f| f.ready);
         match entry {
             Entry::Research(i) => {
                 let topic = &topics[i];
@@ -1563,78 +1658,71 @@ pub fn show(
             }
             _ => {}
         }
-        let icon = look.icon.clone();
-        // Only a press that can do something sounds like it.
-        match (ready, clicks) {
-            (true, false) => {
-                commands.entity(id).insert(Click::COMMAND);
-            }
-            (false, true) => {
-                commands.entity(id).remove::<Click>();
-            }
-            _ => {}
-        }
-        if hover.get() {
-            let refused = refusal.0.filter(|(s, _)| *s == slot.0).map(|(_, r)| r);
-            let unaffordable = match (entry, refused) {
-                (Entry::Recruit(i), Some(tgsim::Refused::Unaffordable)) => menu[i]
-                    .organization
-                    .as_ref()
-                    .map(|r| (&looks.affording, sim.0.cost(r))),
-                _ => None,
-            };
-            let why = match (ready, why, refused) {
-                (_, _, Some(_)) if unaffordable.is_some() => unaffordable.map(|(said, cost)| {
-                    let cost = cost.ceil().to_string();
-                    fill(said, &[&look.name, &cost])
-                }),
-                (_, _, Some(refused)) => Some(refused_why(refused).to_string()),
-                (true, _, _) => None,
-                (false, Some(why), _) => Some(why),
-                (false, None, _) => Some(look.disabled.clone().unwrap_or("Not yet".into())),
-            };
-            let names = bound(entry, slot.0, *page, (menu, &builds), list);
-            let key = names.iter().find_map(|action| bindings.key(action));
-            let help = match (entry, building) {
-                (Entry::Sell, Some(b)) => (look.help.as_deref())
-                    .map(|help| fill(help, &[&sim.0.sale_value(b).to_string()])),
-                _ => look.help.clone(),
-            };
-            hovered = Some(match only.take() {
-                Some(only) => Tip {
-                    title: Marked::plain(only.as_str()),
-                    ..default()
-                },
-                None => Tip {
-                    title: match key {
-                        Some(key) => key.mark(&look.name),
-                        None => Marked::plain(look.name.as_str()),
-                    },
-                    help,
-                    table,
-                    notes,
-                    why,
-                },
-            });
-        }
-        border.set_if_neq(Edge::lit(lit, hover.get() && ready, Edge::Clear));
-        let shade = match ready {
-            true => Shade::Full,
-            false => Shade::Dimmed,
+        let refused = (self.refusal.0).filter(|(s, _)| *s == slot).map(|(_, r)| r);
+        let unaffordable = match (entry, refused) {
+            (Entry::Recruit(i), Some(tgsim::Refused::Unaffordable)) => menu[i]
+                .organization
+                .as_ref()
+                .map(|r| (&looks.affording, sim.cost(r))),
+            _ => None,
         };
-        set_icon(children, &mut icons, icon.map(|i| (i, shade)));
+        let why = match (ready, why, refused) {
+            (_, _, Some(_)) if unaffordable.is_some() => unaffordable.map(|(said, cost)| {
+                let cost = cost.ceil().to_string();
+                fill(said, &[&look.name, &cost])
+            }),
+            (_, _, Some(refused)) => Some(refused_why(refused).to_string()),
+            (true, _, _) => None,
+            (false, Some(why), _) => Some(why),
+            (false, None, _) => Some(look.disabled.clone().unwrap_or("Not yet".into())),
+        };
+        let names = bound(entry, slot, page, (menu, &builds), list);
+        let key = names.iter().find_map(|action| self.bindings.key(action));
+        let help = match (entry, building) {
+            (Entry::Sell, Some(b)) => {
+                (look.help.as_deref()).map(|help| fill(help, &[&sim.sale_value(b).to_string()]))
+            }
+            _ => look.help.clone(),
+        };
+        match only {
+            Some(only) => Tip {
+                title: Marked::plain(only.as_str()),
+                ..default()
+            },
+            None => Tip {
+                title: match key {
+                    Some(key) => key.mark(&look.name),
+                    None => Marked::plain(look.name.as_str()),
+                },
+                help,
+                table,
+                notes,
+                why,
+            },
+        }
     }
+}
+
+/// The tooltip of the button under the cursor, or with none, what the
+/// order being aimed wants.
+fn prompted(
+    hovered: Option<Tip>,
+    page: Page,
+    sim: &tgsim::World,
+    local: Option<u32>,
+    focus: crate::Focus,
+) -> Option<Tip> {
     let prompt = |title: &str| {
         Some(Tip {
             title: Marked::plain(title),
             ..default()
         })
     };
-    let tip = match (hovered, *page) {
+    match (hovered, page) {
         (Some(tip), _) => Some(tip),
         (None, Page::Aiming(Aim::Unpack)) => prompt("Left click where to unpack"),
         (None, Page::Aiming(Aim::Attack)) => {
-            prompt(match local.0.map(|p| attack_at(&sim.0, p, *focus)) {
+            prompt(match local.map(|p| attack_at(sim, p, focus)) {
                 Some(Struck::Friend(_)) => "Can't attack a friend",
                 Some(Struck::Neutral(_)) => "Can't attack a neutral",
                 _ => "Left click an enemy or where to attack",
@@ -1647,8 +1735,7 @@ pub fn show(
         (None, Page::Delivering(_)) => prompt("Left click where to deploy"),
         (None, Page::Placing(_)) => prompt("Left click where to build, or drag to turn it"),
         (None, _) => None,
-    };
-    tooltip.say(tip);
+    }
 }
 
 /// The tooltip's node, not the slots'.

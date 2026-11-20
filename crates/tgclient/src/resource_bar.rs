@@ -3,13 +3,14 @@
 //! what the order under the cursor would make of them.
 
 use bevy::image::CompressedImageFormatSupport;
+use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use tgdata::{Id, ResourceRole};
 use tgmap::Organization;
 use tgrender::textures;
 use tgsim::{Balance, Change};
 
-use crate::ui::{Font, Hint, Ink, Surface, Theme, backed, font, label};
+use crate::ui::{Font, Hint, Ink, Marked, Surface, Theme, backed, label};
 use crate::{Loaded, Local, Screen, Sim};
 
 const CELL: f32 = 80.0;
@@ -35,17 +36,67 @@ pub enum Previewed {
     Build(tgmap::Id),
 }
 
+/// Whether the preview bar has something to show: a [`Preview`] that
+/// still applies, as [`show`] last found.
+#[derive(Resource, Default)]
+pub struct Previewing(pub bool);
+
 /// One of the two bars: the player's economy now, or previewed.
 #[derive(Component)]
 pub struct Bar(bool);
 
-/// The text of a cell of a bar, drawn in a span for each run of it.
+/// The text of a cell of a bar, drawn in a span for each run of it, in
+/// its own font. Its parent holds it and the resource's glyph, hidden
+/// on the preview bar while the order leaves the figure alone.
 #[derive(Component)]
 pub struct Cell {
     preview: bool,
     resource: Id,
     /// Whether it's the stockpiled resource's, which shows the stockpile.
     stockpiled: bool,
+}
+
+impl Cell {
+    /// A cell of the bar, or of the preview, for `resource`, and on the
+    /// bar, what it needs to say what it shows when hovered.
+    pub fn new(
+        game: &tgdata::GameData,
+        preview: bool,
+        resource: &Id,
+    ) -> (Cell, Option<(Hint, Marked, About)>) {
+        let resources = game.resources();
+        let kind = resources.iter().find(|r| &r.id == resource);
+        let cell = Cell {
+            preview,
+            resource: resource.clone(),
+            stockpiled: stockpile(game).as_ref() == Some(resource),
+        };
+        let name = kind.map_or(resource.to_string(), |k| k.name.clone());
+        let about = kind.and_then(|k| k.description.clone());
+        let hint = (!preview).then(|| (Hint(String::new()), Marked::plain(name), About(about)));
+        (cell, hint)
+    }
+}
+
+/// What the game says of a cell's resource, under its figures when hovered.
+#[derive(Component)]
+pub struct About(Option<String>);
+
+/// The colours a cell's text is drawn in, for an interface that doesn't
+/// draw it in the theme's [`Ink`]s: normally, and for a shortfall.
+#[derive(Component, Clone, Copy)]
+pub struct Colours {
+    pub body: Color,
+    pub short: Color,
+}
+
+/// The resource the sim keeps a stockpile of: the first stockpiled one.
+fn stockpile(game: &tgdata::GameData) -> Option<Id> {
+    let resources = game.resources();
+    let first = resources
+        .iter()
+        .find(|r| r.role == ResourceRole::Stockpiled);
+    first.map(|r| r.id.clone())
 }
 
 /// The mark beside the bar while the player can't pay their upkeep.
@@ -66,6 +117,7 @@ pub fn spawn(
     let strings = game.strings();
     let said = crate::ui::said(&strings);
     commands.init_resource::<Preview>();
+    commands.init_resource::<Previewing>();
     let shortage = game
         .read(SHORTAGE_ICON)
         .and_then(|bytes| textures::decode(&bytes, SHORTAGE_ICON, formats.0, true))
@@ -75,10 +127,7 @@ pub fn spawn(
         "Insufficient money to pay upkeep.  Units will take damage when out of supply.",
     );
     let glyphs = crate::actions::glyphs(game, &mut images, formats.0);
-    // The sim keeps one stockpile, of the first stockpiled resource.
-    let resources = game.resources();
-    let stockpile = (resources.iter()).find(|r| r.role == ResourceRole::Stockpiled);
-    let stockpiled = |id: &Id| stockpile.is_some_and(|r| &r.id == id);
+    let stockpile = stockpile(game);
     let cells = game.economy_bar();
     let bar = |root: &mut ChildSpawnerCommands, preview: bool| {
         root.spawn((
@@ -100,9 +149,8 @@ pub fn spawn(
         ))
         .with_children(|bar| {
             for kind in &cells {
-                let stockpiled = stockpiled(kind);
                 bar.spawn(Node {
-                    width: px(match stockpiled {
+                    width: px(match stockpile.as_ref() == Some(kind) {
                         true => STOCKPILE_CELL,
                         false => CELL,
                     }),
@@ -121,12 +169,12 @@ pub fn spawn(
                             },
                         ));
                     }
-                    let text = Cell {
-                        preview,
-                        resource: kind.clone(),
-                        stockpiled,
-                    };
-                    cell.spawn((text, label("", Font::Hud, Ink::Body)));
+                    let (text, hint) = Cell::new(game, preview, kind);
+                    let mut text = cell.spawn((text, label("", Font::Hud, Ink::Body)));
+                    // Unlike a label's, its text is hovered.
+                    if let Some(hint) = hint {
+                        text.insert((hint, Pickable::default()));
+                    }
                 });
             }
         });
@@ -180,11 +228,13 @@ pub fn show(
     sim: Res<Sim>,
     local: Res<Local>,
     preview: Res<Preview>,
+    mut previewing: ResMut<Previewing>,
     mut bars: Query<(&Bar, &mut Node), Without<ShortageIcon>>,
     mut icons: Query<&mut Node, With<ShortageIcon>>,
     mut commands: Commands,
-    cells: Query<(Entity, &Cell, Option<&Children>)>,
-    mut spans: Query<(&mut TextSpan, &mut Ink)>,
+    mut cells: Query<CellParts>,
+    mut holders: Query<&mut Visibility>,
+    mut spans: Query<SpanParts>,
 ) {
     let short = local.0.is_some_and(|p| sim.0.short(p).is_some());
     for mut node in &mut icons {
@@ -200,6 +250,7 @@ pub fn show(
         for (_, mut node) in &mut bars {
             node.display = Display::None;
         }
+        previewing.0 = false;
         return;
     };
     let sim = &sim.0;
@@ -214,6 +265,9 @@ pub fn show(
         };
         Some(sim.preview(player, change))
     });
+    if previewing.0 != previewed.is_some() {
+        previewing.0 = previewed.is_some();
+    }
     for (bar, mut node) in &mut bars {
         let display = match bar.0 && previewed.is_none() {
             true => Display::None,
@@ -223,7 +277,7 @@ pub fn show(
             node.display = display;
         }
     }
-    for (entity, cell, children) in &cells {
+    for (entity, cell, children, style, holder, hint) in &mut cells {
         let shown = match cell.preview {
             true => previewed.as_ref(),
             false => Some(&now),
@@ -232,37 +286,99 @@ pub fn show(
             continue;
         };
         let parts = cell_parts(&cell.resource, cell.stockpiled, *stockpile, balance);
-        paint(&mut commands, entity, children, parts, &mut spans);
+        // The preview shows only what the order would change.
+        let changed =
+            !cell.preview || parts != cell_parts(&cell.resource, cell.stockpiled, now.0, &now.1);
+        if let Ok(mut visibility) = holders.get_mut(holder.parent()) {
+            visibility.set_if_neq(match changed {
+                true => Visibility::Inherited,
+                false => Visibility::Hidden,
+            });
+        }
+        // Only what's hovered is said.
+        if let Some((mut hint, about, hovered)) = hint
+            && hovered.get()
+        {
+            let said = said(&parts, about.0.as_deref());
+            if hint.0 != said {
+                hint.0 = said;
+            }
+        }
+        paint(&mut commands, entity, children, style, parts, &mut spans);
     }
 }
 
-/// Puts each run of a cell's text in a span of its own, in its ink, adding
-/// spans it lacks and emptying those it has spare.
+/// A cell's parts: its text's, the parent holding it and its glyph, and,
+/// on the bar rather than the preview, its hint.
+type CellParts = (
+    Entity,
+    &'static Cell,
+    Option<&'static Children>,
+    (&'static TextFont, Option<&'static Colours>),
+    &'static ChildOf,
+    Option<(&'static mut Hint, &'static About, &'static Hovered)>,
+);
+
+/// What a cell's hint says: its figures, then what the game says of its
+/// resource.
+fn said(parts: &[(String, bool)], about: Option<&str>) -> String {
+    let figures: String = parts.iter().map(|(words, _)| words.as_str()).collect();
+    match about {
+        Some(about) => format!("{figures}\n{about}"),
+        None => figures,
+    }
+}
+
+/// A span of a cell's text's parts: what it says, and how it's coloured.
+type SpanParts = (
+    &'static mut TextSpan,
+    Option<&'static mut Ink>,
+    Option<&'static mut TextColor>,
+);
+
+/// Puts each run of a cell's text in a span of its own, in the cell's
+/// font and in its ink or [`Colours`], adding spans it lacks and emptying
+/// those it has spare.
 fn paint(
     commands: &mut Commands,
     cell: Entity,
     children: Option<&Children>,
+    (font, colours): (&TextFont, Option<&Colours>),
     parts: Vec<(String, bool)>,
-    spans: &mut Query<(&mut TextSpan, &mut Ink)>,
+    spans: &mut Query<SpanParts>,
 ) {
     let children = children.map_or(&[][..], |c| &c[..]);
     let ink = |short| match short {
         true => Ink::Short,
         false => Ink::Body,
     };
+    let colour = |colours: &Colours, short| match short {
+        true => colours.short,
+        false => colours.body,
+    };
     let mut parts = parts.into_iter();
     for &child in children {
-        let Ok((mut text, mut was)) = spans.get_mut(child) else {
+        let Ok((mut text, was_ink, was_colour)) = spans.get_mut(child) else {
             continue;
         };
         let (words, short) = parts.next().unwrap_or_default();
         if text.0 != words {
             text.0 = words;
         }
-        was.set_if_neq(ink(short));
+        match (colours, was_ink, was_colour) {
+            (Some(c), _, Some(mut was)) => _ = was.set_if_neq(TextColor(colour(c, short))),
+            (None, Some(mut was), _) => _ = was.set_if_neq(ink(short)),
+            _ => {}
+        }
     }
     for (words, short) in parts {
-        commands.spawn((TextSpan(words), font(Font::Hud), ink(short), ChildOf(cell)));
+        let span = commands
+            .spawn((TextSpan(words), font.clone(), ChildOf(cell)))
+            .id();
+        match colours {
+            Some(c) => commands.entity(span).insert(TextColor(colour(c, short))),
+            None => commands.entity(span).insert(ink(short)),
+        };
     }
 }
 
@@ -382,6 +498,21 @@ mod tests {
     }
 
     #[test]
+    fn a_cells_hint_is_its_figures_then_what_the_game_says_of_it() {
+        let parts = [
+            ("512".into(), false),
+            ("(".into(), false),
+            ("+25".into(), true),
+            (")".into(), false),
+        ];
+        assert_eq!(
+            said(&parts, Some("Money is gained.")),
+            "512(+25)\nMoney is gained."
+        );
+        assert_eq!(said(&parts[..1], None), "512");
+    }
+
+    #[test]
     fn runs_are_painted_in_spans_of_the_hud_font() {
         use bevy::ecs::system::RunSystemOnce;
         let mut world = World::new();
@@ -390,10 +521,18 @@ mod tests {
             world
                 .run_system_once(
                     move |mut commands: Commands,
-                          cells: Query<Option<&Children>>,
-                          mut spans: Query<(&mut TextSpan, &mut Ink)>| {
-                        let children = cells.get(cell).unwrap();
-                        paint(&mut commands, cell, children, parts.clone(), &mut spans);
+                          cells: Query<(Option<&Children>, &TextFont)>,
+                          mut spans: Query<SpanParts>| {
+                        let (children, font) = cells.get(cell).unwrap();
+                        let style = (font, None);
+                        paint(
+                            &mut commands,
+                            cell,
+                            children,
+                            style,
+                            parts.clone(),
+                            &mut spans,
+                        );
                     },
                 )
                 .unwrap();

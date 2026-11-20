@@ -29,6 +29,8 @@ pub struct ResourceKind {
     pub purchase_cost: Amounts,
     /// What the game calls it, its id where the data names nothing.
     pub name: String,
+    /// What the game says of it, where it says anything.
+    pub description: Option<String>,
     /// The glyph it's drawn with, by the glyph's id.
     pub icon: Option<String>,
     /// What the font's image of that glyph is called, e.g. `MONEY`.
@@ -43,6 +45,7 @@ impl ResourceKind {
             limited_by: None,
             purchase_cost: Amounts::default(),
             name: id.to_string(),
+            description: None,
             icon: None,
             glyph: None,
         }
@@ -480,6 +483,7 @@ fn resource_kinds<P: Borrow<tgi::Parsed>>(
             };
             out.push(ResourceKind {
                 name: localized(strings, r.name.as_deref()).unwrap_or_else(|| id.to_string()),
+                description: localized(strings, r.description.as_deref()),
                 role,
                 limited_by: not_null(r.limited_by),
                 purchase_cost: (r.purchase_cost.as_ref())

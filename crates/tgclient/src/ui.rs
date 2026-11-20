@@ -20,6 +20,7 @@ pub struct UiPlugin;
 impl Plugin for UiPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<Theme>()
+            .init_resource::<Hinted>()
             .add_systems(Startup, (faces, spawn_hint))
             .add_systems(Update, (highlight, hint))
             // Before layout, which a meter's fill width and a slider's
@@ -491,6 +492,19 @@ pub struct Hint(pub String);
 #[derive(Component)]
 pub struct Docks(pub Entity);
 
+/// The [`Hint`] under the pointer, for a box drawn elsewhere: one its pane
+/// [`Docks`] to something that's not a [`hint_box`] shows it.
+#[derive(Resource, Default, Clone, PartialEq, Debug)]
+pub struct Hinted(pub Option<Docked>);
+
+/// A [`Hint`] said in the box a pane docks it to.
+#[derive(Clone, PartialEq, Debug)]
+pub struct Docked {
+    pub dock: Entity,
+    pub name: Option<Marked>,
+    pub hint: String,
+}
+
 /// The widest a hint by the pointer is before its words wrap.
 const HINT_WIDTH: f32 = 320.0;
 
@@ -551,6 +565,7 @@ fn hint(
     mut boxes: Query<(Entity, &mut Node, &Children, Has<ByPointer>), With<HintBox>>,
     mut texts: Query<(&mut Text, &Children)>,
     mut spans: Query<(&HintSpan, &mut TextSpan)>,
+    mut hinted: ResMut<Hinted>,
 ) {
     // A part counts as hovered with everything it's in, so of those with
     // something to say, the innermost.
@@ -564,6 +579,14 @@ fn hint(
         let mut panes = parents.iter_ancestors(entity);
         panes.find_map(|pane| Some(docks.get(pane).ok()?.0))
     });
+    let docked = (hovered.zip(dock)).map(|((_, hint, name, ..), dock)| Docked {
+        dock,
+        name: name.cloned(),
+        hint: hint.0.clone(),
+    });
+    if hinted.0 != docked {
+        hinted.0 = docked;
+    }
     let at = windows
         .single()
         .ok()
@@ -1191,6 +1214,7 @@ mod tests {
     fn a_hint_is_said_in_the_box_its_pane_docks() {
         let mut app = App::new();
         app.init_resource::<UiScale>()
+            .init_resource::<Hinted>()
             .add_systems(Startup, spawn_hint)
             .add_systems(Update, hint);
         let world = app.world_mut();
@@ -1212,6 +1236,11 @@ mod tests {
         assert_eq!(shown(by_pointer), Some(Display::None));
         let text = world.get::<Children>(docked).unwrap()[0];
         assert_eq!(world.get::<Text>(text).unwrap().0, "Entrenched");
+        let hinted = world.resource::<Hinted>().0.clone();
+        assert_eq!(
+            hinted.map(|h| (h.dock, h.hint)),
+            Some((docked, "Entrenched".into()))
+        );
     }
 
     fn lit(hovered: bool, chosen: bool, card: bool) -> Edge {
