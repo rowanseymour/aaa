@@ -291,7 +291,13 @@ pub fn load(
 
 /// Whether the dialog is closed, so that what's under it takes input.
 pub fn closed(dialog: Res<Dialog>) -> bool {
-    dialog.opened.is_none()
+    !dialog.is_open()
+}
+
+impl Dialog {
+    pub fn is_open(&self) -> bool {
+        self.opened.is_some()
+    }
 }
 
 /// Opens the dialog at the player's asking, as the game menu does.

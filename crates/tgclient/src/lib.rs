@@ -1209,11 +1209,18 @@ pub fn run(program: Program) -> ExitCode {
         }
     }
     hud::add_states(&mut app);
-    // After the screen and the interface change, so the scale changes with
-    // them rather than a frame late.
+    // Before what's placed over the map in Update, once the screen and the
+    // interface have changed, and again once a menu has opened or closed,
+    // so the scale changes with them rather than a frame late.
     app.add_systems(
         bevy::state::state::StateTransition,
         fit_ui.after(bevy::state::state::StateTransitionSystems::EnterSchedules),
+    )
+    .add_systems(
+        PostUpdate,
+        fit_ui
+            .before(hud::original::fit_view)
+            .before(bevy::ui::UiSystems::Prepare),
     );
     app.add_systems(Last, orders::leave_on_exit)
         .insert_resource(program);
@@ -2934,19 +2941,24 @@ const UI_HEIGHT_SHARE: f32 = 1.0 / 3.0;
 /// they take no more than [`UI_HEIGHT_SHARE`] of the window's height. A match
 /// played with the original's interface takes no setting, as the original
 /// has none: what's drawn over it scales with its layouts' screen, as its
-/// own panels do.
+/// own panels do. The pause menu and the connection dialog over it keep the
+/// setting, as menus aren't the interface's.
 fn fit_ui(
     setting: Res<UiScaleSetting>,
     windows: Query<Ref<Window>, With<PrimaryWindow>>,
     screen: Option<Res<bevy::state::state::State<Screen>>>,
     hud: Option<Res<bevy::state::state::State<hud::InMatch>>>,
+    menu: Option<Res<pause::PauseMenu>>,
+    dialog: Option<Res<connection::Dialog>>,
     mut scale: ResMut<UiScale>,
 ) {
     let window = windows.single().ok();
     let changed = setting.is_changed()
         || window.as_ref().is_some_and(|w| w.is_changed())
         || screen.as_ref().is_some_and(|s| s.is_changed())
-        || hud.as_ref().is_some_and(|h| h.is_changed());
+        || hud.as_ref().is_some_and(|h| h.is_changed())
+        || menu.as_ref().is_some_and(|m| m.is_changed())
+        || dialog.as_ref().is_some_and(|d| d.is_changed());
     if !changed {
         return;
     }
@@ -2955,7 +2967,8 @@ fn fit_ui(
     if size.min_element() <= 0.0 {
         return;
     }
-    let original = hud.is_some_and(|h| h.0 == hud::Hud::Original);
+    let menu_up = menu.is_some_and(|m| m.is_open()) || dialog.is_some_and(|d| d.is_open());
+    let original = hud.is_some_and(|h| h.0 == hud::Hud::Original) && !menu_up;
     let wanted = match original {
         true => hud::original::layout_scale(size),
         false => fitted(setting.0, size),

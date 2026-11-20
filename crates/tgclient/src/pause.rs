@@ -70,6 +70,12 @@ impl Plugin for PausePlugin {
     }
 }
 
+impl PauseMenu {
+    pub fn is_open(&self) -> bool {
+        self.open
+    }
+}
+
 /// Whether the menu is down, so the match takes input.
 pub fn closed(menu: Res<PauseMenu>) -> bool {
     !menu.open
@@ -253,6 +259,31 @@ mod tests {
     use bevy::state::app::StatesPlugin;
 
     use super::*;
+
+    #[test]
+    fn the_menu_keeps_the_scale_setting_over_the_original_interface() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, StatesPlugin))
+            .insert_state(Screen::Match)
+            .insert_resource(crate::hud::Hud::Original)
+            .insert_resource(crate::UiScaleSetting(1.0))
+            .init_resource::<UiScale>()
+            .init_resource::<PauseMenu>()
+            .add_systems(Update, crate::fit_ui);
+        crate::hud::add_states(&mut app);
+        let scale = |app: &mut App, open| {
+            app.world_mut().resource_mut::<PauseMenu>().open = open;
+            app.update();
+            app.world().resource::<UiScale>().0
+        };
+        let size = crate::shot::SIZE.as_vec2();
+        let original = crate::hud::original::layout_scale(size);
+        let setting = crate::fitted(1.0, size);
+        assert_ne!(original, setting);
+        assert_eq!(scale(&mut app, false), original);
+        assert_eq!(scale(&mut app, true), setting);
+        assert_eq!(scale(&mut app, false), original);
+    }
 
     fn app() -> App {
         let mut app = App::new();
