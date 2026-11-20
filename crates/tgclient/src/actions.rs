@@ -538,9 +538,11 @@ pub fn let_go_card_buttons(
 pub fn press_card_button(
     activate: On<Activate>,
     buttons: Query<(&CardButton, Has<NotLeft>)>,
-    sim: Res<Sim>,
+    // Absent outside a match, where menu buttons still trigger this.
+    sim: Option<Res<Sim>>,
     mut intents: MessageWriter<Intent>,
 ) {
+    let Some(sim) = sim else { return };
     if let Ok((button, false)) = buttons.get(activate.entity) {
         let id = sim.0.organizations[button.0].id;
         intents.write(Intent(format!("{CARD_BUTTON} {id}")));
@@ -2535,6 +2537,16 @@ mod tests {
         // Exhausted, it has neither.
         sim.organizations[0].mind = tgsim::Mind::Exhausted;
         assert_eq!(card_order(&sim, Some(1), 0), None);
+    }
+
+    #[test]
+    fn a_button_pressed_outside_a_match_is_ignored() {
+        let mut app = App::new();
+        app.add_message::<Intent>().add_observer(press_card_button);
+        let button = app.world_mut().spawn_empty().id();
+        app.world_mut().trigger(Activate { entity: button });
+        app.world_mut().flush();
+        assert!(app.world().resource::<Messages<Intent>>().is_empty());
     }
 
     #[test]
