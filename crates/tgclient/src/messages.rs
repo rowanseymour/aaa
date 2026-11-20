@@ -506,7 +506,8 @@ fn fill_all(text: &str, with: &[impl Into<Fill> + Clone]) -> Words {
     }
 }
 
-/// The log's box.
+/// The log's box, in the top left corner until the interface played
+/// places it.
 #[derive(Component)]
 pub struct LogBox;
 
@@ -596,14 +597,7 @@ pub fn start(
     commands.insert_resource(MessageLog::new(look));
 }
 
-pub fn spawn(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    mut log: ResMut<MessageLog>,
-    local: Res<Local>,
-    leaders: Res<Leaders>,
-) {
-    let corner = crate::special_ops::corner(&local, &leaders);
+pub fn spawn(mut commands: Commands, loaded: Res<Loaded>, mut log: ResMut<MessageLog>) {
     log.look.name_things(&loaded);
     let said = crate::ui::said(&log.look.strings);
     displays::spawn_window(
@@ -620,8 +614,8 @@ pub fn spawn(
         LogBox,
         Node {
             position_type: PositionType::Absolute,
-            top: px(corner.y),
-            left: px(corner.x),
+            top: px(crate::MARGIN),
+            left: px(crate::MARGIN),
             width: px(WIDTH),
             flex_direction: FlexDirection::Column,
             row_gap: px(LINE_GAP),

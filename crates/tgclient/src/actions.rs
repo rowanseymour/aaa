@@ -1,6 +1,6 @@
-//! The action buttons: a grid in the bottom-right corner of the orders the
-//! selection can take, with the game's icons in the places its data gives
-//! them. Orders given at a place, such as Move, wait for a left click on the
+//! The action buttons: a grid of the orders the selection can take, with
+//! the game's icons in the places its data gives them, for either
+//! interface to draw. Orders given at a place, such as Move, wait for a left click on the
 //! map or minimap, with a button to cancel; right click or Escape does too.
 //! A selected building that recruits, such as a Corps HQ, has Deploy,
 //! opening a menu of what comes out of it, and Deploy to Location, of what
@@ -19,18 +19,18 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
 use bevy::ui::{ComputedStackIndex, RelativeCursorPosition};
-use bevy::ui_widgets::{Activate, Button};
+use bevy::ui_widgets::Activate;
 use tgdata::{GameData, Id};
 use tgmap::Organization;
 use tgrender::textures;
 use tgsim::{Lacking, Researchable};
 
 use crate::control_groups::{self, ControlGroups};
-use crate::intent::{Asked, Asks, Intent};
+use crate::intent::{Asked, Intent};
 use crate::keys::Bindings;
 use crate::messages::{About, Failed, Refused};
 use crate::resource_bar::{Preview, Previewed};
-use crate::ui::{self, Click, Edge, Font, Ink, Marked, Shade, Surface, label, panel, tooltip};
+use crate::ui::Marked;
 use crate::{Loaded, Local, Orders, Raising, Screen, Selected, SelectedBuilding, Sim};
 
 pub const COLUMNS: usize = 4;
@@ -39,19 +39,6 @@ pub const SLOTS: usize = COLUMNS * ROWS;
 /// The original's widget for a grid button, repeated once per slot and
 /// named by it in the hotkey files, e.g. `ActionButtonsButton_3`.
 pub const WIDGET: &str = "ActionButtonsButton";
-/// A button's side, in logical pixels; the icons are drawn 42 across.
-pub(crate) const BUTTON: f32 = 56.0;
-pub(crate) const GAP: f32 = 4.0;
-/// Black margin between the buttons and the panel's rounded edge.
-pub(crate) const PAD: f32 = 8.0;
-/// The grid's size, in logical pixels.
-pub const SIZE: Vec2 = Vec2::new(span(COLUMNS), span(ROWS));
-
-/// Across `n` buttons and the padding either side.
-const fn span(n: usize) -> f32 {
-    n as f32 * BUTTON + (n - 1) as f32 * GAP + 2.0 * PAD
-}
-
 /// The orders an organization has, by command id, and what each does here;
 /// `None` for those the sim can't carry out yet, which are shown dimmed.
 /// The game leaves the rest of the commands off an organization's grid.
@@ -546,12 +533,12 @@ fn layout(
 
 /// How a button shows.
 #[derive(Clone)]
-struct Look {
+pub(crate) struct Look {
     name: String,
     /// What it does, and why it can't be pressed when it can't.
     help: Option<String>,
     disabled: Option<String>,
-    icon: Option<Handle<Image>>,
+    pub(crate) icon: Option<Handle<Image>>,
 }
 
 /// One of the things a building commissions.
@@ -673,21 +660,6 @@ impl Looks {
 #[derive(Component)]
 pub struct Slot(pub usize);
 
-#[derive(Component)]
-pub struct SlotIcon;
-
-/// The panel holding the caption and the grid.
-#[derive(Component)]
-pub struct Panel;
-
-/// The grid, whose cursor position says whether clicks are for it.
-#[derive(Component)]
-pub struct Grid;
-
-/// The box above the grid saying what the button under the cursor is.
-#[derive(Component)]
-pub struct Tooltip;
-
 /// What the tooltip says: the button's name, what it does, a table of
 /// such as what it costs, and why it can't be pressed.
 #[derive(Clone, PartialEq, Default, Debug)]
@@ -798,7 +770,7 @@ impl Looks {
 #[derive(Resource, Default, PartialEq)]
 pub struct Shown {
     /// What each slot holds.
-    entries: [Option<Entry>; SLOTS],
+    pub(crate) entries: [Option<Entry>; SLOTS],
     /// How each slot's button shows.
     pub faces: [Option<Face>; SLOTS],
     /// What the player lacks for each recruit the menu offers, and how
@@ -1093,87 +1065,6 @@ pub fn setup(
     commands.insert_resource(Page::Orders);
 }
 
-/// Spawns our interface's command grid, in the window's lower right
-/// corner, with the tooltip above it.
-pub fn spawn(mut commands: Commands) {
-    commands
-        .spawn((
-            Panel,
-            Node {
-                position_type: PositionType::Absolute,
-                right: px(crate::MARGIN),
-                bottom: px(crate::MARGIN),
-                flex_direction: FlexDirection::Column,
-                align_items: AlignItems::End,
-                row_gap: px(PAD),
-                ..default()
-            },
-            Visibility::Hidden,
-            GlobalZIndex(1),
-            DespawnOnExit(Screen::Match),
-        ))
-        .with_children(|root| {
-            // As wide as the grid, which the object display is kept clear of, and as
-            // tall as its text wraps to, growing upwards.
-            root.spawn((
-                Tooltip,
-                tooltip(Node {
-                    display: Display::None,
-                    width: px(SIZE.x),
-                    ..default()
-                }),
-            ));
-            root.spawn((
-                Grid,
-                Blocks,
-                RelativeCursorPosition::default(),
-                panel(
-                    Surface::Hud,
-                    Node {
-                        display: Display::Grid,
-                        width: px(SIZE.x),
-                        height: px(SIZE.y),
-                        grid_template_columns: RepeatedGridTrack::px(COLUMNS as u16, BUTTON),
-                        grid_template_rows: RepeatedGridTrack::px(ROWS as u16, BUTTON),
-                        column_gap: px(GAP),
-                        row_gap: px(GAP),
-                        padding: UiRect::all(px(PAD)),
-                        ..default()
-                    },
-                ),
-            ))
-            .with_children(|grid| {
-                for s in 0..SLOTS {
-                    grid.spawn((
-                        Slot(s),
-                        Button,
-                        ui::called(format!("action.{}", s + 1)),
-                        Asks::new(widget(s)),
-                        Hovered::default(),
-                        Pickable::default(),
-                        Click::COMMAND,
-                        Node {
-                            border: UiRect::all(px(2)),
-                            ..default()
-                        },
-                        Surface::Slot,
-                        Edge::Clear,
-                        children![(
-                            SlotIcon,
-                            Shade::Full,
-                            Node {
-                                width: percent(100),
-                                height: percent(100),
-                                ..default()
-                            },
-                            Pickable::IGNORE,
-                        )],
-                    ));
-                }
-            });
-        });
-}
-
 /// Whether the cursor is off the grid, so clicks go to the map.
 pub fn pointer_away(panels: Panels) -> bool {
     !panels.under_cursor()
@@ -1218,18 +1109,8 @@ pub fn back_out(
     }
 }
 
-type SlotParts<'a> = (
-    Entity,
-    Has<Click>,
-    &'a Slot,
-    &'a Hovered,
-    &'a Children,
-    &'a mut Edge,
-    &'a mut Pickable,
-);
-
 /// The look of the button for `entry`.
-fn look_of<'a>(
+pub(crate) fn look_of<'a>(
     entry: Entry,
     sim: &tgsim::World,
     looks: &'a Looks,
@@ -1298,7 +1179,7 @@ fn ready(
 }
 
 /// Whether the button for `entry` is lit for the page it's opened.
-fn lit(entry: Entry, page: Page) -> bool {
+pub(crate) fn lit(entry: Entry, page: Page) -> bool {
     match entry {
         Entry::Order(i) => {
             matches!((page, ORDERS[i].1), (Page::Aiming(a), Some(Give::Aim(b))) if a == b)
@@ -1508,74 +1389,6 @@ fn previewed(
     }
 }
 
-/// Draws the grid's slots as [`fill_slots`] filled them, and in its box
-/// what [`tell`] has the tooltip say.
-#[allow(clippy::too_many_arguments)]
-pub fn show(
-    page: Res<Page>,
-    selected: Res<Selected>,
-    chosen: Res<SelectedBuilding>,
-    sim: Res<Sim>,
-    looks: Res<Looks>,
-    shown: Res<Shown>,
-    said: Res<Said>,
-    mut panel: Single<&mut Visibility, (With<Panel>, Without<SlotIcon>)>,
-    mut slots: Query<SlotParts, Without<SlotIcon>>,
-    mut icons: Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
-    mut tooltip: TipParts,
-    local: Res<Local>,
-    mut commands: Commands,
-) {
-    let building = chosen.0.filter(|_| selected.0.is_empty());
-    // Others' things have no buttons.
-    let nothing = !crate::selection::commanded(&sim.0, local.0, &selected.0, building);
-    panel.set_if_neq(match nothing {
-        false => Visibility::Inherited,
-        true => Visibility::Hidden,
-    });
-    if nothing {
-        return;
-    }
-    let builds = builds(&sim.0, &selected.0);
-    for (id, clicks, slot, hover, children, mut border, mut pickable) in &mut slots {
-        let entry = shown.entries[slot.0];
-        // Empty slots are just boxes, which nothing should hear clicks on.
-        let want = match entry {
-            Some(_) => Pickable::default(),
-            None => Pickable::IGNORE,
-        };
-        if *pickable != want {
-            *pickable = want;
-        }
-        let Some(entry) = entry else {
-            border.set_if_neq(Edge::Clear);
-            set_icon(children, &mut icons, None);
-            continue;
-        };
-        let look = look_of(entry, &sim.0, &looks, building, &builds);
-        let ready = shown.faces[slot.0].as_ref().is_some_and(|f| f.ready);
-        let lit = lit(entry, *page);
-        let icon = look.icon.clone();
-        // Only a press that can do something sounds like it.
-        match (ready, clicks) {
-            (true, false) => {
-                commands.entity(id).insert(Click::COMMAND);
-            }
-            (false, true) => {
-                commands.entity(id).remove::<Click>();
-            }
-            _ => {}
-        }
-        border.set_if_neq(Edge::lit(lit, hover.get() && ready, Edge::Clear));
-        let shade = match ready {
-            true => Shade::Full,
-            false => Shade::Dimmed,
-        };
-        set_icon(children, &mut icons, icon.map(|i| (i, shade)));
-    }
-    tooltip.say(said.0.clone());
-}
-
 /// What the tooltip says, whichever interface shows it.
 #[derive(Resource, Default)]
 pub struct Said(pub Option<Tip>);
@@ -1783,131 +1596,6 @@ fn prompted(
         (None, Page::Delivering(_)) => prompt("Left click where to deploy"),
         (None, Page::Placing(_)) => prompt("Left click where to build, or drag to turn it"),
         (None, _) => None,
-    }
-}
-
-/// The tooltip's node, not the slots'.
-type TooltipOnly = (With<Tooltip>, Without<Slot>);
-
-/// The tooltip's box and what it last said.
-#[derive(SystemParam)]
-pub struct TipParts<'w, 's> {
-    tooltip: Single<'w, 's, (Entity, &'static mut Node), TooltipOnly>,
-    said: bevy::ecs::system::Local<'s, Tip>,
-    commands: Commands<'w, 's>,
-}
-
-impl TipParts<'_, '_> {
-    /// Shows the tip, or hides the box for none.
-    fn say(&mut self, tip: Option<Tip>) {
-        let (entity, node) = &mut *self.tooltip;
-        let display = match tip {
-            Some(_) => Display::Flex,
-            None => Display::None,
-        };
-        if node.display != display {
-            node.display = display;
-        }
-        let tip = tip.unwrap_or_default();
-        if *self.said == tip {
-            return;
-        }
-        let mut tooltip = self.commands.entity(*entity);
-        tooltip.despawn_children();
-        tooltip.with_children(|parent| {
-            ui::marked(parent, &tip.title, Font::HudTitle, Ink::Body);
-            if let Some(help) = &tip.help {
-                parent.spawn(label(help.clone(), Font::Small, Ink::Help));
-            }
-            if !tip.table.is_empty() {
-                parent
-                    .spawn(Node {
-                        display: Display::Grid,
-                        grid_template_columns: vec![GridTrack::auto(), GridTrack::flex(1.0)],
-                        column_gap: px(PAD * 2.0),
-                        row_gap: px(2),
-                        ..default()
-                    })
-                    .with_children(|table| {
-                        for row in &tip.table {
-                            table.spawn(label(row.label.clone(), Font::Small, Ink::Help));
-                            table
-                                .spawn(Node {
-                                    column_gap: px(PAD),
-                                    align_items: AlignItems::Center,
-                                    ..default()
-                                })
-                                .with_children(|cell| {
-                                    for q in &row.amounts {
-                                        quantity(cell, q);
-                                    }
-                                });
-                        }
-                    });
-            }
-            for note in &tip.notes {
-                parent.spawn(label(note.clone(), Font::Small, Ink::Help));
-            }
-            if let Some(why) = &tip.why {
-                parent.spawn(label(why.clone(), Font::Small, Ink::Warn));
-            }
-        });
-        *self.said = tip;
-    }
-}
-
-/// An amount after its resource's glyph, as the game's tooltips show it,
-/// or before its name where there's no glyph.
-fn quantity(cell: &mut ChildSpawnerCommands, q: &Quantity) {
-    cell.spawn(Node {
-        column_gap: px(2),
-        align_items: AlignItems::Center,
-        ..default()
-    })
-    .with_children(|pair| match &q.glyph {
-        Some(glyph) => {
-            pair.spawn((
-                ImageNode::new(glyph.clone()),
-                Node {
-                    width: px(16),
-                    height: px(16),
-                    ..default()
-                },
-                Pickable::IGNORE,
-            ));
-            pair.spawn(label(q.number(), Font::Small, Ink::Body));
-        }
-        None => {
-            pair.spawn(label(
-                format!("{} {}", q.number(), q.resource),
-                Font::Small,
-                Ink::Body,
-            ));
-        }
-    });
-}
-
-/// Shows a slot's icon in this shade, or hides it, say for an empty slot
-/// or a command the data gives no icon, which would otherwise draw white.
-fn set_icon(
-    children: &Children,
-    icons: &mut Query<(&mut ImageNode, &mut Shade, &mut Visibility), With<SlotIcon>>,
-    icon: Option<(Handle<Image>, Shade)>,
-) {
-    for &child in children {
-        let Ok((mut image, mut shade, mut visibility)) = icons.get_mut(child) else {
-            continue;
-        };
-        visibility.set_if_neq(match icon {
-            Some(_) => Visibility::Inherited,
-            None => Visibility::Hidden,
-        });
-        if let Some((handle, want)) = icon.clone() {
-            if image.image != handle {
-                image.image = handle;
-            }
-            shade.set_if_neq(want);
-        }
     }
 }
 

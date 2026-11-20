@@ -87,6 +87,7 @@ use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::window::PrimaryWindow;
+use hud::modern;
 use orders::Orders;
 use tgck::map::{Detail, Thing};
 use tgdata::{Footing, GameData};
@@ -932,6 +933,7 @@ pub fn run(program: Program) -> ExitCode {
         .add_plugins(console::ConsolePlugin)
         .add_plugins(sound::SoundPlugin)
         .add_plugins(special_ops::SpecialOpsPlugin)
+        .add_plugins(hud::modern::ModernHudPlugin)
         .add_plugins(music::MusicPlugin)
         .add_plugins(effects::EffectsPlugin)
         .insert_resource(console)
@@ -1006,17 +1008,8 @@ pub fn run(program: Program) -> ExitCode {
                     object_display::setup,
                     resource_bar::setup,
                     supply::setup,
-                ),
-                (
-                    minimap::spawn,
-                    actions::spawn,
-                    object_display::spawn,
-                    resource_bar::spawn,
-                    supply::spawn,
-                    clock::spawn_button,
-                    displays::spawn_buttons,
                 )
-                    .run_if(hud::playing(hud::Hud::Modern)),
+                    .in_set(hud::Setup),
                 (widgets::spawn, widgets::spawn_overlay).run_if(hud::playing(hud::Hud::Original)),
                 messages::spawn,
                 waypoints::load,
@@ -1069,15 +1062,10 @@ pub fn run(program: Program) -> ExitCode {
                 clear_scenery,
                 selection_sounds,
                 show_focus,
-                (
-                    supply::show_border,
-                    supply::tint_buildings,
-                    supply::show_cycle_button,
-                ),
+                (supply::show_border, supply::tint_buildings),
                 (
                     clock::follow.run_if(resource_exists::<Orders>),
                     clock::disable_buttons,
-                    clock::light_button,
                     (clock::select_original_button, widgets::show_pressables)
                         .chain()
                         .run_if(hud::playing(hud::Hud::Original)),
@@ -1104,21 +1092,18 @@ pub fn run(program: Program) -> ExitCode {
                     .before(actions::aim)
                     .run_if(takes_input),
                 minimap::update.after(camera::Controls).after(fog::look),
-                minimap::tint,
                 (
                     actions::act.after(keys::send),
                     actions::back_out,
                     actions::fill_slots,
                     actions::hover,
                     actions::tell,
-                    actions::show,
                     widgets::show_grid.run_if(hud::playing(hud::Hud::Original)),
                     widgets::show_tip.run_if(hud::playing(hud::Hud::Original)),
                 )
                     .chain(),
                 (
                     object_display::choose,
-                    object_display::lay_out,
                     widgets::lay_out_object.run_if(hud::playing(hud::Hud::Original)),
                     (
                         object_display::refresh,
@@ -1132,7 +1117,7 @@ pub fn run(program: Program) -> ExitCode {
                     ),
                 )
                     .chain(),
-                resource_bar::show.after(actions::show),
+                resource_bar::show.after(actions::hover),
                 widgets::slide_bars
                     .after(resource_bar::show)
                     .run_if(hud::playing(hud::Hud::Original)),
@@ -2989,11 +2974,11 @@ fn fit_ui(
     if size.min_element() <= 0.0 {
         return;
     }
-    let side = MARGIN + minimap::DISC.max(actions::SIZE.x) + MARGIN;
-    let wide = size.x / (2.0 * side + object_display::SIZE.x);
-    let tallest = minimap::DISC
-        .max(actions::SIZE.y)
-        .max(object_display::SIZE.y);
+    let side = MARGIN + modern::minimap::DISC.max(modern::actions::SIZE.x) + MARGIN;
+    let wide = size.x / (2.0 * side + modern::object_display::SIZE.x);
+    let tallest = modern::minimap::DISC
+        .max(modern::actions::SIZE.y)
+        .max(modern::object_display::SIZE.y);
     let tall = size.y * UI_HEIGHT_SHARE / (MARGIN + tallest);
     let wanted = setting.0.min(wide).min(tall).max(*UI_SCALES.start());
     if scale.0 != wanted {

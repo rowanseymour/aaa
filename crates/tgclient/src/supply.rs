@@ -1,26 +1,22 @@
 //! Supply as the map shows it: a border along the edge of the ground the
 //! player's side is supplied over, and a tint on buildings going without.
-//! Its key shows and hides the border, as the options do. A button over
-//! the minimap, or its key, steps through the player's organizations that
-//! have no HQ.
+//! Its key shows and hides the border, as the options do. Another steps
+//! through the player's organizations that have no HQ, as either
+//! interface's button does.
 
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
-use bevy::ui::RelativeCursorPosition;
-use bevy::ui_widgets::Button;
 use tgmap::Tile;
 use tgrender::camera::RtsCamera;
 use tgrender::terrain::world;
-use tgrender::{Tint, overlay, textures};
+use tgrender::{Tint, overlay};
 
-use crate::actions::Blocks;
 use crate::effects::Effects;
-use crate::intent::{Asks, Intent, asked};
+use crate::intent::{Intent, asked};
 use crate::keys;
-use crate::ui::Hint;
-use crate::{BuildingView, Loaded, Local, Screen, Selected, SelectedBuilding, Sim, minimap};
+use crate::{BuildingView, Loaded, Local, Screen, Selected, SelectedBuilding, Sim};
 
 /// The tint a building out of supply is drawn in.
 const OUT_OF_SUPPLY: &str = "out_of_supply_vfx";
@@ -169,15 +165,6 @@ pub fn tint_buildings(
     }
 }
 
-/// The button over the minimap that steps through the player's detached
-/// organizations, as F5 does; there only while there are some.
-#[derive(Component)]
-pub struct CycleDetached;
-
-const CYCLE_ICON: &str = "UI/Game/Floaters/ButtonDetachedRegimentUnpressed.tga";
-const CYCLE_HELP: &str = "idle_buttons_IdleButton_tooltip_2";
-const CYCLE_SIZE: f32 = 42.0;
-
 /// Loads how the border looks.
 pub fn setup(
     mut commands: Commands,
@@ -200,42 +187,6 @@ pub fn setup(
         block: border.block,
         material,
     });
-}
-
-/// Spawns our interface's button that cycles through detached
-/// organizations, above the minimap.
-pub fn spawn(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-) {
-    let game = &loaded.game;
-    let icon = (game.read(CYCLE_ICON))
-        .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
-        .map(|i| images.add(i));
-    let help = game.strings().get(CYCLE_HELP).cloned();
-    commands.spawn((
-        CycleDetached,
-        Blocks,
-        Button,
-        crate::ui::called("supply.detached"),
-        Asks::new(keys::CYCLE_DETACHED),
-        RelativeCursorPosition::default(),
-        Hint(help.unwrap_or_else(|| "Cycles through all detached regiments.".into())),
-        ImageNode::new(icon.unwrap_or_default()),
-        Node {
-            position_type: PositionType::Absolute,
-            display: Display::None,
-            left: px(crate::MARGIN),
-            bottom: px(crate::MARGIN + minimap::DISC + crate::MARGIN),
-            width: px(CYCLE_SIZE),
-            height: px(CYCLE_SIZE),
-            ..default()
-        },
-        GlobalZIndex(1),
-        DespawnOnExit(Screen::Match),
-    ));
 }
 
 /// What stepping through the detached organizations reads and changes.
@@ -285,26 +236,5 @@ pub fn cycle_detached(mut intents: MessageReader<Intent>, mut cycle: CycleParts)
 pub fn toggle_border(mut intents: MessageReader<Intent>, mut border: ResMut<Border>) {
     if asked(&mut intents, keys::SUPPLY_BORDER) {
         border.0 = !border.0;
-    }
-}
-
-/// Shows the button that cycles through detached organizations while there's
-/// one that an HQ of the player's could take, places aside, though the
-/// cycle takes in those none could.
-pub fn show_cycle_button(
-    sim: Res<Sim>,
-    local: Res<Local>,
-    mut button: Single<&mut Node, With<CycleDetached>>,
-) {
-    if !sim.is_changed() && !local.is_changed() {
-        return;
-    }
-    let any = local.0.is_some_and(|p| sim.0.attachable(p));
-    let display = match any {
-        true => Display::Flex,
-        false => Display::None,
-    };
-    if button.display != display {
-        button.display = display;
     }
 }

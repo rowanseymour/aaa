@@ -1,23 +1,17 @@
-//! The keys that pause the match and set how fast it's played, and the
-//! button on the minimap's rim that pauses it as its key does: Escape's
-//! menu leaves a match hosted elsewhere playing on.
+//! The keys that pause the match and set how fast it's played, and what
+//! either interface's pause button shows and asks for, as the key does:
+//! Escape's menu leaves a match hosted elsewhere playing on.
 
 use std::ops::RangeInclusive;
 
-use bevy::image::CompressedImageFormatSupport;
-use bevy::picking::hover::Hovered;
 use bevy::prelude::*;
-use bevy::ui::{InteractionDisabled, RelativeCursorPosition};
-use bevy::ui_widgets::Button;
+use bevy::ui::InteractionDisabled;
 use tgsim::Action;
 
-use crate::actions::Blocks;
-use crate::displays::{self, Displays, Rim};
-use crate::intent::{Asked, Asks, Intent};
-use crate::keys::{Bindings, Named};
-use crate::ui::{Click, Edge, Hint, Ink, Surface, Theme};
+use crate::displays::Displays;
+use crate::intent::{Asked, Intent};
 use crate::widgets::Pressable;
-use crate::{Loaded, Orders, Screen};
+use crate::{Loaded, Orders};
 
 /// What the hotkey files call pausing or unpausing, stepping the speed up
 /// or down, and setting it.
@@ -130,100 +124,6 @@ pub fn disable_buttons(
             (true, true) => _ = commands.entity(id).remove::<InteractionDisabled>(),
             (false, false) => _ = commands.entity(id).insert(InteractionDisabled),
             _ => {}
-        }
-    }
-}
-
-/// Our interface's pause button, a glyph on the minimap's rim.
-#[derive(Component)]
-pub struct PauseButton;
-
-/// The glyph on the [`PauseButton`].
-#[derive(Component)]
-pub struct PauseGlyph;
-
-/// Spawns the pause button.
-pub fn spawn_button(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    bindings: Res<Bindings>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-    mut icons: ResMut<displays::Icons>,
-) {
-    let strings = loaded.game.strings();
-    let said = crate::ui::said(&strings);
-    let name = said("control_panel_ButtonPause_ToolTip", "Pause Game");
-    let help = said("control_panel_ButtonPause_tooltip_2", "Pauses the game.");
-    let glyph = icons.get(displays::icon!("pause"), &mut images, formats.0);
-    commands.spawn((
-        Blocks,
-        Button,
-        Click::TOGGLE,
-        RelativeCursorPosition::default(),
-        Named::new(&bindings, PAUSE, name),
-        (Asks::new(PAUSE), Hint(help)),
-        crate::ui::called(PAUSE_BUTTON),
-        (Pauses, PauseButton),
-        Rim::TopLeft.node(),
-        Surface::Clear,
-        Edge::Border,
-        GlobalZIndex(2),
-        DespawnOnExit(Screen::Match),
-        children![(
-            PauseGlyph,
-            ImageNode::new(glyph),
-            Node {
-                width: px(displays::GLYPH_SIZE),
-                height: px(displays::GLYPH_SIZE),
-                ..default()
-            },
-            Pickable::IGNORE,
-        )],
-    ));
-}
-
-/// What [`light_button`] reads and sets on the button.
-type ButtonLook = (
-    Ref<'static, PauseButton>,
-    Ref<'static, Hovered>,
-    Has<bevy::ui::Pressed>,
-    &'static mut Edge,
-    &'static mut Surface,
-    &'static Children,
-);
-
-/// Lights our pause button while the match is paused, its edge while it's
-/// hovered and its face while it's held down, and greys it for those who
-/// may not pause.
-pub fn light_button(
-    state: Res<PauseState>,
-    theme: Res<Theme>,
-    mut buttons: Query<ButtonLook>,
-    mut glyphs: Query<&mut ImageNode, With<PauseGlyph>>,
-) {
-    let PauseState { paused, usable } = *state;
-    for (button, hovered, pressed, mut edge, mut surface, children) in &mut buttons {
-        surface.set_if_neq(match pressed && usable {
-            true => Surface::Hovered,
-            false => Surface::Clear,
-        });
-        let restyle = state.is_changed() || theme.is_changed() || button.is_added();
-        if restyle || hovered.is_changed() {
-            edge.set_if_neq(Edge::lit(paused, hovered.get() && usable, Edge::Border));
-        }
-        if !restyle {
-            continue;
-        }
-        let colour = match (paused, usable) {
-            (true, _) => theme.edge(Edge::Lit),
-            (false, true) => theme.ink(Ink::Help),
-            (false, false) => theme.ink(Ink::Muted),
-        };
-        for &child in children {
-            if let Ok(mut glyph) = glyphs.get_mut(child) {
-                glyph.color = colour;
-            }
         }
     }
 }
