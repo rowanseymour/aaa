@@ -6,6 +6,7 @@ use bevy::prelude::*;
 use serde::{Deserialize, Serialize};
 
 pub mod modern;
+pub mod original;
 
 /// Which interface matches are played with, as chosen in the options.
 #[derive(Resource, Clone, Copy, PartialEq, Eq, Default, Debug, Serialize, Deserialize)]

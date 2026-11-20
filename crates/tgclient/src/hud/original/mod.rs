@@ -1,11 +1,11 @@
-//! The original interface's in-match panels, drawn from its layouts (see
-//! [`tgdata::widgets`]) in place of ours: their pictures as they look at
-//! rest, the command grid's buttons, which show what
-//! [`actions::Shown`](crate::actions::Shown) holds and ask for their
-//! widget by name when pressed, other buttons that ask for what our
+//! The original's interface: its in-match panels, drawn from its layouts
+//! (see [`tgdata::widgets`]), over a view of their 4:3 shape. They're
+//! their pictures as they look at rest, the command grid's buttons, which
+//! show what [`actions::Shown`](crate::actions::Shown) holds and ask for
+//! their widget by name when pressed, other buttons that ask for what our
 //! interface's do, such as pausing, the resource bars, the object display,
-//! and the one pane every tooltip is said in. What they show is shared with ours; only the
-//! drawing is their own.
+//! and the one pane every tooltip is said in. What they show is shared
+//! with ours; only the drawing is their own.
 
 use std::collections::HashMap;
 
@@ -25,17 +25,89 @@ mod lettering;
 mod object;
 mod tips;
 
-pub use bars::slide as slide_bars;
-pub use lettering::{LayoutScale, scale as scale_layout};
-pub use object::{
-    economy as object_economy, fill_bars as fill_object_bars, lay_out as lay_out_object,
-    portray as portray_object,
-};
-pub use tips::show as show_tip;
+use lettering::LayoutScale;
 
+use super::{Hud, Setup, playing};
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
 use crate::intent::Asks;
 use crate::{Loaded, Local, Screen, Sim};
+
+pub struct OriginalHudPlugin;
+
+impl Plugin for OriginalHudPlugin {
+    fn build(&self, app: &mut App) {
+        let drawn = || playing(Hud::Original);
+        app.add_systems(
+            OnEnter(Screen::Match),
+            (
+                spawn,
+                spawn_overlay,
+                place_log.after(spawn).after(crate::messages::spawn),
+            )
+                .after(Setup)
+                .before(crate::console::start_scripts)
+                .run_if(drawn()),
+        )
+        .add_systems(
+            PostUpdate,
+            (
+                match_msaa,
+                (fit_view, lettering::scale)
+                    .chain()
+                    .before(bevy::camera::CameraUpdateSystems)
+                    .before(bevy::ui::UiSystems::Prepare),
+            )
+                .run_if(in_state(Screen::Match))
+                .run_if(drawn()),
+        )
+        .add_systems(
+            Update,
+            (
+                (select_pause_button, show_pressables)
+                    .chain()
+                    .after(crate::clock::disable_buttons),
+                (show_grid, tips::show).chain().after(crate::actions::tell),
+                (
+                    object::lay_out
+                        .after(crate::object_display::choose)
+                        .before(crate::object_display::refresh),
+                    (object::fill_bars, object::economy),
+                )
+                    .chain(),
+                object::portray.after(crate::object_display::portray),
+                bars::slide.after(crate::resource_bar::show),
+            )
+                .run_if(in_state(Screen::Match))
+                .run_if(drawn()),
+        );
+    }
+}
+
+/// The floaters the message log goes beside and under.
+const LOG_LEFT_OF: &str = "FactionAbilitiesFloater";
+const LOG_UNDER: &str = "GroupFloater";
+
+/// Where on the layouts' screen the message log goes.
+#[derive(Resource)]
+struct LogAt(Vec2);
+
+/// Puts the on-screen message log in the [`Frame`]'s top left corner, clear
+/// of the floaters there, over the map's view rather than beside it.
+fn place_log(
+    mut commands: Commands,
+    at: Option<Res<LogAt>>,
+    frames: Query<Entity, With<Frame>>,
+    mut logs: Query<(Entity, &mut Node), With<crate::messages::LogBox>>,
+) {
+    let (Ok(frame), Some(at)) = (frames.single(), at) else {
+        return;
+    };
+    for (log, mut node) in &mut logs {
+        node.left = Val::Percent(100.0 * at.0.x / SCREEN[0]);
+        node.top = Val::Percent(100.0 * at.0.y / SCREEN[1]);
+        commands.entity(frame).add_child(log);
+    }
+}
 
 /// Spawns the camera the interface is drawn by over the whole window, as
 /// that drawn by the map's camera would be cut to its view by [`fit_view`].
@@ -113,6 +185,13 @@ pub fn fit_view(
             node.set_if_neq(placed);
         }
     }
+}
+
+/// How many of the interface's pixels a pixel of the layouts' screen is,
+/// drawn as [`fit_view`] fits it within a window `size` across, in logical
+/// pixels.
+pub fn layout_scale(size: Vec2) -> f32 {
+    size.y.min(size.x * SCREEN[1] / SCREEN[0]) / SCREEN[1]
 }
 
 /// The corner and size of the largest rectangle of the layouts' shape
@@ -295,6 +374,19 @@ pub fn spawn(
             .map(Step::By);
         drawer.widget(widget, &Vec::from_iter(offset));
     }
+    // The message log goes in the corner between the floater along the top
+    // and the one down the left.
+    let screen = Rect {
+        left: 0.0,
+        top: 0.0,
+        right: SCREEN[0],
+        bottom: SCREEN[1],
+    };
+    let edge = |name: &str, of: fn(Rect) -> f32| named(name).map_or(0.0, |w| of(w.bounds(screen)));
+    commands.insert_resource(LogAt(Vec2::new(
+        edge(LOG_LEFT_OF, |at| at.right),
+        edge(LOG_UNDER, |at| at.bottom),
+    )));
     let colour = |c: Option<[f32; 3]>, or: Color| c.map_or(or, |[r, g, b]| Color::srgb(r, g, b));
     let short = colour(game.invalid_colour(), Color::srgb(1.0, 0.0, 0.0));
     let key = colour(game.highlight_colour(), Color::srgb(1.0, 1.0, 0.0));
@@ -734,6 +826,18 @@ impl BuiltPressable {
     }
 }
 
+/// Switches the pause button on while the match is paused.
+pub fn select_pause_button(
+    state: Res<crate::clock::PauseState>,
+    mut buttons: Query<(Ref<crate::clock::Pauses>, &mut Pressable)>,
+) {
+    for (pauses, mut button) in &mut buttons {
+        if state.is_changed() || pauses.is_added() {
+            button.selected = state.paused;
+        }
+    }
+}
+
 /// Shows each [`Pressable`]'s pictures for the states it's in: switched on
 /// or not, hovered, held down, and disabled where it can't be pressed,
 /// greyed as the original greys a command it can't give.
@@ -975,9 +1079,37 @@ fn grey(icon: &Image) -> Option<Image> {
 
 #[cfg(test)]
 mod tests {
+    use bevy::ui::InteractionDisabled;
     use tgdata::widgets::Bounds;
 
     use super::*;
+    use crate::clock::{PauseState, Pauses, disable_buttons};
+
+    #[test]
+    fn the_pause_button_follows_the_pause_and_who_may_pause() {
+        let mut app = App::new();
+        app.init_resource::<PauseState>()
+            .add_systems(Update, (disable_buttons, select_pause_button));
+        let button = app.world_mut().spawn((Pauses, Pressable::default())).id();
+        let set = |app: &mut App, paused, usable| {
+            *app.world_mut().resource_mut::<PauseState>() = PauseState { paused, usable };
+            app.update();
+            let world = app.world();
+            let selected = world.get::<Pressable>(button).unwrap().selected;
+            (selected, world.get::<InteractionDisabled>(button).is_some())
+        };
+        assert_eq!(set(&mut app, true, true), (true, false));
+        assert_eq!(set(&mut app, false, false), (false, true));
+        assert_eq!(set(&mut app, true, true), (true, false));
+    }
+
+    #[test]
+    fn what_is_drawn_over_the_view_scales_with_its_height() {
+        assert_eq!(layout_scale(Vec2::new(1024.0, 768.0)), 1.0);
+        assert_eq!(layout_scale(Vec2::new(1280.0, 720.0)), 720.0 / 768.0);
+        // Too narrow for the window's height, the view's width decides.
+        assert_eq!(layout_scale(Vec2::new(1280.0, 1024.0)), 1.25);
+    }
 
     #[test]
     fn the_view_fits_the_layouts_shape_whichever_way_the_window_is_out() {
