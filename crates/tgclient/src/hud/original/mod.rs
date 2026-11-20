@@ -52,7 +52,7 @@ impl Plugin for OriginalHudPlugin {
             PostUpdate,
             (
                 match_msaa,
-                (fit_view, lettering::scale)
+                (fit_view, lettering::scale, lettering::share_face)
                     .chain()
                     .before(bevy::camera::CameraUpdateSystems)
                     .before(bevy::ui::UiSystems::Prepare),
@@ -456,6 +456,9 @@ pub fn spawn(
     if let Some(pane) = docked {
         commands.entity(frame).insert(crate::ui::Docks(pane));
     }
+    // After the layouts' own, so as not to change which face stands in for
+    // theirs the data doesn't hold.
+    letters.read(game, &mut faces, lettering::PLAIN);
     commands.insert_resource(letters);
     if let Some(object) = object {
         commands.insert_resource(object);
