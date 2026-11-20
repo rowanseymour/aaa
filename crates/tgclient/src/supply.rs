@@ -178,9 +178,8 @@ const CYCLE_ICON: &str = "UI/Game/Floaters/ButtonDetachedRegimentUnpressed.tga";
 const CYCLE_HELP: &str = "idle_buttons_IdleButton_tooltip_2";
 const CYCLE_SIZE: f32 = 42.0;
 
-/// Loads how the border looks, and spawns the button that cycles through
-/// detached organizations.
-pub fn spawn(
+/// Loads how the border looks.
+pub fn setup(
     mut commands: Commands,
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
@@ -195,20 +194,29 @@ pub fn spawn(
         .and_then(|path| overlay::border_image(game, path, formats.0))
         .map(|i| images.add(i));
     let material = materials.add(overlay::mark_material(image, colour));
-    let icon = (game.read(CYCLE_ICON))
-        .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
-        .map(|i| images.add(i));
-    let strings = game.strings();
     commands.insert_resource(BorderLook {
         colour,
         width: border.width,
         block: border.block,
         material,
     });
-    let help = strings.get(CYCLE_HELP).cloned();
+}
+
+/// Spawns our interface's button that cycles through detached
+/// organizations, above the minimap.
+pub fn spawn(
+    mut commands: Commands,
+    loaded: Res<Loaded>,
+    mut images: ResMut<Assets<Image>>,
+    formats: Res<CompressedImageFormatSupport>,
+) {
+    let game = &loaded.game;
+    let icon = (game.read(CYCLE_ICON))
+        .and_then(|bytes| textures::decode(&bytes, CYCLE_ICON, formats.0, true))
+        .map(|i| images.add(i));
+    let help = game.strings().get(CYCLE_HELP).cloned();
     commands.spawn((
         CycleDetached,
-        crate::widgets::Ours,
         Blocks,
         Button,
         crate::ui::called("supply.detached"),

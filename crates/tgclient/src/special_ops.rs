@@ -17,6 +17,7 @@ use bevy::picking::hover::Hovered;
 use bevy::ui_widgets::Button;
 
 use crate::actions::{self, BUTTON, Blocks, GAP, GLYPH_DIR, PAD, Page, fill};
+use crate::hud::{Hud, playing};
 use crate::intent::{Asked, Asks, Intent};
 use crate::keys::Bindings;
 use crate::messages::Failed;
@@ -63,20 +64,25 @@ pub struct SpecialOpsPlugin;
 
 impl Plugin for SpecialOpsPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Match), spawn.after(crate::keys::load))
-            .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
-                commands.remove_resource::<Panel>();
-            })
-            .init_resource::<Armed>()
-            .add_systems(OnExit(Screen::Match), |mut armed: ResMut<Armed>| {
-                armed.0 = None
-            })
-            .add_systems(
-                Update,
-                (refresh, tips, mark)
-                    .run_if(in_state(Screen::Match))
-                    .run_if(resource_exists::<Panel>),
-            );
+        app.add_systems(
+            OnEnter(Screen::Match),
+            (setup, spawn.run_if(playing(Hud::Modern)))
+                .chain()
+                .after(crate::keys::load),
+        )
+        .add_systems(OnExit(Screen::Match), |mut commands: Commands| {
+            commands.remove_resource::<Panel>();
+        })
+        .init_resource::<Armed>()
+        .add_systems(OnExit(Screen::Match), |mut armed: ResMut<Armed>| {
+            armed.0 = None
+        })
+        .add_systems(
+            Update,
+            (refresh, tips, mark)
+                .run_if(in_state(Screen::Match))
+                .run_if(resource_exists::<Panel>),
+        );
     }
 }
 
@@ -167,15 +173,9 @@ struct OperationIcon;
 #[derive(Component)]
 struct RechargeBar;
 
-fn spawn(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-    local: Res<Local>,
-    leaders: Res<Leaders>,
-    bindings: Res<Bindings>,
-) {
+/// Takes the player's faction's operations and the words they're told of
+/// in, for either interface.
+fn setup(mut commands: Commands, loaded: Res<Loaded>, local: Res<Local>, leaders: Res<Leaders>) {
     let Some(player) = local.0 else {
         return;
     };
@@ -185,18 +185,7 @@ fn spawn(
     let game = &loaded.game;
     let strings = game.strings();
     let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
-    let mut cache: HashMap<String, Option<Handle<Image>>> = HashMap::new();
-    let mut image = |game: &tgdata::GameData, path: &str| {
-        (cache.entry(path.to_string()))
-            .or_insert_with(|| {
-                let decoded = textures::decode(&game.read(path)?, path, formats.0, true)?;
-                Some(images.add(decoded))
-            })
-            .clone()
-    };
-    let medal = image(game, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
     let operations = game.special_operations();
-    let vfx = game.vfx();
     let words = Words {
         title: said("game_interface_FactionExperience_ToolTip", "Experience"),
         faction: said("ui_tooltip_item_general", "General"),
@@ -226,11 +215,68 @@ fn spawn(
             "Recharging (%d:%.2d left)",
         ),
     };
+    let listed = offered(&faction.operations, &operations)
+        .map(|(index, _, op)| Operation {
+            index,
+            name: op.name.clone(),
+            summons: op.summons.clone(),
+            on_self: op.on_self,
+        })
+        .collect();
+    commands.insert_resource(Panel {
+        player,
+        operations: listed,
+        faction: faction.name.clone(),
+        max: faction.experience_max,
+        words,
+        shown: None,
+    });
+}
+
+/// The operations of `faction`'s that the game has, with their place in
+/// its list.
+fn offered<'a>(
+    faction: &'a [tgdata::FactionOperation],
+    operations: &'a HashMap<tgdata::Id, SpecialOperation>,
+) -> impl Iterator<Item = (usize, &'a tgdata::FactionOperation, &'a SpecialOperation)> {
+    (faction.iter().enumerate()).filter_map(|(n, o)| Some((n, o, operations.get(&o.id)?)))
+}
+
+/// Spawns our interface's experience and operations, in the window's upper
+/// left corner.
+#[allow(clippy::too_many_arguments)]
+fn spawn(
+    mut commands: Commands,
+    loaded: Res<Loaded>,
+    mut images: ResMut<Assets<Image>>,
+    formats: Res<CompressedImageFormatSupport>,
+    local: Res<Local>,
+    leaders: Res<Leaders>,
+    bindings: Res<Bindings>,
+    shared: Option<Res<Panel>>,
+) {
+    let (Some(shared), Some(faction)) = (shared, (local.0).and_then(|p| leaders.0.get(&p))) else {
+        return;
+    };
+    let game = &loaded.game;
+    let strings = game.strings();
+    let said = |key: &str, or: &str| strings.get(key).map_or(or, String::as_str).to_string();
+    let mut cache: HashMap<String, Option<Handle<Image>>> = HashMap::new();
+    let mut image = |game: &tgdata::GameData, path: &str| {
+        (cache.entry(path.to_string()))
+            .or_insert_with(|| {
+                let decoded = textures::decode(&game.read(path)?, path, formats.0, true)?;
+                Some(images.add(decoded))
+            })
+            .clone()
+    };
+    let medal = image(game, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
+    let operations = game.special_operations();
+    let vfx = game.vfx();
     let cost = said("ui_tooltip_item_title_cost", "Cost");
     let area = said("ui_tooltip_item_title_area", "Area");
-    let buttons: Vec<_> = (faction.operations.iter().enumerate())
-        .filter_map(|(n, o)| {
-            let op = operations.get(&o.id)?;
+    let buttons: Vec<_> = offered(&faction.operations, &operations)
+        .map(|(n, o, op)| {
             let icon = (op.icon.as_deref()).and_then(|path| image(game, path));
             let name = bindings.marked(&action(n), &op.name);
             let figures = figures(op, o.cost, &cost, &area);
@@ -241,20 +287,11 @@ fn spawn(
                     ..decal
                 })
             });
-            Some((n, icon, name, op.clone(), figures, marker))
-        })
-        .collect();
-    let listed = (buttons.iter())
-        .map(|(index, _, _, op, ..)| Operation {
-            index: *index,
-            name: op.name.clone(),
-            summons: op.summons.clone(),
-            on_self: op.on_self,
+            (n, icon, name, op.clone(), figures, marker)
         })
         .collect();
     commands
         .spawn((
-            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 top: px(crate::MARGIN),
@@ -273,7 +310,7 @@ fn spawn(
                 .spawn((
                     ExperienceBox,
                     Blocks,
-                    Marked::plain(words.title.clone()),
+                    Marked::plain(shared.words.title.clone()),
                     Hint(String::new()),
                     panel(
                         Surface::Hud,
@@ -378,14 +415,6 @@ fn spawn(
                     }
                 });
         });
-    commands.insert_resource(Panel {
-        player,
-        operations: listed,
-        faction: faction.name.clone(),
-        max: faction.experience_max,
-        words,
-        shown: None,
-    });
 }
 
 /// The Cost and Area rows of an operation's tooltip, where they apply.

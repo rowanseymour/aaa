@@ -8,8 +8,7 @@ use bevy::ui_widgets::ScrollArea;
 use tgrender::textures;
 use tgsim::{Objective, Standing};
 
-use crate::displays::{self, Displays, Panel, Rim, Window};
-use crate::keys::Bindings;
+use crate::displays::{self, Displays, Panel, Window};
 use crate::ui::{Font, Ink, coloured, label};
 use crate::{Loaded, Local, Screen, Sim};
 
@@ -41,14 +40,13 @@ pub struct ObjectivesPlugin;
 
 impl Plugin for ObjectivesPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Match), spawn.after(crate::keys::load))
-            .add_systems(
-                Update,
-                refresh
-                    .after(displays::Keys)
-                    .run_if(in_state(Screen::Match))
-                    .run_if(resource_exists::<Look>),
-            );
+        app.add_systems(OnEnter(Screen::Match), spawn).add_systems(
+            Update,
+            refresh
+                .after(displays::Keys)
+                .run_if(in_state(Screen::Match))
+                .run_if(resource_exists::<Look>),
+        );
     }
 }
 
@@ -57,8 +55,6 @@ fn spawn(
     loaded: Res<Loaded>,
     mut images: ResMut<Assets<Image>>,
     formats: Res<CompressedImageFormatSupport>,
-    bindings: Res<Bindings>,
-    mut icons: ResMut<displays::Icons>,
 ) {
     let game = &loaded.game;
     let strings = game.strings();
@@ -80,21 +76,6 @@ fn spawn(
             image.map(|i| images.add(i)).unwrap_or_default(),
         )
     });
-    displays::spawn_button(
-        &mut commands,
-        &bindings,
-        Panel::Objectives,
-        Rim::BottomLeft,
-        icons.get(displays::icon!("objectives"), &mut images, formats.0),
-        said(
-            "control_panel_ButtonObjectives_ToolTip",
-            "Display Objectives",
-        ),
-        said(
-            "control_panel_ButtonObjectives_tooltip_2",
-            "Displays a list of mission objectives.",
-        ),
-    );
     let contents = displays::spawn_window(
         &mut commands,
         Window {

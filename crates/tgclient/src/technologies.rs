@@ -9,13 +9,10 @@ use bevy::prelude::*;
 use tgdata::Id;
 use tgrender::textures;
 
-use crate::displays::{self, Contents, Displays, Panel, Rim, Window};
-use crate::keys::Bindings;
+use crate::displays::{self, Contents, Displays, Panel, Window};
 use crate::ui::{Font, Hint, Ink, Marked, label};
 use crate::{Loaded, Local, Screen, Sim};
 
-const NAME: &str = "control_panel_ButtonTechnology_ToolTip";
-const HELP: &str = "control_panel_ButtonTechnology_tooltip_2";
 const TITLE: &str = "technology_display_Child_text";
 /// A line is at least this tall, and its icon this wide.
 const LINE: f32 = 20.0;
@@ -48,25 +45,17 @@ pub struct TechnologyPlugin;
 
 impl Plugin for TechnologyPlugin {
     fn build(&self, app: &mut App) {
-        app.add_systems(OnEnter(Screen::Match), spawn.after(crate::keys::load))
-            .add_systems(
-                Update,
-                refresh
-                    .after(displays::Keys)
-                    .run_if(in_state(Screen::Match))
-                    .run_if(resource_exists::<Looks>),
-            );
+        app.add_systems(OnEnter(Screen::Match), spawn).add_systems(
+            Update,
+            refresh
+                .after(displays::Keys)
+                .run_if(in_state(Screen::Match))
+                .run_if(resource_exists::<Looks>),
+        );
     }
 }
 
-fn spawn(
-    mut commands: Commands,
-    loaded: Res<Loaded>,
-    mut images: ResMut<Assets<Image>>,
-    formats: Res<CompressedImageFormatSupport>,
-    bindings: Res<Bindings>,
-    mut icons: ResMut<displays::Icons>,
-) {
+fn spawn(mut commands: Commands, loaded: Res<Loaded>, formats: Res<CompressedImageFormatSupport>) {
     let game = &loaded.game;
     let strings = game.strings();
     let said = crate::ui::said(&strings);
@@ -90,15 +79,6 @@ fn spawn(
             Some((id.clone(), line))
         })
         .collect();
-    displays::spawn_button(
-        &mut commands,
-        &bindings,
-        Panel::Technologies,
-        Rim::TopRight,
-        icons.get(displays::icon!("technologies"), &mut images, formats.0),
-        said(NAME, "Display Technologies"),
-        said(HELP, "Displays a list of all your technologies."),
-    );
     displays::spawn_window(
         &mut commands,
         Window {

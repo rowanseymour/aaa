@@ -38,6 +38,7 @@ mod effects;
 mod fields;
 mod fog;
 mod ghost;
+mod hud;
 mod intent;
 mod keys;
 mod lan;
@@ -936,8 +937,8 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(console)
         .insert_resource(UiScaleSetting(ui_scale))
         .insert_resource(ui::Theme::from(program.palette))
-        .init_resource::<widgets::Hud>()
-        .init_resource::<widgets::InMatch>()
+        .init_resource::<hud::Hud>()
+        .init_resource::<hud::InMatch>()
         .add_systems(PreUpdate, fit_ui)
         // The menu's backdrop has a camera too, which stays put.
         .configure_sets(
@@ -986,7 +987,7 @@ pub fn run(program: Program) -> ExitCode {
         .add_systems(OnEnter(Screen::MainMenu), console::start_scripts)
         .add_systems(
             OnEnter(Screen::Loading),
-            (loading, messages::start, widgets::choose),
+            (loading, messages::start, hud::choose),
         )
         .add_systems(Update, load.run_if(in_state(Screen::Loading)))
         .add_systems(
@@ -999,14 +1000,25 @@ pub fn run(program: Program) -> ExitCode {
                 setup_overlays,
                 keys::load,
                 banners::setup_banners,
-                minimap::spawn,
-                actions::spawn,
-                object_display::spawn,
-                resource_bar::spawn,
-                (widgets::spawn, widgets::spawn_overlay).run_if(widgets::original),
+                (
+                    minimap::setup,
+                    actions::setup,
+                    object_display::setup,
+                    resource_bar::setup,
+                    supply::setup,
+                ),
+                (
+                    minimap::spawn,
+                    actions::spawn,
+                    object_display::spawn,
+                    resource_bar::spawn,
+                    supply::spawn,
+                    clock::spawn_button,
+                    displays::spawn_buttons,
+                )
+                    .run_if(hud::playing(hud::Hud::Modern)),
+                (widgets::spawn, widgets::spawn_overlay).run_if(hud::playing(hud::Hud::Original)),
                 messages::spawn,
-                supply::spawn,
-                clock::spawn_button,
                 waypoints::load,
                 console::start_scripts,
                 ready,
@@ -1025,14 +1037,13 @@ pub fn run(program: Program) -> ExitCode {
         .add_systems(
             PostUpdate,
             (
-                widgets::remove_ours,
                 widgets::match_msaa,
                 (widgets::fit_view, widgets::scale_layout)
                     .chain()
                     .before(bevy::camera::CameraUpdateSystems)
                     .before(bevy::ui::UiSystems::Prepare),
             )
-                .run_if(widgets::original)
+                .run_if(hud::playing(hud::Hud::Original))
                 .run_if(in_state(Screen::Match)),
         )
         .add_plugins((HoldFirstTick, InTouch))
@@ -1069,7 +1080,7 @@ pub fn run(program: Program) -> ExitCode {
                     clock::light_button,
                     (clock::select_original_button, widgets::show_pressables)
                         .chain()
-                        .run_if(widgets::original),
+                        .run_if(hud::playing(hud::Hud::Original)),
                 )
                     .chain(),
                 (
@@ -1101,14 +1112,14 @@ pub fn run(program: Program) -> ExitCode {
                     actions::hover,
                     actions::tell,
                     actions::show,
-                    widgets::show_grid.run_if(widgets::original),
-                    widgets::show_tip.run_if(widgets::original),
+                    widgets::show_grid.run_if(hud::playing(hud::Hud::Original)),
+                    widgets::show_tip.run_if(hud::playing(hud::Hud::Original)),
                 )
                     .chain(),
                 (
                     object_display::choose,
                     object_display::lay_out,
-                    widgets::lay_out_object.run_if(widgets::original),
+                    widgets::lay_out_object.run_if(hud::playing(hud::Hud::Original)),
                     (
                         object_display::refresh,
                         object_display::portray,
@@ -1117,14 +1128,14 @@ pub fn run(program: Program) -> ExitCode {
                             widgets::object_economy,
                             widgets::portray_object.after(object_display::portray),
                         )
-                            .run_if(widgets::original),
+                            .run_if(hud::playing(hud::Hud::Original)),
                     ),
                 )
                     .chain(),
                 resource_bar::show.after(actions::show),
                 widgets::slide_bars
                     .after(resource_bar::show)
-                    .run_if(widgets::original),
+                    .run_if(hud::playing(hud::Hud::Original)),
                 (messages::tell, messages::refuse, messages::show).chain(),
                 messages::list.after(messages::tell).after(displays::Keys),
                 chat::keys

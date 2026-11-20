@@ -387,7 +387,9 @@ impl Looks {
     }
 }
 
-pub fn spawn(
+/// Loads what selections are shown with, and the stage portraits are
+/// posed on, for either interface.
+pub fn setup(
     mut commands: Commands,
     loaded: Res<Loaded>,
     formats: Res<CompressedImageFormatSupport>,
@@ -440,6 +442,11 @@ pub fn spawn(
         efficiency_target: efficiency_target(&game.game_widgets()),
     });
     commands.insert_resource(Showing::default());
+}
+
+/// Spawns our interface's object display, at the middle of the window's
+/// lower edge.
+pub fn spawn(mut commands: Commands) {
     // Above the display and as wide, growing upwards as its words wrap.
     let said = commands
         .spawn((
@@ -470,7 +477,6 @@ pub fn spawn(
         .id();
     commands
         .spawn((
-            crate::widgets::Ours,
             Node {
                 position_type: PositionType::Absolute,
                 left: px(0),
