@@ -31,6 +31,7 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `guard organization (x y | other)`: posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight
 - `heroes [kingdom]`: lists the heroes a kingdom, by name or id, holds, and what each is doing; without one, the kingdom played
 - `settlements`: lists the settlements, with each one's side and the id of its centre
+- `objects [kingdom | template ...]`: lists the buildings and organizations on the map, each with its template, id, kingdom and place; given kingdoms, by name or id, or templates, only those, a word that names a kingdom taken as one; only with --dev, in a match no other machine shares
 - `select [id ...]`: selects organizations, or one building, of any side by their ids; without any, says what's selected
 - `commission template [x y | hero]`: asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there; a settlement's company can be led by a hero from the pool
 - `research technology`: asks the selected building to research a technology it lists
