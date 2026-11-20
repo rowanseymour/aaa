@@ -26,8 +26,9 @@ pub struct Preview(pub Option<Previewed>);
 
 #[derive(Clone)]
 pub enum Previewed {
-    /// Commissioning this organization.
-    Commission(Box<Organization>),
+    /// Commissioning this organization at the building at this index into
+    /// the sim's buildings.
+    Commission(usize, Box<Organization>),
     Research(tgmap::Research),
     /// The packed building at this index into the sim's organizations
     /// unpacking.
@@ -257,7 +258,8 @@ pub fn show(
     let now = (sim.stockpile(player), sim.balance(player));
     let previewed = preview.0.as_ref().and_then(|p| {
         let change = match p {
-            Previewed::Commission(r) => Change::Commission(r),
+            Previewed::Commission(b, r) if *b < sim.buildings.len() => Change::Commission(*b, r),
+            Previewed::Commission(..) => return None,
             Previewed::Research(r) => Change::Research(r),
             Previewed::Unpack(r) if *r < sim.organizations.len() => Change::Unpack(*r),
             Previewed::Unpack(_) => return None,

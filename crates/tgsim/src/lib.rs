@@ -64,7 +64,7 @@ pub use attach::Hq;
 pub use combat::Struck;
 pub use computer::{ComputerPlayer, Idle};
 pub use delivery::{Delivery, Descent};
-pub use economy::{Balance, Change, Ledger, Limit, Treasury};
+pub use economy::{Balance, Change, EconomyEffect, Ledger, Limit, Treasury};
 pub use experience::{Commander, Operated, SpecialOp};
 pub use fog::{Fog, Seen};
 pub use groups::Group;

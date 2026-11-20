@@ -234,6 +234,7 @@ mod tests {
             enchantment_type: None,
             ability_type: None,
             effect: Vec::new(),
+            production: None,
         }
     }
 

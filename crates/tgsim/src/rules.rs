@@ -112,6 +112,9 @@ pub struct Rules {
     /// What each property does to supply, for those that do anything to
     /// it, by its id.
     pub supply_effects: HashMap<Id, tgmap::SupplyEffect>,
+    /// What each property does to the economy, for those that do anything
+    /// to it, by its id.
+    pub economy_effects: HashMap<Id, tgmap::EconomyEffect>,
     /// Each property's enchantment type, for those that have one.
     pub enchantment_types: HashMap<Id, Id>,
     /// What each template's things are, by template, for the technologies
@@ -223,6 +226,7 @@ impl Default for Rules {
             attack_target_first: true,
             engage_reaction: 0.3,
             supply_effects: HashMap::new(),
+            economy_effects: HashMap::new(),
             enchantment_types: HashMap::new(),
             kinds: HashMap::new(),
             sort_objectives: true,

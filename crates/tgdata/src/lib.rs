@@ -54,7 +54,9 @@ pub use combat::{
     Repair, Shape, Targets, Turret, Weapon, WeaponHit,
 };
 pub use combat_value::{CombatAbility, CombatProfile, CombatValueRules};
-pub use economy::{Amounts, Economy, EconomyRules, Logistics, ResourceKind, ResourceRole, Supply};
+pub use economy::{
+    Amounts, Economy, EconomyEffect, EconomyRules, Logistics, ResourceKind, ResourceRole, Supply,
+};
 pub use effects::{
     Decal, HealthCue, HealthTrigger, ObjectEffects, Vfx, VfxCue, VfxTint, WeaponEffects,
 };

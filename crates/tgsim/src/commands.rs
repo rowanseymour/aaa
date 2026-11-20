@@ -389,7 +389,7 @@ impl World {
         if hq.is_some_and(|h| self.free_places(&h) == 0) {
             return Err(Refused::Full);
         }
-        if self.cost(organization) > self.stockpile(player) {
+        if self.cost(building, organization) > self.stockpile(player) {
             return Err(Refused::Unaffordable);
         }
         Ok(organization)
@@ -570,7 +570,7 @@ impl World {
         to: Option<[f32; 2]>,
     ) -> Result<(), Refused> {
         let organization = self.may_commission(player, building, template)?;
-        let paid = self.cost(organization);
+        let paid = self.cost(building, organization);
         let seconds = self.rules.recruit_times.get(template).copied();
         let work = Work::Raise(Box::new(organization.clone()));
         let mut commission = Commission::of(work, seconds.unwrap_or(0.0));
