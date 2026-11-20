@@ -253,17 +253,17 @@ const VERBS: &[Verb] = &[
         "",
         "puts the camera back to the game's own view",
     ),
-    verb(
+    dev_verb(
         "create",
         "template [x y]",
         "raises an organization for the placement kingdom where the camera points, or at x y, and says its id",
     ),
-    verb(
+    dev_verb(
         "placementkingdom",
         "[kingdom]",
         "sets, by name or id, who owns what create raises; without one, lists the kingdoms",
     ),
-    verb(
+    dev_verb(
         "playerkingdom",
         "[kingdom]",
         "plays as a kingdom, by name or id; without one, lists them",
@@ -273,12 +273,12 @@ const VERBS: &[Verb] = &[
         "",
         "says whether the match is over, and how it's come out for each kingdom",
     ),
-    verb(
+    dev_verb(
         "missionwon",
         "kingdom",
         "has a kingdom, by name or id, win the match",
     ),
-    verb(
+    dev_verb(
         "missionlost",
         "kingdom",
         "has a kingdom, by name or id, lose the match",
@@ -376,8 +376,8 @@ const VERBS: &[Verb] = &[
         "sends an organization, by its id, to repair a building, by its id",
     ),
     verb("cancelsite", "", "calls off the selected building site"),
-    verb("destroyselected", "", "destroys the selected organizations"),
-    verb(
+    dev_verb("destroyselected", "", "destroys the selected organizations"),
+    dev_verb(
         "advance",
         "seconds",
         "plays that much of the game at once, paused or not",
@@ -387,7 +387,7 @@ const VERBS: &[Verb] = &[
         "[file]",
         "says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for tgserver to play again",
     ),
-    verb(
+    dev_verb(
         "fog",
         "",
         "lifts the fog of war from the screen, or lays it again",
@@ -577,16 +577,10 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
                 "record" => record(world, &args),
-                "fog" => no_args(&args).and_then(|_| {
-                    if world
-                        .get_resource::<Orders>()
-                        .is_some_and(Orders::joined_to)
-                    {
-                        return Err(HOSTED_HERE.into());
-                    }
+                "fog" => no_args(&args).map(|_| {
                     let mut fog = world.resource_mut::<crate::fog::Fog>();
                     fog.lifted = !fog.lifted;
-                    Ok(String::new())
+                    String::new()
                 }),
                 _ => unreachable!("{name} isn't handled"),
             }
@@ -1151,10 +1145,6 @@ fn player_kingdom(world: &mut World, args: &[&str]) -> Reply {
         [] => Ok(kingdoms(sim, world.resource::<Local>().0)),
         [word] => {
             let id = kingdom(sim, word)?;
-            let given = world.get_resource::<Orders>().and_then(Orders::players);
-            if given.is_some_and(|players| !players.contains(&id)) {
-                return Err("the match's host didn't let the game in to play that kingdom".into());
-            }
             world.resource_mut::<Local>().0 = Some(id);
             if let Some(mut lineup) = world.get_resource_mut::<Lineup>() {
                 lineup.seat(Some(id));
@@ -1697,12 +1687,6 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
     let seconds = number(seconds)?;
     if !(0.0..=600.0).contains(&seconds) {
         return Err("takes 0 to 600 seconds".into());
-    }
-    if world
-        .get_resource::<Orders>()
-        .is_some_and(Orders::joined_to)
-    {
-        return Err("the match's host plays it, when it will; wait lets time go by".into());
     }
     let mut orders = world.remove_resource::<Orders>().ok_or("no match")?;
     let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
