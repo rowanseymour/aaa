@@ -819,6 +819,7 @@ impl Ui<'_> {
                             },
                             r,
                         );
+                        morale(card, at(0.0, 69.0, 63.0, 2.0), r);
                     });
             });
         }
@@ -874,6 +875,7 @@ impl Ui<'_> {
                 );
                 if !lone(self.sim, r) {
                     self.efficiency(card, at(2.0, 48.0, CARD - 6.0, 2.0), r);
+                    morale(card, at(2.0, 101.0, CARD - 6.0, 2.0), r);
                 }
                 // The wide bar is the captain's, then one for each unit.
                 let wide = at(2.0, 51.0, CARD - 6.0, 5.0);
@@ -955,6 +957,12 @@ impl Ui<'_> {
 
 /// A bar in `node`, filled as `fill` says, giving `of`'s tooltip where
 /// it has one of its own rather than leaving that to what it's on.
+/// The organization at `r`'s morale bar.
+fn morale(parent: &mut ChildSpawnerCommands, node: Node, r: usize) {
+    let gauge = meter(node, Gauge::Morale);
+    parent.spawn((gauge, Fill::Morale(r), BackgroundColor(Color::BLACK)));
+}
+
 fn bar(parent: &mut ChildSpawnerCommands, node: Node, fill: Fill, of: Option<Says>) {
     let gauge = match fill {
         Fill::Progress(_) => Gauge::Progress,
