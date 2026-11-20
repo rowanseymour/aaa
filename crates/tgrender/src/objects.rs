@@ -80,7 +80,7 @@ pub fn spawn(
                 (
                     meshes.add(mesh),
                     materials.add(StandardMaterial {
-                        base_color: Color::srgb(r, g, b),
+                        base_color: crate::stored::rgb([r, g, b]),
                         perceptual_roughness: 0.9,
                         ..default()
                     }),

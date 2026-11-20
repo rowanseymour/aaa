@@ -53,8 +53,9 @@ impl OverlayImages {
         images: &mut Assets<Image>,
         formats: CompressedImageFormats,
     ) -> Self {
+        // Marks on the ground, drawn with the world.
         let mut texture = |name: &str| {
-            let image = textures::decode(&game.read(name)?, name, formats, true)?;
+            let image = textures::decode(&game.read(name)?, name, formats, false)?;
             Some(images.add(image))
         };
         let ring = texture("Effects/Selection/FocusedCircle.dds");
@@ -322,7 +323,7 @@ fn frames(nif: &Nif, formats: CompressedImageFormats) -> Vec<Image> {
     nif.objects
         .iter()
         .filter_map(|o| match o {
-            Object::Pixels(p) => embedded_image(p, formats),
+            Object::Pixels(p) => embedded_image(p, formats, true),
             _ => None,
         })
         .map(|mut i| {
@@ -356,7 +357,7 @@ pub fn flat_square() -> Mesh {
 /// An unlit, see-through material showing `image` in `colour`.
 pub fn mark_material(image: Option<Handle<Image>>, colour: Color) -> StandardMaterial {
     StandardMaterial {
-        base_color: colour,
+        base_color: crate::stored::stored(colour),
         base_color_texture: image,
         alpha_mode: AlphaMode::Blend,
         unlit: true,
@@ -537,7 +538,7 @@ pub fn border_paths(loops: &[Vec<[f32; 2]>]) -> Vec<Vec<[f32; 2]>> {
 
 /// The image a border is drawn with, sampled over and over along it.
 pub fn border_image(game: &GameData, path: &str, formats: CompressedImageFormats) -> Option<Image> {
-    let mut image = textures::decode(&game.read(path)?, path, formats, true)?;
+    let mut image = textures::decode(&game.read(path)?, path, formats, false)?;
     image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
         address_mode_v: ImageAddressMode::Repeat,
         ..ImageSamplerDescriptor::linear()

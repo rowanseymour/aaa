@@ -1,10 +1,12 @@
 // Team-coloured models: the texture's alpha says how much of its own colour
-// shows, the rest is the owner's; the result is opaque and lit as usual.
+// shows, the rest is the owner's; the result is opaque and lit as usual, or
+// shown as it is where unlit.
 
 import bevy_pbr::render::{
     pbr_fragment::pbr_input_from_standard_material,
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
 };
 
 struct Team {
@@ -22,7 +24,11 @@ fn fragment(
     let base = pbr_input.material.base_color;
     pbr_input.material.base_color = vec4(mix(team.colour.rgb, base.rgb, base.a), 1.0);
 
+    var lit = pbr_input.material.base_color;
+    if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
+        lit = apply_pbr_lighting(pbr_input);
+    }
     var out: FragmentOutput;
-    out.color = main_pass_post_lighting_processing(pbr_input, apply_pbr_lighting(pbr_input));
+    out.color = main_pass_post_lighting_processing(pbr_input, lit);
     return out;
 }

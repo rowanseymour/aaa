@@ -16,6 +16,7 @@ pub mod portrait;
 mod rig;
 pub mod shot;
 mod solid;
+pub mod stored;
 mod team;
 pub mod terrain;
 pub mod textures;
@@ -27,6 +28,7 @@ use std::sync::Arc;
 
 use bevy::asset::{RenderAssetUsages, embedded_asset};
 use bevy::camera::Exposure;
+use bevy::core_pipeline::fullscreen_material::FullscreenMaterialPlugin;
 use bevy::ecs::system::SystemParam;
 use bevy::image::CompressedImageFormatSupport;
 use bevy::light::{CascadeShadowConfigBuilder, NotShadowCaster};
@@ -90,8 +92,9 @@ impl Plugin for MapRenderPlugin {
         embedded_asset!(app, "glow.wesl");
         embedded_asset!(app, "team.wesl");
         embedded_asset!(app, "particles.wesl");
+        embedded_asset!(app, "stored.wesl");
         let beyond = match self.edge {
-            Edge::Hard => Color::srgb(0.55, 0.7, 0.85),
+            Edge::Hard => stored::rgb([0.55, 0.7, 0.85]),
             Edge::Fade => Color::BLACK,
         };
         app.add_plugins(MaterialPlugin::<GroundMaterial>::default())
@@ -100,6 +103,7 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<TeamMaterial>::default())
             .add_plugins(MaterialPlugin::<SolidMaterial>::default())
             .add_plugins(MaterialPlugin::<particles::ParticleMaterial>::default())
+            .add_plugins(FullscreenMaterialPlugin::<stored::StoredColours>::default())
             .insert_resource(ClearColor(beyond))
             .insert_resource(self.edge)
             .insert_resource(MeshPicking(self.pickable))
@@ -253,6 +257,7 @@ pub fn spawn_land(
     size: f32,
     tag: impl Bundle + Clone,
 ) -> Option<Handle<GroundMaterial>> {
+    let shade = prepared.shade;
     let built = prepared.finish(&mut assets.images);
     let ground = built.ground.map(|(mut mesh, material)| {
         if assets.picking.0 {
@@ -279,35 +284,46 @@ pub fn spawn_land(
             tag.clone(),
         ));
     }
-    let light = light(commands, sun, size);
-    commands.entity(light).insert(tag);
+    for light in light(commands, sun, size, shade).into_iter().flatten() {
+        commands.entity(light).insert(tag.clone());
+    }
     ground
 }
 
-/// Lights a map of `size` across from its sun.
-fn light(commands: &mut Commands, sun: &Sun, size: f32) -> Entity {
-    let mut directional = DirectionalLight {
-        shadow_maps_enabled: true,
-        ..default()
-    };
+/// Lights a map of `size` across from its sun, whose shadows take away
+/// `shade` of its light: two lights, that share casting shadows and the
+/// rest not, either left out where its share is nothing.
+fn light(commands: &mut Commands, sun: &Sun, size: f32, shade: f32) -> [Option<Entity>; 2] {
     let mut ambient = GlobalAmbientLight::default();
-    color_lights(&mut directional, &mut ambient, sun.diffuse, sun.ambient);
     let [dx, dy, dz] = sun.direction;
+    let facing = Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y);
+    let lights = [(shade, true), (1.0 - shade, false)].map(|(share, shadows)| {
+        if share <= 0.0 {
+            return None;
+        }
+        let mut directional = DirectionalLight {
+            illuminance: std::f32::consts::PI * light_unit() * share,
+            shadow_maps_enabled: shadows,
+            ..default()
+        };
+        color_lights(&mut directional, &mut ambient, sun.diffuse, sun.ambient);
+        let cascades = CascadeShadowConfigBuilder {
+            maximum_distance: size * 1.5,
+            ..default()
+        };
+        Some(commands.spawn((directional, facing, cascades.build())).id())
+    });
     commands.insert_resource(ambient);
-    commands
-        .spawn((
-            directional,
-            Transform::default().looking_to(terrain::world(dx, dy, dz), Vec3::Y),
-            CascadeShadowConfigBuilder {
-                maximum_distance: size * 1.5,
-                ..default()
-            }
-            .build(),
-        ))
-        .id()
+    lights
 }
 
-/// Gives the sun and ambient lights a sun's `diffuse` and `ambient` colours.
+/// Light of strength 1 to the camera: the inverse of its exposure.
+fn light_unit() -> f32 {
+    1.0 / Exposure::default().exposure()
+}
+
+/// Gives the sun and ambient lights a sun's `diffuse` and `ambient` colours,
+/// keeping each sun light's share of the light.
 ///
 /// The game lights like Direct3D's fixed pipeline: texture * (ambient +
 /// diffuse * N.L), clamped. Undoing the exposure and Lambert's 1/pi in Bevy's
@@ -318,10 +334,7 @@ pub fn color_lights(
     diffuse: [f32; 3],
     ambient_color: [f32; 3],
 ) {
-    let unit = 1.0 / Exposure::default().exposure();
-    let rgb = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b);
-    directional.color = rgb(diffuse);
-    directional.illuminance = std::f32::consts::PI * unit;
-    ambient.color = rgb(ambient_color);
-    ambient.brightness = unit;
+    directional.color = stored::rgb(diffuse);
+    ambient.color = stored::rgb(ambient_color);
+    ambient.brightness = light_unit();
 }

@@ -102,9 +102,10 @@ impl Stage {
                 Tonemapping::None,
                 DebandDither::Disabled,
                 RenderLayers::layer(LAYER),
+                crate::stored::StoredColours::default(),
                 // White light all round: see [`crate::color_lights`].
                 AmbientLight {
-                    color: Color::srgb(AMBIENT, AMBIENT, AMBIENT),
+                    color: crate::stored::rgb([AMBIENT; 3]),
                     brightness: 1.0 / Exposure::default().exposure(),
                     ..default()
                 },
@@ -353,7 +354,7 @@ impl Models {
 fn staged(colour: Option<[f32; 3]>) -> Paint {
     Paint {
         colour,
-        ambient: Some(Color::srgb(AMBIENT, AMBIENT, AMBIENT).to_linear().red),
+        ambient: Some(AMBIENT),
     }
 }
 

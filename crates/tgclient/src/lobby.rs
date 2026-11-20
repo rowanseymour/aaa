@@ -1143,8 +1143,11 @@ fn faction_list(
     let chosen = lobby.factions.get(&player);
     let chosen = chosen.and_then(|id| factions.iter().find(|g| g.id == *id));
     let label = chosen.map_or("Random".into(), |g| g.short_name.clone());
-    let offered = factions.iter().filter(|g| g.public);
-    let choices = offered.map(|g| (Some(g.id.clone()), g.short_name.clone()));
+    let mut offered: Vec<_> = factions.iter().filter(|g| g.public).collect();
+    offered.sort_by_cached_key(|g| g.short_name.to_lowercase());
+    let choices = offered
+        .into_iter()
+        .map(|g| (Some(g.id.clone()), g.short_name.clone()));
     let choices = std::iter::once((None, "Random".to_string())).chain(choices);
     let choices = choices.map(|(g, name)| (key(g.as_ref()), FactionChoice(player, g), name));
     let open = lobby.open == Open::Factions(player);

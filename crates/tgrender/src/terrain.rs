@@ -69,6 +69,8 @@ pub(crate) struct Built {
 pub struct Prepared {
     ground: Option<PreparedGround>,
     water: Option<PreparedWater>,
+    /// The share of the sun's light a shadow takes away.
+    pub(crate) shade: f32,
 }
 
 struct PreparedGround {
@@ -106,12 +108,10 @@ impl Prepared {
         });
         let water = self.water.map(|w| {
             let material = WaterMaterial {
-                // Lit without highlights, as the game draws it. Transmission
-                // gives the shader the scene behind to blend over; Blend
-                // keeps it out of the depth buffer, as in the game.
+                // Lit without highlights, as the game draws it. Blend keeps
+                // it out of the depth buffer, as in the game.
                 base: StandardMaterial {
                     alpha_mode: AlphaMode::Blend,
-                    specular_transmission: 1.0,
                     perceptual_roughness: 1.0,
                     reflectance: 0.0,
                     ..default()
@@ -233,6 +233,7 @@ pub fn prepare(game: &GameData, ground: &Ground, terrain: &Terrain, fade: f32) -
         return Prepared {
             ground: None,
             water,
+            shade: game.shadow_shade(),
         };
     }
 
@@ -252,11 +253,16 @@ pub fn prepare(game: &GameData, ground: &Ground, terrain: &Terrain, fade: f32) -
     }
     let textures = blend::texture_array(kinds.into_iter().map(|k| k.image).collect());
     Prepared {
+        shade: game.shadow_shade(),
         ground: Some(PreparedGround {
             mesh,
             layers: blend::Layers {
                 repeats,
                 edge: Vec4::new(ground.size(), fade, 0.0, 0.0),
+                light: {
+                    let [ambient, diffuse] = game.terrain_light();
+                    Vec4::new(ambient, diffuse, 0.0, 0.0)
+                },
             },
             textures,
             masks: masks.unwrap_or_else(blend::empty_masks),
@@ -375,7 +381,6 @@ fn water_mesh(ground: &Ground, tiles: &[(usize, usize)], colors: &[DepthColor], 
             let surface = ground.surface[cy * ground.side + cx] - SHORE_DROP;
             positions.push(world(wx, wy, surface).to_array());
             let ([r, g, b], a) = at_depth(colors, surface - ground.at(cx, cy));
-            let [r, g, b, a] = Color::srgba(r, g, b, a).to_linear().to_f32_array();
             let lit = edge_light(ground.size(), fade, [wx, wy]);
             vertex_colors.push([r * lit, g * lit, b * lit, a + (1.0 - a) * (1.0 - lit)]);
         }
@@ -470,8 +475,8 @@ fn load_frames(game: &GameData, animation: &TextureAnimation) -> Vec<Image> {
 
 /// Decodes a texture into a square, mipmapped array layer of side `n`.
 fn load_texture(bytes: &[u8], name: &str, n: usize) -> Option<Image> {
-    let image = textures::decode(bytes, name, CompressedImageFormats::BC, true)?;
-    let image = textures::decompress(image)?.convert(TextureFormat::Rgba8UnormSrgb)?;
+    let image = textures::decode(bytes, name, CompressedImageFormats::BC, false)?;
+    let image = textures::rgba8(image)?;
     let (w, h) = (image.width() as usize, image.height() as usize);
     let src = image.data?;
     // Nearest-neighbour resampling: the textures are 128 or 256 square.
@@ -487,10 +492,8 @@ fn load_texture(bytes: &[u8], name: &str, n: usize) -> Option<Image> {
 
 /// A single-colour array layer of side `n`, for a missing texture.
 fn solid(color: [f32; 3], n: usize) -> Image {
-    let [r, g, b, a] = Color::srgb(color[0], color[1], color[2])
-        .to_srgba()
-        .to_u8_array();
-    layer_image([r, g, b, a].repeat(n * n), n)
+    let [r, g, b] = color.map(|c| (c.clamp(0.0, 1.0) * 255.0).round() as u8);
+    layer_image([r, g, b, 255].repeat(n * n), n)
 }
 
 pub(crate) fn layer_image(data: Vec<u8>, n: usize) -> Image {
@@ -503,7 +506,8 @@ pub(crate) fn layer_image(data: Vec<u8>, n: usize) -> Image {
         },
         TextureDimension::D2,
         data,
-        TextureFormat::Rgba8UnormSrgb,
+        // Stored colour values: see crate::stored.
+        TextureFormat::Rgba8Unorm,
         RenderAssetUsages::RENDER_WORLD,
     );
     generate_mipmaps(&mut image);

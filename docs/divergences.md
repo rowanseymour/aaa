@@ -32,6 +32,10 @@ where the original stretches them to fill the screen. See
   original, so a wider window sees more of the map to each side rather than stretching
   it. At the same zoom this reads as being zoomed out further. See
   [camera.rs](../crates/tgrender/src/camera.rs).
+- **Shadows.** Every model casts a shadow from the sun onto everything, by shadow
+  mapping, which needn't match what the original shades or the shapes it gives. A
+  shadow takes away the share of the sun's light the data's `DynamicShadowSunModulate`
+  gives, as the original's do. See [lib.rs](../crates/tgrender/src/lib.rs).
 - **Fidgets.** Idle men always fidget. The original lets the `CharacterFidget` game
   variable turn them off, which the stock data never does. See
   [stances.rs](../crates/tgsim/src/stances.rs).

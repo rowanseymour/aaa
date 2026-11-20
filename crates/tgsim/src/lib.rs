@@ -88,7 +88,7 @@ pub use summons::Summoned;
 pub use supply::{Bombarder, Supplying};
 pub use targets::TypeSlots;
 pub use tgmap::{Outcome, Player, Relation, Team};
-pub use triggers::{Switch, Triggers};
+pub use triggers::{SunChange, Switch, Triggers};
 pub use value::CombatMeans;
 
 /// Seconds of play one [`World::tick`] advances.

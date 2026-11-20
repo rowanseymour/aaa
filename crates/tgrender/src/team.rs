@@ -12,16 +12,15 @@ pub type TeamMaterial = ExtendedMaterial<StandardMaterial, Team>;
 
 #[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
 pub struct Team {
-    /// Linear rgb; w unused.
+    /// Stored rgb (see [`crate::stored`]); w unused.
     #[uniform(100)]
     pub colour: Vec4,
 }
 
 impl Team {
     pub fn new([r, g, b]: [f32; 3]) -> Self {
-        let c = Color::srgb(r, g, b).to_linear();
         Team {
-            colour: Vec4::new(c.red, c.green, c.blue, 1.0),
+            colour: Vec4::new(r, g, b, 1.0),
         }
     }
 }

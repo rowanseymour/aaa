@@ -64,6 +64,7 @@ mod selection;
 mod sound;
 mod special_ops;
 mod staging;
+mod sunlight;
 mod supply;
 mod technologies;
 mod ui;
@@ -1064,6 +1065,7 @@ pub fn run(program: Program) -> ExitCode {
                     .chain(),
                 keep_selection,
                 clear_scenery,
+                sunlight::follow,
                 selection_sounds,
                 show_focus,
                 (supply::show_border, supply::tint_buildings),
@@ -1384,6 +1386,7 @@ fn begin(world: &mut bevy::ecs::world::World, prepared: Prepared) {
     world.insert_resource(control_groups::ControlGroups::default());
     world.insert_resource(Raising(raising));
     world.insert_resource(effects);
+    world.insert_resource(sunlight::Sunlight::new(&loaded.game, &loaded.map.sun));
     world.insert_resource(loaded);
 }
 

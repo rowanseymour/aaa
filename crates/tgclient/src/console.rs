@@ -619,6 +619,10 @@ fn sun(world: &mut World, args: &[&str]) -> Reply {
         return Err("the map isn't lit yet".into());
     }
     world.resource_mut::<Loaded>().map.light(preset);
+    let changes = world.resource::<crate::Sim>().0.triggers.suns.len();
+    if let Some(mut sunlight) = world.get_resource_mut::<crate::sunlight::Sunlight>() {
+        sunlight.set([preset.diffuse, preset.ambient, preset.specular], changes);
+    }
     let night = game.night(preset.diffuse);
     world
         .resource_mut::<crate::effects::Effects>()

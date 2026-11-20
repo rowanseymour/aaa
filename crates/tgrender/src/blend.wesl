@@ -15,6 +15,8 @@ import bevy_pbr::render::{
 struct Layers {
     repeats: array<vec4<f32>, 256>,
     edge: vec4<f32>,
+    // Share of the sun's ambient (x) and diffuse (y) light reflected.
+    light: vec4<f32>,
 }
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> layers: Layers;
@@ -67,7 +69,9 @@ fn fragment(
     c = mix(c, terrain(kinds.y, ground), mask(m.x, in.uv));
     c = mix(c, terrain(kinds.z, ground), mask(m.y, in.uv));
     c = mix(c, terrain(kinds.w, ground), mask(m.z, in.uv));
-    pbr_input.material.base_color = vec4(c, 1.0);
+    // ambient × a + diffuse × d is d × (ambient × a / d + diffuse).
+    pbr_input.material.base_color = vec4(c * layers.light.y, 1.0);
+    pbr_input.diffuse_occlusion = vec3(layers.light.x / max(layers.light.y, 1e-4));
 
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);

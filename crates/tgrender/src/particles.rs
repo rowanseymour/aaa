@@ -1436,7 +1436,8 @@ impl Layers {
     /// Every layer so far, as an array texture.
     fn array(&self) -> Image {
         let side = SIDE as u32;
-        let format = TextureFormat::Rgba8UnormSrgb;
+        // Stored colour values: see crate::stored.
+        let format = TextureFormat::Rgba8Unorm;
         blend::array_image(
             self.data.clone(),
             (side, side),
@@ -1455,7 +1456,7 @@ fn white() -> Image {
 /// `image` as a layer of [`TEXTURES`]: bilinearly resampled, as it would be
 /// sampled at its own size, and mipmapped.
 fn resampled(image: Image) -> Option<Image> {
-    let image = textures::decompress(image)?.convert(TextureFormat::Rgba8UnormSrgb)?;
+    let image = textures::rgba8(image)?;
     let (w, h) = (image.width() as usize, image.height() as usize);
     let src = image.data?;
     let texel = |x: isize, y: isize, c: usize| {
@@ -1692,12 +1693,7 @@ pub fn draw(
             at: to_world.transform_point3(p.position),
             half: p.radius * p.size * scale,
             colour: match look.tinted {
-                // The model's colours are sRGB, as everywhere else.
-                true => {
-                    let [r, g, b, a] = p.colour;
-                    let c = Color::srgba(r, g, b, a).to_linear().to_f32_array();
-                    std::array::from_fn(|i| c[i] * look.colour[i])
-                }
+                true => std::array::from_fn(|i| p.colour[i] * look.colour[i]),
                 false => look.colour,
             },
             look: [look.layer as f32, flags as f32],
