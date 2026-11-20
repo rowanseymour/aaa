@@ -160,10 +160,24 @@ struct Verb {
     name: &'static str,
     args: &'static str,
     does: &'static str,
+    /// It's for developing the game, so runs only where [`developing`] lets it.
+    dev: bool,
 }
 
 const fn verb(name: &'static str, args: &'static str, does: &'static str) -> Verb {
-    Verb { name, args, does }
+    Verb {
+        name,
+        args,
+        does,
+        dev: false,
+    }
+}
+
+const fn dev_verb(name: &'static str, args: &'static str, does: &'static str) -> Verb {
+    Verb {
+        dev: true,
+        ..verb(name, args, does)
+    }
 }
 
 const VERBS: &[Verb] = &[
@@ -239,17 +253,17 @@ const VERBS: &[Verb] = &[
         "",
         "puts the camera back to the game's own view",
     ),
-    verb(
+    dev_verb(
         "create",
         "template [x y]",
         "raises an organization for the placement kingdom where the camera points, or at x y, and says its id",
     ),
-    verb(
+    dev_verb(
         "placementkingdom",
         "[kingdom]",
         "sets, by name or id, who owns what create raises; without one, lists the kingdoms",
     ),
-    verb(
+    dev_verb(
         "playerkingdom",
         "[kingdom]",
         "plays as a kingdom, by name or id; without one, lists them",
@@ -259,12 +273,12 @@ const VERBS: &[Verb] = &[
         "",
         "says whether the match is over, and how it's come out for each kingdom",
     ),
-    verb(
+    dev_verb(
         "missionwon",
         "kingdom",
         "has a kingdom, by name or id, win the match",
     ),
-    verb(
+    dev_verb(
         "missionlost",
         "kingdom",
         "has a kingdom, by name or id, lose the match",
@@ -293,6 +307,11 @@ const VERBS: &[Verb] = &[
         "settlements",
         "",
         "lists the settlements, with each one's side and the id of its centre",
+    ),
+    dev_verb(
+        "objects",
+        "[kingdom | template ...]",
+        "lists the buildings and organizations on the map, each with its template, id, kingdom and place; given kingdoms, by name or id, or templates, only those, a word that names a kingdom taken as one",
     ),
     verb(
         "select",
@@ -357,8 +376,8 @@ const VERBS: &[Verb] = &[
         "sends an organization, by its id, to repair a building, by its id",
     ),
     verb("cancelsite", "", "calls off the selected building site"),
-    verb("destroyselected", "", "destroys the selected organizations"),
-    verb(
+    dev_verb("destroyselected", "", "destroys the selected organizations"),
+    dev_verb(
         "advance",
         "seconds",
         "plays that much of the game at once, paused or not",
@@ -368,7 +387,7 @@ const VERBS: &[Verb] = &[
         "[file]",
         "says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for tgserver to play again",
     ),
-    verb(
+    dev_verb(
         "fog",
         "",
         "lifts the fog of war from the screen, or lays it again",
@@ -475,6 +494,9 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
     let Some(verb) = find(&words[0]) else {
         return Err("no such command; help lists them".into());
     };
+    if verb.dev {
+        developing(world)?;
+    }
     let args: Vec<&str> = words[1..].iter().map(String::as_str).collect();
     match verb.name {
         "help" => help(&args),
@@ -530,6 +552,7 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "guard" => order(world, &args, Aim::Guard),
                 "heroes" => heroes(world, &args),
                 "settlements" => no_args(&args).map(|_| settlements(&world.resource::<Sim>().0)),
+                "objects" => Ok(objects(&world.resource::<Sim>().0, &args)),
                 "select" => select(world, &args),
                 "usefactionability" => use_faction_ability(world, &args),
                 "commission" => commission(world, &args),
@@ -554,16 +577,10 @@ fn execute(world: &mut World, words: &[String], depth: usize) -> Reply {
                 "destroyselected" => destroy_selected(world, &args),
                 "advance" => advance(world, &args),
                 "record" => record(world, &args),
-                "fog" => no_args(&args).and_then(|_| {
-                    if world
-                        .get_resource::<Orders>()
-                        .is_some_and(Orders::joined_to)
-                    {
-                        return Err(HOSTED_HERE.into());
-                    }
+                "fog" => no_args(&args).map(|_| {
                     let mut fog = world.resource_mut::<crate::fog::Fog>();
                     fog.lifted = !fog.lifted;
-                    Ok(String::new())
+                    String::new()
                 }),
                 _ => unreachable!("{name} isn't handled"),
             }
@@ -627,7 +644,8 @@ fn help(args: &[&str]) -> Reply {
         }
         [name] => {
             let v = find(name).ok_or("no such command")?;
-            Ok(format!("{} {}\n  {}", v.name, v.args, v.does))
+            let dev = if v.dev { DEV_ONLY } else { "" };
+            Ok(format!("{} {}\n  {}{dev}", v.name, v.args, v.does))
         }
         _ => Err(usage("help")),
     }
@@ -1042,6 +1060,52 @@ fn settlements(sim: &tgsim::World) -> String {
     }
 }
 
+/// The buildings and organizations still on the map, of the kingdoms and
+/// templates `args` name, if any: a word is a kingdom where it names one,
+/// else a template.
+fn objects(sim: &tgsim::World, args: &[&str]) -> String {
+    let (mut kingdoms, mut templates) = (Vec::new(), Vec::new());
+    for word in args {
+        match kingdom(sim, word) {
+            Ok(id) => kingdoms.push(id),
+            Err(_) => templates.push(word.to_ascii_lowercase()),
+        }
+    }
+    let wanted = |owner: u32, template: &str| {
+        (kingdoms.is_empty() || kingdoms.contains(&owner))
+            && (templates.is_empty() || templates.contains(&template.to_ascii_lowercase()))
+    };
+    let line = |kind: &str, template: &str, id: u32, owner: u32, [x, y]: [f32; 2]| {
+        format!("{kind} {template} {id} of kingdom {owner} at {x:.0} {y:.0}")
+    };
+    let buildings = (sim.buildings.iter())
+        .filter(|b| !b.gone() && wanted(b.owner, b.template.as_str()))
+        .map(|b| line("building", b.template.as_str(), b.id, b.owner, b.position));
+    let organizations = (0..sim.organizations.len())
+        .filter(|&r| !sim.destroyed(r))
+        .filter(|&r| {
+            wanted(
+                sim.organizations[r].owner,
+                sim.organizations[r].template.as_str(),
+            )
+        })
+        .map(|r| {
+            let o = &sim.organizations[r];
+            line(
+                "organization",
+                o.template.as_str(),
+                o.id,
+                o.owner,
+                sim.centre(r),
+            )
+        });
+    let lines: Vec<String> = buildings.chain(organizations).collect();
+    match lines.is_empty() {
+        true => "nothing on the map".into(),
+        false => lines.join("\n"),
+    }
+}
+
 /// Has a kingdom win or lose the match, as a map's triggers can.
 fn decide(world: &mut World, args: &[&str], won: bool) -> Reply {
     let [word] = args else {
@@ -1081,10 +1145,6 @@ fn player_kingdom(world: &mut World, args: &[&str]) -> Reply {
         [] => Ok(kingdoms(sim, world.resource::<Local>().0)),
         [word] => {
             let id = kingdom(sim, word)?;
-            let given = world.get_resource::<Orders>().and_then(Orders::players);
-            if given.is_some_and(|players| !players.contains(&id)) {
-                return Err("the match's host didn't let the game in to play that kingdom".into());
-            }
             world.resource_mut::<Local>().0 = Some(id);
             if let Some(mut lineup) = world.get_resource_mut::<Lineup>() {
                 lineup.seat(Some(id));
@@ -1558,6 +1618,22 @@ fn selected_building(world: &World) -> Result<usize, String> {
     (world.resource::<SelectedBuilding>().0).ok_or_else(|| "no building selected".into())
 }
 
+/// What `help` adds to what a verb for developing the game does.
+const DEV_ONLY: &str = "; only with --dev, in a match no other machine shares";
+
+/// Why a verb for developing the game can't run, if it can't: only with
+/// `--dev`, and never in a match another machine shares, so no real match
+/// is changed or seen through by one.
+fn developing(world: &World) -> Result<(), String> {
+    if !world.get_resource::<crate::Dev>().is_some_and(|d| d.0) {
+        return Err("only with --dev".into());
+    }
+    if (world.get_resource::<Orders>()).is_some_and(Orders::joined_to) {
+        return Err("only in a match no other machine shares".into());
+    }
+    Ok(())
+}
+
 /// What's said of a cheat tried in a match hosted elsewhere.
 const HOSTED_HERE: &str = "only in a match hosted here";
 
@@ -1611,12 +1687,6 @@ fn advance(world: &mut World, args: &[&str]) -> Reply {
     let seconds = number(seconds)?;
     if !(0.0..=600.0).contains(&seconds) {
         return Err("takes 0 to 600 seconds".into());
-    }
-    if world
-        .get_resource::<Orders>()
-        .is_some_and(Orders::joined_to)
-    {
-        return Err("the match's host plays it, when it will; wait lets time go by".into());
     }
     let mut orders = world.remove_resource::<Orders>().ok_or("no match")?;
     let mut selected = std::mem::take(&mut world.resource_mut::<Selected>().0);
@@ -1958,6 +2028,22 @@ mod tests {
     }
 
     #[test]
+    fn objects_lists_what_a_kingdom_or_template_names() {
+        let sim = crate::orders::testing::fresh();
+        let all = objects(&sim, &[]);
+        assert_eq!(
+            all,
+            "organization squad 1 of kingdom 1 at 10 10\norganization squad 3 of kingdom 2 at 10 20"
+        );
+        assert_eq!(
+            objects(&sim, &["2"]),
+            "organization squad 3 of kingdom 2 at 10 20"
+        );
+        assert_eq!(objects(&sim, &["SQUAD"]), all);
+        assert_eq!(objects(&sim, &["3"]), "nothing on the map");
+    }
+
+    #[test]
     fn a_script_runs_before_what_follows_its_exec() {
         let script = std::env::temp_dir().join(format!("console-{}.txt", std::process::id()));
         std::fs::write(&script, "echo b; echo c\necho d\n").unwrap();
@@ -2073,7 +2159,8 @@ mod tests {
         );
         for v in VERBS {
             let usage = format!("{} {}", v.name, v.args);
-            page += &format!("- `{}`: {}\n", usage.trim_end(), v.does);
+            let dev = if v.dev { DEV_ONLY } else { "" };
+            page += &format!("- `{}`: {}{dev}\n", usage.trim_end(), v.does);
         }
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/console.md");
         if std::env::var_os("UPDATE_DOCS").is_some() {
@@ -2088,6 +2175,22 @@ mod tests {
                 "docs/console.md is stale; rerun this test with UPDATE_DOCS=1"
             );
         }
+    }
+
+    #[test]
+    fn dev_verbs_run_only_with_dev() {
+        let mut world = console();
+        enter(&mut world, "objects");
+        run(&mut world);
+        assert_eq!(said(&world), ["objects: only with --dev"]);
+        world.insert_resource(crate::Dev(true));
+        assert_eq!(developing(&world), Ok(()));
+        let (_host, joined, _) = crate::orders::testing::joined(&[1]);
+        world.insert_resource(joined);
+        assert_eq!(
+            developing(&world),
+            Err("only in a match no other machine shares".into())
+        );
     }
 
     #[test]

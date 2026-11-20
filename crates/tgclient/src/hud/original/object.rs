@@ -22,8 +22,8 @@ use super::lettering::{Letters, Measured, PLAIN, Sliced};
 use super::{Pictures, on_screen};
 use crate::banners::Badges;
 use crate::object_display::{
-    self as shown, Actor, Defends, Detail, EfficiencyTarget, Fill, Flown, Looks, Mode, Pick, Place,
-    Queued, Says, Shield, Showing, Status, UnitPicture,
+    self as shown, Actor, Armed, Defends, Detail, EfficiencyTarget, Fill, Flown, Looks, Mode, Pick,
+    Place, Queued, Says, Shield, Showing, Status, Strikes, UnitPicture,
 };
 use crate::ui::{self, Hint, Shade};
 use crate::{Drawn, Leaders, Loaded, Local, Sim};
@@ -724,6 +724,44 @@ impl Draw<'_, '_> {
         }
     }
 
+    /// `target`'s weapons, each its icon with its main damage by it, a row
+    /// each down from the top of the values.
+    fn attacks(&mut self, target: Target) {
+        let Some(values) = self.display.children.iter().find(|c| c.name == "Values") else {
+            return;
+        };
+        let Some(widget) = values.children.iter().find(|c| c.name == "AttackValues") else {
+            return;
+        };
+        let most = (values.value("max_widgets_values")).and_then(|v| v.parse().ok());
+        let most = most.unwrap_or(shown::MOST_WEAPONS).min(shown::MOST_WEAPONS);
+        let apart = (values.value("display_values_separation")).and_then(|v| v.parse().ok());
+        let apart: f32 = apart.unwrap_or(0.0);
+        let within = values.bounds(self.area);
+        let row = widget.bounds(within).height() + apart;
+        let icons: Vec<Option<String>> = (self.sim.weapons(target).iter())
+            .take(most)
+            .map(|w| w.shown.icon.clone())
+            .collect();
+        for (i, icon) in icons.into_iter().enumerate() {
+            let down = row * i as f32;
+            let within = Rect {
+                top: within.top + down,
+                bottom: within.bottom + down,
+                ..within
+            };
+            let parts = self.painter.paint(self.s, widget, within, &[]);
+            let icon = self.looks.image(self.game, self.images, icon.as_deref());
+            self.show(&parts, "Icon/Decal", icon);
+            if let Some(mut label) = self.entity(&parts, "Label/Label") {
+                label.insert(Strikes(target, i, Some(Color::WHITE)));
+            }
+            if let Some(mut panel) = self.entity(&parts, "") {
+                panel.insert((Armed(target, i), Hint(String::new()), Pickable::default()));
+            }
+        }
+    }
+
     /// The box of what a lone thing's template says of it; none for one
     /// that says nothing.
     fn description(&mut self, says: Option<String>) {
@@ -751,6 +789,7 @@ impl Draw<'_, '_> {
                 let captain = shown::captain(self.sim, self.looks, r);
                 let unit = self.sim.units[captain].template.clone();
                 self.portrait(unit.as_str(), Fill::Unit(captain), Says::Unit(captain));
+                self.attacks(Target::Unit(captain));
                 self.defense(Target::Unit(captain), &unit);
                 let says = [&organization.template, &unit];
                 let says = says.into_iter().find_map(|t| self.described(t));
@@ -760,6 +799,7 @@ impl Draw<'_, '_> {
             Actor::Building(b, ref queue) => {
                 self.structure(b);
                 let template = self.sim.buildings[b].template.clone();
+                self.attacks(Target::Building(b));
                 self.defense(Target::Building(b), &template);
                 // What it's commissioning shows where its description would.
                 match queue.is_empty() {

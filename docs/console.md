@@ -20,17 +20,18 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `yaw [degrees]`: turns the camera to look that far counter-clockwise from the map's x axis; without, back to the game's
 - `pitch [degrees]`: tilts the camera that far down from level; without, back to the game's
 - `defaultangles`: puts the camera back to the game's own view
-- `create template [x y]`: raises an organization for the placement kingdom where the camera points, or at x y, and says its id
-- `placementkingdom [kingdom]`: sets, by name or id, who owns what create raises; without one, lists the kingdoms
-- `playerkingdom [kingdom]`: plays as a kingdom, by name or id; without one, lists them
+- `create template [x y]`: raises an organization for the placement kingdom where the camera points, or at x y, and says its id; only with --dev, in a match no other machine shares
+- `placementkingdom [kingdom]`: sets, by name or id, who owns what create raises; without one, lists the kingdoms; only with --dev, in a match no other machine shares
+- `playerkingdom [kingdom]`: plays as a kingdom, by name or id; without one, lists them; only with --dev, in a match no other machine shares
 - `outcome`: says whether the match is over, and how it's come out for each kingdom
-- `missionwon kingdom`: has a kingdom, by name or id, win the match
-- `missionlost kingdom`: has a kingdom, by name or id, lose the match
+- `missionwon kingdom`: has a kingdom, by name or id, win the match; only with --dev, in a match no other machine shares
+- `missionlost kingdom`: has a kingdom, by name or id, lose the match; only with --dev, in a match no other machine shares
 - `move organization (x y | other)`: sends an organization, by its id, to x y, or to keep near another organization, by its id
 - `attack organization (x y | enemy)`: sends an organization, by its id, to x y in its combat formation, taking on enemies that come near on the way, or after an enemy organization, by its id
 - `guard organization (x y | other)`: posts an organization, by its id, at x y or beside another organization, by its id, to come back to after every fight
 - `heroes [kingdom]`: lists the heroes a kingdom, by name or id, holds, and what each is doing; without one, the kingdom played
 - `settlements`: lists the settlements, with each one's side and the id of its centre
+- `objects [kingdom | template ...]`: lists the buildings and organizations on the map, each with its template, id, kingdom and place; given kingdoms, by name or id, or templates, only those, a word that names a kingdom taken as one; only with --dev, in a match no other machine shares
 - `select [id ...]`: selects organizations, or one building, of any side by their ids; without any, says what's selected
 - `commission template [x y | hero]`: asks the selected building to commission a template it lists, or with x y, one that's flown in, to deliver it there; a settlement's company can be led by a hero from the pool
 - `research technology`: asks the selected building to research a technology it lists
@@ -46,10 +47,10 @@ How lines are written, and how scripts and a port feed them in, is in [console.r
 - `build organization template x y [degrees]`: sends an organization, by its id, to put up a building of template at x y, facing that far counter-clockwise from the map's x axis
 - `repair organization building`: sends an organization, by its id, to repair a building, by its id
 - `cancelsite`: calls off the selected building site
-- `destroyselected`: destroys the selected organizations
-- `advance seconds`: plays that much of the game at once, paused or not
+- `destroyselected`: destroys the selected organizations; only with --dev, in a match no other machine shares
+- `advance seconds`: plays that much of the game at once, paused or not; only with --dev, in a match no other machine shares
 - `record [file]`: says how many ticks the match has played, how many orders it's carried out and its hash, which copies of a match share while they've played out the same way; given a file, keeps the match so far there as a film, for tgserver to play again
-- `fog`: lifts the fog of war from the screen, or lays it again
+- `fog`: lifts the fog of war from the screen, or lays it again; only with --dev, in a match no other machine shares
 - `gamespeed [speed]`: runs the game that many times as fast, 0.05 to 16; without, says how fast
 - `gamepause [1/0]`: pauses or resumes the game; without, switches
 - `toggleshowzonesupply`: shows or hides the supply border

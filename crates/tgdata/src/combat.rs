@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use crate::strings::localized;
 use crate::supply::{is, listed};
 use crate::{Cue, GameData, Id, WeaponEffects, audio::cues, defs, effects::vfx_cues, not_null};
 
@@ -153,6 +154,21 @@ pub struct Weapon {
     /// Its main damage ignores its user's attack efficiency.
     pub spell: bool,
     pub choice: Choice,
+    pub shown: WeaponShown,
+}
+
+/// What the selected thing's panel shows of a weapon besides its damage.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct WeaponShown {
+    /// Its ability's icon, as an archive path.
+    pub icon: Option<String>,
+    pub name: Option<String>,
+    /// The game's words for how often it fires and how wide it hits.
+    pub rate: Option<String>,
+    pub area: Option<String>,
+    /// The ability's own words, until [`GameData::fighters`] reads them.
+    name_key: Option<String>,
+    volley_area: f32,
 }
 
 /// An ability that adds health to what it's used on each time, up to its
@@ -440,8 +456,20 @@ impl GameData {
         for f in out.values_mut().filter(|f| !f.builds.is_empty()) {
             f.builds = with_renames(&f.builds, &renames);
         }
+        let strings = self.strings();
+        let words = |category: &str, amount: f32| {
+            crate::special_ops::word_for(&strings, &definitions.descriptions, category, amount)
+        };
         for w in out.values_mut().flat_map(|f| &mut f.weapons) {
             w.flight = w.projectile.as_ref().and_then(|p| flights.get(p)).copied();
+            let shown = &mut w.shown;
+            shown.name = localized(&strings, shown.name_key.as_deref());
+            shown.rate = words("RECHARGE_RATE", w.recharge);
+            let (category, radius) = match shown.volley_area > w.area {
+                true => ("AREA_VOLLEY", shown.volley_area),
+                false => ("AREA", w.area),
+            };
+            shown.area = (radius > 0.0).then(|| words(category, radius)).flatten();
         }
         out
     }
@@ -717,6 +745,12 @@ pub(crate) fn fighter(
             vorpal: d.flags.iter().any(|f| f.vorpal),
             spell: d.flags.iter().any(|f| f.spell),
             choice: choice(a, animations),
+            shown: WeaponShown {
+                icon: d.icon.as_deref().and_then(crate::ui_path),
+                name_key: d.name.clone(),
+                volley_area: d.volley_area,
+                ..Default::default()
+            },
         })
     };
     for (a, d) in abilities.filter_map(|a| Some((a, a.ability_definition.as_ref()?))) {

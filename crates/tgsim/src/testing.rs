@@ -150,6 +150,7 @@ pub(crate) fn rifle(range: f32, amount: f32) -> Weapon {
         vorpal: false,
         spell: false,
         choice: Default::default(),
+        shown: Default::default(),
     }
 }
 

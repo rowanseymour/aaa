@@ -140,7 +140,9 @@ options:
   --seed <number>           what the match's chances are drawn from, to play one
                             out the same way again, rather than a new one
   --log <filter>            what to log, as for RUST_LOG, e.g. \"debug\" or
-                            \"tgclient=debug\"; RUST_LOG still applies on top"
+                            \"tgclient=debug\"; RUST_LOG still applies on top
+  --dev                     let the console's verbs for developing the game run,
+                            in a match no other machine shares"
     )
 }
 
@@ -367,6 +369,11 @@ struct Side(Option<usize>);
 /// What the person playing goes by.
 #[derive(Resource, Clone, PartialEq)]
 pub(crate) struct Nickname(pub(crate) String);
+
+/// Whether the console's verbs for developing the game may run, as asked
+/// on the command line.
+#[derive(Resource, Clone, Copy, Default)]
+pub(crate) struct Dev(pub(crate) bool);
 
 /// What matches' chances are drawn from, as asked on the command line.
 #[derive(Resource, Clone, Copy)]
@@ -651,6 +658,12 @@ fn take_option(args: &mut Vec<String>, flag: &str) -> Option<Option<String>> {
     }
 }
 
+/// Removes `flag` from `args`, saying whether it was there.
+fn take_flag(args: &mut Vec<String>, flag: &str) -> bool {
+    let at = args.iter().position(|a| a == flag);
+    at.map(|at| args.remove(at)).is_some()
+}
+
 /// What the command line asks for besides the game and map.
 struct Options {
     side: Option<usize>,
@@ -659,6 +672,7 @@ struct Options {
     screenshot: Option<String>,
     shot_after: f64,
     headless: bool,
+    dev: bool,
     /// Where the options chosen are kept, if not where they usually are.
     saved: Option<String>,
     fog: Option<tgmap::FogSetting>,
@@ -690,13 +704,8 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         Some(s) => s.parse().ok().filter(|s: &f64| (0.0..=600.0).contains(s))?,
         None => 0.0,
     };
-    let headless = match args.iter().position(|a| a == "--headless") {
-        Some(at) => {
-            args.remove(at);
-            true
-        }
-        None => false,
-    };
+    let headless = take_flag(args, "--headless");
+    let dev = take_flag(args, "--dev");
     let saved = take_option(args, "--options")?;
     let fog = match take_option(args, "--fog")? {
         Some(f) => Some(tgmap::FogSetting::named(&f)?),
@@ -735,6 +744,7 @@ fn options(args: &mut Vec<String>) -> Option<Options> {
         screenshot,
         shot_after,
         headless,
+        dev,
         saved,
         fog,
         seed,
@@ -781,6 +791,7 @@ pub fn run(program: Program) -> ExitCode {
         screenshot,
         shot_after,
         headless,
+        dev,
         saved,
         fog,
         seed,
@@ -970,6 +981,7 @@ pub fn run(program: Program) -> ExitCode {
         .insert_resource(Side(side))
         .insert_resource(Nickname(name))
         .insert_resource(Seed(seed))
+        .insert_resource(Dev(dev))
         .add_plugins((
             ui::UiPlugin,
             confirm::ConfirmPlugin,

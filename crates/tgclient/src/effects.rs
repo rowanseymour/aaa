@@ -1898,6 +1898,7 @@ mod tests {
             vorpal: false,
             spell: false,
             choice: Default::default(),
+            shown: Default::default(),
         }
     }
 
