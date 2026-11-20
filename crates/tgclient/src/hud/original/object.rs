@@ -13,13 +13,13 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::text::Font as Face;
 use bevy::ui_widgets::Button;
 use tgdata::Id;
-use tgdata::widgets::{RESTING, Rect, ViewElement, Widget};
+use tgdata::widgets::{RESTING, Rect, SCREEN, ViewElement, Widget};
 use tgrender::overlay::BannerImages;
 use tgrender::portrait::Stage;
 use tgsim::{Target, World};
 
+use super::Pictures;
 use super::lettering::{Letters, Measured, PLAIN, Sliced};
-use super::{Pictures, on_screen};
 use crate::banners::Badges;
 use crate::object_display::{
     self as shown, Actor, Armed, Defends, Detail, EfficiencyTarget, Fill, Flown, Looks, Mode, Pick,
@@ -175,6 +175,14 @@ fn joined(pictures: &mut Pictures, ends: &str, middle: &str) -> Option<(Handle<I
     Some((pictures.images.add(image), half as f32))
 }
 
+/// The whole of the layouts' screen.
+const SCREEN_RECT: Rect = Rect {
+    left: 0.0,
+    top: 0.0,
+    right: SCREEN[0],
+    bottom: SCREEN[1],
+};
+
 /// `at` moved `x` across and `y` down.
 fn moved(at: Rect, x: f32, y: f32) -> Rect {
     Rect {
@@ -277,13 +285,31 @@ pub struct Portrait;
 /// at the empty path.
 type Parts = HashMap<String, (Entity, Rect)>;
 
-/// Draws widgets as their layouts have them, over the layouts' screen.
+/// Draws widgets as their layouts have them, within `frame`: the
+/// rectangle of the layouts' screen that the node they're drawn in covers.
+#[derive(Clone, Copy)]
 struct Painter<'a> {
     layout: &'a Layout,
     letters: &'a Letters,
+    frame: Rect,
 }
 
 impl Painter<'_> {
+    /// The node covering `at`, a rectangle of the layouts' screen, within
+    /// the [`frame`](Painter::frame).
+    fn place(&self, at: Rect) -> Node {
+        let f = self.frame;
+        let percent = |v: f32, of: f32| Val::Percent(100.0 * v / of.max(f32::EPSILON));
+        Node {
+            position_type: PositionType::Absolute,
+            left: percent(at.left - f.left, f.width()),
+            top: percent(at.top - f.top, f.height()),
+            width: percent(at.width().max(0.0), f.width()),
+            height: percent(at.height().max(0.0), f.height()),
+            ..default()
+        }
+    }
+
     /// Draws `widget`, `within` its parent's bounds, and all within it but
     /// the widgets at the paths in `skip`.
     fn paint(
@@ -311,7 +337,7 @@ impl Painter<'_> {
             return;
         }
         let at = widget.bounds(within);
-        let own = s.spawn((on_screen(at), Pickable::IGNORE)).id();
+        let own = s.spawn((self.place(at), Pickable::IGNORE)).id();
         parts.insert(path.to_string(), (own, at));
         let join = |name: &str| match path {
             "" => name.to_string(),
@@ -340,7 +366,7 @@ impl Painter<'_> {
             return;
         }
         let at = element.bounds.place(within);
-        let node = on_screen(at);
+        let node = self.place(at);
         let entity = match element.kind.as_deref() {
             Some("LABEL") => {
                 let font = element.font.as_deref().unwrap_or(PLAIN);
@@ -519,6 +545,7 @@ pub fn lay_out(
             painter: Painter {
                 layout: &layout,
                 letters: &letters,
+                frame: SCREEN_RECT,
             },
             display,
             area: display.bounds(layout.at),
@@ -631,7 +658,7 @@ impl Draw<'_, '_> {
                     super::Pressable::default(),
                     crate::formations::FormationButton(n),
                     ui::called(format!("formation.{}", n + 1)),
-                    on_screen(at),
+                    self.painter.place(at),
                     Button,
                     Pickable::default(),
                     Visibility::Hidden,
@@ -711,7 +738,7 @@ impl Draw<'_, '_> {
         let line = Node {
             align_items: AlignItems::Center,
             column_gap: percent(100.0 * 4.0 / at.width().max(1.0)),
-            ..on_screen(at)
+            ..self.painter.place(at)
         };
         let font = self.font("Owner");
         let mark =
@@ -778,7 +805,7 @@ impl Draw<'_, '_> {
             self.s.commands_mut().entity(label).despawn();
             let row = Node {
                 align_items: AlignItems::FlexStart,
-                ..on_screen(at)
+                ..self.painter.place(at)
             };
             let line = Economy {
                 of: status,
@@ -1300,86 +1327,114 @@ impl Draw<'_, '_> {
         let offset = (self.display.value("mini_display_offset"))
             .and_then(|v| v.trim().parse::<f32>().ok())
             .unwrap_or(0.0);
-        for (i, &r) in rs.iter().enumerate() {
-            let lone = shown::lone(self.sim, r);
-            let name = if lone {
-                "SimpleActorMini"
-            } else {
-                "CompanyMini"
-            };
-            let Some(card) = self
-                .display
-                .children
-                .iter()
-                .find(|c| c.name == name)
-                .cloned()
-            else {
+        // Each card after the last, whatever its kind and so its width.
+        let mut left = 0.0;
+        for &r in rs {
+            let Some(card) = card_widget(self.display, shown::lone(self.sim, r)) else {
                 continue;
             };
             let size = card.bounds(self.area);
-            let x = i as f32 * (size.width() + offset);
-            let within = moved(self.area, x, 0.0);
-            let skip = [
-                "PortraitButton/Portrait",
-                "PortraitButton/ModelPortrait",
-                "PortraitButton/Icon",
-                "DescriptionLabel",
-                "PrimaryName",
-                "HealthBars",
-                "RetreatRoutButton",
-                "Health/TargetPercentage",
-                "PrimaryHealth/TargetPercentage",
-                "Morale/TargetPercentage",
-            ];
-            let parts = self.painter.paint(self.s, &card, within, &skip);
-            let captain = shown::captain(self.sim, self.looks, r);
-            let of = match lone {
-                true => Says::Unit(captain),
-                false => Says::Organization(r),
-            };
-            let id = format!("object.organization.{}", self.sim.organizations[r].id);
-            if let Some(mut node) = self.entity(&parts, "") {
-                node.insert((
-                    Button,
-                    ui::called(id),
-                    Pick(r),
-                    shown::says(of),
-                    Pickable::default(),
-                ))
-                .observe(shown::pick);
+            let at = moved(size, left, 0.0);
+            left += size.width() + offset;
+            let holder = self
+                .s
+                .spawn((self.painter.place(at), Pickable::IGNORE))
+                .id();
+            let commands = self.s.commands_mut();
+            let mut holder = commands.entity(holder);
+            holder.with_children(|s| {
+                let mut draw = Draw {
+                    s,
+                    painter: Painter {
+                        frame: card.bounds(SCREEN_RECT),
+                        ..self.painter
+                    },
+                    display: self.display,
+                    area: SCREEN_RECT,
+                    sim: self.sim,
+                    local: self.local,
+                    leaders: self.leaders,
+                    gem: self.gem,
+                    drawn: self.drawn,
+                    badges: self.badges,
+                    detail: self.detail,
+                    game: self.game,
+                    looks: &mut *self.looks,
+                    banners: &mut *self.banners,
+                    images: &mut *self.images,
+                };
+                draw.card(card, r);
+            });
+        }
+    }
+
+    /// The group display's card for the organization at `r`, drawn from
+    /// `card`'s layout to fill the node it's drawn in: a lone thing's
+    /// picture and health, or a regiment's banner over its efficiency,
+    /// morale, captain's health and a small bar for each of the rest.
+    fn card(&mut self, card: &Widget, r: usize) {
+        let lone = shown::lone(self.sim, r);
+        let skip = [
+            "PortraitButton/Portrait",
+            "PortraitButton/ModelPortrait",
+            "PortraitButton/Icon",
+            "DescriptionLabel",
+            "PrimaryName",
+            "HealthBars",
+            "RetreatRoutButton",
+            "Health/TargetPercentage",
+            "PrimaryHealth/TargetPercentage",
+            "Morale/TargetPercentage",
+        ];
+        let parts = self.painter.paint(self.s, card, SCREEN_RECT, &skip);
+        let captain = shown::captain(self.sim, self.looks, r);
+        let of = match lone {
+            true => Says::Unit(captain),
+            false => Says::Organization(r),
+        };
+        let id = format!("object.organization.{}", self.sim.organizations[r].id);
+        if let Some(mut node) = self.entity(&parts, "") {
+            node.insert((
+                Button,
+                ui::called(id),
+                Pick(r),
+                shown::says(of),
+                Pickable::default(),
+            ))
+            .observe(shown::pick);
+        }
+        let Some(portrait) = card.children.iter().find(|c| c.name == "PortraitButton") else {
+            return;
+        };
+        let bounds = card.bounds(SCREEN_RECT);
+        let at = portrait.bounds(bounds);
+        let inner = |child: &str| portrait.children.iter().find(|c| c.name == child);
+        match lone {
+            true => {
+                if let Some(icon) = inner("Icon") {
+                    let parts = self.painter.paint(self.s, icon, at, &[]);
+                    let template = self.sim.units[captain].template.clone();
+                    let picture = self.picture(template.as_str());
+                    self.show(&parts, "Decal", picture);
+                }
+                self.fill(&parts, "Health/StatusBar", Fill::Unit(captain));
             }
-            let Some(portrait) = card.children.iter().find(|c| c.name == "PortraitButton") else {
-                continue;
-            };
-            let at = portrait.bounds(card.bounds(within));
-            let inner = |child: &str| portrait.children.iter().find(|c| c.name == child);
-            match lone {
-                true => {
-                    if let Some(icon) = inner("Icon") {
-                        let parts = self.painter.paint(self.s, icon, at, &[]);
-                        let template = self.sim.units[captain].template.clone();
-                        let picture = self.picture(template.as_str());
-                        self.show(&parts, "Decal", picture);
-                    }
-                    self.fill(&parts, "Health/StatusBar", Fill::Unit(captain));
+            false => {
+                if let Some(model) = inner("ModelPortrait") {
+                    let model = self.painter.paint(self.s, model, at, &[]);
+                    self.banner(&model, "Model", r);
                 }
-                false => {
-                    if let Some(model) = inner("ModelPortrait") {
-                        let model = self.painter.paint(self.s, model, at, &[]);
-                        self.banner(&model, "Model", r);
-                    }
-                    self.fill(&parts, "PrimaryHealth/StatusBar", Fill::Unit(captain));
-                    self.says(&parts, "PrimaryHealth", Says::Unit(captain));
-                    self.fill(&parts, "Morale/StatusBar", Fill::Morale(r));
-                    self.efficiency(&parts, "AttackEfficiency", r);
-                    self.health_bars(&card, card.bounds(within), r);
-                }
+                self.fill(&parts, "PrimaryHealth/StatusBar", Fill::Unit(captain));
+                self.says(&parts, "PrimaryHealth", Says::Unit(captain));
+                self.fill(&parts, "Morale/StatusBar", Fill::Morale(r));
+                self.efficiency(&parts, "AttackEfficiency", r);
+                self.health_bars(card, bounds, r);
             }
         }
     }
 
-    /// A small bar for each of the organization at `r`'s units, two to a
-    /// row, on a group display's card at `at`.
+    /// The small bars on a group display's card at `at` for the
+    /// organization at `r`, two to a row, each over its own plate.
     fn health_bars(&mut self, card: &Widget, at: Rect, r: usize) {
         let Some(panel) = card.children.iter().find(|c| c.name == "HealthBars") else {
             return;
@@ -1387,25 +1442,129 @@ impl Draw<'_, '_> {
         let Some(bar) = panel.children.iter().find(|c| c.name == "Health") else {
             return;
         };
+        let plate = panel.children.iter().find(|c| c.name == "HealthBarBorder");
         let number = |key: &str| panel.value(key).and_then(|v| v.trim().parse::<f32>().ok());
         let gap = number("bar_separation").unwrap_or(5.0);
-        let (left, top) = (
+        let border = Vec2::new(
             number("horizontal_border_separation").unwrap_or(3.0),
             number("vertical_border_separation").unwrap_or(2.0),
         );
         let area = panel.bounds(at);
         let size = bar.bounds(area);
-        let units = self.sim.organizations[r].units.clone();
-        for (n, u) in units.into_iter().enumerate() {
-            let x = left + (n % 2) as f32 * (size.width() + gap);
-            let y = top + (n / 2) as f32 * (size.height() + 3.0);
-            let within = moved(area, x, y);
+        let size = Vec2::new(size.width(), size.height());
+        for (n, u) in shown::small_bars(self.sim, self.looks, r)
+            .into_iter()
+            .enumerate()
+        {
+            let step = Vec2::new((n % 2) as f32, (n / 2) as f32) * (size + gap);
+            let place = border + step;
+            // Cut off at the panel's edge, as one starting past it would be.
+            if place.y >= area.height() {
+                break;
+            }
+            if let Some(plate) = plate {
+                // As wide as the bar and the border either side.
+                let corner = (place - border).max(Vec2::ZERO);
+                let within = moved(area, corner.x, corner.y);
+                let within = Rect {
+                    right: within.left + size.x + 2.0 * border.x,
+                    ..within
+                };
+                self.painter.paint(self.s, plate, within, &[]);
+            }
+            let within = moved(area, place.x, place.y);
             let parts = self
                 .painter
                 .paint(self.s, bar, within, &["TargetPercentage"]);
             self.fill(&parts, "StatusBar", Fill::Unit(u));
             self.says(&parts, "", Says::Unit(u));
         }
+    }
+}
+
+/// The group display's widget for a card: a lone thing's or an
+/// organization's.
+fn card_widget(display: &Widget, lone: bool) -> Option<&Widget> {
+    let name = match lone {
+        true => "SimpleActorMini",
+        false => "CompanyMini",
+    };
+    display.children.iter().find(|c| c.name == name)
+}
+
+/// What the group display's cards are drawn with, wherever they're shown:
+/// the original's layout, or this project's own interface, which embeds
+/// them.
+#[derive(Resource)]
+pub struct Cards {
+    pub(super) layout: Layout,
+    pub(super) letters: Letters,
+}
+
+/// The things a card shows of the match, as its interface has them.
+pub(crate) struct CardShows<'a> {
+    pub sim: &'a World,
+    pub local: Option<u32>,
+    pub leaders: &'a Leaders,
+    pub gem: &'a ui::Gem,
+    pub drawn: &'a Drawn,
+    pub badges: &'a Badges,
+    pub detail: &'a Detail,
+    pub game: &'a tgdata::GameData,
+    pub looks: &'a mut Looks,
+    pub banners: &'a mut BannerImages,
+    pub images: &'a mut Assets<Image>,
+}
+
+impl Cards {
+    /// How big the card for a thing on its own, or an organization, is, in
+    /// the layouts' units; none where the layouts have no such card.
+    pub(crate) fn size(&self, lone: bool) -> Option<Vec2> {
+        let at = card_widget(self.layout.displays.get(GROUP)?, lone)?.bounds(SCREEN_RECT);
+        Some(Vec2::new(at.width(), at.height()))
+    }
+
+    /// How far down a card for a thing on its own, or an organization, its
+    /// picture starts: what's above is for its name, which this project's
+    /// interface shows elsewhere.
+    pub(crate) fn top(&self, lone: bool) -> Option<f32> {
+        let card = card_widget(self.layout.displays.get(GROUP)?, lone)?;
+        let at = card.bounds(SCREEN_RECT);
+        let portrait = card.children.iter().find(|c| c.name == "PortraitButton")?;
+        Some(portrait.bounds(at).top - at.top)
+    }
+
+    /// Draws the card for the organization at `r` to fill the node `s`
+    /// spawns into, as the group display shows it.
+    pub(crate) fn draw(&self, s: &mut ChildSpawnerCommands, shows: CardShows, r: usize) {
+        let Some(display) = self.layout.displays.get(GROUP) else {
+            return;
+        };
+        let Some(card) = card_widget(display, shown::lone(shows.sim, r)) else {
+            return;
+        };
+        let mut draw = Draw {
+            s,
+            painter: Painter {
+                layout: &self.layout,
+                letters: &self.letters,
+                frame: card.bounds(SCREEN_RECT),
+            },
+            display,
+            area: SCREEN_RECT,
+            sim: shows.sim,
+            local: shows.local,
+            leaders: shows.leaders,
+            gem: shows.gem,
+            drawn: shows.drawn,
+            badges: shows.badges,
+            detail: shows.detail,
+            game: shows.game,
+            looks: shows.looks,
+            banners: shows.banners,
+            images: shows.images,
+        };
+        draw.card(card, r);
     }
 }
 

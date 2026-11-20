@@ -26,6 +26,7 @@ mod object;
 mod tips;
 
 use lettering::LayoutScale;
+pub(crate) use object::{CardShows, Cards, fill_bars};
 
 use super::{Hud, InMatch};
 use crate::actions::{Blocks, COLUMNS, ROWS, Shown, Slot};
@@ -319,16 +320,7 @@ pub fn spawn(
     minimap: Res<crate::minimap::Minimap>,
 ) {
     let game = &loaded.game;
-    let nation = (local.0)
-        .and_then(|p| sim.0.sides.player(p))
-        .and_then(|p| p.nation.clone());
-    let skin = nation.and_then(|id| {
-        let nations = game.nations();
-        let nation = nations
-            .into_iter()
-            .find(|n| n.id == tgdata::Id::from(id.as_str()))?;
-        game.skin(&nation.skin)
-    });
+    let skin = skin(game, &sim, &local);
     let widgets = game.game_widgets();
     let named = |name: &str| (widgets.iter()).find(|w| w.name.eq_ignore_ascii_case(name));
     let mut drawer = Drawer {
@@ -530,6 +522,60 @@ fn on_screen(at: Rect) -> Node {
         height: percent(at.height().max(0.0), SCREEN[1]),
         ..default()
     }
+}
+
+/// The skin of the viewing player's nation, which the original's panels
+/// are drawn in.
+fn skin(game: &tgdata::GameData, sim: &Sim, local: &Local) -> Option<tgdata::Skin> {
+    let nation = (local.0)
+        .and_then(|p| sim.0.sides.player(p))
+        .and_then(|p| p.nation.clone())?;
+    let nations = game.nations();
+    let nation = nations
+        .into_iter()
+        .find(|n| n.id == tgdata::Id::from(nation.as_str()))?;
+    game.skin(&nation.skin)
+}
+
+/// Reads the group display's [`Cards`] from the original's layouts, for
+/// an interface that embeds them without drawing the rest.
+pub(crate) fn load_cards(
+    mut commands: Commands,
+    loaded: Res<Loaded>,
+    sim: Res<Sim>,
+    local: Res<Local>,
+    mut images: ResMut<Assets<Image>>,
+    mut faces: ResMut<Assets<bevy::text::Font>>,
+    formats: Res<CompressedImageFormatSupport>,
+) {
+    let game = &loaded.game;
+    let skin = skin(game, &sim, &local);
+    let widgets = game.game_widgets();
+    let named = |name: &str| (widgets.iter()).find(|w| w.name.eq_ignore_ascii_case(name));
+    let Some(display) = named(OBJECT_DISPLAY) else {
+        return;
+    };
+    let mut pictures = Pictures {
+        game,
+        skin: skin.as_ref(),
+        images: &mut images,
+        formats: formats.0,
+        known: HashMap::new(),
+    };
+    let mut letters = lettering::Letters::default();
+    let at = display.bounds(Rect {
+        left: 0.0,
+        top: 0.0,
+        right: SCREEN[0],
+        bottom: SCREEN[1],
+    });
+    let layout = object::Layout::read(display, at, &mut pictures, (&mut letters, &mut faces));
+    commands.insert_resource(Cards { layout, letters });
+}
+
+/// Takes down what [`load_cards`] read.
+pub(crate) fn unload_cards(mut commands: Commands) {
+    commands.remove_resource::<Cards>();
 }
 
 /// The pictures read so far, by archive path.

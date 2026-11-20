@@ -13,8 +13,9 @@
 //!   organization it takes, with the organization attached there or the one
 //!   it's been asked for.
 //! - Group, for several: a card each, up to [`MAX_SELECTED`], with the
-//!   banner, its efficiency, the organization's health and each unit's;
-//!   clicking one selects it alone.
+//!   banner between its efficiency and morale, its captain's health, and
+//!   a small bar for each of its [`small_bars`]; clicking one selects it
+//!   alone.
 //! - Settlement, for a settlement (see [`tgdata::defs::CityComponent`]):
 //!   unused, since a city shows as a simple actor.
 //!
@@ -296,6 +297,9 @@ pub struct Looks {
     /// Each member's slot property, e.g. `front`, in member order, for
     /// an organization of each template that's whole.
     pub(crate) kinds: HashMap<Id, Vec<Id>>,
+    /// Which member, in member order, holds the primary position of an
+    /// organization of each template that's whole, for those with one.
+    pub(crate) primary_members: HashMap<Id, usize>,
     /// The names of experience levels, by their properties' ids.
     pub(crate) levels: HashMap<Id, String>,
     pub(crate) images: HashMap<String, Option<Handle<Image>>>,
@@ -367,6 +371,8 @@ pub fn setup(
         });
         Some((id.clone(), kinds.collect()))
     });
+    let primary_members = (components.iter())
+        .filter_map(|(id, o)| Some((id.clone(), primary_member_of(layouts.get(&o.layout)?, o)?)));
     let (technologies, listings) = (game.technologies(), game.listings());
     let names = (technologies
         .iter()
@@ -386,6 +392,7 @@ pub fn setup(
     commands.insert_resource(Looks {
         primaries: primaries.collect(),
         kinds: kinds.collect(),
+        primary_members: primary_members.collect(),
         levels: game.level_names(),
         names: names.collect(),
         listings: listings.clone(),
@@ -1371,6 +1378,9 @@ pub(crate) fn lone(sim: &World, r: usize) -> bool {
 /// primary slot, else its leader.
 pub(crate) fn captain(sim: &World, looks: &Looks, r: usize) -> usize {
     let organization = &sim.organizations[r];
+    if let Some(p) = primary_member(looks, organization) {
+        return organization.units[p];
+    }
     let primary = (looks.primaries.get(&organization.template)).and_then(|p| p.as_ref());
     let unit = primary.and_then(|template| {
         let is = |&&u: &&usize| sim.units[u].template == *template;
@@ -1449,6 +1459,58 @@ pub(crate) fn card_places(
     }
     places
 }
+
+/// Which member, in member order, of a whole organization made as
+/// `component` says holds `layout`'s primary position: the last of its
+/// primary slot's, after those of the filled slots before it.
+fn primary_member_of(
+    layout: &tgdata::Layout,
+    component: &tgdata::OrganizationComponent,
+) -> Option<usize> {
+    let (primary, start) = (layout.primary?, layout.formations.get(layout.default)?);
+    component.slots.get(primary)?.as_ref()?;
+    let count = |i: usize| start.slots.get(i).map_or(1, Vec::len);
+    let through = (component.slots.iter().enumerate().take(primary + 1))
+        .filter(|(_, e)| e.is_some())
+        .map(|(i, _)| count(i));
+    through.sum::<usize>().checked_sub(1)
+}
+
+/// Which of `organization`'s members holds its primary position, where
+/// its members can be told apart by position.
+fn primary_member(looks: &Looks, organization: &tgsim::Organization) -> Option<usize> {
+    let kinds = looks.kinds.get(&organization.template)?;
+    let p = *looks.primary_members.get(&organization.template)?;
+    (kinds.len() == organization.units.len()).then_some(p)
+}
+
+/// The organization at `r`'s units that have a small bar on its card in
+/// the group display: those of its first nine positions but the primary
+/// one, whose unit has the wide bar.
+pub(crate) fn small_bars(sim: &World, looks: &Looks, r: usize) -> Vec<usize> {
+    let organization = &sim.organizations[r];
+    let primary = match primary_member(looks, organization) {
+        Some(p) => Some(organization.units[p]),
+        // Where the positions can't be told apart, the one with the wide
+        // bar.
+        None => looks
+            .primaries
+            .get(&organization.template)
+            .is_some_and(Option::is_some)
+            .then(|| captain(sim, looks, r)),
+    };
+    small(&organization.units, primary)
+}
+
+/// `units`, of the first [`MOST_SMALL_BARS`] positions, but `primary`.
+fn small(units: &[usize], primary: Option<usize>) -> Vec<usize> {
+    let first = units.iter().take(MOST_SMALL_BARS).copied();
+    first.filter(|&u| Some(u) != primary).collect()
+}
+
+/// How many of an organization's positions the group display's card
+/// looks at for its small bars.
+const MOST_SMALL_BARS: usize = 9;
 
 /// An organization's commanding officer, else its first unit.
 fn leader(sim: &World, r: usize) -> usize {
@@ -1689,6 +1751,50 @@ mod tests {
         );
         // One lost, so the slots no longer say which is which.
         assert_eq!(grouped(&[5, 6, 7], Some(&kinds), None), [vec![5, 6, 7]]);
+    }
+
+    #[test]
+    fn the_primary_member_is_the_last_of_its_slot_after_the_filled_ones() {
+        let positions = |n: usize| vec![[0.0, 0.0]; n];
+        let layout = tgdata::Layout {
+            formations: vec![tgdata::Formation {
+                id: Id::from("line"),
+                slots: vec![positions(3), positions(1), positions(2)],
+                aggressive: false,
+                effect: Default::default(),
+                types: Vec::new(),
+            }],
+            default: 0,
+            combat: None,
+            primary: Some(2),
+            kinds: Vec::new(),
+            broken: Default::default(),
+            broken_types: Vec::new(),
+        };
+        let component = |slots: [Option<&str>; 3]| tgdata::OrganizationComponent {
+            layout: Id::from("squad"),
+            slots: slots.map(|s| s.map(Id::from)).to_vec(),
+        };
+        let whole = component([Some("rifle"), Some("rifle"), Some("captain")]);
+        assert_eq!(primary_member_of(&layout, &whole), Some(5));
+        // An empty slot before it has no members.
+        let short = component([Some("rifle"), None, Some("captain")]);
+        assert_eq!(primary_member_of(&layout, &short), Some(4));
+        let leaderless = component([Some("rifle"), Some("rifle"), None]);
+        assert_eq!(primary_member_of(&layout, &leaderless), None);
+    }
+
+    #[test]
+    fn small_bars_are_the_first_nine_positions_but_the_primary() {
+        // An officer last after eight soldiers, as AA's infantry has.
+        assert_eq!(
+            small(&(10..19).collect::<Vec<_>>(), Some(18)),
+            (10..18).collect::<Vec<_>>()
+        );
+        // The primary one first, as a tank regiment's lead tank.
+        assert_eq!(small(&[4, 5, 6, 7], Some(4)), [5, 6, 7]);
+        // No primary position: one each, nine at most.
+        assert_eq!(small(&(0..10).collect::<Vec<_>>(), None).len(), 9);
     }
 
     #[test]

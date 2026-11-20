@@ -35,9 +35,11 @@ impl Plugin for ModernHudPlugin {
                 displays::spawn_buttons,
                 special_ops::spawn,
                 messages::place,
+                crate::hud::original::load_cards,
                 crate::object_display::redraw,
             ),
         )
+        .add_systems(OnExit(DRAWN), crate::hud::original::unload_cards)
         .add_systems(
             Update,
             (
@@ -51,7 +53,7 @@ impl Plugin for ModernHudPlugin {
                     object_display::lay_out
                         .after(crate::object_display::choose)
                         .before(crate::object_display::refresh),
-                    object_display::economy,
+                    (object_display::economy, crate::hud::original::fill_bars),
                 )
                     .chain(),
                 object_display::portray.after(crate::object_display::portray),

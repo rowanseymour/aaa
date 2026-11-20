@@ -15,6 +15,7 @@ use tgsim::{Target, World};
 
 use crate::actions::Blocks;
 use crate::banners::Badges;
+use crate::hud::original::{CardShows, Cards};
 use crate::object_display::*;
 use crate::ui::{self, Font, Gauge, Hint, Ink, Shade, Surface, framed, label, meter};
 use crate::{Drawn, Leaders, Loaded, Local, Sim};
@@ -171,6 +172,7 @@ pub fn lay_out(
     mut looks: ResMut<Looks>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
+    cards: Option<Res<Cards>>,
     mut display: Single<(Entity, &mut Visibility), With<ObjectDisplay>>,
     row: Query<Entity, With<PropertyRow>>,
 ) {
@@ -194,6 +196,7 @@ pub fn lay_out(
         return;
     };
     let mut ui = Ui {
+        cards: cards.as_deref(),
         sim: &sim.0,
         local: local.0,
         leaders: &leaders,
@@ -263,6 +266,8 @@ fn formation_buttons(commands: &mut Commands, root: Entity) {
 
 /// What laying the display out reads.
 struct Ui<'a> {
+    /// The group display's cards, where the game's layouts have them.
+    cards: Option<&'a Cards>,
     sim: &'a World,
     local: Option<u32>,
     leaders: &'a Leaders,
@@ -837,60 +842,46 @@ impl Ui<'_> {
             self.sim.organizations[first].owner,
             false,
         );
-        const CARD: f32 = 66.0;
-        for (i, &r) in rs.iter().enumerate() {
-            let left = 8.0 + i as f32 * (CARD + 4.0);
-            let icon = self.picture(self.sim.organizations[r].template.as_str());
-            let units = self.sim.organizations[r].units.clone();
-            let captain = captain(self.sim, self.looks, r);
-            // A thing on its own answers for itself.
-            let of = match lone(self.sim, r) {
-                true => Says::Unit(captain),
-                false => Says::Organization(r),
+        // The original's cards, so without its layouts there are none.
+        let Some(cards) = self.cards else {
+            return;
+        };
+        let mut left = 8.0;
+        for &r in rs {
+            let lone = lone(self.sim, r);
+            let (Some(size), Some(top)) = (cards.size(lone), cards.top(lone)) else {
+                continue;
             };
-            let mut card = commands.spawn((
-                framed(at(left, HEADER, CARD, 138.0)),
-                Button,
-                ui::called(format!(
-                    "object.organization.{}",
-                    self.sim.organizations[r].id
-                )),
-                Pick(r),
-                says(of),
-                ChildOf(root),
-            ));
-            card.observe(pick);
-            card.with_children(|card| {
-                self.banner(
-                    card,
-                    Node {
-                        position_type: PositionType::Absolute,
-                        left: px(10.0 * SCALE),
-                        top: px(2.0 * SCALE),
-                        width: px(46.0 * SCALE),
-                        height: px(46.0 * SCALE),
-                        ..default()
-                    },
-                    r,
-                );
-                if !lone(self.sim, r) {
-                    self.efficiency(card, at(2.0, 48.0, CARD - 6.0, 2.0), r);
-                    morale(card, at(2.0, 101.0, CARD - 6.0, 2.0), r);
-                }
-                // The wide bar is the captain's, then one for each unit.
-                let wide = at(2.0, 51.0, CARD - 6.0, 5.0);
-                bar(card, wide, Fill::Unit(captain), Some(Says::Unit(captain)));
-                let half = (CARD - 8.0) / 2.0;
-                for (n, &u) in units.iter().enumerate() {
-                    let (col, row) = ((n % 2) as f32, (n / 2) as f32);
-                    let node = at(2.0 + col * (half + 2.0), 59.0 + row * 5.0, half, 3.0);
-                    bar(card, node, Fill::Unit(u), Some(Says::Unit(u)));
-                }
-                card.spawn((
-                    at(13.0, 106.0, 40.0, 28.0),
-                    picture_node(icon),
-                    Pickable::IGNORE,
-                ));
+            // Under the header, which has the name the card's top is for,
+            // and cut off at it so the header keeps the pointer.
+            let holder = Node {
+                overflow: Overflow::clip(),
+                ..at(left, HEADER, size.x, size.y - top)
+            };
+            left += size.x + 4.0;
+            commands.entity(root).with_children(|display| {
+                display
+                    .spawn((holder, Pickable::IGNORE))
+                    .with_children(|holder| {
+                        holder
+                            .spawn((at(0.0, -top, size.x, size.y), Pickable::IGNORE))
+                            .with_children(|s| {
+                                let shows = CardShows {
+                                    sim: self.sim,
+                                    local: self.local,
+                                    leaders: self.leaders,
+                                    gem: self.gem,
+                                    drawn: self.drawn,
+                                    badges: self.badges,
+                                    detail: self.detail,
+                                    game: self.game,
+                                    looks: &mut *self.looks,
+                                    banners: &mut *self.banners,
+                                    images: &mut *self.images,
+                                };
+                                cards.draw(s, shows, r);
+                            });
+                    });
             });
         }
     }
