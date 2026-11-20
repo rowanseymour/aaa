@@ -144,6 +144,10 @@ struct Effect {
 #[derive(Component)]
 struct Tied(Entity);
 
+/// An effect for the night, hidden while the sun's too bright for it.
+#[derive(Component)]
+struct NightOnly;
+
 /// An effect a command stopped that's still to go as it does.
 #[derive(Component)]
 struct Stopped;
@@ -281,7 +285,7 @@ impl Effects {
         }
     }
 
-    /// Has effects for the night show from now on, or not.
+    /// Has effects for the night show, or not.
     pub(crate) fn set_night(&mut self, night: bool) {
         self.night = night;
     }
@@ -648,7 +652,7 @@ impl Plugin for EffectsPlugin {
     fn build(&self, app: &mut App) {
         app.add_systems(
             Update,
-            (notice, play, follow, fade, tint_units)
+            (notice, play, follow, show_by_night, fade, tint_units)
                 .chain()
                 .after(crate::show_packing)
                 .after(crate::show_units)
@@ -968,9 +972,9 @@ fn play(
         if path.is_none() && vfx.decal.is_none() {
             continue;
         }
-        if vfx.night_only && !effects.night {
-            continue;
-        }
+        // One for the night is still made by day, hidden, so as to show
+        // if the sun goes down.
+        let nightly = (NightOnly, visible(effects.night));
         if !fits(sim, &cue.targets, fired_by, p.target) {
             continue;
         }
@@ -1058,6 +1062,9 @@ fn play(
                 },
                 DespawnOnExit(Screen::Match),
             ));
+            if vfx.night_only {
+                entity.insert(nightly);
+            }
             if decal.fade != [0.0; 2] {
                 entity.insert(Fading {
                     decal: decal.clone(),
@@ -1094,6 +1101,9 @@ fn play(
             },
             DespawnOnExit(Screen::Match),
         ));
+        if vfx.night_only {
+            entity.insert(nightly);
+        }
         if let Some(rate) = rate(&vfx, cue, length) {
             entity.insert(Rate(rate));
         }
@@ -1343,6 +1353,7 @@ type Playing<'a> = (
     Option<&'a Tied>,
     Option<&'a mut Fading>,
     Has<Stopped>,
+    Has<NightOnly>,
     &'a mut Transform,
     &'a mut Visibility,
 );
@@ -1354,6 +1365,7 @@ fn follow(
     time: Res<Time>,
     sim: Res<Sim>,
     mut effects: Query<Playing>,
+    lit: Res<Effects>,
     anchors: Query<(&Transform, &Visibility, Option<&BuildingView>), Without<Effect>>,
     cameras: Query<(&Camera, &GlobalTransform), With<RtsCamera>>,
 ) {
@@ -1369,9 +1381,10 @@ fn follow(
         (anchors.get(anchor).ok())
             .filter(|(_, _, b)| b.is_none_or(|v| !sim.0.buildings[v.building].gone()))
     };
-    for (e, mut effect, follow, tied, fading, stopped, mut transform, mut visibility) in
+    for (e, mut effect, follow, tied, fading, stopped, nightly, mut transform, mut visibility) in
         &mut effects
     {
+        let with = |shown: &Visibility| shown_with(*shown, nightly, lit.night);
         if effect.ends.is_some_and(|t| t <= now) {
             commands.entity(e).despawn();
             continue;
@@ -1391,10 +1404,7 @@ fn follow(
             continue;
         }
         if let Some((_, shown, _)) = tied.and_then(|t| stays(t.0)) {
-            visibility.set_if_neq(match shown {
-                Visibility::Hidden => Visibility::Hidden,
-                _ => Visibility::Inherited,
-            });
+            visibility.set_if_neq(with(shown));
         }
         // Scenery's effects go when it's cleared, and are hidden with it
         // on ground never seen.
@@ -1403,10 +1413,7 @@ fn follow(
                 commands.entity(e).despawn();
                 continue;
             };
-            visibility.set_if_neq(match shown {
-                Visibility::Hidden => Visibility::Hidden,
-                _ => Visibility::Inherited,
-            });
+            visibility.set_if_neq(with(shown));
         }
         if let Some(f) = follow {
             let Some((root, _, building)) = there(f.anchor) else {
@@ -1432,6 +1439,38 @@ fn follow(
             trace!("{}: off screen", effect.vfx);
             commands.entity(e).despawn();
         }
+    }
+}
+
+/// Shows effects for the night only while it's night. Those shown with
+/// what they're on are left to `follow`.
+fn show_by_night(
+    effects: Res<Effects>,
+    mut nightly: Query<(&Effect, &mut Visibility, Has<Tied>), With<NightOnly>>,
+) {
+    for (effect, mut visibility, tied) in &mut nightly {
+        if tied || matches!(effect.by, Some(Subject::Scenery(_))) {
+            continue;
+        }
+        visibility.set_if_neq(visible(effects.night));
+    }
+}
+
+/// How an effect shows with what it's on, `shown` as that is: hidden with
+/// it, and by day if it's `nightly`.
+fn shown_with(shown: Visibility, nightly: bool, night: bool) -> Visibility {
+    match shown {
+        Visibility::Hidden => Visibility::Hidden,
+        _ if nightly && !night => Visibility::Hidden,
+        _ => Visibility::Inherited,
+    }
+}
+
+/// How an effect for the night shows, by whether it's night.
+fn visible(night: bool) -> Visibility {
+    match night {
+        true => Visibility::Inherited,
+        false => Visibility::Hidden,
     }
 }
 
@@ -1841,6 +1880,41 @@ mod tests {
         assert!((stood * Vec3::Z).distance(up) < 1e-5);
         assert!((stood * Vec3::X).y.abs() < 1e-5);
         assert_eq!(upright(Vec3::Y), Quat::IDENTITY);
+    }
+
+    #[test]
+    fn effects_for_the_night_show_only_while_it_is_night() {
+        let mut app = App::new();
+        app.insert_resource(effects(HashMap::new()))
+            .add_systems(Update, show_by_night);
+        let effect = || Effect {
+            vfx: Id::from("lit_window"),
+            by: None,
+            holding: None,
+            ends: None,
+            discard: false,
+        };
+        let world = app.world_mut();
+        let nightly = world.spawn((effect(), NightOnly, visible(false))).id();
+        let always = world.spawn((effect(), Visibility::Inherited)).id();
+        let shown = |app: &App, e| *app.world().get::<Visibility>(e).unwrap();
+        app.world_mut().resource_mut::<Effects>().set_night(true);
+        app.update();
+        assert_eq!(shown(&app, nightly), Visibility::Inherited);
+        app.world_mut().resource_mut::<Effects>().set_night(false);
+        app.update();
+        assert_eq!(shown(&app, nightly), Visibility::Hidden);
+        assert_eq!(shown(&app, always), Visibility::Inherited);
+    }
+
+    #[test]
+    fn effects_on_things_show_with_them_and_for_the_night_only_at_night() {
+        use Visibility::{Hidden, Inherited, Visible};
+        assert_eq!(shown_with(Visible, false, false), Inherited);
+        assert_eq!(shown_with(Hidden, false, true), Hidden);
+        assert_eq!(shown_with(Inherited, true, true), Inherited);
+        assert_eq!(shown_with(Visible, true, false), Hidden);
+        assert_eq!(shown_with(Hidden, true, true), Hidden);
     }
 
     fn effects(objects: HashMap<Id, ObjectEffects>) -> Effects {

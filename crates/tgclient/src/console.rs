@@ -396,7 +396,7 @@ const VERBS: &[Verb] = &[
     dev_verb(
         "sun",
         "[preset]",
-        "lights the map with a lighting preset's colours at once, by its id, e.g. sun_dusk; effects for the night show or not by the new light only once they next start; without one, lists the presets",
+        "lights the map with a lighting preset's colours at once, by its id, e.g. sun_dusk, as a trigger setting the sun's colours would; without one, lists them",
     ),
     verb(
         "gamespeed",
