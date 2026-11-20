@@ -127,7 +127,7 @@ pub fn redden(
             let red = red
                 .get_or_insert_with(|| {
                     materials.add(StandardMaterial {
-                        base_color: Color::srgb(0.9, 0.0, 0.0),
+                        base_color: tgrender::stored::rgb([0.9, 0.0, 0.0]),
                         unlit: true,
                         ..default()
                     })

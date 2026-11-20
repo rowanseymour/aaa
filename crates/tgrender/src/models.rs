@@ -1204,8 +1204,7 @@ fn reflecting(
     let Some((ambient, diffuse)) = part.reflects else {
         return material;
     };
-    let linear = |[r, g, b]: [f32; 3]| Color::srgb(r, g, b).to_linear().to_vec3();
-    let more = (linear(ambient) - linear(diffuse) * light).max(Vec3::ZERO);
+    let more = (Vec3::from(ambient) - Vec3::from(diffuse) * light).max(Vec3::ZERO);
     if more.max_element() < 1e-3 {
         return material;
     }
@@ -1215,7 +1214,10 @@ fn reflecting(
     }
     let copy = assets.materials.copy(&material);
     if let Some(base) = assets.materials.base_mut(&copy) {
-        base.emissive = LinearRgba::rgb(more.x, more.y, more.z);
+        // On top of the material's own glow; alpha 0 keeps it from being
+        // scaled by the camera's exposure, which the lights undo.
+        let e = base.emissive;
+        base.emissive = LinearRgba::new(e.red + more.x, e.green + more.y, e.blue + more.z, 0.0);
         base.emissive_texture = base.base_color_texture.clone();
     }
     copy

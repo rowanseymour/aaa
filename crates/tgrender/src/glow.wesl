@@ -1,12 +1,13 @@
 // Additive models: lit like a StandardMaterial plus the extra ambient light
-// their material reflects, then scaled by their source factor. The game adds
-// gamma-encoded colours, so the scaling is done on those.
+// their material reflects, or their colour alone where unlit, then scaled by
+// their source factor.
 
 import bevy_pbr::render::{
     mesh_view_bindings::{lights, view},
     pbr_fragment::pbr_input_from_standard_material,
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_types::STANDARD_MATERIAL_FLAGS_UNLIT_BIT,
 };
 
 struct Glow {
@@ -25,9 +26,12 @@ fn fragment(
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     let base = pbr_input.material.base_color;
 
-    let lit = apply_pbr_lighting(pbr_input).rgb
-        + base.rgb * glow.params.rgb * lights.ambient_color.rgb * view.exposure;
-    let c = pow(saturate(lit), vec3(1.0 / 2.2));
+    var lit = base.rgb;
+    if (pbr_input.material.flags & STANDARD_MATERIAL_FLAGS_UNLIT_BIT) == 0u {
+        lit = apply_pbr_lighting(pbr_input).rgb
+            + base.rgb * glow.params.rgb * lights.ambient_color.rgb * view.exposure;
+    }
+    let c = saturate(lit);
     var added = c;
     if glow.params.w == 1.0 {
         added = c * c;
@@ -37,6 +41,6 @@ fn fragment(
 
     var out: FragmentOutput;
     // Alpha 1 so the additive blend's premultiply leaves the colour be.
-    out.color = main_pass_post_lighting_processing(pbr_input, vec4(pow(added, vec3(2.2)), 1.0));
+    out.color = main_pass_post_lighting_processing(pbr_input, vec4(added, 1.0));
     return out;
 }

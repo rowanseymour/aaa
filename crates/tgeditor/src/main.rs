@@ -305,7 +305,7 @@ fn setup(
 fn cycle_lighting(
     keys: Res<ButtonInput<KeyCode>>,
     mut lighting: ResMut<Lighting>,
-    mut sun: Single<&mut DirectionalLight>,
+    mut suns: Query<&mut DirectionalLight>,
     mut ambient: ResMut<GlobalAmbientLight>,
     mut text: Query<&mut Text, With<Help>>,
 ) {
@@ -314,7 +314,9 @@ fn cycle_lighting(
     }
     lighting.current = (lighting.current + 1) % lighting.presets.len();
     let (name, diffuse, ambient_color) = &lighting.presets[lighting.current];
-    tgrender::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
+    for mut sun in &mut suns {
+        tgrender::color_lights(&mut sun, &mut ambient, *diffuse, *ambient_color);
+    }
     for mut t in &mut text {
         t.0 = help(name);
     }

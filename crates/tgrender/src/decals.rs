@@ -33,7 +33,7 @@ pub struct DecalCache {
 /// What a decal's picture is multiplied by, shown as much as `opacity`.
 pub fn decal_colour(decal: &Decal, opacity: f32) -> Color {
     let [r, g, b] = decal.colour;
-    Color::srgba(r, g, b, opacity)
+    Color::linear_rgba(r, g, b, opacity)
 }
 
 fn material(decal: &Decal, image: Handle<Image>, opacity: f32) -> StandardMaterial {
@@ -82,7 +82,7 @@ impl MapAssets<'_> {
             None => {
                 let bytes = game.read(&decal.texture);
                 let read = bytes
-                    .and_then(|b| textures::decode(&b, &decal.texture, self.formats.0, true))
+                    .and_then(|b| textures::decode(&b, &decal.texture, self.formats.0, false))
                     .map(|i| self.images.add(i));
                 cache.pictures.insert(decal.texture.clone(), read.clone());
                 read

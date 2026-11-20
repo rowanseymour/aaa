@@ -1567,6 +1567,14 @@ pub struct AVars {
     /// The side, in world units, of the squares the terrain is drawn in.
     #[serde(rename = "TerrainBlockSize")]
     pub terrain_block_size: Option<f32>,
+    /// How much of the sun's ambient and diffuse light the ground reflects.
+    #[serde(rename = "TerrainAmbient")]
+    pub terrain_ambient: Option<f32>,
+    #[serde(rename = "TerrainDiffuse")]
+    pub terrain_diffuse: Option<f32>,
+    /// How dark a shadow is, as the share of the sun it takes away.
+    #[serde(rename = "DynamicShadowSunModulate")]
+    pub dynamic_shadow_sun_modulate: Option<f32>,
     /// What streamed audio plays in place of a file the archives don't have.
     #[serde(rename = "DefaultAudioStreamingResource")]
     pub default_audio_streaming_resource: Option<String>,

@@ -139,11 +139,29 @@ impl<'a> Loader<'a, '_> {
         let double_sided = nif
             .property::<nif::Stencil>(props)
             .is_some_and(|s| s.double_sided());
-        let [r, g, b] = material.map_or([1.0; 3], |m| m.diffuse);
         let opacity = material.map_or(1.0, |m| m.alpha);
         let alpha_mode = alpha_mode(alpha, opacity);
+        let emissive = material.map_or([0.0; 3], |m| m.emissive);
+        // Shapes no light reaches show their emissive colour alone, such
+        // as the glow of a lit window.
+        let unlit = nif
+            .property::<nif::VertexColor>(props)
+            .is_some_and(|v| !v.lit());
+        let ([r, g, b], emissive) = match unlit {
+            true => (emissive, [0.0; 3]),
+            false => (material.map_or([1.0; 3], |m| m.diffuse), emissive),
+        };
+        // The material's own glow is added to the light it takes, and the
+        // texture multiplies the lot. Alpha 0 keeps it from being scaled by
+        // the camera's exposure, which the lights are set to undo.
+        let emissive = LinearRgba::new(emissive[0], emissive[1], emissive[2], 0.0);
         let standard = StandardMaterial {
-            base_color: Color::srgba(r, g, b, opacity),
+            base_color: Color::linear_rgba(r, g, b, opacity),
+            emissive_texture: (emissive.to_f32_array_no_alpha() != [0.0; 3])
+                .then(|| texture.clone())
+                .flatten(),
+            emissive,
+            unlit,
             base_color_texture: texture,
             uv_transform: base
                 .and_then(|b| b.placement)
@@ -159,10 +177,13 @@ impl<'a> Loader<'a, '_> {
         let writes_depth = nif
             .property::<nif::ZBuffer>(props)
             .is_none_or(|z| z.write());
-        let reflects = material.map(|m| (m.ambient, m.diffuse));
+        let reflects = material.filter(|_| !unlit).map(|m| (m.ambient, m.diffuse));
         let glow = (alpha.filter(|_| alpha_mode == AlphaMode::Add))
             .zip(material)
-            .and_then(|(a, m)| Glow::new(m.ambient, m.diffuse, a.source()));
+            .and_then(|(a, m)| match unlit {
+                true => Glow::new([1.0; 3], [1.0; 3], a.source()),
+                false => Glow::new(m.ambient, m.diffuse, a.source()),
+            });
         let materials = &mut self.assets.materials;
         let material = match glow {
             Some(glow) => PartMaterial::Glow(materials.glow.add(GlowMaterial {
@@ -287,7 +308,7 @@ impl<'a> Loader<'a, '_> {
         };
         let rgb = |c: Option<[f32; 3]>, a: f32| {
             let [r, g, b] = c.unwrap_or([1.0; 3]);
-            Color::srgba(r, g, b, a)
+            Color::linear_rgba(r, g, b, a)
         };
         let emissive = m.map(|m| m.emissive);
         // Without a property, vertex colours stand for ambient and diffuse,
@@ -308,9 +329,7 @@ impl<'a> Loader<'a, '_> {
             (false, VertexColors::AmbientDiffuse, true) => (Color::WHITE, emissive, true, true),
             (false, _, true) => (rgb(m.map(|m| m.diffuse), opacity), emissive, true, false),
         };
-        let emissive = emissive.map_or([0.0; 3], |[r, g, b]| {
-            LinearRgba::from(Color::srgb(r, g, b)).to_f32_array_no_alpha()
-        });
+        let emissive = emissive.unwrap_or([0.0; 3]);
         Look {
             layer: layer.unwrap_or(0),
             colour: base_color.to_linear().to_f32_array(),
@@ -383,7 +402,7 @@ impl Source<'_> {
         match self {
             Source::File(path) => load_image(&game.read(path)?, path, formats),
             Source::Embedded { model, pixels, .. } => {
-                let image = embedded_image(pixels, formats);
+                let image = embedded_image(pixels, formats, false);
                 if image.is_none() {
                     warn!(
                         "{model}: unsupported embedded texture format {:?}",
@@ -443,13 +462,7 @@ fn mesh(
         mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs.clone());
     }
     if tinted && g.colors.len() == g.positions.len() {
-        // The model's colours are sRGB, as everywhere else.
-        let colours: Vec<[f32; 4]> = g
-            .colors
-            .iter()
-            .map(|&[r, g, b, a]| Color::srgba(r, g, b, a).to_linear().to_f32_array())
-            .collect();
-        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, g.colors.clone());
     }
     if g.normals.len() == g.positions.len() {
         let normals: Vec<[f32; 3]> = g
@@ -465,8 +478,13 @@ fn mesh(
 }
 
 /// A texture stored in a model: uncompressed RGB(A), or DXT blocks with
-/// every mipmap level when the GPU can sample them.
-pub(crate) fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -> Option<Image> {
+/// every mipmap level when the GPU can sample them. `srgb` for one the
+/// interface draws, rather than the world (see [`crate::stored`]).
+pub(crate) fn embedded_image(
+    p: &nif::Pixels,
+    formats: CompressedImageFormats,
+    srgb: bool,
+) -> Option<Image> {
     let &[width, height, offset] = p.mipmaps.first()?;
     let size = Extent3d {
         width,
@@ -482,15 +500,22 @@ pub(crate) fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -
                 .chunks_exact(n)
                 .flat_map(|c| [c[0], c[1], c[2], if n == 4 { c[3] } else { 255 }])
                 .collect();
-            (TextureFormat::Rgba8UnormSrgb, rgba, 1)
+            let format = match srgb {
+                true => TextureFormat::Rgba8UnormSrgb,
+                false => TextureFormat::Rgba8Unorm,
+            };
+            (format, rgba, 1)
         }
         bc @ (PixelFormat::Dxt1 | PixelFormat::Dxt3 | PixelFormat::Dxt5)
             if formats.contains(CompressedImageFormats::BC) =>
         {
-            let format = match bc {
-                PixelFormat::Dxt1 => TextureFormat::Bc1RgbaUnormSrgb,
-                PixelFormat::Dxt3 => TextureFormat::Bc2RgbaUnormSrgb,
-                _ => TextureFormat::Bc3RgbaUnormSrgb,
+            let format = match (bc, srgb) {
+                (PixelFormat::Dxt1, true) => TextureFormat::Bc1RgbaUnormSrgb,
+                (PixelFormat::Dxt3, true) => TextureFormat::Bc2RgbaUnormSrgb,
+                (_, true) => TextureFormat::Bc3RgbaUnormSrgb,
+                (PixelFormat::Dxt1, false) => TextureFormat::Bc1RgbaUnorm,
+                (PixelFormat::Dxt3, false) => TextureFormat::Bc2RgbaUnorm,
+                (_, false) => TextureFormat::Bc3RgbaUnorm,
             };
             (format, p.data.clone(), p.mipmaps.len() as u32)
         }
@@ -509,7 +534,7 @@ pub(crate) fn embedded_image(p: &nif::Pixels, formats: CompressedImageFormats) -
 }
 
 fn load_image(bytes: &[u8], name: &str, formats: CompressedImageFormats) -> Option<Image> {
-    let mut image = textures::decode(bytes, name, formats, true)?;
+    let mut image = textures::decode(bytes, name, formats, false)?;
     image.sampler = textures::repeating();
     Some(image)
 }

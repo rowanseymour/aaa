@@ -87,14 +87,10 @@ impl Fog {
     }
 
     /// How much light the ground under each tile keeps, row-major from
-    /// the south-west corner: the share of its brightness it looks, in
-    /// linear light.
+    /// the south-west corner: the share of its brightness it looks.
     fn light(&self) -> impl Iterator<Item = u8> + '_ {
-        let linear = |s: Seen| {
-            let l = brightness(s);
-            (Color::srgb(l, l, l).to_linear().red * 255.0).round() as u8
-        };
-        let shades = [Seen::Unexplored, Seen::Explored, Seen::Visible].map(linear);
+        let shade = |s: Seen| (brightness(s) * 255.0).round() as u8;
+        let shades = [Seen::Unexplored, Seen::Explored, Seen::Visible].map(shade);
         self.tiles.iter().map(move |&s| shades[s as usize])
     }
 

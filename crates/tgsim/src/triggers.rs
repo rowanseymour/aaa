@@ -33,7 +33,22 @@ pub struct Triggers {
     pub variables: BTreeMap<String, f32>,
     /// The things the map gives a name, with their ids, in its order.
     pub(crate) names: Arc<[(String, u32)]>,
+    /// The changes of the sun's colours triggers have made, oldest first.
+    pub suns: Vec<SunChange>,
 }
+
+/// A trigger turning the sun's colours to a sun definition's, moving from
+/// whatever they show at `at` over `seconds` of game time.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SunChange {
+    /// The sun definition, by id, e.g. `sun_night`.
+    pub sun: Id,
+    /// The tick it was made.
+    pub at: u64,
+    pub seconds: f32,
+}
+
+crate::hash::digest!(SunChange { sun, at, seconds });
 
 impl Triggers {
     pub fn new(triggers: Option<&tgmap::Triggers>) -> Triggers {
@@ -55,6 +70,7 @@ impl Triggers {
             switches: t.triggers.iter().map(switch).collect(),
             variables: t.variables.iter().cloned().collect(),
             names: Arc::default(),
+            suns: Vec::new(),
         }
     }
 }
@@ -64,6 +80,7 @@ impl crate::hash::Digest for Triggers {
         // The list and names are fixed by the map.
         self.switches.digest(h);
         self.variables.digest(h);
+        self.suns.digest(h);
     }
 }
 
@@ -83,6 +100,7 @@ const HANDLED: &[&str] = &[
     "trigger_deactive",
     "actor_modify_morale",
     "actor_gains_experience",
+    "global_set_sun_colors",
 ];
 
 /// How two numbers are compared, by the game's numbering.
@@ -237,6 +255,17 @@ impl World {
                     if let Thing::Organization(r) = t {
                         self.gain_experience(r, amount);
                     }
+                    true
+                }
+                _ => false,
+            },
+            "global_set_sun_colors" => match name(p.first()) {
+                Some(sun) if !sun.is_empty() => {
+                    self.triggers.suns.push(SunChange {
+                        sun: Id::from(sun),
+                        at: self.ticks,
+                        seconds: self.number(p.get(1)).unwrap_or(0.0).max(0.0),
+                    });
                     true
                 }
                 _ => false,
@@ -569,6 +598,26 @@ mod tests {
         // On every tick until the one that switched it off.
         assert_eq!(count(&w, "n"), 9.0);
         assert!(!w.triggers.switches[1].active);
+    }
+
+    #[test]
+    fn a_trigger_turns_the_sun_to_a_definition_over_its_seconds() {
+        let sun = parameter("ma_sun", "mi_sun", Value::String("sun_night".into()));
+        let set = element("global_set_sun_colors", vec![sun, int(3600)]);
+        let mut w = with(
+            pool(),
+            vec![trigger(1, true, false, vec![after(1)], vec![set])],
+            &[],
+        );
+        run(&mut w, 0.5);
+        assert!(w.triggers.suns.is_empty());
+        run(&mut w, 1.0);
+        let [change] = w.triggers.suns.as_slice() else {
+            panic!("one sun change, not {:?}", w.triggers.suns);
+        };
+        assert_eq!(change.sun, "sun_night".into());
+        assert_eq!(change.seconds, 3600.0);
+        assert!(change.at > 0 && change.at <= w.ticks);
     }
 
     #[test]

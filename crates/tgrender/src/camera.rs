@@ -8,7 +8,6 @@ use std::f32::consts::FRAC_PI_4;
 
 use bevy::core_pipeline::tonemapping::{DebandDither, Tonemapping};
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
-use bevy::pbr::ScreenSpaceTransmission;
 use bevy::prelude::*;
 use tgmap::Ground;
 
@@ -119,8 +118,7 @@ pub fn spawn(commands: &mut Commands, cam: RtsCamera) -> Entity {
             Tonemapping::None,
             // Dithering only runs as part of tonemapping.
             DebandDither::Disabled,
-            // The water blends over the scene behind it.
-            ScreenSpaceTransmission::default(),
+            crate::stored::StoredColours::default(),
             cam.projection(),
             cam.transform(),
             cam,

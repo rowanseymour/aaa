@@ -7,7 +7,8 @@ use bevy::image::{
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-/// Decodes an image file by its name's extension, warning if it can't.
+/// Decodes an image file by its name's extension, warning if it can't:
+/// `srgb` for one the interface draws, not the world (see [`crate::stored`]).
 pub fn decode(
     bytes: &[u8],
     name: &str,
@@ -35,6 +36,17 @@ pub fn repeating() -> ImageSampler {
         anisotropy_clamp: 16,
         ..ImageSamplerDescriptor::linear()
     })
+}
+
+/// The top level of `image` as RGBA8, its bytes as stored whatever its
+/// format says they mean, for textures resampled or stacked on the CPU.
+pub fn rgba8(image: Image) -> Option<Image> {
+    let mut image = decompress(image)?;
+    // Bevy converts only sRGB-labelled RGBA8; the bytes are the same.
+    if image.texture_descriptor.format == TextureFormat::Rgba8Unorm {
+        image.texture_descriptor.format = TextureFormat::Rgba8UnormSrgb;
+    }
+    image.convert(TextureFormat::Rgba8UnormSrgb)
 }
 
 /// Decompresses the top level of a BC1-3 (DXT1-5) image to RGBA8, for

@@ -56,6 +56,9 @@ pub struct Layers {
     /// The map's size (x) and how far in from its edge it fades to black (y),
     /// in world units; no fade if y is 0.
     pub edge: Vec4,
+    /// How much of the sun's ambient (x) and diffuse (y) light the ground
+    /// reflects.
+    pub light: Vec4,
 }
 
 impl MaterialExtension for Blend {
@@ -190,10 +193,7 @@ fn pattern(digits: &str) -> Option<u8> {
 
 fn decode_alpha(bytes: &[u8], name: &str) -> Option<Vec<u8>> {
     let image = textures::decode(bytes, name, CompressedImageFormats::NONE, false)?;
-    let image = match image.texture_descriptor.format {
-        TextureFormat::Rgba8Unorm => image,
-        _ => image.convert(TextureFormat::Rgba8Unorm)?,
-    };
+    let image = textures::rgba8(image)?;
     if image.width() as usize != MASK_SIZE || image.height() as usize != MASK_SIZE {
         warn!("transition {name}: not {MASK_SIZE}x{MASK_SIZE}");
         return None;

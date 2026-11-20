@@ -702,6 +702,24 @@ impl GameData {
         coverage
     }
 
+    /// How much of the sun's ambient and diffuse light the ground
+    /// reflects, all of each where the settings don't say.
+    pub fn terrain_light(&self) -> [f32; 2] {
+        let vars = self.avars();
+        [
+            vars.iter().find_map(|v| v.terrain_ambient).unwrap_or(1.0),
+            vars.iter().find_map(|v| v.terrain_diffuse).unwrap_or(1.0),
+        ]
+    }
+
+    /// The share of the sun's light a shadow takes away, all of it where
+    /// the settings don't say.
+    pub fn shadow_shade(&self) -> f32 {
+        let vars = self.avars();
+        let shade = vars.iter().find_map(|v| v.dynamic_shadow_sun_modulate);
+        shade.unwrap_or(1.0).clamp(0.0, 1.0)
+    }
+
     /// The lighting presets the player can pick from, by id.
     pub fn sun_presets(&self) -> Vec<defs::Sun> {
         let files = self.parse_tgis(|n| n.starts_with("sun/"));
