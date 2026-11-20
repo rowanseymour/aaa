@@ -149,6 +149,7 @@ impl Theme {
             (Gauge::Progress, _) => Color::srgb(0.95, 0.45, 0.1),
             (Gauge::Stockpile, _) => Color::srgb(0.1, 0.85, 0.9),
             (Gauge::Recharge | Gauge::Efficiency, _) => Color::srgb(1.0, 0.0, 0.0),
+            (Gauge::Morale, _) => Color::srgb(0.3, 0.3, 0.8),
             (Gauge::Health, s) if s > 0.66 => Color::srgb(0.1, 0.85, 0.1),
             (Gauge::Health, s) if s > 0.33 => Color::srgb(0.9, 0.85, 0.1),
             (Gauge::Health, _) => Color::srgb(0.9, 0.15, 0.1),
@@ -273,6 +274,8 @@ pub enum Gauge {
     Recharge,
     /// How hard a regiment hits at the moment.
     Efficiency,
+    /// A regiment's morale.
+    Morale,
 }
 
 #[derive(Component)]
