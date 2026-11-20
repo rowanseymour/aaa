@@ -231,6 +231,7 @@ const HQ_HEIGHT: f32 = 6.0;
 
 /// Spawns a banner for each HQ building that has none yet, in its
 /// division's badge.
+#[allow(clippy::too_many_arguments)]
 pub fn add_hq_banners(
     mut commands: Commands,
     loaded: Res<Loaded>,
@@ -238,11 +239,15 @@ pub fn add_hq_banners(
     (badges, leaders): (Res<Badges>, Res<Leaders>),
     mut images: (ResMut<BannerImages>, ResMut<Assets<Image>>),
     flying: Query<&HqBanner>,
+    map: Query<Entity, With<RtsCamera>>,
     mut bare: bevy::prelude::Local<HashSet<usize>>,
 ) {
     if sim.is_added() {
         bare.clear();
     }
+    let Ok(map) = map.single() else {
+        return;
+    };
     if !sim.is_changed() {
         return;
     }
@@ -274,6 +279,8 @@ pub fn add_hq_banners(
                 ..default()
             },
             Visibility::Hidden,
+            // Cut to the map's view, and under any panels over it.
+            UiTargetCamera(map),
             Pickable::IGNORE,
             RelativeCursorPosition::default(),
             DespawnOnExit(Screen::Match),
@@ -348,7 +355,8 @@ pub fn show_hq_banners(
             continue;
         };
         *visibility = Visibility::Inherited;
-        crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
+        let corner = crate::in_own_view(camera, p) - side / 2.0;
+        crate::place_on_map(&mut node, corner, Vec2::splat(side), &ui);
         // As near as an organization's banner there, flying lower, would be.
         let low = over - Vec3::Y * (HQ_HEIGHT - HEIGHT);
         let near = camera.world_to_viewport(&global, low).map_or(p.y, |p| p.y);
@@ -387,12 +395,16 @@ pub fn add_banners(
     leaders: Res<Leaders>,
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
+    map: Query<Entity, With<RtsCamera>>,
     mut have: bevy::prelude::Local<usize>,
 ) {
     // Organizations are only ever added, at the end, until another match.
     if sim.is_added() {
         *have = 0;
     }
+    let Ok(map) = map.single() else {
+        return;
+    };
     let new = sim.0.organizations.iter().enumerate().skip(*have);
     *have = sim.0.organizations.len();
     for (r, organization) in new {
@@ -419,6 +431,8 @@ pub fn add_banners(
                 ..default()
             },
             Visibility::Hidden,
+            // Cut to the map's view, and under any panels over it.
+            UiTargetCamera(map),
             Pickable::IGNORE,
             RelativeCursorPosition::default(),
             DespawnOnExit(Screen::Match),
@@ -539,7 +553,8 @@ pub fn show_banners(
             continue;
         };
         *visibility = Visibility::Inherited;
-        crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
+        let corner = crate::in_own_view(camera, p) - side / 2.0;
+        crate::place_on_map(&mut node, corner, Vec2::splat(side), &ui);
         // Lower on the screen is nearer the camera.
         *z = ZIndex(p.y as i32);
         // Its owner's colour, whoever that is now.
