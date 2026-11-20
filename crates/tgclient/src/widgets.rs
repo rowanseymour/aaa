@@ -166,7 +166,8 @@ const UNDER_BUTTONS: [&str; 2] = [OBJECT_DISPLAY, "ActionButtons"];
 /// The panel showing what's selected: with nothing selected, only its own
 /// pictures, as its parts show the selection.
 const OBJECT_DISPLAY: &str = "ObjectDisplay";
-const OVER_BUTTONS: [&str; 1] = ["GameMiniMap"];
+/// The panel the minimap's drawn in, over the rest of the control panel.
+const MINIMAP: &str = "GameMiniMap";
 
 /// The match layer's own part that's on screen from the start, and the
 /// panels placed against the whole screen that are, with the flag each
@@ -249,6 +250,7 @@ pub fn spawn(
     mut images: ResMut<Assets<Image>>,
     mut faces: ResMut<Assets<bevy::text::Font>>,
     formats: Res<CompressedImageFormatSupport>,
+    minimap: Res<crate::minimap::Minimap>,
 ) {
     let game = &loaded.game;
     let nation = (local.0)
@@ -278,6 +280,8 @@ pub fn spawn(
     let mut grid = None;
     let mut letters = lettering::Letters::default();
     let mut object = None;
+    // Where the minimap's drawn, and its panel's pictures over it.
+    let mut minimap_at = None;
     if let Some(top) = named(GAME).and_then(|g| g.find(ON_GAME)) {
         drawer.widget(top, &[]);
     }
@@ -308,9 +312,14 @@ pub fn spawn(
         for child in &panel.children {
             drawer.widget(child, &chain);
         }
-        for name in OVER_BUTTONS {
-            named(name).inspect(|w| drawer.widget(w, &chain));
-        }
+        minimap_at = named(MINIMAP).and_then(|widget| {
+            let within = drawer.own(widget, &chain)?;
+            let under = drawer.drawn.len();
+            for child in &widget.children {
+                drawer.widget(child, &within);
+            }
+            Some((within, drawer.drawn.split_off(under)))
+        });
     }
     for (name, flag) in ON_SCREEN {
         if flag.is_some_and(|f| !f(&drawer.flags)) {
@@ -367,13 +376,7 @@ pub fn spawn(
         ))
         .with_children(|screen| {
             for (chain, image) in drawn {
-                screen.spawn((
-                    placed(&chain),
-                    ImageNode::new(image).with_mode(NodeImageMode::Stretch),
-                    // Clicks on the panels aren't the map's.
-                    Blocks,
-                    RelativeCursorPosition::default(),
-                ));
+                screen.spawn(picture(&chain, image));
             }
             // Over the panels' pictures, as what's selected shows on them.
             if object.is_some() {
@@ -388,6 +391,12 @@ pub fn spawn(
             for button in pressables {
                 button.spawn(screen, &bindings);
             }
+            if let Some((within, over)) = minimap_at {
+                screen.spawn((placed(&within), minimap.view()));
+                for (chain, image) in over {
+                    screen.spawn(picture(&chain, image));
+                }
+            }
             docked = pane.map(|pane| pane.spawn(screen));
         })
         .id();
@@ -400,6 +409,17 @@ pub fn spawn(
         commands.insert_resource(object);
     }
     commands.init_resource::<LayoutScale>();
+}
+
+/// One of the panels' pictures, given the steps from the screen to it.
+fn picture(chain: &[Step], image: Handle<Image>) -> impl Bundle {
+    (
+        placed(chain),
+        ImageNode::new(image).with_mode(NodeImageMode::Stretch),
+        // Clicks on the panels aren't the map's.
+        Blocks,
+        RelativeCursorPosition::default(),
+    )
 }
 
 /// Where on the layouts' screen the steps from it lead.

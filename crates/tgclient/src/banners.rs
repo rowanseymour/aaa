@@ -15,7 +15,7 @@ use tgrender::camera::RtsCamera;
 use tgrender::overlay::BannerImages;
 use tgrender::terrain::world;
 
-use crate::{Drawn, Focus, Leaders, Loaded, Local, Screen, Sim, TINTS, tint};
+use crate::{Drawn, Focus, Leaders, Loaded, Local, OnMap, Screen, Sim, TINTS, tint};
 
 /// How high over the ground under its organization a banner floats, in world
 /// units.
@@ -274,6 +274,7 @@ pub fn add_hq_banners(
                 ..default()
             },
             Visibility::Hidden,
+            OnMap,
             Pickable::IGNORE,
             RelativeCursorPosition::default(),
             DespawnOnExit(Screen::Match),
@@ -339,16 +340,19 @@ pub fn show_hq_banners(
         let [x, y] = building.position;
         let over = world(x, y, loaded.map.ground.height_at([x, y]) + HQ_HEIGHT);
         let seen = fog.building(b) == crate::fog::Look::Shown;
+        let on_screen =
+            |p| crate::overlaps_view(camera, Rect::from_center_size(p, Vec2::splat(side)));
         let Some(p) = camera
             .world_to_viewport(&global, over)
             .ok()
-            .filter(|&p| seen && crate::in_view(camera, p))
+            .filter(|&p| seen && on_screen(p))
         else {
             *visibility = Visibility::Hidden;
             continue;
         };
         *visibility = Visibility::Inherited;
-        crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
+        let rect = Rect::from_center_size(p, Vec2::splat(side));
+        crate::place_in_view(&mut node, camera, rect, &ui);
         // As near as an organization's banner there, flying lower, would be.
         let low = over - Vec3::Y * (HQ_HEIGHT - HEIGHT);
         let near = camera.world_to_viewport(&global, low).map_or(p.y, |p| p.y);
@@ -419,6 +423,7 @@ pub fn add_banners(
                 ..default()
             },
             Visibility::Hidden,
+            OnMap,
             Pickable::IGNORE,
             RelativeCursorPosition::default(),
             DespawnOnExit(Screen::Match),
@@ -534,12 +539,14 @@ pub fn show_banners(
             || dropping && fog.at(organization.position) == tgsim::Seen::Visible;
         let at = at.filter(|_| seen);
         let drawn_at = |p| camera.world_to_viewport(&global, p).ok();
-        let Some(p) = at.and_then(drawn_at).filter(|&p| crate::in_view(camera, p)) else {
+        let rect = |p| Rect::from_center_size(p, Vec2::splat(side));
+        let on_screen = |&p: &Vec2| crate::overlaps_view(camera, rect(p));
+        let Some(p) = at.and_then(drawn_at).filter(on_screen) else {
             *visibility = Visibility::Hidden;
             continue;
         };
         *visibility = Visibility::Inherited;
-        crate::place_on_map(&mut node, p - side / 2.0, Vec2::splat(side), &ui);
+        crate::place_in_view(&mut node, camera, rect(p), &ui);
         // Lower on the screen is nearer the camera.
         *z = ZIndex(p.y as i32);
         // Its owner's colour, whoever that is now.
