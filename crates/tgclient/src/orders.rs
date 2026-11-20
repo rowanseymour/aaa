@@ -556,6 +556,11 @@ pub(crate) mod testing {
     /// A match of players 1 to 3, the first two each with an organization of
     /// one soldier: organization 0 the first's and organization 1 the second's.
     pub(crate) fn fresh() -> World {
+        fresh_by(tgsim::Rules::default())
+    }
+
+    /// A [`fresh`] match played by `rules`.
+    pub(crate) fn fresh_by(rules: tgsim::Rules) -> World {
         let organization = |i: u32| Organization {
             hq: None,
             id: i * 2 + 1,
@@ -598,7 +603,8 @@ pub(crate) mod testing {
             teams: Vec::new(),
         };
         let pathing = Pathing::uniform(40, Domain::Land);
-        World::from_organizations(sides, pathing, &[organization(0), organization(1)])
+        let organizations = [organization(0), organization(1)];
+        World::from_organizations_by(sides, pathing, rules, &organizations)
     }
 
     /// What a match was given but for the names its host gives sides as it

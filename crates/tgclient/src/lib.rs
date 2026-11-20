@@ -1105,7 +1105,11 @@ pub fn run(program: Program) -> ExitCode {
                     .after(object_display::refresh),
                 (
                     object_display::choose,
-                    (object_display::refresh, object_display::portray),
+                    (
+                        object_display::refresh,
+                        object_display::portray,
+                        object_display::hide_remembered,
+                    ),
                 )
                     .chain(),
                 (

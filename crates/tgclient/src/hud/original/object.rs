@@ -23,7 +23,7 @@ use super::lettering::{Letters, Measured, PLAIN, Sliced};
 use crate::banners::Badges;
 use crate::object_display::{
     self as shown, Actor, Armed, Defends, Detail, Fill, Flown, Looks, Marker, Mode, Pick, Place,
-    Queued, Says, Shield, Showing, Status, Strikes, UnitPicture,
+    Queued, Says, Shield, Showing, Status, Strikes, UnitPicture, WhileSeen,
 };
 use crate::ui::{self, Hint, Shade};
 use crate::{Drawn, Leaders, Loaded, Local, Sim};
@@ -196,6 +196,11 @@ fn moved(at: Rect, x: f32, y: f32) -> Rect {
 /// What the display's parts are drawn in, over the whole layouts' screen.
 #[derive(Component)]
 pub struct Holder;
+
+/// One of the icons of the properties the shown thing holds, which change
+/// without the rest of the display being laid out again.
+#[derive(Component)]
+pub struct PropertyIcon;
 
 impl Holder {
     pub(super) fn bundle() -> impl Bundle {
@@ -517,16 +522,19 @@ pub fn lay_out(
     mut banners: ResMut<BannerImages>,
     mut images: ResMut<Assets<Image>>,
     holder: Single<Entity, With<Holder>>,
+    icons: Query<Entity, With<PropertyIcon>>,
 ) {
-    // It draws no properties' icons, so a change only to those is none.
     let Some(layout) = layout else {
         return;
     };
-    if !showing.is_changed() || showing.icons_only {
+    if !showing.is_changed() {
         return;
     }
     let holder = *holder;
-    commands.entity(holder).despawn_related::<Children>();
+    match showing.icons_only {
+        true => icons.iter().for_each(|e| commands.entity(e).despawn()),
+        false => drop(commands.entity(holder).despawn_related::<Children>()),
+    }
     let Some((mode, detail)) = &showing.now else {
         return;
     };
@@ -561,6 +569,10 @@ pub fn lay_out(
             banners: &mut banners,
             images: &mut images,
         };
+        draw.properties();
+        if showing.icons_only {
+            return;
+        }
         match mode {
             Mode::SimpleActor(actor) => draw.simple_actor(actor),
             Mode::Company(actor) => draw.company(actor),
@@ -729,6 +741,63 @@ impl Draw<'_, '_> {
         }
     }
 
+    /// An icon for each property the shown thing holds that shows, left to
+    /// right along the `Properties` panel, as many as it has places for.
+    fn properties(&mut self) {
+        let Some(panel) = (self.display.children.iter()).find(|c| c.name == "Properties") else {
+            return;
+        };
+        let Some(bar) = panel.children.iter().find(|c| c.name == "PropertyBar") else {
+            return;
+        };
+        let separation = (panel.value("property_separation"))
+            .and_then(|v| v.trim().parse::<f32>().ok())
+            .unwrap_or(1.0)
+            .min(2.0);
+        let at = panel.bounds(self.area);
+        let width = bar.bounds(at).width();
+        let seen = self.detail.seen_as.map(WhileSeen);
+        let mut tips = Vec::new();
+        for id in &self.detail.properties {
+            if let Some(look) = self.looks.properties.get(id).cloned() {
+                let said = std::iter::once(look.name).chain(look.lines);
+                tips.push((look.icon, said.collect::<Vec<_>>().join("\n")));
+            }
+        }
+        let more = tips.split_off(tips.len().min(shown::MAX_PROPERTIES));
+        for (n, (icon, tip)) in tips.into_iter().enumerate() {
+            let within = moved(at, n as f32 * (width + separation), 0.0);
+            let parts = self.painter.paint(self.s, bar, within, &[]);
+            let icon = self.looks.image(self.game, self.images, Some(&icon));
+            self.show(&parts, "Decal", icon);
+            self.mark_icon(&parts, Hint(tip), seen);
+        }
+        // The rest behind one marker at the panel's right end, which lists
+        // them.
+        let indicator = panel
+            .children
+            .iter()
+            .find(|c| c.name == "PropertyMoreIndicator");
+        if let (false, Some(indicator)) = (more.is_empty(), indicator) {
+            let size = indicator.bounds(at);
+            let within = moved(size, at.right - size.right, 0.0);
+            let parts = self.painter.paint(self.s, indicator, within, &[]);
+            let tip = std::iter::once(self.looks.said("additional_properties"));
+            let tip = tip.chain(more.into_iter().map(|(_, tip)| tip));
+            self.mark_icon(&parts, Hint(tip.collect::<Vec<_>>().join("\n")), seen);
+        }
+    }
+
+    /// Makes the root of `parts` one of the property icons, saying `hint`.
+    fn mark_icon(&mut self, parts: &Parts, hint: Hint, seen: Option<WhileSeen>) {
+        if let Some(mut icon) = self.entity(parts, "") {
+            icon.insert((PropertyIcon, hint, Pickable::default()));
+            if let Some(seen) = seen {
+                icon.insert(seen);
+            }
+        }
+    }
+
     /// The name and owner lines.
     fn title(&mut self, name: String, owner: u32) {
         let parts = self.part("Name", &[]);
@@ -744,7 +813,7 @@ impl Draw<'_, '_> {
         };
         let colour = shown::owner_colour(self.sim, self.local, owner);
         let name = self.leaders.owner(player, &self.sim.sides, &self.looks.map);
-        // The owner's gem, as tall as the line, then its name.
+        // The owner's gem, as tall and wide as the line, then its name.
         let line = Node {
             align_items: AlignItems::Center,
             column_gap: percent(100.0 * 4.0 / at.width().max(1.0)),
@@ -754,7 +823,7 @@ impl Draw<'_, '_> {
         let mark =
             (!player.independent).then(|| ui::side_mark(self.gem, player.rgb, Node::default()));
         let words = self.painter.letters.text(&font, &name, colour);
-        let gem_size = Vec2::new(at.height() * 0.5, at.height());
+        let gem_size = Vec2::splat(at.height());
         let s = &mut *self.s;
         s.commands_mut().entity(label).despawn();
         s.spawn((line, Pickable::IGNORE)).with_children(|line| {
@@ -957,10 +1026,13 @@ impl Draw<'_, '_> {
         self.title(name, owner);
         let of = Says::Building(b);
         self.portrait(template.as_str(), Fill::Building(b), of);
-        if self.sim.supply_of(b).is_some_and(|s| s.relay) {
+        if self.detail.stockpile {
             let parts = self.part("SupplyStockpile", &["TargetPercentage"]);
             self.fill(&parts, "StatusBar", Fill::Stockpile(b));
             self.says(&parts, "", of);
+            if let Some(mut bar) = self.entity(&parts, "") {
+                bar.insert(WhileSeen(Target::Building(b)));
+            }
         }
     }
 

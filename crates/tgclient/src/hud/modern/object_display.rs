@@ -451,7 +451,7 @@ impl Ui<'_> {
 
     /// An icon for each property that shows.
     fn icons(&mut self, commands: &mut Commands, row: Entity) {
-        for id in &self.detail.properties {
+        for id in self.detail.properties.iter().take(MAX_PROPERTIES) {
             let Some(look) = self.looks.properties.get(id).cloned() else {
                 continue;
             };
@@ -462,11 +462,15 @@ impl Ui<'_> {
                 height: px(PROPERTY * SCALE),
                 ..default()
             };
-            commands.entity(row).with_child((
+            let mut icon = commands.spawn((
                 node,
                 picture_node(icon),
                 Hint(said.collect::<Vec<_>>().join("\n")),
+                ChildOf(row),
             ));
+            if let Some(of) = self.detail.seen_as {
+                icon.insert(WhileSeen(of));
+            }
         }
     }
 
@@ -922,10 +926,18 @@ impl Ui<'_> {
         self.title(commands, root, name, building.owner, true);
         let of = Says::Building(b);
         self.portrait(commands, root, template.as_str(), Fill::Building(b), of);
-        if self.sim.supply_of(b).is_some_and(|s| s.relay) {
+        if self.detail.stockpile {
             let node = at(PORTRAIT_BOX[0], 176.0, PORTRAIT_BOX[2], 3.0);
+            let whole = Node {
+                width: percent(100),
+                height: percent(100),
+                ..default()
+            };
             commands.entity(root).with_children(|display| {
-                bar(display, node, Fill::Stockpile(b), Some(of));
+                let seen = WhileSeen(Target::Building(b));
+                display
+                    .spawn((node, seen, Pickable::IGNORE))
+                    .with_children(|holder| bar(holder, whole, Fill::Stockpile(b), Some(of)));
             });
         }
     }

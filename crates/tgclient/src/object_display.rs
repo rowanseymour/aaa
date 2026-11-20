@@ -70,8 +70,9 @@ pub(crate) fn spread(i: usize, count: usize, area: Vec2, slot: Vec2) -> Vec2 {
 pub(crate) const EMPTY_SLOT: &str =
     "object_display_CompanyDisplay_HQAttached_HQAttachedOrganization_ToolTip";
 
-/// How many properties' icons the display has places for.
-const MAX_PROPERTIES: usize = 7;
+/// How many properties' icons the display has places for: the original's
+/// gathers the rest behind a marker.
+pub(crate) const MAX_PROPERTIES: usize = 7;
 
 /// The game's layout's box for the portrait, and how far in from its
 /// left, top, right and bottom the portrait itself is.
@@ -115,7 +116,17 @@ pub(crate) struct Detail {
     /// The units in each place of the organizations shown, which a
     /// replacement changes.
     pub(crate) members: Vec<usize>,
+    /// Whether the building shown has a supply stockpile bar: a relay's,
+    /// once it's done unpacking.
+    pub(crate) stockpile: bool,
+    /// The thing shown alone, as the fog tells whether it's seen now.
+    pub(crate) seen_as: Option<Target>,
 }
+
+/// Part of the display that shows only while the thing shown is seen now,
+/// not only remembered: the property icons and the supply stockpile bar.
+#[derive(Component, Clone, Copy)]
+pub struct WhileSeen(pub(crate) Target);
 
 /// What's in one of an HQ's places.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -583,12 +594,11 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
 }
 
 /// The properties held `now` as their icons show: those already `shown`
-/// as they stand there, then the rest, as many as there are places for.
+/// as they stand there, then the rest.
 fn ordered(now: Vec<Id>, shown: &[Id]) -> Vec<Id> {
     let kept = shown.iter().filter(|p| now.contains(p)).cloned();
     let mut out: Vec<Id> = kept.collect();
     out.extend(now.into_iter().filter(|p| !shown.contains(p)));
-    out.truncate(MAX_PROPERTIES);
     out
 }
 
@@ -637,11 +647,22 @@ fn detail(
     let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
     let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
     let properties = holder(sim, mode).map_or(Vec::new(), |of| held(sim, looks, of, shown));
+    let stockpile = match mode.actor() {
+        Some(&Actor::Building(b, _)) => shows_stockpile(sim, b),
+        _ => false,
+    };
+    let seen_as = match mode.actor() {
+        Some(&Actor::Organization(r)) => Some(Target::Unit(captain(sim, looks, r))),
+        Some(&Actor::Building(b, _)) => Some(Target::Building(b)),
+        None => None,
+    };
     Detail {
         slots,
         banners,
         properties,
         members,
+        stockpile,
+        seen_as,
     }
 }
 
@@ -674,7 +695,10 @@ pub fn choose(
     let icons_only = !local.is_changed()
         && match (&showing.now, &mode) {
             (Some((a, was)), Some((b, now))) => {
-                a == b && was.slots == now.slots && was.banners == now.banners
+                a == b
+                    && was.slots == now.slots
+                    && was.banners == now.banners
+                    && was.stockpile == now.stockpile
             }
             _ => false,
         };
@@ -840,6 +864,25 @@ pub fn portray(
             None => stage.clear(&mut commands),
         }
         *asked = wanted;
+    }
+}
+
+/// Whether the building at `b` shows a supply stockpile bar: a relay does
+/// once it's done unpacking.
+fn shows_stockpile(sim: &World, b: usize) -> bool {
+    let relay = sim.supply_of(b).is_some_and(|s| s.relay);
+    relay && sim.buildings[b].unpacking.is_none()
+}
+
+/// Hides what shows only while the thing shown is seen now, as the fog
+/// covers it.
+pub fn hide_remembered(
+    sim: Res<Sim>,
+    fog: Option<Res<crate::fog::Fog>>,
+    mut parts: Query<(&WhileSeen, &mut Visibility)>,
+) {
+    for (of, mut shown) in &mut parts {
+        shown.set_if_neq(visible(seen_now(&sim.0, fog.as_deref(), of.0)));
     }
 }
 
@@ -1017,7 +1060,7 @@ pub fn refresh(
     for (status, mut text) in &mut statuses {
         let ids = match *status {
             Status::Organization(r) => organization_state(sim, r),
-            Status::Building(b) => building_state(sim, b),
+            Status::Building(b) => hq_state(sim, b).unwrap_or_else(|| building_state(sim, b)),
         };
         let words = ids.map(|i| looks.state(i)).unwrap_or_default();
         if text.0 != words {
@@ -1028,11 +1071,15 @@ pub fn refresh(
 
 /// What an organization's doing, as the game's actor state ids.
 fn organization_state(sim: &World, r: usize) -> Option<&'static str> {
+    (!sim.destroyed(r)).then(|| doing(sim, r))
+}
+
+/// What an organization's doing, as the game's actor state id, whether or
+/// not it has members standing, as an HQ unpacked into its building has
+/// none.
+fn doing(sim: &World, r: usize) -> &'static str {
     let organization = &sim.organizations[r];
-    if sim.destroyed(r) {
-        return None;
-    }
-    Some(match organization.mind {
+    match organization.mind {
         tgsim::Mind::Routing { .. } => "mind_routing",
         tgsim::Mind::Exhausted => "mind_exhausted",
         _ if !organization.engaged.is_empty() => "mind_engaged",
@@ -1049,7 +1096,18 @@ fn organization_state(sim: &World, r: usize) -> Option<&'static str> {
         _ if sim.lacks_supply(r) => "out_of_supply",
         _ if sim.entrenched(r) => tgdata::ENTRENCHED,
         _ => "mind_resting",
-    })
+    }
+}
+
+/// What an HQ's building is doing, where that's its organization's state:
+/// all but packing and unpacking, which are the building's own, and not
+/// once another side has taken the building from it.
+fn hq_state(sim: &World, b: usize) -> Option<Option<&'static str>> {
+    let building = &sim.buildings[b];
+    let r = building.unpacked_from?;
+    let moving = building.packing.is_some() || building.unpacking.is_some();
+    let held = sim.organizations[r].owner == building.owner;
+    (held && !moving).then(|| Some(doing(sim, r)))
 }
 
 /// What a building's doing, as the game's actor state ids; nothing for one
@@ -1736,8 +1794,62 @@ mod tests {
         assert_eq!(efficiency_target(&layouts[0].children[0].children), None);
     }
 
+    /// A match whose player 1 has a relay, building 0, unpacked from its
+    /// organization 0.
+    fn unpacked_hq() -> World {
+        let mut rules = tgsim::Rules::default();
+        let supply = tgdata::Supply {
+            range: 30.0,
+            relay: true,
+            stockpile_max: 60.0,
+        };
+        rules.supplies.insert(Id::from("hq"), supply);
+        let mut sim = crate::orders::testing::fresh_by(rules);
+        let hq = tgmap::Building {
+            id: 9,
+            template: "hq".into(),
+            owner: 1,
+            position: [20.0, 20.0],
+            facing: [0.0, -1.0],
+            fighter: Default::default(),
+            health: 1.0,
+            zone: None,
+            members: Vec::new(),
+            obstacle: None,
+            deploy: None,
+            organization: None,
+            awake: false,
+        };
+        sim.add_buildings(&[hq]);
+        sim.buildings[0].unpacked_from = Some(0);
+        sim
+    }
+
     #[test]
-    fn property_icons_keep_their_order_and_the_newest_go_without_a_place() {
+    fn an_hq_says_what_its_organization_is_doing_but_while_it_moves_in_or_out() {
+        let mut sim = unpacked_hq();
+        assert_eq!(hq_state(&sim, 0), Some(Some("mind_resting")));
+        sim.buildings[0].unpacking = Some((0, 10));
+        assert_eq!(hq_state(&sim, 0), None);
+        sim.buildings[0].unpacking = None;
+        sim.buildings[0].packing = Some((0, 10));
+        assert_eq!(hq_state(&sim, 0), None);
+        // Once taken, it's the building's own.
+        sim.buildings[0].packing = None;
+        sim.buildings[0].owner = 2;
+        assert_eq!(hq_state(&sim, 0), None);
+    }
+
+    #[test]
+    fn a_relay_shows_its_stockpile_once_its_unpacked() {
+        let mut sim = unpacked_hq();
+        assert!(shows_stockpile(&sim, 0));
+        sim.buildings[0].unpacking = Some((0, 10));
+        assert!(!shows_stockpile(&sim, 0));
+    }
+
+    #[test]
+    fn property_icons_keep_their_order_and_the_newest_come_last() {
         let ids = |of: &[&str]| -> Vec<Id> { of.iter().map(|&p| Id::from(p)).collect() };
         // What's shown stays as it stands, what's gone leaves, the rest follow.
         let now = ids(&["forest", "guarding", "supplied"]);
@@ -1747,7 +1859,7 @@ mod tests {
             ids(&["guarding", "forest", "supplied"])
         );
         let many = ids(&["a", "b", "c", "d", "e", "f", "g", "h"]);
-        assert_eq!(ordered(many.clone(), &[]), many[..MAX_PROPERTIES]);
+        assert_eq!(ordered(many.clone(), &[]), many);
         assert_eq!(ordered(many.clone(), &many[7..]).first(), many.last());
     }
 
