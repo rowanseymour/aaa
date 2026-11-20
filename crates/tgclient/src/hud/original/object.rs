@@ -1055,7 +1055,7 @@ impl Draw<'_, '_> {
             Actor::Organization(r) => self.organization(r),
             Actor::Building(b, _) => {
                 self.structure(b);
-                // An HQ unpacked from a regiment shows the regiment's banner.
+                // An HQ unpacked from an organization shows its banner.
                 if let Some(r) = self.sim.buildings[b].unpacked_from {
                     self.flag(r);
                 }
@@ -1164,6 +1164,11 @@ impl Draw<'_, '_> {
         self.says(parts, path, Says::Organization(marker.organization()));
         let (Some(&(bar, at)), Some(&(picture, mark))) = (parts.get(&status), parts.get(&decal))
         else {
+            // A marker that can't be placed isn't shown at all.
+            let commands = self.s.commands_mut();
+            for (_, &(e, _)) in parts.iter().filter(|(p, _)| p.starts_with(&target)) {
+                commands.entity(e).despawn();
+            }
             return;
         };
         // Within the bar, its right edge at the share.

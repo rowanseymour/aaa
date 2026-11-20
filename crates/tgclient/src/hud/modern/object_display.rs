@@ -737,7 +737,7 @@ impl Ui<'_> {
             Actor::Organization(r) => self.organization(commands, root, r),
             Actor::Building(b, _) => {
                 self.structure(commands, root, b);
-                // An HQ unpacked from a regiment shows the regiment's banner.
+                // An HQ unpacked from an organization shows its banner.
                 if let Some(r) = self.sim.buildings[b].unpacked_from {
                     self.flag(commands, root, r);
                 }

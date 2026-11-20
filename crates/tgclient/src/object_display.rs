@@ -537,7 +537,9 @@ fn held(sim: &World, looks: &Looks, holder: Piece, shown: &[Id]) -> Vec<Id> {
     // so its own before those it inherits.
     let own = |template: &Id| {
         let kind = sim.rules().kinds.get(template);
-        kind.into_iter().flat_map(|k| k.properties.iter().rev()).cloned()
+        kind.into_iter()
+            .flat_map(|k| k.properties.iter().rev())
+            .cloned()
     };
     let all: Vec<Id> = match holder {
         Piece::Organization(r) => {
@@ -625,7 +627,8 @@ fn detail(
     });
     let members = (own.iter()).flat_map(|&r| sim.organizations[r].units.iter().copied());
     let members = members.collect();
-    // An HQ's building shows the banner of the regiment it unpacked from.
+    // An HQ's building shows the banner of the organization it unpacked
+    // from.
     let unpacked = match mode.actor() {
         Some(Actor::Building(b, _)) => sim.buildings[*b].unpacked_from,
         _ => None,
@@ -1563,17 +1566,25 @@ fn primary_member(looks: &Looks, organization: &tgsim::Organization) -> Option<u
 /// Each has the unit standing in that position, or none while it's empty.
 pub(crate) fn small_bars(sim: &World, looks: &Looks, r: usize) -> Vec<Option<usize>> {
     let organization = &sim.organizations[r];
+    let captain = captain(sim, looks, r);
     let Some((positions, primary)) = looks.positions.get(&organization.template) else {
-        // Without its layout, a bar for each of its units but the captain.
-        let captain = captain(sim, looks, r);
+        // Without its layout, a bar for each of its units but the captain,
+        // where it has a primary slot.
+        let primary = looks.primaries.get(&organization.template);
+        let wide = primary.is_some_and(Option::is_some).then_some(captain);
         let units = organization.units.iter().copied().take(MOST_SMALL_BARS);
-        return units.filter(|&u| u != captain).map(Some).collect();
+        return units.filter(|&u| Some(u) != wide).map(Some).collect();
     };
-    let units = organization
-        .units
-        .iter()
+    // The captain has the primary position, and the wide bar, whatever
+    // its template.
+    let mut open = positions.clone();
+    if let Some(p) = *primary {
+        open[p] = None;
+    }
+    let units = (organization.units.iter())
+        .filter(|&&u| primary.is_none() || u != captain)
         .map(|&u| (u, &sim.units[u].template));
-    small(positions, &standing(positions, units), *primary)
+    small(positions, &standing(&open, units), *primary)
 }
 
 /// Which of `units`, each with its template, stands in each of
@@ -1938,7 +1949,7 @@ mod tests {
             None,
             Some(captain.clone()),
         ];
-        // A regiment that's arrived as its captain and one rifleman.
+        // An organization that's arrived as its captain and one rifleman.
         let units = [(7, &captain), (8, &rifle)];
         let held = standing(&positions, units.into_iter());
         assert_eq!(held, [Some(8), None, None, Some(7)]);
