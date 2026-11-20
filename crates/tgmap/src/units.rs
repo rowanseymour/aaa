@@ -1053,6 +1053,7 @@ mod tests {
             default: 1,
             combat: Some(0),
             primary: Some(2),
+            kinds: Vec::new(),
             broken: Default::default(),
             broken_types: Vec::new(),
         }

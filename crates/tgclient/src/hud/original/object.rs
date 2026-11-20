@@ -1043,7 +1043,8 @@ impl Draw<'_, '_> {
     }
 
     /// A card for each of the organization at `r`'s units but an officer
-    /// `captain`, who has the portrait: its picture over its health.
+    /// `captain`, who has the portrait: its picture over its health, in a
+    /// block for each kind of slot.
     fn units(&mut self, r: usize, captain: usize) {
         let Some(panel) = self
             .display
@@ -1057,20 +1058,24 @@ impl Draw<'_, '_> {
             return;
         };
         let number = |key: &str| panel.value(key).and_then(|v| v.trim().parse::<f32>().ok());
-        let gap = [
+        let gap = Vec2::new(
             number("horizontal_unit_separation").unwrap_or(2.0),
             number("vertical_unit_separation").unwrap_or(2.0),
-        ];
+        );
+        let separation = number("definition_separation").unwrap_or(0.0);
         let at = panel.bounds(self.area);
         let size = card.bounds(at);
-        let step = [size.width() + gap[0], size.height() + gap[1]];
-        let across = (((at.width() + gap[0]) / step[0]).floor() as usize).max(1);
-        let officer = shown::is_officer(self.sim.units[captain].template.as_str());
-        let mut units = self.sim.organizations[r].units.clone();
-        units.retain(|&u| !(officer && u == captain));
-        for (n, u) in units.into_iter().enumerate() {
-            let (x, y) = ((n % across) as f32 * step[0], (n / across) as f32 * step[1]);
-            let within = moved(at, x, y);
+        let size = Vec2::new(size.width(), size.height());
+        let groups = shown::card_groups(self.sim, self.looks, r, captain);
+        let places = shown::card_places(
+            &groups,
+            size,
+            gap,
+            separation,
+            Vec2::new(at.width(), at.height()),
+        );
+        for (u, place) in places {
+            let within = moved(at, place.x, place.y);
             let parts = self.painter.paint(
                 self.s,
                 card,
