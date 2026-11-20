@@ -591,7 +591,12 @@ fn detail(
     });
     let members = (own.iter()).flat_map(|&r| sim.organizations[r].units.iter().copied());
     let members = members.collect();
-    let flying = own.iter().copied().chain(attached);
+    // An HQ's building shows the banner of the regiment it unpacked from.
+    let unpacked = match mode.actor() {
+        Some(Actor::Building(b, _)) => sim.buildings[*b].unpacked_from,
+        _ => None,
+    };
+    let flying = own.iter().copied().chain(unpacked).chain(attached);
     let wears = |r| banners::wears(sim, hqs, r).map(|hq| (hq, badges.side(hq)));
     let banners = flying.map(|r| (r, wears(r), sim.lacks_supply(r))).collect();
     let properties = holder(sim, mode).map_or(Vec::new(), |of| held(sim, looks, of, shown));
