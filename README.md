@@ -30,11 +30,11 @@ It's written in [Rust](https://rust-lang.org) with [Bevy](https://bevy.org). Nam
 
 ## Goals
 
-- Play like the original: the same rules giving the same results. Anywhere it looks or
+- Plays like the original: the same rules giving the same results. Anywhere it looks or
   controls differently on purpose, that's listed in [divergences](docs/divergences.md).
-- Playable on modern systems, Linux and macOS included.
-- Stay driven by the data files, so the original's maps and mods keep working and new ones are easier to make.
-- Document every [file format](docs/formats) the game uses.
+- Playable on macOS, Linux and Windows.
+- Stay driven by the data files so the original's maps and mods keep working, and new ones are easier to make.
+- Great documentation of everything including [file formats](docs/formats).
 
 ## Status
 
