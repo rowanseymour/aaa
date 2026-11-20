@@ -81,22 +81,30 @@ taken() {
     fi
 }
 
-# game <name> <map> [seconds], with the script on stdin. Regiment ids are the
-# ones `create` gives on that map, which are the same every run. Effects only
-# play as frames are drawn, not through `advance`, so seconds plays on that
-# long before the shot.
+# options <hud>: an options file of the game's that chooses that HUD and
+# leaves the rest as they start, so shots don't take the player's own.
+options() {
+    echo "hud = \"$1\"" >"$work/$1.toml"
+    echo "$work/$1.toml"
+}
+
+# game <name> <map> [seconds [hud]], with the script on stdin. Regiment ids
+# are the ones `create` gives on that map, which are the same every run.
+# Effects only play as frames are drawn, not through `advance`, so seconds
+# plays on that long before the shot.
 game() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
     shoot "$1" "$bin/tag-aa" "$game" "$2" --exec "$work/$1.txt" --shot-after "${3:-0}" \
-        --screenshot "$work/$1.png"
+        --options "$(options "${4:-modern}")" --screenshot "$work/$1.png"
 }
 
 # menus <name>, with the script on stdin, which starts from the first menu.
 menus() {
     cat >"$work/$1.txt"
     wanted "$1" || return 0
-    shoot "$1" "$bin/tag-aa" "$game" --exec "$work/$1.txt" --screenshot "$work/$1.png"
+    shoot "$1" "$bin/tag-aa" "$game" --exec "$work/$1.txt" --options "$(options modern)" \
+        --screenshot "$work/$1.png"
 }
 
 # editor <name> <map> <camera> <ids to inspect>
@@ -139,7 +147,7 @@ lookat 342 289
 zoom 0.6
 EOF
 
-    game guadalcanal allies02_guadalcanal <<'EOF'
+    game guadalcanal allies02_guadalcanal 0 original <<'EOF'
 lookat 46 276
 zoom 0.5
 advance 3
