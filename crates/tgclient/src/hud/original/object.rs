@@ -227,7 +227,7 @@ pub struct Shaded {
 }
 
 impl Shaded {
-    fn of(element: &ViewElement) -> Self {
+    pub(super) fn of(element: &ViewElement) -> Self {
         let number = |key| {
             element
                 .value(key)
@@ -244,7 +244,7 @@ impl Shaded {
         }
     }
 
-    fn colour(&self, share: f32) -> Color {
+    pub(super) fn colour(&self, share: f32) -> Color {
         let blend = |a: [f32; 3], b: [f32; 3], t: f32| {
             let t = t.clamp(0.0, 1.0);
             Color::srgb(

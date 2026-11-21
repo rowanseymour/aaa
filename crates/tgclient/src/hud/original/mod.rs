@@ -20,6 +20,7 @@ use tgrender::textures;
 use bevy::picking::hover::Hovered;
 use bevy::ui_widgets::Button;
 
+mod abilities;
 mod bars;
 pub(crate) mod lettering;
 mod object;
@@ -76,6 +77,8 @@ impl Plugin for OriginalHudPlugin {
                     .chain(),
                 (
                     (select_toggles, show_pressables).chain(),
+                    (abilities::refresh, abilities::show).chain(),
+                    abilities::fill,
                     (show_grid, tips::show).chain(),
                     bars::slide,
                 )
@@ -368,7 +371,12 @@ pub enum Follows {
 /// The widgets the interface repeats once for each entry a panel lists,
 /// such as a group or a command: templates, not shown themselves, and
 /// with nothing listed at rest.
-const ENTRIES: [&str; 3] = ["Item", "GroupButton", crate::actions::WIDGET];
+const ENTRIES: [&str; 4] = [
+    "Item",
+    "GroupButton",
+    crate::actions::WIDGET,
+    abilities::ENTRY,
+];
 
 /// The command grid.
 const GRID: &str = "ActionButtons";
@@ -399,11 +407,13 @@ pub fn spawn(
     mut faces: ResMut<Assets<bevy::text::Font>>,
     formats: Res<CompressedImageFormatSupport>,
     minimap: Res<crate::minimap::Minimap>,
+    operations: Option<Res<crate::special_ops::Panel>>,
 ) {
     let game = &loaded.game;
     let skin = skin(game, &sim, &local);
     let widgets = game.game_widgets();
     let named = |name: &str| (widgets.iter()).find(|w| w.name.eq_ignore_ascii_case(name));
+    let mut abilities = Vec::new();
     let mut drawer = Drawer {
         pictures: Pictures {
             game,
@@ -472,7 +482,16 @@ pub fn spawn(
         let offset = (widget.value("hidden_offset"))
             .and_then(point2)
             .map(Step::By);
-        drawer.widget(widget, &Vec::from_iter(offset));
+        let Some(within) = drawer.own(widget, &Vec::from_iter(offset)) else {
+            continue;
+        };
+        for child in &widget.children {
+            drawer.widget(child, &within);
+        }
+        if name == abilities::FLOATER {
+            let panel = operations.as_deref();
+            abilities = abilities::build(widget, &within, &mut drawer, panel, &bindings);
+        }
     }
     // The message log goes in the corner between the floater along the top
     // and the one down the left.
@@ -533,6 +552,9 @@ pub fn spawn(
             }
             for button in pressables {
                 button.spawn(screen, &bindings);
+            }
+            for ability in abilities {
+                ability.spawn(screen);
             }
             if let Some((within, over)) = minimap_at {
                 screen.spawn((placed(&within), minimap.view()));
