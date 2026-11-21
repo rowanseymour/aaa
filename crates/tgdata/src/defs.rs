@@ -1640,6 +1640,9 @@ pub struct AVars {
     /// The glyph that marks a side, drawn in its colour, by [`Glyph`] id.
     #[serde(rename = "KingdomGlyphInfo")]
     pub kingdom_glyph_info: Option<Id>,
+    /// The glyph drawn before a side's experience, by [`Glyph`] index.
+    #[serde(rename = "FontFactionExperienceGlyphIndex")]
+    pub font_faction_experience_glyph_index: Option<u32>,
     /// The glyphs drawn before a ping, by how good it is, by [`Glyph`] id;
     /// a ping is good below the low cutoff and middling below the medium,
     /// in milliseconds.
