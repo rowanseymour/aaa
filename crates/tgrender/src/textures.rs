@@ -24,6 +24,7 @@ pub fn read(
 
 /// Decodes an image file by its name's extension, warning if it can't:
 /// `srgb` for one the interface draws, not the world (see [`crate::stored`]).
+/// An SVG is drawn at the size it gives itself.
 pub fn decode(
     bytes: &[u8],
     name: &str,
@@ -31,6 +32,9 @@ pub fn decode(
     srgb: bool,
 ) -> Option<Image> {
     let ext = name.rsplit('.').next()?.to_ascii_lowercase();
+    if ext == "svg" {
+        return svg(bytes, srgb).map_err(|e| warn!("{name}: {e}")).ok();
+    }
     Image::from_buffer(
         bytes,
         ImageType::Extension(&ext),
@@ -41,6 +45,37 @@ pub fn decode(
     )
     .map_err(|e| warn!("{name}: {e}"))
     .ok()
+}
+
+/// The most texels across or down an SVG is drawn at.
+const SVG_MAX: u32 = 4096;
+
+/// An SVG drawn at the size it gives itself.
+fn svg(bytes: &[u8], srgb: bool) -> Result<Image, String> {
+    use resvg::{tiny_skia, usvg};
+    let tree =
+        usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| e.to_string())?;
+    let size = tree.size().to_int_size();
+    if size.width().max(size.height()) > SVG_MAX {
+        let (w, h) = (size.width(), size.height());
+        return Err(format!("{w} by {h} is bigger than {SVG_MAX} a side"));
+    }
+    let mut pixmap =
+        tiny_skia::Pixmap::new(size.width(), size.height()).ok_or("no size to draw at")?;
+    resvg::render(
+        &tree,
+        tiny_skia::Transform::identity(),
+        &mut pixmap.as_mut(),
+    );
+    // Drawn with its colours multiplied by their alpha, which images aren't.
+    let data = (pixmap.pixels().iter())
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    let size = UVec2::new(size.width(), size.height());
+    Ok(image_2d(size, 1, data, rgba8_format(srgb)))
 }
 
 /// A sampler that tiles the texture.
@@ -313,6 +348,59 @@ fn interpolated_alpha(b: &[u8]) -> [u8; 16] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svgs_are_drawn_at_their_own_size_unmultiplied() {
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
+            <rect width="4" height="2" fill="#ff8000" fill-opacity="0.5"/>
+        </svg>"##;
+        let image = decode(svg, "a.SVG", CompressedImageFormats::NONE, true).unwrap();
+        assert_eq!(image.size(), UVec2::new(4, 2));
+        assert_eq!(
+            image.texture_descriptor.format,
+            TextureFormat::Rgba8UnormSrgb
+        );
+        let texel = &image.data.as_ref().unwrap()[..4];
+        assert_eq!(texel[3], 128);
+        assert!(
+            texel[0] >= 254 && (127..=129).contains(&texel[1]),
+            "{texel:?}"
+        );
+        assert!(decode(b"<svg", "b.svg", CompressedImageFormats::NONE, true).is_none());
+        let huge = br#"<svg xmlns="http://www.w3.org/2000/svg" width="20000" height="1"/>"#;
+        assert!(decode(huge, "c.svg", CompressedImageFormats::NONE, true).is_none());
+    }
+
+    /// Every SVG in this project's own data, by path.
+    fn own_svgs(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                own_svgs(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|e| e.eq_ignore_ascii_case("svg"))
+            {
+                out.push(path);
+            }
+        }
+    }
+
+    #[test]
+    fn this_projects_own_svgs_are_drawn() {
+        let mut svgs = Vec::new();
+        own_svgs(
+            &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data"),
+            &mut svgs,
+        );
+        assert!(!svgs.is_empty());
+        for path in svgs {
+            let bytes = std::fs::read(&path).unwrap();
+            let name = path.display().to_string();
+            let image = decode(&bytes, &name, CompressedImageFormats::NONE, true);
+            assert!(image.is_some_and(|i| i.size().min_element() > 0), "{name}");
+        }
+    }
 
     #[test]
     fn bc1_blocks() {

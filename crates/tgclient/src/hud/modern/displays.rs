@@ -76,10 +76,10 @@ pub fn spawn_buttons(
     let strings = loaded.game.strings();
     let said = ui::said(&strings);
     for panel in PANELS {
-        let (rim, icon, [name, name_or], [help, help_or]) = match panel {
+        let (rim, path, [name, name_or], [help, help_or]) = match panel {
             Panel::Objectives => (
                 Rim::BottomLeft,
-                icon!("objectives"),
+                icon("objectives"),
                 [
                     "control_panel_ButtonObjectives_ToolTip",
                     "Display Objectives",
@@ -91,7 +91,7 @@ pub fn spawn_buttons(
             ),
             Panel::Technologies => (
                 Rim::TopRight,
-                icon!("technologies"),
+                icon("technologies"),
                 [
                     "control_panel_ButtonTechnology_ToolTip",
                     "Display Technologies",
@@ -103,7 +103,7 @@ pub fn spawn_buttons(
             ),
             Panel::MessageLog => (
                 Rim::TopLeft,
-                icon!("message-log"),
+                icon("message-log"),
                 [
                     "control_panel_ButtonMessageLog_ToolTip",
                     "Display Message Log",
@@ -114,7 +114,7 @@ pub fn spawn_buttons(
                 ],
             ),
         };
-        let glyph = icons.get(icon, &mut images, formats.0);
+        let glyph = icons.get(&loaded.game, &path, &mut images, formats.0);
         spawn_button(
             &mut commands,
             &bindings,
