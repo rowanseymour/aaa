@@ -86,33 +86,29 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
         return Ok((dir, Asked::Replay(film)));
     }
     if let Some(at) = take_option(&mut args, "--join")? {
-        let players = match take_option(&mut args, "--players")? {
-            Some(ids) => {
-                (ids.split(',').map(str::parse).collect::<Result<_, _>>()).map_err(|_| ())?
-            }
-            None => Vec::new(),
-        };
-        let name = match take_option(&mut args, "--name")? {
-            Some(typed) => Some(tgserver::name(&typed).ok_or(())?),
-            None => None,
-        };
+        let players = (take_option(&mut args, "--players")?)
+            .map(|ids| ids.split(',').map(str::parse).collect::<Result<_, _>>())
+            .transpose()
+            .map_err(|_| ())?
+            .unwrap_or_default();
+        let name = (take_option(&mut args, "--name")?)
+            .map(|typed| tgserver::name(&typed).ok_or(()))
+            .transpose()?;
         let [dir] = <[String; 1]>::try_from(args).map_err(|_| ())?;
         let at = at.parse().map_err(|_| ())?;
         return Ok((dir, Asked::Join(at, players, name)));
     }
-    let clients = match take_option(&mut args, "--clients")? {
-        Some(n) => Some(n.parse().ok().filter(|&n| n > 0).ok_or(())?),
-        None => None,
-    };
-    let speed = match take_option(&mut args, "--speed")? {
-        Some(n) => Some(
+    let clients = (take_option(&mut args, "--clients")?)
+        .map(|n| n.parse().ok().filter(|&n| n > 0).ok_or(()))
+        .transpose()?;
+    let speed = (take_option(&mut args, "--speed")?)
+        .map(|n| {
             n.parse()
                 .ok()
                 .filter(|n| tgsim::SPEEDS.contains(n))
-                .ok_or(())?,
-        ),
-        None => None,
-    };
+                .ok_or(())
+        })
+        .transpose()?;
     let hosting = match (take_option(&mut args, "--host")?, clients, speed) {
         (Some(at), clients, speed) => Some(Hosting {
             at: at.parse().map_err(|_| ())?,
@@ -122,18 +118,17 @@ fn asked(mut args: Vec<String>) -> Result<(String, Asked), ()> {
         (None, None, None) => None,
         (None, ..) => return Err(()),
     };
-    let seed = match take_option(&mut args, "--seed")? {
-        Some(n) => n.parse().map_err(|_| ())?,
-        None => tgserver::fresh_seed(),
-    };
+    let seed = (take_option(&mut args, "--seed")?)
+        .map(|n| n.parse().map_err(|_| ()))
+        .transpose()?
+        .unwrap_or_else(tgserver::fresh_seed);
     let seconds = match take_option(&mut args, "--seconds")? {
         Some(s) => s.parse().ok().filter(|s| (0.0..=LONGEST).contains(s)),
         None => Some(60.0),
     };
-    let fog = match take_option(&mut args, "--fog")? {
-        Some(f) => Some(tgmap::FogSetting::named(&f).ok_or(())?),
-        None => None,
-    };
+    let fog = (take_option(&mut args, "--fog")?)
+        .map(|f| tgmap::FogSetting::named(&f).ok_or(()))
+        .transpose()?;
     let rules = fog.map(|f| (tgdata::Id::from(tgdata::FOG_OF_WAR), f.id().to_string()));
     let film = take_option(&mut args, "--film")?;
     let [dir, map] = <[String; 2]>::try_from(args).map_err(|_| ())?;
@@ -256,6 +251,7 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             Ok((world, seed))
         }
         Asked::Join(at, players, name) => {
+            let gone = |_| format!("{at}: the host has gone");
             let mut link = quic::connect(at)?;
             let name = name.unwrap_or_else(|| tgserver::default_name(&game.strings()));
             let welcome = tgserver::enter(&mut link, players, name, ANSWERED)
@@ -267,17 +263,13 @@ fn run(dir: &str, asked: Asked) -> Result<(World, u64), String> {
             let setup = welcome.setup.clone();
             let starting = std::thread::spawn(move || tgserver::start(&game, &setup, || {}));
             while !starting.is_finished() {
-                client
-                    .wait()
-                    .map_err(|_| format!("{at}: the host has gone"))?;
+                client.wait().map_err(gone)?;
                 std::thread::sleep(IDLE);
             }
             let started =
                 (starting.join()).unwrap_or_else(|panic| std::panic::resume_unwind(panic));
             let mut world = started?.world;
-            client
-                .ready()
-                .map_err(|_| format!("{at}: the host has gone"))?;
+            client.ready().map_err(gone)?;
             let mut played = Ok(());
             while played.is_ok() {
                 played = client.advance(&mut world, usize::MAX);

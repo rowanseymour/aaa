@@ -71,13 +71,18 @@ impl Film {
     }
 
     pub fn write(&self, path: &Path) -> Result<(), String> {
-        std::fs::write(path, self.to_bytes()).map_err(|e| format!("{}: {e}", path.display()))
+        std::fs::write(path, self.to_bytes()).map_err(at(path))
     }
 
     pub fn read(path: &Path) -> Result<Film, String> {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        Film::from_bytes(&bytes).map_err(|e| format!("{}: {e}", path.display()))
+        let bytes = std::fs::read(path).map_err(at(path))?;
+        Film::from_bytes(&bytes).map_err(at(path))
     }
+}
+
+/// Says an error with the file it came of.
+fn at<E: fmt::Display>(path: &Path) -> impl Fn(E) -> String {
+    move |e| format!("{}: {e}", path.display())
 }
 
 #[cfg(test)]

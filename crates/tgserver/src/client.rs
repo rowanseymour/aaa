@@ -26,22 +26,44 @@ pub enum NotJoined {
 /// orders of `players`, or only to watch if there are none, for a person
 /// going by `name`. Its answer is its [`welcome`].
 pub fn join(link: &mut impl Link, players: Vec<u32>, name: String) -> Result<(), Lost> {
+    ask_in(link, players, name, String::new())
+}
+
+/// Asks the host at the other end of `link` to let in a person going by
+/// `name`, to give the orders of `players`, with the game's `password`.
+pub(crate) fn ask_in(
+    link: &mut impl Link,
+    players: Vec<u32>,
+    name: String,
+    password: String,
+) -> Result<(), Lost> {
     link.send(encode(&Join {
         protocol: PROTOCOL,
         players,
         name,
-        password: String::new(),
+        password,
     }))
+}
+
+/// What the host at the other end of `link` first answers one who asked
+/// to come in, once it has; an error if it's a refusal or nonsense.
+pub(crate) fn first_answer(link: &mut impl Link) -> Result<Option<ToClient>, NotJoined> {
+    let Some(message) = link.receive().map_err(|_| NotJoined::Lost)? else {
+        return Ok(None);
+    };
+    match decode(&message) {
+        Some(ToClient::Refused(refusal)) => Err(NotJoined::Refused(refusal)),
+        Some(answer) => Ok(Some(answer)),
+        None => Err(NotJoined::Lost),
+    }
 }
 
 /// What the host first tells a client at the other end of `link`, which
 /// is what to set its copy of the match up from; `None` until it comes.
 pub fn welcome(link: &mut impl Link) -> Result<Option<Welcome>, NotJoined> {
-    let heard = link.receive().map_err(|_| NotJoined::Lost)?;
-    match heard.map(|m| decode(&m)) {
+    match first_answer(link)? {
         None => Ok(None),
-        Some(Some(ToClient::Start(welcome))) => Ok(Some(welcome)),
-        Some(Some(ToClient::Refused(refusal))) => Err(NotJoined::Refused(refusal)),
+        Some(ToClient::Start(welcome)) => Ok(Some(welcome)),
         Some(_) => Err(NotJoined::Lost),
     }
 }
