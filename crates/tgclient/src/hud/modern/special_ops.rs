@@ -26,7 +26,6 @@ const ROW: f32 = 22.0;
 /// The tray of buttons, padded as the action palette is.
 const TRAY: f32 = BUTTON + 2.0 * PAD;
 const MEDAL: f32 = 16.0;
-const MEDAL_GLYPH: &str = "FactionExperience";
 
 /// How far right of the left edge, and down from the top, the panel
 /// leaves clear for what shares the corner with it.
@@ -87,7 +86,8 @@ pub fn spawn(
         return;
     };
     let game = &loaded.game;
-    let medal = cache.get(game, &mut images, &format!("{GLYPH_DIR}/{MEDAL_GLYPH}.png"));
+    let medal = (game.experience_glyph())
+        .and_then(|name| cache.get(game, &mut images, &format!("{GLYPH_DIR}/{name}.png")));
     let buttons: Vec<_> = (shared.operations.iter())
         .map(|op| {
             let icon = (op.icon.as_deref()).and_then(|path| cache.get(game, &mut images, path));

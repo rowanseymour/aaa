@@ -22,6 +22,7 @@ use bevy::ui_widgets::Button;
 
 mod abilities;
 mod bars;
+mod experience;
 pub(crate) mod lettering;
 mod object;
 mod tips;
@@ -79,6 +80,7 @@ impl Plugin for OriginalHudPlugin {
                     (select_toggles, show_pressables).chain(),
                     (abilities::refresh, abilities::show).chain(),
                     abilities::fill,
+                    experience::refresh,
                     (show_grid, tips::show).chain(),
                     bars::slide,
                 )
@@ -414,6 +416,7 @@ pub fn spawn(
     let widgets = game.game_widgets();
     let named = |name: &str| (widgets.iter()).find(|w| w.name.eq_ignore_ascii_case(name));
     let mut abilities = Vec::new();
+    let mut experience = None;
     let mut drawer = Drawer {
         pictures: Pictures {
             game,
@@ -488,9 +491,12 @@ pub fn spawn(
         for child in &widget.children {
             drawer.widget(child, &within);
         }
+        let panel = operations.as_deref();
         if name == abilities::FLOATER {
-            let panel = operations.as_deref();
             abilities = abilities::build(widget, &within, &mut drawer, panel, &bindings);
+        } else if name == experience::WIDGET {
+            let fonts = (&mut letters, &mut *faces);
+            experience = experience::build(widget, &within, &mut drawer, panel, fonts);
         }
     }
     // The message log goes in the corner between the floater along the top
@@ -555,6 +561,9 @@ pub fn spawn(
             }
             for ability in abilities {
                 ability.spawn(screen);
+            }
+            if let Some(experience) = experience {
+                experience.spawn(screen, &letters);
             }
             if let Some((within, over)) = minimap_at {
                 screen.spawn((placed(&within), minimap.view()));

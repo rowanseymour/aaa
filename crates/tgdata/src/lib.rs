@@ -1231,6 +1231,32 @@ mod tests {
         }
     }
 
+    #[test]
+    fn the_experience_glyph_is_the_one_at_the_index_the_settings_give() {
+        let dir = folder(
+            "experience-glyph",
+            &[
+                ("index_x.lst", "Fonts/*.tgi"),
+                (
+                    "AVars.tgi",
+                    "[Vars]\n{\nint FontFactionExperienceGlyphIndex = 133\n}",
+                ),
+                (
+                    "Fonts/special_glyphs.tgi",
+                    "[Glyph]\n{\nids = ch_rank1\ndisplay_name = Rank1\nindex = 132\n}\n\
+                     [Glyph]\n{\nids = ch_xp\ndisplay_name = Faction Experience\nindex = 133\n}",
+                ),
+            ],
+        );
+        let mut game = empty();
+        game.add_depot(&dir).unwrap();
+        assert_eq!(
+            game.experience_glyph().as_deref(),
+            Some("FactionExperience")
+        );
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// This project's own data, every game's and each game's.
     fn own_data() -> GameData {
         let data = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data");

@@ -76,6 +76,14 @@ impl GameData {
         glyph_image(&self.glyphs(), &id)
     }
 
+    /// What the font's image of the glyph drawn before a side's experience
+    /// is called, e.g. `FactionExperience`.
+    pub fn experience_glyph(&self) -> Option<String> {
+        let index = (self.avars().iter()).find_map(|v| v.font_faction_experience_glyph_index)?;
+        let glyphs = self.glyphs();
+        image_name(glyphs.iter().find(|g| g.index == Some(index))?)
+    }
+
     /// How a ping is shown: the font's images of the glyphs drawn before
     /// it, by how good it is, and where good gives way to middling and
     /// middling to bad.
@@ -135,7 +143,11 @@ impl PingLook {
 /// run together, as `Faction Experience` is drawn from
 /// `FactionExperience.png`.
 pub(crate) fn glyph_image(glyphs: &[defs::Glyph], id: &Id) -> Option<String> {
-    let glyph = glyphs.iter().find(|g| g.ids.as_ref() == Some(id))?;
+    image_name(glyphs.iter().find(|g| g.ids.as_ref() == Some(id))?)
+}
+
+/// What the font's image of `glyph` is called.
+fn image_name(glyph: &defs::Glyph) -> Option<String> {
     Some(glyph.display_name.as_deref()?.replace(' ', ""))
 }
 
