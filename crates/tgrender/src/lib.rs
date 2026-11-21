@@ -102,6 +102,7 @@ impl Plugin for MapRenderPlugin {
             .add_plugins(MaterialPlugin::<GlowMaterial>::default())
             .add_plugins(MaterialPlugin::<TeamMaterial>::default())
             .add_plugins(MaterialPlugin::<SolidMaterial>::default())
+            .add_plugins(MaterialPlugin::<decals::DecalMaterial>::default())
             .add_plugins(MaterialPlugin::<particles::ParticleMaterial>::default())
             .add_plugins(FullscreenMaterialPlugin::<stored::StoredColours>::default())
             .insert_resource(ClearColor(beyond))
@@ -113,6 +114,7 @@ impl Plugin for MapRenderPlugin {
                 (
                     portrait::layer
                         .before(bevy::camera::visibility::VisibilitySystems::CheckVisibility),
+                    rig::face_camera.before(bevy::transform::TransformSystems::Propagate),
                     rig::carry_skins.after(bevy::transform::TransformSystems::Propagate),
                     particles::play.after(bevy::transform::TransformSystems::Propagate),
                     particles::place_copies
@@ -158,6 +160,7 @@ pub struct MapAssets<'w> {
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: MaterialStores<'w>,
     ground_materials: ResMut<'w, Assets<GroundMaterial>>,
+    decal_materials: ResMut<'w, Assets<decals::DecalMaterial>>,
     water_materials: ResMut<'w, Assets<WaterMaterial>>,
     images: ResMut<'w, Assets<Image>>,
     skins: ResMut<'w, Assets<SkinnedMeshInverseBindposes>>,

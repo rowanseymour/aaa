@@ -1149,6 +1149,9 @@ impl Models {
         let selection = selection_box(nif, &nodes.frames);
         let mut loader = self.loader(assets, nif, path, view);
         let particles = loader.particles(&nodes.frames);
+        // A model that plays nothing still needs a rig to turn its
+        // billboards.
+        let clips = clips.or_else(|| nodes.face_camera().then(Clips::default));
         if let Some(clips) = clips {
             let meshes = loader.rig_meshes(&nodes);
             if let Some(rig) = nodes.rig(nif, meshes, &clips, assets) {

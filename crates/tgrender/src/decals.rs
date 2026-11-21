@@ -4,7 +4,14 @@
 use std::collections::HashMap;
 
 use bevy::light::NotShadowCaster;
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{
+    ExtendedMaterial, MaterialExtension, MaterialExtensionKey, MaterialExtensionPipeline,
+};
 use bevy::prelude::*;
+use bevy::render::render_resource::{
+    AsBindGroup, RenderPipelineDescriptor, SpecializedMeshPipelineError,
+};
 use tgdata::{Decal, GameData};
 use tgmap::Ground;
 
@@ -14,6 +21,45 @@ use crate::{MapAssets, overlay, textures};
 /// How much higher each layer of decals lies than the one below, so that
 /// it's drawn over it.
 const LAYER_LIFT: f32 = 0.01;
+
+/// How far behind everything else that blends decals are sorted, so that
+/// they're drawn first, as part of the ground: farther than any distance
+/// within a map.
+const UNDER_ALL: f32 = -100_000.0;
+
+/// A decal's material: drawn like a standard one, but lifted over the
+/// ground by its own depth offset rather than the one its sorting takes.
+pub type DecalMaterial = ExtendedMaterial<StandardMaterial, Lifted>;
+
+#[derive(Asset, AsBindGroup, TypePath, Debug, Clone)]
+#[bind_group_data(Lift)]
+pub struct Lifted {
+    /// The depth offset, in the graphics card's units.
+    lift: i32,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Lift(i32);
+
+impl From<&Lifted> for Lift {
+    fn from(l: &Lifted) -> Self {
+        Lift(l.lift)
+    }
+}
+
+impl MaterialExtension for Lifted {
+    fn specialize(
+        _pipeline: &MaterialExtensionPipeline,
+        descriptor: &mut RenderPipelineDescriptor,
+        _layout: &MeshVertexBufferLayoutRef,
+        key: MaterialExtensionKey<Self>,
+    ) -> Result<(), SpecializedMeshPipelineError> {
+        if let Some(depth) = &mut descriptor.depth_stencil {
+            depth.bias.constant = key.bind_group_data.0;
+        }
+        Ok(())
+    }
+}
 
 /// One of the pictures laid on the ground.
 #[derive(Component)]
@@ -27,7 +73,7 @@ pub struct DecalCache {
     pictures: HashMap<String, Option<Handle<Image>>>,
     /// The material of each kind of decal that never fades, which those
     /// of its kind share.
-    materials: HashMap<String, Handle<StandardMaterial>>,
+    materials: HashMap<String, Handle<DecalMaterial>>,
 }
 
 /// What a decal's picture is multiplied by, shown as much as `opacity`.
@@ -36,8 +82,10 @@ pub fn decal_colour(decal: &Decal, opacity: f32) -> Color {
     Color::linear_rgba(r, g, b, opacity)
 }
 
-fn material(decal: &Decal, image: Handle<Image>, opacity: f32) -> StandardMaterial {
-    StandardMaterial {
+fn material(decal: &Decal, image: Handle<Image>, opacity: f32) -> DecalMaterial {
+    // Over the ground, each layer over the one below.
+    let lift = 10 * (i32::from(decal.layer) + 1);
+    let base = StandardMaterial {
         base_color: decal_colour(decal, opacity),
         base_color_texture: Some(image),
         alpha_mode: match decal.additive {
@@ -50,9 +98,14 @@ fn material(decal: &Decal, image: Handle<Image>, opacity: f32) -> StandardMateri
         reflectance: 0.0,
         double_sided: true,
         cull_mode: None,
-        // Over the ground, each layer over the one below.
-        depth_bias: 10.0 * f32::from(decal.layer + 1),
+        // Drawn before any model's blending shapes, as things on the
+        // ground are drawn over it, and each layer after the one below.
+        depth_bias: UNDER_ALL + lift as f32,
         ..default()
+    };
+    ExtendedMaterial {
+        base,
+        extension: Lifted { lift },
     }
 }
 
@@ -65,8 +118,7 @@ fn laid_at(placed: &Transform) -> ([f32; 2], [f32; 2]) {
 impl MapAssets<'_> {
     /// What draws `decal` laid where `placed` puts it, with its picture's
     /// top toward where it faces, shown as much as `opacity`; `None` where
-    /// its picture can't be read. It's placed where it lies, so that it's
-    /// drawn in its turn among what's blended.
+    /// its picture can't be read.
     pub fn decal(
         &mut self,
         game: &GameData,
@@ -94,10 +146,10 @@ impl MapAssets<'_> {
                 let kind = format!("{decal:?}");
                 let shared = cache.materials.entry(kind);
                 shared
-                    .or_insert_with(|| self.materials.standard.add(material(decal, image, 1.0)))
+                    .or_insert_with(|| self.decal_materials.add(material(decal, image, 1.0)))
                     .clone()
             }
-            false => self.materials.standard.add(material(decal, image, opacity)),
+            false => self.decal_materials.add(material(decal, image, opacity)),
         };
         let [x, y] = position;
         let lift = LAYER_LIFT * f32::from(decal.layer);
@@ -118,6 +170,28 @@ impl MapAssets<'_> {
 mod tests {
     use super::*;
     use crate::terrain::world;
+
+    #[test]
+    fn decals_sort_under_all_else_yet_lie_over_the_ground_by_layer() {
+        let laid = |layer| {
+            let decal = Decal {
+                texture: String::new(),
+                size: 1.0,
+                colour: [1.0; 3],
+                lit: false,
+                additive: false,
+                fade: [0.0; 2],
+                layer,
+            };
+            material(&decal, Handle::default(), 1.0)
+        };
+        let [low, high] = [laid(0), laid(1)];
+        // Behind any blending model shape, lower layers first.
+        assert!(low.base.depth_bias < -10_000.0);
+        assert!(low.base.depth_bias < high.base.depth_bias);
+        // Yet lifted over the ground, higher layers more.
+        assert!(0 < low.extension.lift && low.extension.lift < high.extension.lift);
+    }
 
     #[test]
     fn decals_lie_under_their_effect_and_point_the_way_it_faces() {

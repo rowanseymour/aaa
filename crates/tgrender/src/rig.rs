@@ -47,6 +47,9 @@ struct RigNode {
     name: String,
     parent: Option<usize>,
     rest: nif::Transform,
+    /// It's turned square-on to the camera, whatever its file and
+    /// animation turn it to.
+    faces_camera: bool,
 }
 
 struct RigMesh {
@@ -234,6 +237,7 @@ impl Nodes {
                     name: av.name.clone(),
                     parent,
                     rest: av.transform,
+                    faces_camera: node.billboard == Some(0),
                 });
                 self.index.insert(i, at);
                 for &c in &node.children {
@@ -276,6 +280,12 @@ impl Nodes {
             }
         }
         out
+    }
+
+    /// Whether any node is turned to face the camera, which only a rig
+    /// can do.
+    pub fn face_camera(&self) -> bool {
+        self.nodes.iter().any(|n| n.faces_camera)
     }
 
     /// The nif index of rig node `node`.
@@ -466,7 +476,9 @@ impl Nodes {
             .iter()
             .map(|c| c.controller.stop - c.controller.start)
             .fold(0.0, f32::max);
-        (!channels.is_empty()).then_some(Clip {
+        // A node that faces the camera moves with it, even in a model
+        // that's otherwise still.
+        (!channels.is_empty() || self.face_camera()).then_some(Clip {
             channels,
             speed: 1.0,
             length,
@@ -558,6 +570,9 @@ impl Rig {
                     ChildOf(parent),
                 ))
                 .id();
+            if node.faces_camera {
+                commands.entity(id).insert(FacesCamera);
+            }
             joints.push(id);
         }
         for (mesh, material) in self.meshes.iter().zip(materials) {
@@ -914,6 +929,72 @@ pub fn play(
     }
 }
 
+/// A node turned square-on to the world's camera every frame.
+#[derive(Component)]
+pub struct FacesCamera;
+
+/// What [`face_camera`] reads of a node and the nodes above it.
+type Above = (
+    &'static Transform,
+    Option<&'static ChildOf>,
+    Has<FacesCamera>,
+);
+
+/// What [`face_camera`] turns.
+type Facing = (Entity, &'static mut Transform);
+
+type NotCamera = Without<crate::camera::RtsCamera>;
+
+/// Turns every [`FacesCamera`] node so that, in the world, its own z axis
+/// points back at the viewer, its y along the camera's up and its x to the
+/// right: the same turn for all of them, from the camera's direction alone.
+/// Runs once the frame's animation and following are done, before
+/// transforms are propagated.
+#[allow(clippy::type_complexity)]
+pub fn face_camera(
+    cameras: Query<&Transform, With<crate::camera::RtsCamera>>,
+    mut nodes: ParamSet<(
+        Query<Above, NotCamera>,
+        Query<Facing, (With<FacesCamera>, NotCamera)>,
+    )>,
+) {
+    let Some(camera) = cameras.iter().next() else {
+        return;
+    };
+    // The node's game axes as Bevy's: x stays, z is Bevy's y, -y its z.
+    let facing = camera.rotation * Quat::from_rotation_x(std::f32::consts::FRAC_PI_2);
+    let ids: Vec<Entity> = nodes.p1().iter().map(|(e, _)| e).collect();
+    let above = nodes.p0();
+    let turns: Vec<(Entity, Quat)> = ids
+        .into_iter()
+        .map(|e| {
+            // How everything above it turns it, up to a node that faces
+            // the camera itself.
+            let mut parents = Quat::IDENTITY;
+            let mut at = above
+                .get(e)
+                .ok()
+                .and_then(|(_, p, _)| p)
+                .map(ChildOf::parent);
+            while let Some((transform, parent, faces)) = at.and_then(|p| above.get(p).ok()) {
+                if faces {
+                    parents = facing * parents;
+                    break;
+                }
+                parents = transform.rotation * parents;
+                at = parent.map(ChildOf::parent);
+            }
+            (e, parents.inverse() * facing)
+        })
+        .collect();
+    let mut nodes = nodes.p1();
+    for (e, turn) in turns {
+        if let Ok((_, mut transform)) = nodes.get_mut(e) {
+            transform.rotation = turn;
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1058,6 +1139,7 @@ mod tests {
                 translation: at,
                 ..nif::Transform::IDENTITY
             },
+            faces_camera: false,
         }
     }
 
@@ -1076,6 +1158,28 @@ mod tests {
         assert_eq!(left.map(|t| t.translation), Some([0.0, 0.0, 10.0]));
         // Measured from the skeleton's root, wherever that is.
         assert_eq!(left_over(&up, &nif::Transform::IDENTITY, &up), None);
+    }
+
+    #[test]
+    fn nodes_facing_the_camera_turn_to_it_whatever_is_above_them() {
+        let mut world = World::new();
+        let camera = Transform::from_xyz(0.0, 50.0, 50.0).looking_at(Vec3::ZERO, Vec3::Y);
+        world.spawn((camera, crate::camera::RtsCamera::new(Vec3::ZERO)));
+        // A model turned about its up and tilted, its node 2 along x.
+        let turned = Quat::from_rotation_y(1.0) * Quat::from_rotation_x(0.3);
+        let root = world.spawn(Transform::from_rotation(turned)).id();
+        let start = Transform::from_xyz(2.0, 0.0, 0.0).with_rotation(Quat::from_rotation_z(0.7));
+        let node = world.spawn((start, FacesCamera, ChildOf(root))).id();
+        world.run_system_once(face_camera).expect("runs");
+        let local = *world.get::<Transform>(node).expect("node");
+        assert_eq!(local.translation, start.translation);
+        // In the world its game z (Bevy's y) points at the viewer, its game
+        // y (Bevy's -z) up the screen and its x to the right.
+        let rotation = turned * local.rotation;
+        let close = |a: Vec3, b: Vec3| assert!(a.abs_diff_eq(b, 1e-5), "{a} vs {b}");
+        close(rotation * Vec3::Y, camera.back().into());
+        close(rotation * Vec3::NEG_Z, camera.up().into());
+        close(rotation * Vec3::X, camera.right().into());
     }
 
     #[test]
