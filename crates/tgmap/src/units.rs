@@ -682,7 +682,7 @@ pub struct Recruits {
 }
 
 /// [`Recruits::padding`] where the game's settings don't give it.
-const BUILDING_PADDING: f32 = 2.0;
+pub const BUILDING_PADDING: f32 = 2.0;
 
 impl Recruits {
     pub fn new(game: &GameData) -> Recruits {
@@ -715,6 +715,12 @@ impl Recruits {
             settlements,
             padding: game.building_padding().unwrap_or(BUILDING_PADDING),
         }
+    }
+
+    /// How far beyond its footprint a building needs clear ground, to
+    /// unpack or be built.
+    pub fn padding(&self) -> f32 {
+        self.padding
     }
 
     fn ranges(&self, template: &str) -> Ranges {
