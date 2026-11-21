@@ -17,8 +17,8 @@ use crate::orders::Orders;
 /// What the hotkey files call pausing or unpausing, stepping the speed up
 /// or down, and setting it.
 pub(crate) const PAUSE: &str = "gamepause";
-const SPEED_UP: &str = "SpeedUp";
-const SPEED_DOWN: &str = "SpeedDown";
+pub(crate) const SPEED_UP: &str = "SpeedUp";
+pub(crate) const SPEED_DOWN: &str = "SpeedDown";
 const SPEED: &str = "GameSpeed";
 
 /// Pauses or unpauses the match, or steps or sets its speed, as asked.

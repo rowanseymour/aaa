@@ -5,6 +5,7 @@ use bevy::prelude::*;
 use bevy::ui_widgets::Activate;
 
 use crate::actions::Page;
+use crate::intent::Intent;
 use crate::loading::LoadingScreen;
 use crate::marks::SelectionBox;
 use crate::options::Options;
@@ -44,6 +45,10 @@ impl Default for Words {
     }
 }
 
+/// The control panel's button that opens the menu, which the hotkey files
+/// bind Escape to.
+pub(crate) const MENU: &str = "ButtonMenu";
+
 /// Opening and closing the menu on Escape, which what else Escape closes
 /// goes after, so as not to have the same press open the menu.
 #[derive(SystemSet, Clone, PartialEq, Eq, Hash, Debug)]
@@ -54,22 +59,45 @@ pub struct PausePlugin;
 impl Plugin for PausePlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<PauseMenu>()
+            .init_resource::<Pressed>()
             .init_resource::<Words>()
             .init_resource::<crate::connection::Dialog>()
             .add_systems(OnEnter(Screen::Match), reset)
             .add_systems(
                 Update,
-                toggle
+                (
+                    // Every frame, as what's asked while the menu can't
+                    // open isn't for later; and after the keys, so that
+                    // Escape's own asking comes with its press.
+                    note_press.after(crate::keys::send),
+                    toggle
+                        .run_if(console::closed)
+                        .run_if(crate::keys_free)
+                        .run_if(crate::displays::closed)
+                        // It goes over the menu, which would open unseen.
+                        .run_if(crate::connection::closed),
+                )
+                    .chain()
                     .in_set(Toggle)
                     .before(crate::actions::back_out)
-                    .run_if(in_state(Screen::Match))
-                    .run_if(console::closed)
-                    .run_if(crate::keys_free)
-                    .run_if(crate::displays::closed)
-                    // It goes over the menu, which would open unseen.
-                    .run_if(crate::connection::closed),
+                    .run_if(in_state(Screen::Match)),
             );
     }
+}
+
+/// Whether the menu's button was pressed this frame.
+#[derive(Resource, Default)]
+struct Pressed(bool);
+
+/// Notes whether the menu's button was pressed, rather than Escape, which
+/// the hotkey files bind to it but which backs out of what's up first.
+fn note_press(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut intents: MessageReader<Intent>,
+    mut pressed: ResMut<Pressed>,
+) {
+    let asked = crate::intent::asked(&mut intents, MENU);
+    pressed.0 = asked && !keys.just_pressed(KeyCode::Escape);
 }
 
 impl PauseMenu {
@@ -89,11 +117,12 @@ fn reset(mut menu: ResMut<PauseMenu>) {
 
 /// Opens or closes the menu on Escape, unless Escape is backing out of an
 /// action page or an armed special operation, or the loading screen is
-/// still up.
+/// still up, and opens it when its button is pressed.
 #[allow(clippy::too_many_arguments)]
 fn toggle(
     words: Res<Words>,
     keys: Res<ButtonInput<KeyCode>>,
+    button: Res<Pressed>,
     page: Res<Page>,
     mut armed: ResMut<crate::special_ops::Armed>,
     loading: Query<(), With<LoadingScreen>>,
@@ -106,14 +135,19 @@ fn toggle(
     sim: Option<Res<Sim>>,
     local: Option<Res<Local>>,
 ) {
-    if !keys.just_pressed(KeyCode::Escape) || !loading.is_empty() {
+    let escape = keys.just_pressed(KeyCode::Escape);
+    let button = button.0;
+    if !(escape || button) || !loading.is_empty() {
         return;
     }
     if menu.open {
-        close(&mut commands, menu, orders, &overlays);
-    } else if armed.0.is_some() {
+        // The menu covers its button.
+        if escape {
+            close(&mut commands, menu, orders, &overlays);
+        }
+    } else if escape && armed.0.is_some() {
         armed.0 = None;
-    } else if *page == Page::Orders {
+    } else if button || *page == Page::Orders {
         // What the map was showing of the cursor would otherwise stay up
         // under the menu, as nothing updates it while it's open.
         focus.set_if_neq(Focus::Nothing);
@@ -297,6 +331,7 @@ mod tests {
         ))
         .insert_state(Screen::Match)
         .insert_resource(crate::confirm::Words::default())
+        .add_message::<Intent>()
         .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<console::Console>()
         .init_resource::<Page>()
@@ -364,6 +399,26 @@ mod tests {
         let mut app = app();
         app.insert_resource(Page::Rally);
         escape(&mut app);
+        assert!(!open(&app));
+    }
+
+    #[test]
+    fn its_button_opens_it_from_an_action_page_and_escape_alone_does_not_twice() {
+        let mut app = app();
+        app.insert_resource(Page::Rally);
+        app.world_mut().write_message(Intent::from(MENU));
+        app.update();
+        assert!(open(&app) && paused(&app));
+        // Escape asks for the button as it closes the menu.
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.press(KeyCode::Escape);
+        app.world_mut().write_message(Intent::from(MENU));
+        app.update();
+        assert!(!open(&app));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
+        app.update();
         assert!(!open(&app));
     }
 
