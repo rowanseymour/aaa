@@ -5,17 +5,19 @@
 //! on says what it is in a box above the display.
 
 use bevy::ecs::hierarchy::ChildSpawnerCommands;
+use bevy::image::CompressedImageFormatSupport;
 use bevy::prelude::*;
 use bevy::ui::RelativeCursorPosition;
 use bevy::ui_widgets::Button;
 use tgdata::Id;
+use tgrender::textures;
 use tgsim::Target;
 
 use crate::hud::original::Cards;
 use crate::object_display::*;
 use crate::ui::Blocks;
 use crate::ui::{self, Font, Gauge, Hint, Ink, Shade, Surface, framed, label, meter};
-use crate::{Local, Sim};
+use crate::{Loaded, Local, Sim};
 
 /// Our pixels to one of the game's interface units, in which its layout is
 /// given, chosen so the display stands as tall as the action buttons beside it.
@@ -159,26 +161,40 @@ pub fn spawn(mut commands: Commands) {
 
 /// Puts the player's nation's emblem behind the display, or takes it away
 /// where the nation has none, as the player or the display changes.
+#[allow(clippy::too_many_arguments)]
 pub fn emblem(
     mut commands: Commands,
-    program: Res<crate::Program>,
+    loaded: Res<Loaded>,
     sim: Res<Sim>,
     local: Res<Local>,
     mut images: ResMut<Assets<Image>>,
+    formats: Res<CompressedImageFormatSupport>,
     display: Single<Entity, With<ObjectDisplay>>,
-    mut drawn: bevy::prelude::Local<Option<(Entity, Option<String>)>>,
+    mut drawn: bevy::prelude::Local<Option<(Entity, Option<Id>)>>,
 ) {
     let nation = local.0.and_then(|p| sim.0.sides.player(p)?.nation.clone());
-    let now = (*display, nation);
+    let now = (*display, nation.map(Id::from));
     if drawn.as_ref() == Some(&now) {
         return;
     }
     let (_, nation) = drawn.insert(now);
-    let emblem = program
-        .emblems
-        .iter()
-        .find(|(id, _)| Some(*id) == nation.as_deref());
-    let Some((_, emblem)) = emblem else {
+    let game = &loaded.game;
+    let height = (EMBLEM_TEXELS as f32 * EMBLEM_ACROSS).round() as u32;
+    let image = (nation.as_ref())
+        .and_then(|n| game.emblems().remove(n))
+        .and_then(|path| {
+            let Some(bytes) = game.read(&path) else {
+                warn!("no {path} in the data");
+                return None;
+            };
+            match path.to_ascii_lowercase().ends_with(".svg") {
+                true => textures::svg(&bytes, Some(height), true)
+                    .map_err(|e| warn!("{path}: {e}"))
+                    .ok(),
+                false => textures::decode(&bytes, &path, formats.0, true),
+            }
+        });
+    let Some(image) = image else {
         commands.entity(*display).remove::<ImageNode>();
         return;
     };
@@ -186,7 +202,11 @@ pub fn emblem(
         (EMBLEM_TEXELS as f32 * SIZE.x / SIZE.y).round() as u32,
         EMBLEM_TEXELS,
     );
-    let image = emblem.image(texels, EMBLEM_ACROSS, EMBLEM_ALPHA);
+    let Some(image) = crate::emblem::faint(&image, texels, EMBLEM_ALPHA) else {
+        warn!("{nation:?}'s emblem isn't an image drawn a texel at a time");
+        commands.entity(*display).remove::<ImageNode>();
+        return;
+    };
     commands
         .entity(*display)
         .insert(ImageNode::new(images.add(image)));

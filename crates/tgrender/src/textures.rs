@@ -33,7 +33,9 @@ pub fn decode(
 ) -> Option<Image> {
     let ext = name.rsplit('.').next()?.to_ascii_lowercase();
     if ext == "svg" {
-        return svg(bytes, srgb).map_err(|e| warn!("{name}: {e}")).ok();
+        return svg(bytes, None, srgb)
+            .map_err(|e| warn!("{name}: {e}"))
+            .ok();
     }
     Image::from_buffer(
         bytes,
@@ -50,23 +52,25 @@ pub fn decode(
 /// The most texels across or down an SVG is drawn at.
 const SVG_MAX: u32 = 4096;
 
-/// An SVG drawn at the size it gives itself.
-fn svg(bytes: &[u8], srgb: bool) -> Result<Image, String> {
+/// An SVG drawn `height` texels down and as wide as that makes it, or
+/// at the size it gives itself: `srgb` as for [`decode`].
+pub fn svg(bytes: &[u8], height: Option<u32>, srgb: bool) -> Result<Image, String> {
     use resvg::{tiny_skia, usvg};
     let tree =
         usvg::Tree::from_data(bytes, &usvg::Options::default()).map_err(|e| e.to_string())?;
-    let size = tree.size().to_int_size();
-    if size.width().max(size.height()) > SVG_MAX {
-        let (w, h) = (size.width(), size.height());
-        return Err(format!("{w} by {h} is bigger than {SVG_MAX} a side"));
+    let own = tree.size();
+    let scale = height.map_or(1.0, |h| h as f32 / own.height());
+    let size = (own.width() * scale).ceil().max(1.0) as u32;
+    let size = UVec2::new(size, (own.height() * scale).ceil().max(1.0) as u32);
+    if size.max_element() > SVG_MAX {
+        return Err(format!(
+            "{} by {} is bigger than {SVG_MAX} a side",
+            size.x, size.y
+        ));
     }
-    let mut pixmap =
-        tiny_skia::Pixmap::new(size.width(), size.height()).ok_or("no size to draw at")?;
-    resvg::render(
-        &tree,
-        tiny_skia::Transform::identity(),
-        &mut pixmap.as_mut(),
-    );
+    let mut pixmap = tiny_skia::Pixmap::new(size.x, size.y).ok_or("no size to draw at")?;
+    let transform = tiny_skia::Transform::from_scale(scale, scale);
+    resvg::render(&tree, transform, &mut pixmap.as_mut());
     // Drawn with its colours multiplied by their alpha, which images aren't.
     let data = (pixmap.pixels().iter())
         .flat_map(|p| {
@@ -74,7 +78,6 @@ fn svg(bytes: &[u8], srgb: bool) -> Result<Image, String> {
             [c.red(), c.green(), c.blue(), c.alpha()]
         })
         .collect();
-    let size = UVec2::new(size.width(), size.height());
     Ok(image_2d(size, 1, data, rgba8_format(srgb)))
 }
 
@@ -350,11 +353,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn svgs_are_drawn_at_their_own_size_unmultiplied() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
+    fn svgs_are_drawn_at_their_own_size_or_one_asked_for() {
+        let bytes = br##"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="2">
             <rect width="4" height="2" fill="#ff8000" fill-opacity="0.5"/>
         </svg>"##;
-        let image = decode(svg, "a.SVG", CompressedImageFormats::NONE, true).unwrap();
+        let image = decode(bytes, "a.SVG", CompressedImageFormats::NONE, true).unwrap();
         assert_eq!(image.size(), UVec2::new(4, 2));
         assert_eq!(
             image.texture_descriptor.format,
@@ -367,6 +370,8 @@ mod tests {
             "{texel:?}"
         );
         assert!(decode(b"<svg", "b.svg", CompressedImageFormats::NONE, true).is_none());
+        let image = svg(bytes, Some(8), true).unwrap();
+        assert_eq!(image.size(), UVec2::new(16, 8));
         let huge = br#"<svg xmlns="http://www.w3.org/2000/svg" width="20000" height="1"/>"#;
         assert!(decode(huge, "c.svg", CompressedImageFormats::NONE, true).is_none());
     }

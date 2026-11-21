@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- A red disc edged in white. -->
+  <circle fill="#fff" cx="64" cy="64" r="64"/>
+  <circle fill="#bf1a1a" cx="64" cy="64" r="56.32"/>
+</svg>

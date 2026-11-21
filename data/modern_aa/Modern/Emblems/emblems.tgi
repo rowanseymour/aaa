@@ -1,0 +1,32 @@
+;; Each nation's emblem, after the markings on its aircraft, which this
+;; project's own interface draws faintly behind its object display.
+
+[Emblem]
+{
+	nation_ids = nation_usa
+	texture = usa.svg
+}
+
+[Emblem]
+{
+	nation_ids = nation_gbr
+	texture = gbr.svg
+}
+
+[Emblem]
+{
+	nation_ids = nation_ger
+	texture = ger.svg
+}
+
+[Emblem]
+{
+	nation_ids = nation_rus
+	texture = rus.svg
+}
+
+[Emblem]
+{
+	nation_ids = nation_jpn
+	texture = jpn.svg
+}
