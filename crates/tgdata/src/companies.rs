@@ -40,11 +40,7 @@ impl GameData {
             .filter_map(|t| Some((t.id.clone(), company(&t.thing, &layouts, &things)?)))
             .collect();
         let requires = self.requirements();
-        let upgrades = self.by_template(|t| {
-            let c = t.construction_component.as_ref()?;
-            let ids: Vec<Id> = c.upgrade.iter().filter_map(|u| u.ids.clone()).collect();
-            (!ids.is_empty()).then_some(ids)
-        });
+        let upgrades = self.upgrades();
         (definitions.things.iter())
             .filter_map(|t| {
                 let possible =
